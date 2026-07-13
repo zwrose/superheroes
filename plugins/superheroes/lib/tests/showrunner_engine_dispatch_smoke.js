@@ -652,6 +652,124 @@ function makeAgent(routes) {
   console.log('OK: engine_dispatch #395 staged-input verify + fail-closed re-stage')
 
   // ---------------------------------------------------------------------
+  // #408: the /tmp staging key folds the workItem into the key for EVERY role. A bare taskId is the
+  // tasks-doc task NUMBER — machine-global and project-blind — so two concurrent runs in DIFFERENT
+  // projects at the same task index + engine + role used to collide on one staging path (a weekly-eats
+  // prompt shipped to another repo's codex review, falsely parking the run). These pin the derivation
+  // directly (a pure, FR-8-clean function of caller identifiers) so resume recomputes the same key.
+  // ---------------------------------------------------------------------
+  {
+    const key = (o) => d._deriveRunKey(o, o.prompt || 'P', o.schemaText || '{}')
+
+    // (a) Cross-project distinctness: SAME taskId + engine + role, DIFFERENT workItem => DIFFERENT key
+    // (the collision this issue fixes). The task-number MUST no longer be the whole key.
+    const kA = key({ taskId: '6', workItem: 'weekly-eats' })
+    const kB = key({ taskId: '6', workItem: 'other-repo' })
+    assert.notStrictEqual(kA, kB, '#408: same task index in different projects must derive DIFFERENT keys')
+    assert.ok(kA.startsWith('weekly-eats-') && /(^|-)6$/.test(kA),
+      '#408: the folded key carries BOTH the workItem and the task number: ' + kA)
+
+    // (b) Same project, DIFFERENT task index => still distinct (no over-folding that erases the task).
+    assert.notStrictEqual(key({ taskId: '6', workItem: 'weekly-eats' }),
+      key({ taskId: '7', workItem: 'weekly-eats' }),
+      '#408: different tasks in the same project stay distinct')
+
+    // (c) No double-prefix: the review-code panel leaves already pass `${workItem}-${reviewer}-r${round}`
+    // (ee8a5b5). Folding must NOT prepend the workItem a second time.
+    const kPref = key({ taskId: 'weekly-eats-security-r2', workItem: 'weekly-eats' })
+    assert.strictEqual(kPref, 'weekly-eats-security-r2',
+      '#408: an already-prefixed taskId must not be double-prefixed: ' + kPref)
+    assert.strictEqual((kPref.match(/weekly-eats/g) || []).length, 1,
+      '#408: the workItem must appear exactly once in an already-prefixed key')
+    // A workItem that is a bare CHARACTER-prefix of the taskId is NOT an already-prefixed taskId — the
+    // `${wi}-` delimiter guards that boundary, so it still gets folded (distinct from `window-*`).
+    const kBoundary = key({ taskId: 'window-r1', workItem: 'wi' })
+    assert.strictEqual(kBoundary, 'wi-window-r1',
+      '#408: a char-prefix (no delimiter) must still be folded, not mistaken for already-prefixed: ' + kBoundary)
+
+    // (d) Resume determinism: identical inputs recompute the identical key (FR-8: no wall-clock/PRNG).
+    assert.strictEqual(key({ taskId: '6', workItem: 'weekly-eats' }),
+      key({ taskId: '6', workItem: 'weekly-eats' }),
+      '#408: the key is a deterministic function of the inputs (resume-safe)')
+
+    // (e) workItem-only content suffix (#403) is UNCHANGED: taskId-less roles keep a private path keyed
+    // on the prompt+schema content, and it is deterministic per content.
+    const kSuffix1 = key({ workItem: 'wi-panel', prompt: 'security reviewer', schemaText: '{"a":1}' })
+    const kSuffix2 = key({ workItem: 'wi-panel', prompt: 'code reviewer', schemaText: '{"a":1}' })
+    assert.ok(kSuffix1.startsWith('wi-panel-') && /-[0-9a-f]{12}$/.test(kSuffix1),
+      '#408: the taskId-less key keeps the workItem prefix + 12-hex content suffix: ' + kSuffix1)
+    assert.notStrictEqual(kSuffix1, kSuffix2,
+      '#408: taskId-less panel reviewers with different content keep private paths (#403 preserved)')
+    assert.strictEqual(kSuffix1,
+      key({ workItem: 'wi-panel', prompt: 'security reviewer', schemaText: '{"a":1}' }),
+      '#408: the content suffix is deterministic for identical content')
+
+    // (f) Neither taskId nor workItem => the legacy 'run' key.
+    assert.strictEqual(key({}), 'run', '#408: no identifiers falls back to the legacy run key')
+
+    // (g) Over-length slug truncation safety (inherited #383 Part C caveat): a very long workItem must
+    // NOT let the 80-char bound delete the distinguishing tail. Two different task numbers under the
+    // SAME over-length workItem must stay distinct, and the bounded key must respect the 80-char cap.
+    const longWi = 'a-really-long-work-item-slug-that-exceeds-the-eighty-character-run-key-budget-by-a-lot-indeed'
+    assert.ok(longWi.length > 80, 'test premise: the slug over-runs the 80-char budget')
+    const kLong6 = key({ taskId: '6', workItem: longWi })
+    const kLong7 = key({ taskId: '7', workItem: longWi })
+    assert.ok(kLong6.length <= 80 && kLong7.length <= 80,
+      '#408: the bounded key respects the 80-char cap even for an over-length slug')
+    assert.notStrictEqual(kLong6, kLong7,
+      '#408: truncation must not delete the task discriminator on an over-length slug')
+    // Two DIFFERENT over-length workItems that share the first 80 chars must also stay distinct.
+    const kLongProjA = key({ taskId: '6', workItem: longWi + '-projectA' })
+    const kLongProjB = key({ taskId: '6', workItem: longWi + '-projectB' })
+    assert.notStrictEqual(kLongProjA, kLongProjB,
+      '#408: two over-length projects sharing an 80-char prefix must stay distinct')
+    // Over-length keys stay deterministic (resume-safe).
+    assert.strictEqual(kLong6, key({ taskId: '6', workItem: longWi }),
+      '#408: the bounded over-length key is deterministic')
+
+    // (h) Sanitizer survives the _boundRunKey relocation: an unsafe workItem (space / slash) must not
+    // leak a path separator into the `/tmp/engine-<runId>.prompt` path — a '/' would target a
+    // nonexistent subdir and fail staging. Pins the load-bearing `.replace()` the fix moved.
+    const kDirty = key({ taskId: '6', workItem: 'weekly eats/v2' })
+    assert.ok(/^[A-Za-z0-9_.-]+$/.test(kDirty),
+      '#408: the derived key must stay filesystem-safe (no spaces/slashes reach the /tmp path): ' + kDirty)
+    assert.ok(/(^|-)6$/.test(kDirty), '#408: the task discriminator survives sanitization: ' + kDirty)
+
+    console.log('OK: engine_dispatch #408 workItem-folded staging keys (cross-project, no double-prefix, over-length safe)')
+  }
+
+  // #408 integration: drive TWO full dispatches at the same taskId+engine+role in DIFFERENT projects
+  // and assert their staged /tmp prompt/schema paths (captured from build-argv's --verify args) never
+  // collide — the exact cross-project clobber the live specimen hit.
+  {
+    const verifyPaths = []
+    global.agent = makeAgent([
+      ['exec', (prompt) => {
+        if (prompt.includes('hashlib.sha256')) return [{ index: 0, ok: true, stdout: '' }]
+        if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) return [{ index: 0, ok: true, stdout: 'preSHA\n' }]
+        if (prompt.includes('engine_adapter.py build-argv')) {
+          for (const m of prompt.matchAll(/--verify '([^']+:[0-9a-f]{64})'/g)) verifyPaths.push(m[1].split(':')[0])
+          return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'read-only', '-']) }]
+        }
+        if (prompt.includes('engine_adapter.py parse-result')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, findings: [] }) }]
+        if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        if (prompt.includes('--sandbox')) return markedStdout('{}')
+        return [{ index: 0, ok: true, stdout: '{}' }]
+      }],
+    ])
+    await Promise.all([
+      d.dispatchExternal({ engine: 'codex', roleKind: 'review', effort: 'high',
+        prompt: 'review', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, taskId: '6', workItem: 'weekly-eats' }),
+      d.dispatchExternal({ engine: 'codex', roleKind: 'review', effort: 'high',
+        prompt: 'review', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, taskId: '6', workItem: 'other-repo' }),
+    ])
+    const promptPaths = [...new Set(verifyPaths.filter((p) => p.endsWith('.prompt')))]
+    assert.strictEqual(promptPaths.length, 2,
+      '#408: same task index in different projects must stage to DIFFERENT /tmp prompt paths')
+    console.log('OK: engine_dispatch #408 cross-project full-dispatch staging paths never collide')
+  }
+
+  // ---------------------------------------------------------------------
   // FIX 4a: _execJson courier-drop retry — a single empty/garbled stdout on a durable command is
   // retried ONCE (mirrors build_phase.js's canonical execJson contract); a PERSISTENT empty stdout
   // still fails closed after the retry.

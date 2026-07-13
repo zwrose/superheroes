@@ -154,6 +154,17 @@ async function prepareExecutionContext(deps, workItem, context, plan, records, p
     } catch (err) {
       return { done: low(`test-pilot preparation failed: ${message(err)}`) }
     }
+    // #411: the folded prepare leaf carries its own honest park reason (e.g. the live specimen's argparse
+    // usage error from test_pilot_server_config_cli.py). A folded park has none of the per-field result
+    // shapes below, so surface its reason FIRST — before the readiness predicates, whose null-arm
+    // ("returned no result") would otherwise mask a result that said exactly what broke. The three park
+    // signals match the sibling predicates' "leaf is not ready" convention (artifactReadinessProblem /
+    // seedReadinessProblem: action==='park' || ok===false || confidence==='low') so a park surfaced via
+    // any of them is caught — a healthy fold is { ok:true, artifactResult, serverContext, seedResult },
+    // which trips none of these.
+    if (folded && (folded.action === 'park' || folded.ok === false || folded.confidence === 'low')) {
+      return { done: low(folded.reason || 'test-pilot preparation parked') }
+    }
     const artifactResult = folded && folded.artifactResult
     const serverContext = folded && folded.serverContext
     const seedResult = folded && folded.seedResult

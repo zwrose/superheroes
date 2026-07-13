@@ -570,12 +570,11 @@ function reviewCodeLeaves(tiers, opts) {
       // a dispatch fact — the adapter's owner-policy map keeps a cursor reviewer on composer, and the
       // readout shows the same map's truth. #309: the moderate read ceiling for effortKey
       // (review/review-deep); the owner `timeout` override still wins.
-      // #395 follow-up: engine_dispatch's runKeyBase uses taskId ALONE when present (it wins over
-      // workItem — see engine_dispatch.js runKeyBase) — a bare `${reviewer}-r${round}` taskId
-      // collides across DIFFERENT work items reviewing concurrently (same reviewer name + round
-      // land on one shared /tmp staging path). Prefix with the resolved workItem so the key is
-      // unique both across parallel same-work-item reviewers (the #395 fix) and across concurrent
-      // work items (this fix) — same sanitize/truncate in runKeyBase makes any workItem value safe.
+      // Prefix the reviewer taskId with the resolved workItem so a bare `${reviewer}-r${round}` key is
+      // unique across parallel same-work-item reviewers (#395) AND concurrent work items reviewing at
+      // once. #408 note: engine_dispatch's _deriveRunKey now folds the workItem into the key for EVERY
+      // role, so this explicit prefix is belt-and-suspenders (the dispatch detects the `${workItem}-`
+      // prefix and does not double it) — retained so this leaf's key is self-describing at the seam.
       const dispatchWorkItem = typeof workItem === 'string' ? workItem : 'review-code'
       const res = await engineDispatch.dispatchExternal({
         workItem: dispatchWorkItem,
