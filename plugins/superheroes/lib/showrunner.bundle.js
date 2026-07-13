@@ -6370,6 +6370,11 @@ async function journalTasksRoutedFindings(workItem, findings) {
     '      journal.append(p["events"], "routed_forward", payload=payload, root=os.getcwd())'
   const out = await io().runHelper('python3', ['-c', script, String(workItem), JSON.stringify(findings)],
     { label: 'route tasks findings' })
+  if (!out || !out.ok) {
+    const err = (out && out.stderr && out.stderr.trim()) ||
+      'routed_forward journal write exited ' + (out && out.status != null ? out.status : 'unknown')
+    throw new Error(err)
+  }
 }
 async function reviewDocPhase(doc, workItem, opts) {
   opts = opts || {}
@@ -6471,7 +6476,10 @@ async function reviewDocPhase(doc, workItem, opts) {
   if (!recWrite.ok) {
     if (gate === 'passed') {
       return {
-        phaseResult: { confidence: 'high', assumptions: planHandoffAssumptions.slice() },
+        phaseResult: {
+          confidence: 'high',
+          assumptions: planHandoffAssumptions.concat(tasksRoutedAssumptions),
+        },
         gate,
         persist,
         runtimeDeferredIds: Array.from(deferred.keys()),

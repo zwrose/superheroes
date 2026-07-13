@@ -1313,6 +1313,11 @@ async function journalTasksRoutedFindings(workItem, findings) {
     '      journal.append(p["events"], "routed_forward", payload=payload, root=os.getcwd())'
   const out = await io().runHelper('python3', ['-c', script, String(workItem), JSON.stringify(findings)],
     { label: 'route tasks findings' })
+  if (!out || !out.ok) {
+    const err = (out && out.stderr && out.stderr.trim()) ||
+      'routed_forward journal write exited ' + (out && out.status != null ? out.status : 'unknown')
+    throw new Error(err)
+  }
 }
 
 // the review phase: idempotent passed-gate skip, else run the panel-doc leg and map terminal->gate.
@@ -1450,7 +1455,10 @@ async function reviewDocPhase(doc, workItem, opts) {
   if (!recWrite.ok) {
     if (gate === 'passed') {
       return {
-        phaseResult: { confidence: 'high', assumptions: planHandoffAssumptions.slice() },
+        phaseResult: {
+          confidence: 'high',
+          assumptions: planHandoffAssumptions.concat(tasksRoutedAssumptions),
+        },
         gate,
         persist,
         runtimeDeferredIds: Array.from(deferred.keys()),
@@ -1469,7 +1477,10 @@ async function reviewDocPhase(doc, workItem, opts) {
   // #212: on a non-passed gate, name the terminal + the panel's honest reason on parkDetail so the
   // workflow park survives the phase-layer flatten (phase_step threads it into the changes-requested
   // reason). A passed gate proceeds — no park detail.
-  const phaseResult = { confidence: 'high', assumptions: planHandoffAssumptions.slice() }
+  const phaseResult = {
+    confidence: 'high',
+    assumptions: planHandoffAssumptions.concat(tasksRoutedAssumptions),
+  }
   if (gate !== 'passed') {
     phaseResult.parkDetail = `${(verdict && verdict.terminal) || 'cannot-certify'}: ${(verdict && verdict.reason) || 'review not certified'}`
   }
