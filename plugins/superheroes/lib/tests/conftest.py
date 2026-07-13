@@ -21,6 +21,11 @@ def _isolate_store_root(monkeypatch, tmp_path):
     own SUPERHEROES_WORKTREES_ROOT still wins (applies after this fixture)."""
     monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "_store_isolation"))
     monkeypatch.setenv("SUPERHEROES_WORKTREES_ROOT", str(tmp_path / "_worktrees_isolation"))
+    # #412 review finding: test-pilot's store has its OWN env-pinned root; without this, a
+    # test (or its subprocess) that never sets TEST_PILOT_STORE_ROOT resolves — and
+    # store_core's pointer self-heal can WRITE INTO — the developer's real
+    # ~/.claude/test-pilot store. A test that sets its own still wins (applies after this).
+    monkeypatch.setenv("TEST_PILOT_STORE_ROOT", str(tmp_path / "_tp_store_isolation"))
     # 0.10.0 qualification finding #7: the acceptance harness's child env carries the
     # SUPERHEROES_ACCEPTANCE_* markers, and a build-worktree verify run inherits them —
     # making any marker-sensitive test (e.g. enforcer selfcheck arming) fail inside a

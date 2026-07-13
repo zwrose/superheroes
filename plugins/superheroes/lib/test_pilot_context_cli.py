@@ -96,6 +96,7 @@ def resolve(work_item, generation, worktree=None, base_name="main"):
         "worktree": git_root, "branch": branch, "head": head,
         "pr": cp.get("pr"), "store": trusted_store,
         "profile": profile or None, "profileError": profile_error,
+        "profileSource": res.get("profileSource"),
         "baseUrl": base, "allowedOrigins": allowed,
         "browserTool": {"source": "profile", "tools": browser_tools} if browser_tools else None,
         "diff": {"files": changed},

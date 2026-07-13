@@ -21,15 +21,133 @@ def _init_repo(path, remote=None):
     return path
 
 
+_LAYER = (
+    "<!-- test-pilot: schemaVersion=2 status=confirmed created=2026-07-01 "
+    "updated=2026-07-01 nudge-ack={} -->\n\n"
+    "## Machine-readable config\n\n"
+    "```json test-pilot-config\n"
+    '{"schemaVersion": 1, "baseUrl": "http://localhost:3000"}\n'
+    "```\n"
+)
+
+
+def _write_in_repo_layer(repo, text=_LAYER):
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, "test-pilot.md")
+    open(p, "w").write(text)
+    return p
+
+
+def _write_global_layer(repo, text=_LAYER):
+    """Write the unified layer into the out-of-repo project store (global mode). Uses the
+    same mode-aware store dir the resolver probes; WORKHORSE_STORE_ROOT is pinned by conftest
+    so this never touches the real ~/.claude store."""
+    import mode_registry
+    d = os.path.join(mode_registry.project_store_dir(repo), "config")
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, "test-pilot.md")
+    open(p, "w").write(text)
+    return p
+
+
 def test_resolve_none_when_nothing_exists(tmp_path):
     repo = _init_repo(tmp_path / "repo")
     root = str(tmp_path / "store")
     r = store.resolve(repo, root)
     assert r["location"] == "none"
     assert r["profile"] is None
+    assert r["profileSource"] == "none"
     # state/plans are computed even with no profile (machine-local, always global)
     assert r["state_dir"].startswith(root)
     assert r["plans_dir"].startswith(root)
+
+
+def test_resolve_layer_only_in_repo(tmp_path):
+    """#412: a migrated in-repo project (layer, no profile.md) resolves via the layer."""
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    layer = _write_in_repo_layer(repo)
+    r = store.resolve(repo, root)
+    assert r["location"] == "in-repo"
+    assert r["profileSource"] == "layer"
+    assert r["profile"] == layer
+    # blocks/manifests follow in-repo mode (the migration did not move them)
+    base = os.path.join(repo, ".claude", "test-pilot")
+    assert r["blocks_dir"] == os.path.join(base, "blocks")
+    assert r["manifests_dir"] == os.path.join(base, "manifests")
+    # engine can load the config block straight from the layer path resolve() returned
+    import engine
+    assert engine.load_profile_config(r["profile"])["baseUrl"] == "http://localhost:3000"
+
+
+def test_resolve_layer_only_global(tmp_path, monkeypatch):
+    """#412: a migrated out-of-repo project resolves via the project-store layer."""
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "core-store"))
+    repo = _init_repo(tmp_path / "repo", remote="git@github.com:org/repo.git")
+    root = str(tmp_path / "store")
+    layer = _write_global_layer(repo)
+    r = store.resolve(repo, root)
+    assert r["location"] == "global"
+    assert r["profileSource"] == "layer"
+    assert r["profile"] == layer
+    assert r["blocks_dir"].startswith(root)  # machine-local entry, not in-repo
+    import engine
+    assert engine.load_profile_config(r["profile"])["baseUrl"] == "http://localhost:3000"
+
+
+def test_resolve_profile_md_precedence_over_layer(tmp_path):
+    """#412: legacy profile.md still wins when BOTH it and the layer are present."""
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    base = os.path.join(repo, ".claude", "test-pilot")
+    os.makedirs(base)
+    open(os.path.join(base, "profile.md"), "w").write("# p\n")
+    _write_in_repo_layer(repo)
+    r = store.resolve(repo, root)
+    assert r["location"] == "in-repo"
+    assert r["profileSource"] == "profile-md"
+    assert r["profile"] == os.path.join(base, "profile.md")
+
+
+def test_resolve_layer_without_config_block_is_none(tmp_path):
+    """#412 / epic #327: a layer carrying only prose (no test-pilot-config block) is NOT
+    engine calibration — resolution must honestly report `none`, not a phantom profile."""
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    _write_in_repo_layer(repo, text="<!-- test-pilot -->\n\n## App launch\n- npm run dev\n")
+    r = store.resolve(repo, root)
+    assert r["location"] == "none"
+    assert r["profile"] is None
+    assert r["profileSource"] == "none"
+
+
+def test_resolve_global_layer_without_config_block_is_none(tmp_path, monkeypatch):
+    """#412 / epic #327, global mode: the out-of-repo layer branch carries its own
+    config-block gate — a prose-only project-store layer must not become a phantom profile."""
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "core-store"))
+    repo = _init_repo(tmp_path / "repo", remote="git@github.com:org/repo.git")
+    root = str(tmp_path / "store")
+    _write_global_layer(repo, text="<!-- test-pilot -->\n\n## App launch\n- npm run dev\n")
+    r = store.resolve(repo, root)
+    assert r["location"] == "none"
+    assert r["profile"] is None
+    assert r["profileSource"] == "none"
+
+
+def test_resolve_global_profile_md_precedence_over_global_layer(tmp_path, monkeypatch):
+    """#412, global mode: a legacy global-entry profile.md still wins over the
+    project-store layer when both are present."""
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "core-store"))
+    repo = _init_repo(tmp_path / "repo", remote="git@github.com:org/repo.git")
+    root = str(tmp_path / "store")
+    c = store.create(repo, "global", root)
+    open(c["profile"], "w").write("# p\n")
+    _write_global_layer(repo)
+    r = store.resolve(repo, root)
+    assert r["location"] == "global"
+    assert r["profileSource"] == "profile-md"
+    assert r["profile"] == c["profile"]
 
 
 def test_in_repo_profile_wins_but_state_stays_global(tmp_path):
@@ -40,6 +158,7 @@ def test_in_repo_profile_wins_but_state_stays_global(tmp_path):
     open(os.path.join(base, "profile.md"), "w").write("# p\n")
     r = store.resolve(repo, root)
     assert r["location"] == "in-repo"
+    assert r["profileSource"] == "profile-md"
     assert r["profile"] == os.path.join(base, "profile.md")
     assert r["blocks_dir"] == os.path.join(base, "blocks")
     assert r["manifests_dir"] == os.path.join(base, "manifests")
@@ -55,6 +174,7 @@ def test_create_global_then_resolve(tmp_path):
     open(c["profile"], "w").write("# p\n")
     r = store.resolve(repo, root)
     assert r["location"] == "global"
+    assert r["profileSource"] == "profile-md"
     assert r["profile"] == c["profile"]
     assert os.path.isdir(r["blocks_dir"])
 

@@ -2768,6 +2768,9 @@ async function prepareExecutionContext(deps, workItem, context, plan, records, p
     } catch (err) {
       return { done: low(`test-pilot preparation failed: ${message(err)}`) }
     }
+    if (folded && (folded.action === 'park' || folded.ok === false || folded.confidence === 'low')) {
+      return { done: low(folded.reason || 'test-pilot preparation parked') }
+    }
     const artifactResult = folded && folded.artifactResult
     const serverContext = folded && folded.serverContext
     const seedResult = folded && folded.seedResult
