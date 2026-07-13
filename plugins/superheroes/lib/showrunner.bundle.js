@@ -6134,14 +6134,40 @@ async function producePhase(phase, workItem) {
   const draft = await usableDraft(workItem, doc)
   if (draft.usable) return { confidence: 'high', assumptions: [] } // FR-8 resume — do not re-author
   const model = authorModel(doc)
+  let handoff = null
+  let handoffEvent = null
+  if (doc === 'tasks') {
+    handoff = await readHandoff(docDirFor(workItem))
+    if (handoff && handoff.ok) {
+      const count = (handoff.findings && handoff.findings.length) || 0
+      handoffEvent = { type: 'handoff_provided', payload: { doc: 'tasks', delivered: count } }
+    } else {
+      const reason = (handoff && handoff.reason) || 'unknown'
+      handoffEvent = { type: 'handoff_provided', payload: { doc: 'tasks', delivered: 0, reason } }
+    }
+  }
   const aEngine = doc === 'plan'
     ? enginePrefTwin.resolveEngine('author-plan', _enginePrefs())
     : 'claude'
-  function _authorPrompt(gapSignal, includeWriteMarker) {
+  function _authorPrompt(gapSignal, includeWriteMarker, handoff) {
     let base =
       `You are the author-only produce leaf (plugins/superheroes/eval/produce-leaf.md). Author the ` +
       `${doc} definition-doc for work-item ${workItem} from its approved parent, every section ` +
       `non-empty, no placeholder.`
+    if (doc === 'tasks' && handoff) {
+      base += `\n\n## Hand-off from the plan review\n\n`
+      if (handoff.ok && handoff.findings && Array.isArray(handoff.findings)) {
+        base += `The plan review surfaced the following non-blocking findings — fold relevant ` +
+          `ones into the task/test breakdown:\n\n`
+        for (const f of handoff.findings) {
+          const section = f.planSection ? ` (${f.planSection})` : ''
+          base += `- ${f.text}${section}\n`
+        }
+      } else {
+        base += `The plan hand-off was not available (${(handoff && handoff.reason) || 'unknown'}). ` +
+          `Proceed without it.\n`
+      }
+    }
     if (includeWriteMarker !== false) {
       base +=
         ` After writing the doc, run the following command to stamp the ` +
@@ -6174,7 +6200,7 @@ async function producePhase(phase, workItem) {
     const gapSignal = attempt > 0 ? lastSignal : null
     let authored = null
     if (aEngine !== 'claude') {
-      const extPrompt = _authorPrompt(gapSignal, false)
+      const extPrompt = _authorPrompt(gapSignal, false, handoff)
       const eff = enginePrefTwin.resolveEffort(aEngine, 'author-plan', _effortOverrides())
       const beforeSnap = await _snapshotGitPorcelain()
       const docsRoot = _docsScanRoot(workItem)
@@ -6224,32 +6250,43 @@ async function producePhase(phase, workItem) {
       }
     }
     if (authored == null) {
-      const nativePrompt = _authorPrompt(gapSignal, true)
+      const nativePrompt = _authorPrompt(gapSignal, true, handoff)
       authored = await agent(
         nativePrompt,
         { label: `author-${doc}`, model,
           schema: { type: 'object', properties: { status: {}, notify: { type: 'array' } } } })
     }
     if (authored == null) {
-      return { confidence: 'low', assumptions: [`produce step failed for ${doc}`] } // UFR-4
+      const result = { confidence: 'low', assumptions: [`produce step failed for ${doc}`] }
+      if (handoffEvent) result.persist = { journalPayload: handoffEvent }
+      return result  // UFR-4
     }
     if (authored.notify && authored.notify.length) {
       const ok = await appendNotify(workItem, authored.notify.map(
         (n) => ({ phase: doc, identity: n && n.identity, message: n && n.message })))
       if (!ok) {
-        return { confidence: 'low', assumptions: ['produce NOTIFY default not durably recorded: ' +
+        const result = { confidence: 'low',
+          assumptions: ['produce NOTIFY default not durably recorded: ' +
                  authored.notify.map((n) => (n && n.message) || '').join('; ')] }
+        if (handoffEvent) result.persist = { journalPayload: handoffEvent }
+        return result
       }
     }
     const after = await usableDraft(workItem, doc)
-    if (after.usable) return { confidence: 'high', assumptions: [] }
+    if (after.usable) {
+      const result = { confidence: 'high', assumptions: [] }
+      if (handoffEvent) result.persist = { journalPayload: handoffEvent }
+      return result
+    }
     lastSignal = after
   }
   const gapDesc = (lastSignal && lastSignal.missing_sections && lastSignal.missing_sections.length)
     ? `missing ## headings: ${lastSignal.missing_sections.join(', ')}`
     : (lastSignal && lastSignal.placeholder ? 'placeholder token present' : 'content check failed')
-  return { confidence: 'low',
+  const result = { confidence: 'low',
     assumptions: [`produce step yielded no usable ${doc} draft after ${_PRODUCE_MAX_RETRIES + 1} attempts: ${gapDesc}`] }
+  if (handoffEvent) result.persist = { journalPayload: handoffEvent }
+  return result
 }
 function _helperJsonAnswer(out) {
   if (!out || !out.ok) return null
@@ -6269,6 +6306,19 @@ async function collectNonBlockingFindings(runDir) {
     return Array.isArray(ans.findings) ? ans.findings : []
   } catch (_) {
     return null
+  }
+}
+async function readHandoff(docsDir) {
+  try {
+    const out = await io().runHelper('python3', [
+      libPath('review_handoff.py'), 'read',
+      '--docs-dir', docsDir,
+    ], { label: 'read plan hand-off', courier: true })
+    const ans = _helperJsonAnswer(out)
+    if (!ans) return { ok: false, reason: 'read-failed' }
+    return ans  // pass through the {ok, findings, counts} or {ok: false, reason}
+  } catch (_) {
+    return { ok: false, reason: 'read-dispatch-failed' }
   }
 }
 async function reviewDocPhase(doc, workItem, opts) {

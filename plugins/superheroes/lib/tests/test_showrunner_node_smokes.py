@@ -29,6 +29,9 @@ SHOWRUNNER_SMOKES = [
     # Task 15 (#397 FR-2/UFR-1): plan-review terminal writes plan-handoff.json from non-blocking
     # findings and discloses write failures on phaseResult.assumptions.
     "plugins/superheroes/lib/tests/showrunner_plan_handoff_smoke.js",
+    # Task 16 (#397 FR-3): tasks produce leaf receives hand-off from plan review via readHandoff,
+    # splices into prompt, and journals handoff_provided event on success/failure.
+    "plugins/superheroes/lib/tests/showrunner_handoff_delivery_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_switch_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fullpipeline_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fullrun_smoke.js",

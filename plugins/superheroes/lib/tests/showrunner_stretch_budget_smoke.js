@@ -112,6 +112,8 @@ function isAllowedCourier(label) { return COURIER_ALLOW.some((re) => re.test(lab
 // clean review-code round, passing test-pilot, green ship). Each budget is a CEILING pinned at
 // the observed as-built count; the breakdown comments map every leaf to its matrix row so a
 // future courier added to a phase fails here and has to justify itself against the matrix.
+// #397 Task 16: tasks produce adds readHandoff courier call to deliver plan hand-off. The budget
+// rises from 3 (check draft + appendNotify/exec + notifyLedger or appendNotify) to 4.
 const PHASE_BUDGETS = {
   // Task 12 (FR-8/UFR-9): the run-start rules freeze — ONE 'io' bookkeeping leaf that snapshots the
   // provenance-valid rules for this run (permission_rules.freeze_run_rules via the io() runHelper
@@ -122,7 +124,8 @@ const PHASE_BUDGETS = {
   startup: 2,
   // read draft signals (pre-author) + post-author marker verify + save phase progress
   plan: 3,
-  tasks: 3,
+  // #397 Task 16: +1 (readHandoff) to deliver plan hand-off to tasks author; was 3 before Task 16.
+  tasks: 4,
   // read-gate exec (1) + #211 pre-round SETUP GATHER (1 — run-dir mkdir + resume DECISION + round-1
   // plan + deferred seed + coverage, folded Python-side by review_setup_gather.py) + persist-skeleton
   // (1) + #211 tally-round DECIDER (1 — breaker + terminal + certification from disk; the ONE new

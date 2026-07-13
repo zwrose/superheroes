@@ -1016,6 +1016,23 @@ async function producePhase(phase, workItem) {
   const draft = await usableDraft(workItem, doc)
   if (draft.usable) return { confidence: 'high', assumptions: [] } // FR-8 resume — do not re-author
   const model = authorModel(doc)
+
+  // #397 FR-3: read the hand-off from plan review for tasks phase, and journal handoff_provided.
+  // A hand-off read failure is disclosed (UFR-5) via the prompt and journal event, but does NOT
+  // block produce — the produce phase proceeds with or without the hand-off.
+  let handoff = null
+  let handoffEvent = null
+  if (doc === 'tasks') {
+    handoff = await readHandoff(docDirFor(workItem))
+    if (handoff && handoff.ok) {
+      const count = (handoff.findings && handoff.findings.length) || 0
+      handoffEvent = { type: 'handoff_provided', payload: { doc: 'tasks', delivered: count } }
+    } else {
+      const reason = (handoff && handoff.reason) || 'unknown'
+      handoffEvent = { type: 'handoff_provided', payload: { doc: 'tasks', delivered: 0, reason } }
+    }
+  }
+
   // planAuthor engine route: ONLY the plan doc reads the enginePreferences.planAuthor key (tasks
   // always authors native). The resolved model tier rides along so cursor can map it to its own
   // model id (author-plan: fable + planAuthor: cursor = Fable via Cursor). External failure falls
@@ -1026,12 +1043,28 @@ async function producePhase(phase, workItem) {
   // _authorPrompt: builds the author dispatch prompt. On a retry, appends a targeted gap hint so
   // the author knows precisely what to fix (Layer 2b). The hint is derived from the why-signal
   // (missing_sections + placeholder) returned by usableDraft on the previous failed check.
+  // For tasks, includes the hand-off list from the plan review (FR-3).
   // FR-8 sandbox: no banned tokens in this function body.
-  function _authorPrompt(gapSignal, includeWriteMarker) {
+  function _authorPrompt(gapSignal, includeWriteMarker, handoff) {
     let base =
       `You are the author-only produce leaf (plugins/superheroes/eval/produce-leaf.md). Author the ` +
       `${doc} definition-doc for work-item ${workItem} from its approved parent, every section ` +
       `non-empty, no placeholder.`
+    // #397 FR-3: splice the hand-off from the plan review for tasks
+    if (doc === 'tasks' && handoff) {
+      base += `\n\n## Hand-off from the plan review\n\n`
+      if (handoff.ok && handoff.findings && Array.isArray(handoff.findings)) {
+        base += `The plan review surfaced the following non-blocking findings — fold relevant ` +
+          `ones into the task/test breakdown:\n\n`
+        for (const f of handoff.findings) {
+          const section = f.planSection ? ` (${f.planSection})` : ''
+          base += `- ${f.text}${section}\n`
+        }
+      } else {
+        base += `The plan hand-off was not available (${(handoff && handoff.reason) || 'unknown'}). ` +
+          `Proceed without it.\n`
+      }
+    }
     if (includeWriteMarker !== false) {
       base +=
         ` After writing the doc, run the following command to stamp the ` +
@@ -1067,7 +1100,7 @@ async function producePhase(phase, workItem) {
     let authored = null
     if (aEngine !== 'claude') {
       // External author-plan: no --write-marker in the dispatch prompt; showrunner stamps after confinement.
-      const extPrompt = _authorPrompt(gapSignal, false)
+      const extPrompt = _authorPrompt(gapSignal, false, handoff)
       const eff = enginePrefTwin.resolveEffort(aEngine, 'author-plan', _effortOverrides())
       const beforeSnap = await _snapshotGitPorcelain()
       const docsRoot = _docsScanRoot(workItem)
@@ -1118,14 +1151,16 @@ async function producePhase(phase, workItem) {
     }
     if (authored == null) {
       // FR-4 fold (native only): the author leaf writes its own doc + stamps the completion marker.
-      const nativePrompt = _authorPrompt(gapSignal, true)
+      const nativePrompt = _authorPrompt(gapSignal, true, handoff)
       authored = await agent(
         nativePrompt,
         { label: `author-${doc}`, model,
           schema: { type: 'object', properties: { status: {}, notify: { type: 'array' } } } })
     }
     if (authored == null) {
-      return { confidence: 'low', assumptions: [`produce step failed for ${doc}`] } // UFR-4
+      const result = { confidence: 'low', assumptions: [`produce step failed for ${doc}`] }
+      if (handoffEvent) result.persist = { journalPayload: handoffEvent }
+      return result  // UFR-4
     }
     // surface any produce-phase NOTIFY default in the durable ledger the boundary reads (UFR-2): a
     // produce phase has no #104 loop record to ride, so it is named via the ledger, not the extras seam.
@@ -1136,14 +1171,21 @@ async function producePhase(phase, workItem) {
       if (!ok) {
         // a NOTIFY default that can't be durably recorded must NOT be silently lost (UFR-2): park and
         // name it. No marker is stamped yet, so a resume re-produces and retries the NOTIFY.
-        return { confidence: 'low', assumptions: ['produce NOTIFY default not durably recorded: ' +
+        const result = { confidence: 'low',
+          assumptions: ['produce NOTIFY default not durably recorded: ' +
                  authored.notify.map((n) => (n && n.message) || '').join('; ')] }
+        if (handoffEvent) result.persist = { journalPayload: handoffEvent }
+        return result
       }
     }
     // Verify the author actually stamped the marker (UFR-4 guard). usableDraft re-reads via exec+twin.
     // The why-signal (missing_sections, placeholder) is preserved for the next retry's gap hint.
     const after = await usableDraft(workItem, doc)
-    if (after.usable) return { confidence: 'high', assumptions: [] }
+    if (after.usable) {
+      const result = { confidence: 'high', assumptions: [] }
+      if (handoffEvent) result.persist = { journalPayload: handoffEvent }
+      return result
+    }
     // Store the gap signal for the next attempt's targeted hint.
     lastSignal = after
     // If more retries remain, loop back and re-dispatch the author with the gap hint.
@@ -1153,8 +1195,10 @@ async function producePhase(phase, workItem) {
   const gapDesc = (lastSignal && lastSignal.missing_sections && lastSignal.missing_sections.length)
     ? `missing ## headings: ${lastSignal.missing_sections.join(', ')}`
     : (lastSignal && lastSignal.placeholder ? 'placeholder token present' : 'content check failed')
-  return { confidence: 'low',
+  const result = { confidence: 'low',
     assumptions: [`produce step yielded no usable ${doc} draft after ${_PRODUCE_MAX_RETRIES + 1} attempts: ${gapDesc}`] }
+  if (handoffEvent) result.persist = { journalPayload: handoffEvent }
+  return result
 }
 
 // #397 FR-2: collectNonBlockingFindings asks the Python courier helper to read round-records.json
@@ -1179,6 +1223,23 @@ async function collectNonBlockingFindings(runDir) {
     return Array.isArray(ans.findings) ? ans.findings : []
   } catch (_) {
     return null
+  }
+}
+
+// #397 FR-3: readHandoff reads the plan-handoff.json written by the plan-review terminal.
+// Returns {ok, findings, counts} on success or {ok: false, reason} on failure (absent/unreadable).
+// The tasks produce phase uses this to deliver the hand-off as input to the tasks author.
+async function readHandoff(docsDir) {
+  try {
+    const out = await io().runHelper('python3', [
+      libPath('review_handoff.py'), 'read',
+      '--docs-dir', docsDir,
+    ], { label: 'read plan hand-off', courier: true })
+    const ans = _helperJsonAnswer(out)
+    if (!ans) return { ok: false, reason: 'read-failed' }
+    return ans  // pass through the {ok, findings, counts} or {ok: false, reason}
+  } catch (_) {
+    return { ok: false, reason: 'read-dispatch-failed' }
   }
 }
 
