@@ -145,6 +145,30 @@ function runHelperResponse(cmdline) {
     }
   }
   if (script.endsWith('review_telemetry.py')) return JSON.stringify({ ok: true, benchmarkValid: true })
+  if (script.endsWith('review_handoff.py') && args[0] === 'collect') {
+    const path = args[args.indexOf('--records-path') + 1]
+    const text = path && files[path] != null ? files[path] : '[]'
+    try {
+      const records = JSON.parse(text)
+      const findings = []
+      if (Array.isArray(records)) {
+        for (const rec of records) {
+          if (!rec || !Array.isArray(rec.findings)) continue
+          for (const f of rec.findings) {
+            if (!f || !f.severity) continue
+            const sev = String(f.severity).toLowerCase()
+            if (sev !== 'minor' && sev !== 'nit') continue
+            const e = Object.assign({}, f)
+            e.planSection = f.planSection || f.docSection || f.section || f.dimension || ''
+            findings.push(e)
+          }
+        }
+      }
+      return JSON.stringify({ ok: true, findings })
+    } catch (_) {
+      return JSON.stringify({ ok: false, reason: 'unreadable' })
+    }
+  }
   if (script.endsWith('fenced_json.py')) {
     const p = args[args.indexOf('--path') + 1]
     const staged = args[args.indexOf('--payload-path') + 1]
@@ -246,6 +270,30 @@ function shellResponse(cmd) {
   if (cmd.includes('loop_readout.py')) return '## readout'
   if (cmd.includes('record_deferred.py') || cmd.includes('record-deferred')) return JSON.stringify({ ok: true })
   if (cmd.includes('append-notify')) return JSON.stringify({ ok: true })
+  if (cmd.includes('review_handoff.py') && cmd.includes(' collect ')) {
+    const path = (cmd.match(/--records-path '([^']+)'/) || [])[1]
+    const text = path && files[path] != null ? files[path] : '[]'
+    try {
+      const records = JSON.parse(text)
+      const findings = []
+      if (Array.isArray(records)) {
+        for (const rec of records) {
+          if (!rec || !Array.isArray(rec.findings)) continue
+          for (const f of rec.findings) {
+            if (!f || !f.severity) continue
+            const sev = String(f.severity).toLowerCase()
+            if (sev !== 'minor' && sev !== 'nit') continue
+            const e = Object.assign({}, f)
+            e.planSection = f.planSection || f.docSection || f.section || f.dimension || ''
+            findings.push(e)
+          }
+        }
+      }
+      return JSON.stringify({ ok: true, findings })
+    } catch (_) {
+      return JSON.stringify({ ok: false, reason: 'unreadable' })
+    }
+  }
   if (cmd.includes('review_handoff.py') && cmd.includes(' write ')) {
     return JSON.stringify({ ok: true, counts: { distinct: 0 } })
   }

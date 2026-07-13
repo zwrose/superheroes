@@ -13,6 +13,7 @@ import json
 import os
 import sys
 
+import circuit_breaker
 import finding_identity
 import readout   # the same scrub seam journal.py/review_park.py use — see below
 
@@ -63,6 +64,40 @@ def write_handoff(docs_dir, work_item, findings):
     return {"ok": True, "path": path, "counts": payload["counts"]}
 
 
+def collect_nonblocking(records_path):
+    """Read round-records.json from disk and return non-blocking findings for plan-handoff staging.
+
+    The blocking partition routes through circuit_breaker.is_blocking (case-normalized, fail-closed)
+    — the same predicate the panel gate uses — so the hand-off list never disagrees with the
+    terminal verdict on what was blocking vs non-blocking.
+    """
+    try:
+        with open(records_path, encoding="utf-8") as fh:
+            records = json.load(fh)
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "reason": "unreadable: " + str(exc)}
+    if not isinstance(records, list):
+        return {"ok": True, "findings": []}
+    findings = []
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        round_findings = rec.get("findings")
+        if not isinstance(round_findings, list):
+            continue
+        for f in round_findings:
+            if not isinstance(f, dict):
+                continue
+            if not circuit_breaker.is_blocking(f.get("severity")):
+                entry = dict(f)
+                entry["planSection"] = (
+                    f.get("planSection") or f.get("docSection") or f.get("section")
+                    or f.get("dimension") or ""
+                )
+                findings.append(entry)
+    return {"ok": True, "findings": findings}
+
+
 def read_handoff(docs_dir):
     path = os.path.join(docs_dir, FILENAME)
     if not os.path.exists(path):
@@ -87,11 +122,15 @@ def main(argv):
     w.add_argument("--findings", required=True, help="path to a JSON array of findings")
     r = sub.add_parser("read")
     r.add_argument("--docs-dir", required=True)
+    c = sub.add_parser("collect")
+    c.add_argument("--records-path", required=True)
     args = ap.parse_args(argv)
     if args.cmd == "write":
         with open(args.findings, encoding="utf-8") as fh:
             findings = json.load(fh)
         print(json.dumps(write_handoff(args.docs_dir, args.work_item, findings)))
+    elif args.cmd == "collect":
+        print(json.dumps(collect_nonblocking(args.records_path)))
     else:
         print(json.dumps(read_handoff(args.docs_dir)))
     return 0

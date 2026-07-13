@@ -42,6 +42,34 @@ def test_read_roundtrips(tmp_path):
     assert res["ok"] and len(res["findings"]) == 1
 
 
+def test_collect_nonblocking_from_round_records(tmp_path):
+    rh = _load("review_handoff")
+    records_path = tmp_path / "round-records.json"
+    records_path.write_text(json.dumps([
+        {"round": 1, "findings": [
+            {"file": "plan.md", "title": "blocker", "severity": "Important"},
+            {"file": "plan.md", "title": "minor note", "severity": "Minor",
+             "docSection": "Goals", "summary": "add detail"},
+            {"file": "plan.md", "title": "nit", "severity": "Nit", "dimension": "Data flow"},
+        ]},
+    ]), encoding="utf-8")
+    out = rh.collect_nonblocking(str(records_path))
+    assert out["ok"]
+    assert len(out["findings"]) == 2
+    assert {f["title"] for f in out["findings"]} == {"minor note", "nit"}
+    assert out["findings"][0]["planSection"] == "Goals"
+    assert out["findings"][1]["planSection"] == "Data flow"
+
+
+def test_collect_unreadable_records_returns_structured_failure(tmp_path):
+    rh = _load("review_handoff")
+    path = tmp_path / "round-records.json"
+    path.write_text("[", encoding="utf-8")
+    out = rh.collect_nonblocking(str(path))
+    assert not out["ok"]
+    assert out["reason"].startswith("unreadable:")
+
+
 def test_write_scrubs_finding_text_before_it_reaches_disk(tmp_path):
     # plan-handoff.json is a durable FILE, not a journal event, but it carries the same
     # free-text finding titles a courier round-tripped — Bearer-token shape matches an existing

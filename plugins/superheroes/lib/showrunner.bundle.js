@@ -6251,27 +6251,22 @@ async function producePhase(phase, workItem) {
   return { confidence: 'low',
     assumptions: [`produce step yielded no usable ${doc} draft after ${_PRODUCE_MAX_RETRIES + 1} attempts: ${gapDesc}`] }
 }
+function _helperJsonAnswer(out) {
+  if (!out || !out.ok) return null
+  try {
+    const p = JSON.parse(out.stdout || '')
+    return (p && typeof p === 'object') ? p : null
+  } catch (_) { return null }
+}
 async function collectNonBlockingFindings(runDir) {
   try {
-    const recordsPath = `${runDir}/round-records.json`
-    const recordsText = await io().readText(recordsPath)
-    const records = JSON.parse(recordsText)
-    if (!Array.isArray(records)) return []
-    const findings = []
-    for (const r of records) {
-      if (!r || typeof r !== 'object') continue
-      const roundFindings = r.findings
-      if (!Array.isArray(roundFindings)) continue
-      for (const f of roundFindings) {
-        if (!f || typeof f !== 'object') continue
-        if (!circuitBreaker.isBlocking(f.severity)) {
-          const e = Object.assign({}, f)
-          e.planSection = f.docSection || f.section || f.dimension || ''
-          findings.push(e)
-        }
-      }
-    }
-    return findings
+    const out = await io().runHelper('python3', [
+      libPath('review_handoff.py'), 'collect',
+      '--records-path', `${runDir}/round-records.json`,
+    ], { label: 'read nonblocking findings', courier: true })
+    const ans = _helperJsonAnswer(out)
+    if (!ans || !ans.ok) return null
+    return Array.isArray(ans.findings) ? ans.findings : []
   } catch (_) {
     return null
   }

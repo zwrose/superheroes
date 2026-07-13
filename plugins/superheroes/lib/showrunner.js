@@ -1157,30 +1157,26 @@ async function producePhase(phase, workItem) {
     assumptions: [`produce step yielded no usable ${doc} draft after ${_PRODUCE_MAX_RETRIES + 1} attempts: ${gapDesc}`] }
 }
 
-// #397 FR-2: collectNonBlockingFindings reads round-records.json and filters to non-blocking findings,
-// adding planSection from docSection/section or dimension for the handoff. Returns an array or null
-// on a read failure (unreadable/malformed records).
+// #397 FR-2: collectNonBlockingFindings asks the Python courier helper to read round-records.json
+// from disk and filter to non-blocking findings (circuit_breaker.is_blocking — never a JS re-read).
+// Returns an array or null on a read/parse failure (unreadable/malformed records).
+function _helperJsonAnswer(out) {
+  if (!out || !out.ok) return null
+  try {
+    const p = JSON.parse(out.stdout || '')
+    return (p && typeof p === 'object') ? p : null
+  } catch (_) { return null }
+}
+
 async function collectNonBlockingFindings(runDir) {
   try {
-    const recordsPath = `${runDir}/round-records.json`
-    const recordsText = await io().readText(recordsPath)
-    const records = JSON.parse(recordsText)
-    if (!Array.isArray(records)) return []
-    const findings = []
-    for (const r of records) {
-      if (!r || typeof r !== 'object') continue
-      const roundFindings = r.findings
-      if (!Array.isArray(roundFindings)) continue
-      for (const f of roundFindings) {
-        if (!f || typeof f !== 'object') continue
-        if (!circuitBreaker.isBlocking(f.severity)) {
-          const e = Object.assign({}, f)
-          e.planSection = f.docSection || f.section || f.dimension || ''
-          findings.push(e)
-        }
-      }
-    }
-    return findings
+    const out = await io().runHelper('python3', [
+      libPath('review_handoff.py'), 'collect',
+      '--records-path', `${runDir}/round-records.json`,
+    ], { label: 'read nonblocking findings', courier: true })
+    const ans = _helperJsonAnswer(out)
+    if (!ans || !ans.ok) return null
+    return Array.isArray(ans.findings) ? ans.findings : []
   } catch (_) {
     return null
   }
