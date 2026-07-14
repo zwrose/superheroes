@@ -21,3 +21,14 @@ test('doc leg plan-round ALSO passes --doc-mode (the round-scheduling decider, n
     changedSubjects: null, justMarked: false, coverageTarget: null, ioApi, docMode: true })
   assert.ok(captured.includes('--doc-mode'), 'doc leg plan-round must ALSO pass --doc-mode')
 })
+
+test('code leg tally does NOT pass --doc-mode', async () => {
+  let captured = null
+  const ioApi = { join: (...p) => p.join('/'),
+    runHelper: async (_bin, args) => { captured = args; return '{"terminal":"clean"}' } }
+  await shell.tallyRoundDecider({ runDir: '/tmp/r', round: 1, roster: ['a'], maxRounds: 7,
+    gate: 'clean', confidence: 'high', missing: [], presentBlocking: 0, fixStatus: 'completed',
+    verifyResult: null, enterConfirmation: false, ioApi, docMode: false })
+  assert.ok(captured, 'code leg must invoke the tally decider')
+  assert.ok(!captured.includes('--doc-mode'), 'code leg must not pass --doc-mode')
+})

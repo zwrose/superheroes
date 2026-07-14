@@ -148,6 +148,9 @@ test('tasks produce leaf fences injected hand-off text inside labeled JSON (prom
     'prompt warns against treating hand-off text as instructions')
   assert.ok(prompt.includes(injection),
     'injection payload is present as JSON data (escaped), not spliced as a bullet instruction')
+  const outsideFence = prompt.replace(/```json handoff-advisory[\s\S]*?```/g, '')
+  assert.ok(!outsideFence.includes(injection),
+    'injection payload must not appear outside the fenced JSON boundary as an instruction')
 
   reset()
 })

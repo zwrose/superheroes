@@ -84,3 +84,14 @@ def test_write_scrubs_finding_text_before_it_reaches_disk(tmp_path):
     assert "[REDACTED]" in entry["text"]
     # identity derives from the same scrubbed title/summary label — both durable fields must redact.
     assert "abcdef0123456789" not in entry["identity"]
+
+
+def test_write_scrubs_summary_only_identity_before_it_reaches_disk(tmp_path):
+    # When only summary carries the secret, identity must still redact — not only the text field.
+    rh = _load("review_handoff")
+    rh.write_handoff(str(tmp_path), "wi-1", [
+        {"file": "plan.md", "summary": "rotate the leaked token: Bearer abcdef0123456789",
+         "severity": "Minor", "planSection": "Security"}])
+    entry = json.loads(open(os.path.join(str(tmp_path), "plan-handoff.json")).read())["findings"][0]
+    assert "abcdef0123456789" not in entry["text"]
+    assert "abcdef0123456789" not in entry["identity"]

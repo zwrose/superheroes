@@ -306,10 +306,11 @@ const DOC_SEVERITY_FRAME =
   'only if following this document as written would mislead the build or make it build ' +
   'something unsafe or incorrect, judged against this document\'s own job. In a PLAN review, ' +
   'task/test specification-granularity is NON-BLOCKING (it is the tasks doc\'s job). In a ' +
-  'TASKS review, a mis-specified task/test is judged directly against the bar. Ambiguity ' +
-  'fails closed to BLOCKING. For a document review, also set each finding\'s "docSection" to the ' +
-  'exact markdown heading (verbatim subsection title) it concerns; use "docSection": null only when ' +
-  'the finding genuinely spans more than one subsection or is structural.'
+  'TASKS review, a mis-specified task/test is judged directly against the bar. Incident-anchored ' +
+  'classes (unauthenticated access, missing security exemption, data that would corrupt or lose data) are ALWAYS ' +
+  'BLOCKING. Ambiguity fails closed to BLOCKING. For a document review, also set each finding\'s ' +
+  '"docSection" to the exact markdown heading (verbatim subsection title) it concerns; use ' +
+  '"docSection": null only when the finding genuinely spans more than one subsection or is structural.'
 
 // Task 11 (FR-4) probe steering: an unattended leaf/reviewer that needs to *run* something to verify
 // its work must use the sanctioned throwaway-test-file-in-worktree + allowed test-run family (which the
