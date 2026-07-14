@@ -8,6 +8,10 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..",
 
 SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/courier_exec_smoke.js",
+    # #425: the dumb-pipe DISPATCH prompts state byte-fidelity as why-transparency (not concealment-shaped
+    # prohibition, which the auto-mode classifier blocked); the #402 leads + first-blank-line boundary stay
+    # byte-compatible so recordComposedFromPrompt still extracts the executed bytes off the reworked builders.
+    "plugins/superheroes/lib/tests/courier_dispatch_idiom_smoke.js",
     # B5 (#315): the courier retry meter counts a dispatch that needed >1 attempt (retry pressure).
     "plugins/superheroes/lib/tests/courier_retry_meter_smoke.js",
     # #402 Part A: FR-8 composed-exact re-aligned to executed bytes — the single dispatch chokepoint
