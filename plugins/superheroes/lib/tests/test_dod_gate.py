@@ -65,6 +65,99 @@ def test_parse_ignores_nested_subbullets():
     assert dod_gate.parse_dod_bullets(txt) == ["top one", "top two"]
 
 
+# --- #422: markdown-wrapped bullets fold to their full text ------------------
+
+def test_parse_folds_wrapped_bullet_continuations():
+    # the exact live shape that parked the 0.13.0 acceptance run at mark-ready: the
+    # fixture spec's first DoD bullet wraps onto an indented continuation line.
+    txt = ("## Definition of done\n\n"
+           "- The branch's net diff adds exactly one file, `target.txt`, with exactly two lines: the\n"
+           "  seeded baseline line first, one dated line below it.\n"
+           "- No file other than `target.txt` is modified anywhere on the branch.\n\n"
+           "## Next\n")
+    assert dod_gate.parse_dod_bullets(txt) == [
+        "The branch's net diff adds exactly one file, `target.txt`, with exactly two lines: "
+        "the seeded baseline line first, one dated line below it.",
+        "No file other than `target.txt` is modified anywhere on the branch.",
+    ]
+
+
+def test_parse_fold_attaches_only_to_the_preceding_bullet():
+    txt = ("## Definition of done\n\n"
+           "- first wraps\n  onto two\n  indented lines\n"
+           "- second stays short\n\n## Next\n")
+    assert dod_gate.parse_dod_bullets(txt) == [
+        "first wraps onto two indented lines",
+        "second stays short",
+    ]
+
+
+def test_parse_wrapped_bullet_with_nested_subbullet_folds_prose_not_the_sublist():
+    txt = ("## Definition of done\n\n"
+           "- top one wraps\n  here\n  - nested stays ignored\n"
+           "- top two\n\n## Next\n")
+    assert dod_gate.parse_dod_bullets(txt) == ["top one wraps here", "top two"]
+
+
+def test_parse_fold_attaches_to_the_last_bullet_not_the_first():
+    # kills the bullets[0] mutant: the continuation must extend the bullet it FOLLOWS,
+    # which here is not the first one.
+    txt = ("## Definition of done\n\n"
+           "- one stays short\n"
+           "- two wraps\n  onto here\n\n## Next\n")
+    assert dod_gate.parse_dod_bullets(txt) == ["one stays short", "two wraps onto here"]
+
+
+def test_parse_sublist_continuation_stays_out_of_the_parent():
+    # deep-indented prose under a NESTED sub-bullet belongs to the sub-bullet (ignored),
+    # not to the top-level parent; folding resumes at the next top-level bullet.
+    txt = ("## Definition of done\n\n"
+           "- top one\n  - nested wraps\n    onto this line\n"
+           "- top two\n\n## Next\n")
+    assert dod_gate.parse_dod_bullets(txt) == ["top one", "top two"]
+
+
+def test_parse_fold_accepts_tab_indent_and_blank_separated_continuations():
+    # both deliberate: a tab-indented continuation folds, and a continuation paragraph
+    # separated by a blank line is still that bullet's text (markdown loose-list reading).
+    assert dod_gate.parse_dod_bullets(
+        "## Definition of done\n\n- wraps\n\tvia tab\n\n## Next\n") == ["wraps via tab"]
+    assert dod_gate.parse_dod_bullets(
+        "## Definition of done\n\n- b1\n  cont\n\n  more after blank\n\n## Next\n") == [
+        "b1 cont more after blank"]
+
+
+def test_parse_preamble_prose_before_bullets_still_discarded():
+    # column-0 prose ahead of the bullets (e.g. "All judged on the net diff:") is not a
+    # continuation of anything and keeps its pre-#422 behavior: discarded when bullets exist.
+    txt = ("## Definition of done\n\n"
+           "All judged on the branch's net diff and file content:\n\n"
+           "- only bullet\n\n## Next\n")
+    assert dod_gate.parse_dod_bullets(txt) == ["only bullet"]
+
+
+def test_parse_indented_preamble_before_first_bullet_does_not_crash_or_fold():
+    # exercises the `bullets and` guard: indented prose BEFORE any bullet has nothing to
+    # fold into and must stay prose (discarded once bullets exist), never an IndexError.
+    txt = ("## Definition of done\n\n"
+           "  indented preamble\n- only bullet\n\n## Next\n")
+    assert dod_gate.parse_dod_bullets(txt) == ["only bullet"]
+
+
+def test_parse_real_acceptance_fixture_spec_yields_three_full_bullets():
+    # binds the parser to the REAL committed fixture (the artifact whose wrapped bullet
+    # parked the 0.13.0 acceptance run at mark-ready) — pre-#422 the first bullet ended
+    # at "two lines: the".
+    import os
+    p = os.path.join(os.path.dirname(__file__), "..", "..", "eval", "fixtures",
+                     "acceptance", "spec.md")
+    bullets = dod_gate.parse_dod_bullets(open(p, encoding="utf-8").read())
+    assert len(bullets) == 3
+    assert bullets[0].startswith("The branch's net diff adds exactly one file")
+    assert bullets[0].endswith("one dated line below it.")
+    assert bullets[2] == "The change is shippable to a ready-for-review PR with green CI."
+
+
 # --- decide: not-applicable / fail-closed -----------------------------------
 
 def test_not_applicable_when_no_spec():
