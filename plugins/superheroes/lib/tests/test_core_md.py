@@ -1302,7 +1302,8 @@ def test_migrate_belt_refuses_when_legacy_is_the_layer(tmp_path, monkeypatch):
 def test_commit_pathspec_excludes_absent_calibration_paths(tmp_path):
     # #428 direction 1 (unit): the migration commit pathspec / add-set must include core/layer
     # ONLY when present+non-empty. An ABSENT (tracked-but-missing) layer must never have its
-    # DELETION staged/committed by the migration.
+    # DELETION staged/committed by the migration — and a present-but-EMPTY one is equally not
+    # a calibration ADD (the >0 boundary).
     repo = _git_repo(tmp_path)
     d = os.path.join(repo, ".claude", "superheroes")
     os.makedirs(d)
@@ -1315,14 +1316,114 @@ def test_commit_pathspec_excludes_absent_calibration_paths(tmp_path):
     present = CM._present_calibration_paths(core_p, layer_p)
     assert core_p in present
     assert layer_p not in present
-    # a distinct in-repo legacy deletion is still recorded; an absent layer is not
+    # present-but-ZERO-BYTE is not "populated" either (kills the >0 → >=0 mutant)
+    open(layer_p, "w").close()
+    assert layer_p not in CM._present_calibration_paths(core_p, layer_p)
+    os.unlink(layer_p)
+    # a distinct TRACKED in-repo legacy deletion is still recorded; an absent layer is not
     legacy = os.path.join(repo, ".claude", "test-pilot", "profile.md")
     os.makedirs(os.path.dirname(legacy))
     open(legacy, "w").write("# legacy\n")
+    _git(repo, "add", ".claude/test-pilot/profile.md")
+    _git(repo, "commit", "-q", "-m", "seed legacy")
     spec = CM._commit_pathspec(repo, core_p, layer_p, legacy)
     assert core_p in spec
     assert layer_p not in spec        # absent → never a deletion in the pathspec
-    assert legacy in spec             # distinct in-repo legacy deletion still recorded
+    assert legacy in spec             # distinct tracked in-repo legacy deletion still recorded
+
+
+def test_commit_pathspec_excludes_phantom_untracked_legacy(tmp_path):
+    # #428 review (code round 1): _legacy_path returns an in-repo ANCHORED path even when no
+    # legacy ever existed. A never-tracked pathspec entry makes `git commit --only` abort the
+    # WHOLE commit ("did not match any files"), so core/layer would never land. The pathspec
+    # must include the legacy only when it is genuinely tracked.
+    repo = _git_repo(tmp_path)
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d)
+    core_p = os.path.join(d, "core.md")
+    layer_p = os.path.join(d, "test-pilot.md")
+    open(core_p, "w").write("x\n")
+    open(layer_p, "w").write("y\n")
+    phantom = os.path.join(repo, ".claude", "test-pilot", "profile.md")  # never created/tracked
+    spec = CM._commit_pathspec(repo, core_p, layer_p, phantom)
+    assert phantom not in spec
+    assert spec == [core_p, layer_p]
+
+
+def test_resume_outstanding_commit_with_no_legacy_ever_lands(tmp_path, monkeypatch):
+    # #428 review (code round 1, integration): in-repo core+layer written on disk but never
+    # committed, and NO legacy profile ever existed. The outstanding-commit resume must land
+    # the split — with the phantom anchored legacy in the pathspec the whole commit aborted
+    # and every read deferred forever.
+    repo = _git_repo(tmp_path)
+    store = str(tmp_path / "store")
+    _force_in_repo(repo, store)
+    monkeypatch.setenv("TEST_PILOT_STORE_ROOT", str(tmp_path / "tp_store"))
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "init")
+    layer_p = _write_migrated_test_pilot(repo)  # writes core.md + layer, commits nothing
+
+    res = CM.migrate_on_read(repo, "test-pilot", root=store)
+
+    assert res["action"] == "completed"
+    assert _git(repo, "ls-files", "--", ".claude/superheroes/core.md").stdout.strip()
+    assert _git(repo, "ls-files", "--", ".claude/superheroes/test-pilot.md").stdout.strip()
+    assert os.path.isfile(layer_p)
+    assert not os.path.isfile(CM._pending_path(repo, store))
+
+
+def test_record_migration_commit_nothing_to_add_refuses(tmp_path):
+    # #428 direction 1 (unit lock on the belt): with NEITHER core nor layer present+populated
+    # there is nothing legitimate to record — _record_migration_commit must refuse (deferred +
+    # calibration-not-saved marker), never commit a purely destructive migration.
+    repo = _git_repo(tmp_path)
+    store = str(tmp_path / "store")
+    _force_in_repo(repo, store)
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d)
+    core_p = os.path.join(d, "core.md")         # ABSENT
+    layer_p = os.path.join(d, "test-pilot.md")  # ABSENT
+    legacy = os.path.join(repo, ".claude", "test-pilot", "profile.md")
+    os.makedirs(os.path.dirname(legacy))
+    open(legacy, "w").write("# legacy\n")
+    _git(repo, "add", ".claude/test-pilot/profile.md")
+    _git(repo, "commit", "-q", "-m", "seed legacy")
+    head_before = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    res = CM._record_migration_commit(repo, repo, "test-pilot", core_p, layer_p, legacy, store)
+
+    assert res == {"action": "deferred"}
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == head_before  # no commit landed
+    assert _git(repo, "ls-files", "--", ".claude/test-pilot/profile.md").stdout.strip()  # not retired
+    marker = json.load(open(CM._pending_path(repo, store)))
+    assert marker["detail"]["reason"] == "migrate-nothing-to-add"
+
+
+def test_migration_recorded_requires_present_layer_tracked(tmp_path, monkeypatch):
+    # #428 review (premortem round 1): the convergence predicate must not be layer-blind. A
+    # commit that landed core.md + legacy retirement but DROPPED the layer must read as NOT
+    # recorded (so the next read retries and heals), while an absent layer imposes no
+    # requirement (a deliberately deleted layer must not retry forever).
+    repo = _git_repo(tmp_path)
+    store = str(tmp_path / "store")
+    _force_in_repo(repo, store)
+    monkeypatch.setenv("TEST_PILOT_STORE_ROOT", str(tmp_path / "tp_store"))
+    layer_p = _write_migrated_test_pilot(repo)
+    core_p = os.path.join(repo, ".claude", "superheroes", "core.md")
+    legacy = os.path.join(repo, ".claude", "test-pilot", "profile.md")  # never existed
+    # core committed, layer present+populated but UNTRACKED → not recorded
+    _git(repo, "add", ".claude/superheroes/core.md")
+    _git(repo, "commit", "-q", "-m", "core only")
+    assert CM._migration_recorded(repo, core_p, legacy, layer_p=layer_p) is False
+    # the next read HEALS it: the outstanding-commit resume commits the dropped layer
+    res = CM.migrate_on_read(repo, "test-pilot", root=store)
+    assert res["action"] == "completed"
+    assert _git(repo, "ls-files", "--", ".claude/superheroes/test-pilot.md").stdout.strip()
+    assert CM._migration_recorded(repo, core_p, legacy, layer_p=layer_p) is True
+    # an ABSENT layer imposes no tracked requirement (recorded stays true after a deliberate,
+    # committed retirement of the layer)
+    _git(repo, "rm", "-q", ".claude/superheroes/test-pilot.md")
+    _git(repo, "commit", "-q", "-m", "retire layer on purpose")
+    assert CM._migration_recorded(repo, core_p, legacy, layer_p=layer_p) is True
 
 
 def test_commit_pathspec_never_records_legacy_that_is_the_layer(tmp_path):
@@ -1349,6 +1450,7 @@ def test_store_create_does_not_mint_legacy_profile_md(tmp_path):
     subprocess.run(["git", "init", "-q", repo], check=True, capture_output=True)
     root = str(tmp_path / "store")
     c = tp_store.create(repo, "in-repo", root)
+    assert c["profileSource"] == "profile-md"  # genuinely un-migrated: legacy scaffold target
     assert c["profile"].endswith(os.path.join(".claude", "test-pilot", "profile.md"))
     assert not os.path.exists(c["profile"])  # path returned, file NOT minted
 

@@ -199,24 +199,43 @@ def create(cwd, location, root):
     os.makedirs(d["plans_dir"], exist_ok=True)
     os.makedirs(d["state_dir"], exist_ok=True)
 
+    # #428: a MIGRATED project's calibration lives in the unified layer — create() must
+    # point callers (test-pilot-init Step 6 writes the profile at this path) AT THE LAYER,
+    # never back at the legacy .claude/test-pilot/profile.md. Re-minting the legacy file on
+    # a migrated project re-arms core_md.migrate_on_read inside build worktrees — the exact
+    # chain that committed a destructive layer deletion (weekly-eats 9dad0f6). Only a
+    # genuinely un-migrated project (no layer with a config block) still scaffolds at the
+    # legacy path, byte-identical to before.
     if location == "in-repo":
         base = os.path.join(repo_root, ".claude", "test-pilot")
         blocks, manifests = (os.path.join(base, "blocks"),
                              os.path.join(base, "manifests"))
         os.makedirs(blocks, exist_ok=True)
         os.makedirs(manifests, exist_ok=True)
-        profile = os.path.join(base, "profile.md")
+        legacy = os.path.join(base, "profile.md")
+        layer = _in_repo_layer(repo_root)
+        if (not os.path.exists(legacy)  # a still-present legacy keeps resolve()'s precedence
+                and layer is not None and _layer_has_config_block(layer)):
+            profile, profile_source = layer, "layer"
+        else:
+            profile, profile_source = legacy, "profile-md"
     elif location == "global":
         os.makedirs(d["blocks_dir"], exist_ok=True)
         os.makedirs(d["manifests_dir"], exist_ok=True)
         blocks, manifests = d["blocks_dir"], d["manifests_dir"]
-        profile = os.path.join(entry_dir, "profile.md")
+        legacy = os.path.join(entry_dir, "profile.md")
+        layer = _global_layer(cwd)
+        if (not os.path.exists(legacy)  # a still-present legacy keeps resolve()'s precedence
+                and layer is not None and _layer_has_config_block(layer)):
+            profile, profile_source = layer, "layer"
+        else:
+            profile, profile_source = legacy, "profile-md"
     else:
         raise ValueError(f"unknown location: {location}")
     return {"location": location, "exists": os.path.exists(profile),
-            "entry_id": entry_id, "profile": profile, "blocks_dir": blocks,
-            "manifests_dir": manifests, "plans_dir": d["plans_dir"],
-            "state_dir": d["state_dir"]}
+            "entry_id": entry_id, "profile": profile, "profileSource": profile_source,
+            "blocks_dir": blocks, "manifests_dir": manifests,
+            "plans_dir": d["plans_dir"], "state_dir": d["state_dir"]}
 
 
 def decide_location(env_value, interactive, cwd=None, root=None):

@@ -411,7 +411,7 @@ def _present_calibration_paths(core_p, layer_p):
     out = []
     for p in (core_p, layer_p):
         try:
-            if os.path.isfile(p) and os.path.getsize(p) > 0:
+            if p and os.path.isfile(p) and os.path.getsize(p) > 0:
                 out.append(p)
         except OSError:
             pass
@@ -423,14 +423,17 @@ def _same_file(a, b):
     return bool(a) and bool(b) and os.path.realpath(a) == os.path.realpath(b)
 
 
-def _commit_pathspec(repo_root, core_p, layer_p, legacy):
+def _commit_pathspec(repo_root, core_p, layer_p, legacy, present=None):
     """The paths `git commit --only` records for a migration: the PRESENT+POPULATED core + layer
     (never a DELETION of an absent tracked core/layer — #428), plus the legacy DELETION only when
-    the legacy is in-repo (#121 Part E) AND is a genuinely distinct file (a core/layer is never
-    its own legacy, so it is never recorded as its own deletion)."""
-    paths = _present_calibration_paths(core_p, layer_p)
-    if _legacy_in_repo(repo_root, legacy) and not (
-            _same_file(legacy, core_p) or _same_file(legacy, layer_p)):
+    the legacy is in-repo (#121 Part E), TRACKED (a phantom never-committed path in the pathspec
+    fails the WHOLE commit — git aborts on an unmatched pathspec, so core/layer would never land),
+    and a genuinely distinct file (a core/layer is never its own legacy, so it is never recorded
+    as its own deletion). `present` lets a caller reuse an already-computed add set."""
+    paths = list(present) if present is not None else _present_calibration_paths(core_p, layer_p)
+    if (_legacy_in_repo(repo_root, legacy)
+            and not (_same_file(legacy, core_p) or _same_file(legacy, layer_p))
+            and store_core.run_git(repo_root, "ls-files", "--", legacy)):
         paths.append(legacy)
     return paths
 
@@ -453,8 +456,8 @@ def _record_migration_commit(cwd, repo, hero, core_p, layer_p, legacy, root):
     # legacy is excluded — Part E — and was already removed by os.unlink).
     store_core.run_git(repo, "add", "--", *add_paths)
     store_core.run_git(repo, "commit", "--only", "-m", msg, "--",
-                       *_commit_pathspec(repo, core_p, layer_p, legacy))
-    if not _migration_recorded(repo, core_p, legacy):
+                       *_commit_pathspec(repo, core_p, layer_p, legacy, present=add_paths))
+    if not _migration_recorded(repo, core_p, legacy, layer_p=layer_p):
         mark_pending(cwd, root, detail={"hero": hero, "reason": "migrate-commit-failed"})
         return {"action": "deferred"}
     return None
@@ -516,7 +519,8 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
     # fall through to the under-lock retry, not short-circuit to noop (the round-3 finding).
     if not legacy_present and (core_present or not os.path.exists(core_p)):
         outstanding = (core_present and _in_repo_mode(cwd, root)
-                       and not _migration_recorded(_repo_root(cwd), core_p, legacy))
+                       and not _migration_recorded(_repo_root(cwd), core_p, legacy,
+                                                   layer_p=layer_p))
         if not outstanding:
             return {"action": "noop"}
     if mode_registry.ensure_project_store(cwd, root) is None:
@@ -586,7 +590,7 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
             # using git's own tracking state (not run_git's ambiguous None) to decide.
             if _in_repo_mode(cwd, root):
                 repo = _repo_root(cwd)
-                if not _migration_recorded(repo, core_p, legacy):
+                if not _migration_recorded(repo, core_p, legacy, layer_p=layer_p):
                     problem = _record_migration_commit(
                         cwd, repo, hero, core_p, layer_p, legacy, root)
                     if problem is not None:
@@ -624,7 +628,7 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
         return {"action": "migrated"}
 
 
-def _migration_recorded(repo_root, core_p, legacy):
+def _migration_recorded(repo_root, core_p, legacy, layer_p=None):
     """In in-repo mode the split is fully recorded iff core.md is TRACKED and the legacy
     path is NO LONGER tracked (its deletion is committed). `run_git ls-files` returns the
     path when tracked, "" otherwise — distinguishing a real commit landing from run_git's
@@ -632,15 +636,29 @@ def _migration_recorded(repo_root, core_p, legacy):
     read rather than silently dropped (FR-8). Defined after migrate_on_read; Python late-binds
     the module-level name, so the call order is fine.
 
+    When `layer_p` is given, a PRESENT+POPULATED hero layer must ALSO be tracked before the
+    split counts as recorded — otherwise a commit that dropped the layer (while landing
+    core.md + the legacy retirement) would be declared done and the layer would sit untracked
+    forever with no retry and no calibration-not-saved marker (#428 review). An absent layer
+    imposes no requirement: requiring a deleted-on-purpose layer to be tracked would retry
+    forever, and committing an absent layer is exactly the deletion #428 forbids.
+
     An OUT-OF-REPO legacy (global-mode profile) has no git deletion to record — and `ls-files`
     on a path outside the repo always errors (run_git → None → falsey), which the old
     `not legacy_tracked` leg misread as 'deletion committed'. So for an out-of-repo legacy the
-    split is recorded iff core.md is tracked, full stop (#121 Part E)."""
+    split is recorded iff core.md (and any present layer) is tracked (#121 Part E)."""
     core_tracked = bool(store_core.run_git(repo_root, "ls-files", "--", core_p))
     if not core_tracked:
         return False
+    if layer_p is not None:
+        try:
+            layer_present = os.path.isfile(layer_p) and os.path.getsize(layer_p) > 0
+        except OSError:
+            layer_present = True  # unreadable is NOT absent: stay unrecorded and retry later
+        if layer_present and not store_core.run_git(repo_root, "ls-files", "--", layer_p):
+            return False
     if not _legacy_in_repo(repo_root, legacy):
-        return True  # out-of-repo legacy: nothing for git to record beyond core.md
+        return True  # out-of-repo legacy: nothing for git to record beyond the adds
     legacy_tracked = bool(store_core.run_git(repo_root, "ls-files", "--", legacy))
     return not legacy_tracked
 
