@@ -1197,3 +1197,191 @@ def test_resume_rescue_preserves_confirmed_status_and_created(tmp_path):
     assert got["verifyCommand"] == "npm test"   # rescued
     assert got["status"] == "confirmed"          # NOT downgraded
     assert got["created"] == "2026-06-01"        # preserved
+
+
+# ---------------------------------------------------------------------------
+# #428 — migrate_on_read committed a pure DELETION of the tracked calibration
+# LAYER (.claude/superheroes/test-pilot.md) with no replacement, losing a
+# migrated project's calibration. Two-part defense: (1) the migration commit
+# never records a deletion of core/layer; (2) _legacy_path never returns the
+# unified layer as a "legacy" migration source (the trigger).
+# ---------------------------------------------------------------------------
+
+_TP_LAYER_BODY = (
+    "## App launch\n\nnpm run dev\n\n"
+    "## Machine-readable config\n\n"
+    "```json test-pilot-config\n"
+    '{"schemaVersion": 1, "baseUrl": "http://localhost:3000"}\n'
+    "```\n"
+)
+
+
+def _write_migrated_test_pilot(repo, *, status="confirmed", stamp="2026-07-01"):
+    """A MIGRATED test-pilot project: core.md + the unified test-pilot.md layer (with the
+    test-pilot-config block store.resolve() keys on), NO legacy profile.md. Returns the layer path."""
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    core_facts = {"verifyCommand": "npm test", "stackTags": ["node"],
+                  "threatModel": "xss", "patterns": "hooks"}
+    open(os.path.join(d, "core.md"), "w").write(
+        CM.render_core(core_facts, status, stamp, stamp))
+    layer_p = os.path.join(d, "test-pilot.md")
+    open(layer_p, "w").write(CM._render_layer(_TP_LAYER_BODY, "test-pilot", status, stamp))
+    return layer_p
+
+
+def test_migrated_layer_is_never_a_legacy_migration_source(tmp_path, monkeypatch):
+    # #428 direction 2 (trigger): a migrated project's unified layer must NEVER be treated as a
+    # legacy profile. store.resolve() returns profileSource=="layer" with the layer in `profile`;
+    # _legacy_path must NOT hand that back (its #123 contract: "never the unified layer").
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+    monkeypatch.setenv("TEST_PILOT_STORE_ROOT", str(tmp_path / "tp_store"))
+    layer_p = _write_migrated_test_pilot(repo)
+    # sanity: store.resolve DOES surface the layer (that overload is correct for the engine)
+    import store as tp_store
+    res = tp_store.resolve(repo, tp_store.store_root())
+    assert res["profileSource"] == "layer"
+    assert os.path.realpath(res["profile"]) == os.path.realpath(layer_p)
+    # but _legacy_path must not return the layer — it returns the (non-existent) legacy path,
+    # so resolve_shared's `os.path.isfile(legacy)` gate is False and migration never fires.
+    legacy = CM._legacy_path(repo, "test-pilot")
+    assert os.path.realpath(legacy) != os.path.realpath(layer_p)
+    assert not os.path.isfile(legacy)
+
+
+def test_migrate_migrated_test_pilot_is_noop_never_deletes_layer(tmp_path, monkeypatch):
+    # #428 THE reproducer: an in-repo worktree cut from a migrated main (core.md + tracked
+    # test-pilot.md layer, NO legacy profile.md). migrate_on_read must be a NOOP — it must NOT
+    # unlink the layer, and must NOT commit a deletion of it.
+    repo = _git_repo(tmp_path)
+    store = str(tmp_path / "store")
+    _force_in_repo(repo, store)
+    monkeypatch.setenv("TEST_PILOT_STORE_ROOT", str(tmp_path / "tp_store"))
+    layer_p = _write_migrated_test_pilot(repo)
+    _git(repo, "add", ".claude/superheroes/core.md", ".claude/superheroes/test-pilot.md")
+    _git(repo, "commit", "-q", "-m", "migrate (prior run)")
+    head_before = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    res = CM.migrate_on_read(repo, "test-pilot", root=store)
+
+    assert res["action"] == "noop"
+    # the layer is still on disk AND still tracked — no destructive deletion
+    assert os.path.isfile(layer_p)
+    assert _git(repo, "ls-files", "--", ".claude/superheroes/test-pilot.md").stdout.strip()
+    # HEAD did not advance with a phantom "migrate" deletion commit
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == head_before
+    # idempotent: a second read is still a clean noop, layer intact
+    assert CM.migrate_on_read(repo, "test-pilot", root=store)["action"] == "noop"
+    assert os.path.isfile(layer_p)
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == head_before
+
+
+def test_migrate_belt_refuses_when_legacy_is_the_layer(tmp_path, monkeypatch):
+    # #428 direction 1 (belt, independent of the trigger fix): even if a resolver regressed and
+    # handed the LAYER path back as "legacy", migrate_on_read must refuse — a calibration
+    # core/layer is never its own legacy. No unlink, no deletion commit.
+    repo = _git_repo(tmp_path)
+    store = str(tmp_path / "store")
+    _force_in_repo(repo, store)
+    layer_p = _write_migrated_test_pilot(repo)
+    _git(repo, "add", ".claude/superheroes/core.md", ".claude/superheroes/test-pilot.md")
+    _git(repo, "commit", "-q", "-m", "migrate (prior run)")
+    head_before = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    # simulate the regression: _legacy_path returns the layer itself
+    monkeypatch.setattr(CM, "_legacy_path", lambda cwd, hero: layer_p)
+
+    res = CM.migrate_on_read(repo, "test-pilot", root=store)
+
+    assert res["action"] == "noop"
+    assert os.path.isfile(layer_p)  # NOT unlinked
+    assert _git(repo, "ls-files", "--", ".claude/superheroes/test-pilot.md").stdout.strip()
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == head_before
+
+
+def test_commit_pathspec_excludes_absent_calibration_paths(tmp_path):
+    # #428 direction 1 (unit): the migration commit pathspec / add-set must include core/layer
+    # ONLY when present+non-empty. An ABSENT (tracked-but-missing) layer must never have its
+    # DELETION staged/committed by the migration.
+    repo = _git_repo(tmp_path)
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d)
+    core_p = os.path.join(d, "core.md")
+    layer_p = os.path.join(d, "test-pilot.md")
+    open(core_p, "w").write(CM.render_core(
+        {"verifyCommand": "npm test", "stackTags": [], "threatModel": "x", "patterns": ""},
+        "provisional", "2026-07-01", "2026-07-01"))
+    # layer_p is ABSENT
+    present = CM._present_calibration_paths(core_p, layer_p)
+    assert core_p in present
+    assert layer_p not in present
+    # a distinct in-repo legacy deletion is still recorded; an absent layer is not
+    legacy = os.path.join(repo, ".claude", "test-pilot", "profile.md")
+    os.makedirs(os.path.dirname(legacy))
+    open(legacy, "w").write("# legacy\n")
+    spec = CM._commit_pathspec(repo, core_p, layer_p, legacy)
+    assert core_p in spec
+    assert layer_p not in spec        # absent → never a deletion in the pathspec
+    assert legacy in spec             # distinct in-repo legacy deletion still recorded
+
+
+def test_commit_pathspec_never_records_legacy_that_is_the_layer(tmp_path):
+    # #428 direction 1 (unit): if `legacy` coincides with core_p/layer_p, it must NOT be appended
+    # as a deletion (a core/layer is never its own legacy).
+    repo = _git_repo(tmp_path)
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d)
+    core_p = os.path.join(d, "core.md")
+    layer_p = os.path.join(d, "test-pilot.md")
+    open(core_p, "w").write("x\n")
+    open(layer_p, "w").write("y\n")
+    spec = CM._commit_pathspec(repo, core_p, layer_p, layer_p)  # legacy == layer
+    assert spec.count(layer_p) == 1  # present once as the ADD, never doubled as a deletion
+
+
+def test_store_create_does_not_mint_legacy_profile_md(tmp_path):
+    # #428 direction 2 corollary: store.create() must not materialize a legacy profile.md on disk
+    # (it returns the path but never writes the file). Locks the non-minting invariant so a future
+    # change can't reintroduce the migrate_on_read trigger.
+    import store as tp_store
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+    subprocess.run(["git", "init", "-q", repo], check=True, capture_output=True)
+    root = str(tmp_path / "store")
+    c = tp_store.create(repo, "in-repo", root)
+    assert c["profile"].endswith(os.path.join(".claude", "test-pilot", "profile.md"))
+    assert not os.path.exists(c["profile"])  # path returned, file NOT minted
+
+
+def test_migrate_real_test_pilot_legacy_still_migrates_and_commits(tmp_path, monkeypatch):
+    # #428 must NOT break the legitimate migration: a REAL in-repo legacy profile.md (tracked, no
+    # prior core/layer) still splits into core.md + test-pilot.md, commits them, and records the
+    # legacy DELETION.
+    repo = _git_repo(tmp_path)
+    store = str(tmp_path / "store")
+    _force_in_repo(repo, store)
+    monkeypatch.setenv("TEST_PILOT_STORE_ROOT", str(tmp_path / "tp_store"))
+    legacy_dir = os.path.join(repo, ".claude", "test-pilot")
+    os.makedirs(legacy_dir)
+    legacy = os.path.join(legacy_dir, "profile.md")
+    open(legacy, "w").write(
+        "<!-- test-pilot -->\n\n## App launch\n\nnpm run dev\n\n"
+        "## Machine-readable config\n\n```json test-pilot-config\n"
+        '{"schemaVersion": 1, "baseUrl": "http://localhost:3000"}\n```\n')
+    _git(repo, "add", ".claude/test-pilot/profile.md")
+    _git(repo, "commit", "-q", "-m", "seed legacy test-pilot profile")
+
+    # _legacy_path returns the REAL legacy (anchored in-repo), not the layer
+    assert os.path.realpath(CM._legacy_path(repo, "test-pilot")) == os.path.realpath(legacy)
+    res = CM.migrate_on_read(repo, "test-pilot", root=store)
+    assert res["action"] == "migrated"
+    # core.md + layer written and committed; legacy deletion recorded
+    names = set(_git(repo, "show", "--name-status", "--format=", "HEAD").stdout.split())
+    assert ".claude/superheroes/core.md" in names
+    assert ".claude/superheroes/test-pilot.md" in names
+    # the legacy profile.md's removal is recorded (git may report it as a delete or, since it
+    # shares the config block with the layer, as a rename — either way it is no longer tracked)
+    assert not _git(repo, "ls-files", "--", ".claude/test-pilot/profile.md").stdout.strip()
+    assert not os.path.exists(legacy)
+    # and the layer carries the test-pilot-config block (real calibration, not an empty deletion)
+    assert "test-pilot-config" in open(os.path.join(repo, ".claude", "superheroes", "test-pilot.md")).read()

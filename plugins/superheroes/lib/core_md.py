@@ -351,7 +351,14 @@ def _legacy_path(cwd, hero):
         elif hero == "test-pilot":
             import store as test_pilot_store
             res = test_pilot_store.resolve(cwd, test_pilot_store.store_root())
-            if res.get("exists") and res.get("profile"):
+            # Only a REAL single-file legacy profile.md is a migration source — NEVER the unified
+            # layer. store.resolve() overloads `profile` to also point at the layer
+            # (profileSource == "layer") so the ENGINE can read calibration from it; returning
+            # that here made migrate_on_read treat the layer itself as a legacy to RETIRE — it
+            # unlinked the layer and committed its DELETION (#428 data-loss). Gate on
+            # profileSource so this honors the #123 contract ("never the unified layer").
+            if (res.get("exists") and res.get("profileSource") == "profile-md"
+                    and res.get("profile")):
                 return res["profile"]
     except Exception:
         pass  # fail-open: return the in-repo anchored path for isfile checks
@@ -395,13 +402,62 @@ def _legacy_in_repo(repo_root, legacy):
     return os.path.realpath(legacy).startswith(os.path.realpath(repo_root) + os.sep)
 
 
+def _present_calibration_paths(core_p, layer_p):
+    """The migration commit's ADD set: core.md and the hero layer, but ONLY when each is PRESENT
+    and NON-EMPTY in the worktree. A tracked core/layer that is ABSENT from this worktree must
+    NEVER have its DELETION staged or committed by the migration — the migration's job is to ADD
+    the split, never to delete a layer (#428 data-loss). A freshly-written split has both
+    present+populated, so the legitimate migration is unaffected."""
+    out = []
+    for p in (core_p, layer_p):
+        try:
+            if os.path.isfile(p) and os.path.getsize(p) > 0:
+                out.append(p)
+        except OSError:
+            pass
+    return out
+
+
+def _same_file(a, b):
+    """True when two paths denote the same file on disk (realpath-normalized)."""
+    return bool(a) and bool(b) and os.path.realpath(a) == os.path.realpath(b)
+
+
 def _commit_pathspec(repo_root, core_p, layer_p, legacy):
-    """The paths `git commit --only` records for a migration: always core + layer, plus the legacy
-    DELETION only when the legacy is in-repo (#121 Part E)."""
-    paths = [core_p, layer_p]
-    if _legacy_in_repo(repo_root, legacy):
+    """The paths `git commit --only` records for a migration: the PRESENT+POPULATED core + layer
+    (never a DELETION of an absent tracked core/layer — #428), plus the legacy DELETION only when
+    the legacy is in-repo (#121 Part E) AND is a genuinely distinct file (a core/layer is never
+    its own legacy, so it is never recorded as its own deletion)."""
+    paths = _present_calibration_paths(core_p, layer_p)
+    if _legacy_in_repo(repo_root, legacy) and not (
+            _same_file(legacy, core_p) or _same_file(legacy, layer_p)):
         paths.append(legacy)
     return paths
+
+
+def _record_migration_commit(cwd, repo, hero, core_p, layer_p, legacy, root):
+    """Stage + commit the migration split via `git commit --only`: add the present+populated
+    core/layer, and record the in-repo legacy DELETION. Returns None on success, or a
+    `deferred`-result dict on refusal/failure. NEVER commits a DELETION of an absent core/layer
+    (#428): only present+populated calibration files are added, and if NEITHER is present there
+    is nothing legitimate to record — refuse (calibration-not-saved) rather than commit a purely
+    destructive migration."""
+    add_paths = _present_calibration_paths(core_p, layer_p)
+    if not add_paths:
+        # No present+populated calibration to ADD → committing would record only deletions.
+        mark_pending(cwd, root, detail={"hero": hero, "reason": "migrate-nothing-to-add"})
+        return {"action": "deferred"}
+    msg = "chore(superheroes): migrate %s profile to core.md + layer" % hero
+    # stage the (possibly untracked) new files so `commit --only` knows them; an in-repo legacy is
+    # recorded via the pathspec so its working-tree DELETION is what --only captures (an out-of-repo
+    # legacy is excluded — Part E — and was already removed by os.unlink).
+    store_core.run_git(repo, "add", "--", *add_paths)
+    store_core.run_git(repo, "commit", "--only", "-m", msg, "--",
+                       *_commit_pathspec(repo, core_p, layer_p, legacy))
+    if not _migration_recorded(repo, core_p, legacy):
+        mark_pending(cwd, root, detail={"hero": hero, "reason": "migrate-commit-failed"})
+        return {"action": "deferred"}
+    return None
 
 
 def _facts_are_empty(rec):
@@ -444,6 +500,13 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
         return {"action": "noop"}
     core_p = core_path(cwd, root)
     layer_p = _layer_path(cwd, hero, root)
+    # DATA-LOSS BELT (#428): a calibration core/layer is NEVER its own legacy. If `legacy`
+    # resolves to the same file as core.md or the hero layer, this is not a migration source —
+    # retiring it would unlink the live layer and commit its DELETION. Refuse before any
+    # unlink/commit. (Direction 2 keeps _legacy_path from ever returning the layer; this belt
+    # holds even if a resolver regresses.)
+    if _same_file(legacy, core_p) or _same_file(legacy, layer_p):
+        return {"action": "noop"}
     legacy_present = bool(legacy) and os.path.isfile(legacy)
     core_present = read(cwd, root) is not None
     layer_present = os.path.isfile(layer_p)
@@ -524,14 +587,10 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
             if _in_repo_mode(cwd, root):
                 repo = _repo_root(cwd)
                 if not _migration_recorded(repo, core_p, legacy):
-                    msg = "chore(superheroes): migrate %s profile to core.md + layer" % hero
-                    # stage the (possibly untracked) new files so `commit --only` knows them
-                    store_core.run_git(repo, "add", "--", core_p, layer_p)
-                    store_core.run_git(repo, "commit", "--only", "-m", msg, "--",
-                                       *_commit_pathspec(repo, core_p, layer_p, legacy))
-                    if not _migration_recorded(repo, core_p, legacy):
-                        mark_pending(cwd, root, detail={"hero": hero, "reason": "migrate-commit-failed"})
-                        return {"action": "deferred"}
+                    problem = _record_migration_commit(
+                        cwd, repo, hero, core_p, layer_p, legacy, root)
+                    if problem is not None:
+                        return problem
                     did_work = True
             clear_pending(cwd, root)
             return {"action": "completed" if did_work else "noop"}
@@ -558,16 +617,9 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
             return {"action": "deferred"}
         if _in_repo_mode(cwd, root):
             repo = _repo_root(cwd)
-            msg = "chore(superheroes): migrate %s profile to core.md + layer" % hero
-            # stage the (untracked) new files first so `commit --only` knows them; an in-repo
-            # legacy is included so its working-tree DELETION is what --only records (an
-            # out-of-repo legacy is excluded — Part E — and was already removed by os.unlink).
-            store_core.run_git(repo, "add", "--", core_p, layer_p)
-            store_core.run_git(repo, "commit", "--only", "-m", msg, "--",
-                               *_commit_pathspec(repo, core_p, layer_p, legacy))
-            if not _migration_recorded(repo, core_p, legacy):
-                mark_pending(cwd, root, detail={"hero": hero, "reason": "migrate-commit-failed"})
-                return {"action": "deferred"}
+            problem = _record_migration_commit(cwd, repo, hero, core_p, layer_p, legacy, root)
+            if problem is not None:
+                return problem
         clear_pending(cwd, root)
         return {"action": "migrated"}
 
