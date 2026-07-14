@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.13.1](https://github.com/zwrose/superheroes/compare/superheroes-v0.13.0...superheroes-v0.13.1) (2026-07-14)
+
+
+### Bug Fixes
+
+* **superheroes:** courier prompts state fidelity as transparency, not concealment-shaped prohibition ([#425](https://github.com/zwrose/superheroes/issues/425)) ([#426](https://github.com/zwrose/superheroes/issues/426)) ([7695f90](https://github.com/zwrose/superheroes/commit/7695f909c94182426fad7507b24e62bd52eda3bf))
+
+## [0.13.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.12.0...superheroes-v0.13.0) (2026-07-14)
+
+
+### Features
+
+* **superheroes:** add GPT-5.6 Codex support ([#406](https://github.com/zwrose/superheroes/issues/406)) ([513e832](https://github.com/zwrose/superheroes/commit/513e8323d8a6aac50c329e9f328a90bac788c4c7))
+
+
+### Bug Fixes
+
+* **superheroes:** acceptance fixture seeds its own target.txt baseline ([#419](https://github.com/zwrose/superheroes/issues/419)) ([#420](https://github.com/zwrose/superheroes/issues/420)) ([d7a0a37](https://github.com/zwrose/superheroes/commit/d7a0a37df6ae753607ced6c243e33879275e93df))
+* **superheroes:** add payload-is-data clause to courier prompts ([#403](https://github.com/zwrose/superheroes/issues/403)) ([491232d](https://github.com/zwrose/superheroes/commit/491232dafc9ba772bad9073df6f36997c1624905))
+* **superheroes:** attribute allowance journaling to the triggering session's run ([#379](https://github.com/zwrose/superheroes/issues/379)) ([#405](https://github.com/zwrose/superheroes/issues/405)) ([5a57bcc](https://github.com/zwrose/superheroes/commit/5a57bcc7e000108bb86b327a0b0209e1ce955a1e))
+* **superheroes:** DoD gate folds markdown-wrapped bullets; fill heals pre-fold truncated rows ([#422](https://github.com/zwrose/superheroes/issues/422)) ([#423](https://github.com/zwrose/superheroes/issues/423)) ([8203ce3](https://github.com/zwrose/superheroes/commit/8203ce3152413f3abf0e725652349627992d2844))
+* **superheroes:** fold work-item into ALL engine staging keys — bare taskId paths were project-blind ([#408](https://github.com/zwrose/superheroes/issues/408)) ([#415](https://github.com/zwrose/superheroes/issues/415)) ([15dc66a](https://github.com/zwrose/superheroes/commit/15dc66a99a4b1534961e45d4e1d00cf7a5d1a597))
+* **superheroes:** io.writeFile verifies every courier write — refused or mutated writes fail loudly ([#410](https://github.com/zwrose/superheroes/issues/410)) ([#417](https://github.com/zwrose/superheroes/issues/417)) ([e64c867](https://github.com/zwrose/superheroes/commit/e64c867f5891de79a4605fdfcb266fc146b7be3d))
+* **superheroes:** re-align FR-8 composed-exact to executed bytes + denial-terminal couriers ([#402](https://github.com/zwrose/superheroes/issues/402)) ([#407](https://github.com/zwrose/superheroes/issues/407)) ([806b9cd](https://github.com/zwrose/superheroes/commit/806b9cd2a409e75cc713ade40b02b475bd3f4aaa))
+* **superheroes:** test-pilot engine resolves the unified calibration layer ([#412](https://github.com/zwrose/superheroes/issues/412)) ([#416](https://github.com/zwrose/superheroes/issues/416)) ([f14c7e1](https://github.com/zwrose/superheroes/commit/f14c7e11f0c3c4044af502110ba2a163562bb284))
+* **superheroes:** test-pilot prepare surfaces the leaf's real park reason ([#411](https://github.com/zwrose/superheroes/issues/411)) ([#414](https://github.com/zwrose/superheroes/issues/414)) ([6892a20](https://github.com/zwrose/superheroes/commit/6892a20d724b0525a8ec9501c8f79a5be09f19d1))
+
 ## [0.12.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.11.2...superheroes-v0.12.0) (2026-07-12)
 
 

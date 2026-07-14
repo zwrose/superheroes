@@ -121,3 +121,26 @@ def test_render_shows_effective_model_tiers(tmp_path):
     assert "reviewer: fable" in screen
     assert "synthesis: opus" in screen
     assert "mechanical: haiku" in screen
+
+
+def test_render_shows_engine_preferences_and_codex_model_pins(tmp_path):
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    cdir = os.path.join(str(tmp_path), ".claude", "superheroes")
+    os.makedirs(cdir, exist_ok=True)
+    sc.atomic_write(os.path.join(cdir, "core.md"),
+                    core_md.render_core({"verifyCommand": "pytest", "stackTags": ["py"],
+                                         "threatModel": "single-user", "patterns": "",
+                                         "enginePreferences": {
+                                             "reviewer": "codex", "implementation": "claude",
+                                             "planAuthor": "codex", "effort": {"review": "high"},
+                                             "codexModels": {"reviewer": "gpt-5.5"}}},
+                                        "confirmed", "2026-07-12", "2026-07-12"))
+    sc.atomic_write(os.path.join(cdir, "review-crew.md"), "<!-- review-crew: v1 -->\nscope\n")
+    screen = cv.render(str(tmp_path), root=root)
+    assert "## Engine preferences" in screen
+    assert "reviewer: codex" in screen and "implementation: claude" in screen
+    assert "planAuthor: codex" in screen
+    assert "reviewer: gpt-5.5" in screen
+    assert "effort overrides: review=high" in screen

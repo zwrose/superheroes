@@ -206,14 +206,20 @@ function shellResponse(cmd) {
     const out = runHelperResponse(helper)
     return (out != null ? out : '{}') + '\n__SR_EXIT:0'
   }
-  // The OPAQUE write transport (base64 python heredoc) — for the remaining standalone io.writeFile
-  // leaves (test-pilot artifacts, last-extras). The write's answer is a conversational ack (mode 2).
-  const bw = cmd.match(/^python3 -c '[\s\S]*?' '([^']*)' '([A-Za-z0-9+/=]*)'$/)
+  // The OPAQUE write transport (base64 python argv) — for the remaining standalone io.writeFile leaves
+  // (test-pilot artifacts, last-extras). #410: io.writeFile passes an expected-hash third argv and
+  // VERIFIES the landed file, so a faithful write's answer carries the `__SR_WROTE:<hash8>` marker.
+  // (2) CHATTY WRITE ACK — the FIRST standalone write answers a conversational ack with NO marker (the
+  // write applied, but the leaf narrated instead of returning the verify marker). #410's writeFile must
+  // read the missing marker as UNVERIFIED and RETRY (escalated to the payload tier); the retry runs the
+  // same command and returns the marker, so the write converges instead of silently landing unverified.
+  const bw = cmd.match(/^python3 -c '[\s\S]*?' '([^']*)' '([A-Za-z0-9+/=]*)' '([0-9a-f]{64})'$/)
   if (bw) {
     const target = bw[1]
-    files[target] = Buffer.from(bw[2], 'base64').toString('utf8')
-    counters.chattyAcks += 1
-    return CHATTY_ACK   // (2) the write's answer is conversational, never the command's stdout
+    const content = Buffer.from(bw[2], 'base64').toString('utf8')
+    files[target] = content
+    if (counters.chattyAcks === 0) { counters.chattyAcks += 1; return CHATTY_ACK }
+    return '__SR_WROTE:' + sha256(content).slice(0, 8)
   }
   if (cmd.startsWith('mkdir -p')) return ''
   if (/^python3 -c '[^']*os\.makedirs[^']*' '[^']*'$/.test(cmd)) return ''   // argv-shape mkdirp

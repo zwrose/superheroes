@@ -8,8 +8,18 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..",
 
 SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/courier_exec_smoke.js",
+    # #425: the dumb-pipe DISPATCH prompts state byte-fidelity as why-transparency (not concealment-shaped
+    # prohibition, which the auto-mode classifier blocked); the #402 leads + first-blank-line boundary stay
+    # byte-compatible so recordComposedFromPrompt still extracts the executed bytes off the reworked builders.
+    "plugins/superheroes/lib/tests/courier_dispatch_idiom_smoke.js",
     # B5 (#315): the courier retry meter counts a dispatch that needed >1 attempt (retry pressure).
     "plugins/superheroes/lib/tests/courier_retry_meter_smoke.js",
+    # #402 Part A: FR-8 composed-exact re-aligned to executed bytes — the single dispatch chokepoint
+    # records the exact leaf command (byte-exact through the real bundle preamble, floor-safe, fail-open).
+    "plugins/superheroes/lib/tests/showrunner_composed_exact_smoke.js",
+    # #402 Part B: a classifier denial is terminal on every courier — one attempt, journaled scrubbed
+    # decline, fail-closed; a non-denial failure still retries.
+    "plugins/superheroes/lib/tests/courier_denial_terminal_smoke.js",
     "plugins/superheroes/lib/tests/test_pilot_deciders_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_test_pilot_leaf_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_ship_leaf_budget_smoke.js",
@@ -49,6 +59,10 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_fullpipeline_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fullrun_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_io_seam_smoke.js",
+    # #410: io.writeFile verifies every courier write — the writer re-reads + re-hashes the landed file
+    # (__SR_WROTE marker), and a refused/empty/prose/mutated/never-dispatched write retries once on the
+    # payload tier then throws loudly. Drives the REAL bundle writeFile through a real python3 shell.
+    "plugins/superheroes/lib/tests/showrunner_writefile_verify_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_panel_shell_smoke.js",
     # #394: the whole-branch final-review leg (panel:false) schedules its honest deep dispatch tier,
     # so a post-baseline round with prior findings does NOT arm a byte-identical escalation re-dispatch;

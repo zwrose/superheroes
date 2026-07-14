@@ -27,6 +27,10 @@ _DOD_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+definition of done\b", re.IGNORECAS
 _HEADING = re.compile(r"^\s{0,3}#{1,6}\s+")
 # Top-level markdown list items only (column 0) — nested sub-bullets do not inflate the count.
 _LIST_ITEM = re.compile(r"^([-*]|\d+\.)\s+(.*)")
+# An INDENTED list item (a nested sub-bullet) — excluded from continuation folding in
+# parse_dod_bullets so sub-bullets keep their long-standing "ignored" behavior instead of
+# merging into the parent bullet's text.
+_INDENTED_LIST = re.compile(r"^\s+([-*]|\d+\.)\s+")
 
 # The machine-anchor for the disposition table in the PR body (seeded at draft-PR time by
 # pr_body.seed_dod_block). Anchoring on this marker, not on prose, keeps the parse robust.
@@ -65,12 +69,29 @@ def parse_dod_bullets(spec_text):
     if start is None:
         return None
     bullets, prose = [], []
+    in_sublist = False
     for ln in lines[start:]:
         if _HEADING.match(ln):
             break
         m = _LIST_ITEM.match(ln)
         if m:
             bullets.append(m.group(2).strip())
+            in_sublist = False
+        elif _INDENTED_LIST.match(ln):
+            # nested sub-bullets keep their long-standing "ignored" behavior — and anything
+            # indented under THEM belongs to the sub-bullet, not the parent (see below).
+            in_sublist = True
+        elif (bullets and not in_sublist and ln.strip() and ln[:1] in (" ", "\t")):
+            # #422: a markdown-wrapped bullet continues on indented lines. Keeping only the
+            # first physical line truncated the bullet's identity, so the disposition filler
+            # (which reads the spec naturally and records the full joined text) could never
+            # match it and mark-ready parked a fully-green run with "no disposition". Fold
+            # indented, non-list, non-heading continuations into the bullet they follow —
+            # every DoD consumer (seed_dod_block, the filler match, decide) routes through
+            # this one parser, so folding here fixes seeding and matching together. Once a
+            # nested sub-bullet starts, its own continuations are NOT the parent's text:
+            # folding resumes only at the next top-level bullet.
+            bullets[-1] = bullets[-1] + " " + ln.strip()
         elif ln.strip():
             prose.append(ln.strip())
     if bullets:

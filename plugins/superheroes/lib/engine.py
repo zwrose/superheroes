@@ -9,7 +9,6 @@ import fnmatch
 import hashlib
 import json
 import os
-import re
 import sys
 import time
 
@@ -173,17 +172,17 @@ def load_plan_record(path, manifest, branch=None, slot=None):
     return rec
 
 
-_CONFIG_RE = re.compile(r"```json\s+test-pilot-config\s*\n(.*?)\n```", re.S)
-
-
 def load_profile_config(profile_path):
-    """Parse the one machine-readable fenced block out of profile.md."""
+    """Parse the one machine-readable fenced block out of the profile source (legacy
+    profile.md or the unified calibration layer — #412). The block pattern is defined
+    ONCE, in store.CONFIG_BLOCK_RE, shared with store's layer presence gate so the two
+    can never drift."""
     try:
         with open(profile_path) as _fh:
             text = _fh.read()
     except OSError as exc:
         raise EngineError(f"cannot read profile {profile_path}: {exc}") from exc
-    m = _CONFIG_RE.search(text)
+    m = store.CONFIG_BLOCK_RE.search(text)
     if not m:
         raise EngineError(
             f"profile {profile_path} has no ```json test-pilot-config block; "

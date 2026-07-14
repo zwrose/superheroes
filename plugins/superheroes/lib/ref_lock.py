@@ -132,23 +132,34 @@ def is_stale(lease, ttl, now=None):
     return _expired(lease.get("acquiredAt"), ttl, now) and _pid_dead(lease)
 
 
-def _lease_obj(generation, ttl, now=None):
-    return {"pid": os.getpid(), "host": _host(), "bootId": hostinfo.boot_id(),
-            "acquiredAt": _stamp(now), "generation": generation, "ttl": ttl}
+def _lease_obj(generation, ttl, now=None, session_cwd=None):
+    obj = {"pid": os.getpid(), "host": _host(), "bootId": hostinfo.boot_id(),
+           "acquiredAt": _stamp(now), "generation": generation, "ttl": ttl}
+    # #379: the owning session's launch cwd — the honest "which session started this run"
+    # signal used to attribute allowance audit events to the run whose session triggered them
+    # (Claude Code does not expose session_id to a subprocess, so the acquiring leaf records its
+    # own os.getcwd(), which equals the payload cwd the hook reports for that session's tool
+    # calls). Absent on a pre-#379 (legacy) lease, or any acquire that passes no session_cwd —
+    # attribution then falls back to today's cwd-resolved run. Never load-bearing for the mutex.
+    if session_cwd:
+        obj["sessionCwd"] = session_cwd
+    return obj
 
 
-def acquire(store, work_item, ttl=DEFAULT_TTL, now=None):
+def acquire(store, work_item, ttl=DEFAULT_TTL, now=None, session_cwd=None):
     """(ok, generation, reason). Create-if-absent or CAS-steal-if-stale; a live
-    holder -> (False, gen, 'held')."""
+    holder -> (False, gen, 'held'). `session_cwd` (#379), when given, records the acquiring
+    session's launch cwd on the lease for allowance-event attribution — optional and
+    backward-compatible (an omitted value leaves the field absent)."""
     sha, lease = read_lease(store, work_item)
     if sha is None:                               # absent -> create
-        if _cas(store, work_item, _lease_obj(1, ttl, now), None):
+        if _cas(store, work_item, _lease_obj(1, ttl, now, session_cwd), None):
             return (True, 1, "created")
         return (False, 0, "lost-create-cas")      # someone created concurrently
     if lease is not None and not is_stale(lease, ttl, now):
         return (False, lease.get("generation", 0), "held")
     gen = (lease.get("generation", 0) if lease else 0) + 1
-    if _cas(store, work_item, _lease_obj(gen, ttl, now), sha):   # CAS on the stale blob
+    if _cas(store, work_item, _lease_obj(gen, ttl, now, session_cwd), sha):   # CAS on the stale blob
         return (True, gen, "stolen")
     return (False, gen, "lost-steal-cas")         # concurrent reclaimer won
 
@@ -172,7 +183,9 @@ def renew(store, work_item, generation, ttl=DEFAULT_TTL, now=None):
     sha, lease = read_lease(store, work_item)
     if not lease or lease.get("generation") != generation:
         return False
-    obj = _lease_obj(generation, ttl, now)
+    # #379: carry the owning session's cwd forward across the heartbeat — else the first renew
+    # would silently drop it and mid-run allowance events would lose their attribution.
+    obj = _lease_obj(generation, ttl, now, session_cwd=lease.get("sessionCwd"))
     return _cas(store, work_item, obj, sha)
 
 

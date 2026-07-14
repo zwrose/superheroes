@@ -30,6 +30,17 @@ from store_core import (
 
 SLOT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
+# The ONE definition of the machine-readable calibration block (```json test-pilot-config```).
+# Both resolve()'s layer presence gate (here) and engine.load_profile_config match this exact
+# pattern — engine imports store (never the reverse), so sharing it here keeps the edge
+# one-directional while the store's gate can never drift from what the engine parses (#412).
+CONFIG_BLOCK_RE = re.compile(r"```json\s+test-pilot-config\s*\n(.*?)\n```", re.S)
+
+
+def has_config_block(text):
+    """True when `text` carries the fenced ```json test-pilot-config``` block."""
+    return CONFIG_BLOCK_RE.search(text) is not None
+
 
 def sanitize_branch(branch):
     if not isinstance(branch, str) or not branch.strip():
@@ -68,10 +79,57 @@ def _entry_dirs(entry_dir):
             "state_dir": os.path.join(entry_dir, "state")}
 
 
+def _in_repo_layer(repo_root):
+    """Physical in-repo path to the unified calibration layer (#412), or None if absent.
+    Same convention core_md/calibration_resolve use for the in-repo layer — a direct
+    file probe, so this read path never triggers a mode_registry backfill WRITE."""
+    p = os.path.join(repo_root, ".claude", "superheroes", "test-pilot.md")
+    return p if os.path.isfile(p) else None
+
+
+def _global_layer(cwd):
+    """Physical out-of-repo (project store) path to the unified layer (#412), or None.
+    Mode-aware via mode_registry.project_store_dir (mirrors core_md.core_path's global
+    branch and calibration_resolve._unified_global_layer) — never a hardcoded ~/.claude
+    path. Always the real control-plane project store: resolve()'s `root` is TEST-PILOT's
+    store root, not the superheroes core store base, so it must not be threaded here."""
+    import mode_registry
+    p = os.path.join(mode_registry.project_store_dir(cwd), "config", "test-pilot.md")
+    return p if os.path.isfile(p) else None
+
+
+def _layer_has_config_block(path):
+    """True when the layer file carries the ```json test-pilot-config``` block — the exact
+    block the engine parses (CONFIG_BLOCK_RE above, shared with engine.load_profile_config
+    so this presence gate can never drift from what the engine extracts downstream). A layer
+    with only prose (no block) is genuinely un-calibrated for the engine → resolve() falls
+    through to `location: none` (epic #327: "missing calibration" must mean calibration is
+    actually missing)."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError as exc:
+        # A present-but-unreadable layer must not silently masquerade as greenfield
+        # (the legacy profile.md path surfaces read errors via load_profile_config;
+        # this gate reads earlier, so at least leave a trace on stderr).
+        sys.stderr.write(f"test-pilot store: calibration layer {path} exists but "
+                         f"could not be read ({exc}); treating as no calibration\n")
+        return False
+    return has_config_block(text)
+
+
 def resolve(cwd, root):
-    """Resolve all artifact locations. Location keys on the PROFILE: in-repo
-    profile wins, else a global entry whose profile exists, else none.
-    plans_dir/state_dir ALWAYS point into the global entry (machine-local)."""
+    """Resolve all artifact locations. Location keys on the PROFILE source, in precedence
+    order: legacy in-repo profile.md → legacy global-entry profile.md → the unified
+    calibration layer (.claude/superheroes/test-pilot.md, in-repo then out-of-repo project
+    store) → none. `profileSource` names the winner: `profile-md` | `layer` | `none`.
+
+    Legacy profile.md wins when present so un-migrated projects keep working byte-identically;
+    the layer is the new primary for projects the calibration migration moved (#412 —
+    `core_md migrate --hero test-pilot` deletes profile.md after copying the same
+    `test-pilot-config` block into the layer). blocks_dir/manifests_dir follow the mode the
+    winning source physically lives in. plans_dir/state_dir ALWAYS point into the global
+    entry (machine-local)."""
     repo_root = get_repo_root(cwd)
     ident = derive_identifiers(cwd)
     g = resolve_global(cwd, root, _consumer="test_pilot store")
@@ -84,15 +142,35 @@ def resolve(cwd, root):
     if os.path.exists(os.path.join(in_repo, "profile.md")):
         return {"location": "in-repo", "exists": True, "entry_id": entry_id,
                 "profile": os.path.join(in_repo, "profile.md"),
+                "profileSource": "profile-md",
                 "blocks_dir": os.path.join(in_repo, "blocks"),
                 "manifests_dir": os.path.join(in_repo, "manifests"),
                 **machine}
     if g is not None and os.path.exists(os.path.join(g["dir"], "profile.md")):
         d = _entry_dirs(g["dir"])
         return {"location": "global", "exists": True, "entry_id": g["entry_id"],
-                "profile": os.path.join(g["dir"], "profile.md"), **d}
+                "profile": os.path.join(g["dir"], "profile.md"),
+                "profileSource": "profile-md", **d}
+    # #412: migrated projects carry calibration in the unified layer, not profile.md. The
+    # layer is the calibration SSOT; read the same config block from it (in-repo first, then
+    # the out-of-repo project store). blocks/manifests follow the mode the layer lives in.
+    layer = _in_repo_layer(repo_root)
+    if layer is not None and _layer_has_config_block(layer):
+        return {"location": "in-repo", "exists": True, "entry_id": entry_id,
+                "profile": layer, "profileSource": "layer",
+                "blocks_dir": os.path.join(in_repo, "blocks"),
+                "manifests_dir": os.path.join(in_repo, "manifests"),
+                **machine}
+    layer = _global_layer(cwd)
+    if layer is not None and _layer_has_config_block(layer):
+        e_dir = g["dir"] if g is not None else entry_dir
+        e_id = g["entry_id"] if g is not None else entry_id
+        d = _entry_dirs(e_dir)
+        return {"location": "global", "exists": True, "entry_id": e_id,
+                "profile": layer, "profileSource": "layer", **d}
     return {"location": "none", "exists": False, "entry_id": entry_id,
-            "profile": None, "blocks_dir": None, "manifests_dir": None,
+            "profile": None, "profileSource": "none",
+            "blocks_dir": None, "manifests_dir": None,
             **machine}
 
 

@@ -81,6 +81,15 @@ def test_implementation_dispatch_probes_the_engines_own_write_command(tmp_path):
     assert " ".join(str(t) for t in seen["argv"]).startswith("cursor-agent")
 
 
+def test_codex_dispatch_probe_checks_the_gpt_5_6_capability_by_default(tmp_path):
+    seen = {}
+    def run(args, **k):
+        seen["argv"] = args
+        return _Proc(returncode=0)
+    AZ.implementation_dispatch_allowed(str(tmp_path), "codex", run=run)
+    assert seen["argv"][seen["argv"].index("-m") + 1] == "gpt-5.6-sol"
+
+
 def test_implementation_dispatch_unknown_engine_falls_open_false(tmp_path):
     def run(args, **k):
         return _Proc(returncode=0)

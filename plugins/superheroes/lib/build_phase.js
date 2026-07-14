@@ -479,9 +479,11 @@ async function _implDispatch({ workItem, roleKind, taskId, prompt, wt, branch, n
   // #309: PAIR the high ceiling with the byte-activity stall monitor — the write idle window
   // (resolveIdle(_,'build'|'fix') = 600s, owner `idleTimeout` override wins, clamped ≤ ceiling).
   const idleSeconds = enginePrefTwin.resolveIdle(_enginePrefs(), roleKind)
+  const tierRole = roleKind === 'build' ? 'builder' : 'fixer'
+  const engineModel = enginePrefTwin.resolveEngineModel(engine, tierRole, model, _enginePrefs())
   const res = await engineDispatch.dispatchExternal({
     engine, roleKind, effort, prompt, cwd: wt, schema: { type: 'object', required: ['ok'] },
-    taskId, workItem, model, timeoutSeconds, idleSeconds,
+    taskId, workItem, model, engineModel, timeoutSeconds, idleSeconds,
   })
   if (res && res.ok) return res
   // UFR-2: a failed/stalled external write left only uncommitted edits -> discard, then redo on Claude.
@@ -679,11 +681,12 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
       retryNote: attempt > 1 ? buildRetryNote(task, docPath) : '',
       deniedNote: buildDeniedNote(deniedActions),
     })
-    // Task 12 (FR-8): register the command the spine just composed for this leaf against the run's
-    // generation (the run_id), so the enforcer allows the leaf to run it byte-for-byte without a
-    // prompt — and only within the run that composed it. Recorded per attempt (a retry's prompt is a
-    // NEW composed command). The seam is fail-open (UFR-2): a record error never derails the build.
-    try { require('./showrunner.js')._recordComposed(generation, prompt, workItem) } catch (_e) { /* fail-open */ }
+    // #402 (absorbs #333): the builder-leaf PROMPT is NOT recorded for FR-8 — it is dispatched to a
+    // subagent, never executed as a shell command, so hashing it matched 0 executed commands ever. FR-8
+    // composed-exact is now re-aligned to EXECUTED bytes: the spine registers each dumb-pipe leaf's exact
+    // shell command at the single dispatch chokepoint (courier_exec.recordComposedFromPrompt, wired from
+    // the bundle preamble's agent wrapper) BEFORE it dispatches. A builder leaf's improvised shell
+    // commands stay under FR-5 (worktree-confined) / FR-6 (routine family) — never pre-registered here.
     // Pin the native builder's model EXPLICITLY (mirrors the per-task reviewer's resolveModel beside it,
     // fixed pre-#160). Before this, buildOneTask called agent() with NO `model` option, so the dispatch
     // silently rode the bundle preamble's __safeSmartDefault() Opus floor — policy-correct for a smart
@@ -866,7 +869,9 @@ async function taskReviewAgent(workItem, task, branch, wt, round) {
     const res = await engineDispatch.dispatchExternal({
       workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
       schema: REVIEW_TASK_SCHEMA, taskId: task.id,
-      model: reviewerModel, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'review'),
+      model: reviewerModel,
+      engineModel: enginePrefTwin.resolveEngineModel(rEngine, 'reviewer', reviewerModel, _enginePrefs()),
+      timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'review'),
       idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'review'),   // #309 read stall monitor
     })
     // The engine adapter's review parse yields {findings} only (parse_result role_kind='review'
@@ -1056,7 +1061,9 @@ async function runFinalReview(workItem, generation, branch, wt) {
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
         schema: FINAL_REVIEW_SCHEMA,
-        model: reviewerModel, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'review-deep'),
+        model: reviewerModel,
+        engineModel: enginePrefTwin.resolveEngineModel(rEngine, 'reviewer-deep', reviewerModel, _enginePrefs()),
+        timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'review-deep'),
         idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'review-deep'),   // #309 read stall monitor
       })
       // UFR-7: an unreadable/incomplete external review -> null -> the shell re-runs on Claude, never
@@ -1079,7 +1086,12 @@ async function runFinalReview(workItem, generation, branch, wt) {
     // deferred finding re-blocks or gets re-reviewed (waste, not corruption).
     let set = await io().readJson(p, {})
     for (const id of (report && report.fixed) || []) set[String(id)] = (verdict && verdict.gate) || 'resolved'
-    await io().writeFile(p, JSON.stringify(set))
+    // #410: io.writeFile now THROWS on a persistently-unverified courier write. This deferred-set write
+    // is deliberately degrade-tolerant (above) — a transport flake here is "waste, not corruption" — so
+    // swallow the throw rather than let it propagate to runFixStep, which would mislabel a round whose
+    // fix ALREADY succeeded as a failed fix step and discard it (review_panel_shell runFixStep catch).
+    try { await io().writeFile(p, JSON.stringify(set)) }
+    catch (_) { try { log(`recordDeferred: deferred-set write failed for ${p} (degraded — findings may re-block, under-count is fail-closed)`) } catch (__) {} }
   }
   // Populated after reviewPanel returns on a round-cap halt; fixStep reads it when dispatching.
   let capBlockers = []

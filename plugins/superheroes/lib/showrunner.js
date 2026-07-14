@@ -436,6 +436,49 @@ function _defaultRecordComposed(runId, command, workItem) {
 // Mutable holders so both seams are overridable (the smoke harness swaps in observers).
 const _permissionSeam = { freeze: _defaultFreezeRunRules, recordComposed: _defaultRecordComposed }
 
+// #402 Part A: the composed-exact recorder the courier chokepoint (courier_exec.recordComposedFromPrompt)
+// calls with the EXACT bytes a dumb-pipe leaf is about to execute. It reads the active run identity from
+// globalThis.__SR_RUN_CTX (set at run start, right after the freeze) and threads it into record_composed, so a
+// registration lands in the run that composed the command — and only that run. No active run -> no-op
+// (FR-3: the allowance layer is inert with no live run). Concurrency (#402 review — premortem-002): the
+// recorder fires once per state-write on its own fire-and-forget leaf, so two record_composed processes
+// for one run can overlap; record_composed serialises its read-append-write under a per-run flock so
+// DISTINCT concurrent hashes accumulate (a REPEAT of the same hash is the idempotent no-op). Fail-open
+// lives in _defaultRecordComposed: a dropped registration degrades to the classifier path, never a park.
+function _composedRecorderFromRun(command) {
+  const run = (typeof globalThis !== 'undefined') ? globalThis.__SR_RUN_CTX : null
+  if (!run || run.runId == null) return
+  _permissionSeam.recordComposed(run.runId, command, run.workItem)
+}
+// #402 Part B: the decline-journal seam the couriers call when an answer carries a classifier-denial
+// signature. Appends a `courier_declined` event (with the scrubbed reason) to the active run's own
+// events.jsonl — the SAME journal the enforcer writes `allowance_fired` to — via the io() runHelper shim
+// (works under node's fs-backed defaultIo AND the bundle's leaf-bash io). Best-effort + fail-open (UFR-2):
+// a journal failure never derails the caller's fail-closed hand-off. No active run -> no-op.
+function _defaultDeclineRecorder(label, reason) {
+  const run = (typeof globalThis !== 'undefined') ? globalThis.__SR_RUN_CTX : null
+  if (!run || run.runId == null) return
+  const script =
+    `import sys; sys.path.insert(0, ${pyLibDir()}); import control_plane, journal; ` +
+    'events = control_plane.paths(sys.argv[1], (sys.argv[2] or None))["events"]; ' +
+    'journal.append(events, "courier_declined", step=sys.argv[3], detail={"reason": sys.argv[4]})'
+  try {
+    const p = io().runHelper('python3', ['-c', script,
+      run.cwd || procCwd(), run.workItem || '', String(label || 'courier'), String(reason || '')])
+    if (p && typeof p.then === 'function') p.then(() => {}, () => {})   // swallow the async result
+  } catch (_e) { /* fail-open: never let a decline journal derail the fail-closed hand-off (UFR-2) */ }
+}
+const _declineSeam = { record: _defaultDeclineRecorder }
+
+// Wire the courier chokepoint's injectable seams to the spine's run-aware recorders. Done at module load
+// (the registry is populated before any leaf runs); the recorders read globalThis.__SR_RUN_CTX live, so a
+// wiring here is safe before any run is active. Fail-open: a courier with no wiring (a raw node harness)
+// simply records nothing.
+try {
+  courier.setComposedRecorder(_composedRecorderFromRun)
+  courier.setDeclineRecorder((label, reason) => _declineSeam.record(label, reason))
+} catch (_e) { /* fail-open: the courier module always exports these; guard belt-and-suspenders */ }
+
 function ensureReviewerShape(out, opts = {}) {
   if (Array.isArray(out)) {
     const conf = (opts.tier === 'reviewer' && out.length > 0) ? 'low' : 'high'
@@ -542,12 +585,22 @@ function reviewCodeLeaves(tiers, opts) {
       // a dispatch fact — the adapter's owner-policy map keeps a cursor reviewer on composer, and the
       // readout shows the same map's truth. #309: the moderate read ceiling for effortKey
       // (review/review-deep); the owner `timeout` override still wins.
+      // Prefix the reviewer taskId with the resolved workItem so a bare `${reviewer}-r${round}` key is
+      // unique across parallel same-work-item reviewers (#395) AND concurrent work items reviewing at
+      // once. #408 note: engine_dispatch's _deriveRunKey now folds the workItem into the key for EVERY
+      // role, so this explicit prefix is belt-and-suspenders (the dispatch detects the `${workItem}-`
+      // prefix and does not double it) — retained so this leaf's key is self-describing at the seam.
+      const dispatchWorkItem = typeof workItem === 'string' ? workItem : 'review-code'
       const res = await engineDispatch.dispatchExternal({
-        workItem: typeof workItem === 'string' ? workItem : 'review-code',
+        workItem: dispatchWorkItem,
+        taskId: `${dispatchWorkItem}-${reviewer}-r${round}`,
         engine: rEngine, roleKind: 'review', effort: eff, prompt,
         cwd: (target.worktree || procCwd()),
         schema: FINDINGS_SCHEMA,
-        model, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), effortKey),
+        model,
+        engineModel: enginePrefTwin.resolveEngineModel(rEngine,
+          tier === 'reviewer' ? 'reviewer' : 'reviewer-deep', model, _enginePrefs()),
+        timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), effortKey),
         idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), effortKey),   // #309 read stall monitor
       })
       if (res && Array.isArray(res.findings)) {
@@ -600,7 +653,9 @@ function reviewCodeLeaves(tiers, opts) {
       const res = await engineDispatch.dispatchExternal({
         workItem: 'review-code', engine: iEngine, roleKind: 'fix', effort: eff, prompt,
         cwd: (target.worktree || procCwd()), schema: FIX_RESULT_SCHEMA,
-        model: pinnedTier('fixer'), timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'fix'),
+        model: pinnedTier('fixer'),
+        engineModel: enginePrefTwin.resolveEngineModel(iEngine, 'fixer', pinnedTier('fixer'), _enginePrefs()),
+        timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'fix'),
         idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'fix'),   // #309 write stall monitor
       })
       if (res && res.ok) return normalizeFixResult({ fixed: [], deferred: [], changedSubjects: [], coverageDecisions: [] }, fixContext)
@@ -667,8 +722,10 @@ Object.defineProperty(module.exports, '_denialRecorder', {
   set(fn) { _denialSeam.record = fn },
 })
 // Task 12 seams: overridable through mutable holders so an assignment (`sr._freezeRunRules = fn`,
-// `sr._recordComposed = fn`) rebinds what showrunner()/build_phase call. build_phase.js reaches
-// _recordComposed through this export (lazy require) so the smoke's override is honored there too.
+// `sr._recordComposed = fn`) rebinds what showrunner() calls. #402: build_phase.js no longer records
+// the builder-leaf prompt here — composed-exact is fed executed bytes by the courier chokepoint via
+// _composedRecorderFromRun, which calls _permissionSeam.recordComposed; this export stays the smoke's
+// observation/override point for that recorder.
 Object.defineProperty(module.exports, '_freezeRunRules', {
   get() { return _permissionSeam.freeze },
   set(fn) { _permissionSeam.freeze = fn },
@@ -749,7 +806,12 @@ async function docRecordDeferred(report, verdict, runDir, context, runtimeDeferr
   // #115: write the deferred-set via the cheap exec dumb-pipe. fix-report.json is a transient hand-off
   // written first, then front_half.py record-deferred (frozen) appends the deferred identities to
   // deferred-set.json — the channel the in-process tally reads. Both run as cheap pipes.
-  await io().writeFile(`${runDir}/fix-report.json`, JSON.stringify(report || {}))
+  // #410: io.writeFile now THROWS on a persistently-unverified write. This hand-off is advisory — its
+  // own contract below is "No park: an under-count is itself fail-closed" — so swallow the throw and let
+  // the existing record-deferred / under-count path degrade, rather than parking (or, via runFixStep's
+  // catch, discarding a fix that already succeeded).
+  try { await io().writeFile(`${runDir}/fix-report.json`, JSON.stringify(report || {})) }
+  catch (_) { try { log(`docRecordDeferred: fix-report write failed for ${runDir} (degraded — deferrals may under-count, which is fail-closed)`) } catch (__) {} }
   const results = await exec([
     `python3 ${libPath('front_half.py')} record-deferred --run-dir ${shq(runDir)} ` +
     `--report ${shq(runDir + '/fix-report.json')}`,
@@ -1135,6 +1197,7 @@ async function producePhase(phase, workItem) {
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: aEngine, roleKind: 'author-plan', effort: eff, prompt: extPrompt,
         cwd: checkoutRoot() || procCwd(), model,
+        engineModel: enginePrefTwin.resolveEngineModel(aEngine, 'author-plan', model, _enginePrefs()),
         timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'author-plan'),  // #309 write ceiling
         idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'author-plan'),        // #309 write stall monitor
       })
@@ -2027,6 +2090,8 @@ async function exec(commands, label) {
   const cmdList = cmds.map(function(c, i) { return (i + 1) + '. ' + selfContained(c) }).join('\n')
   const prompt =
     'Run each of the following commands in order using the Bash tool. ' +
+    courier.PAYLOAD_IS_DATA_CLAUSE + ' Your hard tool budget is exactly ' + cmds.length +
+    ' Bash call' + (cmds.length === 1 ? '' : 's') + ' — one per numbered command — and no other tool. ' +
     'Return ONLY a raw JSON array and NOTHING else — no prose, no explanation, no markdown fences; ' +
     'your entire response must be valid for JSON.parse. ' +
     'Each element: {"index":<0-based>,"ok":<true|false>,"stdout":<string>}. ' +
@@ -2360,6 +2425,16 @@ async function showrunner({ workItem }) {
   // the deliberately-two-leaf startup stretch (#118 budget): a single run-start bookkeeping leaf.
   if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = 'permission-freeze'
   _permissionSeam.freeze(r.generation, procCwd(), workItem)
+  // #402 Part A/B: publish the active run identity for the courier chokepoint's composed-exact recorder
+  // (byte-exact registration BEFORE each dumb-pipe dispatch) and the decline-journal seam. Set AFTER the
+  // freeze so the freeze's own helper leaf isn't recorded, and BEFORE any command dispatch so every
+  // spine-composed leaf command is registered. The showrunner runs one work-item per process and exits,
+  // so this ambient global is process-scoped like __SR_ROOT/__SR_PHASE (#402 review — code-003: it is not
+  // cleared on return; a run that parks BEFORE this line — e.g. at the reconcile gate above — never sets it,
+  // and the recorders no-op on a null __SR_RUN_CTX, so no prior value can be misattributed in a fresh process).
+  if (typeof globalThis !== 'undefined') {
+    globalThis.__SR_RUN_CTX = { runId: r.generation, workItem: workItem, cwd: procCwd() }
+  }
   if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = 'startup'
   // UFR-1 / #25 intake: refuse to run unless the route's input artifact is approved. resolveIntake
   // (pure) picks the route from the durable artifact state (spec present ⇒ full, else tasks ⇒ quick)
@@ -2412,6 +2487,10 @@ async function showrunner({ workItem }) {
       planAuthor: _epParsed.planAuthor || 'claude',
       effort: (_epParsed.effort && typeof _epParsed.effort === 'object' && !Array.isArray(_epParsed.effort)) ? _epParsed.effort : {},
     }
+    if (_epParsed.codexModels && typeof _epParsed.codexModels === 'object'
+        && !Array.isArray(_epParsed.codexModels)) {
+      _epMap.codexModels = Object.assign({}, _epParsed.codexModels)
+    }
     // #309 owner timeout override: carry the positive-int `timeout` so resolveTimeout(_enginePrefs(),
     // role) honors it at dispatch (load_engine_prefs already validated it; guard again defensively).
     if (typeof _epParsed.timeout === 'number' && Number.isInteger(_epParsed.timeout) && _epParsed.timeout > 0) {
@@ -2437,19 +2516,20 @@ async function showrunner({ workItem }) {
     globalThis.__SR_OVERRIDES = _merged.overrides
     globalThis.__SR_ENGINE_PREFS = _merged.enginePrefs
   }
-  // D (detectability): fail-open never blocks the run, but a silent revert to live config must be
-  // LOUD. A frozenSnapshot record was on disk (run_overrides_present, from the same run_overrides.read)
-  // yet no pin reached dispatch — the snapshot was dropped in transit (courier lost frozen_snapshot),
-  // version-gated stale (B), or every row was skipped by the merge exclusions/validation (C). Narrate
-  // it on the existing log() channel so the run isn't silently dispatching on live config unnoticed.
+  // A confirmed frozenSnapshot record was on disk but no pin reached dispatch: it was dropped in
+  // transit, is version-stale, or failed validation. This is run-confirmation safety machinery, so
+  // unknown state must park for a fresh preflight instead of dispatching on unconfirmed live config.
   if ((startupFacts && startupFacts.run_overrides_present) && (!_merged || !_merged.pinnedCount)) {
     const _why = (_merged && _merged.reason) ? _merged.reason
       : (_frozenSnapshot ? 'no pins produced' : 'frozen_snapshot dropped in transit')
     try {
       if (typeof log === 'function') {
-        log(`frozen readout snapshot present but NOT applied — dispatching on live config (${_why})`)
+        log(`frozen readout snapshot present but NOT applied — fresh preflight confirmation required (${_why})`)
       }
     } catch (_) { /* logging must never break the run */ }
+    await releaseLease(workItem, r.generation, r.root)
+    return { outcome: 'parked', phase: 'startup',
+      reason: `frozen readout snapshot could not be applied; fresh preflight confirmation required (${_why})` }
   }
   // 'continue' (from_step) or 'world_derive' (from_step 0) -> run the phase loop (Task 8).
   // lastGoodStep = the last *completed* phase index; resume at the next one (no re-run, FR-3).
@@ -2684,16 +2764,15 @@ const _ENGINE_ROLE_KIND = { review: 'reviewer', build: 'implementation', fix: 'i
 // frozenSnapshots and stamps its READOUT_VERSION onto each (assemble's `version` field). A snapshot
 // whose `version` !== this is from an incompatible commit — its rows predate the current merge
 // exclusions/validation, so re-interpreting them could pin values this consumer would now refuse.
-// mergeFrozenSnapshot ignores such a snapshot entirely (falls through to live config, the documented
-// rollback state). This is a JS COPY of the Python constant, drift-guarded: the freeze-version drift
+// mergeFrozenSnapshot refuses to interpret such a snapshot; startup then parks for a fresh preflight
+// confirmation rather than dispatching on live config. This is a JS COPY of the Python constant, drift-guarded: the freeze-version drift
 // smoke asserts it equals preflight_readout.READOUT_VERSION via a `python3 -c` dump (roster-parity
 // pattern), so a Python-side bump that isn't mirrored here fails CI rather than silently ungating.
 // Bumped to 3 (#219 pr-body dispatch row): older snapshots (version 2 or lower) predate the concrete
 // "pr-body" row for draft-PR's compose-PR-body leaf and only carry the old `kind: none` row, so
 // re-interpreting them would leave pr-body unpinned and let it resolve from LIVE config at dispatch —
-// silently bypassing the confirmed preflight readout. Ignored (falls through to live) rather than
-// mis-merged.
-const READOUT_VERSION = 3
+// silently bypassing the confirmed preflight readout. Refused and re-confirmed rather than mis-merged.
+const READOUT_VERSION = 4
 function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
   const overrides = (baseOverrides && typeof baseOverrides === 'object' && !Array.isArray(baseOverrides))
     ? Object.assign({}, baseOverrides) : {}
@@ -2702,6 +2781,9 @@ function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
   const enginePrefs = Object.assign({}, src)
   enginePrefs.effort = (src.effort && typeof src.effort === 'object' && !Array.isArray(src.effort))
     ? Object.assign({}, src.effort) : {}
+  if (src.codexModels && typeof src.codexModels === 'object' && !Array.isArray(src.codexModels)) {
+    enginePrefs.codexModels = Object.assign({}, src.codexModels)
+  }
   // Track how many pins we actually plant + why we might plant none, so the caller can log a loud
   // no-apply narrator line (D) when a snapshot WAS present on disk but nothing survived to dispatch.
   let pinnedCount = 0
@@ -2716,6 +2798,17 @@ function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
       reason: `snapshot version ${JSON.stringify(frozen.version)} != expected ${READOUT_VERSION} (stale — ignored)` }
   }
   const rows = (frozen && Array.isArray(frozen.phases)) ? frozen.phases : []
+  // Validate provider-specific pairs before planting ANY field from the snapshot. Rejecting only
+  // engineModel/effort after shared model + engine were already pinned would create a hybrid of
+  // confirmed and live state while still incrementing pinnedCount, bypassing startup's fresh-
+  // confirmation park. A malformed current-version Codex row invalidates the whole snapshot.
+  const invalidCodexRow = rows.find((row) => row && typeof row === 'object'
+    && !row.fallbackToClaude && row.engine === 'codex'
+    && !enginePrefTwin.validCodexModelEffort(row.engineModel, row.effort))
+  if (invalidCodexRow) {
+    return { overrides, enginePrefs, pinnedCount: 0,
+      reason: `invalid Codex model/effort pair for ${String(invalidCodexRow.role || 'unknown role')}` }
+  }
   for (const row of rows) {
     if (!row || typeof row !== 'object') continue
     // --- Exclusions: rows that must NOT freeze a snapshot value (each keeps the resolve-live path) ---
@@ -2752,7 +2845,8 @@ function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
     // Pin the engine onto the engine-pref map (resolveEngine reads __SR_ENGINE_PREFS by role_key).
     // The pref map is keyed by role_kind, so normalize review-deep -> review for the engine key.
     const kind = row.kind === 'review-deep' ? 'review'
-      : (row.kind === 'build' || row.kind === 'fix' || row.kind === 'review' ? row.kind : null)
+      : (row.kind === 'build' || row.kind === 'fix' || row.kind === 'review' || row.kind === 'author-plan'
+        ? row.kind : null)
     const epKey = kind && Object.prototype.hasOwnProperty.call(_ENGINE_ROLE_KIND, kind)
       ? _ENGINE_ROLE_KIND[kind] : null
     // Set validation (C): pin an engine ONLY if it is in the known ENGINES set (the producer's domain).
@@ -2762,11 +2856,23 @@ function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
       enginePrefs[epKey] = effectiveEngine
       pinnedCount++
     }
+    // Provider-specific model pins never enter the shared model-tier map: native Claude fallback
+    // keeps row.model, while Codex dispatch reads enginePrefs.codexModels[role]. Set/pair validation
+    // mirrors the producer so a malformed same-version snapshot cannot freeze gpt-5.5 + max.
+    if (!row.fallbackToClaude && effectiveEngine === 'codex' && typeof role === 'string'
+        && typeof row.engineModel === 'string'
+        && enginePrefTwin.validCodexModelEffort(row.engineModel, row.effort)) {
+      if (!enginePrefs.codexModels) enginePrefs.codexModels = {}
+      enginePrefs.codexModels[role] = row.engineModel
+      pinnedCount++
+    }
     // Pin the effort onto the effort sub-map (resolveEffort reads __SR_ENGINE_PREFS.effort[role_kind]).
     // The effort sub-map is keyed by role_kind (review/review-deep/build/fix), not the role name. A
     // Claude fallback has null effort (resolveEffort returns null for claude), so a fallback row that
     // still carries the target engine's effort must not pin it — only pin effort for a non-fallback row.
-    if (kind && !row.fallbackToClaude && typeof row.effort === 'string' && row.effort.trim()) {
+    if (kind && !row.fallbackToClaude && typeof row.effort === 'string' && row.effort.trim()
+        && !(effectiveEngine === 'codex' && typeof row.engineModel === 'string'
+          && !enginePrefTwin.validCodexModelEffort(row.engineModel, row.effort))) {
       const effortKind = row.kind === 'review-deep' ? 'review-deep' : kind
       enginePrefs.effort[effortKind] = row.effort
       pinnedCount++
@@ -2978,23 +3084,34 @@ function testPilotDeps(workItem, generation) {
       if (!launched || launched.verdict === 'park' || launched.action === 'park' || launched.ok === false) {
         return launched
       }
+      // Only run() is the work that can legitimately fail and needs teardown-on-exception; the finish
+      // artifacts + finish CLI are teardown bookkeeping. Keeping them in separate try blocks means a
+      // #410 write-verify throw on the ADVISORY finish artifacts cannot be mistaken for a run failure.
+      let outcome = null
+      let runErr = null
       try {
-        const outcome = await run(launched)
-        const contextPath = await writeJson('server-finish-context', launched)
-        const outcomePath = await writeJson('server-finish-outcome', outcome || {})
-        return cli(
-          `python3 ${libPath('test_pilot_server_config_cli.py')} finish ` +
-          `--context-json ${shq(contextPath)} --outcome-json ${shq(outcomePath)}`,
-          { type: 'object' })
+        outcome = await run(launched)
       } catch (err) {
+        runErr = err
+      }
+      // #410: writeJson (io.writeFile) now THROWS on a persistently-unverified courier write. The
+      // finish/teardown must ALWAYS be attempted and must NEVER mask the run's real result (or error): a
+      // transport flake on these advisory finish-context/outcome writes must not skip the server teardown
+      // nor discard a successful outcome. finish(context, outcome) tears the managed server down and echoes
+      // the outcome, so on success we return its result (falling back to the outcome itself if the finish
+      // write/CLI flaked), and on the exception path we always re-throw the ORIGINAL run error.
+      let finished = null
+      try {
         const contextPath = await writeJson('server-finish-context', launched)
-        const outcomePath = await writeJson('server-finish-outcome', { action: 'exception', reason: err && err.message ? err.message : String(err) })
-        await cli(
+        const outcomePath = await writeJson('server-finish-outcome',
+          runErr ? { action: 'exception', reason: runErr && runErr.message ? runErr.message : String(runErr) } : (outcome || {}))
+        finished = await cli(
           `python3 ${libPath('test_pilot_server_config_cli.py')} finish ` +
           `--context-json ${shq(contextPath)} --outcome-json ${shq(outcomePath)}`,
           { type: 'object' })
-        throw err
-      }
+      } catch (_) { /* finish/teardown is best-effort — never mask the run result or its error */ }
+      if (runErr) throw runErr
+      return finished != null ? finished : (outcome || {})
     },
 
     seedRecords: async (records) => {

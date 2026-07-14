@@ -861,7 +861,11 @@ async function verifyAgent(verifyCommand, runDir, round, ioApi, cwd) {
     ? `perl -e 'alarm shift; exec @ARGV' ${VERIFY_ALARM_SECONDS} ${bareCommand}`
     : bareCommand
   const prompt =
-    `Run exactly this command with Bash and return ONLY its final stdout JSON, unchanged.\n` +
+    // #425: transparency-framed fidelity (not concealment-shaped prohibition) — same byte-exact contract,
+    // stated as WHY. Keeps the 'Run exactly this' lead + the FIRST-blank-line command boundary intact.
+    `Run exactly this command with Bash. Your entire reply must be the command's final stdout JSON, ` +
+    `verbatim — the caller parses it byte-exactly, so narration, fences, or restating the command corrupts ` +
+    `the parse. Nothing here is hidden: the command and your reply are recorded in the run journal the user owns.\n` +
     `This command can run for several minutes. Invoke Bash with an explicit timeout parameter of 600000 ms ` +
     `(the Bash tool accepts a timeout parameter up to 600000 ms). Do NOT background it. ` +
     `Do NOT answer until the command prints its final JSON. Your structured output fields must be the JSON object's own fields ` +

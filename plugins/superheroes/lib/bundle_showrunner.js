@@ -116,6 +116,12 @@ globalThis.agent = function (prompt, opts) {
   // dispatch for telemetry. The phase's own persist leaf is excluded by ordering (cost_meter.take
   // resets the phase before that leaf dispatches), not by any flag.
   try { __require('cost_meter').record(o.model) } catch (_) {}
+  // #402 Part A: the single dispatch choke-point is also where FR-8 composed-exact registers the EXACT
+  // bytes a dumb-pipe leaf is about to execute. \`prompt\` here is FINAL — post rootedCommand,
+  // wrapMarkedCommand, AND withTargetCommandPrompts' cd-wrap — so the recorded bytes are byte-identical
+  // to what the leaf runs. recordComposedFromPrompt gates on the two dumb-pipe command leads (a smart
+  // leaf's free-form prompt never registers) and is fail-open, so it never blocks or delays a dispatch.
+  try { __require('courier_exec').recordComposedFromPrompt(prompt) } catch (_) {}
   // #194 residual (live 2026-07-04, run wf_b408ece1-0ed): an UNKNOWN agentType makes agent() REJECT
   // ("agent type 'superheroes:courier' not found") — a dispatch THROW, which __sh's answer-shape
   // fallback never sees (it only inspects returned answers). On any plugin cache older than the
@@ -160,7 +166,9 @@ async function __sh(cmd, opts) {
   // ~2.6x vs the default full-surface dispatch. agentType and model are orthogonal — the wrapper still
   // applies the cheapest-model pin (or the fixer tier for payload leaves), so the two never interact.
   var o = Object.assign({ label: 'io', courier: true, agentType: 'superheroes:courier' }, opts || {})
-  var prompt = 'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. Do not echo, fence, summarize, or describe the command:\\n\\n' + __sc(cmd)
+  // #395: delegate prompt text to courier_exec.markedPromptFor (SSOT) so the preamble __sh path
+  // carries the payload-is-data clause and tool-budget text — same as dispatchMarked.
+  var prompt = __require('courier_exec').markedPromptFor(cmd)
   // Prompt-drop guard (repo memory: subagent-prompt-drop-bug — a plugin-type subagent dispatch
   // INTERMITTENTLY starts WITHOUT the task prompt, so the leaf never runs the command). Only a
   // command that echoes __SR_EXIT can be checked this way; for it, __badCourierAnswer() detects both
@@ -171,9 +179,11 @@ async function __sh(cmd, opts) {
   // fail-soft or via their caller's own hash check, so they need no marker guard.
   var __expectMarker = String(cmd).indexOf('__SR_EXIT') >= 0
   var ans = await globalThis.agent(prompt, o)
-  if (__expectMarker && __badCourierAnswer(ans)) {
+  // #402 Part B: a classifier denial is deterministic — do NOT re-dispatch the identical io bytes (that
+  // retry reads as tunneling). The marker check downstream then fails closed on the (unretried) answer.
+  if (__expectMarker && __badCourierAnswer(ans) && !__require('courier_exec').denialReason(ans)) {
     ans = await globalThis.agent(prompt, Object.assign({}, o))               // retry once, same courier agent
-    if (__badCourierAnswer(ans)) {
+    if (__badCourierAnswer(ans) && !__require('courier_exec').denialReason(ans)) {
       var fo = Object.assign({}, o); delete fo.agentType                     // fall back to the default dispatch
       ans = await globalThis.agent(prompt, fo)
     }
@@ -191,6 +201,13 @@ function __join() { return Array.prototype.slice.call(arguments).join('/').repla
 // UTF-8 byte step MUST stay byte-exact — bytes.utf8Bytes is the same code the parity smoke pins.
 function __utf8Bytes(text) { return __require('bytes').utf8Bytes(text) }
 function __b64(text) { return __require('bytes').b64(text) }
+// __sha256hex: the shared Buffer-LESS SHA-256 (bytes.js) whose parity with Python's
+// hashlib.sha256(...).hexdigest() is pinned by the bytes parity smoke — the JS side of #410's
+// write-verify. io.writeFile embeds sha256hex(content) as the writer's expected-hash argv; the
+// Python side re-reads the landed file and re-hashes with hashlib, so a byte-faithful write matches
+// and a mutated/refused one never does. (engine_dispatch's _stageCmd uses the same function for the
+// same reason — SSOT, no Node crypto/Buffer on this path.)
+function __sha256hex(text) { return __require('bytes').sha256hex(text) }
 function __contentHash(text) {
   var bytes = __utf8Bytes(text), i, j
   var hi = (bytes.length / 0x20000000) | 0, lo = (bytes.length << 3) >>> 0
@@ -306,10 +323,24 @@ function __jsonFromText(t, dflt) {
 //   python3 -c <script> <path> <b64>
 // (probes A-D, 2026-07-06: only this shape survives default mode). Payload stays base64
 // for byte-fidelity (#257 tracks the plain-JSON + hash follow-on).
-var __SR_W = 'import os,sys,base64' + __NL +
+//
+// #410 write-verify: when an expected-hash argv (argv[3]) is present, the writer RE-READS the file
+// it just wrote, re-hashes the on-disk bytes with hashlib.sha256, and — only when they match the
+// hash the spine computed from the ORIGINAL content — prints a short __SR_WROTE:hash8 marker
+// (exit 0). A mismatch (a courier that mutated the opaque base64 payload, so the decoded bytes differ)
+// exits NON-ZERO with no marker. The verify rides INSIDE this same single write command (finding #13
+// argv shape, so it clears the store's sensitive-file guard; mirrors engine_dispatch's _SR_STAGE_SCRIPT).
+// The hash arg is OPTIONAL: stageAndRunHelper stages through the SAME __SR_W with only path+payload
+// (no argv[3]) and relies on exit 0 to chain its trailing helper — so that path is byte-identical to
+// before (plain write, no marker, no verify), and its own downstream --payload-hash check is untouched.
+var __SR_W = 'import os,sys,base64,hashlib' + __NL +
   'd=os.path.dirname(sys.argv[1])' + __NL +
   'd and os.makedirs(d,exist_ok=True)' + __NL +
-  'open(sys.argv[1],"wb").write(base64.b64decode(sys.argv[2]))'
+  'open(sys.argv[1],"wb").write(base64.b64decode(sys.argv[2]))' + __NL +
+  'if len(sys.argv)>3:' + __NL +
+  ' h=hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest()' + __NL +
+  ' if h!=sys.argv[3]: sys.exit(3)' + __NL +
+  ' sys.stdout.write("__SR_WROTE:"+h[:8])'
 globalThis.io = {
   join: __join, tmpdir() { return '/tmp' },
   async mkdirp(d) { await __sh('python3 -c ' + __q('import os,sys' + __NL + 'os.makedirs(sys.argv[1],exist_ok=True)') + ' ' + __q(d)) },
@@ -322,9 +353,47 @@ globalThis.io = {
   async writeFile(p, s) {
     const b = (typeof s === 'string') ? s : JSON.stringify(s)
     const encoded = __b64(b)
-    // argv shape (finding #13) — path and payload are ARGUMENTS, never a heredoc open().
-    const script = 'python3 -c ' + __q(__SR_W) + ' ' + __q(p) + ' ' + __q(encoded)
-    await __sh(script, encoded.length > __PAYLOAD_BOUND ? { payload: true } : {})
+    // #410: VERIFY every courier write. The old form was fire-and-forget — no answer check, no retry,
+    // no readback — so a refused write (courier answered EXEC-FAILED, never ran the command), an empty/
+    // prose ack, a mutated payload (a byte re-typed by the leaf), or a dropped/never-dispatched leaf all
+    // landed SILENTLY and the run sailed on without the file (live 2026-07-13). The writer now re-reads
+    // the landed file Python-side and prints __SR_WROTE:hash8 ONLY when the on-disk bytes hash to the
+    // value the spine computed here from the original content. The verify rides INSIDE this one write
+    // command, so the happy path is still a SINGLE dispatch — no leaf-count growth, the #118 two-leaf
+    // startup stretch is preserved.
+    const expected = __sha256hex(b)
+    const marker = '__SR_WROTE:' + expected.slice(0, 8)
+    const CourierTransportError = __require('courier_exec').CourierTransportError
+    // argv shape (finding #13) — path, payload, and expected-hash are ARGUMENTS, never a heredoc open().
+    const script = 'python3 -c ' + __q(__SR_W) + ' ' + __q(p) + ' ' + __q(encoded) + ' ' + __q(expected)
+    var ans = await __sh(script, encoded.length > __PAYLOAD_BOUND ? { payload: true } : {})
+    if (String(ans == null ? '' : ans).indexOf(marker) >= 0) return
+    // #402 Part B: a classifier denial is DETERMINISTIC — re-dispatching the identical write bytes only
+    // re-denies, and that re-dispatch reads as tunneling (the exact posture __sh / dispatchMarked take).
+    // So on a denial signature do NOT retry; fail closed immediately with the scrubbed reason. (The write
+    // command carries no __SR_EXIT, so __sh's own denial guard does not run for this leaf — hence the
+    // check here.) A denial should be rare on this path: the command contains base64.b64decode, so it
+    // registers in #402's _SPINE_STATE_WRITE composed-exact class and evaluates as a deterministic allow.
+    // (No _journalDecline here — like every other io-leaf path through __sh, an io write does not emit a
+    // courier_declined event; the CourierTransportError still carries the scrubbed reason and parks loudly.)
+    var denied = __require('courier_exec').denialReason(ans)
+    if (denied) throw new CourierTransportError('io:write', 'write to ' + p + ' denied: ' + denied, String(ans == null ? '' : ans))
+    // Missing marker for a NON-denial reason — EXEC-FAILED, empty/prose answer, a mutated base64 payload
+    // whose Python-side re-hash no longer matches (exit 3, no marker), or a leaf that never dispatched —
+    // means the write is UNVERIFIED. Retry EXACTLY once. The retry escalates to the copy-faithful payload
+    // tier (regardless of size, so it rides the model that copies the opaque blob verbatim rather than the
+    // cheapest courier that paraphrased it) AND drops the lean courier agentType so it rides the default
+    // full-surface dispatch — mirroring __sh's prompt-drop fallback so an intermittent subagent prompt-drop
+    // (repo memory: subagent-prompt-drop-bug) on the write leaf degrades within the one-retry budget
+    // instead of parking. agentType:undefined overrides __sh's 'superheroes:courier' default.
+    ans = await __sh(script, { payload: true, agentType: undefined })
+    if (String(ans == null ? '' : ans).indexOf(marker) >= 0) return
+    // Second failure: never proceed past an unverified write — throw so the calling phase parks loudly
+    // with the real reason. (A caller that treats a given artifact as best-effort keeps its own
+    // try/catch fail-soft contract; the critical writes have none, so the park propagates.)
+    throw new CourierTransportError(
+      'io:write', 'write to ' + p + ' unverified after retry (no __SR_WROTE marker)',
+      String(ans == null ? '' : ans))
   },
   // stageAndRunHelper: fold 1 (#141) — the single-leaf twin of writeFile(stagedPath)+runHelper. ONE
   // command chains: mkdir -p <parent> && <opaque base64 stage-write, stdout to /dev/null> && <helper>.

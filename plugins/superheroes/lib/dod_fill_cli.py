@@ -95,7 +95,14 @@ def _table_data_line_indexes(lines):
 
 def fill(body, proposals, root, *, _issue_exists=_issue_exists):
     """Pure splice: (new_body, filled, rejected, changed_line_texts). Never touches a byte
-    outside matching data rows; unknown bullets and invalid proposals are rejected."""
+    outside matching data rows; unknown bullets and invalid proposals are rejected.
+
+    One deliberate exception to equality-only matching (#422 mixed-version healing): a
+    proposal that exact-matches no row may rewrite exactly ONE still-blank row whose cell
+    is a word-boundary strict prefix of the proposal — the shape a pre-fold spine's seeded
+    table leaves behind for a wrapped bullet. Guards: blank disposition only (no recorded
+    data can be lost), unique candidate only, and the healed identity still has to satisfy
+    dod_gate.decide's exact match against the freshly parsed spec — a bad heal parks."""
     lines = str(body).split("\n")
     data_idx = _table_data_line_indexes(lines)
     rejected, changed = [], []
@@ -113,6 +120,31 @@ def fill(body, proposals, root, *, _issue_exists=_issue_exists):
             if cells and dod_gate._norm(cells[0]) == target:
                 hit = (i, cells)
                 break
+        if hit is None:
+            # #422 mixed-version healing: a table seeded by a pre-fold spine carries a bullet
+            # cell TRUNCATED at the wrapped bullet's first physical line, which can never
+            # exact-match the full folded text — without this, such a run parks at mark-ready
+            # forever (re-seeding is marker-idempotent; nothing else rewrites a bullet cell).
+            # Heal the one provably-safe case: exactly ONE still-BLANK row (placeholder
+            # disposition, so no recorded data can be lost) whose cell is a strict prefix of
+            # the proposed bullet — rewrite that row's bullet cell along with its disposition.
+            # Ambiguity (two prefix candidates) or any non-blank candidate stays a rejection.
+            candidates = []
+            for i in data_idx:
+                cells = dod_gate._split_row(lines[i])
+                if not cells or len(cells) < 2:
+                    continue
+                cell_norm = dod_gate._norm(cells[0])
+                disposition_blank = dod_gate._norm(cells[1]) in dod_gate._PLACEHOLDERS
+                # word-boundary prefix only: a real pre-fold truncation ends at a physical
+                # line break, so the folded text is exactly `cell + ' ' + rest` — mid-word
+                # extensions (the forgery shape both reviewers flagged) never qualify.
+                if disposition_blank and cell_norm and target.startswith(cell_norm + " "):
+                    candidates.append((i, cells))
+            if len(candidates) == 1:
+                i, cells = candidates[0]
+                cells = [dod_gate.cellsafe(bullet)] + list(cells[1:])
+                hit = (i, cells)
         if hit is None:
             rejected.append({"bullet": bullet, "reason": "no matching table row for this bullet"})
             continue

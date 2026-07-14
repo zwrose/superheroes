@@ -193,6 +193,27 @@ def test_permission_denied_is_a_valid_event_type(tmp_path):
     assert any('"type": "permission_denied"' in l for l in lines)
 
 
+def test_courier_declined_is_a_valid_event_type(tmp_path):
+    # #402 Part B: the decline-journal seam (showrunner _defaultDeclineRecorder) shells
+    # journal.append(events, "courier_declined", step=<label>, detail={"reason": <scrubbed>}). Prove the
+    # REAL append path succeeds and the event is durable — the smokes inject an observer that bypasses
+    # this, so without a real-path test a missing EVENT_TYPES entry would silently drop every decline.
+    p = str(tmp_path / "events.jsonl")
+    journal.append(p, "courier_declined", step="save phase progress",
+                   detail={"reason": "permission for this action was denied"}, root=str(tmp_path))
+    evs = journal.read_events(p)
+    assert evs[-1]["type"] == "courier_declined"
+    assert evs[-1]["step"] == "save phase progress"
+    # detail is scrubbed to a string (journal._scrub stringifies then readout-scrubs the whole value).
+    assert "denied" in evs[-1]["detail"]
+
+
+def test_courier_declined_is_a_known_event_type():
+    # An unknown type fails closed (DurableWriteError) and — because the decline recorder is fail-open —
+    # would be swallowed, dropping the decline. courier_declined MUST be registered.
+    assert "courier_declined" in journal.EVENT_TYPES
+
+
 def test_allowance_fired_is_a_valid_event_type(tmp_path):
     # #149 auditability NFR: an automatic ALLOWANCE (not just a denial) is recorded with a
     # structured, non-secret payload written AS-IS — the command HASH, never the raw command
@@ -208,6 +229,29 @@ def test_allowance_fired_is_a_valid_event_type(tmp_path):
 def test_allowance_fired_is_a_known_event_type():
     # An unknown type fails closed (DurableWriteError); allowance_fired must be registered.
     assert "allowance_fired" in journal.EVENT_TYPES
+
+
+def test_dense_seq_false_omits_seq_and_skips_the_whole_file_read(tmp_path, monkeypatch):
+    # premortem-001 / #379: the multi-writer checkout allowance trail appends with
+    # dense_seq=False. The event must carry `ts` + `type` (readable/roundtrippable) but NO `seq`,
+    # and the append must NOT re-read the whole file to compute one (the O(n^2) hot-path cost the
+    # trail routing avoids). Default (dense_seq=True) still stamps a dense seq.
+    p = str(tmp_path / "trail.jsonl")
+    calls = []
+    real_next_seq = journal._next_seq
+    monkeypatch.setattr(journal, "_next_seq",
+                        lambda path: calls.append(path) or real_next_seq(path))
+    journal.append(p, "allowance_fired", payload={"reason": "r"}, dense_seq=False)
+    journal.append(p, "allowance_fired", payload={"reason": "r"}, dense_seq=False)
+    assert calls == [], "dense_seq=False must not read the file to compute a seq"
+    evs = journal.read_events(p)
+    assert len(evs) == 2
+    assert all("seq" not in e for e in evs)
+    assert all(e["ts"] and e["type"] == "allowance_fired" for e in evs)
+    # Default keeps the dense seq (and does read the file).
+    journal.append(p, "allowance_fired", payload={"reason": "r"})
+    assert calls == [p], "dense_seq=True (default) computes a dense seq"
+    assert journal.read_events(p)[-1]["seq"] == 3
 
 
 def test_unknown_event_type_still_parks(tmp_path):

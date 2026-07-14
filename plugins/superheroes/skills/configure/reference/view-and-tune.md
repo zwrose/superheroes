@@ -111,6 +111,33 @@ action that owns it, leaving the rest of the calibration untouched:
   `author-plan: fable` and `planAuthor: cursor` (the cursor adapter maps the tier to its own fable
   model id).
 
+- **Pin a concrete Codex model for one role** → keep the provider-neutral `## Model tiers` block
+  unchanged and write the pin under `core.md`'s `enginePreferences.codexModels`. Valid role keys are
+  `reviewer`, `reviewer-deep`, `builder`, `fixer`, and `author-plan`; valid model IDs are `gpt-5.5`,
+  `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`. Codex tier map:
+  haiku=gpt-5.6-luna, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol, fable=gpt-5.6-sol.
+  Show the current engine preferences and
+  effective model first, merge only the requested role into the existing object, and preserve every
+  sibling key. Before writing, validate the selected model/effort with
+  `engine_pref.valid_codex_model_effort`; reject `gpt-5.5` + `max` and leave the prior valid config
+  unchanged. `max` is never proposed as a default — it is owner opt-in only.
+
+  ```json
+  {
+    "enginePreferences": {
+      "reviewer": "codex",
+      "implementation": "codex",
+      "planAuthor": "claude",
+      "effort": {"review": "high"},
+      "codexModels": {"reviewer": "gpt-5.5"}
+    }
+  }
+  ```
+
+  A Codex pin applies only while that role's engine is `codex`; switching the role to Claude or
+  Cursor ignores it. Per-run preflight model overrides have highest precedence, followed by this
+  persistent pin, then the shared-tier GPT-5.6 mapping.
+
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
   python3 "$ROOT_DIR/lib/model_tier_overrides.py" show

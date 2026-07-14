@@ -14,6 +14,7 @@ Clusters covered (sweep follow-up of #231):
 - Route vocabulary full/quick    (shared vocabulary: preflight.py + showrunner.js)
 - Accepted-model set (KNOWN_MODELS)                    (home: model_tier_overrides.py)
 - Accepted-engine set (ENGINES)                        (home: engine_pref.py)
+- Accepted Codex-model set (CODEX_MODELS)              (home: engine_pref.py)
 - haltKind cap-halt discriminator                      (home: review_loop_plan.py)
 - Document-review severity steering (DOC_SEVERITY_FRAME) (home: rubric/review-base.md §Document-review severity)
 
@@ -73,6 +74,17 @@ def _js_str_set(text, name, label):
         isinstance(x, str) and x for x in value), (
         "%s: `%s` Set must contain a non-empty list of strings" % (label, name))
     return set(value)
+
+
+def _js_str_map(text, name, label):
+    """`const NAME = { key: 'value', ... }` → dict[str,str]."""
+    body = _one(re.findall(r"\bconst\s+%s\s*=\s*\{([^}]+)\}" % re.escape(name), text),
+                name, label, "{ key: 'value', ... }")
+    pairs = re.findall(r"(?:^|,)\s*(['\"]?[-\w]+['\"]?)\s*:\s*['\"]([^'\"]+)['\"]", body)
+    value = {key.strip("'\""): item for key, item in pairs}
+    assert value and len(value) == len(pairs), (
+        "%s: `%s` must be a non-empty string-to-string map" % (label, name))
+    return value
 
 
 def _js_rank_map(text, name, label):
@@ -333,6 +345,47 @@ def test_engines_single_sourced():
     js = _read(os.path.join("lib", "engine_pref.js"))
     assert set(_js_str_array(js, "ENGINES", "engine_pref.js")) == set(home), (
         "engine_pref.js ENGINES drifted from engine_pref.py ENGINES")
+
+
+def test_codex_models_single_sourced():
+    """The Python preference resolver owns the selectable concrete Codex model IDs; the
+    Workflow JS twin validates and freezes the same set."""
+    import engine_pref
+    js = _read(os.path.join("lib", "engine_pref.js"))
+    assert set(_js_str_array(js, "CODEX_MODELS", "engine_pref.js")) == set(engine_pref.CODEX_MODELS), (
+        "engine_pref.js CODEX_MODELS drifted from engine_pref.py CODEX_MODELS")
+
+
+def test_complete_codex_policy_single_sourced():
+    """The Python home and Workflow twin must agree on the full translation/effort policy."""
+    import engine_pref
+    js = _read(os.path.join("lib", "engine_pref.js"))
+    assert _js_str_map(js, "CODEX_MODEL_BY_TIER", "engine_pref.js") == engine_pref.CODEX_MODEL_BY_TIER
+    assert set(_js_str_array(js, "CODEX_EFFORTS", "engine_pref.js")) == set(engine_pref.CODEX_EFFORTS)
+    assert set(_js_str_array(js, "CODEX_MAX_UNSUPPORTED_MODELS", "engine_pref.js")) == set(
+        engine_pref.CODEX_MAX_UNSUPPORTED_MODELS)
+
+    adapter = _read(os.path.join("lib", "engine_adapter.py"))
+    assert '_CODEX_MODEL = _CODEX_MODEL_BY_TIER["opus"]' in adapter, (
+        "engine_adapter's no-tier default must derive from the authoritative tier map")
+
+    expected_ids = set(engine_pref.CODEX_MODELS)
+    for rel in ("../../README.md", "../../CONVENTIONS.md",
+                "skills/configure/reference/set-up.md",
+                "skills/configure/reference/view-and-tune.md"):
+        doc = _read(rel)
+        documented_ids = set(re.findall(r"gpt-5\.(?:5|6-(?:sol|terra|luna))", doc))
+        assert documented_ids == expected_ids, "%s Codex model IDs drifted from engine_pref.py" % rel
+        mapping_text = _one(re.findall(r"Codex tier map:\s*([^\n]+(?:\n(?!\s*\n)[^\n]+)?)", doc),
+                            "Codex tier map", rel, "tier=model, ...")
+        documented_map = dict(re.findall(
+            r"(haiku|sonnet|opus|fable)=(gpt-5\.6-(?:sol|terra|luna))", mapping_text))
+        assert documented_map == engine_pref.CODEX_MODEL_BY_TIER, (
+            "%s Codex tier map drifted from engine_pref.py" % rel)
+        for model in engine_pref.CODEX_MAX_UNSUPPORTED_MODELS:
+            assert re.search(r"%s.{0,80}(?:\+|with).{0,20}`?max`?" % re.escape(model), doc,
+                             flags=re.IGNORECASE | re.DOTALL), (
+                "%s max-effort compatibility guidance drifted for %s" % (rel, model))
 
 
 # --- Cluster 7: haltKind cap-halt discriminator (#381) -----------------------

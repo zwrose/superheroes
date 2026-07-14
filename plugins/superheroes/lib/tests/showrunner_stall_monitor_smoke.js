@@ -242,7 +242,7 @@ const d = require('../engine_dispatch.js')
     // Post-mortem detectability (round-2 premortem finding): the engine's stderr diagnostic survives a
     // stall-kill on disk (the $$-suffixed .err capture is kept on failure, removed only on success).
     const errFiles = fs.readdirSync('/tmp').filter((n) =>
-      n.startsWith(`engine-codex-review-wi-realstall-${process.pid}.run.`) && n.endsWith('.err'))
+      n.startsWith(`engine-codex-review-wi-realstall-${process.pid}`) && n.includes('.run.') && n.endsWith('.err'))
     assert.ok(errFiles.length >= 1, 'a stall-killed dispatch keeps its stderr capture on disk for post-mortem')
     const errContent = fs.readFileSync(path.join('/tmp', errFiles[0]), 'utf8')
     assert.ok(errContent.includes('DIAG-ON-STDERR'),
@@ -250,7 +250,7 @@ const d = require('../engine_dispatch.js')
     for (const n of errFiles) { try { fs.unlinkSync(path.join('/tmp', n)) } catch (_) {} }
     // #349 retention keeps the stdout capture too — clean this test's own /tmp files
     for (const n of fs.readdirSync('/tmp').filter((x) =>
-      x.startsWith(`engine-codex-review-wi-realstall-${process.pid}.run.`))) {
+      x.startsWith(`engine-codex-review-wi-realstall-${process.pid}`) && x.includes('.run.'))) {
       try { fs.unlinkSync(path.join('/tmp', n)) } catch (_) {}
     }
     console.log('OK: real-seam STALL — outcome:stalled journalled, group death (no orphan), stderr kept for post-mortem')
@@ -297,7 +297,7 @@ const d = require('../engine_dispatch.js')
       'an untruncated dispatch journals no #347 relay keys: ' + JSON.stringify(okJournal))
     // #349 retention keeps this test's stdout capture too — clean it up
     for (const n of fs.readdirSync('/tmp').filter((x) =>
-      x.startsWith(`engine-codex-review-wi-realok-${process.pid}.run.`))) {
+      x.startsWith(`engine-codex-review-wi-realok-${process.pid}`) && x.includes('.run.'))) {
       try { fs.unlinkSync(path.join('/tmp', n)) } catch (_) {}
     }
     assert.ok(!journalSink.some((p) => p.outcome === 'stalled'), 'a steadily-emitting CLI is NEVER stall-killed (no false kill)')

@@ -547,7 +547,9 @@ function _declinePrefix(answer) {
 // truncates at the signature so the staged prompt never leaks. Whitespace-collapsed and clamped to
 // ~200 chars. Returns null when the failure carries NO denial signature (a plain courier/exec error),
 // so the caller distinguishes `staging-denied` from `staging-failed`.
-const _DENIAL_SIG = /permission for this action was denied|auto[- ]?mode classifier|blocked (?:it|this|the) (?:request|action|command)|permission (?:was )?denied|\bdenied by\b/i
+// #402 SSOT (§11): the denial-signature regex lives in courier_exec (bundled before this module) so the
+// staging break-early here and the generic-courier break-early there can never drift apart.
+const { DENIAL_SIG: _DENIAL_SIG } = require('./courier_exec.js')
 const _DENIAL_TAINTED = 'denial signature detected after the echoed stage command — text withheld'
 function _stagingDenial(results) {
   const arr = Array.isArray(results) ? results : []
@@ -579,12 +581,53 @@ async function _scrubReason(reason) {
   return 'external error (scrubbed)'
 }
 
+// #408: sanitize the run key, then bound it to 80 chars WITHOUT letting truncation delete the
+// distinguishing tail. The old `sanitized.slice(0, 80)` (inherited #383 Part C caveat) would, for a
+// very long work-item slug, cut the taskId / content-suffix that makes the key unique — reintroducing
+// the exact cross-run collision this fold is meant to close. So when the sanitized key overflows, keep
+// a readable head PLUS a deterministic sha256 of the FULL sanitized key: two distinct keys stay
+// distinct (the hash covers everything, including the tail truncation would have dropped), and
+// identical inputs recompute the identical key (FR-8: no wall-clock, no PRNG — resume-safe).
+const _RUN_KEY_MAX = 80
+const _RUN_KEY_HASH_LEN = 16
+function _boundRunKey(raw) {
+  const sanitized = String(raw).replace(/[^A-Za-z0-9_.-]+/g, '-')
+  if (sanitized.length <= _RUN_KEY_MAX) return sanitized
+  const digest = sha256hex(sanitized).slice(0, _RUN_KEY_HASH_LEN)
+  return sanitized.slice(0, _RUN_KEY_MAX - _RUN_KEY_HASH_LEN - 1) + '-' + digest
+}
+
+// #408: derive the /tmp staging run key. It MUST distinguish concurrent runs in DIFFERENT projects —
+// a bare taskId is the tasks-doc task NUMBER (machine-global, project-blind), so two runs at the same
+// task index + engine + role collided on one staging path (a weekly-eats prompt was shipped to another
+// repo's codex review, falsely parking the run — #408). Fold the workItem into the key for EVERY role.
+// FR-8: caller-supplied identifiers only, no wall-clock / PRNG, so resume recomputes the identical key.
+function _deriveRunKey(o, prompt, schemaText) {
+  const wi = (typeof o.workItem === 'string' && o.workItem) ? o.workItem : ''
+  let base
+  if (o.taskId) {
+    const tid = String(o.taskId)
+    // Prefix the workItem UNLESS the taskId already carries it as a `${wi}-` delimited prefix — the
+    // review-code panel leaves pass `${workItem}-${reviewer}-r${round}` (ee8a5b5), so folding again
+    // would double it. Match on the delimiter (not a bare startsWith) so a workItem that is only a
+    // CHARACTER-prefix of another ('wi' vs 'window-…') is not mistaken for an already-prefixed taskId.
+    base = (wi && tid !== wi && !tid.startsWith(`${wi}-`)) ? `${wi}-${tid}` : tid
+  } else if (wi) {
+    // taskId-less roles (a review panel fanning out parallel reviewers sharing workItem/roleKind/engine)
+    // keep the #403 deterministic content suffix so each private prompt still gets a private path.
+    base = `${wi}-${sha256hex((prompt || '') + '\0' + schemaText).slice(0, 12)}`
+  } else {
+    base = 'run'
+  }
+  return _boundRunKey(base)
+}
+
 // FIX 3: the body runs inside a try/catch in the exported dispatchExternal below, so ANY thrown
 // error (a synchronous throw from a step here, or an unavailable Buffer/setTimeout global) still
 // returns the native {ok:false} failure shape instead of throwing — callers' fall-open-to-Claude
 // path (UFR-2 discard + native worker) only fires on a returned failure, never on an exception.
 async function _dispatchExternalInner(o) {
-  const { engine, roleKind, effort, prompt, cwd, schema, timeoutSeconds, model } = o
+  const { engine, roleKind, effort, prompt, cwd, schema, timeoutSeconds, model, engineModel } = o
   const limitSeconds = Number(timeoutSeconds) > 0 ? Number(timeoutSeconds) : DEFAULT_STALL_LIMIT_SECONDS
   const limitMs = limitSeconds * 1000
   const isWrite = (roleKind === 'build' || roleKind === 'fix')
@@ -614,10 +657,11 @@ async function _dispatchExternalInner(o) {
   // The invariant audit-line fields for THIS dispatch (#308/#309): engine/effort/roleKind + the
   // resolved model, effective timeout ceiling, (once build-argv resolves) the exact argv, and the
   // stall-monitor state + idle threshold. Read at journal time so `argv` reflects resolvedArgv whenever
-  // it is available. Each outcome-specific call overlays its own {verify, outcome}. `model` is a native
-  // tier short-name or null (session inherit).
+  // it is available. Each outcome-specific call overlays its own {verify, outcome}. The journal names
+  // the concrete provider model when supplied; `model` remains the native/fallback-safe tier fact.
   const _jbase = () => Object.assign({ workItem: o.workItem, engine, effort, roleKind,
-    model: (typeof model === 'string' && model) ? model : null,
+    model: (typeof engineModel === 'string' && engineModel) ? engineModel
+      : ((typeof model === 'string' && model) ? model : null),
     argv: resolvedArgv, effectiveTimeout: limitSeconds,
     stallMonitor, idleSeconds },
     // #347: disclose a bounded relay on EVERY outcome line for this dispatch — the parser saw only
@@ -635,11 +679,17 @@ async function _dispatchExternalInner(o) {
   //    build-argv via --schema-path (codex --output-schema for read roles).
   // runId is built from CALLER-SUPPLIED identifiers only — no wall-clock time or PRNG calls (FR-8:
   // the Workflow sandbox has no time/random globals, and the bundle-smoke statically bans those APIs
-  // because they break deterministic resume). taskId (write roles) or workItem (read roles) plus
-  // engine/roleKind give a stable-enough per-dispatch key; callers that omit both share a fallback
-  // key, which is safe because writeInputs/rawPath are consumed synchronously within this single
-  // dispatch and never read back across calls.
-  const runKey = String(o.taskId || o.workItem || 'run').replace(/[^A-Za-z0-9_.-]+/g, '-').slice(0, 80)
+  // because they break deterministic resume). #408: _deriveRunKey folds the workItem into the key for
+  // EVERY role — a bare taskId is the tasks-doc task NUMBER (machine-global, project-blind), so two
+  // concurrent runs in DIFFERENT projects at the same task index + engine + role used to collide on
+  // one /tmp staging path (a weekly-eats prompt shipped to another repo's codex review, falsely
+  // parking that run). Folding distinguishes projects whose workItem slugs differ (the live-specimen
+  // case); it does NOT fold the checkout root, so two roots resolving to the SAME workItem slug on one
+  // machine remain a known residual (#408 scope note). An already-prefixed taskId (review panel leaves)
+  // is not double-prefixed, and the #403 workItem-only content suffix is preserved.
+  const stagedSchema = engine === 'codex' ? strictify(schema || {}) : (schema || {})
+  const schemaText = JSON.stringify(stagedSchema)
+  const runKey = _deriveRunKey(o, prompt, schemaText)
   const runId = `${engine}-${roleKind}-${runKey}`
   const promptPath = `/tmp/engine-${runId}.prompt`
   const schemaPath = `/tmp/engine-${runId}.schema.json`
@@ -647,14 +697,13 @@ async function _dispatchExternalInner(o) {
   // (see strictify above). ONLY on the codex path — cursor ignores the schema entirely, and the
   // native Claude path never reaches this seam (it calls agent() with the original permissive schema,
   // which Anthropic's tool input_schema requires and which strict shapes would break).
-  const stagedSchema = engine === 'codex' ? strictify(schema || {}) : (schema || {})
   // #257: stage prompt then schema as PLAIN-readable, hash-verified writes (see _stageCmd/_stageInput) —
   // each in its own leaf, prompt first so a prompt-staging denial short-circuits the (pointless) schema
   // stage. writeInputs holds the FAILED leaf's raw results so the #373 denial-signature extraction still
   // fires; a success carries no denial and journals nothing here.
   const promptStage = await _stageInput(promptPath, prompt || '')
   const schemaStage = promptStage.ok
-    ? await _stageInput(schemaPath, JSON.stringify(stagedSchema))
+    ? await _stageInput(schemaPath, schemaText)
     : { ok: false, results: [] }
   if (!(promptStage.ok && schemaStage.ok)) {
     // #373: staging died BEFORE the CLI ran — journal it (was a silent return). A denial-signature in
@@ -690,11 +739,28 @@ async function _dispatchExternalInner(o) {
   // journals the exact argv the CLI was killed while running (#308), and relayMeta carries the last
   // completed _runArgv's relay facts (#347).
   const run = (async () => {
-    const argvObj = await _execJson(
+    const buildArgvCmd =
       `python3 ${libPath('engine_adapter.py')} build-argv --engine ${shq(engine)} --role ${shq(roleKind)} ` +
       `--effort ${shq(String(effort == null ? '' : effort))} --cwd ${shq(cwd || '.')} ` +
       `--schema-path ${shq(schemaPath)}` +
-      (typeof model === 'string' && model ? ` --model ${shq(model)}` : ''))
+      (typeof model === 'string' && model ? ` --model ${shq(model)}` : '') +
+      (typeof engineModel === 'string' && engineModel ? ` --engine-model ${shq(engineModel)}` : '') +
+      ` --verify ${shq(promptPath + ':' + sha256hex(prompt || ''))}` +
+      ` --verify ${shq(schemaPath + ':' + sha256hex(schemaText))}`
+    let argvObj = await _execJson(buildArgvCmd)
+    if (argvObj && argvObj.ok === false && argvObj.reason === 'staged-input-mismatch') {
+      // #395: the staging courier's ok was a LIE (or the file was clobbered since) — the disk
+      // hash disagrees. Re-stage both inputs once (the hijack/mangle is stochastic) and
+      // re-verify via a fresh build-argv; a second mismatch fails the dispatch closed — the
+      // CLI never runs on unverified inputs. No inline journaling (premortem-002: the raced
+      // `run` never journals); the reason rides the role-specific post-race journal line.
+      const rp = await _stageInput(promptPath, prompt || '')
+      const rs = rp.ok ? await _stageInput(schemaPath, schemaText) : { ok: false }
+      argvObj = (rp.ok && rs.ok) ? await _execJson(buildArgvCmd) : null
+      if (argvObj && argvObj.ok === false && argvObj.reason === 'staged-input-mismatch') {
+        return { ok: false, reason: 'staged-input-mismatch' }
+      }
+    }
     const argv = argvObj && Array.isArray(argvObj.argv) ? argvObj.argv : (Array.isArray(argvObj) ? argvObj : null)
     if (!argv) return { ok: false, reason: 'build-argv-failed' }
     resolvedArgv = argv
@@ -892,6 +958,23 @@ function _maybeHarnessDeadNotice(o, reason) {
   } catch (_) {}
 }
 
+// #395: the staged-input-mismatch tripwire — DISTINCT from #277's harness-dead notice (that
+// one means the staging pipe cannot run at all and latches once per run; this one means the
+// deterministic verify caught a staging courier whose ok the disk disproves — the defense
+// WORKING, not a dead harness). Own latch so neither notice consumes the other's budget.
+let _stagingLieNoticeShown = false
+function _maybeStagingLieNotice(o, reason) {
+  if (_stagingLieNoticeShown || String(reason || '') !== 'staged-input-mismatch') return
+  _stagingLieNoticeShown = true
+  const engine = (o && o.engine) || 'external'
+  try {
+    globalThis.log('STAGED-INPUT-MISMATCH: engine ' + JSON.stringify(engine) + ' dispatch inputs failed ' +
+      'the deterministic hash verify twice (original stage + one re-stage) — a staging courier answered ' +
+      'ok on content the disk disproves (#395: possible payload hijack or staging corruption). The ' +
+      'dispatch failed closed; see the journal staged-input-mismatch line.')
+  } catch (_e) { /* notice is best-effort */ }
+}
+
 // #277: preserve the underlying error name+message (clamped) in the fall-open reason. The catch below
 // is the catch-all for any synchronous throw; collapsing every throw to a bare 'dispatch-error' made
 // the #277 Buffer death a transcript-archaeology session. Carrying the error text makes the next
@@ -914,20 +997,23 @@ async function dispatchExternal(o) {
   try {
     const res = await _dispatchExternalInner(o || {})
     _maybeHarnessDeadNotice(o, res && res.reason)
+    _maybeStagingLieNotice(o, res && res.reason)
     return res
   } catch (e) {
     const reason = 'dispatch-error: ' + _errText(e)
     _maybeHarnessDeadNotice(o, reason)
+    _maybeStagingLieNotice(o, reason)
     return { ok: false, reason }
   }
 }
 
 // test-only: reset the once-per-process tripwire memo so a smoke can drive the notice deterministically.
 function __resetHarnessNotice() { _harnessDeadNoticeShown = false }
+function __resetStagingLieNotice() { _stagingLieNoticeShown = false }
 
 // _STREAMS_WHEN_PIPED is exported for the drift guard in the stall-monitor smoke (every dispatchable
 // external engine must have an explicit streams-when-piped verdict) — not a public seam.
-module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice,
+module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice, __resetStagingLieNotice,
   _STREAMS_WHEN_PIPED, strictify,
   // #341: the courier-declined outcome token, exported so the JS↔Python drift guard (CONVENTIONS
   // §11.2) can assert this producer home matches acceptance_verdict.COURIER_DECLINED_OUTCOME.
@@ -944,5 +1030,8 @@ module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarness
   // fail-closed) and pins that no base64 blob rides the staged command; the routing signature lets
   // mocks target the stage leaf.
   _stageCmd, _stageInput, _SR_STAGE_SIG,
+  // #408 test-only: the pure staging-key derivation (workItem-folded, no-double-prefix, over-length
+  // safe), exported so the smoke pins every branch directly without spinning up full dispatches.
+  _deriveRunKey,
   // #347 test-only: the watchdog's stdout-relay cap, exported so the flood smoke pins the bound.
   EMIT_TAIL_BYTES }

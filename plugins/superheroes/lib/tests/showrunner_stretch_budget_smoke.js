@@ -151,34 +151,44 @@ const PHASE_BUDGETS = {
   // (1 — folds resume + plan + coverage + deferred) + run verify + persist-skeleton + tally-round
   // decider + telemetry write + stamp build coverage + prov exec + save phase progress. Was 19
   // pre-#211 (separate load-summary + coverage + deferred reads, in-memory tally), 24 pre-D3.
-  // Task 12 (FR-8, #149): +1 per built task — the record_composed 'io' leaf that freezes the
-  // spine-composed leaf command into this run's composed-exact allow set (1 task in this canned run).
-  workhorse: 19,
+  // #402 (FR-8 re-aligned to executed bytes): +6 vs 19 — one composed-exact registration leaf per
+  // spine STATE-WRITE the build phase dispatches (per-task record-built/record-reviewed stamps, prov
+  // exec, journal appends, the io writes, the reset-uncommitted git). The prior "+1 per built task"
+  // recorded the builder PROMPT (never executed, 0 matches — #333) and is gone; registration now rides
+  // the real dumb-pipe write seams. Reads are NOT registered (scoped allowlist), so no read leaf grows.
+  workhorse: 25,
   // resolve review target (the ONE entry gather: worktree + head + config + cwd-head) + #211 pre-round
   // SETUP GATHER (1 — run-dir mkdir + resume DECISION + round-1 plan + coverage, folded Python-side) +
   // one panel round (run verify, persist-skeleton, #211 tally-round decider, telemetry write = 4) +
   // final/cwd head reads (2 exec) + stamp review coverage + save phase progress. Was 9 pre-#211
   // (in-memory tally), 12 post-D3, 29 pre-D3. (The clean green path parks nothing, so
   // renderAndPostReadout's terminal-record compose-terminal write does not fire here.)
-  'review-code': 10,
+  // #402: +1 vs 10 — one composed-exact registration leaf for the review round's state write.
+  'review-code': 11,
   // #219: resolve review target (the SAME build-worktree entry gather review-code/test-pilot/ship
   // use — review finding: composePrBody and pr_entry's --worktree must describe the build branch,
   // not the launch checkout, so draft-PR resolves it too) + pr-body context (composePrBody's Python
   // gather courier, now rooted at the resolved worktree) + io:write (the composed body's durable
   // file) + open draft PR + save phase progress. The Sonnet 'compose PR body' leaf itself is a
   // genuine judgment agent (not a courier), so it does not count here. Was 2 pre-#219, 4 pre-worktree-fix.
-  'draft-PR': 5,
+  // #402: +1 vs 5 — one composed-exact registration leaf for the durable body io:write.
+  'draft-PR': 6,
   // resolve review target (build-worktree pin) + read test context + plan/results/server/seed
   // artifact staging (writeJson = mkdir+write pairs) + prepare test run + milestone status writes
   // + final artifacts + restore-baseline + write test status + publish tested head + save phase
   // progress; the four deciders (applicability/budget/aggregate/retry) are twins — 0 leaves
-  'test-pilot': 36,
+  // #402: +14 vs 36 — test-pilot stages many artifacts through io.writeFile (the __SR_W argv writer),
+  // and each such state write now rides one composed-exact registration leaf. test-pilot is
+  // applicability-gated (skipped on most runs), so this cost lands only when a browser pass runs.
+  'test-pilot': 50,
   // mark PR ready + save phase progress
   'mark-ready': 2,
   // read PR (checkpoint_entry --read-pr) + resolve review target + renew fence + check
   // ship-readiness (the folded green path) + post readout (hand-back) + lease release (the
   // dedicated hardened 'release lease' courier, BUG C — still ONE leaf, was label 'exec')
-  ship: 6,
+  // #402: +2 vs 6 — composed-exact registration leaves for ship's state writes (the record-final-review
+  // build-state stamp + the lease release), the exact classes the #395 endgame parked on under auto mode.
+  ship: 8,
 }
 
 // Phases whose tail must persist via exactly ONE 'save phase progress' leaf (FR-6). 'ship' is
@@ -372,9 +382,16 @@ function shellResponse(cmd) {
     const out = runHelperResponse(cw[3])
     return (out != null ? out : '{}') + '\n__SR_EXIT:0'
   }
-  // The OPAQUE write transport: base64 payload in a python heredoc, decoded byte-exact.
-  const bw = cmd.match(/^python3 -c '[\s\S]*?' '([^']*)' '([A-Za-z0-9+/=]*)'$/)
-  if (bw) { files[bw[1]] = Buffer.from(bw[2], 'base64').toString('utf8'); return 'ok' }
+  // The OPAQUE write transport: base64 payload in a python argv, decoded byte-exact. #410: io.writeFile
+  // now passes an expected-hash third argv and VERIFIES the landed file, so the courier answer must
+  // carry the `__SR_WROTE:<hash8>` marker (a faithful copy hashes to the expected value) or writeFile
+  // reads the write as unverified and retries/parks.
+  const bw = cmd.match(/^python3 -c '[\s\S]*?' '([^']*)' '([A-Za-z0-9+/=]*)' '([0-9a-f]{64})'$/)
+  if (bw) {
+    const content = Buffer.from(bw[2], 'base64').toString('utf8')
+    files[bw[1]] = content
+    return '__SR_WROTE:' + sha256(content).slice(0, 8)
+  }
   // Legacy cat-heredoc write (pre-opaque bundles): body+'\n' lands on disk — model that
   // faithfully; the staged-hash checks tolerate exactly the one transport-appended newline.
   const w = cmd.match(/cat > '([^']+)' <<'__SR_EOF__'\n([\s\S]*)\n__SR_EOF__$/)
@@ -628,6 +645,18 @@ async function main() {
       `phase '${phase}' fired ${count} courier leaves (budget ${budget}) — a stretch grew; ` +
       `justify against the #118 matrix or fold the new leaf`)
   }
+
+  // (2b) #402 review (test-003): the per-phase budgets above are CEILINGS, so raising them for the
+  // composed-exact registration leaves cannot, by itself, prove those leaves actually FIRE — a silent
+  // registration regression (recorder unwired / __SR_RUN_CTX unset / record_composed no-op) would only
+  // DROP counts and still pass `<= budget`. Pin a positive LOWER bound: the run must dispatch at least
+  // one composed-exact registration leaf (a courier shelling permission_rules.record_composed), and it
+  // must land in a state-write phase (workhorse/ship), the classes #402's evidence saw blocked.
+  const regLeaves = calls.filter((c) => /permission_rules\.record_composed/.test(c.prompt))
+  assert.ok(regLeaves.length >= 1,
+    '#402: at least one composed-exact registration leaf must fire (registration is wired and reaches a state write)')
+  assert.ok(regLeaves.some((c) => c.phase === 'workhorse' || c.phase === 'ship'),
+    '#402: a registration leaf fires in a state-write phase (workhorse/ship), not only bookkeeping')
 
   // (4) STARTUP is the deliberately-two-leaf stretch; assert EXACTLY the matrix shape.
   const startup = calls.filter((c) => c.phase === 'startup' && !isGenuine(c.label))
