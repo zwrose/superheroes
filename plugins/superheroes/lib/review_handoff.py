@@ -103,6 +103,19 @@ def collect_nonblocking(records_path):
     The blocking partition routes through circuit_breaker.is_blocking (case-normalized, fail-closed)
     — the same predicate the panel gate uses — so the hand-off list never disagrees with the
     terminal verdict on what was blocking vs non-blocking.
+
+    INTENTIONAL asymmetry with collect_blocking (terminal round only): blocking findings are
+    STATE — only what is open at the terminal feeds the park decision list and the acceptance
+    ledger — while non-blocking findings are a STREAM accumulated across ALL rounds. Under the
+    loop's scoped-round economics a dimension that goes clean is SKIPPED in later rounds and
+    re-reports nothing, so the terminal round's record holds only the still-active dimensions;
+    collecting terminal-only would silently drop nearly every advisory raised in round 1 by a
+    dimension that went clean — most of the hand-off (FR-2's whole point). An advisory that later
+    revisions mooted rides anyway, by design: the spec's FR-2 acceptance chose recognizability
+    over pruning (each entry names its planSection "so an entry the revisions have since mooted
+    is recognizable as such"), the produce leaf frames the list as advisory-only, and UFR-3's
+    identity dedupe bounds repeats. Absence from a later scoped round is NOT evidence of
+    resolution, so do not "fix" this to terminal-only or prune on non-re-report.
     """
     try:
         with open(records_path, encoding="utf-8") as fh:

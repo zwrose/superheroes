@@ -61,6 +61,35 @@ def test_collect_nonblocking_from_round_records(tmp_path):
     assert out["findings"][1]["planSection"] == "Data flow"
 
 
+def test_collect_nonblocking_unions_all_rounds_while_blocking_is_terminal_only(tmp_path):
+    # Pins the INTENTIONAL asymmetry (see collect_nonblocking's docstring): advisories are a
+    # STREAM across all rounds — under scoped-round economics a dimension that goes clean is
+    # skipped later and re-reports nothing, so a round-1 advisory must survive to the hand-off
+    # even when the terminal round no longer carries it. Blocking findings are STATE — terminal
+    # round only. Do not "fix" either side to match the other.
+    rh = _load("review_handoff")
+    records_path = tmp_path / "round-records.json"
+    records_path.write_text(json.dumps([
+        {"round": 1, "findings": [
+            {"file": "plan.md", "title": "early advisory from a dimension later skipped",
+             "severity": "Minor", "docSection": "Goals"},
+            {"file": "plan.md", "title": "round-1 blocker, later fixed", "severity": "Important"},
+        ]},
+        # terminal round: the advisory's dimension was skipped (re-reports nothing); a new blocker
+        {"round": 2, "findings": [
+            {"file": "plan.md", "title": "terminal blocker", "severity": "Critical"},
+        ]},
+    ]), encoding="utf-8")
+    nonblocking = rh.collect_nonblocking(str(records_path))
+    assert nonblocking["ok"]
+    assert {f["title"] for f in nonblocking["findings"]} == {
+        "early advisory from a dimension later skipped"}
+    blocking = rh.collect_blocking(str(records_path))
+    assert blocking["ok"]
+    # terminal-only: the fixed round-1 blocker does NOT ride; only the terminal round's does
+    assert {f["title"] for f in blocking["findings"]} == {"terminal blocker"}
+
+
 def test_collect_unreadable_records_returns_structured_failure(tmp_path):
     rh = _load("review_handoff")
     path = tmp_path / "round-records.json"
