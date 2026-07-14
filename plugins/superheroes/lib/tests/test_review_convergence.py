@@ -17,13 +17,15 @@ def test_convergence_counts_blocking_and_routed_per_round(tmp_path):
     # same shape Tasks 13/17's fixtures use.
     open(records, "w").write(json.dumps([
         {"round": 1, "findings": [
-            {"severity": "Critical", "title": "a"}, {"severity": "Minor", "title": "b"}]},
-        {"round": 2, "findings": [{"severity": "Minor", "title": "c"}]},
+            {"severity": "Critical", "title": "a"},
+            {"severity": "Important", "title": "b"},
+            {"severity": "Minor", "title": "c"}]},
+        {"round": 2, "findings": [{"severity": "Minor", "title": "d"}]},
     ]))
     out = rc.compose_convergence(records, "plan", "passed")
     assert out["doc"] == "plan" and out["roundsUsed"] == 2 and out["outcome"] == "passed"
     assert out["perRound"] == [
-        {"round": 1, "blocking": 1, "routedForward": 1},
+        {"round": 1, "blocking": 2, "routedForward": 1},
         {"round": 2, "blocking": 0, "routedForward": 1}]
 
 

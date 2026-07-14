@@ -79,18 +79,8 @@ def test_write_scrubs_finding_text_before_it_reaches_disk(tmp_path):
         {"file": "plan.md", "title": "rotate the leaked token: Bearer abcdef0123456789",
          "severity": "Minor", "planSection": "Security"}])
     data = json.loads(open(os.path.join(str(tmp_path), "plan-handoff.json")).read())
-    text = data["findings"][0]["text"]
-    assert "abcdef0123456789" not in text
-    assert "[REDACTED]" in text
-
-
-def test_write_scrubs_identity_before_it_reaches_disk(tmp_path):
-    # finding_identity normalizes title/summary into the durable identity key — scrub the label
-    # first so a copied secret cannot persist via normalize_title even when text is redacted.
-    rh = _load("review_handoff")
-    rh.write_handoff(str(tmp_path), "wi-1", [
-        {"file": "plan.md", "title": "rotate the leaked token: Bearer abcdef0123456789",
-         "severity": "Minor", "planSection": "Security"}])
-    data = json.loads(open(os.path.join(str(tmp_path), "plan-handoff.json")).read())
-    ident = data["findings"][0]["identity"]
-    assert "abcdef0123456789" not in ident
+    entry = data["findings"][0]
+    assert "abcdef0123456789" not in entry["text"]
+    assert "[REDACTED]" in entry["text"]
+    # identity derives from the same scrubbed title/summary label — both durable fields must redact.
+    assert "abcdef0123456789" not in entry["identity"]
