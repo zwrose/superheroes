@@ -518,10 +518,20 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
     # commit is still OUTSTANDING (a prior run wrote+unlinked, then the commit failed) must
     # fall through to the under-lock retry, not short-circuit to noop (the round-3 finding).
     if not legacy_present and (core_present or not os.path.exists(core_p)):
-        outstanding = (core_present and _in_repo_mode(cwd, root)
-                       and not _migration_recorded(_repo_root(cwd), core_p, legacy,
-                                                   layer_p=layer_p))
+        recorded_here = False
+        if core_present and _in_repo_mode(cwd, root):
+            recorded_here = _migration_recorded(_repo_root(cwd), core_p, legacy,
+                                                layer_p=layer_p)
+            outstanding = not recorded_here
+        else:
+            outstanding = False
         if not outstanding:
+            if recorded_here:
+                # VERIFIED recorded: drop any stale calibration-not-saved marker orphaned by
+                # a crash between a successful migration commit and its clear_pending (#428
+                # round-2 review) — otherwise this shortcut returns noop forever and the
+                # false marker never clears.
+                clear_pending(cwd, root)
             return {"action": "noop"}
     if mode_registry.ensure_project_store(cwd, root) is None:
         mark_pending(cwd, root, detail={"hero": hero, "reason": "store-unwritable"})
@@ -606,7 +616,11 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
             # was externally removed after a failed commit). Mirror the resume branch's retry —
             # _record_migration_commit only ever ADDS present+populated paths (never a core/layer
             # deletion) and refuses when nothing is present, so this can't re-open #428.
-            if _in_repo_mode(cwd, root):
+            # `core_present` (core PARSES, re-read under the lock) gates the retry: a prior
+            # run's split always parses (render_core's own output), while hand-authored WIP or
+            # a corrupt core.md is NOT a migration artifact — committing it under a migration
+            # message would be new destructive-adjacent behavior; keep the baseline noop.
+            if _in_repo_mode(cwd, root) and core_present:
                 repo = _repo_root(cwd)
                 if not _migration_recorded(repo, core_p, legacy, layer_p=layer_p):
                     problem = _record_migration_commit(
@@ -682,8 +696,14 @@ def _migration_recorded(repo_root, core_p, legacy, layer_p=None):
             return False
     if not _legacy_in_repo(repo_root, legacy):
         return True  # out-of-repo legacy: nothing for git to record beyond the adds
-    legacy_tracked = bool(store_core.run_git(repo_root, "ls-files", "--", legacy))
-    return not legacy_tracked
+    legacy_probe = store_core.run_git(repo_root, "ls-files", "--", legacy)
+    if legacy_probe is None:
+        # Probe FAILED (run_git error), which is not the same as "untracked": fail closed —
+        # stay unrecorded and retry — instead of declaring the uncommitted legacy deletion
+        # recorded and clearing the marker (#428 round-2 review). An untracked in-repo legacy
+        # is exit 0 + empty output, so this never misfires on the happy path.
+        return False
+    return not legacy_probe
 
 
 import argparse

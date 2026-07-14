@@ -1424,6 +1424,11 @@ def test_migration_recorded_requires_present_layer_tracked(tmp_path, monkeypatch
     _git(repo, "rm", "-q", ".claude/superheroes/test-pilot.md")
     _git(repo, "commit", "-q", "-m", "retire layer on purpose")
     assert CM._migration_recorded(repo, core_p, legacy, layer_p=layer_p) is True
+    # a present-but-ZERO-BYTE layer likewise imposes no requirement — the oracle's presence
+    # boundary must match _present_calibration_paths' (>0), or an empty layer would be
+    # required-tracked yet never added: an unrecoverable retry-forever state
+    open(layer_p, "w").close()
+    assert CM._migration_recorded(repo, core_p, legacy, layer_p=layer_p) is True
 
 
 def test_commit_pathspec_never_records_legacy_that_is_the_layer(tmp_path):
@@ -1534,3 +1539,29 @@ def test_outstanding_commit_retries_even_when_layer_absent(tmp_path, monkeypatch
     names = set(_git(repo, "show", "--name-status", "--format=", "HEAD").stdout.split())
     assert "D" not in names
     assert ".claude/superheroes/test-pilot.md" not in names
+
+
+def test_migrate_global_test_pilot_legacy_is_found_and_migrated(tmp_path, monkeypatch):
+    # #428 round-2 test review: the POSITIVE leg of _legacy_path's rewritten test-pilot branch.
+    # A REAL global-store legacy profile.md (profileSource == "profile-md") must still be found
+    # via store.resolve and migrated — only the unified layer is barred as a migration source.
+    # (Mirrors review-crew's global-mode analog; kills a delete-the-branch mutant.)
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+    store = str(tmp_path / "store")
+    monkeypatch.setenv("TEST_PILOT_STORE_ROOT", str(tmp_path / "tp_store"))
+    import store as tp_store
+    c = tp_store.create(repo, "global", tp_store.store_root())
+    assert c["profileSource"] == "profile-md"  # fresh: global-entry legacy scaffold path
+    open(c["profile"], "w").write(
+        "<!-- test-pilot -->\n\n## App launch\n\nnpm run dev\n\n"
+        "## Machine-readable config\n\n```json test-pilot-config\n"
+        '{"schemaVersion": 1, "baseUrl": "http://localhost:3000"}\n```\n')
+    legacy = CM._legacy_path(repo, "test-pilot")
+    assert os.path.realpath(legacy) == os.path.realpath(c["profile"])
+    res = CM.migrate_on_read(repo, "test-pilot", root=store)
+    assert res["action"] == "migrated"
+    assert not os.path.exists(c["profile"])          # global legacy retired
+    assert CM.read(repo, root=store) is not None      # core written
+    layer_p = CM.layer_path(repo, "test-pilot", store)
+    assert "test-pilot-config" in open(layer_p).read()  # calibration landed in the layer
