@@ -28,8 +28,10 @@ function chokepointContract() {
     courier.recordComposedFromPrompt(
       'Run exactly this command and return ONLY stdout, unchanged:\n\npython3 lib/build_state_cli.py record-reviewed --work-item wi')
     courier.recordComposedFromPrompt(
-      'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. ' +
-      'Do not echo, fence, summarize, or describe the command:\n\npython3 lib/journal_entry.py --step x 2>&1; echo __SR_EXIT:$?')
+      // #425: the marked builder now states fidelity as transparency, not concealment-shaped prohibition;
+      // the LEAD and the FIRST-blank-line boundary are byte-compatible, so the chokepoint is unaffected.
+      'Execute this exact shell command via your command tool. ' + courier.FIDELITY_IS_TRANSPARENT_CLAUSE +
+      '\n\npython3 lib/journal_entry.py --step x 2>&1; echo __SR_EXIT:$?')
     assert.deepStrictEqual(seen, [
       'python3 lib/build_state_cli.py record-reviewed --work-item wi',
       'python3 lib/journal_entry.py --step x 2>&1; echo __SR_EXIT:$?',
