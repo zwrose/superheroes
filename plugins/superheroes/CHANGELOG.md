@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/zwrose/superheroes/compare/superheroes-v0.13.0...superheroes-v0.13.1) (2026-07-14)
+
+
+### Bug Fixes
+
+* **superheroes:** courier prompts state fidelity as transparency, not concealment-shaped prohibition ([#425](https://github.com/zwrose/superheroes/issues/425)) ([#426](https://github.com/zwrose/superheroes/issues/426)) ([7695f90](https://github.com/zwrose/superheroes/commit/7695f909c94182426fad7507b24e62bd52eda3bf))
+
 ## [0.13.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.12.0...superheroes-v0.13.0) (2026-07-14)
 
 
