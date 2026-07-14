@@ -21,9 +21,21 @@ def _write_records(tmp_path, records, name="round-records.json"):
 
 
 def _build_routed_forward_payload(finding):
-    """Same composition path journalTasksRoutedFindings uses in its Python courier one-liner."""
-    ident = finding_identity.finding_identity(finding)
-    text = readout.scrub((finding.get("summary") or finding.get("title") or ""))[0]
+    """Mirror of journalTasksRoutedFindings' Python courier composition (kept in sync by the
+    production-path smoke in showrunner_tasks_routed_smoke.js, which drives the real embedded
+    script): identity is computed from a SCRUBBED copy of title/summary — mirroring
+    review_handoff._scrubbed_label — never from the raw finding."""
+    title_raw = finding.get("title") or ""
+    summary_raw = finding.get("summary") or ""
+    ident_f = {"file": finding.get("file")}
+    if title_raw:
+        ident_f["title"] = readout.scrub(title_raw)[0]
+    elif summary_raw:
+        ident_f["summary"] = readout.scrub(summary_raw)[0]
+    else:
+        ident_f["title"] = ""
+    ident = finding_identity.finding_identity(ident_f)
+    text = readout.scrub(summary_raw or title_raw)[0]
     section = finding.get("docSection") or finding.get("section") or ""
     return {"doc": "tasks", "identity": ident, "section": section, "text": text}
 
@@ -53,3 +65,7 @@ def test_routed_forward_text_is_scrubbed_before_payload():
     assert "abcdef0123456789" not in payload["text"]
     assert "Bearer [REDACTED]" in payload["text"]
     assert "rotate the leaked token:" in payload["text"]
+    # identity is journal payload too (journal.append writes payload as-is) — the secret must
+    # not survive there either: it is computed from the scrubbed copy, never the raw title
+    assert "abcdef0123456789" not in payload["identity"]
+    assert payload["identity"].startswith("tasks.md::")

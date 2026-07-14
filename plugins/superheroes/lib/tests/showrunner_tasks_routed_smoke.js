@@ -143,6 +143,47 @@ test('tasks-review terminal dispatches routed_forward journal for non-blocking f
   }
 })
 
+test('routed_forward payload scrubs secrets from BOTH text and identity (real production path)', async () => {
+  // No interception: sr.journalTasksRoutedFindings runs its REAL embedded python3 -c courier
+  // script against a temp store root, and we read back the events.jsonl it wrote. This is the
+  // production composition path — a secret in a finding title must not survive into either
+  // payload.text or payload.identity (journal.append writes payload as-is).
+  const store = fs.mkdtempSync(path.join(require('os').tmpdir(), `sr-routed-store${SFX}-`))
+  const prevStore = process.env.SUPERHEROES_STORE_ROOT
+  process.env.SUPERHEROES_STORE_ROOT = store
+  const prevIo = global.io
+  delete global.io   // fall back to defaultIo — the real runHelper
+  try {
+    await sr.journalTasksRoutedFindings(WI, [
+      { file: 'tasks.md', title: 'rotate the leaked token: Bearer abcdef0123456789',
+        severity: 'Minor', docSection: 'Security' },
+    ])
+    // find the events.jsonl the real courier wrote under the pinned store root
+    const found = []
+    ;(function walk(d) {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name)
+        if (e.isDirectory()) walk(p)
+        else if (e.name === 'events.jsonl') found.push(p)
+      }
+    })(store)
+    assert.strictEqual(found.length, 1, 'exactly one events.jsonl written under the pinned store root')
+    const events = fs.readFileSync(found[0], 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+    const routed = events.filter((e) => e.type === 'routed_forward')
+    assert.strictEqual(routed.length, 1, 'exactly one routed_forward event')
+    const payload = routed[0].payload
+    assert.ok(!payload.text.includes('abcdef0123456789'), 'secret absent from payload.text')
+    assert.ok(!payload.identity.includes('abcdef0123456789'), 'secret absent from payload.identity')
+    assert.ok(payload.text.includes('[REDACTED]'), 'text carries the redaction marker')
+    assert.ok(payload.identity.startsWith('tasks.md::'), 'identity keeps its file::title shape')
+  } finally {
+    if (prevStore === undefined) delete process.env.SUPERHEROES_STORE_ROOT
+    else process.env.SUPERHEROES_STORE_ROOT = prevStore
+    if (prevIo !== undefined) global.io = prevIo
+    try { fs.rmSync(store, { recursive: true, force: true }) } catch (_) {}
+  }
+})
+
 test('UFR-1: routed_forward journal dispatch failure discloses on phaseResult.assumptions', async () => {
   const docsDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'sr-tasks-routed-'))
   try {
