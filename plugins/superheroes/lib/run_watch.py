@@ -47,6 +47,9 @@ JOURNAL_EVENT_LABELS = {
     "routed_forward": "finding routed forward",
     "review_convergence": "review convergence",
     "handoff_provided": "handoff provided",
+    # #402 Part B (merged from main): a courier answer carried a classifier-denial signature and
+    # was declined terminally.
+    "courier_declined": "courier declined",
 }
 KNOWN_JOURNAL_EVENT_TYPES = frozenset(JOURNAL_EVENT_LABELS)
 

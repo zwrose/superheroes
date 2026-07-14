@@ -140,8 +140,10 @@ const PHASE_BUDGETS = {
   // (1) + #397 plan-handoff.json write (1) + #397 Task 19 review_convergence compose (1) +
   // journal convergence append (1, io leaf in node / courier in bundle). Was 7 pre-#211
   // (in-memory tally), 12 post-D3, 35 pre-D3, 8 pre-#397, 9 pre-Task-15 (handoff skipped when zero findings),
-  // 11 pre-Task-19, 12 pre-compose/journal split.
-  'review-plan': 14,
+  // 11 pre-Task-19, 12 pre-compose/journal split. +1 at the #397×#417 merge union: #417 verifies
+  // every courier write, so the io:write nonblocking.json staging leaf now carries its verification
+  // readback (observed io:write ×1 → ×2; all other leaves unchanged). Was 14 pre-#417-merge.
+  'review-plan': 15,
   // Task 17 (#397 FR-4/FR-5): +1 for routed_forward journal dispatch (non-blocking findings journaled
   // at tasks-review terminal). Task 19 (#397 FR-15): +1 compose + journal convergence record. Was 8 pre-Task-17,
   // 9 pre-Task-19, 10 pre-compose/journal split.

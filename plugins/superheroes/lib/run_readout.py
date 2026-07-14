@@ -17,6 +17,8 @@ KNOWN_JOURNAL_EVENT_TYPES = frozenset({
     "run_completed", "phase_record", "external_dispatch", "phase_cost", "phases_skipped",
     "permission_denied", "allowance_fired", "final_review_handoff",
     "routed_forward", "review_convergence", "handoff_provided",
+    # #402 Part B (merged from main): terminal classifier-denial decline of a courier answer.
+    "courier_declined",
 })
 
 
