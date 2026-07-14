@@ -25,8 +25,12 @@ function chokepointContract() {
   courier.setComposedRecorder((cmd) => seen.push(cmd))
   try {
     // both dumb-pipe leads register a spine STATE-WRITE's exact bytes AFTER the first blank line, verbatim.
+    // NOTE (#425): these 'Run exactly this …' fixtures are LEAD+BOUNDARY shape fixtures, deliberately
+    // NOT byte-identical to promptFor's full output (the chokepoint keys only on the lead prefix and the
+    // first blank line). Byte-fidelity of the REAL builders is owned by courier_dispatch_idiom_smoke.js,
+    // which feeds recordComposedFromPrompt the actual promptFor/markedPromptFor prompts.
     courier.recordComposedFromPrompt(
-      'Run exactly this command and return ONLY stdout, unchanged:\n\npython3 lib/build_state_cli.py record-reviewed --work-item wi')
+      'Run exactly this command. Your entire reply must be the command\'s stdout, verbatim:\n\npython3 lib/build_state_cli.py record-reviewed --work-item wi')
     courier.recordComposedFromPrompt(
       // #425: the marked builder now states fidelity as transparency, not concealment-shaped prohibition;
       // the LEAD and the FIRST-blank-line boundary are byte-compatible, so the chokepoint is unaffected.
@@ -48,15 +52,15 @@ function chokepointContract() {
       'base64.b64decode (__SR_W io writer)': 'python3 -c \'import os,sys,base64\nopen(sys.argv[1],"wb").write(base64.b64decode(sys.argv[2]))\' /store/x.json AA==',
     }
     for (const [cls, cmd] of Object.entries(perClass)) {
-      courier.recordComposedFromPrompt('Run exactly this command and return ONLY stdout, unchanged:\n\n' + cmd)
+      courier.recordComposedFromPrompt('Run exactly this command. Your entire reply must be the command\'s stdout, verbatim:\n\n' + cmd)
     }
     assert.deepStrictEqual(seen, Object.values(perClass),
       'each remaining state-write class (prov, fence, ref_lock, base64 io-writer) registers its exact bytes')
 
     // a READ dumb pipe is NOT registered — reads are not blocked, and registering them would double cost.
     seen.length = 0
-    courier.recordComposedFromPrompt('Run exactly this command and return ONLY stdout, unchanged:\n\ngit status')
-    courier.recordComposedFromPrompt('Run exactly this command and return ONLY stdout, unchanged:\n\ngh pr view 12')
+    courier.recordComposedFromPrompt('Run exactly this command. Your entire reply must be the command\'s stdout, verbatim:\n\ngit status')
+    courier.recordComposedFromPrompt('Run exactly this command. Your entire reply must be the command\'s stdout, verbatim:\n\ngh pr view 12')
     assert.strictEqual(seen.length, 0, 'a READ dumb pipe registers nothing (scoped to state-write seams)')
 
     // a smart-leaf prompt (no dumb-pipe lead) is NEVER recorded — the floor cannot widen.
@@ -65,7 +69,7 @@ function chokepointContract() {
     assert.strictEqual(seen.length, 0, 'a smart-leaf free-form prompt registers nothing (no dumb-pipe lead)')
 
     // no command after the blank line -> nothing recorded.
-    courier.recordComposedFromPrompt('Run exactly this command and return ONLY stdout, unchanged:\n\n')
+    courier.recordComposedFromPrompt('Run exactly this command. Your entire reply must be the command\'s stdout, verbatim:\n\n')
     assert.strictEqual(seen.length, 0, 'an empty command registers nothing')
   } finally { courier.setComposedRecorder(null) }
 
@@ -132,7 +136,7 @@ async function byteExactThroughPreamble() {
   // A dumb-pipe state-write dispatch through the bundle's globalThis.agent (the single choke-point
   // wrapper) records the FINAL prompt's command verbatim — this is what the leaf executes.
   await sandbox.globalThis.agent(
-    'Run exactly this command and return ONLY stdout, unchanged:\n\npython3 lib/journal_entry.py --step ship', { courier: true })
+    'Run exactly this command. Your entire reply must be the command\'s stdout, verbatim:\n\npython3 lib/journal_entry.py --step ship', { courier: true })
   assert.deepStrictEqual(recorded, ['python3 lib/journal_entry.py --step ship'],
     'the preamble wrapper records the dumb-pipe state-write command byte-exactly')
 
@@ -141,13 +145,13 @@ async function byteExactThroughPreamble() {
   // executed bytes, because we extract from the final prompt, never a pre-rewrite copy.
   recorded.length = 0
   await sandbox.globalThis.agent(
-    "Run exactly this command and return ONLY stdout, unchanged:\n\ncd '/managed/wt' && python3 lib/prov_entry.py --step build", { courier: true })
+    "Run exactly this command. Your entire reply must be the command\'s stdout, verbatim:\n\ncd '/managed/wt' && python3 lib/prov_entry.py --step build", { courier: true })
   assert.deepStrictEqual(recorded, ["cd '/managed/wt' && python3 lib/prov_entry.py --step build"],
     'a cd-wrapped command records the FINAL (executed) bytes — no recorded-vs-dispatched drift')
 
   // A READ dumb pipe through the SAME wrapper records nothing (scoped to state-write seams).
   recorded.length = 0
-  await sandbox.globalThis.agent('Run exactly this command and return ONLY stdout, unchanged:\n\ngit status', { courier: true })
+  await sandbox.globalThis.agent('Run exactly this command. Your entire reply must be the command\'s stdout, verbatim:\n\ngit status', { courier: true })
   assert.strictEqual(recorded.length, 0, 'a READ dumb pipe through the wrapper registers nothing')
 
   // A smart leaf dispatched through the SAME wrapper records nothing.

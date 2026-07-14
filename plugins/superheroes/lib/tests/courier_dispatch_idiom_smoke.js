@@ -23,15 +23,24 @@ const courier = require('../courier_exec.js')
 
 const LIB = path.join(__dirname, '..')
 
-// The concealment-shaped idiom the auto-mode classifier flagged (#425). Kept as small, specific
-// alternatives so an ordinary "describe" elsewhere in a comment does not trip the pin.
-const CONCEALMENT_IDIOM = [/describe the command/i, /do not echo, fence, summariz/i]
+// The concealment-shaped idiom the auto-mode classifier flagged (#425): the two literal clauses it
+// quoted, plus one SHAPE alternative ("do not <hide-verb> … the command") so a synonym reword of the
+// prohibition idiom fails too. The shape's verb list deliberately EXCLUDES verbs the sanctioned
+// transparency phrasing uses in non-prohibition positions ("restating of the command corrupts the
+// parse" carries no leading "do not", so `restate` is safe to include).
+const CONCEALMENT_IDIOM = [
+  /describe the command/i,
+  /do not echo, fence, summariz/i,
+  /do not (?:echo|repeat|reveal|restate|quote|mention|describe)\b[^.]*\bthe command/i,
+]
 
 function assertTransparent(name, prompt) {
   for (const re of CONCEALMENT_IDIOM) {
     assert.ok(!re.test(prompt), `${name} must NOT carry the concealment idiom ${re} (#425)`)
   }
-  assert.ok(/recorded|record|journal|transcript/i.test(prompt),
+  // Anchored to the clause's own framing — NOT bare /journal|record/, which the test command's own
+  // bytes could satisfy (e.g. a journal_entry.py command riding after the blank line).
+  assert.ok(/recorded in the (?:session transcript|run journal)|nothing here is hidden/i.test(prompt),
     `${name} must state the command/reply is on the record (transparency framing)`)
   assert.ok(/verbatim|byte-exact|byte-for-byte/i.test(prompt),
     `${name} must state the byte-fidelity reason (the caller parses it exactly)`)
@@ -47,7 +56,10 @@ async function capture(fn) {
 }
 
 async function builtPromptsAreTransparent() {
-  const cmd = 'python3 lib/journal_entry.py --step ship'
+  // A _SPINE_STATE_WRITE-shaped command (fence_cli arm) whose bytes carry NONE of the transparency-regex
+  // words — so the positive framing assertions can only be satisfied by the clause under test, never by
+  // the command payload itself (a journal_entry.py command would self-satisfy /journal/).
+  const cmd = 'python3 lib/fence_cli.py renew --lease L7'
 
   const nonStrict = await capture(() => courier.runCourierText('idiom', cmd))
   const strict = await capture(() => courier.runCourierJson('idiom', cmd, { strict: true }))
@@ -71,25 +83,42 @@ async function builtPromptsAreTransparent() {
   assert.ok(/do not run any other command/i.test(strict),
     'the strict promptFor keeps the no-improvising clause (release-courier fidelity)')
 
-  // End-to-end: recordComposedFromPrompt, fed the REAL builders' prompts, still registers executed bytes.
+  // End-to-end: recordComposedFromPrompt, fed the REAL builders' prompts, still registers executed
+  // bytes — including the STRICT lead, whose extra no-improvising text must not introduce a `\n\n`
+  // ahead of the command boundary (the strict state-write class: lease release).
   const seen = []
   courier.setComposedRecorder((c) => seen.push(c))
   try {
     courier.recordComposedFromPrompt(nonStrict)
+    courier.recordComposedFromPrompt(strict)
     courier.recordComposedFromPrompt(marked)
   } finally { courier.setComposedRecorder(null) }
-  assert.deepStrictEqual(seen, [cmd, cmd],
-    'recordComposedFromPrompt registers the executed bytes off BOTH reworked dumb-pipe builders (#402)')
+  assert.deepStrictEqual(seen, [cmd, cmd, cmd],
+    'recordComposedFromPrompt registers the executed bytes off ALL THREE reworked dumb-pipe builders (#402)')
 }
 
-// Static pin: grep the dispatch-prompt builder SOURCES for the concealment idiom.
+// Static pin: grep EVERY lib source for the concealment idiom — a future prompt builder added in a
+// sibling module (engine_dispatch, build_phase, …) must not reintroduce it either. The bundle is
+// excluded here because test_bundle_drift.py pins committed-bundle == fresh-emit (clean sources ⇒
+// clean bundle); tests live under lib/tests/ so the flat readdir never greps this file's own regexes.
 function builderSourcesAreClean() {
-  for (const f of ['courier_exec.js', 'review_panel_shell.js', 'showrunner.js']) {
+  const sources = fs.readdirSync(LIB).filter((f) => f.endsWith('.js') && f !== 'showrunner.bundle.js')
+  assert.ok(sources.includes('courier_exec.js') && sources.includes('review_panel_shell.js') &&
+    sources.includes('showrunner.js'), 'the source sweep sees the three known dispatch-prompt builders')
+  for (const f of sources) {
     const src = fs.readFileSync(path.join(LIB, f), 'utf8')
     for (const re of CONCEALMENT_IDIOM) {
       assert.ok(!re.test(src), `${f} must not contain the concealment idiom ${re} (#425)`)
     }
   }
+  // review_panel_shell's verify prompt INLINES its transparency framing (a JSON-specific variant of
+  // FIDELITY_IS_TRANSPARENT_CLAUSE, deliberately not the shared constant — its contract is "final stdout
+  // JSON", not raw stdout). Pin the POSITIVE framing here too, so a future retune of the shared clause
+  // that forgets this sibling fails visibly instead of silently reverting the verify courier to
+  // classifier-blockable wording.
+  const rps = fs.readFileSync(path.join(LIB, 'review_panel_shell.js'), 'utf8')
+  assert.ok(/recorded in the run journal/.test(rps) && /byte-exactly/.test(rps),
+    'review_panel_shell.js verify prompt carries the transparency framing (recorded + byte-exact) (#425)')
   const md = fs.readFileSync(path.join(LIB, '..', 'agents', 'courier.md'), 'utf8')
   assert.ok(/not concealment|nothing here is secret|nothing here is hidden/i.test(md),
     'agents/courier.md keeps its explicit not-concealment framing')
