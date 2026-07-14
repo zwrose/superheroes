@@ -21,17 +21,31 @@ SCHEMA_VERSION = 1
 FILENAME = "plan-handoff.json"
 
 
+def _scrubbed_label(finding):
+    # `text`/`identity` both derive from the finding's title/summary — free text a courier
+    # round-tripped. Scrub HERE, at entry-composition time (review_park.py's `_decision()` does
+    # the same for park payloads) so no unscrubbed secret reaches plan-handoff.json in either
+    # field. Identity mirrors finding_identity's title-before-summary label selection on the
+    # scrubbed copy so dedupe semantics stay aligned with the rest of the system.
+    title_raw = finding.get("title") or ""
+    summary_raw = finding.get("summary") or ""
+    ident_finding = {"file": finding.get("file")}
+    if title_raw:
+        ident_finding["title"] = readout.scrub(title_raw)[0]
+    elif summary_raw:
+        ident_finding["summary"] = readout.scrub(summary_raw)[0]
+    else:
+        ident_finding["title"] = ""
+    text = readout.scrub(summary_raw or title_raw)[0]
+    return text, ident_finding
+
+
 def _entry(finding):
-    # `text` is free text a courier round-tripped from the finding's title/summary — the exact
-    # shape review_park.py's `_decision()` scrubs before it reaches a journal payload. This
-    # writer's output is a DURABLE FILE (plan-handoff.json), not an event payload, but the risk
-    # (an unscrubbed secret embedded in reworded finding text) is identical, so scrub HERE, at
-    # entry-composition time, the same way — never write the raw text to disk.
-    text = finding.get("summary") or finding.get("title") or ""
+    text, ident_finding = _scrubbed_label(finding)
     return {
-        "identity": finding_identity.finding_identity(finding),
+        "identity": finding_identity.finding_identity(ident_finding),
         "planSection": finding.get("planSection") or finding.get("docSection") or "",
-        "text": readout.scrub(text)[0],
+        "text": text,
     }
 
 

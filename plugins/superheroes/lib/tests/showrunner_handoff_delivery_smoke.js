@@ -113,10 +113,12 @@ test('tasks produce leaf receives a REAL planted hand-off AND journals handoff_p
   const prompt = h.capturedPrompt()
   assert.ok(prompt, 'the author was dispatched')
   assert.ok(prompt.includes('Hand-off from the plan review'), 'prompt has the hand-off section')
+  assert.ok(/untrusted advisory data/i.test(prompt),
+    'prompt labels the hand-off as untrusted advisory data (not instructions)')
   assert.ok(prompt.includes('the retry constant appears as two separate literals'),
-    'prompt splices the first hand-off finding text')
+    'prompt carries the first hand-off finding text')
   assert.ok(prompt.includes('no named unit test for the fallback branch'),
-    'prompt splices the second hand-off finding text')
+    'prompt carries the second hand-off finding text')
 
   // (b) a handoff_provided event was journaled with delivered == the on-disk hand-off count
   const appends = h.handoffAppends()
