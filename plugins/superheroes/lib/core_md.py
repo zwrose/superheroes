@@ -601,6 +601,20 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
         # core present, layer absent (crash between 1 and 2): re-derive from the still-present legacy.
         # otherwise: a fresh standard migration. Both need the legacy profile.
         if not legacy_present:
+            # No legacy to (re)split — but never dead-end over an OUTSTANDING commit (#428
+            # round-2 review): a prior run's split may still be unrecorded here (e.g. the layer
+            # was externally removed after a failed commit). Mirror the resume branch's retry —
+            # _record_migration_commit only ever ADDS present+populated paths (never a core/layer
+            # deletion) and refuses when nothing is present, so this can't re-open #428.
+            if _in_repo_mode(cwd, root):
+                repo = _repo_root(cwd)
+                if not _migration_recorded(repo, core_p, legacy, layer_p=layer_p):
+                    problem = _record_migration_commit(
+                        cwd, repo, hero, core_p, layer_p, legacy, root)
+                    if problem is not None:
+                        return problem
+                    clear_pending(cwd, root)
+                    return {"action": "completed"}
             clear_pending(cwd, root)
             return {"action": "noop"}
         try:
@@ -643,19 +657,28 @@ def _migration_recorded(repo_root, core_p, legacy, layer_p=None):
     imposes no requirement: requiring a deleted-on-purpose layer to be tracked would retry
     forever, and committing an absent layer is exactly the deletion #428 forbids.
 
+    RECORDED means LANDED IN HEAD, not merely staged: the core/layer legs probe
+    `ls-tree HEAD` rather than `ls-files` (the index), because a `git add` that succeeded
+    followed by a `commit` that failed leaves the split staged-but-uncommitted — an
+    index-based oracle would report that as recorded and (on the out-of-repo-legacy leg)
+    silently drop the retry (#428 round-2 review). An unborn HEAD errors → falsey → not
+    recorded → retried, which converges once the migration commit itself creates HEAD.
+
     An OUT-OF-REPO legacy (global-mode profile) has no git deletion to record — and `ls-files`
     on a path outside the repo always errors (run_git → None → falsey), which the old
     `not legacy_tracked` leg misread as 'deletion committed'. So for an out-of-repo legacy the
-    split is recorded iff core.md (and any present layer) is tracked (#121 Part E)."""
-    core_tracked = bool(store_core.run_git(repo_root, "ls-files", "--", core_p))
-    if not core_tracked:
+    split is recorded iff core.md (and any present layer) is in HEAD (#121 Part E)."""
+    core_recorded = bool(store_core.run_git(
+        repo_root, "ls-tree", "--name-only", "HEAD", "--", core_p))
+    if not core_recorded:
         return False
     if layer_p is not None:
         try:
             layer_present = os.path.isfile(layer_p) and os.path.getsize(layer_p) > 0
         except OSError:
             layer_present = True  # unreadable is NOT absent: stay unrecorded and retry later
-        if layer_present and not store_core.run_git(repo_root, "ls-files", "--", layer_p):
+        if layer_present and not store_core.run_git(
+                repo_root, "ls-tree", "--name-only", "HEAD", "--", layer_p):
             return False
     if not _legacy_in_repo(repo_root, legacy):
         return True  # out-of-repo legacy: nothing for git to record beyond the adds

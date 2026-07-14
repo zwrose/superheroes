@@ -177,7 +177,11 @@ def resolve(cwd, root):
 def create(cwd, location, root):
     """Create the directory skeleton for `location` and ALWAYS mint the global
     entry (state/plans live there in both modes). Non-destructive. Returns the
-    same dict shape as resolve()."""
+    same dict shape as resolve(). On a MIGRATED project (a unified layer carrying
+    the test-pilot-config block, no legacy profile.md anywhere resolve() would
+    prefer) `profile` points at the LAYER (profileSource "layer"); otherwise it
+    is the legacy scaffold path (profileSource "profile-md") — which create()
+    never writes (#428)."""
     repo_root = get_repo_root(cwd)
     ident = derive_identifiers(cwd)
     # Reuse an existing live entry if one already exists (avoids orphaning
@@ -206,6 +210,12 @@ def create(cwd, location, root):
     # chain that committed a destructive layer deletion (weekly-eats 9dad0f6). Only a
     # genuinely un-migrated project (no layer with a config block) still scaffolds at the
     # legacy path, byte-identical to before.
+    # A still-present legacy — in EITHER location — keeps resolve()'s legacy-first
+    # precedence (in-repo profile.md → global-entry profile.md → layers): create() must
+    # never point a writer at the layer while the engine would keep reading a legacy.
+    legacy_anywhere = (
+        os.path.exists(os.path.join(repo_root, ".claude", "test-pilot", "profile.md"))
+        or os.path.exists(os.path.join(entry_dir, "profile.md")))
     if location == "in-repo":
         base = os.path.join(repo_root, ".claude", "test-pilot")
         blocks, manifests = (os.path.join(base, "blocks"),
@@ -214,24 +224,18 @@ def create(cwd, location, root):
         os.makedirs(manifests, exist_ok=True)
         legacy = os.path.join(base, "profile.md")
         layer = _in_repo_layer(repo_root)
-        if (not os.path.exists(legacy)  # a still-present legacy keeps resolve()'s precedence
-                and layer is not None and _layer_has_config_block(layer)):
-            profile, profile_source = layer, "layer"
-        else:
-            profile, profile_source = legacy, "profile-md"
     elif location == "global":
         os.makedirs(d["blocks_dir"], exist_ok=True)
         os.makedirs(d["manifests_dir"], exist_ok=True)
         blocks, manifests = d["blocks_dir"], d["manifests_dir"]
         legacy = os.path.join(entry_dir, "profile.md")
         layer = _global_layer(cwd)
-        if (not os.path.exists(legacy)  # a still-present legacy keeps resolve()'s precedence
-                and layer is not None and _layer_has_config_block(layer)):
-            profile, profile_source = layer, "layer"
-        else:
-            profile, profile_source = legacy, "profile-md"
     else:
         raise ValueError(f"unknown location: {location}")
+    if not legacy_anywhere and layer is not None and _layer_has_config_block(layer):
+        profile, profile_source = layer, "layer"
+    else:
+        profile, profile_source = legacy, "profile-md"
     return {"location": location, "exists": os.path.exists(profile),
             "entry_id": entry_id, "profile": profile, "profileSource": profile_source,
             "blocks_dir": blocks, "manifests_dir": manifests,

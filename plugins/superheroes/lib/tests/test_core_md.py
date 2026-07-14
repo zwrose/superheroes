@@ -1487,3 +1487,50 @@ def test_migrate_real_test_pilot_legacy_still_migrates_and_commits(tmp_path, mon
     assert not os.path.exists(legacy)
     # and the layer carries the test-pilot-config block (real calibration, not an empty deletion)
     assert "test-pilot-config" in open(os.path.join(repo, ".claude", "superheroes", "test-pilot.md")).read()
+
+
+def test_migration_recorded_means_landed_in_head_not_staged(tmp_path, monkeypatch):
+    # #428 round-2 review: RECORDED means landed in HEAD. `git add` succeeded + commit failed
+    # leaves the split staged-but-uncommitted; an index-based oracle would call that recorded
+    # and (with an out-of-repo legacy, which has no legacy leg to rescue it) silently drop the
+    # retry. The oracle must say NOT recorded until the commit itself lands.
+    repo = _git_repo(tmp_path)
+    store = str(tmp_path / "store")
+    _force_in_repo(repo, store)
+    monkeypatch.setenv("TEST_PILOT_STORE_ROOT", str(tmp_path / "tp_store"))
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "init")
+    layer_p = _write_migrated_test_pilot(repo)
+    core_p = os.path.join(repo, ".claude", "superheroes", "core.md")
+    legacy = str(tmp_path / "outside" / "profile.md")  # OUT-OF-REPO legacy (no rescue leg)
+    _git(repo, "add", ".claude/superheroes/core.md", ".claude/superheroes/test-pilot.md")
+    # staged only — no commit yet
+    assert CM._migration_recorded(repo, core_p, legacy, layer_p=layer_p) is False
+    _git(repo, "commit", "-q", "-m", "land the split")
+    assert CM._migration_recorded(repo, core_p, legacy, layer_p=layer_p) is True
+
+
+def test_outstanding_commit_retries_even_when_layer_absent(tmp_path, monkeypatch):
+    # #428 round-2 review: the no-legacy under-lock leg must not dead-end (noop + marker
+    # cleared) over an OUTSTANDING commit when the layer file is absent. It retries the
+    # commit with the present paths only — never a layer deletion.
+    repo = _git_repo(tmp_path)
+    store = str(tmp_path / "store")
+    _force_in_repo(repo, store)
+    monkeypatch.setenv("TEST_PILOT_STORE_ROOT", str(tmp_path / "tp_store"))
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "init")
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d)
+    core_p = os.path.join(d, "core.md")
+    open(core_p, "w").write(CM.render_core(
+        {"verifyCommand": "npm test", "stackTags": ["node"], "threatModel": "x",
+         "patterns": "y"}, "provisional", "2026-07-01", "2026-07-01"))
+    # layer ABSENT, legacy never existed, core present-but-uncommitted = outstanding
+
+    res = CM.migrate_on_read(repo, "test-pilot", root=store)
+
+    assert res["action"] == "completed"
+    assert _git(repo, "ls-files", "--", ".claude/superheroes/core.md").stdout.strip()
+    # no phantom layer or legacy deletion was recorded by the retry
+    names = set(_git(repo, "show", "--name-status", "--format=", "HEAD").stdout.split())
+    assert "D" not in names
+    assert ".claude/superheroes/test-pilot.md" not in names

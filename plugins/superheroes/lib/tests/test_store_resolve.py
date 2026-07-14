@@ -353,3 +353,17 @@ def test_create_prose_only_layer_falls_back_to_legacy_path(tmp_path):
     c = store.create(repo, "in-repo", root)
     assert c["profileSource"] == "profile-md"
     assert c["profile"] == os.path.join(repo, ".claude", "test-pilot", "profile.md")
+
+
+def test_create_cross_mode_legacy_keeps_precedence_over_layer(tmp_path):
+    # #428 round-2 review: resolve()'s precedence puts ANY legacy (in-repo OR global-entry
+    # profile.md) ahead of the layers. create() must honor the cross-location legacy too, or a
+    # direct caller would write over a live layer while the engine keeps reading the legacy.
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    g = store.create(repo, "global", root)          # mint the global entry
+    open(g["profile"], "w").write("# p\n")           # global-entry legacy profile.md
+    _write_in_repo_layer(repo)                       # in-repo layer with config block
+    c = store.create(repo, "in-repo", root)
+    assert c["profileSource"] == "profile-md"        # global legacy keeps precedence
+    assert c["profile"] == os.path.join(repo, ".claude", "test-pilot", "profile.md")
