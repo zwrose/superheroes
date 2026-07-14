@@ -5564,7 +5564,7 @@ const FINDINGS_SCHEMA = {
           evidence: { type: 'string' },
           suggestion: { type: 'string' },
           dimension: { type: 'string' },
-          docSection: { type: 'string' },
+          docSection: { type: ['string', 'null'] },
           classKey: { type: 'string' },
           taxonomy: { type: 'string' },
           tradeoff: { type: 'boolean' },

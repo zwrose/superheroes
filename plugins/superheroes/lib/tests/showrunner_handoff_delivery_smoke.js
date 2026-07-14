@@ -10,6 +10,8 @@
 // the missing-file path are exercised for real, not stubbed. Only the journal append and the
 // unrelated exec pipes stay mocked.
 'use strict'
+require('./_smoke_checkout_root.js')
+if (globalThis.__SR_ROOT) process.chdir(globalThis.__SR_ROOT)
 const assert = require('node:assert')
 const test = require('node:test')
 const fs = require('node:fs')
