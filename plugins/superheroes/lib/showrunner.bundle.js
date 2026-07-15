@@ -539,9 +539,13 @@ function _keptSeverity(f, v) {
 }
 function consume(merged, leafVerdicts) {
   const byId = Object.create(null)   // null-proto: byId[identity] tests own keys only (Python dict parity)
+  const idOrder = []
   if (Array.isArray(leafVerdicts)) {
     for (const v of leafVerdicts) {
-      if (v && typeof v === 'object' && typeof v.id === 'string') byId[v.id] = v
+      if (v && typeof v === 'object' && typeof v.id === 'string') {
+        if (byId[v.id] === undefined) idOrder.push(v.id)
+        byId[v.id] = v
+      }
     }
   }
   const matchedIds = Object.create(null)   // #430: which verdict ids matched a finding
@@ -570,7 +574,7 @@ function consume(merged, leafVerdicts) {
       downgrades.push(entry)
     }
   }
-  const unmatched = Object.keys(byId).filter((vid) => !matchedIds[vid])
+  const unmatched = idOrder.filter((vid) => !matchedIds[vid])
   return { findings: survivors, drops, downgrades, unmatched }
 }
 module.exports = { consume }
