@@ -915,13 +915,26 @@ async function _dispatchExternalInner(o) {
     `python3 ${libPath('engine_adapter.py')} commit --worktree ${shq(cwd)} --task-id ${shq(o.taskId || '')} ` +
     `--pre-sha ${shq(preSha)}`)
   if (!commit || commit.ok !== true) {
-    // M1: commit.error carries raw git stderr — SCRUB it before it can reach an owner-facing notice.
-    const reason = (commit && commit.error) ? await _scrubReason(commit.error) : 'commit-failed'
+    // #392: a STRUCTURED reason (e.g. history-shape-fix-unrepresentable) is the adapter's own honest
+    // classification of a non-error, non-landable outcome — a fixed internal token (not external
+    // free-text, so no scrub) carried VERBATIM as BOTH the fall-open reason and the journal outcome,
+    // so the journal names WHY the fix could not land rather than mislabeling it commit-failed.
+    // Otherwise commit.error carries raw git output (stdout+stderr) — SCRUB it before it can reach an
+    // owner-facing notice, and journal the generic commit-failed outcome.
+    const structured = (commit && typeof commit.reason === 'string' && commit.reason) || null
+    const reason = structured
+      ? structured
+      : ((commit && commit.error) ? await _scrubReason(commit.error) : 'commit-failed')
     // sec-101: the engine DID run and edited the worktree here, so this outcome must ALSO leave exactly
     // one audit line — otherwise commit-failure is the single external-dispatch outcome with no journal
     // entry (FR-6/UFR-6 symmetry gap). Journal BEFORE returning; the reason is already scrubbed above.
-    await _journalExternal(Object.assign(_jbase(), { verify: null,
-      outcome: 'commit-failed' }))
+    // #392: a lost audit append is UFR-6 unauditable — mirror every other durable-write path (read /
+    // author / write-success) and fail closed to 'unauditable' rather than silently return the outcome
+    // with no trace. This is exactly what makes #392's "the journal names WHY" guarantee load-bearing:
+    // if the append vanished, the honest history-shape/commit-failed line vanished with it.
+    const jCommit = await _journalExternal(Object.assign(_jbase(), { verify: null,
+      outcome: structured || 'commit-failed' }))
+    if (!(jCommit && jCommit.ok)) return { ok: false, reason: 'unauditable' }
     return { ok: false, reason }
   }
 

@@ -4375,9 +4375,13 @@ async function _dispatchExternalInner(o) {
     `python3 ${libPath('engine_adapter.py')} commit --worktree ${shq(cwd)} --task-id ${shq(o.taskId || '')} ` +
     `--pre-sha ${shq(preSha)}`)
   if (!commit || commit.ok !== true) {
-    const reason = (commit && commit.error) ? await _scrubReason(commit.error) : 'commit-failed'
-    await _journalExternal(Object.assign(_jbase(), { verify: null,
-      outcome: 'commit-failed' }))
+    const structured = (commit && typeof commit.reason === 'string' && commit.reason) || null
+    const reason = structured
+      ? structured
+      : ((commit && commit.error) ? await _scrubReason(commit.error) : 'commit-failed')
+    const jCommit = await _journalExternal(Object.assign(_jbase(), { verify: null,
+      outcome: structured || 'commit-failed' }))
+    if (!(jCommit && jCommit.ok)) return { ok: false, reason: 'unauditable' }
     return { ok: false, reason }
   }
   const j = await _journalExternal(Object.assign(_jbase(), {
