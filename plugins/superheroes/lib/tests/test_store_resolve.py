@@ -280,3 +280,90 @@ def test_cli_key_and_resolve(tmp_path):
         capture_output=True, text=True, cwd=repo, env=env)
     assert out.returncode == 0
     assert json.loads(out.stdout)["location"] == "none"
+
+
+# ---------------------------------------------------------------------------
+# #428 direction 2 — create() is layer-native on migrated projects. Pointing
+# callers (test-pilot-init writes the profile at create()'s returned path) back
+# at the legacy .claude/test-pilot/profile.md re-minted the legacy file, which
+# re-armed core_md.migrate_on_read inside build worktrees — the trigger of the
+# destructive layer-deletion commit (weekly-eats 9dad0f6).
+# ---------------------------------------------------------------------------
+
+def test_create_in_repo_migrated_project_targets_layer_not_legacy(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    layer = _write_in_repo_layer(repo)
+    c = store.create(repo, "in-repo", root)
+    assert c["profileSource"] == "layer"
+    assert c["profile"] == layer
+    assert c["exists"] is True
+    # the legacy path is neither returned nor created
+    assert not os.path.exists(os.path.join(repo, ".claude", "test-pilot", "profile.md"))
+    # blocks/manifests keep their in-repo home (the migration does not move them)
+    base = os.path.join(repo, ".claude", "test-pilot")
+    assert c["blocks_dir"] == os.path.join(base, "blocks")
+    assert c["manifests_dir"] == os.path.join(base, "manifests")
+
+
+def test_create_global_migrated_project_targets_layer_not_legacy(tmp_path, monkeypatch):
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "core-store"))
+    repo = _init_repo(tmp_path / "repo", remote="git@github.com:org/repo.git")
+    root = str(tmp_path / "store")
+    layer = _write_global_layer(repo)
+    c = store.create(repo, "global", root)
+    assert c["profileSource"] == "layer"
+    assert c["profile"] == layer
+    assert c["exists"] is True
+
+
+def test_create_fresh_project_still_targets_legacy_scaffold_path(tmp_path):
+    # A genuinely un-migrated project keeps the pre-#428 scaffold target, byte-identical:
+    # the legacy path is returned (profileSource profile-md) but never written by create().
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    c = store.create(repo, "in-repo", root)
+    assert c["profileSource"] == "profile-md"
+    assert c["profile"] == os.path.join(repo, ".claude", "test-pilot", "profile.md")
+    assert c["exists"] is False
+    assert not os.path.exists(c["profile"])
+
+
+def test_create_legacy_present_keeps_legacy_precedence_over_layer(tmp_path):
+    # resolve() is legacy-first when both exist; create() must mirror that precedence or
+    # init would write the layer while the engine keeps reading the still-present legacy.
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    base = os.path.join(repo, ".claude", "test-pilot")
+    os.makedirs(base)
+    legacy = os.path.join(base, "profile.md")
+    open(legacy, "w").write("# p\n")
+    _write_in_repo_layer(repo)
+    c = store.create(repo, "in-repo", root)
+    assert c["profileSource"] == "profile-md"
+    assert c["profile"] == legacy
+
+
+def test_create_prose_only_layer_falls_back_to_legacy_path(tmp_path):
+    # A layer without the test-pilot-config block is not engine calibration (epic #327):
+    # create() must not hand it back as the profile target.
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    _write_in_repo_layer(repo, text="<!-- test-pilot -->\n\n## App launch\n- npm run dev\n")
+    c = store.create(repo, "in-repo", root)
+    assert c["profileSource"] == "profile-md"
+    assert c["profile"] == os.path.join(repo, ".claude", "test-pilot", "profile.md")
+
+
+def test_create_cross_mode_legacy_keeps_precedence_over_layer(tmp_path):
+    # #428 round-2 review: resolve()'s precedence puts ANY legacy (in-repo OR global-entry
+    # profile.md) ahead of the layers. create() must honor the cross-location legacy too, or a
+    # direct caller would write over a live layer while the engine keeps reading the legacy.
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    g = store.create(repo, "global", root)          # mint the global entry
+    open(g["profile"], "w").write("# p\n")           # global-entry legacy profile.md
+    _write_in_repo_layer(repo)                       # in-repo layer with config block
+    c = store.create(repo, "in-repo", root)
+    assert c["profileSource"] == "profile-md"        # global legacy keeps precedence
+    assert c["profile"] == os.path.join(repo, ".claude", "test-pilot", "profile.md")
