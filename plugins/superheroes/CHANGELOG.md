@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.14.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.13.2...superheroes-v0.14.0) (2026-07-15)
+
+
+### Features
+
+* **superheroes:** doc reviews converge — document-altitude severity, three-round ratchet, routed hand-off, legible parks + acceptance ([#397](https://github.com/zwrose/superheroes/issues/397)) ([#431](https://github.com/zwrose/superheroes/issues/431)) ([515e0c1](https://github.com/zwrose/superheroes/commit/515e0c1ddd0ab6f5bb3fd36235a7aee0e69c481a))
+
+
+### Bug Fixes
+
+* **superheroes:** commit_result handles history-shape engine fixes honestly — empty-diff folds are a named outcome, not a silent failure ([#392](https://github.com/zwrose/superheroes/issues/392)) ([#439](https://github.com/zwrose/superheroes/issues/439)) ([6f2157f](https://github.com/zwrose/superheroes/commit/6f2157fc66950994c4bd4376f3bf04f83ae30315))
+* **superheroes:** configure view surfaces rejected codex pins; authz probe respects configured pins ([#409](https://github.com/zwrose/superheroes/issues/409)) ([#438](https://github.com/zwrose/superheroes/issues/438)) ([6a8909e](https://github.com/zwrose/superheroes/commit/6a8909e3d8cab24ac35a29ab954c5187811b07f3))
+* **superheroes:** doc-panel reviewer receipts enforced at the schema layer on the receipt-missing retry — schema-minimal answers stop burning the retry budget ([#418](https://github.com/zwrose/superheroes/issues/418)) ([#441](https://github.com/zwrose/superheroes/issues/441)) ([a4725dc](https://github.com/zwrose/superheroes/commit/a4725dc5ef06edb2a013d2cef00ca280d334c577))
+* **superheroes:** final-review fix commits carry a Task-Id trailer the UFR-7 gate accepts — resumes no longer fail-closed ([#375](https://github.com/zwrose/superheroes/issues/375)) ([#440](https://github.com/zwrose/superheroes/issues/440)) ([a376f28](https://github.com/zwrose/superheroes/commit/a376f2845f5ba54cebf1ed95bff9fc32dace0407))
+* **superheroes:** passed-gate skip records nothing when no round state exists — absent is not unreadable; assumption-parks carry their reason ([#446](https://github.com/zwrose/superheroes/issues/446)) ([#447](https://github.com/zwrose/superheroes/issues/447)) ([18f0e31](https://github.com/zwrose/superheroes/commit/18f0e3121e2eae7b10551abe0ead503b4ca1470a))
+* **superheroes:** synthesis folds match on staged ids the judge echoes — unmatched verdicts disclose loudly; doc surfaces get parity or a named exception ([#430](https://github.com/zwrose/superheroes/issues/430)) ([#443](https://github.com/zwrose/superheroes/issues/443)) ([77e5ebf](https://github.com/zwrose/superheroes/commit/77e5ebf7783e8dcaca45e983deb46b030b26e97e))
+
 ## [0.13.2](https://github.com/zwrose/superheroes/compare/superheroes-v0.13.1...superheroes-v0.13.2) (2026-07-15)
 
 
