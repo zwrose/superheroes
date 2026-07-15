@@ -248,3 +248,35 @@ test('UFR-1: ledger record failure does not block gate-approval write', async ()
     cleanLegacyFixture()
   }
 })
+
+test('#446: owner first-approval with ABSENT round state discloses lost acceptance (not a benign skip)', async () => {
+  // The absent→skipped shortcut is benign ONLY on the provably-clean passed-gate re-entry
+  // (gateAlreadySet). On the owner FIRST-APPROVAL path (no gateAlreadySet) a passed gate overrode
+  // a park that HELD blockers, so absent round state is LOST acceptance — it must disclose, never
+  // silently skip (FR-14: never drop an owner's acceptance). Pins the gateAlreadySet term of
+  // benignSkip — a mutant dropping it (treating any absent as benign) suppresses this disclosure.
+  cleanRunDir()
+  cleanLegacyFixture()
+  const docsDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'sr-acc-'))
+  try {
+    seedPlanDoc(docsDir)
+    // No seedRoundRecords: round state is ABSENT on the owner first-approval path.
+    globalThis.__SR_DOC_DIRS = { [WI]: docsDir }
+    globalThis.agent = makeBaseAgent()
+    const r = await sr.approveDocReviewGate('plan', WI, { runId: 'run-acc' }) // NO gateAlreadySet
+    assert.strictEqual(r.gate, 'passed', 'owner approval still targets passed')
+    assert.ok(r.persist && r.persist.sideEffectCmd.includes('set-gate'),
+      'owner first-approval must chain set-gate passed')
+    const assumptions = (r.phaseResult && r.phaseResult.assumptions) || []
+    assert.ok(
+      assumptions.some((a) => /acceptance record could not be written/.test(a)),
+      'absent round state on owner first-approval is lost acceptance — must DISCLOSE, never silently skip',
+    )
+  } finally {
+    delete globalThis.__SR_DOC_DIRS
+    delete globalThis.agent
+    try { fs.rmSync(docsDir, { recursive: true, force: true }) } catch (_) {}
+    cleanRunDir()
+    cleanLegacyFixture()
+  }
+})

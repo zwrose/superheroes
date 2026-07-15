@@ -223,8 +223,9 @@ test('convergence record is journaled on both passed and parked terminals', asyn
   }
 })
 
-test('accepted-pass gate skip journals review_convergence without re-running the panel', async () => {
+test('#446: passed-gate skip with ABSENT round state records an honest skip — no assumption, no park', async () => {
   const since = maxEventSeq(WI)
+  const phaseStep = require('../phase_step.js')
   try {
     cleanRunDir()
     cleanLegacyFixture()
@@ -238,12 +239,26 @@ test('accepted-pass gate skip journals review_convergence without re-running the
       if (label.endsWith('-reviewer')) panelRuns += 1
       return orig(prompt, opts)
     }
+    // No round-records.json is seeded: this is a fresh work item whose review gate was pre-set
+    // passed (the acceptance fixture shape). collect-blocking on the absent file reads ABSENT.
     const r = await sr.reviewDocPhase('plan', WI, { runId: 'run-conv' })
-    assert.strictEqual(r.gate, 'passed')
+    assert.strictEqual(r.gate, 'passed', 'idempotent passed-gate skip stays passed')
     assert.strictEqual(panelRuns, 0, 'passed-gate skip must not re-run the panel')
+    const assumptions = (r.phaseResult && r.phaseResult.assumptions) || []
+    assert.deepStrictEqual(
+      assumptions, [],
+      `absent round state must push NO assumption (got: ${JSON.stringify(assumptions)})`,
+    )
+    // The spine's phase_step twin must PROCEED — a gate-passing phase with no assumption never parks.
+    assert.strictEqual(
+      phaseStep.decide(r.phaseResult, r.gate).action, 'proceed',
+      'no assumption on a passed gate ⇒ proceed, never park',
+    )
     const events = convergenceEvents(WI, since)
-    assert.strictEqual(events.length, 1, 'accepted-pass must journal review_convergence')
-    assert.strictEqual(events[0].payload.outcome, 'accepted-pass')
+    assert.strictEqual(events.length, 1, 'the skip still journals one review_convergence event')
+    assert.strictEqual(events[0].payload.outcome, 'skipped',
+      'nothing was accepted — the honest outcome is `skipped`, not `accepted-pass`')
+    assert.strictEqual(events[0].payload.roundsUsed, 0, 'no rounds ran')
   } finally {
     delete globalThis.__SR_DOC_DIRS
     delete globalThis.agent
@@ -300,5 +315,91 @@ test('UFR-1: non-JSON convergence compose discloses and does not journal', async
     delete globalThis.agent
     cleanRunDir()
     cleanLegacyFixture()
+  }
+})
+
+test('#446: passed-gate skip WITH readable round state records accepted-pass (not skipped)', async () => {
+  // Contrast to the ABSENT case: when round state EXISTS and is readable, the passed-gate skip is a
+  // genuine acceptance re-entry — the honest outcome is `accepted-pass`, roundsUsed reflects the
+  // real rounds. This pins the false branch of the outcome ternary (a constant-`skipped` mutant dies).
+  const wi = `${WI}-acceptedpass`
+  const since = maxEventSeq(wi)
+  const runDir = `/tmp/showrunner-${wi}-review-plan`
+  const docsDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'sr-conv-'))
+  try {
+    cleanRunDir(wi)
+    cleanLegacyFixture(wi)
+    seedPlanDoc(docsDir)
+    fs.mkdirSync(runDir, { recursive: true })
+    fs.writeFileSync(path.join(runDir, 'round-records.json'),
+      JSON.stringify([{ round: 1, findings: BLOCKER }]))
+    globalThis.__SR_DOC_DIRS = { [wi]: docsDir }
+    globalThis.agent = makeAgent({ gate: 'passed', convergenceMode: 'real' })
+    const r = await sr.reviewDocPhase('plan', wi, { runId: 'run-conv' })
+    assert.strictEqual(r.gate, 'passed')
+    const events = convergenceEvents(wi, since)
+    assert.strictEqual(events.length, 1, 'the acceptance re-entry journals one review_convergence')
+    assert.strictEqual(events[0].payload.outcome, 'accepted-pass',
+      'readable round state ⇒ accepted-pass, never skipped')
+    assert.strictEqual(events[0].payload.roundsUsed, 1, 'the one seeded round is reflected')
+  } finally {
+    delete globalThis.__SR_DOC_DIRS
+    delete globalThis.agent
+    try { fs.rmSync(docsDir, { recursive: true, force: true }) } catch (_) {}
+    cleanRunDir(wi)
+    cleanLegacyFixture(wi)
+  }
+})
+
+test('#446: an assumption-park carries a non-empty payload naming the reason (no naked `parked {}`)', async () => {
+  // A passed gate whose EXISTING round-records.json is unreadable is a genuine read failure:
+  // the acceptance ledger discloses (UFR-1), a material assumption is recorded, and the spine
+  // parks. That park must NOT be naked — the folded `parked` journal marker carries a payload
+  // naming the reason + assumptions that parked it (the FR-11 `--terminal-park-payload` carrier).
+  const wi = `${WI}-parkpayload`
+  cleanRunDir(wi)
+  cleanLegacyFixture(wi)
+  const runDir = `/tmp/showrunner-${wi}-review-plan`
+  const docsDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'sr-conv-'))
+  const savePrompts = []
+  try {
+    seedPlanDoc(docsDir)
+    // EXISTING but corrupt round state → unreadable (not absent) → real UFR-1 disclosure.
+    fs.mkdirSync(runDir, { recursive: true })
+    fs.writeFileSync(path.join(runDir, 'round-records.json'), 'not-json')
+    globalThis.__SR_DOC_DIRS = { [wi]: docsDir }
+    const orig = makeAgent({ gate: 'passed' })
+    globalThis.agent = async (prompt, opts) => {
+      const label = (opts && opts.label) || ''
+      if (label === 'save phase progress') {
+        savePrompts.push(String(prompt))
+        return saveProgressOk({ checkpoint_confirmed: false })
+      }
+      return orig(prompt, opts)
+    }
+    const idx = sr.PHASES.indexOf('review-plan')
+    const loopOut = await sr.runPhases(wi, idx, {
+      reviewDoc: (doc, w) => sr.reviewDocPhase(doc, w, { runId: 'run-conv' }),
+    })
+    assert.strictEqual(loopOut.outcome, 'parked', 'a material assumption on a passed gate parks')
+    assert.strictEqual(loopOut.phase, 'review-plan')
+    const parkSave = savePrompts.find((p) => p.includes('--terminal-park-payload'))
+    assert.ok(parkSave, 'the park save must fold a structured `parked` payload, not a bare detail')
+    assert.ok(!/--terminal-park\s/.test(parkSave),
+      'the bare-detail `--terminal-park` marker must NOT ride when a structured payload is present')
+    const m = parkSave.match(/--terminal-park-payload '(.+?)'(?:\s|$)/s)
+    assert.ok(m, 'the terminal-park-payload argument must be present and quoted')
+    const payload = JSON.parse(m[1].replace(/'\\''/g, "'"))
+    assert.ok(payload.reason, 'the parked payload must name the reason that parked the run')
+    assert.ok(
+      /acceptance record could not be written/.test(JSON.stringify(payload)),
+      'the parked payload must carry the assumption(s) that triggered the park',
+    )
+  } finally {
+    delete globalThis.__SR_DOC_DIRS
+    delete globalThis.agent
+    try { fs.rmSync(docsDir, { recursive: true, force: true }) } catch (_) {}
+    cleanRunDir(wi)
+    cleanLegacyFixture(wi)
   }
 })

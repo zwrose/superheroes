@@ -337,6 +337,16 @@ def test_format_journal_event_interesting_types():
         "type": "phases_skipped",
         "payload": {"route": "quick", "skipped": ["plan", "review-plan", "tasks", "review-tasks"]},
     }) == "14:30:00  ⏭ quick route — skipped plan, review-plan, tasks, review-tasks"
+    # a bare-detail park still renders its detail suffix (unchanged).
+    assert run_watch.format_journal_event({
+        "ts": "2026-07-03T14:44:00Z", "type": "parked", "detail": "needs owner",
+    }) == "14:44:00  ‼ parked · needs owner"
+    # #446: a park that folded a structured payload names its cause from payload.reason (no mute park).
+    assert run_watch.format_journal_event({
+        "ts": "2026-07-03T14:45:00Z", "type": "parked",
+        "payload": {"reason": "phase recorded a material assumption: ledger unreadable",
+                    "assumptions": ["ledger unreadable"]},
+    }) == "14:45:00  ‼ parked · phase recorded a material assumption: ledger unreadable"
 
 
 def test_phases_skipped_counts_as_active_state(tmp_path):
