@@ -15,16 +15,26 @@ function _keptSeverity(f, v) {
 
 function consume(merged, leafVerdicts) {
   const byId = Object.create(null)   // null-proto: byId[identity] tests own keys only (Python dict parity)
+  // #430: track first-insertion order explicitly. Object.keys() would order integer-like string keys
+  // numerically ascending — a drifted/mis-keyed verdict id COULD be integer-like ("42") — diverging
+  // from Python's dict first-insertion iteration and breaking the consume parity goldens (§11).
+  const idOrder = []
   if (Array.isArray(leafVerdicts)) {
     for (const v of leafVerdicts) {
-      if (v && typeof v === 'object' && typeof v.id === 'string') byId[v.id] = v
+      if (v && typeof v === 'object' && typeof v.id === 'string') {
+        if (byId[v.id] === undefined) idOrder.push(v.id)
+        byId[v.id] = v
+      }
     }
   }
+  const matchedIds = Object.create(null)   // #430: which verdict ids matched a finding
   const survivors = []; const drops = []; const downgrades = []
   for (const f of merged) {
     const id = findingIdentity(f)
     let v = byId[id]
-    if (!v && f && typeof f.id === 'string') v = byId[f.id]
+    let matchedKey = (v !== undefined) ? id : null
+    if (!v && f && typeof f.id === 'string') { v = byId[f.id]; if (v !== undefined) matchedKey = f.id }
+    if (matchedKey !== null) matchedIds[matchedKey] = true
     const action = (v && typeof v === 'object') ? v.action : null
     const reason = (v && typeof v === 'object') ? v.reason : null
     if (action === 'drop' && typeof reason === 'string' && reason.trim()) {
@@ -45,6 +55,7 @@ function consume(merged, leafVerdicts) {
       downgrades.push(entry)
     }
   }
-  return { findings: survivors, drops, downgrades }
+  const unmatched = idOrder.filter((vid) => !matchedIds[vid])
+  return { findings: survivors, drops, downgrades, unmatched }
 }
 module.exports = { consume }

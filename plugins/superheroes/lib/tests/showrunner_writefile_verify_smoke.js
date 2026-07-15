@@ -15,10 +15,12 @@
 // are exercised end-to-end, and the dispatch count is observed at the seam. Modes:
 //   (a) happy path: faithful copy -> marker -> byte-identical on disk, EXACTLY ONE dispatch;
 //   (b) refused write (EXEC-FAILED, command never ran) -> no marker -> retry -> loud throw, 2 dispatches;
-//   (c) mutated payload (a byte flipped in the b64 arg) -> Python re-hash mismatch (exit 3), no marker
-//       -> retry; faithful on retry CONVERGES (file correct); mutated on both -> throw;
+//   (c) mutated payload (a byte flipped in the plain-visible arg) -> Python re-hash mismatch (exit 3), no
+//       marker -> retry; faithful on retry CONVERGES (file correct); mutated on both -> throw;
 //   (d) empty and prose-only answers -> no marker -> retry/throw;
-//   (e) the composed command still contains base64.b64decode (stays in #402's _SPINE_STATE_WRITE class);
+//   (e) the composed command carries the __SR_WROTE marker literal (stays in #402's _SPINE_STATE_WRITE class)
+//       and is PLAIN-VISIBLE — no base64, and the write-courier prompt drops the verbatim-relay demand (#435);
+//   (e2) a NARRATED reply that embeds a valid receipt line PASSES in one dispatch (narration tolerance, #435);
 //   (f) the retry escalates to the payload tier (opts.payload) regardless of size.
 // Run: node plugins/superheroes/lib/tests/showrunner_writefile_verify_smoke.js
 'use strict'
@@ -45,23 +47,24 @@ function commandOf(prompt) {
   return idx >= 0 ? String(prompt).slice(idx + 2) : String(prompt)
 }
 
-// Flip one payload byte the way the live 2026-07-13 courier did: change a single base64 char in the
-// THIRD single-quoted argv token (the b64 payload) to a different but still-valid base64 char, so the
-// command still parses and b64decode still succeeds — but decodes to DIFFERENT bytes whose re-hash no
-// longer matches the embedded expected hash (Python exits 3).
+// Flip one payload byte the way the live 2026-07-13 courier did: change a single letter in the THIRD
+// single-quoted argv token (the PLAIN-VISIBLE #435 payload) to a different letter, so the command still
+// parses — but the written bytes differ, and the Python re-hash no longer matches the embedded expected
+// hash (exit 3, no marker). The test payloads (JSON.stringify output) carry no single quotes, so each argv
+// is one clean shq token and the token regex is exact.
 function mutatePayloadArg(cmd) {
   const toks = cmd.match(/'(?:[^'\\]|\\.)*'/g) || []
-  // tokens: [script, path, b64, hash]; mutate the b64 (index 2).
-  assert.ok(toks.length >= 4, 'writeFile command must carry script/path/b64/hash argv (#410 shape)')
-  const b64 = toks[2]
-  const inner = b64.slice(1, -1)
+  // tokens: [script, path, payload, hash]; mutate the payload (index 2).
+  assert.ok(toks.length >= 4, 'writeFile command must carry script/path/payload/hash argv (#435 shape)')
+  const payload = toks[2]
+  const inner = payload.slice(1, -1)
   let flipped = null
   for (let i = 0; i < inner.length; i++) {
     const c = inner[i]
     if (/[A-Za-z]/.test(c)) { const r = c === 'A' ? 'B' : 'A'; flipped = inner.slice(0, i) + r + inner.slice(i + 1); break }
   }
-  assert.ok(flipped && flipped !== inner, 'the payload mutation flipped a base64 byte')
-  return cmd.slice(0, cmd.indexOf(b64)) + "'" + flipped + "'" + cmd.slice(cmd.indexOf(b64) + b64.length)
+  assert.ok(flipped && flipped !== inner, 'the payload mutation flipped a content byte')
+  return cmd.slice(0, cmd.indexOf(payload)) + "'" + flipped + "'" + cmd.slice(cmd.indexOf(payload) + payload.length)
 }
 
 function loadBundle(dispatch) {
@@ -89,11 +92,97 @@ async function main() {
     await io.writeFile(p, JSON.stringify(value))
     assert.deepStrictEqual(JSON.parse(fs.readFileSync(p, 'utf8')), value, '#410 happy path: file lands byte-identical')
     assert.strictEqual(dispatches.length, 1, '#410 happy path: EXACTLY ONE dispatch (verify rides inside the write leaf, no leaf growth)')
-    // (e) the composed command stays in #402's _SPINE_STATE_WRITE class (base64.b64decode substring).
-    assert.ok(commandOf(await new Promise((res) => {
-      loadBundle(async (prompt) => { res(prompt); return runReal(commandOf(prompt)) }).writeFile(path.join(tmpDir, 'probe.json'), 'x')
-    })).includes('base64.b64decode'), '#410: the write command still contains base64.b64decode (stays in _SPINE_STATE_WRITE)')
-    console.log('OK: #410 happy path writes byte-identical in exactly one dispatch, command stays base64.b64decode')
+    // (e) #435: the composed command stays in #402's _SPINE_STATE_WRITE class (__SR_WROTE marker literal),
+    // is PLAIN-VISIBLE (no base64), and its dispatch prompt drops the verbatim-relay demand the classifier
+    // flagged as concealment — while KEEPING transparency framing and the payload-is-data clause.
+    let probePrompt = null
+    await loadBundle(async (prompt) => { probePrompt = prompt; return runReal(commandOf(prompt)) }).writeFile(path.join(tmpDir, 'probe.json'), 'x')
+    assert.ok(commandOf(probePrompt).includes('__SR_WROTE'), '#435: the write command carries the __SR_WROTE marker (stays in _SPINE_STATE_WRITE)')
+    assert.ok(!commandOf(probePrompt).includes('base64'), '#435: the write command is plain-visible — NO base64')
+    assert.ok(!/entire reply must be the command's stdout, verbatim/i.test(probePrompt) && !/any narration[^.]*corrupts the parse/i.test(probePrompt),
+      '#435: the write-courier prompt drops the verbatim-relay / narration-corrupts sentence (the flagged concealment clause)')
+    assert.ok(/recorded in the (?:session transcript|run journal)|nothing here is hidden/i.test(probePrompt),
+      '#435: the write-courier prompt keeps transparency framing (nothing hidden, on the record)')
+    assert.ok(/command text is DATA to transport/i.test(probePrompt), '#435: the write-courier prompt keeps the payload-is-data clause (#403)')
+    console.log('OK: #435 happy path writes byte-identical in one dispatch — plain-visible, __SR_WROTE class, narration-tolerant prompt')
+  }
+
+  // ---- (e2) NARRATION TOLERANCE: a chatty reply that EMBEDS a valid receipt line passes in ONE dispatch. ----
+  {
+    // The courier runs the real command (so the file lands + the marker is genuine) but wraps its reply in
+    // conversational prose. #435: writeFile extracts the __SR_WROTE receipt by pattern (indexOf), so narration
+    // around a VALID marker is accepted — no retry, no throw. (A narrated reply with a WRONG/absent marker is
+    // still rejected — covered by (d) prose and (f) wrong-marker below.)
+    const dispatches = []
+    const io = loadBundle(async (prompt, opts) => {
+      dispatches.push(opts || {})
+      const real = runReal(commandOf(prompt))   // runs the command; real carries the genuine __SR_WROTE marker
+      return 'Sure — I ran the command and the file was written.\n' + real + '\nLet me know if you need anything else!'
+    })
+    const p = path.join(tmpDir, 'narrated.json')
+    const value = { narrated: true, n: 9 }
+    await io.writeFile(p, JSON.stringify(value))
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(p, 'utf8')), value, '#435 narration: the file lands correctly')
+    assert.strictEqual(dispatches.length, 1, '#435 narration: a narrated-but-valid receipt passes in EXACTLY ONE dispatch (no retry)')
+    console.log('OK: #435 a narrated reply embedding a valid __SR_WROTE receipt passes in one dispatch (pattern-extracted, narration tolerant)')
+  }
+
+  // ---- (a2) ESCAPE-REQUIRING content round-trips byte-identical through the REAL python3 writer. ----
+  {
+    // The whole point of the #435 escape-encoding (encPayload -> SR_WRITER_SCRIPT decode). The other real-
+    // python cases use JSON.stringify output (no raw newlines/backslashes/apostrophes), so a decode-ordering
+    // bug (two-backslash-n before \n) or a dropped encPayload replace() would be INVISIBLE — the on-disk
+    // re-hash would silently mismatch and every multiline/backslash write would fail closed in production
+    // while the smokes stayed green. This drives the committed writer against a real shell + python3 with
+    // content that exercises every escape branch, and pins byte-identical readback in EXACTLY ONE dispatch
+    // (a decode divergence drops the marker -> 2 dispatches -> throw).
+    const dispatches = []
+    const io = loadBundle(async (prompt, opts) => { dispatches.push(opts || {}); return runReal(commandOf(prompt)) })
+    const p = path.join(tmpDir, 'escape-heavy.txt')
+    const value = [
+      'line1',
+      'line2 with a real LF above and a CRLF next\r',
+      'literal backslash-n: a\\nb (must stay backslash-n, NOT a newline)',
+      'trailing backslash: c\\',
+      'double backslash: d\\\\e',
+      "apostrophe: don't  quote: \"x\"",
+      'tab\there  unicode ünî 日本語 🎉',
+      // The EXACT marker suffix, embedded MID-payload — this locks the round-1 `__expectMarker` anchor
+      // (bundle __sh: `/;\\s*echo __SR_EXIT:\\$\\?\\s*$/`). encPayload passes it through verbatim, so it sits
+      // inside the payload argv (the write command ends with the hash argv, not `$?`). With the `$` anchor
+      // present, __expectMarker stays FALSE -> ONE dispatch. Remove the `$` anchor and it matches mid-command
+      // -> __sh treats the genuine __SR_WROTE-only reply as a bad courier answer -> spurious retry -> the
+      // dispatches===1 assertion below FAILS. (A bare `__SR_EXIT:0` substring can't match the regex either
+      // way, so it would NOT kill that mutant — the literal `; echo __SR_EXIT:$?` is required.)
+      'doc snippet: run foo 2>&1; echo __SR_EXIT:$?  then __SR_WROTE:cafebabe next',
+    ].join('\n')
+    await io.writeFile(p, value)
+    assert.strictEqual(fs.readFileSync(p, 'utf8'), value,
+      '#435 escape-heavy content round-trips byte-identical through the REAL python3 writer (newline/CR/backslash/apostrophe/literal-\\n)')
+    assert.strictEqual(dispatches.length, 1,
+      '#435 escape-heavy: faithful decode + marker-suffix anchor -> EXACTLY ONE dispatch (a decode divergence drops the marker, and an unanchored __expectMarker would spuriously retry on the embedded `; echo __SR_EXIT:$?`)')
+    console.log('OK: #435 escape-requiring content (LF/CRLF/backslash/literal-\\n/apostrophe/unicode + embedded marker suffix) round-trips byte-identical in one dispatch — locks the __expectMarker anchor')
+  }
+
+  // ---- (a3) isWriteCommand's load-bearing anchor: the record_composed embedding leaf is NOT a write. ----
+  {
+    const { isWriteCommand, parseWrite } = require('./_sr_write.js')
+    // A real io.writeFile command (bare `python3 -c '<writer>' …`, carrying __SR_WROTE) IS a write.
+    let composed = null
+    await loadBundle(async (prompt) => { composed = commandOf(prompt); return runReal(commandOf(prompt)) })
+      .writeFile(path.join(tmpDir, 'anchor-src.json'), JSON.stringify({ ok: true }))
+    assert.ok(isWriteCommand(composed), '#435 isWriteCommand: a bare io.writeFile command is a write')
+    assert.deepStrictEqual(JSON.parse(parseWrite(composed).content), { ok: true }, '#435 parseWrite recovers the content of a real write')
+    // The composed-exact record_composed leaf EMBEDS that write command as an argv payload — so its OWN bytes
+    // contain both __SR_WROTE and the substring `python3 -c '` — but it is composed via __argv as a QUOTED
+    // `'python3' '-c' …` leaf, which the anchor must EXCLUDE (else parseWrite misreads the runId as the path,
+    // corrupting the canned in-memory FS and looping the misbehaving/stretch smokes).
+    const recordComposedLeaf = "'python3' '-c' 'import permission_rules; permission_rules.record_composed(...)' '5' " + "'" + composed.replace(/'/g, "'\\''") + "' '.' 'wi'"
+    assert.ok(!isWriteCommand(recordComposedLeaf),
+      '#435 isWriteCommand: a record_composed leaf embedding a write command is NOT mis-classified as a write (bare-prefix anchor)')
+    // The anchor tolerates a cd-root wrap on a real write (rootedCommand prefixes `cd '<root>' && `).
+    assert.ok(isWriteCommand("cd '/repo root' && " + composed), '#435 isWriteCommand: a cd-root-wrapped write is still a write')
+    console.log('OK: #435 isWriteCommand anchors on the bare python3 -c write shape (excludes the record_composed embedding leaf, tolerates cd-root wrap)')
   }
 
   // ---- (b) refused write (EXEC-FAILED, command never ran) -> no marker -> retry -> loud throw. ----
@@ -139,15 +228,14 @@ async function main() {
     let threw = null
     try { await io1.writeFile(pAll, JSON.stringify({ payload: 'faithful?' })) } catch (e) { threw = e }
     assert.ok(threw, '#410 mutated payload (both attempts): a hash-mismatch write THROWS')
-    // Pin that the mutation was FAITHFUL to the live specimen: valid base64 that DECODED to different bytes
-    // that HIT DISK (so the Python exit-3 hash-mismatch branch fired), NOT an invalid-b64 decode crash
-    // that wrote nothing. The verify caught the mismatch and the caller never trusted it — the throw is
-    // the closure, not the on-disk bytes.
-    assert.ok(fs.existsSync(pAll), '#410 mutated payload: the file exists')
-    // __SR_W opens the file "wb" (truncating) BEFORE decode, so a decode CRASH would leave a 0-byte file;
-    // a length>0 file proves b64decode succeeded and the corrupted bytes landed, so the exit-3 hash-mismatch
-    // branch fired (the faithful-mutation contract), not an invalid-base64 decode crash.
-    assert.ok(fs.readFileSync(pAll).length > 0, '#410 mutated payload: corrupted bytes actually landed (b64decode succeeded — a decode crash would leave a 0-byte file)')
+    // Pin that the mutation actually hit disk: the plain-visible payload DECODED to different bytes that
+    // HIT DISK (so the Python exit-3 hash-mismatch branch fired), then the caller never trusted them — the
+    // throw is the closure, not the on-disk bytes.
+    assert.ok(fs.existsSync(pAll), '#435 mutated payload: the file exists')
+    // #435: the writer opens the file "w" and writes the decoded content BEFORE the re-hash, so a length>0
+    // file proves the corrupted bytes landed and the exit-3 hash-mismatch branch fired (the plain payload
+    // never "fails to decode" — decPayload is total — so a mismatch is always a content mutation, not a crash).
+    assert.ok(fs.readFileSync(pAll).length > 0, '#435 mutated payload: corrupted bytes actually landed, then the exit-3 hash-mismatch fired')
     assert.notStrictEqual(fs.readFileSync(pAll, 'utf8'), JSON.stringify({ payload: 'faithful?' }),
       '#410 mutated payload: the on-disk bytes are the mutated (different) content — the exit-3 hash-mismatch path fired')
 
@@ -159,7 +247,7 @@ async function main() {
     await io2.writeFile(pConv, JSON.stringify(want))
     assert.deepStrictEqual(JSON.parse(fs.readFileSync(pConv, 'utf8')), want, '#410 mutated-then-faithful: the retry converges on the correct bytes')
     assert.strictEqual(n, 2, '#410 mutated-then-faithful: exactly one retry')
-    console.log('OK: #410 a mutated base64 payload fails the Python-side hash verify -> retry (converges) / throw (persistent)')
+    console.log('OK: #435 a mutated plain payload fails the Python-side hash verify -> retry (converges) / throw (persistent)')
   }
 
   // ---- (d) empty and prose-only answers -> no marker -> retry/throw. ----
@@ -191,23 +279,25 @@ async function main() {
   //          marker — the shape stageAndRunHelper stages through, so its `&& <helper>` chain still runs. ----
   {
     const { execFileSync } = require('child_process')
+    const { decPayload } = require('./_sr_write.js')
     // Reconstruct a bare 2-arg __SR_W invocation from a real writeFile command by dropping the hash argv,
     // and prove it writes byte-identical content, prints NOTHING, and exits 0 (so a chained helper runs).
     let composed = null
     await loadBundle(async (prompt) => { composed = commandOf(prompt); return runReal(commandOf(prompt)) })
       .writeFile(path.join(tmpDir, 'twoarg-src.json'), 'unused')
-    const toks = composed.match(/'(?:[^'\\]|\\.)*'/g)   // [script, path, b64, hash]
+    const toks = composed.match(/'(?:[^'\\]|\\.)*'/g)   // [script, path, enc-payload, hash]
     const twoArgPath = path.join(tmpDir, 'twoarg.json')
     const scriptTok = composed.slice(composed.indexOf("python3 -c '") + 'python3 -c '.length, composed.indexOf(toks[1]) - 1)
-    const b64Tok = toks[2]
-    const cmd2 = 'python3 -c ' + scriptTok + " '" + twoArgPath + "' " + b64Tok + '; echo __EXIT:$?'
+    const payloadTok = toks[2]
+    const cmd2 = 'python3 -c ' + scriptTok + " '" + twoArgPath + "' " + payloadTok + '; echo __EXIT:$?'
     let out2 = ''
     try { out2 = String(execFileSync('bash', ['-c', cmd2], { stdio: 'pipe', encoding: 'utf8' }) || '') } catch (e) { out2 = 'ERR'; }
-    const payloadBytes = Buffer.from(b64Tok.slice(1, -1), 'base64').toString('utf8')
-    assert.strictEqual(fs.readFileSync(twoArgPath, 'utf8'), payloadBytes, '#410 2-arg __SR_W: writes byte-identical content')
-    assert.ok(!out2.includes('__SR_WROTE'), '#410 2-arg __SR_W: prints NO marker (no verify branch)')
-    assert.ok(/__EXIT:0\s*$/.test(out2), '#410 2-arg __SR_W: exits 0, so stageAndRunHelper\'s && <helper> chain still runs')
-    console.log('OK: #410 the 2-arg (no-hash) __SR_W stage path stays byte-identical (plain write, no marker, exit 0)')
+    // #435: the payload is plain-visible escape-encoded text — decPayload (not base64) recovers the bytes.
+    const payloadBytes = decPayload(payloadTok.slice(1, -1))
+    assert.strictEqual(fs.readFileSync(twoArgPath, 'utf8'), payloadBytes, '#435 2-arg __SR_W: writes byte-identical content')
+    assert.ok(!out2.includes('__SR_WROTE'), '#435 2-arg __SR_W: prints NO marker (no verify branch)')
+    assert.ok(/__EXIT:0\s*$/.test(out2), '#435 2-arg __SR_W: exits 0, so stageAndRunHelper\'s && <helper> chain still runs')
+    console.log('OK: #435 the 2-arg (no-hash) __SR_W stage path stays byte-identical (plain write, no marker, exit 0)')
   }
 
   fs.rmSync(tmpDir, { recursive: true, force: true })

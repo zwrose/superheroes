@@ -688,9 +688,63 @@ async function main() {
       '#212: the park reason names the malformed seat AND its cause')
   }
 
+  // #430: the synthesis judge is handed each merged finding with a PRECOMPUTED `id` staged onto it
+  // (== findingIdentity), so it echoes the id verbatim instead of re-deriving the normalization.
+  // A leaf that echoes that staged id folds a drop; a leaf that echoes a DRIFTED id matches nothing,
+  // keeps the finding fail-closed, and the mis-key is disclosed LOUDLY in verdict.unmatched.
+  {
+    const cb = require('../circuit_breaker.js')
+    const dir = freshDir()
+    const finding = { file: 'a.py', line: 1, title: 'claim/test mismatch: routed_forward', severity: 'Critical', evidence: 'x' }
+    const stagedId = cb.findingIdentity(finding)
+    let sawStagedId = null
+    global.reviewerAgent = async (_r, _c, _rub, runDir, round, opts) => (
+      round === 1 ? { findings: [finding], confidence: 'high', verificationReceipt: receipt(runDir, round, opts), usage: { total: 1 } }
+        : cleanResult(runDir, round, opts))
+    // The judge ECHOES the staged id it was handed — a drop that folds.
+    global.synthesisLeaf = async (merged) => {
+      sawStagedId = merged[0] && merged[0].id
+      return { verdicts: [{ id: merged[0].id, action: 'drop', reason: 'assertion already exists at HEAD' }], usage: { total: 1 } }
+    }
+    v = await reviewPanel({ ...base(dir), reviewerSet: ['code-reviewer'],
+      fixStep: async () => ({ fixed: [], changedSubjects: ['Code'], coverageDecisions: [] }) })
+    assert.strictEqual(sawStagedId, stagedId,
+      '#430: the merged finding handed to the synthesis judge must carry the precomputed id == findingIdentity')
+    assert.strictEqual(v.terminal, 'clean',
+      '#430: a drop verdict echoing the staged id folds — the Critical finding is gone and the round is clean')
+  }
+
+  {
+    // A judge that echoes a DRIFTED id (raw punctuation — the round-5 defect) matches nothing, so
+    // the drop does NOT fold: the blocker is kept fail-closed and routed to the fixer (never a
+    // silent clean). With a fixer that makes no progress the run PARKS, and the park's terminal
+    // verdict carries the loud unmatched disclosure — the #397 round-5 silent no-op made visible.
+    const dir = freshDir()
+    const finding = { file: 'a.py', line: 1, title: 'claim/test mismatch: routed_forward', severity: 'Critical', evidence: 'x' }
+    const driftedId = 'a.py::claim/test mismatch: routed_forward'
+    let fixCalls = 0
+    global.reviewerAgent = async (_r, _c, _rub, runDir, round, opts) => (
+      { findings: [finding], confidence: 'high', verificationReceipt: receipt(runDir, round, opts), usage: { total: 1 } })
+    global.synthesisLeaf = async () => ({
+      verdicts: [{ id: driftedId, action: 'drop', reason: 'stale anchor' }],
+      usage: { total: 1 },
+    })
+    v = await reviewPanel({ ...base(dir), reviewerSet: ['code-reviewer'],
+      fixStep: async () => { fixCalls += 1; return { fixed: [], changedSubjects: ['Code'], coverageDecisions: [] } } })
+    // fail-closed: the drifted-id drop did NOT fold — the blocker survived to the fix leg (had it
+    // silently folded, round 1 would have been clean and the fixer never called).
+    assert.ok(fixCalls >= 1,
+      '#430: a drifted-id drop verdict must NOT silently fold — the kept blocker routes to the fixer')
+    assert.notStrictEqual(v.terminal, 'clean',
+      '#430: a persistently-kept blocker with no fix progress must never terminate clean')
+    // ... and the mis-key is disclosed loudly on the terminal verdict.
+    assert.ok(Array.isArray(v.unmatched) && v.unmatched.includes(driftedId),
+      '#430: a synthesis verdict matching no finding is surfaced in verdict.unmatched, never silent')
+  }
+
   global.synthesisLeaf = async () => ({ verdicts: [], usage: { total: 1 } })
 
-  console.log('ok: in-memory loop shell sentinel + passthrough + continue/fix/clean + extras + accumulator + verify-coercion + policy/memory/coverage + #212 fix-before-park/corrective-retry/honest-reason')
+  console.log('ok: in-memory loop shell sentinel + passthrough + continue/fix/clean + extras + accumulator + verify-coercion + policy/memory/coverage + #212 fix-before-park/corrective-retry/honest-reason + #430 staged-id fold + unmatched disclosure')
 }
 
 main().catch((e) => { console.error('FAIL:', e.message); process.exit(1) })
