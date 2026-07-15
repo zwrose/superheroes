@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.2](https://github.com/zwrose/superheroes/compare/superheroes-v0.13.1...superheroes-v0.13.2) (2026-07-15)
+
+
+### Bug Fixes
+
+* **superheroes:** migration commit never records core/layer deletions; store.create stops minting legacy profile.md ([#428](https://github.com/zwrose/superheroes/issues/428)) ([#429](https://github.com/zwrose/superheroes/issues/429)) ([855b3ad](https://github.com/zwrose/superheroes/commit/855b3ad84fa882010654d67ad7c429521bd83695))
+
 ## [0.13.1](https://github.com/zwrose/superheroes/compare/superheroes-v0.13.0...superheroes-v0.13.1) (2026-07-14)
 
 
