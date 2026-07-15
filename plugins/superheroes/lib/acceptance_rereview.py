@@ -54,7 +54,15 @@ def _acceptance_drops(merged, acceptance_verdicts, offered):
     by_id = {}
     for v in acceptance_verdicts or []:
         if isinstance(v, dict) and isinstance(v.get("id"), str):
-            by_id[v["id"]] = v
+            # keep-on-uncertain extends to self-contradiction: duplicate verdicts for the same
+            # id that disagree on action resolve to "different" (judged afresh) — a contradicted
+            # `same` must never suppress (last-wins would resolve toward suppression).
+            prior = by_id.get(v["id"])
+            if prior is not None and prior.get("action") != v.get("action"):
+                by_id[v["id"]] = {"id": v["id"], "action": "different",
+                                  "reason": "conflicting duplicate verdicts — judged afresh"}
+            else:
+                by_id[v["id"]] = v
     drops = []
     survivors = []
     for f in merged or []:
@@ -100,6 +108,11 @@ def main(argv):
     ap.add_argument("--merged", required=True)
     ap.add_argument("--leaf", required=True)
     ap.add_argument("--candidates", required=True, help="JSON array from review_acceptance candidates")
+    ap.add_argument("--acceptance-only", action="store_true",
+                    help="#433 interactive mode: the leaf carries ONLY sameness verdicts — filter "
+                         "to same/different and strip severity, so no verdict can reach "
+                         "loop_synthesis drop/downgrade power (there is no legitimate normal "
+                         "synthesis leaf on the interactive path)")
     args = ap.parse_args(argv[1:])
     with open(args.merged, encoding="utf-8") as fh:
         merged = json.load(fh)
@@ -112,6 +125,15 @@ def main(argv):
     if not isinstance(candidates, list):
         candidates = []
     leaf_verdicts = leaf if isinstance(leaf, list) else (leaf.get("verdicts") if isinstance(leaf, dict) else [])
+    if args.acceptance_only:
+        # A drifted action ("drop"/"keep") or a smuggled severity on the interactive path must
+        # have no effect: only clear sameness verdicts survive, shorn to the three fields the
+        # acceptance judge owns. Everything else is uncertain -> kept (judged afresh).
+        leaf_verdicts = [
+            {"id": v.get("id"), "action": v.get("action"), "reason": v.get("reason")}
+            for v in (leaf_verdicts or [])
+            if isinstance(v, dict) and v.get("action") in _SAMENESS_ACTIONS
+        ]
     out = consume_with_acceptance(merged, leaf_verdicts, candidates)
     sys.stdout.write(json.dumps(out, sort_keys=True) + "\n")
     return 0

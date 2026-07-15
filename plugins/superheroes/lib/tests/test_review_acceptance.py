@@ -58,3 +58,39 @@ def test_cross_cutting_finding_keyed_to_whole_doc(tmp_path):
     led = json.loads(open(os.path.join(str(tmp_path), "plan-accept.json")).read())
     assert led["accepted"][0]["docSection"] is None
     assert led["accepted"][0]["contentHash"] == ra.whole_doc_hash(DOC)
+
+
+def test_record_preserves_still_valid_prior_acceptances(tmp_path):
+    """Scoped-review fix (FR-14 durability): a suppressed-then-passed re-review's record()
+    must not erase prior acceptances whose concerned content is unchanged — otherwise the
+    NEXT review re-asks the settled decision. Changed-content entries are dropped (judged
+    afresh, the safe direction)."""
+    ra = _load("review_acceptance")
+    ra.record(str(tmp_path), "plan", [
+        {"file": "plan.md", "title": "unauth path", "docSection": "Architecture"}], DOC)
+    # re-review on unchanged content: the accepted finding was suppressed, so this session's
+    # terminal open blockers are EMPTY — record must carry the prior entry forward verbatim
+    out = ra.record(str(tmp_path), "plan", [], DOC)
+    assert out["ok"] and out["count"] == 1
+    led = json.loads(open(os.path.join(str(tmp_path), "plan-accept.json")).read())
+    assert [e["identity"] for e in led["accepted"]] == ["plan.md::unauth path"]
+    # content changed: the carried entry's hash no longer matches -> dropped from the ledger
+    edited = DOC.replace("authenticates every request", "skips authentication")
+    out2 = ra.record(str(tmp_path), "plan", [], edited)
+    assert out2["ok"] and out2["count"] == 0
+    led2 = json.loads(open(os.path.join(str(tmp_path), "plan-accept.json")).read())
+    assert led2["accepted"] == []
+
+
+def test_record_union_new_blockers_with_preserved_priors_dedupes_identity(tmp_path):
+    ra = _load("review_acceptance")
+    ra.record(str(tmp_path), "plan", [
+        {"file": "plan.md", "title": "unauth path", "docSection": "Architecture"}], DOC)
+    # next park accepts a NEW blocker AND re-lists the same prior one — no duplicate entry
+    out = ra.record(str(tmp_path), "plan", [
+        {"file": "plan.md", "title": "unauth path", "docSection": "Architecture"},
+        {"file": "plan.md", "title": "records lost on retry", "docSection": "Data flow"}], DOC)
+    assert out["ok"] and out["count"] == 2
+    led = json.loads(open(os.path.join(str(tmp_path), "plan-accept.json")).read())
+    assert sorted(e["identity"] for e in led["accepted"]) == [
+        "plan.md::records lost on retry", "plan.md::unauth path"]

@@ -106,16 +106,20 @@ def test_cli_interactive_flow_keep_on_uncertain(tmp_path, capsys):
     rc = ar.main(["acceptance_rereview", "--merged", str(m), "--leaf", str(l), "--candidates", str(c)])
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
-    titles = {f["title"] for f in out["findings"]}
-    # `different` and no-verdict both stay blocking; only the clear `same` is suppressed
-    assert titles == {"records dropped on concurrent edit", "retry constant unbounded"}
+    # `different` and no-verdict both stay blocking AT THEIR SEVERITY (presence alone is not
+    # enough — a silent demotion would be a functional accept); only the clear `same` drops
+    assert {f["title"]: f["severity"] for f in out["findings"]} == {
+        "records dropped on concurrent edit": "Important",
+        "retry constant unbounded": "Important"}
+    assert out["downgrades"] == []
     accepted = [d for d in out["drops"] if d.get("accepted")]
     assert len(accepted) == 1 and accepted[0]["id"] == "plan.md::unauth write path"
     assert accepted[0]["was_blocking_tagged"] is True
 
 
 def test_cli_empty_candidates_suppresses_nothing(tmp_path, capsys):
-    """#433: absent/empty ledger — the skills' fail-closed skip path. Every finding survives."""
+    """#433: empty candidates — the fail-closed direction after the skill's absent-ledger
+    `[]` fallback (the absent-FILE case is the shell's `|| echo '[]'`, not reachable here)."""
     ar = _load("acceptance_rereview")
     m, l, c = tmp_path / "merged.json", tmp_path / "leaf.json", tmp_path / "cands.json"
     m.write_text(json.dumps([{"file": "plan.md", "line": 1, "title": "x", "severity": "Important"}]))
@@ -124,3 +128,70 @@ def test_cli_empty_candidates_suppresses_nothing(tmp_path, capsys):
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
     assert len(out["findings"]) == 1 and out["drops"] == []
+
+
+def test_cli_same_verdict_on_changed_content_never_suppresses(tmp_path, capsys):
+    """FR-14 second rule through the CLI: a `same`+reason verdict targeting a candidate whose
+    section hash CHANGED must not suppress — the finding is judged afresh. Kills the mutant
+    that drops on any same+reason verdict regardless of hashMatches."""
+    ar = _load("acceptance_rereview")
+    m, l, c = tmp_path / "merged.json", tmp_path / "leaf.json", tmp_path / "cands.json"
+    m.write_text(json.dumps([
+        {"file": "plan.md", "line": 1, "title": "unauth write path", "severity": "Critical"}]))
+    c.write_text(json.dumps([
+        {"identity": "plan.md::unauth write path", "docSection": "Architecture",
+         "hashMatches": False}]))
+    l.write_text(json.dumps([
+        {"id": "plan.md::unauth write path", "action": "same",
+         "reason": "looks like the accepted one"}]))
+    rc = ar.main(["acceptance_rereview", "--merged", str(m), "--leaf", str(l), "--candidates", str(c)])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert len(out["findings"]) == 1
+    assert out["findings"][0]["title"] == "unauth write path"
+    assert out["findings"][0]["severity"] == "Critical"
+    assert out["drops"] == []
+
+
+def test_cli_acceptance_only_neutralizes_drifted_and_smuggled_verdicts(tmp_path, capsys):
+    """Scoped-review fix: on the interactive path there is NO legitimate normal-synthesis leaf,
+    so --acceptance-only filters the verdict file to clear sameness verdicts and strips
+    severity. A drifted `drop` action (offered or not) and a smuggled severity must have no
+    effect — the findings survive at their own severity."""
+    ar = _load("acceptance_rereview")
+    m, l, c = tmp_path / "merged.json", tmp_path / "leaf.json", tmp_path / "cands.json"
+    m.write_text(json.dumps([
+        {"file": "plan.md", "line": 1, "title": "unauth write path", "severity": "Critical"},
+        {"file": "plan.md", "line": 5, "title": "records dropped", "severity": "Important"},
+    ]))
+    c.write_text(json.dumps([
+        {"identity": "plan.md::unauth write path", "docSection": "A", "hashMatches": True},
+        {"identity": "plan.md::records dropped", "docSection": "B", "hashMatches": False},
+    ]))
+    l.write_text(json.dumps([
+        # drifted action on an offered id — must not suppress
+        {"id": "plan.md::unauth write path", "action": "drop", "reason": "drifted schema"},
+        # drop + smuggled severity on an UNOFFERED id — must neither drop nor re-tier
+        {"id": "plan.md::records dropped", "action": "drop", "reason": "x", "severity": "Nit"},
+    ]))
+    rc = ar.main(["acceptance_rereview", "--acceptance-only",
+                  "--merged", str(m), "--leaf", str(l), "--candidates", str(c)])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert {f["title"]: f["severity"] for f in out["findings"]} == {
+        "unauth write path": "Critical", "records dropped": "Important"}
+    assert out["drops"] == [] and out["downgrades"] == []
+
+
+def test_conflicting_duplicate_sameness_verdicts_resolve_to_keep():
+    """Scoped-review fix: duplicate verdicts for one id that disagree resolve to `different`
+    (kept, judged afresh) — a contradicted `same` never suppresses via last-wins."""
+    ar = _load("acceptance_rereview")
+    cands = [{"identity": "plan.md::unauth write path", "docSection": "Architecture", "hashMatches": True}]
+    verdicts = [
+        {"id": "plan.md::unauth write path", "action": "different", "reason": "not the same"},
+        {"id": "plan.md::unauth write path", "action": "same", "reason": "contradicts the above"},
+    ]
+    out = ar.consume_with_acceptance([BLOCKER], verdicts, cands)
+    assert len(out["findings"]) == 1 and out["findings"][0]["title"] == "unauth write path"
+    assert out["drops"] == []

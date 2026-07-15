@@ -14,13 +14,16 @@ Load the ledger's candidates (absent ledger / failed read ⇒ `[]`: skip suppres
 judge everything afresh — the fail-closed direction):
 
 ```bash
+rm -f "$SESSION_DIR/merged.json" "$SESSION_DIR/acceptance-verdicts.json" "$SESSION_DIR/consumed.json"
 python3 "$ROOT_DIR/lib/review_acceptance.py" candidates --docs-dir "$(dirname "$PLAN_PATH")" \
   --doc plan --doc-path "$PLAN_PATH" > "$SESSION_DIR/acceptance-candidates.json" 2>/dev/null \
   || echo '[]' > "$SESSION_DIR/acceptance-candidates.json"
 ```
 
 When any candidate has `"hashMatches": true`: write the deduped findings array to
-`$SESSION_DIR/merged.json`, then for each finding whose identity appears among the hash-matched
+`$SESSION_DIR/merged.json` — normalizing each doc-citing finding's `file` to the stable ledger
+key `plan.md` (a `$SESSION_DIR/...` session path never matches a prior run's identity) — then
+for each finding whose identity appears among the hash-matched
 candidates judge from the doc: *is this re-raised finding the same concern the owner accepted?*
 Write `$SESSION_DIR/acceptance-verdicts.json` as
 `[{"id": "<identity copied VERBATIM from acceptance-candidates.json>", "action": "same" | "different", "reason": "<why>"}]`.
@@ -30,13 +33,15 @@ deterministically — the tested consumer owns the accounting, and only a clear 
 reason suppresses:
 
 ```bash
-python3 "$ROOT_DIR/lib/acceptance_rereview.py" --merged "$SESSION_DIR/merged.json" \
+python3 "$ROOT_DIR/lib/acceptance_rereview.py" --acceptance-only --merged "$SESSION_DIR/merged.json" \
   --leaf "$SESSION_DIR/acceptance-verdicts.json" \
   --candidates "$SESSION_DIR/acceptance-candidates.json" > "$SESSION_DIR/consumed.json" 2>/dev/null \
   || rm -f "$SESSION_DIR/consumed.json"
 ```
 
 On success, `consumed.json`'s `findings` array is the **effective finding set** for the verdict
+(the cleanup above guarantees a present `consumed.json` is THIS round's — a skipped or failed
+fold leaves none, and the un-suppressed deduped set stands)
 and blocking tally; report each `drops[]` entry carrying `"accepted": true` in the terminal
 summary as `accepted (unchanged content) — not re-asked: <reason>`. A candidate with
 `"hashMatches": false` means the concerned content changed — the finding is judged afresh
@@ -83,8 +88,13 @@ with open('$SESSION_DIR/collect-blocking.json', encoding='utf-8') as f:
     collect = json.load(f)
 if not collect.get('ok'):
     sys.exit(1)
+findings = collect.get('findings') or []
+import os as _os
+for x in findings:
+    if isinstance(x, dict) and isinstance(x.get('file'), str) and _os.path.basename(x['file']) == 'plan.md':
+        x['file'] = 'plan.md'   # stable ledger key — session paths never match across runs
 with open('$ACCEPTED', 'w', encoding='utf-8') as out:
-    json.dump(collect.get('findings') or [], out)
+    json.dump(findings, out)
 " && ACC=$(python3 "$ROOT_DIR/lib/review_acceptance.py" record \
   --docs-dir "$DOCS_DIR" --doc plan --findings "$ACCEPTED" --doc-path "$PLAN_PATH" 2>/dev/null) \
   || ACC='{"ok":false}'

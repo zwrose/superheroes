@@ -66,6 +66,28 @@ def record(docs_dir, doc, findings, doc_text):
             "docSection": section if section not in ("",) else None,
             "contentHash": content_hash,
         })
+    # FR-14 durability: a previously-accepted finding SUPPRESSED at this re-review is absent
+    # from the terminal's open blockers, but its acceptance must survive as long as its
+    # concerned content is unchanged — otherwise one successful consume cycle erases the
+    # ledger and the NEXT review re-asks the owner the settled decision. Union-preserve prior
+    # entries whose recorded hash still matches the current doc (verbatim: original section
+    # keying kept); an entry whose hash no longer matches is dropped — the content changed,
+    # so the finding is judged afresh (FR-14's second rule, the safe direction).
+    new_idents = {e["identity"] for e in entries}
+    prior_path = _path(docs_dir, doc)
+    if os.path.exists(prior_path):
+        try:
+            with open(prior_path, encoding="utf-8") as fh:
+                prior = json.load(fh)
+            for e in (prior.get("accepted") or []) if isinstance(prior, dict) else []:
+                if not isinstance(e, dict) or e.get("identity") in new_idents:
+                    continue
+                section = e.get("docSection")
+                current = whole_doc_hash(doc_text) if section in (None, "") else section_hash(doc_text, section)
+                if current == e.get("contentHash"):
+                    entries.append(e)
+        except (OSError, ValueError):
+            pass  # unreadable prior ledger: record this session's set alone (fail-soft)
     payload = {"schemaVersion": SCHEMA_VERSION, "doc": doc, "accepted": entries}
     path = _path(docs_dir, doc)
     os.makedirs(docs_dir, exist_ok=True)

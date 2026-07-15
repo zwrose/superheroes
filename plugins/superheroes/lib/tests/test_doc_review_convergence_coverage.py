@@ -54,7 +54,7 @@ REQ_COVERAGE = {
     ),
     "FR-5": (
         ["plugins/superheroes/lib/tests/test_doc_review_fix_worklist_filter.py"],
-        [r"routed_tasks_finding_absent_from_build_worklist|routed forward"],
+        [r"routed_tasks_finding_absent_from_doc_fix_worklist|routed forward"],
     ),
     "FR-6": (
         [

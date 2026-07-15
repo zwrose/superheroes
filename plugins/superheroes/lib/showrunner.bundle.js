@@ -1154,7 +1154,14 @@ function acceptanceDrops(merged, acceptanceVerdicts, offered) {
   const offeredSet = new Set(offered || [])
   const byId = Object.create(null)
   for (const v of acceptanceVerdicts || []) {
-    if (v && typeof v.id === 'string') byId[v.id] = v
+    if (!(v && typeof v.id === 'string')) continue
+    const prior = byId[v.id]
+    if (prior !== undefined && prior.action !== v.action) {
+      byId[v.id] = { id: v.id, action: 'different',
+        reason: 'conflicting duplicate verdicts — judged afresh' }
+    } else {
+      byId[v.id] = v
+    }
   }
   const drops = []
   const survivors = []

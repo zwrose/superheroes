@@ -75,8 +75,14 @@ def test_review_plan_consumes_acceptance_before_verdict():
     assert "hashMatches" in detail
     assert "Keep-on-uncertain" in detail or "keep-on-uncertain" in detail
     assert "effective finding set" in detail
-    # consume is documented to run BEFORE the verdict; recording stays before gate_write
-    assert detail.index("Acceptance suppression") < detail.index("Acceptance ledger (gate-approval)")
+    # scoped-review hardening: interactive mode flag, per-round stale-file cleanup, and the
+    # stable ledger key (session paths never match across runs) are all documented
+    assert "--acceptance-only" in detail
+    assert 'rm -f "$SESSION_DIR/merged.json"' in detail
+    assert "stable ledger key" in detail
+    # consume is documented to run BEFORE the verdict; recording stays before gate_write.
+    # Anchor on the section HEADINGS (a Contents entry would match first and prove nothing).
+    assert detail.index("\n## Acceptance suppression") < detail.index("\n## Acceptance ledger (gate-approval)")
 
 
 def test_review_tasks_consumes_acceptance_before_verdict():
@@ -92,4 +98,10 @@ def test_review_tasks_consumes_acceptance_before_verdict():
     assert "hashMatches" in detail
     assert "Keep-on-uncertain" in detail or "keep-on-uncertain" in detail
     assert "effective finding set" in detail
-    assert detail.index("Acceptance suppression") < detail.index("Acceptance ledger (gate-approval)")
+    # scoped-review hardening: interactive mode flag, per-round stale-file cleanup, and the
+    # stable ledger key (session paths never match across runs) are all documented
+    assert "--acceptance-only" in detail
+    assert 'rm -f "$SESSION_DIR/merged.json"' in detail
+    assert "stable ledger key" in detail
+    # heading anchors, so a future Contents block cannot hollow this out
+    assert detail.index("\n## Acceptance suppression") < detail.index("\n## Acceptance ledger (gate-approval)")
