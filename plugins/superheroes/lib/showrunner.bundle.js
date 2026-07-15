@@ -6786,8 +6786,10 @@ async function approveDocReviewGate(doc, workItem, opts) {
   const runDir = runDirFor(workItem, `review-${doc}`)
   const phaseResult = { confidence: 'high', assumptions: [] }
   const rec = await recordAcceptanceLedger(doc, workItem, runDir)
+  const benignSkip = !!(rec.absent && opts.gateAlreadySet)
   if (!rec.ok) phaseResult.assumptions.push(_acceptanceRecordDisclosure(rec.reason))
-  const convergenceOutcome = rec.absent ? 'skipped' : 'accepted-pass'
+  else if (rec.absent && !benignSkip) phaseResult.assumptions.push(_acceptanceRecordDisclosure('acceptance round state absent'))
+  const convergenceOutcome = benignSkip ? 'skipped' : 'accepted-pass'
   try {
     await journalReviewConvergence(workItem, doc, runDir, convergenceOutcome)
   } catch (e) {

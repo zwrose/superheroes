@@ -304,6 +304,19 @@ def _last_event(events, *types):
     return None
 
 
+def _park_cause(park_event):
+    # #446: a park's cause is its bare `detail` OR, for a folded structured payload (assumption
+    # parks, doc-review parks), payload.reason. Both the timeline and the run-summary read it here so
+    # the summary's `last park` never goes blank for a payload-bearing park.
+    if not isinstance(park_event, dict):
+        return None
+    detail = park_event.get("detail")
+    if detail:
+        return detail
+    payload = park_event.get("payload") if isinstance(park_event.get("payload"), dict) else {}
+    return payload.get("reason")
+
+
 def _read_run(root, work_item, events):
     last_park = _last_event(events, "parked")
     try:
@@ -318,7 +331,7 @@ def _read_run(root, work_item, events):
                     "state": "stale" if stale else "active",
                     "detail": "lease held, stale" if stale else "lease held, fresh",
                     "holder": holder,
-                    "last_park": (last_park or {}).get("detail"),
+                    "last_park": _park_cause(last_park),
                 }
     except Exception:
         pass
@@ -339,7 +352,7 @@ def _read_run(root, work_item, events):
         elif typ == "error":
             state = "error"
     return {"state": state, "detail": "from events" if state != "unknown" else None,
-            "last_park": (last_park or {}).get("detail")}
+            "last_park": _park_cause(last_park)}
 
 
 def gather(root, work_item):
@@ -555,13 +568,8 @@ def format_journal_event(evt):
         # #446: a park that folded a structured payload (assumption parks, doc-review parks) carries
         # its cause in payload.reason rather than a bare `detail` — surface it so the live readout
         # names why the run parked instead of a mute `‼ parked`.
-        suffix = _detail_suffix(evt)
-        if not suffix:
-            payload = evt.get("payload") if isinstance(evt.get("payload"), dict) else {}
-            reason = payload.get("reason")
-            if reason:
-                suffix = " · %s" % reason
-        return "%s  ‼ parked%s" % (clock, suffix)
+        cause = _park_cause(evt)
+        return "%s  ‼ parked%s" % (clock, (" · %s" % cause) if cause else "")
     if typ == "resumed":
         return "%s  ▶ resumed%s" % (clock, _detail_suffix(evt))
     if typ == "run_completed":

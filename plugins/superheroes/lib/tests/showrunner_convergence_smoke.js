@@ -318,6 +318,39 @@ test('UFR-1: non-JSON convergence compose discloses and does not journal', async
   }
 })
 
+test('#446: passed-gate skip WITH readable round state records accepted-pass (not skipped)', async () => {
+  // Contrast to the ABSENT case: when round state EXISTS and is readable, the passed-gate skip is a
+  // genuine acceptance re-entry — the honest outcome is `accepted-pass`, roundsUsed reflects the
+  // real rounds. This pins the false branch of the outcome ternary (a constant-`skipped` mutant dies).
+  const wi = `${WI}-acceptedpass`
+  const since = maxEventSeq(wi)
+  const runDir = `/tmp/showrunner-${wi}-review-plan`
+  const docsDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'sr-conv-'))
+  try {
+    cleanRunDir(wi)
+    cleanLegacyFixture(wi)
+    seedPlanDoc(docsDir)
+    fs.mkdirSync(runDir, { recursive: true })
+    fs.writeFileSync(path.join(runDir, 'round-records.json'),
+      JSON.stringify([{ round: 1, findings: BLOCKER }]))
+    globalThis.__SR_DOC_DIRS = { [wi]: docsDir }
+    globalThis.agent = makeAgent({ gate: 'passed', convergenceMode: 'real' })
+    const r = await sr.reviewDocPhase('plan', wi, { runId: 'run-conv' })
+    assert.strictEqual(r.gate, 'passed')
+    const events = convergenceEvents(wi, since)
+    assert.strictEqual(events.length, 1, 'the acceptance re-entry journals one review_convergence')
+    assert.strictEqual(events[0].payload.outcome, 'accepted-pass',
+      'readable round state ⇒ accepted-pass, never skipped')
+    assert.strictEqual(events[0].payload.roundsUsed, 1, 'the one seeded round is reflected')
+  } finally {
+    delete globalThis.__SR_DOC_DIRS
+    delete globalThis.agent
+    try { fs.rmSync(docsDir, { recursive: true, force: true }) } catch (_) {}
+    cleanRunDir(wi)
+    cleanLegacyFixture(wi)
+  }
+})
+
 test('#446: an assumption-park carries a non-empty payload naming the reason (no naked `parked {}`)', async () => {
   // A passed gate whose EXISTING round-records.json is unreadable is a genuine read failure:
   // the acceptance ledger discloses (UFR-1), a material assumption is recorded, and the spine

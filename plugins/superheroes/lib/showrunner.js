@@ -1426,11 +1426,17 @@ async function approveDocReviewGate(doc, workItem, opts) {
   const runDir = runDirFor(workItem, `review-${doc}`)
   const phaseResult = { confidence: 'high', assumptions: [] }
   const rec = await recordAcceptanceLedger(doc, workItem, runDir)
+  // #446: absent round state is nothing-to-record ONLY on the provably-clean passed-gate re-entry
+  // (gateAlreadySet: the gate reads passed only for a `clean` terminal, so there were zero accepted
+  // blockers to record). On the owner first-approval path a passed gate means the owner overrode a
+  // park that HELD open blockers, so absent there is lost round state — disclose it like an
+  // unreadable read (FR-14: never silently drop an owner's acceptance).
+  const benignSkip = !!(rec.absent && opts.gateAlreadySet)
   if (!rec.ok) phaseResult.assumptions.push(_acceptanceRecordDisclosure(rec.reason))
-  // #446: describe what actually happened. Absent round state ⇒ an idempotent skip on an
-  // already-passed gate (nothing was accepted): outcome `skipped`, not `accepted-pass`. A genuine
-  // owner gate-approval with real acceptance history still records `accepted-pass`.
-  const convergenceOutcome = rec.absent ? 'skipped' : 'accepted-pass'
+  else if (rec.absent && !benignSkip) phaseResult.assumptions.push(_acceptanceRecordDisclosure('acceptance round state absent'))
+  // Describe what actually happened: an idempotent skip on an already-passed gate (nothing was
+  // accepted) is `skipped`; a genuine owner gate-approval still records `accepted-pass`.
+  const convergenceOutcome = benignSkip ? 'skipped' : 'accepted-pass'
   try {
     await journalReviewConvergence(workItem, doc, runDir, convergenceOutcome)
   } catch (e) {
