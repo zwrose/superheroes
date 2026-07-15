@@ -28,6 +28,10 @@ function compileFindings(findings, contextFiles) {
       const merged = ((SEV_RANK[f.severity] != null ? SEV_RANK[f.severity] : 99) <
                       (SEV_RANK[ex.severity] != null ? SEV_RANK[ex.severity] : 99)) ? Object.assign({}, f) : Object.assign({}, ex)
       merged.dimension = dims
+      if (!merged.docSection) {
+        const preserved = ex.docSection || f.docSection
+        if (preserved) merged.docSection = preserved
+      }
       byId[fid] = merged
     } else byId[fid] = Object.assign({}, f)
   }

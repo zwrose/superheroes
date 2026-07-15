@@ -57,17 +57,21 @@ def _append_cost(paths, cost):
         pass
 
 
-def _append_park(paths, park_reason):
+def _append_park(paths, park_reason=None, park_payload=None):
     # #130: fold the terminal `parked` marker into the park's journalOnly save leaf (no new leaf —
     # #118). A run that parks mid-phase exits via parkFromPhases, which journals nothing itself and
     # only some phases (review-code, ship) post a readout — so without this marker a workhorse/plan/
     # tasks park carries no terminal event and token_trend/run_watch would misclassify it as 'other'
     # rather than parked, dropping it from the tokens-per-park average. Tied to the fresh-record
     # branch (exactly-once, resume-safe); best-effort.
-    if park_reason is None:
+    # #397 FR-11: doc-review parks carry a structured payload (decision list) instead of bare detail.
+    if park_reason is None and park_payload is None:
         return
     try:
-        journal.append(paths["events"], "parked", detail=str(park_reason), root=os.getcwd())
+        if park_payload is not None:
+            journal.append(paths["events"], "parked", payload=park_payload, root=os.getcwd())
+        else:
+            journal.append(paths["events"], "parked", detail=str(park_reason), root=os.getcwd())
     except Exception:   # noqa: BLE001 — best-effort terminal marker
         pass
 
@@ -93,11 +97,11 @@ def _reflects_journal(paths, payload):
     return journal_ok, {"journal_confirmed": journal_ok}
 
 
-def _apply_journal(paths, payload, cost=None, park_reason=None):
+def _apply_journal(paths, payload, cost=None, park_reason=None, park_payload=None):
     if not any(record == payload for record in _phase_records(paths["events"])):
         journal.append(paths["events"], "phase_record", payload=payload, root=os.getcwd())
         _append_cost(paths, cost)     # exactly-once with the record (crash-resume dedupes both)
-        _append_park(paths, park_reason)
+        _append_park(paths, park_reason, park_payload)
     return _reflects_journal(paths, payload)
 
 
@@ -116,6 +120,13 @@ def save(args):
             cost = None
     # #130: on a park (journal-only), the reason to fold into a `parked` terminal marker.
     park_reason = getattr(args, "terminal_park", None)
+    # #397 FR-11: structured doc-review park payload (decision list) — preferred over bare detail.
+    park_payload = None
+    if getattr(args, "terminal_park_payload", None):
+        try:
+            park_payload = json.loads(args.terminal_park_payload)
+        except ValueError:
+            park_payload = None
     paths = control_plane.paths(os.getcwd(), args.work_item)
     step = int(args.step)
     journal_only = bool(getattr(args, "journal_only", False))
@@ -132,7 +143,7 @@ def save(args):
         result = idempotent_write.idempotent_apply(
             key + ":journal-only",
             lambda: _reflects_journal(paths, payload),
-            lambda: _apply_journal(paths, payload, cost, park_reason),
+            lambda: _apply_journal(paths, payload, cost, park_reason, park_payload),
         )
         detail = result.get("detail") or {}
         return {
@@ -174,6 +185,8 @@ def main(argv):
                    help="#130: JSON phase_cost telemetry, folded into this save (best-effort)")
     s.add_argument("--terminal-park", dest="terminal_park", default=None,
                    help="#130: on a journal-only (park) save, the reason to fold into a `parked` marker")
+    s.add_argument("--terminal-park-payload", dest="terminal_park_payload", default=None,
+                   help="#397 FR-11: structured `parked` event payload (doc-review decision list)")
     args = parser.parse_args(argv[1:])
     if args.cmd == "save":
         print(json.dumps(save(args), sort_keys=True))

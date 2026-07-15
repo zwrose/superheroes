@@ -1,0 +1,1 @@
+{"input": [["Important"], 1, false, 2, true], "expected": {"rearm": true, "park": false, "atCap": false, "reason": "open blocking finding in doc review — one more full confirmation panel required"}}
