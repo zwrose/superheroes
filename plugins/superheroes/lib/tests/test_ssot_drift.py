@@ -16,6 +16,7 @@ Clusters covered (sweep follow-up of #231):
 - Accepted-engine set (ENGINES)                        (home: engine_pref.py)
 - Accepted Codex-model set (CODEX_MODELS)              (home: engine_pref.py)
 - haltKind cap-halt discriminator                      (home: review_loop_plan.py)
+- Document-review severity steering (DOC_SEVERITY_FRAME) (home: rubric/review-base.md §Document-review severity)
 
 The generated showrunner.bundle.js copies of these facts are guarded separately by
 test_bundle_drift. The reviewer-roster, docs-location, and Failure-Mode-taxonomy
@@ -478,3 +479,82 @@ def test_uncertified_flag_single_sourced():
     shell = _read(os.path.join("lib", "review_panel_shell.js"))
     assert 'decided.uncertified' in shell and 'verdictOut.uncertified' in shell, (
         "review_panel_shell.js must copy the decider's uncertified flag onto the verdict")
+
+
+# --- Cluster 9: journal event vocabulary (#397) ----------------------------
+
+def test_journal_event_types_known_to_renderers():
+    """CONVENTIONS §11: journal.EVENT_TYPES is the append writer's single source; run_watch and
+    run_readout each carry a known-type map so a new event type can't be added to the journal
+    without updating the renderers (the #397 doc-review routing + convergence vocabulary)."""
+    import journal
+    import run_readout
+    import run_watch
+    home = journal.EVENT_TYPES
+    assert home <= run_watch.KNOWN_JOURNAL_EVENT_TYPES, (
+        "run_watch.KNOWN_JOURNAL_EVENT_TYPES missing journal types: %r"
+        % (home - run_watch.KNOWN_JOURNAL_EVENT_TYPES))
+    assert home <= run_readout.KNOWN_JOURNAL_EVENT_TYPES, (
+        "run_readout.KNOWN_JOURNAL_EVENT_TYPES missing journal types: %r"
+        % (home - run_readout.KNOWN_JOURNAL_EVENT_TYPES))
+
+
+# --- Cluster 10: document-review severity steering (#397 FR-1) ---------------
+
+def _js_concat_string_const(text, name, label):
+    """`const NAME = 'a' + 'b' + ...` (may span lines, may contain \\') → joined str."""
+    m = re.search(r"\bconst\s+" + re.escape(name) + r"\s*=", text)
+    assert m, "%s: expected exactly one `const %s = ...`, not found" % (label, name)
+    lines = []
+    started = False
+    for line in text[m.end():].splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("//"):
+            if not started:
+                continue
+            break
+        started = True
+        lines.append(line)
+        if not stripped.endswith("+"):
+            break
+    blob = "\n".join(lines)
+    parts = re.findall(r"'((?:\\'|[^'])*)'", blob)
+    assert parts, "%s: `%s` has no string literal parts" % (label, name)
+    return "".join(p.replace("\\'", "'") for p in parts)
+
+
+def _rubric_doc_severity_section():
+    """Home: review-base.md 'Document-review severity' section (the blocking-bar rules)."""
+    text = _read(os.path.join("rubric", "review-base.md"))
+    m = re.search(r"## Document-review severity\b.*?(?=\n## )", text, re.DOTALL)
+    assert m, "rubric: Document-review severity section not found"
+    return m.group(0)
+
+
+def test_doc_severity_frame_single_sourced():
+    """CONVENTIONS §11: DOC_SEVERITY_FRAME paraphrases the rubric's document-review severity
+    rules into the doc reviewer + synthesis prompts. The rubric section is the home; the JS
+    steering string is the copy-holder — both must stay aligned, and a rubric edit must break
+    CI here rather than letting the prompt silently drift (the #397 FR-1 class)."""
+    rubric = _rubric_doc_severity_section()
+    sr = _read(os.path.join("lib", "showrunner.js"))
+    frame = _js_concat_string_const(sr, "DOC_SEVERITY_FRAME", "showrunner.js")
+
+    assert 'Document-review severity' in frame, (
+        "showrunner.js DOC_SEVERITY_FRAME must point at the rubric section home")
+    assert "docSection" in frame, (
+        "showrunner.js DOC_SEVERITY_FRAME must steer docSection tagging for document reviews")
+
+    # Anchor phrases read from the rubric home — the steering paraphrase must preserve each.
+    rubric_anchors = [
+        ("blocking bar", r"mislead the build"),
+        ("plan asymmetry", r"plan.*non-blocking|granularity"),
+        ("tasks bar", r"tasks"),
+        ("incident-anchored carve-out", r"unauthenticated|security exemption|corrupt or lose data"),
+        ("ambiguity fail-closed", r"ambiguity.*fail"),
+    ]
+    for label, pattern in rubric_anchors:
+        assert re.search(pattern, rubric, re.IGNORECASE), (
+            "rubric: Document-review severity missing anchor %r" % label)
+        assert re.search(pattern, frame, re.IGNORECASE), (
+            "showrunner.js DOC_SEVERITY_FRAME drifted from rubric on %r" % label)

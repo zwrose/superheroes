@@ -9,6 +9,8 @@
 // usableDraft uses the small boundary signal {usable, recorded, expected} — verdict computed
 // Python-side; the large doc text never crosses the cheapest-model pipe.
 require('./_smoke_checkout_root.js')
+// Seed/read fixtures from the acquire authority (__SR_ROOT), not the launch cwd.
+if (globalThis.__SR_ROOT) process.chdir(globalThis.__SR_ROOT)
 const assert = require('assert')
 const { markedStdout, saveProgressOk } = require('./_marked_stdout.js')
 const fs = require('fs')
@@ -20,6 +22,7 @@ const sr = require('../showrunner.js')
 // a concurrent pytest suite on this machine (see _final_review_probe.js for the flake story).
 // The pid-named files are reaped on a PASSING exit; a failing run keeps them as evidence.
 const WI = `wi-pid${process.pid}`
+const cleaned = new Set()
 process.on('exit', (code) => {
   if (code !== 0) return
   for (const f of [`/tmp/showrunner-${WI}-fronthalf-outcome.json`,
@@ -27,7 +30,42 @@ process.on('exit', (code) => {
                    `/tmp/showrunner-${WI}-fronthalf-readout-tmp.json`]) {
     try { fs.rmSync(f, { force: true }) } catch (_) {}
   }
+  for (const wi of cleaned) {
+    for (const doc of ['plan', 'tasks']) {
+      try { fs.rmSync(`/tmp/showrunner-${wi}-review-${doc}`, { recursive: true, force: true }) } catch (_) {}
+    }
+    try { fs.rmSync(`docs/superheroes/${wi}`, { recursive: true, force: true }) } catch (_) {}
+  }
 })
+
+function receiptFromPrompt(prompt) {
+  let ctx = { receiptArtifact: 'stub', receiptCoverageDecisionIds: [] }
+  const m = String(prompt || '').match(/Prompt context: (\{.*\})/s)
+  if (m) { try { ctx = JSON.parse(m[1]) } catch (_) {} }
+  return {
+    artifact: ctx.receiptArtifact || 'stub',
+    chain: [
+      { step: 'citation', evidence: 'reviewed citations' },
+      { step: 'reachability', evidence: 'validated call path' },
+      { step: 'missing-check', evidence: 'checked missing FRs' },
+      { step: 'tooling', evidence: 'smoke passed' },
+    ],
+    coverageDecisionIds: ctx.receiptCoverageDecisionIds || [],
+  }
+}
+
+function seedDocs(wi) {
+  cleaned.add(wi)
+  for (const doc of ['plan', 'tasks']) {
+    try { fs.rmSync(`/tmp/showrunner-${wi}-review-${doc}`, { recursive: true, force: true }) } catch (_) {}
+  }
+  const dir = `docs/superheroes/${wi}`
+  try {
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(`${dir}/plan.md`, '# Plan\n## Review coverage decisions\n')
+    fs.writeFileSync(`${dir}/tasks.md`, '# Tasks\n## Review coverage decisions\n')
+  } catch (_) {}
+}
 
 // ---------------------------------------------------------------------------
 // Shared agent stub — handles all leaf dispatch that showrunner() reaches on
@@ -55,36 +93,56 @@ function makeAgentStub() {
       return [{ ok: true, stdout: markedStdout({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', run_overrides_present: false }) }]
     }
 
-    // Dumb-pipe (courier) leaves are routed by the command in their prompt, regardless of the
-    // descriptive label ('gather snapshot'/'read gate'/'check draft'/'append notify'). The generic
-    // courier catch-all lives AFTER the named 'save phase progress' branch so it never swallows it.
-    if (opts && opts.courier && typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
-      // reconcile(): empty snapshot -> recoverTwin gets undefined checkpoint/world -> world_derive
-      return markedStdout({
-        checkpoint: null,
-        world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
-        generation: 1,
-        root: globalThis.__SR_ROOT,
-      })
-    }
-    if (opts && opts.courier && typeof prompt === 'string' && prompt.includes('definition_doc.py read-gate')) {
-      // readGate() for spec, plan, or tasks: always return 'passed'
-      return [{ index: 0, ok: true, stdout: '{"review":"passed"}' }]
-    }
-    if (opts && opts.courier && typeof prompt === 'string' && prompt.includes('front_half_usable.py')) {
-      // usableDraft(): return a usable draft so producePhase short-circuits (no author agent)
-      return [{ index: 0, ok: true, stdout: USABLE_SIGNALS }]
-    }
-    if (opts && opts.courier && typeof prompt === 'string' && prompt.includes('front_half.py append-notify')) {
-      return [{ index: 0, ok: true, stdout: '{"ok":true}' }]
-    }
-
     if (label === 'save phase progress') {
       return saveProgressOk()
     }
+    if (label === 'save round state') {
+      return [{ ok: true, stdout: JSON.stringify({ ok: true }) }]
+    }
 
-    // Any other dumb-pipe leaf (e.g. definition_doc set-gate batched in persistPhase): return ok.
-    if (opts && opts.courier) return [{ index: 0, ok: true, stdout: '{"ok":true}' }]
+    // Dumb-pipe (courier) leaves are routed by the command in their prompt, regardless of the
+    // descriptive label ('gather snapshot'/'read gate'/'check draft'/'append notify'). The generic
+    // courier catch-all lives AFTER the named 'save phase progress' branch so it never swallows it.
+    if (opts && opts.courier && typeof prompt === 'string') {
+      if (prompt.includes('recover_entry.py')) {
+        return markedStdout({
+          checkpoint: null,
+          world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
+          generation: 1,
+          root: globalThis.__SR_ROOT,
+        })
+      }
+      if (prompt.includes('definition_doc.py read-gate')) {
+        return [{ index: 0, ok: true, stdout: '{"review":"pending"}' }]
+      }
+      if (prompt.includes('front_half_usable.py')) {
+        return [{ index: 0, ok: true, stdout: USABLE_SIGNALS }]
+      }
+      if (prompt.includes('front_half.py append-notify')) {
+        return [{ index: 0, ok: true, stdout: '{"ok":true}' }]
+      }
+      if (prompt.includes('loop_readout.py')) {
+        return [{ index: 0, ok: true, stdout: '## stub readout\n\n- terminal: clean\n' }]
+      }
+      if (prompt.includes('review_convergence.py')) {
+        const m = String(prompt).match(/^\d+\.\s(.*)$/m)
+        const cmd = m ? m[1] : null
+        const stdout = require('child_process').execSync(cmd, { encoding: 'utf8', shell: '/bin/bash' }).trim()
+        return [{ index: 0, ok: true, stdout }]
+      }
+      if (prompt.includes('review_handoff.py')) {
+        if (prompt.includes(' write ')) {
+          return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, counts: { distinct: 0 } }) }]
+        }
+        if (prompt.includes(' read')) {
+          return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: false, reason: 'absent' }) }]
+        }
+      }
+      if (prompt.includes('gate-for-terminal')) {
+        throw new Error('gate-for-terminal dispatched as exec — must use JS twin')
+      }
+      return [{ index: 0, ok: true, stdout: '{"ok":true}' }, { index: 1, ok: true, stdout: '' }]
+    }
 
     if (label === 'lib') {
       if (typeof prompt === 'string' && prompt.includes('journal_entry')) return { ok: true }
@@ -97,6 +155,15 @@ function makeAgentStub() {
       }
       return { ok: true }
     }
+
+    if (prompt.includes('gate-for-terminal')) {
+      throw new Error('gate-for-terminal dispatched as cmdRunner — must use JS twin')
+    }
+    if (label.endsWith('-reviewer')) {
+      return { findings: [], confidence: 'high', verificationReceipt: receiptFromPrompt(prompt) }
+    }
+    if (label.startsWith('synthesis')) return { verdicts: [] }
+    if (label === 'revise-doc') return { fixes: [], deferred: [] }
 
     // Everything else (e.g. 'tasks-gate' in buildPhase for a3): return null.
     // buildPhase will see gate='null', park with low-confidence -> workhorse parks (not boundary).
@@ -119,6 +186,7 @@ async function main() {
     const savedNative = globalThis.SUPERHEROES_FRONT_HALF_NATIVE
     const savedEnv = process.env.SUPERHEROES_FRONT_HALF
     try {
+      seedDocs(WI)
       globalThis.SUPERHEROES_BUNDLE_FULL_RUN = false
       globalThis.SUPERHEROES_FRONT_HALF_NATIVE = true
       delete process.env.SUPERHEROES_FRONT_HALF   // ensure env path is NOT the trigger
@@ -144,6 +212,7 @@ async function main() {
     const savedNative = globalThis.SUPERHEROES_FRONT_HALF_NATIVE
     const savedEnv = process.env.SUPERHEROES_FRONT_HALF
     try {
+      seedDocs(WI)
       globalThis.SUPERHEROES_BUNDLE_FULL_RUN = false
       delete globalThis.SUPERHEROES_FRONT_HALF_NATIVE   // ensure globalThis path is NOT the trigger
       process.env.SUPERHEROES_FRONT_HALF = 'native'

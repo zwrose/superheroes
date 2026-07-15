@@ -9,6 +9,18 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import journal
 
+# Journal event types this readout module may derive from or project (CONVENTIONS §11 copy-holder;
+# drift-guarded against journal.EVENT_TYPES in test_ssot_drift.py).
+KNOWN_JOURNAL_EVENT_TYPES = frozenset({
+    "run_started", "step_entered", "step_completed", "notify", "gate", "error",
+    "resumed", "lease_acquired", "lease_reclaimed", "ci_fix_attempt", "parked",
+    "run_completed", "phase_record", "external_dispatch", "phase_cost", "phases_skipped",
+    "permission_denied", "allowance_fired", "final_review_handoff",
+    "routed_forward", "review_convergence", "handoff_provided",
+    # #402 Part B (merged from main): terminal classifier-denial decline of a courier answer.
+    "courier_declined",
+})
+
 
 def _permission_denials(state):
     """Enumerate (never decide) the run's timeout-denial events (UFR-3). Reads the run's

@@ -453,6 +453,57 @@ def test_tally_parks_when_critical_surfaces_at_confirmation_cap(tmp_path):
     assert "withheld" in ans["reason"]
 
 
+def test_tally_doc_mode_parks_on_open_important_at_cap(tmp_path):
+    # Two qualifying confirmation panels have run (rounds 2 and 4); the second surfaces a plain
+    # Important (not Critical, not cross-cutting — changedSubjects stays a single "Code" the whole
+    # way). Code mode resolves it by scoped verify; doc mode has no scoped-verify tier and must
+    # park (Never-auto-pass) on the same open Important at the confirmation cap.
+    important = [{"title": "spec gap", "file": "a.js", "severity": "Important", "dimension": "Code"}]
+    recs = [
+        _skeleton_round(1, {n: _dim() for n in FULL_ROSTER}, changed_subjects=["Code"]),
+        _skeleton_round(2, {n: _dim() for n in FULL_ROSTER}, kind="confirmation",
+                        confirmation_pending=True, changed_subjects=["Code"]),
+        _skeleton_round(3, {n: _dim() for n in FULL_ROSTER}, kind="intermediate",
+                        changed_subjects=["Code"]),
+        # second qualifying confirmation panel that surfaces the open Important
+        _skeleton_round(4, dict({n: _dim() for n in FULL_ROSTER},
+                                **{"code-reviewer": _dim(findings=important)}),
+                        kind="confirmation", confirmation_pending=True, changed_subjects=["Code"]),
+        _skeleton_round(5, {n: _dim() for n in FULL_ROSTER}, kind="intermediate",
+                        changed_subjects=["Code"]),
+    ]
+    records_path = _write_records(tmp_path, recs)
+    # code mode (default): a non-Critical at the cap resolves by scoped verify -> not halted
+    code = _tally(records_path, 5, roster=FULL_ROSTER, gate="clean", present_blocking=0)
+    assert code["terminal"] != "halted"
+    # doc mode: the same open Important at the cap PARKS (Never-auto-pass)
+    doc = _tally(records_path, 5, roster=FULL_ROSTER, gate="clean", present_blocking=0,
+                 doc_mode=True)
+    assert doc["terminal"] == "halted"
+
+
+def test_plan_round_doc_mode_schedules_confirmation_for_open_important(tmp_path):
+    # Through the SCHEDULING decider this time (not tally): one qualifying confirmation panel has
+    # already run (round 1), then an intermediate round 2 surfaces a plain (non-Critical,
+    # non-cross-cutting) open Important. At round 3, code mode does not owe a further confirmation
+    # (a plain Important doesn't re-arm) — but doc mode does (any open blocker re-arms), the exact
+    # disagreement a doc_mode-blind `_confirmation_ready` would produce.
+    important = [{"title": "spec gap", "file": "a.js", "severity": "Important", "dimension": "Code"}]
+    recs = [
+        _skeleton_round(1, {n: _dim() for n in FULL_ROSTER}, kind="confirmation",
+                        confirmation_pending=True, changed_subjects=["Code"]),
+        _skeleton_round(2, dict({n: _dim() for n in FULL_ROSTER},
+                                **{"code-reviewer": _dim(findings=important)}),
+                        kind="intermediate", changed_subjects=["Code"]),
+    ]
+    records_path = _write_records(tmp_path, recs)
+    code = rlp.plan_round_decider(records_path, 3, FULL_ROSTER, ["Code"], just_marked=False)
+    assert code["enterConfirmation"] is False   # code mode: a plain Important doesn't re-arm
+    doc = rlp.plan_round_decider(records_path, 3, FULL_ROSTER, ["Code"], just_marked=False,
+                                 doc_mode=True)
+    assert doc["enterConfirmation"] is True      # doc mode: any open blocker re-arms the panel
+
+
 def test_tally_challenged_coverage_decision_changes_breaker_verdict(tmp_path):
     # tally-round threads each round's coverageDecisions into the breaker; a challenged-and-recurring
     # coverage decision must produce the distinct `challenged-principle-recurring` halt, not the plain
@@ -771,6 +822,33 @@ def test_compose_fix_context_includes_current_round_skeleton_when_no_staged_file
     titles = [f["title"] for f in worklist["findings"]]
     assert "prior bug" in titles and "current bug" in titles, \
         "the current round's skeleton must be included when no full-body file is staged"
+
+
+def test_compose_fix_context_doc_mode_excludes_non_blocking(tmp_path):
+    records_path = _write_records(tmp_path, [
+        {"round": 1, "findings": [
+            {"file": "plan.md", "title": "unauth path", "severity": "Critical"},
+            {"file": "plan.md", "title": "no named unit test", "severity": "Minor"},
+        ], "dimensions": {}}])
+    out = str(tmp_path / "worklist.json")
+    res = rlp.compose_fix_context(records_path, None, None, "code", 1, FULL_ROSTER, out, doc_mode=True)
+    assert res["ok"]
+    wl = json.loads(open(out).read())
+    titles = [f["title"] for f in wl["findings"]]
+    assert "unauth path" in titles and "no named unit test" not in titles
+
+
+def test_compose_fix_context_doc_mode_empty_when_only_non_blocking(tmp_path):
+    records_path = _write_records(tmp_path, [
+        {"round": 1, "findings": [
+            {"file": "plan.md", "title": "no named unit test", "severity": "Minor"},
+            {"file": "plan.md", "title": "nit: spacing", "severity": "Nit"},
+        ], "dimensions": {}}])
+    out = str(tmp_path / "worklist.json")
+    res = rlp.compose_fix_context(records_path, None, None, "code", 1, FULL_ROSTER, out, doc_mode=True)
+    assert res["ok"]
+    wl = json.loads(open(out).read())
+    assert wl["findings"] == []
 
 
 # ─────────────────────────────────────────────────────────────────────────────

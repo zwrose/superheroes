@@ -104,6 +104,11 @@ const COURIER_ALLOW = [
   /^resolve head$/,                // resolveHead: git rev-parse
   /^read pr$/,                     // loadPr: checkpoint_entry.py --read-pr
   /^pr-body context$/,             // #219: composePrBody's context courier (pr_body.py context)
+  /^write plan hand-off$/,         // #397: review_handoff.py write at plan-review terminal
+  /^read nonblocking findings$/,   // #397: review_handoff.py collect at plan-review terminal
+  /^route tasks findings$/,        // #397 Task 17: journal routed_forward events at tasks-review terminal
+  /^compose convergence record$/,  // #397 Task 19: review_convergence.py compose at doc-review terminal
+  /^load acceptance candidates$/,  // #397 FR-14: loadAcceptanceCandidates courier (pre-judge cache load)
 ]
 function isAllowedCourier(label) { return COURIER_ALLOW.some((re) => re.test(label)) }
 
@@ -111,6 +116,8 @@ function isAllowedCourier(label) { return COURIER_ALLOW.some((re) => re.test(lab
 // clean review-code round, passing test-pilot, green ship). Each budget is a CEILING pinned at
 // the observed as-built count; the breakdown comments map every leaf to its matrix row so a
 // future courier added to a phase fails here and has to justify itself against the matrix.
+// #397 Task 16: tasks produce adds readHandoff (deliver the plan hand-off) + the handoff_provided
+// journal-append (the honest FR-3/UFR-5 receipt) courier calls. The budget rises from 3 to 5.
 const PHASE_BUDGETS = {
   // Task 12 (FR-8/UFR-9): the run-start rules freeze — ONE 'io' bookkeeping leaf that snapshots the
   // provenance-valid rules for this run (permission_rules.freeze_run_rules via the io() runHelper
@@ -121,15 +128,27 @@ const PHASE_BUDGETS = {
   startup: 2,
   // read draft signals (pre-author) + post-author marker verify + save phase progress
   plan: 3,
-  tasks: 3,
+  // #397 Task 16: +2 over the pre-#397 baseline of 3 — readHandoff (deliver the plan hand-off to the
+  // tasks author) + the handoff_provided journal-append (the honest FR-3/UFR-5 receipt, an 'io' leaf).
+  // Task 17: +1 more for routed_forward journal dispatch (non-blocking findings journaled at terminal).
+  tasks: 9,
   // read-gate exec (1) + #211 pre-round SETUP GATHER (1 — run-dir mkdir + resume DECISION + round-1
   // plan + deferred seed + coverage, folded Python-side by review_setup_gather.py) + persist-skeleton
   // (1) + #211 tally-round DECIDER (1 — breaker + terminal + certification from disk; the ONE new
   // decider leaf per round, plan folds into the gather, compose-fix-context folds into tally) +
   // telemetry write (1) + save round state (1) + terminal-record compose-terminal write as ONE leaf
-  // (1) + save phase progress (1). Was 7 pre-#211 (in-memory tally), 12 post-D3, 35 pre-D3.
-  'review-plan': 8,
-  'review-tasks': 8,
+  // (1) + io:read nonblocking findings (1) + io:write nonblocking.json staging (1) + save phase progress
+  // (1) + #397 plan-handoff.json write (1) + #397 Task 19 review_convergence compose (1) +
+  // journal convergence append (1, io leaf in node / courier in bundle). Was 7 pre-#211
+  // (in-memory tally), 12 post-D3, 35 pre-D3, 8 pre-#397, 9 pre-Task-15 (handoff skipped when zero findings),
+  // 11 pre-Task-19, 12 pre-compose/journal split. +1 at the #397×#417 merge union: #417 verifies
+  // every courier write, so the io:write nonblocking.json staging leaf now carries its verification
+  // readback (observed io:write ×1 → ×2; all other leaves unchanged). Was 14 pre-#417-merge.
+  'review-plan': 15,
+  // Task 17 (#397 FR-4/FR-5): +1 for routed_forward journal dispatch (non-blocking findings journaled
+  // at tasks-review terminal). Task 19 (#397 FR-15): +1 compose + journal convergence record. Was 8 pre-Task-17,
+  // 9 pre-Task-19, 10 pre-compose/journal split.
+  'review-tasks': 12,
   // entry gathers (read-gate, build_entry, task list, fence — exec) + gather build state ×2 +
   // per-task record-built/record-reviewed + verify+minors + final-review round: #211 setup gather
   // (1 — folds resume + plan + coverage + deferred) + run verify + persist-skeleton + tally-round
@@ -303,6 +322,30 @@ function runHelperResponse(cmdline) {
     }
   }
   if (script.endsWith('review_telemetry.py')) return JSON.stringify({ ok: true, benchmarkValid: true })
+  if (script.endsWith('review_handoff.py') && args[0] === 'collect') {
+    const path = args[args.indexOf('--records-path') + 1]
+    const text = path && files[path] != null ? files[path] : '[]'
+    try {
+      const records = JSON.parse(text)
+      const findings = []
+      if (Array.isArray(records)) {
+        for (const rec of records) {
+          if (!rec || !Array.isArray(rec.findings)) continue
+          for (const f of rec.findings) {
+            if (!f || !f.severity) continue
+            const sev = String(f.severity).toLowerCase()
+            if (sev !== 'minor' && sev !== 'nit') continue
+            const e = Object.assign({}, f)
+            e.planSection = f.planSection || f.docSection || f.section || f.dimension || ''
+            findings.push(e)
+          }
+        }
+      }
+      return JSON.stringify({ ok: true, findings })
+    } catch (_) {
+      return JSON.stringify({ ok: false, reason: 'unreadable' })
+    }
+  }
   if (script.endsWith('fenced_json.py')) {
     const p = args[args.indexOf('--path') + 1]
     const staged = args[args.indexOf('--payload-path') + 1]
@@ -401,6 +444,59 @@ function shellResponse(cmd) {
   if (cmd.includes('loop_readout.py')) return '## readout'
   if (cmd.includes('record_deferred.py') || cmd.includes('record-deferred')) return JSON.stringify({ ok: true })
   if (cmd.includes('append-notify')) return JSON.stringify({ ok: true })
+  if (cmd.includes('review_handoff.py') && cmd.includes(' collect ')) {
+    const path = (cmd.match(/--records-path '([^']+)'/) || [])[1]
+    const text = path && files[path] != null ? files[path] : '[]'
+    try {
+      const records = JSON.parse(text)
+      const findings = []
+      if (Array.isArray(records)) {
+        for (const rec of records) {
+          if (!rec || !Array.isArray(rec.findings)) continue
+          for (const f of rec.findings) {
+            if (!f || !f.severity) continue
+            const sev = String(f.severity).toLowerCase()
+            if (sev !== 'minor' && sev !== 'nit') continue
+            const e = Object.assign({}, f)
+            e.planSection = f.planSection || f.docSection || f.section || f.dimension || ''
+            findings.push(e)
+          }
+        }
+      }
+      return JSON.stringify({ ok: true, findings })
+    } catch (_) {
+      return JSON.stringify({ ok: false, reason: 'unreadable' })
+    }
+  }
+  if (cmd.includes('review_handoff.py') && cmd.includes(' write ')) {
+    return JSON.stringify({ ok: true, counts: { distinct: 0 } })
+  }
+  if (cmd.includes('review_convergence.py')) {
+    const pathM = cmd.match(/--path '([^']+)'/)
+    const docM = cmd.match(/--doc '([^']+)'/)
+    const outM = cmd.match(/--outcome '([^']+)'/)
+    const doc = docM ? docM[1] : 'plan'
+    const outcome = outM ? outM[1] : 'unknown'
+    const recordsPath = pathM ? pathM[1] : ''
+    let roundsUsed = 0
+    let perRound = []
+    try {
+      const records = JSON.parse(files[recordsPath] || '[]')
+      if (Array.isArray(records)) {
+        roundsUsed = records.length
+        perRound = records.map((rec) => {
+          const findings = Array.isArray(rec && rec.findings) ? rec.findings : []
+          let blocking = 0
+          for (const f of findings) {
+            const sev = String((f && f.severity) || '').toLowerCase()
+            if (sev === 'critical' || sev === 'major' || sev === 'high') blocking += 1
+          }
+          return { round: rec.round, blocking, routedForward: findings.length - blocking }
+        })
+      }
+    } catch (_) {}
+    return JSON.stringify({ doc, outcome, roundsUsed, perRound })
+  }
   return '{}'
 }
 
