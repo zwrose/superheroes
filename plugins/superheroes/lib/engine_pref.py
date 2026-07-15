@@ -33,6 +33,17 @@ CODEX_ROLE_KIND = {"reviewer": "review", "reviewer-deep": "review-deep", "builde
 CODEX_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
 CODEX_MAX_UNSUPPORTED_MODELS = ("gpt-5.5",)
 
+# #409 write-auth probe strength order (weakest → strongest). The build-authz probe (engine_authz)
+# dispatches the strongest model the codex implementation role will actually run, so a passing probe
+# covers every weaker dispatch. Kept a superset of CODEX_MODELS (guarded by a unit test) so no valid
+# pin is ever unrankable and silently dropped.
+CODEX_MODEL_STRENGTH = ("gpt-5.5", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol")
+
+# The pin roles the codex IMPLEMENTATION role dispatches as workspace writes (build + fix). The
+# write-auth probe (engine_authz) must cover exactly these — reviewer/plan roles run on separate
+# (read / non-write-gated) paths, so their pins are irrelevant to whether a build write is authorized.
+CODEX_WRITE_PIN_ROLES = ("builder", "fixer")
+
 # role_kind -> the enginePreferences key it reads. `author-plan` (the front-half plan-author
 # leaf) reads its OWN key — plan authoring routes independently of review/build; tasks
 # authoring has no key on purpose and always runs native.
@@ -118,6 +129,26 @@ def resolve_engine_model(engine, tier_role, tier_model, prefs=None):
         if isinstance(pinned, str) and pinned in CODEX_MODELS:
             return pinned
     return CODEX_MODEL_BY_TIER.get(tier_model, "gpt-5.6-sol")
+
+
+def codex_write_probe_model(prefs):
+    """The Codex model the build/fix write-auth probe should dispatch (#409): the strongest model the
+    implementation role will actually RUN. Each write role (build, fix) contributes its explicit pin
+    when set, else the sol capability floor — an UNPINNED codex write role derives a GPT-5.6 tier model
+    (up to sol), so it must keep the floor in the max, never under-testing the real dispatch. A project
+    whose write roles are pinned ENTIRELY to an older family (e.g. gpt-5.5) therefore probes that
+    family (not falsely failed by a hard sol probe), while any unpinned write role clamps the probe up
+    to sol — preserving the original rationale (an old CLI must not falsely pass). Takes a
+    load_engine_prefs() result (so pins are already validity-filtered). Pure; never raises; always
+    returns a valid model in CODEX_MODEL_STRENGTH."""
+    pins = prefs.get("codexModels") if isinstance(prefs, dict) else None
+    pins = pins if isinstance(pins, dict) else {}
+    floor = CODEX_MODEL_BY_TIER["opus"]  # sol — the strongest a tier fallback can derive
+    candidates = []
+    for role in CODEX_WRITE_PIN_ROLES:
+        model = pins.get(role)
+        candidates.append(model if model in CODEX_MODEL_STRENGTH else floor)
+    return max(candidates, key=CODEX_MODEL_STRENGTH.index)
 
 
 def valid_codex_model_effort(model, effort):
