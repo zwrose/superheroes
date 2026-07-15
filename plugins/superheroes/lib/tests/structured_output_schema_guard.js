@@ -162,6 +162,21 @@ function checkStrictModeSchemas() {
   }
 }
 
+// #418: FINDINGS_SCHEMA_RECEIPT_REQUIRED is derived via Object.assign (not a `{` literal), so the
+// source-parse extractConst above cannot reach it. Require the module and assert the runtime object
+// directly: no top-level combinator, and verificationReceipt promoted into `required` (the whole point
+// of the variant). It is a native-path-only retry schema — never dispatched to codex — so no
+// strict-mode check applies.
+function checkDerivedSchemas() {
+  const sr = require('../showrunner.js')
+  const variant = sr.FINDINGS_SCHEMA_RECEIPT_REQUIRED
+  if (!variant) throw new Error('showrunner.js: FINDINGS_SCHEMA_RECEIPT_REQUIRED is not exported (#418)')
+  assertNoTopLevelCombinators(variant, 'showrunner.js:FINDINGS_SCHEMA_RECEIPT_REQUIRED')
+  if (!Array.isArray(variant.required) || !variant.required.includes('verificationReceipt')) {
+    throw new Error('showrunner.js:FINDINGS_SCHEMA_RECEIPT_REQUIRED must list verificationReceipt in required (#418)')
+  }
+}
+
 function main() {
   checkFile('showrunner.js', [
     'FINDINGS_SCHEMA',
@@ -170,6 +185,7 @@ function main() {
   ])
   checkFile('build_phase.js', [])
   checkStrictModeSchemas()
+  checkDerivedSchemas()
   process.stdout.write('structured output schema guard: ok\n')
 }
 

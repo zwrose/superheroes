@@ -85,6 +85,9 @@ SHOWRUNNER_SMOKES = [
     # Task 10 (FR-2): a denied reviewer probe -> confidence:low + degraded-dimension (single-retry
     # ceiling), with the denial recorded to the journal.
     "plugins/superheroes/lib/tests/showrunner_reviewer_denied_probe_smoke.js",
+    # #418: a schema-minimal {findings,confidence} answer parked the release gate — the receipt-missing
+    # retry now dispatches a receipt-required schema so the empty shell stops burning the budget.
+    "plugins/superheroes/lib/tests/showrunner_receipt_required_retry_smoke.js",
     # Task 11 (FR-1/FR-4/UFR-6): reviewer + builder/leaf prompts embed the FR-4 probe steering
     # (throwaway-test-file family, no inline interpreter probes) + the 15-min proceed-honestly contract.
     "plugins/superheroes/lib/tests/showrunner_permission_contract_smoke.js",
