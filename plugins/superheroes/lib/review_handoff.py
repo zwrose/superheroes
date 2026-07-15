@@ -80,9 +80,15 @@ def write_handoff(docs_dir, work_item, findings):
 
 def collect_blocking(records_path):
     """Read round-records.json and return open BLOCKING findings from the terminal round."""
+    # #446: a MISSING records file is ABSENT, not unreadable — no review ever ran (the passed-gate
+    # skip on a fresh pre-approved doc), so there is nothing to record. Distinguish it from a genuine
+    # read failure on EXISTING state (corrupt JSON, permission) so the acceptance ledger does not
+    # manufacture a false "open blockers unreadable" park on a gate-passing phase.
     try:
         with open(records_path, encoding="utf-8") as fh:
             records = json.load(fh)
+    except FileNotFoundError:
+        return {"ok": True, "findings": [], "absent": True}
     except (OSError, ValueError) as exc:
         return {"ok": False, "reason": "unreadable: " + str(exc)}
     if not isinstance(records, list):

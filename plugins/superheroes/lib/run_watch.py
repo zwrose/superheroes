@@ -552,7 +552,16 @@ def format_journal_event(evt):
     if typ == "ci_fix_attempt":
         return "%s  ↻ ci fix attempt%s" % (clock, _detail_suffix(evt))
     if typ == "parked":
-        return "%s  ‼ parked%s" % (clock, _detail_suffix(evt))
+        # #446: a park that folded a structured payload (assumption parks, doc-review parks) carries
+        # its cause in payload.reason rather than a bare `detail` — surface it so the live readout
+        # names why the run parked instead of a mute `‼ parked`.
+        suffix = _detail_suffix(evt)
+        if not suffix:
+            payload = evt.get("payload") if isinstance(evt.get("payload"), dict) else {}
+            reason = payload.get("reason")
+            if reason:
+                suffix = " · %s" % reason
+        return "%s  ‼ parked%s" % (clock, suffix)
     if typ == "resumed":
         return "%s  ▶ resumed%s" % (clock, _detail_suffix(evt))
     if typ == "run_completed":

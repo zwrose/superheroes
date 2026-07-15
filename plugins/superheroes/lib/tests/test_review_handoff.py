@@ -99,6 +99,32 @@ def test_collect_unreadable_records_returns_structured_failure(tmp_path):
     assert out["reason"].startswith("unreadable:")
 
 
+def test_collect_blocking_absent_records_is_absent_not_unreadable(tmp_path):
+    # #446: a MISSING round-records.json (no review ever ran — the passed-gate skip on a fresh
+    # pre-approved doc) is ABSENT, not unreadable. The acceptance ledger must read this as
+    # nothing-to-record (ok, absent) rather than manufacture a false "open blockers unreadable"
+    # failure that parks a gate-passing phase.
+    rh = _load("review_handoff")
+    missing = tmp_path / "no-such-run" / "round-records.json"
+    out = rh.collect_blocking(str(missing))
+    assert out["ok"], "an absent records file must NOT read as a failed collect"
+    assert out.get("absent") is True, "an absent records file must be flagged absent"
+    assert out["findings"] == []
+
+
+def test_collect_blocking_corrupt_records_stays_unreadable(tmp_path):
+    # #446 contrast: a records file that EXISTS but does not parse is a genuine read failure —
+    # it keeps the structured unreadable failure (and its downstream UFR-1 disclosure), never
+    # the absent shortcut.
+    rh = _load("review_handoff")
+    path = tmp_path / "round-records.json"
+    path.write_text("not-json", encoding="utf-8")
+    out = rh.collect_blocking(str(path))
+    assert not out["ok"]
+    assert not out.get("absent")
+    assert out["reason"].startswith("unreadable:")
+
+
 def test_write_scrubs_finding_text_before_it_reaches_disk(tmp_path):
     # plan-handoff.json is a durable FILE, not a journal event, but it carries the same
     # free-text finding titles a courier round-tripped — Bearer-token shape matches an existing
