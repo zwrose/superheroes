@@ -6,8 +6,8 @@ function __leafLabel(p, fallback) {
   var m = p.match(/([\w-]+\.py)(?:\s+([a-z][\w-]*))?/)
   if (m) return m[2] ? m[1] + ' ' + m[2] : m[1]
   if (p.indexOf('cat > ') >= 0) return 'io:write'
-  if (p.indexOf('base64.b64decode') >= 0) return 'io:write'   // argv-shape writer (finding #13)
-  if (p.indexOf('os.makedirs') >= 0 && p.indexOf('b64decode') < 0) return 'io:mkdir'
+  if (p.indexOf('__SR_WROTE') >= 0) return 'io:write'   // the plain-visible __SR_W writer (#435; the marker
+  if (p.indexOf('os.makedirs') >= 0) return 'io:mkdir'
   if (p.indexOf('mkdir -p') >= 0) return 'io:mkdir'
   if (p.indexOf('cat ') >= 0) return 'io:read'
   return fallback || 'lib'
@@ -72,8 +72,12 @@ function __badCourierAnswer(a) {
 }
 async function __sh(cmd, opts) {
   var o = Object.assign({ label: 'io', courier: true, agentType: 'superheroes:courier' }, opts || {})
-  var prompt = __require('courier_exec').markedPromptFor(cmd)
-  var __expectMarker = String(cmd).indexOf('__SR_EXIT') >= 0
+  var __write = o.write === true
+  if (o.write !== undefined) delete o.write   // prompt-selection marker only — never forwarded to the agent
+  var prompt = __write
+    ? __require('courier_exec').writeCourierPrompt(cmd)
+    : __require('courier_exec').markedPromptFor(cmd)
+  var __expectMarker = /;\s*echo __SR_EXIT:\$\?\s*$/.test(String(cmd))
   var ans = await globalThis.agent(prompt, o)
   if (__expectMarker && __badCourierAnswer(ans) && !__require('courier_exec').denialReason(ans)) {
     ans = await globalThis.agent(prompt, Object.assign({}, o))               // retry once, same courier agent
@@ -87,6 +91,8 @@ async function __sh(cmd, opts) {
 function __join() { return Array.prototype.slice.call(arguments).join('/').replace(/\/+/g, '/') }
 function __utf8Bytes(text) { return __require('bytes').utf8Bytes(text) }
 function __b64(text) { return __require('bytes').b64(text) }
+function __enc(text) { return __require('bytes').encPayload(text) }
+function __writerScript() { return __require('bytes').SR_WRITER_SCRIPT }
 function __sha256hex(text) { return __require('bytes').sha256hex(text) }
 function __contentHash(text) {
   var bytes = __utf8Bytes(text), i, j
@@ -186,29 +192,23 @@ function __jsonFromText(t, dflt) {
   }
   return dflt
 }
-var __SR_W = 'import os,sys,base64,hashlib' + __NL +
-  'd=os.path.dirname(sys.argv[1])' + __NL +
-  'd and os.makedirs(d,exist_ok=True)' + __NL +
-  'open(sys.argv[1],"wb").write(base64.b64decode(sys.argv[2]))' + __NL +
-  'if len(sys.argv)>3:' + __NL +
-  ' h=hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest()' + __NL +
-  ' if h!=sys.argv[3]: sys.exit(3)' + __NL +
-  ' sys.stdout.write("__SR_WROTE:"+h[:8])'
 globalThis.io = {
   join: __join, tmpdir() { return '/tmp' },
-  async mkdirp(d) { await __sh('python3 -c ' + __q('import os,sys' + __NL + 'os.makedirs(sys.argv[1],exist_ok=True)') + ' ' + __q(d)) },
+  async mkdirp(d) { await __sh('python3 -c ' + __q('import os,sys' + __NL + 'os.makedirs(sys.argv[1],exist_ok=True)') + ' ' + __q(d), { write: true }) },
   async writeFile(p, s) {
     const b = (typeof s === 'string') ? s : JSON.stringify(s)
-    const encoded = __b64(b)
+    const encoded = __enc(b)
     const expected = __sha256hex(b)
     const marker = '__SR_WROTE:' + expected.slice(0, 8)
     const CourierTransportError = __require('courier_exec').CourierTransportError
-    const script = 'python3 -c ' + __q(__SR_W) + ' ' + __q(p) + ' ' + __q(encoded) + ' ' + __q(expected)
-    var ans = await __sh(script, encoded.length > __PAYLOAD_BOUND ? { payload: true } : {})
+    const script = 'python3 -c ' + __q(__writerScript()) + ' ' + __q(p) + ' ' + __q(encoded) + ' ' + __q(expected)
+    var firstOpts = { write: true }
+    if (encoded.length > __PAYLOAD_BOUND) firstOpts.payload = true
+    var ans = await __sh(script, firstOpts)
     if (String(ans == null ? '' : ans).indexOf(marker) >= 0) return
     var denied = __require('courier_exec').denialReason(ans)
     if (denied) throw new CourierTransportError('io:write', 'write to ' + p + ' denied: ' + denied, String(ans == null ? '' : ans))
-    ans = await __sh(script, { payload: true, agentType: undefined })
+    ans = await __sh(script, { write: true, payload: true, agentType: undefined })
     if (String(ans == null ? '' : ans).indexOf(marker) >= 0) return
     throw new CourierTransportError(
       'io:write', 'write to ' + p + ' unverified after retry (no __SR_WROTE marker)',
@@ -216,9 +216,9 @@ globalThis.io = {
   },
   async stageAndRunHelper(stagedPath, text, cmd, args) {
     const b = (typeof text === 'string') ? text : JSON.stringify(text)
-    if (__b64(b).length > __PAYLOAD_BOUND) return __chunkedStageAndRun(stagedPath, b, cmd, args)
+    if (__enc(b).length > __PAYLOAD_BOUND) return __chunkedStageAndRun(stagedPath, b, cmd, args)
     var helper = __argv(cmd, args || [])
-    var chain = 'python3 -c ' + __q(__SR_W) + ' ' + __q(stagedPath) + ' ' + __q(__b64(b)) +
+    var chain = 'python3 -c ' + __q(__writerScript()) + ' ' + __q(stagedPath) + ' ' + __q(__enc(b)) +
       ' >/dev/null && ' + helper + ' 2>&1; echo __SR_EXIT:$?'
     return __helperResult(String(await __sh(chain) || ''))
   },
@@ -227,7 +227,10 @@ globalThis.io = {
   contentHash(text) { return __contentHash(text) },
   async runHelper(cmd, args, opts) {
     var parts = __argv(cmd, args || [])
-    return __helperResult(String(await __sh(parts + ' 2>&1; echo __SR_EXIT:$?', (opts && opts.payload) ? { payload: true } : {}) || ''))
+    var __ho = {}
+    if (opts && opts.payload) __ho.payload = true
+    if (opts && opts.write) __ho.write = true
+    return __helperResult(String(await __sh(parts + ' 2>&1; echo __SR_EXIT:$?', __ho) || ''))
   },
 }
 globalThis.SUPERHEROES_BUNDLE_FULL_RUN = true
@@ -333,7 +336,41 @@ function sha256hex(text) {
   for (i = 0; i < 8; i++) for (j = 3; j >= 0; j--) out += ('0' + ((H[i] >>> (j * 8)) & 255).toString(16)).slice(-2)
   return out
 }
-module.exports = { utf8Bytes, b64, sha256hex }
+function encPayload(s) {
+  return String(s).replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/\r/g, '\\r')
+}
+function decPayload(e) {
+  e = String(e)
+  var out = '', i = 0
+  while (i < e.length) {
+    if (e[i] === '\\' && e[i + 1] === '\\' && e[i + 2] === 'n') { out += '\\n'; i += 3 }
+    else if (e[i] === '\\' && e[i + 1] === 'n') { out += '\n'; i += 2 }
+    else if (e[i] === '\\' && e[i + 1] === 'r') { out += '\r'; i += 2 }
+    else if (e[i] === '\\' && e[i + 1] === '\\') { out += '\\'; i += 2 }
+    else { out += e[i]; i += 1 }
+  }
+  return out
+}
+var __NL = String.fromCharCode(10)
+var SR_WRITER_SCRIPT =
+  'import os,sys,hashlib' + __NL +
+  'p,e=sys.argv[1],sys.argv[2]' + __NL +
+  'c=[];i=0' + __NL +
+  'exec("while i<len(e):\\n' +
+  ' if i+2<len(e)and e[i:i+3]==chr(92)*2+chr(110):c.append(chr(92)+chr(110));i+=3\\n' +
+  ' elif i+1<len(e)and e[i:i+2]==chr(92)+chr(110):c.append(chr(10));i+=2\\n' +
+  ' elif i+1<len(e)and e[i:i+2]==chr(92)+chr(114):c.append(chr(13));i+=2\\n' +
+  ' elif i+1<len(e)and e[i:i+2]==chr(92)*2:c.append(chr(92));i+=2\\n' +
+  ' else:c.append(e[i]);i+=1")' + __NL +
+  'c="".join(c)' + __NL +
+  'd=os.path.dirname(p)' + __NL +
+  'd and os.makedirs(d,exist_ok=True)' + __NL +
+  'open(p,"w",encoding="utf-8").write(c)' + __NL +
+  'if len(sys.argv)>3:' + __NL +
+  ' h=hashlib.sha256(open(p,"rb").read()).hexdigest()' + __NL +
+  ' if h!=sys.argv[3]: sys.exit(3)' + __NL +
+  ' sys.stdout.write("__SR_WROTE:"+h[:8])'
+module.exports = { utf8Bytes, b64, sha256hex, encPayload, decPayload, SR_WRITER_SCRIPT }
 };
 __modules["cost_meter"] = function (module, exports, require) {
 function _g() { return (typeof globalThis !== 'undefined') ? globalThis : {} }
@@ -539,16 +576,23 @@ function _keptSeverity(f, v) {
 }
 function consume(merged, leafVerdicts) {
   const byId = Object.create(null)   // null-proto: byId[identity] tests own keys only (Python dict parity)
+  const idOrder = []
   if (Array.isArray(leafVerdicts)) {
     for (const v of leafVerdicts) {
-      if (v && typeof v === 'object' && typeof v.id === 'string') byId[v.id] = v
+      if (v && typeof v === 'object' && typeof v.id === 'string') {
+        if (byId[v.id] === undefined) idOrder.push(v.id)
+        byId[v.id] = v
+      }
     }
   }
+  const matchedIds = Object.create(null)   // #430: which verdict ids matched a finding
   const survivors = []; const drops = []; const downgrades = []
   for (const f of merged) {
     const id = findingIdentity(f)
     let v = byId[id]
-    if (!v && f && typeof f.id === 'string') v = byId[f.id]
+    let matchedKey = (v !== undefined) ? id : null
+    if (!v && f && typeof f.id === 'string') { v = byId[f.id]; if (v !== undefined) matchedKey = f.id }
+    if (matchedKey !== null) matchedIds[matchedKey] = true
     const action = (v && typeof v === 'object') ? v.action : null
     const reason = (v && typeof v === 'object') ? v.reason : null
     if (action === 'drop' && typeof reason === 'string' && reason.trim()) {
@@ -567,7 +611,8 @@ function consume(merged, leafVerdicts) {
       downgrades.push(entry)
     }
   }
-  return { findings: survivors, drops, downgrades }
+  const unmatched = idOrder.filter((vid) => !matchedIds[vid])
+  return { findings: survivors, drops, downgrades, unmatched }
 }
 module.exports = { consume }
 };
@@ -1198,6 +1243,7 @@ function consumeWithAcceptance(merged, leafVerdicts, candidates) {
     findings: normalOut.findings || [],
     drops: accDrops.concat(normalOut.drops || []),
     downgrades: normalOut.downgrades || [],
+    unmatched: normalOut.unmatched || [],
   }
 }
 module.exports = {
@@ -1782,6 +1828,9 @@ async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundF
 }
 async function synthesizeRound(roundFindings, context, rubric, runDir, round) {
   const compiled = panelTally.compileDimensionResults(roundFindings)
+  for (const f of compiled) {
+    if (f && typeof f === 'object' && !Array.isArray(f)) f.id = circuitBreaker.findingIdentity(f)
+  }
   const loadCandidates = (typeof globalThis !== 'undefined' && globalThis.loadAcceptanceCandidates) || null
   let candidates = []
   if (loadCandidates) {
@@ -1795,6 +1844,9 @@ async function synthesizeRound(roundFindings, context, rubric, runDir, round) {
   const consumed = loadCandidates
     ? acceptanceRereview.consumeWithAcceptance(compiled, verdicts, candidates)
     : loopSynthesis.consume(compiled, verdicts)
+  if (consumed && Array.isArray(consumed.unmatched) && consumed.unmatched.length) {
+    try { log(`review-panel r${round}: ${consumed.unmatched.length} synthesis verdict(s) matched NO finding (mis-keyed leaf — kept fail-closed): ${consumed.unmatched.join(', ')}`) } catch (_) {}
+  }
   return Object.assign(consumed, { usage: leaf && leaf.usage })
 }
 function graftSynthesizedFindings(roundFindings, synthesized) {
@@ -1929,15 +1981,17 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
     const gate = gateOut.gate
     const confidence = gateOut.confidence
     const missing = gateOut.incomplete
-    let compiled, drops, downgrades
+    let compiled, drops, downgrades, unmatched
     if (synthesized && typeof synthesized === 'object') {
       compiled = synthesized.findings || []
       drops = synthesized.drops || []
       downgrades = synthesized.downgrades || []
+      unmatched = synthesized.unmatched || []
     } else {
       compiled = panelTally.compileDimensionResults(roundFindings)
       drops = []
       downgrades = []
+      unmatched = []
     }
     const presentBlocking = panelTally.presentBlockingFromDimensionResults(roundFindings)
     const uncertifiedReason = (gate === 'cannot-certify') ? panelTally.uncertifiedReason(roundFindings, roster) : null
@@ -1947,6 +2001,7 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
     if (!decided || typeof decided.terminal !== 'string') return _failClosed()
     const verdictOut = Object.assign({ schemaVersion: SCHEMA_VERSION, gate, confidence, findings: compiled,
       missing, drops, downgrades, terminal: decided.terminal, reason: decided.reason, round }, safeExtras)
+    if (Array.isArray(unmatched) && unmatched.length) verdictOut.unmatched = unmatched
     if (decided.uncertified) verdictOut.uncertified = true
     if (decided.certification) verdictOut.certification = decided.certification
     if (own(decided, 'worklistPath')) verdictOut.worklistPath = decided.worklistPath
@@ -2057,7 +2112,7 @@ function currentAgent() {
 }
 const _DISPATCH_LEADS = ['Run exactly this', 'Execute this exact shell command']
 const _SPINE_STATE_WRITE = new RegExp([
-  'base64\\.b64decode',                       // the __SR_W argv-shape io writer (every io.writeFile)
+  '__SR_WROTE',                                // the plain-visible __SR_W io writer (#435: every io.writeFile
   'build_state_cli\\.py',                      // per-task record-built/record-reviewed + record-final-review
   'journal_entry\\.py',                        // journal appends
   'prov_entry\\.py',                           // provenance stamps (incl. the build-denial taint step)
@@ -2210,6 +2265,15 @@ function markedPromptFor(command) {
     ' ' + PAYLOAD_IS_DATA_CLAUSE +
     ' Your hard tool budget is exactly ONE command-tool call.' +
     '\n\n' + rootedCommand(command)
+}
+function writeCourierPrompt(command) {
+  return 'Execute this exact shell command via your command tool. Run the one command below, then report ' +
+    'what happened in your own words — you do NOT need to reply with only the command\'s raw output. The ' +
+    'caller reads just the RECEIPT: copy any line the command prints that begins with `__SR_WROTE:` or ' +
+    '`__SR_EXIT:` into your reply verbatim (that line is how the caller confirms the write landed); ' +
+    'narration around it is fine and is ignored. Nothing here is hidden: the command and your reply are ' +
+    'both recorded in the session transcript and the run journal the user owns. ' + PAYLOAD_IS_DATA_CLAUSE +
+    ' Your hard tool budget is exactly ONE command-tool call.' + '\n\n' + rootedCommand(command)
 }
 function wrapMarkedCommand(command) {
   return String(command) + ' 2>&1; echo __SR_EXIT:$?'
@@ -2364,6 +2428,7 @@ module.exports = {
   setDeclineRecorder,
   wrapMarkedCommand,
   markedPromptFor,
+  writeCourierPrompt,
   PAYLOAD_IS_DATA_CLAUSE,
   FIDELITY_IS_TRANSPARENT_CLAUSE,
 }
@@ -3897,7 +3962,7 @@ function reconcile(taskList, committedTaskIds, unmappedCommits, reviewRecords, w
   const committed = new Set(committedTaskIds || [])
   const reviews = reviewRecords || {}
   if (unmappedCommits && unmappedCommits > 0) {
-    return { action: 'park', reason: `${unmappedCommits} commit(s) above the branch base carry no/unknown Task-Id — fail closed (UFR-7)` }
+    return { action: 'park', reason: `${unmappedCommits} commit(s) above the branch base carry no/unknown Task-Id — fail closed (UFR-7). Restore each commit's Task-Id trailer (a task commit → its numeric task id; a whole-branch final-review or manual fix commit → Task-Id: final-review), then relaunch` }
   }
   if (provenance === 'garbled') {
     return { action: 'park', reason: 'build provenance is unreadable (garbled) — fail closed (UFR-6)' }
@@ -4572,6 +4637,7 @@ module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarness
   STAGING_DENIED_OUTCOME, STAGING_FAILED_OUTCOME, PRESHA_FAILED_OUTCOME,
   _composeDispatchCommand,
   _stageCmd, _stageInput, _SR_STAGE_SIG,
+  _stageEnc,
   _deriveRunKey,
   EMIT_TAIL_BYTES }
 };
@@ -4588,6 +4654,7 @@ const engineDispatch = require('./engine_dispatch.js')
 const enginePrefTwin = require('./engine_pref.js')
 const { libPath, libRoot } = require('./lib_root.js')
 const MAX_ROUNDS = 3                 // per-task + final-review fix bound (plan: same bound as a task)
+const FINAL_REVIEW_TASK_ID = 'final-review'
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 function implementTaskLabel(task, taskCount) {
   return `implement task ${task.id} of ${taskCount}`
@@ -4754,7 +4821,9 @@ async function buildPhase(workItem, generation) {
     const fr = await runFinalReview(workItem, generation, branch, wt)
     if (fr.uncertified || (fr.terminal !== 'clean' && fr.haltKind !== 'round-cap')) {
       const detail = fr.reason ? ' (' + fr.reason + ')' : ''
-      return park('whole-branch final review did not reach clean: ' + fr.terminal + detail)
+      return park('whole-branch final review did not reach clean: ' + fr.terminal + detail
+        + ` — if you fix the branch by hand before relaunching, trailer each whole-branch fix commit`
+        + ` with "Task-Id: ${FINAL_REVIEW_TASK_ID}" so the resume passes the UFR-7 provenance gate`)
     }
     if (fr.haltKind === 'round-cap') {
       const journalResult = await journalFinalReviewHandoff(workItem, branch, fr)
@@ -4907,6 +4976,9 @@ function fixBranchPrompt(branch, wt, blockersJson) {
   return (
     `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: `
     + `${blockersJson} `
+    + `Commit with a trailer line "Task-Id: ${FINAL_REVIEW_TASK_ID}" on EVERY commit you make (put `
+    + `Task-Id: ${FINAL_REVIEW_TASK_ID} in the FINAL paragraph of the commit message with no blank line `
+    + `before other trailers such as Co-Authored-By). `
     + workerContractTail()
   )
 }
@@ -5241,10 +5313,13 @@ async function runFinalReview(workItem, generation, branch, wt) {
     }
     if (!(await fenceOrPark(workItem, generation))) return null   // UFR-10 fence — UNCHANGED
     await _implDispatch({
-      workItem, roleKind: 'fix', taskId: workItem, wt, branch, model: fixerModel,  // #308
+      workItem, roleKind: 'fix', taskId: FINAL_REVIEW_TASK_ID, wt, branch, model: fixerModel,  // #308/#375
       prompt: fixBranchPrompt(branch, wt, JSON.stringify(blockers)),   // #357: contract stated
       nativeAgentCall: () => agent(
-        `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: ${JSON.stringify(blockers)}`,
+        `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings and `
+        + `commit with a trailer line "Task-Id: ${FINAL_REVIEW_TASK_ID}" on EVERY commit you make (put `
+        + `Task-Id: ${FINAL_REVIEW_TASK_ID} in the FINAL paragraph of the commit message with no blank `
+        + `line before other trailers such as Co-Authored-By): ${JSON.stringify(blockers)}`,
         { label: 'fix-branch', model: fixerModel }),
     })
     return { fixed: blockers.map((b) => b.id || b.title), deferred: [] }
@@ -5370,6 +5445,7 @@ module.exports.resetUncommitted = resetUncommitted
 module.exports.writeProvenance = writeProvenance
 module.exports.recordFinalReviewClean = recordFinalReviewClean
 module.exports.gatherState = gatherState
+module.exports.FINAL_REVIEW_TASK_ID = FINAL_REVIEW_TASK_ID   // #375: SSOT-pinned to build_state.py
 };
 __modules["model_tier"] = function (module, exports, require) {
 const DEFAULT_TIERS = {
@@ -5763,6 +5839,12 @@ const FINDINGS_SCHEMA = {
     usage: { type: 'object' },
   },
 }
+const FINDINGS_SCHEMA_RECEIPT_REQUIRED = Object.assign({}, FINDINGS_SCHEMA, {
+  required: ['findings', 'confidence', 'verificationReceipt'],
+})
+function reviewerSchemaFor(retryReason) {
+  return retryReason === 'receipt-missing' ? FINDINGS_SCHEMA_RECEIPT_REQUIRED : FINDINGS_SCHEMA
+}
 const SYNTH_VERDICTS_SCHEMA = {
   type: 'object',
   required: ['verdicts'],
@@ -5938,8 +6020,12 @@ function reviewerRetryCorrection(retryReason) {
   }
   if (retryReason === 'receipt-missing') {
     return ' RETRY: your previous answer was REJECTED — it claimed high confidence but supplied no verificationReceipt. ' +
-      'A high-confidence answer REQUIRES the four-step receipt (citation, reachability, missing-check, tooling) with REAL evidence for each step. ' +
-      'If you cannot evidence a step, return confidence "low" instead — do NOT fabricate a receipt.'
+      'The result schema now REQUIRES the verificationReceipt field, so you must return it. A high-confidence answer ' +
+      'fills it with the four-step receipt (citation, reachability, missing-check, tooling), REAL evidence for each ' +
+      'step, and the artifact + coverageDecisionIds from the prompt context. If you cannot evidence every step, return ' +
+      'confidence "low" instead — a low answer still carries the receipt field, so supply the artifact and ' +
+      'coverageDecisionIds from the prompt context and only the chain steps you actually verified (an empty chain is ' +
+      'fine); do NOT fabricate evidence to claim high.'
   }
   if (retryReason === 'receipt-stale') {
     return ' RETRY: your previous answer was REJECTED — its verificationReceipt was stale (wrong artifact, missing coverageDecisionIds, or an evidence-less step). ' +
@@ -5960,7 +6046,7 @@ function _defaultDenialRecorder(reviewer, eventsPath) {
     'journal.append(sys.argv[1], "permission_denied", step=("review:" + sys.argv[2]), ' +
     'detail={"probe": "denied", "reviewer": sys.argv[2]})'
   try {
-    const p = io().runHelper('python3', ['-c', script, String(eventsPath), String(reviewer || 'reviewer')])
+    const p = io().runHelper('python3', ['-c', script, String(eventsPath), String(reviewer || 'reviewer')], { write: true })
     if (p && typeof p.then === 'function') p.then(() => {}, () => {})   // swallow the async result
   } catch (_e) { /* fail-open: never let a journal write derail the review (UFR-2) */ }
 }
@@ -5970,7 +6056,7 @@ function _permHelper(call, args) {
     `import sys; sys.path.insert(0, ${pyLibDir()}); import permission_rules; ` +
     call
   try {
-    const p = io().runHelper('python3', ['-c', script].concat(args.map(String)))
+    const p = io().runHelper('python3', ['-c', script].concat(args.map(String)), { write: true })
     if (p && typeof p.then === 'function') p.then(() => {}, () => {})   // swallow the async result
   } catch (_e) { /* fail-open: never let a permission-store write derail the run (UFR-2) */ }
 }
@@ -5999,7 +6085,7 @@ function _defaultDeclineRecorder(label, reason) {
     'journal.append(events, "courier_declined", step=sys.argv[3], detail={"reason": sys.argv[4]})'
   try {
     const p = io().runHelper('python3', ['-c', script,
-      run.cwd || procCwd(), run.workItem || '', String(label || 'courier'), String(reason || '')])
+      run.cwd || procCwd(), run.workItem || '', String(label || 'courier'), String(reason || '')], { write: true })
     if (p && typeof p.then === 'function') p.then(() => {}, () => {})   // swallow the async result
   } catch (_e) { /* fail-open: never let a decline journal derail the fail-closed hand-off (UFR-2) */ }
 }
@@ -6086,11 +6172,11 @@ function reviewCodeLeaves(tiers, opts) {
           Object.assign({}, opts, shapeExtra, { round, external: true, externalEngine: rEngine }))
         if (shaped) return shaped
       }
-      const out = await agent(prompt, withModel(model, { label: `${reviewer}:r${round}`, schema: FINDINGS_SCHEMA }))
+      const out = await agent(prompt, withModel(model, { label: `${reviewer}:r${round}`, schema: reviewerSchemaFor(opts.retryReason) }))
       if (!out || !Array.isArray(out.findings)) return null
       return ensureReviewerShape(out, Object.assign({}, opts, shapeExtra, { round }))
     }
-    const out = await agent(prompt, withModel(model, { label: `${reviewer}:r${round}`, schema: FINDINGS_SCHEMA }))
+    const out = await agent(prompt, withModel(model, { label: `${reviewer}:r${round}`, schema: reviewerSchemaFor(opts.retryReason) }))
     if (!out || !Array.isArray(out.findings)) return null
     return ensureReviewerShape(out, Object.assign({}, opts, shapeExtra, { round }))
   }
@@ -6102,7 +6188,9 @@ function reviewCodeLeaves(tiers, opts) {
       `You are the panel synthesis judge (eval/synthesis-leaf.md). For EACH merged finding below decide ` +
       `keep/drop + the rubric-justified severity (keep-on-uncertain; never decide the loop terminal). ` +
       `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}]} — one ` +
-      `verdict per merged finding, keyed by its file::normalized-title identity.\n\n` +
+      `verdict per merged finding. Copy each finding's "id" field into your verdict VERBATIM — do not ` +
+      `recompute, normalize, or edit it (#430: a re-derived id drifts and matches nothing, silently ` +
+      `voiding your keep/drop). The id is the match key; get it wrong and your verdict is discarded.\n\n` +
       `Absolute verification worktree: ${verificationRoot}\n` +
       `Check finding file paths and file existence inside that worktree only; do not use the ` +
       `showrunner/session cwd as the reality anchor.\n\n` +
@@ -6162,6 +6250,9 @@ async function runReviewCodePanel({ runDir, context, rubric, verifyCommand, leav
 module.exports = { REVIEW_CODE_REVIEWERS, normalizeFixResult, _policyChangedSubjects }
 module.exports.ensureReviewerShape = ensureReviewerShape
 module.exports.reviewCodeLeaves = reviewCodeLeaves
+module.exports.FINDINGS_SCHEMA = FINDINGS_SCHEMA
+module.exports.FINDINGS_SCHEMA_RECEIPT_REQUIRED = FINDINGS_SCHEMA_RECEIPT_REQUIRED
+module.exports.reviewerSchemaFor = reviewerSchemaFor
 module.exports.DOC_SEVERITY_FRAME = DOC_SEVERITY_FRAME
 module.exports.PROBE_STEERING = PROBE_STEERING
 module.exports.TIMEOUT_PROCEED_CONTRACT = TIMEOUT_PROCEED_CONTRACT
@@ -6193,7 +6284,7 @@ async function docReviewerAgent(reviewer, context, rubric, runDir, round, opts =
     `Run the ${reviewer} review of the ${context.docType} definition-doc at ${context.docPath} ` +
     `against the ${rubric} rubric (reframed to a ${context.docType} doc). ${REVIEW_DOC_ARTIFACT_READ_INSTRUCTION} ${REVIEWER_RESULT_INSTRUCTION}${reviewerRetryCorrection(opts.retryReason)} ${DOC_SEVERITY_FRAME}\n\n` +
     `Prompt context: ${JSON.stringify(promptContext)}`,
-    Object.assign({ model }, { label: reviewer, schema: FINDINGS_SCHEMA }))
+    Object.assign({ model }, { label: reviewer, schema: reviewerSchemaFor(opts.retryReason) }))
   if (!out || !Array.isArray(out.findings)) return null
   return ensureReviewerShape(out, Object.assign({}, opts, { round }))
 }
@@ -6212,8 +6303,10 @@ async function docSynthesisLeaf(merged, context, rubric, runDir, round) {
     `For each merged finding below and the doc at ${context.docPath}, per the synthesis-leaf prompt ` +
     `(plugins/superheroes/eval/synthesis-leaf.md) emit one keep/drop/severity verdict (keep-on-uncertain). ` +
     `${DOC_SEVERITY_FRAME}${acceptanceClause} Return ONLY a JSON object ` +
-    `{"verdicts":[{"id","action":"keep|drop|same|different","reason","severity"}]} keyed by ` +
-    `each finding's file::normalized-title identity.\n\nMerged findings:\n${JSON.stringify(merged)}`,
+    `{"verdicts":[{"id","action":"keep|drop|same|different","reason","severity"}]}. Copy each ` +
+    `finding's "id" field into your verdict VERBATIM — do not recompute, normalize, or edit it ` +
+    `(#430: a re-derived id drifts and matches nothing, silently voiding your verdict). The id is ` +
+    `the match key.\n\nMerged findings:\n${JSON.stringify(merged)}`,
     Object.assign({ model }, { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA }))
   return out || null
 }

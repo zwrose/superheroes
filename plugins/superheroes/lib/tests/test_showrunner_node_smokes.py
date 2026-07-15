@@ -85,6 +85,9 @@ SHOWRUNNER_SMOKES = [
     # Task 10 (FR-2): a denied reviewer probe -> confidence:low + degraded-dimension (single-retry
     # ceiling), with the denial recorded to the journal.
     "plugins/superheroes/lib/tests/showrunner_reviewer_denied_probe_smoke.js",
+    # #418: a schema-minimal {findings,confidence} answer parked the release gate — the receipt-missing
+    # retry now dispatches a receipt-required schema so the empty shell stops burning the budget.
+    "plugins/superheroes/lib/tests/showrunner_receipt_required_retry_smoke.js",
     # Task 11 (FR-1/FR-4/UFR-6): reviewer + builder/leaf prompts embed the FR-4 probe steering
     # (throwaway-test-file family, no inline interpreter probes) + the 15-min proceed-honestly contract.
     "plugins/superheroes/lib/tests/showrunner_permission_contract_smoke.js",
@@ -179,6 +182,10 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/build_phase_tasklist_shape_smoke.js",
     # #357: the worker output-contract drift guard (build + both external fix prompts share the tail).
     "plugins/superheroes/lib/tests/build_phase_fix_contract_smoke.js",
+    # #375: whole-branch final-review fix commits carry the reserved sentinel Task-Id both fix paths
+    # mint (native prompt + external dispatch taskId) and the build-gather accepts — JS/Python SSOT
+    # pinned so the fixer and the UFR-7 gate cannot drift apart into a self-rejecting resume again.
+    "plugins/superheroes/lib/tests/build_phase_finalreview_trailer_smoke.js",
     # configurable base branch: --base threading to ship freshness, draft-PR, gather + bundle ENTRY.
     "plugins/superheroes/lib/tests/showrunner_base_smoke.js",
     # FIX A: resolveTarget seam targets build worktree + null-resolver parks (never reviews root).

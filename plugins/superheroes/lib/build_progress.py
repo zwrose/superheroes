@@ -11,9 +11,16 @@ def reconcile(task_list, committed_task_ids, unmapped_commits, review_records,
     reviews = review_records or {}
 
     if unmapped_commits and unmapped_commits > 0:
+        # #375: this entry-reconcile park is the one an OLD parked run hits on relaunch (its whole-branch
+        # final-review fix commits pre-date the sentinel), so name the remediation for BOTH commit kinds
+        # without misdirecting: a task commit that lost its id gets its NUMERIC id back; a whole-branch
+        # final-review or manual fix commit gets the reserved `Task-Id: final-review` sentinel the gate
+        # now accepts. Fail-closed direction is UNCHANGED — this only makes the park actionable.
         return {"action": "park",
                 "reason": "%d commit(s) above the branch base carry no/unknown Task-Id — fail "
-                          "closed (UFR-7)" % unmapped_commits}
+                          "closed (UFR-7). Restore each commit's Task-Id trailer (a task commit → its "
+                          "numeric task id; a whole-branch final-review or manual fix commit → "
+                          "Task-Id: final-review), then relaunch" % unmapped_commits}
     if provenance == "garbled":
         return {"action": "park",
                 "reason": "build provenance is unreadable (garbled) — fail closed (UFR-6)"}

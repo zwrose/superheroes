@@ -1043,6 +1043,9 @@ module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarness
   // fail-closed) and pins that no base64 blob rides the staged command; the routing signature lets
   // mocks target the stage leaf.
   _stageCmd, _stageInput, _SR_STAGE_SIG,
+  // #435 test-only: the escape-encoder, exported so showrunner_bytes_smoke.js pins it byte-identical to
+  // bytes.encPayload (the io writer's mirror) — a drift between the two mirrored transports fails a test.
+  _stageEnc,
   // #408 test-only: the pure staging-key derivation (workItem-folded, no-double-prefix, over-length
   // safe), exported so the smoke pins every branch directly without spinning up full dispatches.
   _deriveRunKey,

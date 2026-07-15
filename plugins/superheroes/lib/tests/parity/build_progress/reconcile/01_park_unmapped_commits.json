@@ -1,1 +1,1 @@
-{"input": [[{"id": "t1", "name": "Task 1"}], [], 3, {}, false, null, "absent"], "expected": {"action": "park", "reason": "3 commit(s) above the branch base carry no/unknown Task-Id — fail closed (UFR-7)"}}
+{"input": [[{"id": "t1", "name": "Task 1"}], [], 3, {}, false, null, "absent"], "expected": {"action": "park", "reason": "3 commit(s) above the branch base carry no/unknown Task-Id — fail closed (UFR-7). Restore each commit's Task-Id trailer (a task commit → its numeric task id; a whole-branch final-review or manual fix commit → Task-Id: final-review), then relaunch"}}

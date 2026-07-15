@@ -133,6 +133,30 @@ const FINDINGS_SCHEMA = {
     usage: { type: 'object' },
   },
 }
+// #418: the receipt-required RETRY variant. The schema-minimal answer {findings:[],confidence:"high"}
+// satisfied FINDINGS_SCHEMA (verificationReceipt is OPTIONAL there — a legitimate low answer omits it),
+// so the StructuredOutput tool accepted the empty shell, ensureReviewerShape downgraded it to
+// low+receiptMissing, and the whole dispatch was spent — a tail that burned the 0.13.0 release gate.
+// On a receipt-missing RETRY the contract is already "high+receipt or low", so promoting
+// verificationReceipt into the top-level `required` list (a plain `required` array is LEGAL — it is NOT
+// one of the banned allOf/oneOf/anyOf combinators the Anthropic input_schema subset rejects; the guard
+// proves it) makes the empty shell UNREPRESENTABLE: the tool rejects it and re-prompts the model
+// IN-TURN (schema validation's own retry loop) instead of consuming a dispatch. The low escape hatch
+// stays the path of least resistance — a low answer supplies a minimal honest receipt the shell IGNORES
+// for non-high confidence, whereas fabricating four evidenced steps to claim high is strictly more work
+// — so this never invites a fabricated receipt (#183). Used ONLY on the receipt-missing retry and ONLY
+// on the native reviewer path (external engines carry no chain-of-verification receipt — ensureReviewerShape
+// marks them externalReview, so they never reach retryReason receipt-missing; and a codex strictify would
+// promote verificationReceipt into the OpenAI-strict required set, which we never want). NOT used for
+// permission-denied (a denied probe must return low, never be pressed for a receipt) or receipt-stale (a
+// receipt is already present — requiring presence adds nothing). Object.assign preserves SSOT: the shared
+// `properties` come straight from FINDINGS_SCHEMA, so the two literals cannot drift.
+const FINDINGS_SCHEMA_RECEIPT_REQUIRED = Object.assign({}, FINDINGS_SCHEMA, {
+  required: ['findings', 'confidence', 'verificationReceipt'],
+})
+function reviewerSchemaFor(retryReason) {
+  return retryReason === 'receipt-missing' ? FINDINGS_SCHEMA_RECEIPT_REQUIRED : FINDINGS_SCHEMA
+}
 const SYNTH_VERDICTS_SCHEMA = {
   type: 'object',
   required: ['verdicts'],
@@ -354,8 +378,12 @@ function reviewerRetryCorrection(retryReason) {
   }
   if (retryReason === 'receipt-missing') {
     return ' RETRY: your previous answer was REJECTED — it claimed high confidence but supplied no verificationReceipt. ' +
-      'A high-confidence answer REQUIRES the four-step receipt (citation, reachability, missing-check, tooling) with REAL evidence for each step. ' +
-      'If you cannot evidence a step, return confidence "low" instead — do NOT fabricate a receipt.'
+      'The result schema now REQUIRES the verificationReceipt field, so you must return it. A high-confidence answer ' +
+      'fills it with the four-step receipt (citation, reachability, missing-check, tooling), REAL evidence for each ' +
+      'step, and the artifact + coverageDecisionIds from the prompt context. If you cannot evidence every step, return ' +
+      'confidence "low" instead — a low answer still carries the receipt field, so supply the artifact and ' +
+      'coverageDecisionIds from the prompt context and only the chain steps you actually verified (an empty chain is ' +
+      'fine); do NOT fabricate evidence to claim high.'
   }
   if (retryReason === 'receipt-stale') {
     return ' RETRY: your previous answer was REJECTED — its verificationReceipt was stale (wrong artifact, missing coverageDecisionIds, or an evidence-less step). ' +
@@ -389,7 +417,9 @@ function _defaultDenialRecorder(reviewer, eventsPath) {
     'journal.append(sys.argv[1], "permission_denied", step=("review:" + sys.argv[2]), ' +
     'detail={"probe": "denied", "reviewer": sys.argv[2]})'
   try {
-    const p = io().runHelper('python3', ['-c', script, String(eventsPath), String(reviewer || 'reviewer')])
+    // #435 write:true — a pure journal state-write; ride the narration-tolerant write-courier prompt so the
+    // disclosure channel survives a classifier storm (its only output is a small receipt, extracted by pattern).
+    const p = io().runHelper('python3', ['-c', script, String(eventsPath), String(reviewer || 'reviewer')], { write: true })
     if (p && typeof p.then === 'function') p.then(() => {}, () => {})   // swallow the async result
   } catch (_e) { /* fail-open: never let a journal write derail the review (UFR-2) */ }
 }
@@ -413,7 +443,10 @@ function _permHelper(call, args) {
     `import sys; sys.path.insert(0, ${pyLibDir()}); import permission_rules; ` +
     call
   try {
-    const p = io().runHelper('python3', ['-c', script].concat(args.map(String)))
+    // #435 write:true — freeze_run_rules / record_composed are pure permission-store state-writes (the
+    // record_composed registration was itself among the classifier-blocked dispatches on the live run).
+    // Ride the narration-tolerant write-courier prompt; the output is a small receipt extracted by pattern.
+    const p = io().runHelper('python3', ['-c', script].concat(args.map(String)), { write: true })
     if (p && typeof p.then === 'function') p.then(() => {}, () => {})   // swallow the async result
   } catch (_e) { /* fail-open: never let a permission-store write derail the run (UFR-2) */ }
 }
@@ -463,8 +496,10 @@ function _defaultDeclineRecorder(label, reason) {
     'events = control_plane.paths(sys.argv[1], (sys.argv[2] or None))["events"]; ' +
     'journal.append(events, "courier_declined", step=sys.argv[3], detail={"reason": sys.argv[4]})'
   try {
+    // #435 write:true — the courier-decline journal is the disclosure channel for a blocked dispatch; ride
+    // the narration-tolerant write-courier prompt so it is not itself caught in the same classifier storm.
     const p = io().runHelper('python3', ['-c', script,
-      run.cwd || procCwd(), run.workItem || '', String(label || 'courier'), String(reason || '')])
+      run.cwd || procCwd(), run.workItem || '', String(label || 'courier'), String(reason || '')], { write: true })
     if (p && typeof p.then === 'function') p.then(() => {}, () => {})   // swallow the async result
   } catch (_e) { /* fail-open: never let a decline journal derail the fail-closed hand-off (UFR-2) */ }
 }
@@ -608,11 +643,11 @@ function reviewCodeLeaves(tiers, opts) {
           Object.assign({}, opts, shapeExtra, { round, external: true, externalEngine: rEngine }))
         if (shaped) return shaped
       }
-      const out = await agent(prompt, withModel(model, { label: `${reviewer}:r${round}`, schema: FINDINGS_SCHEMA }))
+      const out = await agent(prompt, withModel(model, { label: `${reviewer}:r${round}`, schema: reviewerSchemaFor(opts.retryReason) }))
       if (!out || !Array.isArray(out.findings)) return null
       return ensureReviewerShape(out, Object.assign({}, opts, shapeExtra, { round }))
     }
-    const out = await agent(prompt, withModel(model, { label: `${reviewer}:r${round}`, schema: FINDINGS_SCHEMA }))
+    const out = await agent(prompt, withModel(model, { label: `${reviewer}:r${round}`, schema: reviewerSchemaFor(opts.retryReason) }))
     if (!out || !Array.isArray(out.findings)) return null
     return ensureReviewerShape(out, Object.assign({}, opts, shapeExtra, { round }))
   }
@@ -630,7 +665,9 @@ function reviewCodeLeaves(tiers, opts) {
       `You are the panel synthesis judge (eval/synthesis-leaf.md). For EACH merged finding below decide ` +
       `keep/drop + the rubric-justified severity (keep-on-uncertain; never decide the loop terminal). ` +
       `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}]} — one ` +
-      `verdict per merged finding, keyed by its file::normalized-title identity.\n\n` +
+      `verdict per merged finding. Copy each finding's "id" field into your verdict VERBATIM — do not ` +
+      `recompute, normalize, or edit it (#430: a re-derived id drifts and matches nothing, silently ` +
+      `voiding your keep/drop). The id is the match key; get it wrong and your verdict is discarded.\n\n` +
       `Absolute verification worktree: ${verificationRoot}\n` +
       `Check finding file paths and file existence inside that worktree only; do not use the ` +
       `showrunner/session cwd as the reality anchor.\n\n` +
@@ -710,6 +747,11 @@ module.exports.ensureReviewerShape = ensureReviewerShape
 // for the FR-4 probe steering and the 15-min proceed contract; build_phase.js reuses the latter so the
 // builder leaf and reviewer leaf agree byte-for-byte on the timeout instruction).
 module.exports.reviewCodeLeaves = reviewCodeLeaves
+// #418: schema literals + the receipt-missing retry selector, exported for the schema guard and the
+// receipt-required-retry smoke.
+module.exports.FINDINGS_SCHEMA = FINDINGS_SCHEMA
+module.exports.FINDINGS_SCHEMA_RECEIPT_REQUIRED = FINDINGS_SCHEMA_RECEIPT_REQUIRED
+module.exports.reviewerSchemaFor = reviewerSchemaFor
 module.exports.DOC_SEVERITY_FRAME = DOC_SEVERITY_FRAME
 module.exports.PROBE_STEERING = PROBE_STEERING
 module.exports.TIMEOUT_PROCEED_CONTRACT = TIMEOUT_PROCEED_CONTRACT
@@ -757,7 +799,7 @@ async function docReviewerAgent(reviewer, context, rubric, runDir, round, opts =
     `Run the ${reviewer} review of the ${context.docType} definition-doc at ${context.docPath} ` +
     `against the ${rubric} rubric (reframed to a ${context.docType} doc). ${REVIEW_DOC_ARTIFACT_READ_INSTRUCTION} ${REVIEWER_RESULT_INSTRUCTION}${reviewerRetryCorrection(opts.retryReason)} ${DOC_SEVERITY_FRAME}\n\n` +
     `Prompt context: ${JSON.stringify(promptContext)}`,
-    Object.assign({ model }, { label: reviewer, schema: FINDINGS_SCHEMA }))
+    Object.assign({ model }, { label: reviewer, schema: reviewerSchemaFor(opts.retryReason) }))
   if (!out || !Array.isArray(out.findings)) return null
   return ensureReviewerShape(out, Object.assign({}, opts, { round }))
 }
@@ -776,8 +818,10 @@ async function docSynthesisLeaf(merged, context, rubric, runDir, round) {
     `For each merged finding below and the doc at ${context.docPath}, per the synthesis-leaf prompt ` +
     `(plugins/superheroes/eval/synthesis-leaf.md) emit one keep/drop/severity verdict (keep-on-uncertain). ` +
     `${DOC_SEVERITY_FRAME}${acceptanceClause} Return ONLY a JSON object ` +
-    `{"verdicts":[{"id","action":"keep|drop|same|different","reason","severity"}]} keyed by ` +
-    `each finding's file::normalized-title identity.\n\nMerged findings:\n${JSON.stringify(merged)}`,
+    `{"verdicts":[{"id","action":"keep|drop|same|different","reason","severity"}]}. Copy each ` +
+    `finding's "id" field into your verdict VERBATIM — do not recompute, normalize, or edit it ` +
+    `(#430: a re-derived id drifts and matches nothing, silently voiding your verdict). The id is ` +
+    `the match key.\n\nMerged findings:\n${JSON.stringify(merged)}`,
     Object.assign({ model }, { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA }))
   return out || null
 }

@@ -26,7 +26,12 @@ Hard rules:
     over-confident judge cannot quietly demote a real blocker. Upgrades and non-blocking↔non-
     blocking re-tiers are not flagged (noise).
 
-Single-reviewer legs never call this (FR-11). stdlib only; never raises on bad leaf output.
+Single-reviewer legs never call this (FR-11). Interactive doc reviews (review-plan/tasks/spec/
+audit-debt) also never call this general fold — the orchestrator dedupes/compiles in-context with
+the owner present, and the one deterministic fold they run (acceptance suppression,
+acceptance_rereview --acceptance-only) already keys on a verbatim-copied identity; that documented
+exception lives in skills/review-code/reference/synthesis-pass.md (#430). stdlib only; never raises
+on bad leaf output.
 """
 import argparse
 import json
@@ -56,20 +61,32 @@ def _kept_severity(f, v):
 
 
 def consume(merged, leaf_verdicts):
-    """merged: the mechanically-merged finding list (each has file/title/severity). leaf_verdicts:
-    list of {id, action, reason, severity} from the Opus leaf, keyed by finding identity
-    (file::normalized_title). Returns {"findings", "drops", "downgrades"}."""
+    """merged: the mechanically-merged finding list (each has file/title/severity, and — under the
+    #430 staged-id methodology — an `id` precomputed to finding_identity(f) that the judge echoes
+    verbatim). leaf_verdicts: list of {id, action, reason, severity} from the Opus leaf. A verdict
+    matches a finding on the staged/recomputed identity (file::normalized_title) or the finding's
+    literal `id` fallback. Returns {"findings", "drops", "downgrades", "unmatched"}.
+
+    UFR (#430): `unmatched` is the ids of leaf verdicts that matched NO finding — a judge that
+    mis-keyed its verdicts (the #397 round-5 defect: drifted, model-recomputed ids) is surfaced
+    LOUDLY in the round record and readout, never silently swallowed by keep-on-uncertain."""
     by_id = {}
     if isinstance(leaf_verdicts, list):
         for v in leaf_verdicts:
             if isinstance(v, dict) and isinstance(v.get("id"), str):
                 by_id[v["id"]] = v
+    matched_ids = set()
     survivors, drops, downgrades = [], [], []
     for f in merged:
         identity = _identity(f)
         v = by_id.get(identity)
+        matched_key = identity if v is not None else None
         if v is None and isinstance(f, dict) and isinstance(f.get("id"), str):
             v = by_id.get(f["id"])
+            if v is not None:
+                matched_key = f["id"]
+        if matched_key is not None:
+            matched_ids.add(matched_key)
         action = v.get("action") if isinstance(v, dict) else None
         reason = v.get("reason") if isinstance(v, dict) else None
         # DROP only on a clear, well-formed drop with a reason; everything else KEEPS.
@@ -90,7 +107,8 @@ def consume(merged, leaf_verdicts):
             if isinstance(reason, str) and reason.strip():
                 entry["reason"] = reason.strip()
             downgrades.append(entry)
-    return {"findings": survivors, "drops": drops, "downgrades": downgrades}
+    unmatched = [vid for vid in by_id if vid not in matched_ids]
+    return {"findings": survivors, "drops": drops, "downgrades": downgrades, "unmatched": unmatched}
 
 
 def _safe_read_json(path, default):

@@ -31,6 +31,17 @@ const enginePrefTwin = require('./engine_pref.js')
 const { libPath, libRoot } = require('./lib_root.js')
 const MAX_ROUNDS = 3                 // per-task + final-review fix bound (plan: same bound as a task)
 
+// #375: the reserved Task-Id the WHOLE-BRANCH final-review fix commits carry. A whole-branch fix
+// serves no single task, so it has no numeric task id; before this, the native (default-Claude) fixer
+// committed with NO trailer and the external fixer minted the work-item SLUG — neither is in the numeric
+// valid_ids, so the spine's OWN fix commits failed the spine's OWN UFR-7 resume gate, every time, by
+// construction. Both fix paths now mint THIS value: the native/default path via the inline nativeAgentCall
+// prompt at the dispatch site, and the external path via the _implDispatch `taskId` (engine_adapter.
+// commit_result stamps it). The build-gather (build_state.py FINAL_REVIEW_TASK_ID) accepts it. The value
+// MUST stay byte-equal to the Python constant — build_phase_finalreview_trailer_smoke.js pins JS===Python
+// so the fixer and the gate cannot drift apart again (the two-SSOT-sides-one-value invariant #375 demands).
+const FINAL_REVIEW_TASK_ID = 'final-review'
+
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 
 // #150: task-scoped leaf labels for the /workflows progress view (spaces, not kebab-case).
@@ -334,7 +345,13 @@ async function buildPhase(workItem, generation) {
     // round-cap handoff proceeds (haltKind 'round-cap' AND NOT uncertified).
     if (fr.uncertified || (fr.terminal !== 'clean' && fr.haltKind !== 'round-cap')) {
       const detail = fr.reason ? ' (' + fr.reason + ')' : ''
-      return park('whole-branch final review did not reach clean: ' + fr.terminal + detail)
+      // #375: this is a whole-branch final-review park — the operator resolves it by fixing the
+      // branch and relaunching. Name the reserved trailer so any HAND fix commits they add carry an
+      // identity the UFR-7 resume gate accepts (whole-branch fixes serve no single task); without this
+      // the relaunch fail-closes on those untrailered commits and needs history-rewriting archaeology.
+      return park('whole-branch final review did not reach clean: ' + fr.terminal + detail
+        + ` — if you fix the branch by hand before relaunching, trailer each whole-branch fix commit`
+        + ` with "Task-Id: ${FINAL_REVIEW_TASK_ID}" so the resume passes the UFR-7 provenance gate`)
     }
     if (fr.haltKind === 'round-cap') {
       // Auditable handoff record (best-effort/fail-open), THEN stamp + advance like the clean path.
@@ -566,9 +583,18 @@ function fixTaskPrompt(task, branch, wt, findingsJson) {
 }
 
 function fixBranchPrompt(branch, wt, blockersJson) {
+  // #375: this is the EXTERNAL (codex|cursor) whole-branch fix-dispatch prompt (the native/default path
+  // runs the inline nativeAgentCall prompt at the dispatch site, NOT this one). A whole-branch final-review
+  // fix serves no single task, so it carries the RESERVED sentinel Task-Id. On the external path the commit
+  // is stamped by engine_adapter.commit_result from the _implDispatch `taskId` (= FINAL_REVIEW_TASK_ID), so
+  // the trailer clause below is DEFENSIVE redundancy — harmless if the engine folds its own message. The
+  // load-bearing native-path instruction lives in the inline prompt beside the taskId; keep the two in sync.
   return (
     `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: `
     + `${blockersJson} `
+    + `Commit with a trailer line "Task-Id: ${FINAL_REVIEW_TASK_ID}" on EVERY commit you make (put `
+    + `Task-Id: ${FINAL_REVIEW_TASK_ID} in the FINAL paragraph of the commit message with no blank line `
+    + `before other trailers such as Co-Authored-By). `
     + workerContractTail()
   )
 }
@@ -1113,13 +1139,23 @@ async function runFinalReview(workItem, generation, branch, wt) {
     // Fence before the only branch-mutating final-review path (UFR-10: the module's fence-before-write
     // invariant). A lost lease -> null -> reviewPanel treats it as a fix failure -> halted -> phase parks.
     if (!(await fenceOrPark(workItem, generation))) return null   // UFR-10 fence — UNCHANGED
-    // The whole-branch final review has NO per-task id in scope (mirror the real 504-511 closure):
-    // use the work-item as the fix dispatch's task id for the trailer/journal.
+    // The whole-branch final review has NO per-task id in scope. #375: use the RESERVED sentinel as
+    // the fix dispatch's task id — engine_adapter.commit_result stamps `Task-Id: final-review`, which
+    // the build-gather accepts. (It used to pass `workItem` (the slug), which is not in the numeric
+    // valid_ids, so the external fixer's own commits failed the spine's own UFR-7 resume gate.)
     await _implDispatch({
-      workItem, roleKind: 'fix', taskId: workItem, wt, branch, model: fixerModel,  // #308
+      workItem, roleKind: 'fix', taskId: FINAL_REVIEW_TASK_ID, wt, branch, model: fixerModel,  // #308/#375
       prompt: fixBranchPrompt(branch, wt, JSON.stringify(blockers)),   // #357: contract stated
       nativeAgentCall: () => agent(
-        `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: ${JSON.stringify(blockers)}`,
+        // #375: the DEFAULT fixer is native Claude (engine fails open to 'claude'), and _implDispatch
+        // runs THIS prompt on the native path — not fixBranchPrompt (that is the external-dispatch
+        // prompt only). So the sentinel trailer instruction MUST be stated here too, or the common
+        // (default-engine) final-review fix commit carries no trailer and the resume fail-closes on
+        // UFR-7 — the exact #375 bug. Mirror the per-task native fix prompt's trailer clause.
+        `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings and `
+        + `commit with a trailer line "Task-Id: ${FINAL_REVIEW_TASK_ID}" on EVERY commit you make (put `
+        + `Task-Id: ${FINAL_REVIEW_TASK_ID} in the FINAL paragraph of the commit message with no blank `
+        + `line before other trailers such as Co-Authored-By): ${JSON.stringify(blockers)}`,
         { label: 'fix-branch', model: fixerModel }),
     })
     // Always return the {fixed, deferred} REPORT shape (never the raw dispatch result / undefined):
@@ -1307,3 +1343,4 @@ module.exports.resetUncommitted = resetUncommitted
 module.exports.writeProvenance = writeProvenance
 module.exports.recordFinalReviewClean = recordFinalReviewClean
 module.exports.gatherState = gatherState
+module.exports.FINAL_REVIEW_TASK_ID = FINAL_REVIEW_TASK_ID   // #375: SSOT-pinned to build_state.py

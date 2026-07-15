@@ -37,6 +37,7 @@ const fs = require('fs')
 const path = require('path')
 const vm = require('vm')
 const { markedStdout } = require('./_marked_stdout.js')
+const { isWriteCommand, parseWrite } = require('./_sr_write.js')
 
 function sha256(text) { return crypto.createHash('sha256').update(String(text), 'utf8').digest('hex') }
 
@@ -192,34 +193,33 @@ function runHelperResponse(cmdline) {
 
 function shellResponse(cmd) {
   cmd = cmd.replace(/^cd '[^']*' && /, '')
-  // fold 1 (#141): the CHAINED stage+verify write — [mkdir &&] opaque base64 stage-write (stdout to
-  // /dev/null) && fenced_json.py, all ONE leaf. The terminal-record write no longer stages here — it
-  // is composed Python-side via compose-terminal, and the content-mangle regression moved to that
-  // self-verified inline path (see the compose-terminal handler in runHelperResponse). Any remaining
-  // fenced write decodes honestly, then answers the helper.
-  // argv shape (finding #13): python3 -c '<writer>' '<path>' '<b64>' >/dev/null && helper
-  const cw = cmd.match(/^python3 -c '[\s\S]*?' '([^']*)' '([A-Za-z0-9+/=]*)' >\/dev\/null && ([\s\S]*?) 2>&1; echo __SR_EXIT:\$\?$/)
-  if (cw) {
-    const helper = cw[3]
-    const staged = cw[1]
-    files[staged] = Buffer.from(cw[2], 'base64').toString('utf8')
-    const out = runHelperResponse(helper)
-    return (out != null ? out : '{}') + '\n__SR_EXIT:0'
-  }
-  // The OPAQUE write transport (base64 python argv) — for the remaining standalone io.writeFile leaves
-  // (test-pilot artifacts, last-extras). #410: io.writeFile passes an expected-hash third argv and
-  // VERIFIES the landed file, so a faithful write's answer carries the `__SR_WROTE:<hash8>` marker.
-  // (2) CHATTY WRITE ACK — the FIRST standalone write answers a conversational ack with NO marker (the
-  // write applied, but the leaf narrated instead of returning the verify marker). #410's writeFile must
-  // read the missing marker as UNVERIFIED and RETRY (escalated to the payload tier); the retry runs the
-  // same command and returns the marker, so the write converges instead of silently landing unverified.
-  const bw = cmd.match(/^python3 -c '[\s\S]*?' '([^']*)' '([A-Za-z0-9+/=]*)' '([0-9a-f]{64})'$/)
-  if (bw) {
-    const target = bw[1]
-    const content = Buffer.from(bw[2], 'base64').toString('utf8')
-    files[target] = content
+  // #435: io writes are now PLAIN-VISIBLE (escape-encoded text, base64 dropped) — parseWrite recovers the
+  // path + content via shq-aware tokenization + decPayload (a `'([A-Za-z0-9+/=]*)'` regex is no longer safe:
+  // plain payloads carry quotes/spaces/unicode). isWriteCommand keys on the __SR_WROTE marker literal unique
+  // to the writer, so this runs BEFORE the mkdir arm (the writer script also carries os.makedirs).
+  if (isWriteCommand(cmd)) {
+    const pw = parseWrite(cmd)
+    if (pw.chained) {
+      // fold 1 (#141): the CHAINED stage+verify write — [mkdir &&] plain stage-write (stdout to /dev/null)
+      // && fenced_json.py, all ONE leaf. The terminal-record write no longer stages here — it is composed
+      // Python-side via compose-terminal, and the content-mangle regression moved to that self-verified
+      // inline path (see the compose-terminal handler). Any remaining staged write decodes honestly, then
+      // answers the helper.
+      files[pw.path] = pw.content
+      const out = runHelperResponse(pw.helper)
+      return (out != null ? out : '{}') + '\n__SR_EXIT:0'
+    }
+    // A standalone io.writeFile leaf (test-pilot artifacts, last-extras). #417: writeFile passes an
+    // expected-hash argv and VERIFIES the landed file, so a faithful write's answer carries the
+    // `__SR_WROTE:<hash8>` marker. (2) CHATTY WRITE ACK — the FIRST standalone write answers a conversational
+    // ack with NO marker (the write applied, but the leaf narrated instead of returning the marker). #435's
+    // write-courier prompt EXPECTS narration; writeFile extracts the receipt by pattern, so a chatty ack with
+    // NO marker is still UNVERIFIED and RETRIES (escalated to the payload tier); the retry returns the marker
+    // and the write converges. (An ack that EMBEDS the marker would pass first try — covered by the
+    // writefile-verify smoke's narration case.)
+    files[pw.path] = pw.content
     if (counters.chattyAcks === 0) { counters.chattyAcks += 1; return CHATTY_ACK }
-    return '__SR_WROTE:' + sha256(content).slice(0, 8)
+    return '__SR_WROTE:' + sha256(pw.content).slice(0, 8)
   }
   if (cmd.startsWith('mkdir -p')) return ''
   if (/^python3 -c '[^']*os\.makedirs[^']*' '[^']*'$/.test(cmd)) return ''   // argv-shape mkdirp
