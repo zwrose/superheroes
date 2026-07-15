@@ -3,7 +3,12 @@ function reconcile(taskList, committedTaskIds, unmappedCommits, reviewRecords, w
   const committed = new Set(committedTaskIds || [])
   const reviews = reviewRecords || {}
   if (unmappedCommits && unmappedCommits > 0) {
-    return { action: 'park', reason: `${unmappedCommits} commit(s) above the branch base carry no/unknown Task-Id — fail closed (UFR-7)` }
+    // #375: this entry-reconcile park is the one an OLD parked run hits on relaunch (its whole-branch
+    // final-review fix commits pre-date the sentinel), so name the remediation for BOTH commit kinds —
+    // without misdirecting: a task commit that lost its id gets its NUMERIC id back; a whole-branch
+    // final-review or manual fix commit gets the reserved `Task-Id: final-review` sentinel the gate now
+    // accepts. Fail-closed direction is UNCHANGED — this only makes the park actionable, never opens it.
+    return { action: 'park', reason: `${unmappedCommits} commit(s) above the branch base carry no/unknown Task-Id — fail closed (UFR-7). Restore each commit's Task-Id trailer (a task commit → its numeric task id; a whole-branch final-review or manual fix commit → Task-Id: final-review), then relaunch` }
   }
   if (provenance === 'garbled') {
     return { action: 'park', reason: 'build provenance is unreadable (garbled) — fail closed (UFR-6)' }

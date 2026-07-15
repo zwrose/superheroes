@@ -182,6 +182,10 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/build_phase_tasklist_shape_smoke.js",
     # #357: the worker output-contract drift guard (build + both external fix prompts share the tail).
     "plugins/superheroes/lib/tests/build_phase_fix_contract_smoke.js",
+    # #375: whole-branch final-review fix commits carry the reserved sentinel Task-Id both fix paths
+    # mint (native prompt + external dispatch taskId) and the build-gather accepts — JS/Python SSOT
+    # pinned so the fixer and the UFR-7 gate cannot drift apart into a self-rejecting resume again.
+    "plugins/superheroes/lib/tests/build_phase_finalreview_trailer_smoke.js",
     # configurable base branch: --base threading to ship freshness, draft-PR, gather + bundle ENTRY.
     "plugins/superheroes/lib/tests/showrunner_base_smoke.js",
     # FIX A: resolveTarget seam targets build worktree + null-resolver parks (never reviews root).

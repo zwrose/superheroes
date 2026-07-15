@@ -3962,7 +3962,7 @@ function reconcile(taskList, committedTaskIds, unmappedCommits, reviewRecords, w
   const committed = new Set(committedTaskIds || [])
   const reviews = reviewRecords || {}
   if (unmappedCommits && unmappedCommits > 0) {
-    return { action: 'park', reason: `${unmappedCommits} commit(s) above the branch base carry no/unknown Task-Id — fail closed (UFR-7)` }
+    return { action: 'park', reason: `${unmappedCommits} commit(s) above the branch base carry no/unknown Task-Id — fail closed (UFR-7). Restore each commit's Task-Id trailer (a task commit → its numeric task id; a whole-branch final-review or manual fix commit → Task-Id: final-review), then relaunch` }
   }
   if (provenance === 'garbled') {
     return { action: 'park', reason: 'build provenance is unreadable (garbled) — fail closed (UFR-6)' }
@@ -4650,6 +4650,7 @@ const engineDispatch = require('./engine_dispatch.js')
 const enginePrefTwin = require('./engine_pref.js')
 const { libPath, libRoot } = require('./lib_root.js')
 const MAX_ROUNDS = 3                 // per-task + final-review fix bound (plan: same bound as a task)
+const FINAL_REVIEW_TASK_ID = 'final-review'
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 function implementTaskLabel(task, taskCount) {
   return `implement task ${task.id} of ${taskCount}`
@@ -4816,7 +4817,9 @@ async function buildPhase(workItem, generation) {
     const fr = await runFinalReview(workItem, generation, branch, wt)
     if (fr.uncertified || (fr.terminal !== 'clean' && fr.haltKind !== 'round-cap')) {
       const detail = fr.reason ? ' (' + fr.reason + ')' : ''
-      return park('whole-branch final review did not reach clean: ' + fr.terminal + detail)
+      return park('whole-branch final review did not reach clean: ' + fr.terminal + detail
+        + ` — if you fix the branch by hand before relaunching, trailer each whole-branch fix commit`
+        + ` with "Task-Id: ${FINAL_REVIEW_TASK_ID}" so the resume passes the UFR-7 provenance gate`)
     }
     if (fr.haltKind === 'round-cap') {
       const journalResult = await journalFinalReviewHandoff(workItem, branch, fr)
@@ -4969,6 +4972,9 @@ function fixBranchPrompt(branch, wt, blockersJson) {
   return (
     `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: `
     + `${blockersJson} `
+    + `Commit with a trailer line "Task-Id: ${FINAL_REVIEW_TASK_ID}" on EVERY commit you make (put `
+    + `Task-Id: ${FINAL_REVIEW_TASK_ID} in the FINAL paragraph of the commit message with no blank line `
+    + `before other trailers such as Co-Authored-By). `
     + workerContractTail()
   )
 }
@@ -5303,10 +5309,13 @@ async function runFinalReview(workItem, generation, branch, wt) {
     }
     if (!(await fenceOrPark(workItem, generation))) return null   // UFR-10 fence — UNCHANGED
     await _implDispatch({
-      workItem, roleKind: 'fix', taskId: workItem, wt, branch, model: fixerModel,  // #308
+      workItem, roleKind: 'fix', taskId: FINAL_REVIEW_TASK_ID, wt, branch, model: fixerModel,  // #308/#375
       prompt: fixBranchPrompt(branch, wt, JSON.stringify(blockers)),   // #357: contract stated
       nativeAgentCall: () => agent(
-        `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: ${JSON.stringify(blockers)}`,
+        `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings and `
+        + `commit with a trailer line "Task-Id: ${FINAL_REVIEW_TASK_ID}" on EVERY commit you make (put `
+        + `Task-Id: ${FINAL_REVIEW_TASK_ID} in the FINAL paragraph of the commit message with no blank `
+        + `line before other trailers such as Co-Authored-By): ${JSON.stringify(blockers)}`,
         { label: 'fix-branch', model: fixerModel }),
     })
     return { fixed: blockers.map((b) => b.id || b.title), deferred: [] }
@@ -5432,6 +5441,7 @@ module.exports.resetUncommitted = resetUncommitted
 module.exports.writeProvenance = writeProvenance
 module.exports.recordFinalReviewClean = recordFinalReviewClean
 module.exports.gatherState = gatherState
+module.exports.FINAL_REVIEW_TASK_ID = FINAL_REVIEW_TASK_ID   // #375: SSOT-pinned to build_state.py
 };
 __modules["model_tier"] = function (module, exports, require) {
 const DEFAULT_TIERS = {
