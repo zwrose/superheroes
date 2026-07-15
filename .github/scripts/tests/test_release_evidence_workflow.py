@@ -104,11 +104,53 @@ def test_data_steps_tolerate_failure_so_status_always_reports():
     import yaml
     with open(_WF) as fh:
         steps = yaml.safe_load(fh)["jobs"]["evidence"]["steps"]
-    # materialize + verify + upsert must be continue-on-error so an upstream hiccup can't skip
-    # the always() status step and strand the required check.
-    for label in ("Materialize", "Verify release evidence", "Upsert"):
+    # Materialize + Verify precede the non-always() gate on the Verify/summary steps, so a failure
+    # there would skip Verify and strand nothing downstream that isn't always(); they stay
+    # continue-on-error so an upstream hiccup can't skip the always() status step. The Upsert step
+    # is deliberately NOT in this list — see test_upsert_failure_is_loud_not_swallowed (#385).
+    for label in ("Materialize", "Verify release evidence"):
         s = [x for x in steps if label.lower() in x.get("name", "").lower()][0]
         assert s.get("continue-on-error") is True, f"{label} must be continue-on-error"
+
+
+def test_upsert_failure_is_loud_not_swallowed():
+    # #385 detector (CONVENTIONS §12.1): the sticky owed-summary upsert 403'd on every release PR
+    # since #241 shipped it (issues:write present but pull-requests:read → the PR-backed
+    # /issues/{n}/comments write is denied), yet the failure hid inside a green job because the
+    # step was continue-on-error. The step must NOT swallow its failure: a failed comment post
+    # reddens the job. The always() status step still posts the required release-evidence status,
+    # so a loud red job never strands the required check.
+    import yaml
+    with open(_WF) as fh:
+        steps = yaml.safe_load(fh)["jobs"]["evidence"]["steps"]
+    upsert = [x for x in steps if "upsert" in x.get("name", "").lower()][0]
+    # `in (None, False)` kills both the boolean revert (`continue-on-error: true`) and a
+    # string-truthy form (`"true"`), not just the literal boolean.
+    assert upsert.get("continue-on-error") in (None, False), (
+        "upsert must be loud (not continue-on-error) so a failed owed-summary post "
+        "reddens the job instead of hiding inside a green run"
+    )
+    # the status step that MUST still report despite an upsert failure is always()-guarded.
+    status = [x for x in steps if "commit status" in x.get("name", "").lower()][0]
+    assert status.get("if") == "always()"
+
+
+def test_grants_pull_requests_write_for_pr_comment_upsert():
+    # #385 root cause: a comment on a PR-backed issue (POST /repos/{repo}/issues/{n}/comments where
+    # {n} is a PR) is governed by the pull-requests permission, NOT issues. The block carried
+    # issues:write + pull-requests:read and the upsert 403'd on release PRs #338/#380/#432 — proof
+    # that issues:write alone does not authorize the write. pull-requests:write is required.
+    import yaml
+    with open(_WF) as fh:
+        perms = yaml.safe_load(fh)["permissions"]
+    assert perms.get("pull-requests") == "write", (
+        "commenting on a release PR needs pull-requests: write; issues: write alone 403s (#385)"
+    )
+    # the status POST still needs statuses:write; the checkout still only reads contents;
+    # issues:write is retained (belt-and-braces for the PR-backed comment write).
+    assert perms.get("statuses") == "write"
+    assert perms.get("contents") == "read"
+    assert perms.get("issues") == "write"
 
 
 def test_publishes_a_commit_status_named_release_evidence():
