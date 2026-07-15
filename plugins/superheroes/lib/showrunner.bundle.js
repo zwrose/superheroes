@@ -77,7 +77,7 @@ async function __sh(cmd, opts) {
   var prompt = __write
     ? __require('courier_exec').writeCourierPrompt(cmd)
     : __require('courier_exec').markedPromptFor(cmd)
-  var __expectMarker = String(cmd).indexOf('__SR_EXIT') >= 0
+  var __expectMarker = /;\s*echo __SR_EXIT:\$\?\s*$/.test(String(cmd))
   var ans = await globalThis.agent(prompt, o)
   if (__expectMarker && __badCourierAnswer(ans) && !__require('courier_exec').denialReason(ans)) {
     ans = await globalThis.agent(prompt, Object.assign({}, o))               // retry once, same courier agent
@@ -4487,6 +4487,7 @@ module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarness
   STAGING_DENIED_OUTCOME, STAGING_FAILED_OUTCOME, PRESHA_FAILED_OUTCOME,
   _composeDispatchCommand,
   _stageCmd, _stageInput, _SR_STAGE_SIG,
+  _stageEnc,
   _deriveRunKey,
   EMIT_TAIL_BYTES }
 };

@@ -127,6 +127,57 @@ async function main() {
     console.log('OK: #435 a narrated reply embedding a valid __SR_WROTE receipt passes in one dispatch (pattern-extracted, narration tolerant)')
   }
 
+  // ---- (a2) ESCAPE-REQUIRING content round-trips byte-identical through the REAL python3 writer. ----
+  {
+    // The whole point of the #435 escape-encoding (encPayload -> SR_WRITER_SCRIPT decode). The other real-
+    // python cases use JSON.stringify output (no raw newlines/backslashes/apostrophes), so a decode-ordering
+    // bug (two-backslash-n before \n) or a dropped encPayload replace() would be INVISIBLE — the on-disk
+    // re-hash would silently mismatch and every multiline/backslash write would fail closed in production
+    // while the smokes stayed green. This drives the committed writer against a real shell + python3 with
+    // content that exercises every escape branch, and pins byte-identical readback in EXACTLY ONE dispatch
+    // (a decode divergence drops the marker -> 2 dispatches -> throw).
+    const dispatches = []
+    const io = loadBundle(async (prompt, opts) => { dispatches.push(opts || {}); return runReal(commandOf(prompt)) })
+    const p = path.join(tmpDir, 'escape-heavy.txt')
+    const value = [
+      'line1',
+      'line2 with a real LF above and a CRLF next\r',
+      'literal backslash-n: a\\nb (must stay backslash-n, NOT a newline)',
+      'trailing backslash: c\\',
+      'double backslash: d\\\\e',
+      "apostrophe: don't  quote: \"x\"",
+      'tab\there  unicode ünî 日本語 🎉',
+      '__SR_EXIT:0 and __SR_WROTE:cafebabe embedded as content',   // marker-looking substrings in the payload
+    ].join('\n')
+    await io.writeFile(p, value)
+    assert.strictEqual(fs.readFileSync(p, 'utf8'), value,
+      '#435 escape-heavy content round-trips byte-identical through the REAL python3 writer (newline/CR/backslash/apostrophe/literal-\\n)')
+    assert.strictEqual(dispatches.length, 1,
+      '#435 escape-heavy: faithful decode -> marker present -> EXACTLY ONE dispatch (a decode divergence would drop the marker and force a retry)')
+    console.log('OK: #435 escape-requiring content (LF/CRLF/backslash/literal-\\n/apostrophe/unicode + marker-looking substrings) round-trips byte-identical in one dispatch')
+  }
+
+  // ---- (a3) isWriteCommand's load-bearing anchor: the record_composed embedding leaf is NOT a write. ----
+  {
+    const { isWriteCommand, parseWrite } = require('./_sr_write.js')
+    // A real io.writeFile command (bare `python3 -c '<writer>' …`, carrying __SR_WROTE) IS a write.
+    let composed = null
+    await loadBundle(async (prompt) => { composed = commandOf(prompt); return runReal(commandOf(prompt)) })
+      .writeFile(path.join(tmpDir, 'anchor-src.json'), JSON.stringify({ ok: true }))
+    assert.ok(isWriteCommand(composed), '#435 isWriteCommand: a bare io.writeFile command is a write')
+    assert.deepStrictEqual(JSON.parse(parseWrite(composed).content), { ok: true }, '#435 parseWrite recovers the content of a real write')
+    // The composed-exact record_composed leaf EMBEDS that write command as an argv payload — so its OWN bytes
+    // contain both __SR_WROTE and the substring `python3 -c '` — but it is composed via __argv as a QUOTED
+    // `'python3' '-c' …` leaf, which the anchor must EXCLUDE (else parseWrite misreads the runId as the path,
+    // corrupting the canned in-memory FS and looping the misbehaving/stretch smokes).
+    const recordComposedLeaf = "'python3' '-c' 'import permission_rules; permission_rules.record_composed(...)' '5' " + "'" + composed.replace(/'/g, "'\\''") + "' '.' 'wi'"
+    assert.ok(!isWriteCommand(recordComposedLeaf),
+      '#435 isWriteCommand: a record_composed leaf embedding a write command is NOT mis-classified as a write (bare-prefix anchor)')
+    // The anchor tolerates a cd-root wrap on a real write (rootedCommand prefixes `cd '<root>' && `).
+    assert.ok(isWriteCommand("cd '/repo root' && " + composed), '#435 isWriteCommand: a cd-root-wrapped write is still a write')
+    console.log('OK: #435 isWriteCommand anchors on the bare python3 -c write shape (excludes the record_composed embedding leaf, tolerates cd-root wrap)')
+  }
+
   // ---- (b) refused write (EXEC-FAILED, command never ran) -> no marker -> retry -> loud throw. ----
   {
     const dispatches = []

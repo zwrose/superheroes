@@ -188,7 +188,14 @@ async function __sh(cmd, opts) {
   // courier:true so the cheap-model pin holds) so a courier-agent dispatch bug degrades to today's
   // cost instead of parking the run. Non-marker leaves (mkdir/cat/writeFile) already degrade
   // fail-soft or via their caller's own hash check, so they need no marker guard.
-  var __expectMarker = String(cmd).indexOf('__SR_EXIT') >= 0
+  // #435: anchor the guard to the appended-marker SUFFIX the wrapping composers add (a trailing
+  // "; echo __SR_EXIT:$?"), NOT a raw substring of the whole command. The old indexOf('__SR_EXIT') was safe
+  // only because the io payload used to be base64 (whose alphabet can't spell the underscore-bearing literal); now the
+  // payload is plain-visible, so a writeFile/stage whose FILE CONTENT contains the __SR_EXIT literal (e.g.
+  // journaling a courier answer that carried the marker, or writing docs/tests about the marker protocol) would
+  // spuriously trip the marker-retry chain and burn extra leaves (perturbing the #118 two-leaf stretch).
+  // The suffix match keys off the wrapper, so payload content can never trip it.
+  var __expectMarker = /;\\s*echo __SR_EXIT:\\$\\?\\s*$/.test(String(cmd))
   var ans = await globalThis.agent(prompt, o)
   // #402 Part B: a classifier denial is deterministic — do NOT re-dispatch the identical io bytes (that
   // retry reads as tunneling). The marker check downstream then fails closed on the (unretried) answer.
@@ -289,6 +296,12 @@ async function __runHelperCommand(args, payload) {
   var parts = __argv('python3', args)
   return __helperResult(String(await __sh(parts + ' 2>&1; echo __SR_EXIT:$?', payload ? { payload: true } : {}) || ''))
 }
+// __stageChunkFile / __chunkedStageAndRun: the LARGE-payload (>__PAYLOAD_BOUND) staging path, reached only
+// from stageAndRunHelper. #435 SCOPE BOUNDARY (premortem-3): this path deliberately stays base64 (--chunk-b64)
+// — the #435 evidence corpus is the SMALL io.writeFile class (83 blocks), and re-plumbing the chunked
+// review_memory.py staging to plain-visible is out of scope for this hotfix. Large staged payloads are rare
+// (big review-memory / fenced records) and fail closed, not silently. Follow-up if the classifier is later
+// observed blocking the chunked path.
 async function __stageChunkFile(stagedPath, index, total, chunkText) {
   var b64 = __b64(chunkText)
   var args = [__libPath('review_memory.py'), 'stage-chunk', '--path', stagedPath,
@@ -361,12 +374,14 @@ globalThis.io = {
   async mkdirp(d) { await __sh('python3 -c ' + __q('import os,sys' + __NL + 'os.makedirs(sys.argv[1],exist_ok=True)') + ' ' + __q(d), { write: true }) },
   // writeFile rides a PLAIN-VISIBLE transport (#435): the payload travels escape-encoded but human/
   // classifier-readable inside a python argv, decoded + written byte-exact Python-side. A #417 sha256
-  // re-hash of the landed file — pinned to a hash the spine computed from the ORIGINAL content — proves
-  // the courier copied it faithfully; a paraphrase changes the file hash so the marker never appears
-  // (live 2026-07-02: a staged dim-write leaf re-wrote the PREVIOUS dimension's content). The reply is
-  // narration-TOLERANT: the caller extracts the __SR_WROTE receipt by pattern (indexOf), so the courier
-  // may narrate freely — the write-courier prompt therefore carries no verbatim-relay demand (the exact
-  // clause the classifier flagged), and narration can never forge a passing receipt for the wrong bytes.
+  // re-hash of the landed file — pinned to a hash the spine computed from the ORIGINAL content — means a
+  // courier that GENUINELY runs the command only gets the marker when the on-disk bytes match, so a
+  // paraphrased write never produces the marker (live 2026-07-02: a staged dim-write leaf re-wrote the
+  // PREVIOUS dimension's content). The reply is narration-TOLERANT: the caller extracts the __SR_WROTE
+  // receipt by pattern (indexOf), so the courier may narrate freely — the write-courier prompt carries no
+  // verbatim-relay demand (the exact clause the classifier flagged). (Fabrication residual: the expected
+  // hash is in-band in the command, so a courier that never runs it could echo the marker — the marker
+  // protocol's pre-existing bound, mitigated by the cheap-model trust model + payload-is-data, see bytes.js.)
   async writeFile(p, s) {
     const b = (typeof s === 'string') ? s : JSON.stringify(s)
     const encoded = __enc(b)

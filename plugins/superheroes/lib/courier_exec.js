@@ -391,9 +391,12 @@ function markedPromptFor(command) {
 // … corrupts the parse") is the EXACT sentence the auto-mode classifier quoted as "concealment
 // instructions" when it blocked 85/150 dispatches on the live 0.13.2 run (#435). This builder drops that
 // sentence for writes and instead invites the courier to narrate freely, asking only that it copy the
-// receipt line through verbatim. The receipt binds to content via the sha256 the writer re-hashes on disk,
-// so narration can never forge a passing receipt for the wrong bytes — a paraphrased payload changes the
-// file's hash and the marker never appears (#417's verify, unchanged).
+// receipt line through verbatim. For a courier that GENUINELY runs the command, the receipt binds to
+// content via the sha256 the writer re-hashes on disk, so a paraphrased payload changes the file's hash and
+// the marker never appears (#417's verify, unchanged) — narration around a real execution cannot forge a
+// pass. (The pre-existing marker-protocol residual still holds: the expected hash is in-band, so a courier
+// that never runs the command could echo it — bounded by the cheap-model trust model + the payload-is-data
+// clause, not cryptographically; the sandbox has no crypto/RNG to strengthen it. See bytes.js.)
 //
 // The LEAD stays 'Execute this exact shell command via your command tool.' (a _DISPATCH_LEADS prefix) and
 // the command still follows the FIRST blank line unchanged, so recordComposedFromPrompt still registers the

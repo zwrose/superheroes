@@ -106,19 +106,38 @@ function sha256hex(text) {
 // only. To the harness auto-mode safety classifier that shape reads as an obfuscated concealment relay —
 // it blocked 85/150 dispatches (essentially all io writes), quoting the transport's OWN base64 +
 // verbatim-relay clauses as the "explicit concealment instructions." Framing rewords (#425) cannot fix a
-// shape; the payload must ride VISIBLE. This is the exact move engine_dispatch made for its stage-writes
-// in #257 — kept here as ONE shared writer so both io.writeFile and (via encPayload) engine staging
-// escape-encode identically (SSOT §11).
+// shape; the payload must ride VISIBLE. This is the exact move engine_dispatch made for its stage-writes in
+// #257, under the SAME licensing condition (an arbitrary courier-relayed payload). engine_dispatch carries
+// its OWN byte-identical escape-encoder (`_stageEnc`) + decode loop (`_SR_STAGE_SCRIPT`); this file is NOT
+// imported by it. The two encoders are MIRRORED, not literally shared — kept byte-identical by construction
+// and PINNED by a parity assertion in showrunner_bytes_smoke.js (encPayload === engine._stageEnc over a
+// battery), so a future edit to one that diverges from the other fails a test rather than silently breaking
+// cross-transport fidelity.
 //
 // encPayload escape-encodes the content so it rides as ONE readable argv token (no raw newlines that would
 // break the single-quoted arg or collide with a heredoc sentinel, no base64 opacity): backslash → `\\`,
 // newline → `\n`, CR → `\r`. Everything else — including non-ASCII UTF-8 and the payload's own quotes —
-// rides literally inside the shell-single-quoted argv. SR_WRITER_SCRIPT reverses it Python-side, writes
-// utf-8, and — when an expected-hash argv (argv[3]) is present — re-reads the landed file, re-hashes with
-// hashlib.sha256, and prints `__SR_WROTE:<hash8>` on a match (exit 3, no marker, on a mismatch). The hash
-// the spine embeds is sha256hex(content) computed BEFORE the payload rides the courier, so a paraphrase
-// changes the file's hash but never the embedded 64-hex literal (an LLM copies a hex string verbatim or
-// fails visibly) — #417's write-verify semantics, unchanged, now over a plain-readable payload.
+// rides literally inside the shell-single-quoted argv.
+//
+// BYTE-DOMAIN PRECONDITION (same as the ratified #257 engine transport): the plain form escapes only
+// backslash/newline/CR. Raw C0 control characters (TAB, NUL, ESC, …) and lone surrogates therefore ride
+// UNescaped — the common spine payloads are safe (JSON.stringify \u-escapes every control char; the spine's
+// writes are JSON artifacts), and arbitrary-text callers match the byte domain engine_dispatch has relied on
+// in production since #257. A payload that DOES carry such a byte fails CLOSED (the on-disk re-hash won't
+// match → no marker → retry-then-park), never a silent corruption — so this is a bounded availability edge,
+// not a data-integrity risk. (Widening the escape set is a possible follow-up but must move BOTH mirrored
+// encoders + both decode loops together, or the parity pin breaks.)
+//
+// SR_WRITER_SCRIPT reverses the encoding Python-side, writes utf-8, and — when an expected-hash argv
+// (argv[3]) is present — re-reads the landed file, re-hashes with hashlib.sha256, and prints
+// `__SR_WROTE:<hash8>` on a match (exit 3, no marker, on a mismatch). The hash the spine embeds is
+// sha256hex(content) computed BEFORE the payload rides the courier. A courier that GENUINELY runs the
+// command cannot make the real writer emit the marker for paraphrased bytes (the on-disk hash won't match).
+// The residual is the marker protocol's PRE-EXISTING one (see badCourierAnswer/executedMarker below): the
+// expected hash is in-band in argv[3], so a courier that never runs the command could echo
+// `__SR_WROTE:<first-8-of-argv[3]>` — a fabrication bounded by the cheap-model trust model + the
+// payload-is-data clause, NOT a cryptographic guarantee (the sandbox has no crypto/RNG to strengthen it).
+// #417's write-verify semantics are unchanged; #435 only makes the payload legible.
 function encPayload(s) {
   return String(s).replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/\r/g, '\\r')
 }
