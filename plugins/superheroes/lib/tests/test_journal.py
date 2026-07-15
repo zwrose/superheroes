@@ -343,6 +343,18 @@ def test_final_review_handoff_is_a_known_event_type():
     assert "final_review_handoff" in journal.EVENT_TYPES
 
 
+def test_new_doc_review_event_types_are_accepted(tmp_path):
+    import importlib.util, os
+    lib = os.path.join(os.path.dirname(__file__), "..")
+    spec = importlib.util.spec_from_file_location("journal", os.path.join(lib, "journal.py"))
+    journal = importlib.util.module_from_spec(spec); spec.loader.exec_module(journal)
+    events = str(tmp_path / "events.jsonl")
+    for et in ("routed_forward", "review_convergence", "handoff_provided"):
+        journal.append(events, et, payload={"doc": "plan"}, root=str(tmp_path))
+    kinds = [e.get("type") for e in journal.read_events(events)]
+    assert kinds == ["routed_forward", "review_convergence", "handoff_provided"]
+
+
 def test_journal_entry_cli_writes_final_review_handoff(tmp_path, monkeypatch):
     # #381: build_phase.js shells journal_entry.py --event-type final_review_handoff; prove the
     # CLI append succeeds and the event line is durable (not a mock — real journal_entry.py path).

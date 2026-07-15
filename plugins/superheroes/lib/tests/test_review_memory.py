@@ -106,6 +106,19 @@ def test_title_clamp_bounds_identity_and_skeleton_titles():
     assert skeleton["dimensions"]["Security"]["findings"][0]["title"] == clamped
 
 
+def test_summarize_record_preserves_doc_section():
+    """#397: docSection is part of the durable finding skeleton — Tasks 14/18/20/21 read it."""
+    rm = load_memory()
+    finding = {"file": "plan.md", "line": 10, "title": "Gap", "severity": "Important",
+               "docSection": "## Architecture"}
+    skeleton = rm.summarize_record({
+        "schemaVersion": 2, "round": 1, "kind": "baseline",
+        "findings": [finding],
+        "dimensions": {},
+    })
+    assert skeleton["findings"][0]["docSection"] == "## Architecture"
+
+
 def test_summarized_records_keep_matching_legacy_coverage_decisions():
     """#177 handoff repro: a legacy coverage decision (classKey computed from the UNCLAMPED
     title) must suppress recurrence for RAW and SUMMARIZED records alike — skeletonization
