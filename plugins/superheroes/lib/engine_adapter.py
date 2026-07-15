@@ -22,6 +22,20 @@ import engine_pref  # noqa: E402  (provider-specific model policy; same-tree sib
 # build_state_cli git-log parser both reference this so the convention cannot fork.
 TASK_ID_TRAILER = "Task-Id"
 
+# #392: the distinct, honest outcome for a fix whose SUBSTANCE is the history shape (squash to N
+# commits, reword, drop a commit) rather than content. Such a fix produces a tree content-identical
+# to pre_sha, so the fold-only invariant (commit_result never discards commits below pre_sha) folds
+# it to a no-op — the engine did exactly what was asked, but the adapter structurally cannot LAND a
+# pure history rewrite. Reporting THIS token (not a bare/blank commit-failed) lets the caller fall
+# open to the native fixer — which CAN rewrite history — deliberately, and the journal names WHY.
+# engine_dispatch.js reads this `reason` off the adapter's JSON result DYNAMICALLY (it does not
+# hardcode the literal), passing it through verbatim as both the fall-open reason and the journal
+# outcome. Downstream acceptance_verdict.tally_external_dispatches counts it as a genuine (non-"ok")
+# dispatch FAILURE — the deliberate, conservative choice (#392): the engine authentically ran, but the
+# dispatch did NOT land a commit, so it fails SAFE (never inflates a run's success tally) exactly like
+# commit-failed. It is NOT modeled as a new acceptance outcome class.
+HISTORY_SHAPE_UNREPRESENTABLE = "history-shape-fix-unrepresentable"
+
 # Explicit model per engine (Config-determinism NFR — never the developer's ambient default).
 # Codex maps the shared tier through engine_pref and accepts a separate concrete engine-model pin;
 # this compatibility alias remains the capable no-tier default used by display/readout callers.
@@ -319,7 +333,8 @@ def commit_result(worktree, task_id, pre_sha):
         if head.returncode != 0:
             return {"ok": False, "error": "cannot resolve HEAD: %s" % head.stderr.strip()}
         subject = _CANNED_COMMIT_SUBJECT
-        if head.stdout.strip() != pre_sha:
+        engine_self_committed = head.stdout.strip() != pre_sha
+        if engine_self_committed:
             # Capture the engine's own commit message BEFORE folding — after the soft-reset the
             # engine's commits (and their messages) are gone from HEAD. A usable message is reused
             # so spec-prescribed commit messages survive; empty/unusable → canned fallback.
@@ -336,7 +351,19 @@ def commit_result(worktree, task_id, pre_sha):
             return {"ok": False, "error": "git add failed: %s" % add.stderr.strip()}
         commit = _git(worktree, "commit", "-m", msg)
         if commit.returncode != 0:
-            return {"ok": False, "error": "git commit failed: %s" % commit.stderr.strip()}
+            # #392: when the engine self-committed and the fold leaves the index identical to HEAD
+            # (`git diff --cached --quiet` → 0, i.e. nothing to commit), the engine's work was a PURE
+            # history-shape change (squash/reword/drop-commit) whose tree already equals pre_sha's.
+            # The fold-only invariant cannot land it; report it as a DISTINCT, honest outcome so the
+            # caller falls open to the native fixer deliberately and the journal names WHY — never a
+            # blank commit-failed and never a silently-swallowed empty diff.
+            if engine_self_committed and \
+                    _git(worktree, "diff", "--cached", "--quiet").returncode == 0:
+                return {"ok": False, "reason": HISTORY_SHAPE_UNREPRESENTABLE}
+            # #392 sub-defect 1: "nothing to commit" (and other benign git refusals) print to STDOUT,
+            # not stderr — a stderr-only read left the reason blank. Prefer stderr, fall back to stdout.
+            detail = commit.stderr.strip() or commit.stdout.strip()
+            return {"ok": False, "error": "git commit failed: %s" % detail}
         new_head = _git(worktree, "rev-parse", "HEAD")
         return {"ok": True, "sha": new_head.stdout.strip()}
     except Exception as exc:

@@ -390,7 +390,84 @@ function makeAgent(routes) {
   assert.ok(execLog3.some((c) => c.includes('journal_entry.py') && c.includes('--event-type external_dispatch') && c.includes('commit-failed')),
     'sec-101: commit-failure must still leave exactly one external_dispatch audit line')
 
-  console.log('OK: engine_dispatch timeout + unauditable + commit-failure audit')
+  // (d) #392: the adapter classifies a PURE history-shape fix (squash/reword/drop-commit, tree ==
+  // pre_sha) as the STRUCTURED outcome {ok:false, reason:'history-shape-fix-unrepresentable'} — NOT
+  // an error. The caller must carry that token VERBATIM as (a) the returned fall-open reason, (b) the
+  // journal `outcome` (never relabeled 'commit-failed'), and (c) it must NEVER route through the
+  // pr_comment.py scrub seam (that is for external free-text git errors; this is a fixed internal
+  // token). A mutant that dropped the structured branch would relabel it commit-failed and/or scrub it.
+  const execLog4 = []
+  global.agent = makeAgent([
+    ['exec', (prompt) => {
+      execLog4.push(prompt)
+      if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) {
+        return [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }]
+      }
+      if (prompt.includes('engine_adapter.py build-argv')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'workspace-write', '-C', '/tmp/wt', '-']) }]
+      }
+      if (prompt.includes('engine_adapter.py parse-result')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, signal: 'ok', evidence: {} }) }]
+      }
+      if (prompt.includes('engine_adapter.py commit')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: false, reason: 'history-shape-fix-unrepresentable' }) }]
+      }
+      if (prompt.includes('journal_entry.py')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      }
+      if (prompt.includes('--sandbox')) {
+        return markedStdout('{"raw":"external build output"}')
+      }
+      return [{ index: 0, ok: true, stdout: '{}' }]
+    }],
+  ])
+  const rHistShape = await d.dispatchExternal({ engine: 'codex', roleKind: 'build', effort: 'high', prompt: 'build', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, taskId: 'T1', workItem: 'wi-abc' })
+  assert.strictEqual(rHistShape.ok, false)
+  // (a) the structured token survives to the caller verbatim
+  assert.strictEqual(rHistShape.reason, 'history-shape-fix-unrepresentable',
+    '#392: the structured history-shape reason must reach the caller verbatim (drives a deliberate native fall-open)')
+  // (b) the journal outcome is the honest token, NOT commit-failed
+  assert.ok(execLog4.some((c) => c.includes('journal_entry.py') && c.includes('--event-type external_dispatch') && c.includes('history-shape-fix-unrepresentable')),
+    '#392: the external_dispatch journal must name outcome history-shape-fix-unrepresentable')
+  assert.ok(!execLog4.some((c) => c.includes('journal_entry.py') && c.includes('"outcome":"commit-failed"')),
+    '#392: a history-shape fix must NOT be journaled as commit-failed')
+  // (c) the fixed internal token never routes through the external-free-text scrub seam
+  assert.ok(!execLog4.some((c) => c.includes('pr_comment.py scrub')),
+    '#392: a structured (non-error) reason must not be scrubbed — scrub is only for raw git error text')
+
+  // (e) #392: the commit-failure block fails CLOSED to 'unauditable' if the audit append is lost —
+  // the honest history-shape outcome and the line that carries it share a fate. With the journal leaf
+  // returning {ok:false}, the structured reason must be OVERRIDDEN by 'unauditable' (never returned
+  // with no audit trail). Kills a revert of the jCommit guard to a fire-and-forget append.
+  global.agent = makeAgent([
+    ['exec', (prompt) => {
+      if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) {
+        return [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }]
+      }
+      if (prompt.includes('engine_adapter.py build-argv')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'workspace-write', '-C', '/tmp/wt', '-']) }]
+      }
+      if (prompt.includes('engine_adapter.py parse-result')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, signal: 'ok', evidence: {} }) }]
+      }
+      if (prompt.includes('engine_adapter.py commit')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: false, reason: 'history-shape-fix-unrepresentable' }) }]
+      }
+      if (prompt.includes('journal_entry.py')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: false }) }]
+      }
+      if (prompt.includes('--sandbox')) {
+        return markedStdout('{"raw":"external build output"}')
+      }
+      return [{ index: 0, ok: true, stdout: '{}' }]
+    }],
+  ])
+  const rHistShapeUnaud = await d.dispatchExternal({ engine: 'codex', roleKind: 'build', effort: 'high', prompt: 'build', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, taskId: 'T1', workItem: 'wi-abc' })
+  assert.strictEqual(rHistShapeUnaud.ok, false)
+  assert.strictEqual(rHistShapeUnaud.reason, 'unauditable',
+    '#392: a lost commit-failure audit append must fail closed to unauditable, overriding the structured reason')
+
+  console.log('OK: engine_dispatch timeout + unauditable + commit-failure audit + history-shape passthrough + history-shape unauditable')
 
   // ---------------------------------------------------------------------
   // FIX 3: a synchronous throw from an internal step must fall open, never throw out of

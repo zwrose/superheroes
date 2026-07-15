@@ -24,6 +24,8 @@ def _fail(reason):
 # the engine's Bash verb). A run that journals one of these has HONESTLY disclosed why it fell
 # open to Claude (the "fall-open must be visible" principle, #288/#292/#299), so it does not
 # fail the authenticity gate. EVERY other non-"ok" outcome (timeout, unreadable, commit-failed,
+# history-shape-fix-unrepresentable (#392 — the engine authentically ran but the fold-only adapter
+# could not LAND a pure history rewrite; counted as a failure, never an excuse, so it fails SAFE),
 # could-not-stage-*, dispatch-error, an engine parse reason, a bare "failed") is a genuine
 # dispatch FAILURE and counts against the tally. These clean markers are emitted by the spine's
 # dispatch path (the #299 fall-open-visibility work); until then the only authentic path is an
