@@ -104,6 +104,8 @@ BUNDLED_NON_TWINS = {
     # #130: a JS-only in-memory cost accumulator (globalThis.__SR_COST); the durable Python side is
     # the journal/cost_report/token_trend projection, not a line-by-line twin of this module.
     "cost_meter.js",
+    # #397 FR-14: acceptance re-review module for doc-review panel (utility, not a pure decider).
+    "acceptance_rereview.js",
 }
 
 # ---------------------------------------------------------------------------

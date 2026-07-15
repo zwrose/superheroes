@@ -11,7 +11,10 @@ import os
 import re
 import sys
 
-from review_memory import clamp_title, canonical_class_key, class_key_aliases
+from review_memory import canonical_class_key, class_key_aliases
+from finding_identity import (
+    clamp_title, normalize_title, finding_label, finding_identity,
+)
 
 BLOCKING = {"Critical", "Important"}
 # The ONLY severities that demote a finding to non-blocking: the rubric's non-blocking tiers
@@ -24,10 +27,6 @@ BLOCKING = {"Critical", "Important"}
 # build legs can never disagree on what blocks.
 _NON_BLOCKING = frozenset({"minor", "nit"})
 
-_NON_WORD = re.compile(r"[^\w\s]", re.ASCII)   # JS \w is ASCII-only — match it
-_WS = re.compile(r"\s+", re.ASCII)
-
-
 def is_blocking(severity):
     return str("" if severity is None else severity).strip().lower() not in _NON_BLOCKING
 
@@ -37,21 +36,6 @@ def is_critical(severity):
     # the confirmation re-arm/park gate can't miss a mis-cased `critical`. Distinct from is_blocking:
     # Important is blocking but NOT critical.
     return str("" if severity is None else severity).strip().lower() == "critical"
-
-
-def normalize_title(title):
-    t = title.lower()
-    t = _NON_WORD.sub("", t)
-    t = _WS.sub(" ", t)
-    return t.strip()
-
-
-def finding_label(finding):
-    return finding.get("title") or finding.get("summary") or ""
-
-
-def finding_identity(finding):
-    return f"{finding.get('file') or ''}::{normalize_title(clamp_title(finding_label(finding)))}"
 
 
 def recurrence_key(finding):

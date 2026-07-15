@@ -212,7 +212,7 @@ def _panel_window(records):
     return qualifying, since
 
 
-def _further_confirmation_owed(records):
+def _further_confirmation_owed(records, doc_mode=False):
     """review_panel_shell.furtherConfirmationOwed — is a FURTHER full confirmation still owed?
     Before any qualifying panel the mandatory first one is owed; after, the #174 economics decide
     (Critical or cross-cutting under the cap re-arms; Critical at the cap parks)."""
@@ -223,7 +223,8 @@ def _further_confirmation_owed(records):
     for rec in since:
         surfaced.extend(_surfaced_blocking_severities(rec))
     followup = review_round_policy.confirmation_followup(
-        surfaced, len(qualifying), review_round_policy.is_cross_cutting(_rework_across(since)))
+        surfaced, len(qualifying), review_round_policy.is_cross_cutting(_rework_across(since)),
+        doc_mode=doc_mode)
     return {"owed": followup["rearm"], "park": followup["park"],
             "panels": len(qualifying), "reason": followup["reason"]}
 
@@ -236,7 +237,7 @@ def _certification_summary(records):
             "lastPanelSurfacedResolved": any(len(_surfaced_blocking_severities(r)) > 0 for r in since)}
 
 
-def _confirmation_ready(records, round_no, just_marked):
+def _confirmation_ready(records, round_no, just_marked, doc_mode=False):
     """review_panel_shell.confirmationReady — whether THIS round is the full confirmation panel.
 
     `just_marked` is the shell's loop-local truth that a fix marked confirmation THIS iteration:
@@ -249,7 +250,7 @@ def _confirmation_ready(records, round_no, just_marked):
     marked = [r for r in (records or []) if isinstance(r, dict) and r.get("confirmationPending")]
     if not marked:
         return False
-    if not _further_confirmation_owed(records)["owed"]:
+    if not _further_confirmation_owed(records, doc_mode=doc_mode)["owed"]:
         return False
 
     def _round_no(rec):
@@ -411,7 +412,7 @@ def entry_bootstrap(path, dimensions, extras_path=None):
 
 # ── decider: plan-round — the per-dimension schedule for the round about to run ──
 def plan_round_decider(path, round_no, dimensions, changed_subjects, just_marked,
-                       coverage_path=None, coverage_mode="code"):
+                       coverage_path=None, coverage_mode="code", doc_mode=False):
     """Answer the next round's schedule: whether it is the full confirmation panel, the run/skip/
     tier per dimension (via the plan_round twin over disk-read previous state), and the carried
     dimension state for each skip. Small, meaningful JSON — the carried dimension state carries NO
@@ -447,7 +448,7 @@ def plan_round_decider(path, round_no, dimensions, changed_subjects, just_marked
             out["coverage"] = coverage
         return out
     records = state.get("records") or []
-    enter_confirmation = _confirmation_ready(records, round_no, just_marked)
+    enter_confirmation = _confirmation_ready(records, round_no, just_marked, doc_mode=doc_mode)
     plan = review_round_policy.plan_round({
         "round": round_no,
         "dimensions": dimensions or [],
@@ -480,7 +481,8 @@ def tally_round_decider(path, round_no, roster, max_rounds, gate, confidence, mi
                         present_blocking, deferred_path, fix_status, verify_result,
                         enter_confirmation, uncertified_reason=None,
                         coverage_path=None, coverage_mode="code",
-                        current_findings_path=None, worklist_out_path=None):
+                        current_findings_path=None, worklist_out_path=None,
+                        doc_mode=False):
     """Answer the loop terminal: run the breaker over the durable rounds, apply the terminal
     precedence (`panel_tally.decide_terminal`), fold in the #174 confirmation-bar economics, and
     attach the honest certification summary on a certifying terminal. The gate + present-blocking
@@ -562,7 +564,7 @@ def tally_round_decider(path, round_no, roster, max_rounds, gate, confidence, mi
 
         marked_pending = any(isinstance(r, dict) and r.get("confirmationPending") for r in records)
         if terminal in ("clean", "clean-with-skips") and marked_pending and not enter_confirmation:
-            owe = _further_confirmation_owed(records)
+            owe = _further_confirmation_owed(records, doc_mode=doc_mode)
             if owe.get("park"):
                 terminal = "halted"
                 reason = owe.get("reason") or \
@@ -630,7 +632,7 @@ def tally_round_decider(path, round_no, roster, max_rounds, gate, confidence, mi
         # the shell parks rather than dispatch a fixer with no worklist.
         if terminal == "continue" and worklist_out_path:
             fc = compose_fix_context(path, current_findings_path, coverage_path, coverage_mode,
-                                     round_no, roster, worklist_out_path)
+                                     round_no, roster, worklist_out_path, doc_mode=doc_mode)
             if fc.get("ok"):
                 out["worklistPath"] = fc.get("path")
                 out["worklistBytes"] = fc.get("bytes")
@@ -650,7 +652,7 @@ def tally_round_decider(path, round_no, roster, max_rounds, gate, confidence, mi
 
 # ── decider: compose-fix-context — write the worklist, answer a pointer ──
 def compose_fix_context(records_path, current_findings_path, coverage_path, coverage_mode,
-                        round_no, dimensions, out_path):
+                        round_no, dimensions, out_path, doc_mode=False):
     """Write the fixer's worklist to a runDir FILE and answer only {ok, path, bytes, sha256}.
 
     Content flows disk → the fixer's Read, never through a courier answer. The worklist mirrors
@@ -712,6 +714,10 @@ def compose_fix_context(records_path, current_findings_path, coverage_path, cove
         except (OSError, ValueError):
             current_findings = []
 
+    if doc_mode:
+        prior_findings = [f for f in prior_findings if circuit_breaker.is_blocking(f.get("severity"))]
+        current_findings = [f for f in current_findings if circuit_breaker.is_blocking(f.get("severity"))]
+
     # round order: prior rounds' skeletons first, then this round's full-bodied findings.
     all_findings = prior_findings + current_findings
     worklist = {
@@ -757,6 +763,7 @@ def _build_parser():
     pr.add_argument("--coverage-path", default=None,
                     help="fold the per-round coverage read in (one round-entry leaf, #118)")
     pr.add_argument("--coverage-mode", default="code")
+    pr.add_argument("--doc-mode", action="store_true")
 
     tr = sub.add_parser("tally-round")
     tr.add_argument("--path", required=True)
@@ -779,6 +786,7 @@ def _build_parser():
                     help="optional staged full-bodied current findings for the folded fix-context")
     tr.add_argument("--worklist-out-path", default=None,
                     help="when set and terminal is continue, write the fixer worklist here (fold)")
+    tr.add_argument("--doc-mode", action="store_true")
 
     fc = sub.add_parser("compose-fix-context")
     fc.add_argument("--records-path", required=True)
@@ -788,6 +796,7 @@ def _build_parser():
     fc.add_argument("--round", required=True, type=int)
     fc.add_argument("--dimensions", default="[]")
     fc.add_argument("--out-path", required=True)
+    fc.add_argument("--doc-mode", action="store_true")
     return p
 
 
@@ -799,7 +808,8 @@ def main(argv):
         result = plan_round_decider(
             args.path, args.round, _json_arg(args.dimensions, []),
             _json_arg(args.changed_subjects, None) if args.changed_subjects is not None else None,
-            args.just_marked, coverage_path=args.coverage_path, coverage_mode=args.coverage_mode)
+            args.just_marked, coverage_path=args.coverage_path, coverage_mode=args.coverage_mode,
+            doc_mode=args.doc_mode)
     elif args.cmd == "tally-round":
         result = tally_round_decider(
             args.path, args.round, _json_arg(args.roster, []), args.max_rounds,
@@ -809,11 +819,13 @@ def main(argv):
             uncertified_reason=args.uncertified_reason,
             coverage_path=args.coverage_path, coverage_mode=args.coverage_mode,
             current_findings_path=args.current_findings_path,
-            worklist_out_path=args.worklist_out_path)
+            worklist_out_path=args.worklist_out_path,
+            doc_mode=args.doc_mode)
     elif args.cmd == "compose-fix-context":
         result = compose_fix_context(
             args.records_path, args.current_findings_path, args.coverage_path,
-            args.coverage_mode, args.round, _json_arg(args.dimensions, []), args.out_path)
+            args.coverage_mode, args.round, _json_arg(args.dimensions, []), args.out_path,
+            doc_mode=args.doc_mode)
     else:  # pragma: no cover — argparse `required=True` forbids this
         sys.stderr.write("unknown command\n")
         return 2

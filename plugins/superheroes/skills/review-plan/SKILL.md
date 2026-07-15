@@ -347,6 +347,7 @@ Read the five `$SESSION_DIR/findings-*.json` files. Apply, in order:
 1. **Citation check.** Drop any finding with `file == null` or `line == null` — the base rubric's verification rules require a `file:line` citation.
 2. **Dedupe by plan section + topic.** When two findings target the same plan section heading and same topic (e.g. both flagging "no accepted downside on the data-model decision"), merge them: concatenate bodies with a separator, keep the higher severity, list both dimensions (e.g. `"Architecture + Failure-Mode"`).
 3. **Nit cap.** If more than 5 Nits remain after dedupe, keep the first 5 and summarize the rest as a count (e.g. `"+ 8 more Nits — see $SESSION_DIR/findings-*.json"`).
+4. **Acceptance suppression (FR-14).** Run the acceptance-consume block in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-plan/reference/plan-detail.md`: owner-accepted findings on unchanged content are suppressed from the tally (reported as accepted, never re-asked); uncertain sameness stays blocking.
 
 Determine the verdict per the base rubric's "Verdict labels & mapping". For `/superheroes:review-plan` the labels are **PLAN READY** / **REVISE BEFORE TASKS** / **MAJOR GAPS — RECONSIDER DESIGN**:
 
@@ -419,14 +420,14 @@ Each round:
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-   python3 "$ROOT_DIR/lib/loop_state.py" --round <N> --max-rounds 7 \
+   python3 "$ROOT_DIR/lib/loop_state.py" --round <N> --max-rounds 3 \
      --compiled "$SESSION_DIR/compiled.json" --skipped-blocking <SKIPPED_BLOCKING>
    ```
 
    - **`review`** → `round += 1` and repeat from step 1. **MANDATORY** — you revised a blocking finding; re-review to verify it actually resolved and introduced nothing new. Do **not** exit because the revision "looks resolved" (that belief is what this gate overrides).
    - **`exit_clean`** → **EXIT** the loop (then record the gate, §6).
    - **`exit_skipped`** → **EXIT**, listing the deliberately-skipped blocking finding(s) — not a plain PLAN READY.
-   - **`halt`** → the 7-round cap was hit with blocking findings still being revised: report them; do **not** declare PLAN READY (coverage may be incomplete).
+   - **`halt`** → the three-round cap (baseline + at most two confirmations) was hit with blocking findings still being revised: report them; do **not** declare PLAN READY (coverage may be incomplete).
 
 ### 6. Record the review gate
 
@@ -437,9 +438,11 @@ gate to set; say so and stop at the terminal summary).
 
 - **PLAN READY** (no unresolved Critical/Important; any Minor/Nit are informational) →
   record `passed`.
-- **REVISE BEFORE TASKS / MAJOR GAPS**, or the 7-round cap was hit with Critical/Important
+- **REVISE BEFORE TASKS / MAJOR GAPS**, or the three-round cap was hit with Critical/Important
   still open, or the user **skipped** a blocking finding → record `changes-requested` (the
   plan is not cleared to advance; report what remains).
+
+**Record accepted findings to the acceptance ledger (gate-approval only).** When `REVIEW` is `passed`, run the acceptance-ledger block in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-plan/reference/plan-detail.md` **before** `gate_write.py` (FR-14: acceptance first, then `gates.review`).
 
 The gate write lives in `lib/gate_write.py` (canonical-path guard, parent-gate precondition, fenced `set-gate`). It prints stderr detail and a one-word outcome to stdout:
 
@@ -453,18 +456,15 @@ GATE=$(python3 "$ROOT_DIR/lib/gate_write.py" --mode certify --doc plan \
   --expected-hash "$REVIEWED_HASH" --run-id "$RUN_ID" --lease "$LEASE")
 ```
 
-`$GATE` is one of `recorded:passed` / `recorded:changes-requested` / `skipped:noncanonical` /
-`failed:set-gate` — surface it (and any stderr detail) in the terminal
-summary. Never hand-edit the frontmatter — `gate_write.py` (via the-architect's CLI) is the
-only writer.
+`$GATE` is one of `recorded:passed` / `recorded:changes-requested` / `skipped:noncanonical` / `failed:set-gate` — surface it (and any stderr detail, plus any acceptance-ledger disclosure from plan-detail) in the terminal summary. Never hand-edit the frontmatter — `gate_write.py` is the only writer.
 
 After exit, print a terminal summary in chat:
 
 - Lead with the final verdict label in bold, and the **gate outcome** (`$GATE` from the
   helper — e.g. `recorded:passed`, `recorded:changes-requested`, `skipped:noncanonical`;
   or "not recorded — not a definition-doc" when `isDefinitionDoc == no`,
-  in which case step 6 was skipped). If the loop hit the 7-round cap with Critical/Important
-  unresolved, the verdict is **REVISE** and the gate is `changes-requested` — do **not**
+  in which case step 6 was skipped). If the loop hit the three-round cap (baseline + at most two
+  confirmations) with Critical/Important unresolved, the verdict is **REVISE** and the gate is `changes-requested` — do **not**
   declare PLAN READY.
 - List, grouped by plan section heading, the revisions applied (auto + user-approved) and
   the findings the user chose to skip — each with its POV line.
@@ -473,7 +473,7 @@ After exit, print a terminal summary in chat:
 
 **Then, after the terminal summary**, run the three non-blocking end-of-run steps from `## Learning Loop & Staleness Nudge`, in order: (1) the **staleness nudge** (print the doctor `message` only when non-null and `nudge_acked` is false), (2) the **learning-loop proposal** (`decisions.py analyze` → at most one user-gated `AskUserQuestion`, never auto-applied), then (3) the **provisional-profile confirmation** (interactive only — offer to confirm a `status: provisional` profile; skipped when headless, already stable, or already acked). All three are placed after the review output and none blocks.
 
-Nothing else is written to the repo — the revised `$PLAN_PATH` and its gate are the deliverables (plus the project-level `.claude/review-decisions.json` learning-loop store and, only on a dismissal, the profile's `nudge-ack` map).
+Nothing else is written to the repo — the revised `$PLAN_PATH`, its gate, and (on `passed` only) `plan-accept.json` are the deliverables (plus `.claude/review-decisions.json` and, on dismissal, the profile's `nudge-ack` map).
 
 For recurrence handling, coverage decisions, dimension skipping, tier cascade, final confirmation, and telemetry, use `plugins/superheroes/reference/review-loop.md` as the shared loop contract. This skill owns only its leg-specific setup, reviewer framing, and gate-write rules.
 

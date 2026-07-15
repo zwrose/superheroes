@@ -211,7 +211,7 @@ def load_records(path, dimensions):
 # terminal-record.json. summarize_record is idempotent, so pre-D3 full-bodied files load
 # (and re-persist) cleanly through the same path.
 _SKELETON_FIELDS = ("file", "line", "title", "severity", "taxonomy", "dimension",
-                    "classKey", "carried", "sourceRound", "synthesisUnverified")
+                    "classKey", "carried", "sourceRound", "synthesisUnverified", "docSection")
 
 
 def _skeleton_finding(finding):
