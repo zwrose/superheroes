@@ -1345,6 +1345,10 @@ async function collectNonBlockingFindings(runDir) {
   }
 }
 
+// Three-state read of the terminal round's open blocking findings (#446):
+//   { absent: true } — no round state exists (no review ran): nothing to record.
+//   null             — EXISTING state is unreadable (corrupt/permission): a real read failure.
+//   { findings: [] } — readable: the open blocking findings (possibly empty).
 async function collectOpenBlockingFindings(runDir) {
   try {
     const out = await io().runHelper('python3', [
@@ -1352,8 +1356,9 @@ async function collectOpenBlockingFindings(runDir) {
       '--records-path', `${runDir}/round-records.json`,
     ], { label: 'read open blockers', courier: true })
     const ans = _helperJsonAnswer(out)
+    if (ans && ans.ok && ans.absent) return { absent: true }
     if (!ans || !ans.ok) return null
-    return Array.isArray(ans.findings) ? ans.findings : []
+    return { findings: Array.isArray(ans.findings) ? ans.findings : [] }
   } catch (_) {
     return null
   }
@@ -1381,8 +1386,14 @@ async function recordAcceptanceLedger(doc, workItem, runDir) {
   try {
     const docsDir = docDirFor(workItem)
     const docPath = docPathFor(workItem, doc)
-    const blockers = await collectOpenBlockingFindings(runDir)
-    if (blockers === null) return { ok: false, reason: 'open blockers unreadable' }
+    const collected = await collectOpenBlockingFindings(runDir)
+    // #446: ABSENT round state (no review ever ran — the passed-gate skip on a fresh pre-approved
+    // doc) is nothing-to-record: return ok WITHOUT an assumption, and flag `absent` so the caller
+    // journals an honest idempotent-skip outcome rather than a false `accepted-pass`.
+    if (collected && collected.absent) return { ok: true, absent: true }
+    // A genuine read failure on EXISTING state keeps the UFR-1 disclosure exactly as before.
+    if (collected === null) return { ok: false, reason: 'open blockers unreadable' }
+    const blockers = collected.findings
     const findingsPath = `${runDir}/open-blockers.json`
     await io().writeFile(findingsPath, JSON.stringify(blockers))
     const res = await exec([
@@ -1415,9 +1426,19 @@ async function approveDocReviewGate(doc, workItem, opts) {
   const runDir = runDirFor(workItem, `review-${doc}`)
   const phaseResult = { confidence: 'high', assumptions: [] }
   const rec = await recordAcceptanceLedger(doc, workItem, runDir)
+  // #446: absent round state is nothing-to-record ONLY on the provably-clean passed-gate re-entry
+  // (gateAlreadySet: the gate reads passed only for a `clean` terminal, so there were zero accepted
+  // blockers to record). On the owner first-approval path a passed gate means the owner overrode a
+  // park that HELD open blockers, so absent there is lost round state — disclose it like an
+  // unreadable read (FR-14: never silently drop an owner's acceptance).
+  const benignSkip = !!(rec.absent && opts.gateAlreadySet)
   if (!rec.ok) phaseResult.assumptions.push(_acceptanceRecordDisclosure(rec.reason))
+  else if (rec.absent && !benignSkip) phaseResult.assumptions.push(_acceptanceRecordDisclosure('acceptance round state absent'))
+  // Describe what actually happened: an idempotent skip on an already-passed gate (nothing was
+  // accepted) is `skipped`; a genuine owner gate-approval still records `accepted-pass`.
+  const convergenceOutcome = benignSkip ? 'skipped' : 'accepted-pass'
   try {
-    await journalReviewConvergence(workItem, doc, runDir, 'accepted-pass')
+    await journalReviewConvergence(workItem, doc, runDir, convergenceOutcome)
   } catch (e) {
     phaseResult.assumptions.push(`review_convergence record may have failed for ${workItem}`)
   }
@@ -3285,6 +3306,14 @@ async function runPhases(workItem, fromStep, deps) {
     // so a resume re-enters the parked phase instead of skipping it.
     const decision = await phaseStep(phaseResult, gate)
     const proceed = decision.action === 'proceed'
+    // #446: an assumption-park must never be naked. When a phase parks on a material assumption and
+    // did not already compose a structured park payload (the FR-11 doc-review parks do), fold one
+    // carrying the reason + the assumptions that parked it, via the same `--terminal-park-payload`
+    // carrier — so the `parked` journal marker names its cause instead of an empty `parked {}`.
+    let parkPayload = (persist && persist.parkPayload) || null
+    if (!proceed && !parkPayload && decision.action === 'park_assumption') {
+      parkPayload = { reason: decision.reason, assumptions: phaseResult.assumptions || [] }
+    }
     const saved = await persistPhase(workItem, {
       sideEffectCmd: (persist && persist.sideEffectCmd) || null,
       journalPayload: (persist && persist.journalPayload) ||
@@ -3298,7 +3327,7 @@ async function runPhases(workItem, fromStep, deps) {
       // #130: on a park, fold a `parked` terminal marker into the same save so token_trend/run_watch
       // can classify the run (parkFromPhases journals nothing of its own).
       parkReason: !proceed ? (phaseResult.parkReason || decision.reason) : null,
-      parkPayload: !proceed ? ((persist && persist.parkPayload) || null) : null,
+      parkPayload: !proceed ? parkPayload : null,
     })
     // FR-4/UFR-2: a failed durable phase-progress write must never advance (and never park silently
     // on unrecorded state) — park naming the durable-write failure.

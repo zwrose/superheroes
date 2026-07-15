@@ -6726,8 +6726,9 @@ async function collectOpenBlockingFindings(runDir) {
       '--records-path', `${runDir}/round-records.json`,
     ], { label: 'read open blockers', courier: true })
     const ans = _helperJsonAnswer(out)
+    if (ans && ans.ok && ans.absent) return { absent: true }
     if (!ans || !ans.ok) return null
-    return Array.isArray(ans.findings) ? ans.findings : []
+    return { findings: Array.isArray(ans.findings) ? ans.findings : [] }
   } catch (_) {
     return null
   }
@@ -6753,8 +6754,10 @@ async function recordAcceptanceLedger(doc, workItem, runDir) {
   try {
     const docsDir = docDirFor(workItem)
     const docPath = docPathFor(workItem, doc)
-    const blockers = await collectOpenBlockingFindings(runDir)
-    if (blockers === null) return { ok: false, reason: 'open blockers unreadable' }
+    const collected = await collectOpenBlockingFindings(runDir)
+    if (collected && collected.absent) return { ok: true, absent: true }
+    if (collected === null) return { ok: false, reason: 'open blockers unreadable' }
+    const blockers = collected.findings
     const findingsPath = `${runDir}/open-blockers.json`
     await io().writeFile(findingsPath, JSON.stringify(blockers))
     const res = await exec([
@@ -6783,9 +6786,12 @@ async function approveDocReviewGate(doc, workItem, opts) {
   const runDir = runDirFor(workItem, `review-${doc}`)
   const phaseResult = { confidence: 'high', assumptions: [] }
   const rec = await recordAcceptanceLedger(doc, workItem, runDir)
+  const benignSkip = !!(rec.absent && opts.gateAlreadySet)
   if (!rec.ok) phaseResult.assumptions.push(_acceptanceRecordDisclosure(rec.reason))
+  else if (rec.absent && !benignSkip) phaseResult.assumptions.push(_acceptanceRecordDisclosure('acceptance round state absent'))
+  const convergenceOutcome = benignSkip ? 'skipped' : 'accepted-pass'
   try {
-    await journalReviewConvergence(workItem, doc, runDir, 'accepted-pass')
+    await journalReviewConvergence(workItem, doc, runDir, convergenceOutcome)
   } catch (e) {
     phaseResult.assumptions.push(`review_convergence record may have failed for ${workItem}`)
   }
@@ -8059,6 +8065,10 @@ async function runPhases(workItem, fromStep, deps) {
     }
     const decision = await phaseStep(phaseResult, gate)
     const proceed = decision.action === 'proceed'
+    let parkPayload = (persist && persist.parkPayload) || null
+    if (!proceed && !parkPayload && decision.action === 'park_assumption') {
+      parkPayload = { reason: decision.reason, assumptions: phaseResult.assumptions || [] }
+    }
     const saved = await persistPhase(workItem, {
       sideEffectCmd: (persist && persist.sideEffectCmd) || null,
       journalPayload: (persist && persist.journalPayload) ||
@@ -8070,7 +8080,7 @@ async function runPhases(workItem, fromStep, deps) {
       journalOnly: !proceed,
       recordCost: true,     // #130: fold this phase's cost telemetry into the save leaf
       parkReason: !proceed ? (phaseResult.parkReason || decision.reason) : null,
-      parkPayload: !proceed ? ((persist && persist.parkPayload) || null) : null,
+      parkPayload: !proceed ? parkPayload : null,
     })
     if (!saved.ok) {
       return parkFromPhases(workItem, deps.generation, deps.root, phase,
