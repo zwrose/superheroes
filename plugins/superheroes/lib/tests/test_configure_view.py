@@ -144,3 +144,39 @@ def test_render_shows_engine_preferences_and_codex_model_pins(tmp_path):
     assert "planAuthor: codex" in screen
     assert "reviewer: gpt-5.5" in screen
     assert "effort overrides: review=high" in screen
+
+
+def test_render_surfaces_rejected_codex_pins(tmp_path):
+    # #409: a hand-edited invalid Codex pin (unknown model, or gpt-5.5 + a max-effort role) must be
+    # surfaced as rejected — never displayed as if active. The view mirrors the preflight readout:
+    # valid pins under "Codex model pins", rejected ones under a "Rejected Codex model pins" sub-list.
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    cdir = os.path.join(str(tmp_path), ".claude", "superheroes")
+    os.makedirs(cdir, exist_ok=True)
+    sc.atomic_write(os.path.join(cdir, "core.md"),
+                    core_md.render_core({"verifyCommand": "pytest", "stackTags": ["py"],
+                                         "threatModel": "single-user", "patterns": "",
+                                         "enginePreferences": {
+                                             "reviewer": "codex", "implementation": "codex",
+                                             "planAuthor": "claude", "effort": {"build": "max"},
+                                             "codexModels": {"reviewer": "gpt-5.6-sol",
+                                                             "builder": "gpt-5.5",
+                                                             "bogus-role": "gpt-5.6-sol"}}},
+                                        "confirmed", "2026-07-14", "2026-07-14"))
+    sc.atomic_write(os.path.join(cdir, "review-crew.md"), "<!-- review-crew: v1 -->\nscope\n")
+    screen = cv.render(str(tmp_path), root=root)
+    # the one valid pin still shows as active
+    assert "Codex model pins:" in screen
+    assert "reviewer: gpt-5.6-sol" in screen
+    # the rejected pins are surfaced as rejected and flagged
+    assert "Rejected Codex model pins" in screen
+    assert "builder: gpt-5.5 + max is invalid ⚠" in screen
+    assert "bogus-role: unknown role 'bogus-role' rejected ⚠" in screen
+    # ...and are NOT shown in the ACTIVE pins block (the exact bug fix #1 removes: rendering the raw
+    # core.md map would print `builder`/`bogus-role` as active). Slice the active block and assert.
+    active = screen.split("Codex model pins:")[1].split("Rejected Codex model pins")[0]
+    assert "reviewer: gpt-5.6-sol" in active
+    assert "builder" not in active
+    assert "bogus-role" not in active

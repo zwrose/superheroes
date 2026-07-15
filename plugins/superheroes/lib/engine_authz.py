@@ -29,6 +29,20 @@ def _codex_capability_model():
         return "gpt-5.6-sol"
 
 
+def _codex_probe_model(cwd):
+    """The Codex model the write-auth probe dispatches (#409): the strongest model the codex
+    implementation role will actually run for this project (its build/fix pins, else the sol capability
+    floor for any unpinned write role — engine_pref.codex_write_probe_model). A project pinned entirely
+    to an older family is then not falsely marked not-ready, while an unpinned write role keeps the sol
+    floor so the probe never under-tests the real dispatch. Any import/read error falls open to the sol
+    floor; never raises."""
+    try:
+        import engine_pref
+        return engine_pref.codex_write_probe_model(engine_pref.load_engine_prefs(cwd))
+    except Exception:
+        return _codex_capability_model()
+
+
 def _probe_timeout(overrides=None):
     """The subprocess timeout for the throwaway dispatch probe — the SAME configurable, test-settable
     limit as UFR-5 (`engine_pref.resolve_timeout`, default DEFAULT_STALL_LIMIT_SECONDS=300). Any import
@@ -75,10 +89,11 @@ def implementation_dispatch_allowed(cwd, engine, run=None, overrides=None):
     # `codex exec --sandbox workspace-write -C <cwd> "<prompt>"` / `cursor-agent -p -f "<prompt>"`.
     write_prompt = "write an empty file named .superheroes-authz-probe and exit"
     if engine == "codex":
-        # Probe the required GPT-5.6 family explicitly. An authenticated older CLI can run its
-        # ambient model while rejecting every 5.6 dispatch, so an unpinned probe would falsely mark
-        # Codex ready during configure and defer the failure until the real build.
-        argv = ["codex", "exec", "-m", _codex_capability_model(),
+        # Probe the model the project will actually dispatch (#409): the strongest configured pin, or
+        # the sol capability floor when unpinned. An authenticated older CLI can run its ambient model
+        # while rejecting the project's model, so a model-blind probe would falsely mark Codex ready
+        # during configure and defer the failure until the real build.
+        argv = ["codex", "exec", "-m", _codex_probe_model(cwd),
                 "--sandbox", "workspace-write", "-C", cwd, write_prompt]
     else:  # cursor
         # -p/--print is required for a headless run (without it cursor-agent goes interactive and

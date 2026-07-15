@@ -92,6 +92,22 @@ def test_no_downgrade_section_when_none():
     assert "DOWNGRADED" not in out
 
 
+def test_unmatched_verdicts_surfaced_loudly_430():
+    # #430: a synthesis leaf that echoed ids matching no finding is disclosed in its own scrutiny
+    # section (the #397 round-5 silent no-op fold becomes visible).
+    out = LR.render(_record(unmatched=[
+        "a.py::claim test mismatch routed_forward", "b.py::duplicate assertion"]))
+    assert "matched NO finding" in out
+    scrutiny = out.split("matched NO finding")[1]
+    assert "a.py::claim test mismatch routed_forward" in scrutiny
+    assert "b.py::duplicate assertion" in scrutiny
+
+
+def test_no_unmatched_section_when_none():
+    out = LR.render(_record(drops=[{"title": "x", "reason": "y", "was_blocking_tagged": False}]))
+    assert "matched NO finding" not in out
+
+
 def test_parent_origin_named_fr21():
     out = LR.render(_record(terminal="halted", parentOrigin="plan"))
     assert "plan" in out and "upstream" in out.lower()

@@ -49,13 +49,15 @@ function chokepointContract() {
       'prov_entry.py': 'python3 lib/prov_entry.py --step build --sha abc123',
       'fence_cli.py': 'python3 lib/fence_cli.py renew --lease L7',
       'ref_lock': 'python3 -c "import ref_lock; ref_lock.release(\'wi\')"',
-      'base64.b64decode (__SR_W io writer)': 'python3 -c \'import os,sys,base64\nopen(sys.argv[1],"wb").write(base64.b64decode(sys.argv[2]))\' /store/x.json AA==',
+      // #435: the __SR_W io writer is now PLAIN-VISIBLE (base64 dropped); _SPINE_STATE_WRITE tracks it by
+      // the unique __SR_WROTE marker literal the writer carries, not the (gone) base64.b64decode substring.
+      '__SR_WROTE (__SR_W io writer)': 'python3 -c \'import os,sys,hashlib\nopen(sys.argv[1],"w").write(sys.argv[2])\nsys.stdout.write("__SR_WROTE:"+"x")\' /store/x.json payload',
     }
     for (const [cls, cmd] of Object.entries(perClass)) {
       courier.recordComposedFromPrompt('Run exactly this command. Your entire reply must be the command\'s stdout, verbatim:\n\n' + cmd)
     }
     assert.deepStrictEqual(seen, Object.values(perClass),
-      'each remaining state-write class (prov, fence, ref_lock, base64 io-writer) registers its exact bytes')
+      'each remaining state-write class (prov, fence, ref_lock, __SR_WROTE io-writer) registers its exact bytes')
 
     // a READ dumb pipe is NOT registered — reads are not blocked, and registering them would double cost.
     seen.length = 0

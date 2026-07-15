@@ -227,3 +227,87 @@ def test_commit_result_empty_message_falls_back_to_canned(tmp_path):
 def test_commit_result_bad_worktree_returns_error_never_raises(tmp_path):
     res = EA.commit_result(str(tmp_path / "not-a-repo"), "t", "deadbeef")
     assert res["ok"] is False and res.get("error")
+
+
+def test_commit_result_history_shape_fix_is_named_outcome_not_silent_failure(tmp_path):
+    # #392: a PURE history-shape fix (squash to a single commit, reword, drop-commit) produces a
+    # tree content-identical to pre_sha — the engine restructured HISTORY without changing CONTENT.
+    # The fold-only invariant soft-resets that structure away, leaving an empty diff → git reports
+    # "nothing to commit". This must be a DISTINCT, honest outcome (so the caller falls open to the
+    # native fixer — which CAN rewrite history — deliberately, and the journal says WHY), never a
+    # blank/mislabeled commit-failed and NEVER a silently-swallowed success.
+    repo = _repo(tmp_path)
+    # The build produced TWO commits above the base (the wrong-path-file-then-corrected shape #392
+    # describes); pre_sha for the fix dispatch is that two-commit tip.
+    base = _head(repo)
+    (tmp_path / "repo" / "a").write_text("commit-1 work")
+    _git(repo, "add", "a")
+    _git(repo, "commit", "-qm", "commit 1")
+    (tmp_path / "repo" / "b").write_text("commit-2 correction")
+    _git(repo, "add", "b")
+    _git(repo, "commit", "-qm", "commit 2")
+    pre = _head(repo)
+    assert _git(repo, "rev-list", "--count", "%s..HEAD" % base).stdout.strip() == "2"
+    # The fix engine did the right thing: soft-reset to base and ONE clean squashed commit whose
+    # tree is content-identical to pre (a pure history rewrite, zero content delta vs pre).
+    _git(repo, "reset", "--soft", base)
+    _git(repo, "commit", "-qm", "squashed: single commit")
+    assert _git(repo, "diff", "--quiet", pre, "HEAD").returncode == 0  # tree == pre's tree
+
+    res = EA.commit_result(repo, "task-hs", pre)
+    assert res["ok"] is False
+    # A NAMED reason — not a bare/blank commit-failed, and no fabricated sha.
+    assert res.get("reason") == "history-shape-fix-unrepresentable"
+    assert "sha" not in res
+    # The invariant is preserved: no prior work was destroyed — the engine's squashed commit and
+    # base are both still reachable (the adapter did not hard-reset or lose content).
+    assert _git(repo, "cat-file", "-t", base).stdout.strip() == "commit"
+
+
+def test_commit_result_genuine_commit_failure_with_content_is_not_laundered_as_history_shape(tmp_path):
+    # #392 discriminator guard: the history-shape outcome fires ONLY when the fold leaves NOTHING to
+    # commit (`git diff --cached --quiet` == 0). A genuine commit failure that occurs WITH a non-empty
+    # staged diff (here: a rejecting pre-commit hook, engine left real new content) must NOT be
+    # laundered into the benign history-shape outcome — the real git error must surface, not be hidden.
+    import os
+    import stat
+    repo = _repo(tmp_path)
+    pre = _head(repo)
+    # engine self-committed GENUINE new content (tree differs from pre) — a normal fold candidate.
+    (tmp_path / "repo" / "real").write_text("genuine new content the engine added")
+    _git(repo, "add", "real")
+    _git(repo, "commit", "-qm", "engine content commit")
+    assert _head(repo) != pre
+    # a repo-side pre-commit hook rejects the fold commit (staged diff is NON-empty at commit time).
+    # Pin core.hooksPath to THIS repo's hooks dir so an ambient global core.hooksPath (husky / the
+    # pre-commit framework, common on contributor machines) cannot bypass the repo-local hook and make
+    # the fold commit spuriously succeed — that would be a false FAILURE of this test, not a false pass.
+    hooks_dir = os.path.join(repo, ".git", "hooks")
+    _git(repo, "config", "core.hooksPath", hooks_dir)
+    hook = os.path.join(hooks_dir, "pre-commit")
+    with open(hook, "w") as fh:
+        fh.write("#!/bin/sh\necho 'hook says no'\nexit 1\n")
+    os.chmod(hook, os.stat(hook).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    res = EA.commit_result(repo, "task-hook", pre)
+    assert res["ok"] is False
+    # NOT the history-shape outcome — a genuine, surfaced commit failure with detail.
+    assert res.get("reason") is None
+    assert "history-shape" not in res.get("error", "")
+    assert res.get("error")
+
+
+def test_commit_result_empty_edit_noop_captures_git_stdout_in_error(tmp_path):
+    # #392 sub-defect 1: a genuine no-op that is NOT a history-shape fix (engine committed nothing
+    # and made no net edit, HEAD==pre_sha) fails the commit with git's "nothing to commit" text,
+    # which git prints to STDOUT, not stderr. The error detail must carry that text — previously it
+    # read blank ("git commit failed: ") because only stderr was captured.
+    repo = _repo(tmp_path)
+    pre = _head(repo)
+    # engine ran but produced no edits and left HEAD at pre_sha
+    res = EA.commit_result(repo, "task-noop", pre)
+    assert res["ok"] is False
+    # NOT the history-shape outcome (engine did not self-commit) — a plain commit-failed with detail.
+    assert res.get("reason") is None
+    assert res.get("error")
+    assert "nothing to commit" in res["error"]

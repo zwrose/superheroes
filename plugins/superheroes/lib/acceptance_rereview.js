@@ -80,6 +80,9 @@ function consumeWithAcceptance(merged, leafVerdicts, candidates) {
     findings: normalOut.findings || [],
     drops: accDrops.concat(normalOut.drops || []),
     downgrades: normalOut.downgrades || [],
+    // #430: unmatched normal-fold verdict ids ride out for the loud disclosure. Acceptance
+    // verdicts are keyed to offered candidates (drawn from merged) so they always match.
+    unmatched: normalOut.unmatched || [],
   }
 }
 

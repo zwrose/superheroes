@@ -12,6 +12,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import core_md         # noqa: E402
+import engine_pref     # noqa: E402
 import mode_reconcile  # noqa: E402
 import mode_registry   # noqa: E402
 import model_tier_overrides  # noqa: E402
@@ -68,10 +69,18 @@ def collect(cwd, root=None):
         permission_audit = permission_rules.audit(cwd, root=root)  # read-only FR-7 record
     except Exception:
         permission_audit = []
+    try:
+        # #409: the validated engine-preference view — carries the accepted codexModels pins AND the
+        # rejected `invalidCodexModels` sub-map, so a hand-edited bad pin surfaces instead of showing
+        # raw core.md text as if active. Read-only.
+        engine_prefs = engine_pref.load_engine_prefs(cwd, root)
+    except Exception:
+        engine_prefs = {}
     return {"core": core, "layers": layers, "patterns": patterns, "mode": mode,
             "drift": drift, "storeHealth": health,
             "modelTiers": tiers, "modelTierOverrides": overrides, "modelTierProfile": profile,
-            "permissionRules": permission, "permissionAudit": permission_audit}
+            "permissionRules": permission, "permissionAudit": permission_audit,
+            "enginePrefs": engine_prefs}
 
 
 def _health_line(counts):
@@ -113,13 +122,22 @@ def render(cwd, *, root=None):
         effort = prefs.get("effort") if isinstance(prefs.get("effort"), dict) else {}
         out.append("effort overrides: " + (", ".join(f"{k}={v}" for k, v in sorted(effort.items()))
                                            or "(none)"))
-        codex_models = prefs.get("codexModels") if isinstance(prefs.get("codexModels"), dict) else {}
+        # #409: render the VALIDATED pins (load_engine_prefs output), not the raw core.md map — so an
+        # accepted pin shows as active and a rejected one is surfaced below rather than displayed as if
+        # in force. Mirrors the preflight readout line.
+        eng = data.get("enginePrefs") or {}
+        codex_models = eng.get("codexModels") if isinstance(eng.get("codexModels"), dict) else {}
         out.append("Codex model pins:")
         if codex_models:
             for role, model in sorted(codex_models.items()):
                 out.append(f"  {role}: {model}")
         else:
             out.append("  (none; GPT-5.6 models derive from shared tiers)")
+        rejected = eng.get("invalidCodexModels") if isinstance(eng.get("invalidCodexModels"), dict) else {}
+        if rejected:
+            out.append("Rejected Codex model pins (not applied — dispatch falls to the tier default):")
+            for role, reason in sorted(rejected.items()):
+                out.append(f"  {role}: {reason} ⚠")
     for hero, text in data["layers"]:
         out.append("")
         out.append(f"## Layer: {hero}")
