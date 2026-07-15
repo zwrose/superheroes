@@ -1,4 +1,12 @@
-# review-code fail-closed synthesis pass (`loop_synthesis.py`)
+## Contents
+
+review-code fail-closed synthesis pass (`loop_synthesis.py`).
+
+- [Where it runs](#where-it-runs)
+- [The pass](#the-pass)
+- [Fallback — fail toward keeping everything](#fallback--fail-toward-keeping-everything)
+- [Surfacing — a dropped or demoted blocker is never silently gone](#surfacing--a-dropped-or-demoted-blocker-is-never-silently-gone)
+- [Cross-surface identity methodology + the interactive-doc exception (#430)](#cross-surface-identity-methodology--the-interactive-doc-exception-430)
 
 Ports the showrunner spine's panel **synthesis** stage into standalone review-code's
 compile step. review-code's mechanical compile (dedupe/citation/diff-scope) never judged
@@ -97,3 +105,32 @@ unsubstantiated (each with its reason) and — **distinctly, flagged for the own
 any `was_blocking_tagged` drop AND any `downgrades` entry (a reviewer had tagged it Critical/
 Important; synthesis then dropped it or demoted it below blocking). The loop may filter false
 positives or re-tier; it may never silently discard OR quietly demote a blocker.
+
+## Cross-surface identity methodology + the interactive-doc exception (#430)
+
+The verdict fold matches a judge verdict to a merged finding by an **exact string `id`**, not by
+asking the model to reproduce the `file::normalized-title` normalization. Every surface that runs
+a judge/consumer split must **stage a precomputed id and have the judge echo it verbatim**:
+
+| Surface | Where the id is staged | Fold |
+| --- | --- | --- |
+| Standalone `review-code` (this doc) | `merged.json` carries each finding's `id`; the judge is told "id unchanged" | `loop_synthesis.py --merged --leaf` |
+| Native code panel (`review_panel_shell.js::synthesizeRound`) | `synthesizeRound` stages `id = findingIdentity(f)` on each merged finding before the leaf; the judge echoes it verbatim | `loop_synthesis.consume` |
+| Native doc panels (`showrunner.js::docSynthesisLeaf`) | same `synthesizeRound` staging path | `acceptance_rereview.consumeWithAcceptance` → `loop_synthesis.consume` |
+
+A verdict whose id matches no finding is **kept fail-closed AND disclosed loudly** in `unmatched`
+(the round record, the readout's "matched NO finding" scrutiny section, and a runtime log) — a
+mis-keyed judge is never a silent no-op (the #397 round-5 defect: drifted ids voided 4 real drops
+and the run false-parked on no-net-progress).
+
+**Named exceptions (no silent divergence):**
+- **Single-reviewer legs** (per-task review, final-review deep leg) run no synthesis fold at all —
+  one reviewer, nothing to reconcile (FR-11; stated in `loop_synthesis.py`).
+- **Interactive doc reviews** (`review-plan` / `review-tasks` / `review-spec` / `audit-debt`) run
+  **no general keep/drop synthesis judge**: the orchestrator dedupes/compiles/verifies findings
+  **in-context**, with the owner present, so there is no judge→consumer split whose verdict-fold
+  could silently no-op. The one deterministic fold they do run — acceptance suppression
+  (`acceptance_rereview.py --acceptance-only`, #397 FR-14, deliberately drop/downgrade-stripped) —
+  already keys on an identity **copied verbatim** from `acceptance-candidates.json`, i.e. the same
+  staged-id/echo discipline, not a model-recomputed normalization. So the interactive surface is a
+  **documented exception**, not a silent divergence.

@@ -20,11 +20,14 @@ function consume(merged, leafVerdicts) {
       if (v && typeof v === 'object' && typeof v.id === 'string') byId[v.id] = v
     }
   }
+  const matchedIds = Object.create(null)   // #430: which verdict ids matched a finding
   const survivors = []; const drops = []; const downgrades = []
   for (const f of merged) {
     const id = findingIdentity(f)
     let v = byId[id]
-    if (!v && f && typeof f.id === 'string') v = byId[f.id]
+    let matchedKey = (v !== undefined) ? id : null
+    if (!v && f && typeof f.id === 'string') { v = byId[f.id]; if (v !== undefined) matchedKey = f.id }
+    if (matchedKey !== null) matchedIds[matchedKey] = true
     const action = (v && typeof v === 'object') ? v.action : null
     const reason = (v && typeof v === 'object') ? v.reason : null
     if (action === 'drop' && typeof reason === 'string' && reason.trim()) {
@@ -45,6 +48,7 @@ function consume(merged, leafVerdicts) {
       downgrades.push(entry)
     }
   }
-  return { findings: survivors, drops, downgrades }
+  const unmatched = Object.keys(byId).filter((vid) => !matchedIds[vid])
+  return { findings: survivors, drops, downgrades, unmatched }
 }
 module.exports = { consume }

@@ -82,6 +82,57 @@ def test_unmatched_verdict_short_id_keeps_finding_fail_closed():
     assert out["drops"] == []
 
 
+# --- #430: unmatched-verdict LOUD disclosure -------------------------------------------------
+# The live failure (#397 ship leg, round 5): the synthesis judge returned drop verdicts whose
+# computed ids had drifted (raw punctuation) and matched NO finding, so keep-on-uncertain kept
+# every finding — SILENTLY. consume now reports the ids of verdicts that matched no finding so a
+# mis-keyed leaf is visible, never a silent no-op.
+def test_unmatched_verdicts_are_reported_loudly():
+    f = {"id": "premortem-001", "file": "a.py", "line": 12, "title": "real blocker",
+         "severity": "Critical"}
+    # The judge tried to drop the finding but keyed on a drifted id that matches nothing.
+    v = {"id": "a.py::claim/test mismatch: routed_forward", "action": "drop",
+         "reason": "stale anchor"}
+    out = LS.consume([f], [v])
+    # fail-closed: the finding is KEPT (never dropped on an unmatched verdict) ...
+    assert out["findings"] == [f]
+    assert out["drops"] == []
+    # ... AND the mis-keyed verdict is surfaced, not swallowed.
+    assert out["unmatched"] == ["a.py::claim/test mismatch: routed_forward"]
+
+
+def test_all_matched_verdicts_leave_unmatched_empty():
+    f = _f("a.py", "bug", "Important")
+    v = {"id": CB.finding_identity(f), "action": "keep", "severity": "Important"}
+    out = LS.consume([f], [v])
+    assert out["unmatched"] == []
+
+
+def test_staged_id_echoed_verbatim_folds_the_drop():
+    # The FIX shape: stage finding_identity as the finding's id; the judge ECHOES it verbatim
+    # (no re-normalization). consume matches on the staged id and the drop folds — the exact
+    # scenario round 5 failed on now succeeds.
+    f = _f("a.py", "claim/test mismatch: routed_forward secret-leak", "Critical")
+    staged = CB.finding_identity(f)
+    f_with_id = dict(f, id=staged)
+    v = {"id": staged, "action": "drop", "reason": "assertion already exists at HEAD"}
+    out = LS.consume([f_with_id], [v])
+    assert out["findings"] == []
+    assert out["drops"][0]["was_blocking_tagged"] is True
+    assert out["unmatched"] == []
+
+
+def test_id_collision_across_findings_no_false_unmatched():
+    # Two findings whose identity collides (same file + same normalized title) + one verdict for
+    # that id: both match, nothing is reported unmatched.
+    f1 = _f("a.py", "duplicate title", "Important")
+    f2 = _f("a.py", "Duplicate Title!", "Minor")  # normalizes to the same identity
+    assert CB.finding_identity(f1) == CB.finding_identity(f2)
+    v = {"id": CB.finding_identity(f1), "action": "keep", "severity": "Important"}
+    out = LS.consume([f1, f2], [v])
+    assert out["unmatched"] == []
+
+
 def test_drop_without_reason_is_kept_uncertain():
     f = _f("a.py", "weak", "Minor")
     v = {"id": CB.finding_identity(f), "action": "drop", "reason": ""}  # no reason -> keep
