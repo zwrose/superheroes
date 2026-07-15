@@ -147,14 +147,21 @@ async function main() {
       'double backslash: d\\\\e',
       "apostrophe: don't  quote: \"x\"",
       'tab\there  unicode ünî 日本語 🎉',
-      '__SR_EXIT:0 and __SR_WROTE:cafebabe embedded as content',   // marker-looking substrings in the payload
+      // The EXACT marker suffix, embedded MID-payload — this locks the round-1 `__expectMarker` anchor
+      // (bundle __sh: `/;\\s*echo __SR_EXIT:\\$\\?\\s*$/`). encPayload passes it through verbatim, so it sits
+      // inside the payload argv (the write command ends with the hash argv, not `$?`). With the `$` anchor
+      // present, __expectMarker stays FALSE -> ONE dispatch. Remove the `$` anchor and it matches mid-command
+      // -> __sh treats the genuine __SR_WROTE-only reply as a bad courier answer -> spurious retry -> the
+      // dispatches===1 assertion below FAILS. (A bare `__SR_EXIT:0` substring can't match the regex either
+      // way, so it would NOT kill that mutant — the literal `; echo __SR_EXIT:$?` is required.)
+      'doc snippet: run foo 2>&1; echo __SR_EXIT:$?  then __SR_WROTE:cafebabe next',
     ].join('\n')
     await io.writeFile(p, value)
     assert.strictEqual(fs.readFileSync(p, 'utf8'), value,
       '#435 escape-heavy content round-trips byte-identical through the REAL python3 writer (newline/CR/backslash/apostrophe/literal-\\n)')
     assert.strictEqual(dispatches.length, 1,
-      '#435 escape-heavy: faithful decode -> marker present -> EXACTLY ONE dispatch (a decode divergence would drop the marker and force a retry)')
-    console.log('OK: #435 escape-requiring content (LF/CRLF/backslash/literal-\\n/apostrophe/unicode + marker-looking substrings) round-trips byte-identical in one dispatch')
+      '#435 escape-heavy: faithful decode + marker-suffix anchor -> EXACTLY ONE dispatch (a decode divergence drops the marker, and an unanchored __expectMarker would spuriously retry on the embedded `; echo __SR_EXIT:$?`)')
+    console.log('OK: #435 escape-requiring content (LF/CRLF/backslash/literal-\\n/apostrophe/unicode + embedded marker suffix) round-trips byte-identical in one dispatch — locks the __expectMarker anchor')
   }
 
   // ---- (a3) isWriteCommand's load-bearing anchor: the record_composed embedding leaf is NOT a write. ----
