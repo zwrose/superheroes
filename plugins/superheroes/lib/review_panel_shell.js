@@ -7,6 +7,7 @@
 const { io } = require('./io_seam.js')
 const panelTally = require('./panel_tally.js')
 const loopSynthesis = require('./loop_synthesis.js')
+const acceptanceRereview = require('./acceptance_rereview.js')
 const circuitBreaker = require('./circuit_breaker.js')
 const loopState = require('./loop_state.js')
 const verifyGateTwin = require('./verify_gate.js')
@@ -14,6 +15,8 @@ const reviewMemory = require('./review_memory.js')
 const { libPath } = require('./lib_root.js')   // #170: spine code root for lib composes
 
 const SCHEMA_VERSION = 1
+const DOC_ROUND_RETRY_ATTEMPTS = 2   // #397 UFR-4: 2 failed attempts per round before parking
+                                      // (doc legs only — a code-leg round still fails on attempt 1)
 // #396: THREE strictly-ordered duration bounds, so a genuine verify timeout is CLASSIFIED and its
 // result file WRITTEN before any outer bound hard-kills the process:
 //   gate --timeout (VERIFY_TIMEOUT_SECONDS = 570s)
@@ -44,7 +47,7 @@ function _jsonAnswer(out) {
   catch (_) { return null }
 }
 
-async function planRoundDecider({ runDir, round, roster, changedSubjects, justMarked, coverageTarget, ioApi }) {
+async function planRoundDecider({ runDir, round, roster, changedSubjects, justMarked, coverageTarget, docMode, ioApi }) {
   const args = [libPath('review_loop_plan.py'), 'plan-round',
     '--path', ioApi.join(runDir, 'round-records.json'),
     '--round', String(round),
@@ -52,6 +55,7 @@ async function planRoundDecider({ runDir, round, roster, changedSubjects, justMa
   if (coverageTarget) args.push('--coverage-path', coverageTarget.path, '--coverage-mode', coverageTarget.mode)
   if (changedSubjects !== null && changedSubjects !== undefined) args.push('--changed-subjects', JSON.stringify(changedSubjects))
   if (justMarked) args.push('--just-marked')
+  if (docMode) args.push('--doc-mode')
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const ans = _jsonAnswer(await ioApi.runHelper('python3', args, { label: 'plan review round', courier: true }))
     if (ans && ans.ok) return ans
@@ -61,7 +65,7 @@ async function planRoundDecider({ runDir, round, roster, changedSubjects, justMa
 
 async function tallyRoundDecider({ runDir, round, roster, maxRounds, gate, confidence, missing,
   presentBlocking, uncertifiedReason, fixStatus, verifyResult, enterConfirmation, coverageTarget,
-  worklistOutPath, ioApi }) {
+  worklistOutPath, docMode, ioApi }) {
   const args = [libPath('review_loop_plan.py'), 'tally-round',
     '--path', ioApi.join(runDir, 'round-records.json'),
     '--round', String(round),
@@ -78,6 +82,7 @@ async function tallyRoundDecider({ runDir, round, roster, maxRounds, gate, confi
   if (verifyResult !== null && verifyResult !== undefined) args.push('--verify-result', String(verifyResult))
   if (enterConfirmation) args.push('--enter-confirmation')
   if (uncertifiedReason) args.push('--uncertified-reason', uncertifiedReason)
+  if (docMode) args.push('--doc-mode')
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const ans = _jsonAnswer(await ioApi.runHelper('python3', args, { label: 'tally review round', courier: true }))
     if (ans && typeof ans.terminal === 'string') return ans
@@ -455,6 +460,7 @@ async function gatherReviewSetup({ runDir, reviewerSet, context, legKind, ioApi 
     '--coverage-mode', target.mode === 'doc' ? 'doc' : 'code',
     '--out-path', api.join(runDir, 'review-setup-gather.json'),
     '--receipt-threshold', String(_SUMMARY_RECEIPT_BOUND)]
+  if (legKind && legKind.docMode) args.push('--doc-mode')
   const out = await api.runHelper('python3', args, { payload: true })
   let parsed = _jsonFromStdout(out)
   if (parsed && parsed.receipt === 'review-setup-gather') {
@@ -508,7 +514,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     const v = await tallyRound({ runDir, round, roster: reviewerSet || [], maxRounds,
                                    roundFindings: {}, legKind, verifyResult: null,
                                    policy: { roundKind: 'baseline' }, coverageDecisions: [],
-                                   coverageTarget: null, runId, extras: lastExtras, ioApi })
+                                   coverageTarget: null, runId, extras: lastExtras, docMode: legKind && legKind.docMode, ioApi })
     return _usable(v) ? await finalizeVerdict(v, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi) : _failClosed()
   }
 
@@ -524,7 +530,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     } else {
       plan = await planRoundDecider({ runDir, round, roster: reviewerSet,
         changedSubjects: (lastExtras && lastExtras.changedSubjects),
-        justMarked: justMarkedForConfirmation, coverageTarget, ioApi })
+        justMarked: justMarkedForConfirmation, coverageTarget, docMode: legKind && legKind.docMode, ioApi })
       if (!plan) {
         return await finalizeVerdict(
           { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'round-plan-unreadable', round },
@@ -641,7 +647,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     // rides only its pointer back. gate / present-blocking / uncertified-reason ride DOWN (below).
     const verdict = await tallyRound({ runDir, round, roster: reviewerSet, maxRounds,
       roundFindings, legKind, synthesized, verifyResult, policy: { roundKind }, coverageDecisions: roundCoverageDecisions,
-      coverageTarget, runId, extras: lastExtras, enterConfirmation, ioApi })
+      coverageTarget, runId, extras: lastExtras, enterConfirmation, docMode: legKind && legKind.docMode, ioApi })
     if (!_usable(verdict)) return _failClosed()
 
     if (verdict.terminal !== 'continue') {
@@ -666,7 +672,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     if (!fixResult.ok) {
       const failVerdict = await tallyRound({ runDir, round, roster: reviewerSet, maxRounds,
         roundFindings, legKind, synthesized, verifyResult, policy: { roundKind }, coverageDecisions: roundCoverageDecisions,
-        coverageTarget, runId, extras: fixResult.extras || lastExtras, fixStatus: 'failed', enterConfirmation, ioApi })
+        coverageTarget, runId, extras: fixResult.extras || lastExtras, fixStatus: 'failed', enterConfirmation, docMode: legKind && legKind.docMode, ioApi })
       return await finalizeVerdict(
         _usable(failVerdict) ? failVerdict : _failClosed(),
         reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
@@ -777,8 +783,19 @@ async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundF
 
 async function synthesizeRound(roundFindings, context, rubric, runDir, round) {
   const compiled = panelTally.compileDimensionResults(roundFindings)
-  const leaf = await synthesisLeaf(compiled, context, rubric, runDir, round)
-  const consumed = loopSynthesis.consume(compiled, leaf && Array.isArray(leaf.verdicts) ? leaf.verdicts : [])
+  const loadCandidates = (typeof globalThis !== 'undefined' && globalThis.loadAcceptanceCandidates) || null
+  let candidates = []
+  if (loadCandidates) {
+    try { candidates = await loadCandidates(context) || [] } catch (_) { candidates = [] }
+  }
+  const enrichedContext = Object.assign({}, context || {}, {
+    acceptanceCandidates: acceptanceRereview.prefilterForJudge(compiled, candidates),
+  })
+  const leaf = await synthesisLeaf(compiled, enrichedContext, rubric, runDir, round)
+  const verdicts = leaf && Array.isArray(leaf.verdicts) ? leaf.verdicts : []
+  const consumed = loadCandidates
+    ? acceptanceRereview.consumeWithAcceptance(compiled, verdicts, candidates)
+    : loopSynthesis.consume(compiled, verdicts)
   return Object.assign(consumed, { usage: leaf && leaf.usage })
 }
 
@@ -919,10 +936,24 @@ function verifyResultFromPayload(verifyCommand, payload, opts) {
 // scalars the durable skeleton can't hold DOWN to the tally-round decider (which owns the terminal
 // from disk + writes the fix worklist on a continue), and assemble the verdict — this round's
 // findings/drops/downgrades for the readout, the decider's decisions for control flow.
+async function _tallyRoundDeciderRetrying(opts, docMode) {
+  const attempts = docMode ? DOC_ROUND_RETRY_ATTEMPTS : 1
+  let lastErr
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      return await module.exports.tallyRoundDecider(opts)
+    } catch (e) {
+      lastErr = e
+      if (docMode) { try { log(`review-panel r${opts.round}: tally attempt ${i + 1}/${attempts} failed (${e && e.message ? e.message : e})`) } catch (_) {} }
+    }
+  }
+  throw lastErr
+}
+
 async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {},
                            legKind = {}, synthesized = null, verifyResult = null,
                            fixStatus = 'completed', extras = null, policy = {}, coverageDecisions = [],
-                           coverageTarget = null, runId, enterConfirmation = false, ioApi }) {
+                           coverageTarget = null, runId, enterConfirmation = false, docMode = false, ioApi }) {
   const api = ioApi || io()
   const safeExtras = {}
   if (extras && typeof extras === 'object') {
@@ -961,9 +992,9 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
 
     // the decider owns the terminal (breaker + decideTerminal + #174 economics + certification) from
     // disk; on a continue it writes the fixer worklist to the SAME leaf and rides only its pointer.
-    const decided = await tallyRoundDecider({ runDir, round, roster, maxRounds, gate, confidence, missing,
+    const decided = await _tallyRoundDeciderRetrying({ runDir, round, roster, maxRounds, gate, confidence, missing,
       presentBlocking, uncertifiedReason, fixStatus, verifyResult, enterConfirmation, coverageTarget,
-      worklistOutPath: api.join(runDir, `fix-context-r${round}.json`), ioApi: api })
+      worklistOutPath: api.join(runDir, `fix-context-r${round}.json`), docMode, ioApi: api }, legKind && legKind.docMode)
     // a mangled/unparseable decider answer fails closed — never a silent clean (the #211 adversarial
     // invariant): the shell's _failClosed sentinel halts + flags recordMissing.
     if (!decided || typeof decided.terminal !== 'string') return _failClosed()
@@ -1050,4 +1081,6 @@ function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 // after its one-pass fix batch lands (the fix changed the tree, so the round's pre-fix verify result is
 // stale) — reusing this leaf keeps the verify contract (round-stamped file authoritative, anti-
 // fabrication fail-closed) single-sourced instead of duplicating it at the call site.
-module.exports = { reviewPanel, gatherReviewSetup, verifyAgent, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }
+// tallyRoundDecider and planRoundDecider exported for #397 doc-panel smoke tests.
+// tallyRound exported for #397 Task 22 doc-round retry smoke tests.
+module.exports = { reviewPanel, gatherReviewSetup, verifyAgent, tallyRound, tallyRoundDecider, planRoundDecider, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }

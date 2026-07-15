@@ -36,6 +36,25 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_fronthalf_produce_smoke.js",
     # storage-mode-aware front-half doc/marker/ledger paths (out-of-repo project regression).
     "plugins/superheroes/lib/tests/showrunner_fronthalf_docdir_smoke.js",
+    # Task 15 (#397 FR-2/UFR-1): plan-review terminal writes plan-handoff.json from non-blocking
+    # findings and discloses write failures on phaseResult.assumptions.
+    "plugins/superheroes/lib/tests/showrunner_plan_handoff_smoke.js",
+    # Task 16 (#397 FR-3): tasks produce leaf receives hand-off from plan review via readHandoff,
+    # splices into prompt, and journals handoff_provided event on success/failure.
+    "plugins/superheroes/lib/tests/showrunner_handoff_delivery_smoke.js",
+    # Task 17 (#397 FR-4/FR-5): tasks-review non-blocking findings are journaled as routed_forward
+    # events and kept out of the build worklist.
+    "plugins/superheroes/lib/tests/showrunner_tasks_routed_smoke.js",
+    # Task 18 (#397 FR-10/FR-11/UFR-1): doc-review park composes a decision list into the parked
+    # event payload and discloses review_park.py dispatch failures on phaseResult.assumptions.
+    "plugins/superheroes/lib/tests/showrunner_park_disclosure_smoke.js",
+    # Task 19 (#397 FR-15/UFR-1): review_convergence event is journaled at every doc-review terminal
+    # (pass, park, accepted) with rounds used, per-round blocking vs routed-forward counts, and outcome.
+    "plugins/superheroes/lib/tests/showrunner_convergence_smoke.js",
+    # Task 21 (#397 FR-14/UFR-1): acceptance ledger consulted at re-review; recorded on gate-approval.
+    "plugins/superheroes/lib/tests/showrunner_acceptance_rereview_smoke.js",
+    # Task 22 (#397 UFR-4): doc-review per-round tally retry bounded at two attempts before parking.
+    "plugins/superheroes/lib/tests/showrunner_doc_round_retry_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_switch_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fullpipeline_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fullrun_smoke.js",
@@ -51,10 +70,14 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_final_review_tier_smoke.js",
     # #174: confirmation-bar economics — certify-after-scoped, severity-gated re-arm, hard cap.
     "plugins/superheroes/lib/tests/showrunner_confirmation_economics_smoke.js",
+    # Task 6 (#397 FR-8): confirmationFollowup docMode branch in the JS twin.
+    "plugins/superheroes/lib/tests/showrunner_review_round_policy_doc_mode_smoke.js",
     # mega-JSON regression: loop persistence ships paths + small scalars, never the record body.
     "plugins/superheroes/lib/tests/showrunner_reviewloop_payload_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_terminal_record_compose_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_defer_confirmation_fence_smoke.js",
+    "plugins/superheroes/lib/tests/showrunner_doc_severity_frame_smoke.js",
+    "plugins/superheroes/lib/tests/showrunner_doc_cap_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reconcile_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_resume_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reviewcode_smoke.js",
