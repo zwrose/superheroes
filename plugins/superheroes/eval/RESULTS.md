@@ -189,3 +189,44 @@ both mechanical bars green on first attempt. The severity closed-enum rubric lin
 (#276/#278) did not degrade any reviewer's recall or precision on the frozen
 fixtures. Absolute strict numbers remain non-comparable across runs per the
 2026-06-11 caveat.
+
+## 2026-07-15 — 0.14.0 release-eval benchmark run (full dual-dispatch A/B)
+
+**Instrument:** the release-evidence benchmark leg for the **superheroes 0.14.0** release
+(release PR #436, `releaseSha d6d1cd1`; release class `spine-carrying+reviewer-touching` —
+the fleet touched the doc-severity rubric addendum (#431), the synthesis fold (#430), and
+the reviewer receipt schema (#418)). Full §Procedure dual dispatch: 4 agents × 2 fixtures
+× 2 variants (baseline `5a05714`, improved = release tree at main `a52232d`) + premortem ×
+2 single-variant = **18 dispatches**, each a **sonnet** generic subagent reading the
+variant's agent file + rubric + fixture from disk (note: the 0.11.0 run used opus
+single-variant; absolute numbers remain non-comparable across runs per the 2026-06-11
+caveat — the within-run A/B gate is what binds).
+
+**Date:** 2026-07-15.
+
+Own-dimension recall (strict `score.py`) + traps, baseline → improved:
+
+| Agent | Fixture | Gate | Recall base→impr | Traps base→impr | Net-new (inspected) |
+|---|---|---|---|---|---|
+| architecture-reviewer | web-handler | PASS | 1/1 → 1/1 | 0 → 0 | 0 |
+| architecture-reviewer | refactor | PASS | 1/1 → 1/1 | 0 → 0 | 0 |
+| code-reviewer | web-handler | PASS | 0/1 † → 0/1 † | 0 → 0 | 2 († BOTH variants caught the hardcoded-error-string seed semantically at `notes.ts:27` — "hardcodes an inline 404 payload instead of the imported notFound" — outside the strict ±2 window; symmetric, no regression. Other net-new = the dual-filter cross-dim true positive, as in 0.11.0) |
+| code-reviewer | refactor | PASS | 1/1 → 1/1 | 0 → 0 | 2 (cross-dim BFLA/BOPLA true positives) |
+| security-reviewer | web-handler | PASS | 0/1 → **1/1** | 0 → 0 | 0 (improved caught the BOLA seed the baseline missed — recall improvement) |
+| security-reviewer | refactor | PASS | 2/2 → 2/2 | 0 → 0 | 0 |
+| test-reviewer | web-handler | strict FAIL → **hand-verified PASS †** | 1/1 → 1/1 | 0 → 1 † | 2 († the "flagged trap" is a Test coverage Nit on `noteBadgeColor` at :37 colliding with the theme-token trap's ±2 window at :39; the trap's `whyNotFlagged` scopes the regression to *contrast/color* findings, which did not occur — scorer window artifact, not the trapped behavior. Net-new are real: unauthenticated-condition never set; createNote uncovered) |
+| test-reviewer | refactor | PASS | 1/1 → 1/1 | **2 → 0** | 1 (baseline flagged two traps; improved flagged none — precision improvement) |
+| premortem-reviewer | failure-modes | n/a | — → **7/7** | 0 | 1 (extra real partial-failure instance) |
+| premortem-reviewer | failure-modes-bait | n/a | — → 0/0 | **0** (0 findings emitted) | 0 |
+
+**Mechanical bars:** `failure-modes` matched == total (7/7) ✓; `failure-modes-bait`
+traps_flagged == 0 ✓.
+
+**Tokens:** ~68k avg per dispatch, 1,224,116 total across 18.
+
+**Verdict: PASS** for the 0.14.0 benchmark instrument — no seeded regression anywhere the
+strict scorer OR hand-verification can see (the one strict trap FAIL is a hand-verified
+±2-window collision with a differently-typed finding; the one strict recall miss is
+symmetric across variants and semantically caught by both), zero real false positives,
+two genuine improvements (security/web-handler recall, test/refactor precision), both
+premortem mechanical bars green on first attempt.
