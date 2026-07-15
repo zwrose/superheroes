@@ -322,6 +322,40 @@ def test_load_engine_prefs_surfaces_only_valid_per_role_codex_model_pins(tmp_pat
     )
 
 
+def test_codex_model_strength_covers_every_valid_model():
+    # #409 drift guard: CODEX_MODEL_STRENGTH must stay a superset of CODEX_MODELS, else a valid pin
+    # would be unrankable and silently dropped from the write-auth probe's model selection.
+    assert set(EP.CODEX_MODEL_STRENGTH) == set(EP.CODEX_MODELS)
+
+
+def test_codex_write_probe_model_covers_the_implementation_dispatch_ceiling():
+    # #409: the write-auth probe dispatches the strongest model the codex implementation (build/fix)
+    # role will actually run — its pins, else the sol floor for any UNPINNED write role.
+    floor = EP.CODEX_MODEL_BY_TIER["opus"]  # gpt-5.6-sol
+    # no pins at all -> the sol capability floor (both write roles unpinned)
+    assert EP.codex_write_probe_model(None) == floor
+    assert EP.codex_write_probe_model({}) == floor
+    assert EP.codex_write_probe_model({"codexModels": {}}) == floor
+    assert EP.codex_write_probe_model({"codexModels": "nope"}) == floor
+    # BOTH write roles pinned entirely to gpt-5.5 -> gpt-5.5 (the exact #409 scenario)
+    assert EP.codex_write_probe_model(
+        {"codexModels": {"builder": "gpt-5.5", "fixer": "gpt-5.5"}}) == "gpt-5.5"
+    # PARTIAL pin: one write role unpinned derives a GPT-5.6 tier model, so the probe clamps up to the
+    # sol floor rather than under-testing at gpt-5.5 (the premortem fail-direction regression, closed).
+    assert EP.codex_write_probe_model({"codexModels": {"builder": "gpt-5.5"}}) == floor
+    # a reviewer pin is irrelevant to the WRITE probe — it does not lower or raise the write ceiling
+    assert EP.codex_write_probe_model(
+        {"codexModels": {"builder": "gpt-5.5", "fixer": "gpt-5.5",
+                         "reviewer": "gpt-5.6-sol"}}) == "gpt-5.5"
+    # both write roles pinned to a mid 5.6 family -> that family (still not the hard sol floor)
+    assert EP.codex_write_probe_model(
+        {"codexModels": {"builder": "gpt-5.6-luna", "fixer": "gpt-5.6-terra"}}) == "gpt-5.6-terra"
+    # builder is the ceiling (stronger than fixer) -> the probe dispatches builder's model. Proves the
+    # probe covers BOTH write roles, not just fixer (drops-builder-from-the-loop mutant dies here).
+    assert EP.codex_write_probe_model(
+        {"codexModels": {"builder": "gpt-5.6-sol", "fixer": "gpt-5.5"}}) == "gpt-5.6-sol"
+
+
 def test_load_engine_prefs_rejects_persistent_five_five_plus_max_before_dispatch(tmp_path):
     repo = str(tmp_path)
     _write_core_with_prefs(repo, {"reviewer": "codex", "implementation": "claude",
