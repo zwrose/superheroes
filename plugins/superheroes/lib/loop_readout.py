@@ -120,6 +120,17 @@ def render(record):
                 row += " — %s" % d.get("reason")
             lines.append(row)
         lines.append("")
+    # #430: a synthesis verdict that matched NO finding (a mis-keyed judge leaf) is disclosed
+    # LOUDLY, never silently swallowed. keep-on-uncertain kept every finding fail-closed, but an
+    # unmatched verdict means the judge's keep/drop intent was VOIDED — surface it so a false
+    # park (the #397 round-5 no-net-progress defect) is visible instead of hidden.
+    unmatched = [u for u in (record.get("unmatched") or []) if isinstance(u, str)]
+    if unmatched:
+        lines += ["### ⚠️ Synthesis verdicts that matched NO finding — the judge mis-keyed these",
+                  "_These verdict ids matched no merged finding, so the judge's keep/drop intent "
+                  "was voided and every finding was kept fail-closed. A drift here can mask real "
+                  "drops and inflate the no-net-progress signal — confirm the fold is sound._"]
+        lines += ["- %s" % u for u in unmatched] + [""]
     return "\n".join(lines).rstrip() + "\n"
 
 

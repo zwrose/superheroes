@@ -100,6 +100,11 @@ def consume_with_acceptance(merged, leaf_verdicts, candidates):
         "findings": normal_out.get("findings") or [],
         "drops": (acc_drops or []) + (normal_out.get("drops") or []),
         "downgrades": normal_out.get("downgrades") or [],
+        # #430: a sameness/normal verdict that matched no offered candidate or survivor is
+        # surfaced loudly (never a silent no-op). Acceptance verdicts are keyed to offered
+        # candidates, which are drawn from `merged`, so they always match — only the normal fold
+        # can produce unmatched ids here.
+        "unmatched": normal_out.get("unmatched") or [],
     }
 
 

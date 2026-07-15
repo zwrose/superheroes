@@ -82,6 +82,83 @@ def test_unmatched_verdict_short_id_keeps_finding_fail_closed():
     assert out["drops"] == []
 
 
+# --- #430: unmatched-verdict LOUD disclosure -------------------------------------------------
+# The live failure (#397 ship leg, round 5): the synthesis judge returned drop verdicts whose
+# computed ids had drifted (raw punctuation) and matched NO finding, so keep-on-uncertain kept
+# every finding — SILENTLY. consume now reports the ids of verdicts that matched no finding so a
+# mis-keyed leaf is visible, never a silent no-op.
+def test_unmatched_verdicts_are_reported_loudly():
+    f = {"id": "premortem-001", "file": "a.py", "line": 12, "title": "real blocker",
+         "severity": "Critical"}
+    # The judge tried to drop the finding but keyed on a drifted id that matches nothing.
+    v = {"id": "a.py::claim/test mismatch: routed_forward", "action": "drop",
+         "reason": "stale anchor"}
+    out = LS.consume([f], [v])
+    # fail-closed: the finding is KEPT (never dropped on an unmatched verdict) ...
+    assert out["findings"] == [f]
+    assert out["drops"] == []
+    # ... AND the mis-keyed verdict is surfaced, not swallowed.
+    assert out["unmatched"] == ["a.py::claim/test mismatch: routed_forward"]
+
+
+def test_all_matched_verdicts_leave_unmatched_empty():
+    f = _f("a.py", "bug", "Important")
+    v = {"id": CB.finding_identity(f), "action": "keep", "severity": "Important"}
+    out = LS.consume([f], [v])
+    assert out["unmatched"] == []
+
+
+def test_staged_id_echoed_verbatim_folds_the_drop():
+    # The FIX shape: stage finding_identity as the finding's id; the judge ECHOES it verbatim
+    # (no re-normalization). consume matches on the staged id and the drop folds — the exact
+    # scenario round 5 failed on now succeeds.
+    f = _f("a.py", "claim/test mismatch: routed_forward secret-leak", "Critical")
+    staged = CB.finding_identity(f)
+    f_with_id = dict(f, id=staged)
+    v = {"id": staged, "action": "drop", "reason": "assertion already exists at HEAD"}
+    out = LS.consume([f_with_id], [v])
+    assert out["findings"] == []
+    assert out["drops"][0]["was_blocking_tagged"] is True
+    assert out["unmatched"] == []
+
+
+def test_mixed_staged_identity_and_short_id_fallback_in_one_call():
+    # Premortem "mixed rounds" vector, tightened: one consume() call where one finding matches on
+    # the staged/recomputed identity and another matches on the literal f["id"] fallback. Both fold,
+    # nothing is falsely reported unmatched.
+    f_staged = _f("a.py", "identity match", "Important")
+    f_short = {"id": "premortem-007", "file": "b.py", "line": 3, "title": "fallback match",
+               "severity": "Critical"}
+    v_staged = {"id": CB.finding_identity(f_staged), "action": "drop", "reason": "does not hold"}
+    v_short = {"id": "premortem-007", "action": "keep", "severity": "Critical"}
+    out = LS.consume([f_staged, f_short], [v_staged, v_short])
+    assert [x["file"] for x in out["findings"]] == ["b.py"]   # a.py dropped, b.py kept
+    assert out["drops"][0]["file"] == "a.py"
+    assert out["unmatched"] == []
+
+
+def test_unmatched_preserves_first_insertion_order_with_numeric_ids():
+    # #430 twin-parity: an integer-like drifted verdict id must NOT reorder — Python dict and JS
+    # idOrder both keep first-insertion order (Object.keys would float numeric keys to the front).
+    f = _f("z.py", "real blocker", "Critical")
+    v1 = {"id": "42", "action": "drop", "reason": "mis-keyed"}
+    v2 = {"id": CB.finding_identity(f), "action": "keep", "severity": "Critical"}
+    v3 = {"id": "7", "action": "drop", "reason": "mis-keyed"}
+    out = LS.consume([f], [v1, v2, v3])
+    assert out["unmatched"] == ["42", "7"]
+
+
+def test_id_collision_across_findings_no_false_unmatched():
+    # Two findings whose identity collides (same file + same normalized title) + one verdict for
+    # that id: both match, nothing is reported unmatched.
+    f1 = _f("a.py", "duplicate title", "Important")
+    f2 = _f("a.py", "Duplicate Title!", "Minor")  # normalizes to the same identity
+    assert CB.finding_identity(f1) == CB.finding_identity(f2)
+    v = {"id": CB.finding_identity(f1), "action": "keep", "severity": "Important"}
+    out = LS.consume([f1, f2], [v])
+    assert out["unmatched"] == []
+
+
 def test_drop_without_reason_is_kept_uncertain():
     f = _f("a.py", "weak", "Minor")
     v = {"id": CB.finding_identity(f), "action": "drop", "reason": ""}  # no reason -> keep

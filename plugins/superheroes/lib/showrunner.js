@@ -417,7 +417,9 @@ function _defaultDenialRecorder(reviewer, eventsPath) {
     'journal.append(sys.argv[1], "permission_denied", step=("review:" + sys.argv[2]), ' +
     'detail={"probe": "denied", "reviewer": sys.argv[2]})'
   try {
-    const p = io().runHelper('python3', ['-c', script, String(eventsPath), String(reviewer || 'reviewer')])
+    // #435 write:true — a pure journal state-write; ride the narration-tolerant write-courier prompt so the
+    // disclosure channel survives a classifier storm (its only output is a small receipt, extracted by pattern).
+    const p = io().runHelper('python3', ['-c', script, String(eventsPath), String(reviewer || 'reviewer')], { write: true })
     if (p && typeof p.then === 'function') p.then(() => {}, () => {})   // swallow the async result
   } catch (_e) { /* fail-open: never let a journal write derail the review (UFR-2) */ }
 }
@@ -441,7 +443,10 @@ function _permHelper(call, args) {
     `import sys; sys.path.insert(0, ${pyLibDir()}); import permission_rules; ` +
     call
   try {
-    const p = io().runHelper('python3', ['-c', script].concat(args.map(String)))
+    // #435 write:true — freeze_run_rules / record_composed are pure permission-store state-writes (the
+    // record_composed registration was itself among the classifier-blocked dispatches on the live run).
+    // Ride the narration-tolerant write-courier prompt; the output is a small receipt extracted by pattern.
+    const p = io().runHelper('python3', ['-c', script].concat(args.map(String)), { write: true })
     if (p && typeof p.then === 'function') p.then(() => {}, () => {})   // swallow the async result
   } catch (_e) { /* fail-open: never let a permission-store write derail the run (UFR-2) */ }
 }
@@ -491,8 +496,10 @@ function _defaultDeclineRecorder(label, reason) {
     'events = control_plane.paths(sys.argv[1], (sys.argv[2] or None))["events"]; ' +
     'journal.append(events, "courier_declined", step=sys.argv[3], detail={"reason": sys.argv[4]})'
   try {
+    // #435 write:true — the courier-decline journal is the disclosure channel for a blocked dispatch; ride
+    // the narration-tolerant write-courier prompt so it is not itself caught in the same classifier storm.
     const p = io().runHelper('python3', ['-c', script,
-      run.cwd || procCwd(), run.workItem || '', String(label || 'courier'), String(reason || '')])
+      run.cwd || procCwd(), run.workItem || '', String(label || 'courier'), String(reason || '')], { write: true })
     if (p && typeof p.then === 'function') p.then(() => {}, () => {})   // swallow the async result
   } catch (_e) { /* fail-open: never let a decline journal derail the fail-closed hand-off (UFR-2) */ }
 }
@@ -658,7 +665,9 @@ function reviewCodeLeaves(tiers, opts) {
       `You are the panel synthesis judge (eval/synthesis-leaf.md). For EACH merged finding below decide ` +
       `keep/drop + the rubric-justified severity (keep-on-uncertain; never decide the loop terminal). ` +
       `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}]} — one ` +
-      `verdict per merged finding, keyed by its file::normalized-title identity.\n\n` +
+      `verdict per merged finding. Copy each finding's "id" field into your verdict VERBATIM — do not ` +
+      `recompute, normalize, or edit it (#430: a re-derived id drifts and matches nothing, silently ` +
+      `voiding your keep/drop). The id is the match key; get it wrong and your verdict is discarded.\n\n` +
       `Absolute verification worktree: ${verificationRoot}\n` +
       `Check finding file paths and file existence inside that worktree only; do not use the ` +
       `showrunner/session cwd as the reality anchor.\n\n` +
@@ -809,8 +818,10 @@ async function docSynthesisLeaf(merged, context, rubric, runDir, round) {
     `For each merged finding below and the doc at ${context.docPath}, per the synthesis-leaf prompt ` +
     `(plugins/superheroes/eval/synthesis-leaf.md) emit one keep/drop/severity verdict (keep-on-uncertain). ` +
     `${DOC_SEVERITY_FRAME}${acceptanceClause} Return ONLY a JSON object ` +
-    `{"verdicts":[{"id","action":"keep|drop|same|different","reason","severity"}]} keyed by ` +
-    `each finding's file::normalized-title identity.\n\nMerged findings:\n${JSON.stringify(merged)}`,
+    `{"verdicts":[{"id","action":"keep|drop|same|different","reason","severity"}]}. Copy each ` +
+    `finding's "id" field into your verdict VERBATIM — do not recompute, normalize, or edit it ` +
+    `(#430: a re-derived id drifts and matches nothing, silently voiding your verdict). The id is ` +
+    `the match key.\n\nMerged findings:\n${JSON.stringify(merged)}`,
     Object.assign({ model }, { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA }))
   return out || null
 }
