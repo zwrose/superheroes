@@ -1,4 +1,4 @@
-<!-- rubric-version: 5 -->
+<!-- rubric-version: 6 -->
 # review-base
 
 The source of truth for review **severity, verification rules, findings format,
@@ -96,6 +96,42 @@ Security reviewer emits `security-001`, …; the Failure-Mode reviewer emits
 - **Critical / Important:** uncapped (load-bearing).
 - **Minor:** uncapped, but each must pass the verification rules; if reporting
   >10, dedupe — they're usually facets of one issue.
+
+## Document-review severity (applies only when `docType` is `plan` or `tasks`)
+
+This section **overrides the severity tiers above for document reviews only**. It does not
+apply to code review (`docType` absent). A document is not code: judge every finding against
+the reviewed document's **own job**, not against code-review severity.
+
+**Blocking bar (FR-1).** A finding is **blocking** only if *following the document as written
+would mislead the build or cause it to build something unsafe or incorrect*, judged against
+the document's own job. Everything else is **non-blocking** and routes forward — it never
+blocks the gate and never re-arms the loop.
+
+**Plan vs tasks asymmetry.**
+- In a **plan** review, task- and test-*specification granularity* is **non-blocking**:
+  "no named unit test for this option", "this value appears as two separate literals", "this
+  test doesn't pin a controlled clock" — specifying tasks and tests is the *tasks* document's
+  job, not the plan's. Route these to the hand-off list.
+- In a **tasks** review, a finding that the tasks document *mis-specifies a task or test the
+  build will follow* is judged **directly against the bar** — never categorically demoted as
+  "specification granularity" — because the tasks document is the build's contract.
+
+**Always blocking (incident-anchored).** A finding of the class that legitimately blocked
+round 1 of the 2026-07-12 incident run — an unauthenticated access path, a required security exemption missing, a design that would corrupt or lose data — is **blocking** in either
+document.
+
+**Ambiguity fails closed.** A finding you cannot confidently place on either side of the bar
+is **blocking**. A wrongly-demoted real blocker is invisible; a wrongly-promoted one costs at
+most a readable park the owner can rule on. Example: "the plan's error-handling approach *may
+be insufficient*" without naming what would break cannot be confidently placed — so it blocks.
+
+*Few-shot anchors (2026-07-12 incident corpus).* Blocking (its round-1 findings): an
+unauthenticated write path; a missing security-exemption the design required; a data-model
+that would drop records on a concurrent edit. Non-blocking on a **plan** (its rounds 5–7
+findings, which fueled the treadmill): "no named unit test for the fallback branch"; "the
+retry constant is written twice as two literals"; "this test description doesn't specify a
+frozen clock". On a **tasks** doc those same three ARE judged against the bar.
 
 ## Triage rubric (mechanical vs judgment)
 

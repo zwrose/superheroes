@@ -1,5 +1,5 @@
 // plugins/superheroes/lib/review_round_policy.js
-const { isCritical } = require('./circuit_breaker.js')
+const { isCritical, isBlocking } = require('./circuit_breaker.js')
 const DEEP = 'reviewer-deep'
 const CHEAP = 'reviewer'
 // #174 confirmation-bar economics: at most this many FULL confirmation panels per loop, and the
@@ -141,18 +141,31 @@ function isCrossCutting(changedSubjects, threshold = CROSS_CUTTING_SUBJECTS) {
 }
 
 function confirmationFollowup(surfacedSeverities, confirmationsRun, crossCutting,
-  maxConfirmations = MAX_CONFIRMATIONS) {
+  maxConfirmations = MAX_CONFIRMATIONS, docMode = false) {
   // #174 confirmation-bar economics — the follow-up decision after a FULL confirmation panel
   // surfaced blocking findings (which the fix loop still resolves + verifies, requirement 1).
   // Only a Critical surfaced, OR cross-cutting rework, triggers one more full confirmation; hard
   // cap of `maxConfirmations` panels; a Critical still owed at the cap parks (certification
   // withheld), a non-Critical at the cap is resolved by a scoped verify then certified.
   const sevs = (surfacedSeverities || []).filter((s) => typeof s === 'string')
+  const atCap = confirmationsRun >= maxConfirmations
+  if (docMode) {
+    const hasBlocking = sevs.some((s) => isBlocking(s))
+    if (!hasBlocking) {
+      return { rearm: false, park: false, atCap,
+        reason: 'no open blocking finding — doc review certifies' }
+    }
+    if (atCap) {
+      return { rearm: false, park: true, atCap: true,
+        reason: 'open blocking finding at the doc-review round cap — park; certification withheld' }
+    }
+    return { rearm: true, park: false, atCap: false,
+      reason: 'open blocking finding in doc review — one more full confirmation panel required' }
+  }
   // #291: case-normalized Critical match — a surfaced mis-cased `critical` must still park at the cap
   // (was `sevs.includes('Critical')`, case-sensitive, so a lowercase Critical resolved by scoped verify).
   const hasCritical = sevs.some((s) => isCritical(s))
   const trigger = hasCritical || !!crossCutting
-  const atCap = confirmationsRun >= maxConfirmations
   if (!trigger) {
     return { rearm: false, park: false, atCap,
       reason: 'non-Critical findings, rework not cross-cutting — resolve by scoped verify; no further confirmation panel' }

@@ -22,8 +22,7 @@ fixes that involve a judgment call. On a clean exit it **records the review gate
 This is the **Tasks leg of the superheroes review trio** (`review-spec` / `review-plan` /
 `review-tasks`) — the automated gate the-architect's `tasks` skill calls. Read the base
 rubric (`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-base.md`) for severity calibration and the
-verification rules every finding must pass; if anything below contradicts the base rubric,
-the base rubric wins.
+verification rules every finding must pass; if anything below contradicts it, the base rubric wins.
 
 > **Band posture.** This reviews the superheroes `tasks` definition-doc (CONVENTIONS §3),
 > designed to run inside the band alongside the-architect. If handed a doc with no
@@ -346,6 +345,7 @@ Read the five `$SESSION_DIR/findings-*.json` files. Apply, in order:
 1. **Citation check.** Drop any finding with `file == null` or `line == null`.
 2. **Dedupe by tasks section + topic.** When two findings target the same task/step and same topic, merge them: concatenate bodies with a separator, keep the higher severity, list both dimensions (e.g. `"Test + Code"`).
 3. **Nit cap.** If more than 5 Nits remain after dedupe, keep the first 5 and summarize the rest as a count.
+4. **Acceptance suppression (FR-14).** Run the acceptance-consume block in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-tasks/reference/tasks-detail.md`: owner-accepted findings on unchanged content are suppressed from the tally (reported as accepted, never re-asked); uncertain sameness stays blocking.
 
 Determine the verdict per the base rubric's "Verdict labels & mapping". For `/superheroes:review-tasks` the labels are **TASKS READY** / **REVISE BEFORE BUILD** / **MAJOR GAPS — RECONSIDER PLAN**:
 
@@ -418,14 +418,14 @@ Each round:
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-   python3 "$ROOT_DIR/lib/loop_state.py" --round <N> --max-rounds 7 \
+   python3 "$ROOT_DIR/lib/loop_state.py" --round <N> --max-rounds 3 \
      --compiled "$SESSION_DIR/compiled.json" --skipped-blocking <SKIPPED_BLOCKING>
    ```
 
    - **`review`** → `round += 1` and repeat from step 1. **MANDATORY** — you revised a blocking finding; re-review to verify it actually resolved and introduced nothing new. Do **not** exit because the revision "looks resolved."
    - **`exit_clean`** → **EXIT** the loop (then record the gate, §6).
    - **`exit_skipped`** → **EXIT**, listing the deliberately-skipped blocking finding(s) — not a plain TASKS READY.
-   - **`halt`** → the 7-round cap was hit with blocking findings still being revised: report them; do **not** declare TASKS READY.
+   - **`halt`** → the three-round cap (baseline + at most two confirmations) was hit with blocking findings still being revised: report them; do **not** declare TASKS READY.
 
 ### 6. Record the review gate
 
@@ -434,8 +434,10 @@ producer's Build reads (it supersedes the-architect's `tasks` self-certification
 this step entirely when `isDefinitionDoc == no`.**
 
 - **TASKS READY** (no unresolved Critical/Important) → record `passed`.
-- **REVISE BEFORE BUILD / MAJOR GAPS**, or the 7-round cap hit with Critical/Important still
+- **REVISE BEFORE BUILD / MAJOR GAPS**, or the three-round cap hit with Critical/Important still
   open, or the user **skipped** a blocking finding → record `changes-requested`.
+
+**Record accepted findings to the acceptance ledger (gate-approval only).** When `REVIEW` is `passed`, run the acceptance-ledger block in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-tasks/reference/tasks-detail.md` **before** `gate_write.py` (FR-14: acceptance first, then `gates.review`).
 
 The gate write lives in `lib/gate_write.py` (canonical-path guard, parent-gate precondition, fenced `set-gate`). It prints stderr detail and a one-word outcome to stdout:
 
@@ -450,23 +452,21 @@ GATE=$(python3 "$ROOT_DIR/lib/gate_write.py" --mode certify --doc tasks \
 ```
 
 `$GATE` is one of `recorded:passed` / `recorded:changes-requested` / `skipped:noncanonical` /
-`failed:set-gate` — surface it (and any stderr detail) in the terminal
-summary. Never hand-edit the frontmatter — `gate_write.py` (via the-architect's CLI) is the
-only writer.
+`failed:set-gate` — surface it (and stderr plus acceptance-ledger disclosure from tasks-detail) in the terminal summary. Never hand-edit the frontmatter — `gate_write.py` is the only writer.
 
 After exit, print a terminal summary in chat:
 
 - Lead with the final verdict label in bold, and the **gate outcome** (`$GATE` from the
   helper; or "not recorded — not a definition-doc" when `isDefinitionDoc == no`, in which case
-  step 6 was skipped). If the loop hit the 7-round cap with Critical/Important unresolved, the
-  verdict is **REVISE** and the gate is `changes-requested` — do **not** declare TASKS READY.
+  step 6 was skipped). If the loop hit the three-round cap (baseline + at most two confirmations)
+  with Critical/Important unresolved, the verdict is **REVISE** and the gate is `changes-requested` — do **not** declare TASKS READY.
 - List, grouped by task/step, the revisions applied (auto + user-approved) and the findings the
   user chose to skip — each with its POV line.
 - End with a count summary (e.g. `"3 auto-revised, 1 skipped; TASKS READY; gate → passed"`).
 
 **Then, after the terminal summary**, run the three non-blocking end-of-run steps from `## Learning Loop & Staleness Nudge`, in order: (1) the **staleness nudge**, (2) the **learning-loop proposal**, then (3) the **provisional-profile confirmation**. All three are placed after the review output and none blocks.
 
-Nothing else is written to the repo — the revised `$TASKS_PATH` and its gate are the deliverables (plus the project-level `.claude/review-decisions.json` learning-loop store and, only on a dismissal, the profile's `nudge-ack` map).
+Nothing else is written to the repo — the revised `$TASKS_PATH`, its gate, and (on `passed` only) `tasks-accept.json` are the deliverables (plus `.claude/review-decisions.json` and, on dismissal, the profile's `nudge-ack` map).
 
 For recurrence handling, coverage decisions, dimension skipping, tier cascade, final confirmation, and telemetry, use `plugins/superheroes/reference/review-loop.md` as the shared loop contract. This skill owns only its leg-specific setup, reviewer framing, and gate-write rules.
 
@@ -494,7 +494,7 @@ Agents flag departures from these — every one is in the writing-plans + CONVEN
 | Re-reviewing the plan's design decisions at tasks time                      | That was review-plan's job. Here, only flag a task that contradicts or drifts from the plan — design is settled.                                                |
 | Tolerating a placeholder ("add error handling")                             | The tasks bar forbids placeholders. A placeholder is a Fix + mechanical finding — fill it with the concrete code/command, or flag the plan gap behind it.        |
 | Inventing a task to cover a missing requirement                             | If the PLAN never covered a requirement, tasks can't faithfully add it — loop back to review-plan/plan. Tasks must not re-decide design.                         |
-| Overwriting a `changes-requested` gate with `passed`                        | The gate write reflects the verdict. A skipped blocking finding or a 7-round cap with open Critical/Important → `changes-requested`, never `passed`.            |
+| Overwriting a `changes-requested` gate with `passed`                        | The gate write reflects the verdict. A skipped blocking finding or a three-round cap with open Critical/Important → `changes-requested`, never `passed`.            |
 | Hand-editing the frontmatter to set the gate                                | The gate is written only via the-architect's `definition_doc.py set-gate`. If that lib is absent, report "gate not recorded" — never hand-edit the YAML.        |
 | Citing line numbers from the wrong file                                     | Tasks-doc citations point at `$SESSION_DIR/tasks.md`; project-file citations point at repo paths. Don't mix them.                                               |
 | Re-raising findings the user skipped                                        | Check the `skip-set` and prior rounds before raising a finding.                                                                                                 |

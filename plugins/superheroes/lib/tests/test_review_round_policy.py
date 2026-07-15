@@ -119,6 +119,38 @@ def test_confirmation_followup_nothing_surfaced_no_rearm():
     assert out["park"] is False
 
 
+def test_doc_mode_important_under_cap_rearms():
+    out = RP.confirmation_followup(["Important"], 1, False, doc_mode=True)
+    assert out == {"rearm": True, "park": False, "atCap": False,
+                   "reason": "open blocking finding in doc review — one more full confirmation panel required"}
+
+
+def test_doc_mode_important_at_cap_parks():
+    out = RP.confirmation_followup(["Important"], 2, False, doc_mode=True)
+    assert out["rearm"] is False and out["park"] is True and out["atCap"] is True
+
+
+def test_doc_mode_nothing_open_no_rearm():
+    out = RP.confirmation_followup([], 1, False, doc_mode=True)
+    assert out == {"rearm": False, "park": False, "atCap": False,
+                   "reason": "no open blocking finding — doc review certifies"}
+
+
+def test_doc_mode_critical_at_cap_parks():
+    out = RP.confirmation_followup(["Critical"], 2, False, doc_mode=True)
+    assert out["park"] is True and out["atCap"] is True
+
+
+def test_code_mode_unchanged_important_at_cap_scoped_verify():
+    # regression guard: code review's rule is untouched — a non-Critical, non-cross-cutting finding
+    # at the cap certifies via scoped verify. `cross_cutting=False` exercises the actual early
+    # `not trigger` return; passing True here would instead exercise the cross-cutting-at-cap branch,
+    # which happens to produce the same {park, rearm, atCap} values and so would silently pass even
+    # if the `not trigger` branch regressed.
+    out = RP.confirmation_followup(["Important"], 2, False)
+    assert out["park"] is False and out["rearm"] is False and out["atCap"] is True
+
+
 def test_object_changed_subjects_from_live_doc_fix_still_schedule_skips():
     out = RP.plan_round({
         "round": 2,

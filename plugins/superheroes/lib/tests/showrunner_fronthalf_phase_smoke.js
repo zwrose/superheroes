@@ -63,6 +63,16 @@ function makeAgent({ gate, reviewerFindings = [], reviserFails = false, setGateF
     if (label === 'save round state') return jsonOut({ ok: true })
     if (opts && opts.courier) {
       if (prompt.includes('read-gate')) return [{ index: 0, ok: true, stdout: JSON.stringify({ review: gate }) }]
+      if (prompt.includes('review_convergence.py')) {
+        const m = String(prompt).match(/^\d+\.\s(.*)$/m)
+        const cmd = m ? m[1] : null
+        assert.ok(cmd, 'review_convergence dispatch must be a numbered exec command')
+        const stdout = require('child_process').execSync(cmd, { encoding: 'utf8', shell: '/bin/bash' }).trim()
+        return [{ index: 0, ok: true, stdout }]
+      }
+      if (prompt.includes('review_handoff.py') && prompt.includes(' write ')) {
+        return jsonOut({ ok: true, counts: { distinct: 0 } })
+      }
       // gate-for-terminal must NOT be dispatched as an exec (it is the in-process JS twin).
       if (prompt.includes('gate-for-terminal')) throw new Error('gate-for-terminal dispatched as exec — must use JS twin')
       return [{ index: 0, ok: true, stdout: '' }, { index: 1, ok: true, stdout: '' }]
