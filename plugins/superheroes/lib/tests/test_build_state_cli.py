@@ -141,6 +141,114 @@ def test_gather_maps_task_id_before_co_authored_by_trailer_block(tmp_path):
     assert st["unmapped_commits"] == 0
 
 
+def test_gather_maps_final_review_sentinel_commit_resume_not_fail_closed(tmp_path):
+    """#375 reproduction: a run that parked at the final-review round cap leaves whole-branch
+    final-review FIX commits on the branch (no numeric Task-Id — they serve no single task). On
+    relaunch the build-gather re-validates every above-base commit; before the fix those fix commits
+    read as unmapped and the resume fail-closes on UFR-7. With the reserved sentinel trailer the gather
+    maps them, so unmapped==0 and the resume proceeds."""
+    import build_state as bs  # the SSOT for the sentinel value
+    repo = str(tmp_path)
+    _git(repo, "init", "-q")
+    _git(repo, "commit", "--allow-empty", "-m", "base", "-q")
+    _git(repo, "checkout", "-q", "-b", "superheroes/wi-fr")
+    _git(repo, "branch", "-f", "main", "HEAD")
+    _git(repo, "commit", "--allow-empty", "-m", "task 1\n\nTask-Id: 1", "-q")
+    # Two whole-branch final-review fix commits (the spine's own fix loop landed these), each carrying
+    # the reserved sentinel — NOT a numeric task id.
+    _git(repo, "commit", "--allow-empty",
+         "-m", "build: fix whole-branch findings\n\nTask-Id: %s" % bs.FINAL_REVIEW_TASK_ID, "-q")
+    _git(repo, "commit", "--allow-empty",
+         "-m", "build: fix more whole-branch findings\n\nTask-Id: %s" % bs.FINAL_REVIEW_TASK_ID, "-q")
+    env = dict(os.environ, WORKHORSE_STORE_ROOT=str(tmp_path / "store"))
+    out = subprocess.run([sys.executable, CLI, "gather", "--work-item", "wi",
+                          "--branch", "superheroes/wi-fr", "--valid-ids", "1"],
+                         cwd=repo, env=env, capture_output=True, text=True)
+    st = json.loads(out.stdout)
+    assert st["unmapped_commits"] == 0                  # the resume no longer fail-closes (UFR-7)
+    assert "1" in st["committed_task_ids"]
+    # The sentinel commits are mapped (not silently dropped) — reality-wins provenance stays complete.
+    assert st["committed_task_ids"].count(bs.FINAL_REVIEW_TASK_ID) == 2
+
+
+def test_gather_sentinel_acceptance_is_additive_stray_still_unmapped(tmp_path):
+    """The sentinel acceptance must be ADDITIVE, not a gate-wide loosening: on a resumed branch that
+    mixes a numeric task commit, sentinel final-review fix commits, AND a genuine untrailered stray, the
+    stray STILL reads unmapped==1 while the sentinel commits map. This is the true #375 resume shape and
+    proves accepting the sentinel did not open a wholesale hole in UFR-7."""
+    import build_state as bs
+    repo = str(tmp_path)
+    _git(repo, "init", "-q")
+    _git(repo, "commit", "--allow-empty", "-m", "base", "-q")
+    _git(repo, "checkout", "-q", "-b", "superheroes/wi-mix")
+    _git(repo, "branch", "-f", "main", "HEAD")
+    _git(repo, "commit", "--allow-empty", "-m", "task 1\n\nTask-Id: 1", "-q")
+    _git(repo, "commit", "--allow-empty",
+         "-m", "build: fix whole-branch findings\n\nTask-Id: %s" % bs.FINAL_REVIEW_TASK_ID, "-q")
+    _git(repo, "commit", "--allow-empty", "-m", "stray (no trailer)", "-q")   # a genuine unmapped commit
+    env = dict(os.environ, WORKHORSE_STORE_ROOT=str(tmp_path / "store"))
+    out = subprocess.run([sys.executable, CLI, "gather", "--work-item", "wi",
+                          "--branch", "superheroes/wi-mix", "--valid-ids", "1"],
+                         cwd=repo, env=env, capture_output=True, text=True)
+    st = json.loads(out.stdout)
+    assert st["unmapped_commits"] == 1                  # EXACTLY the stray — sentinel acceptance is additive
+    assert "1" in st["committed_task_ids"]
+    assert bs.FINAL_REVIEW_TASK_ID in st["committed_task_ids"]
+
+
+def test_gather_still_flags_pre_fix_slug_trailered_commit(tmp_path):
+    """#375 backward-compat: an OLD parked run whose external final-review fix minted the work-item
+    SLUG as the Task-Id is STILL unmapped after this fix — the gate reserves one sentinel, it does not
+    accept arbitrary ids. Those commits need a manual re-trailer to the sentinel (the documented
+    convention) before they resume. This test pins that UFR-7 stays fail-closed for unknown ids."""
+    repo = str(tmp_path)
+    _git(repo, "init", "-q")
+    _git(repo, "commit", "--allow-empty", "-m", "base", "-q")
+    _git(repo, "checkout", "-q", "-b", "superheroes/wi-slug")
+    _git(repo, "branch", "-f", "main", "HEAD")
+    _git(repo, "commit", "--allow-empty", "-m", "task 1\n\nTask-Id: 1", "-q")
+    _git(repo, "commit", "--allow-empty",
+         "-m", "build: fix\n\nTask-Id: superheroes-wi-slug", "-q")   # pre-fix external mint = the slug
+    env = dict(os.environ, WORKHORSE_STORE_ROOT=str(tmp_path / "store"))
+    out = subprocess.run([sys.executable, CLI, "gather", "--work-item", "wi",
+                          "--branch", "superheroes/wi-slug", "--valid-ids", "1"],
+                         cwd=repo, env=env, capture_output=True, text=True)
+    st = json.loads(out.stdout)
+    assert st["unmapped_commits"] == 1                  # still fail-closed (fix is a sentinel, not "any id")
+
+
+def test_external_committer_sentinel_roundtrips_through_gather(tmp_path):
+    """The EXTERNAL final-review fix path commits via engine_adapter.commit_result(task_id=sentinel).
+    Prove that committer's output maps clean through the gather — the whole external chain, not just
+    the native-prompt path."""
+    import build_state as bs
+    sys.path.insert(0, os.path.join(HERE, ".."))
+    import engine_adapter
+    repo = str(tmp_path)
+    _git(repo, "init", "-q")
+    # engine_adapter.commit_result spawns its OWN `git commit` with a bare env (no GIT_AUTHOR_* inherited
+    # from _git's per-subprocess injection), so pin a repo-local identity or it fails "Author identity
+    # unknown" on a clean runner (mirrors test_engine_adapter_effectful.py).
+    _git(repo, "config", "user.email", "t@t")
+    _git(repo, "config", "user.name", "t")
+    _git(repo, "commit", "--allow-empty", "-m", "base", "-q")
+    _git(repo, "checkout", "-q", "-b", "superheroes/wi-ext")
+    _git(repo, "branch", "-f", "main", "HEAD")
+    pre = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    # Simulate an engine that only edited the tree (HEAD == pre_sha): the committer mints the single
+    # sentinel-trailered commit.
+    (tmp_path / "changed.txt").write_text("whole-branch fix")
+    res = engine_adapter.commit_result(repo, bs.FINAL_REVIEW_TASK_ID, pre)
+    assert res["ok"] is True, res
+    env = dict(os.environ, WORKHORSE_STORE_ROOT=str(tmp_path / "store"))
+    out = subprocess.run([sys.executable, CLI, "gather", "--work-item", "wi",
+                          "--branch", "superheroes/wi-ext", "--valid-ids", "1"],
+                         cwd=repo, env=env, capture_output=True, text=True)
+    st = json.loads(out.stdout)
+    assert st["unmapped_commits"] == 0
+    assert bs.FINAL_REVIEW_TASK_ID in st["committed_task_ids"]
+
+
 def test_record_reviewed_then_gather_reads_it(tmp_path):
     repo = str(tmp_path)
     _git(repo, "init", "-q")
