@@ -7,9 +7,12 @@ name: Release Evidence
 # (`release-evidence`) on the PR head SHA, so posting evidence later flips it green without a
 # force-push clobbering it. See RELEASING.md.
 #
-# Security posture: this job holds statuses:write + issues:write, so it must never execute code
-# from the (untrusted) PR head. It checks out the TRUSTED base branch for the scripts and reads
-# the release head only as data — the bundle blob via `git show`, the range via `git diff`.
+# Security posture: this job holds statuses:write + pull-requests:write + issues:write, so it must
+# never execute code from the (untrusted) PR head. It checks out the TRUSTED base branch for the
+# scripts and reads the release head only as data — the bundle blob via `git show`, the range via
+# `git diff`. The sticky owed-summary comment is posted to a PR-backed issue, whose comment write
+# is governed by the pull-requests permission (NOT issues) — issues:write alone 403s the POST
+# (issue #385); pull-requests:write is required.
 # Fork PRs additionally receive a read-only token from GitHub, and the job no-ops on any branch
 # not named `release-please--*`.
 
@@ -28,7 +31,9 @@ permissions:
   contents: read
   statuses: write
   issues: write
-  pull-requests: read
+  # A comment on a PR-backed issue (the release-please PR) is governed by the pull-requests
+  # permission, not issues — issues:write alone 403s the owed-summary POST (issue #385).
+  pull-requests: write
 
 jobs:
   evidence:
@@ -136,8 +141,11 @@ jobs:
       - name: Upsert the sticky owed-summary comment
         # Only on branch-push / dispatch — NOT on issue_comment, so the upsert never re-triggers
         # itself (issue_comment is also skipped by the job `if`, this is belt-and-braces).
+        # Deliberately NOT continue-on-error (issue #385): a failed comment post (e.g. a
+        # permission regression) must redden the job — for years this step 403'd silently inside
+        # green runs. The always() status step below still posts the required release-evidence
+        # status even when this step fails, so a loud red job never strands the required check.
         if: steps.ctx.outputs.is_release == 'true' && github.event_name != 'issue_comment'
-        continue-on-error: true
         env:
           NUM: ${{ steps.ctx.outputs.pr }}
         run: |

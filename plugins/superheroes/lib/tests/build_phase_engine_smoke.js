@@ -345,11 +345,12 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     delete require.cache[require.resolve('../engine_dispatch.js')]
     const engineDispatch = require('../engine_dispatch.js')
     let externalFixDispatches = 0
+    const finalFixDispatches = []
     engineDispatch.dispatchExternal = async (o) => {
       if (o.roleKind === 'review') {
         return { findings: [{ severity: 'Critical', file: 'y.js', title: 'blocker', line: 1, evidence: 'x' }] }
       }
-      if (o.roleKind === 'fix') externalFixDispatches += 1
+      if (o.roleKind === 'fix') { externalFixDispatches += 1; finalFixDispatches.push(o) }
       return { ok: true, signal: 'ok', evidence: {} }
     }
     const bp = require('../build_phase.js')
@@ -369,6 +370,14 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
       '#381: the halt carries the STRUCTURED round-cap discriminator (the caller hands off to review-code)')
     assert.strictEqual(externalFixDispatches, 1,
       '#381: the one fix pass dispatches roleKind fix to the implementation engine EXACTLY ONCE')
+    // #375: the whole-branch final-review fix dispatch carries the RESERVED sentinel as its taskId
+    // (engine_adapter.commit_result stamps `Task-Id: final-review`, which the build-gather accepts) —
+    // NOT the work-item slug (the pre-#375 value that failed the spine's own UFR-7 resume gate). This
+    // kills the `taskId: workItem` regression at build_phase.js's final-review _implDispatch call site.
+    assert.strictEqual(finalFixDispatches[0].taskId, bp.FINAL_REVIEW_TASK_ID,
+      '#375: the whole-branch fix dispatch carries the reserved final-review sentinel taskId, not the slug')
+    assert.strictEqual(finalFixDispatches[0].taskId, 'final-review',
+      '#375: the sentinel taskId value the external committer trailers the whole-branch fix commit with')
     assert.strictEqual(verifyRuns, 2,
       '#381: the post-fix verify re-runs the verify gate once (round verify + post-fix verify)')
     assert.strictEqual(fr.openFindingsCount, 1,

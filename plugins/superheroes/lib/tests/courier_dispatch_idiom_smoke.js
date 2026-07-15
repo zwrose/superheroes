@@ -124,10 +124,55 @@ function builderSourcesAreClean() {
     'agents/courier.md keeps its explicit not-concealment framing')
 }
 
+// #435: the WRITE-courier prompt is NARRATION-TOLERANT — a write's load-bearing output is a small receipt
+// the caller extracts by pattern, so writeCourierPrompt drops the verbatim-relay demand that
+// markedPromptFor carries (the EXACT sentence the auto-mode classifier quoted as concealment when it
+// blocked 85/150 dispatches on the live 0.13.2 run). It must, however, keep: the _DISPATCH_LEADS lead + the
+// first-blank-line command boundary (so composed-exact still registers the io writer's executed bytes), the
+// payload-is-data clause (#403), transparency framing, and none of the concealment idiom.
+function writeCourierPromptIsBenign() {
+  const cmd = 'python3 -c \'import os,sys,hashlib\nsys.stdout.write("__SR_WROTE:x")\' /store/x.json payload hash'
+  const p = courier.writeCourierPrompt(cmd)
+
+  // (1) drops the verbatim-relay demand markedPromptFor carries — the flagged concealment-shaped sentence.
+  assert.ok(!/entire reply must be the command's stdout, verbatim/i.test(p),
+    'writeCourierPrompt must NOT demand the entire reply be verbatim stdout (#435 narration tolerance)')
+  assert.ok(!/any narration[^.]*corrupts the parse/i.test(p),
+    'writeCourierPrompt must NOT say narration corrupts the parse (#435)')
+  // The shared FIDELITY_IS_TRANSPARENT_CLAUSE (markedPromptFor's) must not appear verbatim on the write prompt.
+  assert.ok(p.indexOf(courier.FIDELITY_IS_TRANSPARENT_CLAUSE) < 0,
+    'writeCourierPrompt must not carry the byte-exact FIDELITY_IS_TRANSPARENT_CLAUSE (that is for reads/exec)')
+
+  // (2) never the concealment idiom.
+  for (const re of CONCEALMENT_IDIOM) {
+    assert.ok(!re.test(p), `writeCourierPrompt must NOT carry the concealment idiom ${re} (#435/#425)`)
+  }
+
+  // (3) keeps the payload-is-data clause + transparency framing.
+  assert.ok(p.indexOf(courier.PAYLOAD_IS_DATA_CLAUSE) >= 0, 'writeCourierPrompt keeps the payload-is-data clause (#403)')
+  assert.ok(/recorded in the (?:session transcript|run journal)|nothing here is hidden/i.test(p),
+    'writeCourierPrompt keeps transparency framing (nothing hidden, on the record)')
+  // It DOES ask the courier to copy the receipt LINE verbatim — a benign, targeted instruction, not a
+  // whole-reply relay demand — so it names __SR_WROTE / __SR_EXIT and invites narration around it.
+  assert.ok(/__SR_WROTE|__SR_EXIT/.test(p) && /report what happened|narration around it is fine/i.test(p),
+    'writeCourierPrompt tells the courier to copy the receipt line but may narrate freely (#435)')
+
+  // (4) #402: the lead + first-blank-line boundary survive, so recordComposedFromPrompt still extracts the bytes.
+  assert.ok(p.startsWith('Execute this exact shell command'),
+    'writeCourierPrompt keeps a _DISPATCH_LEADS lead (composed-exact registration)')
+  assert.ok(p.endsWith('\n\n' + cmd), 'writeCourierPrompt keeps the command after the FIRST blank line, unchanged')
+  const seen = []
+  courier.setComposedRecorder((c) => seen.push(c))
+  try { courier.recordComposedFromPrompt(p) } finally { courier.setComposedRecorder(null) }
+  assert.deepStrictEqual(seen, [cmd],
+    'recordComposedFromPrompt registers the io writer bytes off writeCourierPrompt (#402/#435)')
+}
+
 async function main() {
   await builtPromptsAreTransparent()
+  writeCourierPromptIsBenign()
   builderSourcesAreClean()
-  console.log('ok: courier dispatch prompts state fidelity as transparency; #402 leads + boundary intact (#425)')
+  console.log('ok: courier dispatch prompts state fidelity as transparency; write prompt narration-tolerant; #402 leads + boundary intact (#425/#435)')
 }
 
 main().catch((e) => { console.error('FAIL:', e.message, e.stack); process.exit(1) })

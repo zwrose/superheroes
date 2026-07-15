@@ -783,6 +783,17 @@ async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundF
 
 async function synthesizeRound(roundFindings, context, rubric, runDir, round) {
   const compiled = panelTally.compileDimensionResults(roundFindings)
+  // #430: stage the precomputed identity as each merged finding's `id` so the synthesis judge
+  // ECHOES it verbatim instead of re-deriving the file::normalized-title normalization by eye. The
+  // native panels used to ask the model to reproduce a deterministic regex normalization; round 5
+  // of #397's ship leg came back with drifted (raw-punctuation) ids that matched no finding, so
+  // loop_synthesis.consume's keep-on-uncertain kept every finding SILENTLY and the run false-parked
+  // on the no-net-progress breaker. consume matches on this staged id (identity == id), so the
+  // judge only has to copy the string. (Interactive review-code already stages an echo id — this
+  // brings the native code + doc panels to parity.)
+  for (const f of compiled) {
+    if (f && typeof f === 'object' && !Array.isArray(f)) f.id = circuitBreaker.findingIdentity(f)
+  }
   const loadCandidates = (typeof globalThis !== 'undefined' && globalThis.loadAcceptanceCandidates) || null
   let candidates = []
   if (loadCandidates) {
@@ -796,6 +807,12 @@ async function synthesizeRound(roundFindings, context, rubric, runDir, round) {
   const consumed = loadCandidates
     ? acceptanceRereview.consumeWithAcceptance(compiled, verdicts, candidates)
     : loopSynthesis.consume(compiled, verdicts)
+  // #430 LOUD disclosure: a judge that mis-keyed its verdicts (echoed an id matching no finding)
+  // is logged at runtime AND rides up in `unmatched` for the round record + readout — never a
+  // silent no-op fold.
+  if (consumed && Array.isArray(consumed.unmatched) && consumed.unmatched.length) {
+    try { log(`review-panel r${round}: ${consumed.unmatched.length} synthesis verdict(s) matched NO finding (mis-keyed leaf — kept fail-closed): ${consumed.unmatched.join(', ')}`) } catch (_) {}
+  }
   return Object.assign(consumed, { usage: leaf && leaf.usage })
 }
 
@@ -973,17 +990,21 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
     const gate = gateOut.gate
     const confidence = gateOut.confidence
     const missing = gateOut.incomplete
-    let compiled, drops, downgrades
+    let compiled, drops, downgrades, unmatched
     if (synthesized && typeof synthesized === 'object') {
       compiled = synthesized.findings || []
       drops = synthesized.drops || []
       // #186: blocking→non-blocking severity downgrades ride alongside drops for the readout's
       // owner-scrutiny section (visibility only; the severity change itself already applied).
       downgrades = synthesized.downgrades || []
+      // #430: synthesis verdicts that matched no finding (a mis-keyed judge leaf) ride up for the
+      // readout's loud disclosure — a silent no-op fold is exactly the #397 round-5 defect.
+      unmatched = synthesized.unmatched || []
     } else {
       compiled = panelTally.compileDimensionResults(roundFindings)
       drops = []
       downgrades = []
+      unmatched = []
     }
     const presentBlocking = panelTally.presentBlockingFromDimensionResults(roundFindings)
     // #212 named reason only matters on a cannot-certify GATE — compute it from the live per-seat
@@ -1001,6 +1022,10 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
 
     const verdictOut = Object.assign({ schemaVersion: SCHEMA_VERSION, gate, confidence, findings: compiled,
       missing, drops, downgrades, terminal: decided.terminal, reason: decided.reason, round }, safeExtras)
+    // #430: only ride the unmatched-verdict disclosure when there is something to disclose (keeps
+    // the healthy terminal record — and the compose-terminal inline scalars — unchanged in the
+    // common case where every verdict matched).
+    if (Array.isArray(unmatched) && unmatched.length) verdictOut.unmatched = unmatched
     // #212 uncertified flag (from the decider — set on a cannot-certify gate, even routing to fix).
     if (decided.uncertified) verdictOut.uncertified = true
     // #174 req 4 honest certification summary rides on a certifying terminal (from the decider).

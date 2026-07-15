@@ -21,6 +21,7 @@ global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 let fixDispatches = 0
 let verifyCalls = 0
 let reviewerCalls = 0
+let lastFixBranchPrompt = ''   // #375: the native whole-branch fixer prompt (must carry the sentinel trailer)
 
 // reviewerFindings: what the (single) reviewer leaf returns this run. reviewerConfidence (optional):
 // when set, rides through branch-reviewer so the panel gate sees cannot-certify. verifyResult: the
@@ -64,6 +65,7 @@ function makeAgent({ reviewerFindings, reviewerConfidence, verifyResult, postFix
     }
     if (label === 'fix-branch') {
       fixDispatches += 1
+      lastFixBranchPrompt = prompt   // #375: capture the NATIVE (default Claude) whole-branch fix prompt
       if (typeof fixBranch === 'function') return fixBranch()
       return { ok: true }
     }
@@ -137,6 +139,12 @@ const bp = require('../build_phase.js')
   assert.strictEqual(r.haltKind, 'round-cap', '#381: the halt carries the round-cap discriminator')
   assert.strictEqual(reviewerCalls, 1, '#381 (a): exactly one review pass — no post-fix re-review')
   assert.strictEqual(fixDispatches, 1, '#381 (a): the fix batch dispatches EXACTLY ONCE (no loop)')
+  // #375: the NATIVE (default-Claude) whole-branch fixer is the COMMON path (engine fails open to
+  // 'claude'); its inline prompt — NOT fixBranchPrompt (that is the external-dispatch prompt) — must
+  // instruct the reserved sentinel trailer, or the default-engine final-review fix commit carries no
+  // Task-Id and the resume fail-closes on UFR-7 (the exact #375 bug on the most common config).
+  assert.ok(lastFixBranchPrompt.includes('Task-Id: final-review'),
+    '#375: the native whole-branch fixer prompt instructs the reserved final-review sentinel trailer')
   assert.strictEqual(verifyCalls, 2, '#381 (a): the post-fix verify runs once (round verify + post-fix)')
   assert.deepStrictEqual(r.fixPass, { dispatched: true, fixed: ['branch bug'], postVerify: 'pass' },
     '#381 (a): the fix-pass facts ride the result for the handoff journal')
