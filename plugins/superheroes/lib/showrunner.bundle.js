@@ -576,16 +576,23 @@ function _keptSeverity(f, v) {
 }
 function consume(merged, leafVerdicts) {
   const byId = Object.create(null)   // null-proto: byId[identity] tests own keys only (Python dict parity)
+  const idOrder = []
   if (Array.isArray(leafVerdicts)) {
     for (const v of leafVerdicts) {
-      if (v && typeof v === 'object' && typeof v.id === 'string') byId[v.id] = v
+      if (v && typeof v === 'object' && typeof v.id === 'string') {
+        if (byId[v.id] === undefined) idOrder.push(v.id)
+        byId[v.id] = v
+      }
     }
   }
+  const matchedIds = Object.create(null)   // #430: which verdict ids matched a finding
   const survivors = []; const drops = []; const downgrades = []
   for (const f of merged) {
     const id = findingIdentity(f)
     let v = byId[id]
-    if (!v && f && typeof f.id === 'string') v = byId[f.id]
+    let matchedKey = (v !== undefined) ? id : null
+    if (!v && f && typeof f.id === 'string') { v = byId[f.id]; if (v !== undefined) matchedKey = f.id }
+    if (matchedKey !== null) matchedIds[matchedKey] = true
     const action = (v && typeof v === 'object') ? v.action : null
     const reason = (v && typeof v === 'object') ? v.reason : null
     if (action === 'drop' && typeof reason === 'string' && reason.trim()) {
@@ -604,7 +611,8 @@ function consume(merged, leafVerdicts) {
       downgrades.push(entry)
     }
   }
-  return { findings: survivors, drops, downgrades }
+  const unmatched = idOrder.filter((vid) => !matchedIds[vid])
+  return { findings: survivors, drops, downgrades, unmatched }
 }
 module.exports = { consume }
 };
@@ -1235,6 +1243,7 @@ function consumeWithAcceptance(merged, leafVerdicts, candidates) {
     findings: normalOut.findings || [],
     drops: accDrops.concat(normalOut.drops || []),
     downgrades: normalOut.downgrades || [],
+    unmatched: normalOut.unmatched || [],
   }
 }
 module.exports = {
@@ -1819,6 +1828,9 @@ async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundF
 }
 async function synthesizeRound(roundFindings, context, rubric, runDir, round) {
   const compiled = panelTally.compileDimensionResults(roundFindings)
+  for (const f of compiled) {
+    if (f && typeof f === 'object' && !Array.isArray(f)) f.id = circuitBreaker.findingIdentity(f)
+  }
   const loadCandidates = (typeof globalThis !== 'undefined' && globalThis.loadAcceptanceCandidates) || null
   let candidates = []
   if (loadCandidates) {
@@ -1832,6 +1844,9 @@ async function synthesizeRound(roundFindings, context, rubric, runDir, round) {
   const consumed = loadCandidates
     ? acceptanceRereview.consumeWithAcceptance(compiled, verdicts, candidates)
     : loopSynthesis.consume(compiled, verdicts)
+  if (consumed && Array.isArray(consumed.unmatched) && consumed.unmatched.length) {
+    try { log(`review-panel r${round}: ${consumed.unmatched.length} synthesis verdict(s) matched NO finding (mis-keyed leaf — kept fail-closed): ${consumed.unmatched.join(', ')}`) } catch (_) {}
+  }
   return Object.assign(consumed, { usage: leaf && leaf.usage })
 }
 function graftSynthesizedFindings(roundFindings, synthesized) {
@@ -1966,15 +1981,17 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
     const gate = gateOut.gate
     const confidence = gateOut.confidence
     const missing = gateOut.incomplete
-    let compiled, drops, downgrades
+    let compiled, drops, downgrades, unmatched
     if (synthesized && typeof synthesized === 'object') {
       compiled = synthesized.findings || []
       drops = synthesized.drops || []
       downgrades = synthesized.downgrades || []
+      unmatched = synthesized.unmatched || []
     } else {
       compiled = panelTally.compileDimensionResults(roundFindings)
       drops = []
       downgrades = []
+      unmatched = []
     }
     const presentBlocking = panelTally.presentBlockingFromDimensionResults(roundFindings)
     const uncertifiedReason = (gate === 'cannot-certify') ? panelTally.uncertifiedReason(roundFindings, roster) : null
@@ -1984,6 +2001,7 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
     if (!decided || typeof decided.terminal !== 'string') return _failClosed()
     const verdictOut = Object.assign({ schemaVersion: SCHEMA_VERSION, gate, confidence, findings: compiled,
       missing, drops, downgrades, terminal: decided.terminal, reason: decided.reason, round }, safeExtras)
+    if (Array.isArray(unmatched) && unmatched.length) verdictOut.unmatched = unmatched
     if (decided.uncertified) verdictOut.uncertified = true
     if (decided.certification) verdictOut.certification = decided.certification
     if (own(decided, 'worklistPath')) verdictOut.worklistPath = decided.worklistPath
@@ -6146,7 +6164,9 @@ function reviewCodeLeaves(tiers, opts) {
       `You are the panel synthesis judge (eval/synthesis-leaf.md). For EACH merged finding below decide ` +
       `keep/drop + the rubric-justified severity (keep-on-uncertain; never decide the loop terminal). ` +
       `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}]} — one ` +
-      `verdict per merged finding, keyed by its file::normalized-title identity.\n\n` +
+      `verdict per merged finding. Copy each finding's "id" field into your verdict VERBATIM — do not ` +
+      `recompute, normalize, or edit it (#430: a re-derived id drifts and matches nothing, silently ` +
+      `voiding your keep/drop). The id is the match key; get it wrong and your verdict is discarded.\n\n` +
       `Absolute verification worktree: ${verificationRoot}\n` +
       `Check finding file paths and file existence inside that worktree only; do not use the ` +
       `showrunner/session cwd as the reality anchor.\n\n` +
@@ -6256,8 +6276,10 @@ async function docSynthesisLeaf(merged, context, rubric, runDir, round) {
     `For each merged finding below and the doc at ${context.docPath}, per the synthesis-leaf prompt ` +
     `(plugins/superheroes/eval/synthesis-leaf.md) emit one keep/drop/severity verdict (keep-on-uncertain). ` +
     `${DOC_SEVERITY_FRAME}${acceptanceClause} Return ONLY a JSON object ` +
-    `{"verdicts":[{"id","action":"keep|drop|same|different","reason","severity"}]} keyed by ` +
-    `each finding's file::normalized-title identity.\n\nMerged findings:\n${JSON.stringify(merged)}`,
+    `{"verdicts":[{"id","action":"keep|drop|same|different","reason","severity"}]}. Copy each ` +
+    `finding's "id" field into your verdict VERBATIM — do not recompute, normalize, or edit it ` +
+    `(#430: a re-derived id drifts and matches nothing, silently voiding your verdict). The id is ` +
+    `the match key.\n\nMerged findings:\n${JSON.stringify(merged)}`,
     Object.assign({ model }, { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA }))
   return out || null
 }

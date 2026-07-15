@@ -637,7 +637,9 @@ function reviewCodeLeaves(tiers, opts) {
       `You are the panel synthesis judge (eval/synthesis-leaf.md). For EACH merged finding below decide ` +
       `keep/drop + the rubric-justified severity (keep-on-uncertain; never decide the loop terminal). ` +
       `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}]} — one ` +
-      `verdict per merged finding, keyed by its file::normalized-title identity.\n\n` +
+      `verdict per merged finding. Copy each finding's "id" field into your verdict VERBATIM — do not ` +
+      `recompute, normalize, or edit it (#430: a re-derived id drifts and matches nothing, silently ` +
+      `voiding your keep/drop). The id is the match key; get it wrong and your verdict is discarded.\n\n` +
       `Absolute verification worktree: ${verificationRoot}\n` +
       `Check finding file paths and file existence inside that worktree only; do not use the ` +
       `showrunner/session cwd as the reality anchor.\n\n` +
@@ -783,8 +785,10 @@ async function docSynthesisLeaf(merged, context, rubric, runDir, round) {
     `For each merged finding below and the doc at ${context.docPath}, per the synthesis-leaf prompt ` +
     `(plugins/superheroes/eval/synthesis-leaf.md) emit one keep/drop/severity verdict (keep-on-uncertain). ` +
     `${DOC_SEVERITY_FRAME}${acceptanceClause} Return ONLY a JSON object ` +
-    `{"verdicts":[{"id","action":"keep|drop|same|different","reason","severity"}]} keyed by ` +
-    `each finding's file::normalized-title identity.\n\nMerged findings:\n${JSON.stringify(merged)}`,
+    `{"verdicts":[{"id","action":"keep|drop|same|different","reason","severity"}]}. Copy each ` +
+    `finding's "id" field into your verdict VERBATIM — do not recompute, normalize, or edit it ` +
+    `(#430: a re-derived id drifts and matches nothing, silently voiding your verdict). The id is ` +
+    `the match key.\n\nMerged findings:\n${JSON.stringify(merged)}`,
     Object.assign({ model }, { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA }))
   return out || null
 }

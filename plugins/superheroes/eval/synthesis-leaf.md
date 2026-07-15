@@ -1,4 +1,4 @@
-<!-- synthesis-leaf-version: 1 -->
+<!-- synthesis-leaf-version: 2 -->
 # Panel synthesis leaf
 
 The Opus judgment stage of the shared review-and-fix loop's panel synthesis (FR-11/12/13). It runs
@@ -23,7 +23,10 @@ finding, decide whether it holds up against the artifact and the project's sever
 
 ## Your job — one verdict per finding
 For each merged finding, emit:
-- id: the finding's id, unchanged.
+- id: **copy the finding's `id` field VERBATIM** — do not recompute, normalize, or edit it. The
+  deterministic consumer matches your verdict to the finding by this exact string; a re-derived id
+  drifts (raw punctuation, casing) and matches nothing, silently voiding your keep/drop (#430). An
+  id that matches no finding is surfaced loudly as an unmatched verdict — get it right.
 - action: "keep" or "drop".
   - "drop" ONLY when the finding clearly does NOT hold up against the artifact (it is wrong,
     not in the changed material, or already handled). A drop REQUIRES a non-empty `reason`.
@@ -43,5 +46,5 @@ For each merged finding, emit:
 
 ## Output
 Write a JSON array to <absolute synthesis.json path>: [{ "id", "action", "reason", "severity" }]
-— exactly one entry per input finding, id unchanged.
+— exactly one entry per input finding, **id copied verbatim from the input**.
 ```
