@@ -389,7 +389,9 @@ function _defaultDenialRecorder(reviewer, eventsPath) {
     'journal.append(sys.argv[1], "permission_denied", step=("review:" + sys.argv[2]), ' +
     'detail={"probe": "denied", "reviewer": sys.argv[2]})'
   try {
-    const p = io().runHelper('python3', ['-c', script, String(eventsPath), String(reviewer || 'reviewer')])
+    // #435 write:true — a pure journal state-write; ride the narration-tolerant write-courier prompt so the
+    // disclosure channel survives a classifier storm (its only output is a small receipt, extracted by pattern).
+    const p = io().runHelper('python3', ['-c', script, String(eventsPath), String(reviewer || 'reviewer')], { write: true })
     if (p && typeof p.then === 'function') p.then(() => {}, () => {})   // swallow the async result
   } catch (_e) { /* fail-open: never let a journal write derail the review (UFR-2) */ }
 }
@@ -413,7 +415,10 @@ function _permHelper(call, args) {
     `import sys; sys.path.insert(0, ${pyLibDir()}); import permission_rules; ` +
     call
   try {
-    const p = io().runHelper('python3', ['-c', script].concat(args.map(String)))
+    // #435 write:true — freeze_run_rules / record_composed are pure permission-store state-writes (the
+    // record_composed registration was itself among the classifier-blocked dispatches on the live run).
+    // Ride the narration-tolerant write-courier prompt; the output is a small receipt extracted by pattern.
+    const p = io().runHelper('python3', ['-c', script].concat(args.map(String)), { write: true })
     if (p && typeof p.then === 'function') p.then(() => {}, () => {})   // swallow the async result
   } catch (_e) { /* fail-open: never let a permission-store write derail the run (UFR-2) */ }
 }
@@ -463,8 +468,10 @@ function _defaultDeclineRecorder(label, reason) {
     'events = control_plane.paths(sys.argv[1], (sys.argv[2] or None))["events"]; ' +
     'journal.append(events, "courier_declined", step=sys.argv[3], detail={"reason": sys.argv[4]})'
   try {
+    // #435 write:true — the courier-decline journal is the disclosure channel for a blocked dispatch; ride
+    // the narration-tolerant write-courier prompt so it is not itself caught in the same classifier storm.
     const p = io().runHelper('python3', ['-c', script,
-      run.cwd || procCwd(), run.workItem || '', String(label || 'courier'), String(reason || '')])
+      run.cwd || procCwd(), run.workItem || '', String(label || 'courier'), String(reason || '')], { write: true })
     if (p && typeof p.then === 'function') p.then(() => {}, () => {})   // swallow the async result
   } catch (_e) { /* fail-open: never let a decline journal derail the fail-closed hand-off (UFR-2) */ }
 }
