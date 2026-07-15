@@ -56,3 +56,40 @@ def test_review_tasks_records_acceptance_ledger_before_gate_write():
     assert "open-blockers.json" in detail
     assert "skip-set.json" not in detail
     assert "finding_identity" not in detail
+
+
+def test_review_plan_consumes_acceptance_before_verdict():
+    """#433 (FR-14 interactive consume): the review-plan skill's compile step must run the
+    acceptance-consume block BEFORE determining the verdict, and the detail file must carry
+    the candidates load, the tested consumer, and the keep-on-uncertain direction."""
+    skill = (ROOT / "skills/review-plan/SKILL.md").read_text(encoding="utf-8")
+    detail = (ROOT / "skills/review-plan/reference/plan-detail.md").read_text(encoding="utf-8")
+    section = skill[skill.index("### 4. Compile Findings"):skill.index("### 5. Revise Loop")]
+    assert "Acceptance suppression" in section and "plan-detail.md" in section
+    # the suppression step precedes the verdict determination
+    assert section.index("Acceptance suppression") < section.index("Determine the verdict")
+    assert "never re-asked" in section
+    # the detail file wires the tested consumer, not duplicated logic
+    assert "review_acceptance.py" in detail and " candidates " in detail
+    assert "acceptance_rereview.py" in detail
+    assert "hashMatches" in detail
+    assert "Keep-on-uncertain" in detail or "keep-on-uncertain" in detail
+    assert "effective finding set" in detail
+    # consume is documented to run BEFORE the verdict; recording stays before gate_write
+    assert detail.index("Acceptance suppression") < detail.index("Acceptance ledger (gate-approval)")
+
+
+def test_review_tasks_consumes_acceptance_before_verdict():
+    """#433 (FR-14 interactive consume), tasks leg — FR-13 symmetry with review-plan."""
+    skill = (ROOT / "skills/review-tasks/SKILL.md").read_text(encoding="utf-8")
+    detail = (ROOT / "skills/review-tasks/reference/tasks-detail.md").read_text(encoding="utf-8")
+    section = skill[skill.index("### 4. Compile Findings"):skill.index("### 5. Revise Loop")]
+    assert "Acceptance suppression" in section and "tasks-detail.md" in section
+    assert section.index("Acceptance suppression") < section.index("Determine the verdict")
+    assert "never re-asked" in section
+    assert "review_acceptance.py" in detail and " candidates " in detail
+    assert "acceptance_rereview.py" in detail
+    assert "hashMatches" in detail
+    assert "Keep-on-uncertain" in detail or "keep-on-uncertain" in detail
+    assert "effective finding set" in detail
+    assert detail.index("Acceptance suppression") < detail.index("Acceptance ledger (gate-approval)")

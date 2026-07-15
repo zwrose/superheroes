@@ -22,8 +22,7 @@ fixes that involve a judgment call. On a clean exit it **records the review gate
 This is the **Tasks leg of the superheroes review trio** (`review-spec` / `review-plan` /
 `review-tasks`) — the automated gate the-architect's `tasks` skill calls. Read the base
 rubric (`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-base.md`) for severity calibration and the
-verification rules every finding must pass; if anything below contradicts the base rubric,
-the base rubric wins.
+verification rules every finding must pass; if anything below contradicts it, the base rubric wins.
 
 > **Band posture.** This reviews the superheroes `tasks` definition-doc (CONVENTIONS §3),
 > designed to run inside the band alongside the-architect. If handed a doc with no
@@ -346,6 +345,7 @@ Read the five `$SESSION_DIR/findings-*.json` files. Apply, in order:
 1. **Citation check.** Drop any finding with `file == null` or `line == null`.
 2. **Dedupe by tasks section + topic.** When two findings target the same task/step and same topic, merge them: concatenate bodies with a separator, keep the higher severity, list both dimensions (e.g. `"Test + Code"`).
 3. **Nit cap.** If more than 5 Nits remain after dedupe, keep the first 5 and summarize the rest as a count.
+4. **Acceptance suppression (FR-14).** Run the acceptance-consume block in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-tasks/reference/tasks-detail.md`: owner-accepted findings on unchanged content are suppressed from the tally (reported as accepted, never re-asked); uncertain sameness stays blocking.
 
 Determine the verdict per the base rubric's "Verdict labels & mapping". For `/superheroes:review-tasks` the labels are **TASKS READY** / **REVISE BEFORE BUILD** / **MAJOR GAPS — RECONSIDER PLAN**:
 

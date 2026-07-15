@@ -347,6 +347,7 @@ Read the five `$SESSION_DIR/findings-*.json` files. Apply, in order:
 1. **Citation check.** Drop any finding with `file == null` or `line == null` — the base rubric's verification rules require a `file:line` citation.
 2. **Dedupe by plan section + topic.** When two findings target the same plan section heading and same topic (e.g. both flagging "no accepted downside on the data-model decision"), merge them: concatenate bodies with a separator, keep the higher severity, list both dimensions (e.g. `"Architecture + Failure-Mode"`).
 3. **Nit cap.** If more than 5 Nits remain after dedupe, keep the first 5 and summarize the rest as a count (e.g. `"+ 8 more Nits — see $SESSION_DIR/findings-*.json"`).
+4. **Acceptance suppression (FR-14).** Run the acceptance-consume block in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-plan/reference/plan-detail.md`: owner-accepted findings on unchanged content are suppressed from the tally (reported as accepted, never re-asked); uncertain sameness stays blocking.
 
 Determine the verdict per the base rubric's "Verdict labels & mapping". For `/superheroes:review-plan` the labels are **PLAN READY** / **REVISE BEFORE TASKS** / **MAJOR GAPS — RECONSIDER DESIGN**:
 
