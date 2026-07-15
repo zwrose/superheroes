@@ -1,3 +1,9 @@
+"""#397 FR-4/FR-5: the DOC-REVIEW fix-worklist filter — non-blocking findings are excluded
+from compose_fix_context's fixer worklist on the doc legs, and the routed_forward payload
+composition scrubs text+identity. This does NOT drive the workhorse BUILD phase: FR-5's
+build-side guarantee is structural — routed_forward journal events have zero readers in any
+build-instruction composition path (verified by grep at the #431 spec-vet), so there is no
+behavioral seam to test there."""
 import json
 import os
 import sys
@@ -40,7 +46,7 @@ def _build_routed_forward_payload(finding):
     return {"doc": "tasks", "identity": ident, "section": section, "text": text}
 
 
-def test_routed_tasks_finding_absent_from_build_worklist(tmp_path):
+def test_routed_tasks_finding_absent_from_doc_fix_worklist(tmp_path):
     records_path = _write_records(tmp_path, [{"round": 1, "findings": [
         {"file": "tasks.md", "title": "task 3 mis-specifies the clock", "severity": "Important"},
         {"file": "tasks.md", "title": "nit: rename local var", "severity": "Minor"},
@@ -48,8 +54,10 @@ def test_routed_tasks_finding_absent_from_build_worklist(tmp_path):
     out = str(tmp_path / "worklist.json")
     rlp.compose_fix_context(records_path, None, None, "code", 1, FULL_ROSTER, out, doc_mode=True)
     titles = [f["title"] for f in json.loads(open(out).read())["findings"]]
-    assert "nit: rename local var" not in titles   # routed forward, never in the build worklist
-    assert "task 3 mis-specifies the clock" in titles  # blocking tasks finding IS judged/built
+    # routed forward, never in the DOC-REVIEW fixer worklist (the build's contract stays the
+    # tasks doc alone — routed_forward events have no build-side reader, structurally)
+    assert "nit: rename local var" not in titles
+    assert "task 3 mis-specifies the clock" in titles  # blocking tasks finding IS in the worklist
 
 
 def test_routed_forward_text_is_scrubbed_before_payload():

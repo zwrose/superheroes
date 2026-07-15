@@ -1,4 +1,10 @@
-"""Task 23 (#397): sweep the spec requirement → task map and confirm each FR/UFR is covered."""
+"""Task 23 (#397): sweep the spec requirement → task map and confirm each FR/UFR is covered.
+
+This file is a MARKER-PRESENCE map (each requirement's test exists where the map says), not a
+behavioral proof — the behavior lives in test_review_round_policy / test_review_loop_plan /
+test_parity (doc_mode economics), test_review_handoff / test_doc_review_fix_worklist_filter
+(routing), test_review_park / test_review_convergence / test_review_acceptance +
+test_acceptance_rereview (legibility/FR-14), and the showrunner_*_smoke.js node smokes."""
 
 import os
 import re
@@ -47,7 +53,7 @@ REQ_COVERAGE = {
         [r"routed_forward"],
     ),
     "FR-5": (
-        ["plugins/superheroes/lib/tests/test_tasks_routed_not_in_build.py"],
+        ["plugins/superheroes/lib/tests/test_doc_review_fix_worklist_filter.py"],
         [r"routed_tasks_finding_absent_from_build_worklist|routed forward"],
     ),
     "FR-6": (

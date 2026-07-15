@@ -124,3 +124,37 @@ def test_write_scrubs_summary_only_identity_before_it_reaches_disk(tmp_path):
     entry = json.loads(open(os.path.join(str(tmp_path), "plan-handoff.json")).read())["findings"][0]
     assert "abcdef0123456789" not in entry["text"]
     assert "abcdef0123456789" not in entry["identity"]
+
+
+def test_two_run_rerun_atomically_replaces_handoff_with_distinct_findings_once(tmp_path):
+    """UFR-3 across re-runs: a re-review's write atomically REPLACES plan-handoff.json —
+    the file holds the new run's full deduped set, each distinct finding exactly once,
+    never an append/union with run 1's list."""
+    rh = _load("review_handoff")
+    # run 1: two advisories
+    rh.write_handoff(str(tmp_path), "wi-1", [
+        {"file": "plan.md", "title": "no named unit test", "severity": "Minor",
+         "planSection": "Testing", "summary": "add a unit test for option A"},
+        {"file": "plan.md", "title": "two literals for retry", "severity": "Minor",
+         "planSection": "Data flow", "summary": "retry constant appears twice"},
+    ])
+    # run 2 (re-review): overlaps on one finding (reworded case → same identity after
+    # normalization), drops the other, adds a new one — plus an in-run duplicate
+    out = rh.write_handoff(str(tmp_path), "wi-1", [
+        {"file": "plan.md", "title": "No Named UNIT Test", "severity": "Minor",
+         "planSection": "Testing", "summary": "still worth a unit test"},
+        {"file": "plan.md", "title": "no named unit test", "severity": "Minor",
+         "planSection": "Testing", "summary": "dup within run 2"},
+        {"file": "plan.md", "title": "park note lacks decision list", "severity": "Minor",
+         "planSection": "Legibility", "summary": "new advisory from run 2"},
+    ])
+    assert out["ok"] and out["counts"]["distinct"] == 2
+    data = json.loads(open(os.path.join(str(tmp_path), "plan-handoff.json")).read())
+    idents = [e["identity"] for e in data["findings"]]
+    # each distinct finding exactly once; run 1's non-overlapping entry is GONE (replace, not union)
+    assert len(idents) == len(set(idents)) == 2
+    assert data["counts"]["distinct"] == 2
+    assert not any("two literals" in e["identity"] for e in data["findings"])
+    assert any("park note lacks decision list" in e["identity"] for e in data["findings"])
+    # no partial/temp residue from the atomic replace
+    assert sorted(f for f in os.listdir(str(tmp_path)) if "handoff" in f) == ["plan-handoff.json"]
