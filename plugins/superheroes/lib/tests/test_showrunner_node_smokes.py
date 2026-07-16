@@ -178,6 +178,9 @@ SHOWRUNNER_SMOKES = [
     # timeout denied) is instructed in buildLeafPrompt AND recorded via prov_entry's build-denial
     # step, tainting provenance so the ship gate later GATEs.
     "plugins/superheroes/lib/tests/build_phase_denial_smoke.js",
+    # #449: the fix-loop round-reset (resetUncommitted) is classifier-benign, resetUncommitted flags a
+    # [Self-Modification] denial as denied:true, and the entry reset parks LOUDLY naming the denial.
+    "plugins/superheroes/lib/tests/build_phase_reset_denial_smoke.js",
     # back-half cluster: task-list leaf shape guards (BUG-2/3) + silent-zero park.
     "plugins/superheroes/lib/tests/build_phase_tasklist_shape_smoke.js",
     # #357: the worker output-contract drift guard (build + both external fix prompts share the tail).

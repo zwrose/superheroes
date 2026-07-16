@@ -52,12 +52,21 @@ function chokepointContract() {
       // #435: the __SR_W io writer is now PLAIN-VISIBLE (base64 dropped); _SPINE_STATE_WRITE tracks it by
       // the unique __SR_WROTE marker literal the writer carries, not the (gone) base64.b64decode substring.
       '__SR_WROTE (__SR_W io writer)': 'python3 -c \'import os,sys,hashlib\nopen(sys.argv[1],"w").write(sys.argv[2])\nsys.stdout.write("__SR_WROTE:"+"x")\' /store/x.json payload',
+      // #413: the two spine-composed write classes the #402 evidence addendum named but the merged set
+      // never covered. Both ride the same dumb-pipe lead through this chokepoint but were falling to the
+      // auto-mode classifier (blocked on the first live 0.13.0/0.14.0 runs); registering their exact
+      // bytes turns each into a deterministic composed-exact allow. (freeze_run_rules is the FR-8/UFR-9
+      // permission-store frozen-snapshot bootstrap write; record_deferred.py is the deferred-set record.)
+      'freeze_run_rules (permission-store snapshot)':
+        'python3 -c \'import sys; sys.path.insert(0, "/lib"); import permission_rules; permission_rules.freeze_run_rules(sys.argv[1], sys.argv[2], work_item=(sys.argv[3] or None))\' gen1 /cwd wi',
+      'record_deferred.py (deferred-set record)':
+        'python3 /lib/record_deferred.py --run-dir /run/wi --report /run/wi/fix-report.json',
     }
     for (const [cls, cmd] of Object.entries(perClass)) {
       courier.recordComposedFromPrompt('Run exactly this command. Your entire reply must be the command\'s stdout, verbatim:\n\n' + cmd)
     }
     assert.deepStrictEqual(seen, Object.values(perClass),
-      'each remaining state-write class (prov, fence, ref_lock, __SR_WROTE io-writer) registers its exact bytes')
+      'each state-write class (prov, fence, ref_lock, __SR_WROTE io-writer, freeze_run_rules, record_deferred.py) registers its exact bytes')
 
     // a READ dumb pipe is NOT registered — reads are not blocked, and registering them would double cost.
     seen.length = 0
