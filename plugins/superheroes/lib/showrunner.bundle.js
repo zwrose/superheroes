@@ -7890,6 +7890,7 @@ function testPilotDeps(workItem, generation) {
           'python3', libPath('test_pilot_server_config_cli.py'), 'resolve',
           '--profile-json', profilePath, '--detection-json', detectionPath,
           '--work-item', workItem,
+          ...(context.worktree ? ['--worktree', context.worktree] : []),
         ],
         seed: [
           'python3', libPath('test_pilot_seed_cli.py'), 'prepare',
@@ -7936,16 +7937,21 @@ function testPilotDeps(workItem, generation) {
     resolveServer: async (context) => {
       const profile = await writeJson('server-profile', context.profile || {})
       const detection = await writeJson('server-detection', context.detectors || {})
+      const wtArg = context.worktree ? ` --worktree ${shq(context.worktree)}` : ''
       return cli(
         `python3 ${libPath('test_pilot_server_config_cli.py')} resolve ` +
-        `--profile-json ${shq(profile)} --detection-json ${shq(detection)} --work-item ${shq(workItem)}`,
+        `--profile-json ${shq(profile)} --detection-json ${shq(detection)} --work-item ${shq(workItem)}${wtArg}`,
         { type: 'object' })
     },
     withManagedServer: async (serverContext, run) => {
       const launchPath = await writeJson('server-launch-context', serverContext)
+      const launchWorktree = serverContext && typeof serverContext.cwd === 'string' && serverContext.cwd
+        ? serverContext.cwd : null
+      const wtArg = launchWorktree ? ` --worktree ${shq(launchWorktree)}` : ''
+      const launchCmd = `python3 ${libPath('test_pilot_server_config_cli.py')} launch ` +
+        `--context-json ${shq(launchPath)}${wtArg}`
       const launched = await cli(
-        `python3 ${libPath('test_pilot_server_config_cli.py')} launch ` +
-        `--context-json ${shq(launchPath)}`,
+        inWorktree(launchCmd, launchWorktree),
         { type: 'object' })
       if (!launched || launched.verdict === 'park' || launched.action === 'park' || launched.ok === false) {
         return launched

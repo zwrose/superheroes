@@ -947,10 +947,118 @@ async function unresolvableWorktreeParksNotSkips() {
   }
 }
 
+
+// #451 Half A: the managed dev-server launch MUST be rooted at the BUILD worktree so browser
+// evidence is gathered against the tree under test — never the session root (which sits behind the
+// PR branch HEAD and would produce FALSE evidence toward flipping the PR ready). Fails if the launch
+// command is not cd'd into the build worktree and does not thread --worktree through the launch CLI.
+async function managedServerLaunchIsRootedAtBuildWorktree() {
+  const previousAgent = global.agent
+  const buildWorktree = '/tmp/build-worktree-451'
+  const sessionRoot = require('path').resolve(__dirname, '../../../..')
+  let launchPrompt = null
+  global.agent = async (prompt) => {
+    if (prompt.includes('test_pilot_server_config_cli.py launch')) {
+      launchPrompt = prompt
+      return { verdict: 'managed', shell: false, cwd: buildWorktree, baseUrl: 'http://localhost:3003', allowedOrigins: ['http://localhost:3003'], handle: { pid: 99, port: 3003 } }
+    }
+    if (prompt.includes('test_pilot_server_config_cli.py finish')) {
+      return { source: 'browser', steps: [{ id: 's1', status: 'passed' }] }
+    }
+    return previousAgent(prompt)
+  }
+  try {
+    const deps = sr.testPilotDeps('wi', 3)
+    await deps.withManagedServer(
+      { verdict: 'managed', shell: false, cwd: buildWorktree, baseUrl: 'http://localhost:3003', allowedOrigins: ['http://localhost:3003'] },
+      async () => ({ source: 'browser', steps: [{ id: 's1', status: 'passed' }] }),
+    )
+    assert.ok(launchPrompt, 'launch command must have been composed')
+    assert.ok(launchPrompt.includes(`cd '${buildWorktree}' &&`),
+      `#451 Half A: launch must be rooted (cd) at the build worktree (got: ${launchPrompt})`)
+    assert.ok(launchPrompt.includes(`--worktree '${buildWorktree}'`),
+      `#451 Half A: launch must thread --worktree into the launch CLI (got: ${launchPrompt})`)
+    // The command (after the courier preamble) must START by cd-ing into the build worktree — proves
+    // it is rooted at the tree under test, not merely un-prefixed / left at the session root.
+    const launchCmd = launchPrompt.slice(launchPrompt.lastIndexOf('\n\n') + 2)
+    assert.ok(launchCmd.startsWith(`cd '${buildWorktree}' && python3 `),
+      `#451 Half A: launch command must be rooted at the build worktree (got: ${launchCmd})`)
+    assert.ok(!launchCmd.includes(`cd '${sessionRoot}'`),
+      '#451 Half A: launch must NOT be rooted at the session root when a build worktree is known')
+  } finally {
+    global.agent = previousAgent
+  }
+}
+
+// #451 Half A: with NO build worktree on the server context, the launch stays session-rooted and adds
+// no --worktree (backward-compatible with the pre-#451 ready_external / cwd-less managed path).
+async function managedServerLaunchWithoutWorktreeStaysBackwardCompatible() {
+  const previousAgent = global.agent
+  let launchPrompt = null
+  global.agent = async (prompt) => {
+    if (prompt.includes('test_pilot_server_config_cli.py launch')) {
+      launchPrompt = prompt
+      return { verdict: 'managed', shell: false, baseUrl: 'http://localhost:3000', allowedOrigins: ['http://localhost:3000'], handle: { pid: 7, port: 3000 } }
+    }
+    if (prompt.includes('test_pilot_server_config_cli.py finish')) {
+      return { source: 'browser', steps: [{ id: 's1', status: 'passed' }] }
+    }
+    return previousAgent(prompt)
+  }
+  try {
+    const deps = sr.testPilotDeps('wi', 3)
+    await deps.withManagedServer(
+      { verdict: 'managed', shell: false, baseUrl: 'http://localhost:3000', allowedOrigins: ['http://localhost:3000'] },
+      async () => ({ source: 'browser', steps: [{ id: 's1', status: 'passed' }] }),
+    )
+    assert.ok(launchPrompt, 'launch command must have been composed')
+    const sessionRoot = require('path').resolve(__dirname, '../../../..')
+    const launchCmd = launchPrompt.slice(launchPrompt.lastIndexOf('\n\n') + 2)
+    // No build worktree known -> the launch stays session-rooted (selfContained cd to __SR_ROOT),
+    // carries no --worktree flag, and still invokes the launch CLI. This is the pre-#451 shape.
+    assert.ok(launchCmd.startsWith(`cd '${sessionRoot}' && python3 `),
+      `#451: no build worktree -> launch stays session-rooted (got: ${launchCmd})`)
+    assert.ok(launchCmd.includes('test_pilot_server_config_cli.py launch --context-json'),
+      `#451: launch CLI must still be invoked (got: ${launchCmd})`)
+    assert.ok(!launchCmd.includes('--worktree'),
+      `#451: no build worktree -> no --worktree flag (got: ${launchCmd})`)
+  } finally {
+    global.agent = previousAgent
+  }
+}
+
+// #451: resolveServer must thread the build worktree into the resolver CLI (--worktree) — this is the
+// connective tissue that populates serverContext.cwd, which in turn (a) sources the .env.local port
+// override and (b) roots the managed launch. A regression dropping it reintroduces the :3000 mismatch.
+async function resolveServerThreadsWorktreeIntoCli() {
+  const previousAgent = global.agent
+  const buildWorktree = '/tmp/build-worktree-451'
+  let resolvePrompt = null
+  global.agent = async (prompt) => {
+    if (prompt.includes('test_pilot_server_config_cli.py resolve')) {
+      resolvePrompt = prompt
+      return { verdict: 'managed', baseUrl: 'http://localhost:3003', allowedOrigins: ['http://localhost:3003'], cwd: buildWorktree, command: ['npm', 'run', 'dev'], shell: false }
+    }
+    return previousAgent(prompt)
+  }
+  try {
+    const deps = sr.testPilotDeps('wi', 3)
+    await deps.resolveServer({ worktree: buildWorktree, profile: { baseUrl: 'http://localhost:3003' }, detectors: {} })
+    assert.ok(resolvePrompt, 'resolve command must have been composed')
+    assert.ok(resolvePrompt.includes(`--worktree '${buildWorktree}'`),
+      `#451: resolveServer must thread the build worktree into the resolver CLI (got: ${resolvePrompt})`)
+  } finally {
+    global.agent = previousAgent
+  }
+}
+
 ;(async () => {
   await notApplicableProceeds()
   await productionWrapperHandlesNotApplicableWithoutMissingLeaf()
   await productionManagedServerUsesLifecycleHelperAroundBrowserRun()
+  await managedServerLaunchIsRootedAtBuildWorktree()
+  await managedServerLaunchWithoutWorktreeStaysBackwardCompatible()
+  await resolveServerThreadsWorktreeIntoCli()
   await managedServerFinishWriteThrowPreservesOutcomeAndError()
   await uncertainApplicabilityParks()
   await emptyApplicablePlanParks()
