@@ -488,6 +488,12 @@ the resilience substrate above). If a GATE fires and the owner is away, **park s
 5. Write the parked state to the journal via `journal.render_brief(…)` so any resume
    reconcile sees "parked" as the last known state, not an ambiguous cursor.
 
+If a later session finishes this parked work **by hand** (rather than relaunching), it
+records a **manual-completion receipt** at hand-finish so the record stops reading "parked,
+never resumed" (`python3 "$LIB/manual_completion_entry.py" --work-item <slug> --pr <N>` — a
+terminal `manual_completion` event + the checkpoint advanced to `shipped-manual`; #450).
+Idempotent and fail-soft.
+
 **Durable-write failures are fail-closed (park-GATE).** The orchestrator wraps every
 `journal.append` / `checkpoint.write`; a `journal.DurableWriteError` (`journal.py`)
 or an `atomic_write` `OSError` (e.g. a full disk, from `control_plane.py`) →
