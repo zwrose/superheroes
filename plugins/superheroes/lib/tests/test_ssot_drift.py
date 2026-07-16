@@ -17,6 +17,7 @@ Clusters covered (sweep follow-up of #231):
 - Accepted Codex-model set (CODEX_MODELS)              (home: engine_pref.py)
 - haltKind cap-halt discriminator                      (home: review_loop_plan.py)
 - Document-review severity steering (DOC_SEVERITY_FRAME) (home: rubric/review-base.md §Document-review severity)
+- Journal event MINT surface ⊆ registry              (home: journal.py EVENT_TYPES)
 
 The generated showrunner.bundle.js copies of these facts are guarded separately by
 test_bundle_drift. The reviewer-roster, docs-location, and Failure-Mode-taxonomy
@@ -558,3 +559,125 @@ def test_doc_severity_frame_single_sourced():
             "rubric: Document-review severity missing anchor %r" % label)
         assert re.search(pattern, frame, re.IGNORECASE), (
             "showrunner.js DOC_SEVERITY_FRAME drifted from rubric on %r" % label)
+
+
+# --- Cluster 11: journal event MINT surface (#458) ---------------------------
+# Cluster 9 (above) guards the READER direction: every registered type has a
+# renderer. This guards the WRITER direction — every event type MINTED anywhere in
+# the plugin's lib source must be REGISTERED in journal.EVENT_TYPES. journal.append()
+# fail-closes on an unregistered type (DurableWriteError on the first real event), but
+# the JS smokes MOCK the journal leaf, so an unregistered type sails through every test
+# and dies only in production. Three PRs shipped dead receipts this way: courier_declined
+# (#402), confinement_tripwire (#355, caught at advisor vet), with manual_completion
+# (#450) the one done right. Types are DISCOVERED from source (never a hardcoded list),
+# so the guard stays correct as new types are added in parallel (#434).
+
+_MINT_PATTERNS = (
+    # 1. `--event-type <type>` — the flag journal_entry.py reads, composed into shell
+    #    commands in the Workflow JS (build_phase.js / showrunner.js / engine_dispatch.js).
+    r"--event-type\s+([A-Za-z_][A-Za-z0-9_]*)",
+    # 2. `journal.append(<events>, "<type>", ...)` — the direct Python append, in the
+    #    Python libs AND embedded as inline-Python strings inside the JS wiring
+    #    (showrunner.js mints courier_declined / permission_denied / dispatch_retried
+    #    that way). Non-greedy `[^\n]*?` skips a first arg that itself contains commas
+    #    (e.g. `control_plane.paths(root, wi)["events"]`) and stops at the first quoted
+    #    positional literal on the line — never crossing a newline into a later call.
+    r"journal\.append\([^\n]*?,\s*[\"']([A-Za-z_][A-Za-z0-9_]*)[\"']",
+    # 3. `EVENT_TYPE = "<type>"` — a module-level constant passed to journal.append
+    #    (manual_completion.py's receipt writer). `\b` after the name so `EVENT_TYPES`
+    #    (the registry itself) is not mistaken for a mint.
+    r"^\s*EVENT_TYPE\b\s*=\s*[\"']([A-Za-z_][A-Za-z0-9_]*)[\"']",
+)
+
+
+def _strip_comments(text, ext):
+    """Remove comments so a prose mention of a mint form (e.g. a `// ... --event-type
+    flag` comment in engine_dispatch.js) is not extracted as a bogus event type. Only
+    ever REMOVES text, so at worst it hides a real mint (a false negative that would let
+    a mint slip) — but no actual mint line carries a `//`/`#` before its literal, so the
+    real surface is preserved. `test_mint_extractor_ignores_comment_mentions` pins this."""
+    if ext == ".js":
+        text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)   # block comments
+        text = re.sub(r"//[^\n]*", "", text)                # line comments
+    elif ext == ".py":
+        text = re.sub(r"#[^\n]*", "", text)                 # line comments
+    return text
+
+
+def _extract_minted(text, ext):
+    """The event-type literals minted in one comment-stripped source blob."""
+    stripped = _strip_comments(text, ext)
+    found = set()
+    for pat in _MINT_PATTERNS:
+        found |= set(re.findall(pat, stripped, flags=re.M))
+    return found
+
+
+def _minted_event_types():
+    """Every event-type literal MINTED across the lib PRODUCTION source (walks lib/,
+    prunes lib/tests, skips the generated showrunner.bundle.js which test_bundle_drift
+    guards). Returns {type: "rel/path"} for a legible failure message. Fail-closed: the
+    scanned-file and non-empty asserts raise if the walk or the regexes silently break,
+    so the membership check below can never pass vacuously."""
+    lib_dir = os.path.join(PLUGIN, "lib")
+    minted = {}
+    scanned = 0
+    for root, dirs, files in os.walk(lib_dir):
+        dirs[:] = [d for d in dirs if d != "tests"]
+        for fn in sorted(files):
+            ext = os.path.splitext(fn)[1]
+            if ext not in (".js", ".py") or fn == "showrunner.bundle.js":
+                continue
+            rel = os.path.relpath(os.path.join(root, fn), PLUGIN)
+            scanned += 1
+            for t in _extract_minted(_read(rel), ext):
+                minted.setdefault(t, rel)
+    assert scanned > 10, "mint scan walked too few source files (%d) — the walk broke" % scanned
+    assert minted, "mint scan extracted no event types — the extractor regexes broke"
+    return minted
+
+
+def test_every_minted_event_type_is_registered():
+    """CONVENTIONS §11: every journal event type minted in lib source must be a member of
+    journal.EVENT_TYPES, so an unregistered type fails CI at build time instead of raising
+    DurableWriteError on its first real event in production (#402/#355). The three mint
+    mechanisms are extracted as literals; membership is the assertion."""
+    import journal
+    minted = _minted_event_types()
+    unregistered = {t: src for t, src in minted.items() if t not in journal.EVENT_TYPES}
+    assert not unregistered, (
+        "journal event type(s) MINTED in lib source but NOT registered in "
+        "journal.EVENT_TYPES — journal.append() would raise DurableWriteError on the first "
+        "real event, and the JS smokes mock the journal leaf so nothing else catches it. "
+        "Add each to EVENT_TYPES: %r" % unregistered)
+
+    # The extractor must actually SEE each of the three historical mint mechanisms, so a
+    # regex regression that stops matching a mechanism (making the membership check pass
+    # vacuously for that surface) fails HERE rather than silently. confinement_tripwire =
+    # the `--event-type` flag surface; courier_declined = inline-Python `journal.append`
+    # inside JS; manual_completion = the `EVENT_TYPE` module constant.
+    for t in ("confinement_tripwire", "courier_declined", "manual_completion"):
+        assert t in minted, (
+            "mint extractor stopped seeing %r — a mechanism regex regressed and this guard "
+            "no longer covers that mint surface" % t)
+
+
+def test_mint_extractor_ignores_comment_mentions():
+    """§11.2: the extractor is the trust anchor — a comment that merely MENTIONS a mint
+    form (engine_dispatch.js literally carries `// ... --event-type flag`) must not be
+    read as a minted type, or the guard would false-fail on prose. Pin both the JS and
+    Python comment strippers, and confirm a real (uncommented) mint on the same corpus
+    still extracts."""
+    js = (
+        "// composed via journal_entry.py --event-type flag), and then\n"
+        "const cmd = `--event-type real_js_type --payload x`;\n"
+        "/* block: journal.append(events, \"blocked_out\") */\n"
+    )
+    assert _extract_minted(js, ".js") == {"real_js_type"}
+
+    py = (
+        "# journal.append(paths, \"commented_out\") is only prose here\n"
+        "journal.append(paths[\"events\"], \"real_py_type\", payload=p)  # trailing note\n"
+        "EVENT_TYPE = \"const_type\"\n"
+    )
+    assert _extract_minted(py, ".py") == {"real_py_type", "const_type"}
