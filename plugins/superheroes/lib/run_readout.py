@@ -21,6 +21,8 @@ KNOWN_JOURNAL_EVENT_TYPES = frozenset({
     "courier_declined",
     # #450: terminal receipt for a parked run finished by hand outside the spine.
     "manual_completion",
+    # #350 Part B: a re-execute-and-discard disclosure (a completed dispatch re-run, its answer dropped).
+    "dispatch_retried",
 })
 
 

@@ -1263,7 +1263,8 @@ const circuitBreaker = require('./circuit_breaker.js')
 const loopState = require('./loop_state.js')
 const verifyGateTwin = require('./verify_gate.js')
 const reviewMemory = require('./review_memory.js')
-const { libPath } = require('./lib_root.js')   // #170: spine code root for lib composes
+const { libPath, pyLibDir } = require('./lib_root.js')   // #170: spine code root for lib composes
+const { sha256hex } = require('./bytes.js')   // #350: hash the discarded dispatch answer for disclosure
 const SCHEMA_VERSION = 1
 const DOC_ROUND_RETRY_ATTEMPTS = 2   // #397 UFR-4: 2 failed attempts per round before parking
 const VERIFY_TIMEOUT_SECONDS = 570
@@ -1809,6 +1810,30 @@ function _shapeReviewerResult(out, opts) {
   if (!shaped || !Array.isArray(shaped.findings)) return shaped
   return _withReceiptFreshness(Object.assign({}, shaped, { findings: normalizeReviewerFindings(shaped.findings) }), opts || {})
 }
+function _defaultRetryDiscloser(eventsPath, payload) {
+  if (!eventsPath) return   // eventsPath rides context when the caller supplies it; absent -> no journal line
+  const idem = 'retry:' + String(payload.reviewer) + ':r' + String(payload.round) + ':' +
+    String(payload.cause) + ':' + String(payload.discardedHash)
+  const script =
+    'import sys, json; sys.path.insert(0, ' + pyLibDir() + '); import journal; ' +
+    'journal.append(sys.argv[1], "dispatch_retried", step=("review:" + sys.argv[2]), ' +
+    'payload=json.loads(sys.argv[3]), idem=sys.argv[4])'
+  try {
+    const p = io().runHelper('python3', ['-c', script, String(eventsPath), String(payload.reviewer || 'reviewer'),
+      JSON.stringify(payload), idem], { write: true })
+    if (p && typeof p.then === 'function') p.then(() => {}, () => {})   // swallow the async result (fail-open)
+  } catch (_e) { /* fail-open: never let a disclosure write derail the review */ }
+}
+const _retryDiscloseSeam = { record: _defaultRetryDiscloser }
+function _discloseRetry(context, reviewer, round, cause, discarded) {
+  const findings = (discarded && Array.isArray(discarded.findings)) ? discarded.findings : []
+  let hash = ''
+  try { hash = sha256hex(JSON.stringify(discarded == null ? null : discarded)) } catch (_e) { hash = '' }
+  try {
+    _retryDiscloseSeam.record((context && context.eventsPath) || undefined,
+      { reviewer, round, cause, discardedFindings: findings.length, discardedHash: hash })
+  } catch (_e) { /* fail-open */ }
+}
 async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundFindings, opts) {
   const baseOpts = opts || {}
   let out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, baseOpts), baseOpts)
@@ -1816,11 +1841,14 @@ async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundF
   if (baseOpts.tier === 'reviewer' && (_retryableReviewerIssue(out) || out.confidence !== 'high')) {
     escalated = true
     const deepOpts = Object.assign({}, baseOpts, { tier: 'reviewer-deep', escalatedFrom: 'reviewer', retryReason: _retryReason(out) })
+    _discloseRetry(context, reviewer, round, 'escalation:reviewer->reviewer-deep', out)
     out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, deepOpts), deepOpts)
     if (_retryableReviewerIssue(out)) {
+      _discloseRetry(context, reviewer, round, 'retry:reviewer-deep:' + (_retryReason(out) || 'malformed'), out)
       out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, deepOpts, { retryFrom: 'reviewer-deep', retryReason: _retryReason(out) })), deepOpts)
     }
   } else if (baseOpts.tier === 'reviewer-deep' && _retryableReviewerIssue(out)) {
+    _discloseRetry(context, reviewer, round, 'retry:reviewer-deep:' + (_retryReason(out) || 'malformed'), out)
     out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, baseOpts, { tier: 'reviewer-deep', retryFrom: 'reviewer-deep', retryReason: _retryReason(out) })), baseOpts)
   }
   if (!_validReviewerResult(out)) {
@@ -2070,7 +2098,8 @@ const SYNTH_SCHEMA = { type: 'object', required: ['findings', 'drops'],
 const VERIFY_SCHEMA = { type: 'object', required: ['result'],
   properties: { result: {}, code: {}, tail: {}, command: {}, returncode: {}, timedOut: {} } }
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
-module.exports = { reviewPanel, gatherReviewSetup, verifyAgent, tallyRound, tallyRoundDecider, planRoundDecider, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }
+module.exports = { reviewPanel, gatherReviewSetup, verifyAgent, tallyRound, tallyRoundDecider, planRoundDecider, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA,
+  dispatchReviewer, _retryDiscloseSeam }
 };
 __modules["courier_exec"] = function (module, exports, require) {
 let injectedAgent = null
@@ -4359,10 +4388,12 @@ async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armI
   }
   return { ok: true, stdout: out }
 }
+let _journalDispatchNonce = 0
 async function _journalExternal(payload) {
+  const idem = `${payload.workItem || 'run'}:d${++_journalDispatchNonce}`
   return _execJson(
     `python3 ${libPath('journal_entry.py')} --work-item ${shq(payload.workItem || '')} ` +
-    `--event-type external_dispatch --payload ` +
+    `--event-type external_dispatch --idem ${shq(idem)} --payload ` +
     shq(JSON.stringify({ engine: payload.engine, effort: payload.effort, roleKind: payload.roleKind,
       model: payload.model == null ? null : payload.model,
       argv: Array.isArray(payload.argv) ? payload.argv : null,
@@ -4398,6 +4429,19 @@ function _stagingDenial(results) {
     let from = sigIdx >= 0 ? s.slice(m.index, sigIdx) : s.slice(m.index)
     from = from.replace(/[A-Za-z0-9+\/=]{24,}/g, '[redacted]')
     return from.length > 200 ? from.slice(0, 200) + '…' : from
+  }
+  return null
+}
+function _stagingFailureReason(results) {
+  const arr = Array.isArray(results) ? results : []
+  for (const r of arr) {
+    if (!r || r.ok) continue
+    const exit = (typeof r.status === 'number') ? r.status : null
+    const errText = String((r.error != null ? r.error : (r.stderr != null ? r.stderr : ''))).replace(/\s+/g, ' ').trim()
+    const parts = []
+    if (exit != null) parts.push('exit ' + exit)
+    if (errText) parts.push(errText.length > 200 ? errText.slice(0, 200) + '…' : errText)
+    return parts.join(': ') || 'staging leaf failed (no error text)'
   }
   return null
 }
@@ -4470,9 +4514,12 @@ async function _dispatchExternalInner(o) {
     const scrubbedDenial = !denial ? null
       : (denial === _DENIAL_TAINTED ? denial
         : await _scrubReason(denial, 'staging denied (reason scrubbed)'))
+    const rawFail = denial ? null : _stagingFailureReason(writeInputs)
+    const failReason = rawFail ? await _scrubReason(rawFail, 'staging failed (reason scrubbed)') : null
+    const stagingReason = scrubbedDenial || failReason
     const jStaging = await _journalExternal(Object.assign(_jbase(), { verify: null,
       outcome: denial ? STAGING_DENIED_OUTCOME : STAGING_FAILED_OUTCOME },
-      scrubbedDenial ? { reason: scrubbedDenial } : {}))
+      stagingReason ? { reason: stagingReason } : {}))
     if (!(jStaging && jStaging.ok)) return { ok: false, reason: 'unauditable' }
     return { ok: false, reason: 'could-not-stage-external-inputs' }
   }

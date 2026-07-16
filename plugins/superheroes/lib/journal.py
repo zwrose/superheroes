@@ -66,6 +66,13 @@ EVENT_TYPES = {
     # scrubbed by its writer (manual_completion_entry) BEFORE it reaches the payload. Additive to
     # the vocabulary (no schemaVersion bump); manual_completion.py is its sole writer.
     "manual_completion",
+    # #350 Part B (the silent re-execution disclosure): a re-execute-and-discard decision — the spine
+    # re-runs an expensive, non-idempotent dispatch and DISCARDS a completed answer — records this
+    # LOUD event so a finding raised then dropped is never silent (the 2026-07-11 #219 round-4
+    # signature). Structured non-secret `payload` carries the CAUSE (why the re-dispatch fired) and
+    # the discarded result's summary/hash (findings count + a sha256 of the discarded answer); written
+    # as-is. Additive to the vocabulary (no schemaVersion bump).
+    "dispatch_retried",
 }
 
 
@@ -93,12 +100,23 @@ def _next_seq(events_path):
 
 
 def append(events_path, event_type, *, step=None, detail=None, world=None,
-           payload=None, root=None, ts=None, dense_seq=True):
+           payload=None, root=None, ts=None, dense_seq=True, idem=None):
     # Fail closed on an unknown event type: a typo'd "ci_fix_attempt" would be silently
     # ignored by ci_attempts() and UNDER-count the step 8 bound (inverting the over-count
     # fail-safe). Parking on it (the orchestrator catches DurableWriteError) is safe.
     if event_type not in EVENT_TYPES:
         raise DurableWriteError("unknown event type: %r" % event_type)
+    # #350 Part A (the doubled-line signature): a journal append is NOT idempotent, so a courier-chain
+    # retry (_execJson re-runs journal_entry.py after a stdout-drop, even though the first append
+    # landed) doubles the line. An `idem` key makes the repeated append a NO-OP: if an event already
+    # carries this key, return without writing. Only the SINGLE-writer run journal passes idem (never
+    # the #379 multi-writer trail), so no concurrent writer can interleave between this read and the
+    # O_APPEND below (§4.5). The key is a per-dispatch nonce (never content-derived), so two
+    # genuinely-distinct events with byte-identical payloads still each write under distinct nonces.
+    if idem is not None:
+        for e in read_events(events_path):
+            if isinstance(e, dict) and e.get("idem") == idem:
+                return
     ev = {"ts": _stamp(ts)}
     if dense_seq:
         # Dense, monotonic seq for a SINGLE-writer run journal. Skipped (dense_seq=False) for a
@@ -109,6 +127,10 @@ def append(events_path, event_type, *, step=None, detail=None, world=None,
         # orders by `ts`; consumers that read seq use `.get("seq")` and tolerate its absence.
         ev["seq"] = _next_seq(events_path)
     ev["type"] = event_type
+    # #350 Part A: the idempotence key rides top-level (like `seq`) so the `payload` stays byte-
+    # identical for consumers; written right after `type` so a hand-read line shows it early.
+    if idem is not None:
+        ev["idem"] = idem
     if step is not None:
         ev["step"] = step
     if detail is not None:

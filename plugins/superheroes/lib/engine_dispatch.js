@@ -486,6 +486,14 @@ async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armI
   return { ok: true, stdout: out }
 }
 
+// #350 Part A: a process-local, monotonic per-dispatch-journal counter — the source of the idempotence
+// nonce embedded in each external_dispatch append. NOT PRNG / NOT wall-clock (both absent in the Workflow
+// sandbox, FR-8), so it is safe on every live code path; a plain increment, unique per _journalExternal
+// call within a process. It need NOT survive a resume: the nonce only has to be STABLE across the
+// in-process _execJson retry (which re-runs the identical command it is baked into) — a resumed run is a
+// genuinely new attempt whose re-journal SHOULD write a fresh line, so a fresh-process reset is correct.
+let _journalDispatchNonce = 0
+
 async function _journalExternal(payload) {
   // Journal the external action as a FIRST-CLASS `external_dispatch` event (FR-6): the audit line's
   // `type` is external_dispatch (Task 4 added the type + the journal_entry.py --event-type flag), and
@@ -495,9 +503,15 @@ async function _journalExternal(payload) {
   // promise, and a `timeout` outcome + effectiveTimeout together read as "killed at ceiling after Ns"
   // — distinct from a genuine CLI failure (external-run-failed / unreadable / commit-failed). A failed
   // durable append -> {ok:false} -> the caller treats it as UFR-6 (fail-closed, unauditable).
+  // #350 Part A: mint the idempotence nonce ONCE here and bake it into the command string, so BOTH of
+  // _execJson's attempts (the same `cmd` re-run on a courier stdout-drop) carry the same --idem — the
+  // journal.append dedupe then makes the retry a no-op and the doubled line cannot recur. The nonce is
+  // per-CALL (a counter), never derived from the payload, so two distinct dispatches with byte-identical
+  // payloads (the #378 re-execute case) still each journal.
+  const idem = `${payload.workItem || 'run'}:d${++_journalDispatchNonce}`
   return _execJson(
     `python3 ${libPath('journal_entry.py')} --work-item ${shq(payload.workItem || '')} ` +
-    `--event-type external_dispatch --payload ` +
+    `--event-type external_dispatch --idem ${shq(idem)} --payload ` +
     shq(JSON.stringify({ engine: payload.engine, effort: payload.effort, roleKind: payload.roleKind,
       model: payload.model == null ? null : payload.model,
       argv: Array.isArray(payload.argv) ? payload.argv : null,
@@ -564,6 +578,25 @@ function _stagingDenial(results) {
     let from = sigIdx >= 0 ? s.slice(m.index, sigIdx) : s.slice(m.index)
     from = from.replace(/[A-Za-z0-9+\/=]{24,}/g, '[redacted]')
     return from.length > 200 ? from.slice(0, 200) + '…' : from
+  }
+  return null
+}
+
+// #350: the failed staging leaf's exit code + bounded error prose — the honest "why" for a NON-DENIAL
+// staging-failed outcome (a courier/exec error carrying no denial signature). The 2026-07-12 acceptance
+// run recorded two staging-failed events with EMPTY reasons, leaving the root cause undiagnosable after
+// teardown; this carries the failed leaf's error/exit so the outcome is self-identifying. Reads the exec
+// result shape (courier_exec: {ok:false, error, status?}); returns null when no failed leaf is present.
+function _stagingFailureReason(results) {
+  const arr = Array.isArray(results) ? results : []
+  for (const r of arr) {
+    if (!r || r.ok) continue
+    const exit = (typeof r.status === 'number') ? r.status : null
+    const errText = String((r.error != null ? r.error : (r.stderr != null ? r.stderr : ''))).replace(/\s+/g, ' ').trim()
+    const parts = []
+    if (exit != null) parts.push('exit ' + exit)
+    if (errText) parts.push(errText.length > 200 ? errText.slice(0, 200) + '…' : errText)
+    return parts.join(': ') || 'staging leaf failed (no error text)'
   }
   return null
 }
@@ -732,9 +765,15 @@ async function _dispatchExternalInner(o) {
     const scrubbedDenial = !denial ? null
       : (denial === _DENIAL_TAINTED ? denial
         : await _scrubReason(denial, 'staging denied (reason scrubbed)'))
+    // #350: on a plain (non-denial) staging failure, carry the failed leaf's exit code + error prose so
+    // a `staging-failed` line is never reason-less (the 2026-07-12 empty-reason blind spot). Scrubbed
+    // through the same seam as the denial path; a scrub outage falls back to a fixed label, never raw.
+    const rawFail = denial ? null : _stagingFailureReason(writeInputs)
+    const failReason = rawFail ? await _scrubReason(rawFail, 'staging failed (reason scrubbed)') : null
+    const stagingReason = scrubbedDenial || failReason
     const jStaging = await _journalExternal(Object.assign(_jbase(), { verify: null,
       outcome: denial ? STAGING_DENIED_OUTCOME : STAGING_FAILED_OUTCOME },
-      scrubbedDenial ? { reason: scrubbedDenial } : {}))
+      stagingReason ? { reason: stagingReason } : {}))
     if (!(jStaging && jStaging.ok)) return { ok: false, reason: 'unauditable' }
     return { ok: false, reason: 'could-not-stage-external-inputs' }
   }
