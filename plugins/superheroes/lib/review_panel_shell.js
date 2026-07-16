@@ -12,7 +12,8 @@ const circuitBreaker = require('./circuit_breaker.js')
 const loopState = require('./loop_state.js')
 const verifyGateTwin = require('./verify_gate.js')
 const reviewMemory = require('./review_memory.js')
-const { libPath } = require('./lib_root.js')   // #170: spine code root for lib composes
+const { libPath, pyLibDir } = require('./lib_root.js')   // #170: spine code root for lib composes
+const { sha256hex } = require('./bytes.js')   // #350: hash the discarded dispatch answer for disclosure
 
 const SCHEMA_VERSION = 1
 const DOC_ROUND_RETRY_ATTEMPTS = 2   // #397 UFR-4: 2 failed attempts per round before parking
@@ -758,6 +759,49 @@ function _shapeReviewerResult(out, opts) {
   return _withReceiptFreshness(Object.assign({}, shaped, { findings: normalizeReviewerFindings(shaped.findings) }), opts || {})
 }
 
+// #350 Part B (the silent re-execution disclosure): a re-execute-and-discard decision must journal a
+// LOUD `dispatch_retried` event — the 2026-07-11 #219 round-4 signature was a completed review's findings
+// dropped with NO trace anywhere. The trigger fix is #394 (the tier-blind final-review leg no longer
+// spuriously escalates); this is the disclosure safety net for EVERY surviving re-execute-and-discard
+// (the legitimate cheap->deep escalations still discard the cheap answer). Runs through the SAME io()
+// runHelper Python shim the denial recorder uses — fail-open (a journal miss never derails the review;
+// the adopted answer is unaffected) and idempotent (a per-decision idem: the same cause+round+reviewer+
+// discarded-hash dedupes a courier double-run, two distinct discards keep their distinct hashes).
+function _defaultRetryDiscloser(eventsPath, payload) {
+  if (!eventsPath) return   // eventsPath rides context when the caller supplies it; absent -> no journal line
+  const idem = 'retry:' + String(payload.reviewer) + ':r' + String(payload.round) + ':' +
+    String(payload.cause) + ':' + String(payload.discardedHash)
+  // The lib dir goes on sys.path via lib_root.pyLibDir() (#170) — the same seam the denial recorder uses;
+  // no __dirname (absent in the bundle sandbox). The structured payload is non-secret (a finding COUNT +
+  // a hash + engine-controlled tier tokens — never the finding text), written as-is.
+  const script =
+    'import sys, os, json; sys.path.insert(0, ' + pyLibDir() + '); import journal; ' +
+    'journal.append(sys.argv[1], "dispatch_retried", step=("review:" + sys.argv[2]), ' +
+    'payload=json.loads(sys.argv[3]), idem=sys.argv[4])'
+  try {
+    const p = io().runHelper('python3', ['-c', script, String(eventsPath), String(payload.reviewer || 'reviewer'),
+      JSON.stringify(payload), idem], { write: true })
+    if (p && typeof p.then === 'function') p.then(() => {}, () => {})   // swallow the async result (fail-open)
+  } catch (_e) { /* fail-open: never let a disclosure write derail the review */ }
+}
+// A mutable holder so the recorder is overridable (the smoke swaps in an observer) — mirrors showrunner's
+// _denialSeam. dispatchReviewer calls _retryDiscloseSeam.record so the swap is observed without shelling.
+const _retryDiscloseSeam = { record: _defaultRetryDiscloser }
+
+// #350: disclose that a COMPLETED reviewer answer is about to be discarded and re-dispatched. Called at
+// each re-execution site BEFORE `out` is overwritten, carrying the cause + the discarded answer's finding
+// count and a sha256 of it (the summary/hash the issue requires) so a raised-then-dropped finding is never
+// silent. Best-effort (fail-open); reads context.eventsPath (the run journal).
+function _discloseRetry(context, reviewer, round, cause, discarded) {
+  const findings = (discarded && Array.isArray(discarded.findings)) ? discarded.findings : []
+  let hash = ''
+  try { hash = sha256hex(JSON.stringify(discarded == null ? null : discarded)) } catch (_e) { hash = '' }
+  try {
+    _retryDiscloseSeam.record((context && context.eventsPath) || undefined,
+      { reviewer, round, cause, discardedFindings: findings.length, discardedHash: hash })
+  } catch (_e) { /* fail-open */ }
+}
+
 async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundFindings, opts) {
   const baseOpts = opts || {}
   let out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, baseOpts), baseOpts)
@@ -767,11 +811,17 @@ async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundF
     // #212: the escalation to reviewer-deep IS a re-dispatch — carry the corrective retryReason when
     // the shallow answer had a curable defect (null when it was just an honest low, nothing to correct).
     const deepOpts = Object.assign({}, baseOpts, { tier: 'reviewer-deep', escalatedFrom: 'reviewer', retryReason: _retryReason(out) })
+    // #350: this re-dispatch DISCARDS the cheap answer (its findings included) — disclose it before overwriting.
+    _discloseRetry(context, reviewer, round, 'escalation:reviewer->reviewer-deep', out)
     out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, deepOpts), deepOpts)
     if (_retryableReviewerIssue(out)) {
+      // #350: a second re-dispatch discards the first deep answer — disclose it too (distinct cause + hash).
+      _discloseRetry(context, reviewer, round, 'retry:reviewer-deep:' + (_retryReason(out) || 'malformed'), out)
       out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, deepOpts, { retryFrom: 'reviewer-deep', retryReason: _retryReason(out) })), deepOpts)
     }
   } else if (baseOpts.tier === 'reviewer-deep' && _retryableReviewerIssue(out)) {
+    // #350: the deep-tier corrective retry discards the first deep answer — disclose the re-execution.
+    _discloseRetry(context, reviewer, round, 'retry:reviewer-deep:' + (_retryReason(out) || 'malformed'), out)
     out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, baseOpts, { tier: 'reviewer-deep', retryFrom: 'reviewer-deep', retryReason: _retryReason(out) })), baseOpts)
   }
   if (!_validReviewerResult(out)) {
@@ -1108,4 +1158,7 @@ function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 // fabrication fail-closed) single-sourced instead of duplicating it at the call site.
 // tallyRoundDecider and planRoundDecider exported for #397 doc-panel smoke tests.
 // tallyRound exported for #397 Task 22 doc-round retry smoke tests.
-module.exports = { reviewPanel, gatherReviewSetup, verifyAgent, tallyRound, tallyRoundDecider, planRoundDecider, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }
+module.exports = { reviewPanel, gatherReviewSetup, verifyAgent, tallyRound, tallyRoundDecider, planRoundDecider, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA,
+  // #350 Part B test-only: the re-execute-and-discard disclosure seam + the dispatch function, exported
+  // so the smoke drives the escalation ladder directly and observes the dispatch_retried disclosure.
+  dispatchReviewer, _retryDiscloseSeam }

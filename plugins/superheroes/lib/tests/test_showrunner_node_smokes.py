@@ -85,6 +85,13 @@ SHOWRUNNER_SMOKES = [
     # Task 10 (FR-2): a denied reviewer probe -> confidence:low + degraded-dimension (single-retry
     # ceiling), with the denial recorded to the journal.
     "plugins/superheroes/lib/tests/showrunner_reviewer_denied_probe_smoke.js",
+    # #350 Part A: _journalExternal bakes a per-call idempotence nonce into the external_dispatch append,
+    # so a courier stdout-drop retry (_execJson) cannot double the line; a non-denial staging failure now
+    # carries the failed leaf's error/exit as the journal reason.
+    "plugins/superheroes/lib/tests/showrunner_journal_idem_smoke.js",
+    # #350 Part B: dispatchReviewer's re-execute-and-discard escalation journals a loud dispatch_retried
+    # event carrying the cause + the discarded answer's finding count and hash (no silent dropped finding).
+    "plugins/superheroes/lib/tests/showrunner_dispatch_retried_smoke.js",
     # #418: a schema-minimal {findings,confidence} answer parked the release gate — the receipt-missing
     # retry now dispatches a receipt-required schema so the empty shell stops burning the budget.
     "plugins/superheroes/lib/tests/showrunner_receipt_required_retry_smoke.js",

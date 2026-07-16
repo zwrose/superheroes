@@ -412,3 +412,133 @@ def test_journal_entry_cli_writes_final_review_handoff(tmp_path, monkeypatch):
     assert evs[-1]["payload"]["handoff"] == "review-code"
     assert _os.path.exists(events)
     assert any('"type": "final_review_handoff"' in line for line in open(events).read().splitlines())
+
+
+def test_idem_key_dedupes_a_repeated_append(tmp_path):
+    # #350 Part A (the doubled-line signature): a courier-chain retry (_execJson) re-runs
+    # journal_entry.py AFTER the first append already landed, because a journal append is not
+    # idempotent. An `idem` key makes the SECOND identical append a no-op — the same line cannot
+    # double. Two calls with the same idem -> exactly one event; the idem value is recorded top-level.
+    p = str(tmp_path / "events.jsonl")
+    payload = {"engine": "codex", "roleKind": "review", "outcome": "unreadable",
+               "outPath": "/tmp/engine-cursor-build-1.run.68417.out", "outBytes": 0}
+    journal.append(p, "external_dispatch", payload=payload, root=str(tmp_path), idem="disp-7")
+    journal.append(p, "external_dispatch", payload=payload, root=str(tmp_path), idem="disp-7")
+    evs = journal.read_events(p)
+    assert len(evs) == 1, "the idem retry must be a no-op — one line, never two"
+    assert evs[0]["idem"] == "disp-7"
+    assert evs[0]["seq"] == 1
+
+
+def test_distinct_idem_keys_both_append(tmp_path):
+    # Idempotency is per-key: two genuinely-distinct dispatches that happen to carry byte-identical
+    # payloads (e.g. two failed dispatches with the same outcome — the #378 re-execute case) MUST each
+    # journal. A content-derived key would wrongly collapse them; a per-call nonce does not.
+    p = str(tmp_path / "events.jsonl")
+    payload = {"engine": "codex", "roleKind": "review", "outcome": "unreadable"}
+    journal.append(p, "external_dispatch", payload=payload, root=str(tmp_path), idem="disp-1")
+    journal.append(p, "external_dispatch", payload=payload, root=str(tmp_path), idem="disp-2")
+    evs = journal.read_events(p)
+    assert len(evs) == 2
+    assert [e["seq"] for e in evs] == [1, 2]
+    assert [e["idem"] for e in evs] == ["disp-1", "disp-2"]
+
+
+def test_idem_absent_when_not_supplied(tmp_path):
+    # Backward compatibility: an append with no idem writes NO idem field (pre-#350 byte shape).
+    p = str(tmp_path / "events.jsonl")
+    journal.append(p, "external_dispatch", payload={"engine": "codex"}, root=str(tmp_path))
+    evs = journal.read_events(p)
+    assert "idem" not in evs[0]
+
+
+def test_journal_entry_cli_idem_dedupes_a_rerun(tmp_path, monkeypatch):
+    # The JS seam (_journalExternal) shells journal_entry.py --idem <nonce>; _execJson re-runs the
+    # SAME command on a courier stdout-drop. Two CLI runs with the same --idem -> one event.
+    import json as _json
+    import os as _os
+    import subprocess as _sp
+    import sys as _sys
+    import control_plane
+    _lib = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..")
+    monkeypatch.chdir(tmp_path)
+    args = [_sys.executable, _os.path.join(_lib, "journal_entry.py"),
+            "--work-item", "wi-idem", "--event-type", "external_dispatch",
+            "--idem", "cursor-review-r4-1",
+            "--payload", _json.dumps({"engine": "cursor", "outcome": "unreadable"})]
+    for _ in range(2):
+        out = _sp.run(args, capture_output=True, text=True)
+        assert out.returncode == 0, out.stderr
+        assert _json.loads(out.stdout) == {"ok": True}
+    events = control_plane.paths(str(tmp_path), "wi-idem")["events"]
+    evs = journal.read_events(events)
+    assert len([e for e in evs if e.get("type") == "external_dispatch"]) == 1
+
+
+def test_dispatch_retried_is_a_valid_event_type(tmp_path):
+    # #350 Part B (the silent re-execution disclosure): a re-execute-and-discard decision journals a
+    # loud dispatch_retried event carrying the cause + the discarded result's summary/hash. Prove the
+    # REAL append path succeeds so a missing EVENT_TYPES entry can't silently drop the disclosure.
+    p = str(tmp_path / "events.jsonl")
+    payload = {"cause": "escalation:reviewer->reviewer-deep", "reviewer": "code", "round": 4,
+               "discardedFindings": 2, "discardedHash": "abc123"}
+    journal.append(p, "dispatch_retried", step="review:code", payload=payload, root=str(tmp_path))
+    evs = journal.read_events(p)
+    assert evs[-1]["type"] == "dispatch_retried"
+    assert evs[-1]["payload"]["discardedFindings"] == 2
+
+
+def test_dispatch_retried_is_a_known_event_type():
+    assert "dispatch_retried" in journal.EVENT_TYPES
+
+
+def test_max_idem_ordinal_seeds_a_resumed_dispatch_counter(tmp_path):
+    # #350 Part A resume-safety: the per-process dispatch-nonce counter is SEEDED from the journal's max
+    # `<prefix>:d<N>` ordinal so a resumed run continues past the pre-crash tail (never re-mints a
+    # colliding d1..dN that journal.append would silently dedupe away).
+    p = str(tmp_path / "events.jsonl")
+    journal.append(p, "external_dispatch", payload={"o": 1}, root=str(tmp_path), idem="wi-x:d1")
+    journal.append(p, "external_dispatch", payload={"o": 2}, root=str(tmp_path), idem="wi-x:d2")
+    journal.append(p, "external_dispatch", payload={"o": 9}, root=str(tmp_path), idem="wi-x:d9")
+    # a DIFFERENT prefix must not bleed into the max (Part B's retry:... idems, another work-item, etc.)
+    journal.append(p, "dispatch_retried", step="review:code", payload={"c": 1}, root=str(tmp_path),
+                   idem="retry:code:r1:escalation:abc")
+    journal.append(p, "external_dispatch", payload={"o": 4}, root=str(tmp_path), idem="wi-other:d4")
+    assert journal.max_idem_ordinal(p, "wi-x") == 9
+    assert journal.max_idem_ordinal(p, "wi-other") == 4
+    assert journal.max_idem_ordinal(p, "wi-absent") == 0    # a fresh run: no prior ordinal
+
+
+def test_max_idem_ordinal_zero_on_missing_or_unreadable_journal(tmp_path):
+    # A fresh run (no journal yet) seeds 0, so its first dispatch mints d1.
+    assert journal.max_idem_ordinal(str(tmp_path / "nope.jsonl"), "wi-x") == 0
+
+
+def test_max_idem_ordinal_ignores_malformed_ordinals(tmp_path):
+    # Only a strict `<prefix>:d<digits>` idem counts; a look-alike must not seed the counter.
+    p = str(tmp_path / "events.jsonl")
+    journal.append(p, "external_dispatch", payload={"o": 1}, root=str(tmp_path), idem="wi-x:dABC")
+    journal.append(p, "external_dispatch", payload={"o": 2}, root=str(tmp_path), idem="wi-x:d3x")
+    journal.append(p, "external_dispatch", payload={"o": 3}, root=str(tmp_path), idem="wi-x:d7")
+    assert journal.max_idem_ordinal(p, "wi-x") == 7
+
+
+def test_journal_entry_cli_max_idem_prefix_query(tmp_path, monkeypatch):
+    # The JS seam (_maxDispatchNonce) shells journal_entry.py --max-idem-prefix; it must print the max
+    # ordinal and make NO append.
+    import json as _json
+    import os as _os
+    import subprocess as _sp
+    import sys as _sys
+    import control_plane
+    _lib = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..")
+    monkeypatch.chdir(tmp_path)
+    events = control_plane.paths(str(tmp_path), "wi-q")["events"]
+    journal.append(events, "external_dispatch", payload={"o": 1}, root=str(tmp_path), idem="wi-q:d5")
+    before = len(journal.read_events(events))
+    out = _sp.run([_sys.executable, _os.path.join(_lib, "journal_entry.py"),
+                   "--work-item", "wi-q", "--max-idem-prefix", "wi-q"],
+                  capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert _json.loads(out.stdout) == {"ok": True, "max": 5}
+    assert len(journal.read_events(events)) == before, "the query must NOT append"
