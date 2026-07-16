@@ -563,14 +563,20 @@ def test_doc_severity_frame_single_sourced():
 
 # --- Cluster 11: journal event MINT surface (#458) ---------------------------
 # Cluster 9 (above) guards the READER direction: every registered type has a
-# renderer. This guards the WRITER direction — every event type MINTED anywhere in
-# the plugin's lib source must be REGISTERED in journal.EVENT_TYPES. journal.append()
-# fail-closes on an unregistered type (DurableWriteError on the first real event), but
-# the JS smokes MOCK the journal leaf, so an unregistered type sails through every test
-# and dies only in production. Three PRs shipped dead receipts this way: courier_declined
-# (#402), confinement_tripwire (#355, caught at advisor vet), with manual_completion
-# (#450) the one done right. Types are DISCOVERED from source (never a hardcoded list),
-# so the guard stays correct as new types are added in parallel (#434).
+# renderer. This guards the WRITER direction — every event type MINTED in the plugin's
+# lib source must be REGISTERED in journal.EVENT_TYPES. journal.append() fail-closes on
+# an unregistered type (DurableWriteError on the first real event), but the JS smokes
+# MOCK the journal leaf, so an unregistered type sails through every test and dies only
+# in production. Three PRs shipped dead receipts this way: courier_declined (#402),
+# confinement_tripwire (#355, caught at advisor vet), with manual_completion (#450) the
+# one done right. Types are DISCOVERED from source (never a hardcoded list), so the
+# guard stays correct as new types are added in parallel (#434).
+#
+# The extractor covers the FOUR mint mechanisms present in source (three static-literal
+# `_MINT_PATTERNS` below + the value-indirection resolver in `_extract_minted`). Its one
+# accepted blind spot is a `journal.append(...)` whose type literal wraps onto a
+# continuation LINE (pattern 2 is line-anchored); no current mint is formatted that way,
+# and such a type is still fail-closed at runtime by journal.append's own registry check.
 
 _MINT_PATTERNS = (
     # 1. `--event-type <type>` — the flag journal_entry.py reads, composed into shell
@@ -610,6 +616,17 @@ def _extract_minted(text, ext):
     found = set()
     for pat in _MINT_PATTERNS:
         found |= set(re.findall(pat, stripped, flags=re.M))
+    # 4. Value-indirection — `journal.append(<events>, MAP[<key>], ...)` mints the STRING
+    #    VALUES of a module-level dict-of-literals, not a literal at the call site
+    #    (readout_post.py mints run_completed / parked via `_TERMINAL_EVENT[a.terminal]`).
+    #    Discover the map NAME from the append site (the 2nd positional, after the first
+    #    comma so the events-path 1st arg can't be mistaken for it), then resolve its
+    #    string values from the same blob — so a new terminal type added to such a map is
+    #    covered WITHOUT naming the map here (mirrors Cluster 3's `_ACTION_TO_TERMINAL`).
+    for name in set(re.findall(r"journal\.append\([^\n]*?,\s*([A-Za-z_]\w*)\s*\[", stripped)):
+        m = re.search(r"^\s*%s\s*=\s*\{([^}]*)\}" % re.escape(name), stripped, flags=re.M)
+        if m:
+            found |= set(re.findall(r":\s*[\"']([A-Za-z_][A-Za-z0-9_]*)[\"']", m.group(1)))
     return found
 
 
@@ -640,8 +657,8 @@ def _minted_event_types():
 def test_every_minted_event_type_is_registered():
     """CONVENTIONS §11: every journal event type minted in lib source must be a member of
     journal.EVENT_TYPES, so an unregistered type fails CI at build time instead of raising
-    DurableWriteError on its first real event in production (#402/#355). The three mint
-    mechanisms are extracted as literals; membership is the assertion."""
+    DurableWriteError on its first real event in production (#402/#355). The mint literals
+    are extracted from source (four mechanisms); membership is the assertion."""
     import journal
     minted = _minted_event_types()
     unregistered = {t: src for t, src in minted.items() if t not in journal.EVENT_TYPES}
@@ -651,12 +668,14 @@ def test_every_minted_event_type_is_registered():
         "real event, and the JS smokes mock the journal leaf so nothing else catches it. "
         "Add each to EVENT_TYPES: %r" % unregistered)
 
-    # The extractor must actually SEE each of the three historical mint mechanisms, so a
-    # regex regression that stops matching a mechanism (making the membership check pass
-    # vacuously for that surface) fails HERE rather than silently. confinement_tripwire =
-    # the `--event-type` flag surface; courier_declined = inline-Python `journal.append`
-    # inside JS; manual_completion = the `EVENT_TYPE` module constant.
-    for t in ("confinement_tripwire", "courier_declined", "manual_completion"):
+    # The extractor must actually SEE each of the four mint mechanisms, so a regex
+    # regression that stops matching one (making the membership check pass vacuously for
+    # that surface) fails HERE rather than silently. confinement_tripwire = the
+    # `--event-type` flag surface; courier_declined = inline-Python `journal.append` inside
+    # JS; manual_completion = the `EVENT_TYPE` module constant; run_completed = the
+    # `_TERMINAL_EVENT[...]` value-indirection (readout_post.py — it exists as no static
+    # literal anywhere in production source, so it proves mechanism 4 fires).
+    for t in ("confinement_tripwire", "courier_declined", "manual_completion", "run_completed"):
         assert t in minted, (
             "mint extractor stopped seeing %r — a mechanism regex regressed and this guard "
             "no longer covers that mint surface" % t)
@@ -681,3 +700,14 @@ def test_mint_extractor_ignores_comment_mentions():
         "EVENT_TYPE = \"const_type\"\n"
     )
     assert _extract_minted(py, ".py") == {"real_py_type", "const_type"}
+
+
+def test_mint_extractor_resolves_value_indirection():
+    """Mechanism 4: a `journal.append(events, MAP[key], ...)` mint resolves the MAP's
+    string values (the readout_post.py `_TERMINAL_EVENT` shape), while the events-path
+    first arg is never mistaken for the map and keys are not read as values."""
+    py = (
+        "_TERM = {\"parked\": \"parked_type\", \"done\": \"done_type\"}\n"
+        "journal.append(paths[\"events\"], _TERM[a.terminal], detail=text)\n"
+    )
+    assert _extract_minted(py, ".py") == {"parked_type", "done_type"}
