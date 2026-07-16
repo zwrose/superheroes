@@ -30,8 +30,14 @@ def main(argv):
     resolve.add_argument("--profile-json", required=True)
     resolve.add_argument("--detection-json", required=True)
     resolve.add_argument("--work-item", required=True)
+    resolve.add_argument("--worktree", default=None,
+                         help="Launch worktree. Its .env.local PORT wins over the band "
+                              "default so the readiness probe follows the real bind (#451).")
     launch = sub.add_parser("launch")
     launch.add_argument("--context-json", required=True)
+    launch.add_argument("--worktree", default=None,
+                        help="Launch worktree. Overrides the context's embedded cwd for "
+                             "starting the dev server.")
     finish = sub.add_parser("finish")
     finish.add_argument("--context-json", required=True)
     finish.add_argument("--outcome-json", required=True)
@@ -41,7 +47,7 @@ def main(argv):
         try:
             profile = _read_json(args.profile_json)
             detection = _read_json(args.detection_json)
-            result = test_pilot_server_config.resolve(profile, detection, args.work_item)
+            result = test_pilot_server_config.resolve(profile, detection, args.work_item, cwd=args.worktree)
         except (OSError, ValueError) as exc:
             result = {"schemaVersion": test_pilot_server_config.SCHEMA_VERSION,
                       "verdict": "park", "reason": "malformed inputs: %s" % exc,
@@ -51,7 +57,8 @@ def main(argv):
     if args.cmd == "launch":
         try:
             context = _read_json(args.context_json)
-            result = test_pilot_server_config.launch(context)
+            launch_cwd = args.worktree or (context.get("cwd") if isinstance(context, dict) else None)
+            result = test_pilot_server_config.launch(context, cwd=launch_cwd)
         except (OSError, ValueError) as exc:
             result = {"schemaVersion": test_pilot_server_config.SCHEMA_VERSION,
                       "verdict": "park", "reason": "malformed inputs: %s" % exc}
