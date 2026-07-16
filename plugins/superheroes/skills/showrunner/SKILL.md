@@ -174,6 +174,24 @@ work-item's existing PR, so a resume after a park, compaction, or crash is the s
 special handling. A stale or absent run-lease lets the relaunch proceed; only a live conflicting
 run blocks at pre-flight.
 
+### Finished a parked run BY HAND? Record the receipt
+
+When you take over a **parked** run and complete it yourself — outside the spine (native
+gate, docs commits, PR, review-code panel, ready-flip) — the run record otherwise stays dark:
+the journal's last event is the park and the checkpoint is frozen at the parked phase with
+`pr: null`, so every reader (`run_watch`, `token_trend`, the readout) reconstructs "parked,
+never resumed" when the truth is "manually completed to PR #N". Close that gap at
+hand-finish with a one-line **manual-completion receipt** — a terminal `manual_completion`
+journal event + the checkpoint advanced to `shipped-manual`:
+
+```bash
+python3 "$LIB/manual_completion_entry.py" --work-item "<work-item>" --pr <N> \
+  [--url <pr-url>] [--head-sha <sha>] [--note "hand-finished to ready"]
+```
+
+Idempotent (a second call is a no-op) and fail-soft: skipping it changes nothing about
+today's behavior; running it makes the record truthful.
+
 ## Status
 
 Read the work-item's run-outcome projection (and its last readout) and print it — the status,

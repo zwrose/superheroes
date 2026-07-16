@@ -59,6 +59,13 @@ EVENT_TYPES = {
     # audit trail shows the decline. `detail` = {"reason": <scrubbed>} — the reason is already
     # base64-redacted + length-clamped by courier_exec.denialReason and is scrubbed again here.
     "courier_declined",
+    # #450 manual-completion receipt: a PARKED run that was finished BY HAND (native gate, PR,
+    # review, ready-flip) outside the spine records this TERMINAL event so the record stops
+    # reading "parked, never resumed" when the truth is "manually completed to PR #N" (epic #327).
+    # Structured non-secret `payload` ({pr, headSha?, note?}) written as-is — the free-text note is
+    # scrubbed by its writer (manual_completion_entry) BEFORE it reaches the payload. Additive to
+    # the vocabulary (no schemaVersion bump); manual_completion.py is its sole writer.
+    "manual_completion",
 }
 
 
