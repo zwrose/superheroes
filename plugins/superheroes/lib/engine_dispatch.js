@@ -572,13 +572,20 @@ function _stagingDenial(results) {
 // an owner-facing notice — the band's single scrub seam (pr_comment.py scrub reads stdin -> scrubbed
 // stdout, the same scrubber readout/parse_result use). On any exec/scrub failure fall back to a
 // fixed generic label (never surface the raw external text). Only used on the failure/notice path.
-async function _scrubReason(reason) {
+async function _scrubReason(reason, fallback = 'external error (scrubbed)') {
   const s = reason == null ? '' : String(reason)
   if (!s) return s
   const res = await _exec([`printf '%s' ${shq(s)} | python3 ${libPath('pr_comment.py')} scrub`])
   const r0 = res && res[0]
-  if (r0 && r0.ok && r0.stdout != null) return String(r0.stdout)
-  return 'external error (scrubbed)'
+  // #383: an empty/whitespace-only scrub stdout is the cheap courier's documented stdout-drop (see the
+  // _execJson note above — a leaf returns ok:true with stdout:'' even though the command ran). A real
+  // scrub never empties non-empty input (it only redacts to [REDACTED]), so treat empty as a scrub
+  // failure and fall back to the fixed label rather than persisting an empty (WHY-less) reason.
+  if (r0 && r0.ok && r0.stdout != null) {
+    const out = String(r0.stdout)
+    if (out.trim()) return out
+  }
+  return fallback
 }
 
 // #408: sanitize the run key, then bound it to 80 chars WITHOUT letting truncation delete the
@@ -713,9 +720,21 @@ async function _dispatchExternalInner(o) {
     // every caller behave exactly as before — only the missing audit line is added.
     const writeInputs = promptStage.ok ? schemaStage.results : promptStage.results
     const denial = _stagingDenial(writeInputs)
+    // #383 (Part B): the denial reason is external classifier prose — route it through the repo's rich
+    // scrub seam (pr_comment.py scrub: framed key=value / "key":"value" secrets, Bearer tokens, the
+    // gho_/github_pat_/sk-/AKIA…/xox…/AIza… prefixes, URI userinfo) BEFORE it persists, closing the
+    // consistency gap with the commit-failure path (~926) that already scrubs. _stagingDenial's own
+    // base64-run redaction (>=24-char alnum runs) misses those framed classes. On scrub failure fall
+    // back to a fixed label so a scrubber outage can never leak the raw (possibly secret) denial text.
+    // The fixed _DENIAL_TAINTED label is a known-safe internal constant (no external free-text), so it
+    // skips the scrub — avoiding a needless exec and keeping the taint-specific evidence intact even if
+    // the scrubber is unavailable; only the WINDOWED classifier prose is scrubbed.
+    const scrubbedDenial = !denial ? null
+      : (denial === _DENIAL_TAINTED ? denial
+        : await _scrubReason(denial, 'staging denied (reason scrubbed)'))
     const jStaging = await _journalExternal(Object.assign(_jbase(), { verify: null,
       outcome: denial ? STAGING_DENIED_OUTCOME : STAGING_FAILED_OUTCOME },
-      denial ? { reason: denial } : {}))
+      scrubbedDenial ? { reason: scrubbedDenial } : {}))
     if (!(jStaging && jStaging.ok)) return { ok: false, reason: 'unauditable' }
     return { ok: false, reason: 'could-not-stage-external-inputs' }
   }

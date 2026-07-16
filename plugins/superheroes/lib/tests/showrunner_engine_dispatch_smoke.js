@@ -1256,6 +1256,24 @@ function makeAgent(routes) {
     const DENIAL = 'Permission for this action was denied by the Claude Code auto mode classifier. ' +
       'Reason: Auto mode could not evaluate this action and is blocking it for safety.'
     // Helper: collect every external_dispatch journal payload the dispatch appends.
+    // #383 (Part B): the staging-denied path now routes its denial reason through the real
+    // pr_comment.py scrub seam BEFORE it journals, so the collector must run that scrub for real
+    // (extract the exact `printf … | python3 …pr_comment.py scrub` pipeline the dispatch built and
+    // execute it) rather than stubbing it — otherwise every #373 denial assertion would see a stub
+    // in place of the windowed reason. Clean classifier prose scrubs to itself (identity), so the
+    // pre-existing #373 assertions keep holding; a framed secret in the prose gets redacted. The
+    // command is the dispatch's own scrub pipe (not test input), so running it via the shell is safe.
+    const { execSync } = require('child_process')
+    function realScrub(prompt) {
+      const m = prompt.match(/printf '%s' .*pr_comment\.py scrub/s)
+      if (!m) return [{ index: 0, ok: true, stdout: '' }]
+      try {
+        const out = execSync(m[0], { shell: '/bin/sh', encoding: 'utf8' })
+        return [{ index: 0, ok: true, stdout: out }]
+      } catch (_e) {
+        return [{ index: 0, ok: false, stdout: '' }]
+      }
+    }
     function journalCollector(collector, routes, journalResult) {
       const jOut = journalResult == null ? { ok: true } : journalResult
       return async (prompt) => {
@@ -1264,6 +1282,7 @@ function makeAgent(routes) {
           if (m) { try { collector.push(JSON.parse(m[1].replace(/'\\''/g, "'"))) } catch (_e) { /* asserted below */ } }
           return [{ index: 0, ok: true, stdout: JSON.stringify(jOut) }]
         }
+        if (prompt.includes('pr_comment.py scrub')) return realScrub(prompt)
         for (const [needle, resp] of routes) if (prompt.includes(needle)) return typeof resp === 'function' ? resp(prompt) : resp
         return [{ index: 0, ok: true, stdout: '{}' }]
       }
@@ -1387,6 +1406,124 @@ function makeAgent(routes) {
       assert.ok(ed[0].reason.length <= 201, '#373: the journaled reason is clamped to ≤201 chars (200 + ellipsis): len=' + ed[0].reason.length)
       assert.ok(!ed[0].reason.includes(secretPayload), '#373: the plain payload secret never leaks into the reason: ' + ed[0].reason)
       console.log('OK: engine_dispatch #373 denial-reason clamp + plain-staging leak guard (≤201 chars, no payload)')
+    }
+
+    // (a4) #383 (Part B): the denial reason is routed through the repo's rich pr_comment.py scrub seam
+    // BEFORE it persists to events.jsonl — closing the consistency gap with the commit-failure path,
+    // which already scrubs. _stagingDenial's base64-run redaction (>=24-char alnum runs) misses framed
+    // secret classes the scrubber catches: key=value / "key":"value" secrets, Bearer tokens, the
+    // gho_/github_pat_/sk-/AKIA…/xox…/AIza… prefixes, and URI userinfo. A framed token whose alnum
+    // run is under 24 chars survives the base64 rule but MUST NOT reach the journal — the scrub redacts it.
+    {
+      d.__resetHarnessNotice()
+      const jp = []
+      // ghp_SHORT1234567890abc: the run after ghp_ is 18 chars (<24), so _stagingDenial's base64 rule
+      // leaves it intact; only the richer scrub seam redacts it (github-token + key=value patterns).
+      const SECRET = 'token=ghp_SHORT1234567890abc'
+      const DENIAL_WITH_SECRET = 'Permission for this action was denied by the auto mode classifier: ' + SECRET + ' leaked'
+      global.agent = journalCollector(jp, [
+        [d._SR_STAGE_SIG, [{ index: 0, ok: false, stdout: DENIAL_WITH_SECRET }]],
+      ])
+      const r = await d.dispatchExternal({ engine: 'cursor', roleKind: 'review', effort: 'composer', prompt: 'review prompt', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, workItem: 'wi-383-scrub' })
+      assert.strictEqual(r.reason, 'could-not-stage-external-inputs', '#383: return reason unchanged when the denial reason is scrubbed')
+      const ed = jp.filter((p) => p.outcome === 'staging-denied')
+      assert.strictEqual(jp.length, 1, '#383: exactly ONE external_dispatch journal line: ' + JSON.stringify(jp.map((p) => p.outcome)))
+      assert.strictEqual(ed.length, 1, '#383: the scrubbed denial still journals one staging-denied line')
+      // Precondition: the base64-run redaction alone would NOT have caught this framed token — so the
+      // scrub seam (not the pre-existing windowing) is provably what removes it.
+      assert.strictEqual(SECRET.replace(/[A-Za-z0-9+\/=]{24,}/g, '[redacted]'), SECRET, '#383 precondition: the base64-run rule leaves this framed token intact')
+      // The persisted reason must NOT carry the raw secret — the scrub seam redacted it.
+      assert.ok(!ed[0].reason.includes('ghp_SHORT1234567890abc'), '#383: the raw framed secret must never reach the journal reason: ' + ed[0].reason)
+      assert.ok(ed[0].reason.includes('[REDACTED]'), '#383: the scrub seam redacts the framed secret to [REDACTED]: ' + ed[0].reason)
+      // The non-secret classifier prose around the secret is preserved (honest evidence, not a secret).
+      assert.ok(ed[0].reason.includes('auto mode classifier'), '#383: the non-secret classifier prose is preserved: ' + ed[0].reason)
+      console.log('OK: engine_dispatch #383 staging-denied reason is scrubbed through the rich seam before it journals')
+    }
+
+    // (a5) #383 (Part B): scrub FAILURE fails safe — if pr_comment.py scrub errors, the denial reason
+    // falls back to a fixed label ('staging denied (reason scrubbed)') rather than the unscrubbed prose,
+    // so a scrubber outage can never leak the raw (possibly secret-bearing) denial text into the journal.
+    {
+      d.__resetHarnessNotice()
+      const jp = []
+      const SECRET = 'token=ghp_SHORT1234567890abc'
+      const DENIAL_WITH_SECRET = 'Permission for this action was denied by the auto mode classifier: ' + SECRET + ' leaked'
+      // Route the scrub leaf to a hard failure; the stage leaf denies, the journal leaf collects.
+      global.agent = async (prompt) => {
+        if (prompt.includes('journal_entry.py')) {
+          const m = prompt.match(/--payload '(.*)'$/s)
+          if (m) { try { jp.push(JSON.parse(m[1].replace(/'\\''/g, "'"))) } catch (_e) { /* asserted below */ } }
+          return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        }
+        if (prompt.includes('pr_comment.py scrub')) return [{ index: 0, ok: false, stdout: '' }]
+        if (prompt.includes(d._SR_STAGE_SIG)) return [{ index: 0, ok: false, stdout: DENIAL_WITH_SECRET }]
+        return [{ index: 0, ok: true, stdout: '{}' }]
+      }
+      await d.dispatchExternal({ engine: 'cursor', roleKind: 'review', effort: 'composer', prompt: 'review prompt', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, workItem: 'wi-383-scrub-fail' })
+      const ed = jp.filter((p) => p.outcome === 'staging-denied')
+      assert.strictEqual(ed.length, 1, '#383: a scrub failure still journals one staging-denied line')
+      assert.strictEqual(ed[0].reason, 'staging denied (reason scrubbed)', '#383: on scrub failure the reason is the fixed fallback label: ' + ed[0].reason)
+      assert.ok(!ed[0].reason.includes('ghp_SHORT1234567890abc'), '#383: a scrub failure must NOT leak the raw denial prose: ' + ed[0].reason)
+      console.log('OK: engine_dispatch #383 staging-denied reason falls back to a fixed label when scrub fails')
+    }
+
+    // (a6) #383 (Part B): scrub COURIER STDOUT-DROP (ok:true, stdout:'') is the cheap courier's own
+    // documented failure mode (see the _execJson note: a leaf returns ok:true with empty stdout even
+    // though the command ran). A real scrub never empties non-empty prose, so an empty scrub result is
+    // treated as a scrub failure — the reason must be the fixed fallback label, NOT a silently-dropped
+    // (WHY-less) reason and NEVER the raw prose. This is the shape (a5) does not cover.
+    {
+      d.__resetHarnessNotice()
+      const jp = []
+      const SECRET = 'token=ghp_SHORT1234567890abc'
+      const DENIAL_WITH_SECRET = 'Permission for this action was denied by the auto mode classifier: ' + SECRET + ' leaked'
+      global.agent = async (prompt) => {
+        if (prompt.includes('journal_entry.py')) {
+          const m = prompt.match(/--payload '(.*)'$/s)
+          if (m) { try { jp.push(JSON.parse(m[1].replace(/'\\''/g, "'"))) } catch (_e) { /* asserted below */ } }
+          return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        }
+        // The courier "ran" the scrub but dropped its stdout (ok:true, empty) — the documented drop.
+        if (prompt.includes('pr_comment.py scrub')) return [{ index: 0, ok: true, stdout: '' }]
+        if (prompt.includes(d._SR_STAGE_SIG)) return [{ index: 0, ok: false, stdout: DENIAL_WITH_SECRET }]
+        return [{ index: 0, ok: true, stdout: '{}' }]
+      }
+      await d.dispatchExternal({ engine: 'cursor', roleKind: 'review', effort: 'composer', prompt: 'review prompt', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, workItem: 'wi-383-scrub-drop' })
+      const ed = jp.filter((p) => p.outcome === 'staging-denied')
+      assert.strictEqual(ed.length, 1, '#383: a scrub stdout-drop still journals one staging-denied line')
+      assert.strictEqual(ed[0].reason, 'staging denied (reason scrubbed)', '#383: an empty (dropped) scrub stdout falls back to the fixed label, not a missing reason: ' + JSON.stringify(ed[0]))
+      assert.ok(!ed[0].reason.includes('ghp_SHORT1234567890abc'), '#383: a scrub stdout-drop must NOT leak the raw denial prose: ' + ed[0].reason)
+      console.log('OK: engine_dispatch #383 staging-denied reason falls back to a fixed label on a scrub stdout-drop (ok:true, empty)')
+    }
+
+    // (a7) #383 (Part B): a TAINT-WITHHELD denial (the fixed _DENIAL_TAINTED internal label) skips the
+    // scrub entirely — it is a known-safe constant, so it must reach the journal verbatim EVEN when the
+    // scrubber would fail (its taint-specific evidence is preserved, not degraded to the generic label).
+    {
+      d.__resetHarnessNotice()
+      const jp = []
+      const WITHHELD = 'denial signature detected after the echoed stage command — text withheld'
+      const secretPayload = 'build prompt with Permission for this action was denied embedded'
+      const stageEcho = "python3 -c 'import os,sys,hashlib;…" + d._SR_STAGE_SIG + "…' /tmp/e383t-" + process.pid + ".prompt '" + secretPayload + "' 'deadbeef'"
+      let scrubCalls = 0
+      global.agent = async (prompt) => {
+        if (prompt.includes('journal_entry.py')) {
+          const m = prompt.match(/--payload '(.*)'$/s)
+          if (m) { try { jp.push(JSON.parse(m[1].replace(/'\\''/g, "'"))) } catch (_e) { /* asserted below */ } }
+          return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        }
+        // The scrub would fail if it ran — but for the known-safe taint constant it must NOT run at all.
+        if (prompt.includes('pr_comment.py scrub')) { scrubCalls++; return [{ index: 0, ok: false, stdout: '' }] }
+        if (prompt.includes(d._SR_STAGE_SIG)) return [{ index: 0, ok: false, stdout: stageEcho }]
+        return [{ index: 0, ok: true, stdout: '{}' }]
+      }
+      await d.dispatchExternal({ engine: 'cursor', roleKind: 'review', effort: 'composer', prompt: secretPayload, cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, workItem: 'wi-383-taint-skip' })
+      const ed = jp.filter((p) => p.outcome === 'staging-denied')
+      assert.strictEqual(ed.length, 1, '#383: a taint-withheld denial journals one staging-denied line')
+      assert.strictEqual(ed[0].reason, WITHHELD, '#383: the fixed taint label reaches the journal verbatim (scrub skipped, not degraded to the fallback): ' + ed[0].reason)
+      assert.ok(!ed[0].reason.includes(secretPayload), '#257/#383: the payload text never rides in the withheld reason')
+      assert.strictEqual(scrubCalls, 0, '#383: the scrub seam is NOT invoked for the known-safe taint constant (short-circuited): scrubCalls=' + scrubCalls)
+      console.log('OK: engine_dispatch #383 taint-withheld denial skips the scrub and reaches the journal verbatim')
     }
 
     // (b) STAGING FAILED (no denial signature): a plain courier/exec staging error (empty stdout) →

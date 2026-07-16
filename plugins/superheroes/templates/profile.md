@@ -13,6 +13,12 @@ CLAUDE.md does not already state. Conventions live in CLAUDE.md.
 - Readiness probe: GET {{readiness-url}} → expect HTTP {{readiness-status}}
 - May test-pilot start/stop the server: {{yes/no}}
 
+> Per-worktree PORT: if the launch worktree carries a `.env.local` with a
+> `PORT=<N>` line, test-pilot honors it automatically — the resolved port,
+> base URL, and readiness probe follow that value (what the dev server will
+> actually bind) instead of the base URL above, and the resolved port is
+> disclosed in the phase record. No per-worktree edit to this profile needed.
+
 ## Auth strategy
 
 {{One of: test-user credentials (env var NAMES only, never secrets) /

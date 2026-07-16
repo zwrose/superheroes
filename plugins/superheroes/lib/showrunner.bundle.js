@@ -4401,13 +4401,16 @@ function _stagingDenial(results) {
   }
   return null
 }
-async function _scrubReason(reason) {
+async function _scrubReason(reason, fallback = 'external error (scrubbed)') {
   const s = reason == null ? '' : String(reason)
   if (!s) return s
   const res = await _exec([`printf '%s' ${shq(s)} | python3 ${libPath('pr_comment.py')} scrub`])
   const r0 = res && res[0]
-  if (r0 && r0.ok && r0.stdout != null) return String(r0.stdout)
-  return 'external error (scrubbed)'
+  if (r0 && r0.ok && r0.stdout != null) {
+    const out = String(r0.stdout)
+    if (out.trim()) return out
+  }
+  return fallback
 }
 const _RUN_KEY_MAX = 80
 const _RUN_KEY_HASH_LEN = 16
@@ -4464,9 +4467,12 @@ async function _dispatchExternalInner(o) {
   if (!(promptStage.ok && schemaStage.ok)) {
     const writeInputs = promptStage.ok ? schemaStage.results : promptStage.results
     const denial = _stagingDenial(writeInputs)
+    const scrubbedDenial = !denial ? null
+      : (denial === _DENIAL_TAINTED ? denial
+        : await _scrubReason(denial, 'staging denied (reason scrubbed)'))
     const jStaging = await _journalExternal(Object.assign(_jbase(), { verify: null,
       outcome: denial ? STAGING_DENIED_OUTCOME : STAGING_FAILED_OUTCOME },
-      denial ? { reason: denial } : {}))
+      scrubbedDenial ? { reason: scrubbedDenial } : {}))
     if (!(jStaging && jStaging.ok)) return { ok: false, reason: 'unauditable' }
     return { ok: false, reason: 'could-not-stage-external-inputs' }
   }
@@ -7915,6 +7921,7 @@ function testPilotDeps(workItem, generation) {
           'python3', libPath('test_pilot_server_config_cli.py'), 'resolve',
           '--profile-json', profilePath, '--detection-json', detectionPath,
           '--work-item', workItem,
+          ...(context.worktree ? ['--worktree', context.worktree] : []),
         ],
         seed: [
           'python3', libPath('test_pilot_seed_cli.py'), 'prepare',
@@ -7961,16 +7968,21 @@ function testPilotDeps(workItem, generation) {
     resolveServer: async (context) => {
       const profile = await writeJson('server-profile', context.profile || {})
       const detection = await writeJson('server-detection', context.detectors || {})
+      const wtArg = context.worktree ? ` --worktree ${shq(context.worktree)}` : ''
       return cli(
         `python3 ${libPath('test_pilot_server_config_cli.py')} resolve ` +
-        `--profile-json ${shq(profile)} --detection-json ${shq(detection)} --work-item ${shq(workItem)}`,
+        `--profile-json ${shq(profile)} --detection-json ${shq(detection)} --work-item ${shq(workItem)}${wtArg}`,
         { type: 'object' })
     },
     withManagedServer: async (serverContext, run) => {
       const launchPath = await writeJson('server-launch-context', serverContext)
+      const launchWorktree = serverContext && typeof serverContext.cwd === 'string' && serverContext.cwd
+        ? serverContext.cwd : null
+      const wtArg = launchWorktree ? ` --worktree ${shq(launchWorktree)}` : ''
+      const launchCmd = `python3 ${libPath('test_pilot_server_config_cli.py')} launch ` +
+        `--context-json ${shq(launchPath)}${wtArg}`
       const launched = await cli(
-        `python3 ${libPath('test_pilot_server_config_cli.py')} launch ` +
-        `--context-json ${shq(launchPath)}`,
+        inWorktree(launchCmd, launchWorktree),
         { type: 'object' })
       if (!launched || launched.verdict === 'park' || launched.action === 'park' || launched.ok === false) {
         return launched
