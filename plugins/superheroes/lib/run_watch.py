@@ -51,6 +51,7 @@ JOURNAL_EVENT_LABELS = {
     # was declined terminally.
     "courier_declined": "courier declined",
     "manual_completion": "manually completed",
+    "confinement_tripwire": "CONFINEMENT BREACH (engine wrote outside its worktree)",
 }
 KNOWN_JOURNAL_EVENT_TYPES = frozenset(JOURNAL_EVENT_LABELS)
 

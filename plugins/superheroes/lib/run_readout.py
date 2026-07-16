@@ -21,6 +21,8 @@ KNOWN_JOURNAL_EVENT_TYPES = frozenset({
     "courier_declined",
     # #450: terminal receipt for a parked run finished by hand outside the spine.
     "manual_completion",
+    # #355: confinement-tripwire security receipt (engine subprocess wrote outside its build worktree).
+    "confinement_tripwire",
 })
 
 
