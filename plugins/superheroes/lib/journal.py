@@ -66,6 +66,12 @@ EVENT_TYPES = {
     # scrubbed by its writer (manual_completion_entry) BEFORE it reaches the payload. Additive to
     # the vocabulary (no schemaVersion bump); manual_completion.py is its sole writer.
     "manual_completion",
+    # #355 confinement tripwire: a first-class security receipt — an external engine subprocess left a
+    # write-trace on the PRIMARY repo during a worktree-confined write-role dispatch (reflog growth /
+    # HEAD move / porcelain delta vs the pre-dispatch baseline). Distinct from external_dispatch on
+    # purpose so acceptance_verdict's per-engine authenticity tally never counts it as a dispatch
+    # outcome; engine_dispatch._journalConfinementTripwire is its sole writer.
+    "confinement_tripwire",
 }
 
 

@@ -71,6 +71,25 @@ def test_phase_cost_is_a_valid_additive_event_type(tmp_path, monkeypatch):
     assert evs[0]["payload"]["tokens"]["output"] == 84000
 
 
+def test_confinement_tripwire_is_a_valid_additive_event_type(tmp_path, monkeypatch):
+    # #355: the confinement tripwire's durable receipt MUST be an appendable event type — journal.append
+    # fails closed on unknown types, so an unregistered "confinement_tripwire" would make every real
+    # breach receipt raise DurableWriteError and the tripwire's durable half dead on arrival (the exact
+    # miss class #402's courier_declined and #450's manual_completion already hit). Additive (no
+    # schemaVersion bump); engine_dispatch._journalConfinementTripwire is its sole writer.
+    monkeypatch.setattr(journal.readout, "scrub", lambda t, root=None: (t, True))
+    e = str(tmp_path / "events.jsonl")
+    payload = {"engine": "cursor", "roleKind": "fix", "confinementRoot": "/repo",
+               "confinementBreach": ["primary-HEAD-reflog-grew"],
+               "preReflog": 100, "postReflog": 102, "preHead": "abc", "postHead": "abc",
+               "preStatus": 0, "postStatus": 0, "outcome": "run"}
+    journal.append(e, "confinement_tripwire", payload=payload, root=str(tmp_path))
+    evs = journal.read_events(e)
+    assert evs[0]["type"] == "confinement_tripwire"
+    assert evs[0]["payload"]["confinementBreach"] == ["primary-HEAD-reflog-grew"]
+    assert evs[0]["payload"]["postReflog"] == 102
+
+
 def test_render_brief_has_required_sections(tmp_path, monkeypatch):
     monkeypatch.setattr(journal.readout, "scrub", lambda t, root=None: (t, True))
     e = str(tmp_path / "events.jsonl")
