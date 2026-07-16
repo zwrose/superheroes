@@ -19,13 +19,17 @@ import journal
 
 
 def classify(events):
-    """completed / parked / other, from the LAST terminal marker (run_completed wins over parked)."""
+    """completed / parked / other, from the LAST terminal marker (a completion wins over parked).
+
+    #450: a `manual_completion` receipt (a parked run finished by hand outside the spine) is a
+    genuine completion for the efficiency trend — without it a hand-shipped run counts as a park,
+    inflating the tokens-per-park denominator with runs that actually shipped."""
     state = "other"
     for ev in events or []:
         if not isinstance(ev, dict):
             continue
         etype = ev.get("type")
-        if etype == "run_completed":
+        if etype in ("run_completed", "manual_completion"):
             state = "completed"
         elif etype == "parked":
             state = "parked"
