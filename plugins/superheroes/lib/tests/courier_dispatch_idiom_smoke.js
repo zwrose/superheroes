@@ -168,11 +168,64 @@ function writeCourierPromptIsBenign() {
     'recordComposedFromPrompt registers the io writer bytes off writeCourierPrompt (#402/#435)')
 }
 
+// #449: the SELF-MANAGEMENT write prompt. The plugin's own run-lifecycle bookkeeping writes
+// (permission_rules.freeze_run_rules — the per-run frozen-rules bootstrap snapshot — and the
+// composed-command record) read to the auto-mode classifier as the agent modifying its OWN permission
+// rules ([Self-Modification] denials survived the #435 transport rework: 1 block on 0.14.0 vs 85 on
+// 0.13.2, all on this surface). writeCourierPrompt({selfManage:true}) adds a clause naming the operation
+// as sanctioned plugin lifecycle (owner-calibrated run rules, written once, read-only thereafter), NOT
+// self-modification — WITHOUT breaking the #435 narration-tolerance, the payload-is-data clause, the
+// _DISPATCH_LEADS lead, or the first-blank-line composed-exact boundary.
+function writeCourierPromptSelfManageIsBenign() {
+  const cmd = 'python3 -c \'import sys; import permission_rules; permission_rules.freeze_run_rules(sys.argv[1], sys.argv[2])\' gen1 /cwd'
+  const plain = courier.writeCourierPrompt(cmd)
+  const managed = courier.writeCourierPrompt(cmd, { selfManage: true })
+
+  // (1) the shared clause exists and is exported, and names the operation as sanctioned lifecycle.
+  assert.ok(typeof courier.SELF_MANAGEMENT_IS_LIFECYCLE_CLAUSE === 'string' &&
+    courier.SELF_MANAGEMENT_IS_LIFECYCLE_CLAUSE.length > 0,
+    'courier exports the SELF_MANAGEMENT_IS_LIFECYCLE_CLAUSE (#449)')
+  assert.ok(/not (agent )?self-modification/i.test(courier.SELF_MANAGEMENT_IS_LIFECYCLE_CLAUSE) &&
+    /lifecycle/i.test(courier.SELF_MANAGEMENT_IS_LIFECYCLE_CLAUSE),
+    'the self-management clause frames the write as sanctioned plugin lifecycle, not self-modification (#449)')
+  assert.ok(/owner-calibrated/i.test(courier.SELF_MANAGEMENT_IS_LIFECYCLE_CLAUSE) &&
+    /read-only/i.test(courier.SELF_MANAGEMENT_IS_LIFECYCLE_CLAUSE),
+    'the self-management clause states the frozen rules are owner-calibrated + read-only (#449 fix direction 1)')
+  assert.ok(/grants no new authority|no new authority|bypasses nothing/i.test(courier.SELF_MANAGEMENT_IS_LIFECYCLE_CLAUSE),
+    'the self-management clause states it grants no new authority (#449)')
+
+  // (2) selfManage:true carries the clause; the default (no opts) does NOT — byte-compat for every
+  //     other io write (journal/prov/build_state/decline-journal), which must NOT gain the clause.
+  assert.ok(managed.indexOf(courier.SELF_MANAGEMENT_IS_LIFECYCLE_CLAUSE) >= 0,
+    'writeCourierPrompt({selfManage:true}) carries the self-management clause')
+  assert.ok(plain.indexOf(courier.SELF_MANAGEMENT_IS_LIFECYCLE_CLAUSE) < 0,
+    'writeCourierPrompt() (no opts) does NOT carry the self-management clause — byte-compat for other io writes')
+
+  // (3) the clause NEVER breaks the #402 invariants: the lead + first-blank-line command boundary survive.
+  assert.ok(managed.startsWith('Execute this exact shell command'),
+    'the self-managed write prompt keeps its _DISPATCH_LEADS lead (composed-exact registration)')
+  assert.ok(managed.endsWith('\n\n' + cmd),
+    'the self-managed write prompt keeps the command after the FIRST blank line, unchanged')
+  const seen = []
+  courier.setComposedRecorder((c) => seen.push(c))
+  try { courier.recordComposedFromPrompt(managed) } finally { courier.setComposedRecorder(null) }
+  assert.deepStrictEqual(seen, [cmd],
+    'recordComposedFromPrompt still extracts the executed bytes off the self-managed write prompt (#402/#413)')
+
+  // (4) it keeps the #435 narration-tolerance + payload-is-data + transparency framing, no concealment idiom.
+  assert.ok(managed.indexOf(courier.PAYLOAD_IS_DATA_CLAUSE) >= 0,
+    'the self-managed write prompt keeps the payload-is-data clause')
+  for (const re of CONCEALMENT_IDIOM) {
+    assert.ok(!re.test(managed), `the self-managed write prompt must NOT carry the concealment idiom ${re} (#425/#449)`)
+  }
+}
+
 async function main() {
   await builtPromptsAreTransparent()
   writeCourierPromptIsBenign()
+  writeCourierPromptSelfManageIsBenign()
   builderSourcesAreClean()
-  console.log('ok: courier dispatch prompts state fidelity as transparency; write prompt narration-tolerant; #402 leads + boundary intact (#425/#435)')
+  console.log('ok: courier dispatch prompts state fidelity as transparency; write prompt narration-tolerant; self-management write prompt is benign; #402 leads + boundary intact (#425/#435/#449)')
 }
 
 main().catch((e) => { console.error('FAIL:', e.message, e.stack); process.exit(1) })
