@@ -217,6 +217,10 @@ SHOWRUNNER_SMOKES = [
     # showrunner_engine_dispatch_smoke.js (not engine_dispatch_smoke.js) so the discovery-equality
     # guard below (which only auto-matches showrunner_*/build_phase_* names) stays satisfied.
     "plugins/superheroes/lib/tests/showrunner_engine_dispatch_smoke.js",
+    # #355: the post-dispatch primary-repo confinement tripwire — an external write engine escaping its
+    # build worktree to write on the PRIMARY checkout (reflog-growth commit-and-self-revert / dirtied tree)
+    # is detected + journaled (confinement_tripwire) + narrator-noticed; no-op unrooted / read-role / root==cwd.
+    "plugins/superheroes/lib/tests/showrunner_engine_confinement_tripwire_smoke.js",
     # #341: the engine CLI dispatch rides the HARDENED marker courier — a real cheapest-model claude
     # leaf must actually RUN the composed cursor build watchdog command (answer carries __SR_EXIT)
     # rather than declining with prose. LIVE-GATED (SUPERHEROES_LIVE_COURIER=1): a no-op SKIP in CI

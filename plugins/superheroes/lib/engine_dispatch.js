@@ -260,6 +260,113 @@ async function _executionEvidence(wt, preSha, captureBase) {
   return Number(m[1]) > 0 || (preSha != null && m[2] !== preSha) || Number(m[3]) > 0
 }
 
+// #355 CONFINEMENT TRIPWIRE. An external engine subprocess is dispatched cd'd into a disposable build
+// worktree, but worktree confinement does NOT bind the spawned CLI's children: the enforcer's PreToolUse
+// hook governs OUR agents' Bash, not a `--trust -f` engine's grandchildren (live 2026-07-10: a cursor fix
+// leaf committed to the PRIMARY checkout's `main`, then self-reverted — LEDGERS §3's residual re-check
+// trigger fired). This is the mechanical tripwire the issue asks for (detect, don't just hope): snapshot
+// the primary repo BEFORE the CLI runs and AFTER it settles, and on any out-of-worktree delta surface it.
+// Signals (any one = a breach): (1) the primary HEAD REFLOG grew — the load-bearing signal, append-only,
+// so a commit-and-self-revert excursion whose END STATE is clean (same HEAD, clean tree) is still caught
+// where a bare HEAD/status probe reads clean; (2) primary HEAD moved off its baseline; (3) the primary
+// working tree gained/lost porcelain entries (an uncommitted write). The probe is SENTINEL-PREFIXED and
+// read-only. Disclosed blind spots (also in LEDGERS §3): a direct `git push` mutates a REMOTE and leaves
+// the local reflog/status clean — NOT caught by a LOCAL probe (owner: the enforcer/credential layer,
+// #311/#335); a write to a DIFFERENT on-disk repo, or a commit to a branch the primary hasn't checked out
+// (only THAT branch's ref-log grows, not the primary HEAD reflog), is outside probed scope; a `.git`-
+// internal write (planted hook, rewritten config) or a count-NEUTRAL working-tree edit (write-then-restore,
+// or a further edit to an already-dirty file) moves none of the three signals; a within-window reflog gc/
+// expiry could in principle mask count growth (very low probability — HEAD reflog entries live 90 days).
+// The reflog signal is a line COUNT on purpose: it catches a commit-and-self-revert (the observed shape,
+// end-state clean) that a reflog-TIP oid would MISS (the tip returns to baseline after the revert). The
+// tripwire DETECTS and DISCLOSES — it never blocks or alters the dispatch's own outcome (a false positive,
+// e.g. a concurrent run touching the shared primary, costs an audit line, never a failed run). On a
+// timeout/threw dispatch whose CLI was never joined, a clean post-probe is reported INDETERMINATE, not
+// confined (premortem-001), and a breach whose durable receipt fails to persist is surfaced LOUDLY on the
+// live narrator line rather than dropped silently (premortem-002).
+function _confinementProbeCmd(root) {
+  return "printf '__SR_TRIP__ %s %s %s\\n' " +
+    `"$(git -C ${shq(root)} reflog show HEAD 2>/dev/null | wc -l | tr -d ' ')" ` +
+    `"$(git -C ${shq(root)} rev-parse HEAD 2>/dev/null)" ` +
+    `"$(git -C ${shq(root)} status --porcelain 2>/dev/null | wc -l | tr -d ' ')"`
+}
+
+// Snapshot the primary repo's confinement-relevant state. Returns {reflog,head,status} or null on ANY
+// probe failure/garble/drop — a null baseline leaves the tripwire INERT for that dispatch (it cannot
+// assert an escape it never measured, and firing on a probe failure would be crying wolf). Single-shot,
+// mirroring _executionEvidence: a stochastic courier drop just makes that one dispatch inert (a disclosed,
+// fail-safe missed detection), never a false alarm.
+async function _primaryRepoState(root) {
+  const res = await _exec([_confinementProbeCmd(root)])
+  const r0 = res && res[0]
+  if (!(r0 && r0.ok)) return null
+  const m = String(r0.stdout == null ? '' : r0.stdout).match(/__SR_TRIP__ (\d+) (\S+) (\d+)/)
+  if (!m) return null
+  return { reflog: Number(m[1]), head: m[2], status: Number(m[3]) }
+}
+
+// Pure classifier: the ordered list of breached signals, or null when the primary repo is unchanged.
+// reflog is append-only (only ever grows), so `>` is the honest growth test; HEAD/status use inequality.
+function _confinementBreach(pre, post) {
+  if (!pre || !post) return null
+  const signals = []
+  if (post.reflog > pre.reflog) signals.push('primary-HEAD-reflog-grew')
+  if (post.head !== pre.head) signals.push('primary-HEAD-moved')
+  if (post.status !== pre.status) signals.push('primary-worktree-dirtied')
+  return signals.length ? signals : null
+}
+
+// Journal the breach as a FIRST-CLASS `confinement_tripwire` event — a DISTINCT event type from
+// external_dispatch on purpose: acceptance_verdict.tally_external_dispatches filters by type, so a breach
+// line never pollutes the per-engine authenticity tally (it is not a dispatch outcome; it is a security
+// receipt orthogonal to whether the dispatch itself succeeded). A failed durable append -> {ok:false};
+// the tripwire is best-effort disclosure and never fails the dispatch, so the caller ignores the return.
+async function _journalConfinementTripwire(payload) {
+  const pre = payload.pre || {}
+  const post = payload.post || {}
+  return _execJson(
+    `python3 ${libPath('journal_entry.py')} --work-item ${shq(payload.workItem || '')} ` +
+    `--event-type confinement_tripwire --payload ` +
+    shq(JSON.stringify(Object.assign({ engine: payload.engine, roleKind: payload.roleKind,
+      confinementRoot: payload.confinementRoot, confinementBreach: payload.confinementBreach,
+      preReflog: pre.reflog == null ? null : pre.reflog, postReflog: post.reflog == null ? null : post.reflog,
+      preHead: pre.head == null ? null : pre.head, postHead: post.head == null ? null : post.head,
+      preStatus: pre.status == null ? null : pre.status, postStatus: post.status == null ? null : post.status,
+      outcome: payload.outcome },
+      payload.dispatchReason == null ? {} : { dispatchReason: payload.dispatchReason }))))
+}
+
+// The distinct narrator notice (run_watch surfaces narrator lines live). Fired PER occurrence — an escape
+// is a genuine security event, and it cannot spam: each dispatch re-baselines, so a one-time excursion
+// fires once and a persistent dirty tree it left behind is already in the next baseline. Best-effort.
+function _confinementTripwireNotice(o, signals, root, opts) {
+  const engine = (o && o.engine) || 'external'
+  const role = (o && o.roleKind) || '?'
+  // #355 (premortem-002): if the DURABLE receipt could not be persisted, say so LOUDLY on this live line
+  // — the tripwire is detection-only and must never fail the dispatch, but an audit-loss must not be
+  // silent (every sibling audit path fails closed; this one keeps the dispatch contract but surfaces).
+  const auditTail = (opts && opts.auditFailed)
+    ? ' [AUDIT-APPEND-FAILED: the durable confinement_tripwire receipt could NOT be persisted — this live ' +
+      'notice is the only record; treat as a confirmed finding]'
+    : ''
+  try {
+    if (opts && opts.indeterminate) {
+      // #355 (premortem-001): the JS race abandoned an un-joined CLI (timeout/threw), so a clean post-probe
+      // cannot be trusted — the engine or a detached child may still be writing. Report INDETERMINATE, not
+      // confined: a silent "clean" on the exact runaway path most likely to be escaping is false comfort.
+      globalThis.log('CONFINEMENT-INDETERMINATE: engine ' + JSON.stringify(engine) + ' (' + role + ') dispatch did ' +
+        'NOT confirm CLI termination (' + ((opts && opts.dispatchReason) || 'incomplete') + ') on primary repo ' +
+        JSON.stringify(root) + ' — a clean post-probe is untrustworthy; the engine or a detached child may still ' +
+        'be writing (#355). Inspect `git -C ' + root + ' reflog` and `git -C ' + root + ' status`.' + auditTail)
+      return
+    }
+    globalThis.log('CONFINEMENT-BREACH: engine ' + JSON.stringify(engine) + ' (' + role + ') left a write-trace ' +
+      'on the PRIMARY repo ' + JSON.stringify(root) + ' during a worktree-confined dispatch [' + (signals || []).join(', ') +
+      '] — worktree confinement does not bind engine subprocesses (#355). The build worktree is disposable; ' +
+      'the primary checkout is NOT. Inspect `git -C ' + root + ' reflog` and `git -C ' + root + ' status`.' + auditTail)
+  } catch (_) {}
+}
+
 // preSHA capture for write roles — the established spine pattern (showrunner.js:1226).
 async function _captureHead(wt) {
   const res = await _exec([`git -C ${shq(wt)} rev-parse HEAD`])
@@ -703,6 +810,12 @@ async function _dispatchExternalInner(o) {
   const limitSeconds = Number(timeoutSeconds) > 0 ? Number(timeoutSeconds) : DEFAULT_STALL_LIMIT_SECONDS
   const limitMs = limitSeconds * 1000
   const isWrite = (roleKind === 'build' || roleKind === 'fix')
+  // #355 confinement tripwire: the PRIMARY repo root to probe for out-of-worktree engine writes. Armed
+  // ONLY for WRITE roles (build|fix) dispatched into a build worktree DISTINCT from the primary checkout —
+  // read roles are engine-read-only-sandboxed and author-plan runs AT the primary root (no boundary to
+  // police). Unset __SR_ROOT (most smokes / unrooted runs) or root === cwd -> null -> tripwire disabled.
+  const _primaryRoot = (typeof globalThis !== 'undefined' && globalThis.__SR_ROOT) ? String(globalThis.__SR_ROOT).trim() : ''
+  const tripRoot = (isWrite && _primaryRoot && _primaryRoot !== cwd) ? _primaryRoot : null
   // #309 STALL MONITOR resolution — the monitor half of the ceiling+monitor pair. The caller resolves
   // the idle threshold (resolveIdle: role default or owner override) and passes it as o.idleSeconds; a
   // dispatch with no idle passed (the engine_authz probe / any pre-#309 caller) runs ceiling-only. The
@@ -822,6 +935,11 @@ async function _dispatchExternalInner(o) {
       return { ok: false, reason: 'could-not-capture-preSHA' }
     }
   }
+
+  // #355: baseline the primary repo BEFORE the CLI runs (see the tripwire helpers above). A null baseline
+  // (probe unavailable) leaves the tripwire inert for this dispatch. Only armed for a confined write role.
+  let preTrip = null
+  if (tripRoot) preTrip = await _primaryRepoState(tripRoot)
 
   // 3. Wrap the whole dispatch in the UFR-5 finite timeout. A stall -> {ok:false, reason:'timeout'}.
   // resolvedArgv / relayMeta are declared ABOVE (hoisted over _jbase and the #373 pre-CLI early exits);
@@ -953,6 +1071,35 @@ async function _dispatchExternalInner(o) {
     ])
   } catch (_e) { parsed = { ok: false, reason: 'external-run-threw' } }
   finally { if (timeoutHandle) clearTimeout(timeoutHandle) }
+
+  // #355 CONFINEMENT TRIPWIRE (post-dispatch): re-probe the primary repo and, on ANY out-of-worktree delta
+  // vs the baseline, journal a first-class confinement_tripwire event + raise a distinct narrator notice.
+  // Detection is ORTHOGONAL to the dispatch outcome (a clean in-worktree commit can still have spawned a
+  // child that touched the primary), so this runs on EVERY settled write dispatch regardless of how
+  // `parsed` resolved — BEFORE the outcome-specific returns below — and never alters the dispatch's own
+  // return shape. The append-only reflog signal catches a commit-and-self-revert excursion (end clean).
+  if (tripRoot && preTrip) {
+    const postTrip = await _primaryRepoState(tripRoot)
+    const breach = _confinementBreach(preTrip, postTrip)
+    // premortem-001: a `run`-LOSES resolution (the JS race timed out, or the body threw) never joined or
+    // confirmed the kill of the courier+CLI, so the CLI (or a detached child) may still be writing when we
+    // re-probe — a clean reading here is NOT trustworthy. `run` never returns reason 'timeout'/'external-
+    // run-threw' (those are only the race timer / the outer catch), so this uniquely identifies the
+    // un-joined case. Report it as INDETERMINATE rather than silently as confined.
+    const runIncomplete = !!(parsed && (parsed.reason === 'timeout' || parsed.reason === 'external-run-threw'))
+    if (breach) {
+      const jt = await _journalConfinementTripwire({ workItem: o.workItem, engine, roleKind,
+        confinementRoot: tripRoot, confinementBreach: breach, pre: preTrip, post: postTrip,
+        outcome: 'confinement-breach' })
+      _confinementTripwireNotice(o, breach, tripRoot, { auditFailed: !(jt && jt.ok) })
+    } else if (runIncomplete) {
+      const jt = await _journalConfinementTripwire({ workItem: o.workItem, engine, roleKind,
+        confinementRoot: tripRoot, confinementBreach: null, pre: preTrip, post: postTrip,
+        outcome: 'confinement-indeterminate', dispatchReason: String(parsed.reason) })
+      _confinementTripwireNotice(o, null, tripRoot,
+        { indeterminate: true, dispatchReason: String(parsed.reason), auditFailed: !(jt && jt.ok) })
+    }
+  }
 
   // #341/#343: journal every corroborated courier-declined attempt HERE, on the single post-race
   // settled path (never inline in the raced `run`), so a timeout win cannot interleave a stray audit
@@ -1140,4 +1287,7 @@ module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarness
   // safe), exported so the smoke pins every branch directly without spinning up full dispatches.
   _deriveRunKey,
   // #347 test-only: the watchdog's stdout-relay cap, exported so the flood smoke pins the bound.
-  EMIT_TAIL_BYTES }
+  EMIT_TAIL_BYTES,
+  // #355 test-only: the confinement-tripwire probe composer + pure signal classifier, exported so a
+  // focused smoke can pin the probe shape and every breach/clean branch without a full dispatch.
+  _confinementProbeCmd, _confinementBreach }

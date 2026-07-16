@@ -23,6 +23,8 @@ KNOWN_JOURNAL_EVENT_TYPES = frozenset({
     "manual_completion",
     # #350 Part B: a re-execute-and-discard disclosure (a completed dispatch re-run, its answer dropped).
     "dispatch_retried",
+    # #355: confinement-tripwire security receipt (engine subprocess wrote outside its build worktree).
+    "confinement_tripwire",
 })
 
 

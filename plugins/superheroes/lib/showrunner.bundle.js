@@ -4304,6 +4304,63 @@ async function _executionEvidence(wt, preSha, captureBase) {
   if (!m) return true
   return Number(m[1]) > 0 || (preSha != null && m[2] !== preSha) || Number(m[3]) > 0
 }
+function _confinementProbeCmd(root) {
+  return "printf '__SR_TRIP__ %s %s %s\\n' " +
+    `"$(git -C ${shq(root)} reflog show HEAD 2>/dev/null | wc -l | tr -d ' ')" ` +
+    `"$(git -C ${shq(root)} rev-parse HEAD 2>/dev/null)" ` +
+    `"$(git -C ${shq(root)} status --porcelain 2>/dev/null | wc -l | tr -d ' ')"`
+}
+async function _primaryRepoState(root) {
+  const res = await _exec([_confinementProbeCmd(root)])
+  const r0 = res && res[0]
+  if (!(r0 && r0.ok)) return null
+  const m = String(r0.stdout == null ? '' : r0.stdout).match(/__SR_TRIP__ (\d+) (\S+) (\d+)/)
+  if (!m) return null
+  return { reflog: Number(m[1]), head: m[2], status: Number(m[3]) }
+}
+function _confinementBreach(pre, post) {
+  if (!pre || !post) return null
+  const signals = []
+  if (post.reflog > pre.reflog) signals.push('primary-HEAD-reflog-grew')
+  if (post.head !== pre.head) signals.push('primary-HEAD-moved')
+  if (post.status !== pre.status) signals.push('primary-worktree-dirtied')
+  return signals.length ? signals : null
+}
+async function _journalConfinementTripwire(payload) {
+  const pre = payload.pre || {}
+  const post = payload.post || {}
+  return _execJson(
+    `python3 ${libPath('journal_entry.py')} --work-item ${shq(payload.workItem || '')} ` +
+    `--event-type confinement_tripwire --payload ` +
+    shq(JSON.stringify(Object.assign({ engine: payload.engine, roleKind: payload.roleKind,
+      confinementRoot: payload.confinementRoot, confinementBreach: payload.confinementBreach,
+      preReflog: pre.reflog == null ? null : pre.reflog, postReflog: post.reflog == null ? null : post.reflog,
+      preHead: pre.head == null ? null : pre.head, postHead: post.head == null ? null : post.head,
+      preStatus: pre.status == null ? null : pre.status, postStatus: post.status == null ? null : post.status,
+      outcome: payload.outcome },
+      payload.dispatchReason == null ? {} : { dispatchReason: payload.dispatchReason }))))
+}
+function _confinementTripwireNotice(o, signals, root, opts) {
+  const engine = (o && o.engine) || 'external'
+  const role = (o && o.roleKind) || '?'
+  const auditTail = (opts && opts.auditFailed)
+    ? ' [AUDIT-APPEND-FAILED: the durable confinement_tripwire receipt could NOT be persisted — this live ' +
+      'notice is the only record; treat as a confirmed finding]'
+    : ''
+  try {
+    if (opts && opts.indeterminate) {
+      globalThis.log('CONFINEMENT-INDETERMINATE: engine ' + JSON.stringify(engine) + ' (' + role + ') dispatch did ' +
+        'NOT confirm CLI termination (' + ((opts && opts.dispatchReason) || 'incomplete') + ') on primary repo ' +
+        JSON.stringify(root) + ' — a clean post-probe is untrustworthy; the engine or a detached child may still ' +
+        'be writing (#355). Inspect `git -C ' + root + ' reflog` and `git -C ' + root + ' status`.' + auditTail)
+      return
+    }
+    globalThis.log('CONFINEMENT-BREACH: engine ' + JSON.stringify(engine) + ' (' + role + ') left a write-trace ' +
+      'on the PRIMARY repo ' + JSON.stringify(root) + ' during a worktree-confined dispatch [' + (signals || []).join(', ') +
+      '] — worktree confinement does not bind engine subprocesses (#355). The build worktree is disposable; ' +
+      'the primary checkout is NOT. Inspect `git -C ' + root + ' reflog` and `git -C ' + root + ' status`.' + auditTail)
+  } catch (_) {}
+}
 async function _captureHead(wt) {
   const res = await _exec([`git -C ${shq(wt)} rev-parse HEAD`])
   const r0 = res && res[0]
@@ -4497,6 +4554,8 @@ async function _dispatchExternalInner(o) {
   const limitSeconds = Number(timeoutSeconds) > 0 ? Number(timeoutSeconds) : DEFAULT_STALL_LIMIT_SECONDS
   const limitMs = limitSeconds * 1000
   const isWrite = (roleKind === 'build' || roleKind === 'fix')
+  const _primaryRoot = (typeof globalThis !== 'undefined' && globalThis.__SR_ROOT) ? String(globalThis.__SR_ROOT).trim() : ''
+  const tripRoot = (isWrite && _primaryRoot && _primaryRoot !== cwd) ? _primaryRoot : null
   const idleRequested = Number(o.idleSeconds) > 0 ? Math.ceil(Number(o.idleSeconds)) : null
   const engineStreams = _STREAMS_WHEN_PIPED[engine] === true
   const armIdle = engineStreams && idleRequested != null
@@ -4547,6 +4606,8 @@ async function _dispatchExternalInner(o) {
       return { ok: false, reason: 'could-not-capture-preSHA' }
     }
   }
+  let preTrip = null
+  if (tripRoot) preTrip = await _primaryRepoState(tripRoot)
   const run = (async () => {
     const buildArgvCmd =
       `python3 ${libPath('engine_adapter.py')} build-argv --engine ${shq(engine)} --role ${shq(roleKind)} ` +
@@ -4621,6 +4682,23 @@ async function _dispatchExternalInner(o) {
     ])
   } catch (_e) { parsed = { ok: false, reason: 'external-run-threw' } }
   finally { if (timeoutHandle) clearTimeout(timeoutHandle) }
+  if (tripRoot && preTrip) {
+    const postTrip = await _primaryRepoState(tripRoot)
+    const breach = _confinementBreach(preTrip, postTrip)
+    const runIncomplete = !!(parsed && (parsed.reason === 'timeout' || parsed.reason === 'external-run-threw'))
+    if (breach) {
+      const jt = await _journalConfinementTripwire({ workItem: o.workItem, engine, roleKind,
+        confinementRoot: tripRoot, confinementBreach: breach, pre: preTrip, post: postTrip,
+        outcome: 'confinement-breach' })
+      _confinementTripwireNotice(o, breach, tripRoot, { auditFailed: !(jt && jt.ok) })
+    } else if (runIncomplete) {
+      const jt = await _journalConfinementTripwire({ workItem: o.workItem, engine, roleKind,
+        confinementRoot: tripRoot, confinementBreach: null, pre: preTrip, post: postTrip,
+        outcome: 'confinement-indeterminate', dispatchReason: String(parsed.reason) })
+      _confinementTripwireNotice(o, null, tripRoot,
+        { indeterminate: true, dispatchReason: String(parsed.reason), auditFailed: !(jt && jt.ok) })
+    }
+  }
   if (parsed && Array.isArray(parsed.declinePrefixes)) {
     for (const prefix of parsed.declinePrefixes) {
       await _journalExternal(Object.assign(_jbase(), { verify: null,
@@ -4720,7 +4798,8 @@ module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarness
   _stageCmd, _stageInput, _SR_STAGE_SIG,
   _stageEnc,
   _deriveRunKey,
-  EMIT_TAIL_BYTES }
+  EMIT_TAIL_BYTES,
+  _confinementProbeCmd, _confinementBreach }
 };
 __modules["build_phase"] = function (module, exports, require) {
 const { reviewPanel, verifyAgent: shellVerifyAgent } = require('./review_panel_shell.js')

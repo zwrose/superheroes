@@ -53,6 +53,7 @@ JOURNAL_EVENT_LABELS = {
     "manual_completion": "manually completed",
     # #350 Part B: a completed dispatch was re-executed and its answer discarded (loud disclosure).
     "dispatch_retried": "dispatch retried (answer discarded)",
+    "confinement_tripwire": "CONFINEMENT BREACH (engine wrote outside its worktree)",
 }
 KNOWN_JOURNAL_EVENT_TYPES = frozenset(JOURNAL_EVENT_LABELS)
 
