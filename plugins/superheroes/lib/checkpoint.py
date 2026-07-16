@@ -26,6 +26,15 @@ LEGACY_PHASES_PRE_TEST_PILOT = ["plan", "review-plan", "tasks", "review-tasks",
                                 "workhorse", "review-code", "draft-PR",
                                 "mark-ready", "ship"]
 
+# #450 terminal marker for the `phase` field: a run that was PARKED and then finished BY HAND
+# (native gate, PR, review, ready-flip) outside the spine. It is deliberately NOT one of
+# CURRENT_PHASES — a resume must never try to re-enter a hand-shipped run — and the manual-
+# completion receipt (manual_completion.py) is its only writer. Record-readers treat a
+# TERMINAL_PHASES `phase` as authoritative over the (truthfully frozen) lastGoodPhase resume
+# cursor so the record reads "shipped" instead of the stale parked phase (epic #327).
+SHIPPED_MANUAL = "shipped-manual"
+TERMINAL_PHASES = frozenset({SHIPPED_MANUAL})
+
 
 def new(work_item, branch, issue=None, size=None, phase="build",
         gates=None, patterns_pin=None, pr=None, last_good_step=None,

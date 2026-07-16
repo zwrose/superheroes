@@ -50,6 +50,7 @@ JOURNAL_EVENT_LABELS = {
     # #402 Part B (merged from main): a courier answer carried a classifier-denial signature and
     # was declined terminally.
     "courier_declined": "courier declined",
+    "manual_completion": "manually completed",
 }
 KNOWN_JOURNAL_EVENT_TYPES = frozenset(JOURNAL_EVENT_LABELS)
 
@@ -116,7 +117,14 @@ def _read_checkpoint(root, work_item):
     if not isinstance(data, dict) or data.get("_incompatible"):
         return _phase_unknown(), {}, None
 
-    phase = data.get("lastGoodPhase") or data.get("phase") or "unknown"
+    # #450: a TERMINAL `phase` marker (a hand-finished-after-park run) is authoritative — it
+    # wins over the lastGoodPhase resume cursor, which stays truthfully frozen at where the
+    # spine actually got to. So the record DISPLAYS "shipped-manual", not the stale parked phase.
+    phase_marker = data.get("phase")
+    if phase_marker in checkpoint.TERMINAL_PHASES:
+        phase = phase_marker
+    else:
+        phase = data.get("lastGoodPhase") or phase_marker or "unknown"
     step_index = data.get("lastGoodStep")
     step = None
     if isinstance(step_index, int) and not isinstance(step_index, bool):
@@ -338,10 +346,17 @@ def _read_run(root, work_item, events):
 
     last = (events or [])[-1] if events else None
     state = "unknown"
+    detail = None
     if isinstance(last, dict):
         typ = last.get("type")
         if typ == "run_completed":
             state = "completed"
+        elif typ == "manual_completion":
+            # #450: a parked run finished BY HAND outside the spine — a genuine terminal
+            # completion, distinguished from an automated run_completed so the record is
+            # honest about HOW it shipped (not merely that it did).
+            state = "completed"
+            detail = "manual"
         elif typ == "parked":
             state = "parked"
         elif typ in ("run_started", "resumed", "lease_acquired", "lease_reclaimed",
@@ -351,7 +366,8 @@ def _read_run(root, work_item, events):
             state = "active"
         elif typ == "error":
             state = "error"
-    return {"state": state, "detail": "from events" if state != "unknown" else None,
+    return {"state": state,
+            "detail": detail or ("from events" if state != "unknown" else None),
             "last_park": _park_cause(last_park)}
 
 
@@ -574,6 +590,15 @@ def format_journal_event(evt):
         return "%s  ▶ resumed%s" % (clock, _detail_suffix(evt))
     if typ == "run_completed":
         return "%s  ✓ run completed%s" % (clock, _detail_suffix(evt))
+    if typ == "manual_completion":
+        # #450: a hand-finished-after-park receipt. Surface the PR (and any note) so the
+        # timeline names WHERE the work landed instead of ending on a mute park.
+        payload = evt.get("payload") if isinstance(evt.get("payload"), dict) else {}
+        pr = payload.get("pr")
+        note = payload.get("note")
+        pr_txt = (" · PR %s" % pr) if pr not in (None, "") else ""
+        note_txt = (" — %s" % note) if note else ""
+        return "%s  ✓ manually completed%s%s" % (clock, pr_txt, note_txt)
     if typ == "phases_skipped":
         # #25: surface the quick route's skipped front-half phases in the live readout — never silent.
         payload = evt.get("payload") if isinstance(evt.get("payload"), dict) else {}
