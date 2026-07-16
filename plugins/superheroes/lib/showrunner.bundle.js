@@ -4397,9 +4397,12 @@ async function _maxDispatchNonce(workItem) {
 }
 async function _nextDispatchIdem(workItem) {
   const key = workItem || 'run'
-  if (!_dispatchSeed.has(key)) _dispatchSeed.set(key, _maxDispatchNonce(workItem))
+  if (!_dispatchSeed.has(key)) _dispatchSeed.set(key, _maxDispatchNonce(workItem).catch(() => null))
   const seed = await _dispatchSeed.get(key)
-  if (seed == null) return null   // unseedable -> fail-safe: no dedup for this workItem, always write
+  if (seed == null) {
+    _dispatchSeed.delete(key)
+    return null
+  }
   const n = (_dispatchNonce.get(key) || seed) + 1
   _dispatchNonce.set(key, n)
   return `${key}:d${n}`

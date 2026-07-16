@@ -508,10 +508,17 @@ async function _maxDispatchNonce(workItem) {
 async function _nextDispatchIdem(workItem) {
   const key = workItem || 'run'
   // Memoize the seed READ (one per workItem per process); concurrent panel dispatches on one workItem all
-  // await the same promise, so the FIRST-call race that would double-seed is closed.
-  if (!_dispatchSeed.has(key)) _dispatchSeed.set(key, _maxDispatchNonce(workItem))
+  // await the same promise, so the FIRST-call race that would double-seed is closed. `.catch(()=>null)`
+  // maps a HARD exec reject to the documented unseedable fail-safe (never a throw out of journaling).
+  if (!_dispatchSeed.has(key)) _dispatchSeed.set(key, _maxDispatchNonce(workItem).catch(() => null))
   const seed = await _dispatchSeed.get(key)
-  if (seed == null) return null   // unseedable -> fail-safe: no dedup for this workItem, always write
+  if (seed == null) {
+    // Do NOT keep an unseedable result memoized: a transient seed-read drop must disable dedup for THIS
+    // dispatch only (omit --idem -> fail-safe over-count), not permanently for the workItem — the next
+    // dispatch re-attempts the seed (both review confirmations flagged the sticky-null amplification).
+    _dispatchSeed.delete(key)
+    return null
+  }
   // The get/set increment is synchronous after the awaited seed (no await between), so concurrent
   // dispatches on one workItem each take a DISTINCT ordinal (single-threaded JS).
   const n = (_dispatchNonce.get(key) || seed) + 1

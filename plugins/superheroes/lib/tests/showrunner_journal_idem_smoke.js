@@ -125,5 +125,38 @@ function appendIdems(execLog) {
     console.log('OK: #350 a non-denial staging-failed line carries the failed leaf output (no more empty reason)')
   }
 
+  // (4) A TRANSIENT seed-read failure degrades ONLY that dispatch (omit --idem, fail-safe over-count)
+  //     and is NOT memoized: a later dispatch on the same workItem RE-ATTEMPTS the seed and recovers its
+  //     dedup. (Both confirmation reviewers flagged a sticky-failure amplification; this pins the fix.)
+  {
+    let seedQueryCalls = 0
+    const execLog = []
+    global.agent = async (prompt, opts) => {
+      const label = (opts && opts.label) || ''
+      if (label !== 'exec') return ''
+      execLog.push(prompt)
+      if (prompt.includes('--max-idem-prefix')) {
+        seedQueryCalls += 1
+        // The first _execJson seed read (2 attempts) courier-drops -> null seed; later reads succeed.
+        return seedQueryCalls <= 2 ? [{ index: 0, ok: true, stdout: '' }]
+          : [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, max: 0 }) }]
+      }
+      if (prompt.includes('journal_entry.py') && prompt.includes('external_dispatch')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      if (prompt.includes('engine_adapter.py build-argv')) return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'read-only', '-']) }]
+      if (prompt.includes('engine_adapter.py parse-result')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, findings: [] }) }]
+      if (prompt.includes('--sandbox')) return markedStdout('{"raw":"external review output"}')
+      return [{ index: 0, ok: true, stdout: '{}' }]
+    }
+    await d.dispatchExternal(review('wi-transient'))   // seed read fails -> this dispatch omits --idem
+    await d.dispatchExternal(review('wi-transient'))   // memo not stuck null -> re-attempts, recovers idem
+    const appends = execLog.filter((c) => c.includes('journal_entry.py') && c.includes('external_dispatch'))
+    const withIdem = appends.filter((c) => /--idem '/.test(c))
+    const withoutIdem = appends.filter((c) => !/--idem '/.test(c))
+    assert.ok(withoutIdem.length >= 1, 'a failed seed read omits --idem for that dispatch (fail-safe over-count, never suppression)')
+    assert.ok(withIdem.length >= 1, 'the failure is NOT memoized — a later dispatch re-attempts the seed and recovers dedup')
+    console.log('OK: #350 a transient seed-read failure degrades one dispatch, not the whole run (non-sticky memo)')
+  }
+
   console.log('ALL OK: showrunner_journal_idem_smoke')
 })().catch((e) => { console.error(e); process.exit(1) })
