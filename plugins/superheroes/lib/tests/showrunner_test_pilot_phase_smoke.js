@@ -978,7 +978,12 @@ async function managedServerLaunchIsRootedAtBuildWorktree() {
       `#451 Half A: launch must be rooted (cd) at the build worktree (got: ${launchPrompt})`)
     assert.ok(launchPrompt.includes(`--worktree '${buildWorktree}'`),
       `#451 Half A: launch must thread --worktree into the launch CLI (got: ${launchPrompt})`)
-    assert.ok(!launchPrompt.includes(`cd '${sessionRoot}' && python3`),
+    // The command (after the courier preamble) must START by cd-ing into the build worktree — proves
+    // it is rooted at the tree under test, not merely un-prefixed / left at the session root.
+    const launchCmd = launchPrompt.slice(launchPrompt.lastIndexOf('\n\n') + 2)
+    assert.ok(launchCmd.startsWith(`cd '${buildWorktree}' && python3 `),
+      `#451 Half A: launch command must be rooted at the build worktree (got: ${launchCmd})`)
+    assert.ok(!launchCmd.includes(`cd '${sessionRoot}'`),
       '#451 Half A: launch must NOT be rooted at the session root when a build worktree is known')
   } finally {
     global.agent = previousAgent
@@ -1007,8 +1012,41 @@ async function managedServerLaunchWithoutWorktreeStaysBackwardCompatible() {
       async () => ({ source: 'browser', steps: [{ id: 's1', status: 'passed' }] }),
     )
     assert.ok(launchPrompt, 'launch command must have been composed')
-    assert.ok(!launchPrompt.includes('--worktree'),
-      `#451: no build worktree -> no --worktree flag (got: ${launchPrompt})`)
+    const sessionRoot = require('path').resolve(__dirname, '../../../..')
+    const launchCmd = launchPrompt.slice(launchPrompt.lastIndexOf('\n\n') + 2)
+    // No build worktree known -> the launch stays session-rooted (selfContained cd to __SR_ROOT),
+    // carries no --worktree flag, and still invokes the launch CLI. This is the pre-#451 shape.
+    assert.ok(launchCmd.startsWith(`cd '${sessionRoot}' && python3 `),
+      `#451: no build worktree -> launch stays session-rooted (got: ${launchCmd})`)
+    assert.ok(launchCmd.includes('test_pilot_server_config_cli.py launch --context-json'),
+      `#451: launch CLI must still be invoked (got: ${launchCmd})`)
+    assert.ok(!launchCmd.includes('--worktree'),
+      `#451: no build worktree -> no --worktree flag (got: ${launchCmd})`)
+  } finally {
+    global.agent = previousAgent
+  }
+}
+
+// #451: resolveServer must thread the build worktree into the resolver CLI (--worktree) — this is the
+// connective tissue that populates serverContext.cwd, which in turn (a) sources the .env.local port
+// override and (b) roots the managed launch. A regression dropping it reintroduces the :3000 mismatch.
+async function resolveServerThreadsWorktreeIntoCli() {
+  const previousAgent = global.agent
+  const buildWorktree = '/tmp/build-worktree-451'
+  let resolvePrompt = null
+  global.agent = async (prompt) => {
+    if (prompt.includes('test_pilot_server_config_cli.py resolve')) {
+      resolvePrompt = prompt
+      return { verdict: 'managed', baseUrl: 'http://localhost:3003', allowedOrigins: ['http://localhost:3003'], cwd: buildWorktree, command: ['npm', 'run', 'dev'], shell: false }
+    }
+    return previousAgent(prompt)
+  }
+  try {
+    const deps = sr.testPilotDeps('wi', 3)
+    await deps.resolveServer({ worktree: buildWorktree, profile: { baseUrl: 'http://localhost:3003' }, detectors: {} })
+    assert.ok(resolvePrompt, 'resolve command must have been composed')
+    assert.ok(resolvePrompt.includes(`--worktree '${buildWorktree}'`),
+      `#451: resolveServer must thread the build worktree into the resolver CLI (got: ${resolvePrompt})`)
   } finally {
     global.agent = previousAgent
   }
@@ -1020,6 +1058,7 @@ async function managedServerLaunchWithoutWorktreeStaysBackwardCompatible() {
   await productionManagedServerUsesLifecycleHelperAroundBrowserRun()
   await managedServerLaunchIsRootedAtBuildWorktree()
   await managedServerLaunchWithoutWorktreeStaysBackwardCompatible()
+  await resolveServerThreadsWorktreeIntoCli()
   await managedServerFinishWriteThrowPreservesOutcomeAndError()
   await uncertainApplicabilityParks()
   await emptyApplicablePlanParks()

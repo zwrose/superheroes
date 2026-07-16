@@ -56,10 +56,16 @@ def _readiness_url(profile, base_url):
 
 
 def _coerce_port(raw):
-    """Parse a port from a raw string; return an int in (0, 65536) or None."""
+    """Parse a port from a raw string; return an int in (0, 65536) or None.
+
+    Tolerates a surrounding quote pair and an unquoted trailing inline comment
+    (dotenv `PORT=3003 # note`) so a real .env.local value is not silently missed."""
     if raw is None:
         return None
-    text = str(raw).strip().strip('"').strip("'")
+    text = str(raw).strip()
+    if text[:1] not in ('"', "'"):
+        text = text.split("#", 1)[0].strip()  # drop an unquoted inline comment
+    text = text.strip('"').strip("'")
     try:
         value = int(text)
     except (TypeError, ValueError):
@@ -79,7 +85,9 @@ def _env_local_port(cwd):
     try:
         with open(os.path.join(cwd, ".env.local"), encoding="utf-8") as fh:
             lines = fh.readlines()
-    except OSError:
+    except (OSError, ValueError):
+        # OSError: missing/unreadable file. ValueError covers UnicodeDecodeError on a
+        # non-UTF-8 file — honor the never-raises contract; the band default stands.
         return None
     resolved = None
     for line in lines:

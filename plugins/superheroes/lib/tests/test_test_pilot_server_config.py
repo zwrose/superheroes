@@ -310,6 +310,33 @@ def test_env_local_invalid_port_falls_back_to_band(tmp_path, body):
     assert result["portSource"] == "profile.baseUrl"
 
 
+def test_env_local_port_tolerates_inline_comment(tmp_path):
+    _write_env_local(tmp_path, "PORT=3003 # per-worktree port, minted by postinstall\n")
+    result = cfg.resolve(
+        {"baseUrl": "http://localhost:3000", "devCommand": ["npm", "run", "dev"], "mayManageServer": True},
+        {},
+        "issue-451",
+        cwd=str(tmp_path),
+    )
+
+    assert result["port"] == 3003
+
+
+def test_env_local_non_utf8_falls_back_without_raising(tmp_path):
+    # Honor _env_local_port's never-raises contract: a non-UTF-8 .env.local must not
+    # crash the run (UnicodeDecodeError is a ValueError, not an OSError).
+    (tmp_path / ".env.local").write_bytes(b"PORT=3003\n\xff\xfe not utf-8\n")
+    result = cfg.resolve(
+        {"baseUrl": "http://localhost:3000", "devCommand": ["npm", "run", "dev"], "mayManageServer": True},
+        {},
+        "issue-451",
+        cwd=str(tmp_path),
+    )
+
+    assert result["port"] == 3000
+    assert result["portSource"] == "profile.baseUrl"
+
+
 def test_env_local_last_assignment_wins_and_honors_export(tmp_path):
     _write_env_local(tmp_path, "export PORT=3005\nPORT=3007\n")
     result = cfg.resolve(
