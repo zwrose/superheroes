@@ -581,10 +581,6 @@ async function _scrubReason(reason, fallback = 'external error (scrubbed)') {
   // _execJson note above — a leaf returns ok:true with stdout:'' even though the command ran). A real
   // scrub never empties non-empty input (it only redacts to [REDACTED]), so treat empty as a scrub
   // failure and fall back to the fixed label rather than persisting an empty (WHY-less) reason.
-  // #383: an empty/whitespace-only scrub stdout is the cheap courier's documented stdout-drop (see the
-  // _execJson note above — a leaf returns ok:true with stdout:'' even though the command ran). A real
-  // scrub never empties non-empty input (it only redacts to [REDACTED]), so treat empty as a scrub
-  // failure and fall back to the fixed label rather than persisting an empty (WHY-less) reason.
   if (r0 && r0.ok && r0.stdout != null) {
     const out = String(r0.stdout)
     if (out.trim()) return out
@@ -730,9 +726,6 @@ async function _dispatchExternalInner(o) {
     // consistency gap with the commit-failure path (~926) that already scrubs. _stagingDenial's own
     // base64-run redaction (>=24-char alnum runs) misses those framed classes. On scrub failure fall
     // back to a fixed label so a scrubber outage can never leak the raw (possibly secret) denial text.
-    // The fixed _DENIAL_TAINTED label is a known-safe internal constant (no external free-text), so it
-    // skips the scrub — avoiding a needless exec and keeping the taint-specific evidence intact even if
-    // the scrubber is unavailable; only the WINDOWED classifier prose is scrubbed.
     // The fixed _DENIAL_TAINTED label is a known-safe internal constant (no external free-text), so it
     // skips the scrub — avoiding a needless exec and keeping the taint-specific evidence intact even if
     // the scrubber is unavailable; only the WINDOWED classifier prose is scrubbed.
