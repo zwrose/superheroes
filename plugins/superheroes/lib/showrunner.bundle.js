@@ -1815,7 +1815,7 @@ function _defaultRetryDiscloser(eventsPath, payload) {
   const idem = 'retry:' + String(payload.reviewer) + ':r' + String(payload.round) + ':' +
     String(payload.cause) + ':' + String(payload.discardedHash)
   const script =
-    'import sys, json; sys.path.insert(0, ' + pyLibDir() + '); import journal; ' +
+    'import sys, os, json; sys.path.insert(0, ' + pyLibDir() + '); import journal; ' +
     'journal.append(sys.argv[1], "dispatch_retried", step=("review:" + sys.argv[2]), ' +
     'payload=json.loads(sys.argv[3]), idem=sys.argv[4])'
   try {
@@ -4388,12 +4388,27 @@ async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armI
   }
   return { ok: true, stdout: out }
 }
-let _journalDispatchNonce = 0
+const _dispatchNonce = new Map()   // workItem -> last ordinal minted this process
+const _dispatchSeed = new Map()    // workItem -> Promise<number|null> (the memoized journal seed)
+async function _maxDispatchNonce(workItem) {
+  const r = await _execJson(
+    `python3 ${libPath('journal_entry.py')} --work-item ${shq(workItem || '')} --max-idem-prefix ${shq(workItem || 'run')}`)
+  return (r && r.ok === true && typeof r.max === 'number') ? r.max : null
+}
+async function _nextDispatchIdem(workItem) {
+  const key = workItem || 'run'
+  if (!_dispatchSeed.has(key)) _dispatchSeed.set(key, _maxDispatchNonce(workItem))
+  const seed = await _dispatchSeed.get(key)
+  if (seed == null) return null   // unseedable -> fail-safe: no dedup for this workItem, always write
+  const n = (_dispatchNonce.get(key) || seed) + 1
+  _dispatchNonce.set(key, n)
+  return `${key}:d${n}`
+}
 async function _journalExternal(payload) {
-  const idem = `${payload.workItem || 'run'}:d${++_journalDispatchNonce}`
+  const idem = await _nextDispatchIdem(payload.workItem)
   return _execJson(
     `python3 ${libPath('journal_entry.py')} --work-item ${shq(payload.workItem || '')} ` +
-    `--event-type external_dispatch --idem ${shq(idem)} --payload ` +
+    `--event-type external_dispatch ${idem ? `--idem ${shq(idem)} ` : ''}--payload ` +
     shq(JSON.stringify({ engine: payload.engine, effort: payload.effort, roleKind: payload.roleKind,
       model: payload.model == null ? null : payload.model,
       argv: Array.isArray(payload.argv) ? payload.argv : null,
@@ -4436,12 +4451,9 @@ function _stagingFailureReason(results) {
   const arr = Array.isArray(results) ? results : []
   for (const r of arr) {
     if (!r || r.ok) continue
-    const exit = (typeof r.status === 'number') ? r.status : null
-    const errText = String((r.error != null ? r.error : (r.stderr != null ? r.stderr : ''))).replace(/\s+/g, ' ').trim()
-    const parts = []
-    if (exit != null) parts.push('exit ' + exit)
-    if (errText) parts.push(errText.length > 200 ? errText.slice(0, 200) + '…' : errText)
-    return parts.join(': ') || 'staging leaf failed (no error text)'
+    const text = String(r.stdout == null ? '' : r.stdout).replace(/\s+/g, ' ').trim()
+    if (text) return text.length > 200 ? text.slice(0, 200) + '…' : text
+    return 'staging leaf failed (no output)'
   }
   return null
 }

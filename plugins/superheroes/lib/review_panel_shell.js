@@ -775,7 +775,7 @@ function _defaultRetryDiscloser(eventsPath, payload) {
   // no __dirname (absent in the bundle sandbox). The structured payload is non-secret (a finding COUNT +
   // a hash + engine-controlled tier tokens — never the finding text), written as-is.
   const script =
-    'import sys, json; sys.path.insert(0, ' + pyLibDir() + '); import journal; ' +
+    'import sys, os, json; sys.path.insert(0, ' + pyLibDir() + '); import journal; ' +
     'journal.append(sys.argv[1], "dispatch_retried", step=("review:" + sys.argv[2]), ' +
     'payload=json.loads(sys.argv[3]), idem=sys.argv[4])'
   try {

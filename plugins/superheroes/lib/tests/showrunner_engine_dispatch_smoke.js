@@ -1527,28 +1527,27 @@ function makeAgent(routes) {
     }
 
     // (b) STAGING FAILED (no denial signature): a plain courier/exec staging error →
-    // outcome:'staging-failed' carrying the failed leaf's error/exit as the journal reason (#350: the
-    // 2026-07-12 empty-reason blind spot — a staging-failed line was reason-less and undiagnosable).
+    // outcome:'staging-failed' carrying the failed leaf's OUTPUT as the journal reason (#350: the
+    // 2026-07-12 empty-reason blind spot — a staging-failed line was reason-less and undiagnosable). The
+    // dumb-pipe exec result shape is {index, ok, stdout}; the failure text rides in stdout (no exit code).
     {
       d.__resetHarnessNotice()
       const jp = []
-      // A failed staging leaf with an exit code + error prose, no denial signature.
       global.agent = journalCollector(jp, [
-        [d._SR_STAGE_SIG, [{ index: 0, ok: false, status: 1, error: 'ENOSPC: no space left on device', stdout: '' }]],
+        [d._SR_STAGE_SIG, [{ index: 0, ok: false, stdout: 'ENOSPC: no space left on device' }]],
       ])
-      const r = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer', prompt: 'p', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T373', workItem: 'wi-373-fail' })
+      const r = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer', prompt: 'ppppppppppppppppppppppppppppppppppppppppppppppppppp', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T373', workItem: 'wi-373-fail' })
       assert.strictEqual(r.reason, 'could-not-stage-external-inputs', '#373: return reason unchanged for a non-denial staging failure')
       const ed = jp.filter((p) => p.outcome === 'staging-failed')
       assert.strictEqual(jp.length, 1, '#373: exactly ONE external_dispatch journal line total (no stray outcome): ' + JSON.stringify(jp.map((p) => p.outcome)))
       assert.strictEqual(ed.length, 1, '#373: a plain staging failure journals EXACTLY ONE staging-failed line: ' + JSON.stringify(jp.map((p) => p.outcome)))
-      assert.ok(ed[0].reason && /exit 1/.test(ed[0].reason), '#350: staging-failed carries the failed leaf EXIT code: ' + JSON.stringify(ed[0].reason))
-      assert.ok(/no space left/i.test(ed[0].reason), '#350: staging-failed carries the failed leaf ERROR prose: ' + JSON.stringify(ed[0].reason))
+      assert.ok(ed[0].reason && /no space left/i.test(ed[0].reason), '#350: staging-failed carries the failed leaf OUTPUT: ' + JSON.stringify(ed[0].reason))
       assert.ok(!ed[0].reason.includes('p'.repeat(50)), '#350: the staged prompt content never rides in the reason')
       assert.ok(!jp.some((p) => p.outcome === 'staging-denied'), '#373: a no-signature failure is NOT mislabeled staging-denied')
-      console.log('OK: engine_dispatch #350 staging-failed carries the failed leaf error/exit (no more empty reason), not mislabeled as denied')
+      console.log('OK: engine_dispatch #350 staging-failed carries the failed leaf output (no more empty reason), not mislabeled as denied')
     }
 
-    // (b2) STAGING FAILED with a leaf that reports NO error text at all: the reason is a fixed generic
+    // (b2) STAGING FAILED with a leaf that reports NO output at all: the reason is a fixed generic
     // marker, never null/empty — a staging-failed line is ALWAYS self-identifying (#350).
     {
       d.__resetHarnessNotice()
@@ -1558,9 +1557,9 @@ function makeAgent(routes) {
       ])
       await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer', prompt: 'p', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T373b', workItem: 'wi-373-fail-b' })
       const ed = jp.filter((p) => p.outcome === 'staging-failed')
-      assert.strictEqual(ed.length, 1, '#350: one staging-failed line even when the leaf reports no error text')
+      assert.strictEqual(ed.length, 1, '#350: one staging-failed line even when the leaf reports no output')
       assert.ok(ed[0].reason && ed[0].reason.length > 0, '#350: a staging-failed line is never reason-less: ' + JSON.stringify(ed[0].reason))
-      console.log('OK: engine_dispatch #350 an error-text-less staging failure still carries a fixed non-empty reason')
+      console.log('OK: engine_dispatch #350 an output-less staging failure still carries a fixed non-empty reason')
     }
 
     // (c) PRESHA FAILED (write role): staging succeeds, but the write-role preSHA git capture fails →

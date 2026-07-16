@@ -109,10 +109,15 @@ def append(events_path, event_type, *, step=None, detail=None, world=None,
     # #350 Part A (the doubled-line signature): a journal append is NOT idempotent, so a courier-chain
     # retry (_execJson re-runs journal_entry.py after a stdout-drop, even though the first append
     # landed) doubles the line. An `idem` key makes the repeated append a NO-OP: if an event already
-    # carries this key, return without writing. Only the SINGLE-writer run journal passes idem (never
-    # the #379 multi-writer trail), so no concurrent writer can interleave between this read and the
-    # O_APPEND below (§4.5). The key is a per-dispatch nonce (never content-derived), so two
-    # genuinely-distinct events with byte-identical payloads still each write under distinct nonces.
+    # carries this key, return without writing. The key is a per-dispatch nonce minted by the caller
+    # (engine_dispatch._nextDispatchIdem), UNIQUE per logical dispatch (so two byte-identical-payload
+    # dispatches still each write) and resume-distinct (SEEDED from max_idem_ordinal below, so a resumed
+    # run never re-mints a pre-crash nonce). Correctness rests on that per-call uniqueness, NOT on a
+    # single-writer file: the panel fans reviewers out as concurrent journal_entry.py processes, so the
+    # run journal has multiple OS writers — but distinct dispatches carry distinct nonces and the
+    # _execJson retry this dedupes is SEQUENTIAL within one call (first append fsync'd before the retry
+    # reads). The rare cross-process interleave can at worst let the retry's dup slip through as an
+    # over-count (fail-safe — the gate tolerates it), never suppress a real line.
     if idem is not None:
         for e in read_events(events_path):
             if isinstance(e, dict) and e.get("idem") == idem:
@@ -181,6 +186,27 @@ def read_events(events_path, *, want_torn_tail=False):
             if i == last:
                 torn_tail = True      # a torn TRAILING line — counted conservatively below
     return (evs, torn_tail) if want_torn_tail else evs
+
+
+def max_idem_ordinal(events_path, prefix):
+    """#350 Part A: the highest N among idem values shaped `<prefix>:d<N>` already in the journal. Lets a
+    resumed run SEED its per-process dispatch-nonce counter (engine_dispatch._nextDispatchIdem) from where
+    the pre-crash run left off, so a fresh post-resume dispatch mints `<prefix>:d<N+1>` instead of
+    restarting at d1 (which would collide with the persistent pre-crash d1..dN and be deduped away).
+    Returns 0 when none match / the journal is unreadable (a fresh run has none)."""
+    import re
+    pat = re.compile(r"^" + re.escape(str(prefix)) + r":d(\d+)$")
+    best = 0
+    for ev in read_events(events_path):
+        if not isinstance(ev, dict):
+            continue
+        m = pat.match(str(ev.get("idem") or ""))
+        if m:
+            try:
+                best = max(best, int(m.group(1)))
+            except ValueError:
+                pass
+    return best
 
 
 def permission_denied_events(events_path):

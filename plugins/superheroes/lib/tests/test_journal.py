@@ -471,3 +471,55 @@ def test_dispatch_retried_is_a_valid_event_type(tmp_path):
 
 def test_dispatch_retried_is_a_known_event_type():
     assert "dispatch_retried" in journal.EVENT_TYPES
+
+
+def test_max_idem_ordinal_seeds_a_resumed_dispatch_counter(tmp_path):
+    # #350 Part A resume-safety: the per-process dispatch-nonce counter is SEEDED from the journal's max
+    # `<prefix>:d<N>` ordinal so a resumed run continues past the pre-crash tail (never re-mints a
+    # colliding d1..dN that journal.append would silently dedupe away).
+    p = str(tmp_path / "events.jsonl")
+    journal.append(p, "external_dispatch", payload={"o": 1}, root=str(tmp_path), idem="wi-x:d1")
+    journal.append(p, "external_dispatch", payload={"o": 2}, root=str(tmp_path), idem="wi-x:d2")
+    journal.append(p, "external_dispatch", payload={"o": 9}, root=str(tmp_path), idem="wi-x:d9")
+    # a DIFFERENT prefix must not bleed into the max (Part B's retry:... idems, another work-item, etc.)
+    journal.append(p, "dispatch_retried", step="review:code", payload={"c": 1}, root=str(tmp_path),
+                   idem="retry:code:r1:escalation:abc")
+    journal.append(p, "external_dispatch", payload={"o": 4}, root=str(tmp_path), idem="wi-other:d4")
+    assert journal.max_idem_ordinal(p, "wi-x") == 9
+    assert journal.max_idem_ordinal(p, "wi-other") == 4
+    assert journal.max_idem_ordinal(p, "wi-absent") == 0    # a fresh run: no prior ordinal
+
+
+def test_max_idem_ordinal_zero_on_missing_or_unreadable_journal(tmp_path):
+    # A fresh run (no journal yet) seeds 0, so its first dispatch mints d1.
+    assert journal.max_idem_ordinal(str(tmp_path / "nope.jsonl"), "wi-x") == 0
+
+
+def test_max_idem_ordinal_ignores_malformed_ordinals(tmp_path):
+    # Only a strict `<prefix>:d<digits>` idem counts; a look-alike must not seed the counter.
+    p = str(tmp_path / "events.jsonl")
+    journal.append(p, "external_dispatch", payload={"o": 1}, root=str(tmp_path), idem="wi-x:dABC")
+    journal.append(p, "external_dispatch", payload={"o": 2}, root=str(tmp_path), idem="wi-x:d3x")
+    journal.append(p, "external_dispatch", payload={"o": 3}, root=str(tmp_path), idem="wi-x:d7")
+    assert journal.max_idem_ordinal(p, "wi-x") == 7
+
+
+def test_journal_entry_cli_max_idem_prefix_query(tmp_path, monkeypatch):
+    # The JS seam (_maxDispatchNonce) shells journal_entry.py --max-idem-prefix; it must print the max
+    # ordinal and make NO append.
+    import json as _json
+    import os as _os
+    import subprocess as _sp
+    import sys as _sys
+    import control_plane
+    _lib = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..")
+    monkeypatch.chdir(tmp_path)
+    events = control_plane.paths(str(tmp_path), "wi-q")["events"]
+    journal.append(events, "external_dispatch", payload={"o": 1}, root=str(tmp_path), idem="wi-q:d5")
+    before = len(journal.read_events(events))
+    out = _sp.run([_sys.executable, _os.path.join(_lib, "journal_entry.py"),
+                   "--work-item", "wi-q", "--max-idem-prefix", "wi-q"],
+                  capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert _json.loads(out.stdout) == {"ok": True, "max": 5}
+    assert len(journal.read_events(events)) == before, "the query must NOT append"

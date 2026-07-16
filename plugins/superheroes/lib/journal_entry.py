@@ -17,8 +17,15 @@ ap.add_argument("--detail")
 # stdout-drop; the same --idem makes the second run a no-op so the append never doubles (the 2026-07-10
 # doubled-line signature). Absent -> the legacy append (no dedupe, byte-unchanged for every caller).
 ap.add_argument("--idem")
+# #350 Part A: query mode — print {"ok": true, "max": N}, the highest <prefix>:d<N> idem ordinal already
+# in this work-item's journal, so engine_dispatch seeds a resume-continuing (collision-free) nonce. No
+# append; short-circuits before the write path below. Idempotent read (safe for _execJson to retry).
+ap.add_argument("--max-idem-prefix")
 a = ap.parse_args()
 paths = control_plane.paths(os.getcwd(), a.work_item)
+if a.max_idem_prefix is not None:
+    print(json.dumps({"ok": True, "max": journal.max_idem_ordinal(paths["events"], a.max_idem_prefix)}))
+    sys.exit(0)
 payload = None
 if a.payload is not None:
     try:
