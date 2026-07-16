@@ -7529,6 +7529,14 @@ async function execText(cmd, label) {
     throw e
   }
 }
+async function phaseLegIdem(workItem, step, phase) {
+  const prefix = `pp:${workItem}:s${step}:${phase}`
+  const seedCmd = `${libRootProbe()}${selfContained(
+    `python3 ${libPath('journal_entry.py')} --work-item ${shq(workItem)} --max-idem-prefix ${shq(prefix)}`)}`
+  const r = await execJson(seedCmd, 'phase leg seed')
+  const max = r && r.ok === true && typeof r.max === 'number' ? r.max : null
+  return max == null ? null : `${prefix}:d${max + 1}`
+}
 async function persistPhase(workItem, opts) {
   opts = opts || {}
   const sideEffectCmd = opts.sideEffectCmd || null
@@ -7545,9 +7553,11 @@ async function persistPhase(workItem, opts) {
     ? ` --terminal-park ${shq(String(opts.parkReason))}` : ''
   const parkPayloadArg = (journalOnly && opts.parkPayload)
     ? ` --terminal-park-payload ${shq(JSON.stringify(opts.parkPayload))}` : ''
+  const legIdem = journalOnly ? await phaseLegIdem(workItem, step, phase) : null
+  const legArg = legIdem ? ` --leg-idem ${shq(legIdem)}` : ''
   const saveCmd =
     `python3 ${libPath('phase_progress_entry.py')} save --work-item ${shq(workItem)} ` +
-    `--step ${shq(String(step))} --phase ${shq(phase)} --payload ${shq(JSON.stringify(record))}${sideArg}${joArg}${costArg}${parkArg}${parkPayloadArg}`
+    `--step ${shq(String(step))} --phase ${shq(phase)} --payload ${shq(JSON.stringify(record))}${sideArg}${joArg}${costArg}${parkArg}${parkPayloadArg}${legArg}`
   const cmd = sideEffectCmd ? `${sideEffectCmd} && ${saveCmd}` : saveCmd
   const probedCmd = `${libRootProbe()}${cmd}`
   const required = journalOnly

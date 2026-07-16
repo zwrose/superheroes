@@ -2196,6 +2196,27 @@ async function execText(cmd, label) {
   }
 }
 
+// #434: the next per-(workItem,step,phase) leg idem nonce for a PARK-save — `pp:<wi>:s<step>:<phase>:d<N>`,
+// seeded (resume-continuing) from the journal's max such ordinal via journal_entry.py --max-idem-prefix
+// (the #350 primitive journal.max_idem_ordinal). A relaunched leg re-enters a parked phase, runs it
+// again, and parks again with a byte-identical payload; phase_progress_entry.py keyed freshness on
+// payload-equality and deduped that second park's phase_record/phase_cost/parked away — the run journal
+// went quieter than the allowance ledger (#434). This nonce is (a) STABLE across the courier retry of one
+// save (minted ONCE here, baked into the save command) so a retry dedupes, and (b) DISTINCT across a
+// genuine re-entry (a new showrunner process/leg reads the journal and mints the next ordinal) so the
+// relaunch park records. FR-8 clean (journal-derived; no PRNG/wall-clock). Null on an unseedable journal
+// -> the save omits --leg-idem and rides the legacy payload-equality dedup (fail-safe: never suppress a
+// real line by minting a colliding nonce). Only parks call this — a completed (proceed) phase advances
+// the checkpoint cursor, so a resume SKIPS it and it can never double-record.
+async function phaseLegIdem(workItem, step, phase) {
+  const prefix = `pp:${workItem}:s${step}:${phase}`
+  const seedCmd = `${libRootProbe()}${selfContained(
+    `python3 ${libPath('journal_entry.py')} --work-item ${shq(workItem)} --max-idem-prefix ${shq(prefix)}`)}`
+  const r = await execJson(seedCmd, 'phase leg seed')
+  const max = r && r.ok === true && typeof r.max === 'number' ? r.max : null
+  return max == null ? null : `${prefix}:d${max + 1}`
+}
+
 // persistPhase: one 'save phase progress' courier — the optional side-effect command chained (&&)
 // before phase_progress_entry.py save, which writes journal + checkpoint and read-back-confirms both.
 // Persist order (FR-4): side-effect first (when present), then journal, then checkpoint (cursor last).
@@ -2226,9 +2247,16 @@ async function persistPhase(workItem, opts) {
     ? ` --terminal-park ${shq(String(opts.parkReason))}` : ''
   const parkPayloadArg = (journalOnly && opts.parkPayload)
     ? ` --terminal-park-payload ${shq(JSON.stringify(opts.parkPayload))}` : ''
+  // #434: on a PARK, mint a resume-continuing per-leg idem nonce so a relaunched leg that re-enters this
+  // parked phase and parks again earns its own phase_record/phase_cost/parked instead of being deduped
+  // against the first leg's byte-identical payload (journal quieter than the allowance ledger). Baked
+  // once into the save command -> stable across the courier retry; seeded from the journal -> distinct
+  // per genuine leg. Null (unseedable) omits the flag -> legacy payload-equality dedup.
+  const legIdem = journalOnly ? await phaseLegIdem(workItem, step, phase) : null
+  const legArg = legIdem ? ` --leg-idem ${shq(legIdem)}` : ''
   const saveCmd =
     `python3 ${libPath('phase_progress_entry.py')} save --work-item ${shq(workItem)} ` +
-    `--step ${shq(String(step))} --phase ${shq(phase)} --payload ${shq(JSON.stringify(record))}${sideArg}${joArg}${costArg}${parkArg}${parkPayloadArg}`
+    `--step ${shq(String(step))} --phase ${shq(phase)} --payload ${shq(JSON.stringify(record))}${sideArg}${joArg}${costArg}${parkArg}${parkPayloadArg}${legArg}`
   const cmd = sideEffectCmd ? `${sideEffectCmd} && ${saveCmd}` : saveCmd
   // #170: the SECOND (and last) libRoot probe site — the once-per-phase durable write covers the long
   // back half, where a plugin-cache eviction after startup would otherwise surface as a raw python

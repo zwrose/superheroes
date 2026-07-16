@@ -3,7 +3,7 @@
 // release-on-park path — targeting the acquire-authority store via --root (and cd when set).
 require('./_smoke_checkout_root.js')
 const assert = require('assert')
-const { saveProgressOk } = require('./_marked_stdout.js')
+const { markedStdout, saveProgressOk } = require('./_marked_stdout.js')
 global.log = () => {}
 
 const CHECKOUT_ROOT = globalThis.__SR_ROOT
@@ -11,6 +11,8 @@ const CHECKOUT_ROOT = globalThis.__SR_ROOT
 function agentFor(generation, releaseCalls) {
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
+    // #434: a park now seeds a resume-continuing per-leg idem nonce before the save.
+    if (label === 'phase leg seed') return markedStdout({ ok: true, max: 0 })
     if (label === 'save phase progress') {
       return saveProgressOk({ checkpoint_confirmed: false })
     }

@@ -22,6 +22,8 @@ function driveAgent(startupFacts, trace) {
     }
     if (label === 'record skipped phases') { trace.recorded = true; return JSON.stringify({ ok: true }) }
     if (label === 'read gate') { trace.buildEntered = true; return '{"review": "pending"}' }
+    // #434: a park seeds a resume-continuing per-leg idem nonce before the save.
+    if (label === 'phase leg seed') return markedStdout({ ok: true, max: 0 })
     if (label === 'save phase progress') return saveProgressOk({ checkpoint_confirmed: false })
     if (label === 'release lease') { trace.released = true; return JSON.stringify({ ok: true, reason: 'lease released' }) }
     throw new Error('unexpected agent leaf: ' + label + ' :: ' + String(prompt).slice(0, 80))

@@ -78,6 +78,76 @@ def test_phase_progress_journal_only_then_full_save_advances_cursor(tmp_path):
     assert out["step"] == 2
 
 
+def _run_park(tmp_path, payload, leg_idem=None, cost=None, park="no net progress"):
+    extra = ["--journal-only", "--terminal-park", park]
+    if cost is not None:
+        extra += ["--cost-payload", json.dumps(cost)]
+    if leg_idem is not None:
+        extra += ["--leg-idem", leg_idem]
+    return _run(tmp_path, payload, extra)
+
+
+def _count(tmp_path, needle):
+    events = control_plane.paths(str(tmp_path), "wi", root=str(tmp_path / "store"))["events"]
+    lines = open(events, encoding="utf-8").read().splitlines()
+    return len([line for line in lines if needle in line])
+
+
+def test_phase_progress_relaunch_leg_records_second_park(tmp_path):
+    # #434: a relaunched review leg re-enters a PARKED phase, runs it again, and parks again with a
+    # byte-identical payload. Keying freshness on payload-equality alone dedupes the second leg's
+    # phase_record/phase_cost/parked away (journal quieter than the allowance ledger). With a per-leg
+    # idem nonce (minted resume-continuing by the spine) each genuine re-entry earns its own records.
+    payload = {"phase": "review-plan", "gate": "changes-requested", "confidence": "high"}
+    leg1 = _run_park(tmp_path, payload, leg_idem="pp:wi:s2:build:d1", cost={"dispatches": 38})
+    assert json.loads(leg1.stdout)["ok"] is True
+    assert json.loads(leg1.stdout)["already"] is False
+    leg2 = _run_park(tmp_path, payload, leg_idem="pp:wi:s2:build:d2", cost={"dispatches": 41})
+    out2 = json.loads(leg2.stdout)
+    assert out2["ok"] is True
+    assert out2["already"] is False   # the relaunch is NOT a no-op — it parked again
+    assert _count(tmp_path, '"phase_record"') == 2
+    assert _count(tmp_path, '"parked"') == 2
+    assert _count(tmp_path, '"phase_cost"') == 2
+
+
+def test_phase_progress_relaunch_leg_same_nonce_dedupes(tmp_path):
+    # A courier retry of ONE park-save re-sends the SAME baked --leg-idem; that must dedupe to a single
+    # phase_record/parked/cost (the retry landed the first append already).
+    payload = {"phase": "review-plan", "gate": "changes-requested"}
+    first = _run_park(tmp_path, payload, leg_idem="pp:wi:s2:build:d1", cost={"dispatches": 38})
+    assert json.loads(first.stdout)["already"] is False
+    retry = _run_park(tmp_path, payload, leg_idem="pp:wi:s2:build:d1", cost={"dispatches": 38})
+    out = json.loads(retry.stdout)
+    assert out["ok"] is True
+    assert out["already"] is True
+    assert _count(tmp_path, '"phase_record"') == 1
+    assert _count(tmp_path, '"parked"') == 1
+    assert _count(tmp_path, '"phase_cost"') == 1
+
+
+def test_phase_progress_leg_idem_rides_top_level_payload_clean(tmp_path):
+    # The per-leg nonce rides the top-level `idem` field (like #350's external_dispatch) so the
+    # phase_record `payload` stays semantic + byte-unchanged for consumers.
+    payload = {"phase": "review-plan", "gate": "changes-requested"}
+    _run_park(tmp_path, payload, leg_idem="pp:wi:s2:build:d1")
+    events = control_plane.paths(str(tmp_path), "wi", root=str(tmp_path / "store"))["events"]
+    rec = [json.loads(line) for line in open(events, encoding="utf-8").read().splitlines()
+           if '"phase_record"' in line][0]
+    assert rec["idem"] == "pp:wi:s2:build:d1"
+    assert rec["payload"] == payload   # payload carries NO synthetic leg field
+
+
+def test_phase_progress_no_leg_idem_is_legacy_payload_dedup(tmp_path):
+    # Absent --leg-idem the behavior is byte-unchanged: a second identical-payload park is a no-op
+    # (the unseedable-journal fail-safe path — never regress crash-resume dedup).
+    payload = {"phase": "review-plan", "gate": "changes-requested"}
+    _run_park(tmp_path, payload)
+    second = _run_park(tmp_path, payload)
+    assert json.loads(second.stdout)["already"] is True
+    assert _count(tmp_path, '"phase_record"') == 1
+
+
 def test_phase_progress_malformed_payload_fails_closed(tmp_path):
     env = {**os.environ, "SUPERHEROES_STORE_ROOT": str(tmp_path / "store")}
     cmd = [

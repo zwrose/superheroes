@@ -92,17 +92,40 @@ def _apply(paths, work_item, step, phase, payload, side, cost=None):
     return reflects is True, detail
 
 
-def _reflects_journal(paths, payload):
-    journal_ok = any(record == payload for record in _phase_records(paths["events"]))
+def _has_leg_record(path, payload, leg_idem):
+    # #434: a relaunched review leg re-enters a PARKED phase, runs it again, and parks again with a
+    # byte-identical payload (the #397 no-net-progress treadmill parks). Keying phase-record freshness
+    # on payload-equality ALONE dedupes that second leg's phase_record/phase_cost/parked away — the run
+    # journal ends up quieter than the allowance ledger (the 2nd/3rd legs fired allowance_fired events
+    # but journaled no phase story). With a per-leg idem nonce — minted resume-continuing by the spine
+    # (engine_dispatch's #350 primitive) and baked once into the save command — freshness becomes "a
+    # phase_record already carries THIS leg's idem": a genuine re-entry (a fresh nonce) records, while a
+    # courier retry of ONE save (the same baked nonce) still dedupes to a single line. leg_idem is None
+    # on the legacy/unseedable path -> byte-unchanged payload-equality (never regress crash-resume
+    # dedup; on an unseedable journal we cannot distinguish legs, so we fail SAFE toward the prior
+    # behavior rather than double-count a courier retry).
+    if leg_idem is None:
+        return any(record == payload for record in _phase_records(path))
+    for event in journal.read_events(path):
+        if event.get("type") == "phase_record" and event.get("idem") == leg_idem:
+            return True
+    return False
+
+
+def _reflects_journal(paths, payload, leg_idem=None):
+    journal_ok = _has_leg_record(paths["events"], payload, leg_idem)
     return journal_ok, {"journal_confirmed": journal_ok}
 
 
-def _apply_journal(paths, payload, cost=None, park_reason=None, park_payload=None):
-    if not any(record == payload for record in _phase_records(paths["events"])):
-        journal.append(paths["events"], "phase_record", payload=payload, root=os.getcwd())
+def _apply_journal(paths, payload, cost=None, park_reason=None, park_payload=None, leg_idem=None):
+    if not _has_leg_record(paths["events"], payload, leg_idem):
+        # #434: stamp the per-leg idem on the phase_record (top-level, like #350's external_dispatch) so
+        # journal.append itself dedupes a courier retry AND the freshness read above distinguishes legs;
+        # the folded cost/park ride under this same fresh-record gate (exactly-once with the record).
+        journal.append(paths["events"], "phase_record", payload=payload, root=os.getcwd(), idem=leg_idem)
         _append_cost(paths, cost)     # exactly-once with the record (crash-resume dedupes both)
         _append_park(paths, park_reason, park_payload)
-    return _reflects_journal(paths, payload)
+    return _reflects_journal(paths, payload, leg_idem)
 
 
 def save(args):
@@ -127,6 +150,12 @@ def save(args):
             park_payload = json.loads(args.terminal_park_payload)
         except ValueError:
             park_payload = None
+    # #434: the per-leg idem nonce for a park-save (journal-only). Minted resume-continuing by the spine
+    # and baked into this command, so a relaunched leg that parks again earns a fresh phase_record while
+    # a courier retry of one save reuses the same nonce and dedupes. Only the journal-only (park) path
+    # consumes it — a completed phase advances the checkpoint cursor, so a resume SKIPS it and it can
+    # never double-record. None (unseedable / non-park) -> legacy payload-equality dedup.
+    leg_idem = getattr(args, "leg_idem", None)
     paths = control_plane.paths(os.getcwd(), args.work_item)
     step = int(args.step)
     journal_only = bool(getattr(args, "journal_only", False))
@@ -142,8 +171,8 @@ def save(args):
     if journal_only:
         result = idempotent_write.idempotent_apply(
             key + ":journal-only",
-            lambda: _reflects_journal(paths, payload),
-            lambda: _apply_journal(paths, payload, cost, park_reason, park_payload),
+            lambda: _reflects_journal(paths, payload, leg_idem),
+            lambda: _apply_journal(paths, payload, cost, park_reason, park_payload, leg_idem),
         )
         detail = result.get("detail") or {}
         return {
@@ -187,6 +216,8 @@ def main(argv):
                    help="#130: on a journal-only (park) save, the reason to fold into a `parked` marker")
     s.add_argument("--terminal-park-payload", dest="terminal_park_payload", default=None,
                    help="#397 FR-11: structured `parked` event payload (doc-review decision list)")
+    s.add_argument("--leg-idem", dest="leg_idem", default=None,
+                   help="#434: per-leg idem nonce so a relaunched park earns its own phase_record/cost/park")
     args = parser.parse_args(argv[1:])
     if args.cmd == "save":
         print(json.dumps(save(args), sort_keys=True))

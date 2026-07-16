@@ -92,6 +92,8 @@ function makeAgent(startupFacts, trace, opts) {
       trace.buildEntered = true
       return '{"review": "pending"}'
     }
+    // #434: a park seeds a resume-continuing per-leg idem nonce before the save.
+    if (label === 'phase leg seed') return markedStdout({ ok: true, max: 0 })
     if (label === 'save phase progress') {
       return saveProgressOk({ checkpoint_confirmed: false })
     }
