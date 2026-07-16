@@ -2209,12 +2209,21 @@ async function execText(cmd, label) {
 // real line by minting a colliding nonce). Only parks call this — a completed (proceed) phase advances
 // the checkpoint cursor, so a resume SKIPS it and it can never double-record.
 async function phaseLegIdem(workItem, step, phase) {
-  const prefix = `pp:${workItem}:s${step}:${phase}`
-  const seedCmd = `${libRootProbe()}${selfContained(
-    `python3 ${libPath('journal_entry.py')} --work-item ${shq(workItem)} --max-idem-prefix ${shq(prefix)}`)}`
-  const r = await execJson(seedCmd, 'phase leg seed')
-  const max = r && r.ok === true && typeof r.max === 'number' ? r.max : null
-  return max == null ? null : `${prefix}:d${max + 1}`
+  // Fail-safe to null on ANY seed-read failure (transport OR a non-transport throw — execJson re-raises
+  // a non-CourierTransportError, and currentAgent()-unavailable throws a plain Error). The caller reads
+  // a null as "unseedable" and force-records the park (fail-safe toward recording), so this whole read
+  // never derails the park save; a throw here would otherwise reject persistPhase before its own
+  // try/catch, dropping the park's phase_record/parked entirely — the #434 symptom (code review).
+  try {
+    const prefix = `pp:${workItem}:s${step}:${phase}`
+    const seedCmd = `${libRootProbe()}${selfContained(
+      `python3 ${libPath('journal_entry.py')} --work-item ${shq(workItem)} --max-idem-prefix ${shq(prefix)}`)}`
+    const r = await execJson(seedCmd, 'phase leg seed')
+    const max = r && r.ok === true && typeof r.max === 'number' ? r.max : null
+    return max == null ? null : `${prefix}:d${max + 1}`
+  } catch (_e) {
+    return null
+  }
 }
 
 // persistPhase: one 'save phase progress' courier — the optional side-effect command chained (&&)
@@ -2251,9 +2260,11 @@ async function persistPhase(workItem, opts) {
   // parked phase and parks again earns its own phase_record/phase_cost/parked instead of being deduped
   // against the first leg's byte-identical payload (journal quieter than the allowance ledger). Baked
   // once into the save command -> stable across the courier retry; seeded from the journal -> distinct
-  // per genuine leg. Null (unseedable) omits the flag -> legacy payload-equality dedup.
+  // per genuine leg. On an UNSEEDABLE journal (null) pass --leg-force so the park still ALWAYS records
+  // (fail-safe TOWARD recording, the #350 direction) rather than silently reverting to payload-equality
+  // dedup and re-hiding the relaunch park on a transient seed drop (premortem finding).
   const legIdem = journalOnly ? await phaseLegIdem(workItem, step, phase) : null
-  const legArg = legIdem ? ` --leg-idem ${shq(legIdem)}` : ''
+  const legArg = journalOnly ? (legIdem ? ` --leg-idem ${shq(legIdem)}` : ' --leg-force') : ''
   const saveCmd =
     `python3 ${libPath('phase_progress_entry.py')} save --work-item ${shq(workItem)} ` +
     `--step ${shq(String(step))} --phase ${shq(phase)} --payload ${shq(JSON.stringify(record))}${sideArg}${joArg}${costArg}${parkArg}${parkPayloadArg}${legArg}`

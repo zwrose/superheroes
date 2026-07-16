@@ -64,14 +64,16 @@ function savePrompt(prompts) {
     'a completed phase mints no leg nonce')
   assert.ok(!/--leg-idem/.test(savePrompt(prompts)), 'completed-phase save carries no --leg-idem')
 
-  // 4) an unseedable journal (seed read fails) omits --leg-idem -> legacy payload-equality dedup
-  // (fail-safe: never suppress a real line by minting a colliding nonce).
+  // 4) an unseedable journal (seed read fails) carries --leg-force, NOT --leg-idem: the park still
+  // ALWAYS records (fail-safe TOWARD recording, the #350 direction) instead of silently reverting to
+  // payload-equality dedup and re-hiding the relaunch park on a transient seed drop (premortem finding).
   prompts = runWith({ seedFails: true })
   res = await showrunner.persistPhase('wi', {
     step: 5, phase: 'review-plan', journalOnly: true, recordCost: true, parkReason: 'x',
     record: { phase: 'review-plan', gate: 'changes-requested' },
   })
-  assert.ok(!/--leg-idem/.test(savePrompt(prompts)), 'unseedable journal omits --leg-idem')
+  assert.ok(!/--leg-idem/.test(savePrompt(prompts)), 'unseedable park carries no --leg-idem')
+  assert.ok(/--leg-force/.test(savePrompt(prompts)), 'unseedable park force-records (fail-safe toward recording)')
 
   console.log('ok: showrunner phase relaunch leg nonce')
 })().catch((e) => { console.error('FAIL:', e.message || e); process.exit(1) })

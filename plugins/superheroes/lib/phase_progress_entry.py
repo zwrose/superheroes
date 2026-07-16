@@ -92,7 +92,7 @@ def _apply(paths, work_item, step, phase, payload, side, cost=None):
     return reflects is True, detail
 
 
-def _has_leg_record(path, payload, leg_idem):
+def _has_leg_record(path, payload, leg_idem, force=False):
     # #434: a relaunched review leg re-enters a PARKED phase, runs it again, and parks again with a
     # byte-identical payload (the #397 no-net-progress treadmill parks). Keying phase-record freshness
     # on payload-equality ALONE dedupes that second leg's phase_record/phase_cost/parked away — the run
@@ -100,10 +100,17 @@ def _has_leg_record(path, payload, leg_idem):
     # but journaled no phase story). With a per-leg idem nonce — minted resume-continuing by the spine
     # (engine_dispatch's #350 primitive) and baked once into the save command — freshness becomes "a
     # phase_record already carries THIS leg's idem": a genuine re-entry (a fresh nonce) records, while a
-    # courier retry of ONE save (the same baked nonce) still dedupes to a single line. leg_idem is None
-    # on the legacy/unseedable path -> byte-unchanged payload-equality (never regress crash-resume
-    # dedup; on an unseedable journal we cannot distinguish legs, so we fail SAFE toward the prior
-    # behavior rather than double-count a courier retry).
+    # courier retry of ONE save (the same baked nonce) still dedupes to a single line.
+    #
+    # `force` is the UNSEEDABLE-park fail-safe. When the spine could not read the journal to seed a
+    # nonce (the seed-read courier leaf dropped stdout, etc.) it sets --leg-force on the PARK save: this
+    # returns "not present" so the park ALWAYS records. That mirrors #350's actual fail-safe DIRECTION
+    # (its unseedable dispatch omits --idem and therefore always writes — a tolerated over-count),
+    # instead of silently reverting a relaunch park to payload-equality dedup, which would recreate the
+    # exact #434 under-recording bug on a transient seed drop (a real premortem finding). leg_idem is
+    # None WITHOUT force only on the legacy/direct-call path -> byte-unchanged payload-equality dedup.
+    if force:
+        return False
     if leg_idem is None:
         return any(record == payload for record in _phase_records(path))
     for event in journal.read_events(path):
@@ -112,20 +119,25 @@ def _has_leg_record(path, payload, leg_idem):
     return False
 
 
-def _reflects_journal(paths, payload, leg_idem=None):
-    journal_ok = _has_leg_record(paths["events"], payload, leg_idem)
+def _reflects_journal(paths, payload, leg_idem=None, force=False):
+    # A forced park never "already reflects" (it must always apply), so the idempotent-apply reader must
+    # report not-reflected too — else idempotent_apply short-circuits before _apply_journal runs.
+    journal_ok = _has_leg_record(paths["events"], payload, leg_idem, force)
     return journal_ok, {"journal_confirmed": journal_ok}
 
 
-def _apply_journal(paths, payload, cost=None, park_reason=None, park_payload=None, leg_idem=None):
-    if not _has_leg_record(paths["events"], payload, leg_idem):
+def _apply_journal(paths, payload, cost=None, park_reason=None, park_payload=None, leg_idem=None, force=False):
+    if not _has_leg_record(paths["events"], payload, leg_idem, force):
         # #434: stamp the per-leg idem on the phase_record (top-level, like #350's external_dispatch) so
         # journal.append itself dedupes a courier retry AND the freshness read above distinguishes legs;
         # the folded cost/park ride under this same fresh-record gate (exactly-once with the record).
         journal.append(paths["events"], "phase_record", payload=payload, root=os.getcwd(), idem=leg_idem)
         _append_cost(paths, cost)     # exactly-once with the record (crash-resume dedupes both)
         _append_park(paths, park_reason, park_payload)
-    return _reflects_journal(paths, payload, leg_idem)
+    # Read-back confirmation must NOT re-force (the record is now present regardless of the seed) — a
+    # forced apply that then re-forced the reader would always report unconfirmed. Confirm on presence.
+    journal_ok = any(record == payload for record in _phase_records(paths["events"]))
+    return journal_ok, {"journal_confirmed": journal_ok}
 
 
 def save(args):
@@ -156,6 +168,10 @@ def save(args):
     # consumes it — a completed phase advances the checkpoint cursor, so a resume SKIPS it and it can
     # never double-record. None (unseedable / non-park) -> legacy payload-equality dedup.
     leg_idem = getattr(args, "leg_idem", None)
+    # #434: the unseedable-park fail-safe. The spine sets --leg-force when it could not read the journal
+    # to seed a per-leg nonce, so a park still ALWAYS records (fail-safe toward recording — the #350
+    # direction) instead of silently reverting to payload-equality dedup and re-hiding the relaunch park.
+    leg_force = bool(getattr(args, "leg_force", False)) and leg_idem is None
     paths = control_plane.paths(os.getcwd(), args.work_item)
     step = int(args.step)
     journal_only = bool(getattr(args, "journal_only", False))
@@ -171,8 +187,8 @@ def save(args):
     if journal_only:
         result = idempotent_write.idempotent_apply(
             key + ":journal-only",
-            lambda: _reflects_journal(paths, payload, leg_idem),
-            lambda: _apply_journal(paths, payload, cost, park_reason, park_payload, leg_idem),
+            lambda: _reflects_journal(paths, payload, leg_idem, leg_force),
+            lambda: _apply_journal(paths, payload, cost, park_reason, park_payload, leg_idem, leg_force),
         )
         detail = result.get("detail") or {}
         return {
@@ -218,6 +234,8 @@ def main(argv):
                    help="#397 FR-11: structured `parked` event payload (doc-review decision list)")
     s.add_argument("--leg-idem", dest="leg_idem", default=None,
                    help="#434: per-leg idem nonce so a relaunched park earns its own phase_record/cost/park")
+    s.add_argument("--leg-force", dest="leg_force", action="store_true",
+                   help="#434: unseedable-park fail-safe — record unconditionally instead of payload-dedup")
     args = parser.parse_args(argv[1:])
     if args.cmd == "save":
         print(json.dumps(save(args), sort_keys=True))

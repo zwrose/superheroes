@@ -102,6 +102,11 @@ def test_phase_progress_relaunch_leg_records_second_park(tmp_path):
     leg1 = _run_park(tmp_path, payload, leg_idem="pp:wi:s2:build:d1", cost={"dispatches": 38})
     assert json.loads(leg1.stdout)["ok"] is True
     assert json.loads(leg1.stdout)["already"] is False
+    # Pin leg 1's contribution (exactly one of each) BEFORE leg 2 runs, so the ==2 totals below prove the
+    # SECOND park added its own record — killing a redistribution mutant that doubles leg 1 and drops leg 2.
+    assert _count(tmp_path, '"phase_record"') == 1
+    assert _count(tmp_path, '"parked"') == 1
+    assert _count(tmp_path, '"phase_cost"') == 1
     leg2 = _run_park(tmp_path, payload, leg_idem="pp:wi:s2:build:d2", cost={"dispatches": 41})
     out2 = json.loads(leg2.stdout)
     assert out2["ok"] is True
@@ -136,6 +141,20 @@ def test_phase_progress_leg_idem_rides_top_level_payload_clean(tmp_path):
            if '"phase_record"' in line][0]
     assert rec["idem"] == "pp:wi:s2:build:d1"
     assert rec["payload"] == payload   # payload carries NO synthetic leg field
+
+
+def test_phase_progress_leg_force_records_unconditionally(tmp_path):
+    # #434 unseedable-park fail-safe: when the spine could not seed a nonce it passes --leg-force so the
+    # park ALWAYS records (fail-safe TOWARD recording — the #350 direction) rather than reverting to
+    # payload-equality dedup and re-hiding the relaunch park. Two identical-payload force saves each land
+    # (accepting a tolerated over-count on a courier retry, never a suppressed real line).
+    payload = {"phase": "review-plan", "gate": "changes-requested"}
+    first = _run(tmp_path, payload, ["--journal-only", "--terminal-park", "x", "--leg-force"])
+    assert json.loads(first.stdout)["already"] is False
+    second = _run(tmp_path, payload, ["--journal-only", "--terminal-park", "x", "--leg-force"])
+    assert json.loads(second.stdout)["already"] is False   # NOT deduped — the park is never re-hidden
+    assert _count(tmp_path, '"phase_record"') == 2
+    assert _count(tmp_path, '"parked"') == 2
 
 
 def test_phase_progress_no_leg_idem_is_legacy_payload_dedup(tmp_path):
