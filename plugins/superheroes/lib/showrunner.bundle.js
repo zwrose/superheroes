@@ -4388,13 +4388,16 @@ function _stagingDenial(results) {
   }
   return null
 }
-async function _scrubReason(reason) {
+async function _scrubReason(reason, fallback = 'external error (scrubbed)') {
   const s = reason == null ? '' : String(reason)
   if (!s) return s
   const res = await _exec([`printf '%s' ${shq(s)} | python3 ${libPath('pr_comment.py')} scrub`])
   const r0 = res && res[0]
-  if (r0 && r0.ok && r0.stdout != null) return String(r0.stdout)
-  return 'external error (scrubbed)'
+  if (r0 && r0.ok && r0.stdout != null) {
+    const out = String(r0.stdout)
+    if (out.trim()) return out
+  }
+  return fallback
 }
 const _RUN_KEY_MAX = 80
 const _RUN_KEY_HASH_LEN = 16
@@ -4451,9 +4454,12 @@ async function _dispatchExternalInner(o) {
   if (!(promptStage.ok && schemaStage.ok)) {
     const writeInputs = promptStage.ok ? schemaStage.results : promptStage.results
     const denial = _stagingDenial(writeInputs)
+    const scrubbedDenial = !denial ? null
+      : (denial === _DENIAL_TAINTED ? denial
+        : await _scrubReason(denial, 'staging denied (reason scrubbed)'))
     const jStaging = await _journalExternal(Object.assign(_jbase(), { verify: null,
       outcome: denial ? STAGING_DENIED_OUTCOME : STAGING_FAILED_OUTCOME },
-      denial ? { reason: denial } : {}))
+      scrubbedDenial ? { reason: scrubbedDenial } : {}))
     if (!(jStaging && jStaging.ok)) return { ok: false, reason: 'unauditable' }
     return { ok: false, reason: 'could-not-stage-external-inputs' }
   }
