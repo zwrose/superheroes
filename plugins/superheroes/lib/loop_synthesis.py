@@ -26,7 +26,7 @@ Hard rules:
     over-confident judge cannot quietly demote a real blocker. Upgrades and non-blocking↔non-
     blocking re-tiers are not flagged (noise).
 
-Single-reviewer legs never call this (FR-11). Interactive doc reviews (review-plan/tasks/spec/
+Single-reviewer legs never call this (FR-11). Interactive doc reviews (review-spec,
 audit-debt) also never call this general fold — the orchestrator dedupes/compiles in-context with
 the owner present, and the one deterministic fold they run (acceptance suppression,
 acceptance_rereview --acceptance-only) already keys on a verbatim-copied identity; that documented

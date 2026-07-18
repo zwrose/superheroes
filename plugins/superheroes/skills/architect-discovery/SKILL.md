@@ -127,7 +127,7 @@ Refine the idea through natural dialogue, capturing requirements in **EARS** for
      criterion** (a Given-When-Then scenario, or a pass/fail rule). If you can't
      write one, the requirement is too vague to keep.
 - **Run the coverage checklist** — the happy path plus the *significant* unhappy
-  paths. Probe each owner-facing area; tag it **Specify / Defer-to-plan / N-A** so a
+  paths. Probe each owner-facing area; tag it **Specify / Defer-to-build / N-A** so a
   skip is a recorded decision. Risk-gate: go deeper only where a failure costs
   money, data, safety, trust, or legal standing. One representative case per area,
   not a matrix.
@@ -145,7 +145,7 @@ Refine the idea through natural dialogue, capturing requirements in **EARS** for
   | **Reach** *(if in scope)* | Other languages/currencies/timezones? Keyboard + screen-reader usable? |
 
   Connectivity & timing failures (dropped network, timeouts, duplicate requests at
-  the wire) are **defer-to-plan**: capture only the owner-visible *promise* ("a
+  the wire) are **defer-to-build**: capture only the owner-visible *promise* ("a
   dropped connection never loses their work").
 - **Non-functional needs** are captured as **outcomes with a measurable bar** ("a
   page they wait on responds within 2 seconds", "only the owner can see their

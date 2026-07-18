@@ -1,11 +1,9 @@
 """Structural guard: per-agent dispatch tables and prose enumerations stay in
 sync with the bundled agents and the rubric's dimension list.
 
-- review-plan and review-code dispatch every bundled REVIEWER agent: their
-  substitution tables have exactly one row per `*-reviewer` file in agents/, and
-  their "Specialists to dispatch" prose enumerations name every reviewer slug.
-  Internal non-reviewer leaf agents (e.g. `courier`, the showrunner spine's
-  command pipe) are NOT review specialists and are excluded.
+- review-code dispatches every bundled REVIEWER agent: its substitution table
+  has exactly one row per `*-reviewer` file in agents/, and its "Specialists to
+  dispatch" prose enumeration names every reviewer slug.
 - audit-debt intentionally dispatches only the ORIGINAL FOUR (Failure-Mode
   whole-repo sweep deferred) — guarded here so a four->five sweep cannot
   silently change it.

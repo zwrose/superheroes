@@ -84,7 +84,7 @@ def _fence_for(path, run_id="test-run"):
     return ["--expected-hash", _file_hash(path), "--run-id", run_id]
 
 
-# --- certify (review-plan / review-tasks) ---------------------------------
+# --- certify (legacy: plan/tasks legs retired in #469; seam kept whole) ----
 
 def test_certify_records_passed_when_parent_approved(tmp_path, capsys):
     root = _docs_root(tmp_path)

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """The trio's gate-write handshake — ONE tested place (was inlined bash in 3 skills).
 
-review-crew's review-plan / review-tasks (mode **certify**) and review-spec (mode
-**reset**) record a definition-doc's review gate via the definition-doc lib. This helper
+review-crew's review-spec (mode **reset**) records a definition-doc's review gate via
+the definition-doc lib; mode **certify** is legacy support for the plan/tasks legs
+retired in S1 train 2 (#469), kept because the shared seam stays whole. This helper
 performs the whole guarded handshake so a fix lives in one place — the previous
 near-verbatim duplication across the three SKILL.md files let a fix miss one copy and
 resurface as a bug a review round later.
@@ -104,7 +105,7 @@ def _set_gate(doc, work_item, review, root, *, expected_hash, run_id, lease=None
 
 
 def certify(doc, work_item, reviewed_path, review, parent_doc, root, *, expected_hash, run_id, lease=None):
-    """review-plan / review-tasks: record `review` on `doc`, downgrading to
+    """Legacy (plan/tasks legs retired, #469): record `review` on `doc`, downgrading to
     changes-requested if the parent isn't approved. Canonical-path guarded.
 
     Returns an exit code: 0 only when the verdict was RECORDED (`recorded:*`); 3 when a

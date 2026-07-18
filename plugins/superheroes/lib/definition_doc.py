@@ -155,10 +155,9 @@ def frontmatter(doc_type, work_item, *, size, parent=None, issue=None,
     that violates the contract. `parent` may be passed as the work-item slug of
     the parent (a string) or as a full `{workItem, docType}` dict.
 
-    `allow_orphan` (tasks only) permits a NULL parent: quick discovery (#25) authors a tasks
-    doc directly, with no plan (and no spec) ancestor — the tasks doc IS the showrunner's root
-    input artifact on the quick route, so a null parent is correct, exactly as a spec's is. It
-    is opt-in, so the full path keeps its strict tasks→plan linkage; a non-tasks doc, or a
+    `allow_orphan` (tasks only) permits a NULL parent — legacy support for the retired
+    quick-discovery route (#25; plan/tasks legs retired in S1 train 2, #469), kept because
+    the tasks docType survives as a shared-seam legacy. It is opt-in; a non-tasks doc, or a
     tasks doc that is given a parent, still runs the strict validation below.
     """
     if doc_type not in DOC_TYPES:
