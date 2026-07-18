@@ -18,7 +18,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SKILLS = os.path.normpath(os.path.join(HERE, "..", "..", "skills"))
 
 PATH_LITERALS = (".claude/review-profile.md", ".claude/review-decisions.json")
-REVIEW_SKILLS = ("review-code", "review-plan", "review-spec", "review-tasks", "audit-debt")
+REVIEW_SKILLS = ("review-code", "review-spec", "audit-debt")
 ALL_SKILLS = REVIEW_SKILLS + ("review-init",)
 REPO = os.path.normpath(os.path.join(HERE, "..", "..", "..", ".."))
 
@@ -82,24 +82,7 @@ def test_review_dispatch_prompts_require_bounded_session_artifact_reads():
             "never one whole-file",
             "until the diff is covered",
         )),
-        "review-plan/SKILL.md": ("## Your assignment", "## Context files", (
-            "$SESSION_DIR/plan.md",
-            "$SESSION_DIR/spec.md",
-            "bounded chunks",
-            "<=800",
-            "bounded shell",
-            "never one whole-file",
-        )),
         "review-spec/SKILL.md": ("## Your assignment", "## Context files", (
-            "$SESSION_DIR/spec.md",
-            "bounded chunks",
-            "<=800",
-            "bounded shell",
-            "never one whole-file",
-        )),
-        "review-tasks/SKILL.md": ("## Your assignment", "## Context files", (
-            "$SESSION_DIR/tasks.md",
-            "$SESSION_DIR/plan.md",
             "$SESSION_DIR/spec.md",
             "bounded chunks",
             "<=800",

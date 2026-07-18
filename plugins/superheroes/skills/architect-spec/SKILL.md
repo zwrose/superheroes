@@ -1,6 +1,6 @@
 ---
 name: writing-specs
-description: Use to author the on-disk `spec` definition-doc once an owner has APPROVED a set of requirements — normally invoked by the `discovery` skill, not directly by an owner idea. Mints the work-item slug, fills the spec body template, writes `docs/superheroes/<work-item>/spec.md`, and runs a self-review. Does NOT elicit requirements (that is `discovery`) or design the technical approach (that is `plan`).
+description: Use to author the on-disk `spec` definition-doc once an owner has APPROVED a set of requirements — normally invoked by the `discovery` skill, not directly by an owner idea. Mints the work-item slug, fills the spec body template, writes `docs/superheroes/<work-item>/spec.md`, and runs a self-review. Does NOT elicit requirements (that is `discovery`) or design the technical approach (that is the build's *how*).
 ---
 
 This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
@@ -89,7 +89,7 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
      state one behavior, avoid vague words, and carry an acceptance criterion? Split
      compound requirements; pin vague ones.
    - **No tech leaked:** any implementation detail (libraries, schemas, APIs) that
-     belongs in the `plan`? Move it out — the spec is the *what*.
+     belongs to the build's *how*? Move it out — the spec is the *what*.
    - **Coverage:** does the `## Coverage` table disposition every area (Specify/Defer/N-A),
      with each `Specify` backed by a real UFR — and are the significant unhappy paths actually
      addressed, not just the happy path?
@@ -111,5 +111,5 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
 | "I'll resolve the path from the current dir" | Pin `--root "$(git rev-parse --show-toplevel)"` — a subdir cwd would misplace the spec. |
 | "I'll re-mint the slug to be safe" | The slug is frozen at creation (§6.1). Reuse it for a revision; never re-mint. |
 | "Plain prose is fine for requirements" | Functional requirements are EARS + acceptance criteria. That's the verifiable contract. |
-| "A little tech detail clarifies it" | Tech is the `plan`. Keep the spec to the *what*. |
+| "A little tech detail clarifies it" | Tech is the build's *how*. Keep the spec to the *what*. |
 | "Owner approved the idea, I'll author straight off" | Author only from the *approved requirements*. If they weren't approved, back to `discovery`. |

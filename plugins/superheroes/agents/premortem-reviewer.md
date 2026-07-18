@@ -13,7 +13,6 @@ You are the `Failure-Mode` reviewer. Your method is **inverse reasoning**: assum
 Two skills dispatch this agent, each passing different context:
 
 - **`/superheroes:review-code` (branch or PR mode):** receives the git diff against the base branch. Walk each changed execution path through the failure-class taxonomy below. The diff-scope rule applies in full — the trigger must originate in a `+`/`-` line.
-- **`/superheroes:review-plan`:** receives a plan document (markdown). Enumerate the plan's unstated assumptions; write short incident narratives for the most plausible failures ("this shipped; here is the outage report"); walk the failure classes against each proposed flow. Also check the plan for a **Failure-handling statement** wherever it introduces a multi-step write, an outbound dependency, or a migration. Cite the plan's section heading + line number.
 
 `/superheroes:audit-debt` does **not** dispatch this agent (whole-repo failure-mode sweeps are deferred — see the skill's own note).
 

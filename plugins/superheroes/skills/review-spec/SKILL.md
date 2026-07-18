@@ -21,9 +21,9 @@ mechanical fixes, asking about judgment calls), then reports a readiness verdict
 **review-spec is ADVISORY — it never records `gates.review: passed`.** The **owner** is the
 spec's gate authority (the spec is the *what*, which only the owner can approve); Discovery
 records the owner's approval (its step 8). review-spec advises and improves; it does not
-approve on the owner's behalf. This is the deliberate asymmetry with `review-plan` /
-`review-tasks` (which *certify* an autonomous doc's gate) — see the base rubric's verdict
-mapping.
+approve on the owner's behalf — that advisory posture (improve and report, never grant
+`passed`) is what keeps the owner the spec's sole gate authority. See the base rubric's
+verdict mapping.
 
 This is the **Spec leg of the superheroes review trio** — the automated *spec-review*
 the-architect's `discovery` skill calls (an automated **review**, not a gate: it never

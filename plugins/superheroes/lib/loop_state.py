@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The deterministic loop-continuation gate — decides the ONE mandatory next action.
 
-review-crew's loops (review-code's auto-fix loop; the review-plan/spec/tasks revise loops)
+review-crew's loops (review-code's auto-fix loop; review-spec's revise loop)
 re-review until no blocking findings remain. That continuation decision used to be prose the
 orchestrator executed — and a model rationalizes past prose ("this fix is trivial", "the
 next round will be clean", "I'll offer it as optional", "save the tokens"), exiting early

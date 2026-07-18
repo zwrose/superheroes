@@ -17,9 +17,8 @@ def test_required_phrases_keys_match_skills_exactly_and_are_present():
         for phrase in reg["requiredPhrases"][key]:
             assert phrase in desc, f"{key}: required phrase {phrase!r} not in current description"
 
-def test_body_ceilings_cover_the_six():
+def test_body_ceilings_cover_the_survivors():
     reg = skills.load_registry(REGISTRY)
     assert set(reg["bodyCeilings"]) == {
-        "superheroes/review-code", "superheroes/review-spec", "superheroes/review-plan",
-        "superheroes/review-tasks", "superheroes/audit-debt", "superheroes/architect-plan",
+        "superheroes/review-code", "superheroes/review-spec", "superheroes/audit-debt",
     }

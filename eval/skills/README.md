@@ -27,19 +27,13 @@ skill SKILL.md in `plugins/superheroes/skills/`:
 plugins/superheroes/skills/audit-debt/SKILL.md
 plugins/superheroes/skills/review-code/SKILL.md
 plugins/superheroes/skills/review-init/SKILL.md
-plugins/superheroes/skills/review-plan/SKILL.md
 plugins/superheroes/skills/review-spec/SKILL.md
-plugins/superheroes/skills/review-tasks/SKILL.md
 plugins/superheroes/skills/test-pilot-execute/SKILL.md
 plugins/superheroes/skills/test-pilot-init/SKILL.md
 plugins/superheroes/skills/test-pilot-plan/SKILL.md
 plugins/superheroes/skills/architect-discovery/SKILL.md
 plugins/superheroes/skills/architect-init/SKILL.md
-plugins/superheroes/skills/architect-plan/SKILL.md
-plugins/superheroes/skills/architect-tasks/SKILL.md
 plugins/superheroes/skills/architect-spec/SKILL.md
-plugins/superheroes/skills/workhorse/SKILL.md
-plugins/superheroes/skills/showrunner/SKILL.md
 ```
 
 Judgment must be made in the context of ALL 16 descriptions simultaneously — not in

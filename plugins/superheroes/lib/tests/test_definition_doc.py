@@ -151,7 +151,8 @@ def test_tasks_orphan_is_opt_in_only():
 def test_tasks_orphan_content_hash_is_present_and_deterministic(tmp_path):
     # §6.3 content-hash (the deterministic build-branch key) requires the `parent` stable field to
     # be PRESENT — a null parent renders + reads back as the literal "null" (present, not missing),
-    # so the hash never raises and is stable across reads (a stable quick-route build branch).
+    # so the hash never raises and is stable across reads (historically the quick-route
+    # build-branch key; the route is retired, the orphan-tasks contract stays guarded).
     import identifiers
     fm = DD.frontmatter("tasks", "tasks-x-bbb222", size="small", allow_orphan=True,
                         created="2026-06-14", updated="2026-06-14")
