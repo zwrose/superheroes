@@ -1,4 +1,0 @@
-{
-  "input": [{"dimension": "Security", "taxonomy": "leak", "summary": "Secret leaked"}],
-  "expected": "Security::leak::secret leaked"
-}

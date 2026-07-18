@@ -1,1 +1,0 @@
-{"input": [[], 1, false], "expected": {"rearm": false, "park": false, "atCap": false, "reason": "non-Critical findings, rework not cross-cutting — resolve by scoped verify; no further confirmation panel"}}

@@ -1,1 +1,0 @@
-{"input": ["---\nfoo: bar\n---\n# Heading\nSome body content.\n", "sig1", "sig2"], "expected": false}

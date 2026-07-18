@@ -1,1 +1,0 @@
-{"input": [[], 1, false, 2, true], "expected": {"rearm": false, "park": false, "atCap": false, "reason": "no open blocking finding — doc review certifies"}}

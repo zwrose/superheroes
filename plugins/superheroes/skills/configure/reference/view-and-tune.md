@@ -76,27 +76,6 @@ action that owns it, leaving the rest of the calibration untouched:
   `$ROOT_DIR/rubric/review-discipline.md`), and on explicit confirm
   append it under a `## Review discipline` heading. Idempotent — if a `Review discipline`
   heading already exists in the project's `CLAUDE.md`, report that and change nothing.
-- **Authorize the spine's courier transport (project-level allow-rules)** — offered when the
-  owner reports runtime-classifier blocks on showrunner runs (issue #255 class: courier
-  dispatches denied as suspected oversight-evasion). Project-scoped, never user-wide; the
-  target follows the storage mode — **in-repo** → `.claude/settings.json` (committed,
-  team-shared; rules embed this checkout's absolute paths, collaborators re-run this offer),
-  **out-of-repo** → `.claude/settings.local.json` (machine-local, git-ignored, zero committed
-  traces). Owner-gated like every write: show the exact rules first (`emit`), and on explicit
-  confirm apply them (idempotent merge; never clobbers unrelated settings):
-
-  ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-  python3 "$ROOT_DIR/lib/courier_allow_rules.py" emit --root .
-  # show the owner the rules; on their explicit confirm (mode per the storage mode above):
-  python3 "$ROOT_DIR/lib/courier_allow_rules.py" apply --root . --mode local   # or --mode in-repo
-  ```
-
-  The rules stay scoped — rooted at this project, its managed worktrees, the plugin-cache lib
-  path, or the spine's own `__SR_EOF__` write marker; never blanket verb grants. The enforcer
-  hooks still deny gated verbs (merge/release/force-push) regardless of any allow rule. When
-  the CLI creates `settings.local.json` fresh, confirm it is git-ignored (Claude Code only
-  auto-ignores the file when it creates it itself).
 - **Switch the storage mode** → the confirmed switch below.
 - **Change the per-role engine** (reviewer engine / implementation engine / plan-author engine) → the
   engine step in `reference/set-up.md` §4.5 (availability → preference → show-authorization →

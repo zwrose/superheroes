@@ -1,1 +1,0 @@
-{"input": [{"premortem-reviewer": {"status": "run", "confidence": "low", "receiptMissing": true, "findings": [{"file": "a.py", "line": 1, "severity": "Critical"}]}}, ["premortem-reviewer"]], "expected": "premortem-reviewer returned no verification receipt after retry (receipt-missing — uncertifiable)"}

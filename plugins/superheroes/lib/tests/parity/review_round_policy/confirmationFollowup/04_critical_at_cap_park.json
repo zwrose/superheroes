@@ -1,1 +1,0 @@
-{"input": [["Critical"], 2, false], "expected": {"rearm": false, "park": true, "atCap": true, "reason": "Critical surfaced at the confirmation-panel cap — park; certification withheld"}}

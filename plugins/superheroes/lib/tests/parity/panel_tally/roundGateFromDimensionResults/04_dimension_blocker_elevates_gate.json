@@ -1,4 +1,0 @@
-{
-  "input": [{"test-reviewer": {"status": "run", "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Missing acceptance test", "severity": "Important"}], "confidence": "high"}}, ["test-reviewer"], false],
-  "expected": {"gate": "blocking", "confidence": "high", "incomplete": []}
-}

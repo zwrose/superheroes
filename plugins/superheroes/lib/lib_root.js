@@ -19,7 +19,7 @@ function libRoot() {
   return (typeof v === 'string' && v.length) ? v : DEFAULT_LIB
 }
 
-// libPath: the interpreter-path segment for a shell compose — `python3 ${libPath('fence_cli.py')}`.
+// libPath: the interpreter-path segment for a shell compose — `python3 ${libPath('verify_gate.py')}`.
 // With the default (relative) libRoot this yields the exact pre-#170 literal, so composes are byte-
 // identical; with an absolute libRoot it yields the cache path (portable + cwd-independent).
 function libPath(script) { return libRoot() + '/' + script }

@@ -80,22 +80,11 @@
       "refresh the-architect's doc-policy layer",
       "reached from `superheroes:configure`"
     ],
-    "superheroes/workhorse": [
-      "approved tasks doc (gates.review == passed) should be BUILT",
-      "shipped to a ready-for-review PR",
-      "It NEVER merges — that is always yours"
-    ],
     "superheroes/configure": [
       "set up, fix, view, or tune a project's superheroes calibration",
       "the single front door for superheroes configuration",
       "see the whole project's calibration on one screen",
       "move a project between in-repo and out-of-repo storage"
-    ],
-    "superheroes/showrunner": [
-      "RUN end-to-end by the live showrunner",
-      "Runs a deterministic pre-flight gate",
-      "drives the native front-half → build → review → ship pipeline to a ready-for-review PR",
-      "It NEVER merges — that is always yours"
     ]
   }
 }

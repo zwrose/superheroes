@@ -1,1 +1,0 @@
-{"input": ["---\nfoo: bar\n---\n# Summary\nThis is a proper summary with content.\n\n## Details\nMore content here.\n", "abc", "abc", ["Summary", "Details"]], "expected": true}

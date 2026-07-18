@@ -81,23 +81,18 @@ def _js_const_str_list(rel, name):
 
 def test_code_reviewer_rosters_match_bundled_agents():
     """CONVENTIONS §11: the reviewer roster is a cross-boundary fact re-typed as a
-    hand-maintained copy in JS (`showrunner.js` REVIEW_CODE_REVIEWERS / DOC_REVIEWERS)
-    and Python (`code_loop_plan` / `spec_loop_plan` DIMENSIONS, and the same roster
-    re-keyed as AGENT_SUFFIX). The authoritative home is the set of `agents/*-reviewer`
-    files; each copy must equal it, so adding/removing/renaming a reviewer breaks CI in
-    every enumerated copy-holder rather than letting them silently diverge (the PR #205
-    class). This enumeration is only as complete as the copies listed below — a NEW copy
-    must be added here (see the §11.2 caveat). The generated `showrunner.bundle.js` copy
-    is guarded separately by test_bundle_drift.
+    hand-maintained copy in Python (`code_loop_plan` / `spec_loop_plan` DIMENSIONS, and
+    the same roster re-keyed as AGENT_SUFFIX). The authoritative home is the set of
+    `agents/*-reviewer` files; each copy must equal it, so adding/removing/renaming a
+    reviewer breaks CI in every enumerated copy-holder rather than letting them silently
+    diverge (the PR #205 class). This enumeration is only as complete as the copies listed
+    below — a NEW copy must be added here (see the §11.2 caveat).
     """
     home = _agent_slugs()
 
     import code_loop_plan
     import spec_loop_plan
-    js = os.path.join("lib", "showrunner.js")
     rosters = {
-        "showrunner.js REVIEW_CODE_REVIEWERS": _js_const_str_list(js, "REVIEW_CODE_REVIEWERS"),
-        "showrunner.js DOC_REVIEWERS": _js_const_str_list(js, "DOC_REVIEWERS"),
         "code_loop_plan.DIMENSIONS": list(code_loop_plan.DIMENSIONS),
         "spec_loop_plan.DIMENSIONS": list(spec_loop_plan.DIMENSIONS),
         # AGENT_SUFFIX is the same roster re-keyed — its keys are a copy too.

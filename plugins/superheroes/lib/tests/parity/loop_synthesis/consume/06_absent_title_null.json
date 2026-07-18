@@ -1,1 +1,0 @@
-{"input": [[{"file": "f.js", "severity": "Minor"}], [{"id": "f.js::", "action": "drop", "reason": "duplicate finding", "severity": null}]], "expected": {"findings": [], "drops": [{"id": "f.js::", "file": "f.js", "title": null, "reason": "duplicate finding", "was_blocking_tagged": false}], "downgrades": [], "unmatched": []}}

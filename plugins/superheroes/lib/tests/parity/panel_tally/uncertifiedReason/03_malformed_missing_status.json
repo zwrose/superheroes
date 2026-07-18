@@ -1,1 +1,0 @@
-{"input": [{"test-reviewer": {"status": "missing", "confidence": "low", "malformed": true, "findings": []}}, ["test-reviewer"]], "expected": "test-reviewer did not return a usable result after retry (malformed — uncertifiable)"}

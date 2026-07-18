@@ -1,7 +1,7 @@
 {
   "recordedAt": "2026-07-05",
   "knownRedCeilings": [],
-  "allowedUnresolvedRefs": ["superheroes/workhorse:lib/loop_state.py"],
+  "allowedUnresolvedRefs": [],
   "combinedDescriptionChars": 5583,
   "carveOuts": {}
 }

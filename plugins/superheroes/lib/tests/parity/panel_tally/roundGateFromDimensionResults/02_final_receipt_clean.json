@@ -1,4 +1,0 @@
-{
-  "input": [{"code": {"status": "run", "findings": [], "confidence": "high", "verificationReceipt": {"artifact": "run-1:round-3", "chain": [{"step": "citation", "evidence": "reviewed citations"}, {"step": "reachability", "evidence": "validated call path"}, {"step": "missing-check", "evidence": "checked missing FRs"}, {"step": "tooling", "evidence": "pytest smoke passed"}], "coverageDecisionIds": ["RCD-1"]}}}, ["code"], true],
-  "expected": {"gate": "clean", "confidence": "high", "incomplete": []}
-}

@@ -1,1 +1,0 @@
-{"input": [{"security-reviewer": {"status": "run", "confidence": "low", "receiptStale": true, "findings": []}}, ["security-reviewer"]], "expected": "security-reviewer returned a stale verification receipt after retry (receipt-stale — uncertifiable)"}

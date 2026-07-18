@@ -1,1 +1,0 @@
-{"input": ["---\nfoo: bar\n---\n# Head\nContent <!-- AUTHOR GUIDANCE remove me --> here.\n", "sig", "sig"], "expected": false}

@@ -1,1 +1,0 @@
-{"input": [{"lastGoodStep": 5}, {"seeded_empty": "unknown"}], "expected": {"action": "gate", "reason": "could not read seeded state (transient) — cannot confirm a clean baseline"}}

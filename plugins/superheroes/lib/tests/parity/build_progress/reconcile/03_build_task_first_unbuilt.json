@@ -1,1 +1,0 @@
-{"input": [[{"id": "t1", "name": "Task 1"}, {"id": "t2", "name": "Task 2"}], [], 0, {}, false, null, "absent"], "expected": {"action": "build_task", "resume_at": {"id": "t1", "name": "Task 1"}, "reason": "first task not yet implemented — build it"}}

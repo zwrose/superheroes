@@ -4,19 +4,9 @@
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/lib/enforcer.py\" hook --host claude || printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"workhorse enforcer unavailable (fail-closed)\"}}'" },
           { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/bash_timeout.py\" || true" }
         ]
-      },
-      {
-        "matcher": "Edit|Write|MultiEdit",
-        "hooks": [
-          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/lib/enforcer.py\" hook --host claude || printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"workhorse enforcer unavailable (fail-closed)\"}}'" }
-        ]
       }
-    ],
-    "PreCompact": [
-      { "hooks": [ { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/precompact.py\" || true" } ] }
     ],
     "SessionStart": [
       { "hooks": [ { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session_start.py\" --host claude || true" } ] }

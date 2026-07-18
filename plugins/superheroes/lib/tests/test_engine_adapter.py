@@ -92,16 +92,6 @@ def test_build_argv_cli(capsys):
     assert out[out.index("-m") + 1] == "gpt-5.5"
 
 
-def test_build_state_uses_shared_trailer_constant():
-    import importlib.util as _u
-    spec = _u.spec_from_file_location(
-        "build_state", os.path.join(_HERE, "..", "build_state.py"))
-    bs = _u.module_from_spec(spec)
-    spec.loader.exec_module(bs)
-    body, _ = bs.task_id_from_body("x\n\n%s: 1\n" % EA.TASK_ID_TRAILER, {"1"})
-    assert body == "1"
-
-
 def test_parse_result_codex_review_critical():
     stdout = json.dumps({"findings": [
         {"severity": "Critical", "title": "path traversal",

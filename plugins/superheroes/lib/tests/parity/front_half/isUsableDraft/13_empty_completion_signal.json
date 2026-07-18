@@ -1,1 +1,0 @@
-{"input": ["---\nfoo: bar\n---\n# Head\nContent.\n", "", "abc"], "expected": false}

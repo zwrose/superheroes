@@ -1,1 +1,0 @@
-{"input": [[{"id": "t1", "name": "Task 1"}], ["t1"], 0, {"t1": "passed"}, false, {"clean": true}, "present"], "expected": {"action": "complete", "reason": "build complete — provenance present over the handed-off commit"}}

@@ -1,1 +1,0 @@
-{"input": [[{"file": "a.py", "line": 0, "title": "Zero line kept", "severity": "Critical", "dimension": "Code", "evidence": "repro"}]], "expected": [{"classification": "mechanical", "dimension": "Code", "evidence": "repro", "file": "a.py", "line": 0, "severity": "Critical", "title": "Zero line kept"}]}

@@ -1,1 +1,0 @@
-{"input": [[{"id": "t1", "name": "Task 1"}], ["t1"], 0, {"t1": "passed"}, false, {"clean": true}, "absent"], "expected": {"action": "write_provenance", "reason": "final review clean, provenance absent — (re)write provenance idempotently, do not re-review (FR-9)"}}

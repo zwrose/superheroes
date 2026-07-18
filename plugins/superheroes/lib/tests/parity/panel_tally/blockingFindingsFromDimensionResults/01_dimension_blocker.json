@@ -1,9 +1,0 @@
-{
-  "input": [{
-    "test-reviewer": {
-      "status": "run",
-      "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Missing acceptance test", "severity": "Important"}]
-    }
-  }],
-  "expected": [{"dimension": "Test", "taxonomy": "coverage", "title": "Missing acceptance test", "severity": "Important"}]
-}

@@ -1,2 +1,0 @@
-{"input": [{"confidence": "high", "assumptions": []}, "weird"],
- "expected": {"action": "park_unexpected_gate", "reason": "unexpected or unreadable gate value: 'weird'"}}
