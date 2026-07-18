@@ -125,7 +125,7 @@ and the run false-parked on no-net-progress).
 **Named exceptions (no silent divergence):**
 - **Single-reviewer legs** (per-task review, final-review deep leg) run no synthesis fold at all —
   one reviewer, nothing to reconcile (FR-11; stated in `loop_synthesis.py`).
-- **Interactive doc reviews** (`review-plan` / `review-tasks` / `review-spec` / `audit-debt`) run
+- **Interactive doc reviews** (`review-spec` / `audit-debt`) run
   **no general keep/drop synthesis judge**: the orchestrator dedupes/compiles/verifies findings
   **in-context**, with the owner present, so there is no judge→consumer split whose verdict-fold
   could silently no-op. The one deterministic fold they do run — acceptance suppression

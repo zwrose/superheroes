@@ -204,17 +204,15 @@ finding with its taxonomy term.
 
 - `/superheroes:review-code`: `READY FOR PR` / `FIX BEFORE PR` / `MAJOR FIXES NEEDED`
 - `/superheroes:review-spec`: `SPEC READY` / `REVISE BEFORE OWNER REVIEW` / `MAJOR GAPS — RETURN TO DISCOVERY` *(advisory — the owner is the spec's gate authority; review-spec records no `passed`)*
-- `/superheroes:review-plan`: `PLAN READY` / `REVISE BEFORE TASKS` / `MAJOR GAPS — RECONSIDER DESIGN`
-- `/superheroes:review-tasks`: `TASKS READY` / `REVISE BEFORE BUILD` / `MAJOR GAPS — RECONSIDER PLAN`
 - `/superheroes:audit-debt`: no single verdict — a prioritized backlog
 
 Mapping (post-dedupe, post-filter counts) — the same shape for every skill (the first / second / third label):
-- 0 Critical, 0 Important → the **READY** label (`READY FOR PR` / `SPEC READY` / `PLAN READY` / `TASKS READY`)
-- 0 Critical, ≥1 Important → the **REVISE** label (`FIX BEFORE PR` / `REVISE BEFORE OWNER REVIEW` / `REVISE BEFORE TASKS` / `REVISE BEFORE BUILD`)
+- 0 Critical, 0 Important → the **READY** label (`READY FOR PR` / `SPEC READY`)
+- 0 Critical, ≥1 Important → the **REVISE** label (`FIX BEFORE PR` / `REVISE BEFORE OWNER REVIEW`)
 - ≥1 Critical → the **MAJOR** label
 - Only Minor/Nit → the READY label (informational)
 
-The trio's **certifying** skills (`review-plan`, `review-tasks`) map the verdict onto the doc's `gates.review` via the-architect's lib: a READY verdict → `passed`; any REVISE/MAJOR verdict, or a deliberately-skipped blocking finding, → `changes-requested`. `review-spec` is **advisory** — it never records `passed` (the owner approves the spec in Discovery); its only gate write is resetting a *stale* approval to `pending`.
+`review-spec` is **advisory** — it never records `passed` (the owner approves the spec in Discovery); its only gate write is resetting a *stale* approval to `pending`.
 
 ## Where calibration comes from (read these, in order)
 

@@ -404,7 +404,7 @@ End of skill — no code edits, no commits, no posting to PRs, no further checks
 
 ## Learning Loop & Staleness Nudge
 
-These four behaviors are **non-blocking**, run **at end of run** (after filing issues and saving the report), and are **identical across `review-code`, `review-plan`, and `audit-debt`**. Nothing here ever auto-applies a profile or `CLAUDE.md` edit — every change is user-gated.
+These four behaviors are **non-blocking**, run **at end of run** (after filing issues and saving the report), and are **identical across `review-code`, `review-spec`, and `audit-debt`**. Nothing here ever auto-applies a profile or `CLAUDE.md` edit — every change is user-gated.
 
 ### Recording decisions (at resolution time)
 

@@ -11,13 +11,11 @@ import os
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILLS = os.path.normpath(os.path.join(HERE, "..", "..", "skills"))
 
-# The skills whose loops fix/revise and then must re-review until clean. (audit-debt's loop
-# is loop-until-dry discovery, not fix-then-re-review; it is intentionally not in this set.)
-# review-spec's gate runs THROUGH its script-owned scheduler (#164): `spec_loop_plan.py decide`
-# wraps loop_state.decide and additionally emits the next round's dims_to_run. review-code's
-# gate now runs THROUGH `code_loop_plan.py decide` the same way (#174 PR 2) — so it moved from
-# LOOPING_SKILLS to GATE_WRAPPED_SKILLS.
-LOOPING_SKILLS = ("review-plan", "review-tasks")
+# Every surviving review-crew fix-then-re-review loop runs THROUGH a script-owned scheduler
+# that wraps `loop_state.decide` and emits the next round's dims_to_run. review-spec via
+# `spec_loop_plan.py decide` (#164); review-code via `code_loop_plan.py decide` (#174 PR 2).
+# (The plan/tasks legs that called `loop_state.py" --round` directly retired in S1 train 2
+# (#469); audit-debt's loop is loop-until-dry discovery, intentionally not gate-wrapped.)
 GATE_WRAPPED_SKILLS = {
     "review-spec": [
         'spec_loop_plan.py" decide --session-dir',
@@ -35,14 +33,6 @@ GATE_WRAPPED_SKILLS = {
 def _read(skill):
     with open(os.path.join(SKILLS, skill, "SKILL.md"), encoding="utf-8") as fh:
         return fh.read()
-
-
-def test_looping_skills_invoke_the_continuation_gate():
-    # Match the INVOCATION shape (`loop_state.py" --round`), not a bare mention — review-code
-    # also references loop_state.py in prose (the Common-Mistakes row), which must not let a
-    # skill that dropped the actual call pass vacuously.
-    missing = [s for s in LOOPING_SKILLS if 'loop_state.py" --round' not in _read(s)]
-    assert not missing, "continuation gate not actually invoked in: " + ", ".join(missing)
 
 
 def test_gate_wrapped_skills_invoke_their_wrapper():
@@ -89,8 +79,6 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_review_skills_reference_shared_loop_contract():
     for rel in [
         "skills/review-spec/SKILL.md",
-        "skills/review-plan/SKILL.md",
-        "skills/review-tasks/SKILL.md",
         "skills/review-code/SKILL.md",
     ]:
         text = (ROOT / rel).read_text(encoding="utf-8")

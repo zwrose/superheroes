@@ -2,10 +2,7 @@
   "bodyCeilings": {
     "superheroes/review-code": 499,
     "superheroes/review-spec": 505,
-    "superheroes/review-plan": 499,
-    "superheroes/review-tasks": 503,
-    "superheroes/audit-debt": 459,
-    "superheroes/architect-plan": 450
+    "superheroes/audit-debt": 459
   },
   "requiredPhrases": {
     "superheroes/audit-debt": [
@@ -21,23 +18,11 @@
       "refresh review-crew's calibration layer",
       "reached from `superheroes:configure`"
     ],
-    "superheroes/review-plan": [
-      "review the-architect's `plan` definition-doc",
-      "the technical *how* for a work-item",
-      "advances to Tasks",
-      "records the review gate (`gates.review: passed`)"
-    ],
     "superheroes/review-spec": [
       "review the-architect's `spec` definition-doc",
       "the plain-language requirements / the *what* for a work-item",
       "owner gives final approval",
       "it never records `passed`"
-    ],
-    "superheroes/review-tasks": [
-      "review the-architect's `tasks` definition-doc",
-      "bite-sized, test-first executable steps for a work-item",
-      "before the producer's Build runs it",
-      "records the review gate (`gates.review: passed`)"
     ],
     "superheroes/test-pilot-execute": [
       "test-pilot plan should be exercised before human spot-check",
@@ -60,16 +45,6 @@
       "owner-approved requirements spec",
       "OWNS the requirements front-half",
       "Elicits requirements (incl. significant unhappy paths) with the owner"
-    ],
-    "superheroes/architect-plan": [
-      "turn it into the technical `plan` (the *how*) for a work-item",
-      "runs LARGELY AUTONOMOUSLY",
-      "Produces the `plan` definition-doc and runs review-plan"
-    ],
-    "superheroes/architect-tasks": [
-      "turn it into the bite-sized, test-first executable `tasks` for a work-item",
-      "WRAPS superpowers `writing-plans`",
-      "produces the `tasks` definition-doc, then runs review-tasks"
     ],
     "superheroes/architect-spec": [
       "author the on-disk `spec` definition-doc once an owner has APPROVED",
