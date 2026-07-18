@@ -1,1 +1,0 @@
-{"input": [["Critical"], 2, false, 2, true], "expected": {"rearm": false, "park": true, "atCap": true, "reason": "open blocking finding at the doc-review round cap — park; certification withheld"}}

@@ -1,1 +1,0 @@
-{"input": [{"lastGoodStep": 7}, {}], "expected": {"action": "continue", "from_step": 7, "reason": "reconciled — resume"}}

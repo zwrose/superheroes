@@ -1,1 +1,0 @@
-{"input": [{"command": "make verify", "returncode": 0, "timedOut": false}], "expected": "pass"}

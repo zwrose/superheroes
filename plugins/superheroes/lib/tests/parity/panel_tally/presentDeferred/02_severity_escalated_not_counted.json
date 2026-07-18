@@ -1,1 +1,0 @@
-{"input": [[{"file": "a.py", "line": 1, "title": "bug", "severity": "Critical", "dimension": "Code", "evidence": "repro"}], {"a.py::bug": "Important"}], "expected": 0}

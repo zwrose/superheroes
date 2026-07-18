@@ -85,13 +85,11 @@ def test_hook_fails_open_on_garbage_stdin():
 
 # --- wiring ------------------------------------------------------------------
 
-def test_hooks_json_wires_timeout_floor_after_enforcer_fail_open():
+def test_hooks_json_wires_timeout_floor_fail_open():
     cfg = json.load(open(_HOOKS_JSON))
     bash_blocks = [h for h in cfg["hooks"]["PreToolUse"] if h["matcher"] == "Bash"]
     assert len(bash_blocks) == 1
     cmds = [h["command"] for h in bash_blocks[0]["hooks"]]
     idx = [i for i, c in enumerate(cmds) if "bash_timeout.py" in c]
     assert idx, "hooks.json must wire bash_timeout.py on the Bash matcher"
-    assert "enforcer.py" in cmds[0], "the fail-closed enforcer stays the first Bash hook"
-    assert idx[0] > 0, "the timeout floor rides after the enforcer entry"
     assert "|| true" in cmds[idx[0]], "process-level fail-open: a hook crash never breaks Bash"

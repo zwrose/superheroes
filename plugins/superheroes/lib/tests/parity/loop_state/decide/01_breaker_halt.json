@@ -1,1 +1,0 @@
-{"input": [0, 0, 1, 7, true], "expected": ["halt", true, "circuit breaker halted (stuck / recurrence) — stop and report the still-open findings and the commit range; do not loop further."]}

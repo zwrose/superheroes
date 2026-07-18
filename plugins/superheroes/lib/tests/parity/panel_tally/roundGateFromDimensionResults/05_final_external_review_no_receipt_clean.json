@@ -1,4 +1,0 @@
-{
-  "input": [{"code": {"status": "run", "findings": [], "confidence": "high", "externalReview": "codex"}}, ["code"], true],
-  "expected": {"gate": "clean", "confidence": "high", "incomplete": []}
-}

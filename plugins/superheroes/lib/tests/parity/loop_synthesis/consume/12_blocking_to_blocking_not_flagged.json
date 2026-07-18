@@ -1,1 +1,0 @@
-{"input": [[{"file": "j.ts", "title": "Broad scope", "severity": "Critical"}], [{"id": "j.ts::broad scope", "action": "keep", "reason": "real but not release-blocking", "severity": "Important"}]], "expected": {"findings": [{"file": "j.ts", "title": "Broad scope", "severity": "Important"}], "drops": [], "downgrades": [], "unmatched": []}}

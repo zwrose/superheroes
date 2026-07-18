@@ -1,1 +1,0 @@
-{"input": ["bogus-role", {"reviewer": "codex"}], "expected": "claude"}

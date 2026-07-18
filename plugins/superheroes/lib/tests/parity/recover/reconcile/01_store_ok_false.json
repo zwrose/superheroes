@@ -1,1 +1,0 @@
-{"input": [{}, {"store_ok": false}], "expected": {"action": "park_gate", "reason": "control-plane store unusable — fail closed (no lockless run)"}}

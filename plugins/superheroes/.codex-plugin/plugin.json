@@ -18,11 +18,9 @@
     "review-plan",
     "review-spec",
     "review-tasks",
-    "showrunner",
     "test-pilot-execute",
     "test-pilot-init",
-    "test-pilot-plan",
-    "workhorse"
+    "test-pilot-plan"
   ],
   "hooks": "./hooks/hooks-codex.json",
   "interface": {

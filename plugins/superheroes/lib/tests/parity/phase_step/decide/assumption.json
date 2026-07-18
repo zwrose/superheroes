@@ -1,2 +1,0 @@
-{"input": [{"confidence": "high", "assumptions": ["x"]}, "passed"],
- "expected": {"action": "park_assumption", "reason": "phase recorded a material assumption: x"}}

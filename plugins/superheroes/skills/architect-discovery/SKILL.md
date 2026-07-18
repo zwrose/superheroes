@@ -306,19 +306,11 @@ automated review ran** — never claim a review that didn't happen:
   **not** self-approval — the HARD-GATE forbids *you* rubber-stamping your own
   un-reviewed work, not recording the owner's call. Run this **after** the owner says
   yes, never before.
-- **Offer the post-approval path choice (FR-1).** With the spec approved, present an
-  `AskUserQuestion` with exactly two options and **no default** — the owner picks how this
-  work-item runs:
-  - **"Run the showrunner (recommended)"** — record the choice
-    (`python3 "$ROOT_DIR/lib/path_choice.py"` / `path_choice.record(<work-item>, "showrunner", cwd, root)`)
-    and **invoke the `showrunner` skill** to run pre-flight → the live pipeline → a ready-for-review PR.
-  - **"Manual bridged path"** — record the choice
-    (`path_choice.record(<work-item>, "manual", cwd, root)`) and fall through to the existing
-    hand-off below, unchanged.
-
-  The record is **advisory** — the run state is authoritative. A showrunner pick that never
-  actually started simply re-enters via the `showrunner` skill (UFR-6/FR-7); recording it does
-  not start, merge, or transition anything on its own.
+- **Discovery is done — hand back (FR-1).** With the spec approved, Discovery's job is
+  complete: the owner-approved spec is the ready artifact. Do **not** start a build yourself —
+  hand back to the owner, who routes the approved work-item to a build session. (The
+  execution-spine run-path choice is retired; the spec's approval gate is the authoritative
+  signal.)
 - Discovery is now done and the spec is ready for the (more autonomous) **Plan** phase. Do **not** start `plan` yourself — hand off; the producer/owner drives the transition.
 
 ## Rationalization table

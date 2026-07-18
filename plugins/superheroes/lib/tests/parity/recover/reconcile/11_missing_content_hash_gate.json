@@ -1,1 +1,0 @@
-{"input": [{"branch": "superheroes/work-item-abc123", "lastGoodStep": 3}, {}], "expected": {"action": "gate", "reason": "could not recompute the tasks content-hash (transient) — not resuming blind"}}

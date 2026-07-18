@@ -1,7 +1,0 @@
-{
-  "input": [[
-    {"round": 1, "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Missing acceptance test", "severity": "Important"}]},
-    {"round": 2, "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Missing acceptance test", "severity": "Important"}]}
-  ], []],
-  "expected": [{"classKey": "Test::coverage::missing acceptance test", "rounds": [1, 2]}]
-}

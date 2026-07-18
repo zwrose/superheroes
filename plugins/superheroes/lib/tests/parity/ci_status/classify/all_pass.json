@@ -1,1 +1,0 @@
-{"input": [[{"name": "check1", "conclusion": "success"}, {"name": "check2", "conclusion": "pass"}]], "expected": {"status": "green", "failing": [], "pending": []}}

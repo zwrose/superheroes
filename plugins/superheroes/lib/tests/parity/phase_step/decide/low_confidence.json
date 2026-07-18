@@ -1,2 +1,0 @@
-{"input": [{"confidence": "low", "assumptions": []}, "passed"],
- "expected": {"action": "park_low_confidence", "reason": "phase recorded confidence below the parking threshold"}}

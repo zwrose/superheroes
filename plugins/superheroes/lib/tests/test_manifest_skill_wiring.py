@@ -3,7 +3,7 @@
 The Claude host auto-discovers `skills/<name>/SKILL.md` directories, but the Codex
 host reads the explicit `skills` array in `.codex-plugin/plugin.json` — a skill absent
 from that array is invisible on Codex. `validate_hosts.py` only checks the field EXISTS,
-not that it enumerates every skill, so a newly-added skill (here `superheroes:showrunner`)
+not that it enumerates every skill, so a newly-added skill (e.g. `superheroes:review-code`)
 can ship wired for Claude but silently unwired for Codex. This test is the wiring floor:
 the Codex `skills` array must list exactly the on-disk skill directories.
 """
@@ -30,7 +30,7 @@ def _codex_skills():
 def test_core_skill_is_registered_in_codex_manifest():
     # sentinel that a representative plugin skill is wired for Codex (the acceptance skill
     # deliberately left the plugin for the repo-local `.claude/skills/` — issue #237).
-    assert "showrunner" in _codex_skills()
+    assert "review-code" in _codex_skills()
 
 
 def test_codex_manifest_lists_exactly_the_on_disk_skills():

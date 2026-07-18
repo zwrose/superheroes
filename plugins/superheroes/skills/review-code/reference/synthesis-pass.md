@@ -116,7 +116,6 @@ a judge/consumer split must **stage a precomputed id and have the judge echo it 
 | --- | --- | --- |
 | Standalone `review-code` (this doc) | `merged.json` carries each finding's `id`; the judge is told "id unchanged" | `loop_synthesis.py --merged --leaf` |
 | Native code panel (`review_panel_shell.js::synthesizeRound`) | `synthesizeRound` stages `id = findingIdentity(f)` on each merged finding before the leaf; the judge echoes it verbatim | `loop_synthesis.consume` |
-| Native doc panels (`showrunner.js::docSynthesisLeaf`) | same `synthesizeRound` staging path | `acceptance_rereview.consumeWithAcceptance` → `loop_synthesis.consume` |
 
 A verdict whose id matches no finding is **kept fail-closed AND disclosed loudly** in `unmatched`
 (the round record, the readout's "matched NO finding" scrutiny section, and a runtime log) — a

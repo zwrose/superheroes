@@ -1,1 +1,0 @@
-{"input": [[{"file": "a.js", "title": "Null deref", "severity": "Critical"}], []], "expected": {"findings": [{"file": "a.js", "title": "Null deref", "severity": "Critical"}], "drops": [], "downgrades": [], "unmatched": []}}

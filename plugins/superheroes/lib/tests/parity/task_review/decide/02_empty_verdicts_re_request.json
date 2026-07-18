@@ -1,1 +1,0 @@
-{"input": [{}, [], 1, 3, []], "expected": {"action": "re_request", "blocking": [], "minors": [], "cannot_verify": [], "reason": "both verdicts (spec-compliance + code-quality) are required (FR-5)"}}

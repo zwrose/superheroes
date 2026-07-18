@@ -91,24 +91,11 @@ python3 "$ROOT_DIR/lib/definition_doc.py" set-gate \
   --expected-hash "$HASH" --run-id "discovery-$WORK_ITEM"
 ```
 
-This writes `gates.review: passed` (deriving `status: approved`) — the signal the showrunner's
-**route-aware pre-flight** reads on the quick route.
+This writes `gates.review: passed` (deriving `status: approved`) — the machine-readable signal
+that the quick-route artifact is ready.
 
-Then **launch the showrunner**: invoke the `showrunner` skill. Its pre-flight derives `quick` from
-the on-disk artifact (a tasks doc present, **no** spec), gates on the tasks doc, and the launch
-declares `args.route = "quick"` to the spine. You never free-type the route — it is derived and
-validated by the pre-flight (only ever `full`/`quick`), so a typo can't slip past intake.
-
-**Honor the PR-1 intake contract** — the spine's `resolveIntake` fails closed:
-
-- quick requires a **tasks doc present and NO spec**; if a spec is also present, a declared `quick`
-  **conflicts** and is refused — reconcile the artifact/route before relaunching.
-- a **missing or malformed** tasks artifact refuses to launch — it never silently falls back to (or
-  past) the full path.
-
-The gate write above therefore must land on a well-formed tasks doc at the resolved path (it does —
-the same `resolve-write` resolver placed it, and `set-gate` re-reads it), or the showrunner refuses.
-
-The showrunner then drives **build → review-code panel → verify → back-half → a ready-for-review
-PR** with review evidence + the scope line. **Spec-less is never review-less** (CONVENTIONS §3.4).
-It **never merges** — that is always the owner's.
+**Discovery is done — hand back.** With the tasks doc written and its gate recorded, Discovery's
+job on the quick route is complete: the approved tasks doc is the ready artifact. Do **not** start
+a build yourself — hand back to the owner, who routes the approved work-item to a build session.
+**Spec-less is never review-less** (CONVENTIONS §3.4) — the build still carries the full review
+discipline. Discovery **never merges** — that is always the owner's.

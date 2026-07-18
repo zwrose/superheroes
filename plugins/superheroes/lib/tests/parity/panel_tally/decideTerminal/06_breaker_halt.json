@@ -1,1 +1,0 @@
-{"input": ["blocking", 1, 0, "completed", 1, 7, true], "expected": {"reason": "circuit breaker halted (stuck / recurrence) — stop and report the still-open findings and the commit range; do not loop further.", "terminal": "halted"}}

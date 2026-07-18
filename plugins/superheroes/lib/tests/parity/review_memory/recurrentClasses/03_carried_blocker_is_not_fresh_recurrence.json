@@ -1,7 +1,0 @@
-{
-  "input": [[
-    {"round": 1, "findings": [{"dimension": "Security", "taxonomy": "leak", "title": "Secret leaked", "severity": "Important"}]},
-    {"round": 2, "findings": [{"dimension": "Security", "taxonomy": "leak", "title": "Secret leaked", "severity": "Important", "carried": true, "sourceRound": 1}]}
-  ], []],
-  "expected": []
-}

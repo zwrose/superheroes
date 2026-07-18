@@ -1,1 +1,0 @@
-{"input": [{"code-reviewer": {"status": "skipped", "confidence": "low", "findings": []}}, ["code-reviewer"]], "expected": "code-reviewer did not complete after its retry (coverage-gap — uncertifiable)"}

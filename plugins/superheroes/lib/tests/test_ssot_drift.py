@@ -1,5 +1,5 @@
 """CONVENTIONS §11 single-source-of-truth drift guards for cross-boundary facts that
-are re-typed across the Python libs, the Workflow JS, and schema literals.
+are re-typed across the surviving Python libs, their Workflow-JS twins, and schema literals.
 
 Each guard reads the authoritative home (or, where no single named home exists, pins
 the shared vocabulary across every enumerated copy-holder) and **fails closed** on an
@@ -7,21 +7,16 @@ unparseable literal — so a change to the truth breaks CI in every copy-holder 
 than letting them silently diverge (the PR #205 class). Per the §11.2 caveat, every
 test enumerates its copy-holders explicitly: a NEW copy must be added here.
 
-Clusters covered (sweep follow-up of #231):
+Clusters covered (post spine-retirement #468 — the execution-spine copy-holders
+`showrunner.js` / `build_phase.js` / `model_tier.js` / `engine_pref.js` and the
+`task_review` / `review_loop_plan` / `journal` producers are retired, so their clusters
+are gone with them):
 - Severity tiers + BLOCKING / SEV_RANK / NON_BLOCKING  (home: rubric/review-base.md)
-- Task-review required verdicts                        (home: task_review.py)
 - Terminal-state vocabulary                            (home: panel_tally.py)
-- Route vocabulary full/quick    (shared vocabulary: preflight.py + showrunner.js)
-- Accepted-model set (KNOWN_MODELS)                    (home: model_tier_overrides.py)
-- Accepted-engine set (ENGINES)                        (home: engine_pref.py)
-- Accepted Codex-model set (CODEX_MODELS)              (home: engine_pref.py)
-- haltKind cap-halt discriminator                      (home: review_loop_plan.py)
-- Document-review severity steering (DOC_SEVERITY_FRAME) (home: rubric/review-base.md §Document-review severity)
+- Codex translation/effort policy (docs + adapter default) (home: engine_pref.py)
 
-The generated showrunner.bundle.js copies of these facts are guarded separately by
-test_bundle_drift. The reviewer-roster, docs-location, and Failure-Mode-taxonomy
-clusters live in their topical sibling guards (test_dispatch_tables.py,
-test_definition_doc.py, test_taxonomy_sync.py).
+The reviewer-roster and docs-location clusters live in their topical sibling guards
+(test_dispatch_tables.py, test_definition_doc.py).
 """
 import ast
 import os
@@ -41,11 +36,6 @@ def _read(rel):
 # --- fail-closed JS literal readers (CONVENTIONS §11.2) ----------------------
 # Each asserts exactly one match and a well-formed literal; parsing nothing raises
 # (never returns an empty value that would make a downstream equality pass vacuously).
-# The sibling test_dispatch_tables.py carries the same fail-closed contract for its own
-# roster reader (`_parse_js_const_str_list`); these are kept per-file rather than shared
-# because the literal SHAPES differ (array / Set / object-map here vs a plain array
-# there) — connascence of algorithm, accepted for test helpers. The fail-closed behavior
-# below is exercised by `test_js_readers_fail_closed`.
 
 def _one(matches, name, label, shape):
     assert len(matches) == 1, (
@@ -76,17 +66,6 @@ def _js_str_set(text, name, label):
     return set(value)
 
 
-def _js_str_map(text, name, label):
-    """`const NAME = { key: 'value', ... }` → dict[str,str]."""
-    body = _one(re.findall(r"\bconst\s+%s\s*=\s*\{([^}]+)\}" % re.escape(name), text),
-                name, label, "{ key: 'value', ... }")
-    pairs = re.findall(r"(?:^|,)\s*(['\"]?[-\w]+['\"]?)\s*:\s*['\"]([^'\"]+)['\"]", body)
-    value = {key.strip("'\""): item for key, item in pairs}
-    assert value and len(value) == len(pairs), (
-        "%s: `%s` must be a non-empty string-to-string map" % (label, name))
-    return value
-
-
 def _js_rank_map(text, name, label):
     """`const NAME = { Key: 0, Key2: 1, ... }` (unquoted keys, int values) → dict[str,int]."""
     m = _one(re.findall(r"\bconst\s+%s\s*=\s*\{([^}]+)\}" % re.escape(name), text),
@@ -114,9 +93,7 @@ def _js_rank_map(text, name, label):
 def test_js_readers_fail_closed(reader, text, name, match):
     """§11.2: the JS literal readers are the trust anchor for every drift guard in this
     file — parsing nothing must RAISE, never return an empty/partial value that would let
-    a `== home` assertion pass vacuously. Mirrors the sibling fail-closed tests
-    (test_dispatch_tables.py, test_acceptance_fixture.py). Without these, a regression
-    that defeats fail-closed would ship undetected (the PR #205 class)."""
+    a `== home` assertion pass vacuously."""
     with pytest.raises(AssertionError, match=match):
         reader(text, name, "<test>")
 
@@ -139,10 +116,7 @@ def _rubric_severity_tiers():
 
 
 def _rubric_blocking_tiers(text, tiers):
-    """Which tiers BLOCK a verdict, read from the rubric's verdict-mapping section: a
-    tier blocks iff `≥1 <tier>` yields a non-READY label (`0 Critical, ≥1 Important →
-    REVISE`, `≥1 Critical → MAJOR`; `Minor/Nit → READY` do not block). Read from the home
-    rather than assumed positionally, so the blocking set traces to the rubric (§11.3)."""
+    """Which tiers BLOCK a verdict, read from the rubric's verdict-mapping section."""
     blocking = {t for t in tiers if re.search(r"≥\s*1\s+%s\b" % re.escape(t), text)}
     assert blocking, "rubric: no blocking tiers derived from the verdict mapping"
     return blocking
@@ -150,9 +124,9 @@ def _rubric_blocking_tiers(text, tiers):
 
 def test_severity_vocabulary_is_single_sourced():
     """CONVENTIONS §11: the severity tiers, the blocking/non-blocking partition, and the
-    Critical<Important<Minor<Nit rank are re-typed across ~13 Python + JS copy-holders.
-    All must agree with the rubric home — the ordered tier vocabulary and the blocking
-    set are both READ from review-base.md (the enum + the verdict mapping), not assumed."""
+    Critical<Important<Minor<Nit rank are re-typed across the surviving Python + JS
+    copy-holders. All must agree with the rubric home — the ordered tier vocabulary and
+    the blocking set are both READ from review-base.md (the enum + the verdict mapping)."""
     text = _read(os.path.join("rubric", "review-base.md"))
     tiers = _rubric_severity_tiers()          # ['Critical','Important','Minor','Nit']
     vocab = set(tiers)
@@ -168,14 +142,7 @@ def test_severity_vocabulary_is_single_sourced():
     import review_memory
     import review_telemetry
 
-    # Python copy-holders (read at runtime) — every BLOCKING constant. #276/#291 consolidated the
-    # blocking + Critical PARTITION decisions into two predicates (circuit_breaker.is_blocking /
-    # is_critical); circuit_breaker._blocking, task_review, panel_tally (the panel gate), loop_state
-    # (review-code's continuation gate), loop_synthesis, review_panel_shell, review_loop_plan and
-    # loop_plan_common (the confirmation re-arm/park feeders + gate) all route through them now. The
-    # remaining sets below are the drift-guarded canonical vocabulary declarations. review_memory /
-    # review_telemetry keep a case-sensitive set BY DESIGN — non-gating recurrence/telemetry consumers
-    # (a case mismatch there mis-counts a stat, it does not pass a defect through a gate).
+    # Python copy-holders (read at runtime) — every BLOCKING constant.
     py_blocking = {
         "circuit_breaker.BLOCKING": set(circuit_breaker.BLOCKING),
         "loop_plan_common.BLOCKING": set(loop_plan_common.BLOCKING),
@@ -190,10 +157,7 @@ def test_severity_vocabulary_is_single_sourced():
     assert list(loop_synthesis._TIERS) == tiers, "loop_synthesis._TIERS order/vocab drift"
     assert panel_tally.SEV_RANK == rank, "panel_tally.SEV_RANK drift"
 
-    # #276: the shared FAIL-CLOSED blocking predicate has ONE home (circuit_breaker). Its non-blocking
-    # set (the ONLY tiers that demote; everything else fails closed to blocking) must equal the rubric's
-    # non-blocking tiers, case-folded — Python home + JS twin. The predicate's cross-language behavior
-    # (canonical + foreign/mis-cased/degenerate corpus) is pinned by the isBlocking parity twin.
+    # #276: the shared FAIL-CLOSED blocking predicate has ONE home (circuit_breaker).
     non_blocking_lc = {t.lower() for t in non_blocking}
     assert {s.lower() for s in circuit_breaker._NON_BLOCKING} == non_blocking_lc, (
         "circuit_breaker.py _NON_BLOCKING drifted from the rubric non-blocking tiers %r" % non_blocking)
@@ -201,14 +165,12 @@ def test_severity_vocabulary_is_single_sourced():
     assert not circuit_breaker.is_blocking("Minor") and not circuit_breaker.is_blocking("Nit")
     assert circuit_breaker.is_blocking("blocker") and circuit_breaker.is_blocking(None)  # fail closed
 
-    # #291: the shared TIER-specific Critical predicate (case-normalized) — the confirmation re-arm/park
-    # gate reads it. Distinct from is_blocking: Important blocks but is not Critical. Cross-language
-    # behavior is pinned by the isCritical parity twin; here we assert it exists and case-normalizes.
+    # #291: the shared TIER-specific Critical predicate (case-normalized).
     assert circuit_breaker.is_critical("Critical") and circuit_breaker.is_critical("critical")
     assert not circuit_breaker.is_critical("Important") and not circuit_breaker.is_critical("blocker")
     assert not circuit_breaker.is_critical(None) and not circuit_breaker.is_critical("")
 
-    # JS copy-holders (regex-extracted, fail-closed).
+    # JS copy-holders (regex-extracted, fail-closed) — the surviving review-panel twins.
     cb = _read(os.path.join("lib", "circuit_breaker.js"))
     assert _js_str_set(cb, "BLOCKING", "circuit_breaker.js") == blocking
     assert {s.lower() for s in _js_str_set(cb, "_NON_BLOCKING", "circuit_breaker.js")} == non_blocking_lc, (
@@ -221,54 +183,10 @@ def test_severity_vocabulary_is_single_sourced():
     assert _js_str_set(ptjs, "BLOCKING", "panel_tally.js") == blocking
     assert _js_rank_map(ptjs, "SEV_RANK", "panel_tally.js") == rank
 
-    # Schema enum copy (showrunner.js findings-severity enum).
-    srjs = _read(os.path.join("lib", "showrunner.js"))
-    enum = re.findall(r"severity:\s*\{\s*enum:\s*(\[[^\]]+\])", srjs)
-    assert len(enum) == 1, "showrunner.js: expected exactly one severity enum, found %d" % len(enum)
-    assert ast.literal_eval(enum[0]) == tiers, "showrunner.js severity enum drift"
-
-    # #276: the per-task AND whole-branch final reviewers' schema enums must speak the SAME tier
-    # vocabulary — the live escape (2026-07-06) was reviewers emitting a foreign scale
-    # (blocker/critical/high) the partition then demoted. build_phase.js now carries two such enums
-    # (REVIEW_TASK_SCHEMA + FINAL_REVIEW_SCHEMA); EVERY one must equal the rubric tiers.
-    bp = _read(os.path.join("lib", "build_phase.js"))
-    bp_enums = re.findall(r"severity:\s*\{\s*enum:\s*(\[[^\]]+\])", bp)
-    assert len(bp_enums) == 2, "build_phase.js: expected two severity enums, found %d" % len(bp_enums)
-    for e in bp_enums:
-        assert ast.literal_eval(e) == tiers, "build_phase.js severity enum drift: %s" % e
-    # The reviewer PROMPTS (not just the schemas) name the closed vocabulary so an off-scale label is
-    # forbidden at the source. Anchor to the exact prompt sentence — a whole-file `\bNit\b` search would
-    # pass on the schema enum alone (the mutant that reverts the prompt hint must NOT survive). Both the
-    # per-task and whole-branch reviewer prompts carry it, so require both occurrences.
-    prompt_sentence = "severity MUST be one of Critical, Important, Minor, Nit (no other scale)"
-    assert bp.count(prompt_sentence) == 2, (
-        "build_phase.js: expected the closed-severity prompt sentence in both reviewer prompts (per-task "
-        "+ whole-branch), found %d" % bp.count(prompt_sentence))
-    # The rubric's shared findings schema (the panel reviewers' single source) must also forbid the
-    # foreign scale, not just name the tiers — the live panel escape emitted high/medium/low.
+    # The rubric's shared findings schema (the panel reviewers' single source) must forbid
+    # the foreign scale, not just name the tiers — the live panel escape emitted high/medium/low.
     assert "closed enum" in text and "no `high`/`medium`/`low`" in text, (
         "review-base.md: findings schema must forbid off-scale severities (the panel-vocabulary fix)")
-
-
-# --- Cluster 2: task-review required verdicts --------------------------------
-
-def test_task_review_required_verdicts_single_sourced():
-    """CONVENTIONS §11: the required task-review verdict keys are re-typed in
-    task_review.js and the build_phase.js result schema. Home: task_review.py."""
-    import task_review
-    home = list(task_review.REQUIRED_VERDICTS)   # ('spec_compliance', 'code_quality')
-    assert home == ["spec_compliance", "code_quality"], home
-
-    js = _read(os.path.join("lib", "task_review.js"))
-    assert _js_str_array(js, "REQUIRED_VERDICTS", "task_review.js") == home
-
-    bp = _read(os.path.join("lib", "build_phase.js"))
-    req = re.findall(r"required:\s*(\['spec_compliance'[^\]]*\])", bp)
-    assert len(req) == 1, "build_phase.js: verdicts schema `required` not found uniquely"
-    assert ast.literal_eval(req[0]) == home, "build_phase.js verdicts `required` drift"
-    for v in home:  # each verdict also has a properties entry
-        assert re.search(r"\b%s:\s*\{\s*enum:" % re.escape(v), bp), (
-            "build_phase.js: verdict %r missing its schema properties entry" % v)
 
 
 # --- Cluster 3: terminal-state vocabulary ------------------------------------
@@ -286,84 +204,12 @@ def test_terminal_vocabulary_single_sourced():
     assert js_map == home, "panel_tally.js `_ACTION_TO_TERMINAL` drifted from panel_tally.py"
 
 
-# --- Cluster 4: route vocabulary (full / quick) ------------------------------
-
-def test_route_vocabulary_single_sourced():
-    """CONVENTIONS §11: the route vocabulary {'full','quick'} has no single named home —
-    preflight.py emits it and showrunner.js resolveIntake recognizes it. Pin the
-    vocabulary at both canonical decision expressions so a rename/new route in either
-    (a producer emitting a value the consumer won't recognize) fails closed."""
-    routes = {"full", "quick"}
-
-    pf = _read(os.path.join("lib", "preflight.py"))
-    norm = re.search(
-        r'route\s*=\s*"quick"\s*if\s*probes\.get\("route"\)\s*==\s*"quick"\s*else\s*"full"', pf)
-    assert norm, "preflight.py: route normalizer expression not found (drift or reformat)"
-    assert set(re.findall(r'"(quick|full)"', norm.group(0))) == routes
-
-    sr = _read(os.path.join("lib", "showrunner.js"))
-    derived = re.search(
-        r"const derived = specPresent \? '(\w+)' : \(tasksPresent \? '(\w+)' : null\)", sr)
-    assert derived, "showrunner.js: resolveIntake `derived` route expression not found"
-    assert set(derived.groups()) == routes
-    declared = re.search(
-        r"const declared = \(explicit === '(\w+)' \|\| explicit === '(\w+)'\)", sr)
-    assert declared, "showrunner.js: resolveIntake `declared` route expression not found"
-    assert set(declared.groups()) == routes
-
-
-# --- Cluster 5: accepted-model set (KNOWN_MODELS) ----------------------------
-
-def test_known_models_single_sourced():
-    """CONVENTIONS §11: the accepted-model set is validated Python-side in
-    model_tier_overrides.KNOWN_MODELS (the home) and re-typed JS-side in model_tier.js
-    (the freeze-consume merge boundary validates a snapshot's pinned model against it).
-    A model added/renamed in one place must break CI in the other, so a valid new model
-    isn't silently refused at the merge boundary (or a stale one silently pinned). Order
-    is not semantically load-bearing for a membership set, so compare as sets."""
-    import model_tier_overrides
-    home = list(model_tier_overrides.KNOWN_MODELS)  # ('haiku', 'sonnet', 'opus', 'fable')
-
-    mt = _read(os.path.join("lib", "model_tier.js"))
-    assert set(_js_str_array(mt, "KNOWN_MODELS", "model_tier.js")) == set(home), (
-        "model_tier.js KNOWN_MODELS drifted from model_tier_overrides.KNOWN_MODELS")
-
-
-# --- Cluster 6: accepted-engine set (ENGINES) --------------------------------
-
-def test_engines_single_sourced():
-    """CONVENTIONS §11: the accepted-engine set is re-typed across the engine_pref
-    pair — engine_pref.py's authoritative ENGINES tuple (the resolver that falls open to
-    'claude' on anything outside it) and engine_pref.js's ENGINES array (the same
-    membership gate on the Workflow side). An engine added/renamed in one place must break
-    CI in the other, so a valid new engine isn't silently rejected on one side (or a stale
-    one silently still-accepted). Order is not semantically load-bearing for a membership
-    set, so compare as sets — mirrors the KNOWN_MODELS cluster."""
-    import engine_pref
-    home = list(engine_pref.ENGINES)  # ('claude', 'codex', 'cursor')
-
-    js = _read(os.path.join("lib", "engine_pref.js"))
-    assert set(_js_str_array(js, "ENGINES", "engine_pref.js")) == set(home), (
-        "engine_pref.js ENGINES drifted from engine_pref.py ENGINES")
-
-
-def test_codex_models_single_sourced():
-    """The Python preference resolver owns the selectable concrete Codex model IDs; the
-    Workflow JS twin validates and freezes the same set."""
-    import engine_pref
-    js = _read(os.path.join("lib", "engine_pref.js"))
-    assert set(_js_str_array(js, "CODEX_MODELS", "engine_pref.js")) == set(engine_pref.CODEX_MODELS), (
-        "engine_pref.js CODEX_MODELS drifted from engine_pref.py CODEX_MODELS")
-
+# --- Cluster 3b: Codex translation/effort policy (docs + adapter default) -----
 
 def test_complete_codex_policy_single_sourced():
-    """The Python home and Workflow twin must agree on the full translation/effort policy."""
+    """The Python home (engine_pref.py) owns the Codex translation/effort policy; the
+    engine_adapter no-tier default and the owner-facing docs must agree with it."""
     import engine_pref
-    js = _read(os.path.join("lib", "engine_pref.js"))
-    assert _js_str_map(js, "CODEX_MODEL_BY_TIER", "engine_pref.js") == engine_pref.CODEX_MODEL_BY_TIER
-    assert set(_js_str_array(js, "CODEX_EFFORTS", "engine_pref.js")) == set(engine_pref.CODEX_EFFORTS)
-    assert set(_js_str_array(js, "CODEX_MAX_UNSUPPORTED_MODELS", "engine_pref.js")) == set(
-        engine_pref.CODEX_MAX_UNSUPPORTED_MODELS)
 
     adapter = _read(os.path.join("lib", "engine_adapter.py"))
     assert '_CODEX_MODEL = _CODEX_MODEL_BY_TIER["opus"]' in adapter, (
@@ -386,175 +232,3 @@ def test_complete_codex_policy_single_sourced():
             assert re.search(r"%s.{0,80}(?:\+|with).{0,20}`?max`?" % re.escape(model), doc,
                              flags=re.IGNORECASE | re.DOTALL), (
                 "%s max-effort compatibility guidance drifted for %s" % (rel, model))
-
-
-# --- Cluster 7: haltKind cap-halt discriminator (#381) -----------------------
-
-def _halt_kind_literals_home():
-    """Home: review_loop_plan.py tally-round verdict assembly — the four halt_kind
-    assignments inside `if terminal == "halted":`. Read from the producer, not
-    restated."""
-    text = _read(os.path.join("lib", "review_loop_plan.py"))
-    m = re.search(
-        r'if terminal == "halted":\s+'
-        r'if verify_red:\s+halt_kind = "([^"]+)"\s+'
-        r'elif fix_status == "failed":\s+halt_kind = "([^"]+)"\s+'
-        r'elif breaker_halt and brk\.get\("reason"\) == "max-iterations":.*?'
-        r'halt_kind = \("([^"]+)" if gate == "blocking" and confidence == "high"\s+'
-        r'else "([^"]+)"\)',
-        text, re.DOTALL)
-    assert m, (
-        "review_loop_plan.py: #381 halt_kind assignment block not found "
-        "(drift or reformat)")
-    return [m.group(1), m.group(2), m.group(3), m.group(4)]
-
-
-def _js_halt_kind_routing_literals(text, label):
-    """`haltKind` / `fr.haltKind` comparisons and assignments in JS copy-holders."""
-    literals = re.findall(
-        r"(?:fr\.)?haltKind\s*(?:===|!==|=)\s*'([^']+)'", text)
-    assert literals, "%s: no haltKind routing literals found (drift or reformat)" % label
-    return set(literals)
-
-
-def _js_halt_kind_assertion_literals(text, label):
-    """`assert.strictEqual(...haltKind, 'kind', ...)` in JS smoke tests."""
-    literals = re.findall(r"haltKind,\s*'([^']+)'", text)
-    return set(literals)
-
-
-def test_halt_kind_vocabulary_single_sourced():
-    """CONVENTIONS §11: the #381 haltKind cap-halt discriminator is produced by
-    review_loop_plan.py and consumed by build_phase.js (routing + downgrade) and
-    pinned in JS smokes. A rename on the producer must break CI in every
-    copy-holder rather than silently mis-routing the handoff."""
-    home = _halt_kind_literals_home()
-    home_set = set(home)
-
-    bp = _read(os.path.join("lib", "build_phase.js"))
-    bp_literals = _js_halt_kind_routing_literals(bp, "build_phase.js")
-    assert bp_literals == home_set, (
-        "build_phase.js haltKind routing literals %r drifted from review_loop_plan.py home %r"
-        % (bp_literals, home_set))
-
-    js_test_holders = [
-        ("lib/tests/build_phase_engine_smoke.js", "build_phase_engine_smoke.js"),
-        ("lib/tests/build_phase_final_review_smoke.js", "build_phase_final_review_smoke.js"),
-    ]
-    for rel, label in js_test_holders:
-        text = _read(rel)
-        test_literals = _js_halt_kind_assertion_literals(text, label)
-        assert test_literals, "%s: expected haltKind assertion literals" % label
-        assert test_literals <= home_set, (
-            "%s haltKind assertion literals %r drifted from review_loop_plan.py home %r"
-            % (label, test_literals, home_set))
-
-
-# --- Cluster 8: uncertified flag (#212 / #381) -----------------------------
-
-def _uncertified_producer_home():
-    """Home: review_loop_plan.py sets `uncertified` when gate is cannot-certify."""
-    text = _read(os.path.join("lib", "review_loop_plan.py"))
-    assert 'if gate == "cannot-certify":' in text and 'out["uncertified"] = True' in text, (
-        "review_loop_plan.py: uncertified flag producer block not found (drift or reformat)")
-
-
-def _js_uncertified_routing_literals(text, label):
-    """`uncertified` comparisons on verdict/fr in JS copy-holders."""
-    literals = re.findall(r"(?:fr\.|verdict\.)uncertified", text)
-    assert literals, "%s: no uncertified routing references found (drift or reformat)" % label
-    return len(literals)
-
-
-def test_uncertified_flag_single_sourced():
-    """CONVENTIONS §11: the uncertified flag is produced by review_loop_plan.py and consumed
-    by build_phase.js (park + fix-dispatch guard) and review_panel_shell.js (verdict copy).
-    A rename on the producer must break CI in every copy-holder."""
-    _uncertified_producer_home()
-
-    bp = _read(os.path.join("lib", "build_phase.js"))
-    assert _js_uncertified_routing_literals(bp, "build_phase.js") >= 2, (
-        "build_phase.js must guard both buildPhase park and runFinalReview fix dispatch on uncertified")
-
-    shell = _read(os.path.join("lib", "review_panel_shell.js"))
-    assert 'decided.uncertified' in shell and 'verdictOut.uncertified' in shell, (
-        "review_panel_shell.js must copy the decider's uncertified flag onto the verdict")
-
-
-# --- Cluster 9: journal event vocabulary (#397) ----------------------------
-
-def test_journal_event_types_known_to_renderers():
-    """CONVENTIONS §11: journal.EVENT_TYPES is the append writer's single source; run_watch and
-    run_readout each carry a known-type map so a new event type can't be added to the journal
-    without updating the renderers (the #397 doc-review routing + convergence vocabulary)."""
-    import journal
-    import run_readout
-    import run_watch
-    home = journal.EVENT_TYPES
-    assert home <= run_watch.KNOWN_JOURNAL_EVENT_TYPES, (
-        "run_watch.KNOWN_JOURNAL_EVENT_TYPES missing journal types: %r"
-        % (home - run_watch.KNOWN_JOURNAL_EVENT_TYPES))
-    assert home <= run_readout.KNOWN_JOURNAL_EVENT_TYPES, (
-        "run_readout.KNOWN_JOURNAL_EVENT_TYPES missing journal types: %r"
-        % (home - run_readout.KNOWN_JOURNAL_EVENT_TYPES))
-
-
-# --- Cluster 10: document-review severity steering (#397 FR-1) ---------------
-
-def _js_concat_string_const(text, name, label):
-    """`const NAME = 'a' + 'b' + ...` (may span lines, may contain \\') → joined str."""
-    m = re.search(r"\bconst\s+" + re.escape(name) + r"\s*=", text)
-    assert m, "%s: expected exactly one `const %s = ...`, not found" % (label, name)
-    lines = []
-    started = False
-    for line in text[m.end():].splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("//"):
-            if not started:
-                continue
-            break
-        started = True
-        lines.append(line)
-        if not stripped.endswith("+"):
-            break
-    blob = "\n".join(lines)
-    parts = re.findall(r"'((?:\\'|[^'])*)'", blob)
-    assert parts, "%s: `%s` has no string literal parts" % (label, name)
-    return "".join(p.replace("\\'", "'") for p in parts)
-
-
-def _rubric_doc_severity_section():
-    """Home: review-base.md 'Document-review severity' section (the blocking-bar rules)."""
-    text = _read(os.path.join("rubric", "review-base.md"))
-    m = re.search(r"## Document-review severity\b.*?(?=\n## )", text, re.DOTALL)
-    assert m, "rubric: Document-review severity section not found"
-    return m.group(0)
-
-
-def test_doc_severity_frame_single_sourced():
-    """CONVENTIONS §11: DOC_SEVERITY_FRAME paraphrases the rubric's document-review severity
-    rules into the doc reviewer + synthesis prompts. The rubric section is the home; the JS
-    steering string is the copy-holder — both must stay aligned, and a rubric edit must break
-    CI here rather than letting the prompt silently drift (the #397 FR-1 class)."""
-    rubric = _rubric_doc_severity_section()
-    sr = _read(os.path.join("lib", "showrunner.js"))
-    frame = _js_concat_string_const(sr, "DOC_SEVERITY_FRAME", "showrunner.js")
-
-    assert 'Document-review severity' in frame, (
-        "showrunner.js DOC_SEVERITY_FRAME must point at the rubric section home")
-    assert "docSection" in frame, (
-        "showrunner.js DOC_SEVERITY_FRAME must steer docSection tagging for document reviews")
-
-    # Anchor phrases read from the rubric home — the steering paraphrase must preserve each.
-    rubric_anchors = [
-        ("blocking bar", r"mislead the build"),
-        ("plan asymmetry", r"plan.*non-blocking|granularity"),
-        ("tasks bar", r"tasks"),
-        ("incident-anchored carve-out", r"unauthenticated|security exemption|corrupt or lose data"),
-        ("ambiguity fail-closed", r"ambiguity.*fail"),
-    ]
-    for label, pattern in rubric_anchors:
-        assert re.search(pattern, rubric, re.IGNORECASE), (
-            "rubric: Document-review severity missing anchor %r" % label)
-        assert re.search(pattern, frame, re.IGNORECASE), (
-            "showrunner.js DOC_SEVERITY_FRAME drifted from rubric on %r" % label)
