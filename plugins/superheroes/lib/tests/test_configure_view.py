@@ -90,3 +90,20 @@ def test_render_shows_brief_check_claude_fallback_when_configured(tmp_path):
     root = _seed_core_and_layer(tmp_path, engine_preferences={"briefCheck": "claude"})
     screen = cv.render(str(tmp_path), root=root)
     assert "brief-check reviewer — claude — opus" in screen
+
+
+def test_collect_threads_root_into_model_tier_resolution(tmp_path, monkeypatch):
+    # Regression (#489): collect() reads core/engine prefs with `root`, so it must resolve the
+    # model-tier profile with the SAME root — else a global-store / custom-root project reads its
+    # tiers from the default store while its core prefs come from the custom one.
+    root = _seed_core_and_layer(tmp_path)
+    captured = {}
+    orig = cv.model_tier_overrides.resolve_profile_path
+
+    def _spy(cwd=None, root=None):
+        captured["root"] = root
+        return orig(cwd, root)
+
+    monkeypatch.setattr(cv.model_tier_overrides, "resolve_profile_path", _spy)
+    cv.collect(str(tmp_path), root=root)
+    assert captured["root"] == root
