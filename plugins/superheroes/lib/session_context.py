@@ -253,18 +253,29 @@ def auto_memory_head(cwd, transcript_path):
     return _read_memory_head(path)
 
 
-# ----------------------------------------------------------------- review discipline
-def _discipline_doc(plugin_root):
-    return os.path.join(os.path.abspath(plugin_root or "."), "rubric", "review-discipline.md")
+# ----------------------------------------------------------------- covenant
+def _covenant_doc(plugin_root):
+    return os.path.join(os.path.abspath(plugin_root or "."), "rubric", "covenant.md")
 
 
-def review_discipline(cwd, plugin_root):
-    """Compact review-discipline note, injected ONLY for a superheroes-calibrated project
-    (a storage-mode registry entry, or any hero calibration evidence). The probe is strictly
-    READ-ONLY — never mode_registry.resolve(), which can backfill-WRITE the registry; a
-    session-start hook must not mutate project state. Any probe error → '' with a breadcrumb
-    (this is guidance; absence is the status quo, and injecting it into non-superheroes
-    projects would be noise)."""
+def covenant(cwd, plugin_root):
+    """The distilled superheroes covenant (`rubric/covenant.md`), injected ONLY for a
+    superheroes-calibrated project (a storage-mode registry entry, or any hero calibration
+    evidence). This REPLACES the older review-discipline-only note — the covenant subsumes
+    its injection (its "review before handback" hard line carries the review convention and
+    points back at the canonical `rubric/review-discipline.md`, which stays put).
+
+    The calibration probe is strictly READ-ONLY — never `mode_registry.resolve()`, which can
+    backfill-WRITE the registry; a session-start hook must not mutate project state. A probe
+    error → '' with a breadcrumb (this is guidance; absence is the status quo, and injecting
+    it into a non-superheroes project would be noise).
+
+    The covenant text is READ from the plugin install (`rubric/covenant.md`), never the
+    project repo — so injection leaves ZERO repo traces in both storage modes. An unreadable
+    covenant on a CALIBRATED project is a genuine failure (the file ships with the plugin),
+    so it is `_note_failure`'d (folded into the in-block diagnostics the owner's agent can
+    read back) rather than treated as a silent absence — a calibrated session must never lose
+    its covenant quietly."""
     try:
         import mode_registry
         calibrated = mode_registry.read_registry(cwd) is not None
@@ -272,20 +283,16 @@ def review_discipline(cwd, plugin_root):
             verdict = mode_registry.evidence_verdict(mode_registry.hero_evidence(cwd))
             calibrated = verdict != "none"
     except Exception as exc:
-        _note_failure("Review discipline", "calibration probe errored (%s)" % type(exc).__name__)
+        _note_failure("Covenant", "calibration probe errored (%s)" % type(exc).__name__)
         return ""
     if not calibrated:
         return ""
-    return (
-        "This project is calibrated with superheroes, whose review convention applies to "
-        "every session working here: **every PR gets a real review before handback**, no "
-        "matter how small the diff or how it was built. Pipeline work reviews itself; a "
-        "direct build ends with `/superheroes:review-code` (or an explicit owner-directed "
-        "review) before the PR is handed back; a review that halts with an open blocker is "
-        "resolved or explicitly owner-accepted in the PR body — never quietly merged. "
-        "\"Too small to review\" is never a reason to skip. Full statement: %s"
-        % _discipline_doc(plugin_root)
-    )
+    path = _covenant_doc(plugin_root)
+    try:
+        return _read_text(path).strip()
+    except Exception as exc:
+        _note_failure("Covenant", "read error for %s (%s)" % (path, type(exc).__name__))
+        return ""
 
 
 # ----------------------------------------------------------------- assemble
@@ -295,7 +302,7 @@ _Rec = collections.namedtuple("_Rec", "name text hint")
 def assemble(cwd, transcript_path, plugin_root, host, char_budget=9000):
     """Compose the injected `additionalContext` block, best-effort, never raising.
 
-    Priority order: resolved roots → review discipline (calibrated projects only)
+    Priority order: resolved roots → covenant (calibrated projects only)
     → project CLAUDE.md → env block → user CLAUDE.md → MEMORY.md head.
     The block stays under char_budget; an oversized
     source is truncated with a marker and stops the walk, and any present source
@@ -322,11 +329,12 @@ def assemble(cwd, transcript_path, plugin_root, host, char_budget=9000):
         records = [
             _Rec("Resolved plugin roots", resolved_roots(plugin_root, host),
                  os.path.join(os.path.abspath(plugin_root or "."), "hosts", "%s-tools.md" % host)),
-            # Second record, immediately after resolved roots: both are small and
-            # constant-size, so placement guarantees the note for any sane budget.
-            # Every variable-size source (each with truncate/omit handling) follows.
-            _Rec("Review discipline", review_discipline(cwd, plugin_root),
-                 _discipline_doc(plugin_root)),
+            # Second record, immediately after resolved roots: resolved roots is small and
+            # constant-size and the covenant is a fixed ~50-line doc, so placement guarantees
+            # the covenant for any sane budget. Every variable-size source (each with
+            # truncate/omit handling) follows.
+            _Rec("Covenant", covenant(cwd, plugin_root),
+                 _covenant_doc(plugin_root)),
             _Rec("Project CLAUDE.md", _read_claude_chain(chain),
                  ", ".join(chain) or None),
             _Rec("Environment", env_block(cwd), None),

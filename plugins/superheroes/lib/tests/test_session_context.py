@@ -13,6 +13,11 @@ import os
 
 import session_context as sc
 
+# The real plugin root (…/plugins/superheroes) — its `rubric/covenant.md` is the file the
+# covenant injection reads. Tests point plugin_root here so they exercise the real covenant
+# text (single source of truth), not a fixture copy that could drift from it.
+_PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(sc.__file__)))
+
 
 # ---------------------------------------------------------------- helpers
 def _mk_repo(d, claude_md=None):
@@ -254,10 +259,10 @@ def test_assemble_budget_truncates_and_accounts_omitted(tmp_path, monkeypatch, c
     assert len(out) <= 1000 + 250
 
 
-def test_assemble_review_discipline_survives_oversized_project_claude_md(tmp_path, monkeypatch):
-    # Review discipline is the second record (after constant-size resolved roots); every
+def test_assemble_covenant_survives_oversized_project_claude_md(tmp_path, monkeypatch):
+    # The covenant is the second record (after constant-size resolved roots); every
     # variable-size source comes after, so an oversized project CLAUDE.md cannot
-    # silently omit the note.
+    # silently omit the ~50-line covenant.
     import mode_registry
     monkeypatch.setattr(mode_registry, "read_registry",
                         lambda cwd, root=None: {"storageMode": "in-repo"})
@@ -266,13 +271,13 @@ def test_assemble_review_discipline_survives_oversized_project_claude_md(tmp_pat
     monkeypatch.setenv("HOME", str(tmp_path / "no-home"))
     main = str(tmp_path)
     _mk_repo(main, claude_md="X" * 20000)
-    out = sc.assemble(main, None, "/plug", "claude", char_budget=9000)
-    assert "### Review discipline" in out
+    out = sc.assemble(main, None, _PLUGIN_ROOT, "claude", char_budget=9000)
+    assert "### Covenant" in out
 
 
-def test_assemble_review_discipline_survives_oversized_memory_head(tmp_path, monkeypatch):
-    # Review discipline is the second record (constant-size); a large memory head comes
-    # after all variable-size sources and cannot silently omit the note.
+def test_assemble_covenant_survives_oversized_memory_head(tmp_path, monkeypatch):
+    # The covenant is the second record (constant-size); a large memory head comes
+    # after all variable-size sources and cannot silently omit it.
     import mode_registry
     monkeypatch.setattr(mode_registry, "read_registry",
                         lambda cwd, root=None: {"storageMode": "in-repo"})
@@ -282,45 +287,48 @@ def test_assemble_review_discipline_survives_oversized_memory_head(tmp_path, mon
     monkeypatch.setenv("HOME", str(tmp_path / "no-home"))
     main = str(tmp_path)
     _mk_repo(main, claude_md="PROJECT\n")
-    out = sc.assemble(main, None, "/plug", "claude", char_budget=9000)
-    assert "### Review discipline" in out
+    out = sc.assemble(main, None, _PLUGIN_ROOT, "claude", char_budget=9000)
+    assert "### Covenant" in out
     assert "truncated" in out or "omitted for space" in out
 
 
-# ---------------------------------------------------------------- review discipline (#190)
-def test_review_discipline_injected_for_calibrated_project(tmp_path, monkeypatch):
-    # A registry entry marks the project calibrated → the compact note is injected,
-    # pointing at the canonical rubric doc under the plugin root.
+# ---------------------------------------------------------------- covenant (#470)
+def test_covenant_injected_for_calibrated_project(tmp_path, monkeypatch):
+    # A registry entry marks the project calibrated → the covenant (rubric/covenant.md,
+    # read from the plugin install) is injected verbatim.
     import mode_registry
     monkeypatch.setattr(mode_registry, "read_registry",
                         lambda cwd, root=None: {"storageMode": "in-repo"})
-    note = sc.review_discipline(str(tmp_path), "/plug")
-    assert "every pr gets a real review" in note.lower()
-    assert "/superheroes:review-code" in note
-    assert os.path.join("/plug", "rubric", "review-discipline.md") in note
+    note = sc.covenant(str(tmp_path), _PLUGIN_ROOT)
+    assert "The superheroes covenant" in note
+    assert "Never merge" in note                       # a hard line
+    assert "Review before handback" in note            # subsumes the review-discipline note
+    assert "superheroes:showrunner" in note and "superheroes:workhorse" in note  # charter pointer
+    # The covenant subsumed the old note: it no longer carries the review-code command string.
+    assert "/superheroes:review-code" not in note
 
 
-def test_review_discipline_via_hero_evidence_when_registry_absent(tmp_path, monkeypatch):
+def test_covenant_via_hero_evidence_when_registry_absent(tmp_path, monkeypatch):
     # No registry record, but hero calibration evidence exists → still calibrated.
     import mode_registry
     monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
     monkeypatch.setattr(mode_registry, "hero_evidence",
                         lambda cwd, root=None, hero_roots=None: {"review-crew": "global"})
-    note = sc.review_discipline(str(tmp_path), "/plug")
-    assert "review-discipline.md" in note
+    note = sc.covenant(str(tmp_path), _PLUGIN_ROOT)
+    assert "The superheroes covenant" in note
 
 
-def test_review_discipline_absent_for_uncalibrated_project(tmp_path, monkeypatch):
-    # No registry, no hero evidence → no note (guidance never leaks into
-    # non-superheroes projects).
+def test_covenant_absent_for_uncalibrated_project(tmp_path, monkeypatch):
+    # No registry, no hero evidence → no covenant (it never leaks into non-superheroes
+    # projects).
     import mode_registry
     monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
     monkeypatch.setattr(mode_registry, "hero_evidence",
                         lambda cwd, root=None, hero_roots=None: {"review-crew": "none"})
-    assert sc.review_discipline(str(tmp_path), "/plug") == ""
+    assert sc.covenant(str(tmp_path), _PLUGIN_ROOT) == ""
 
 
-def test_review_discipline_probe_is_read_only(tmp_path, monkeypatch):
+def test_covenant_probe_is_read_only(tmp_path, monkeypatch):
     # The calibration probe must never invoke write-capable registry paths.
     import mode_registry
 
@@ -331,11 +339,11 @@ def test_review_discipline_probe_is_read_only(tmp_path, monkeypatch):
     monkeypatch.setattr(mode_registry, "write_registry", _write_tripwire)
     monkeypatch.setattr(mode_registry, "read_registry",
                         lambda cwd, root=None: {"storageMode": "in-repo"})
-    note = sc.review_discipline(str(tmp_path), "/plug")
+    note = sc.covenant(str(tmp_path), _PLUGIN_ROOT)
     assert note
 
 
-def test_review_discipline_probe_is_read_only_via_hero_evidence(tmp_path, monkeypatch):
+def test_covenant_probe_is_read_only_via_hero_evidence(tmp_path, monkeypatch):
     # Same write-tripwire guard, but through the absent-registry branch
     # (read_registry → None, then hero_evidence / evidence_verdict).
     import mode_registry
@@ -348,23 +356,71 @@ def test_review_discipline_probe_is_read_only_via_hero_evidence(tmp_path, monkey
     monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
     monkeypatch.setattr(mode_registry, "hero_evidence",
                         lambda cwd, root=None, hero_roots=None: {"review-crew": "in-repo"})
-    note = sc.review_discipline(str(tmp_path), "/plug")
+    note = sc.covenant(str(tmp_path), _PLUGIN_ROOT)
     assert note
 
 
-def test_review_discipline_probe_error_skips_with_breadcrumb(tmp_path, monkeypatch, capsys):
-    # The probe is best-effort: an erroring registry read skips the note (absence is
+def test_covenant_probe_error_skips_with_breadcrumb(tmp_path, monkeypatch, capsys):
+    # The probe is best-effort: an erroring registry read skips the covenant (absence is
     # the status quo) and breadcrumbs to stderr without leaking content.
     import mode_registry
     def _boom(cwd, root=None):
         raise OSError("store unreadable")
     monkeypatch.setattr(mode_registry, "read_registry", _boom)
-    assert sc.review_discipline(str(tmp_path), "/plug") == ""
+    assert sc.covenant(str(tmp_path), _PLUGIN_ROOT) == ""
     err = capsys.readouterr().err
-    assert "Review discipline" in err and "OSError" in err
+    assert "Covenant" in err and "OSError" in err
 
 
-def test_assemble_includes_review_discipline_section_when_calibrated(tmp_path, monkeypatch):
+def test_covenant_unreadable_on_calibrated_project_is_noted_in_block(tmp_path, monkeypatch):
+    # F5: the covenant is a real file read, so on a CALIBRATED project an unreadable
+    # covenant.md (broken install) is a genuine failure — _note_failure'd so it lands in
+    # the in-block diagnostics the owner's agent can read back, not a silent absence.
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry",
+                        lambda cwd, root=None: {"storageMode": "in-repo"})
+    monkeypatch.setattr(sc.store_core, "run_git", lambda *a, **k: None)
+    monkeypatch.setattr(sc.store_core, "get_gitdir", lambda cwd: str(tmp_path / ".git"))
+    monkeypatch.setenv("HOME", str(tmp_path / "no-home"))
+    main = str(tmp_path)
+    _mk_repo(main, claude_md="PROJECT\n")
+    noplugin = str(tmp_path / "noplugin")               # no rubric/covenant.md here
+    out = sc.assemble(main, None, noplugin, "claude")
+    assert "### Covenant" not in out                    # empty covenant → section omitted
+    assert "### Bootstrap diagnostics" in out           # ...but the failure is surfaced
+    assert "Covenant" in out and "read error" in out    # named in-block, no file contents
+
+
+def test_covenant_injection_writes_nothing_to_repo(tmp_path, monkeypatch):
+    # Zero repo traces: the covenant is read from the plugin install, never the project;
+    # a full assemble on a calibrated project leaves the repo's file set unchanged.
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry",
+                        lambda cwd, root=None: {"storageMode": "in-repo"})
+    monkeypatch.setattr(sc.store_core, "run_git", lambda *a, **k: None)
+    monkeypatch.setattr(sc.store_core, "get_gitdir", lambda cwd: str(tmp_path / ".git"))
+    monkeypatch.setenv("HOME", str(tmp_path / "no-home"))
+    main = str(tmp_path)
+    _mk_repo(main, claude_md="PROJECT\n")
+
+    def _snapshot(root):
+        # path -> content, so an in-place overwrite is caught too (not just create/delete).
+        snap = {}
+        for dp, _, fs in os.walk(root):
+            for f in fs:
+                p = os.path.join(dp, f)
+                with open(p, "rb") as fh:
+                    snap[p] = fh.read()
+        return snap
+
+    before = _snapshot(main)
+    out = sc.assemble(main, None, _PLUGIN_ROOT, "claude")
+    after = _snapshot(main)
+    assert before == after                              # nothing written/overwritten in the project
+    assert "### Covenant" in out                        # ...and the covenant did inject
+
+
+def test_assemble_includes_covenant_section_when_calibrated(tmp_path, monkeypatch):
     import mode_registry
     monkeypatch.setattr(mode_registry, "read_registry",
                         lambda cwd, root=None: {"storageMode": "global"})
@@ -373,6 +429,7 @@ def test_assemble_includes_review_discipline_section_when_calibrated(tmp_path, m
     monkeypatch.setenv("HOME", str(tmp_path / "no-home"))
     main = str(tmp_path)
     _mk_repo(main, claude_md="PROJECT\n")
-    out = sc.assemble(main, None, "/plug", "claude")
-    assert "### Review discipline" in out
-    assert "/superheroes:review-code" in out
+    out = sc.assemble(main, None, _PLUGIN_ROOT, "claude")
+    assert "### Covenant" in out
+    assert "Never merge" in out and "superheroes:workhorse" in out
+    assert "/superheroes:review-code" not in out        # covenant replaced the old note

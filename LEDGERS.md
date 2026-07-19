@@ -16,12 +16,21 @@ Every custom mechanism we maintain, the platform primitive that could absorb it,
 still diverge, and the trigger that reopens the decision. Upstream requests are cited,
 never duplicated — corroborate on the existing thread.
 
-| Mechanism | What it is | Platform primitive that could absorb it | Why we still diverge | Re-check trigger |
-|---|---|---|---|---|
-| **Showrunner Workflow bundle** | The whole pipeline (build → review → ship) compiled into one Workflow-tool script (`lib/bundle_showrunner.js` emits it; smoke tests + a script-size cap guard it) | The Workflow tool itself, if scripts gained filesystem/exec access and first-class module composition | Workflow scripts today have no fs/exec and a hard script-size cap, so the spine must bundle its modules and delegate every side effect | Deterministic exec/fs lands upstream (requested: anthropics/claude-code#67684 + family) — re-check the bundle *and* the size-cap workarounds together |
-| **Couriers** | Single-command Bash subagents the spine dispatches as dumb pipes for shell side effects (git, gh, store writes) | Direct exec from Workflow scripts (same upstream request) | The only way a Workflow script can touch the world today; conformance-tested, label-audited, `__badCourierAnswer` fenced | Same trigger as the bundle — couriers exist *only* because scripts cannot exec; they retire the day that ships |
-| **Enforcer (PreToolUse hook)** | Deterministic guardrail layer: owner-authority floor (never merge/release/publish), worktree confinement, role-scoped command policy | Native permission rules (`settings.json` allow/deny/ask) | Native rules are static per-session and can't express per-role, per-worktree, or composed-command policy; the floor must hold *inside* spawned subagents too | Platform permission rules gain dynamic/role-scoped composition, or hooks gain a first-class policy API — walk the enforcer's rule inventory against it |
-| **run_watch** | CLI watcher rendering a live run's `events.jsonl` into an owner-readable progress view | `/workflows` live progress UI + TaskOutput | The native view shows agent/phase structure but not our domain facts (gates, verdicts, park reasons, engine dispatches) in owner language | Native progress surfaces become extensible enough to carry domain rows — or the promise-6 read-back work (agent-as-interpreter) absorbs run_watch's job from the other side |
+The v2 pivot (see [PATH-FORWARD.md](PATH-FORWARD.md); PR #478) retired the deterministic
+execution spine, and with it the four divergences this ledger tracked — recorded in §1.1
+below as B6 requires (a divergence that retires leaves its record, not a blank). No
+maintained spine divergence remains. The remaining known bespoke surface — review-code's
+multi-model review panel — gets its own entry here when the review-code evolution spike
+(PATH-FORWARD §2-B) lands; it is a fresh B6 analysis, not authored on the spine's exit.
+
+### 1.1 Retired divergences (record kept per B6)
+
+| Mechanism | What it was | Why it retired / what absorbed it | Retired in |
+|---|---|---|---|
+| **Showrunner Workflow bundle** | The whole pipeline (build → review → ship) compiled into one Workflow-tool script (`lib/bundle_showrunner.js` emitted it; smoke tests + a script-size cap guarded it) | v2 no longer runs builds — the platform's own agent sessions run them, and superheroes became the discipline layer around them; bespoke orchestration was no longer earned (not the upstream fs/exec primitive landing — the job itself moved off the spine) | PR #478 |
+| **Couriers** | Single-command Bash subagents the spine dispatched as dumb pipes for shell side effects (git, gh, store writes) | Retired with the spine that dispatched them — a session does its own git/gh/store work directly; there is no orchestrator left to pipe side effects for | PR #478 |
+| **Enforcer (PreToolUse hook)** | Deterministic guardrail floor: owner-authority (never merge/release/publish), worktree confinement, role-scoped command policy | v2 relies on the platform permission model + owner presence; the PreToolUse floor was unwired. The owner-authority promise now rides the covenant (a standing order) plus the owner-merges structure, not a bespoke hook | PR #478 |
+| **run_watch** | CLI watcher rendering a live run's `events.jsonl` into an owner-readable progress view | No spine run to watch; the promise-6 trail now rides the durable artifacts (issue, PR, review dispositions) a session leaves, read directly by the owner or their advisor | PR #478 |
 
 ## 2. Anti-opportunities ledger
 

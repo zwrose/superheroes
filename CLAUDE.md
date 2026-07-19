@@ -110,10 +110,11 @@ fix PR, fast-follow):
   or explicitly owner-accepted in the PR body — never quietly merged.
 
 The convention also ships to plugin users: the canonical statement lives in
-`plugins/superheroes/rubric/review-discipline.md`, the SessionStart bootstrap injects
-a compact note into every session on a superheroes-calibrated project (both storage
-modes, zero repo traces), and `configure` offers an in-repo project a durable
-`CLAUDE.md` copy (see CONVENTIONS §7.4).
+`plugins/superheroes/rubric/review-discipline.md`, the SessionStart bootstrap injects the
+distilled covenant (`plugins/superheroes/rubric/covenant.md`, which subsumes the note —
+its review-before-handback hard line still points at the canonical statement) into every
+session on a superheroes-calibrated project (both storage modes, zero repo traces), and
+`configure` offers an in-repo project a durable `CLAUDE.md` copy (see CONVENTIONS §7.4).
 
 ## Branch protection
 

@@ -9,18 +9,24 @@ this file starts changing often, it has become a status doc and something is wro
 ## 1. Who it's for
 
 Superheroes is built for the **moderately technical builder** — the technical product
-manager, the founder, the domain expert who builds. They can describe what they want,
-read code a little, and run a project; many know good engineering when they see it.
-What they lack is the practiced craft of *doing* it — which third-party contract
-demands a round-trip test, which green suite is mocking the very thing it claims to
-test. Recognizing craft and performing it are different skills. They cannot audit an
-agent's work, and they should not have to.
+manager, the founder, the domain expert who builds. They know their way around
+software: they can describe what they want, tell whether the result works, and read
+code a little. What they lack is the practiced craft of the *details* — which
+third-party contract demands a round-trip test, which green suite is mocking the very
+thing it claims to test. That gap is expected, and the system is built around it: **no
+part of the system depends on the owner recognizing good engineering** — a guardrail
+that leans on the owner to catch an engineering problem is not a guardrail, so the
+judgment lives in the structure instead. They cannot audit an agent's work at that
+depth, and they should not have to. So the obligation runs the other way: every
+decision that routes to the owner arrives as plain consequences — what it costs, what
+it risks, what accepting it means — never as a craft call they're presumed able to
+judge.
 
 This person is **the owner** — the product's word for the human with the final say.
 The owner works through an agent already at their side (it is
-where superheroes lives), and delegates **judgment**, not just labor: when they run
-Plan, they are trusting it to find the gotchas they don't know exist; when a readout
-says "reviewed and passing," they will ship on that sentence.
+where superheroes lives), and delegates **judgment**, not just labor: when they hand
+off a build, they are trusting the session to find the gotchas they don't know exist;
+when a readout says "reviewed and passing," they will ship on that sentence.
 
 We build superheroes with superheroes. Every promise and guardrail below is one its own
 developers run behind daily — the bar is that they hold even for experts, because
@@ -66,16 +72,23 @@ What the owner may trust, in order of what they'd feel most betrayed by if broke
 The falsifiable architecture decisions. Each carries its re-check condition — the
 evidence that would change our mind. A bet whose condition never gets checked is dogma.
 
-**B1 — Staged pipeline over freewheeling loops.** Discovery → spec → plan → tasks →
-build → review → ship, with gates between stages — each stage itself a loop with a
-verifiable stop, so this composes loops rather than rejecting them. We bet that for an
-owner who cannot supervise mid-flight, checkpoints at the right altitude beat raw
-flexibility.
-*Re-check:* prescribed steps cost planning, rigidity, and staleness; they buy bounded
-behavior and work our checkers can review *before* it executes. If goal-directed
-execution (a goal plus acceptance criteria) ever matches the pipeline on intent
-fidelity, auditability, honest failure, and cost, we change how build work is specified
-between the checkpoints — never the checkpoints themselves.
+**B1 — Checkpoints at the right altitude, not a deterministic execution spine.**
+Discovery → spec → build → review → ship, with checkpoints between the stages — each a
+loop with a verifiable stop. The owner personally enters at just two: they approve the
+plain-language spec before build, and they do the final review and merge at the end
+(merging is always theirs). Everything in between runs autonomously — the build brief
+is checked by an independent reviewer before code, and the finished work gets an
+independent review before handback; these are checkpoints by construction, not owner
+interruptions. The one mid-flight exception is a genuinely consequential or irreversible
+decision — a migration, a new dependency, an external contract — which comes to the
+owner before the builder commits to it, and even that can be pre-authorized at spec
+time. We bet that for an owner who cannot supervise mid-flight, checkpoints at the right
+altitude beat both raw flexibility and a deterministic execution spine between them.
+*Re-check:* the checkpoints cost the after-the-fact forensic trail a staged execution
+would leave; they buy bounded behavior and work the checkers can review *before* it
+executes. If a fidelity, honest-failure, or auditability regression ever traces to the
+absence of staged execution between the checkpoints, the spine question reopens — the
+checkpoints themselves do not.
 
 **B2 — Plain language can carry the contract.** Everything the owner touches — specs,
 readouts, park reasons, verdicts — is written in their language, and the spec is the
@@ -109,13 +122,13 @@ failure nothing is reporting.
 *Re-check:* any release whose first real run surfaces a fidelity-class surprise means
 this bet's enforcement has a hole; treat it as a broken guarantee, not a bug.
 
-**B6 — Bespoke machinery only where the platform lacks the primitive.** We maintain a
-custom spine (orchestration bundle, couriers, enforcer, watchers) on a platform that
-ships monthly and keeps absorbing jobs like ours. Every divergence is a *named decision
-with a re-check trigger*, recorded in a ledger — never inertia.
+**B6 — Bespoke machinery only where the platform lacks the primitive.** On a platform
+that ships monthly and keeps absorbing jobs like ours, every bespoke divergence we keep
+is a *named decision with a re-check trigger*, recorded in a ledger — never inertia;
+when the platform grows a primitive that makes one of ours redundant, ours retires.
 *Re-check:* a standing orientation review — monthly-ish, deliberately independent of
-the release path — walks the ledger against the platform's current primitives; upstream
-requests are cited, never duplicated.
+the release path — walks the ledger against the platform's current primitives, retiring
+what is no longer earned and citing upstream requests rather than duplicating them.
 
 **B7 — Evidence before machinery.** No producer without a named consumer. No new gate
 without an escape that penetrated every existing layer. No growth during stabilization
@@ -158,9 +171,9 @@ every promise above, this document wouldn't have needed writing. Promises are al
 precede their receipts; forgetting they're owed is the defect. So, applied to itself,
 promise 4 means this file needs receipts:
 
-- **Heroes cite it.** Discovery, Plan, and the review rubric reference the promise and
-  bets where they enforce them; a hero behavior that can't be traced to a promise is a
-  candidate for the anti-opportunities ledger.
+- **Heroes cite it.** Discovery, the review rubric, and the session covenant reference
+  the promise and bets where they enforce them; a hero behavior that can't be traced to
+  a promise is a candidate for the anti-opportunities ledger.
 - **Releases walk it.** Release evaluation maps each release's headline claims to
   promise 4 (claims carry receipts) — a deferral is stated in the evidence, loudly.
 - **Orientation reviews re-check the bets.** On a standing monthly-ish cadence,
