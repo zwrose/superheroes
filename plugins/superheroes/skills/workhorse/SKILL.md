@@ -65,14 +65,24 @@ high-tier, the default is a **cross-vendor reviewer at comparable tier**; a Clau
 reviewer is the fallback **only with disclosed degradation** (never a silent downgrade). One pass:
 fold its findings in, or dispute each with a reason. Post the dispositions.
 
-## 5. Decompose into work orders
+## 5. Preflight & live-probe — before the autonomous stretch
+
+Before you go heads-down, run the project preflight and **live-probe every interactive-approval tool
+the plan will touch** — approval state can't be read from config, only *exercised*: the browser tool
+for test-pilot (connect + navigate to the dev origin + snapshot), the cross-vendor CLI (one
+authenticated no-op), and `gh` auth. A probe failure surfaces to the owner **now, while they're
+present** — never enter autonomy with an unproven interactive tool, or you park at the first approval
+card (potentially mid-night). The preflight's checklist is owned by configure/preflight (**#472**) —
+cite it, don't restate it.
+
+## 6. Decompose into work orders
 
 Break the build into scoped **work orders**. **Independent orders run in parallel by default, each
 in its own isolated worktree** (native subagent worktree isolation) — you integrate the branches.
 Sequential/dependent orders may ride the session worktree. **Subagents always run flat/synchronous**
 — never a background agent that spawns another background agent (the notification chain breaks).
 
-## 6. Delegate every implementation (no direct-typing exception)
+## 7. Delegate every implementation (no direct-typing exception)
 
 **All implementation is delegated — no direct-typing exception of any size.** You dispatch each
 work order to an implementer under the **shared implementer contract**
@@ -87,13 +97,13 @@ Its terms live in that one home — do not restate or paraphrase them here. Choo
 **model tier deliberately** — never let a subagent silently inherit your (high) session tier; tier
 the work and disclose it.
 
-## 7. Verify — re-run every receipt yourself
+## 8. Verify — re-run every receipt yourself
 
 **Verification authority never delegates.** Every receipt an implementer claims — tests pass, types
 clean, build green — **you re-run yourself and read the raw output**. An implementer's claim is an
 *input* to your verification, never a substitute for it. Run the **full local gates** and **watch CI**.
 
-## 8. Test-pilot — plan and seed here; execute via a pilot subagent
+## 9. Test-pilot — plan and seed here; execute via a pilot subagent
 
 - **You** do test-pilot **planning and seeding** (invoke `test-pilot-plan`).
 - **Execution is a pilot subagent** (`agents/pilot.md`) that **observes and reports structured
@@ -101,7 +111,7 @@ clean, build green — **you re-run yourself and read the raw output**. An imple
 - The skill-side change — `test-pilot-execute` becoming observe-and-report, dropping its own fix loop
   — is tracked in **issue #483**, not this PR; this charter states the observe-only contract now.
 
-## 9. Review before handback, then grade re-review by the delta
+## 10. Review before handback, then grade re-review by the delta
 
 Run **`review-code`** (as-built) with **vendor-complementary seats** composed against the
 implementers' vendors. Resolve findings or disclose each in a **dispositions table** in the PR body;
@@ -116,15 +126,15 @@ whole PR for a small change:
 | a fix **inside an already-reviewed surface** | scoped single-reviewer pass on the diff-since-last-review |
 | new surface/behavior, or anything that invalidates a prior review conclusion | full loop |
 
-## 10. Hand back the ready PR
+## 11. Hand back the ready PR
 
 Open a **ready** (not draft) PR: the **build brief + dispositions table + receipts + disclosures**.
 **Keep the PR body current** — edit it in place so it reads correct top to bottom. **You never
 merge** — hand back to the owner.
 
-## 11. Post-handback loop & park protocol
+## 12. Post-handback loop & park protocol
 
-Address owner review comments (re-review graded by the delta, §9); keep the body correct. When you
+Address owner review comments (re-review graded by the delta, §10); keep the body correct. When you
 are **blocked on the owner** — a consequential flag, an ambiguous route, a decision you cannot make
 — **park honestly with receipts**: what is done, what is blocked, what you need. A truthful park
 beats a false ship.
