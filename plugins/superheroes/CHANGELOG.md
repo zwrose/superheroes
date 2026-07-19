@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.15.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.14.0...superheroes-v0.15.0) (2026-07-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **superheroes:** retire the plan/tasks legs — The Architect narrows to the what ([#479](https://github.com/zwrose/superheroes/issues/479))
+* **superheroes:** retire the execution spine ([#478](https://github.com/zwrose/superheroes/issues/478))
+
+### Features
+
+* **superheroes:** add the showrunner and workhorse charter skills ([#481](https://github.com/zwrose/superheroes/issues/481)) ([2e056c0](https://github.com/zwrose/superheroes/commit/2e056c0a4a79de1631bcf2bf728d370bbbc5249e))
+* **superheroes:** PHILOSOPHY amendments, the covenant, and SessionStart injection ([#480](https://github.com/zwrose/superheroes/issues/480)) ([a4771b2](https://github.com/zwrose/superheroes/commit/a4771b2e0697a2db8df57d8a45848f27feb36d17))
+* **superheroes:** retire the execution spine ([#478](https://github.com/zwrose/superheroes/issues/478)) ([9e11860](https://github.com/zwrose/superheroes/commit/9e11860cf2b79b2264d9025ee8a259280040d407))
+* **superheroes:** retire the plan/tasks legs — The Architect narrows to the what ([#479](https://github.com/zwrose/superheroes/issues/479)) ([8680b0e](https://github.com/zwrose/superheroes/commit/8680b0e119672ec8b398c7a31943f8068140b2f9))
+* **superheroes:** S1 train 5 — configure trim + v2 model/engine knobs ([#488](https://github.com/zwrose/superheroes/issues/488)) ([d21ba68](https://github.com/zwrose/superheroes/commit/d21ba685badeabab1426e4e471b8c185aa5ed89a))
+* **superheroes:** S1 train 5b — minimal owner-authority gate (the never-merge floor) ([#487](https://github.com/zwrose/superheroes/issues/487)) ([bf75305](https://github.com/zwrose/superheroes/commit/bf75305b33b68aa038704605b80127d7dec24c96))
+* **superheroes:** S1 train 6 — docs finale; the discipline layer is the product ([#492](https://github.com/zwrose/superheroes/issues/492)) ([cc2fe1e](https://github.com/zwrose/superheroes/commit/cc2fe1e01d174fc408247578d92e27a0a9b16e38))
+* **superheroes:** test-pilot-execute becomes observe-and-report — fixes route to the caller ([#486](https://github.com/zwrose/superheroes/issues/486)) ([ef8c07d](https://github.com/zwrose/superheroes/commit/ef8c07d7fd64e63be42896334dbf285a02b78e40))
+
+
+### Bug Fixes
+
+* **superheroes:** journal truth under courier retries — idempotent external_dispatch appends + loud re-execute-and-discard disclosure ([#459](https://github.com/zwrose/superheroes/issues/459)) ([c920425](https://github.com/zwrose/superheroes/commit/c92042599a2764a2189250dd5677b55a0151c842))
+* **superheroes:** launch test-pilot dev server in the build worktree + honor its .env.local PORT ([#451](https://github.com/zwrose/superheroes/issues/451)) ([#454](https://github.com/zwrose/superheroes/issues/454)) ([873d6f8](https://github.com/zwrose/superheroes/commit/873d6f875c58760294d90138fac13fc92162ac70))
+* **superheroes:** manual-completion receipt + terminal checkpoint state ([#450](https://github.com/zwrose/superheroes/issues/450)) ([#453](https://github.com/zwrose/superheroes/issues/453)) ([0381a93](https://github.com/zwrose/superheroes/commit/0381a938935e2076144cfbc951c146e2c5470647))
+* **superheroes:** post-[#472](https://github.com/zwrose/superheroes/issues/472) calibration nits — degenerate engine dict, cursor probe model, override root threading ([#490](https://github.com/zwrose/superheroes/issues/490)) ([2943a63](https://github.com/zwrose/superheroes/commit/2943a63912c7d34cca531bba7898107d737e298b))
+* **superheroes:** post-dispatch primary-repo confinement tripwire for engine subprocesses ([#355](https://github.com/zwrose/superheroes/issues/355)) ([#457](https://github.com/zwrose/superheroes/issues/457)) ([e28b642](https://github.com/zwrose/superheroes/commit/e28b642a69ec8d5a42e5a38752e7b745500f2bb1))
+* **superheroes:** register freeze_run_rules + record_deferred at the composed-exact chokepoint, make self-management prompts classifier-benign ([#413](https://github.com/zwrose/superheroes/issues/413), [#449](https://github.com/zwrose/superheroes/issues/449)) ([#455](https://github.com/zwrose/superheroes/issues/455)) ([11cec3d](https://github.com/zwrose/superheroes/commit/11cec3d76edb689e0aa507ab28685fdb7a3c4bae))
+* **superheroes:** scrub staging-denial reasons before they journal ([#383](https://github.com/zwrose/superheroes/issues/383)) ([#452](https://github.com/zwrose/superheroes/issues/452)) ([776a504](https://github.com/zwrose/superheroes/commit/776a504ababbc7c8b9a819c1ba6a4856688c1921))
+
+
+### Chores
+
+* **superheroes:** rip the orphaned legacy engine roles (author/author-plan/planAuthor/builder) ([#491](https://github.com/zwrose/superheroes/issues/491)) ([3eaf143](https://github.com/zwrose/superheroes/commit/3eaf1436395dedc0e710f950712cfb06796c2fc3)), closes [#485](https://github.com/zwrose/superheroes/issues/485)
+
 ## [0.14.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.13.2...superheroes-v0.14.0) (2026-07-15)
 
 
