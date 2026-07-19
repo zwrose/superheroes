@@ -27,8 +27,8 @@
     "superheroes/test-pilot-execute": [
       "test-pilot plan should be exercised before human spot-check",
       "Drives the app via a browser MCP",
-      "fixes bugs it finds",
-      "posts a results comment"
+      "posts a results comment",
+      "Observe-and-report only"
     ],
     "superheroes/test-pilot-init": [
       "refresh test-pilot's profile, seeding blocks, and browser tooling layer",
