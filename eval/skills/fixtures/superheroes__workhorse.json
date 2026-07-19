@@ -2,7 +2,7 @@
   "should_fire": [
     "workhorse this issue",
     "build issue #481 and take it to a ready PR",
-    "rip #481",
+    "build #481",
     "run the builder on this routed issue",
     "orchestrate the build for this issue — brief, delegate, review, ready PR"
   ],

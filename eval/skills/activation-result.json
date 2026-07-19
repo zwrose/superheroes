@@ -1515,21 +1515,21 @@
     },
     {
       "skill": "superheroes/workhorse",
-      "phrase": "rip #481",
+      "phrase": "build #481",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
       "skill": "superheroes/workhorse",
-      "phrase": "rip #481",
+      "phrase": "build #481",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
       "skill": "superheroes/workhorse",
-      "phrase": "rip #481",
+      "phrase": "build #481",
       "direction": "should_fire",
       "run": 2,
       "activated": true
