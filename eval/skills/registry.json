@@ -60,6 +60,20 @@
       "the single front door for superheroes configuration",
       "see the whole project's calibration on one screen",
       "move a project between in-repo and out-of-repo storage"
+    ],
+    "superheroes/showrunner": [
+      "run the long-lived advisor session for a superheroes project",
+      "sizes and routes incoming work (build-ready vs. needs-discovery)",
+      "vets every PR from its artifacts against the issue/spec and the build brief",
+      "coordinates releases",
+      "Not the builder (that is workhorse)"
+    ],
+    "superheroes/workhorse": [
+      "run a disposable builder session on one routed, approved issue",
+      "Writes a six-item build brief",
+      "checked pre-code by one fresh reviewer a tier up and cross-vendor by default",
+      "hands back a ready PR",
+      "Not the advisor (that is showrunner)"
     ]
   }
 }

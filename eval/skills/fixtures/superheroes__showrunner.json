@@ -1,0 +1,15 @@
+{
+  "should_fire": [
+    "run the showrunner on this project",
+    "be the advisor for this repo and tell me what to build next",
+    "vet this PR from its artifacts against its issue and build brief",
+    "is this incoming issue build-ready or does it need discovery first?",
+    "split this too-big issue into a small epic of mergeable issues before a builder takes it"
+  ],
+  "should_not_fire": [
+    "build this approved issue and take it to a ready PR",
+    "turn this fuzzy idea into an owner-approved spec",
+    "review the code changes on this branch for bugs before merging",
+    "sweep the whole repo for accumulated technical debt"
+  ]
+}
