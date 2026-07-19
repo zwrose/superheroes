@@ -25,7 +25,7 @@ approve on the owner's behalf — that advisory posture (improve and report, nev
 `passed`) is what keeps the owner the spec's sole gate authority. See the base rubric's
 verdict mapping.
 
-This is the **Spec leg of the superheroes review trio** — the automated *spec-review*
+This is the **spec leg of the superheroes Review Crew** — the automated *spec-review*
 the-architect's `discovery` skill calls (an automated **review**, not a gate: it never
 grants `passed`). Read the base rubric (`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-base.md`)
 for severity calibration and the verification rules every finding must pass; if anything
@@ -38,7 +38,7 @@ below contradicts the base rubric, the base rubric wins.
 > has no gate to reset either).
 
 Spec review is about the **requirements**, not code or design. The spec is plain-language,
-owner-facing, and **carries no technical *how*** (that is the `plan`). The reviewers' job is
+owner-facing, and **carries no technical *how*** (that stays with the build). The reviewers' job is
 to flag where the spec is **vague, unverifiable, internally inconsistent, missing a
 significant unhappy path, or leaking implementation** — not to propose a technical approach
 (proposing the *how* here is itself a finding).
@@ -258,7 +258,7 @@ Base rubric (binding) > CLAUDE.md (conventions) > profile (adder over CLAUDE.md)
 
 ## The spec is the *what*, owner-facing, NO tech
 The spec is plain-language requirements the owner co-authored. It must carry **no
-implementation/how** (libraries, schemas, APIs, frameworks) — that is the `plan`.
+implementation/how** (libraries, schemas, APIs, frameworks) — that stays with the build.
 **Proposing a technical approach is itself out of scope here; flag tech that LEAKED
 into the spec, don't add more.** A good spec is:
 - **Functional requirements in EARS** (`When`/`While`/`Where`/`If-Then` + "the
@@ -270,7 +270,7 @@ into the spec, don't add more.** A good spec is:
 - **Significant unhappy paths covered** (the coverage checklist: empty/first-run,
   invalid input, boundaries, errors, access/permissions, duplicates/double-actions,
   concurrent use, misuse/abuse, reach) — each owner-facing area Specify / Defer-to-
-  plan / N-A. A missing significant unhappy path is the #1 spec gap.
+  build / N-A. A missing significant unhappy path is the #1 spec gap.
 - **Non-functional requirements as outcomes with a fit-criterion** (e.g. "a page
   they wait on responds within 2 seconds"), never as a mechanism.
 - **UI/UX references the Claude Design handoff output**, not a reinterpretation.
@@ -301,14 +301,14 @@ into the spec, don't add more.** A good spec is:
   (no two that contradict)? Is anything specified that isn't this work-item's job?
 
 ## Out of scope at spec time
-- Proposing or grading a technical approach (that is the `plan`; only flag tech that
+- Proposing or grading a technical approach (that stays with the build; only flag tech that
   leaked in).
 - Wording/style preferences that don't affect clarity or verifiability.
 
 ## Verification rules
 - `file:line` citation required — cite the spec heading/requirement + line number.
 - Before flagging "missing unhappy path X", check it isn't already covered under a
-  different heading or tagged Defer-to-plan / N-A.
+  different heading or tagged Defer-to-build / N-A.
 - Before flagging "vague", confirm there is no acceptance criterion elsewhere that
   pins it.
 
@@ -373,7 +373,7 @@ Each round:
 1. **Review.** (Round 1: the specialists dispatched in §3 have already written `$SESSION_DIR/findings-*.json`.) For round > 1, dispatch **exactly the `dims_to_run` the step-8 gate emitted** — no more, no fewer, each at its listed tier's model (§2) — per §3 against the freshly-copied `$SESSION_DIR/spec.md`. The schedule is script-owned: do not add, drop, or re-tier a dimension (a skipped dimension carries its prior high-confidence clean result; after compaction re-emit the round's schedule with `spec_loop_plan.py plan --session-dir "$SESSION_DIR" --round <N>`). Then, every round (round 1 included), record the executed evidence: run `python3 "$ROOT_DIR/lib/spec_loop_plan.py" record --session-dir "$SESSION_DIR" --round <N>`; if its `escalate` list is non-empty (a missing/malformed findings file, or a low-confidence `reviewer`-tier result), re-dispatch **just those dimensions once** at `reviewer-deep` and run `record` again — it never asks twice.
 2. **Compile** per §4 into `$SESSION_DIR/compiled.json` with verdict.
 3. **Effective findings** = `compiled.findings` whose identity is NOT in the `skip-set`.
-4. **Form POV + classification for every effective finding.** Per the base rubric's "Orchestrator POV", from a targeted read of the cited requirement in `$SESSION_DIR/spec.md`, emit for each finding a **recommendation** (`Fix` = revise the spec; `Defer` = legitimately defer-to-plan; `Skip` = not worth a change) + one-sentence rationale + High/Low confidence, and a **classification** (`mechanical` = one obvious edit, e.g. rephrasing a requirement into EARS or adding an acceptance criterion; `judgment` = a real requirements question only the owner can answer — e.g. "what SHOULD happen on a double-submit?").
+4. **Form POV + classification for every effective finding.** Per the base rubric's "Orchestrator POV", from a targeted read of the cited requirement in `$SESSION_DIR/spec.md`, emit for each finding a **recommendation** (`Fix` = revise the spec; `Defer` = legitimately defer-to-build; `Skip` = not worth a change) + one-sentence rationale + High/Low confidence, and a **classification** (`mechanical` = one obvious edit, e.g. rephrasing a requirement into EARS or adding an acceptance criterion; `judgment` = a real requirements question only the owner can answer — e.g. "what SHOULD happen on a double-submit?").
    **A genuine requirements question is a `judgment` finding for the owner, never an invented answer.** review-spec must not fabricate a requirement the owner never stated; surface it.
 5. **Print findings in chat** — grouped by spec section, each with its POV line. Do **not** write these to a file.
 6. **Auto-revise.** For each effective finding where `recommendation == Fix` AND `classification == mechanical`, edit the spec at `$SPEC_PATH` directly (EARS rephrasing, adding a missing acceptance criterion, removing leaked tech, splitting a compound requirement). Make these edits without asking. Keep the owner's voice; never invent a behavior the owner didn't state.
@@ -394,8 +394,8 @@ Each round:
    the terminal summary with their reverse-path/expiry, per `escalation-base.md`. **Advisory note:**
    review-spec is advisory (the spec is **owner-gated** — the owner approves it at Discovery's
    final-approval gate regardless), so more of its blocking findings route to **present-to-owner**
-   than in the plan/tasks legs; that is correct by construction, not a regression — for a genuine
-   requirements question the owner's answer becomes the requirement (never an invented answer).
+   than in the certifying build-review leg; that is correct by construction, not a regression — for a
+   genuine requirements question the owner's answer becomes the requirement (never an invented answer).
 
    Resolve the rubric for this dispatch once via the wrapper — with
    `REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)` (the project's canonical
@@ -437,7 +437,7 @@ approval — see below — but it can never grant one; that is the advisory inva
 **Stale-approval guard.** review-spec normally runs *before* approval (Discovery step 7,
 gate `pending`). But if it is **re-run on an already-approved spec** (`gates.review: passed`)
 **and makes any revision**, the revision invalidates the owner's approval — the owner
-approved the *old* content, and plan's HARD-GATE reads `gates.review` **programmatically**
+approved the *old* content, and the build reads `gates.review` **programmatically**
 (it can't see a chat warning). So **reset the gate to `pending`** — marking "needs
 (re-)approval". Resetting is advisory-consistent: review-spec *revokes* a stale approval, it
 never *grants* one. Do this **only when this run actually revised an already-`passed`
@@ -477,9 +477,30 @@ After the loop exits, print a terminal summary in chat:
   READY for owner review"`) and a one-line reminder that **the owner's approval is the gate**
   (Discovery records it).
 
+**Durable receipt — post the round history to the linked issue (non-blocking).** Code review
+leaves its receipts on the PR; a doc review must leave them on the issue, or the loop's whole
+history dies in `$SESSION_DIR` — a multi-round run once had to be reconstructed forensically
+because the only record was the transcript. Assemble `$SESSION_DIR/receipt.md` — the final
+verdict, the per-round schedule (dimensions run + tier each round, from the loop state), every
+finding with its disposition (auto-revised / owner-answered / skipped-with-trace), any open
+requirements question, and the count summary (the terminal summary, made durable) — then post
+it to the spec's linked `issue`:
+
+```bash
+ISSUE=$(sed -n 's/^issue:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$SPEC_PATH" | head -1)
+if [ -n "$ISSUE" ] && command -v gh >/dev/null 2>&1; then
+  gh issue comment "$ISSUE" --body-file "$SESSION_DIR/receipt.md" \
+    && echo "receipt posted to issue #$ISSUE" || echo "note: receipt post failed — it stays in chat."
+fi
+```
+
+No linked `issue` (or no `gh`) → say so in chat and continue; the revised `$SPEC_PATH` plus the
+chat summary still stand. The receipt carries only the review summary of an owner-facing spec —
+no secret to scrub.
+
 **Then, after the terminal summary**, run the three non-blocking end-of-run steps from `## Learning Loop & Staleness Nudge`, in order: (1) the **staleness nudge**, (2) the **learning-loop proposal**, then (3) the **provisional-profile confirmation**. All three are placed after the review output and none blocks.
 
-Nothing else is written to the repo — the revised `$SPEC_PATH` is the deliverable (plus the project-level `.claude/review-decisions.json` learning-loop store and, only on a dismissal, the profile's `nudge-ack` map). **The only gate write review-spec can make is the stale-approval reset to `pending` above — it never writes `passed`.**
+Nothing else is written to the repo — the revised `$SPEC_PATH` is the deliverable (plus the project-level `.claude/review-decisions.json` learning-loop store, the round-history receipt on the linked issue, and, only on a dismissal, the profile's `nudge-ack` map). **The only gate write review-spec can make is the stale-approval reset to `pending` above — it never writes `passed`.**
 
 For recurrence handling, coverage decisions, and telemetry, use `plugins/superheroes/reference/review-loop.md` as the shared loop contract; its dimension-skipping, tier-cascade, and final-confirmation levers are **enforced by `spec_loop_plan.py`** (§2, §5) — obey the emitted schedule, do not re-derive it from the contract prose. This skill owns only its leg-specific setup, reviewer framing, and gate-write rules.
 
@@ -489,14 +510,14 @@ Agents flag departures from these — the spec contract (CONVENTIONS §3.2):
 
 - **EARS functional requirements** — `When`/`While`/`Where`/`If-Then` + "the system shall …", one behavior each, no "and/or" chaining.
 - **An acceptance criterion on every functional requirement** — Given-When-Then for a flow, a pass/fail rule for a constraint. A requirement with none is too vague to keep.
-- **Significant unhappy paths covered** — the coverage checklist (empty/first-run, invalid input, boundaries, errors, access, duplicates, concurrency, abuse, reach), each Specify / Defer-to-plan / N-A.
+- **Significant unhappy paths covered** — the coverage checklist (empty/first-run, invalid input, boundaries, errors, access, duplicates, concurrency, abuse, reach), each Specify / Defer-to-build / N-A.
 - **No vague/unmeasurable words** — replaced by a concrete behavior or fit-criterion.
-- **No technical *how*** — no libraries/schemas/APIs/frameworks; that is the `plan`.
+- **No technical *how*** — no libraries/schemas/APIs/frameworks; that stays with the build.
 - **NFRs as outcomes with a fit-criterion**, UI/UX referencing the Claude Design handoff, plus definition of done / assumptions / constraints / out-of-scope.
 
 ## Out of Scope at Spec Time
 
-- **Proposing or grading a technical approach** — that is the `plan`. Only flag tech that leaked into the spec.
+- **Proposing or grading a technical approach** — that stays with the build. Only flag tech that leaked into the spec.
 - **Wording/style preferences** that don't affect clarity or verifiability.
 - **Inventing a requirement the owner never stated** — surface it as a question; never answer it for them.
 
