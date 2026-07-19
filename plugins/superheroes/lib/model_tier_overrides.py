@@ -166,15 +166,18 @@ def update_overrides(profile_path, set_overrides=None, clear_roles=None):
     }
 
 
-def resolve_profile_path(cwd=None):
-    return _resolve_profile_path(cwd)
+def resolve_profile_path(cwd=None, root=None):
+    return _resolve_profile_path(cwd, root)
 
 
-def _resolve_profile_path(cwd=None):
-    """Auto-resolve the review-crew layer (unified) or legacy profile path."""
+def _resolve_profile_path(cwd=None, root=None):
+    """Auto-resolve the review-crew layer (unified) or legacy profile path. `root` threads the
+    control-plane store root through so a global-store / custom-root setup reads its model tiers
+    from the SAME store as the core prefs (else a dropped root silently resolves against the
+    default store)."""
     try:
         import calibration_resolve
-        return calibration_resolve.resolve_profile_path(cwd or os.getcwd())
+        return calibration_resolve.resolve_profile_path(cwd or os.getcwd(), root=root)
     except Exception:
         return None
 

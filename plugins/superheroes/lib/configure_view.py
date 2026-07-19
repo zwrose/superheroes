@@ -62,7 +62,7 @@ def collect(cwd, root=None):
     except Exception:
         health = None
     try:
-        profile = model_tier_overrides.resolve_profile_path(cwd)
+        profile = model_tier_overrides.resolve_profile_path(cwd, root)
         tiers = model_tier_overrides.effective_tiers(profile)
         overrides = model_tier_overrides.load_overrides(profile)
     except Exception:

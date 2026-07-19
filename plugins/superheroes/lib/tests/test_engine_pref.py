@@ -482,3 +482,24 @@ def test_cli_engine_pref_load_emits_json(tmp_path):
     assert json.loads(out.stdout) == {"reviewer": "codex", "implementation": "claude",
                                       "briefCheck": "claude",
                                       "pilot": "claude", "effort": {"build": "low"}}
+
+
+def test_engine_pref_load_error_path_degenerate_carries_every_role_key(capsys, monkeypatch):
+    # main()'s fail-open degenerate (load_engine_prefs raised / returned non-dict) must match the
+    # happy-path schema: briefCheck and pilot included, else a fail-open readout hands the spine a
+    # shape the happy path never would.
+    spec = importlib.util.spec_from_file_location(
+        "engine_pref_load", os.path.join(_LIB, "engine_pref_load.py"))
+    epl = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(epl)
+    import engine_pref as _ep  # the sys.modules instance main() imports at runtime
+
+    def _boom(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(_ep, "load_engine_prefs", _boom)
+    assert epl.main(["engine_pref_load", "--cwd", "."]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert set(EP.ENGINE_ROLE_KEYS) <= set(out)
+    assert out["briefCheck"] == "claude"
+    assert out["pilot"] == "claude"
