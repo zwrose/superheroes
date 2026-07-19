@@ -1,6 +1,6 @@
 ---
 name: workhorse
-description: Use to run the build — Workhorse is the entry point that takes a routed issue all the way to a ready PR — "build this issue", "build this out", "workhorse it", "take this to a PR", "run the builder". It reads the route — build-ready goes straight to the six-item build brief; needs-discovery runs discovery to an owner-approved spec first, in the same session, then builds. As the orchestrator it writes and posts the brief (checked pre-code by a fresh cross-vendor reviewer), decomposes the work into orders, delegates all implementation to tiered subagents or engines under a shared contract, independently re-runs every receipt they claim, orchestrates test-pilot and multi-model review, and hands back a ready PR with a dispositions table and receipts. Never merges, releases, bumps versions, or wires the board. Not advising the project (that is showrunner).
+description: Use to run the build — Workhorse is the entry point that takes a routed issue all the way to a ready PR — "build this issue", "build this out", "workhorse it", "take this to a PR", "run the builder". It reads the route — build-ready needs no discovery step; needs-discovery runs discovery to an owner-approved spec first, in the same session, then builds. As the orchestrator it writes and posts the brief (checked pre-code by a fresh cross-vendor reviewer), decomposes the work into orders, delegates all implementation to tiered subagents or engines under a shared contract, independently re-runs every receipt they claim, orchestrates test-pilot and multi-model review, and hands back a ready PR with a dispositions table and receipts. Never merges, releases, bumps versions, or wires the board. Not advising the project (that is showrunner).
 user-invocable: true
 ---
 
@@ -30,7 +30,8 @@ dispatch never certify their own work, and the review + the advisor's vet sit do
 
 ## 1. Intake — read the route and get the go-ahead
 
-- **build-ready** → the owner starting the issue is your go-ahead; go to the build brief (§4).
+- **build-ready** → the owner starting the issue is your go-ahead; no discovery needed — set up the
+  workspace (§2), run the preflight (§3), then write the brief (§4).
 - **needs-discovery** → run **discovery** yourself in this same session: elicit with the owner →
   spec → **the owner's spec approval is your go-ahead**, *then* build. The Architect stays
   spec-only; you run discovery when the route calls for it.
