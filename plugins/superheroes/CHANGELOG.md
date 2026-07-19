@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.16.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.15.0...superheroes-v0.16.0) (2026-07-19)
+
+
+### Features
+
+* **superheroes:** mandate the DoD disposition table in the workhorse ready-PR contract ([#499](https://github.com/zwrose/superheroes/issues/499)) ([69eca53](https://github.com/zwrose/superheroes/commit/69eca538b79f8e4b6656e18b7362f47465aac4f1))
+
+
+### Bug Fixes
+
+* **superheroes:** launch-mismatch guard — verify session root == target repo before build ([#500](https://github.com/zwrose/superheroes/issues/500)) ([aeeddfb](https://github.com/zwrose/superheroes/commit/aeeddfb23091fc3a6198b05259502e72d656a860)), closes [#496](https://github.com/zwrose/superheroes/issues/496)
+
+
+### Chores
+
+* **superheroes:** front-half skills v2 prose pass — retire stale plan/tasks framing ([#498](https://github.com/zwrose/superheroes/issues/498)) ([1beac19](https://github.com/zwrose/superheroes/commit/1beac19bd2149985d178b84132d0f358361320b2))
+
 ## [0.15.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.14.0...superheroes-v0.15.0) (2026-07-19)
 
 
