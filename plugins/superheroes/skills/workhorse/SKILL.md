@@ -163,7 +163,12 @@ a **dispatch provenance** section — each dispatch (the brief-check reviewer, e
 pilot, the review-code seats) with the **engine + model** it ran on, so the advisor can vet what ran
 without your context — plus **any follow-ups the advisor should file**: out-of-scope discoveries,
 deferred work, or issues you noticed but cannot file yourself (you never wire the board). List them
-plainly in the PR so the advisor can turn them into issues. **Keep the PR body current** — edit it
+plainly in the PR so the advisor can turn them into issues. The PR body also carries a **DoD
+disposition table** (the `superheroes:dod-table` marker) against the issue/spec — one row per
+Definition-of-Done bullet, each **done** (with an evidence pointer) or **deferred** (with a filed
+issue and a one-line reason). This is distinct from the review dispositions table above (that grades
+review findings; this grades every spec'd claim shipped/deferred/dropped) and is the honesty marker
+the review seat verifies (CONVENTIONS `§10.7`, `rubric/review-discipline.md`). **Keep the PR body current** — edit it
 in place so it reads
 correct top to bottom. **You never merge** — hand back to the owner.
 

@@ -566,9 +566,10 @@ Two PR-body markers from the retired execution spine survive independently of it
   per spec DoD bullet, each `done` (with an evidence pointer) or `deferred` (with a
   filed issue and reason). The **deterministic code gate** that used to seed and park on
   this table (`pr_entry.py`/`dod_gate.py`) retired with the execution spine (#478); the
-  table now survives only as the convention `rubric/review-discipline.md` documents —
-  no v2 session charter currently mandates authoring it (a gap worth flagging here, not
-  asserted as closed).
+  table now survives as the convention `rubric/review-discipline.md` documents —
+  the **workhorse** charter's ready-PR section (§11) mandates authoring it and
+  **review-code**'s review seat verifies it in PR mode (the deterministic gate is not
+  reinstated; the mandate and the seat are the enforcement).
 
 Both are cited by `rubric/review-discipline.md`, the canonical statement of the band's
 review convention (no unreviewed PRs, §7.4).
