@@ -27,8 +27,8 @@ if _LIB_DIR not in sys.path:
 # excluded: it has no config key (the session model is not owner-configurable, so it must
 # never be silently overridable via this block). A role not in this set is an owner typo
 # and is dropped (fail-open to the default).
-KNOWN_ROLES = ("reviewer", "reviewer-deep", "mechanical", "synthesis", "fixer", "author",
-               "builder", "pr-body", "author-plan", "implementer", "pilot")
+KNOWN_ROLES = ("reviewer", "reviewer-deep", "mechanical", "synthesis", "fixer",
+               "pr-body", "implementer", "pilot")
 KNOWN_MODELS = ("haiku", "sonnet", "opus", "fable")
 
 _HEADING = re.compile(r"^\s*##\s+[Mm]odel tiers\s*$")

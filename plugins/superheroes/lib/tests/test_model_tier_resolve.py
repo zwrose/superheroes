@@ -45,10 +45,9 @@ def test_core_error_fails_open_for_reviewer_deep(capsys, monkeypatch):
 
 
 def test_embedded_fallback_matches_the_core():
-    # _FALLBACK re-encodes the core's per-role resolution (DEFAULT_TIERS + split roles like
-    # author-plan) for the degrade path; guard against silent drift so the fallback never
-    # serves a stale tier table. The core is now the in-tree sibling (repointed from
-    # plugins/superheroes/lib/model_tier.py).
+    # _FALLBACK re-encodes the core's per-role resolution (DEFAULT_TIERS) for the degrade path;
+    # guard against silent drift so the fallback never serves a stale tier table. The core is now
+    # the in-tree sibling (repointed from plugins/superheroes/lib/model_tier.py).
     core = _load(os.path.join(_HERE, "..", "model_tier.py"), "model_tier_core")
     assert MTR._FALLBACK == {r: core.resolve_model(r) for r in core.ROLES}
 
@@ -58,16 +57,12 @@ def test_wrapper_cli_forwards_context(capsys):
     assert rc == 0 and out["model"] == "opus" and out["degraded"] is False
 
 
-def test_author_role_resolves_to_opus():
-    # front-half (#88): the new `author` role (produce-plan / produce-tasks) is Opus, registered
-    # in all three pinned-equal dicts (DEFAULT_TIERS, KNOWN_ROLES, _FALLBACK).
-    core = _load(os.path.join(_HERE, "..", "model_tier.py"), "model_tier_core_author")
-    mto = _load(os.path.join(_HERE, "..", "model_tier_overrides.py"), "model_tier_overrides_author")
-    assert core.resolve_model("author") == "opus"
-    assert core.DEFAULT_TIERS.get("author") == "opus"
-    assert core.resolve_model("author-plan") == "opus"   # split role: resolves as author by default
-    assert MTR._FALLBACK == {r: core.resolve_model(r) for r in core.ROLES}
+def test_known_roles_mirror_core_roles_minus_orchestrator():
     # KNOWN_ROLES mirrors core.ROLES minus `orchestrator` (deliberately excluded — no config key).
+    # Guards the pinned-equal dicts (DEFAULT_TIERS, KNOWN_ROLES, _FALLBACK) against silent drift.
+    core = _load(os.path.join(_HERE, "..", "model_tier.py"), "model_tier_core_roles")
+    mto = _load(os.path.join(_HERE, "..", "model_tier_overrides.py"), "model_tier_overrides_roles")
+    assert MTR._FALLBACK == {r: core.resolve_model(r) for r in core.ROLES}
     assert set(mto.KNOWN_ROLES) == set(core.ROLES) - {"orchestrator"}
 
 

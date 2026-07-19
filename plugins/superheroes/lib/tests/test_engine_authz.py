@@ -95,7 +95,7 @@ def test_codex_probe_uses_configured_write_pins(tmp_path, monkeypatch):
     # a project pinned entirely to an older family is not falsely marked not-ready by a hard sol probe.
     import engine_pref
     monkeypatch.setattr(engine_pref, "load_engine_prefs",
-                        lambda cwd, root=None: {"codexModels": {"builder": "gpt-5.5",
+                        lambda cwd, root=None: {"codexModels": {"implementer": "gpt-5.5",
                                                                 "fixer": "gpt-5.5"}})
     seen = {}
     def run(args, **k):
@@ -106,11 +106,11 @@ def test_codex_probe_uses_configured_write_pins(tmp_path, monkeypatch):
 
 
 def test_codex_probe_clamps_to_sol_floor_when_a_write_role_is_unpinned(tmp_path, monkeypatch):
-    # #409 premortem regression: with builder pinned to gpt-5.5 but fixer UNPINNED (fixer derives a
-    # GPT-5.6 tier model), the probe must clamp up to the sol floor — never under-test at gpt-5.5.
+    # #409 premortem regression: with implementer pinned to gpt-5.5 but fixer UNPINNED (fixer derives
+    # a GPT-5.6 tier model), the probe must clamp up to the sol floor — never under-test at gpt-5.5.
     import engine_pref
     monkeypatch.setattr(engine_pref, "load_engine_prefs",
-                        lambda cwd, root=None: {"codexModels": {"builder": "gpt-5.5"}})
+                        lambda cwd, root=None: {"codexModels": {"implementer": "gpt-5.5"}})
     seen = {}
     def run(args, **k):
         seen["argv"] = args
@@ -119,9 +119,9 @@ def test_codex_probe_clamps_to_sol_floor_when_a_write_role_is_unpinned(tmp_path,
     assert seen["argv"][seen["argv"].index("-m") + 1] == "gpt-5.6-sol"
 
 
-def test_codex_probe_clamps_to_sol_floor_when_builder_is_unpinned(tmp_path, monkeypatch):
-    # #409 symmetric to the above: fixer pinned to gpt-5.5, builder UNPINNED (derives a GPT-5.6 tier
-    # model) -> the probe clamps up to the sol floor. Exercises the builder-unpinned write-role axis.
+def test_codex_probe_clamps_to_sol_floor_when_implementer_is_unpinned(tmp_path, monkeypatch):
+    # #409 symmetric to the above: fixer pinned to gpt-5.5, implementer UNPINNED (derives a GPT-5.6
+    # tier model) -> the probe clamps up to the sol floor. Exercises the implementer-unpinned axis.
     import engine_pref
     monkeypatch.setattr(engine_pref, "load_engine_prefs",
                         lambda cwd, root=None: {"codexModels": {"fixer": "gpt-5.5"}})
@@ -176,7 +176,7 @@ def test_codex_probe_reads_pin_from_core_md_end_to_end(tmp_path, monkeypatch):
     cm.write(repo, {"verifyCommand": "npm test", "stackTags": [], "threatModel": "x",
                     "patterns": "", "enginePreferences": {
                         "implementation": "codex",
-                        "codexModels": {"builder": "gpt-5.5", "fixer": "gpt-5.5"}}},
+                        "codexModels": {"implementer": "gpt-5.5", "fixer": "gpt-5.5"}}},
              "confirmed", root=store, now="2026-06-30")
     seen = {}
     def run(args, **k):

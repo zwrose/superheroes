@@ -85,7 +85,7 @@ action that owns it, leaving the rest of the calibration untouched:
 
 - **Pin a concrete Codex model for one role** → keep the provider-neutral `## Model tiers` block
   unchanged and write the pin under `core.md`'s `enginePreferences.codexModels`. Valid role keys are
-  `reviewer`, `reviewer-deep`, `builder`, `fixer`, `author-plan`, `implementer`, and `pilot`; valid
+  `reviewer`, `reviewer-deep`, `fixer`, `implementer`, and `pilot`; valid
   model IDs are `gpt-5.5`,
   `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`. Codex tier map:
   haiku=gpt-5.6-luna, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol, fable=gpt-5.6-sol.

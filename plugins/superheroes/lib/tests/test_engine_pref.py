@@ -59,20 +59,6 @@ def test_resolve_effort_override_wins_else_default():
     assert EP.resolve_effort("codex", "review", ["review"]) == "high"         # list (non-dict) → default
 
 
-def test_resolve_engine_author_plan_reads_own_key():
-    prefs = {"reviewer": "codex", "implementation": "cursor", "planAuthor": "cursor"}
-    assert EP.resolve_engine("author-plan", prefs) == "cursor"
-    # planAuthor is its own axis: absent -> claude even with other engines set
-    assert EP.resolve_engine("author-plan", {"reviewer": "codex", "implementation": "cursor"}) == "claude"
-    assert EP.resolve_engine("author-plan", {"planAuthor": "bogus"}) == "claude"
-
-
-def test_resolve_effort_author_plan():
-    assert EP.resolve_effort("codex", "author-plan") == "xhigh"
-    assert EP.resolve_effort("cursor", "author-plan") == "composer"
-    assert EP.resolve_effort("codex", "author-plan", {"author-plan": "medium"}) == "medium"
-
-
 def test_resolve_engine_brief_check_defaults_to_codex():
     # The ratified cross-vendor pre-code check: brief-check fails open to codex, not claude.
     assert EP.resolve_engine("brief-check", {}) == "codex"
@@ -123,7 +109,6 @@ def test_load_engine_prefs_surfaces_brief_check_and_pilot_keys(tmp_path):
     assert got["pilot"] == "claude"
     assert got["reviewer"] == "claude"
     assert got["implementation"] == "claude"
-    assert got["planAuthor"] == "claude"
 
 
 def test_brief_check_claude_fallback_tier_is_opus():
@@ -134,13 +119,13 @@ def test_resolve_engine_model_maps_shared_tiers_to_gpt_5_6_family():
     assert EP.resolve_engine_model("codex", "mechanical", "haiku", {}) == "gpt-5.6-luna"
     assert EP.resolve_engine_model("codex", "reviewer", "sonnet", {}) == "gpt-5.6-terra"
     assert EP.resolve_engine_model("codex", "reviewer-deep", "opus", {}) == "gpt-5.6-sol"
-    assert EP.resolve_engine_model("codex", "author-plan", "fable", {}) == "gpt-5.6-sol"
+    assert EP.resolve_engine_model("codex", "implementer", "fable", {}) == "gpt-5.6-sol"
 
 
 def test_resolve_engine_model_persistent_codex_pin_wins_per_role():
-    prefs = {"codexModels": {"reviewer": "gpt-5.5", "builder": "gpt-5.6-terra"}}
+    prefs = {"codexModels": {"reviewer": "gpt-5.5", "implementer": "gpt-5.6-terra"}}
     assert EP.resolve_engine_model("codex", "reviewer", "sonnet", prefs) == "gpt-5.5"
-    assert EP.resolve_engine_model("codex", "builder", "opus", prefs) == "gpt-5.6-terra"
+    assert EP.resolve_engine_model("codex", "implementer", "opus", prefs) == "gpt-5.6-terra"
     # A sibling role still derives from its tier; pins never become global.
     assert EP.resolve_engine_model("codex", "reviewer-deep", "opus", prefs) == "gpt-5.6-sol"
 
@@ -176,7 +161,7 @@ def test_resolve_timeout_default_and_override():
 def test_resolve_timeout_role_ceilings():
     # #309: write roles get the HIGH ceiling, read roles the moderate one (owner policy: high
     # ceilings, never borderline limits). These are the values the production dispatch sites pass.
-    for role in ("build", "fix", "author-plan"):
+    for role in ("build", "fix"):
         assert EP.resolve_timeout(None, role) == EP.WRITE_TIMEOUT_SECONDS == 2400
     for role in ("review", "review-deep"):
         assert EP.resolve_timeout(None, role) == EP.READ_TIMEOUT_SECONDS == 900
@@ -212,7 +197,7 @@ def test_resolve_idle_role_windows_and_default():
     # #309 the stall-monitor half of the ceiling+monitor pair. WRITE roles get the longer idle window,
     # READ roles the shorter; both under their role ceiling (monitor ≤ ceiling). These are the values
     # the production dispatch sites pass alongside resolve_timeout.
-    for role in ("build", "fix", "author-plan"):
+    for role in ("build", "fix"):
         assert EP.resolve_idle(None, role) == EP.WRITE_IDLE_SECONDS == 600
         assert EP.resolve_idle(None, role) < EP.resolve_timeout(None, role)   # monitor < ceiling
     for role in ("review", "review-deep"):
@@ -345,21 +330,21 @@ def test_load_engine_prefs_reads_core_md(tmp_path):
     _write_core_with_prefs(repo, {"reviewer": "codex", "implementation": "cursor"})
     got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
     assert got == {"reviewer": "codex", "implementation": "cursor",
-                   "planAuthor": "claude", "briefCheck": "claude", "pilot": "claude", "effort": {}}
+                   "briefCheck": "claude", "pilot": "claude", "effort": {}}
 
 
 def test_load_engine_prefs_absent_is_both_claude(tmp_path):
     repo = str(tmp_path)
     _write_core_with_prefs(repo, {})   # core.md exists but no engine prefs
     assert EP.load_engine_prefs(repo, root=os.path.join(repo, "store")) == \
-        {"reviewer": "claude", "implementation": "claude", "planAuthor": "claude",
+        {"reviewer": "claude", "implementation": "claude",
          "briefCheck": "claude", "pilot": "claude", "effort": {}}
 
 
 def test_load_engine_prefs_greenfield_is_both_claude(tmp_path):
     # no core.md at all → both claude (fail-open, never raises)
     assert EP.load_engine_prefs(str(tmp_path), root=str(tmp_path / "store")) == \
-        {"reviewer": "claude", "implementation": "claude", "planAuthor": "claude",
+        {"reviewer": "claude", "implementation": "claude",
          "briefCheck": "claude", "pilot": "claude", "effort": {}}
 
 
@@ -390,7 +375,7 @@ def test_load_engine_prefs_normalizes_bad_values(tmp_path):
     repo = str(tmp_path)
     _write_core_with_prefs(repo, {"reviewer": "bogus", "implementation": "cursor"})
     assert EP.load_engine_prefs(repo, root=os.path.join(repo, "store")) == \
-        {"reviewer": "claude", "implementation": "cursor", "planAuthor": "claude",
+        {"reviewer": "claude", "implementation": "cursor",
          "briefCheck": "claude", "pilot": "claude", "effort": {}}
 
 
@@ -408,34 +393,22 @@ def test_load_engine_prefs_surfaces_effort_submap_and_resolve_effort_honors_it(t
     assert EP.resolve_effort("codex", "build", got["effort"]) == "high"      # no override -> default
 
 
-def test_load_engine_prefs_surfaces_plan_author(tmp_path):
-    repo = str(tmp_path / "a")
-    _write_core_with_prefs(repo, {"reviewer": "claude", "implementation": "claude",
-                                  "planAuthor": "cursor"})
-    got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
-    assert got["planAuthor"] == "cursor"
-    repo2 = str(tmp_path / "b")
-    _write_core_with_prefs(repo2, {"planAuthor": "bogus"})
-    got = EP.load_engine_prefs(repo2, root=os.path.join(repo2, "store"))
-    assert got["planAuthor"] == "claude"   # normalized fail-open
-
-
 def test_load_engine_prefs_surfaces_only_valid_per_role_codex_model_pins(tmp_path):
     repo = str(tmp_path)
     _write_core_with_prefs(repo, {"reviewer": "codex", "implementation": "codex",
                                   "codexModels": {"reviewer": "gpt-5.5",
                                                   "reviewer-deep": "gpt-5.6-luna",
-                                                  "builder": "gpt-5.6-sol",
+                                                  "implementer": "gpt-5.6-sol",
                                                   "fixer": "gpt-5.6-terra",
-                                                  "author-plan": "gpt-5.5",
+                                                  "pilot": "gpt-5.5",
                                                   "bogus-role": "gpt-5.6-terra",
                                                   }})
     got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
     assert got["codexModels"] == {"reviewer": "gpt-5.5",
                                   "reviewer-deep": "gpt-5.6-luna",
-                                  "builder": "gpt-5.6-sol",
+                                  "implementer": "gpt-5.6-sol",
                                   "fixer": "gpt-5.6-terra",
-                                  "author-plan": "gpt-5.5"}
+                                  "pilot": "gpt-5.5"}
     assert got["invalidCodexModels"]["bogus-role"] == "unknown role 'bogus-role' rejected"
     invalid_repo = str(tmp_path / "invalid")
     _write_core_with_prefs(invalid_repo, {"codexModels": {"fixer": "gpt-5.6-solar"}})
@@ -463,21 +436,21 @@ def test_codex_write_probe_model_covers_the_implementation_dispatch_ceiling():
     assert EP.codex_write_probe_model({"codexModels": "nope"}) == floor
     # BOTH write roles pinned entirely to gpt-5.5 -> gpt-5.5 (the exact #409 scenario)
     assert EP.codex_write_probe_model(
-        {"codexModels": {"builder": "gpt-5.5", "fixer": "gpt-5.5"}}) == "gpt-5.5"
+        {"codexModels": {"implementer": "gpt-5.5", "fixer": "gpt-5.5"}}) == "gpt-5.5"
     # PARTIAL pin: one write role unpinned derives a GPT-5.6 tier model, so the probe clamps up to the
     # sol floor rather than under-testing at gpt-5.5 (the premortem fail-direction regression, closed).
-    assert EP.codex_write_probe_model({"codexModels": {"builder": "gpt-5.5"}}) == floor
+    assert EP.codex_write_probe_model({"codexModels": {"implementer": "gpt-5.5"}}) == floor
     # a reviewer pin is irrelevant to the WRITE probe — it does not lower or raise the write ceiling
     assert EP.codex_write_probe_model(
-        {"codexModels": {"builder": "gpt-5.5", "fixer": "gpt-5.5",
+        {"codexModels": {"implementer": "gpt-5.5", "fixer": "gpt-5.5",
                          "reviewer": "gpt-5.6-sol"}}) == "gpt-5.5"
     # both write roles pinned to a mid 5.6 family -> that family (still not the hard sol floor)
     assert EP.codex_write_probe_model(
-        {"codexModels": {"builder": "gpt-5.6-luna", "fixer": "gpt-5.6-terra"}}) == "gpt-5.6-terra"
-    # builder is the ceiling (stronger than fixer) -> the probe dispatches builder's model. Proves the
-    # probe covers BOTH write roles, not just fixer (drops-builder-from-the-loop mutant dies here).
+        {"codexModels": {"implementer": "gpt-5.6-luna", "fixer": "gpt-5.6-terra"}}) == "gpt-5.6-terra"
+    # implementer is the ceiling (stronger than fixer) -> the probe dispatches implementer's model.
+    # Proves the probe covers BOTH write roles, not just fixer (drops-a-write-role mutant dies here).
     assert EP.codex_write_probe_model(
-        {"codexModels": {"builder": "gpt-5.6-sol", "fixer": "gpt-5.5"}}) == "gpt-5.6-sol"
+        {"codexModels": {"implementer": "gpt-5.6-sol", "fixer": "gpt-5.5"}}) == "gpt-5.6-sol"
 
 
 def test_load_engine_prefs_rejects_persistent_five_five_plus_max_before_dispatch(tmp_path):
@@ -507,5 +480,5 @@ def test_cli_engine_pref_load_emits_json(tmp_path):
         capture_output=True, text=True)
     assert out.returncode == 0
     assert json.loads(out.stdout) == {"reviewer": "codex", "implementation": "claude",
-                                      "planAuthor": "claude", "briefCheck": "claude",
+                                      "briefCheck": "claude",
                                       "pilot": "claude", "effort": {"build": "low"}}

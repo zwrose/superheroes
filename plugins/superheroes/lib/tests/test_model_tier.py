@@ -62,17 +62,6 @@ def test_synthesis_role_is_opus():
     assert MT.resolve_model("synthesis") == "opus"
 
 
-def test_builder_role_defaults_to_opus():
-    # The native build-phase implementer is a smart leaf; owner model governance defaults it to opus.
-    # This is the tier the preflight readout's builder row AND build_phase.js's dispatch both resolve.
-    assert MT.resolve_model("builder") == "opus"
-
-
-def test_builder_override_wins():
-    assert MT.resolve_model("builder", {"builder": "sonnet"}) == "sonnet"
-    assert MT.resolve_model("reviewer", {"builder": "sonnet"}) == "sonnet"  # untouched -> default
-
-
 def test_fixer_role_defaults_to_sonnet_code_fixer():
     assert MT.resolve_model("fixer") == "sonnet"          # no context = code-fixer floor
     assert MT.resolve_model("fixer", context="code") == "sonnet"
@@ -90,37 +79,6 @@ def test_cli_resolve_fixer_context_doc(capsys):
     rc = MT.main(["model_tier.py", "resolve", "--role", "fixer", "--context", "doc"])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0 and out == {"role": "fixer", "model": "opus"}
-
-
-def test_author_plan_defaults_to_author_tier():
-    assert MT.resolve_model("author-plan") == "opus"
-
-
-def test_author_plan_follows_author_override_when_unset():
-    assert MT.resolve_model("author-plan", {"author": "sonnet"}) == "sonnet"
-
-
-def test_author_plan_own_override_wins_and_does_not_move_author():
-    overrides = {"author-plan": "fable"}
-    assert MT.resolve_model("author-plan", overrides) == "fable"
-    assert MT.resolve_model("author", overrides) == "opus"   # tasks authoring untouched
-
-
-def test_author_plan_own_override_beats_author_override():
-    assert MT.resolve_model("author-plan", {"author": "sonnet", "author-plan": "fable"}) == "fable"
-
-
-def test_author_plan_none_override_means_inherit_session():
-    assert MT.resolve_model("author-plan", {"author-plan": None}) is None
-
-
-def test_author_plan_malformed_override_falls_back_to_author_resolution():
-    assert MT.resolve_model("author-plan", {"author-plan": ""}) == "opus"
-    assert MT.resolve_model("author-plan", {"author-plan": 7, "author": "sonnet"}) == "sonnet"
-
-
-def test_roles_tuple_includes_split_roles():
-    assert "author-plan" in MT.ROLES and "author" in MT.ROLES
 
 
 def test_pr_body_role_defaults_to_sonnet():

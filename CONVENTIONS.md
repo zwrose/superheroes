@@ -816,7 +816,7 @@ layer that context injection cannot fix; it is tracked separately
 
 The **host** is the harness the plugin *runs on* (§7.1–§7.2 — Claude Code or Codex). The **engine** is
 the agent a working role is *dispatched to* — `claude` (the default, unchanged), `codex`, or `cursor` —
-chosen per role (reviewer engine, implementation engine, **planAuthor engine**) by the owner in `configure`. These are
+chosen per role (reviewer engine, implementation engine) by the owner in `configure`. These are
 orthogonal axes: the host is where the plugin executes; the engine is which model family does a role's
 work. An engine is selected *below* the host, at the dispatch leaf.
 
@@ -850,11 +850,11 @@ fall-open path.
 
 **Cursor is the token-efficiency engine** (owner-ratified 2026-07-09) — the highly token-efficient composer-2.5 runs
 ALL work roles (build/fix/review/reviewer-deep), and premium Claude models are **never routed through
-cursor by default**. The one deliberate exception is plan authoring: `author-plan: fable` +
-`planAuthor: cursor` dispatches Fable via cursor; every other tier falls through to the pinned
+cursor by default**. The one deliberate exception is the `fable` tier: a role explicitly overridden to
+`fable` and routed via cursor dispatches Fable; every other tier falls through to the pinned
 composer default (that fall-through is the policy, not a gap). Each dispatch also carries a
 **role-appropriate timeout ceiling**
-(`engine_pref.resolve_timeout`): write roles (build/fix/author-plan) get a high ceiling, read roles
+(`engine_pref.resolve_timeout`): write roles (build/fix) get a high ceiling, read roles
 (review) a moderate one — a finite kill, never a borderline wall-clock limit. The high ceiling is
 **paired with a byte-activity stall monitor** (`engine_pref.resolve_idle` + `engine_dispatch`'s shell
 watchdog): the CLI runs as its own process group under an idle watchdog that kills the whole group
@@ -866,13 +866,6 @@ false-killing it). An owner may override either limit with a positive-int `engin
 or `enginePreferences.idleTimeout` (seconds); unset, the role values stand, and an override never
 disables the ceiling. The preflight readout's per-role model shares `engine_adapter`'s single
 cursor-tier map, so the row can never disagree with the dispatched argv.
-
-**Plan-author contract.** Showrunner's produce phase routes ONLY the **plan** doc through
-`enginePreferences.planAuthor` (the **`author-plan`** role kind). Tasks authoring always stays native
-(`claude`). The split **`author-plan` model tier** (in `## Model tiers`) lets plan authoring alone move
-to a stronger model (e.g. `author-plan: fable`) without moving tasks authoring; unset, it resolves exactly
-as `author`. A failed external author-plan dispatch falls open to the native author after UFR-2 cleanup
-(clear the completion marker and discard the external draft) within the same attempt.
 
 **Confinement + hygiene.** External reviewers run read-only; external implementers run workspace-write,
 confined to the managed build worktree, with **no remote authority** — the band owns every push / PR /
