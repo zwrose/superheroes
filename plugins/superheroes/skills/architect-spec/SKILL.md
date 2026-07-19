@@ -67,7 +67,7 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
    - **Functional requirements in EARS**, numbered, one behavior each, each with ≥1
      acceptance criterion (Given-When-Then for flows, rule bullets for constraints).
    - **Significant unhappy paths as If/Then EARS**, driven by the coverage checklist;
-     record each area's disposition (Specify/Defer-to-plan/N-A) in the `## Coverage` table at
+     record each area's disposition (Specify/Defer-to-build/N-A) in the `## Coverage` table at
      the end — not as an inline tag list inside the unhappy-paths section.
    - **Non-functional requirements as outcomes with a fit-criterion.**
    - **UI/UX references the actual Claude Design handoff output** (not a rewrite).
@@ -95,7 +95,7 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
      addressed, not just the happy path?
    - **Internal consistency:** do acceptance criteria and the definition of done
      match the requirements? Any section contradict another?
-   - **Scope:** focused enough for one plan, or does it need decomposition?
+   - **Scope:** focused enough for one work-item, or does it need decomposition?
    - **Ambiguity:** any requirement readable two ways? Pick one, make it explicit;
      repeat concrete nouns instead of "it/this".
 
