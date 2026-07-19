@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-07-18",
+  "recordedAt": "2026-07-19",
   "observations": [
     {
       "skill": "superheroes/architect-discovery",
@@ -1494,84 +1494,84 @@
     },
     {
       "skill": "superheroes/workhorse",
-      "phrase": "build this approved issue and take it to a ready PR",
+      "phrase": "build issue #481 and take it to a ready PR",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
       "skill": "superheroes/workhorse",
-      "phrase": "build this approved issue and take it to a ready PR",
+      "phrase": "build issue #481 and take it to a ready PR",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
       "skill": "superheroes/workhorse",
-      "phrase": "build this approved issue and take it to a ready PR",
+      "phrase": "build issue #481 and take it to a ready PR",
       "direction": "should_fire",
       "run": 2,
       "activated": true
     },
     {
       "skill": "superheroes/workhorse",
-      "phrase": "write the build brief and implement this issue test-first",
+      "phrase": "rip #481",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
       "skill": "superheroes/workhorse",
-      "phrase": "write the build brief and implement this issue test-first",
+      "phrase": "rip #481",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
       "skill": "superheroes/workhorse",
-      "phrase": "write the build brief and implement this issue test-first",
+      "phrase": "rip #481",
       "direction": "should_fire",
       "run": 2,
       "activated": true
     },
     {
       "skill": "superheroes/workhorse",
-      "phrase": "run the builder on this routed work item",
+      "phrase": "run the builder on this routed issue",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
       "skill": "superheroes/workhorse",
-      "phrase": "run the builder on this routed work item",
+      "phrase": "run the builder on this routed issue",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
       "skill": "superheroes/workhorse",
-      "phrase": "run the builder on this routed work item",
+      "phrase": "run the builder on this routed issue",
       "direction": "should_fire",
       "run": 2,
       "activated": true
     },
     {
       "skill": "superheroes/workhorse",
-      "phrase": "build this issue and hand back a ready PR with a dispositions table",
+      "phrase": "orchestrate the build for this issue \u2014 brief, delegate, review, ready PR",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
       "skill": "superheroes/workhorse",
-      "phrase": "build this issue and hand back a ready PR with a dispositions table",
+      "phrase": "orchestrate the build for this issue \u2014 brief, delegate, review, ready PR",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
       "skill": "superheroes/workhorse",
-      "phrase": "build this issue and hand back a ready PR with a dispositions table",
+      "phrase": "orchestrate the build for this issue \u2014 brief, delegate, review, ready PR",
       "direction": "should_fire",
       "run": 2,
       "activated": true
