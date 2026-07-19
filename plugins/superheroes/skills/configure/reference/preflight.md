@@ -1,6 +1,7 @@
 # Contents
 
 - Framing + the timing rule
+- 0 — Launch match (session project root == the target repo)
 - A — Interactive-approval tools (live-exercised)
 - B — Engine + model availability (the dispatch-calibration readout)
 - C — Test-pilot readiness
@@ -31,6 +32,17 @@ A session **never** enters autonomous work carrying an unproven interactive tool
 
 A check that plainly does not apply to this run — no test-pilot in scope, no cross-vendor engine
 configured — is marked **N/A, with the reason stated**. N/A is a recorded finding, not a skip.
+
+## 0 — Launch match (session project root == the target repo)
+
+The **first** check, before any live-exercise probe: run `git rev-parse --show-toplevel` and confirm
+it resolves to the repo the routed issue belongs to. A session launched from a *different* project
+(the host mints its cwd there) while it builds the target by absolute path hits the harness's
+always-ask boundary on **every** out-of-project write — regardless of allow rules — because
+out-of-project writes always prompt, and the *launch* project's settings, not the target's, are the
+ones that apply. On a mismatch, **bail now, while the owner is present**, with the two fixes:
+relaunch with the target repo as the project, or `/add-dir <target>` if continuing here is preferred.
+Same fail-loud contract as every check below — never a silent skip.
 
 ## A — Interactive-approval tools (live-exercised)
 

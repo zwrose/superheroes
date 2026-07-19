@@ -47,6 +47,15 @@ prompt until a consequential flag or handback.
 
 ## 2. Set up the workspace
 
+**First command, before anything else — verify the launch.** Run `git rev-parse --show-toplevel`
+and confirm it resolves to the repo the routed issue belongs to. If the session was launched from a
+different project (the host minted its cwd there) while you build the target by absolute path, every
+out-of-project write hits the harness's always-ask boundary regardless of your allow rules, and the
+*launch* project's settings — not the target's — are the ones in force. On a mismatch, **stop and
+report to the owner now, while they're present**, with the two fixes: relaunch the session with the
+target repo as the project, or `/add-dir <target>` if continuing here is preferred. Never go
+autonomous with a mismatched root.
+
 Your own worktree + branch off the issue's base, and **bring the app up** the way test-pilot will
 run it (dev server, any login/seed the app needs to be usable). **No running app (a plugin, library,
 or docs build)?** There is nothing to bring up — say so and skip the app-bring-up; the workspace is
