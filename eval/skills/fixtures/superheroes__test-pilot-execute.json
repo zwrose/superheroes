@@ -2,7 +2,7 @@
   "should_fire": [
     "run the test plan and pilot this PR in the browser",
     "verify the branch in the browser before human spot-check",
-    "execute the test-pilot plan and fix any bugs found",
+    "execute the test-pilot plan and report any bugs found",
     "drive the app via browser MCP and post a results comment"
   ],
   "should_not_fire": [
