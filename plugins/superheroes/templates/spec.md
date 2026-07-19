@@ -6,7 +6,7 @@
 
   Plain-language requirements for this work — the WHAT, not the HOW. Owner co-authored.
   No technical implementation details (libraries, data models, APIs, frameworks) — those
-  live in the `plan`. Depth target: the happy path PLUS the significant unhappy paths that
+  stay with the build. Depth target: the happy path PLUS the significant unhappy paths that
   matter, not an exhaustive enumeration.
 
   Functional requirements are written in EARS (Easy Approach to Requirements Syntax): one
@@ -48,7 +48,7 @@ constraint (limit, format).}}
 ## When things go wrong (significant unhappy paths)
 
 <!-- AUTHOR GUIDANCE (coverage checklist) — DELETE before delivering. Probe each
-     owner-facing area; record each area's disposition (Specify / Defer-to-plan / N-A) in the
+     owner-facing area; record each area's disposition (Specify / Defer-to-build / N-A) in the
      `## Coverage` table at the end of the spec (not inline in this section):
        - Empty & first-run states: what do they see the first time / with nothing here yet?
        - Invalid & malformed input: wrong or blank input — what happens + what message?
@@ -59,15 +59,15 @@ constraint (limit, format).}}
        - Conflicting / simultaneous use (multi-user): two people edit the same thing?
        - Misuse & abuse (sensitive features): could someone abuse this — what to prevent?
        - Reach (if in scope): other languages/currencies/timezones? keyboard + screen-reader?
-     Defer-to-plan promise: for connectivity & timing failures (dropped network, timeouts,
+     Defer-to-build promise: for connectivity & timing failures (dropped network, timeouts,
      duplicate requests at the wire), state only the OWNER-VISIBLE PROMISE here (e.g. "a
      dropped connection never loses their work or double-charges them"); the mechanism
-     (retries, idempotency, rollback, rate-limits) belongs in the `plan`. -->
+     (retries, idempotency, rollback, rate-limits) belongs to the build. -->
 
 {{The significant unhappy paths for THIS work, as If/Then EARS requirements (each with an
 acceptance criterion), driven by the coverage checklist above. Risk-gate: go deeper only where
 a failure costs money, data, safety, trust, or legal standing. One representative case per area,
-not a matrix. Record each area's disposition (Specify / Defer-to-plan / N-A) in the `## Coverage`
+not a matrix. Record each area's disposition (Specify / Defer-to-build / N-A) in the `## Coverage`
 table at the end — do NOT inline a tag list here; this section is requirements, not the audit record.}}
 
 **UFR-1.** {{If &lt;bad thing&gt;, then the system shall &lt;observable response&gt;.}}
@@ -129,14 +129,14 @@ same language. Omit if there are no terms worth pinning.}}
 
 {{The coverage-checklist disposition for each owner-facing unhappy-path area — the audit record
 that every area was consciously considered, kept OUT of the requirements narrative above. This is
-a completeness record, not requirements. `Specify` → a UFR above covers it (name it); `Defer-to-plan`
-→ only the owner-visible promise is stated above, the mechanism is the plan's; `N-A` → not applicable,
-with a one-line why. The `plan` reads the `Defer-to-plan` rows as its handoff list. Keep every area
+a completeness record, not requirements. `Specify` → a UFR above covers it (name it); `Defer-to-build`
+→ only the owner-visible promise is stated above, the mechanism is the build's; `N-A` → not applicable,
+with a one-line why. The build reads the `Defer-to-build` rows as its handoff list. Keep every area
 row (an unconsidered area is itself a finding).}}
 
 | Area | Disposition | Where / why |
 | --- | --- | --- |
-| Empty & first-run | {{Specify / Defer-to-plan / N-A}} | {{UFR-n, or the one-line reason}} |
+| Empty & first-run | {{Specify / Defer-to-build / N-A}} | {{UFR-n, or the one-line reason}} |
 | Invalid & malformed input | {{…}} | {{…}} |
 | Boundaries & limits | {{…}} | {{…}} |
 | Errors & failures | {{…}} | {{…}} |
