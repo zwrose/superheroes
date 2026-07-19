@@ -1,0 +1,15 @@
+{
+  "should_fire": [
+    "workhorse this issue",
+    "build issue #481 and take it to a ready PR",
+    "build #481",
+    "run the builder on this routed issue",
+    "orchestrate the build for this issue — brief, delegate, review, ready PR"
+  ],
+  "should_not_fire": [
+    "vet this PR from its artifacts against its issue and build brief",
+    "what should we build next on this project?",
+    "turn this fuzzy idea into an owner-approved spec",
+    "review the code changes on this branch for bugs before merging"
+  ]
+}

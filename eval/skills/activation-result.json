@@ -1,637 +1,7 @@
 {
-  "recordedAt": "2026-07-03",
+  "recordedAt": "2026-07-19",
   "observations": [
     {
-      "skill": "superheroes/audit-debt",
-      "phrase": "sweep the whole repo for accumulated technical debt",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/audit-debt",
-      "phrase": "sweep the whole repo for accumulated technical debt",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/audit-debt",
-      "phrase": "sweep the whole repo for accumulated technical debt",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/audit-debt",
-      "phrase": "run a monthly audit of our codebase for security and architectural issues",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/audit-debt",
-      "phrase": "run a monthly audit of our codebase for security and architectural issues",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/audit-debt",
-      "phrase": "run a monthly audit of our codebase for security and architectural issues",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/audit-debt",
-      "phrase": "periodically review the entire repository for debt, not just this change",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/audit-debt",
-      "phrase": "periodically review the entire repository for debt, not just this change",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/audit-debt",
-      "phrase": "periodically review the entire repository for debt, not just this change",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/audit-debt",
-      "phrase": "do a full repo audit for technical, security, and architectural problems",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/audit-debt",
-      "phrase": "do a full repo audit for technical, security, and architectural problems",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/audit-debt",
-      "phrase": "do a full repo audit for technical, security, and architectural problems",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/audit-debt",
-      "phrase": "review my code changes before I merge this pull request",
-      "direction": "should_not_fire",
-      "run": 0,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/audit-debt",
-      "phrase": "review my code changes before I merge this pull request",
-      "direction": "should_not_fire",
-      "run": 1,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/audit-debt",
-      "phrase": "review my code changes before I merge this pull request",
-      "direction": "should_not_fire",
-      "run": 2,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/audit-debt",
-      "phrase": "look over the diff on my local branch for bugs",
-      "direction": "should_not_fire",
-      "run": 0,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/audit-debt",
-      "phrase": "look over the diff on my local branch for bugs",
-      "direction": "should_not_fire",
-      "run": 1,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/audit-debt",
-      "phrase": "look over the diff on my local branch for bugs",
-      "direction": "should_not_fire",
-      "run": 2,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/review-code",
-      "phrase": "review my code changes before I merge",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-code",
-      "phrase": "review my code changes before I merge",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-code",
-      "phrase": "review my code changes before I merge",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-code",
-      "phrase": "look over this open pull request for bugs",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-code",
-      "phrase": "look over this open pull request for bugs",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-code",
-      "phrase": "look over this open pull request for bugs",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-code",
-      "phrase": "review the diff on my local branch and auto-fix what you find",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-code",
-      "phrase": "review the diff on my local branch and auto-fix what you find",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-code",
-      "phrase": "review the diff on my local branch and auto-fix what you find",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-code",
-      "phrase": "check this PR for correctness issues and post findings to GitHub",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-code",
-      "phrase": "check this PR for correctness issues and post findings to GitHub",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-code",
-      "phrase": "check this PR for correctness issues and post findings to GitHub",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-code",
-      "phrase": "sweep the whole repo for accumulated technical debt",
-      "direction": "should_not_fire",
-      "run": 0,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/review-code",
-      "phrase": "sweep the whole repo for accumulated technical debt",
-      "direction": "should_not_fire",
-      "run": 1,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/review-code",
-      "phrase": "sweep the whole repo for accumulated technical debt",
-      "direction": "should_not_fire",
-      "run": 2,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/review-code",
-      "phrase": "set up a review profile for this project",
-      "direction": "should_not_fire",
-      "run": 0,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/review-code",
-      "phrase": "set up a review profile for this project",
-      "direction": "should_not_fire",
-      "run": 1,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/review-code",
-      "phrase": "set up a review profile for this project",
-      "direction": "should_not_fire",
-      "run": 2,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "review the spec definition-doc before the owner gives final approval",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "review the spec definition-doc before the owner gives final approval",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "review the spec definition-doc before the owner gives final approval",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "red-team the requirements spec and report a readiness verdict",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "red-team the requirements spec and report a readiness verdict",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "red-team the requirements spec and report a readiness verdict",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "check the plain-language requirements doc and improve it before owner sign-off",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "check the plain-language requirements doc and improve it before owner sign-off",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "check the plain-language requirements doc and improve it before owner sign-off",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "review the spec for EARS requirements quality and unhappy-path coverage",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "review the spec for EARS requirements quality and unhappy-path coverage",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "review the spec for EARS requirements quality and unhappy-path coverage",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "review the plan document before it advances to tasks",
-      "direction": "should_not_fire",
-      "run": 0,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "review the plan document before it advances to tasks",
-      "direction": "should_not_fire",
-      "run": 1,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "review the plan document before it advances to tasks",
-      "direction": "should_not_fire",
-      "run": 2,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "review the tasks doc before the build runs",
-      "direction": "should_not_fire",
-      "run": 0,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "review the tasks doc before the build runs",
-      "direction": "should_not_fire",
-      "run": 1,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "review the tasks doc before the build runs",
-      "direction": "should_not_fire",
-      "run": 2,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/test-pilot-execute",
-      "phrase": "run the test plan and pilot this PR in the browser",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/test-pilot-execute",
-      "phrase": "run the test plan and pilot this PR in the browser",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/test-pilot-execute",
-      "phrase": "run the test plan and pilot this PR in the browser",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/test-pilot-execute",
-      "phrase": "verify the branch in the browser before human spot-check",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/test-pilot-execute",
-      "phrase": "verify the branch in the browser before human spot-check",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/test-pilot-execute",
-      "phrase": "verify the branch in the browser before human spot-check",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/test-pilot-execute",
-      "phrase": "execute the test-pilot plan and fix any bugs found",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/test-pilot-execute",
-      "phrase": "execute the test-pilot plan and fix any bugs found",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/test-pilot-execute",
-      "phrase": "execute the test-pilot plan and fix any bugs found",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/test-pilot-execute",
-      "phrase": "drive the app via browser MCP and post a results comment",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/test-pilot-execute",
-      "phrase": "drive the app via browser MCP and post a results comment",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/test-pilot-execute",
-      "phrase": "drive the app via browser MCP and post a results comment",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/test-pilot-execute",
-      "phrase": "write a manual test plan with seeded data for this PR",
-      "direction": "should_not_fire",
-      "run": 0,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/test-pilot-execute",
-      "phrase": "write a manual test plan with seeded data for this PR",
-      "direction": "should_not_fire",
-      "run": 1,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/test-pilot-execute",
-      "phrase": "write a manual test plan with seeded data for this PR",
-      "direction": "should_not_fire",
-      "run": 2,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/test-pilot-execute",
-      "phrase": "set up the test-pilot profile for this project",
-      "direction": "should_not_fire",
-      "run": 0,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/test-pilot-execute",
-      "phrase": "set up the test-pilot profile for this project",
-      "direction": "should_not_fire",
-      "run": 1,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/test-pilot-execute",
-      "phrase": "set up the test-pilot profile for this project",
-      "direction": "should_not_fire",
-      "run": 2,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/test-pilot-plan",
-      "phrase": "write a test plan with seeded data for this PR",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/test-pilot-plan",
-      "phrase": "write a test plan with seeded data for this PR",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/test-pilot-plan",
-      "phrase": "write a test plan with seeded data for this PR",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/test-pilot-plan",
-      "phrase": "seed test data for this pull request and post a checkbox plan",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/test-pilot-plan",
-      "phrase": "seed test data for this pull request and post a checkbox plan",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/test-pilot-plan",
-      "phrase": "seed test data for this pull request and post a checkbox plan",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/test-pilot-plan",
-      "phrase": "set up manual testing with test-pilot for this branch",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/test-pilot-plan",
-      "phrase": "set up manual testing with test-pilot for this branch",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/test-pilot-plan",
-      "phrase": "set up manual testing with test-pilot for this branch",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/test-pilot-plan",
-      "phrase": "create a manual test plan before I review this change",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/test-pilot-plan",
-      "phrase": "create a manual test plan before I review this change",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/test-pilot-plan",
-      "phrase": "create a manual test plan before I review this change",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/test-pilot-plan",
-      "phrase": "run the test plan and pilot the PR in the browser",
-      "direction": "should_not_fire",
-      "run": 0,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/test-pilot-plan",
-      "phrase": "run the test plan and pilot the PR in the browser",
-      "direction": "should_not_fire",
-      "run": 1,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/test-pilot-plan",
-      "phrase": "run the test plan and pilot the PR in the browser",
-      "direction": "should_not_fire",
-      "run": 2,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/test-pilot-plan",
-      "phrase": "set up the test-pilot profile for this project",
-      "direction": "should_not_fire",
-      "run": 0,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/test-pilot-plan",
-      "phrase": "set up the test-pilot profile for this project",
-      "direction": "should_not_fire",
-      "run": 1,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/test-pilot-plan",
-      "phrase": "set up the test-pilot profile for this project",
-      "direction": "should_not_fire",
-      "run": 2,
-      "activated": false
-    },
-    {
       "skill": "superheroes/architect-discovery",
       "phrase": "I have a new piece of work and need an owner-approved requirements spec",
       "direction": "should_fire",
@@ -753,6 +123,90 @@
     {
       "skill": "superheroes/architect-discovery",
       "phrase": "decompose the approved plan into executable tasks",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "refresh the-architect's doc-policy layer",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "refresh the-architect's doc-policy layer",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "refresh the-architect's doc-policy layer",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "re-calibrate whether definition-docs are committed in-repo or kept gitignored for the-architect",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "re-calibrate whether definition-docs are committed in-repo or kept gitignored for the-architect",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "re-calibrate whether definition-docs are committed in-repo or kept gitignored for the-architect",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "set up superheroes in this project for the first time",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "set up superheroes in this project for the first time",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "set up superheroes in this project for the first time",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "show the whole project's superheroes calibration on one screen",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "show the whole project's superheroes calibration on one screen",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "show the whole project's superheroes calibration on one screen",
       "direction": "should_not_fire",
       "run": 2,
       "activated": false
@@ -884,85 +338,127 @@
       "activated": false
     },
     {
-      "skill": "superheroes/architect-init",
-      "phrase": "refresh the-architect's doc-policy layer",
+      "skill": "superheroes/audit-debt",
+      "phrase": "sweep the whole repo for accumulated technical debt",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
-      "skill": "superheroes/architect-init",
-      "phrase": "refresh the-architect's doc-policy layer",
+      "skill": "superheroes/audit-debt",
+      "phrase": "sweep the whole repo for accumulated technical debt",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
-      "skill": "superheroes/architect-init",
-      "phrase": "refresh the-architect's doc-policy layer",
+      "skill": "superheroes/audit-debt",
+      "phrase": "sweep the whole repo for accumulated technical debt",
       "direction": "should_fire",
       "run": 2,
       "activated": true
     },
     {
-      "skill": "superheroes/architect-init",
-      "phrase": "re-calibrate whether definition-docs are committed in-repo or kept gitignored for the-architect",
+      "skill": "superheroes/audit-debt",
+      "phrase": "run a monthly audit of our codebase for security and architectural issues",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
-      "skill": "superheroes/architect-init",
-      "phrase": "re-calibrate whether definition-docs are committed in-repo or kept gitignored for the-architect",
+      "skill": "superheroes/audit-debt",
+      "phrase": "run a monthly audit of our codebase for security and architectural issues",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
-      "skill": "superheroes/architect-init",
-      "phrase": "re-calibrate whether definition-docs are committed in-repo or kept gitignored for the-architect",
+      "skill": "superheroes/audit-debt",
+      "phrase": "run a monthly audit of our codebase for security and architectural issues",
       "direction": "should_fire",
       "run": 2,
       "activated": true
     },
     {
-      "skill": "superheroes/architect-init",
-      "phrase": "set up superheroes in this project for the first time",
+      "skill": "superheroes/audit-debt",
+      "phrase": "periodically review the entire repository for debt, not just this change",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/audit-debt",
+      "phrase": "periodically review the entire repository for debt, not just this change",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/audit-debt",
+      "phrase": "periodically review the entire repository for debt, not just this change",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/audit-debt",
+      "phrase": "do a full repo audit for technical, security, and architectural problems",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/audit-debt",
+      "phrase": "do a full repo audit for technical, security, and architectural problems",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/audit-debt",
+      "phrase": "do a full repo audit for technical, security, and architectural problems",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/audit-debt",
+      "phrase": "review my code changes before I merge this pull request",
       "direction": "should_not_fire",
       "run": 0,
       "activated": false
     },
     {
-      "skill": "superheroes/architect-init",
-      "phrase": "set up superheroes in this project for the first time",
+      "skill": "superheroes/audit-debt",
+      "phrase": "review my code changes before I merge this pull request",
       "direction": "should_not_fire",
       "run": 1,
       "activated": false
     },
     {
-      "skill": "superheroes/architect-init",
-      "phrase": "set up superheroes in this project for the first time",
+      "skill": "superheroes/audit-debt",
+      "phrase": "review my code changes before I merge this pull request",
       "direction": "should_not_fire",
       "run": 2,
       "activated": false
     },
     {
-      "skill": "superheroes/architect-init",
-      "phrase": "show the whole project's superheroes calibration on one screen",
+      "skill": "superheroes/audit-debt",
+      "phrase": "look over the diff on my local branch for bugs",
       "direction": "should_not_fire",
       "run": 0,
       "activated": false
     },
     {
-      "skill": "superheroes/architect-init",
-      "phrase": "show the whole project's superheroes calibration on one screen",
+      "skill": "superheroes/audit-debt",
+      "phrase": "look over the diff on my local branch for bugs",
       "direction": "should_not_fire",
       "run": 1,
       "activated": false
     },
     {
-      "skill": "superheroes/architect-init",
-      "phrase": "show the whole project's superheroes calibration on one screen",
+      "skill": "superheroes/audit-debt",
+      "phrase": "look over the diff on my local branch for bugs",
       "direction": "should_not_fire",
       "run": 2,
       "activated": false
@@ -1115,6 +611,132 @@
       "activated": false
     },
     {
+      "skill": "superheroes/review-code",
+      "phrase": "review my code changes before I merge",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/review-code",
+      "phrase": "review my code changes before I merge",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/review-code",
+      "phrase": "review my code changes before I merge",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/review-code",
+      "phrase": "look over this open pull request for bugs",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/review-code",
+      "phrase": "look over this open pull request for bugs",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/review-code",
+      "phrase": "look over this open pull request for bugs",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/review-code",
+      "phrase": "review the diff on my local branch and auto-fix what you find",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/review-code",
+      "phrase": "review the diff on my local branch and auto-fix what you find",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/review-code",
+      "phrase": "review the diff on my local branch and auto-fix what you find",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/review-code",
+      "phrase": "check this PR for correctness issues and post findings to GitHub",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/review-code",
+      "phrase": "check this PR for correctness issues and post findings to GitHub",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/review-code",
+      "phrase": "check this PR for correctness issues and post findings to GitHub",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/review-code",
+      "phrase": "sweep the whole repo for accumulated technical debt",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/review-code",
+      "phrase": "sweep the whole repo for accumulated technical debt",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/review-code",
+      "phrase": "sweep the whole repo for accumulated technical debt",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/review-code",
+      "phrase": "set up a review profile for this project",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/review-code",
+      "phrase": "set up a review profile for this project",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/review-code",
+      "phrase": "set up a review profile for this project",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
       "skill": "superheroes/review-init",
       "phrase": "refresh review-crew's calibration layer",
       "direction": "should_fire",
@@ -1199,6 +821,447 @@
       "activated": false
     },
     {
+      "skill": "superheroes/review-spec",
+      "phrase": "review the spec definition-doc before the owner gives final approval",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/review-spec",
+      "phrase": "review the spec definition-doc before the owner gives final approval",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/review-spec",
+      "phrase": "review the spec definition-doc before the owner gives final approval",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/review-spec",
+      "phrase": "red-team the requirements spec and report a readiness verdict",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/review-spec",
+      "phrase": "red-team the requirements spec and report a readiness verdict",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/review-spec",
+      "phrase": "red-team the requirements spec and report a readiness verdict",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/review-spec",
+      "phrase": "check the plain-language requirements doc and improve it before owner sign-off",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/review-spec",
+      "phrase": "check the plain-language requirements doc and improve it before owner sign-off",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/review-spec",
+      "phrase": "check the plain-language requirements doc and improve it before owner sign-off",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/review-spec",
+      "phrase": "review the spec for EARS requirements quality and unhappy-path coverage",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/review-spec",
+      "phrase": "review the spec for EARS requirements quality and unhappy-path coverage",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/review-spec",
+      "phrase": "review the spec for EARS requirements quality and unhappy-path coverage",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/review-spec",
+      "phrase": "review the plan document before it advances to tasks",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/review-spec",
+      "phrase": "review the plan document before it advances to tasks",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/review-spec",
+      "phrase": "review the plan document before it advances to tasks",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/review-spec",
+      "phrase": "review the tasks doc before the build runs",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/review-spec",
+      "phrase": "review the tasks doc before the build runs",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/review-spec",
+      "phrase": "review the tasks doc before the build runs",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "run the showrunner on this project",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "run the showrunner on this project",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "run the showrunner on this project",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "be the advisor for this repo and tell me what to build next",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "be the advisor for this repo and tell me what to build next",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "be the advisor for this repo and tell me what to build next",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "vet this PR from its artifacts against its issue and build brief",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "vet this PR from its artifacts against its issue and build brief",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "vet this PR from its artifacts against its issue and build brief",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "is this incoming issue build-ready or does it need discovery first?",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "is this incoming issue build-ready or does it need discovery first?",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "is this incoming issue build-ready or does it need discovery first?",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "split this too-big issue into a small epic of mergeable issues before a builder takes it",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "split this too-big issue into a small epic of mergeable issues before a builder takes it",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "split this too-big issue into a small epic of mergeable issues before a builder takes it",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "build this approved issue and take it to a ready PR",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "build this approved issue and take it to a ready PR",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "build this approved issue and take it to a ready PR",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "turn this fuzzy idea into an owner-approved spec",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "turn this fuzzy idea into an owner-approved spec",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "turn this fuzzy idea into an owner-approved spec",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "review the code changes on this branch for bugs before merging",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "review the code changes on this branch for bugs before merging",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "review the code changes on this branch for bugs before merging",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "sweep the whole repo for accumulated technical debt",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "sweep the whole repo for accumulated technical debt",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "sweep the whole repo for accumulated technical debt",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/test-pilot-execute",
+      "phrase": "run the test plan and pilot this PR in the browser",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/test-pilot-execute",
+      "phrase": "run the test plan and pilot this PR in the browser",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/test-pilot-execute",
+      "phrase": "run the test plan and pilot this PR in the browser",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/test-pilot-execute",
+      "phrase": "verify the branch in the browser before human spot-check",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/test-pilot-execute",
+      "phrase": "verify the branch in the browser before human spot-check",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/test-pilot-execute",
+      "phrase": "verify the branch in the browser before human spot-check",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/test-pilot-execute",
+      "phrase": "execute the test-pilot plan and fix any bugs found",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/test-pilot-execute",
+      "phrase": "execute the test-pilot plan and fix any bugs found",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/test-pilot-execute",
+      "phrase": "execute the test-pilot plan and fix any bugs found",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/test-pilot-execute",
+      "phrase": "drive the app via browser MCP and post a results comment",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/test-pilot-execute",
+      "phrase": "drive the app via browser MCP and post a results comment",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/test-pilot-execute",
+      "phrase": "drive the app via browser MCP and post a results comment",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/test-pilot-execute",
+      "phrase": "write a manual test plan with seeded data for this PR",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/test-pilot-execute",
+      "phrase": "write a manual test plan with seeded data for this PR",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/test-pilot-execute",
+      "phrase": "write a manual test plan with seeded data for this PR",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/test-pilot-execute",
+      "phrase": "set up the test-pilot profile for this project",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/test-pilot-execute",
+      "phrase": "set up the test-pilot profile for this project",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/test-pilot-execute",
+      "phrase": "set up the test-pilot profile for this project",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
       "skill": "superheroes/test-pilot-init",
       "phrase": "refresh test-pilot's profile, seeding blocks, and browser tooling layer",
       "direction": "should_fire",
@@ -1278,6 +1341,321 @@
     {
       "skill": "superheroes/test-pilot-init",
       "phrase": "drive the test plan in a real browser and verify the branch",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/test-pilot-plan",
+      "phrase": "write a test plan with seeded data for this PR",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/test-pilot-plan",
+      "phrase": "write a test plan with seeded data for this PR",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/test-pilot-plan",
+      "phrase": "write a test plan with seeded data for this PR",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/test-pilot-plan",
+      "phrase": "seed test data for this pull request and post a checkbox plan",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/test-pilot-plan",
+      "phrase": "seed test data for this pull request and post a checkbox plan",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/test-pilot-plan",
+      "phrase": "seed test data for this pull request and post a checkbox plan",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/test-pilot-plan",
+      "phrase": "set up manual testing with test-pilot for this branch",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/test-pilot-plan",
+      "phrase": "set up manual testing with test-pilot for this branch",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/test-pilot-plan",
+      "phrase": "set up manual testing with test-pilot for this branch",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/test-pilot-plan",
+      "phrase": "create a manual test plan before I review this change",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/test-pilot-plan",
+      "phrase": "create a manual test plan before I review this change",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/test-pilot-plan",
+      "phrase": "create a manual test plan before I review this change",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/test-pilot-plan",
+      "phrase": "run the test plan and pilot the PR in the browser",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/test-pilot-plan",
+      "phrase": "run the test plan and pilot the PR in the browser",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/test-pilot-plan",
+      "phrase": "run the test plan and pilot the PR in the browser",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/test-pilot-plan",
+      "phrase": "set up the test-pilot profile for this project",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/test-pilot-plan",
+      "phrase": "set up the test-pilot profile for this project",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/test-pilot-plan",
+      "phrase": "set up the test-pilot profile for this project",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "workhorse this issue",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "workhorse this issue",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "workhorse this issue",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "build issue #481 and take it to a ready PR",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "build issue #481 and take it to a ready PR",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "build issue #481 and take it to a ready PR",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "build #481",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "build #481",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "build #481",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "run the builder on this routed issue",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "run the builder on this routed issue",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "run the builder on this routed issue",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "orchestrate the build for this issue \u2014 brief, delegate, review, ready PR",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "orchestrate the build for this issue \u2014 brief, delegate, review, ready PR",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "orchestrate the build for this issue \u2014 brief, delegate, review, ready PR",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "vet this PR from its artifacts against its issue and build brief",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "vet this PR from its artifacts against its issue and build brief",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "vet this PR from its artifacts against its issue and build brief",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "what should we build next on this project?",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "what should we build next on this project?",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "what should we build next on this project?",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "turn this fuzzy idea into an owner-approved spec",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "turn this fuzzy idea into an owner-approved spec",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "turn this fuzzy idea into an owner-approved spec",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "review the code changes on this branch for bugs before merging",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "review the code changes on this branch for bugs before merging",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/workhorse",
+      "phrase": "review the code changes on this branch for bugs before merging",
       "direction": "should_not_fire",
       "run": 2,
       "activated": false
