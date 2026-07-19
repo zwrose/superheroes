@@ -2,14 +2,14 @@
   "name": "superheroes",
   "owner": { "name": "zwrose" },
   "metadata": {
-    "description": "Your team of superheroes, powered by superpowers — Claude Code plugins that team up to run largely-autonomous development.",
+    "description": "A discipline layer for building software with AI sessions — roles, artifacts, and cross-vendor review that let a technical owner delegate to AI sessions and ship on evidence.",
     "version": "0.5.0"
   },
   "plugins": [
     {
       "name": "superheroes",
       "source": "./plugins/superheroes",
-      "description": "the-architect + review-crew + test-pilot + workhorse — one plugin that runs a project's development loop (discovery → plan → tasks → build → review → ship)."
+      "description": "Showrunner + Workhorse + The Architect + Review Crew + Test-Pilot — one plugin: the discipline layer around AI build sessions (brief → build → cross-vendor review → ready PR → vet → merge)."
     }
   ]
 }

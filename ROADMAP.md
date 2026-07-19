@@ -1,91 +1,88 @@
 # superheroes — roadmap
 
-superheroes is a single Claude Code plugin — a team of heroes that runs a project's
-development loop — **Discovery → Plan → Tasks → Build → Verify → Ship** — on the owner's
-behalf, so a product-minded owner can live in the *what* while the heroes handle the
-*how*. The team fields **the-architect** (spec → plan → tasks), **review-crew** (the
-review panels), **test-pilot** (behavioral proof in a real browser), **workhorse** (the
-producer — never merges), and the **showrunner** (the full pipeline, end to end).
+superheroes is a **discipline layer** for building software with AI sessions — not a system
+that runs the build for you. Your sessions do the work; superheroes supplies the roles,
+artifacts, and review structure that let a technical owner delegate real work to them and ship
+on evidence instead of vibes. Two heroes run your sessions: **Showrunner** (the advisor — one
+long-lived session per project that keeps the board truthful, routes and sizes work, vets every
+PR from artifacts, and coordinates releases) and **Workhorse** (the builder — a disposable
+session per issue that briefs its approach, gets the brief checked cross-vendor before code,
+builds test-first in its own worktree, and hands back a reviewed PR). Three more serve inside
+them: **The Architect** (turns fuzzy intent into an owner-approved spec), **Review Crew** (the
+cross-vendor review panels), and **Test-Pilot** (browser-evidence verification). Neither hero
+merges — that act stays the owner's, always.
 
-**Why this roadmap looks the way it does:** [PHILOSOPHY.md](PHILOSOPHY.md) — the
-promises and bets this train exists to deliver. Issue-level status lives on the
-[GitHub Project](https://github.com/users/zwrose/projects/1); per-release detail lives
-in each release's **epic issue**. This file carries the train itself: what ships
-together, in what order, and what each release must prove before it cuts.
+**Why this roadmap looks the way it does:** [PHILOSOPHY.md](PHILOSOPHY.md) — the promises and
+bets this train exists to deliver. Issue-level status lives on the
+[GitHub Project](https://github.com/users/zwrose/projects/1); per-release detail lives in each
+release's **epic issue**. This file carries the train itself: what ships together, in what
+order, and what each release must prove before it cuts.
 
 ## When we cut a release
 
-1. **Receipts decide, not calendars.** A release cuts when its headline claims each
-   have a receipt or a loud, stated deferral. No date-driven releases; no claim-free
-   waiting either — a bundle that's ready, ships.
-2. **Small and frequent beats big and rare.** Every release's first real run must
-   surface zero fidelity-class surprises (PHILOSOPHY B5); small bundles keep that test
-   cheap and its failures attributable.
-3. **The first real run is part of the release.** A release isn't "good" until one
-   real work-item run on it is diagnosed clean (#293 protocol). The next bundle doesn't
-   build on an undiagnosed release.
-4. **The hotfix lane is always open.** A guardrail or honesty defect ships alone as a
-   patch, immediately.
-5. **Repo-root work cuts no release** — docs, ledgers, board changes land ahead of and
-   between releases.
+1. **Receipts decide, not calendars.** A release cuts when its headline claims each have a
+   receipt or a loud, stated deferral. No date-driven releases; no claim-free waiting either —
+   a bundle that's ready, ships.
+2. **Small and frequent beats big and rare.** Every release's first real run must surface zero
+   fidelity-class surprises (PHILOSOPHY B5); small bundles keep that test cheap and its
+   failures attributable.
+3. **The first real run is part of the release.** A release isn't "good" until one real
+   work-item run on it is diagnosed clean (the first-run-clean protocol). The next bundle
+   doesn't build on an undiagnosed release.
+4. **The hotfix lane is always open.** A guardrail or honesty defect ships alone as a patch,
+   immediately.
+5. **Repo-root work cuts no release** — docs, ledgers, board changes land ahead of and between
+   releases.
 
 ## The release train
 
-Each release has an **epic issue** (off the Project board) carrying its full scope,
-its claims → receipts table, and the at-cut assessment prompt. Status here is
-coarse: *planned → in window → cut → first-run-clean*.
+Each release has an **epic issue** (off the Project board) carrying its full scope, its
+claims → receipts table, and the at-cut assessment prompt. Status here is coarse:
+*planned → in window → cut → first-run-clean*.
 
-| Release | Theme | Core scope | Must prove before cut | Status |
-|---|---|---|---|---|
-| **0.11.1** | Engines tell the truth | #307 #308 #309 #310 #311 + the engine-dispatch fix chain the qualification itself surfaced (#341 #344 #347 #349 #357) | cursor genuinely builds AND codex genuinely reviews (≥1 genuine `ok` each, checked **per engine**); readout/journal tell the truth about who did what; acceptance FAILs any engine that didn't genuinely work | **cut 2026-07-11** (first-run-clean pending) |
-| **0.11.2** | Cursor staging restored (hotfix) | #373 staging-death journaling; #257 input side (plain-readable hash-verified staging); #381 single-pass final review; #386 engine commit messages preserved | per-engine authenticity gate: cursor AND codex each ≥1 genuine ok, zero staging denials | **cut 2026-07-12** |
-| **0.12.x–0.14.x** (line) | The record tells the truth | journal truth (#350 — absorbs #378 — #379 #375 #383 #384 #385); final-review truth fixes (#394 #396 #397, and #397's run-forensics residuals #430 #433 #418); staging-courier hijack guard #395; test-pilot/transport fix families from the 0.13.x first-runs (#410–#413 #417 #425 #428 #434 #435); preflight-readout truth bundle #368 (absorbs #369–#371); engine-confinement tripwire #355; GPT-5.6 quick discovery #337 (+ follow-ups #409); #257 verify-and-close (input side shipped in 0.11.2) | first-runs show none of the 2026-07-10/11/12 defect signatures — no doubled journal lines, no cross-session events, no silent re-execution, verify receipts attest the reviewed tree, resume survives a final-review-fix park, review coverage unmaskable, the owner sees a truthful readout before approving; the bar governs the LINE and the epic closes when the full scope has cut + gone first-run-clean | **0.12.0 cut 2026-07-12** (early unblock cut: #219 + #394 + #396, owner-waived acceptance disclosed on the release PR, watched first-run); **0.13.0 cut 2026-07-14** (test-pilot/transport batch, release-eval passed); **0.13.1/0.13.2 hotfixes cut 2026-07-14** (#425 courier idiom; #428 migrate data-loss); **0.14.0 next** — the #397 doc-review-convergence feat (PR #431) forces the minor bump, so the line continues as 0.14.x and the later bundles shift down one (third renumber, 2026-07-15) |
-| **0.15.0** | Degradation reaches the owner | degradation tallies + degraded-flag consumers #314; owner-declared degradation policy #325; routing audit #299; deniedAction disclosure carrier #359; two-leg acceptance epic #352 (#353 #354 #323) | an all-Claude run cannot look like an external-engine run; property-costing fallbacks follow the owner-declared policy (park by default); acceptance tests the permission posture real users ship and the modality they actually run | planned |
-| **0.16.0** | Built what you meant | terminal spec-fidelity instrument (discovery first); #230 #229 #189 #175 | "ready" is backed by a spec-vs-build receipt, used by the release-eval itself | planned |
-| **0.17.0** | Judgment and readable runs | trap-taxonomy review classes; agent read-back + plain-language park reasons; #137 #32 (#219 shipped early, 0.12.0); guardrail edges (publish scope, checker-not-outmatched, gate provenance) | each new rubric class demonstrated firing; park reasons owner-readable; the never-publishes guarantee matches its prose | planned |
+| Release | Theme | Epic | Core scope | Must prove before cut | Status |
+|---|---|---|---|---|---|
+| **0.15.0** | The discipline layer (superheroes v2) | #467 | The reframe itself: the v1 orchestration machinery and plan/tasks retired; two-charter session model (Showrunner advisor / Workhorse builder); the covenant + SessionStart injection; the minimal owner-authority gate; test-pilot observe-only; configure trim + per-role model×engine knobs + live-exercise preflight; PHILOSOPHY/README/CONVENTIONS/ROADMAP rewrite. | The reframe holds under its own first real run — the next real feature built through Workhorse+Showrunner surfaces zero fidelity-class surprises. | **in window / cutting** — this docs-finale PR is the last step before the cut; the owner merges the release PR. Wave evidence: #486 (test-pilot-execute becomes observe-and-report), #487 (the minimal owner-authority gate), #488 (configure trim + v2 knobs) all merged. #488 was the first real run of the merged Workhorse charter — the delegated-implementation pattern field-validated (eight sonnet implementer work orders, orchestrator receipt re-runs), and a cross-vendor codex pass caught a provenance bug a single Claude review round missed. The charter friction the wave hit — no running app, test-pilot N/A on a plugin repo — is folded back into the charter as an explicit N/A branch. |
+| **0.16.0** | Review quality (Review Crew v2) | #476 | The S2 lane: review-code v2 multi-model orchestrator — design spike (#474) then build; mechanical boundary enforcement per project via configure (#475); review-benchmark growth (#131); trap-taxonomy rubric classes (#316); the orientation-review routine (#318). | review-code v2 ships and one real PR goes through it clean. | planned |
+| **0.17.0** | Front-half depth (The Architect + Test-Pilot) | #477 | The S3 lane: test-pilot plans derive from the spec (#362); test-pilot's documented-command surface for CLI/library repos (#363); right-sizing the spec review panel, including the codex-seat experiment (#34); spec provenance (#229). | Each item's headline claim carries a receipt in the epic; the lane closes with a real spec-to-build run diagnosed clean. | planned |
 
-**The build lane alongside the train** (mechanisms that mostly cut no version but are
-scheduled work): the **0.11.1 window** built the orientation review + ledgers
-(routine scheduled; first memo before the 0.12 cut); the **0.12 window** builds
-claim-based release eval (ships in 0.12, first mechanical use at the 0.15 cut) and
-extends the review benchmark (#131, unblocked now that 0.11.1 made reviews genuinely
-dual-vendor); the **0.16–0.17 windows**
-absorb the telemetry-checkpoint decisions (#184 #34 #250), the tuning loop (#35), and
-the task-granularity research recommendation.
+## Receipts decide cut order, not a ladder
+
+The S2 and S3 lanes above are **largely seam-independent** — 0.16.0 sits in the review layer,
+0.17.0 sits in the front half (spec and test-pilot) — and may interleave where their builders
+don't collide. This is deliberately **not a step ladder**: per cut rule 1, receipts decide the
+actual cut order, not the order the lanes happen to be listed in. 0.16.0 and 0.17.0 are numbered
+for bookkeeping, not sequence — if the S3 lane produces cuttable receipts first, it cuts first.
 
 ## How work is tracked
 
-- **Epics, off-board:** one epic issue per release — its constituents attached as
-  GitHub **native sub-issues** (the epic's sub-issue progress is the bundle's
-  completion state), the claims→receipts table, and an at-cut assessment prompt a
-  fresh agent can execute. The epic closes only when the post-release first-run
-  diagnosis is clean.
-- **Dependencies:** real technical dependencies between work items carry GitHub's
-  native blocked-by/blocking links — and **the train itself is serialized through the
-  epics**: every constituent of a release's epic is blocked-by the *previous* release's
-  epic, so the next bundle formally unblocks only when the prior release closes clean
-  (cut rule 3, encoded mechanically). **Full-discovery issues are exempt** — discovery
-  runs in parallel with the train, so they carry no precursor-epic block; only
-  build-carrying issues (including quick-route discovery+build items) take it. (Keeping
-  this wiring true by hand is toil a future backlog/TPM hero should own — #28.)
-- **Discovery first where it's earned:** fuzzy items file as discovery issues (problem
-  + evidence + open questions, no prescribed solution) and build only after an
-  owner-approved spec. Currently: the spec-fidelity instrument and the
-  acceptance-harness architecture rethink (full); publish-guardrail width and the agent
-  read-back experience (quick route).
+- **Epics, off-board:** one epic issue per release — its constituents attached as GitHub
+  **native sub-issues** (the epic's sub-issue progress is the bundle's completion state), the
+  claims→receipts table, and an at-cut assessment prompt a fresh agent can execute. The epic
+  closes only when the post-release first-run diagnosis is clean.
+- **Dependencies:** real technical dependencies between work items carry GitHub's native
+  blocked-by/blocking links. The train is serialized through the epics **at the reframe
+  boundary**: every S2/S3 constituent is blocked-by 0.15.0's epic (#467), so neither lane
+  formally unblocks until the reframe closes clean (cut rule 3, encoded mechanically). Once
+  unblocked, the S2 and S3 lanes run independently of each other — see above.
+  **Full-discovery issues are exempt** — discovery runs in parallel with the train, so they
+  carry no precursor-epic block; only build-carrying issues take it. (Keeping this wiring true
+  by hand is toil a future backlog/TPM hero should own — #28.)
+- **Discovery first where it's earned:** fuzzy items file as discovery issues (problem +
+  evidence + open questions, no prescribed solution) and build only after an owner-approved
+  spec. Currently: review-code v2's design spike (#474, discovery ahead of the S2 build) and
+  the spec-panel codex-seat experiment (#34, discovery ahead of the S3 lane's panel work).
 
 ## Unscheduled (deliberately)
 
-The growth backlog — backlog/TPM hero (#27 #28 #29 #31), greenfield/productionize
-onramps (#39 #40), maintainability guardian (#41), queue controller (#22) — waits
-behind the stability gate: **two consecutive releases whose first real runs diagnose
-clean.** The train above is engineered to produce exactly that. PHILOSOPHY B7 governs:
-evidence before machinery.
+The growth backlog — backlog/TPM hero (#27 #28 #29 #31), greenfield/productionize onramps
+(#39 #40), maintainability guardian (#41), queue controller (#22) — waits behind the stability
+gate: **two consecutive releases whose first real runs diagnose clean.** The train above is
+engineered to produce exactly that. PHILOSOPHY B7 governs: evidence before machinery.
 
 ## Keeping this file honest
 
-Update this file when — and only when — a release cuts or reorders, an epic opens or
-closes, a cut rule changes, or the build lane reschedules. Issue-level status never
-lives here (that's the Project and the epics). If this file needs edits more than
-release-ish often, it has drifted into being a status board — stop and fix the process
-instead.
+Update this file when — and only when — a release cuts or reorders, an epic opens or closes, a
+cut rule changes, or the build lane reschedules. Issue-level status never lives here (that's the
+Project and the epics). If this file needs edits more than release-ish often, it has drifted
+into being a status board — stop and fix the process instead.

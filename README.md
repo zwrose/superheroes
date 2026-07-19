@@ -1,9 +1,16 @@
 # superheroes
 
-**Your team of superheroes, powered by [superpowers](https://github.com/obra/superpowers) — agent tools for [Claude Code](https://code.claude.com).**
+**A discipline layer for building software with AI sessions.**
 
-A cast of specialist heroes that team up to take real development work off your plate —
-reviewing, testing, planning, and running the build loop themselves. One plugin, one install:
+superheroes doesn't run your builds — your sessions do. It's the set of roles, artifacts,
+and review structures that let a technical owner delegate real work to AI sessions and ship
+the result on evidence instead of vibes. It's built for the moderately technical
+builder — someone who can describe what they want, tell whether the result works, and read
+code a little. The judgment lives in the structure (brief checks, cross-vendor review, an
+advisor that vets with fresh eyes), not in the owner's own engineering taste — and every
+claim traces to a receipt the owner's advisor session can check from the PR alone.
+
+One plugin, one install:
 
 ```
 /plugin marketplace add zwrose/superheroes
@@ -25,9 +32,15 @@ the release train delivering those promises.
 ```
 
 Run it **first** in any project. It senses what the project needs and either sets it up,
-repairs it, or lets you see the whole project's calibration on one screen and tune a setting —
-including moving a project between in-repo and out-of-repo storage. It folds in the old
-per-hero setup commands, so `configure` is the only calibration command you run.
+repairs it, or lets you see the whole project's calibration on one screen and tune a
+setting — models per role, review engines, test-pilot, storage (in-repo vs. out-of-repo),
+and boundary rules — once, so every session that follows inherits it.
+
+configure also carries the **preflight**: the checkout a builder session runs, with the
+owner still present, before it goes autonomous — live-exercising the browser tool,
+cross-vendor CLI, and `gh` access rather than trusting a config file, so a stalled approval
+surfaces now instead of at 2am. See
+[`skills/configure/reference/preflight.md`](plugins/superheroes/skills/configure/reference/preflight.md).
 
 | Command | Use it to… |
 | --- | --- |
@@ -35,192 +48,104 @@ per-hero setup commands, so `configure` is the only calibration command you run.
 
 ---
 
-## the-architect
+## Two heroes run your sessions; three serve inside them
 
-**Turns a fuzzy idea into a reviewed spec → plan → tasks.**
+**Showrunner** and **Workhorse** are the two session types you actually launch — one
+long-lived advisor per project, one disposable builder per issue. **The Architect**,
+**Review Crew**, and **Test-Pilot** serve inside those sessions. A sixth hero, the
+maintainability guardian, arrives once its job does (see [Where this is going](#where-this-is-going)).
 
-the-architect owns the front half of the loop. From a rough idea, feature request, or
-bug it runs **Discovery** (eliciting plain-language requirements with you — the *what*,
-no jargon), then autonomously drafts the technical **Plan** (the *how*) and the
-bite-sized, test-first **Tasks** — each gated by review-crew. You live in the *what*; it
-handles the *how*, pausing only to escalate genuinely consequential calls in
-plain-language pros/cons.
+## Showrunner — the advisor session
 
-Once Discovery approves the spec, it offers a **post-approval path choice** — run the
-showrunner (recommended) to take the work-item all the way to a ready-for-review PR, or take
-the manual bridged path and drive `plan`/`tasks`/build yourself. Engine selection is set per
-role in `configure` (Claude by default); the-architect's front-half authoring stays on Claude
-— the engine axis applies to the review and build roles.
+**Keeps the project honest at project altitude.** One long-lived session per project:
+it keeps the roadmap and issue board truthful, sizes and routes incoming work (build-ready
+vs. needs-discovery), decomposes big asks into small, independently mergeable issues, vets
+every PR from its artifacts — the diff, the issue/spec, the build brief — against what was
+asked and what was proposed, diagnoses anomalies from artifacts, and coordinates releases. It
+**never merges** — that's always the owner's act.
 
-### Commands
+| Command | Use it to… |
+| --- | --- |
+| `/superheroes:showrunner` | Run the advisor session for this project — route work, vet PRs, coordinate releases. |
+
+## Workhorse — the builder session
+
+**Takes one routed issue to a ready PR.** A disposable session, one per issue: it writes a
+short **build brief** (shape, contracts & state, reuse plan, hard seams, rejected
+alternatives, consequential flags), gets it checked pre-code by a fresh reviewer at
+comparable tier and from another vendor, then builds test-first with tiered subagents in small diffs,
+verifies UI work in a real browser via test-pilot, runs multi-model review with every
+finding dispositioned in the PR body, and hands back a **ready PR**. It **never merges**.
+
+| Command | Use it to… |
+| --- | --- |
+| `/superheroes:workhorse` | Build a routed issue and take it to a ready-for-review PR. |
+
+## The Architect
+
+**Turns fuzzy intent into an owner-approved spec.** the-architect owns the *what*, in plain
+language — never the *how*, which stays the builder's, spelled out in the build brief. It
+runs Discovery (eliciting requirements with you, no jargon) through to an owner-approved
+spec.
 
 | Command | Use it to… |
 | --- | --- |
 | `/superheroes:architect-discovery` | Turn an idea into an owner-approved requirements **spec**. |
-| `/superheroes:architect-plan` | Turn an approved spec into a technical **plan**. |
-| `/superheroes:architect-tasks` | Turn an approved plan into bite-sized, test-first **tasks**. |
-| `/superheroes:architect-spec` | Write the on-disk spec doc once requirements are approved (normally invoked by discovery). |
+| `/superheroes:review-spec` | Red-team a draft spec before the owner gives final approval. |
 
-The project's doc-policy (where definition-docs live, committed vs gitignored) is set via
-[`/superheroes:configure`](#getting-set-up).
+## Review Crew
 
-First run in any project:
-
-```
-/superheroes:architect-discovery      # turn an idea into a reviewed spec
-```
-
----
-
-## review-crew
-
-**A standing review panel for your code, plans, and tech debt.**
-
-Most AI review is one model skimming a diff for "anything wrong?" review-crew is
-built differently: a panel of **five specialist reviewers** — architecture, code,
-security, test, and failure-mode (premortem) — each with its own methodology, running in
-parallel under a shared severity rubric. An orchestrator compiles their findings, triages
-each one, and (for code) drives an **auto-fix loop** that applies the safe fixes and
-re-reviews until nothing Critical or Important remains.
-
-Two things make it more than a clever prompt:
-
-- **Calibrated to your project.** [`/superheroes:configure`](#getting-set-up) generates
-  `core.md` plus `.claude/superheroes/review-crew.md` (in-repo) or their global
-  store equivalents — your threat model, verify command, scope, and canonical
-  patterns — so reviews match *your* codebase instead of generic best practices. Severity rules, diff-scope discipline, and "cite `file:line` or drop
-  the finding" are enforced when findings are compiled, not left to hope. You can
-  also run the panel on a **different model family** — set the reviewer engine to
-  Codex or Cursor in `configure` — for a cross-family safety net; findings flow
-  through the same auto-fix loop unchanged, and the fix is written by the
-  implementation engine.
-  Codex dispatches are tier-aware on GPT-5.6 by default. Codex tier map:
-  haiku=gpt-5.6-luna, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol, fable=gpt-5.6-sol.
-  Project calibration and one-run preflight overrides can pin an individual Codex role to `gpt-5.5` or a
-  specific 5.6 model. `gpt-5.5` + `max` is rejected; `max` is opt-in on GPT-5.6 only.
-- **Measured, not vibes.** The reviewer agents ship with a frozen eval harness
-  (planted findings + decoy traps, a deterministic scorer) and a non-regression
-  gate: a change has to prove it catches real issues without inflating false
-  positives before it lands. See [`plugins/superheroes/eval/`](plugins/superheroes/eval/).
-
-It's also context-frugal — the orchestrator never loads the full diff or raw agent
-output into its own conversation; subagents do the heavy reading and write
-structured results to disk.
-
-### Commands
+**The multi-model, cross-vendor review layer.** It checks the build brief before any code
+is written, reviews code with an auto-fix loop (`review-code`), red-teams specs
+(`review-spec`), and periodically sweeps a whole repo for accumulated debt (`audit-debt`).
+Panels are composed to be vendor-complementary — models that didn't write the code (or the
+brief, or the spec) are the ones reviewing it.
 
 | Command | Use it to… |
 | --- | --- |
 | `/superheroes:review-code` | Review an open PR or local branch and auto-fix what it finds — commits locally, never pushes. |
-| `/superheroes:review-plan` | Red-team a draft plan **before** any code is written. |
 | `/superheroes:review-spec` | Red-team a draft spec and report a readiness verdict. |
-| `/superheroes:review-tasks` | Review a tasks doc before the build runs. |
 | `/superheroes:audit-debt` | Periodically sweep a whole repo for accumulated debt → a prioritized set of GitHub issues. |
 
-First run in any project:
+## Test-Pilot
 
-```
-/superheroes:configure        # calibrate to this repo (run first)
-/superheroes:review-code       # review the current branch / PR
-```
-
----
-
-## test-pilot
-
-**Behavioral proof that a change actually works — not just that it compiles.**
-
-review-crew reads your code; test-pilot *drives your app*. It seeds realistic test
-data, writes a manual test plan onto the PR as a checklist, then — when you ask —
-pilots that plan in a real browser, records what it observes as findings, and hands you a
-results comment plus a short spot-check. The goal is a trustworthy "here's it
-working" before a human ever clicks anything.
-
-Like review-crew, it's **calibrated per project** ([`/superheroes:configure`](#getting-set-up)
-sets up a profile, seeding blocks, and browser tooling) so the plans and data fit *your* app.
-
-### Commands
+**Behavioral proof that a change actually works — not just that it compiles.** It seeds
+realistic test data, posts a checkbox test plan to the PR, then drives the plan in a real
+browser and posts a results comment. **Observe-only:** a bug it finds is a finding, never a
+fix — fixes always route back to the session that called it in.
 
 | Command | Use it to… |
 | --- | --- |
 | `/superheroes:test-pilot-plan` | Seed test data for a PR/branch and post a checkbox test plan to the PR. |
 | `/superheroes:test-pilot-execute` | Drive the plan in a real browser, record what it observes at each step, and post a results comment before your spot-check. |
 
-First run in any project:
-
-```
-/superheroes:configure         # calibrate to this app (run first)
-/superheroes:test-pilot-plan    # seed data + post a plan to the PR
-```
-
 ---
 
-## workhorse
+## What holds it together
 
-**The producer — builds an approved work-item and ships it to a ready-for-review PR.**
+- **Specs carry intent.** An owner-approved spec is the *what* — the contract a PR is held
+  accountable to. The *how* stays the builder's: spelled out explicitly in the build brief,
+  checked once before code, and vetted against at the PR. No plan documents, no doc-review
+  treadmills.
+- **Review is structurally independent.** Cross-vendor panels mean models that didn't write
+  the code review it; the advisor vets every PR with fresh context; the owner merges. Maker
+  and checker are never the same mind.
+- **configure calibrates once**, and every session inherits it.
+- **The covenant rides every session.** A SessionStart hook injects a distilled operating
+  discipline — never merge, never claim more than you verified, disclose every degradation,
+  park rather than presume — into every session (see
+  [`rubric/covenant.md`](plugins/superheroes/rubric/covenant.md)).
+- **An owner-authority gate backs the covenant mechanically.** A hook intercepts
+  merge, release, force-push, and workflow-run actions and routes them to the owner — not just a
+  promise in a prompt.
 
-When a tasks doc is approved, workhorse runs the **back half** of the loop on its own: it
-builds the change (subagent-driven, test-first), reviews it (review-crew's auto-fix loop),
-opens a draft PR, exercises it through the native showrunner `test-pilot` phase, resets
-seeded data fresh for spot-checking, then **flips the PR to ready-for-review** only after
-the tested head is review-covered, verified, published to the PR branch, and CI-green on a
-branch brought up to date with its base. It hands you a live dev server + a
-plain-language readout. It **never merges** — that's always yours. The build and its
-mechanical fixes can run on an external **implementation engine** (Codex or Cursor,
-chosen in `configure`); every external result is verify-gated and audited, and the
-producer's owner-authority boundary is unchanged — it still never merges, force-pushes,
-or pushes to the default branch.
+## What this is not
 
-> **GitHub access:** workhorse needs `gh` signed in with **write** access to the repo (it never merges). A fail-closed preflight checks this at startup — see [GitHub access](plugins/superheroes/skills/workhorse/reference/github-access.md).
-
-### Commands
-
-| Command | Use it to… |
-| --- | --- |
-| `/superheroes:workhorse` | Build an approved work-item and take it to a ready-for-review PR. |
-
-Once a tasks doc is approved:
-
-```
-/superheroes:workhorse          # build it and take it to a PR
-```
-
----
-
-## showrunner
-
-**The run engine — turns one approved work-item into a ready-for-review PR, hands-off.**
-
-workhorse builds the back half on demand; showrunner runs the *whole* loop for one approved
-work-item with a single launch. It runs a **fail-closed pre-flight gate** (spec approved, `gh`
-write access, no conflicting live run, repo/verify/config resolvable), then drives the native
-**plan → review → tasks → review → build → review-code → draft-PR → test-pilot → mark-ready →
-ship** pipeline to a ready-for-review PR — parking at any gate it can't pass and handing back a
-codified readout (PR link, CI status, built-vs-acceptance, merge reminder). The showrunner path
-is **superpowers-free**: it authors natively. It **never merges** — that's always yours.
-
-After Discovery approves a spec, the-architect offers a **post-approval path choice**: run the
-showrunner (recommended) or take the manual bridged path. Pick the showrunner and it launches the
-run for you; pick manual and the existing hand-off is unchanged.
-
-> **Re-invocable.** The same entry covers a fresh start, a resume/relaunch after a park or crash,
-> and a status read — the run reconciles its inputs from disk, so a launch is idempotent. Full
-> superpowers removal is tracked by [#111](https://github.com/zwrose/superheroes/issues/111);
-> durable repeatable agentic acceptance by [#112](https://github.com/zwrose/superheroes/issues/112).
-
-### Commands
-
-| Command | Use it to… |
-| --- | --- |
-| `/superheroes:showrunner` | Run an approved work-item end-to-end to a ready-for-review PR (pre-flight → bundle → ship). |
-| `python3 plugins/superheroes/lib/run_watch.py --work-item <work-item> --root "$(git rev-parse --show-toplevel)" --follow` | Watch a showrunner run from on-disk state without spending model tokens. |
-| `python3 plugins/superheroes/lib/token_trend.py --root "$(git rev-parse --show-toplevel)"` | See the token/dispatch cost trend across this checkout's runs — tokens-per-completed-work-item and tokens-per-park. |
-
-Once a spec is approved (the-architect offers this automatically):
-
-```
-/superheroes:showrunner         # run it all the way to a ready-for-review PR
-```
+superheroes does not execute your build as a fixed sequence of stages, and it is not an
+orchestration engine — there is no intermediary layer routing sessions through steps on
+their behalf. There are no gates between an approved issue and a ready PR beyond the ones
+above. The platform runs the agents; superheroes supplies the judgment structure around
+them.
 
 ---
 
@@ -251,10 +176,9 @@ changes — the same methodology runs on both.
 
 ## Where this is going
 
-superheroes is growing into a band that runs much of a project's development loop for
-you. See the [roadmap](ROADMAP.md) — now a live [GitHub Project](https://github.com/users/zwrose/projects/1) —
-for what's planned and in flight, and [CONVENTIONS.md](CONVENTIONS.md) for the cross-plugin
-contracts.
+See the [roadmap](ROADMAP.md) — now a live [GitHub Project](https://github.com/users/zwrose/projects/1) —
+for what's planned and in flight, including the maintainability guardian's eventual arrival,
+and [CONVENTIONS.md](CONVENTIONS.md) for the cross-plugin contracts.
 
 ## Contributing
 

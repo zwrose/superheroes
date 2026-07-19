@@ -48,8 +48,10 @@ prompt until a consequential flag or handback.
 ## 2. Set up the workspace
 
 Your own worktree + branch off the issue's base, and **bring the app up** the way test-pilot will
-run it (dev server, any login/seed the app needs to be usable). **You own integration** — you merge
-the work orders' branches back together, no one else does.
+run it (dev server, any login/seed the app needs to be usable). **No running app (a plugin, library,
+or docs build)?** There is nothing to bring up — say so and skip the app-bring-up; the workspace is
+just your worktree + branch. **You own integration** — you merge the work orders' branches back
+together, no one else does.
 
 ## 3. Preflight — the checkout before going autonomous
 
@@ -64,6 +66,11 @@ approval is in place, only by using it:
   auth wall it can't pass is exactly what would stall you mid-run.
 - **The cross-vendor CLI** — one harmless authenticated call.
 - **`gh`** — confirm sign-in.
+
+**When the build has no running app** (a plugin/library/docs change with no browser-drivable
+surface), the browser/test-pilot live-exercise probe is **N/A** — there is nothing to drive. Run the
+probes that still apply (the cross-vendor CLI, `gh`), and **state the browser-probe N/A explicitly in
+the PR** rather than skipping it silently. Only builds with an app surface exercise the browser.
 
 If one fails it surfaces to the owner **now, while they're here** — never go autonomous with a tool
 you haven't proven, or you will stall at the first approval prompt (which could be the middle of the
@@ -132,6 +139,10 @@ clean, build green — **you re-run yourself and read the raw output**. An imple
   results only — it never fixes.** A bug it reports becomes an **implementer work order** you dispatch.
 - The skill-side change — `test-pilot-execute` becoming observe-and-report, dropping its own fix loop
   — is tracked in **issue #483**, not this PR; this charter states the observe-only contract now.
+- **Test-pilot applies only to a build with an app surface.** A plugin, library, or docs build has
+  nothing to pilot — record test-pilot as **N/A (no running app)** in the PR, with the positive
+  evidence that stands in for it (the receipts you re-ran, the review). Do not fabricate a browser
+  run; do not silently omit the step.
 
 ## 10. Review before handback
 

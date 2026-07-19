@@ -172,8 +172,9 @@ def atomic_write(path, text):
 
 def ensure_store(cwd, root=None):
     """Create the per-checkout store as a git repo (idempotent) + meta.json. The git
-    repo hosts the §4.4 lock refs. Returns the checkout dir, or None if the store
-    can't be created/initialized (wedged → the caller fails closed per design §2)."""
+    repo hosts the per-clone control-plane store's refs (the work-item lease refs it
+    once held retired with the spine, #478). Returns the checkout dir, or None if the
+    store can't be created/initialized (wedged → the caller fails closed per design §2)."""
     d = checkout_dir(cwd, root)
     try:
         os.makedirs(d, exist_ok=True)

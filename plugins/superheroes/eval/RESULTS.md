@@ -1,5 +1,7 @@
 # A/B Results — agent improvements vs faithful-port baseline
 
+> **Status (v2): historical record.** This eval harness predates the v2 reframe (spine + plan/tasks retired, #478/#479). It is preserved as frozen v1 evidence; a v2 rebuild of the review-eval harness is scheduled in the S2 "Review quality" lane (epic #476 — review benchmark #131, orientation review #318). Names like review-plan/review-tasks/plan/tasks/spine below are retired v1 concepts, kept for the historical record — not the current system.
+
 **Method:** offline dual-dispatch (see `README.md`). For each agent × fixture, a reviewer-simulating subagent ran twice — **baseline** (agent + rubric at `git show 5a05714:…`) and **improved** (working tree) — blind to the expected-findings manifest, then scored against `fixtures/<name>/expected.json` (scope-aware matching per README §Scoring).
 
 **Date:** 2026-06-06. **Baseline ref:** `5a05714`. **Fixtures:** `web-handler`, `refactor`.

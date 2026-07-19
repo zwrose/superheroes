@@ -1,5 +1,7 @@
 # review-crew skill-test state matrix
 
+> **Status (v2): historical record.** This eval harness predates the v2 reframe (spine + plan/tasks retired, #478/#479). It is preserved as frozen v1 evidence; a v2 rebuild of the review-eval harness is scheduled in the S2 "Review quality" lane (epic #476 — review benchmark #131, orientation review #318). Names like review-plan/review-tasks/plan/tasks/spine below are retired v1 concepts, kept for the historical record — not the current system.
+
 A documented, re-runnable **state matrix** of orchestrator behavior across the
 dimensions the review skills branch on: **profile presence × profile status ×
 verify-mode × review-init branches × strict fallback**. For each cell it records

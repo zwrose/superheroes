@@ -216,7 +216,7 @@ def test_complete_codex_policy_single_sourced():
         "engine_adapter's no-tier default must derive from the authoritative tier map")
 
     expected_ids = set(engine_pref.CODEX_MODELS)
-    for rel in ("../../README.md", "../../CONVENTIONS.md",
+    for rel in ("../../CONVENTIONS.md",  # README is a high-level overview in v2 — no longer a Codex-policy copy-holder (policy home: engine_pref.py; CONVENTIONS + configure refs remain drift-checked)
                 "skills/configure/reference/set-up.md",
                 "skills/configure/reference/view-and-tune.md"):
         doc = _read(rel)
