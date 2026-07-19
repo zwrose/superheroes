@@ -93,9 +93,7 @@ Two things make it more than a clever prompt:
   also run the panel on a **different model family** — set the reviewer engine to
   Codex or Cursor in `configure` — for a cross-family safety net; findings flow
   through the same auto-fix loop unchanged, and the fix is written by the
-  implementation engine. Plan authoring alone can use a third **`planAuthor` engine**
-  (tasks always authors on Claude); pair it with an **`author-plan` model tier** when
-  you want a stronger plan model via an external host.
+  implementation engine.
   Codex dispatches are tier-aware on GPT-5.6 by default. Codex tier map:
   haiku=gpt-5.6-luna, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol, fable=gpt-5.6-sol.
   Project calibration and one-run preflight overrides can pin an individual Codex role to `gpt-5.5` or a

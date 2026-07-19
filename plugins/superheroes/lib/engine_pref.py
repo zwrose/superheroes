@@ -18,8 +18,8 @@ ENGINES = ("claude", "codex", "cursor")
 
 # Canonical v2 engine-preference role keys (the single home the §11 drift guard reads). Each is a
 # key under core.md's enginePreferences. `orchestrator` is intentionally absent — the session model
-# is not owner-configurable. `planAuthor` is legacy (plan authoring retired) and kept only as
-# harmless back-compat plumbing, not part of the v2 schema.
+# is not owner-configurable. `planAuthor` is retired (plan authoring was retired in #479) — it is
+# not a v2 schema key and survives only as a tombstone in RETIRED_ENGINE_KEYS below.
 ENGINE_ROLE_KEYS = ("reviewer", "implementation", "briefCheck", "pilot")
 
 # The FULL valid enginePreferences key set (role keys + the non-role tuning keys) — the schema home
@@ -42,11 +42,9 @@ CODEX_MODEL_BY_TIER = {
     "opus": "gpt-5.6-sol",
     "fable": "gpt-5.6-sol",
 }
-CODEX_PIN_ROLES = ("reviewer", "reviewer-deep", "builder", "fixer", "author-plan",
-                   "implementer", "pilot")
-CODEX_ROLE_KIND = {"reviewer": "review", "reviewer-deep": "review-deep", "builder": "build",
-                   "fixer": "fix", "author-plan": "author-plan", "implementer": "build",
-                   "pilot": "pilot"}
+CODEX_PIN_ROLES = ("reviewer", "reviewer-deep", "fixer", "implementer", "pilot")
+CODEX_ROLE_KIND = {"reviewer": "review", "reviewer-deep": "review-deep",
+                   "fixer": "fix", "implementer": "build", "pilot": "pilot"}
 CODEX_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
 CODEX_MAX_UNSUPPORTED_MODELS = ("gpt-5.5",)
 
@@ -57,16 +55,14 @@ CODEX_MAX_UNSUPPORTED_MODELS = ("gpt-5.5",)
 CODEX_MODEL_STRENGTH = ("gpt-5.5", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol")
 
 # The pin roles the codex IMPLEMENTATION role dispatches as workspace writes (build + fix). The
-# write-auth probe (engine_authz) must cover exactly these — reviewer/plan roles run on separate
+# write-auth probe (engine_authz) must cover exactly these — reviewer roles run on separate
 # (read / non-write-gated) paths, so their pins are irrelevant to whether a build write is authorized.
-CODEX_WRITE_PIN_ROLES = ("builder", "fixer")
+CODEX_WRITE_PIN_ROLES = ("implementer", "fixer")
 
-# role_kind -> the enginePreferences key it reads. `author-plan` (the front-half plan-author
-# leaf) reads its OWN key — plan authoring routes independently of review/build; tasks
-# authoring has no key on purpose and always runs native. `brief-check` (the v2 cross-vendor
-# pre-code reviewer) and `pilot` (the v2 test-pilot executor) each read their own key too.
+# role_kind -> the enginePreferences key it reads. `brief-check` (the v2 cross-vendor pre-code
+# reviewer) and `pilot` (the v2 test-pilot executor) each read their own key.
 _ROLE_KEY = {"review": "reviewer", "build": "implementation", "fix": "implementation",
-             "author-plan": "planAuthor", "brief-check": "briefCheck", "pilot": "pilot"}
+             "brief-check": "briefCheck", "pilot": "pilot"}
 
 # Most roles fail open to claude; the brief-check reviewer defaults to codex (the ratified
 # cross-vendor pre-code check). An unavailable codex is handled at dispatch time (disclosed
@@ -124,20 +120,19 @@ def dispatch_calibration_rows(prefs, tiers):
 # regular review -> high. GPT-5.6 additionally accepts max, but max is owner opt-in only;
 # GPT-5.5 remains limited to none/low/medium/high/xhigh.
 _CODEX_EFFORT = {"review": "high", "review-deep": "xhigh", "build": "high", "fix": "low",
-                 "author-plan": "xhigh", "brief-check": "high", "pilot": "medium"}
+                 "brief-check": "high", "pilot": "medium"}
 _CURSOR_EFFORT = "composer"
 
 DEFAULT_STALL_LIMIT_SECONDS = 300
 
 # #309 role-appropriate dispatch ceilings (owner policy: HIGH ceilings + monitors, never borderline
-# limits). WRITE roles (build/fix/author-plan) get a high ceiling; READ roles (review) a moderate one.
+# limits). WRITE roles (build/fix) get a high ceiling; READ roles (review) a moderate one.
 # These are CEILINGS, not expected durations, and are PAIRED with the byte-activity stall monitor
 # (resolve_idle below). Twin of engine_pref.js's constants.
 WRITE_TIMEOUT_SECONDS = 2400
 READ_TIMEOUT_SECONDS = 900
 _ROLE_TIMEOUT = {"build": WRITE_TIMEOUT_SECONDS, "fix": WRITE_TIMEOUT_SECONDS,
-                 "author-plan": WRITE_TIMEOUT_SECONDS, "review": READ_TIMEOUT_SECONDS,
-                 "review-deep": READ_TIMEOUT_SECONDS}
+                 "review": READ_TIMEOUT_SECONDS, "review-deep": READ_TIMEOUT_SECONDS}
 
 # #309 byte-activity stall thresholds — the monitor half of the ceiling+monitor pair (twin of
 # engine_pref.js). A dispatch emitting NO output bytes for this many seconds is wedged and is killed
@@ -148,8 +143,7 @@ WRITE_IDLE_SECONDS = 600
 READ_IDLE_SECONDS = 300
 DEFAULT_IDLE_SECONDS = 300
 _ROLE_IDLE = {"build": WRITE_IDLE_SECONDS, "fix": WRITE_IDLE_SECONDS,
-              "author-plan": WRITE_IDLE_SECONDS, "review": READ_IDLE_SECONDS,
-              "review-deep": READ_IDLE_SECONDS}
+              "review": READ_IDLE_SECONDS, "review-deep": READ_IDLE_SECONDS}
 
 
 def resolve_engine(role_kind, prefs):
@@ -272,7 +266,7 @@ def load_engine_prefs(cwd, root=None):
     (else 'claude'); surface the optional FR-9 `effort` sub-map (a dict, else {}) and the optional
     #309 `timeout` owner override (a positive int, else omitted — resolve_timeout then falls to the
     role ceiling); absent block / None / any error → both 'claude' + empty effort. Never raises."""
-    degenerate = {"reviewer": "claude", "implementation": "claude", "planAuthor": "claude",
+    degenerate = {"reviewer": "claude", "implementation": "claude",
                   "briefCheck": "claude", "pilot": "claude", "effort": {}}
     try:
         import core_md
@@ -287,7 +281,6 @@ def load_engine_prefs(cwd, root=None):
     effort = prefs.get("effort")
     out = {"reviewer": _normalize(prefs.get("reviewer")),
            "implementation": _normalize(prefs.get("implementation")),
-           "planAuthor": _normalize(prefs.get("planAuthor")),
            "briefCheck": _normalize(prefs.get("briefCheck")),
            "pilot": _normalize(prefs.get("pilot")),
            "effort": dict(effort) if isinstance(effort, dict) else {}}

@@ -135,9 +135,9 @@ def test_cli_autoresolve_broken_profile_failsafe(tmp_path, monkeypatch, capsys):
 
 
 def test_known_roles_matches_core_default_tiers():
-    # KNOWN_ROLES mirrors the model_tier core's ROLES (DEFAULT_TIERS keys + split roles like
-    # author-plan) MINUS `orchestrator` — deliberately excluded, since the session model has
-    # no config key and must never be silently overridable. Guard against silent drift so a
+    # KNOWN_ROLES mirrors the model_tier core's ROLES (DEFAULT_TIERS keys) MINUS `orchestrator` —
+    # deliberately excluded, since the session model has no config key and must never be silently
+    # overridable. Guard against silent drift so a
     # renamed/added core role can't make this helper drop a valid override (fail-open would
     # otherwise mask it). Mirrors the sibling guard in test_model_tier_resolve.py. Repointed
     # from the old plugins/superheroes/lib/model_tier.py to the in-tree sibling core.

@@ -48,8 +48,8 @@ _CURSOR_MODEL = "composer-2.5-fast"
 # Cursor is the TOKEN-EFFICIENCY engine: its whole point is the highly token-efficient composer-2.5,
 # so ALL work roles (build/fix/review/reviewer-deep) dispatch the pinned _CURSOR_MODEL composer
 # default, and premium Claude models are NEVER routed through cursor by default. The ONE deliberate
-# exception is plan authoring: `author-plan: fable` (model tier) + `planAuthor: cursor` (engine pref)
-# dispatches Fable via cursor — hence `fable` is the map's ONLY entry (id verified live against
+# exception is the `fable` tier: an owner who explicitly overrides a role to `fable` and routes that
+# role via cursor dispatches Fable — hence `fable` is the map's ONLY entry (id verified live against
 # `cursor-agent models` 2026-07-03). Every other tier (opus/sonnet/haiku, or any owner override)
 # DELIBERATELY falls through build_argv's `.get(..., _CURSOR_MODEL)` to composer — that fall-through
 # IS the policy, not a gap; do not "complete" this map with premium ids. EVERY cursor dispatch
@@ -63,7 +63,7 @@ _CURSOR_MODEL_BY_TIER = {
 
 def build_argv(engine, role_kind, effort, opts):
     """Return the argv list to dispatch `engine` for `role_kind` at `effort`. READ (review) →
-    read-only sandbox; WRITE (build|fix|author-plan) → workspace-write. Always explicit
+    read-only sandbox; WRITE (build|fix) → workspace-write. Always explicit
     model+effort. opts keys: cwd, schema_path, model (native tier short name), engine_model
     (provider-specific concrete model pin). Cursor maps the tier via _CURSOR_MODEL_BY_TIER; Codex
     uses a valid engine_model pin or maps the shared tier. The PROMPT is NOT
@@ -205,27 +205,13 @@ def _scrub_findings(findings):
     return out
 
 
-def _scrub_notify(notify):
-    """NOTIFY entries are author free-text end to end (identity AND message) — scrub both."""
-    out = []
-    for n in notify if isinstance(notify, list) else []:
-        if not isinstance(n, dict):
-            continue
-        out.append({"identity": _scrub(n.get("identity")) if isinstance(n.get("identity"), str) else None,
-                    "message": _scrub(n.get("message")) if isinstance(n.get("message"), str) else None})
-    return out
-
-
 def parse_result(engine, role_kind, stdout):
     """Parse an external engine's stdout into the native result shape. review → scrubbed
     findings (from the canonical {"findings": [...]} object OR, tolerated, a bare top-level
     array of finding objects — #196); build|fix → {ok,signal,evidence{testFailed,testPassed}}
     honoring the leaf's OWN ok/signal (an honest {"ok":false,"signal":"plan_wrong"} refusal stays
-    ok:false so it parks — never coerced to ok:true and committed, #288);
-    author-plan →
-    {ok,notify[]} (the doc itself is verified downstream by the deterministic usableDraft
-    post-check — this parse only confirms the engine ran to completion and surfaces NOTIFY
-    defaults). Unparseable/empty → {ok:false, reason:'unreadable'}. External free-text is
+    ok:false so it parks — never coerced to ok:true and committed, #288).
+    Unparseable/empty → {ok:false, reason:'unreadable'}. External free-text is
     scrubbed HERE (Secret-hygiene). Never raises."""
     try:
         stdout = _unwrap_stream_envelope(stdout)   # #347: see the unwrap's docstring
@@ -252,8 +238,6 @@ def parse_result(engine, role_kind, stdout):
             return {"ok": True, "findings": _scrub_findings(findings)}
         if obj is None:
             return {"ok": False, "reason": "unreadable"}
-        if role_kind == "author-plan":
-            return {"ok": True, "notify": _scrub_notify(obj.get("notify"))}
         # build | fix
         ev = obj.get("evidence") if isinstance(obj.get("evidence"), dict) else {}
         evidence = {"testFailed": bool(ev.get("testFailed")),
@@ -399,7 +383,7 @@ def main(argv):
     sub = ap.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("build-argv")
     b.add_argument("--engine", required=True, choices=("codex", "cursor"))
-    b.add_argument("--role", required=True, choices=("review", "build", "fix", "author-plan"))
+    b.add_argument("--role", required=True, choices=("review", "build", "fix"))
     b.add_argument("--effort", required=True)
     b.add_argument("--cwd", default=None)
     b.add_argument("--schema-path", default=None)
@@ -411,7 +395,7 @@ def main(argv):
                    help="PATH:SHA256 staged-input check; any mismatch/unreadable file fails build-argv closed")
     pr = sub.add_parser("parse-result")
     pr.add_argument("--engine", required=True, choices=("codex", "cursor"))
-    pr.add_argument("--role", required=True, choices=("review", "build", "fix", "author-plan"))
+    pr.add_argument("--role", required=True, choices=("review", "build", "fix"))
     pr.add_argument("--stdout-path", default=None,
                      help="file holding the external engine's raw stdout; stdin if omitted")
     cm = sub.add_parser("commit")

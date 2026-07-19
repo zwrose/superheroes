@@ -23,10 +23,7 @@ _FALLBACK = {
     "mechanical": "haiku",
     "synthesis": "opus",
     "fixer": "sonnet",
-    "author": "opus",
-    "builder": "opus",
     "pr-body": "sonnet",
-    "author-plan": "opus",
     "implementer": "sonnet",
     "pilot": "sonnet",
 }
