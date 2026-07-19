@@ -1179,21 +1179,21 @@
     },
     {
       "skill": "superheroes/test-pilot-execute",
-      "phrase": "execute the test-pilot plan and fix any bugs found",
+      "phrase": "execute the test-pilot plan and report any bugs found",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
       "skill": "superheroes/test-pilot-execute",
-      "phrase": "execute the test-pilot plan and fix any bugs found",
+      "phrase": "execute the test-pilot plan and report any bugs found",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
       "skill": "superheroes/test-pilot-execute",
-      "phrase": "execute the test-pilot plan and fix any bugs found",
+      "phrase": "execute the test-pilot plan and report any bugs found",
       "direction": "should_fire",
       "run": 2,
       "activated": true

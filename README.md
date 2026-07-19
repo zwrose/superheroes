@@ -134,7 +134,7 @@ First run in any project:
 
 review-crew reads your code; test-pilot *drives your app*. It seeds realistic test
 data, writes a manual test plan onto the PR as a checklist, then — when you ask —
-pilots that plan in a real browser, fixes the bugs it trips over, and hands you a
+pilots that plan in a real browser, records what it observes as findings, and hands you a
 results comment plus a short spot-check. The goal is a trustworthy "here's it
 working" before a human ever clicks anything.
 
@@ -146,7 +146,7 @@ sets up a profile, seeding blocks, and browser tooling) so the plans and data fi
 | Command | Use it to… |
 | --- | --- |
 | `/superheroes:test-pilot-plan` | Seed test data for a PR/branch and post a checkbox test plan to the PR. |
-| `/superheroes:test-pilot-execute` | Drive the plan in a real browser, fix what breaks, and post a results comment before your spot-check. |
+| `/superheroes:test-pilot-execute` | Drive the plan in a real browser, record what it observes at each step, and post a results comment before your spot-check. |
 
 First run in any project:
 
