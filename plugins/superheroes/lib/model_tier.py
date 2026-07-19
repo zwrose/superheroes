@@ -23,19 +23,12 @@ DEFAULT_TIERS = {
     "mechanical": "haiku",         # well-specified implementers, fixers, triage
     "synthesis": "opus",           # panel synthesis: the strongest tier (loop-owned)
     "fixer": "sonnet",             # default context = code-fixer (the mid-tier floor)
-    "author": "opus",              # produce-plan / produce-tasks (front-half authoring, #88)
-    "builder": "opus",             # native build-phase implementer (a smart leaf; owner policy -> opus)
     "pr-body": "sonnet",           # #219: durable draft-PR body composer (showrunner composePrBody)
     "implementer": "sonnet",   # v2 delegated work-order implementer (owner-ratified default: sonnet)
     "pilot": "sonnet",         # v2 test-pilot executor (owner-ratified default: sonnet)
 }
 
-# Split roles: a role here has no tier of its own — absent an explicit override it resolves
-# EXACTLY as its base role (including the base's override). `author-plan` exists so plan
-# authoring alone can be raised (e.g. to fable) without moving tasks authoring off `author`.
-_ROLE_FALLBACK = {"author-plan": "author"}
-
-ROLES = tuple(DEFAULT_TIERS) + tuple(_ROLE_FALLBACK)
+ROLES = tuple(DEFAULT_TIERS)
 
 # The single `fixer` role resolves by context (spec: one role, not two): a doc-reviser is
 # re-authoring design (strongest tier), a code-fixer works from a prose worklist (mid floor).
@@ -46,19 +39,7 @@ def resolve_model(role, overrides=None, context=None):
     """Return the dispatch model name for `role`, or None to inherit the session model. An
     unknown role, a non-dict `overrides`, or a malformed override value falls back to
     DEFAULT_TIERS (fail-open). `context` selects the single `fixer` role's tier (code/doc);
-    a per-project override on `fixer` still wins over the context default. A split role
-    (_ROLE_FALLBACK) honors its own override first, else resolves as its base role."""
-    base = _ROLE_FALLBACK.get(role)
-    if base is not None:
-        if isinstance(overrides, dict):
-            v = overrides.get(role, _MISSING)
-            if v is not _MISSING:
-                if v is None:
-                    return None
-                if isinstance(v, str) and v.strip():
-                    return v.strip()
-                # malformed own-override -> resolve as the base role (fail-open)
-        return resolve_model(base, overrides, context)
+    a per-project override on `fixer` still wins over the context default."""
     if role not in DEFAULT_TIERS:
         role = "reviewer"  # safe capable default for an unrecognized role
     default = DEFAULT_TIERS[role]

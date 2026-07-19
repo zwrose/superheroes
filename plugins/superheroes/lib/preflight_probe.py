@@ -24,6 +24,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import core_md                 # noqa: E402
+import engine_adapter          # noqa: E402
 import engine_pref            # noqa: E402
 import model_tier_overrides    # noqa: E402
 
@@ -36,7 +37,10 @@ def cross_vendor_no_op_argv(engine):
     if engine == "codex":
         return ("codex", "exec", "--sandbox", "read-only", "reply with the single word READY")
     if engine == "cursor":
-        return ("cursor-agent", "--model", "cursor-small", "-p", "--trust", "reply READY")
+        # The cursor probe must dispatch the project's configured cursor model (the SSOT default
+        # in engine_adapter), not a hard-coded id — `cursor-small` was observed unavailable in a
+        # live run, which would fail the probe for a project that never dispatches it.
+        return ("cursor-agent", "--model", engine_adapter._CURSOR_MODEL, "-p", "--trust", "reply READY")
     return (engine, "--version")
 
 
@@ -129,7 +133,7 @@ def dispatch_calibration(cwd=None, root=None, prefs=None, tiers=None):
             prefs = prefs if isinstance(prefs, dict) else {}
         if tiers is None:
             tiers = model_tier_overrides.effective_tiers(
-                model_tier_overrides.resolve_profile_path(cwd))
+                model_tier_overrides.resolve_profile_path(cwd, root))
         return engine_pref.dispatch_calibration_rows(prefs, tiers)
     except Exception:
         return []

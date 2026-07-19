@@ -135,9 +135,9 @@ def test_cli_autoresolve_broken_profile_failsafe(tmp_path, monkeypatch, capsys):
 
 
 def test_known_roles_matches_core_default_tiers():
-    # KNOWN_ROLES mirrors the model_tier core's ROLES (DEFAULT_TIERS keys + split roles like
-    # author-plan) MINUS `orchestrator` — deliberately excluded, since the session model has
-    # no config key and must never be silently overridable. Guard against silent drift so a
+    # KNOWN_ROLES mirrors the model_tier core's ROLES (DEFAULT_TIERS keys) MINUS `orchestrator` —
+    # deliberately excluded, since the session model has no config key and must never be silently
+    # overridable. Guard against silent drift so a
     # renamed/added core role can't make this helper drop a valid override (fail-open would
     # otherwise mask it). Mirrors the sibling guard in test_model_tier_resolve.py. Repointed
     # from the old plugins/superheroes/lib/model_tier.py to the in-tree sibling core.
@@ -224,3 +224,20 @@ def test_write_unknown_model_warns_but_keeps_override(tmp_path):
     result = MTO.update_overrides(str(p), {"reviewer": "experimental-model"}, [])
     assert any("unknown model for reviewer: experimental-model" in w for w in result["warnings"])
     assert MTO.load_overrides(str(p)) == {"reviewer": "experimental-model"}
+
+
+def test_resolve_profile_path_threads_root_to_calibration_resolve(monkeypatch):
+    # Regression (#489): a caller-supplied `root` was dropped, so a global-store / custom-root
+    # setup silently resolved tiers against the DEFAULT store while the core prefs read the custom
+    # one. `root` must reach calibration_resolve so both read the same store.
+    import calibration_resolve
+    captured = {}
+
+    def _fake(cwd=None, root=None):
+        captured["cwd"] = cwd
+        captured["root"] = root
+        return "/resolved/layer.md"
+
+    monkeypatch.setattr(calibration_resolve, "resolve_profile_path", _fake)
+    assert MTO.resolve_profile_path("/proj", root="/store") == "/resolved/layer.md"
+    assert captured == {"cwd": "/proj", "root": "/store"}

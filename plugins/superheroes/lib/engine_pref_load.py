@@ -17,8 +17,8 @@ def main(argv):
     ap.add_argument("--cwd", default=".")
     ap.add_argument("--root", default=None)
     args = ap.parse_args(argv[1:])
-    degenerate = {"reviewer": "claude", "implementation": "claude", "planAuthor": "claude",
-                  "effort": {}}
+    degenerate = {"reviewer": "claude", "implementation": "claude",
+                  "briefCheck": "claude", "pilot": "claude", "effort": {}}
     try:
         import engine_pref
         prefs = engine_pref.load_engine_prefs(args.cwd, args.root)

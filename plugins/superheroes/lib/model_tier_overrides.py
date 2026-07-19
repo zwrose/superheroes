@@ -27,8 +27,8 @@ if _LIB_DIR not in sys.path:
 # excluded: it has no config key (the session model is not owner-configurable, so it must
 # never be silently overridable via this block). A role not in this set is an owner typo
 # and is dropped (fail-open to the default).
-KNOWN_ROLES = ("reviewer", "reviewer-deep", "mechanical", "synthesis", "fixer", "author",
-               "builder", "pr-body", "author-plan", "implementer", "pilot")
+KNOWN_ROLES = ("reviewer", "reviewer-deep", "mechanical", "synthesis", "fixer",
+               "pr-body", "implementer", "pilot")
 KNOWN_MODELS = ("haiku", "sonnet", "opus", "fable")
 
 _HEADING = re.compile(r"^\s*##\s+[Mm]odel tiers\s*$")
@@ -166,15 +166,18 @@ def update_overrides(profile_path, set_overrides=None, clear_roles=None):
     }
 
 
-def resolve_profile_path(cwd=None):
-    return _resolve_profile_path(cwd)
+def resolve_profile_path(cwd=None, root=None):
+    return _resolve_profile_path(cwd, root)
 
 
-def _resolve_profile_path(cwd=None):
-    """Auto-resolve the review-crew layer (unified) or legacy profile path."""
+def _resolve_profile_path(cwd=None, root=None):
+    """Auto-resolve the review-crew layer (unified) or legacy profile path. `root` threads the
+    control-plane store root through so a global-store / custom-root setup reads its model tiers
+    from the SAME store as the core prefs (else a dropped root silently resolves against the
+    default store)."""
     try:
         import calibration_resolve
-        return calibration_resolve.resolve_profile_path(cwd or os.getcwd())
+        return calibration_resolve.resolve_profile_path(cwd or os.getcwd(), root=root)
     except Exception:
         return None
 

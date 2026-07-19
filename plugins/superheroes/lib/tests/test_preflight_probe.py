@@ -85,8 +85,11 @@ def test_cross_vendor_no_op_argv_codex():
 
 
 def test_cross_vendor_no_op_argv_cursor():
+    # The cursor probe threads the project's configured cursor model (engine_adapter's SSOT),
+    # never a hard-coded id — `cursor-small` was observed unavailable in a live run.
+    import engine_adapter
     assert pp.cross_vendor_no_op_argv("cursor") == (
-        "cursor-agent", "--model", "cursor-small", "-p", "--trust", "reply READY")
+        "cursor-agent", "--model", engine_adapter._CURSOR_MODEL, "-p", "--trust", "reply READY")
 
 
 def test_cross_vendor_no_op_argv_unknown_engine():
