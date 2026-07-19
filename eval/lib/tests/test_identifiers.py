@@ -5,7 +5,8 @@ and as the dogfooding that surfaces any remaining ambiguity in the spec.
 
 The GOLDEN-VALUE tests are the load-bearing ones: a pure-property suite (determinism,
 sensitivity) stays green even if the byte-exact canonicalization drifts — which would
-silently change the §4.4 exactly-once branch key. The frozen golden values pin the
+silently change the exactly-once branch key (the content-addressed work branch, retired
+with the spine #478). The frozen golden values pin the
 exact output, so any drift fails loudly. If §6.1/§6.3 ever changes the canonicalization,
 update these goldens IN THE SAME COMMIT as the spec change (never to make a test pass).
 """

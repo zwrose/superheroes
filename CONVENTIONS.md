@@ -1,85 +1,102 @@
 # superheroes — band conventions
 
 These are the **contracts the superheroes band shares**: artifact formats, storage
-rules, and the coordination primitives that let the band's heroes
-(the-architect, review-crew, test-pilot, workhorse) run a project's
-development loop together without stepping on each other.
+rules, and the coordination primitives that let the band's heroes (Showrunner,
+Workhorse, The Architect, Review Crew, Test-Pilot) run a project's development
+together without stepping on each other.
 
 **Status.** This document *locks* conventions — it decides and records the schema so
 later work builds against a fixed target. A hero implements a convention when it
 first needs it; the convention does not require all heroes to implement it at once.
 Where an existing hero already implements (or diverges from) a convention, this doc
-says so. Conventions not yet specified are named in **§8**, bound to the hero and the
-GitHub issue/milestone that will own them — so deferral is explicit, not silent.
+says so.
 
 **Scope.** This file is the authoritative contract. The broader product vision lives
-elsewhere; this doc is deliberately narrow — *interfaces*, not roadmap. (§8's deferred conventions are
-bound to GitHub issues/milestones — see the [roadmap Project](https://github.com/users/zwrose/projects/1).)
+elsewhere — [PHILOSOPHY.md](PHILOSOPHY.md) (why), [ROADMAP.md](ROADMAP.md) (the
+release train) — this doc is deliberately narrow: *interfaces*, not roadmap.
 
-**Band posture — designed to be used together.** The heroes ship as **one plugin** and form a
-*cohesively designed band*: within the loop they **assume each other's
-presence** and **cross-reference freely by qualified name** (`superheroes:architect-plan`,
-`superheroes:review-plan`). We **design for the integrated band and do not compromise that
-design — or add machinery — to guarantee standalone-equivalence**; a hero used outside the
-band carries **no warranty** (an individual hero may still have standalone utility — e.g.
-review-crew's `review-code`, test-pilot's browser runs — but that is not a contract). A
-missing band member **degrades, it does not crash**: e.g. an absent `review-plan` /
-`review-tasks` gate falls back to the **producing skill's self-certification** (plan and
-tasks are autonomous), while an absent `review-spec` simply leaves the spec for the **owner**
-to approve — the spec is **owner-gated and never self-certified** (the deliberate asymmetry,
-§3.1). That is "degrade-not-crash," **not** "degrade gracefully to full standalone" — we
-don't carry dual-mode complexity to keep the apart-case whole. This is the superheroes-internal analog
-of "superpowers is an assumed dependency."
+**Band posture — designed to be used together.** The heroes ship as **one plugin** and
+form a *cohesively designed band*: within a session they **assume each other's
+presence** and **cross-reference freely by qualified name** (e.g. `superheroes:workhorse`,
+`superheroes:review-code`). We **design for the integrated band and do not compromise
+that design — or add machinery — to guarantee standalone-equivalence**; a hero used
+outside the band carries **no warranty** (an individual hero may still have standalone
+utility — e.g. `review-code`, test-pilot's browser runs — but that is not a contract).
+A missing band member **degrades, it does not crash**: the spec review gate
+(`review-spec`) never self-certifies — the `spec` is always **owner-gated** — so its
+absence simply leaves the spec for the owner to approve directly, never silently waved
+through. This is the superheroes-internal analog of "superpowers is an assumed
+dependency."
+
+**Section numbers are stable permalinks**, cited across the codebase (skills, rubric,
+`lib/*.py` docstrings, tests, `CLAUDE.md`, the PR template). The gaps below
+(§4.1/§4.3/§4.5–4.7, §5, §8–9, and §10.1–10.6) are intentional — they mark contracts
+that retired with the v1 execution spine (#478); surviving contracts keep their
+original numbers so existing citations stay valid.
+
+## Contents
+
+1. [Vocabulary: the v2 loop and cast](#1-vocabulary-the-v2-loop-and-cast)
+2. [Calibration profiles](#2-calibration-profiles)
+3. [Definition-docs: the spec](#3-definition-docs-the-spec)
+4. [State tiers and stores](#4-state-tiers-and-stores)
+6. [Identifiers and schema versioning](#6-identifiers-and-schema-versioning)
+7. [Multi-host harness contract](#7-multi-host-harness-contract)
+10. [Ship-phase honesty gates](#10-ship-phase-honesty-gates)
+11. [One home per cross-boundary fact](#11-one-home-per-cross-boundary-fact-single-source-of-truth)
+12. [Verification contracts](#12-verification-contracts-fix-ships-its-detector-real-seam-tests)
+13. [New deterministic machinery needs a named consumer and a ledger entry](#13-new-deterministic-machinery-needs-a-named-consumer-and-a-ledger-entry)
 
 ---
 
-## 1. Vocabulary: the loop and its artifacts
+## 1. Vocabulary: the v2 loop and cast
 
-The development loop:
+Superheroes pivoted from a v1 deterministic execution pipeline (the "spine") to a **v2
+discipline layer**: two session charters running around ordinary AI build sessions, not
+an orchestration engine (PR #478/#479 — retired the spine and the
+`plan`/`tasks` definition-docs). The v2 loop:
 
 ```
-Discovery → Plan → Tasks → Build → Verify → Ship
+issue → build brief → build → review → ready PR → advisor vet → owner merge
 ```
 
-Each of the first three phases emits one **definition-doc**, and each definition-doc gets one
-review (review-crew owns all three review gates):
+A **build brief** is the builder's own architecture note — shape, contracts & state,
+reuse plan, hard seams, rejected alternatives, consequential flags — checked once by a
+fresh cross-vendor reviewer before code and vetted against at the PR. It is not a
+definition-doc: it lives in the issue/PR, not on disk under `docs/`. The one
+definition-doc that survives the v1→v2 pivot is the **`spec`** (§3) — still owner-gated,
+still produced by The Architect.
 
-| Phase | Emits | Is | Reviewed by | Spec-Kit twin |
-| --- | --- | --- | --- | --- |
-| **Discovery** | `spec` | requirements / the *what* (no tech) | `review-spec` | `spec.md` |
-| **Plan** | `plan` | technical approach & architecture / the *how* | `review-plan` | `plan.md` |
-| **Tasks** | `tasks` | bite-sized executable steps (TDD) | `review-tasks` | `tasks.md` |
+**The cast** (authoritative role definitions live in the two session charters —
+`skills/showrunner/SKILL.md` and `skills/workhorse/SKILL.md` — this is a pointer, not a
+restatement):
 
-> **Spec-Kit** is GitHub's spec-driven-development toolkit
-> (<https://github.com/github/spec-kit>), which standardizes `spec.md` / `plan.md` /
-> `tasks.md`. We adopt its nouns wholesale, for convertibility (§3.3) and to avoid
-> inventing vocabulary.
+- **Showrunner** — the advisor session: project-level, long-lived, typically one per
+  project. Sizes and routes incoming work (build-ready vs. needs-discovery), decomposes
+  big asks into small mergeable issues, vets every PR from its artifacts against the
+  issue/spec and the build brief, owns board hygiene and release coordination, keeps
+  durable memory. **Never builds, never merges.**
+- **Workhorse** — the builder session: issue-scoped, disposable, parallelizable. Takes a
+  routed issue, writes and gets the build brief checked, delegates all implementation to
+  tiered subagents or engines, verifies every receipt itself, runs test-pilot and
+  multi-model review, hands back a ready PR with dispositions and receipts. **Never
+  merges, releases, bumps versions, or wires the board.**
+- **The Architect** — turns fuzzy intent into an owner-approved `spec` (discovery → spec
+  → `review-spec`). Narrowed in v2: it produces the `spec` only — no `plan`, no `tasks`
+  (retired, #479).
+- **Review Crew** — the multi-model review layer: the spec panel (`review-spec`) and
+  `review-code`'s cross-vendor build review. Panel composition is **composed to
+  complement** the builder's vendor so the maker's vendor never dominates its own
+  checking.
+- **Test-Pilot** — browser-evidence verification: plans derived from the spec/issue,
+  executed for real. Observe-and-report only — a bug it finds becomes a work order, it
+  never fixes.
 
-> **Naming note.** We do **not** name any definition-doc "design": **"design" means UI/UX**
-> here, never a technical-approach doc (that is `plan`). **Claude Design** (Anthropic's
-> UI/UX design tool — a separate surface) is a first-class **Discovery** activity:
-> Discovery hands the owner a design prompt built from the requirements, the owner creates
-> the design there, and its **handoff output** (not a reinterpretation) is referenced in
-> the `spec`; the `plan` only references that outcome when describing how the UI gets
-> built. (Inline `mcp__visualize__show_widget` mockups are a graphical-client convenience
-> only — they do not render in a terminal — so never the sole path.)
+Two heroes run sessions; three serve inside them. The band posture above (degrade, not
+crash) governs this cast the same as any other.
 
-The **cast** referenced below: **producer** (the per-issue back-half loop driver —
-**Workhorse**), **the-architect** (produces the definition-docs — spec/plan/tasks),
-**review-crew** (all review gates + code review), **test-pilot** (behavioral/browser
-verification), and the **showrunner** (the run engine that drives one approved work-item
-end-to-end to a ready-for-review PR — the live single-issue launch, §10.4). These five are
-**shipped today** (and run on both Claude Code and Codex, §7).
-**Upcoming heroes:** the showrunner's **queue/controller layer** (driving a *queue* of
-work-items, §10.3), a **backlog/TPM** (owns all GitHub-issue writes — triage,
-decomposition), and a **maintainability guardian** — see the
-[roadmap Project](https://github.com/users/zwrose/projects/1). (The "coordinator" of earlier
-drafts split into the showrunner + the backlog/TPM.) (The spec/plan/tasks artifact family is
-called **definition-docs** — the docs that *define* a work item — independent of the producing
-plugin's name.)
-
-Load-bearing identifiers used throughout (`<work-item>`, `<content-hash>`, the storage
-keys) and the schema-versioning policy are defined once in **§6**.
+Load-bearing identifiers used throughout (`<work-item>`, the storage keys) and the
+schema-versioning policy are defined once in **§6**.
 
 ---
 
@@ -92,7 +109,7 @@ band-wide storage mode**.
 ### 2.1 Layout (decision: core file + per-plugin files)
 
 ```
-.claude/superheroes/        # in-repo mode; in global mode this content lives in the project store (§4.2)
+.claude/superheroes/        # in-repo mode; in global mode this content lives in the project store (§2.3)
   core.md            # the shared brain — read by every hero
   <plugin>.md        # one per plugin: review-crew.md, test-pilot.md, …
   patterns.md        # research-derived "current best-practice" layer (own lifecycle)
@@ -100,21 +117,20 @@ band-wide storage mode**.
 
 - **`core.md`** carries band-wide project facts: stack, the canonical *verify* command,
   threat model, canonical patterns. Its **single writer** is the calibration owner
-  (`init` / the profile-management skill) — not `the-architect` (which owns definition-docs).
-  Because `core.md` is project-keyed and shared across a project's checkouts (§4.2), the
-  writer **serializes its writes under the project-scoped config lock** (§4.4) — a
-  machine-local lock distinct from the per-clone runtime lease refs; the "applied only on
-  confirmation" rule (§2.4) gates *intent*, not concurrent physical writes. (In in-repo
-  mode, cross-machine config writes are additionally git-mediated, since config is
-  committed.)
+  (`init` / the profile-management skill) — not `the-architect` (which owns the `spec`
+  definition-doc). Because `core.md` is project-keyed and shared across a project's
+  checkouts (§2.3), the writer **serializes its writes under the project-scoped config
+  lock** (§4.4) — a machine-local lock. (In in-repo mode, cross-machine config writes are
+  additionally git-mediated, since config is committed.)
 - **`<plugin>.md`** is a layer **owned and versioned by that plugin**. Each plugin
   writes only its own layer — no plugin co-edits another's file.
 - **`patterns.md`** is the research-derived opinion layer. It lives in its own file
   because it has a distinct lifecycle: refreshed on a research cadence and **pinned per
-  run** — at loop start a snapshot is frozen into durable runtime state
-  (`patternsPin`, §4.3), and the run reads the pin, never the live file.
+  run** — a session snapshots the live file at start and reads the pin, never the live
+  file, for the rest of its run.
 
-Runtime state (queue, checkpoints, run records) is **never** stored here — see §4.
+Session-scoped work (a build's worktree, in-progress state) is ephemeral, lives with the
+session, and is never stored here.
 
 ### 2.2 File format
 
@@ -144,7 +160,7 @@ Every file begins with a one-line **provenance comment**:
   `json test-pilot-config` block moves into `test-pilot.md` verbatim).
 - **CLAUDE.md-aware adder.** A profile carries only what the project's `CLAUDE.md` does
   not already state. Conventions live in `CLAUDE.md`; the profile adds calibration on
-  top. (Both existing plugins already follow this.)
+  top.
 
 ### 2.3 Storage mode (one band-wide toggle)
 
@@ -153,36 +169,33 @@ per-plugin:
 
 | | **in-repo** | **global ("without a trace")** |
 | --- | --- | --- |
-| Calibration (`core.md`, layers, `patterns.md`) | `.claude/superheroes/` committed with the repo | the project store (§4.2) |
+| Calibration (`core.md`, layers, `patterns.md`) | `.claude/superheroes/` committed with the repo | the project store (below) |
 | Effect | calibration is **shared with collaborators** | the repo stays **pristine** — zero superheroes footprint |
-| Definition-docs (§3) | `docs/superheroes/<work-item>/` in the repo | the project store (§4.2) |
-| Runtime state (§4) | always machine-local | always machine-local |
+| Definition-doc (`spec`, §3) | `docs/superheroes/<work-item>/` in the repo | the project store (below) |
 
-"in-repo" shares *calibration*; it does not promise zero global footprint — runtime
-state, plus the per-project registry, are always machine-local (§4.2). Both modes keep
-the *repo* clean of run state.
+"Global mode" content (calibration and the `spec` definition-doc) lives in a
+machine-local, git-initialized **project store** — one per project, keyed by
+`<config-key>` (§6.2) — that also holds the authoritative `registry.json` (the
+storage-mode record) and a config-write lock. "in-repo" shares *calibration*; it does
+not promise zero global footprint — `registry.json` is always machine-local. Both modes
+keep the *repo* clean of session-scoped state.
 
 **Mode is set once and is sticky.** `init` is idempotent: on an already-initialized
 project it reconciles content but does **not** silently re-decide the mode. The
-authoritative mode record is `registry.json` in the project store (§4.2/§6.3). A mode
-flip (in-repo↔global) is an **explicit migration** that moves calibration *and* every
-definition-doc to the new location and updates `registry.json`; absent that migration,
-`init` refuses to re-decide once the registry records a mode. (Without this rule a flip
-would strand every already-written calibration file and definition-doc.)
+authoritative mode record is `registry.json` in the project store. A mode flip
+(in-repo↔global) is an **explicit migration** that moves calibration *and* the `spec` to
+the new location and updates `registry.json`; absent that migration, `init` refuses to
+re-decide once the registry records a mode. (Without this rule a flip would strand
+every already-written calibration file and definition-doc.)
 
 ### 2.4 Resolution and evolution
 
-- **One shared resolver, two key derivations.** The band ships a single in-tree library,
-  `store_core` (`lib/store_core.py`), that all heroes use for storage resolution. It
-  exposes **two distinct key derivations**, because config and runtime have opposite
-  sharing needs (see §4.2 and §6.2):
-  - **Config key = per-project** (`<config-key>`, §6.2), with self-healing pointers —
-    deliberately unifies a project's clones/worktrees so they share calibration.
-  - **Control-plane key = per-clone** (`<common-dir-key>`, §6.2), **without** the
-    remote-keyed self-healing — shared identically across a clone's worktrees so the
-    one-live-run-per-work-item lease coordinates them, never unified across clones (§4.2, #170).
+- **One shared resolver.** The band ships a single in-tree library, `store_core`
+  (`lib/store_core.py`), that resolves the project-store key: **`<config-key>`**
+  (§6.2, self-healing pointers) — deliberately unifies a project's clones/worktrees so
+  they share calibration.
 - **No-remote repositories.** When `git remote get-url origin` is empty (common for the
-  owner *before the first push*, while Discovery is already producing definition-docs), the
+  owner *before the first push*, while discovery is already producing a `spec`), the
   config key is `<common-dir-key>` rather than `<remote-key>` (§6.2), which makes config
   **per-checkout-clone, not shared-across-clones** — the "shared across clones"
   guarantee is impossible until a remote exists. On the first push, `init` **rebinds**
@@ -199,25 +212,25 @@ would strand every already-written calibration file and definition-doc.)
 
 ---
 
-## 3. Definition-docs (spec / plan / tasks)
+## 3. Definition-docs: the spec
 
-The three artifacts of the loop's front half. A superset of Spec-Kit's
-`spec`/`plan`/`tasks`, convertible to/from it.
+The `spec` is the one definition-doc that survives the v1→v2 pivot (`plan` and `tasks`
+retired, #479 — the orchestrating session now owns its own approach, checked via the
+build brief instead of a reviewed plan doc, §1).
 
-### 3.1 Shared additive header (YAML frontmatter)
+### 3.1 Shared frontmatter (YAML)
 
-Every definition-doc opens with the metadata superheroes owns:
+The `spec` opens with the metadata superheroes owns:
 
 ```yaml
 ---
 superheroes: doc
 schemaVersion: 1
-docType: spec | plan | tasks
-workItem: <work-item>                 # the frozen identity from §6.1
-issue: <github-issue-number | null>   # linked once an issue exists; NOT the path segment
-parent: { workItem: <id>, docType: spec | plan }   # plan→spec, tasks→plan; null for spec (and for a quick-discovery tasks doc)
-size: small | medium | large          # work-item sizing (see §6.4); "tier" is reserved for state substrates
-status: draft | in-review | approved  # DERIVED, human-facing: approved iff gates.review == passed
+docType: spec                          # the only definition-doc in v2; plan/tasks retired (#479)
+workItem: <work-item>                  # the frozen identity from §6.1
+issue: <github-issue-number | null>    # linked once an issue exists; NOT the path segment
+size: small | medium | large           # work-item sizing (see §6.4)
+status: draft | in-review | approved   # DERIVED, human-facing: approved iff gates.review == passed
 gates: { review: pending | passed | changes-requested }   # AUTHORITATIVE review state for THIS doc
 producedBy: the-architect@<version>
 created: <date>
@@ -225,110 +238,69 @@ updated: <date>
 ---
 ```
 
-- **`gates.review` is the authoritative review outcome** for this doc;
+- **`gates.review` is the authoritative review outcome** for the spec;
   **`status` is derived** from it (`approved` iff `gates.review == passed`) and is for
   humans. Code reads `gates.review`.
-- **`parent`** is a resolver-relative reference (`{workItem, docType}`), **not** a file
-  path — paths differ between storage modes (§2.3), so a path-based link would break on
-  a mode switch. The referent is fixed: `plan`→`spec`, `tasks`→`plan`, `null` for `spec` —
-  **and `null` for a `tasks` doc authored directly by quick discovery** (§3.4), which has no
-  plan (or spec) ancestor: it is itself the showrunner's root input artifact.
-- The per-doc `gates.review` here is **aggregated** by `checkpoint.json` into a
-  doc-type-keyed roll-up (§4.3); the frontmatter is the source of truth, the checkpoint
-  is the projection.
+- There is no `parent` field: v1's `plan`→`spec`/`tasks`→`plan` chain existed to link
+  sibling definition-docs; with only one doc type left, there is nothing to link to.
+
+> **Legacy artifact, intentional.** `eval/lib/schemas/checkpoint.schema.json` still
+> enumerates `docType: plan | tasks | spec` — retained deliberately as test-required
+> legacy from the retired execution spine (PR #478), not drift. It is not a live
+> contract and should not be extended.
 
 > **Why YAML frontmatter here but an HTML-comment in §2.2?** Intentional, not drift.
 > Calibration files are prose config read mostly by agents, with a minimal embedded
-> block for the few code-parsed fields. Definition-docs are structured artifacts with rich
-> machine-read linkage (`docType`, `parent`, `gates`), for which standard frontmatter is
-> the right tool.
+> block for the few code-parsed fields. The `spec` is a structured artifact with
+> machine-read fields (`docType`, `gates`), for which standard frontmatter is the right
+> tool.
 
-### 3.2 Bodies
+### 3.2 Body
 
-- **`spec`** — plain-language requirements, owner co-authors, **no tech**. Sections:
-  purpose; who it's for; functional requirements; significant unhappy paths;
-  non-functional requirements; UI/UX; definition of done; assumptions & dependencies;
-  constraints; out-of-scope; open questions; glossary. **Functional requirements are
-  written in EARS** (Easy Approach to Requirements Syntax — `When`/`While`/`Where`/`If-Then`
-  + "the system shall …"), one behavior each, every requirement carrying **≥1 acceptance
-  criterion** (Given-When-Then for flows, a rule for simple constraints). **Depth = the
-  happy path *plus the significant unhappy paths*** (the unwanted-behavior `If-Then` EARS),
-  elicited via a coverage checklist (empty/first-run, invalid input, boundaries, errors,
-  access, duplicates, concurrency, abuse, reach) and tagged Specify/Defer-to-plan/N-A —
-  **not** an exhaustive enumeration, and **not** the technical *how* (that is the `plan`).
-  Non-functional requirements are stated as **outcomes with a fit-criterion**. UI/UX
-  **references the Claude Design handoff output** (§1), not a reinterpretation. This is the
-  anti-slop core.
-- **`plan`** — approach and architecture; components and interfaces; data flow; risks;
-  alternatives considered. References the spec's UI/UX outcome when describing how it
-  is built.
-- **`tasks`** — the frontmatter above, then the superpowers `writing-plans` body
-  **verbatim** (its Goal/Architecture/Tech-Stack header, the **Global Constraints**
-  block, and the checkbox TDD tasks — each with a per-task **Interfaces** block where
-  `writing-plans` emits one). Our header adds the **build contract**: `size`, `gates`,
-  and the SDD clips — subagent-driven-development is invoked with the worktree
-  **pre-verified, not created**, and **without** `finishing-a-development-branch`; the
-  **producer enforces** both clips at invocation.
-  We target **superpowers ≥ 6.0** (6.0
-  added the Global Constraints / per-task Interfaces blocks to `writing-plans` and the
-  single-`task-reviewer` SDD flow); the wrap captures the body verbatim, so a newer
-  `writing-plans` body flows through unchanged.
-  The build worktree the SDD clip pre-verifies is the **managed** worktree
-  (`lib/buildtree.py`, issue #77): a deterministic home under `~/.superheroes-worktrees/`,
-  reuse-on-entry, a durable record, and tiered fail-closed teardown — the producer owns its
-  create/reclaim/reap, replacing the prior ad-hoc "establish a clean worktree".
+**`spec`** — plain-language requirements, owner co-authors, **no tech**. Sections:
+purpose; who it's for; functional requirements; significant unhappy paths;
+non-functional requirements; UI/UX; definition of done; assumptions & dependencies;
+constraints; out-of-scope; open questions; glossary. **Functional requirements are
+written in EARS** (Easy Approach to Requirements Syntax — `When`/`While`/`Where`/`If-Then`
++ "the system shall …"), one behavior each, every requirement carrying **≥1 acceptance
+criterion** (Given-When-Then for flows, a rule for simple constraints). **Depth = the
+happy path *plus the significant unhappy paths*** (the unwanted-behavior `If-Then` EARS),
+elicited via a coverage checklist (empty/first-run, invalid input, boundaries, errors,
+access, duplicates, concurrency, abuse, reach) and tagged Specify/Defer/N-A —
+**not** an exhaustive enumeration, and **not** the technical *how* (that is the build
+brief, owned by the builder, §1). Non-functional requirements are stated as **outcomes
+with a fit-criterion**. UI/UX **references the Claude Design handoff output**, not a
+reinterpretation. This is the anti-slop core.
 
 ### 3.3 Location and convertibility
 
 - **Location follows the storage mode (§2.3):** in-repo →
-  `docs/superheroes/<work-item>/{spec,plan,tasks}.md` in the repo (committed, diffable);
-  global → `projects/<config-key>/docs/<work-item>/…` in the **git-initialized project
-  store** (§4.2), so global-mode definition-docs are versioned and diffable too. One file
-  per doc-type per work-item.
-  the-architect now implements this: the prior in-repo-only hardcode is closed, and
-  the in-repo location plus committed/gitignored choice is the doc-policy established
-  via `superheroes:configure` (which drives the-architect's doc-policy; the standalone
-  `architect-init` is now an internal helper reached only from `configure`).
-- **Convertibility** to Spec-Kit is a documented field-mapping (`spec↔spec.md`,
-  `plan↔plan.md`, `tasks↔tasks.md`); an actual converter is built only if something
-  needs it.
+  `docs/superheroes/<work-item>/spec.md` in the repo (committed, diffable); global →
+  `projects/<config-key>/docs/<work-item>/spec.md` in the **git-initialized project
+  store** (§2.3), so global-mode specs are versioned and diffable too.
+  The-architect implements this: the in-repo location plus committed/gitignored choice
+  is the doc-policy established via `superheroes:configure` (which drives the-architect's
+  doc-policy; the standalone `architect-init` is now an internal helper reached only from
+  `configure`).
+- **Convertibility.** Spec-Kit is GitHub's spec-driven-development toolkit
+  (<https://github.com/github/spec-kit>), which standardizes `spec.md`/`plan.md`/
+  `tasks.md`; we adopt its `spec` noun for convertibility (`spec↔spec.md` is a
+  documented field-mapping). An actual converter is built only if something needs it.
 
-### 3.4 Discovery routes: full and quick
-
-Discovery (the-architect session) is the single front door for all work, and it always
-produces **the showrunner's input artifact**; the **route** decides which one:
-
-- **full** (default) — the-architect writes the **`spec`**, and the showrunner runs the
-  whole front half (plan → review-plan → tasks → review-tasks) before build.
-- **quick** — the-architect writes the **`tasks`** doc directly (a spec-less chore path), and
-  the showrunner starts at build, skipping the front half.
-
-The invariant: **spec present ⇒ full; else tasks present ⇒ quick** — the route is derivable
-from the on-disk input artifact (the showrunner's `resolveIntake` and the pre-flight both
-derive it this way), and a launch that *declares* a route must **agree** with that artifact or
-it is refused (fail-closed intake). Quick is **spec-less but never review-less**: the
-review-code panel, the verify gate, and the back-half are never skipped. A quick `tasks` doc
-has a **`null` parent** (§3.1) — it is the root input artifact, with no plan or spec ancestor —
-and its review gate is the owner's plain-language **direction** sign-off recorded at intake.
+> **Naming note.** We do **not** name the `spec` "design": **"design" means UI/UX**
+> here, never a technical-approach doc. **Claude Design** (Anthropic's UI/UX design
+> tool) is a first-class Discovery activity: Discovery hands the owner a design prompt
+> built from the requirements, the owner creates the design there, and its **handoff
+> output** (not a reinterpretation) is referenced in the `spec`.
 
 ---
 
-## 4. State tiers and the disk-state layout
+## 4. State tiers and stores
 
-### 4.1 Three tiers, three substrates
-
-| Tier | Substrate | Holds | For |
-| --- | --- | --- | --- |
-| **Human** | **GitHub issues** | work items + a rendered index/summary (coordinator-owned) | the **owner** to see and steer |
-| **Handoff** | a **git "control-plane" repo** | issue queue, per-issue checkpoints, resume-briefs | passing work **between sessions** |
-| **Live** | **ephemeral** | the running loop + a working copy | the **current** session only |
-
-The rule: **git moves state between sessions; GitHub issues surface work to the human;
-live state stays ephemeral.** GitHub issues never hold live machine state. Live state is
-checkpointed *into* the control-plane repo, never into an issue. The source of truth for
-the definition-docs is the **files in git**; the issue is the rendered human index. (The
-GitHub-issue schema itself — body, labels, index format, write coordination — is
-deferred; see §8.)
+§4.1 (state tiers), §4.3 (runtime schemas), and §4.5–4.7 (concurrency, events/resume-brief,
+loop-failure) retired with the execution spine (#478) — the gaps are intentional. The two
+subsections below are **live v2 infrastructure**, not spine runtime: `configure_route.py`/
+`configure_view.py` still resolve calibration storage through them.
 
 ### 4.2 Two stores and their keying
 
@@ -337,290 +309,28 @@ config-vs-state line, because the two have opposite sharing needs:
 
 - **Project store = per-project**, keyed by `<config-key>` (§6.2) — shared across all of
   a project's worktrees and clones on a machine (same project ⇒ same
-  threat-model/patterns, one mode record). Holds calibration, global-mode definition-docs,
-  the authoritative `registry.json`, and the config lock.
-- **Control-plane store = per-clone**, keyed by `<common-dir-key>` (§6.2) — **shared
-  identically across a clone's main checkout and every linked worktree**, distinct across
-  clones. Holds the runtime: checkpoints, per-issue state, and the work-item lease refs.
+  threat-model/patterns, one mode record). Holds calibration, the global-mode `spec`,
+  the authoritative `registry.json`, and the config lock (§4.4).
+- **Control-plane store = per-clone**, keyed by `<common-dir-key>` (§6.2) — shared
+  identically across a clone's main checkout and every linked worktree, distinct across
+  clones. Its resolution home is `lib/control_plane.py`.
 
-> **Implemented by the resilience slice** (workhorse `control_plane.py`). Coordination MUST be shared across a clone's worktrees: the one-live-run-per-work-item lease refs (§4.4) live in this store, so keying it to the git **common dir** (`--path-format=absolute --git-common-dir`, identical from all of a clone's worktrees) is what refuses a duplicate launch of the same work item from any worktree — a per-worktree `--absolute-git-dir` key would let it run twice = split-brain on one branch/PR (#170). State isolation is per-work-item WITHIN the store (`issues/<work-item>/…`), not per-worktree. The resolver still does **not** route through the remote-keyed self-healing pointer (that unifies distinct clones — right for config, wrong for machine-local runtime). Zero-migration: for the main checkout the common dir IS the absolute git dir, so existing stores keep their key.
-
-```
-<global-store>/
-  projects/<config-key>/                # PROJECT STORE — a git repo; per-project, shared across this project's checkouts
-    .git/
-    registry.json                       # AUTHORITATIVE: { schemaVersion, storageMode, remoteKey | null, createdAt }
-    meta.json                           # { schemaVersion, sourcePath }  mint-time provenance; never rewritten (store_sweep's orphan signal)
-    config.lock                         # the project-scoped config-write lock (§4.4)
-    config/                             # core.md, <plugin>.md, patterns.md, review-decisions.json   (global mode only; in-repo → in the repo)
-    docs/<work-item>/{spec,plan,tasks}.md   # definition-docs                          (global mode only; in-repo → in the repo)
-  checkouts/<common-dir-key>/           # CONTROL-PLANE STORE — a git repo; ONE per clone, shared across its worktrees
-    .git/
-    meta.json                           # { schemaVersion, sourcePath }  (mode lives in registry.json, not here — §6.3)
-    queue.json                          # producer-owned ordered work-list (schema in §4.3)
-    allowances.jsonl                    # checkout-level allowance audit trail (#379): allowance_fired events not attributable to a live run's session (multi-writer, ts-ordered, seq-less)
-    issues/<work-item>/
-      checkpoint.json
-      resume-brief.md
-      patterns-pin.md                   # the per-run snapshot of patterns.md (§2.1)
-      events.jsonl                      # append-only audit log
-      devserver.json                    # managed dev-server sidecar (pid/pgid/port/command/bootId) for orphan reclaim
-```
+The per-issue runtime the control-plane store used to hold — checkpoints, the queue, and
+per-work-item lease refs — retired with the execution spine (#478); the store and its
+keying remain as `lib/control_plane.py`'s resolution home.
 
 The project store exists in **both** modes (it is the machine-local home of
-`registry.json` and `config.lock`); in in-repo mode its `config/` and `docs/` content
-lives in the repo instead. (`<config-key>` and `<common-dir-key>` derivations are
-in §6.2.)
+`registry.json` and `config.lock`); in in-repo mode its calibration and `spec` content
+lives in the repo instead. (`<config-key>` and `<common-dir-key>` derivations are in §6.2.)
 
-### 4.3 Runtime schemas
+### 4.4 Project-scoped config lock
 
-**`queue.json`** — producer-owned, single-writer (enforced per §4.5):
-
-```json
-{
-  "schemaVersion": 1,
-  "items": [
-    { "workItem": "...", "issue": 42, "state": "queued | claimed | done | failed", "order": 0 }
-  ]
-}
-```
-
-`issue` is the linked GitHub issue number (or `null` pre-issue, §6.1). Ordering is
-explicit (`order`), not array position. Item lifecycle is
-`queued → claimed → done | failed`.
-
-**`checkpoint.json`** — the sole source of truth for resuming an issue:
-
-```json
-{
-  "schemaVersion": 1,
-  "workItem": "...",
-  "issue": 42,
-  "size": "medium",
-  "phase": "discovery | plan | tasks | build | verify | ship",
-  "gates": { "spec": "passed", "plan": "passed", "tasks": "pending | changes-requested" },
-  "patternsPin": "<content-hash of the frozen patterns-pin.md>",
-  "branch": "superheroes/<work-item>-<content-hash>",
-  "lockGeneration": 7,
-  "pr": { "number": 42, "url": "..." },
-  "lastGoodStep": "...",
-  "updatedAt": "..."
-}
-```
-
-- `gates` here is the **aggregation** of each definition-doc's per-doc `gates.review` (§3.1),
-  keyed by doc-type; it can hold `changes-requested`.
-- `branch` is content-addressed (§6.3) and **is** the idempotency anchor (§4.4).
-- `lockGeneration` is the fencing token (§4.4).
-- `patternsPin` ties the run to its frozen patterns snapshot, so a resume reads the same
-  opinions it started with.
-
-(`resume-brief.md` and `events.jsonl` have schemas of their own — **now specified in §4.6**, authored by the resilience slice.)
-
-### 4.4 Coordination = git refs and a config lock, not file polling
-
-**Work-item lock — a leased git ref**, `refs/superheroes/locks/<work-item>`, valued
-`{ holder, host, acquiredAt, generation }` (plus an optional `sessionCwd` — the run's
-execution root, #379, used only to attribute allowance audit events to the run whose
-session triggered them; absent on a legacy lease → today's behavior), in the per-clone
-control-plane store (so the lease is visible identically from every worktree of the clone,
-§4.2):
-
-- The holder **renews** the ref (bumps `acquiredAt`, carrying `sessionCwd` forward) on a
-  heartbeat interval **≪ TTL** while it works.
-- A contender may **reclaim** only when `now - acquiredAt > TTL`, via **compare-and-swap**
-  on the ref (atomic), **incrementing `generation`**.
-- **Fencing:** the current `generation` is written into `checkpoint.json`
-  (`lockGeneration`); before any external write (push / PR / issue), the holder
-  re-reads the lock ref and **aborts if its generation is stale**. This makes a stale
-  holder **very unlikely** to complete a write — and it is a check-then-act, not atomic
-  with the remote, so it *narrows* rather than fully closes the woken-stale-holder
-  window. Any write that does land on the target remote is caught by the exactly-once
-  anchor below; issue writes (no anchor until §8's coordinator schema) rely on the fence
-  alone. (TTL + CAS *without* fencing would be outright unsound — a live-but-slow holder,
-  or a slept laptop, would be stolen from while still holding live state.)
-- **TTL** is an implementation parameter chosen against the longest expected phase (a
-  full build/verify) with heartbeat ≪ TTL; default on the order of tens of minutes.
-- **Implemented by the resilience slice.** The ref-lease above is the cross-session / cross-host primitive (`lib/ref_lock.py`) and the **sole** work-item mutex — the old §4.5 per-checkout `startup.lock` was removed in #170 (it never serialized anything: its holder pid was the ephemeral acquiring leaf, dead seconds after acquire). The file-based `lib/file_lock.py` — a *narrower, same-host* engine lock — carries TTL + host-boot-id staleness in `acquire()`, superseding the old pid-only `is_stale()`.
-
-**Project-scoped config lock.** Calibration (`core.md`/`<plugin>.md`/`patterns.md`) is
-shared across a project's checkouts (§4.2), so it is **not** guarded by the per-clone
-lease refs above. Config writes acquire an advisory **`flock` on `projects/<config-key>/config.lock`**
-in the machine-local project store (present in both modes), which serializes them across
-the project's checkouts on that machine. In in-repo mode, cross-machine config writes are
-additionally mediated by git (config is committed). Config write cadence is owner-driven
-and low.
-
-**Exactly-once — the remote work branch is the idempotency anchor**, with an explicit
-resume recovery procedure (not just a happy path):
-
-1. On entering Ship (or resuming into it): does the remote branch
-   `superheroes/<work-item>-<content-hash>` exist?
-2. If it exists, **always query for an open PR by head branch** (never trust only the
-   local checkpoint) → if one exists, **adopt** it (record `pr` in checkpoint); else
-   `gh pr create`.
-3. If it does not exist, push, then `gh pr create`.
-
-A `git push` that **fails closed** (branch already exists) is therefore **not** read as
-"someone else owns it" — it routes into step 2. This relies on GitHub **rejecting a
-second open PR for the same head→base**, and the lock lease further serializes so only
-one resumer reaches `gh` at a time. (Pre-search "check-then-act" is explicitly rejected:
-it is only at-least-once under `gh` eventual consistency.)
-
-### 4.5 Concurrency model (two layers)
-
-- **Per-clone coordination (local).** A clone's worktrees **share** one common-dir
-  control-plane store and its lock refs (§4.2). The hard rule is **one live run per work
-  item per clone**, enforced by the per-work-item ref-lease (§4.4): a duplicate launch of an
-  in-flight work item — from *any* worktree — is refused with the lease reason. (The old
-  per-checkout `startup.lock` was removed in #170: its holder pid was an ephemeral leaf, so
-  it never serialized anything — the lease is the real mutex.) Read-modify-write of the shared
-  `worktrees.json` build-registry is guarded by an `fcntl.flock` sidecar (atomic writes prevent
-  torn files; the flock prevents lost updates). **Parallelism = more worktrees running
-  different work items.**
-- **Cross-loop backstop = the target repo's remote.** The genuinely shared write targets
-  are: the target code repo on GitHub (guarded by the exactly-once machinery, §4.4) and the
-  shared **config store** (serialized by the project-scoped config lock, §4.4, and
-  git-mediated cross-machine in in-repo mode). The exactly-once
-  machinery lives on the target remote, so it is inherently cross-process and
-  cross-machine.
-
-**Residual edge (named, not fixed now):** the common-dir lease coordinates a clone's
-worktrees, but two *different clones* (or machines) of one repo won't see each other's
-per-work-item lease if the same work item is launched in both. Worst case is **wasted
-duplicate work, not corruption** — the target-remote backstop (§4.4) still prevents a
-double-merge, and shared config writes are serialized by the config lock. If cross-clone
-overlap ever becomes a real pattern, the escalation is to host the work-item lock ref on
-the *shared target remote* (a network round-trip per lock — so not the default).
-Cross-machine coordination is explicitly out of scope for #170.
-
-### 4.6 `events.jsonl` and `resume-brief.md` schemas (authored — resilience slice)
-
-**`events.jsonl`** — the per-issue append-only audit log (workhorse `journal.py`), one
-JSON object per line, written under the single-writer model (§4.5) via an atomic
-`O_APPEND` + `fsync`. Each line carries:
-
-- `ts` — UTC `YYYY-MM-DDTHH:MM:SSZ`.
-- `seq` — monotonic, 1-based.
-- `type` — one of `run_started`, `step_entered`, `step_completed`, `notify`, `gate`,
-  `error`, `resumed`, `lease_acquired`, `lease_reclaimed`, `ci_fix_attempt`, `parked`,
-  `run_completed`, `phase_record`, `external_dispatch`, `phase_cost`.
-- optional `step` — the step number (0–9) the event belongs to.
-- optional `detail` — free-text, **scrubbed fail-closed** (`readout.scrub`) before write.
-- optional `world` — a dict of reality facts; string values scrubbed fail-closed.
-- optional `payload` — structured non-secret data (e.g. `ci_fix_attempt` →
-  `{round, failing: [signatures]}`), written as-is.
-
-Readers tolerate a single torn trailing line (a crash mid-append). The step 8 CI-fix bound
-is reconstructed by replaying `ci_fix_attempt` events, written **write-ahead** (before
-the fix push); a torn trailing line counts **+1** — a conservative over-count, so the
-bound trips earlier and is never bypassed by a crash-loop (it never under-counts). A
-failed durable append raises `DurableWriteError` and the orchestrator parks (fail-closed).
-
-**Token telemetry** (`phase_cost`, #130) — an additive extension of this vocabulary (no
-schemaVersion; the schema is versionless). Each `phase_cost` `payload` carries one phase's
-`{phase, dispatches: {total, byModel}, tokens: {output, input, measured, source}}`: the
-dispatch count × resolved model tier is the always-exact **proxy**; `tokens.output` is the
-budget-derived (`budget.spent()`) output-token delta over the phase, present only when the
-runtime surfaced it (`measured: true`) and **never fabricated**. It is written best-effort,
-**folded into the phase's existing durable write** — the per-phase `phase_progress_entry.py`
-save leaf, and `readout_post.py` for the terminal `ship` phase — so it rides no new courier
-leaf (§ the #118 one-leaf-per-phase budget). A ready hand-back journals `run_completed`;
-a park journals `parked` — including a mid-phase park, which folds the `parked` marker into
-its journal-only save (`parkFromPhases` itself journals nothing), so `token_trend`/`run_watch`
-classify it as parked rather than `other`. `cost_report.py` projects the run total + top
-phases into the readout, and `token_trend.py` renders tokens-per-completed-work-item and
-tokens-per-park across runs.
-
-Two counts are **excluded by design** (both inherent to the no-new-leaf fold, not bugs): (a) a
-phase's own persist leaf — dispatched after the snapshot, so its tokens fall between the phase's
-delta endpoint and the next phase's baseline; and (b) the pre-loop startup leaves — recorded
-under a `startup` bucket that is never snapshotted. So the per-phase counts run slightly below a
-raw `/workflows` agent count; don't reconcile them one-to-one.
-
-**`resume-brief.md`** — the rehydration brief (workhorse `journal.render_brief`),
-refreshed at the compaction boundary (the PreCompact hook) and on every park. Required
-sections:
-
-- `## Run` — work-item, branch, PR, started timestamp, resume count.
-- `## Where it was` — phase (build/verify/ship) + last good step.
-- `## Confirmed done` — reality reads: PR state, CI, dev server, seeded baseline.
-- `## Next` — the step to resume from (after `lastGoodStep`).
-- `## Notices` — the `notify` / `gate` / `parked` events (scrubbed).
-
-### 4.7 Loop failure / retry / cascade contract (authored — resilience slice)
-
-The producer's back-half loop (workhorse steps 0–9) is **reality-wins, reconcile-on-entry**
-(`recover.py`). On every entry (first run or resume):
-
-- **Reconcile against reality.** The durable `checkpoint.json` only *speeds* a resume;
-  it never authorizes an action. A read the loop would act on that **cannot be
-  determined** (a transient/unknown PR or seeded-state read) → **GATE**, never treated
-  as "absent" (which under auto-continue could redo a mutating step). A lost/unparseable
-  checkpoint → **world-derive**. A **wedged control-plane store or unacquirable lock →
-  park-GATE** (fail-closed; never run lockless — the lock lives in the store).
-- **Floor re-arm.** Every entry re-arms the step 0 enforcer self-check + per-matcher canaries;
-  a transient miss retries (bounded, `recover.rearm_action`, ≤3) then **parks** (visible,
-  never resume unguarded, never silent-wedge).
-- **`changes-requested` / failed review.** review-crew owns its internal auto-fix loop;
-  the producer reads the terminal review action and, on a non-pass, **parks-GATE** (PR
-  left draft, live resources torn down).
-- **Failed build / verify.** Park safely — draft PR, dev-server teardown, GATE to the owner.
-- **step 8 CI bound (bounded fix loop).** `ci_loop.decide` halts after `max_rounds` or on a
-  **recurring failing set** (`revert_and_gate`). The bound **survives restarts** via the
-  write-ahead `ci_fix_attempt` events — a crash-loop cannot reset it.
-- **step 8 base-freshness gate.** Handback requires the branch **up to date with its PR
-  base**, so CI is evaluated on the integrated HEAD (not a stale branch). The producer
-  freshens by **merging the base in** (non-force feature-branch push — never a rebase /
-  force-push, which is owner-authority), bounded by `freshness.decide` (`DEFAULT_MAX_SYNCS`).
-  A **merge conflict** is confidence-gated (F5): a trivially-correct resolution may proceed
-  (CI re-vets), anything uncertain → **GATE** (the owner resolves; never a guessed merge).
-  An unreadable freshness read → **GATE** (fail-closed). If the base keeps advancing past the
-  bound, the loop stops chasing and hands back with an explicit **NOTIFY** — freshness is
-  promised only *as of* handback (post-handback drift is the owner's). The sync counter is
-  in-session: a resume re-derives freshness from reality and re-bounds (a merge converges, so
-  no crash-loop). **The freshness read is on the *local* HEAD, but CI runs on — and the owner
-  merges — the *remote* PR head**, so the producer reconciles them before the CI wait (push the
-  local HEAD when it is ahead of the PR head; idempotent). This closes the partial-failure
-  window where a crash *between* the local merge commit and its push would otherwise read
-  `up_to_date` locally while the PR still points at the stale pre-merge commit, and CI is then
-  evaluated on the reconciled HEAD SHA (a just-pushed-but-unregistered SHA reads as "no checks
-  yet", never an older commit's green). The freshen merge advances HEAD past the step-3
-  ship-gate's reviewed commit by design (the merge integrates already-reviewed base code; CI
-  re-vets it, review is not re-run) — so a post-review merge/conflict-resolution is **NOTIFY**ed
-  in the readout, never silently presented as review-covered.
-- **Stale-spec cascade (§6.3).** When the approved `tasks` doc changes under an in-flight
-  branch (the recorded `<content-hash>` no longer matches the recomputed one), the resume
-  **GATEs** — a downstream run is invalidated when its upstream definition-doc changes.
-- **Escalation to the owner** follows the F5 policy (`escalation-base.md`): act
-  autonomously on agent-verifiable / reversible decisions; escalate on owner-authority or
-  high-stakes-irreversible ones. The **owner-role / repo-shaping** actions — **merge,
-  release, run-workflow, force-push, push-to-default** — are gated on the owner's **live,
-  in-turn approval** (a real prompt the owner answers, never an agent-set token) and are
-  enforced deterministically by the producer's PreToolUse hook (which overrides an
-  allowlist-allow and fires even under bypassPermissions — the guarantee the harness's own
-  prompt can't give): the producer never does them unattended (no approver → it **parks**),
-  but performs them on explicit go-ahead. Generic high-stakes operations the host harness
-  *already* contemplates — **deploy, destructive data ops, `rm -rf`** — stay on the
-  **cooperative F5 layer** (the model GATEs them via `escalation_resolve`; the harness's own
-  permission prompt + `rm -rf /|~` circuit breaker is the backstop), deliberately off the
-  deterministic hook so it doesn't false-positive on routine build commands. **PR-create
-  stays autonomous.** (The live-approval gate — [#14](https://github.com/zwrose/superheroes/issues/14).)
-
-(The fuller walk-away approval-gate contract — defer-vs-block, where approvals are
-recorded — remains deferred to §7, Phase 2a-plus.)
-
----
-
-## 5. Quick reference: what lives where
-
-| Thing | in-repo mode | global mode | Keyed per |
-| --- | --- | --- | --- |
-| Calibration (`core`/`<plugin>`/`patterns`) | `.claude/superheroes/` (committed) | project store `config/` | project (`<config-key>`) |
-| Definition-docs (`spec`/`plan`/`tasks`) | `docs/superheroes/<work-item>/` (committed) | project store `docs/` | project (`<config-key>`) |
-| `registry.json` + `config.lock` | machine-local project store | machine-local project store | project (`<config-key>`) |
-| Runtime (checkpoints, briefs, events, lease refs) | machine-local control-plane store | machine-local control-plane store | clone (`<common-dir-key>`) |
-| Work items + rendered index | GitHub issues | GitHub issues | — |
+Calibration (`core.md`/`<plugin>.md`/`patterns.md`) is shared across a project's
+checkouts (§4.2). Config writes acquire an advisory **`flock` on
+`projects/<config-key>/config.lock`** in the machine-local project store (present in
+both modes), which serializes them across the project's checkouts on that machine. In
+in-repo mode, cross-machine config writes are additionally mediated by git (config is
+committed). Config write cadence is owner-driven and low.
 
 ---
 
@@ -632,86 +342,52 @@ The cross-cutting values **all heroes** must compute identically.
 
 `<work-item>` is a **frozen slug**, chosen **once** at work-item creation and **never
 re-derived** (a title edit does not change it). It is the stable segment interpolated
-into every path, lock ref, and branch (`docs/superheroes/<work-item>/`,
-`projects/<config-key>/docs/<work-item>/`, `issues/<work-item>/`,
-`refs/superheroes/locks/<work-item>`, `superheroes/<work-item>-<hash>`).
+into the `spec`'s path (`docs/superheroes/<work-item>/spec.md`,
+`projects/<config-key>/docs/<work-item>/spec.md`).
 
 - Slug = the title **NFC-normalized**, lowercased, non-`[a-z0-9]` runs collapsed to `-`,
   trimmed, capped at 50 chars (then trimmed again, so the cap can't leave a trailing
   `-`), **plus a short disambiguating suffix** (`-` + first 6 hex of
   `sha256(NFC-title + creation-nonce)`) so two similar titles **never** collide into one
-  dir/lock/branch. (NFC normalization makes canonically-equivalent Unicode — e.g.
-  macOS-NFD vs Linux-NFC — yield the same slug.)
+  dir. (NFC normalization makes canonically-equivalent Unicode — e.g. macOS-NFD vs
+  Linux-NFC — yield the same slug.)
 - The **GitHub issue number is a linked attribute** — the `issue:` field in the
-  definition-doc frontmatter (§3.1), the queue item, and `checkpoint.json` (§4.3) — **not**
-  the path segment, so nothing has to be renamed when an issue is later filed for a
-  work-item that began as a pre-issue draft.
+  `spec`'s frontmatter (§3.1) — **not** the path segment, so nothing has to be renamed
+  when an issue is later filed for a work-item that began as a pre-issue draft.
 
 ### 6.2 Storage keys
 
-The normative spec is implemented in `lib/store_core.py`. **Hash:** `sha256(...)` truncated to **16 hex** (`short_hash`).
+The normative spec is implemented in `lib/store_core.py`. **Hash:** `sha256(...)`
+truncated to **16 hex** (`short_hash`).
 
 - **`<remote-key>`** = `short_hash(normalize_remote(origin))`, where `normalize_remote`
   lowercases the host and strips scheme/userinfo/port and a trailing `.git`.
 - **`<common-dir-key>`** = `short_hash(realpath(git rev-parse --path-format=absolute --git-common-dir))`
-  — shared across a clone's linked worktrees. Serves as **both** the no-remote config
-  fallback (§2.4) **and** the control-plane key (§4.2, #170). `--path-format=absolute` is
-  required: a bare `--git-common-dir` is a relative `.git` from the main checkout, which
-  `realpath` would resolve against the process cwd; the fallback for git < 2.31 joins the
-  relative result onto the target cwd, else `--absolute-git-dir`, else `realpath(cwd)`.
+  — shared across a clone's linked worktrees. Serves as the **no-remote config-key
+  fallback** (§2.4). `--path-format=absolute` is required: a bare `--git-common-dir` is
+  a relative `.git` from the main checkout, which `realpath` would resolve against the
+  process cwd; the fallback for git < 2.31 joins the relative result onto the target
+  cwd, else `--absolute-git-dir`, else `realpath(cwd)`.
 - **`<config-key>`** (the project-store key) = `<remote-key>` when a remote exists,
   else `<common-dir-key>`. On first push, `init` rebinds `<common-dir-key>` →
   `<remote-key>` (§2.4).
-- **`<absolute-git-dir-key>`** = `short_hash(realpath(git rev-parse --absolute-git-dir))` —
-  distinct per linked worktree. **Retired as the control-plane key in #170** (the control
-  plane now uses `<common-dir-key>` so a clone's worktrees coordinate); still the identity a
-  per-worktree derivation would produce, kept here for reference. For the **main checkout**
-  it equals `<common-dir-key>` (common dir == absolute git dir) — the zero-migration hinge.
 
-### 6.3 `<content-hash>` — the exactly-once key
+> **No §6.3.** The old content-hash / branch-content-addressing section retired with
+> the execution spine (#478) — the gap is intentional, not an omission.
 
-`<content-hash>` makes the work branch content-addressed. It is computed **once at branch
-creation** from the **approved `tasks` doc**, and **must be byte-identical across hosts and sessions** (`the-architect` recomputes it to detect a material change; `producer`
-computes it to create the branch — they must agree, or every metadata touch spuriously
-reads as a new attempt). Canonical serialization, in this exact order:
-
-1. Take the **stable** frontmatter fields only — `workItem`, `docType`, `parent`, `size`
-   — and serialize as **JSON with sorted keys** (so `parent` is
-   `{"docType":"...","workItem":"..."}`). Volatile fields are excluded (`updated`,
-   `created`, `status`, `gates`, `issue`, `producedBy`, provenance timestamps).
-2. Take the doc **body**, **NFC-normalize it**, normalize line endings to `\n`, and strip
-   trailing whitespace **per line**. (NFC is what makes the across-hosts guarantee hold
-   for non-ASCII text — macOS-NFD and Linux-NFC of the same text hash identically.)
-3. Concatenate `frontmatter-json` + `"\n"` + `body`.
-4. `sha256` of the UTF-8 bytes, first **16 hex**.
-
-A re-approval that materially changes the `tasks` body or stable frontmatter yields a
-**new** hash → a new attempt branch (the prior PR is closed by the loop). A pure
-metadata touch does not. (A normal resume reads `branch` verbatim from `checkpoint.json`,
-§4.3 — it does not recompute the hash.)
-
-`storageMode` is recorded **authoritatively in `registry.json`** (§4.2); `meta.json`
-does not duplicate it.
-
-### 6.4 `size` and schema versioning
+### 6.4 Size and schema versioning
 
 - **`size`** (`small | medium | large`, §3.1) sizes a work-item. It is set when the
-  `spec` is approved (the discovery skill infers it from scope, not the owner), frozen there, and
-  inherited by `plan`/`tasks` and mirrored into `checkpoint.json`. It is currently
-  **descriptive** — consumers must accept it; no control-flow keys off it yet. (The
-  word "tier" is reserved for the §4 state substrates and durability tiers.)
+  `spec` is approved (The Architect infers it from scope, not the owner) and frozen
+  there. It is currently **descriptive** — consumers must accept it; no control-flow
+  keys off it yet.
 - **`schemaVersion`** is stamped independently on each artifact family (`core.md`,
-  definition-docs, runtime files). Bump on a **breaking** change (additive changes do not
-  bump). A reader that encounters an **unknown** version **fails closed** with a
-  "update the plugin or migrate the file" message — the precedent set by
-  `lib/engine.py`/`lib/state.py`. Migration logic lives in the hero that owns the
-  artifact. A breaking change to the §6.3 `<content-hash>` canonicalization is **likewise
-  a definition-doc `schemaVersion` bump** (so old and new hashes never silently collide);
-  whether to *also* embed an explicit canon-version in the stored branch key is deferred
-  to the first consumer (an entry-gate, tracked in `eval/gate.md`). The band ships as one
-  plugin — one version — so cross-plugin version skew is not a concern; artifact
-  `schemaVersion` skew (files written by an older build) is covered by the fail-closed
-  behavior above.
+  the `spec`, calibration layers). Bump on a **breaking** change (additive changes do
+  not bump). A reader that encounters an **unknown** version **fails closed** with an
+  "update the plugin or migrate the file" message. Migration logic lives in the hero
+  that owns the artifact. The band ships as one plugin — one version — so cross-plugin
+  version skew is not a concern; artifact `schemaVersion` skew (files written by an
+  older build) is covered by the fail-closed behavior above.
 
 ---
 
@@ -770,7 +446,7 @@ scope — the two hosts load the same skills, and the tool maps are the entire s
 
 ### 7.4 SessionStart context bootstrap (Claude)
 
-A session started **directly from a slash command** (e.g. `/superheroes:architect-discovery`
+A session started **directly from a slash command** (e.g. `/superheroes:workhorse`
 in a fresh worktree — superheroes' usual entry path) does **not** receive the harness's
 auto-injected context layer that a plain chat start gets: project `CLAUDE.md`, the
 `MEMORY.md` head, and the env block are all absent, and nothing expands the §7.1 host-map
@@ -802,9 +478,8 @@ best-effort bootstrap block assembled by `lib/session_context.py`:
 
 It is **fail-soft**: each source is gathered independently; a missing/erroring one is omitted
 with a one-line stderr breadcrumb (never the file contents) and the hook always exits 0, never
-breaking a session. The post-compaction workhorse resume-brief is **additive** — appended to
-the same `additionalContext` only on `compact` with a current work-item; it never gates the
-bootstrap. **Codex** wires no `SessionStart` hook, so it gets no bootstrap (out of scope).
+breaking a session. **Codex** wires no `SessionStart` hook, so it gets no bootstrap (out of
+scope).
 
 Scope boundary: this fixes the host-map **Read** (model-resolved, so an injected absolute path
 is the lever). The `lib/` **bash** seam of §7.1 — skills shelling out to `lib/` helpers through
@@ -814,366 +489,111 @@ layer that context injection cannot fix; it is tracked separately
 
 ### 7.5 Cross-engine contract (host-run-on vs engine-dispatched-to)
 
-The **host** is the harness the plugin *runs on* (§7.1–§7.2 — Claude Code or Codex). The **engine** is
-the agent a working role is *dispatched to* — `claude` (the default, unchanged), `codex`, or `cursor` —
-chosen per role (reviewer engine, implementation engine, **planAuthor engine**) by the owner in `configure`. These are
-orthogonal axes: the host is where the plugin executes; the engine is which model family does a role's
-work. An engine is selected *below* the host, at the dispatch leaf.
+The **host** is the harness the plugin *runs on* (§7.1–§7.2 — Claude Code or Codex). The
+**engine** is the agent a working role is *dispatched to* — `claude` (the default,
+unchanged), `codex`, or `cursor` — chosen per role (reviewer engine, implementation
+engine) by the owner in `configure`. These are orthogonal axes: the host is where the
+plugin executes; the engine is which model family does a role's work. An engine is
+selected *below* the host, at the dispatch leaf.
 
 Two postures are held strictly separate, mirroring `model_tier`:
-- **Engine *selection* fails open.** An unknown / unavailable / unauthorized / stalled engine silently
-  degrades to Claude — the same posture `model_tier` documents for a bad tier ("a wrong/absent tier is a
-  cost concern, never a safety one"). No run hangs or hard-fails on engine choice.
-- **A completed external *result* fails closed.** A build or fix that fails or can't run verify stops the
-  run; an unauditable run stops; an unreadable or incomplete review is re-run on Claude, never accepted
-  as green. This reuses the existing gates — no new safety logic.
+- **Engine *selection* fails open.** An unknown / unavailable / unauthorized / stalled
+  engine silently degrades to Claude — the same posture `model_tier` documents for a bad
+  tier ("a wrong/absent tier is a cost concern, never a safety one"). No run hangs or
+  hard-fails on engine choice.
+- **A completed external *result* fails closed.** A build or fix that fails or can't run
+  verify stops; an unauditable run stops; an unreadable or incomplete review is re-run
+  on Claude, never accepted as green. This reuses the existing gates — no new safety logic.
 
-**Build-engine contract.** The native build leg (`build_phase.js`) is now an *engine* consumer: its
-worker, fixer, and final-review-fix leaves route to the implementation engine, and its whole-branch
-review leaf routes to the reviewer engine, via `engine_dispatch.js` → `engine_adapter.py`. The engine
-axis is orthogonal to the model tier: `model_tier` still governs *which Claude model* runs when the
-engine is `claude`; when the engine is external, `engine_pref.resolve_effort` governs the engine's depth.
-Every external dispatch also **threads the role's resolved model** into the engine argv as a dispatch
-fact — and the adapter's **owner-policy model map** decides what actually runs. Codex tier map:
-haiku=gpt-5.6-luna, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol, fable=gpt-5.6-sol.
-An optional per-role `enginePreferences.codexModels` pin may select
-one of those canonical IDs or `gpt-5.5`; a one-run preflight pin wins over the persistent pin, which
-wins over tier mapping. The provider-specific pin is carried separately from the shared tier so a
-failed Codex dispatch falls directly open to Claude with a valid native model — never automatically
-downgrading to another GPT model. Effort stays orthogonal: existing role defaults remain, `max` is
-owner-opt-in on GPT-5.6 only, and `gpt-5.5` + `max` is rejected before dispatch. The readout and
-journal name the concrete attempted model and effort.
-The GPT-5.6 contract was live-verified on Codex CLI 0.144.1; 0.141.0 receives the API's
-"requires a newer version of Codex" rejection. There is no guessed semantic-version gate: the
-configure test-dispatch explicitly probes GPT-5.6 Sol capability, and an unavailable model follows the observable Claude
-fall-open path.
+**Build-engine contract.** A builder's implementer subagents (the Workhorse charter,
+`agents/implementer.md`) may run on an external engine instead of a Claude subagent: the
+same implementer template is inlined verbatim (minus its frontmatter) into the external
+dispatch prompt, so both paths carry identical instructions by construction.
+`review-code`'s panel seats route the same way, resolved via `engine_adapter.py`. The
+engine axis is orthogonal to the model tier: `model_tier` still governs *which Claude
+model* runs when the engine is `claude`; when the engine is external,
+`engine_pref.resolve_effort` governs the engine's depth. Every external dispatch also
+threads the role's resolved model into the engine argv as a dispatch fact — the
+adapter's owner-policy model map decides what actually runs.
 
-**Cursor is the token-efficiency engine** (owner-ratified 2026-07-09) — the highly token-efficient composer-2.5 runs
-ALL work roles (build/fix/review/reviewer-deep), and premium Claude models are **never routed through
-cursor by default**. The one deliberate exception is plan authoring: `author-plan: fable` +
-`planAuthor: cursor` dispatches Fable via cursor; every other tier falls through to the pinned
-composer default (that fall-through is the policy, not a gap). Each dispatch also carries a
-**role-appropriate timeout ceiling**
-(`engine_pref.resolve_timeout`): write roles (build/fix/author-plan) get a high ceiling, read roles
-(review) a moderate one — a finite kill, never a borderline wall-clock limit. The high ceiling is
-**paired with a byte-activity stall monitor** (`engine_pref.resolve_idle` + `engine_dispatch`'s shell
-watchdog): the CLI runs as its own process group under an idle watchdog that kills the whole group
-(CLI + children) when no output bytes arrive for the role's idle window (write 600s, read 300s), well
-before the ceiling — a `stalled` outcome, distinct from a ceiling `timeout`. Both limits are always
-armed and `monitor ≤ ceiling`; the monitor is armed only for an engine that streams when piped (a
-fully-buffering engine is left inert, journalled `stall_monitor:"inert (engine buffers)"`, to avoid
-false-killing it). An owner may override either limit with a positive-int `enginePreferences.timeout`
-or `enginePreferences.idleTimeout` (seconds); unset, the role values stand, and an override never
-disables the ceiling. The preflight readout's per-role model shares `engine_adapter`'s single
-cursor-tier map, so the row can never disagree with the dispatched argv.
+Codex tier map: haiku=gpt-5.6-luna, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol,
+fable=gpt-5.6-sol. An optional per-role `enginePreferences.codexModels` pin may select
+one of those canonical IDs or `gpt-5.5`; a one-run preflight pin wins over the
+persistent pin, which wins over tier mapping. The provider-specific pin is carried
+separately from the shared tier so a failed Codex dispatch falls directly open to
+Claude with a valid native model — never automatically downgrading to another GPT
+model. Effort stays orthogonal: existing role defaults remain, `max` is owner-opt-in on
+GPT-5.6 only, and `gpt-5.5` + `max` is rejected before dispatch. The GPT-5.6 tier
+requires a sufficiently new Codex CLI; an unavailable model follows the observable
+fall-open path to Claude, never a guessed version gate. Dispatch provenance — the
+concrete engine, model, and effort actually used — is recorded in the PR body (the
+Workhorse charter's "dispatch provenance" section), not a separate journal.
 
-**Plan-author contract.** Showrunner's produce phase routes ONLY the **plan** doc through
-`enginePreferences.planAuthor` (the **`author-plan`** role kind). Tasks authoring always stays native
-(`claude`). The split **`author-plan` model tier** (in `## Model tiers`) lets plan authoring alone move
-to a stronger model (e.g. `author-plan: fable`) without moving tasks authoring; unset, it resolves exactly
-as `author`. A failed external author-plan dispatch falls open to the native author after UFR-2 cleanup
-(clear the completion marker and discard the external draft) within the same attempt.
+**Cursor is the token-efficiency engine** (owner-ratified 2026-07-09): the
+token-efficient composer-2.5 model runs cursor-dispatched work by default, and premium
+Claude models are **never routed through cursor by default**. Each dispatch carries a
+role-appropriate timeout ceiling and idle-stall watchdog (`engine_pref.resolve_timeout` /
+`resolve_idle`) so a stalled external CLI is killed well before the ceiling; an owner may
+override either limit via `enginePreferences`, and an override never disables the
+ceiling.
 
-**Confinement + hygiene.** External reviewers run read-only; external implementers run workspace-write,
-confined to the managed build worktree, with **no remote authority** — the band owns every push / PR /
-merge through its `enforcer.py`-gated path (an external producer can never autonomously merge, force-push,
-or push to the default branch). All external free-text is secret-scrubbed at the adapter boundary
-(`engine_adapter.parse_result` → `readout.scrub`) so every downstream surface — including the standalone
-`/review-code --post` PR comment — is clean. The build authorization is the owner's to grant; the band
-shows it and never applies it.
+**Confinement + hygiene.** External reviewers run read-only; external implementers run
+workspace-write, confined to the builder's own worktree, with **no remote authority** —
+the band owns every push / PR / merge, mechanically backstopped by the owner-authority
+gate (a minimal PreToolUse hook, `LEDGERS.md` §1.1) that prompts the owner before any
+merge/release/force-push shape, and never bypassed by an external engine. All external
+free-text is secret-scrubbed at the adapter boundary (`engine_adapter.parse_result`) so
+every downstream surface — including a `/review-code --post` PR comment — is clean. The
+merge authorization is the owner's to grant; the band shows it and never applies it.
 
 ---
 
-## 8. Deferred conventions
+## 10. Ship-phase honesty gates
 
-Real conventions the band will need that are **intentionally not specified yet**, because
-the hero that owns each does not exist — specifying them blind would be guesswork.
-**Each is an entry-gate for its owning hero / milestone** (tracked in the
-[roadmap Project](https://github.com/users/zwrose/projects/1)): building that hero means
-specifying its conventions here first. (Surfaced by the reviews of 2026-06-14.)
+The deterministic per-phase gates (§10.1–10.6) that used to seed and park on these
+markers as part of the v1 build/ship legs retired with the execution spine (#478) — only
+the PR-body convention below survives, and only as a review-seat check, not a code gate.
 
-| Deferred convention | What it must define | Owner · tracking |
-| --- | --- | --- |
-| **GitHub issue ↔ work-item schema** | issue body / labels / state conventions; `<work-item>`→issue mapping; the "rendered index/summary" format; how producer & coordinator coordinate writes to one issue | **backlog/TPM** · [#30](https://github.com/zwrose/superheroes/issues/30) · **now specified in §9** |
-| **Owner-interaction / approval-gate contract** | how the owner is prompted (and in approachable pros/cons); where approvals/decisions are recorded; how a walk-away run defers vs. blocks on a needed human decision | **showrunner** · partly defined by the live-approval gate [#14](https://github.com/zwrose/superheroes/issues/14); the batch/defer contract is TBD |
-| **Cleanup / retention / GC** | when merged work branches, finished `issues/<work-item>/` dirs, lock refs, abandoned checkouts, and state-remote branches are reaped (ties to the "without a trace" promise) | [#42](https://github.com/zwrose/superheroes/issues/42) |
-| **Auth / credentials / scopes** | required `gh` token scopes and push rights; credential handling; graceful behavior when auth is missing or insufficient (a routine state for the non-technical owner) | **showrunner** · [#26](https://github.com/zwrose/superheroes/issues/26) |
+### 10.7 PR-body honesty markers (survive as a review-seat convention)
 
----
+Two PR-body markers from the retired execution spine survive independently of it:
 
-## 9. GitHub issue ↔ work-item schema
+- **Stub markers** — `# STUB(#NNN): <what is unwired and the live effect>` on any
+  deliberately-unwired seam. Still **CI-enforced on source**:
+  `.github/scripts/validate_stubs.py` fails any marker missing a valid issue reference
+  (it does not hunt unmarked stubs — only under-specified ones already flagged).
+- **Definition-of-done disposition table** (`superheroes:dod-table` marker) — one row
+  per spec DoD bullet, each `done` (with an evidence pointer) or `deferred` (with a
+  filed issue and reason). The **deterministic code gate** that used to seed and park on
+  this table (`pr_entry.py`/`dod_gate.py`) retired with the execution spine (#478); the
+  table now survives only as the convention `rubric/review-discipline.md` documents —
+  no v2 session charter currently mandates authoring it (a gap worth flagging here, not
+  asserted as closed).
 
-The data contract mapping a **GitHub issue ↔ a band work-item** — the Human tier of §4.1.
-The **showrunner** reads issues as runnable work-items; the **backlog/TPM** (#28) writes
-them. Authoritative state lives in git (definition-doc `gates.review`, §3.1) and the
-control-plane (`checkpoint.json`, §4.3); **the issue is a rendered projection of that
-state, never its source** — no control flow reads from the issue. (Promoted from §8 ahead
-of its owning hero because the showrunner's read-path makes it a root dependency, #30.)
-
-### 9.1 Mapping (1:1, slug-anchored)
-
-- One work-item ↔ one GitHub issue. The join key is the **frozen `<work-item>` slug**
-  (§6.1); the **issue number is a linked attribute** (`issue:` in the definition-doc
-  frontmatter §3.1, the queue item §4.3, and `checkpoint.json`), **not** the path segment.
-- A work-item may exist **pre-issue** (`issue: null`, §6.1); the TPM later files the issue
-  and back-links the number — **nothing is renamed**. An owner-filed issue becomes a
-  work-item when discovery/TPM mints its slug.
-
-### 9.2 Body = owner/TPM prose + one managed block
-
-- **Prose** (title, description, acceptance) — human-authored.
-- **One machine-managed block**, HTML-comment-fenced (the §2.2 provenance-comment
-  pattern), the only region a resolver parses deterministically:
-
-  ```
-  <!-- superheroes-workitem: schemaVersion=1 workItem=<slug> size=<s|m|l> phase=<discovery|plan|tasks|build|verify|ship> -->
-  ```
-
-  followed by a human-readable rendered roll-up (per-doc gate states, linked PR
-  `{number,url,state}`, latest-readout pointer). The prose around the block is free.
-
-### 9.3 Write coordination = partition by surface (no lock)
-
-- The **backlog/TPM is the sole writer of the issue body** (issue-write authority, #28),
-  including the managed block.
-- The **showrunner/producer never writes the body**; it surfaces run state by **posting
-  comments** (the parked-PR handoff readout, NOTIFYs) and **best-effort labels** (§9.4).
-- Single-writer body + append-only comments ⇒ **no clobber** — the §8 "how producer &
-  coordinator coordinate writes to one issue" question, answered by partitioning the
-  surface rather than locking it.
-
-### 9.4 Labels = owner-facing lane, best-effort
-
-Beyond the taxonomy (`area:*`, `enhancement`/`chore`, `spike`, milestone), a small
-**`state:` lane** projects where a work-item is for the owner — `state:queued`,
-`state:running`, `state:parked`, `state:blocked`, `state:merged` — plus a `size:` mirror
-of §6.4. Labels are a **projection reconciled from authoritative state, never trusted for
-control flow** (a stale label is cosmetic). The TPM sets labels; the showrunner may set its
-own work-item's `state:running`/`state:parked`, reconciled on entry.
-
-### 9.5 Issue open/closed ↔ lifecycle
-
-The issue stays **open** across the work-item's life. It is **closed on merge** (the
-owner's action — merge is owner authority, §4.7) or when the owner drops the work-item.
-**The showrunner never closes an issue** (closing implies done = merge). Reopening
-reactivates the work-item.
-
-### 9.6 Schema versioning + reference impl
-
-The managed block carries `schemaVersion`; an unknown version **fails closed** (§6.4). The
-render/parse is a small library built by the **first consumer** (the showrunner's read-path
-needs parse; the TPM's write-path needs render) — proportionate, not gold-plated.
-
----
-
-## 10. Orchestration model (the showrunner-era contract)
-
-Decided by the engine spike (#37): the band's outer loop runs on **native Workflows over
-the existing durable substrate (§4)**. Three contracts follow that constrain every hero's
-orchestration going forward.
-
-### 10.1 Scripts orchestrate; leaf agents do single-purpose work
-
-A Workflow **worker (an `agent()` step) is a leaf** — it has **no Agent/Task tool** and
-**cannot dispatch its own subagents** (verified empirically, including with a full-tool
-agent type). Therefore **all fan-out lives in the Workflow script**, never inside a worker:
-a panel of reviewers is `parallel([…])` in the script; a producer's build/review/verify
-phases are script steps. A hero that fans out (review-code's panel, the spec/plan/tasks
-review trio, test-pilot, subagent-driven-development) is **re-expressed as Workflow control
-flow that reuses the hero's libraries and leaf agents** — never wrapped as one opaque worker
-(which could not launch its fan-out). The hero's pure decision functions
-(`ci_loop.decide`, `freshness.decide`, `ship_gate.decide`, `recover.reconcile`, …) and
-substrate libraries carry over **unchanged**.
-
-The showrunner back half includes a native `test-pilot` phase after draft-PR and before
-mark-ready. A branch that has positive no-browser evidence records a current-head
-`not_applicable` rationale and may proceed; an applicable branch must publish/update the
-human checklist, seed through test-pilot's engine, run browser-derived checks, fix and rerun
-within the browser-fix cap, restore fresh seed data for spot-checking, re-cover any
-post-browser fixes with targetable `review-code`, non-force-push the final tested head to
-the PR branch, and write a current status sidecar before mark-ready. The human checklist is
-never auto-checked by the workflow.
-
-### 10.2 Durability is the substrate's, not the engine's
-
-A Workflow's native resume (`resumeFromRunId`) is **same-session only** and **not
-load-bearing**. Cross-crash / cross-session / post-compaction durability is owned by the
-**engine-agnostic substrate** (§4): the per-issue Workflow is a **relaunch-and-reconcile
-driver** — on every entry it reads disk-state, recomputes gates from definition-doc
-frontmatter, and **skips completed steps** (`recover.reconcile`; the reality-wins rule
-§4.7). It takes **no load-bearing launch arguments** — it reconciles its inputs from the
-control-plane store keyed by `<work-item>`.
-
-### 10.3 Two layers: a controller session around the per-issue Workflow
-
-A background Workflow **cannot take live owner input mid-run**. So owner interaction lives
-in a **controller layer** (a session): it owns the queue, self-paces across context/usage
-limits, launches/relaunches the per-issue Workflow, and holds the **live owner-approval
-gate** (#14) — unattended, the run **parks** and never ships. The per-issue Workflow is the
-deterministic, gated, background chain that parks at every gate. **Auditability is
-structural:** each step is a validated, logged record (gate / confidence / assumptions)
-appended durably (`events.jsonl`, §4.6); a step that surfaces a **material assumption or
-low confidence parks rather than proceeds** — where an "assumption" is a *genuine
-unverified premise*, not a status note.
-
-### 10.4 The live launch contract (showrunner skill, single work-item)
-
-**Courier stretch contract (#118).** Deterministic showrunner stretches use **at most one
-courier leaf by default**; genuine model work (authoring, review panels, fixers) remains
-separate leaves. The lease/reconcile **world snapshot** at startup is the named exception —
-it may batch multiple reads in one courier call.
-
-**Lean courier agent (#194).** Every dumb-pipe courier leaf dispatches on the restricted
-`superheroes:courier` agent (`tools: Bash` only), not the default full-surface worker. A
-Bash-only agent has neither ToolSearch nor the Skill tool, so it carries **no
-`deferred_tools_delta` / `skill_listing` attachments** (~13.9k tokens/leaf, measured) and only
-a tiny tool-schema prefix — cutting the fixed per-leaf context ~2.6× (≈33k → ≈13k tokens).
-This is orthogonal to the cheapest-model pin (§ the model wrapper). A **prompt-drop guard**
-covers the known plugin-subagent failure where a dispatch starts without the task prompt: for
-a command that echoes `__SR_EXIT`, an answer that either omits the marker **or** echoes the
-command back with the literal unexpanded `__SR_EXIT:$?` (both did-not-run shapes) triggers one
-retry on the courier agent, then a fall-back to the default dispatch — so a courier-agent
-dispatch bug degrades to today's cost instead of parking the run. Every **advancing durable write** must be
-**idempotent** and **read-back confirmed** before the run advances past that step; a failed
-read-back parks fail-closed. **Best-effort** writes (round-state snapshots, deferred-finding
-backups, readout posting) must be explicitly named and must **not** gate advancement on their
-delivery alone.
-
-**Leaf Bash timeout floor.** The Bash tool's 120s default kills long spine commands
-(verify_gate wrapping a full test gate) when a courier omits the prompt-requested `timeout`
-parameter — prompt compliance is stochastic. On Claude Code the plugin makes the floor
-structural: a `PreToolUse(Bash)` hook (`hooks/bash_timeout.py`, wired in `hooks.json` after
-the fail-closed enforcer entry) injects `timeout: 600000` via `updatedInput` **only when the
-call carries no explicit timeout** (an explicit value is never touched; a `null` counts as
-omitted). It matches `verify_gate.py`'s own 600s bound, so the gate reports `timeout` cleanly
-instead of being killed underneath. The hook is **fail-open** (parse error → no output, exit 0,
-`|| true` at the wiring) — worst case is the pre-hook default, never a broken Bash call — and
-it fires inside subagent leaves, so every consumer project gets the floor from the plugin
-alone, with no repo-side settings trace.
-
-The `superheroes:showrunner` skill turns the merged spine **on** for one approved work-item.
-The launch path is **pre-flight → bundle → Workflow tool**:
-
-- **Deterministic pre-flight gate (fail-closed).** `lib/preflight.py` runs a pure `decide()`
-  over a probes dict — spec approved (`gates.review == passed`), `gh` write access, no
-  *conflicting* live run (a stale/absent lease lets a relaunch proceed; only a live lease for
-  another work-item blocks), repo/base/remote ready, the verify command resolvable, and the
-  profile/storage config resolvable. A check that errors or cannot be evaluated is treated as
-  **not-passing**; an advisory `ci-visibility` note fires when no required CI gates the PR.
-  The skill prints each blocking check's cause + remediation and **STOPs** on `ok:false`.
-- **The committed bundle is the runtime.** `lib/showrunner.bundle.js` is a generated,
-  self-contained Workflow-tool script (module-registry bundler, `lib/bundle_showrunner.js`;
-  a drift guard keeps the committed bundle == a fresh emit). The skill reads the bundle and
-  invokes the **Workflow tool** with `args: {workItem: <work-item>}` — it never re-bundles or
-  edits the spine. The bundle injects a leaf-bash `io` so the spine's filesystem touches run
-  in command-runner leaves (no `fs`/`path`/`os` in the sandbox), and sets full-run mode so the
-  pipeline proceeds past the front-half boundary into Build → Ship (vs. the env-driven
-  front-half-only mode, which keeps the boundary park).
-- **Idempotent, re-invocable.** The launch takes no load-bearing arguments beyond the
-  work-item; on every entry the spine `reconcile`s from the control-plane store, skips
-  completed phases, and reuses the existing PR — so the same skill entry covers a fresh start,
-  a resume after a park/crash/compaction, and a status read.
-- **Codified readout (FR-10).** At run end the skill assembles the readout via the deciders
-  (`run_readout.assemble` → `readout.build_readout`): PR link, CI status, built-vs-acceptance,
-  test-pilot result, the secret-scrubbed merge reminder. `run_readout.run_outcome` is the
-  machine-readable projection ([#112](https://github.com/zwrose/superheroes/issues/112)
-  consumes it). **The skill never instructs merging** — merge is owner authority (§4.7).
-
-### 10.5 Post-approval path choice (Discovery presents, showrunner executes)
-
-After Discovery records the spec's approval gate, `architect-discovery` presents a two-option
-choice with **no default** — **run the showrunner (recommended)** or the **manual bridged
-path**. The hand-off partitions cleanly: **Discovery presents the choice; the showrunner skill
-executes the run** (Discovery never starts `plan` itself on either branch). On the showrunner
-pick it records the advisory choice (`lib/path_choice.py`) and invokes the `showrunner` skill;
-on the manual pick it records the choice and falls through to the **existing manual hand-off,
-byte-unchanged**. The recorded choice is **advisory** — the run state is authoritative, so a
-never-started showrunner pick simply re-enters via the showrunner skill.
-
-### 10.6 The showrunner path is superpowers-free
-
-No phase on the **showrunner path** may invoke a superpowers skill — it authors natively (the
-`produce-leaf` names the tasks-doc format only as a quality bar, not a superpowers dependency).
-This is **CI-enforced, impossible-by-construction**: a structural invariant
-(`test_safety_invariants.py::test_showrunner_path_is_superpowers_free`) fails loudly if the
-authoring leaf or the generated live bundle names the superpowers toolkit, and the bundle build
-greps clean of `superpowers`/`writing-plans`/`subagent-driven`. (The **manual bridged path**
-keeps its superpowers dependency, untouched.) Full superpowers removal across the band is
-tracked by [#111](https://github.com/zwrose/superheroes/issues/111); the durable repeatable
-agentic acceptance of the live run by
-[#112](https://github.com/zwrose/superheroes/issues/112).
-
-### 10.7 Ship-phase honesty gates (DoD disposition + stub markers)
-
-The ship phase gates on CI-green + branch-current, but a PR can be internally consistent and
-still **silently incomplete** — a Definition-of-done bullet dropped with no trace, or a
-deliberately-unwired seam disclosed only in a docstring nobody reads (the class
-[#228](https://github.com/zwrose/superheroes/issues/228) closes). Two deterministic,
-fail-closed gates operate on the PR body at draft/mark-ready time.
-
-**DoD disposition gate.** The draft-PR step seeds a **Definition of done** disposition table
-into the PR body — one row per spec DoD bullet (parsed from the spec's `## Definition of done`
-section), anchored on the machine-readable `superheroes:dod-table` marker. The build/ship legs
-**fill** each row: `done` (with an evidence pointer — test name, quoted record, link) or
-`deferred` (with a filed issue `#NNN` **and** a one-line reason). Before the ready flip,
-`lib/dod_gate.py` (pure `decide()`, house decider style) re-reads the table and **parks** the
-run — naming the unaddressed bullet — if any bullet has no row, a `done` with no evidence, or a
-`deferred` with no issue. It verifies *presence and shape*, not quality (a weak pointer passes):
-it converts a silent omission into a visible claim the owner judges at review. A spec-less quick
-route (§3.4, [#25](https://github.com/zwrose/superheroes/issues/25)) returns `not-applicable`;
-a spec-driven run with a missing/empty DoD section **parks** (never silently skips).
-
-There is **no automated filler** — dispositioning each bullet is deliberate work, not something a
-leg fabricates (a fabricated `done` is exactly the silent-completion this gate exists to prevent).
-So a spec-driven run whose table is still blank **parks at mark-ready by design**: it is a
-supervised park (§ review-discipline) the owner resolves by dispositioning the rows and resuming,
-never a defect to auto-clear.
-
-**No-silent-stubs marker.** Any deliberately-unwired seam (a placeholder function, a hardcoded
-default standing in for a real source) **must** carry a machine-findable marker on or above it:
-
-    # STUB(#NNN): <one-line description of what is unwired and the live effect>
-
-The issue number is **mandatory** — a stub without a tracked follow-up is a violation.
-`.github/scripts/validate_stubs.py` (CI) greps the plugin source for `STUB(…)` markers and fails
-any missing a valid issue reference (it does **not** hunt unmarked stubs — that is out of scope
-by design; it catches only stubs the author already flagged but under-specified). The literal
-`#NNN` is the reserved documentation placeholder. At draft-PR time the pipeline greps the PR
-*diff* for markers and writes a **generated** "Stubbed seams" section (anchored on
-`superheroes:stubbed-seams`) — one line per marker (file, issue, description). Generated, not
-authored, so it cannot be omitted; an empty section is omitted entirely. The grammar lives in
-`lib/stub_markers.py` (single source of truth, shared by the validator and the body generator).
-
-**Where each gate bites.** The **stub-marker validator runs in CI on every PR — both paths**, since
-it scans source, not the run. The **DoD disposition gate is code-enforced only on the showrunner
-path** (`lib/pr_entry.py` seeds the table at draft and parks the mark-ready flip). On the
-**standalone review/ship path** the `workhorse` skill authors both sections per this convention and
-the review-discipline rubric cites this section, so the **review seat — not a code gate — is the
-backstop** there. Wiring a deterministic DoD gate into the standalone path is deferred (there is no
-single ship seam to hook the way `pr_entry.py` gives the showrunner).
+Both are cited by `rubric/review-discipline.md`, the canonical statement of the band's
+review convention (no unreviewed PRs, §7.4).
 
 ---
 
 ## 11. One home per cross-boundary fact (single source of truth)
 
 > **This is a repo-specific convention for us as builders of superheroes** — not (yet) a
-> portable band contract like §1–§10. It earns its place here because superheroes' own
-> source spans two languages (Workflow JS + Python libs), skill markdown, and fixtures, so
+> portable band contract like §1–§3, §6–§7. It earns its place here because superheroes'
+> own source spans two languages (JS + Python libs), skill markdown, and fixtures, so
 > the same fact is easy to re-type in four places. If it proves out, it can graduate into
 > the portable rubric later, the way `review-discipline.md` did. Provenance: the PR #205
 > phase-list defect ([#226](https://github.com/zwrose/superheroes/issues/226)), whose
-> structural enabler was exactly this — two hand-maintained copies of the pipeline phase
+> structural enabler was exactly this — two hand-maintained copies of a pipeline phase
 > list in two languages, with no link between them ([#231](https://github.com/zwrose/superheroes/issues/231)).
 
 **One home per cross-boundary fact.** A fact consumed across a **module or language
-boundary** (phase lists, event/verb names, schema field sets, verdict/reason tokens, path
-layouts, reviewer rosters) has **exactly one authoritative definition**. Every other
-consumer either **reads that home at runtime**, or keeps a **copy guarded by a drift test**
+boundary** (event/verb names, schema field sets, verdict/reason tokens, path layouts,
+reviewer rosters) has **exactly one authoritative definition**. Every other consumer
+either **reads that home at runtime**, or keeps a **copy guarded by a drift test**
 that reads the authoritative home and asserts equality — so a change to the truth **breaks
 CI in every copy-holder**. **Two hand-maintained copies with no drift test is a
 review-blocking violation, citable by name (this §).** A reviewer seeing a bare
-`PIPELINE_PHASES = [...]` re-typed from JS now has a rule to object with; without one it
-looks like an ordinary constant, which is how #205 shipped.
+constant re-typed from another language now has a rule to object with, citable by name.
 
 **Scope — what counts.** The boundary is what matters, not the value. A constant with a
 single owner and only same-module callers is not in scope (that is ordinary code). A fact
@@ -1184,74 +604,76 @@ two patterns below.
 
 ### 11.1 Pattern 1 — shared data file (read the one home at runtime)
 
-The fact lives in a **checked-in data file** that every consumer reads; no consumer restates
-it. Best when the fact is plain data (a list, a field set, a map) and every consumer can load
-a file at startup.
-
-*Illustrative:* a checked-in `phases.json` that `showrunner.js` derives its `PHASES` array
-from at load and the Python harness `json.load`s directly. One edit, both move; nothing to
-drift. (Superheroes' phase list happens to use Pattern 2 today because the JS literal
-predates any shared file and the harness read is test-time only — but a new cross-boundary
-fact with several runtime consumers should prefer Pattern 1.)
+The fact lives in a **checked-in data file** that every consumer reads; no consumer
+restates it. Best when the fact is plain data (a list, a field set, a map) and every
+consumer can load a file at startup. *Illustrative:* a checked-in `reviewers.json` that
+every consumer (a skill's doc-generation step, a Python harness) loads directly at
+startup — one edit, both move; nothing to drift. Prefer this pattern for any new
+cross-boundary fact with several runtime consumers.
 
 ### 11.2 Pattern 2 — copy + drift test (fail-closed reader + equality assertion)
 
-A consumer keeps its own copy for ergonomics, but a **drift test parses the authoritative
-home and asserts equality**. The reader **must fail closed** — if it parses nothing (literal
-renamed, moved, duplicated, or malformed) it raises rather than returning an empty set that
-would make the equality vacuously pass. A rename of the truth then **fails the drift test**,
-not production.
+A consumer keeps its own copy for ergonomics, but a **drift test parses (or reads) the
+authoritative home and asserts equality**. The reader **must fail closed** — if it parses
+nothing (literal renamed, moved, duplicated, or malformed) it raises rather than returning
+an empty set that would make the equality vacuously pass. A rename of the truth then
+**fails the drift test**, not production.
 
-*Worked example (the phase list, shipped by [#233](https://github.com/zwrose/superheroes/issues/233)):*
-`showrunner.js` owns the canonical `const PHASES = [...]` literal. Python does **not** re-type
-it: `lib/acceptance_phases.py::read_pipeline_phases` parses that JS literal and **fails closed**
-on every not-found / duplicated / unparseable / non-string-list shape (see its five
-`RuntimeError` paths and the matching `test_acceptance_fixture.py` fail-closed tests). The
-drift test `test_acceptance_fixture.py::test_fixture_expected_phases_match_showrunner_source_of_truth`
-asserts the committed fixture's `expected_phases` equals what the reader returns — so a phase
-rename in `showrunner.js` **breaks CI** (mutation-verified). This is the canonical Pattern-2
-reference; **do not rebuild it.**
+*Worked example 1 — the cross-charter boundary line.* Both session charters state the
+identical two-sided fact — "Workhorse never merges/releases/bumps versions/wires the
+board/re-scopes silently; Showrunner never builds." Neither charter is authoritative over
+the other, so `lib/tests/test_charter_boundary_sync.py` is a **symmetric** Pattern-2
+instance: it extracts the marked boundary line from both `skills/showrunner/SKILL.md` and
+`skills/workhorse/SKILL.md`, fails closed if either is missing, and asserts the two are
+byte-identical — editing one charter's boundary breaks CI until the other matches.
 
-**Caveat — a copy-list drift test is only as complete as the copies it enumerates.** Pattern 2
-catches drift in the copies the test names; a **new** copy someone adds later is invisible until
-it is added to the test. So the enumerating drift test must name every known copy-holder (a comment
-listing them), and **adding a copy means extending the drift test** — checked at review under this §.
-The roster guard `test_dispatch_tables.py::test_code_reviewer_rosters_match_bundled_agents` follows
-this: it enumerates all six copy-holders (two `showrunner.js` JS literals, two Python `DIMENSIONS`,
-and the same roster re-keyed as two `AGENT_SUFFIX` dicts) against the `agents/*-reviewer` home. When
-a single runtime home is cheap to read, Pattern 1 sidesteps this failure mode entirely.
+*Worked example 2 — the reviewer roster.* The authoritative home is the set of
+`agents/*-reviewer` files. `lib/tests/test_dispatch_tables.py::test_code_reviewer_rosters_match_bundled_agents`
+reads that directory listing and asserts it equals each hand-maintained copy —
+`code_loop_plan.DIMENSIONS`, `spec_loop_plan.DIMENSIONS`, and the same roster re-keyed as
+`AGENT_SUFFIX` in both modules — duplicate-sensitive (a copy that duplicates one slug
+while dropping another cannot pass by set-collapsing). Adding, removing, or renaming a
+reviewer agent breaks CI in every enumerated copy until it is updated to match.
+
+**Caveat — a copy-list drift test is only as complete as the copies it enumerates.** A
+**new** copy someone adds later is invisible until it is added to the test. So the
+enumerating drift test must name every known copy-holder (a comment listing them), and
+**adding a copy means extending the drift test** — checked at review under this §. When a
+single runtime home is cheap to read, Pattern 1 sidesteps this failure mode entirely.
+
+(The phase-list example that originally anchored this pattern retired with the execution
+spine, #478 — its files no longer exist; the two worked examples above are its live
+successors.)
 
 ### 11.3 Test corollary — a contract test must read the home, never restate it
 
 **A test for a cross-boundary contract must not restate the constant** — it **imports or
 reads the authoritative home**, or it is merely testing the copy against itself and proves
 nothing. This is how #205's 172 green tests locked the defect in: they asserted the wrong
-`PIPELINE_PHASES` copy against a fixture that restated the *same* wrong copy, so the tautology
-passed while the two real homes disagreed. A drift test that reads one copy and asserts against
+copy against a fixture that restated the *same* wrong copy, so the tautology passed while
+the two real homes disagreed. A drift test that reads one copy and asserts against
 a hand-typed literal of the same fact is the same tautology; the assertion's right-hand side
 must trace back to the authoritative home (directly, or via the fixture the home also feeds).
+
+---
 
 ## 12. Verification contracts (fix-ships-its-detector, real-seam tests)
 
 > **Repo-specific convention for us as builders of superheroes**, like §11 — not (yet) a
 > portable band contract. Provenance: the 2026-07-08 engine-fidelity escape
 > ([#307](https://github.com/zwrose/superheroes/issues/307)–[#311](https://github.com/zwrose/superheroes/issues/311)),
-> which penetrated all four verification layers (CI/parity green, review loops passed,
-> acceptance live-runs passed, release-evidence gate green): codex review dispatch had
-> failed 32/32 times across the product's entire recorded history without any surface
-> noticing, because every test of the seam stubbed the seam. These two rules are the
-> layer-independent part of the fix; their productized siblings (reviewer rubric
-> questions, trap-taxonomy classes) ride the release train. Grounding:
-> [PHILOSOPHY.md](PHILOSOPHY.md) promises 2 (judgment the owner isn't expected to have)
-> and 4 (never claim more than verified).
+> which penetrated every verification layer in place at the time, because every test of
+> the seam stubbed the seam. These two rules are the layer-independent part of the fix.
+> Grounding: [PHILOSOPHY.md](PHILOSOPHY.md) promises 2 (judgment the owner isn't
+> expected to have) and 4 (never claim more than verified).
 
 ### 12.1 A fix ships its detector
 
 **A PR that fixes an observed-in-production failure must ship the assertion that would
-have caught the original escape** — at whichever tier fits the escape: a CI test, an
-acceptance-harness fact, a readout consistency check. "Fixed" without a detector is a
-claim without a receipt (promise 4): the class stays open even when the instance closes.
-This generalizes the named-risk-needs-tripwire rule from owner-named risks to every
+have caught the original escape** — at whichever tier fits the escape: a CI test, a
+review-rubric question, a contract test. "Fixed" without a detector is a claim without a
+receipt (promise 4): the class stays open even when the instance closes. This
+generalizes the named-risk-needs-tripwire rule from owner-named risks to every
 escape-class fix. A reviewer seeing a production-failure fix with no accompanying
 detector now has a rule to object with, citable by name (this §).
 
@@ -1268,3 +690,36 @@ side's real rules** (e.g. a validator enforcing the foreign schema dialect) plus
 **live round-trip receipt recorded in the PR** — not by asserting the near side's argv
 alone. The review question is: *which test would have failed if this seam were broken
 the way it actually broke?*
+
+---
+
+## 13. New deterministic machinery needs a named consumer and a ledger entry
+
+In v2 the heroes are **prompts and conventions** — two session charters (Showrunner,
+Workhorse) plus review/spec/test-pilot support — not a deterministic execution engine.
+The v1→v2 pivot retired the execution spine precisely because prompts plus independent
+review beat a hand-built orchestration layer for this job (PHILOSOPHY.md B1). The guard
+against sliding back into one:
+
+**Any new deterministic machinery — a hook, a gate, a decider, a validator — requires,
+before it ships, both of:**
+
+1. **A named consumer.** A specific hero or skill that actually uses the machinery
+   today, not a future or hypothetical one. No producer without a consumer
+   (PHILOSOPHY.md B7): a validator nothing reads, a gate nothing enforces against, is
+   dead weight waiting to bit-rot.
+2. **A ledger entry** in `LEDGERS.md` §1 (the bespoke-vs-platform ledger, PHILOSOPHY.md
+   B6): the platform primitive that could absorb the job, why we still diverge from it,
+   and the re-check trigger that retires the divergence when the platform catches up.
+
+Both are load-bearing, not paperwork: a hook without a named consumer is exactly how a
+charter re-accumulates the spine's machinery one "just this one small check" at a time;
+a hook without a ledger entry is an unexamined divergence with no trigger to retire it.
+The restored owner-authority gate (`LEDGERS.md` §1.1 — a minimal PreToolUse hook
+mechanically enforcing the never-merge/never-release line) is the live example of a
+divergence that earned its entry: it names its consumer (every session, via the
+covenant's hardest line), states the platform primitive it awaits (plugin-shippable
+native permission rules), and carries the trigger that retires it.
+
+This rule is enforced the same way review discipline is: at review, a reviewer citing
+this section is enough to block a hook or gate that skipped either step.

@@ -1,5 +1,7 @@
 # review-code.md — Relocation Map (UFR-2)
 
+> **Status (v2): historical.** Maps a relocation within the still-current review-code skill, alongside the now-retired review-tasks (retired in #478/#479) cited as the canonical wording source. Kept as provenance; the v2 review-eval rebuild rides the S2 lane (#476).
+
 Records every pre-change instruction unit relocated out of
 `plugins/superheroes/skills/review-code/SKILL.md` (Task 16).
 

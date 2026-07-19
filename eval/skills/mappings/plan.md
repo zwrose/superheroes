@@ -1,5 +1,7 @@
 # plan relocation mapping (Task 17)
 
+> **Status (v2): historical.** Maps the retired v1 skill surface (architect-plan, retired in #478/#479). Kept as provenance; the v2 review-eval rebuild rides the S2 lane (#476).
+
 ## Pre-change line count
 391
 

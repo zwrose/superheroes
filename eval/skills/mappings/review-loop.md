@@ -1,5 +1,7 @@
 # review-loop.md — Relocation Map (UFR-2)
 
+> **Status (v2): historical.** Maps the retired v1 skill surface (review-plan/review-tasks, retired in #478/#479) alongside the still-current review-spec. Kept as provenance; the v2 review-eval rebuild rides the S2 lane (#476).
+
 Records every pre-change instruction unit relocated into
 `plugins/superheroes/reference/review-loop.md` (Task 15).
 

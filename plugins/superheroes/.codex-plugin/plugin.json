@@ -1,7 +1,7 @@
 {
   "name": "superheroes",
   "version": "0.14.0",
-  "description": "Your team of superheroes — the-architect (spec→plan→tasks), review-crew (multi-agent review), test-pilot (browser verification), and workhorse (the producer) — in one plugin that runs a project's development loop.",
+  "description": "The discipline layer around AI build sessions: Showrunner (advisor), Workhorse (builder), The Architect (spec), Review Crew (cross-vendor review), Test-Pilot (browser evidence) — one plugin.",
   "author": {
     "name": "zwrose"
   },
@@ -23,7 +23,7 @@
   "hooks": "./hooks/hooks-codex.json",
   "interface": {
     "displayName": "Superheroes",
-    "shortDescription": "the-architect + review-crew + test-pilot + workhorse — one plugin that runs a project's development loop",
+    "shortDescription": "Showrunner + Workhorse + The Architect + Review Crew + Test-Pilot — the discipline layer around AI build sessions",
     "category": "Developer Tools"
   }
 }

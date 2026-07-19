@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """File lock guarding concurrent engine applies (parallel worktree agents).
-Stale reclaim (CONVENTIONS §4.4): a holder is stale when it is EXPIRED by TTL and its
+Stale reclaim: a holder is stale when it is EXPIRED by TTL and its
 pid is dead-on-this-boot, OR when its recorded bootId no longer matches (the host
 rebooted, so the recorded pid is meaningless). A LIVE holder still raises LockHeld.
 """

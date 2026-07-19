@@ -7,9 +7,9 @@ This skill speaks in host-neutral actions. Resolve them to your runtime's tools 
 
 # architect-init
 
-Configure the-architect's **doc-policy** — where definition-docs (`spec`,
-`plan`, `tasks`) will be written and whether they are committed or gitignored
-(CONVENTIONS `§2.3` / `§3.3` / `§4.2`). This is the one-time (idempotent)
+Configure the-architect's **doc-policy** — where the `spec` definition-doc
+will be written and whether it is committed or gitignored
+(CONVENTIONS `§2.3` / `§3.3`). This is the one-time (idempotent)
 setup step that `architect-discovery` and the rest of the band depend on.
 
 ## Step 1 — Resolve the storage mode
@@ -93,7 +93,7 @@ architect_config.write_policy(os.getcwd(),
 ```
 
 If `write_policy` returns `None` (config lock contended), surface a notice
-and exit without writing — the caller retries (CONVENTIONS `§4.2`).
+and exit without writing — the caller retries (CONVENTIONS `§4.4`).
 
 ## Step 4 — Report
 

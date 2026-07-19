@@ -1,5 +1,7 @@
 # Phase-1 gate — "one issue, evals-gated"
 
+> **Status (v2).** The **[live]** conformance rows for **identifiers and schema validation** remain CI-enforced and current. The content-hash / branch-addressing rows and the **[Phase 1]** behavioral rows describe the retired v1 loop (Discovery→Plan→Tasks with review-plan/review-tasks gates, #478/#479) and are historical — the v2 review-eval rebuild is scheduled in the S2 lane (epic #476).
+
 Phase 1 (see [ROADMAP.md](../ROADMAP.md)) takes a single work-item through the full loop
 — Discovery → Plan → Tasks → Build → Verify → Ship — with a human watching. This is
 what must pass before that run counts as **correct**. Checks marked **[live]** are

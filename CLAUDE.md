@@ -18,7 +18,7 @@ When a change alters the **cast, commands, or cross-plugin contracts**, update t
 the same PR:
 
 - **README.md** — the hero sections + their command tables.
-- **CONVENTIONS.md** — the cross-plugin contracts (§1–§7).
+- **CONVENTIONS.md** — the cross-plugin contracts (§1–§13).
 
 **ROADMAP.md carries the release train** (owner-ratified 2026-07-09, superseding the
 older pointer-only rule): the cut rules, the release bundles with what each must prove
@@ -100,7 +100,7 @@ Every PR that touches `plugins/superheroes/**` gets a real review before handbac
 no matter how small the diff or how it was built (direct build, external engine,
 fix PR, fast-follow):
 
-- Work driven through the pipeline reviews itself (the spine's panels).
+- Work driven through the review skills reviews itself — the cross-vendor review panels (review-code, the spec panel) are the review.
 - **A direct build ends with `/superheroes:review-code`** (or an explicit
   owner/owner-agent review) before the PR is handed back. The loop is cheap on
   small diffs (scoped rounds, capped confirmations) — "too small to review" is

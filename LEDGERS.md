@@ -16,14 +16,14 @@ Every custom mechanism we maintain, the platform primitive that could absorb it,
 still diverge, and the trigger that reopens the decision. Upstream requests are cited,
 never duplicated — corroborate on the existing thread.
 
-The v2 pivot (see [PATH-FORWARD.md](PATH-FORWARD.md); PR #478) retired the deterministic
+The v2 pivot (see [ROADMAP.md](ROADMAP.md); PR #478) retired the deterministic
 execution spine, and with it the four divergences this ledger tracked — recorded in §1.2
 below as B6 requires (a divergence that retires leaves its record, not a blank). No
 maintained spine divergence remains. A new, non-spine divergence is now maintained: the
 restored owner-authority gate (issue #482, §1.1 below) — a minimal PreToolUse hook,
 distinct from (and much smaller than) the retired enforcer it partially recreates. The
 remaining known bespoke surface — review-code's multi-model review panel — gets its own
-entry here when the review-code evolution spike (PATH-FORWARD §2-B) lands; it is a fresh
+entry here when the review-code evolution spike (issue #474, the S2 Review-Crew-v2 lane) lands; it is a fresh
 B6 analysis, not authored on the spine's exit.
 
 ### 1.1 Maintained divergences
