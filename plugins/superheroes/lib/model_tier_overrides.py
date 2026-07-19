@@ -22,10 +22,13 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
-# Mirrors the core's DEFAULT_TIERS keys (the-architect/lib/model_tier.py); a role not in
-# this set is an owner typo and is dropped (fail-open to the default).
-KNOWN_ROLES = ("orchestrator", "reviewer", "reviewer-deep", "mechanical", "synthesis", "fixer",
-               "author", "builder", "pr-body", "author-plan")
+# The OWNER-CONFIGURABLE model-tier role set — mirrors the core's DEFAULT_TIERS keys
+# (the-architect/lib/model_tier.py) minus `orchestrator`. `orchestrator` is deliberately
+# excluded: it has no config key (the session model is not owner-configurable, so it must
+# never be silently overridable via this block). A role not in this set is an owner typo
+# and is dropped (fail-open to the default).
+KNOWN_ROLES = ("reviewer", "reviewer-deep", "mechanical", "synthesis", "fixer", "author",
+               "builder", "pr-body", "author-plan", "implementer", "pilot")
 KNOWN_MODELS = ("haiku", "sonnet", "opus", "fable")
 
 _HEADING = re.compile(r"^\s*##\s+[Mm]odel tiers\s*$")

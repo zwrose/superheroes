@@ -68,9 +68,11 @@ python3 "$ROOT_DIR/lib/hero_setup.py" decline --cwd . --hero test-pilot
 ## 4.5 — Offer an external engine per role (FR-11/12/13/14), decline still completes
 
 After the verify command (§3) is set — external implementers are verify-gated, so this must follow it —
-offer to bring **Codex** and/or **Cursor** into the loop, per role (reviewer engine, implementation
-engine), each independent, default **Claude**. A decline leaves both roles on Claude and set-up still
-completes.
+offer to bring **Codex** and/or **Cursor** into the loop, per role — **reviewer**, **implementer**,
+**brief-check reviewer** (the cross-vendor pre-code check), and **pilot** — each independent. Reviewer,
+implementer, and pilot each default to **Claude**; the brief-check reviewer defaults to **codex** even
+when unset — it is the one role that does not fall open to Claude, so a Claude brief-check is a
+disclosed degradation. A decline leaves every role on its default and set-up still completes.
 
 1. **Availability (FR-11).** Probe both engines and show a readiness matrix — installed + signed in, or
    what to fix:
@@ -81,12 +83,12 @@ completes.
    ```
    A not-ready engine is shown with its next-command remediation; it is never offered as ready.
 
-2. **Per-role preference (FR-12).** Ask, one at a time, which engine to use for the reviewer role and
-   for the implementation role (only ready engines are selectable). Record the pick into `core.md`'s
-   machine block `enginePreferences: {reviewer, implementation}` via `core_md` (schemaVersion 2). An
-   absent block reads as both `claude`. (A third key, `planAuthor`, routes the showrunner's
-   plan-author leaf; it is a tune-level knob — offer it only when the owner asks, per
-   `reference/view-and-tune.md`.)
+2. **Per-role preference (FR-12).** Ask, one at a time, which engine to use for the reviewer role,
+   the implementer role, the brief-check reviewer role, and the pilot role (only ready engines are
+   selectable). Record the pick into `core.md`'s machine block
+   `enginePreferences: {reviewer, implementation, briefCheck, pilot}` via `core_md` (schemaVersion 2).
+   An absent block reads as `claude` for every role **except `briefCheck`, which falls open to
+   `codex`** (the cross-vendor default — a Claude brief-check is a disclosed degradation).
    When Codex is selected and no concrete model pin exists, explain the effective GPT-5.6 defaults.
    Codex tier map: haiku=gpt-5.6-luna, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol,
    fable=gpt-5.6-sol.
