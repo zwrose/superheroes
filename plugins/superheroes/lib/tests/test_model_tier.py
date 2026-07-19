@@ -135,3 +135,37 @@ def test_pr_body_override_wins():
     # not the unknown-role reviewer fallback (which also happens to yield 'sonnet').
     assert MT.resolve_model("pr-body", {"pr-body": "opus"}) == "opus"
     assert MT.resolve_model("reviewer", {"pr-body": "opus"}) == "sonnet"  # untouched -> default
+
+
+def test_implementer_role_defaults_to_sonnet():
+    # v2 delegated work-order implementer (owner-ratified default: sonnet).
+    assert MT.resolve_model("implementer") == "sonnet"
+    assert MT.DEFAULT_TIERS["implementer"] == "sonnet"
+    assert "implementer" in MT.ROLES and "implementer" in MT.DEFAULT_TIERS
+
+
+def test_implementer_override_wins():
+    assert MT.resolve_model("implementer", {"implementer": "opus"}) == "opus"
+    assert MT.resolve_model("reviewer", {"implementer": "opus"}) == "sonnet"  # untouched -> default
+
+
+def test_pilot_role_defaults_to_sonnet():
+    # v2 test-pilot executor (owner-ratified default: sonnet).
+    assert MT.resolve_model("pilot") == "sonnet"
+    assert MT.DEFAULT_TIERS["pilot"] == "sonnet"
+    assert "pilot" in MT.ROLES and "pilot" in MT.DEFAULT_TIERS
+
+
+def test_pilot_override_wins():
+    assert MT.resolve_model("pilot", {"pilot": "opus"}) == "opus"
+    assert MT.resolve_model("reviewer", {"pilot": "opus"}) == "sonnet"  # untouched -> default
+
+
+def test_fable_is_never_a_default():
+    assert "fable" not in MT.DEFAULT_TIERS.values()
+
+
+def test_orchestrator_still_resolves_to_none_internally():
+    # orchestrator remains internal (inherit the session model) — it is simply no longer
+    # owner-configurable (see model_tier_overrides.KNOWN_ROLES), which this module doesn't gate.
+    assert MT.resolve_model("orchestrator") is None

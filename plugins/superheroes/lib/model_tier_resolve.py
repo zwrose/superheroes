@@ -27,6 +27,8 @@ _FALLBACK = {
     "builder": "opus",
     "pr-body": "sonnet",
     "author-plan": "opus",
+    "implementer": "sonnet",
+    "pilot": "sonnet",
 }
 
 

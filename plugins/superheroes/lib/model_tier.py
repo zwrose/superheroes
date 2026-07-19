@@ -26,6 +26,8 @@ DEFAULT_TIERS = {
     "author": "opus",              # produce-plan / produce-tasks (front-half authoring, #88)
     "builder": "opus",             # native build-phase implementer (a smart leaf; owner policy -> opus)
     "pr-body": "sonnet",           # #219: durable draft-PR body composer (showrunner composePrBody)
+    "implementer": "sonnet",   # v2 delegated work-order implementer (owner-ratified default: sonnet)
+    "pilot": "sonnet",         # v2 test-pilot executor (owner-ratified default: sonnet)
 }
 
 # Split roles: a role here has no tier of its own — absent an explicit override it resolves

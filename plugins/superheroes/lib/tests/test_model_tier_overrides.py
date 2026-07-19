@@ -136,15 +136,50 @@ def test_cli_autoresolve_broken_profile_failsafe(tmp_path, monkeypatch, capsys):
 
 def test_known_roles_matches_core_default_tiers():
     # KNOWN_ROLES mirrors the model_tier core's ROLES (DEFAULT_TIERS keys + split roles like
-    # author-plan); guard against silent drift so a renamed/added core role can't make this
-    # helper drop a valid override (fail-open would otherwise mask it). Mirrors the sibling
-    # guard in test_model_tier_resolve.py. Repointed from the old
-    # plugins/superheroes/lib/model_tier.py to the in-tree sibling core.
+    # author-plan) MINUS `orchestrator` — deliberately excluded, since the session model has
+    # no config key and must never be silently overridable. Guard against silent drift so a
+    # renamed/added core role can't make this helper drop a valid override (fail-open would
+    # otherwise mask it). Mirrors the sibling guard in test_model_tier_resolve.py. Repointed
+    # from the old plugins/superheroes/lib/model_tier.py to the in-tree sibling core.
     core_path = os.path.join(_HERE, "..", "model_tier.py")
     spec = importlib.util.spec_from_file_location("model_tier_core", core_path)
     core = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(core)
-    assert set(MTO.KNOWN_ROLES) == set(core.ROLES)
+    assert set(MTO.KNOWN_ROLES) == set(core.ROLES) - {"orchestrator"}
+
+
+def test_orchestrator_excluded_implementer_and_pilot_included():
+    assert "orchestrator" not in MTO.KNOWN_ROLES
+    assert "implementer" in MTO.KNOWN_ROLES
+    assert "pilot" in MTO.KNOWN_ROLES
+
+
+def test_implementer_and_pilot_override_block_takes_effect(tmp_path):
+    p = tmp_path / "profile.md"
+    p.write_text("## Model tiers\nimplementer: opus\npilot: haiku\n", encoding="utf-8")
+    assert MTO.load_overrides(str(p)) == {"implementer": "opus", "pilot": "haiku"}
+    effective = MTO.effective_tiers(str(p))
+    assert effective["implementer"] == "opus"
+    assert effective["pilot"] == "haiku"
+
+
+def test_orchestrator_not_configurable_update_drops_it(tmp_path):
+    # Negative: orchestrator has no config key — an attempted write is dropped with a warning
+    # and never lands in the profile.
+    p = tmp_path / "profile.md"
+    p.write_text("## Model tiers\n", encoding="utf-8")
+    result = MTO.update_overrides(str(p), {"orchestrator": "opus"}, [])
+    assert any("unknown role: orchestrator" in w for w in result["warnings"])
+    text = p.read_text(encoding="utf-8")
+    assert "orchestrator" not in text
+    assert MTO.load_overrides(str(p)) == {}
+
+
+def test_orchestrator_not_configurable_load_drops_it(tmp_path):
+    # A hand-edited block containing `orchestrator: opus` is dropped on read (unknown role).
+    p = tmp_path / "profile.md"
+    p.write_text("## Model tiers\norchestrator: opus\n", encoding="utf-8")
+    assert MTO.load_overrides(str(p)) == {}
 
 
 def test_effective_tiers_merges_defaults_with_profile_overrides(tmp_path):

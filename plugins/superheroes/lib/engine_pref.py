@@ -16,6 +16,21 @@ _MISSING = object()
 
 ENGINES = ("claude", "codex", "cursor")
 
+# Canonical v2 engine-preference role keys (the single home the §11 drift guard reads). Each is a
+# key under core.md's enginePreferences. `orchestrator` is intentionally absent — the session model
+# is not owner-configurable. `planAuthor` is legacy (plan authoring retired) and kept only as
+# harmless back-compat plumbing, not part of the v2 schema.
+ENGINE_ROLE_KEYS = ("reviewer", "implementation", "briefCheck", "pilot")
+
+# The FULL valid enginePreferences key set (role keys + the non-role tuning keys) — the schema home
+# the §11 drift guard reads so no test re-types the list. `codexModels`/`effort`/`timeout`/
+# `idleTimeout` are the non-role keys load_engine_prefs already honors.
+ENGINE_PREF_KEYS = ENGINE_ROLE_KEYS + ("codexModels", "effort", "timeout", "idleTimeout")
+
+# Retired enginePreferences keys that must never be cited as a live config knob again (plan authoring
+# was retired in #479). The §11 drift guard asserts these never re-appear in the calibration prose.
+RETIRED_ENGINE_KEYS = ("planAuthor",)
+
 # Codex model policy is provider-specific and deliberately separate from model_tier's
 # Claude-family capability names. Shared tiers express role strength; this map translates those
 # strengths at the external boundary. Explicit pins live under enginePreferences.codexModels so a
@@ -27,9 +42,11 @@ CODEX_MODEL_BY_TIER = {
     "opus": "gpt-5.6-sol",
     "fable": "gpt-5.6-sol",
 }
-CODEX_PIN_ROLES = ("reviewer", "reviewer-deep", "builder", "fixer", "author-plan")
+CODEX_PIN_ROLES = ("reviewer", "reviewer-deep", "builder", "fixer", "author-plan",
+                   "implementer", "pilot")
 CODEX_ROLE_KIND = {"reviewer": "review", "reviewer-deep": "review-deep", "builder": "build",
-                   "fixer": "fix", "author-plan": "author-plan"}
+                   "fixer": "fix", "author-plan": "author-plan", "implementer": "build",
+                   "pilot": "pilot"}
 CODEX_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
 CODEX_MAX_UNSUPPORTED_MODELS = ("gpt-5.5",)
 
@@ -46,9 +63,60 @@ CODEX_WRITE_PIN_ROLES = ("builder", "fixer")
 
 # role_kind -> the enginePreferences key it reads. `author-plan` (the front-half plan-author
 # leaf) reads its OWN key — plan authoring routes independently of review/build; tasks
-# authoring has no key on purpose and always runs native.
+# authoring has no key on purpose and always runs native. `brief-check` (the v2 cross-vendor
+# pre-code reviewer) and `pilot` (the v2 test-pilot executor) each read their own key too.
 _ROLE_KEY = {"review": "reviewer", "build": "implementation", "fix": "implementation",
-             "author-plan": "planAuthor"}
+             "author-plan": "planAuthor", "brief-check": "briefCheck", "pilot": "pilot"}
+
+# Most roles fail open to claude; the brief-check reviewer defaults to codex (the ratified
+# cross-vendor pre-code check). An unavailable codex is handled at dispatch time (disclosed
+# claude+opus fallback), never here — this resolver is pure and never probes.
+_ROLE_DEFAULT_ENGINE = {"brief-check": "codex"}
+
+# When the brief-check reviewer must fall back to a Claude reviewer (codex unavailable), it runs at
+# this tier — a tier UP from the sonnet implementer, never session-inherited. Disclosed at dispatch.
+BRIEF_CHECK_CLAUDE_FALLBACK_TIER = "opus"
+
+
+def _effective_model(engine, pin_role, tier, prefs):
+    """The model to REPORT for a dispatch role given its resolved engine — honest provenance.
+    claude → the Claude tier; codex → the concrete Codex model (pin or tier→GPT map); cursor → the
+    single composer model. `pin_role` is the CODEX_PIN_ROLES key for this role (or None)."""
+    if engine == "codex":
+        return resolve_engine_model("codex", pin_role, tier, prefs) or tier
+    if engine == "cursor":
+        return "(cursor composer)"
+    return tier  # claude (or unknown) → the Claude-family tier
+
+
+def dispatch_calibration_rows(prefs, tiers):
+    """The effective (engine, model) per v2 dispatch role — the ONE source both the configure view
+    and the preflight readout format. `prefs` MUST be the RAW enginePreferences dict (NOT
+    load_engine_prefs output: an absent `briefCheck` must stay ABSENT so resolve_engine applies the
+    codex default; a normalized 'claude' would suppress it). `tiers` is the effective model-tier map.
+    Honest per-engine provenance: `model` is meaningful only when engine==claude (the Claude tier);
+    an external engine carries its OWN model (the resolved Codex model, or cursor's single composer
+    model) via `_effective_model` — never the Claude tier misreported as what actually ran.
+    Returns a list of {role, engine, model}. Pure; tolerant of non-dict inputs."""
+    prefs = prefs if isinstance(prefs, dict) else {}
+    tiers = tiers if isinstance(tiers, dict) else {}
+    brief_engine = resolve_engine("brief-check", prefs)
+    brief_model = _effective_model(brief_engine, None, BRIEF_CHECK_CLAUDE_FALLBACK_TIER, prefs)
+    impl_engine = resolve_engine("build", prefs)
+    rev_engine = resolve_engine("review", prefs)
+    pilot_engine = resolve_engine("pilot", prefs)
+    return [
+        {"role": "implementer", "engine": impl_engine,
+         "model": _effective_model(impl_engine, "implementer", tiers.get("implementer"), prefs)},
+        {"role": "brief-check", "engine": brief_engine, "model": brief_model},
+        {"role": "review-code", "engine": rev_engine,
+         "model": "reviewer=%s reviewer-deep=%s" % (
+             _effective_model(rev_engine, "reviewer", tiers.get("reviewer"), prefs),
+             _effective_model(rev_engine, "reviewer-deep", tiers.get("reviewer-deep"), prefs))},
+        {"role": "pilot", "engine": pilot_engine,
+         "model": _effective_model(pilot_engine, "pilot", tiers.get("pilot"), prefs)},
+    ]
+
 
 # effort defaults per engine. codex is effort-tiered; cursor is one composer model
 # (FR-10, exempt); claude defers to model_tier (None). Depth-aware review: the deep reviewers
@@ -56,7 +124,7 @@ _ROLE_KEY = {"review": "reviewer", "build": "implementation", "fix": "implementa
 # regular review -> high. GPT-5.6 additionally accepts max, but max is owner opt-in only;
 # GPT-5.5 remains limited to none/low/medium/high/xhigh.
 _CODEX_EFFORT = {"review": "high", "review-deep": "xhigh", "build": "high", "fix": "low",
-                 "author-plan": "xhigh"}
+                 "author-plan": "xhigh", "brief-check": "high", "pilot": "medium"}
 _CURSOR_EFFORT = "composer"
 
 DEFAULT_STALL_LIMIT_SECONDS = 300
@@ -85,17 +153,19 @@ _ROLE_IDLE = {"build": WRITE_IDLE_SECONDS, "fix": WRITE_IDLE_SECONDS,
 
 
 def resolve_engine(role_kind, prefs):
-    """Return the engine for `role_kind`, fail-open to 'claude'. A missing/unknown role,
-    a non-dict `prefs`, an absent key, or a value outside ENGINES all fall open."""
+    """Return the engine for `role_kind`, fail-open to its role default (claude for most roles;
+    codex for the cross-vendor brief-check reviewer — see _ROLE_DEFAULT_ENGINE). A missing/unknown
+    role, a non-dict `prefs`, an absent key, or a value outside ENGINES all fall open to that
+    default. A VALID configured engine in ENGINES always wins."""
     key = _ROLE_KEY.get(role_kind)
     if key is None:
-        return "claude"
+        return _ROLE_DEFAULT_ENGINE.get(role_kind, "claude")
     if not isinstance(prefs, dict):
-        return "claude"
+        return _ROLE_DEFAULT_ENGINE.get(role_kind, "claude")
     v = prefs.get(key)
     if isinstance(v, str) and v in ENGINES:
         return v
-    return "claude"
+    return _ROLE_DEFAULT_ENGINE.get(role_kind, "claude")
 
 
 def resolve_effort(engine, role_kind, overrides=None):
@@ -203,7 +273,7 @@ def load_engine_prefs(cwd, root=None):
     #309 `timeout` owner override (a positive int, else omitted — resolve_timeout then falls to the
     role ceiling); absent block / None / any error → both 'claude' + empty effort. Never raises."""
     degenerate = {"reviewer": "claude", "implementation": "claude", "planAuthor": "claude",
-                  "effort": {}}
+                  "briefCheck": "claude", "pilot": "claude", "effort": {}}
     try:
         import core_md
         rec = core_md.read(cwd, root)
@@ -218,6 +288,8 @@ def load_engine_prefs(cwd, root=None):
     out = {"reviewer": _normalize(prefs.get("reviewer")),
            "implementation": _normalize(prefs.get("implementation")),
            "planAuthor": _normalize(prefs.get("planAuthor")),
+           "briefCheck": _normalize(prefs.get("briefCheck")),
+           "pilot": _normalize(prefs.get("pilot")),
            "effort": dict(effort) if isinstance(effort, dict) else {}}
     codex_models = prefs.get("codexModels")
     if isinstance(codex_models, dict):

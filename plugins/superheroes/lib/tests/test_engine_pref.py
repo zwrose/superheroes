@@ -73,6 +73,63 @@ def test_resolve_effort_author_plan():
     assert EP.resolve_effort("codex", "author-plan", {"author-plan": "medium"}) == "medium"
 
 
+def test_resolve_engine_brief_check_defaults_to_codex():
+    # The ratified cross-vendor pre-code check: brief-check fails open to codex, not claude.
+    assert EP.resolve_engine("brief-check", {}) == "codex"
+    assert EP.resolve_engine("brief-check", {"briefCheck": "cursor"}) == "cursor"
+    assert EP.resolve_engine("brief-check", {"briefCheck": "bogus"}) == "codex"   # invalid -> default
+    assert EP.resolve_engine("brief-check", {"briefCheck": "claude"}) == "claude"  # disclosed degrade
+
+
+def test_resolve_engine_pilot_fails_open_to_claude():
+    assert EP.resolve_engine("pilot", {}) == "claude"
+    assert EP.resolve_engine("pilot", {"pilot": "codex"}) == "codex"
+
+
+def test_resolve_engine_build_unchanged_no_regression():
+    assert EP.resolve_engine("build", {}) == "claude"
+    assert EP.resolve_engine("bogus-role", {}) == "claude"   # unknown role_kind still returns claude
+
+
+def test_engine_role_keys_schema():
+    assert EP.ENGINE_ROLE_KEYS == ("reviewer", "implementation", "briefCheck", "pilot")
+    assert "orchestrator" not in EP.ENGINE_ROLE_KEYS
+    assert "planAuthor" not in EP.ENGINE_ROLE_KEYS
+
+
+def test_engine_role_keys_are_all_surfaced_by_loader():
+    # ARCH-2: ENGINE_ROLE_KEYS is the single home the §11 drift guard reads; the loader's
+    # degenerate (absent-block) dict must carry every one of them, else a role key added to the
+    # schema home that the loader forgets to surface would silently vanish from load_engine_prefs.
+    degenerate = EP.load_engine_prefs("/nonexistent/xyz")
+    assert set(EP.ENGINE_ROLE_KEYS) <= set(degenerate.keys())
+
+
+def test_implementer_and_pilot_are_codex_pin_roles():
+    assert "implementer" in EP.CODEX_PIN_ROLES
+    assert "pilot" in EP.CODEX_PIN_ROLES
+
+
+def test_codex_model_pin_on_implementer():
+    assert EP.resolve_engine_model("codex", "implementer", "sonnet",
+                                   {"codexModels": {"implementer": "gpt-5.6-terra"}}) == "gpt-5.6-terra"
+
+
+def test_load_engine_prefs_surfaces_brief_check_and_pilot_keys(tmp_path):
+    # On an absent enginePreferences block, briefCheck and pilot normalize to claude alongside
+    # the existing keys (raw normalization; resolve_engine applies the codex default at read time).
+    got = EP.load_engine_prefs(str(tmp_path), root=str(tmp_path / "store"))
+    assert got["briefCheck"] == "claude"
+    assert got["pilot"] == "claude"
+    assert got["reviewer"] == "claude"
+    assert got["implementation"] == "claude"
+    assert got["planAuthor"] == "claude"
+
+
+def test_brief_check_claude_fallback_tier_is_opus():
+    assert EP.BRIEF_CHECK_CLAUDE_FALLBACK_TIER == "opus"
+
+
 def test_resolve_engine_model_maps_shared_tiers_to_gpt_5_6_family():
     assert EP.resolve_engine_model("codex", "mechanical", "haiku", {}) == "gpt-5.6-luna"
     assert EP.resolve_engine_model("codex", "reviewer", "sonnet", {}) == "gpt-5.6-terra"
@@ -192,6 +249,70 @@ def test_load_engine_prefs_surfaces_positive_idle_override(tmp_path, monkeypatch
     assert "idleTimeout" not in EP.load_engine_prefs(str(tmp_path))
 
 
+def test_dispatch_calibration_rows_codex_implementer_reports_gpt_model_not_claude_tier():
+    # Fix A: honest per-engine provenance — a codex implementer reports the RESOLVED Codex model
+    # (the sonnet->GPT tier map), never the Claude tier it would show if engine were ignored.
+    rows = EP.dispatch_calibration_rows(
+        {"implementation": "codex"},
+        {"implementer": "sonnet", "pilot": "sonnet", "reviewer": "sonnet", "reviewer-deep": "opus"})
+    by_role = {r["role"]: r for r in rows}
+    assert by_role["implementer"]["engine"] == "codex"
+    assert by_role["implementer"]["model"] == "gpt-5.6-terra"
+
+
+def test_dispatch_calibration_rows_codex_implementer_honors_persistent_pin():
+    rows = EP.dispatch_calibration_rows(
+        {"implementation": "codex", "codexModels": {"implementer": "gpt-5.6-sol"}},
+        {"implementer": "sonnet", "pilot": "sonnet", "reviewer": "sonnet", "reviewer-deep": "opus"})
+    by_role = {r["role"]: r for r in rows}
+    assert by_role["implementer"]["model"] == "gpt-5.6-sol"
+
+
+def test_dispatch_calibration_rows_cursor_implementer_reports_composer_literal():
+    rows = EP.dispatch_calibration_rows(
+        {"implementation": "cursor"},
+        {"implementer": "sonnet", "pilot": "sonnet", "reviewer": "sonnet", "reviewer-deep": "opus"})
+    by_role = {r["role"]: r for r in rows}
+    assert by_role["implementer"]["model"] == "(cursor composer)"
+
+
+def test_dispatch_calibration_rows_claude_implementer_unchanged():
+    rows = EP.dispatch_calibration_rows(
+        {},
+        {"implementer": "sonnet", "pilot": "sonnet", "reviewer": "sonnet", "reviewer-deep": "opus"})
+    by_role = {r["role"]: r for r in rows}
+    assert by_role["implementer"]["engine"] == "claude"
+    assert by_role["implementer"]["model"] == "sonnet"
+
+
+def test_dispatch_calibration_rows_brief_check_reports_effective_provider_model():
+    # Fix 1: the brief-check row is no longer special-cased to "(engine default)" — it routes
+    # through the SAME _effective_model helper as the other rows, so codex/cursor show the real
+    # provider model instead of a placeholder.
+    tiers = {"implementer": "sonnet", "pilot": "sonnet", "reviewer": "sonnet", "reviewer-deep": "opus"}
+    rows = EP.dispatch_calibration_rows({"briefCheck": "codex"}, tiers)
+    by_role = {r["role"]: r for r in rows}
+    assert by_role["brief-check"]["engine"] == "codex"
+    assert by_role["brief-check"]["model"] == "gpt-5.6-sol"   # opus-tier codex peer
+
+    rows = EP.dispatch_calibration_rows({"briefCheck": "cursor"}, tiers)
+    by_role = {r["role"]: r for r in rows}
+    assert by_role["brief-check"]["engine"] == "cursor"
+    assert by_role["brief-check"]["model"] == "(cursor composer)"
+
+    # {} -> brief-check fails open to its codex default (see _ROLE_DEFAULT_ENGINE)
+    rows = EP.dispatch_calibration_rows({}, tiers)
+    by_role = {r["role"]: r for r in rows}
+    assert by_role["brief-check"]["engine"] == "codex"
+    assert by_role["brief-check"]["model"] == "gpt-5.6-sol"
+
+    # explicit claude fallback is unchanged: the opus tier literal
+    rows = EP.dispatch_calibration_rows({"briefCheck": "claude"}, tiers)
+    by_role = {r["role"]: r for r in rows}
+    assert by_role["brief-check"]["engine"] == "claude"
+    assert by_role["brief-check"]["model"] == "opus"
+
+
 def test_never_raises_on_garbage():
     assert EP.resolve_engine(None, None) == "claude"
     assert EP.resolve_effort(None, None, None) is None
@@ -224,20 +345,22 @@ def test_load_engine_prefs_reads_core_md(tmp_path):
     _write_core_with_prefs(repo, {"reviewer": "codex", "implementation": "cursor"})
     got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
     assert got == {"reviewer": "codex", "implementation": "cursor",
-                   "planAuthor": "claude", "effort": {}}
+                   "planAuthor": "claude", "briefCheck": "claude", "pilot": "claude", "effort": {}}
 
 
 def test_load_engine_prefs_absent_is_both_claude(tmp_path):
     repo = str(tmp_path)
     _write_core_with_prefs(repo, {})   # core.md exists but no engine prefs
     assert EP.load_engine_prefs(repo, root=os.path.join(repo, "store")) == \
-        {"reviewer": "claude", "implementation": "claude", "planAuthor": "claude", "effort": {}}
+        {"reviewer": "claude", "implementation": "claude", "planAuthor": "claude",
+         "briefCheck": "claude", "pilot": "claude", "effort": {}}
 
 
 def test_load_engine_prefs_greenfield_is_both_claude(tmp_path):
     # no core.md at all → both claude (fail-open, never raises)
     assert EP.load_engine_prefs(str(tmp_path), root=str(tmp_path / "store")) == \
-        {"reviewer": "claude", "implementation": "claude", "planAuthor": "claude", "effort": {}}
+        {"reviewer": "claude", "implementation": "claude", "planAuthor": "claude",
+         "briefCheck": "claude", "pilot": "claude", "effort": {}}
 
 
 def test_load_engine_prefs_store_base_none_vs_repo_root_regression(tmp_path, monkeypatch):
@@ -267,7 +390,8 @@ def test_load_engine_prefs_normalizes_bad_values(tmp_path):
     repo = str(tmp_path)
     _write_core_with_prefs(repo, {"reviewer": "bogus", "implementation": "cursor"})
     assert EP.load_engine_prefs(repo, root=os.path.join(repo, "store")) == \
-        {"reviewer": "claude", "implementation": "cursor", "planAuthor": "claude", "effort": {}}
+        {"reviewer": "claude", "implementation": "cursor", "planAuthor": "claude",
+         "briefCheck": "claude", "pilot": "claude", "effort": {}}
 
 
 def test_load_engine_prefs_surfaces_effort_submap_and_resolve_effort_honors_it(tmp_path):
@@ -383,4 +507,5 @@ def test_cli_engine_pref_load_emits_json(tmp_path):
         capture_output=True, text=True)
     assert out.returncode == 0
     assert json.loads(out.stdout) == {"reviewer": "codex", "implementation": "claude",
-                                      "planAuthor": "claude", "effort": {"build": "low"}}
+                                      "planAuthor": "claude", "briefCheck": "claude",
+                                      "pilot": "claude", "effort": {"build": "low"}}

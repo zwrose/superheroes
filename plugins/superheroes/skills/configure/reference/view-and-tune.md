@@ -21,9 +21,10 @@ import sys; sys.path.insert(0,'$ROOT_DIR/lib'); import configure_view
 print(configure_view.render('.'))"
 ```
 
-One plain-text screen, top to bottom: the project's core facts, each hero's layer, the pinned
-patterns, and the effective per-role model tiers — "here is everything superheroes knows about
-this project," not a list of files. Any current staleness/drift is shown as a **single,
+One plain-text screen, top to bottom: the project's core facts, the **Dispatch calibration** (the
+effective engine + model for every v2 dispatch role) and its Codex model-pin detail, each hero's
+layer, the pinned patterns, and the **Model tiers** block — "here is everything superheroes knows
+about this project," not a list of files. Any current staleness/drift is shown as a **single,
 dismissible reminder on every run** (whether or not it was dismissed before); the owner can act on
 it or dismiss it again for that run. Rendering is read-only — it never confirms a provisional
 calibration (FR-18).
@@ -63,12 +64,6 @@ action that owns it, leaving the rest of the calibration untouched:
   never stores with content or a live source path. `unknown` stores (pre-provenance, no content)
   are kept unless the owner explicitly opts in with `--include-unknown`. Any classification doubt
   reads as real and is kept.
-- **View, seed, or edit the permission posture** (the auto-allow routine families that let an
-  owner-absent showrunner run finish without babysitting, below the owner-role floor) → follow
-  `reference/permission.md`. The full allow set is already on the view's **Permission posture**
-  section. When the posture is empty, that sub-init offers the batteries-included **seed** of the
-  four routine families (plus the FR-7 audit record) as the first path; individual edits go through
-  `permission_rules.set_rule` / `remove_rule` (the one sanctioned change path, FR-9).
 - **Write the review-discipline section into the project's `CLAUDE.md`** — offered ONLY when
   the storage mode is **in-repo** (out-of-repo mode exists to keep the repo free of superheroes
   traces; there the SessionStart bootstrap note is the sole carrier). Owner-gated like every
@@ -77,22 +72,21 @@ action that owns it, leaving the rest of the calibration untouched:
   append it under a `## Review discipline` heading. Idempotent — if a `Review discipline`
   heading already exists in the project's `CLAUDE.md`, report that and change nothing.
 - **Switch the storage mode** → the confirmed switch below.
-- **Change the per-role engine** (reviewer engine / implementation engine / plan-author engine) → the
-  engine step in `reference/set-up.md` §4.5 (availability → preference → show-authorization →
-  test-dispatch), writing `enginePreferences` through `core_md` (keys `reviewer`, `implementation`,
-  `planAuthor`). Set a role back to `claude` (or clear it) to fall fully open. `planAuthor` routes ONLY
-  the showrunner's plan-author leaf; tasks authoring always runs native.
-- **Change the per-role model tier** (orchestrator/reviewer/reviewer-deep/mechanical/synthesis/fixer/
-  author/author-plan) → show the effective map first, then write only the `## Model tiers` block in the
-  resolved review-crew profile. This is an optional tune action: if the owner declines, change nothing.
-  `author-plan` is a split role: unset, it resolves exactly as `author`; set (e.g. `author-plan: fable`,
-  only on explicit owner ask) it moves plan authoring alone. Fable-via-Cursor plan authoring = both
-  `author-plan: fable` and `planAuthor: cursor` (the cursor adapter maps the tier to its own fable
-  model id).
+- **Change the per-role engine** (reviewer / implementer / brief-check / pilot) → the engine step in
+  `reference/set-up.md` §4.5 (availability → preference → show-authorization → test-dispatch),
+  writing `enginePreferences` through `core_md` (keys `reviewer`, `implementation`, `briefCheck`,
+  `pilot`). Set a role back to `claude` (or clear it) to fall fully open — **except `briefCheck`**,
+  which falls open to **codex** (the cross-vendor default; a Claude brief-check is a disclosed
+  degradation running at opus, one tier up from the implementer).
+- **Change the per-role model tier** (reviewer/reviewer-deep/mechanical/synthesis/fixer/pr-body/
+  implementer/pilot) → show the effective map first, then write only the `## Model tiers` block in
+  the resolved review-crew profile. This is an optional tune action: if the owner declines, change
+  nothing.
 
 - **Pin a concrete Codex model for one role** → keep the provider-neutral `## Model tiers` block
   unchanged and write the pin under `core.md`'s `enginePreferences.codexModels`. Valid role keys are
-  `reviewer`, `reviewer-deep`, `builder`, `fixer`, and `author-plan`; valid model IDs are `gpt-5.5`,
+  `reviewer`, `reviewer-deep`, `builder`, `fixer`, `author-plan`, `implementer`, and `pilot`; valid
+  model IDs are `gpt-5.5`,
   `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`. Codex tier map:
   haiku=gpt-5.6-luna, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol, fable=gpt-5.6-sol.
   Show the current engine preferences and
@@ -106,7 +100,7 @@ action that owns it, leaving the rest of the calibration untouched:
     "enginePreferences": {
       "reviewer": "codex",
       "implementation": "codex",
-      "planAuthor": "claude",
+      "briefCheck": "codex",
       "effort": {"review": "high"},
       "codexModels": {"reviewer": "gpt-5.5"}
     }
@@ -154,7 +148,10 @@ python3 "$ROOT_DIR/lib/mode_migrate.py" execute --cwd . --target <in-repo|global
   relocated.
 - **In-flight work (UFR-3):** if a piece of work is mid-flight (its documents would move underneath
   it), warn the owner — naming the work and what could break — and proceed only on an explicit
-  confirm. Check with `configure_route.work_in_flight('.')`. This is a strong warning, not a hard block.
+  confirm. v2 has no machine-readable in-flight signal (the spine's lease store was retired with the
+  execution spine, #478), so `configure_route.work_in_flight('.')` always reports no known in-flight
+  work — rely on your own judgment about what's mid-flight before switching. This is a strong
+  warning, not a hard block.
 - **Switch to the mode already in effect (FR-11):** reported as already in that mode; no change.
 - **Destination unwritable (UFR-6):** an `execute` result of `blocked` means the destination could
   not be written — report exactly what it needs; the project stays in its prior mode with nothing

@@ -67,8 +67,10 @@ approval is in place, only by using it:
 
 If one fails it surfaces to the owner **now, while they're here** — never go autonomous with a tool
 you haven't proven, or you will stall at the first approval prompt (which could be the middle of the
-night). The preflight's checklist itself lives in configure/preflight (**#472**) — point to it,
-don't restate it.
+night). The preflight's checklist itself lives in the configure **preflight** reference
+(`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/configure/reference/preflight.md`) — follow it; it
+enumerates every check (the live-exercise probes, engine/model availability, worktree hygiene,
+board wiring) and the fail-loud go/no-go. Don't restate it here.
 
 ## 4. Write the build brief (before code)
 
@@ -113,6 +115,9 @@ work-order protocol:
 Both paths carry identical instructions by construction. Choose each implementer's **model tier
 deliberately** — from the project's model/engine calibration where configured, **judged and disclosed
 in the work order** where not. Never let a subagent silently inherit your (high) session tier.
+**Record the effective engine + model in every work order** — configured or judged — so the
+dispatch's provenance is explicit and never implicit; the preflight's dispatch-calibration readout
+gives you this per role.
 
 ## 8. Verify — re-run every receipt yourself
 
@@ -143,9 +148,12 @@ something that only lives in your session), so the advisor can check them withou
 ## 11. Hand back the ready PR
 
 Open a **ready** (not draft) PR: the **build brief + dispositions table + receipts + disclosures**,
-plus **any follow-ups the advisor should file** — out-of-scope discoveries, deferred work, or issues
-you noticed but cannot file yourself (you never wire the board). List them plainly in the PR so the
-advisor can turn them into issues. **Keep the PR body current** — edit it in place so it reads
+a **dispatch provenance** section — each dispatch (the brief-check reviewer, every implementer, the
+pilot, the review-code seats) with the **engine + model** it ran on, so the advisor can vet what ran
+without your context — plus **any follow-ups the advisor should file**: out-of-scope discoveries,
+deferred work, or issues you noticed but cannot file yourself (you never wire the board). List them
+plainly in the PR so the advisor can turn them into issues. **Keep the PR body current** — edit it
+in place so it reads
 correct top to bottom. **You never merge** — hand back to the owner.
 
 ## 12. Post-handback loop & park protocol

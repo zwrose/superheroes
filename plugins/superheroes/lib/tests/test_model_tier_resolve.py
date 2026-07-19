@@ -67,4 +67,15 @@ def test_author_role_resolves_to_opus():
     assert core.DEFAULT_TIERS.get("author") == "opus"
     assert core.resolve_model("author-plan") == "opus"   # split role: resolves as author by default
     assert MTR._FALLBACK == {r: core.resolve_model(r) for r in core.ROLES}
-    assert set(mto.KNOWN_ROLES) == set(core.ROLES)
+    # KNOWN_ROLES mirrors core.ROLES minus `orchestrator` (deliberately excluded — no config key).
+    assert set(mto.KNOWN_ROLES) == set(core.ROLES) - {"orchestrator"}
+
+
+def test_implementer_role_resolves_to_sonnet(capsys):
+    rc, out = _run(capsys, "--role", "implementer")
+    assert rc == 0 and out == {"role": "implementer", "model": "sonnet", "degraded": False}
+
+
+def test_pilot_role_resolves_to_sonnet(capsys):
+    rc, out = _run(capsys, "--role", "pilot")
+    assert rc == 0 and out == {"role": "pilot", "model": "sonnet", "degraded": False}
