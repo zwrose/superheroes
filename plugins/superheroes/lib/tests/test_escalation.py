@@ -104,7 +104,7 @@ def test_safety_machinery_set_members_are_pinned():
     assert set(ESC.SAFETY_MACHINERY) == {
         "escalation.py", "escalation_resolve.py", "loop_state.py", "circuit_breaker.py",
         "gate_write.py", "definition_doc.py",
-        "enforcer.py", "allowance.py", "model_tier.py", "hooks.json",
+        "enforcer.py", "allowance.py", "model_tier.py", "model_registry.py", "hooks.json",
         "precompact.py", "session_start.py",
         "escalation-base.md", "review-base.md",
         # shared review-and-fix loop (#104): deciders, durable record, and the orchestration shell
