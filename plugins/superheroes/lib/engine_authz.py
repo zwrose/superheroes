@@ -20,13 +20,13 @@ _DISPATCH_CMD = {"codex": "codex exec", "cursor": "cursor-agent"}
 
 
 def _codex_capability_model():
-    """Probe the strongest default GPT-5.6 tier without duplicating the model ID policy."""
+    """The strongest default GPT-5.6 tier from the registry, or None if unresolvable
+    (caller then reports codex not-ready → falls open to Claude). Never raises."""
     try:
-        import engine_pref
-        return engine_pref.CODEX_MODEL_BY_TIER["opus"]
+        import model_registry
+        return model_registry.codex_peer_for_claude_tier("opus")
     except Exception:
-        # Fail toward the current required capability if the policy module itself is unreadable.
-        return "gpt-5.6-sol"
+        return None
 
 
 def _codex_probe_model(cwd):
@@ -93,7 +93,10 @@ def implementation_dispatch_allowed(cwd, engine, run=None, overrides=None):
         # the sol capability floor when unpinned. An authenticated older CLI can run its ambient model
         # while rejecting the project's model, so a model-blind probe would falsely mark Codex ready
         # during configure and defer the failure until the real build.
-        argv = ["codex", "exec", "-m", _codex_probe_model(cwd),
+        probe_model = _codex_probe_model(cwd)
+        if not probe_model:
+            return False  # cannot resolve the probe model → codex not-ready → fall open to Claude
+        argv = ["codex", "exec", "-m", probe_model,
                 "--sandbox", "workspace-write", "-C", cwd, write_prompt]
     else:  # cursor
         # -p/--print is required for a headless run (without it cursor-agent goes interactive and
