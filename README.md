@@ -59,9 +59,9 @@ maintainability guardian, arrives once its job does (see [Where this is going](#
 
 **Keeps the project honest at project altitude.** One long-lived session per project:
 it keeps the roadmap and issue board truthful, sizes and routes incoming work (build-ready
-vs. needs-discovery), decomposes big asks into small, independently mergeable issues, hands each
-to the builder with a launch prompt that is just the command and the issue pointer (everything
-durable lives in the issue), vets
+vs. needs-discovery), decomposes big asks into small, independently mergeable issues, drafts each
+builder's launch prompt as just the command and the issue pointer (everything durable lives in the
+issue), vets
 every PR from its artifacts — the diff, the issue/spec, the build brief — against what was
 asked and what was proposed, diagnoses anomalies from artifacts, and coordinates releases. It
 **never merges** — that's always the owner's act.
