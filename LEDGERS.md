@@ -85,11 +85,12 @@ stated unlock condition is met — cite this ledger instead of re-arguing.
   review-time middle option — arming the architecture reviewer with a per-PR
   dependency-graph evidence pass — was **considered and deferred, not banned** (owner
   call 2026-07-20; the guardian pulled forward instead). *Unlock:* a boundary-class
-  escape that penetrates the full standard five-lens panel (B7's test — the #424
-  acceptance case did not: substitute panel with no architecture lens, later adjudicated
-  won't-fix by the consuming repo), OR guardian sweeps showing the same wall repeatedly
-  violated or couplings compounding between cadences — either reopens both the gate
-  question and the deferred review-time option.
+  escape that penetrates every existing layer, including the full standard five-lens
+  panel (B7's test — the #424 acceptance case did not: substitute panel with no
+  architecture lens, later adjudicated won't-fix by the consuming repo), OR guardian
+  sweeps showing the same wall repeatedly violated or couplings that merge and grow
+  between sweeps — either reopens both the gate question and the deferred review-time
+  option.
 - **No storage-mode machinery investment.** Status quo decided 2026-07-05;
   `mode_migrate` demotion re-checks only inside the superpowers-severance pass (#111).
   Store-dir naming legibility (#137) is a different layer — allowed as a read-only
@@ -106,7 +107,8 @@ stated unlock condition is met — cite this ledger instead of re-arguing.
 **Unlock rhythm:** the stability gate (two consecutive releases whose first real runs
 diagnose clean) re-opens the growth posture; #184's checkpoint re-opens
 panel-composition; a real four-layer escape re-opens gate questions (spent once, see
-above).
+above); the enforcement-machinery entry re-opens on its own stated unlock (a
+panel-penetrating boundary escape, or guardian-sweep evidence).
 
 ## 3. Accepted residual risks
 

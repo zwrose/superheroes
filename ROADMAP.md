@@ -56,7 +56,7 @@ interleave where their builders don't collide. This is deliberately **not a step
 actual cut order, not the order the lanes happen to be listed in. **Version numbers float free of
 the lanes** — a release cuts whenever merged receipts justify one (the 0.16.0 cut on post-S1
 hardening smalls is the standing precedent), and a lane's work lands in whatever minor is next
-when its receipts arrive. Epics are named by lane (S2/S3), never by a promised version.
+when its receipts arrive. Epics are named by lane (S2/S3/G1), never by a promised version.
 
 ## How work is tracked
 
