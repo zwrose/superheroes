@@ -70,6 +70,52 @@ def test_default_claude_tiers_migration_pin():
     assert MR.default_claude_tiers() == _EXPECTED_DEFAULT_CLAUDE_TIERS
 
 
+def test_known_claude_models_matches_source():
+    assert MR.known_claude_models() == tuple(
+        m["dispatch"] for m in MR._MODELS["claude"].values())
+
+
+def test_codex_pin_roles_matches_source():
+    assert MR.codex_pin_roles() == tuple(
+        r for r, meta in MR._ROLE_META.items() if meta["pin_eligible"])
+
+
+def test_codex_write_pin_roles_matches_source():
+    assert MR.codex_write_pin_roles() == tuple(
+        r for r, meta in MR._ROLE_META.items()
+        if meta["pin_eligible"] and meta["read_write"] == "write")
+
+
+def test_model_tier_roles_matches_source():
+    assert MR.model_tier_roles() == tuple(
+        r for r, meta in MR._ROLE_META.items() if meta["model_tier_role"])
+
+
+def test_codex_role_kind_matches_source():
+    for role in MR.codex_pin_roles():
+        assert MR.codex_role_kind()[role] == MR._ROLE_META[role]["codex_kind"]
+
+
+def test_codex_effort_for_kind_matches_matrix_and_pilot_floor():
+    expected = {
+        MR._ROLE_META[r]["codex_kind"]: MR.matrix_config(r, "codex")[1]
+        for r in MR.roles()
+        if MR.matrix_config(r, "codex")
+    }
+    for kind, effort in expected.items():
+        assert MR.codex_effort_for_kind(kind) == effort
+    # pilot is claude-only — no codex matrix cell; codex effort is an explicit floor.
+    assert MR.codex_effort_for_kind("pilot") == "medium"
+
+
+def test_model_family():
+    assert MR.model_family("claude", "opus-4.8") == "anthropic"
+    assert MR.model_family("codex", "gpt-5.6-sol") == "openai"
+    assert MR.model_family("cursor", "composer-2.5") == "cursor"
+    assert MR.model_family("cursor", "cursor-grok-4.5") == "xai"
+    assert MR.model_family("cursor", "nope") is None
+
+
 def test_derivation_helpers():
     assert MR.known_claude_models() == ("haiku", "sonnet", "opus", "fable")
     assert MR.codex_models() == ("gpt-5.6-terra", "gpt-5.6-sol")
@@ -99,6 +145,12 @@ def test_codex_effort_for_kind():
     assert MR.codex_effort_for_kind("brief-check") == "xhigh"
     assert MR.codex_effort_for_kind("pilot") == "medium"
     assert MR.codex_effort_for_kind("unknown-kind") == "high"
+    assert MR.codex_effort_for_kind(MR._ROLE_META["reviewer"]["codex_kind"]) == (
+        MR.matrix_config("reviewer", "codex")[1]
+    )
+    assert MR.codex_effort_for_kind(MR._ROLE_META["reviewer-deep"]["codex_kind"]) == (
+        MR.matrix_config("reviewer-deep", "codex")[1]
+    )
 
 
 def test_codex_peer_for_claude_tier():

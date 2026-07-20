@@ -16,7 +16,6 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import readout  # noqa: E402  (the band's single scrub seam; same-tree sibling)
-import engine_pref  # noqa: E402  (provider-specific model policy; same-tree sibling)
 import model_registry  # noqa: E402  (band-wide model taxonomy; same-tree sibling)
 
 # The SINGLE-SOURCED commit trailer. The committer (commit_result, Task 7) and the
@@ -37,12 +36,7 @@ TASK_ID_TRAILER = "Task-Id"
 # commit-failed. It is NOT modeled as a new acceptance outcome class.
 HISTORY_SHAPE_UNREPRESENTABLE = "history-shape-fix-unrepresentable"
 
-# Explicit model per engine (Config-determinism NFR — never the developer's ambient default).
-# Codex maps the shared tier through engine_pref and accepts a separate concrete engine-model pin;
-# this compatibility alias remains the capable no-tier default used by display/readout callers.
-_CODEX_MODEL_BY_TIER = dict(engine_pref.CODEX_MODEL_BY_TIER)
-_CODEX_MODEL = model_registry.codex_peer_for_claude_tier("opus")
-_CODEX_MODELS = model_registry.codex_models()
+# Cursor dispatches a single composer model; codex model selection is resolved inline via model_registry.
 _CURSOR_MODEL = model_registry.dispatch_token("cursor", "composer-2.5")
 
 

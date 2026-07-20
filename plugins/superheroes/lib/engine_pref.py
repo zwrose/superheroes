@@ -46,6 +46,10 @@ CODEX_PIN_ROLES = model_registry.codex_pin_roles()
 CODEX_ROLE_KIND = model_registry.codex_role_kind()
 CODEX_EFFORTS = model_registry.codex_efforts()
 
+# Legacy codexModels pin keys retired during the fixer→code-fixer rename — existing project pins
+# must remap before the CODEX_PIN_ROLES membership check so they are not silently dropped.
+_LEGACY_CODEX_PIN_ALIAS = {"fixer": "code-fixer"}
+
 # #409 write-auth probe strength order (weakest → strongest). The build-authz probe (engine_authz)
 # dispatches the strongest model the codex implementation role will actually run, so a passing probe
 # covers every weaker dispatch. Kept a superset of CODEX_MODELS (guarded by a unit test) so no valid
@@ -80,7 +84,8 @@ def _effective_model(engine, pin_role, tier, prefs):
     claude → the Claude tier; codex → the concrete Codex model (pin or tier→GPT map); cursor → the
     single composer model. `pin_role` is the CODEX_PIN_ROLES key for this role (or None)."""
     if engine == "codex":
-        return resolve_engine_model("codex", pin_role, tier, prefs) or tier
+        m = resolve_engine_model("codex", pin_role, tier, prefs)
+        return m if m is not None else "(unsupported on codex: %s)" % tier
     if engine == "cursor":
         return "(cursor composer)"
     return tier  # claude (or unknown) → the Claude-family tier
@@ -295,6 +300,10 @@ def load_engine_prefs(cwd, root=None):
         pins = {}
         invalid = {}
         for role, model in codex_models.items():
+            canonical = _LEGACY_CODEX_PIN_ALIAS.get(role, role)
+            if canonical != role and canonical in codex_models:
+                continue  # explicit canonical key wins over the legacy alias
+            role = canonical
             if role not in CODEX_PIN_ROLES:
                 invalid[role] = "unknown role %r rejected" % role
                 continue

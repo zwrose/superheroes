@@ -366,15 +366,12 @@ def codex_model_strength() -> tuple[str, ...]:
 
 
 def codex_effort_for_kind(codex_kind: str) -> str:
-    _KIND_EFFORT = {
-        "review": "high",
-        "review-deep": "xhigh",
-        "build": "high",
-        "fix": "high",
-        "brief-check": "xhigh",
-        "pilot": "medium",
-    }
-    return _KIND_EFFORT.get(codex_kind, "high")
+    for role, meta in _ROLE_META.items():
+        if meta.get("codex_kind") == codex_kind:
+            cell = matrix_config(role, "codex")
+            if cell is not None:
+                return cell[1] or "high"
+    return "medium" if codex_kind == "pilot" else "high"
 
 
 def codex_peer_for_claude_tier(claude_short: str) -> str:

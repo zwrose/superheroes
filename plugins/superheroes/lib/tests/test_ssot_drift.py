@@ -212,10 +212,6 @@ def test_complete_codex_policy_single_sourced():
     import engine_pref
     import model_registry
 
-    adapter = _read(os.path.join("lib", "engine_adapter.py"))
-    assert '_CODEX_MODEL = model_registry.codex_peer_for_claude_tier("opus")' in adapter, (
-        "engine_adapter's no-tier default must derive from the authoritative tier map")
-
     expected_ids = set(model_registry.codex_models())
     for rel in ("../../CONVENTIONS.md",  # README is a high-level overview in v2 — no longer a Codex-policy copy-holder (policy home: engine_pref.py; CONVENTIONS + configure refs remain drift-checked)
                 "skills/configure/reference/set-up.md",
@@ -282,17 +278,34 @@ def test_no_concrete_model_id_in_charters_or_skills():
     assert not hits, "concrete model id in charter/skill (use roles, not models): %r" % hits
 
 
-def test_retired_model_tokens_absent_from_lib():
-    """Retired model tokens must not reappear as literals outside model_registry.py."""
-    lib_dir = os.path.join(PLUGIN, "lib")
-    _skip = {"model_registry.py"}
+def _scan_retired_tokens(rel_paths):
     hits = []
-    for name in os.listdir(lib_dir):
-        if not name.endswith(".py") or name in _skip:
-            continue
-        rel = os.path.join("lib", name)
+    for rel in rel_paths:
         text = _read(rel)
         for token in _RETIRED_MODEL_TOKENS:
             if token in text:
                 hits.append((rel, token))
-    assert not hits, "retired model token reappeared in lib: %r" % hits
+    return hits
+
+
+def test_retired_model_tokens_absent_from_lib():
+    """Retired model tokens must not reappear as literals outside model_registry.py."""
+    lib_dir = os.path.join(PLUGIN, "lib")
+    _skip = {"model_registry.py"}
+    py_paths = [
+        os.path.join("lib", name)
+        for name in os.listdir(lib_dir)
+        if name.endswith(".py") and name not in _skip
+    ]
+    js_paths = [
+        os.path.join("lib", name)
+        for name in os.listdir(lib_dir)
+        if name.endswith(".js")
+    ]
+    doc_paths = [
+        "../../CONVENTIONS.md",
+        "skills/configure/reference/set-up.md",
+        "skills/configure/reference/view-and-tune.md",
+    ]
+    hits = _scan_retired_tokens(py_paths + js_paths + doc_paths)
+    assert not hits, "retired model token reappeared: %r" % hits

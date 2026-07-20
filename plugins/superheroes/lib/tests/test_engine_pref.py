@@ -393,6 +393,36 @@ def test_load_engine_prefs_surfaces_effort_submap_and_resolve_effort_honors_it(t
     assert EP.resolve_effort("codex", "build", got["effort"]) == "high"      # no override -> default
 
 
+def test_load_engine_prefs_remaps_legacy_fixer_pin_to_code_fixer(tmp_path):
+    repo = str(tmp_path)
+    _write_core_with_prefs(repo, {"codexModels": {"fixer": "gpt-5.6-terra"}})
+    got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
+    assert got["codexModels"] == {"code-fixer": "gpt-5.6-terra"}
+    assert "fixer" not in got.get("invalidCodexModels", {})
+    assert "code-fixer" not in got.get("invalidCodexModels", {})
+
+
+def test_load_engine_prefs_canonical_code_fixer_wins_over_legacy_fixer(tmp_path):
+    for i, codex_models in enumerate((
+        {"fixer": "gpt-5.6-terra", "code-fixer": "gpt-5.6-sol"},
+        {"code-fixer": "gpt-5.6-sol", "fixer": "gpt-5.6-terra"},
+    )):
+        repo = str(tmp_path / str(i))
+        _write_core_with_prefs(repo, {"codexModels": codex_models})
+        got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
+        assert got["codexModels"] == {"code-fixer": "gpt-5.6-sol"}
+
+
+def test_dispatch_calibration_rows_fable_tier_on_codex_shows_unsupported_marker():
+    rows = EP.dispatch_calibration_rows(
+        {"implementation": "codex"},
+        {"implementer": "fable", "pilot": "sonnet", "reviewer": "sonnet", "reviewer-deep": "opus"})
+    by_role = {r["role"]: r for r in rows}
+    assert by_role["implementer"]["engine"] == "codex"
+    assert "unsupported" in by_role["implementer"]["model"]
+    assert by_role["implementer"]["model"] != "fable"
+
+
 def test_load_engine_prefs_surfaces_only_valid_per_role_codex_model_pins(tmp_path):
     repo = str(tmp_path)
     _write_core_with_prefs(repo, {"reviewer": "codex", "implementation": "codex",
