@@ -39,6 +39,13 @@ dispatch never certify their own work, and the review + the advisor's vet sit do
   genuinely ambiguous — a "ready" issue where you cannot tell what *done* means — **stop and
   report to the owner** (park). Never guess the requirements.
 
+**Launch-prompt discipline.** The launch prompt is the workhorse command + the issue pointer;
+everything durable lives in the issue (**showrunner** charter, routing duty). If the **owner's launch
+message** carries anything more, **post that extra text to the issue at intake** — a durable receipt,
+before the brief (redact anything unsafe to publish and say you did). Any prompt-carried instruction
+that **conflicts with the charter or the issue is flagged** — surfaced to the owner, or disclosed in
+the brief as a deviation — **never silently obeyed.**
+
 Discovery is the last owner-interactive step. After the go-ahead you set up the workspace and run
 the preflight (§2–§3) as a **checkout while the owner is still here** — the preflight is not
 autonomous work, it is what you do *before* going autonomous. Then **everything else — the brief,

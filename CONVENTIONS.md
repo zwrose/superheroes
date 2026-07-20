@@ -73,7 +73,8 @@ restatement):
 
 - **Showrunner** — the advisor session: project-level, long-lived, typically one per
   project. Sizes and routes incoming work (build-ready vs. needs-discovery), decomposes
-  big asks into small mergeable issues, vets every PR from its artifacts against the
+  big asks into small mergeable issues, drafts the builder's launch prompt (the workhorse
+  command + issue pointer only — durable context lives in the issue), vets every PR from its artifacts against the
   issue/spec and the build brief, owns board hygiene and release coordination, keeps
   durable memory. **Never builds, never merges.**
 - **Workhorse** — the builder session: issue-scoped, disposable, parallelizable. Takes a
