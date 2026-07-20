@@ -75,6 +75,21 @@ stated unlock condition is met — cite this ledger instead of re-arguing.
   live-runs, release gate) absorb incidents within existing structure. *(This bar was
   met once: the 2026-07-08 engine-fidelity escape penetrated all four — the resulting
   investment is the 0.12–0.13 truth-telling train, not a fifth standing layer.)*
+- **No plugin-owned enforcement machinery.** *(Owner-ratified 2026-07-20, spike #475.)*
+  Mechanical checks — boundary/import rules included — live in the owner's own toolchain
+  as owner-adopted repo furniture (standard OSS tools: dependency-cruiser,
+  import-linter); superheroes ships analysis and discipline — it recommends, advises,
+  and helps the owner maintain such a check, never manages one. No configure surface, no
+  standing CI gate, no per-build hook, no plugin-owned config. The spike's tool
+  evaluations and sweep design live on as guardian-lens input (#41, epic #503). The
+  review-time middle option — arming the architecture reviewer with a per-PR
+  dependency-graph evidence pass — was **considered and deferred, not banned** (owner
+  call 2026-07-20; the guardian pulled forward instead). *Unlock:* a boundary-class
+  escape that penetrates the full standard five-lens panel (B7's test — the #424
+  acceptance case did not: substitute panel with no architecture lens, later adjudicated
+  won't-fix by the consuming repo), OR guardian sweeps showing the same wall repeatedly
+  violated or couplings compounding between cadences — either reopens both the gate
+  question and the deferred review-time option.
 - **No storage-mode machinery investment.** Status quo decided 2026-07-05;
   `mode_migrate` demotion re-checks only inside the superpowers-severance pass (#111).
   Store-dir naming legibility (#137) is a different layer — allowed as a read-only
