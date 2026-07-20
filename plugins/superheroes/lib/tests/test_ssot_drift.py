@@ -210,25 +210,89 @@ def test_complete_codex_policy_single_sourced():
     """The Python home (engine_pref.py) owns the Codex translation/effort policy; the
     engine_adapter no-tier default and the owner-facing docs must agree with it."""
     import engine_pref
+    import model_registry
 
     adapter = _read(os.path.join("lib", "engine_adapter.py"))
-    assert '_CODEX_MODEL = _CODEX_MODEL_BY_TIER["opus"]' in adapter, (
+    assert '_CODEX_MODEL = model_registry.codex_peer_for_claude_tier("opus")' in adapter, (
         "engine_adapter's no-tier default must derive from the authoritative tier map")
 
-    expected_ids = set(engine_pref.CODEX_MODELS)
+    expected_ids = set(model_registry.codex_models())
     for rel in ("../../CONVENTIONS.md",  # README is a high-level overview in v2 — no longer a Codex-policy copy-holder (policy home: engine_pref.py; CONVENTIONS + configure refs remain drift-checked)
                 "skills/configure/reference/set-up.md",
                 "skills/configure/reference/view-and-tune.md"):
         doc = _read(rel)
-        documented_ids = set(re.findall(r"gpt-5\.(?:5|6-(?:sol|terra|luna))", doc))
-        assert documented_ids == expected_ids, "%s Codex model IDs drifted from engine_pref.py" % rel
+        documented_ids = set(re.findall(r"gpt-5\.6-(?:sol|terra)", doc))
+        assert documented_ids == expected_ids, "%s Codex model IDs drifted from model_registry" % rel
         mapping_text = _one(re.findall(r"Codex tier map:\s*([^\n]+(?:\n(?!\s*\n)[^\n]+)?)", doc),
                             "Codex tier map", rel, "tier=model, ...")
         documented_map = dict(re.findall(
-            r"(haiku|sonnet|opus|fable)=(gpt-5\.6-(?:sol|terra|luna))", mapping_text))
+            r"(haiku|sonnet|opus)=(gpt-5\.6-(?:sol|terra))", mapping_text))
         assert documented_map == engine_pref.CODEX_MODEL_BY_TIER, (
             "%s Codex tier map drifted from engine_pref.py" % rel)
-        for model in engine_pref.CODEX_MAX_UNSUPPORTED_MODELS:
-            assert re.search(r"%s.{0,80}(?:\+|with).{0,20}`?max`?" % re.escape(model), doc,
-                             flags=re.IGNORECASE | re.DOTALL), (
-                "%s max-effort compatibility guidance drifted for %s" % (rel, model))
+
+
+# --- Cluster 4: negative drift scans (concrete model ids must not leak) ------
+
+_CONCRETE_MODEL_TOKENS = (
+    "gpt-5.6-terra",
+    "gpt-5.6-sol",
+    "gpt-5.5",
+    "gpt-5.6-luna",
+    "composer-2.5",
+    "composer-2.5-fast",
+    "cursor-grok-4.5",
+    "haiku-4.5",
+    "sonnet-5",
+    "opus-4.8",
+    "fable-5",
+    "claude-fable-5-thinking",
+)
+
+_RETIRED_MODEL_TOKENS = (
+    "gpt-5.5",
+    "gpt-5.6-luna",
+    "composer-2.5-fast",
+    "claude-fable-5-thinking",
+)
+
+
+def _md_files_excluding_configure(*roots):
+    """Every *.md under the given plugin-relative roots, skipping skills/configure/."""
+    for root in roots:
+        base = os.path.join(PLUGIN, root)
+        for dirpath, _dirs, files in os.walk(base):
+            rel_dir = os.path.relpath(dirpath, PLUGIN)
+            if rel_dir == "skills" and "configure" in _dirs:
+                _dirs.remove("configure")
+            if rel_dir.startswith(os.path.join("skills", "configure")):
+                continue
+            for name in files:
+                if name.endswith(".md"):
+                    yield os.path.join(rel_dir, name)
+
+
+def test_no_concrete_model_id_in_charters_or_skills():
+    """Charters and skills reference roles, never concrete model ids — only configure/ may."""
+    hits = []
+    for rel in _md_files_excluding_configure("agents", "rubric", "skills"):
+        text = _read(rel)
+        for token in _CONCRETE_MODEL_TOKENS:
+            if token in text:
+                hits.append((rel, token))
+    assert not hits, "concrete model id in charter/skill (use roles, not models): %r" % hits
+
+
+def test_retired_model_tokens_absent_from_lib():
+    """Retired model tokens must not reappear as literals outside model_registry.py."""
+    lib_dir = os.path.join(PLUGIN, "lib")
+    _skip = {"model_registry.py"}
+    hits = []
+    for name in os.listdir(lib_dir):
+        if not name.endswith(".py") or name in _skip:
+            continue
+        rel = os.path.join("lib", name)
+        text = _read(rel)
+        for token in _RETIRED_MODEL_TOKENS:
+            if token in text:
+                hits.append((rel, token))
+    assert not hits, "retired model token reappeared in lib: %r" % hits

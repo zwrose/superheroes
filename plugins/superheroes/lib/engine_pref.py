@@ -205,8 +205,9 @@ def codex_write_probe_model(prefs):
     implementation role will actually RUN. Each write role (build, fix) contributes its explicit pin
     when set, else the sol capability floor — an UNPINNED codex write role derives a GPT-5.6 tier model
     (up to sol), so it must keep the floor in the max, never under-testing the real dispatch. A project
-    whose write roles are pinned ENTIRELY to an older family (e.g. gpt-5.5) therefore probes that
-    family (not falsely failed by a hard sol probe), while any unpinned write role clamps the probe up
+    whose write roles are pinned ENTIRELY to the weaker registered model (gpt-5.6-terra) therefore
+    probes that model (not falsely failed by a hard sol probe), while any unpinned write role clamps
+    the probe up
     to sol — preserving the original rationale (an old CLI must not falsely pass). Takes a
     load_engine_prefs() result (so pins are already validity-filtered). Pure; never raises; always
     returns a valid model in CODEX_MODEL_STRENGTH."""

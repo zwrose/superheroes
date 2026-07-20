@@ -78,22 +78,21 @@ action that owns it, leaving the rest of the calibration untouched:
   `pilot`). Set a role back to `claude` (or clear it) to fall fully open — **except `briefCheck`**,
   which falls open to **codex** (the cross-vendor default; a Claude brief-check is a disclosed
   degradation running at opus, one tier up from the implementer).
-- **Change the per-role model tier** (reviewer/reviewer-deep/mechanical/synthesis/fixer/pr-body/
+- **Change the per-role model tier** (reviewer/reviewer-deep/mechanical/synthesis/code-fixer/doc-reviser/pr-body/
   implementer/pilot) → show the effective map first, then write only the `## Model tiers` block in
   the resolved review-crew profile. This is an optional tune action: if the owner declines, change
   nothing.
 
 - **Pin a concrete Codex model for one role** → keep the provider-neutral `## Model tiers` block
   unchanged and write the pin under `core.md`'s `enginePreferences.codexModels`. Valid role keys are
-  `reviewer`, `reviewer-deep`, `fixer`, `implementer`, and `pilot`; valid
-  model IDs are `gpt-5.5`,
-  `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`. Codex tier map:
-  haiku=gpt-5.6-luna, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol, fable=gpt-5.6-sol.
+  `reviewer`, `reviewer-deep`, `code-fixer`, `implementer`, and `pilot`; valid
+  model IDs are `gpt-5.6-terra` and `gpt-5.6-sol`. Codex tier map:
+  haiku=gpt-5.6-terra, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol.
   Show the current engine preferences and
   effective model first, merge only the requested role into the existing object, and preserve every
   sibling key. Before writing, validate the selected model/effort with
-  `engine_pref.valid_codex_model_effort`; reject `gpt-5.5` + `max` and leave the prior valid config
-  unchanged. `max` is never proposed as a default — it is owner opt-in only.
+  `engine_pref.valid_codex_model_effort`; reject an invalid (model, effort) pair and leave the prior
+  valid config unchanged. `max` is never proposed as a default — it is owner opt-in only.
 
   ```json
   {
@@ -102,7 +101,7 @@ action that owns it, leaving the rest of the calibration untouched:
       "implementation": "codex",
       "briefCheck": "codex",
       "effort": {"review": "high"},
-      "codexModels": {"reviewer": "gpt-5.5"}
+      "codexModels": {"reviewer": "gpt-5.6-terra"}
     }
   }
   ```
@@ -116,13 +115,15 @@ action that owns it, leaving the rest of the calibration untouched:
   python3 "$ROOT_DIR/lib/model_tier_overrides.py" show
   ```
 
-  To set overrides (including `fable`, but only when the owner explicitly asks for it) or clear
-  overrides back to `DEFAULT_TIERS`, run the helper; it creates the block if absent, replaces it if
-  present, and preserves every other profile section:
+  To set overrides (including `fable`, but only when the owner explicitly asks for it — `fable` is
+  anthropic-native and runs on claude, never cursor/codex) or clear overrides back to
+  `DEFAULT_TIERS`, run the helper; it creates the block if absent, replaces it if present, and
+  preserves every other profile section. `fixer` is accepted as a legacy alias for `code-fixer`
+  (read, write, and clear):
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-  python3 "$ROOT_DIR/lib/model_tier_overrides.py" write --set reviewer=fable --clear fixer
+  python3 "$ROOT_DIR/lib/model_tier_overrides.py" write --set reviewer=fable --clear code-fixer
   ```
 
   Role names are validated against `KNOWN_ROLES`; unknown roles are dropped with a warning. Unknown
