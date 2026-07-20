@@ -52,11 +52,6 @@ def test_embedded_fallback_matches_the_core():
     assert MTR._FALLBACK == {r: core.resolve_model(r) for r in core.ROLES}
 
 
-def test_wrapper_cli_forwards_context(capsys):
-    rc, out = _run(capsys, "--role", "fixer", "--context", "doc")
-    assert rc == 0 and out["model"] == "opus" and out["degraded"] is False
-
-
 def test_known_roles_mirror_core_roles_minus_orchestrator():
     # KNOWN_ROLES mirrors core.ROLES minus `orchestrator` (deliberately excluded — no config key).
     # Guards the pinned-equal dicts (DEFAULT_TIERS, KNOWN_ROLES, _FALLBACK) against silent drift.

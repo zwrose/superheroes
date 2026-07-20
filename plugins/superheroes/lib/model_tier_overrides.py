@@ -22,14 +22,17 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
-# The OWNER-CONFIGURABLE model-tier role set — mirrors the core's DEFAULT_TIERS keys
-# (the-architect/lib/model_tier.py) minus `orchestrator`. `orchestrator` is deliberately
-# excluded: it has no config key (the session model is not owner-configurable, so it must
-# never be silently overridable via this block). A role not in this set is an owner typo
-# and is dropped (fail-open to the default).
-KNOWN_ROLES = ("reviewer", "reviewer-deep", "mechanical", "synthesis", "fixer",
-               "pr-body", "implementer", "pilot")
-KNOWN_MODELS = ("haiku", "sonnet", "opus", "fable")
+import model_registry  # noqa: E402
+
+# The OWNER-CONFIGURABLE model-tier role set — re-derived from the registry minus
+# `orchestrator`. `orchestrator` is deliberately excluded: it has no config key (the
+# session model is not owner-configurable, so it must never be silently overridable via
+# this block). A role not in this set is an owner typo and is dropped (fail-open to the
+# default).
+KNOWN_ROLES = model_registry.known_roles()
+KNOWN_MODELS = model_registry.known_claude_models()
+
+_LEGACY_ROLE_ALIAS = {"fixer": "code-fixer"}
 
 _HEADING = re.compile(r"^\s*##\s+[Mm]odel tiers\s*$")
 _NEXT_HEADING = re.compile(r"^\s*##\s+")
@@ -55,8 +58,10 @@ def load_overrides(profile_path):
             break
         if in_block:
             m = _ENTRY.match(line)
-            if m and m.group(1) in KNOWN_ROLES:
-                out[m.group(1)] = m.group(2)
+            if m:
+                role = _LEGACY_ROLE_ALIAS.get(m.group(1), m.group(1))
+                if role in KNOWN_ROLES:
+                    out[role] = m.group(2)
     return out
 
 
@@ -90,6 +95,11 @@ def _normalize_updates(updates):
     out = {}
     warnings = []
     for role, model in (updates or {}).items():
+        if role in _LEGACY_ROLE_ALIAS:
+            warnings.append(
+                f"'{role}' is a legacy alias for '{_LEGACY_ROLE_ALIAS[role]}' (remapped)"
+            )
+            role = _LEGACY_ROLE_ALIAS[role]
         if role not in KNOWN_ROLES:
             warnings.append(f"unknown role: {role} (dropped)")
             continue
@@ -146,6 +156,7 @@ def update_overrides(profile_path, set_overrides=None, clear_roles=None):
     current = load_overrides(profile_path)
     warnings = []
     for role in clear_roles or []:
+        role = _LEGACY_ROLE_ALIAS.get(role, role)
         if role not in KNOWN_ROLES:
             warnings.append(f"unknown role: {role} (dropped)")
             continue
