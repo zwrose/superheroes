@@ -23,8 +23,8 @@ maintained spine divergence remains. A new, non-spine divergence is now maintain
 restored owner-authority gate (issue #482, §1.1 below) — a minimal PreToolUse hook,
 distinct from (and much smaller than) the retired enforcer it partially recreates. The
 remaining known bespoke surface — review-code's multi-model review panel — gets its own
-entry here when the review-code evolution spike (issue #474, the S2 Review-Crew-v2 lane) lands; it is a fresh
-B6 analysis, not authored on the spine's exit.
+entry here via issue #513 (filed 2026-07-20 from the ratified #474 design, the S2
+Review-Crew-v2 lane); it is a fresh B6 analysis, not authored on the spine's exit.
 
 ### 1.1 Maintained divergences
 
