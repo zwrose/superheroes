@@ -90,7 +90,7 @@ def build_record(rounds, expected_leaves, usage, benchmark=False, terminal=None)
             elif tier == "reviewer-deep":
                 counts["deep"] += 1
             if dim.get("escalated"):
-                counts["escalated"] += 1
+                counts["escalated"] += 1  # transport-retry re-dispatch
     # D3: no `rounds` embed — the round history's durable home is round-records.json (skeletons);
     # duplicating it here doubled the storage and nothing ever read telemetry rounds back
     # (the eval reads tokenUsage.total; the readout reads the summary scalars).

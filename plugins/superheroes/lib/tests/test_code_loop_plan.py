@@ -223,20 +223,18 @@ def test_record_missing_file_escalates_once_then_missing(tmp_path, capsys):
     assert rec2["dimensions"]["code-reviewer"]["confidence"] == "low"
 
 
-def test_cheap_nonempty_escalates_once_to_deep(tmp_path, capsys):
+def test_cheap_nonempty_stands_without_escalation(tmp_path, capsys):
     session_dir = _session(tmp_path)
     _reach_round2_scoped(tmp_path, capsys, session_dir)
     plan2 = _plan(capsys, session_dir, 2)
     dims2 = _dims_map(plan2)
     assert dims2["code-reviewer"]["tier"] == CHEAP  # prior finding → cheap-first
-    _write_findings(session_dir, 2, "code-reviewer", [_finding("Code")])  # nonempty at cheap = low conf
+    _write_findings(session_dir, 2, "code-reviewer", [_finding("Code")])
     rec = _record(capsys, session_dir, 2)
-    assert any(e["dimension"] == "code-reviewer" and e["tier"] == DEEP for e in rec["escalate"])
-    # deep re-dispatch clean → recorded run/high
-    _write_findings(session_dir, 2, "code-reviewer", [])
-    rec2 = _record(capsys, session_dir, 2)
-    assert rec2["dimensions"]["code-reviewer"]["status"] == "run"
-    assert rec2["dimensions"]["code-reviewer"]["tier"] == DEEP
+    assert rec["escalate"] == []
+    assert rec["dimensions"]["code-reviewer"]["status"] == "run"
+    assert rec["dimensions"]["code-reviewer"]["tier"] == CHEAP
+    assert rec["dimensions"]["code-reviewer"]["confidence"] == "high"
 
 
 def test_cheap_empty_result_stands_without_escalation(tmp_path, capsys):

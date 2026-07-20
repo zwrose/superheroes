@@ -35,10 +35,8 @@ Every round (round 1 included), once the findings files land:
 
     python3 "$ROOT_DIR/lib/code_loop_plan.py" record --session-dir "$SESSION_DIR" --round <N>
 
-If its `escalate` list is non-empty (a missing/malformed findings file, or a low-confidence
-`reviewer`-tier result), re-dispatch **just those dimensions once** at `reviewer-deep`
-(`model: $DEEP_MODEL`) and run `record` again — it never asks twice. Confidence is derived from the
-findings JSON shape (the spine's legacy-array rule), never a prose claim; a prompt-dropped agent that
+If its `escalate` list is non-empty (a missing/malformed findings file), re-dispatch **just those dimensions once** at `reviewer-deep`
+(`model: $DEEP_MODEL`) and run `record` again — it never asks twice. A prompt-dropped agent that
 wrote no file leaves no fresh evidence, so its stale result can never license a skip.
 
 ## decide — the continuation gate + next schedule

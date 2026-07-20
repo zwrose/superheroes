@@ -352,7 +352,7 @@ function _expectedReceiptIds(opts) {
 }
 
 function _reviewerReceiptIssue(result, opts) {
-  if (!result || result.confidence !== 'high' || result.externalReview) return null
+  if (!result || result.externalReview) return null
   const receipt = result.verificationReceipt
   if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return 'missing'
   if (opts && opts.receiptArtifact && receipt.artifact !== opts.receiptArtifact) return 'stale'
@@ -367,10 +367,10 @@ function _reviewerReceiptIssue(result, opts) {
 }
 
 function _withReceiptFreshness(shaped, opts) {
-  if (!shaped || !Array.isArray(shaped.findings) || shaped.confidence !== 'high' || shaped.externalReview) return shaped
+  if (!shaped || !Array.isArray(shaped.findings) || shaped.externalReview) return shaped
   const issue = _reviewerReceiptIssue(shaped, opts || {})
   if (!issue) return shaped
-  const out = Object.assign({}, shaped, { confidence: 'low' })
+  const out = Object.assign({}, shaped)
   if (issue === 'missing') out.receiptMissing = true
   else {
     out.receiptStale = true
@@ -566,12 +566,10 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     // #394: a leg whose reviewerAgent ALWAYS dispatches at a single fixed tier declares that tier
     // (legKind.dispatchTier). The whole-branch final-review leg (legKind.panel:false, build_phase's
     // tier-blind reviewerAgent) is the case: it unconditionally dispatches deep. But the round policy
-    // tiers a post-baseline round with prior findings as CHEAP ('reviewer'), which — via
-    // _shapeReviewerResult stamping a findings-bearing cheap answer 'low' — arms dispatchReviewer's
-    // cheap->deep escalation into a BYTE-IDENTICAL re-dispatch of the already-deep review (the first,
-    // completed answer discarded). Pinning the scheduled run-tier to the leg's honest dispatch tier
-    // makes the confidence stamp truthful and the escalation branch never arm. The per-task panel legs
-    // (legKind.panel:true) declare no dispatchTier, so their real cheap->deep escalation is untouched.
+    // tiers a post-baseline round with prior findings as CHEAP ('reviewer'). Pinning the scheduled
+    // run-tier to the leg's honest dispatch tier makes receipt/transport checks truthful on legs
+    // that always dispatch deep. The per-task panel legs (legKind.panel:true) declare no
+    // dispatchTier, so their real cheap->deep escalation on transport failure is untouched.
     if (legKind && legKind.dispatchTier) {
       for (const name of Object.keys(scheduled)) {
         const sched = scheduled[name]
@@ -751,12 +749,11 @@ function normalizeReviewerFindings(findings) {
 
 function _shapeReviewerResult(out, opts) {
   if (Array.isArray(out)) {
-    const conf = ((opts || {}).tier === 'reviewer' && out.length > 0) ? 'low' : 'high'
-    return { findings: normalizeReviewerFindings(out), confidence: conf, legacyArray: true }
+    return { findings: normalizeReviewerFindings(out), confidence: 'high', legacyArray: true }
   }
   const shaped = _stripZeroUsage(out)
   if (!shaped || !Array.isArray(shaped.findings)) return shaped
-  return _withReceiptFreshness(Object.assign({}, shaped, { findings: normalizeReviewerFindings(shaped.findings) }), opts || {})
+  return _withReceiptFreshness(Object.assign({}, shaped, { findings: normalizeReviewerFindings(shaped.findings), confidence: 'high' }), opts || {})
 }
 
 // #350 Part B (the silent re-execution disclosure): a re-execute-and-discard decision must journal a
@@ -806,7 +803,7 @@ async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundF
   const baseOpts = opts || {}
   let out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, baseOpts), baseOpts)
   let escalated = false
-  if (baseOpts.tier === 'reviewer' && (_retryableReviewerIssue(out) || out.confidence !== 'high')) {
+  if (baseOpts.tier === 'reviewer' && _retryableReviewerIssue(out)) {
     escalated = true
     // #212: the escalation to reviewer-deep IS a re-dispatch — carry the corrective retryReason when
     // the shallow answer had a curable defect (null when it was just an honest low, nothing to correct).
@@ -824,8 +821,11 @@ async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundF
     _discloseRetry(context, reviewer, round, 'retry:reviewer-deep:' + (_retryReason(out) || 'malformed'), out)
     out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, baseOpts, { tier: 'reviewer-deep', retryFrom: 'reviewer-deep', retryReason: _retryReason(out) })), baseOpts)
   }
-  if (!_validReviewerResult(out)) {
-    roundFindings[reviewer] = { status: 'missing', dimension: reviewer, findings: [], confidence: 'low', malformed: true, legacyArray: !!(out && out.legacyArray), escalated }
+  if (!_validReviewerResult(out) || (out && (out.receiptMissing || out.receiptStale))) {
+    const missing = { status: 'missing', dimension: reviewer, findings: [], confidence: 'low', malformed: !_validReviewerResult(out), legacyArray: !!(out && out.legacyArray), escalated }
+    if (out && out.receiptMissing) missing.receiptMissing = true
+    if (out && out.receiptStale) missing.receiptStale = true
+    roundFindings[reviewer] = missing
     return
   }
   roundFindings[reviewer] = Object.assign({ status: 'run', dimension: reviewer, escalated, tier: baseOpts.tier, malformed: false }, out)
