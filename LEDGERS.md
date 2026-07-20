@@ -23,8 +23,8 @@ maintained spine divergence remains. A new, non-spine divergence is now maintain
 restored owner-authority gate (issue #482, §1.1 below) — a minimal PreToolUse hook,
 distinct from (and much smaller than) the retired enforcer it partially recreates. The
 remaining known bespoke surface — review-code's multi-model review panel — gets its own
-entry here when the review-code evolution spike (issue #474, the S2 Review-Crew-v2 lane) lands; it is a fresh
-B6 analysis, not authored on the spine's exit.
+entry here via issue #513 (filed 2026-07-20 from the ratified #474 design, the S2
+Review-Crew-v2 lane); it is a fresh B6 analysis, not authored on the spine's exit.
 
 ### 1.1 Maintained divergences
 
@@ -75,6 +75,22 @@ stated unlock condition is met — cite this ledger instead of re-arguing.
   live-runs, release gate) absorb incidents within existing structure. *(This bar was
   met once: the 2026-07-08 engine-fidelity escape penetrated all four — the resulting
   investment is the 0.12–0.13 truth-telling train, not a fifth standing layer.)*
+- **No plugin-owned enforcement machinery.** *(Owner-ratified 2026-07-20, spike #475.)*
+  Mechanical checks — boundary/import rules included — live in the owner's own toolchain
+  as owner-adopted repo furniture (standard OSS tools: dependency-cruiser,
+  import-linter); superheroes ships analysis and discipline — it recommends, advises,
+  and helps the owner maintain such a check, never manages one. No configure surface, no
+  standing CI gate, no per-build hook, no plugin-owned config. The spike's tool
+  evaluations and sweep design live on as guardian-lens input (#41, epic #503). The
+  review-time middle option — arming the architecture reviewer with a per-PR
+  dependency-graph evidence pass — was **considered and deferred, not banned** (owner
+  call 2026-07-20; the guardian pulled forward instead). *Unlock:* a boundary-class
+  escape that penetrates every existing layer, including the full standard five-lens
+  panel (B7's test — the #424 acceptance case did not: substitute panel with no
+  architecture lens, later adjudicated won't-fix by the consuming repo), OR guardian
+  sweeps showing the same wall repeatedly violated or couplings that merge and grow
+  between sweeps — either reopens both the gate question and the deferred review-time
+  option.
 - **No storage-mode machinery investment.** Status quo decided 2026-07-05;
   `mode_migrate` demotion re-checks only inside the superpowers-severance pass (#111).
   Store-dir naming legibility (#137) is a different layer — allowed as a read-only
@@ -91,7 +107,8 @@ stated unlock condition is met — cite this ledger instead of re-arguing.
 **Unlock rhythm:** the stability gate (two consecutive releases whose first real runs
 diagnose clean) re-opens the growth posture; #184's checkpoint re-opens
 panel-composition; a real four-layer escape re-opens gate questions (spent once, see
-above).
+above); the enforcement-machinery entry re-opens on its own stated unlock (a
+panel-penetrating boundary escape, or guardian-sweep evidence).
 
 ## 3. Accepted residual risks
 
