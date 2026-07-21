@@ -500,13 +500,20 @@ After the loop exits, print a terminal summary in chat:
   READY for owner review"`) and a one-line reminder that **the owner's approval is the gate**
   (Discovery records it).
 
+**Post-halt edits are a named violation (#518).** review-spec's cap terminal, **when any blocking finding is still open, is always a park** — verdict **REVISE**, not SPEC READY — because a spec has no stronger downstream reviewer than the owner (the next gate); a cap round that comes back a clean full-deep confirmation still certifies (§5's `halt` is the park case). That park is a whistle: **after it, any edit to
+`$SPEC_PATH` invalidates the terminal claim.** The reviewed verdict covered the pre-halt spec; an
+edit after the whistle is an unreviewed change wearing a reviewed spec's clothes. So **never
+revise the spec after the halt and still present the prior terminal as valid** — if the spec is
+written post-halt, the receipt records the violation (the READY/REVISE claim is void, the spec is
+unreviewed again) and the loop must re-run before any terminal is claimed.
+
 **Durable receipt — post the round history to the linked issue (non-blocking).** Code review
 leaves its receipts on the PR; a doc review must leave them on the issue, or the loop's whole
 history dies in `$SESSION_DIR` — a multi-round run once had to be reconstructed forensically
 because the only record was the transcript. Assemble `$SESSION_DIR/receipt.md` — the final
 verdict, the per-round schedule (dimensions run + tier each round, from the loop state), every
 finding with its disposition (auto-revised / owner-answered / skipped-with-trace), any open
-requirements question, and the count summary (the terminal summary, made durable) — then post
+requirements question, the count summary (the terminal summary, made durable), and — if the spec was edited after a halt — the post-halt-edit violation notice (the prior terminal is void) — then post
 it to the spec's linked `issue`:
 
 ```bash
