@@ -1651,6 +1651,39 @@ def _finalize_receipt(session_dir, state):
     return None
 
 
+def _parse_vendors(raw):
+    """Parse the `--vendors` CLI value. Accepts BOTH a JSON list ('["codex","cursor"]') and a
+    comma-separated string ('codex,cursor'). Returns (vendors, None) on success or (None, reason)
+    on ANY failure — an unparseable JSON, an empty result, non-string members, or an unknown vendor
+    all fail loud so the CLI can exit nonzero. NEVER falls through to the ["claude"] default
+    silently: a silent fall-through drops cross-vendor independence and stamps every audit degraded
+    when other vendors are actually live (same fail-open class as the v14 journal-swallow, #507)."""
+    stripped = raw.strip()
+    if stripped.startswith("["):
+        try:
+            parsed = json.loads(stripped)
+        except ValueError:
+            return None, "vendors-unparseable"
+        if not isinstance(parsed, list):
+            return None, "vendors-unparseable"
+        members = parsed
+    else:
+        members = stripped.split(",")
+    cleaned = []
+    for member in members:
+        if not isinstance(member, str):
+            return None, "vendors-unparseable"
+        member = member.strip()
+        if member:
+            cleaned.append(member)
+    if not cleaned:
+        return None, "vendors-unparseable"
+    for member in cleaned:
+        if member not in model_registry.VENDORS:
+            return None, "vendors-unknown: %s" % member
+    return cleaned, None
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="the one-entrypoint review-loop round driver (#507)")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -1658,7 +1691,10 @@ def main(argv=None):
     pn = sub.add_parser("next")
     pn.add_argument("--session-dir", required=True)
     pn.add_argument("--leg", default=None)
-    pn.add_argument("--vendors", default=None, help="JSON list of live vendors (fresh state only)")
+    pn.add_argument("--vendors", default=None,
+                    help="live vendors (fresh state only): a JSON list ('[\"codex\",\"cursor\"]') "
+                         "OR a comma-separated string ('codex,cursor'). Unparseable / unknown / "
+                         "on non-fresh state → fails loud (nonzero), never a silent default")
     pn.add_argument("--verify-command", default=None)
     pn.add_argument("--max-rounds", type=int, default=None)
     pn.add_argument("--diff-path", default=None, help="round-1 reviewed diff (fresh state only)")
@@ -1678,11 +1714,21 @@ def main(argv=None):
         overrides = {}
         if args.leg:
             overrides["leg"] = args.leg
-        if args.vendors:
-            try:
-                overrides["vendors"] = json.loads(args.vendors)
-            except ValueError:
-                pass
+        if args.vendors is not None:
+            vendors, reason = _parse_vendors(args.vendors)
+            if reason is not None:
+                sys.stdout.write(json.dumps({"ok": False, "reason": reason,
+                                             "value": args.vendors}) + "\n")
+                return 1
+            # `--vendors` can only take effect on FRESH state — the config is read ONCE at
+            # new_state; a later `next` on existing state would silently ignore it. Reject loudly
+            # rather than accept a flag that cannot take effect (#507).
+            st_ok, st = load_state(args.session_dir)
+            if not (st_ok and st is None):
+                sys.stdout.write(json.dumps({"ok": False, "reason": "vendors-not-fresh-state",
+                                             "value": args.vendors}) + "\n")
+                return 1
+            overrides["vendors"] = vendors
         if args.verify_command is not None:
             overrides["verifyCommand"] = args.verify_command
         if args.max_rounds is not None:

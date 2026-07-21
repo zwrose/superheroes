@@ -917,3 +917,111 @@ def test_run_loop_uses_injected_changed_subjects_seam(tmp_path):
     receipt = RD.run_loop(seams, _cfg(maxRounds=20))
     assert calls  # the seam was invoked (the self-report was never consulted)
     assert any(d["kind"] == "confirmation-rearm" for d in receipt["decisions"])
+
+
+# =============================================================================
+# #507 R1c — `--vendors` must fail LOUD, never fall through to the ["claude"] default
+#
+# A non-JSON `--vendors` (e.g. `codex,cursor`) used to hit json.loads's ValueError → `pass` → the
+# fresh state silently kept the single-vendor default, so every audit selected the fixer's own
+# vendor and stamped `degraded` — cross-vendor independence lost silently when two vendors are live.
+# =============================================================================
+
+def _run_main(argv, capsys):
+    rc = RD.main(argv)
+    out = capsys.readouterr().out.strip()
+    return rc, (json.loads(out) if out else None)
+
+
+def test_vendors_comma_form_accepted(tmp_path, capsys):
+    d = str(tmp_path)
+    rc, out = _run_main(["next", "--session-dir", d, "--vendors", " codex , cursor "], capsys)
+    assert rc == 0 and out["ok"]
+    ok, state = RD.load_state(d)
+    assert ok and state["config"]["vendors"] == ["codex", "cursor"]
+    # a two-vendor pool → the audit is independent, NOT the silent single-vendor degrade.
+    assert state["independenceDegraded"] is False
+
+
+def test_vendors_json_form_accepted(tmp_path, capsys):
+    d = str(tmp_path)
+    rc, out = _run_main(["next", "--session-dir", d, "--vendors", '["codex","cursor"]'], capsys)
+    assert rc == 0 and out["ok"]
+    ok, state = RD.load_state(d)
+    assert ok and state["config"]["vendors"] == ["codex", "cursor"]
+
+
+def test_vendors_garbage_fails_loud_no_state(tmp_path, capsys):
+    """Unparseable JSON (bracket form) → nonzero + `vendors-unparseable`, and NO state is written
+    (never the old silent fall-through to a fresh single-vendor default)."""
+    d = str(tmp_path)
+    rc, out = _run_main(["next", "--session-dir", d, "--vendors", '["codex"'], capsys)
+    assert rc == 1 and out["ok"] is False and out["reason"] == "vendors-unparseable"
+    ok, state = RD.load_state(d)
+    assert ok and state is None  # nothing was created
+
+
+def test_vendors_non_string_member_fails_loud(tmp_path, capsys):
+    d = str(tmp_path)
+    rc, out = _run_main(["next", "--session-dir", d, "--vendors", '["codex", 5]'], capsys)
+    assert rc == 1 and out["reason"] == "vendors-unparseable"
+
+
+def test_vendors_empty_result_fails_loud(tmp_path, capsys):
+    d = str(tmp_path)
+    rc, out = _run_main(["next", "--session-dir", d, "--vendors", " , "], capsys)
+    assert rc == 1 and out["reason"] == "vendors-unparseable"
+
+
+def test_vendors_unknown_fails_loud(tmp_path, capsys):
+    d = str(tmp_path)
+    rc, out = _run_main(["next", "--session-dir", d, "--vendors", "codex,acme"], capsys)
+    assert rc == 1 and out["reason"] == "vendors-unknown: acme"
+
+
+def test_vendors_on_existing_state_rejected(tmp_path, capsys):
+    """`--vendors` on non-fresh state cannot take effect (config is read once at new_state) — reject
+    loudly rather than silently ignore the flag."""
+    d = str(tmp_path)
+    rc0, _ = _run_main(["next", "--session-dir", d, "--vendors", "codex,cursor"], capsys)
+    assert rc0 == 0
+    rc, out = _run_main(["next", "--session-dir", d, "--vendors", "claude,codex"], capsys)
+    assert rc == 1 and out["reason"] == "vendors-not-fresh-state"
+    # the original pool is untouched
+    ok, state = RD.load_state(d)
+    assert state["config"]["vendors"] == ["codex", "cursor"]
+
+
+def test_auditor_vendor_fixer_in_pool_is_independent():
+    """Two-vendor pool, fixerVendor IN the pool → the auditor is the OTHER pool vendor, independent."""
+    auditor, independence = RD._auditor_vendor({"vendors": ["claude", "codex"]}, "claude")
+    assert auditor == "codex" and independence == "independent"
+
+
+def test_auditor_vendor_fixer_outside_pool_is_independent():
+    """#507 R1c: fixerVendor OUTSIDE the pool still yields an independent auditor — the first pool
+    vendor, never the fixer. Pins the outside-pool branch explicitly."""
+    auditor, independence = RD._auditor_vendor({"vendors": ["codex", "cursor"]}, "claude")
+    assert auditor == "codex" and auditor != "claude" and independence == "independent"
+
+
+def test_fixer_outside_pool_audits_independent_end_to_end(tmp_path):
+    """The outside-pool independence threads through the whole loop to a non-degraded audited chain."""
+    captured = {"targets": None}
+
+    def auditor(targets, rnd):
+        captured["targets"] = [dict(t) for t in (targets or [])]
+        return [{"id": t["id"], "ruling": "discharged", "reason": "ok", "evidence": "e",
+                 "auditorVendor": t.get("auditorVendor")} for t in (targets or [])]
+
+    receipt = RD.run_loop(_seams(
+        reviewer=lambda dim, tier, rnd, ctx:
+            ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+             if rnd == 1 and dim == "code-reviewer" else []),
+        auditor=auditor), _cfg(vendors=["codex", "cursor"], fixerVendor="claude"))
+    assert receipt["verdict"] == "converged"
+    t = captured["targets"][0]
+    assert t["fixerVendor"] == "claude"
+    assert t["auditorVendor"] == "codex" and t["auditorVendor"] != t["fixerVendor"]
+    assert t["independence"] == "independent"
+    assert receipt["certificationShape"] == "audited-chain"  # NOT -degraded
