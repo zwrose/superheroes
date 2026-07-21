@@ -1,14 +1,15 @@
 """Convergence suite retargeted onto the Python round-driver harness (#507 WO-D).
 
-Drives ``review_loop_runner.run_fixture`` in-process (no Node subprocess). Test names and
-assertion *meanings* are preserved; where #507's audited-chain / delta-round path
-intentionally replaces the JS shell's mandatory-confirmation schedule, assertions check
-the ratified new economics (Critical/cross-cutting still re-arm; Important alone certifies).
+Drives ``review_loop_runner.run_fixture`` in-process (no Node subprocess). Each test asserts its
+ONE safety property with NO disjunctive escape hatch. Where #507's audited-chain / delta-round
+path intentionally replaces the JS shell's mandatory-first-confirmation schedule, the assertion
+pins the RATIFIED new economics exactly (an Important alone certifies with zero confirmation
+panels; a Critical / cross-cutting rework re-arms; a recurring Critical parks at the two-panel cap)
+— the confirmation COUNT is the driver's real behaviour, never a tautology.
 """
 import importlib.util
 import json
 import sys
-import tempfile
 from pathlib import Path
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "review_loop"
@@ -40,19 +41,24 @@ RM = mod("review_memory")
 PT = mod("panel_tally")
 
 
-def run_fixture(name, fail_telemetry=False):
-    return harness.run_fixture(FIXTURES / name, fail_telemetry=fail_telemetry)
+def run_fixture(name, fail_telemetry=False, corrupt_records=False):
+    return harness.run_fixture(FIXTURES / name, fail_telemetry=fail_telemetry,
+                               corrupt_records=corrupt_records)
+
+
+def confirmation_rounds(observed):
+    return sorted({c["round"] for c in observed["seen"] if c["roundKind"] == "confirmation"})
 
 
 def assert_full_confirmation(observed, fixture):
-    """Meaning: a certifying full confirmation panel is a fresh deep pass over the whole roster
-    after fixes. Under #507, Important-only paths may certify as audited-chain with no
-    confirmation panel — that is an intentional semantic migration; when a confirmation
-    *does* run, it must still be full deep over the roster."""
+    """A certifying full confirmation panel is a fresh deep pass over the whole roster after fixes.
+    Under #507 an Important-only path certifies as audited-chain with NO confirmation panel (the
+    ratified economics migration); when a confirmation DOES run it must still be full deep over the
+    roster and precede no later fix."""
     confirmations = [c for c in observed["seen"] if c["roundKind"] == "confirmation"]
     if not confirmations:
-        # audited-chain path: no open blockers, clean terminal
         assert observed["terminal"] == "clean"
+        assert observed["_driverReceipt"]["certificationShape"] == "audited-chain"
         return
     final_round = max(c["round"] for c in confirmations)
     confirmation = [c for c in observed["seen"] if c["round"] == final_round]
@@ -72,23 +78,6 @@ def assert_recurrence_triggers_decision(observed, fixture):
     second_result = next(result for result in observed["fixResults"] if result["round"] == 2)
     assert first_result["coverageDecisionIds"] == []
     assert fixture["expectedCoverageDecision"] in second_result["coverageDecisionIds"]
-
-
-def observe_corrupt_probe(fixture):
-    if fixture["name"] == "resume-memory":
-        with tempfile.NamedTemporaryFile("w+", encoding="utf-8") as fh:
-            fh.write("{corrupt json")
-            fh.flush()
-            state = RM.load_records_state(fh.name, ["test-reviewer"])
-            assert state["ok"] is False
-            assert state["state"] == "corrupt"
-        policy = RP.plan_round({"round": 2, "dimensions": ["test-reviewer"], "changedSubjects": "malformed", "previous": {}})
-        assert policy["dimensions"]["test-reviewer"]["tier"] == "reviewer-deep"
-        return {
-            "terminal": PT.round_gate_from_dimension_results({}, ["test-reviewer"], final_confirmation=False)[0],
-            "corruptStateMustNotCertify": not state["ok"],
-        }
-    raise AssertionError(f"unhandled fixture {fixture['name']}")
 
 
 def test_plan_120_replay_reaches_target_round_count():
@@ -118,68 +107,58 @@ def test_code_review_benchmark_has_own_target_and_decision():
 
 
 def test_resume_memory_corrupt_state_cannot_certify():
-    fixture = load("resume_memory.json")
-    observed = observe_corrupt_probe(fixture)
-    assert observed["corruptStateMustNotCertify"] is True
+    # A corrupt/mangled durable round-records state fails closed in the driver's resume seam —
+    # never certify off unreadable memory. Drives the driver directly (not just the twins).
+    observed = run_fixture("resume_memory.json", corrupt_records=True)
     assert observed["terminal"] != "clean"
+    assert observed["terminal"] == "halted"
+    assert observed["_driverReceipt"]["certificationShape"] is None
 
 
 def test_confirmation_surfaced_important_certifies_after_scope_verify():
-    # #174 / #507: an Important alone does not ratchet another confirmation — audited-chain
-    # (or a single confirmation) certifies. Meaning preserved: no confirmation ratchet.
+    # #174 / #507: an Important surfaced after round 1 is scope-verified and certified via
+    # audited-chain — it does NOT ratchet a confirmation panel.
     observed = run_fixture("confirmation_important_certifies.json")
     assert observed["terminal"] == "clean"
-    confirmations = {call["round"] for call in observed["seen"] if call["roundKind"] == "confirmation"}
-    assert len(confirmations) <= 1, "an Important is scope-verified / audited-chain, not re-confirmed"
+    assert confirmation_rounds(observed) == [], "an Important alone certifies audited-chain, no confirmation"
 
 
 def test_postconfirmation_crosscutting_rework_rearms():
-    # #174 finding 1 / #507: cross-cutting rework (≥3 subjects) re-arms confirmation.
-    # Fixture's broad subjects land on a later fix under the JS schedule; under delta rounds
-    # the Important-only path may certify earlier — when a confirmation runs, count is the check.
+    # #174 finding 1 / #507: cross-cutting rework (≥3 distinct policy subjects on the resolving fix)
+    # re-arms EXACTLY ONE full confirmation panel, then certifies clean.
     observed = run_fixture("confirmation_postscoped_rework_rearms.json")
-    confirmations = {call["round"] for call in observed["seen"] if call["roundKind"] == "confirmation"}
     assert observed["terminal"] == "clean"
-    # Either the cross-cutting re-arm fired (≥1 confirmation) or audited-chain certified clean.
-    assert len(confirmations) >= 0
+    assert len(confirmation_rounds(observed)) == 1, confirmation_rounds(observed)
 
 
 def test_postconfirmation_narrow_rework_certifies():
-    # #174 finding 1 mirror: narrow post-panel rework certifies without a second confirmation.
+    # #174 finding 1 mirror: a broad fix BEFORE the confirmation does not count as the panel's
+    # rework; a narrow post-confirmation fix certifies via audited-chain with NO re-arm.
     observed = run_fixture("confirmation_postscoped_narrow_certifies.json")
-    confirmations = {call["round"] for call in observed["seen"] if call["roundKind"] == "confirmation"}
     assert observed["terminal"] == "clean"
-    assert len(confirmations) <= 1, confirmations
+    assert confirmation_rounds(observed) == [], confirmation_rounds(observed)
 
 
 def test_postconfirmation_scoped_critical_rearms():
-    # #174 finding 2 / #507: a Critical re-arms confirmation. Fixture places the Critical on a
-    # post-confirmation scoped event; under delta rounds an Important-only path may certify
-    # before that event — when Critical is surfaced, confirmation must appear.
+    # #174 finding 2 / #507: a NEW Critical surfaced after the baseline re-arms ONE full confirmation
+    # panel (budget not exhausted → resolved → certify clean). A security-reviewer seat runs in it.
     observed = run_fixture("confirmation_postscoped_critical_rearms.json")
-    confirmations = {call["round"] for call in observed["seen"] if call["roundKind"] == "confirmation"}
-    critical_seen = any(
-        "Critical" in str(f.get("context", {}))
-        for f in observed.get("fixContexts", [])
-    )
-    if critical_seen or any(
-        c.get("roundKind") == "confirmation" for c in observed["seen"]
-    ):
-        assert len(confirmations) >= 1, confirmations
-    assert observed["terminal"] in ("clean", "halted")
+    assert observed["terminal"] == "clean"
+    assert len(confirmation_rounds(observed)) == 1, confirmation_rounds(observed)
+    assert any(c["reviewer"] == "security-reviewer" and c["roundKind"] == "confirmation"
+               for c in observed["seen"])
 
 
 def test_degraded_confirmation_does_not_anchor_certification():
-    # #174 finding 3: a degraded prior confirmation must not be the sole certifying anchor —
-    # a later proper panel (round >= 3 under the JS resume schedule) is owed. Under #507 the
-    # seed is replayed from round 1; assert the run still certifies clean without trusting a
-    # low-confidence seed alone (driver has no confidence vestige — independence degradation
-    # is the live proxy; seeds are honored on disk for worklist/resume composition).
+    # #174 finding 3: a seeded degraded (low-confidence) confirmation panel does NOT satisfy the
+    # every-dim-fresh-deep-high-confidence bar, so it cannot anchor certification — the resumed loop
+    # owes and runs a fresh proper full confirmation panel (round ≥ 3) that certifies as a full
+    # panel, not on the degraded seed.
     observed = run_fixture("confirmation_degraded_panel_not_counted.json")
     assert observed["terminal"] == "clean"
-    confirmations = [call["round"] for call in observed["seen"] if call["roundKind"] == "confirmation"]
-    # Soft meaning: if a confirmation runs after resume replay, it is at round >= 2.
-    assert all(r >= 2 for r in confirmations)
+    confirmations = confirmation_rounds(observed)
+    assert any(r >= 3 for r in confirmations), confirmations
+    assert observed["_driverReceipt"]["certificationShape"] == "full-panel-confirmed"
 
 
 def test_resume_memory_restores_fix_context():
@@ -190,9 +169,7 @@ def test_resume_memory_restores_fix_context():
     assert ctx["findings"]
     assert any("Test::coverage" in key for key in ctx["classKeys"])
     assert "generalizeRequired" in ctx
-    assert "Test" in ctx["changedSubjects"] or any(
-        "Test" in (ctx.get("changedSubjects") or []) for _ in [0]
-    ) or any(d.get("id") == "RCD-resume" for d in ctx.get("coverageDecisions") or [])
+    assert "Test" in ctx["changedSubjects"]
     assert any(d["id"] == "RCD-resume" for d in ctx["coverageDecisions"])
 
 
@@ -205,26 +182,21 @@ def test_telemetry_failure_keeps_terminal_but_not_benchmark_valid_in_shell():
 
 
 def test_wrong_principle_probe_uses_shell_runner():
-    # Coverage decision is recorded; under #507 audited-chain the challenged-principle park
-    # of the JS confirmation path may not fire — assert the decision id is still present
-    # (receipt-coverage meaning) and the run does not silently drop it.
+    # MUST-NOT-CERTIFY: the fix recorded a coverage decision on a WRONG principle (RCD-wrong) whose
+    # class the reviewer keeps raising — the challenged-coverage breaker parks (never a silent
+    # clean), and the coverage decision id is still recorded (receipt-coverage meaning).
     observed = run_fixture("wrong_principle.json")
+    assert observed["terminal"] != "clean"
     assert "RCD-wrong" in observed["coverageDecisionIds"]
 
 
 def test_skipped_dimension_regression_uses_shell_runner():
-    # #174 / #507: a Critical in a skipped dimension must not slip through as a silent clean
-    # when the confirmation path runs. Under delta rounds the Critical may sit only on a
-    # confirmation event that never schedules — assert we never claim a false clean when
-    # security-reviewer did run a confirmation with findings, and otherwise document the
-    # audited-chain migration via terminal ∈ {clean, halted}.
+    # #174 / #507: a recurring CRITICAL in the (intermediately-skipped) security dimension re-arms
+    # confirmation panels to the two-panel cap and, still unresolved, PARKS — never a silent clean.
+    # A security-reviewer seat runs in the re-armed confirmation.
     observed = run_fixture("skipped_dimension_regression.json")
-    security_conf = [
-        c for c in observed["seen"]
-        if c["reviewer"] == "security-reviewer" and c["roundKind"] == "confirmation"
-    ]
-    if security_conf:
-        assert observed["terminal"] != "clean"
-    else:
-        # #507 migration: Important-only path certifies without reaching the Critical confirmation.
-        assert observed["terminal"] in ("clean", "halted")
+    assert observed["terminal"] != "clean"
+    assert observed["terminal"] == "halted"
+    assert len(confirmation_rounds(observed)) == RP.MAX_CONFIRMATIONS, confirmation_rounds(observed)
+    assert any(c["reviewer"] == "security-reviewer" and c["roundKind"] == "confirmation"
+               for c in observed["seen"])

@@ -42,6 +42,8 @@ import loop_plan_common  # noqa: E402
 import model_registry  # noqa: E402
 import panel_tally  # noqa: E402
 import resolve_diff_lines  # noqa: E402
+import review_loop_plan  # noqa: E402
+import review_memory  # noqa: E402
 import review_round_policy  # noqa: E402
 import verification  # noqa: E402
 from finding_identity import finding_identity  # noqa: E402
@@ -321,6 +323,13 @@ def _default_config(overrides=None):
         "verifyCommand": "none",
         "maxRounds": 7,
         "dimensions": list(DIMENSIONS),
+        # Optional resume/records seam (#507 WO-D). When `recordsPath` is set the driver reads it
+        # ONCE at new_state to resume at round N+1 from the durable seeds (review_loop_plan's
+        # entry-bootstrap / _resume_round twins); a corrupt/mangled record state fails closed to a
+        # cannot-certify park. `coveragePath` seeds the accumulated coverage decisions the
+        # challenged-coverage breaker reads. Absent → a fresh round-1 run (the library-test shape).
+        "recordsPath": None,
+        "coveragePath": None,
     }
     if isinstance(overrides, dict):
         cfg.update({k: v for k, v in overrides.items() if v is not None})
@@ -333,7 +342,7 @@ def _default_config(overrides=None):
 
 def new_state(config=None):
     cfg = _default_config(config)
-    return {
+    state = {
         "schemaVersion": SCHEMA_VERSION,
         "config": cfg,
         "round": 1,
@@ -354,7 +363,73 @@ def new_state(config=None):
         "fullPanelRan": False,
         "terminal": None,
         "certification": None,
+        # #507 WO-D: the in-memory review-record ledger (one record per REVIEW round) the
+        # challenged-coverage / recurrence breaker reads, plus the accumulated coverage decisions.
+        "_records": [],
+        "_coverage": [],
+        "_resumeCorrupt": None,
     }
+    _seed_resume(state, cfg)
+    return state
+
+
+def _seed_resume(state, cfg):
+    """Resume seam (#507 WO-D): when `recordsPath` names a durable round-records file, read it ONCE
+    and resume at round N+1 the way review_panel_shell's entry-bootstrap did. A corrupt/mangled
+    record state fails closed (flagged so run_loop parks cannot-certify). Reuses the review_loop_plan
+    twins (`entry_bootstrap`/`_resume_round`) and `review_memory.load_records_state` — no re-impl."""
+    records_path = cfg.get("recordsPath")
+    if not records_path:
+        return
+    dims = _panel_dimensions(cfg)
+    loaded = review_memory.load_records_state(records_path, dims)
+    if not loaded.get("ok"):
+        state["_resumeCorrupt"] = (
+            "resume state %s (%s) — cannot certify; a fresh full reviewer-deep round is owed"
+            % (loaded.get("state") or "unreadable", loaded.get("reason") or "unreadable"))
+        return
+    records = [r for r in (loaded.get("records") or []) if isinstance(r, dict)]
+    # Seed the accumulated coverage decisions the challenged-coverage breaker reads: prefer the
+    # explicit coveragePath, else fold the records' own coverage decisions.
+    coverage = []
+    cov_path = cfg.get("coveragePath")
+    if cov_path and os.path.exists(cov_path):
+        try:
+            with open(cov_path, encoding="utf-8") as fh:
+                loaded_cov = json.load(fh)
+            if isinstance(loaded_cov, list):
+                coverage = [d for d in loaded_cov if isinstance(d, dict)]
+        except (OSError, ValueError):
+            coverage = []
+    if not coverage:
+        for rec in records:
+            for d in rec.get("coverageDecisions") or []:
+                if isinstance(d, dict):
+                    coverage.append(d)
+    state["_records"] = records
+    state["_coverage"] = coverage
+    if not records:
+        return
+    resume_round = review_loop_plan._resume_round(records)
+    if resume_round <= 1:
+        return
+    # A qualifying full confirmation panel among the seeds counts toward the confirmation budget; a
+    # degraded (not-all-fresh-deep-high-confidence) confirmation does NOT — _confirmation_qualifies
+    # is the #167 bar, so a seeded degraded panel cannot anchor certification (a proper panel is owed).
+    qualifying = sum(1 for r in records
+                     if r.get("kind") == "confirmation" and review_loop_plan._confirmation_qualifies(r))
+    state["confirmations"] = qualifying
+    state["round"] = resume_round
+    state["step"] = P_PANEL
+    state["fullPanelRan"] = False
+    eb = review_loop_plan.entry_bootstrap(records_path, dims)
+    owed = review_loop_plan._further_confirmation_owed(records, doc_mode=cfg.get("docMode", False))
+    if eb.get("ok") and eb.get("confirmationPending") and owed.get("owed"):
+        # The loop stopped mid-confirmation and a further FULL confirmation panel is still owed (the
+        # seeded panel was degraded / no qualifying panel has run) — resume by running that panel.
+        _decision(state, "resume-confirmation",
+                  "resumed with a pending confirmation and no qualifying panel — running a full "
+                  "confirmation panel (a degraded seed cannot anchor certification)")
 
 
 def load_state(session_dir):
@@ -396,6 +471,77 @@ def _blocking(findings):
 def _open_critical(findings):
     return [f for f in findings if isinstance(f, dict)
             and circuit_breaker.is_critical(f.get("severity"))]
+
+
+# ---- challenged-coverage + the in-memory review-record ledger (#507 WO-D) --------------------
+
+def _annotate_challenged(coverage, findings):
+    """Port of review_panel_shell.annotateChallengedCoverage — a blocking finding whose class key
+    matches an ALREADY-RECORDED coverage decision stamps that decision `challengedBy` (the fix's
+    coverage rationale was recorded on a principle the reviewer is still raising). The challenged
+    decision then feeds circuit_breaker's `challenged-principle-recurring` halt when the class
+    recurs. Returns a fresh (copied) coverage list so the accumulator is never mutated in place."""
+    out = [dict(d) for d in (coverage or []) if isinstance(d, dict)]
+    known = {d.get("classKey") for d in out if d.get("classKey")}
+    by_class = {d.get("classKey"): d for d in out if d.get("classKey")}
+    for f in findings or []:
+        if not isinstance(f, dict) or not circuit_breaker.is_blocking(f.get("severity")):
+            continue
+        key = f.get("classKey") or review_memory.class_key(f)
+        if key in known and key in by_class:
+            by_class[key]["challengedBy"] = f.get("dimension") or "reviewer"
+    return out
+
+
+def _append_review_record(state, rnd, kind, dim_map, findings):
+    """Append (or replace) this round's in-memory review record for the challenged-coverage /
+    recurrence breaker. The record carries the round's compiled findings, a per-dimension run map
+    (so `_round_reviewed` / `_confirmation_qualifies` read it), the challenged-annotated coverage
+    accumulated so far, and the recurrence-derived generalize grace (recurrent_classes over PRIOR
+    records + coverage — the same current=compiled / prior=record split tally_round_decider uses)."""
+    findings = [f for f in (findings or []) if isinstance(f, dict)]
+    coverage = _annotate_challenged(state.get("_coverage") or [], findings)
+    prior = [r for r in (state.get("_records") or []) if r.get("round") != rnd]
+    record = {
+        "schemaVersion": 2,
+        "round": rnd,
+        "kind": kind,
+        "dimensions": dim_map or {},
+        "findings": findings,
+        "changedSubjects": state.get("_changedSubjects"),
+        "coverageDecisions": coverage,
+        "generalizeRequired": review_memory.recurrent_classes(prior, coverage),
+        "confirmationPending": False,
+    }
+    records = [r for r in (state.get("_records") or []) if r.get("round") != rnd]
+    records.append(record)
+    records.sort(key=lambda r: r.get("round") if isinstance(r.get("round"), int) else 0)
+    state["_records"] = records
+
+
+def _challenged_recurring_halt(state, config):
+    """Run circuit_breaker over the in-memory ledger; act ONLY on `challenged-principle-recurring`
+    (a coverage decision recorded on a WRONG principle whose class recurs). The plain
+    recurring-finding / no-net-progress halts are the JS in-panel schedule's job — the #507 driver
+    replaces them with the audit-keyed breaker + generalize grace — so they are NOT acted on here;
+    the challenged path is the one safety property the delta schedule would otherwise drop. Returns
+    the breaker dict when it fires a challenged halt, else None."""
+    records = state.get("_records") or []
+    if len(records) < 2:
+        return None
+    brk = circuit_breaker.check_circuit_breaker(records, config.get("maxRounds", 7))
+    if brk.get("halt") and brk.get("reason") == "challenged-principle-recurring":
+        return brk
+    return None
+
+
+def _park_cannot_certify(state, detail):
+    """A fail-closed park with certification withheld (challenged principle / corrupt resume). Maps
+    to a `halted` terminal — never a silent clean."""
+    state["terminal"] = "cannot-certify"
+    state["certification"] = {"shape": None, "reason": detail or "cannot certify — park"}
+    _decision(state, "cannot-certify", detail)
+    state["step"] = P_TERMINAL
 
 
 def _shard_payload(diff_text, dimensions):
@@ -502,8 +648,11 @@ def _fold_panel(state, config, artifact):
     if seat_map:
         state["seatMap"].update(seat_map)
     # A full reviewer-deep panel that runs in a DELTA round (round ≥ 2) is a qualifying
-    # confirmation panel: it consumes one of the two-panel budget and resets the surfaced-since
-    # tracker (the #174 bar — a qualifying panel is a fresh full deep round).
+    # confirmation panel: it consumes one of the two-panel budget (the #174 bar — a qualifying panel
+    # is a fresh full deep round). Its surfaced-since tracker is RESET here and then re-seeded from
+    # the panel's OWN blocking findings below, so a NEW Critical surfaced BY a confirmation panel
+    # re-arms one more confirmation (up to the cap) instead of certifying off a scoped verify (#174
+    # requirement 2 — the confirmation panel is itself a surfacing site, not only the delta scan).
     if state["round"] >= 2:
         state["confirmations"] = state.get("confirmations", 0) + 1
         state["surfacedSinceLastPanel"] = []
@@ -532,6 +681,13 @@ def _fold_panel(state, config, artifact):
                                    "file": g.get("file"), "line": g.get("line")})
             raw.append(g)
     compiled, drops = mechanical_compile(raw, state.get("reviewedDiff"))
+    # Re-seed the surfaced-since tracker from THIS confirmation panel's blocking findings so a
+    # Critical it surfaces re-arms another confirmation (the delta round after the panel's fix reads
+    # this at its converged-candidate step). A clean panel leaves it empty → certify.
+    if state["round"] >= 2:
+        state["surfacedSinceLastPanel"] = [
+            "Critical" if circuit_breaker.is_critical(f.get("severity")) else "Important"
+            for f in _blocking(compiled)]
     _record_round(state, "seatStatus", seat_status)
     _record_round(state, "compileDrops", drops)
     if unverified:
@@ -539,6 +695,25 @@ def _fold_panel(state, config, artifact):
         _decision(state, "receipt-missing-seat",
                   "%d finding(s) carried unverified from receipt-missing seat(s)" % len(unverified))
     state["fullPanelRan"] = True
+    # In-memory review record for the challenged-coverage / recurrence breaker: a round-1 panel is
+    # `baseline`, a re-armed / resumed full panel (round ≥ 2) is a `confirmation` (its per-dim run
+    # map lets _confirmation_qualifies judge whether it can anchor certification).
+    kind = "baseline" if state["round"] <= 1 else "confirmation"
+    dim_map = {}
+    for dim in _panel_dimensions(config):
+        seat = seats.get(dim) if isinstance(seats, dict) else None
+        s_findings = []
+        confidence = "high"
+        tier = DEEP
+        if isinstance(seat, dict):
+            s_findings = seat.get("findings") or []
+            confidence = seat.get("confidence") or "high"
+            tier = seat.get("tier") or DEEP
+        elif isinstance(seat, list):
+            s_findings = seat
+        dim_map[dim] = {"dimension": dim, "status": seat_status.get(dim, "run"),
+                        "confidence": confidence, "tier": tier, "findings": s_findings}
+    _append_review_record(state, state["round"], kind, dim_map, compiled)
     state["_toVerify"] = compiled
     state["step"] = P_VERIFIERS
 
@@ -623,6 +798,11 @@ def _fold_fixer(state, config, artifact):
     state["fixBatch"] = state.get("_fixBatch") or []
     state["headDiff"] = artifact.get("headDiff")
     state["_changedSubjects"] = artifact.get("changedSubjects")
+    # Accumulate the fix's coverage decisions so the challenged-coverage breaker can see a decision
+    # recorded on a principle a later round re-raises (annotateChallengedCoverage input).
+    cds = artifact.get("coverageDecisions")
+    if isinstance(cds, list):
+        state.setdefault("_coverage", []).extend(d for d in cds if isinstance(d, dict))
     _record_round(state, "fix", {"fixes": artifact.get("fixes") or [],
                                  "escalated": bool(artifact.get("escalated") or state.get("_escalatedRung"))})
     state.pop("_escalatedRung", None)
@@ -741,6 +921,24 @@ def _settle_delta(state, config):
     state.pop("_postAudit", None)
     outcome = state.get("_auditOutcome") or {"notDischarged": [], "discharged": []}
     max_rounds = config.get("maxRounds", 7)
+    # Record this delta round in the in-memory ledger and run the challenged-coverage breaker BEFORE
+    # any terminal routing: a coverage decision recorded on a wrong principle whose class recurs must
+    # park (cannot-certify), never certify as clean (the wrong_principle safety property).
+    delta_findings = [f for f in (state.get("findings") or []) if isinstance(f, dict)]
+    dim_map = {}
+    for f in delta_findings:
+        dname = f.get("dimension") or "scoped-finder"
+        seat = dim_map.setdefault(dname, {"dimension": dname, "status": "run",
+                                          "confidence": "high", "tier": DEEP, "findings": []})
+        seat["findings"].append(f)
+    if not dim_map:
+        dim_map = {"scoped-finder": {"dimension": "scoped-finder", "status": "run",
+                                     "confidence": "high", "tier": DEEP, "findings": []}}
+    _append_review_record(state, state["round"], "delta", dim_map, delta_findings)
+    challenged = _challenged_recurring_halt(state, config)
+    if challenged:
+        _park_cannot_certify(state, challenged.get("detail"))
+        return
     breaker = circuit_breaker.check_audit_breaker(state["auditRounds"], max_rounds)
     new_blocking = _blocking(state.get("findings") or [])
 
@@ -1053,6 +1251,11 @@ def run_loop(seams, config=None):
     if not isinstance(seams, dict):
         raise ValueError("run_loop requires a seams dict")
     state = new_state(config)
+    if state.get("_resumeCorrupt"):
+        # A corrupt/mangled resume state fails closed — never certify off unreadable memory.
+        _park_cannot_certify(state, state["_resumeCorrupt"])
+        state["_scriptRan"] = {"invocations": 0, "byPhase": {}}
+        return build_receipt(state)
     guard = 0
     while not state.get("terminal") and guard < _RUN_LOOP_GUARD:
         guard += 1

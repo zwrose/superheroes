@@ -27,6 +27,7 @@ LIB = EVAL_DIR.parent / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+import circuit_breaker as CB  # noqa: E402
 import coverage_decisions as cov  # noqa: E402
 import review_loop_plan as RLP  # noqa: E402
 import review_memory as RM  # noqa: E402
@@ -177,10 +178,11 @@ def _compose_worklist(run_dir, round_no, batch, roster):
         return worklist_path, json.load(fh)
 
 
-def run_fixture(fixture, fail_telemetry=False, run_dir=None):
+def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=False):
     """Drive ``round_driver.run_loop`` for one fixture; return the observational JSON dict.
 
-    ``fixture`` may be a path (str/Path) or an already-loaded dict.
+    ``fixture`` may be a path (str/Path) or an already-loaded dict. ``corrupt_records`` writes a
+    mangled round-records.json so the driver's fail-closed resume seam parks (cannot-certify).
     """
     if isinstance(fixture, (str, Path)):
         fixture_path = Path(fixture)
@@ -207,36 +209,32 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None):
         _write_json(coverage_path, fixture["seedCoverageDecisions"])
     else:
         _write_json(coverage_path, [])
+    if corrupt_records:
+        with open(records_path, "w", encoding="utf-8") as fh:
+            fh.write("{corrupt json — not a records array")
 
-    # Resume: when seeds imply a later start round, synthesize missing early-round
-    # reviewerEvents from the seed skeletons so run_loop (which always starts at 1)
-    # still exercises the seeded findings / worklist path.
-    resume = RLP.entry_bootstrap(records_path, reviewer_set)
-    resume_round = int(resume.get("round") or 1) if resume.get("ok") else 1
-    if resume_round > 1 and fixture.get("seedRoundRecords"):
-        for rec in fixture["seedRoundRecords"]:
-            if not isinstance(rec, dict):
-                continue
-            rnd = rec.get("round")
-            if not isinstance(rnd, int) or rnd >= resume_round:
-                continue
-            dims = rec.get("dimensions") or {}
-            for dim, info in dims.items():
-                if not isinstance(info, dict):
-                    continue
-                already = any(
-                    e.get("round") == rnd and e.get("reviewer") == dim for e in events)
-                if already:
-                    continue
-                findings = list(info.get("findings") or [])
-                events.append({
-                    "round": rnd,
-                    "reviewer": dim,
-                    "tier": info.get("tier") or RD.DEEP,
-                    "findings": findings,
-                    "usageTotal": 1,
-                    "_fromSeed": True,
-                })
+    # Post-round-1 event translation (#507 WO-D §B). The driver's schedule is delta rounds (a
+    # scoped-finder re-scan) plus re-armed confirmation PANELS — it does NOT re-run every named
+    # dimension each round the way the JS shell did. Map the fixture's post-round-1 events onto that
+    # schedule WITHOUT editing the fixture JSON or the goldens: each delta scoped scan surfaces the
+    # next fixture event-round that carried findings (empty rounds are the driver's own clean
+    # deltas); a blocking finding whose (dim, title, severity) recurs across ≥2 fixture rounds is an
+    # UNRESOLVED/recurring finding that ALSO re-surfaces on its dimension's re-armed confirmation
+    # seat — so a recurring Critical re-arms confirmations to the cap and parks (skipped-dimension
+    # regression), with a real security-reviewer seat running in the re-armed confirmation.
+    def _sig(dim, f):
+        return (dim, str(f.get("title")), str(f.get("severity")))
+
+    _sig_rounds = {}
+    for e in events:
+        if not isinstance(e.get("round"), int) or e.get("round") <= 1:
+            continue
+        for f in e.get("findings") or []:
+            if isinstance(f, dict) and CB.is_blocking(f.get("severity")):
+                _sig_rounds.setdefault(_sig(e.get("reviewer"), f), set()).add(e.get("round"))
+    recurring_sigs = {s for s, rs in _sig_rounds.items() if len(rs) >= 2}
+    persistent = {}   # dim -> a recurring blocking finding to re-surface on confirmation seats
+    fix_queue = list(fix_events)
 
     seen = []
     usage = {}
@@ -268,70 +266,73 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None):
             adds="".join("+line%d\n" % i for i in range(1, 5 + n)),
         )
 
+    def _next_delta_round():
+        cand = sorted({e.get("round") for e in events
+                       if isinstance(e.get("round"), int) and e.get("round") > 1
+                       and any(e.get("findings") or [])})
+        return cand[0] if cand else None
+
     def reviewer(dim, tier, rnd, payload):
-        # Scoped-finder / gap-sweep: consume ALL fixture events for this round (the JS
-        # intermediate round dispatches every scheduled dimension), merge findings, and
-        # record each in `seen`.
+        # Scoped-finder / gap-sweep (a DELTA scan): surface the next fixture event-round that
+        # carried findings, at this driver round. Empty fixture rounds are the driver's own clean
+        # deltas (they trigger the converged-candidate / confirmation-rearm decision), so we skip
+        # them rather than emit a dead seat.
         if dim in ("scoped-finder", "gap-sweep"):
-            matched = [
-                (i, e) for i, e in enumerate(events)
-                if e.get("round") == rnd
-            ]
-            # Pop from highest index first so indices stay valid.
-            for i, _e in sorted(matched, key=lambda p: p[0], reverse=True):
-                events.pop(i)
+            target = _next_delta_round()
+            if target is None:
+                seen.append({"reviewer": "scoped-finder", "round": rnd, "tier": tier,
+                             "roundKind": "intermediate"})
+                usage.setdefault("scoped-finder:r%d" % rnd, {"total": 1})
+                return {"findings": [], "confidence": "high",
+                        "verificationReceipt": _receipt(name, rnd, live_coverage),
+                        "usage": {"total": 1}}
+            evs = [e for e in events if e.get("round") == target]
+            for e in list(evs):
+                events.remove(e)
             merged = []
             usage_total = 0
-            for _i, e in matched:
-                obs = e.get("reviewer") or dim
+            for e in evs:
+                obs = e.get("reviewer") or "scoped-finder"
                 etier = e.get("tier") or tier
-                seen.append({
-                    "reviewer": obs,
-                    "round": rnd,
-                    "tier": etier,
-                    "roundKind": "intermediate",
-                })
                 cited = _cite(e.get("findings") or [])
                 merged.extend(cited)
                 ut = int(e.get("usageTotal") or 1)
                 usage_total += ut
                 usage["%s:r%d" % (obs, rnd)] = {"total": ut}
+                seen.append({"reviewer": obs, "round": rnd, "tier": etier,
+                             "roundKind": "intermediate"})
                 last_panel["dims"][obs] = {
-                    "status": "run",
-                    "confidence": e.get("confidence") or "high",
-                    "tier": etier,
-                    "findings": cited,
-                    "hasFindings": bool(cited),
-                }
-            if matched:
-                last_panel["round"] = rnd
-                last_panel["kind"] = "intermediate"
-            else:
-                seen.append({
-                    "reviewer": dim, "round": rnd, "tier": tier,
-                    "roundKind": "intermediate",
-                })
-                usage["%s:r%d" % (dim, rnd)] = {"total": 1}
-            return {
-                "findings": merged,
-                "confidence": "high",
-                "verificationReceipt": _receipt(name, rnd, live_coverage),
-                "usage": {"total": usage_total or 1},
-            }
+                    "status": "run", "confidence": e.get("confidence") or "high",
+                    "tier": etier, "findings": cited, "hasFindings": bool(cited)}
+                for f in cited:
+                    if CB.is_blocking(f.get("severity")) and _sig(obs, f) in recurring_sigs:
+                        persistent[obs] = f
+            last_panel["round"] = rnd
+            last_panel["kind"] = "intermediate"
+            return {"findings": merged, "confidence": "high",
+                    "verificationReceipt": _receipt(name, rnd, live_coverage),
+                    "usage": {"total": usage_total or 1}}
 
+        # Named-dimension seat: a round-1 baseline panel, a resumed round, or a re-armed
+        # confirmation panel. Match this round's event first (baseline / resume / seeded), else — on
+        # a re-armed confirmation (round ≥ 2) — re-surface this dimension's recurring finding so the
+        # security-reviewer confirmation seat keeps raising the unresolved Critical up to the cap.
         idx = next(
             (i for i, e in enumerate(events)
              if e.get("round") == rnd and e.get("reviewer") == dim
              and (not e.get("tier") or e.get("tier") == tier)),
             None,
         )
-        if idx is None:
-            event = {"findings": [], "usageTotal": 1, "reviewer": dim}
-        else:
+        if idx is not None:
             event = events.pop(idx)
+        elif rnd > 1 and dim in persistent:
+            event = {"findings": [persistent[dim]], "usageTotal": 1, "reviewer": dim,
+                     "tier": RD.DEEP}
+        else:
+            event = {"findings": [], "usageTotal": 1, "reviewer": dim}
 
         kind = "baseline"
-        if rnd > 1 and tier == RD.DEEP and dim in reviewer_set:
+        if rnd > 1 and (tier == RD.DEEP or event.get("tier") == RD.DEEP) and dim in reviewer_set:
             kind = "confirmation"
         elif rnd > 1:
             kind = "intermediate"
@@ -426,7 +427,11 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None):
         fix_contexts.append({"round": rnd, "context": context})
         usage["fix:r%d" % rnd] = {"total": 1}
 
-        fix = next((f for f in fix_events if f.get("afterRound") == rnd), None)
+        # Consume fixEvents in fixture ORDER (a queue), not by literal `afterRound` — the driver's
+        # round numbering diverges from the JS scheduler's, so the Nth fix the driver runs takes the
+        # Nth fixture fixEvent (its changedSubjects / coverageDecisions). This keeps the cross-cutting
+        # rework subjects and the coverage-decision recording aligned with the driver's fix legs.
+        fix = fix_queue.pop(0) if fix_queue else None
         if fix is None:
             fix = {"changedSubjects": [], "coverageDecisions": []}
         cds = list(fix.get("coverageDecisions") or [])
@@ -511,6 +516,10 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None):
             "vendors": ["claude", "codex"],
             "fixerVendor": "claude",
             "verifyCommand": "none",
+            # The driver reads these ONCE at new_state to resume from the durable seeds and to seed
+            # the challenged-coverage breaker's accumulated decisions (#507 WO-D resume/records seam).
+            "recordsPath": records_path,
+            "coveragePath": coverage_path,
         }
         receipt = RD.run_loop(seams, config)
     finally:

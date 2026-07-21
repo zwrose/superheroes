@@ -26,86 +26,101 @@ sys.path.insert(0, str(LIB))
 import review_loop_runner as harness  # noqa: E402
 from capture_goldens import normalize  # noqa: E402
 
-# Per-golden, per-top-level-field allowlist. Reasons must stay in sync with PARITY.md.
+# Per-golden, per-top-level-field allowlist. Every allowlisted field is a #507 SCHEDULE / ECONOMICS
+# migration where the TESTED PROPERTY is preserved (terminal, coverageDecisionIds, benchmarkValid all
+# match the golden and are NEVER allowlisted). Reasons must stay in sync with PARITY.md.
+#
+# The migration classes, shared across fixtures:
+#   seen        — the driver's scoped-finder delta scans + re-armed confirmation PANELS replace the
+#                 JS shell's per-dimension intermediate/confirmation seat schedule
+#   roundCount  — delta rounds + audited-chain / confirmation re-arm reach the terminal in a
+#                 different round count than the JS mandatory-first-confirmation schedule
+#   tokenTotal  — the delta schedule dispatches a different set of reviewer leaves than the JS roster
+#   telemetry   — expectedLeaves / dimensionCounts / roundCount follow the driver's delta-round seats
+#   fixContexts — the harness cites file/line for mechanical_compile scope; fix-context shape + fix
+#                 count follow the delta schedule
+#   fixResults  — fix-round numbering follows the driver's delta legs, not the JS round numbers
+_SEEN = ("driver scoped-finder delta scans + re-armed confirmation panels replace the JS "
+         "per-dimension intermediate/confirmation seat schedule")
+_TOK = "the delta schedule dispatches a different set of reviewer leaves than the JS roster schedule"
+_TELEM = "expectedLeaves / dimensionCounts / roundCount follow the driver's delta-round seats, not the JS schedule"
+_FIXCTX = "harness cites file/line for mechanical_compile scope; fix-context shape + count follow the delta schedule"
+_FIXRES = "fix-round numbering follows the driver's delta legs, not the JS round numbers"
+
 ALLOWLIST: dict[str, dict[str, str]] = {
     "telemetry_failure.golden.json": {},
     "telemetry_failure.fail-telemetry.golden.json": {},
     "plan_120_replay.golden.json": {
-        "roundCount": "#507 audited-chain certifies after delta rounds; JS needed intermediate+confirmation to round 4",
-        "seen": "#507 scoped-finder replaces plan_round intermediate/confirmation seat schedule",
-        "tokenTotal": "fewer reviewer leaves under delta rounds than the JS full-roster schedule",
-        "telemetry": "dimensionCounts/expectedLeaves follow delta-round seats, not JS plan_round skips",
-        "fixContexts": "harness cites file/line for mechanical_compile; JS kept synthesisUnverified uncited findings",
+        "roundCount": "audited-chain certifies after delta rounds; the JS shell reached the confirmation panel at a later round",
+        "seen": _SEEN,
+        "tokenTotal": _TOK,
+        "telemetry": _TELEM,
+        "fixContexts": _FIXCTX,
     },
     "code_review_recurring_class.golden.json": {
-        "roundCount": "#507 audited-chain certifies after delta rounds; JS confirmation at round 4",
-        "seen": "#507 scoped-finder replaces plan_round intermediate/confirmation seat schedule",
-        "tokenTotal": "fewer reviewer leaves under delta rounds than the JS full-roster schedule",
-        "telemetry": "dimensionCounts/expectedLeaves follow delta-round seats, not JS plan_round skips",
-        "fixContexts": "harness cites file/line for mechanical_compile; JS kept synthesisUnverified uncited findings",
+        "roundCount": "audited-chain certifies after delta rounds; the JS shell reached the confirmation panel at a later round",
+        "seen": _SEEN,
+        "tokenTotal": _TOK,
+        "telemetry": _TELEM,
+        "fixContexts": _FIXCTX,
     },
     "resume_memory.golden.json": {
-        "roundCount": "round_driver.run_loop has no resume seam; seeds replay from round 1 then continue",
-        "seen": "seed replay starts at baseline round 1 rather than JS resume at round 2",
-        "telemetry": "expectedLeaves/dimensionCounts follow seed-replay schedule, not JS resume",
-        "fixContexts": "seed replay yields an extra early fix; finding shape includes cited file/line",
-        "fixResults": "extra fix round under seed replay vs JS single post-resume fix",
+        "roundCount": "the driver resumes at round N+1 into a full panel then delta rounds — a different round count than the JS resume schedule",
+        "seen": _SEEN,
+        "tokenTotal": _TOK,
+        "telemetry": _TELEM,
+        "fixContexts": _FIXCTX,
     },
     "wrong_principle.golden.json": {
-        "terminal": "#507 audited-chain certifies after discharge; JS confirmation parked on challenged principle",
-        "roundCount": "delta rounds continue fixing rather than parking at confirmation",
-        "seen": "#507 scoped-finder schedule replaces JS confirmation challenge path",
-        "tokenTotal": "more fix rounds under delta path than JS halt-at-3",
-        "telemetry": "terminal/leaves differ under audited-chain vs JS halted confirmation",
-        "fixContexts": "more fixes + cited finding shape vs JS synthesisUnverified",
-        "fixResults": "more fix rounds under delta path",
+        "roundCount": "the challenged-coverage breaker parks at the delta round the class recurs (round 2), earlier than the JS confirmation-cap park at round 3",
+        "seen": _SEEN,
+        "tokenTotal": _TOK,
+        "telemetry": _TELEM,
+        "fixContexts": _FIXCTX,
+        "fixResults": _FIXRES,
     },
     "skipped_dimension_regression.golden.json": {
-        "terminal": "#507 Important-only path certifies audited-chain before the Critical confirmation event runs",
-        "roundCount": "audited-chain ends earlier than JS confirmation-cap park",
-        "seen": "Critical lived on JS confirmation seats that delta rounds never schedule",
-        "tokenTotal": "fewer rounds than JS confirmation-cap path",
-        "telemetry": "terminal/leaves differ under audited-chain vs JS halted",
-        "fixContexts": "single fix + cited finding shape vs JS two-fix confirmation path",
-        "fixResults": "single fix vs JS two-fix confirmation path",
+        "roundCount": "the recurring Critical re-arms confirmation panels to the two-panel cap over delta rounds — a different round count than the JS mandatory-confirmation schedule",
+        "seen": _SEEN,
+        "tokenTotal": _TOK,
+        "telemetry": _TELEM,
+        "fixContexts": _FIXCTX,
+        "fixResults": _FIXRES,
     },
     "confirmation_important_certifies.golden.json": {
-        "roundCount": "#507 Important certifies via audited-chain without JS confirmation+scope-verify rounds",
-        "seen": "no confirmation panel under Important-only delta path",
-        "tokenTotal": "fewer seats than JS confirmation schedule",
-        "telemetry": "dimensionCounts follow delta seats, not JS confirmation",
-        "fixContexts": "single fix + cited finding shape vs JS two-fix path",
-        "fixResults": "single fix vs JS two-fix path",
+        "roundCount": "an Important certifies via audited-chain without the JS confirmation + scope-verify rounds",
+        "seen": _SEEN,
+        "tokenTotal": _TOK,
+        "telemetry": _TELEM,
+        "fixContexts": _FIXCTX,
+        "fixResults": _FIXRES,
     },
     "confirmation_postscoped_rework_rearms.golden.json": {
-        "roundCount": "#507 Important-only path certifies before JS post-confirmation cross-cutting rework",
-        "seen": "cross-cutting subjects on a later JS fix never reached under early audited-chain",
-        "tokenTotal": "fewer seats than JS two-confirmation schedule",
-        "telemetry": "dimensionCounts follow delta seats, not JS confirmation re-arm",
-        "fixContexts": "single fix + cited finding shape vs JS three-fix path",
-        "fixResults": "single fix vs JS three-fix path",
+        "roundCount": "cross-cutting rework re-arms ONE confirmation over delta rounds — fewer rounds than the JS two-confirmation schedule (no mandatory first confirmation)",
+        "seen": _SEEN,
+        "tokenTotal": _TOK,
+        "telemetry": _TELEM,
+        "fixContexts": _FIXCTX,
+        "fixResults": _FIXRES,
     },
     "confirmation_postscoped_narrow_certifies.golden.json": {
-        "seen": "R1 cross-cutting subjects re-arm confirmation under driver last-fix rule; seat order differs from JS",
-        "tokenTotal": "delta+confirmation hybrid token mix differs from JS schedule",
-        "telemetry": "dimensionCounts/leaves differ under delta+confirmation hybrid",
-        "fixContexts": "cited finding shape vs JS synthesisUnverified; classKey stamping differs",
+        "roundCount": "narrow post-confirmation rework certifies audited-chain — fewer rounds than the JS one-confirmation schedule",
+        "seen": _SEEN,
+        "tokenTotal": _TOK,
+        "telemetry": _TELEM,
+        "fixContexts": _FIXCTX,
+        "fixResults": _FIXRES,
     },
     "confirmation_postscoped_critical_rearms.golden.json": {
-        "roundCount": "#507 Important-only path certifies before the post-confirmation Critical scoped event",
-        "seen": "Critical on JS post-confirmation scoped seat never scheduled under early audited-chain",
-        "tokenTotal": "fewer seats than JS two-confirmation schedule",
-        "telemetry": "dimensionCounts follow delta seats, not JS Critical re-arm",
-        "fixContexts": "single fix + cited finding shape vs JS three-fix path",
-        "fixResults": "single fix vs JS three-fix path",
+        "roundCount": "the Critical re-arms ONE confirmation over delta rounds — fewer rounds than the JS two-confirmation schedule (no mandatory first confirmation)",
+        "seen": _SEEN,
+        "tokenTotal": _TOK,
+        "telemetry": _TELEM,
+        "fixContexts": _FIXCTX,
+        "fixResults": _FIXRES,
     },
     "confirmation_degraded_panel_not_counted.golden.json": {
-        "roundCount": "no resume seam: seeds replay from round 1 rather than JS resume at confirmation round 3",
-        "seen": "seed replay emits baseline seats instead of JS resumed confirmation seats",
-        "tokenTotal": "seed-replay schedule differs from JS resume",
-        "telemetry": "expectedLeaves/dimensionCounts follow seed replay, not JS resume",
-        "fixContexts": "seed replay reaches a fix the JS resume path did not",
-        "fixResults": "seed replay reaches a fix the JS resume path did not",
+        "telemetry": "the resumed fresh confirmation panel's expectedLeaves / dimensionCounts follow the driver's round-3 panel seats, not the JS resume schedule",
     },
 }
 
