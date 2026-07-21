@@ -47,6 +47,19 @@ def _os_from_name_is_banned(name):
     return any(name.startswith(prefix) for prefix in _BANNED_OS_ATTR_PREFIXES)
 
 
+def _collect_module_aliases(tree):
+    """Map import aliases to canonical module roots (os, subprocess)."""
+    aliases = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Import):
+            continue
+        for alias in node.names:
+            root = alias.name.split(".")[0]
+            if root in ("os", "subprocess"):
+                aliases[alias.asname or root] = root
+    return aliases
+
+
 def _collect_imported_spawn_names(tree):
     """Map bare names imported from os/subprocess to their spawn primitives."""
     imported = {}
@@ -76,14 +89,18 @@ def _imports_banned(node):
     return None
 
 
-def _call_is_banned(node, imported_spawn_names):
+def _call_is_banned(node, imported_spawn_names, module_aliases):
     if not isinstance(node, ast.Call):
         return None
     func = node.func
     if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
-        if func.value.id == "os" and _os_attr_is_banned(func.attr):
+        receiver = func.value.id
+        os_receiver = receiver == "os" or module_aliases.get(receiver) == "os"
+        subprocess_receiver = (
+            receiver == "subprocess" or module_aliases.get(receiver) == "subprocess")
+        if os_receiver and _os_attr_is_banned(func.attr):
             return "os.%s" % func.attr
-        if func.value.id == "subprocess" and func.attr in _BANNED_SUBPROCESS_ATTRS:
+        if subprocess_receiver and func.attr in _BANNED_SUBPROCESS_ATTRS:
             return "subprocess.%s" % func.attr
     if isinstance(func, ast.Name):
         if func.id == "Popen":
@@ -96,13 +113,14 @@ def _call_is_banned(node, imported_spawn_names):
 def _find_spawn_offenders(source, filename="<memory>"):
     tree = ast.parse(source, filename=filename)
     imported_spawn_names = _collect_imported_spawn_names(tree)
+    module_aliases = _collect_module_aliases(tree)
     offenders = []
     for node in ast.walk(tree):
         banned_import = _imports_banned(node)
         if banned_import:
             offenders.append("import %s" % banned_import)
             break
-        banned_call = _call_is_banned(node, imported_spawn_names)
+        banned_call = _call_is_banned(node, imported_spawn_names, module_aliases)
         if banned_call:
             offenders.append("call %s" % banned_call)
     return offenders
@@ -132,3 +150,21 @@ def test_spawn_detector_flags_imported_os_system():
     offenders = _find_spawn_offenders(source)
     assert offenders, "expected imported os.system to be flagged"
     assert any("system" in hit for hit in offenders)
+
+
+def test_spawn_detector_flags_aliased_os_system_and_exec_spawn():
+    """Non-vacuity: alias imports and exec/spawn attribute calls must be flagged."""
+    alias_source = "import os as _p\n_p.system('x')\n"
+    offenders = _find_spawn_offenders(alias_source)
+    assert offenders, "expected aliased os.system to be flagged"
+    assert any("system" in hit for hit in offenders)
+
+    exec_source = "import os\nos.execv('/bin/sh', ['sh'])\n"
+    offenders = _find_spawn_offenders(exec_source)
+    assert offenders, "expected os.execv to be flagged"
+    assert any("execv" in hit for hit in offenders)
+
+    spawn_source = "import os\nos.spawnv(os.P_WAIT, '/bin/sh', ['sh'])\n"
+    offenders = _find_spawn_offenders(spawn_source)
+    assert offenders, "expected os.spawnv to be flagged"
+    assert any("spawnv" in hit for hit in offenders)

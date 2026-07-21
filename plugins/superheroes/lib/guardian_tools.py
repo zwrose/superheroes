@@ -583,11 +583,17 @@ def _route_captured(tool, argv, cwd, stdout, stderr, rc, parse):
         stdout=stdout, stderr=stderr, parsed=parsed)
 
 
-def _kill_process_tree(proc):
+def _kill_process_tree(proc, session_created):
     """Kill the collector and any descendants (e.g. node worker fan-out)."""
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except (OSError, AttributeError, ProcessLookupError):
+    if session_created:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (OSError, AttributeError, ProcessLookupError):
+            try:
+                proc.kill()
+            except OSError:
+                pass
+    else:
         try:
             proc.kill()
         except OSError:
@@ -602,10 +608,12 @@ def _invoke_subprocess_bounded(tool, argv, cwd, timeout, env, parse):
         "text": True,
         "env": env,
     }
+    session_created = True
     try:
         popen_kwargs["start_new_session"] = True
         proc = subprocess.Popen(argv, **popen_kwargs)
     except TypeError:
+        session_created = False
         popen_kwargs.pop("start_new_session", None)
         try:
             proc = subprocess.Popen(argv, **popen_kwargs)
@@ -635,7 +643,7 @@ def _invoke_subprocess_bounded(tool, argv, cwd, timeout, env, parse):
         stdout_box[0] = text
         if trunc:
             truncated[0] = True
-            _kill_process_tree(proc)
+            _kill_process_tree(proc, session_created)
             _drain_pipe_discard(proc.stdout)
 
     def _drain_stderr():
@@ -656,16 +664,18 @@ def _invoke_subprocess_bounded(tool, argv, cwd, timeout, env, parse):
         try:
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            _kill_process_tree(proc)
+            _kill_process_tree(proc, session_created)
             outcome = _result_dict(
                 "timeout", tool, argv, cwd,
                 reason="%s after %ss" % (argv[0], timeout))
         except (OSError, subprocess.SubprocessError) as exc:
-            _kill_process_tree(proc)
+            _kill_process_tree(proc, session_created)
             outcome = _result_dict(
                 "spawn-failed", tool, argv, cwd,
                 reason="%s: %s" % (argv[0], exc))
         else:
+            for t in readers:
+                t.join(timeout=5)
             if truncated[0]:
                 outcome = _result_dict(
                     "truncated-output", tool, argv, cwd,

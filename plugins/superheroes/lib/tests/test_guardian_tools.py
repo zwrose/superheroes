@@ -9,9 +9,11 @@ import ast
 import json
 import os
 import shutil
+import signal
 import stat
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -1174,6 +1176,72 @@ def test_invoke_subprocess_bounded_truncates_oversized_stdout(tmp_path, monkeypa
         [sys.executable, "-c", "print('x' * 128)"],
         str(tmp_path), 5, os.environ.copy(), None)
     assert res["outcome"] == "truncated-output"
+
+
+def test_invoke_subprocess_bounded_captures_complete_stdout_after_exit(
+        tmp_path, monkeypatch):
+    """Reader threads must join before stdout boxes are read on the success path."""
+    repo = _init_repo(tmp_path)
+    payload = "P" * 8192
+    collector = _write_executable(
+        tmp_path / "bin" / FAKE_COLLECTOR,
+        _python_collector_shebang() +
+        "import sys\n"
+        "sys.stdout.write(%r)\n"
+        "sys.stdout.flush()\n" % payload)
+    monkeypatch.setenv("PATH", os.path.dirname(collector))
+    original_read = gt._read_pipe_bounded
+
+    def _slow_read(pipe, max_bytes):
+        text, trunc = original_read(pipe, max_bytes)
+        time.sleep(0.05)
+        return text, trunc
+
+    monkeypatch.setattr(gt, "_read_pipe_bounded", _slow_read)
+    for _ in range(3):
+        out = gt.invoke(FAKE_COLLECTOR, [], repo, ["src"], run=None)
+        assert out["outcome"] == "ok", out
+        assert out["stdout"] == payload
+
+
+def test_kill_process_tree_session_created_false_uses_proc_kill_only(monkeypatch):
+    killpg_calls = []
+
+    def fake_killpg(pgid, sig):
+        killpg_calls.append((pgid, sig))
+        raise AssertionError("killpg must not run when session_created=False")
+
+    monkeypatch.setattr(os, "killpg", fake_killpg)
+    killed = []
+
+    class FakeProc:
+        pid = 12345
+
+        def kill(self):
+            killed.append(True)
+
+    gt._kill_process_tree(FakeProc(), session_created=False)
+    assert killed
+    assert not killpg_calls
+
+
+def test_kill_process_tree_session_created_true_uses_killpg(monkeypatch):
+    killpg_calls = []
+
+    def fake_killpg(pgid, sig):
+        killpg_calls.append((pgid, sig))
+
+    monkeypatch.setattr(os, "killpg", fake_killpg)
+    monkeypatch.setattr(os, "getpgid", lambda pid: 999)
+
+    class FakeProc:
+        pid = 12345
+
+        def kill(self):
+            raise AssertionError("proc.kill must not run when killpg succeeds")
+
+    gt._kill_process_tree(FakeProc(), session_created=True)
+    assert killpg_calls == [(999, signal.SIGKILL)]
 
 
 def test_version_runs_from_neutral_cwd_with_sanitized_env(tmp_path, monkeypatch):
