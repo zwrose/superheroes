@@ -95,22 +95,22 @@ def test_codex_probe_uses_configured_write_pins(tmp_path, monkeypatch):
     # a project pinned entirely to an older family is not falsely marked not-ready by a hard sol probe.
     import engine_pref
     monkeypatch.setattr(engine_pref, "load_engine_prefs",
-                        lambda cwd, root=None: {"codexModels": {"implementer": "gpt-5.5",
-                                                                "fixer": "gpt-5.5"}})
+                        lambda cwd, root=None: {"codexModels": {"implementer": "gpt-5.6-terra",
+                                                                "code-fixer": "gpt-5.6-terra"}})
     seen = {}
     def run(args, **k):
         seen["argv"] = args
         return _Proc(returncode=0)
     AZ.implementation_dispatch_allowed(str(tmp_path), "codex", run=run)
-    assert seen["argv"][seen["argv"].index("-m") + 1] == "gpt-5.5"
+    assert seen["argv"][seen["argv"].index("-m") + 1] == "gpt-5.6-terra"
 
 
 def test_codex_probe_clamps_to_sol_floor_when_a_write_role_is_unpinned(tmp_path, monkeypatch):
-    # #409 premortem regression: with implementer pinned to gpt-5.5 but fixer UNPINNED (fixer derives
-    # a GPT-5.6 tier model), the probe must clamp up to the sol floor — never under-test at gpt-5.5.
+    # #409 premortem regression: with implementer pinned to gpt-5.6-terra but code-fixer UNPINNED
+    # (code-fixer derives a GPT-5.6 tier model), the probe must clamp up to the sol floor.
     import engine_pref
     monkeypatch.setattr(engine_pref, "load_engine_prefs",
-                        lambda cwd, root=None: {"codexModels": {"implementer": "gpt-5.5"}})
+                        lambda cwd, root=None: {"codexModels": {"implementer": "gpt-5.6-terra"}})
     seen = {}
     def run(args, **k):
         seen["argv"] = args
@@ -120,11 +120,11 @@ def test_codex_probe_clamps_to_sol_floor_when_a_write_role_is_unpinned(tmp_path,
 
 
 def test_codex_probe_clamps_to_sol_floor_when_implementer_is_unpinned(tmp_path, monkeypatch):
-    # #409 symmetric to the above: fixer pinned to gpt-5.5, implementer UNPINNED (derives a GPT-5.6
-    # tier model) -> the probe clamps up to the sol floor. Exercises the implementer-unpinned axis.
+    # #409 symmetric to the above: code-fixer pinned to gpt-5.6-terra, implementer UNPINNED (derives
+    # a GPT-5.6 tier model) -> the probe clamps up to the sol floor. Exercises the implementer-unpinned axis.
     import engine_pref
     monkeypatch.setattr(engine_pref, "load_engine_prefs",
-                        lambda cwd, root=None: {"codexModels": {"fixer": "gpt-5.5"}})
+                        lambda cwd, root=None: {"codexModels": {"code-fixer": "gpt-5.6-terra"}})
     seen = {}
     def run(args, **k):
         seen["argv"] = args
@@ -147,6 +147,19 @@ def test_codex_probe_falls_to_sol_floor_when_no_pins(tmp_path, monkeypatch):
     assert seen["argv"][seen["argv"].index("-m") + 1] == "gpt-5.6-sol"
 
 
+def test_codex_dispatch_falls_open_when_probe_model_unresolvable(tmp_path, monkeypatch):
+    # never-raise posture: when the capability model cannot resolve, codex is reported not-ready
+    # (False) and no dispatch argv is built — the probe never raises.
+    monkeypatch.setattr(AZ, "_codex_capability_model", lambda: None)
+    monkeypatch.setattr(AZ, "_codex_probe_model", lambda cwd: None)
+    called = []
+    def run(args, **k):
+        called.append(args)
+        raise AssertionError("run should not be called")
+    assert AZ.implementation_dispatch_allowed(str(tmp_path), "codex", run=run) is False
+    assert called == []
+
+
 def test_codex_probe_falls_to_sol_floor_when_prefs_unreadable(tmp_path, monkeypatch):
     # any load failure falls open to the sol floor — the probe never raises on a bad/absent core.md.
     import engine_pref
@@ -162,7 +175,7 @@ def test_codex_probe_falls_to_sol_floor_when_prefs_unreadable(tmp_path, monkeypa
 
 
 def test_codex_probe_reads_pin_from_core_md_end_to_end(tmp_path, monkeypatch):
-    # end-to-end: a real core.md pinned entirely to gpt-5.5 makes the probe dispatch -m gpt-5.5.
+    # end-to-end: a real core.md pinned to gpt-5.6-terra makes the probe dispatch -m gpt-5.6-terra.
     import importlib.util as u
     import subprocess
     repo = str(tmp_path / "repo")
@@ -176,14 +189,15 @@ def test_codex_probe_reads_pin_from_core_md_end_to_end(tmp_path, monkeypatch):
     cm.write(repo, {"verifyCommand": "npm test", "stackTags": [], "threatModel": "x",
                     "patterns": "", "enginePreferences": {
                         "implementation": "codex",
-                        "codexModels": {"implementer": "gpt-5.5", "fixer": "gpt-5.5"}}},
+                        "codexModels": {"implementer": "gpt-5.6-terra",
+                                        "code-fixer": "gpt-5.6-terra"}}},
              "confirmed", root=store, now="2026-06-30")
     seen = {}
     def run(args, **k):
         seen["argv"] = args
         return _Proc(returncode=0)
     AZ.implementation_dispatch_allowed(repo, "codex", run=run)
-    assert seen["argv"][seen["argv"].index("-m") + 1] == "gpt-5.5"
+    assert seen["argv"][seen["argv"].index("-m") + 1] == "gpt-5.6-terra"
 
 
 def test_implementation_dispatch_unknown_engine_falls_open_false(tmp_path):

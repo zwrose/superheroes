@@ -49,7 +49,7 @@ def test_tiers_default_policy():
 
 
 def test_tiers_honor_override():
-    t = RC.resolve_tiers({"reviewer-deep": "sonnet", "fixer": "haiku"})
+    t = RC.resolve_tiers({"reviewer-deep": "sonnet", "code-fixer": "haiku"})
     assert t["reviewerDeep"] == "sonnet" and t["fixer"] == "haiku"
 
 

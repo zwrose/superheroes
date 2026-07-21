@@ -12,6 +12,8 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import model_registry
+
 _MISSING = object()
 
 ENGINES = ("claude", "codex", "cursor")
@@ -34,30 +36,30 @@ RETIRED_ENGINE_KEYS = ("planAuthor",)
 # Codex model policy is provider-specific and deliberately separate from model_tier's
 # Claude-family capability names. Shared tiers express role strength; this map translates those
 # strengths at the external boundary. Explicit pins live under enginePreferences.codexModels so a
-# GPT id can never leak into a native Claude fallback or Cursor dispatch.
-CODEX_MODELS = ("gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna")
+# GPT id can never leak into a native Claude fallback or Cursor dispatch. All facts re-derive from
+# model_registry — no parallel literals.
+CODEX_MODELS = model_registry.codex_models()
 CODEX_MODEL_BY_TIER = {
-    "haiku": "gpt-5.6-luna",
-    "sonnet": "gpt-5.6-terra",
-    "opus": "gpt-5.6-sol",
-    "fable": "gpt-5.6-sol",
+    s: model_registry.codex_peer_for_claude_tier(s) for s in ("haiku", "sonnet", "opus")
 }
-CODEX_PIN_ROLES = ("reviewer", "reviewer-deep", "fixer", "implementer", "pilot")
-CODEX_ROLE_KIND = {"reviewer": "review", "reviewer-deep": "review-deep",
-                   "fixer": "fix", "implementer": "build", "pilot": "pilot"}
-CODEX_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
-CODEX_MAX_UNSUPPORTED_MODELS = ("gpt-5.5",)
+CODEX_PIN_ROLES = model_registry.codex_pin_roles()
+CODEX_ROLE_KIND = model_registry.codex_role_kind()
+CODEX_EFFORTS = model_registry.codex_efforts()
+
+# Legacy codexModels pin keys retired during the fixer→code-fixer rename — existing project pins
+# must remap before the CODEX_PIN_ROLES membership check so they are not silently dropped.
+_LEGACY_CODEX_PIN_ALIAS = {"fixer": "code-fixer"}
 
 # #409 write-auth probe strength order (weakest → strongest). The build-authz probe (engine_authz)
 # dispatches the strongest model the codex implementation role will actually run, so a passing probe
 # covers every weaker dispatch. Kept a superset of CODEX_MODELS (guarded by a unit test) so no valid
 # pin is ever unrankable and silently dropped.
-CODEX_MODEL_STRENGTH = ("gpt-5.5", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol")
+CODEX_MODEL_STRENGTH = model_registry.codex_model_strength()
 
 # The pin roles the codex IMPLEMENTATION role dispatches as workspace writes (build + fix). The
 # write-auth probe (engine_authz) must cover exactly these — reviewer roles run on separate
 # (read / non-write-gated) paths, so their pins are irrelevant to whether a build write is authorized.
-CODEX_WRITE_PIN_ROLES = ("implementer", "fixer")
+CODEX_WRITE_PIN_ROLES = model_registry.codex_write_pin_roles()
 
 # role_kind -> the enginePreferences key it reads. `brief-check` (the v2 cross-vendor pre-code
 # reviewer) and `pilot` (the v2 test-pilot executor) each read their own key.
@@ -71,7 +73,10 @@ _ROLE_DEFAULT_ENGINE = {"brief-check": "codex"}
 
 # When the brief-check reviewer must fall back to a Claude reviewer (codex unavailable), it runs at
 # this tier — a tier UP from the sonnet implementer, never session-inherited. Disclosed at dispatch.
-BRIEF_CHECK_CLAUDE_FALLBACK_TIER = "opus"
+_brief_check_claude_model, _brief_check_claude_effort = model_registry.matrix_config(
+    "brief-check", "claude")
+BRIEF_CHECK_CLAUDE_FALLBACK_TIER = model_registry.dispatch_token(
+    "claude", _brief_check_claude_model)
 
 
 def _effective_model(engine, pin_role, tier, prefs):
@@ -79,7 +84,8 @@ def _effective_model(engine, pin_role, tier, prefs):
     claude → the Claude tier; codex → the concrete Codex model (pin or tier→GPT map); cursor → the
     single composer model. `pin_role` is the CODEX_PIN_ROLES key for this role (or None)."""
     if engine == "codex":
-        return resolve_engine_model("codex", pin_role, tier, prefs) or tier
+        m = resolve_engine_model("codex", pin_role, tier, prefs)
+        return m if m is not None else "(unsupported on codex: %s)" % tier
     if engine == "cursor":
         return "(cursor composer)"
     return tier  # claude (or unknown) → the Claude-family tier
@@ -117,10 +123,11 @@ def dispatch_calibration_rows(prefs, tiers):
 # effort defaults per engine. codex is effort-tiered; cursor is one composer model
 # (FR-10, exempt); claude defers to model_tier (None). Depth-aware review: the deep reviewers
 # (security/architecture — the reviewer-deep model tier) dispatch at 'review-deep' -> xhigh;
-# regular review -> high. GPT-5.6 additionally accepts max, but max is owner opt-in only;
-# GPT-5.5 remains limited to none/low/medium/high/xhigh.
-_CODEX_EFFORT = {"review": "high", "review-deep": "xhigh", "build": "high", "fix": "low",
-                 "brief-check": "high", "pilot": "medium"}
+# regular review -> high. GPT-5.6 additionally accepts max, but max is owner opt-in only.
+_CODEX_EFFORT = {
+    k: model_registry.codex_effort_for_kind(k)
+    for k in ("review", "review-deep", "build", "fix", "brief-check", "pilot")
+}
 _CURSOR_EFFORT = "composer"
 
 DEFAULT_STALL_LIMIT_SECONDS = 300
@@ -192,7 +199,10 @@ def resolve_engine_model(engine, tier_role, tier_model, prefs=None):
         pinned = pins.get(tier_role)
         if isinstance(pinned, str) and pinned in CODEX_MODELS:
             return pinned
-    return CODEX_MODEL_BY_TIER.get(tier_model, "gpt-5.6-sol")
+    try:
+        return model_registry.codex_peer_for_claude_tier(tier_model)
+    except ValueError:
+        return None  # fable/anthropic-only on codex — NO cross-family substitution
 
 
 def codex_write_probe_model(prefs):
@@ -200,8 +210,9 @@ def codex_write_probe_model(prefs):
     implementation role will actually RUN. Each write role (build, fix) contributes its explicit pin
     when set, else the sol capability floor — an UNPINNED codex write role derives a GPT-5.6 tier model
     (up to sol), so it must keep the floor in the max, never under-testing the real dispatch. A project
-    whose write roles are pinned ENTIRELY to an older family (e.g. gpt-5.5) therefore probes that
-    family (not falsely failed by a hard sol probe), while any unpinned write role clamps the probe up
+    whose write roles are pinned ENTIRELY to the weaker registered model (gpt-5.6-terra) therefore
+    probes that model (not falsely failed by a hard sol probe), while any unpinned write role clamps
+    the probe up
     to sol — preserving the original rationale (an old CLI must not falsely pass). Takes a
     load_engine_prefs() result (so pins are already validity-filtered). Pure; never raises; always
     returns a valid model in CODEX_MODEL_STRENGTH."""
@@ -217,9 +228,9 @@ def codex_write_probe_model(prefs):
 
 def valid_codex_model_effort(model, effort):
     """Whether an explicit Codex model/effort pair is dispatchable by owner policy."""
-    if model not in CODEX_MODELS or effort not in CODEX_EFFORTS:
-        return False
-    return not (model in CODEX_MAX_UNSUPPORTED_MODELS and effort == "max")
+    ok, _ = model_registry.validate_config(
+        "codex", model, effort, allow_override_only=True)
+    return ok
 
 
 def resolve_timeout(overrides=None, role_kind=None):
@@ -289,6 +300,10 @@ def load_engine_prefs(cwd, root=None):
         pins = {}
         invalid = {}
         for role, model in codex_models.items():
+            canonical = _LEGACY_CODEX_PIN_ALIAS.get(role, role)
+            if canonical != role and canonical in codex_models:
+                continue  # explicit canonical key wins over the legacy alias
+            role = canonical
             if role not in CODEX_PIN_ROLES:
                 invalid[role] = "unknown role %r rejected" % role
                 continue

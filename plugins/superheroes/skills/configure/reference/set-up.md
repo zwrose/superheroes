@@ -90,10 +90,8 @@ disclosed degradation. A decline leaves every role on its default and set-up sti
    An absent block reads as `claude` for every role **except `briefCheck`, which falls open to
    `codex`** (the cross-vendor default — a Claude brief-check is a disclosed degradation).
    When Codex is selected and no concrete model pin exists, explain the effective GPT-5.6 defaults.
-   Codex tier map: haiku=gpt-5.6-luna, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol,
-   fable=gpt-5.6-sol.
-   `gpt-5.5` remains available later as a per-role tune-level compatibility pin; `gpt-5.5` +
-   `max` is rejected, and `max` is opt-in on GPT-5.6 only.
+   Codex tier map: haiku=gpt-5.6-terra, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol.
+   `max` effort is owner opt-in only (never a default).
 
 3. **Show the build authorization — never apply it (FR-13).** If an external **implementation** engine
    is chosen, an external autonomous write needs a one-time owner grant. Show the exact snippet and where

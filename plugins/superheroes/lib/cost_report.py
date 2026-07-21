@@ -8,6 +8,14 @@ are output-only and approximate (shared-pool budget deltas); they are shown ONLY
 never fabricated — an unmeasured run reports honest dispatch counts and says tokens are unavailable.
 stdlib only; never raises on a malformed event (telemetry is best-effort).
 """
+import os
+import sys
+
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+
+import model_registry  # noqa: E402
 
 
 def _int(value):
@@ -89,7 +97,7 @@ def summarize(events):
     }
 
 
-_SHORT = (("opus", "opus"), ("sonnet", "sonnet"), ("haiku", "haiku"), ("fable", "fable"))
+_SHORT = tuple((m, m) for m in model_registry.known_claude_models())
 
 
 def _short_model(model):
