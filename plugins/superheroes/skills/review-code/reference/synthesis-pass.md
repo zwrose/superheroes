@@ -9,10 +9,11 @@ Fail-closed synthesis fold (`loop_synthesis.py`) for the native eval panel and t
 - [Cross-surface identity methodology + the interactive-doc exception (#430)](#cross-surface-identity-methodology--the-interactive-doc-exception-430)
 
 `loop_synthesis.py` is the fail-closed judgment fold that turns a synthesis judge's per-finding
-keep/drop verdicts into a deterministic survivor set, so accounting stays reproducible even
-though a model made the calls. It survives for **two** consumers: the **native eval panel**
-(`review_panel_shell.js::synthesizeRound` → `loop_synthesis.consume`) and the **doc-loop
-acceptance path** (`acceptance_rereview.py --acceptance-only`, drop/downgrade-stripped).
+keep/drop verdicts into a deterministic survivor set. It survives for **two** consumers: the
+**native eval panel** (`lib/loop_synthesis.py::consume`, reached from
+`review_panel_shell.js::synthesizeRound` — JS still exists this phase; **Python is canonical**)
+and the **doc-loop acceptance path** (`acceptance_rereview.py --acceptance-only`,
+drop/downgrade-stripped).
 
 **Standalone `review-code` no longer runs this fold.** As of #506 its keep/drop realness check
 moved to **per-finding verification** (`verification.apply_verdicts` + `merge_and_rank`); that
@@ -28,15 +29,14 @@ yourself and do not reimplement them here or in a second script. `$ROOT_DIR` is
 Two surviving surfaces run this fold over their **merged** findings, after the mechanical
 filters and **before** the verdict — so the verdict counts only the survivors:
 
-- the **native eval panel** — once per synthesized round (`review_panel_shell.js::synthesizeRound`,
-  applying the verdicts through `loop_synthesis.consume`); and
+- the **native eval panel** — once per synthesized round (`lib/loop_synthesis.py::consume`,
+  invoked from `review_panel_shell.js::synthesizeRound`); and
 - the **doc-loop acceptance path** — the deterministic acceptance-suppression fold
   (`acceptance_rereview.py --acceptance-only`, drop/downgrade-stripped).
 
-Standalone `review-code` uses per-finding verification instead (`verification-pass.md`), and the
-interactive doc reviews run no general keep/drop judge at all — see the Cross-surface section
-below. In every case the orchestrator dispatches judges and reads only small JSON files; it
-never loads the diff or the transcript.
+Standalone `review-code` uses per-finding verification instead (`verification-pass.md` via
+`round_driver.py::_fold_synthesis` → `verification.merge_and_rank`), and the interactive doc
+reviews run no general keep/drop judge at all — see the Cross-surface section below.
 
 ## The pass
 
@@ -137,7 +137,7 @@ a judge/consumer split must **stage a precomputed id and have the judge echo it 
 | Surface | Where the id is staged | Fold |
 | --- | --- | --- |
 | Standalone `review-code` | `stage_ids` assigns `v0..vN`; verifier echoes staged ids; synthesis groups survivors | `verification.apply_verdicts` + `verification.merge_and_rank` (contract: `verification-pass.md`); `loop_synthesis` remains for the native eval panel and the doc acceptance path |
-| Native code panel (`review_panel_shell.js::synthesizeRound`) | `synthesizeRound` stages `id = findingIdentity(f)` on each merged finding before the leaf; the judge echoes it verbatim | `loop_synthesis.consume` |
+| Native code panel | `review_panel_shell.js::synthesizeRound` stages ids; fold is `lib/loop_synthesis.py::consume` (canonical Python; JS caller remains this phase) |
 
 A verdict whose id matches no finding is **kept fail-closed AND disclosed loudly** in `unmatched`
 (the round record, the readout's "matched NO finding" scrutiny section, and a runtime log) — a

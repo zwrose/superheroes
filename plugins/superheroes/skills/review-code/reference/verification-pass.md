@@ -17,16 +17,18 @@ do not judge realness yourself and do not reimplement them here or in a second s
 
 ## Where it runs
 
-Inside `## Compile + Dedupe`, **every round**, after the mechanical filters (steps 1–6) and
-**before** the verdict — so the verdict counts only verified survivors. The read-only paths
-reuse the same compile, so they get it too. This stage **replaces** the old single synthesis
-keep/drop judge on the standalone review-code path. The orchestrator dispatches subagents and
-reads only small JSON files; it never loads the diff.
+On the **read-only paths**, inside `## Compile + Dedupe`, **every round**, after the
+mechanical filters (steps 1–5) and **before** the verdict. On the **auto-fix loop**, the same
+mechanical compile (steps 1–4 + 5 nit cap) and this verification stage run **inside
+`round_driver.py`** when findings are submitted — see `round-driver.md`. This stage **replaces**
+the old single synthesis keep/drop judge. The orchestrator dispatches subagents and reads only
+small JSON files; it never loads the diff.
 
 ## The verifier dispatch
 
-1. **Stage ids and cluster.** After steps 1–6, run `verification.stage_ids` on the merged
-   findings array so every finding carries a guaranteed-unique staged id (`v0`, `v1`, …).
+1. **Stage ids and cluster.** After mechanical compile (citation, diff-scope, dedupe, nit cap —
+   driver-owned on the loop path; orchestrator steps 1–5 on read-only), run `verification.stage_ids`
+   on the merged findings array so every finding carries a guaranteed-unique staged id (`v0`, `v1`, …).
    Persist the staged array to `$SESSION_DIR/round-<N>/merged.json`. Then cluster with
    `verification.cluster_findings` — one cluster per `(file, line // 100)` bucket.
 
@@ -182,6 +184,10 @@ merge is PLAUSIBLE. Findings are ranked Critical → Important → Minor → Nit
 
 Use `synthesized.findings` as `compiled.findings`. Carry `verified.drops`, `verified.downgrades`,
 and `synthesized.merges` into the round record as appropriate.
+
+**Author-justification post-filter (PR mode, after merge_and_rank).** May drop only non-CONFIRMED
+findings with a substantive prior justification (quoted in the record); CONFIRMED survives stamped
+`challenge: "author-justified"`. Full rules: `round-driver.md`.
 
 ## Evidence-or-silence + the advisory disposition
 
