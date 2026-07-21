@@ -108,13 +108,18 @@ positives or re-tier; it may never silently discard OR quietly demote a blocker.
 
 ## Cross-surface identity methodology + the interactive-doc exception (#430)
 
+As of #506, standalone `review-code`'s keep/drop realness check moved to **per-finding
+verification** (`verification.apply_verdicts`; contract in `verification-pass.md`); this
+document's `loop_synthesis` fold remains for the native eval panel and the doc-loop
+acceptance-only path.
+
 The verdict fold matches a judge verdict to a merged finding by an **exact string `id`**, not by
 asking the model to reproduce the `file::normalized-title` normalization. Every surface that runs
 a judge/consumer split must **stage a precomputed id and have the judge echo it verbatim**:
 
 | Surface | Where the id is staged | Fold |
 | --- | --- | --- |
-| Standalone `review-code` (this doc) | `merged.json` carries each finding's `id`; the judge is told "id unchanged" | `loop_synthesis.py --merged --leaf` |
+| Standalone `review-code` | `stage_ids` assigns `v0..vN`; verifier echoes staged ids; synthesis groups survivors | `verification.apply_verdicts` + `verification.merge_and_rank` (contract: `verification-pass.md`); `loop_synthesis` remains for the native eval panel and the doc acceptance path |
 | Native code panel (`review_panel_shell.js::synthesizeRound`) | `synthesizeRound` stages `id = findingIdentity(f)` on each merged finding before the leaf; the judge echoes it verbatim | `loop_synthesis.consume` |
 
 A verdict whose id matches no finding is **kept fail-closed AND disclosed loudly** in `unmatched`
