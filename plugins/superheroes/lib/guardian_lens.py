@@ -7,16 +7,20 @@ are named in PRODUCTION_LENS_MODULES and loaded (fail-closed) by load_production
 
 Optional conformance hook (production lenses MUST implement; not checked by validate_lens):
 
-  conformance_cases() -> {scenario_name: {
-      "run": <callable — ctx["run"] stand-in>,
+  conformance_cases() -> {"reported-nonzero-parsed-zero": {
+      "stdout": <raw tool output that reports findings but parses to zero>,
+      "exit": <int, default 0>,
       "config": <dict | None>,
       "prev_digest": <json | None>,
   }}
 
-For each name in REQUIRED_CONFORMANCE_SCENARIOS, the lens supplies a case whose ``run``
-stub simulates that tool outcome. The per-lens conformance harness (test_guardian_conformance)
-drives each case, classifies the collect() outcome, and fails registration when coverage or
-an honesty invariant is missing.
+The harness owns the five tool-agnostic scenarios (``missing-tool``, ``timeout``,
+``nonzero-exit``, ``findings-empty-output``, ``unparseable``) and injects its own
+``ctx["run"]`` stubs. The lens supplies only the tool-specific stdout/exit payload for
+``reported-nonzero-parsed-zero``; the harness wraps it in an ok-exit ``run`` stub. The
+per-lens conformance harness (test_guardian_conformance) drives every
+REQUIRED_CONFORMANCE_SCENARIOS name, classifies each collect() outcome, and fails
+registration when coverage or an honesty invariant is missing.
 """
 import importlib
 import os

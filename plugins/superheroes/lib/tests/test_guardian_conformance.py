@@ -7,49 +7,130 @@ import guardian_collect as gc
 import guardian_lens as gl
 import pytest
 
-_DEGRADED_SCENARIOS = frozenset((
+_HARNESS_OWNED = frozenset((
     "missing-tool",
     "timeout",
     "nonzero-exit",
     "findings-empty-output",
     "unparseable",
 ))
+_LENS_SUPPLIED = frozenset((
+    "reported-nonzero-parsed-zero",
+))
 _REPORTED_NONZERO_PARSED_ZERO = "reported-nonzero-parsed-zero"
 _PREV_DIGEST = {"v": 1, "ids": ["prior-1"]}
 _REPORTED_NONZERO_STDOUT = json.dumps({"reported_findings": 3, "findings": []})
 
 
-def _ok_run(stdout_text, exit_code=0):
+def _counting_run(body):
+    """Return (run_stub, call_counter) where call_counter[0] tracks invocations."""
+    calls = [0]
+
     def run(argv, **kwargs):
+        calls[0] += 1
+        return body(argv, **kwargs)
+
+    return run, calls
+
+
+def _harness_run_missing_tool(argv, **kwargs):
+    raise FileNotFoundError(errno.ENOENT, "conformance-tool")
+
+
+def _harness_run_timeout(argv, **kwargs):
+    raise subprocess.TimeoutExpired(cmd=argv, timeout=60)
+
+
+def _harness_run_nonzero_exit(argv, **kwargs):
+    class R(object):
+        returncode = 127
+        stdout = ""
+        stderr = ""
+    return R()
+
+
+def _harness_run_findings_empty(argv, **kwargs):
+    class R(object):
+        returncode = 0
+        stdout = ""
+        stderr = ""
+    return R()
+
+
+def _harness_run_unparseable(argv, **kwargs):
+    class R(object):
+        returncode = 0
+        stdout = "\x00not-parseable\xffgarbage{{{"
+        stderr = ""
+    return R()
+
+
+_HARNESS_RUN_BUILDERS = {
+    "missing-tool": _harness_run_missing_tool,
+    "timeout": _harness_run_timeout,
+    "nonzero-exit": _harness_run_nonzero_exit,
+    "findings-empty-output": _harness_run_findings_empty,
+    "unparseable": _harness_run_unparseable,
+}
+
+
+def _lens_supplied_run_body(stdout_text, exit_code):
+    def body(argv, **kwargs):
         class R(object):
             returncode = exit_code
             stdout = stdout_text
             stderr = ""
         return R()
-    return run
+    return body
 
 
 def assert_lens_conformance(lens, cwd="/tmp", root="/tmp"):
     """Drive REQUIRED_CONFORMANCE_SCENARIOS for ``lens``; raise AssertionError on any gap."""
+    roster = set(gl.REQUIRED_CONFORMANCE_SCENARIOS)
+    assert _HARNESS_OWNED | _LENS_SUPPLIED == roster, (
+        "harness partition must cover every REQUIRED_CONFORMANCE_SCENARIOS member")
+    assert not (_HARNESS_OWNED & _LENS_SUPPLIED), (
+        "harness-owned and lens-supplied scenario sets must not overlap")
+
     cases = lens.conformance_cases()
-    missing = set(gl.REQUIRED_CONFORMANCE_SCENARIOS) - set(cases.keys())
+    missing = _LENS_SUPPLIED - set(cases.keys())
     assert not missing, (
         "lens %r missing conformance scenarios: %s"
         % (lens.name, sorted(missing)))
 
     for scenario in gl.REQUIRED_CONFORMANCE_SCENARIOS:
-        case = cases[scenario]
+        if scenario in _HARNESS_OWNED:
+            run_stub, call_counter = _counting_run(_HARNESS_RUN_BUILDERS[scenario])
+            config = None
+            prev_digest = dict(_PREV_DIGEST)
+        elif scenario in _LENS_SUPPLIED:
+            case = cases[scenario]
+            exit_code = case.get("exit", 0)
+            run_stub, call_counter = _counting_run(
+                _lens_supplied_run_body(case["stdout"], exit_code))
+            config = case.get("config")
+            prev_digest = case.get("prev_digest")
+        else:
+            raise AssertionError(
+                "scenario %r is in neither harness-owned nor lens-supplied partition"
+                % (scenario,))
+
         ctx = {
             "cwd": cwd,
             "root": root,
-            "config": case.get("config"),
-            "run": case["run"],
-            "prevDigest": case.get("prev_digest"),
+            "config": config,
+            "run": run_stub,
+            "prevDigest": prev_digest,
         }
         out = lens.collect(ctx)
+
+        assert call_counter[0] >= 1, (
+            "lens %r scenario %r: ctx['run'] stub was never invoked"
+            % (lens.name, scenario))
+
         status, reason = gl.classify_collect(out)
 
-        if scenario in _DEGRADED_SCENARIOS:
+        if scenario in _HARNESS_OWNED:
             assert status in ("not-collected", "partial"), (
                 "lens %r scenario %r: expected not-collected or partial, got %r"
                 % (lens.name, scenario, status))
@@ -69,7 +150,7 @@ def assert_lens_conformance(lens, cwd="/tmp", root="/tmp"):
                 "collected with zero candidates" % (lens.name, scenario))
 
         if status != "collected":
-            diff_out = lens.diff(case.get("prev_digest"), out.get("digest"))
+            diff_out = lens.diff(prev_digest, out.get("digest"))
             assert diff_out.get("resolved", []) == [], (
                 "lens %r scenario %r: stopped looking must not emit resolved ids"
                 % (lens.name, scenario))
@@ -87,35 +168,9 @@ class CompliantFakeLens(object):
 
     def conformance_cases(self):
         return {
-            "missing-tool": {
-                "run": lambda argv, **kwargs: (_ for _ in ()).throw(
-                    FileNotFoundError(errno.ENOENT, "conformance-tool")),
-                "config": None,
-                "prev_digest": dict(_PREV_DIGEST),
-            },
-            "timeout": {
-                "run": lambda argv, **kwargs: (_ for _ in ()).throw(
-                    subprocess.TimeoutExpired(cmd=argv, timeout=60)),
-                "config": None,
-                "prev_digest": dict(_PREV_DIGEST),
-            },
-            "nonzero-exit": {
-                "run": _ok_run("", exit_code=2),
-                "config": None,
-                "prev_digest": dict(_PREV_DIGEST),
-            },
-            "findings-empty-output": {
-                "run": _ok_run(""),
-                "config": None,
-                "prev_digest": dict(_PREV_DIGEST),
-            },
-            "unparseable": {
-                "run": _ok_run("not-json{{{"),
-                "config": None,
-                "prev_digest": dict(_PREV_DIGEST),
-            },
             "reported-nonzero-parsed-zero": {
-                "run": _ok_run(_REPORTED_NONZERO_STDOUT),
+                "stdout": _REPORTED_NONZERO_STDOUT,
+                "exit": 0,
                 "config": None,
                 "prev_digest": dict(_PREV_DIGEST),
             },
@@ -186,13 +241,24 @@ class CompliantFakeLens(object):
         return {"lens": self.name, "degraded": True, "reason": reason}
 
 
-class MissingCoverageFake(CompliantFakeLens):
-    name = "missing-coverage"
+class AliasedScenariosFake(CompliantFakeLens):
+    """Ignores ctx['run'] — caught by invocation proof before status assertions."""
+
+    name = "aliased-scenarios"
+
+    def collect(self, ctx):
+        return {
+            "candidates": [],
+            "digest": {"v": 1, "ids": []},
+            **gc.collected(),
+        }
+
+
+class MissingReportedNonzeroFake(CompliantFakeLens):
+    name = "missing-reported-nonzero"
 
     def conformance_cases(self):
-        cases = super().conformance_cases()
-        del cases["unparseable"]
-        return cases
+        return {}
 
 
 class SilentCleanFake(CompliantFakeLens):
@@ -219,8 +285,8 @@ class ResolvedOnStopFake(CompliantFakeLens):
         return super().diff(prev_digest, cur_digest)
 
 
-class EmptyReasonFake(CompliantFakeLens):
-    name = "empty-reason"
+class CollectedOnDegradedFake(CompliantFakeLens):
+    name = "collected-on-degraded"
 
     def collect(self, ctx):
         result = gc.run_tool(["conformance-tool"], ctx=ctx, cwd=ctx.get("cwd"))
@@ -234,13 +300,33 @@ class EmptyReasonFake(CompliantFakeLens):
         return super().collect(ctx)
 
 
+class DigestOnNotCollectedFake(CompliantFakeLens):
+    name = "digest-on-not-collected"
+
+    def collect(self, ctx):
+        result = gc.run_tool(["conformance-tool"], ctx=ctx, cwd=ctx.get("cwd"))
+        if not result["ok"]:
+            return {
+                "candidates": [],
+                "digest": {"v": 9},
+                "status": "not-collected",
+                "reason": "x",
+            }
+        return super().collect(ctx)
+
+
 def test_compliant_fake_passes():
     assert_lens_conformance(CompliantFakeLens())
 
 
-def test_missing_coverage_fake_fails():
-    with pytest.raises(AssertionError, match="unparseable"):
-        assert_lens_conformance(MissingCoverageFake())
+def test_aliased_scenarios_fake_fails():
+    with pytest.raises(AssertionError, match="never invoked"):
+        assert_lens_conformance(AliasedScenariosFake())
+
+
+def test_missing_reported_nonzero_fake_fails():
+    with pytest.raises(AssertionError, match="reported-nonzero-parsed-zero"):
+        assert_lens_conformance(MissingReportedNonzeroFake())
 
 
 def test_silent_clean_fake_fails():
@@ -253,9 +339,16 @@ def test_resolved_on_stop_fake_fails():
         assert_lens_conformance(ResolvedOnStopFake())
 
 
-def test_empty_reason_fake_fails():
+def test_collected_on_degraded_fake_fails():
+    # Non-empty-reason invariant is enforced + negatively proven one layer down by
+    # guardian_lens.classify_collect (see test_guardian_lens.py).
     with pytest.raises(AssertionError, match="not-collected or partial"):
-        assert_lens_conformance(EmptyReasonFake())
+        assert_lens_conformance(CollectedOnDegradedFake())
+
+
+def test_digest_on_not_collected_fake_fails():
+    with pytest.raises(AssertionError, match="overwrite digest"):
+        assert_lens_conformance(DigestOnNotCollectedFake())
 
 
 def _conformance_lens_ids(lens):
