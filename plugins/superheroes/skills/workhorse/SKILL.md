@@ -148,7 +148,11 @@ gives you this per role.
 **Escalation is receipts-driven, not anticipation.** Implementation starts on the calibrated
 implementation engine. Leaving it requires **demonstrated fragility** — receipts from a failed round
 on the work at hand, never a pre-emptive hunch, never a precedent from a previous build, never a
-named class of work booked in advance. **The ladder comes first:** escalate **one rung up that
+named class of work booked in advance. **The trigger must be attributable to the implementer's
+execution, not the work order.** The test: would a different engine, given the same work order,
+plausibly have produced the same defect? If yes, it is an orchestrator design failure — rewrite the
+order and re-dispatch at the same rung. If no, it is demonstrated fragility and the ladder step is
+licensed. **The ladder comes first:** escalate **one rung up that
 engine's registry ladder**. Jumping **across vendors** additionally requires the **top rung of that
 ladder to have demonstrably failed on this same work** — a deliberately high bar — and is **always
 disclosed** in the PR's dispatch-provenance record, with the trigger receipts. This is **not** the
