@@ -1,6 +1,6 @@
 ## Contents
 
-review-code fail-closed synthesis pass (`loop_synthesis.py`).
+Fail-closed synthesis fold (`loop_synthesis.py`) for the native eval panel and the doc-loop acceptance path.
 
 - [Where it runs](#where-it-runs)
 - [The pass](#the-pass)
@@ -8,26 +8,43 @@ review-code fail-closed synthesis pass (`loop_synthesis.py`).
 - [Surfacing — a dropped or demoted blocker is never silently gone](#surfacing--a-dropped-or-demoted-blocker-is-never-silently-gone)
 - [Cross-surface identity methodology + the interactive-doc exception (#430)](#cross-surface-identity-methodology--the-interactive-doc-exception-430)
 
-Ports the showrunner spine's panel **synthesis** stage into standalone review-code's
-compile step. review-code's mechanical compile (dedupe/citation/diff-scope) never judged
-whether a merged finding actually *holds* — so the standalone path shipped every mechanically
-valid finding, false positives included. The spine already runs a judgment pass over its
-merged findings with fail-closed guarantees; this is the same pass, wired into the prose path.
+`loop_synthesis.py` is the fail-closed judgment fold that turns a synthesis judge's per-finding
+keep/drop verdicts into a deterministic survivor set, so accounting stays reproducible even
+though a model made the calls. It survives for **two** consumers: the **native eval panel**
+(`review_panel_shell.js::synthesizeRound` → `loop_synthesis.consume`) and the **doc-loop
+acceptance path** (`acceptance_rereview.py --acceptance-only`, drop/downgrade-stripped).
+
+**Standalone `review-code` no longer runs this fold.** As of #506 its keep/drop realness check
+moved to **per-finding verification** (`verification.apply_verdicts` + `merge_and_rank`); that
+path's contract is `verification-pass.md`, and this document does not govern it. Do not wire
+`loop_synthesis` into the standalone review-code compile.
+
 The **fail-closed rules live only in `lib/loop_synthesis.py`** — do not judge keep/drop
 yourself and do not reimplement them here or in a second script. `$ROOT_DIR` is
 `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}` and `$SYNTH_MODEL` / `$RUBRIC` are resolved in Setup.
 
 ## Where it runs
 
-Inside `## Compile + Dedupe`, **every round**, after the mechanical filters (steps 1–6) and
-**before** the verdict — so the verdict counts only the survivors. The read-only paths reuse
-the same compile, so they get it too. The orchestrator dispatches one subagent and reads only
-its small JSON file; it never loads the diff or the transcript.
+Two surviving surfaces run this fold over their **merged** findings, after the mechanical
+filters and **before** the verdict — so the verdict counts only the survivors:
+
+- the **native eval panel** — once per synthesized round (`review_panel_shell.js::synthesizeRound`,
+  applying the verdicts through `loop_synthesis.consume`); and
+- the **doc-loop acceptance path** — the deterministic acceptance-suppression fold
+  (`acceptance_rereview.py --acceptance-only`, drop/downgrade-stripped).
+
+Standalone `review-code` uses per-finding verification instead (`verification-pass.md`), and the
+interactive doc reviews run no general keep/drop judge at all — see the Cross-surface section
+below. In every case the orchestrator dispatches judges and reads only small JSON files; it
+never loads the diff or the transcript.
 
 ## The pass
 
-1. **Write the merged findings.** Persist the deduped, verified array from steps 1–6 to
-   `$SESSION_DIR/round-<N>/merged.json`. Each finding keeps its `id` (the recomputed
+The steps below are the reference shape of the fold as the eval panel runs it (the doc-loop
+acceptance path runs the same `loop_synthesis` contract through `acceptance_rereview.py`):
+
+1. **Write the merged findings.** Persist the round's deduped, verified array to the panel's
+   round working dir (e.g. `merged.json`). Each finding keeps its `id` (the recomputed
    `file::normalized-title` identity is what the consumer matches on; the agent id is a fallback).
 
 2. **Dispatch the synthesis judge** — ONE subagent, `model: $SYNTH_MODEL` (the **synthesis
@@ -108,13 +125,18 @@ positives or re-tier; it may never silently discard OR quietly demote a blocker.
 
 ## Cross-surface identity methodology + the interactive-doc exception (#430)
 
+As of #506, standalone `review-code`'s keep/drop realness check moved to **per-finding
+verification** (`verification.apply_verdicts`; contract in `verification-pass.md`); this
+document's `loop_synthesis` fold remains for the native eval panel and the doc-loop
+acceptance-only path.
+
 The verdict fold matches a judge verdict to a merged finding by an **exact string `id`**, not by
 asking the model to reproduce the `file::normalized-title` normalization. Every surface that runs
 a judge/consumer split must **stage a precomputed id and have the judge echo it verbatim**:
 
 | Surface | Where the id is staged | Fold |
 | --- | --- | --- |
-| Standalone `review-code` (this doc) | `merged.json` carries each finding's `id`; the judge is told "id unchanged" | `loop_synthesis.py --merged --leaf` |
+| Standalone `review-code` | `stage_ids` assigns `v0..vN`; verifier echoes staged ids; synthesis groups survivors | `verification.apply_verdicts` + `verification.merge_and_rank` (contract: `verification-pass.md`); `loop_synthesis` remains for the native eval panel and the doc acceptance path |
 | Native code panel (`review_panel_shell.js::synthesizeRound`) | `synthesizeRound` stages `id = findingIdentity(f)` on each merged finding before the leaf; the judge echoes it verbatim | `loop_synthesis.consume` |
 
 A verdict whose id matches no finding is **kept fail-closed AND disclosed loudly** in `unmatched`

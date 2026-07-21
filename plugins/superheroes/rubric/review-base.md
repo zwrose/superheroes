@@ -229,14 +229,16 @@ is a different thing — that is how the loop converges.)
 
 This is a ban on re-**finding**, not on **verifying**. A distinct judgment stage
 run over the *already-emitted* findings — deciding per finding whether it holds
-against the artifact (keep/drop + severity) and never searching for new ones — is
-**not** a second finder pass. It is the documented low-noise production pattern and
-is band policy: the panel **synthesis** pass (`loop_synthesis`) applies it with
-fail-closed guarantees — a model's silence never drops a finding, every drop carries
-a reason, and a dropped Critical/Important is flagged for human scrutiny. Verifying
-findings lowers false positives without hunting for more, so it does not trigger the
-finding-exhaustion failure mode above; the earlier blanket "any multi-turn review
-degrades F1" ban conflated the two, but only re-finding is forbidden.
+against the artifact and never searching for new ones — is **not** a second finder
+pass. It is the documented low-noise production pattern and is band policy: on the
+**standalone review-code path**, **per-finding verification** applies 3-state CONFIRMED/PLAUSIBLE/REFUTED
+verdicts with quoted evidence — REFUTED drops only with a reason, silence or malformed
+verdicts keep the finding as PLAUSIBLE (keep-on-uncertain), and a dropped Critical/Important
+is flagged for human scrutiny; a **synthesis** judge then merges same-root-cause survivors
+and ranks them, dropping nothing. Verifying findings lowers false positives without hunting
+for more, so it does not trigger the finding-exhaustion failure mode above; the earlier
+blanket "any multi-turn review degrades F1" ban conflated the two, but only re-finding
+is forbidden.
 
 Within its single pass, each finder still runs an ordered **Chain-of-Verification**
 on each candidate finding before emitting it, dropping (or downgrading) failures in
