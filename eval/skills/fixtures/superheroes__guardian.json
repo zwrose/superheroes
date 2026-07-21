@@ -1,0 +1,12 @@
+{
+  "should_fire": [
+    "run the guardian sweep to check repo health",
+    "do a maintainability sweep of the whole repo and show me what drifted",
+    "run a read-only repo-health sweep and report the drift since last time",
+    "run /superheroes:guardian"
+  ],
+  "should_not_fire": [
+    "review my code changes before I merge this pull request",
+    "write a spec for a new feature from these requirements"
+  ]
+}

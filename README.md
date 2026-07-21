@@ -48,12 +48,11 @@ surfaces now instead of at 2am. See
 
 ---
 
-## Two heroes run your sessions; three serve inside them
+## Two heroes run your sessions; four serve inside them
 
 **Showrunner** and **Workhorse** are the two session types you actually launch — one
 long-lived advisor per project, one disposable builder per issue. **The Architect**,
-**Review Crew**, and **Test-Pilot** serve inside those sessions. A sixth hero, the
-maintainability guardian, arrives once its job does (see [Where this is going](#where-this-is-going)).
+**Review Crew**, **Test-Pilot**, and **Guardian** serve inside those sessions.
 
 ## Showrunner — the advisor session
 
@@ -121,6 +120,22 @@ fix — fixes always route back to the session that called it in.
 | `/superheroes:test-pilot-plan` | Seed test data for a PR/branch and post a checkbox test plan to the PR. |
 | `/superheroes:test-pilot-execute` | Drive the plan in a real browser, record what it observes at each step, and post a results comment before your spot-check. |
 
+## Guardian — the maintainability guardian
+
+**Guards the existential risk for a non-technical owner: unmaintainable AI-spaghetti.** A
+periodic **read-only sweep of repo health** where deterministic tools detect and one model pass
+validates each candidate against your project's own conventions, then writes it as a plain
+consequence with a receipt. It reports **drift over a baseline** — only what changed since the
+last sweep, never re-raising settled trades — reaching you through the advisor as consequences
+to act on, not matrices to interpret. It **never edits code, never commits or pushes, never
+files issues, and never runs or owns enforcement**: it recommends; you and the advisor decide.
+The health lenses (duplication, complexity, coupling, dependency and doc freshness, dead code)
+roll out across the guardian arc; this is the sweep it runs them in.
+
+| Command | Use it to… |
+| --- | --- |
+| `/superheroes:guardian` | Run a read-only repo-health sweep → a drift report of plain-language consequences with receipts. Never edits, commits, or files. |
+
 ---
 
 ## What holds it together
@@ -179,8 +194,7 @@ changes — the same methodology runs on both.
 ## Where this is going
 
 See the [roadmap](ROADMAP.md) — now a live [GitHub Project](https://github.com/users/zwrose/projects/1) —
-for what's planned and in flight, including the maintainability guardian's eventual arrival,
-and [CONVENTIONS.md](CONVENTIONS.md) for the cross-plugin contracts.
+for what's planned and in flight, and [CONVENTIONS.md](CONVENTIONS.md) for the cross-plugin contracts.
 
 ## Contributing
 
