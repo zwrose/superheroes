@@ -103,7 +103,9 @@ def init_calibrated_repo(tmp_path, *, verify_command="true", stack_tags=None, re
         "confirmed", "2026-01-01", "2026-01-01"))
     subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
     subprocess.run(
-        ["git", "-C", str(tmp_path), "commit", "-q", "-m", "init"], check=True)
+        ["git", "-C", str(tmp_path),
+         "-c", "user.email=guardian@test.local", "-c", "user.name=guardian-test",
+         "commit", "-q", "-m", "init"], check=True)
     return str(tmp_path)
 
 
