@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Capture review-loop convergence runner output as golden JSON fixtures.
 
-Runs ``review_loop_runner.js`` for every fixture under ``fixtures/review_loop/``
+Runs ``review_loop_runner.py`` for every fixture under ``fixtures/review_loop/``
 and writes pretty-printed, key-sorted JSON to ``fixtures/review_loop/goldens/``.
 ``telemetry_failure.json`` is also captured with ``--fail-telemetry``.
 
@@ -25,7 +25,7 @@ from pathlib import Path
 EVAL_DIR = Path(__file__).resolve().parent
 ROOT = EVAL_DIR.parents[2]
 FIXTURES = EVAL_DIR / "fixtures" / "review_loop"
-RUNNER = EVAL_DIR / "review_loop_runner.js"
+RUNNER = EVAL_DIR / "review_loop_runner.py"
 DEFAULT_GOLDENS = FIXTURES / "goldens"
 FAIL_TELEMETRY_FIXTURE = "telemetry_failure.json"
 
@@ -47,7 +47,7 @@ def normalize(obj):
 
 def run_fixture(fixture_path: Path, extra_args: list[str]) -> dict:
     proc = subprocess.run(
-        ["node", str(RUNNER), str(fixture_path), *extra_args],
+        [sys.executable, str(RUNNER), str(fixture_path), *extra_args],
         cwd=ROOT,
         text=True,
         stdout=subprocess.PIPE,

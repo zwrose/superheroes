@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Python convergence harness for the review-loop round driver (#507 WO-D).
 
-Ports ``review_loop_runner.js`` onto ``round_driver.run_loop``: loads a fixture, builds
+Ports the retired JS convergence harness onto ``round_driver.run_loop``: loads a fixture, builds
 scripted seams (reviewer / synthesis / verifier / auditor / fix_step / verify_runner),
 runs the panel-leg library loop, and emits the same observational JSON shape the JS
 runner printed:

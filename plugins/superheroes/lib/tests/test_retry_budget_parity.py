@@ -1,8 +1,8 @@
-"""Cross-twin parity guard for the reviewer re-dispatch budget (#525).
+"""Cross-leg parity guard for the reviewer re-dispatch budget (#525).
 
-The reviewer re-dispatch budget is ONE, identically, across the JS shell
-(review_panel_shell.dispatchReviewer), the code-leg driver (round_driver — #507, which absorbed
-the retired code_loop_plan), and the spec-leg scheduler (spec_loop_plan). Documented intent:
+The reviewer re-dispatch budget is ONE, identically, across the code-leg driver
+(round_driver — #507, which absorbed the retired code_loop_plan) and the spec-leg scheduler
+(spec_loop_plan). Documented intent:
 #350 ("re-dispatch … once … never asks twice"). The same invariant is stated in
 skills/review-code/SKILL.md, skills/review-spec/SKILL.md, and
 skills/review-code/reference/round-scheduler.md ("re-dispatch … once … never asks twice").
@@ -10,14 +10,10 @@ skills/review-code/reference/round-scheduler.md ("re-dispatch … once … never
 import importlib.util
 import json
 import os
-import subprocess
-from pathlib import Path
 
 import pytest
 
 EXPECTED_REDISPATCHES = 1
-
-ROOT = Path(__file__).resolve().parents[4]
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -178,87 +174,6 @@ def _slp_record_until_dry(capsys, session_dir, rnd, missing_dim):
         if not last_rec.get("escalate"):
             break
     return escalations, last_rec
-
-
-# --- JS harness (mirrors test_review_panel_dispatch.py) -----------------------
-
-JS_RETRY_BUDGET_SCRIPT = r"""
-const { dispatchReviewer, _retryDiscloseSeam } = require('./plugins/superheroes/lib/review_panel_shell.js')
-
-const disclosures = []
-_retryDiscloseSeam.record = (_path, event) => { disclosures.push(event) }
-global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
-global.log = () => {}
-
-const staleReceipt = {
-  artifact: 'wrong-artifact',
-  chain: [
-    { step: 'citation', evidence: 'x' },
-    { step: 'reachability', evidence: 'x' },
-    { step: 'missing-check', evidence: 'x' },
-    { step: 'tooling', evidence: 'x' },
-  ],
-  coverageDecisionIds: ['RCD-1'],
-}
-
-let calls = 0
-global.reviewerAgent = async () => {
-  calls += 1
-  return {
-    findings: [{ title: 't', severity: 'Minor', dimension: 'code-reviewer' }],
-    confidence: 'high',
-    verificationReceipt: staleReceipt,
-  }
-}
-
-async function main() {
-  const tier = process.argv[1] || 'reviewer'
-  const roundFindings = {}
-  await dispatchReviewer('code-reviewer', {}, {}, '/tmp/run', 1, roundFindings, {
-    tier,
-    receiptArtifact: 'run-1:round-1',
-    coverageDecisions: [{ id: 'RCD-1' }],
-  })
-  process.stdout.write(JSON.stringify({
-    calls,
-    disclosures: disclosures.length,
-    status: roundFindings['code-reviewer'].status,
-    escalated: roundFindings['code-reviewer'].escalated,
-  }))
-}
-
-main().catch((e) => { console.error(e); process.exit(1) })
-"""
-
-
-def _run_js_retry_budget(tier):
-    result = subprocess.run(
-        ["node", "-e", JS_RETRY_BUDGET_SCRIPT, tier],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        timeout=30,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    return json.loads(result.stdout)
-
-
-# --- JS parity cases ----------------------------------------------------------
-
-def test_js_cheap_start_retry_budget():
-    payload = _run_js_retry_budget("reviewer")
-    assert payload["calls"] == 1 + EXPECTED_REDISPATCHES
-    assert payload["disclosures"] == EXPECTED_REDISPATCHES
-    assert payload["status"] == "missing"
-    assert payload["escalated"] is True
-
-
-def test_js_deep_start_retry_budget():
-    payload = _run_js_retry_budget("reviewer-deep")
-    assert payload["calls"] == 1 + EXPECTED_REDISPATCHES
-    assert payload["status"] == "missing"
-    assert payload["disclosures"] == EXPECTED_REDISPATCHES
-    assert payload["escalated"] is False
 
 
 # --- round_driver (code-leg) parity cases ---------------------------------------

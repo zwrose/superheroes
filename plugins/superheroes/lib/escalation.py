@@ -121,7 +121,9 @@ SAFETY_MACHINERY = (
     "verify_gate.py",         # code-leg verify gate decider
     "loop_readout.py",        # the audit-trail readout renderer
     "review_result.py",       # the durable terminal-record writer (UFR-9)
-    "review_panel_shell.js",  # the loop orchestration incl. the last-resort fail-closed sentinel
+    "round_driver.py",        # the one-entrypoint loop orchestration (#507)
+    "audits.py",              # fix-audit fold decider
+    "delta_surface.py",       # delta-surface/shard decider
 )
 
 
