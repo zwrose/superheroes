@@ -60,7 +60,7 @@ stated unlock condition is met — cite this ledger instead of re-arguing.
   (rubric amendments into the existing briefs)** — exactly the path the ban prefers. #511
   formalizes the grounding seat's brief + tier bar only; its live dispatch is gated to
   **#510**.
-- **No traceability reviewer built on spec.** Parked behind #184 + a named consumer;
+- **No traceability reviewer built on spec.** Parked behind #131 + a named consumer;
   #230's conditional-dispatch seam makes it cheap IF evidence ever calls. *(The #33
   investigation itself unlocked 2026-07-09 — the false merge-ready escape + the terminal
   intent-gap audit — and folded into the spec-fidelity instrument's discovery, still not
@@ -69,7 +69,7 @@ stated unlock condition is met — cite this ledger instead of re-arguing.
   burden per feature; it grows only if cross-vendor diversity demonstrably catches
   findings Claude misses (#131 measures — meaningful only once external review
   genuinely dispatches).
-- **No general diff-aware round-1 roster routing.** #184 holds it; #230's narrow
+- **No general diff-aware round-1 roster routing.** #131 holds it; #230's narrow
   shape-trigger is the single sanctioned exception.
 - **No calendar-based eval cadences.** Release-tied triggers (#237) superseded them;
   don't re-add "monthly runs." *(Scoped exception, owner-ratified 2026-07-08: the
@@ -116,7 +116,7 @@ stated unlock condition is met — cite this ledger instead of re-arguing.
   the store, the CHANGELOG, and the Project first.
 
 **Unlock rhythm:** the stability gate (two consecutive releases whose first real runs
-diagnose clean) re-opens the growth posture; #184's checkpoint re-opens
+diagnose clean) re-opens the growth posture; #131's checkpoint re-opens
 panel-composition; a real four-layer escape re-opens gate questions (spent once, see
 above); the enforcement-machinery entry re-opens on its own stated unlock (a
 panel-penetrating boundary escape, or guardian-sweep evidence).

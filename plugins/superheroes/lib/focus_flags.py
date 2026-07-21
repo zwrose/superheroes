@@ -40,13 +40,21 @@ _MIGRATION_NAME_RES = (
 # `diff --git a/<path> b/<path>` and `+++ b/<path>` header shapes.
 _DIFF_GIT_RE = re.compile(r"^diff --git a/(.+?) b/(.+)$")
 _PLUS_RE = re.compile(r"^\+\+\+ (?:b/)?(.+)$")
+# Hunk boundary: a `@@ ... @@` line opens the hunk body (added/removed source lines).
+_HUNK_RE = re.compile(r"^@@")
 
 
 def _changed_paths(diff_text):
     """Return the ordered, de-duplicated set of changed file paths parsed from a unified
-    diff (from `diff --git` headers and `+++ b/` headers). `/dev/null` is dropped."""
+    diff (from `diff --git` headers and `+++ b/` headers). `/dev/null` is dropped.
+
+    Tracks diff structure so a `+++ `/`--- ` line only counts as a header when NOT inside a
+    hunk body: an added source line like `+++ package-lock.json` renders as `+++ ...` and
+    must not be misread as a `+++ b/` header. A `diff --git ` line returns to header
+    context; an `@@` line enters the hunk body."""
     paths = []
     seen = set()
+    in_hunk = False
 
     def _add(p):
         p = p.strip()
@@ -61,8 +69,14 @@ def _changed_paths(diff_text):
     for line in diff_text.splitlines():
         m = _DIFF_GIT_RE.match(line)
         if m:
+            in_hunk = False  # back to header context for this file's stanza
             _add(m.group(2))  # the b/ side (post-image path)
             continue
+        if _HUNK_RE.match(line):
+            in_hunk = True  # subsequent +/- lines are hunk body, not headers
+            continue
+        if in_hunk:
+            continue  # ignore `+++`/`--- ` inside a hunk — those are source lines
         m = _PLUS_RE.match(line)
         if m:
             _add(m.group(1))

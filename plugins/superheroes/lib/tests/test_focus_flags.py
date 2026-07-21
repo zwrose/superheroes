@@ -109,6 +109,67 @@ def test_additive_only_no_false_injection_cli(tmp_path):
     assert proc.stdout.strip() == ""
 
 
+# A hunk BODY line that renders as `+++ package-lock.json` — an added source line, NOT a
+# `+++ b/` file header. The parser must not misread it as a lockfile header (false
+# injection). Regression detector for the Fix-2 in-hunk tracking bug.
+_DIFF_HUNK_BODY_LOOKS_LIKE_HEADER = """\
+diff --git a/notes.md b/notes.md
+index 111..222 100644
+--- a/notes.md
++++ b/notes.md
+@@ -1,1 +1,2 @@
+ line one
++++ package-lock.json
+"""
+
+# A pure rename: the b-side (`package-lock.json`) is named ONLY by the `diff --git` header,
+# with no `+++ b/` line for it. Exercises the b-side capture path independently.
+_DIFF_RENAME_ONLY_LOCKFILE = """\
+diff --git a/old_lock b/package-lock.json
+similarity index 100%
+rename from old_lock
+rename to package-lock.json
+"""
+
+# A migration detected ONLY by its `migrations/` path segment: the basename
+# (`007_thing.sql`) does match a name-regex, so give it one that does NOT — a bare
+# `thing.sql` under `db/migrations/` — to exercise the directory-segment branch alone.
+_DIFF_MIGRATIONS_PATH_SEGMENT = """\
+diff --git a/db/migrations/thing.sql b/db/migrations/thing.sql
+index 3333333..4444444 100644
+--- a/db/migrations/thing.sql
++++ b/db/migrations/thing.sql
+@@ -1,1 +1,1 @@
+-SELECT 1;
++SELECT 2;
+"""
+
+
+def test_hunk_body_plus_plus_line_is_not_a_false_header():
+    # Regression for Fix 2: an added source line rendering as `+++ package-lock.json` inside
+    # a hunk must NOT be misread as a lockfile header — the diff touches only notes.md, so
+    # NO flag fires. This is the detector that would have caught the false injection.
+    assert FF.compute_focus_flags(_DIFF_HUNK_BODY_LOOKS_LIKE_HEADER) == []
+
+
+def test_rename_only_b_side_captures_lockfile():
+    # The lockfile is named ONLY by the `diff --git` b-side (no `+++ b/` line for it); the
+    # lockfile flag must still fire from the b-side capture path.
+    flags = FF.compute_focus_flags(_DIFF_RENAME_ONLY_LOCKFILE)
+    assert len(flags) == 1
+    assert "supply-chain" in flags[0].lower()
+    assert "package-lock.json" in flags[0]
+
+
+def test_migration_detected_by_path_segment_branch():
+    # The basename (`thing.sql`) matches no migration name-regex; detection rides the
+    # `migrations/` path segment alone. The migration flag must still fire.
+    flags = FF.compute_focus_flags(_DIFF_MIGRATIONS_PATH_SEGMENT)
+    assert len(flags) == 1
+    assert "rollback" in flags[0].lower()
+    assert "db/migrations/thing.sql" in flags[0]
+
+
 def test_named_consumer_drift_guard():
     # §13 named-consumer guard: the review-code specialist dispatch (auto-fix-loop.md) is
     # the wired consumer. Read it fail-closed — if the wiring prose drops the literal
