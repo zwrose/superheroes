@@ -110,7 +110,7 @@ def test_safety_machinery_set_members_are_pinned():
         # shared review-and-fix loop (#104): deciders, durable record, and the orchestration shell
         "panel_tally.py", "loop_synthesis.py", "verification.py", "verify_gate.py",
         "loop_readout.py",
-        "review_result.py", "review_panel_shell.js",
+        "review_result.py", "round_driver.py", "audits.py", "delta_surface.py",
     }
 
 def _band_file(tmp_path, sub, name):

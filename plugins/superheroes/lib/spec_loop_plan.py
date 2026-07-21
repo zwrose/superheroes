@@ -12,7 +12,7 @@ It deliberately owns NO policy of its own:
   - the continue/exit/halt action comes from `loop_state.decide` (imported, same inputs);
   - the per-dimension run/skip/tier schedule comes from `review_round_policy.plan_round`,
     the parity-locked Python twin of the spine's scheduler — ONE policy implementation,
-    shared with `review_panel_shell.js`, so the prose path cannot drift from the spine
+    shared with `round_driver.py`, so the prose path cannot drift from the spine
     (#145 paid for that drift once already).
 
 What it adds is the evidence plumbing the prose path was missing:

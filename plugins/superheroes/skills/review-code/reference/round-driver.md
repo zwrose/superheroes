@@ -130,8 +130,7 @@ Pinned by `test_round_driver.py` (ported from the retired `test_code_loop_plan.p
 
 ## Port note
 
-Layer 1 (`run_loop`) ports `review_panel_shell.js::reviewPanel` control-flow with injectable seams;
-Layer 2 (`next`/`submit`) is the state machine between orchestrator dispatches. The JS file still
-exists this phase — **Python is canonical** for review-code. Parity is locked by the goldens in
-`test_round_driver.py` and the PARITY receipt in `test_retry_budget_parity.py`. When the port is
-complete, delete the JS duplicate — until then, treat `round_driver.py` as the contract of record.
+Layer 1 (`run_loop`) is the one-entrypoint loop orchestration with injectable seams;
+Layer 2 (`next`/`submit`) is the state machine between orchestrator dispatches. Parity is locked
+by the goldens in `test_round_driver.py` and the PARITY receipt in `test_retry_budget_parity.py`.
+Treat `round_driver.py` as the contract of record.

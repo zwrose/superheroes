@@ -42,7 +42,9 @@
     {"path": "plugins/superheroes/lib/verify_gate.py", "allow": false},
     {"path": "plugins/superheroes/lib/loop_readout.py", "allow": false},
     {"path": "plugins/superheroes/lib/review_result.py", "allow": false},
-    {"path": "plugins/superheroes/lib/review_panel_shell.js", "allow": false},
+    {"path": "plugins/superheroes/lib/round_driver.py", "allow": false},
+    {"path": "plugins/superheroes/lib/audits.py", "allow": false},
+    {"path": "plugins/superheroes/lib/delta_surface.py", "allow": false},
     {"path": "plugins/superheroes/lib/decisions.py", "allow": true},
     {"path": "their_app/loop_state.py", "allow": true}
   ]
