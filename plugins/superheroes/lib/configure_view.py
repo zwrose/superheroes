@@ -56,9 +56,12 @@ def _collect_guardian(cwd, root):
     ledger = guardian_store.read_ledger(cwd, root)
     report_card_notes = []
     card = guardian_ledger.report_card(
-        ledger.get("records"), config.get("reportCard"), notes_out=report_card_notes)
+        ledger.get("records"), config.get("reportCard"), notes_out=report_card_notes,
+        config_status=config.get("configStatus"))
     if ledger.get("status") not in ("ok", "absent") and ledger.get("note"):
         report_card_notes.append(ledger["note"])
+    for note in config.get("configNotes") or []:
+        report_card_notes.append(note)
     snapshot = guardian_store.read_snapshot(cwd, root)
     trend = guardian_vitals.read_trend(cwd, root=root, limit=1)
     last_date = None
@@ -70,10 +73,14 @@ def _collect_guardian(cwd, root):
         "coverage": config.get("coverage") or [],
         "card": card,
         "reportCardNotes": report_card_notes,
+        "configStatus": config.get("configStatus"),
         "ledgerStatus": ledger.get("status"),
         "ledgerNote": ledger.get("note"),
         "lastSweptSha": snapshot.get("sweptSha") if snapshot else None,
         "lastSweepDate": last_date,
+        "trendStatus": trend.get("status"),
+        "trendNote": trend.get("note"),
+        "trendMalformed": trend.get("malformed"),
     }
 
 
@@ -122,7 +129,10 @@ def _guardian_lines(guardian):
         below_floor.append(lens)
 
     ledger_status = guardian.get("ledgerStatus")
-    bench_authoritative = ledger_status in ("ok", "absent")
+    config_status = guardian.get("configStatus")
+    bench_authoritative = (
+        ledger_status in ("ok", "absent")
+        and config_status in (None, "healthy"))
 
     if not bench_authoritative:
         if ledger_status == "partial":
@@ -134,6 +144,9 @@ def _guardian_lines(guardian):
                 lines.append("benched lenses: unknown — ledger unreadable (%s)" % note)
             else:
                 lines.append("benched lenses: uncertain — ledger unreadable (%s)" % note)
+        elif config_status == "degraded":
+            note = "; ".join(guardian.get("reportCardNotes") or []) or "guardian-config degraded"
+            lines.append("benched lenses: uncertain — guardian-config is degraded (%s)" % note)
         else:
             note = guardian.get("ledgerNote") or (ledger_status or "unknown")
             lines.append("benched lenses: uncertain — ledger status %s (%s)"
@@ -152,6 +165,17 @@ def _guardian_lines(guardian):
 
     for lens in below_floor:
         lines.append("%s — floor not met" % lens)
+
+    trend_status = guardian.get("trendStatus")
+    trend_malformed = guardian.get("trendMalformed")
+    trend_not_clean = (
+        trend_status not in (None, "ok", "absent")
+        or (isinstance(trend_malformed, int) and trend_malformed > 0))
+    if trend_not_clean:
+        note = guardian.get("trendNote") or trend_status or "damaged"
+        if isinstance(trend_malformed, int) and trend_malformed > 0:
+            note = "%s (%d malformed line(s))" % (note, trend_malformed)
+        lines.append("vitals history: unreadable (%s)" % note)
 
     sha = guardian.get("lastSweptSha")
     if sha:

@@ -343,6 +343,11 @@ def _is_trade_disposition(rec):
     return rec.get("disposition") in ("accepted", "declined")
 
 
+def _is_settled_non_trade(rec):
+    """Terminal settled dispositions that are never re-derived (ordinary drift)."""
+    return rec.get("disposition") == "triaged-out"
+
+
 _ISSUE_NUM_RE = re.compile(r"#?(\d+)")
 _ISSUE_TERMINAL = frozenset(("closed", "merged"))
 
@@ -606,6 +611,13 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
                         "line": "filed as %s, verification pending" % issue,
                     })
                     continue
+                if _is_settled_non_trade(rec) and not is_red:
+                    killed_by_ledger.append({
+                        "id": cid,
+                        "lens": lens.name,
+                        "disposition": rec.get("disposition"),
+                    })
+                    continue
                 if _is_trade_disposition(rec) and not is_red:
                     if guardian_ledger.materially_worsened(cand, rec):
                         pass  # surface — materially worsened
@@ -692,12 +704,15 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
             verify_result=verify_result, budget_seconds=budget)
         cur_vitals = vitals_out.get("vitals") or {}
         prev_vitals = (prev or {}).get("vitals") or {}
+        threshold_notes = []
         vitals_delta = {
             "delta": guardian_vitals.delta(prev_vitals, cur_vitals),
             "crossings": guardian_vitals.crossings(
-                prev_vitals, cur_vitals, thresholds=config.get("thresholds")),
+                prev_vitals, cur_vitals, thresholds=config.get("thresholds"),
+                notes_out=threshold_notes),
             "notCollected": vitals_out.get("notCollected") or {},
             "sources": vitals_out.get("sources") or {},
+            "thresholdNotes": threshold_notes,
         }
     else:
         # Carry prior vitals in the snapshot so re-enabling has a baseline, but mark
@@ -840,11 +855,13 @@ def _ledger_fully_readable(cwd, root, ledger):
 
     path = guardian_store.ledger_path(cwd, root)
     try:
-        with open(path, encoding="utf-8") as fh:
-            text = fh.read()
-    except OSError:
+        with open(path, "rb") as fh:
+            text = fh.read().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
         return False, "ledger-unreadable"
     block, err = guardian_store._parse_ledger_block(text)
+    if err == "ambiguous":
+        return False, "ledger-ambiguous"
     if err or not isinstance(block, dict):
         return False, "ledger-malformed"
     ver = block.get("schemaVersion")
@@ -914,11 +931,10 @@ def finalize(cwd, bundle, dispositions, root=None):
     Filed-item closure is computed BEFORE the report is rendered so the durable report
     describes the ledger state this sweep actually advances to. Order inside the lock:
     report → ledger → vitals trend → snapshot last. The snapshot is the commit marker:
-    if the process exits before it lands, a retry still sees the prior identity and can
-    finish the durable writes. A ledger/vitals failure after the report is reported, never
-    silently swallowed; neither is fatal to an already-written report, but the snapshot
-    is still written so the baseline advances only after durable-record attempts complete
-    (success or explicit failure receipt)."""
+    it is written only after required durable ledger/vitals writes succeed. An intentional
+    skip (opaque ledger, vitals not collected) does not block the baseline; a failed
+    attempted write (race, I/O error, invalid records) returns top-level failure and
+    leaves `latest.json` untouched so the same bundle can retry."""
     ok, errors = validate_dispositions(bundle, dispositions)
     if not ok:
         return {"ok": False, "reason": "invalid-dispositions", "errors": errors}
@@ -998,7 +1014,8 @@ def finalize(cwd, bundle, dispositions, root=None):
                     guardian_ledger._read_sweeps(guardian_store.ledger_path(cwd, root)),
                     sweep)
                 ledger_write = guardian_ledger.write_unlocked(
-                    cwd, new_records, root=root, report_card=card, sweeps=sweeps)
+                    cwd, new_records, root=root, report_card=card, sweeps=sweeps,
+                    expected_fence_identity=ledger.get("fenceIdentity"))
                 ledger_write = dict(ledger_write)
                 ledger_write["advances"] = advances
         except Exception as exc:
@@ -1015,6 +1032,24 @@ def finalize(cwd, bundle, dispositions, root=None):
                     swept_sha=bundle.get("sweptSha"), root=root)
         except Exception as exc:
             vitals_append = {"ok": False, "reason": str(exc)}
+
+        # Intentional skips (opaque ledger, vitals disabled) do not block the baseline.
+        # A failed attempted durable write must not advance latest.json.
+        def _blocks_commit(result):
+            if result.get("ok"):
+                return False
+            if result.get("skipped"):
+                return False
+            return True
+
+        if _blocks_commit(ledger_write) or _blocks_commit(vitals_append):
+            return {
+                "ok": False,
+                "reason": "durable-write-failed",
+                "reportPath": rp,
+                "ledgerWrite": ledger_write,
+                "vitalsAppend": vitals_append,
+            }
 
         snap_path = guardian_store.snapshot_path(cwd, root)
         store_core.atomic_write(

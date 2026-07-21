@@ -207,6 +207,38 @@ def test_render_guardian_partial_ledger_does_not_claim_benched_lenses(tmp_path):
     assert "benched lenses:\n" not in screen
 
 
+def test_render_guardian_malformed_config_does_not_claim_benched_lenses(tmp_path):
+    repo, root = _seed_guardian_view_repo(
+        tmp_path,
+        ledger_records=benched_fixture_ledger(),
+        snapshot={"schemaVersion": 1, "sweptSha": "abc1234", "vitals": {}, "lenses": {}},
+    )
+    layer = tmp_path / ".claude" / "superheroes" / "guardian.md"
+    layer.write_text(
+        "<!-- guardian: schemaVersion=1 status=confirmed -->\n\n"
+        "```json guardian-config\n{ not json\n```\n")
+    screen = cv.render(repo, root=root)
+    assert "## Guardian" in screen
+    assert "benched lenses: uncertain — guardian-config is degraded" in screen
+    assert "fixture is benched" not in screen
+    assert "benched lenses:\n" not in screen
+    assert "malformed" in screen
+
+
+def test_render_guardian_surfaces_vitals_trend_failure(tmp_path):
+    repo, root = _seed_guardian_view_repo(
+        tmp_path,
+        snapshot={"schemaVersion": 1, "sweptSha": "abc1234", "vitals": {}, "lenses": {}},
+        vitals_trend='{"schemaVersion": 1, "file": "guardian-vitals", "created": "2026-07-20"}\n{bad\n',
+    )
+    screen = cv.render(repo, root=root)
+    assert "## Guardian" in screen
+    assert "vitals history: unreadable" in screen
+    assert "malformed line" in screen
+    assert "last sweep: abc1234" in screen
+    assert "(2026-07-20)" not in screen
+
+
 def test_render_guardian_lens_below_floor_not_passing(tmp_path):
     records = [{
         "id": "dup:tool:loc-%d" % i,

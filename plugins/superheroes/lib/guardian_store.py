@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -125,15 +126,59 @@ def write_snapshot_cas(cwd, next_snapshot, expected_prev_identity, root=None):
         file_lock.release(lock_path)
 
 
+def atomic_write_bytes(path, data, tmp_prefix=".guardian-store."):
+    """Binary atomic write — round-trips bytes exactly (no newline translation)."""
+    if not isinstance(data, (bytes, bytearray)):
+        raise TypeError("atomic_write_bytes requires bytes")
+    d = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=tmp_prefix, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def find_ledger_fences(text):
+    """All guardian-ledger fenced-block matches in document order."""
+    if not text:
+        return []
+    return list(_LEDGER_BLOCK.finditer(text))
+
+
+def ledger_fence_identity(text):
+    """Content-hash identity of the sole guardian-ledger fence. None if absent/ambiguous.
+
+    Mirrors `snapshot_identity`: callers capture this at the read that produced the
+    records, then pass it to the writer for compare-and-swap."""
+    matches = find_ledger_fences(text)
+    if len(matches) != 1:
+        return None
+    return store_core.short_hash(matches[0].group(0))
+
+
 def _parse_ledger_block(text):
-    """Extract the guardian-ledger fenced JSON block from ledger.md text."""
+    """Extract the guardian-ledger fenced JSON block from ledger.md text.
+
+    Exactly one fence is required. Zero → no-block/empty; more than one → ambiguous.
+    Never silently prefers the first of several competing blocks."""
     if not text:
         return None, "empty"
-    m = _LEDGER_BLOCK.search(text)
-    if not m:
+    matches = find_ledger_fences(text)
+    if not matches:
         return None, "no-block"
+    if len(matches) > 1:
+        return None, "ambiguous"
     try:
-        return json.loads(m.group(1)), None
+        return json.loads(matches[0].group(1)), None
     except ValueError:
         return None, "bad-json"
 
@@ -160,8 +205,8 @@ def read_ledger(cwd, root=None):
 
     path = ledger_path(cwd, root)
     try:
-        with open(path, encoding="utf-8") as fh:
-            text = fh.read()
+        with open(path, "rb") as fh:
+            raw = fh.read()
     except FileNotFoundError:
         # Only a genuinely non-existent path is absent. If the path still
         # lexists (permissions race, dangling weirdness), treat as unreadable.
@@ -171,23 +216,49 @@ def read_ledger(cwd, root=None):
                 "byId": {},
                 "status": "unreadable",
                 "note": "ledger path exists but could not be read (FileNotFoundError)",
+                "fenceIdentity": None,
             }
-        return {"records": [], "byId": {}, "status": "absent", "note": None}
+        return {
+            "records": [], "byId": {}, "status": "absent", "note": None,
+            "fenceIdentity": None,
+        }
     except OSError as exc:
         return {
             "records": [],
             "byId": {},
             "status": "unreadable",
             "note": "ledger exists but could not be read (%s)" % type(exc).__name__,
+            "fenceIdentity": None,
         }
 
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return {
+            "records": [],
+            "byId": {},
+            "status": "unreadable",
+            "note": "ledger exists but is not valid UTF-8",
+            "fenceIdentity": None,
+        }
+
+    fence_identity = ledger_fence_identity(text)
     block, err = _parse_ledger_block(text)
+    if err == "ambiguous":
+        return {
+            "records": [],
+            "byId": {},
+            "status": "malformed",
+            "note": "ledger has multiple %s fenced blocks (ambiguous)" % LEDGER_FENCE,
+            "fenceIdentity": None,
+        }
     if err == "bad-json":
         return {
             "records": [],
             "byId": {},
             "status": "malformed",
             "note": "ledger JSON block is malformed",
+            "fenceIdentity": fence_identity,
         }
     if err in ("empty", "no-block"):
         return {
@@ -195,6 +266,7 @@ def read_ledger(cwd, root=None):
             "byId": {},
             "status": "malformed",
             "note": "ledger has no %s fenced block" % LEDGER_FENCE,
+            "fenceIdentity": None,
         }
 
     # Hand-edited ledgers can parse to a list/string/number — never .get on those.
@@ -204,6 +276,7 @@ def read_ledger(cwd, root=None):
             "byId": {},
             "status": "malformed",
             "note": "ledger block is not an object (got %s)" % type(block).__name__,
+            "fenceIdentity": fence_identity,
         }
 
     ver = block.get("schemaVersion")
@@ -217,6 +290,7 @@ def read_ledger(cwd, root=None):
             "status": "newer",
             "note": "ledger schemaVersion=%s is newer than %s"
                      % (ver, LEDGER_SCHEMA_VERSION),
+            "fenceIdentity": fence_identity,
         }
     if not (isinstance(ver, int) and not isinstance(ver, bool)
             and ver == LEDGER_SCHEMA_VERSION):
@@ -226,6 +300,7 @@ def read_ledger(cwd, root=None):
             "status": "malformed",
             "note": "ledger schemaVersion must be int %s (got %r)"
                      % (LEDGER_SCHEMA_VERSION, ver),
+            "fenceIdentity": fence_identity,
         }
 
     raw_records = block.get("records")
@@ -235,6 +310,7 @@ def read_ledger(cwd, root=None):
             "byId": {},
             "status": "malformed",
             "note": "ledger records is not a list",
+            "fenceIdentity": fence_identity,
         }
 
     if "sweeps" in block and not isinstance(block.get("sweeps"), list):
@@ -243,6 +319,7 @@ def read_ledger(cwd, root=None):
             "byId": {},
             "status": "malformed",
             "note": "ledger sweeps is not a list",
+            "fenceIdentity": fence_identity,
         }
 
     records = []
@@ -308,6 +385,7 @@ def read_ledger(cwd, root=None):
         "byId": by_id,
         "status": status,
         "note": "; ".join(notes) if notes else None,
+        "fenceIdentity": fence_identity,
     }
 
 

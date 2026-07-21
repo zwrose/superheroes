@@ -29,7 +29,7 @@ The vital set, with units:
 | `todoCount` | TODO/FIXME *occurrences* (not files) in git-tracked text files |
 | `majorsBehind` | count of dependencies at least one major version behind |
 | `vulnCount` | count of reported vulnerabilities |
-| `suiteRuntimeSeconds` | seconds of wall clock for the verify command |
+| `suiteRuntimeSeconds` | seconds for the verify command — pytest summary duration when parseable, else wall clock |
 | `suiteTestCount` | tests that ran (passed+failed+errors+skipped+xfailed+xpassed) |
 | `suiteSkipped` | tests reported as skipped |
 
@@ -40,6 +40,7 @@ first line is a JSON provenance object (`{"schemaVersion": 1, "file": "guardian-
 """
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -132,10 +133,10 @@ def not_collected(reason):
 
 
 def _is_number(value):
-    """True for a real int/float (bools and NaN are not measurements)."""
+    """True for a real int/float (bools, NaN, and infinities are not measurements)."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return False
-    return value == value  # NaN != NaN
+    return math.isfinite(float(value))
 
 
 def _git(cwd, args, run=None):
@@ -338,9 +339,13 @@ def _collect_suite_vitals(verify_result, budget_seconds):
             vitals[name] = parsed[name]
             sources[name] = "verify command run this sweep (test-summary line)"
 
+    # Prefer the pytest summary's own duration when parseable (excludes harness/startup
+    # noise); fall back to the verify command's wall clock only when the summary has no
+    # `in Ns` token. `sources` records which path was taken.
     if parsed["suiteRuntimeSeconds"] is not None:
         vitals["suiteRuntimeSeconds"] = parsed["suiteRuntimeSeconds"]
-        sources["suiteRuntimeSeconds"] = "verify command run this sweep (test-summary line)"
+        sources["suiteRuntimeSeconds"] = (
+            "verify command run this sweep (test-summary line)")
     elif _is_number(verify_result.get("durationSeconds")):
         vitals["suiteRuntimeSeconds"] = verify_result["durationSeconds"]
         sources["suiteRuntimeSeconds"] = "verify command run this sweep (wall clock)"
@@ -468,18 +473,47 @@ def _crosses(kind, spec, prev, change):
     return False
 
 
-def crossings(prev_vitals, cur_vitals, thresholds=None):
+def _valid_threshold_override(spec):
+    """True when an override is a complete, usable per-kind threshold."""
+    if not isinstance(spec, dict):
+        return False
+    kind = spec.get("kind")
+    if kind not in THRESHOLD_KINDS:
+        return False
+    if kind in ("none", "any-increase"):
+        return True
+    if kind in ("relative", "absolute"):
+        limit = spec.get("limit")
+        if not _is_number(limit):
+            return False
+        return float(limit) >= 0
+    return False
+
+
+def crossings(prev_vitals, cur_vitals, thresholds=None, *, notes_out=None):
     """Threshold crossings between two sweeps. Defaults come from DRIFT_THRESHOLDS;
     `thresholds` (the guardian.md config layer) overrides entry by entry.
 
     Only worsening movement crosses; an improvement lands in `delta` and nothing else. A
     vital missing from either side — first sweep, or not collected — never crosses, which
-    is what keeps the first sweep quiet."""
+    is what keeps the first sweep quiet.
+
+    Invalid overrides are ignored: the authoritative default is retained and a note is
+    appended to `notes_out` when provided. A typo must never silently disable detection."""
     merged = dict(DRIFT_THRESHOLDS)
     if isinstance(thresholds, dict):
         for key, spec in thresholds.items():
-            if isinstance(spec, dict) and spec.get("kind") in THRESHOLD_KINDS:
+            if not isinstance(spec, dict):
+                continue
+            if _valid_threshold_override(spec):
                 merged[key] = spec
+                continue
+            note = (
+                "invalid threshold override for %r retained default "
+                "(override must be a complete per-kind spec)" % (key,)
+            )
+            if notes_out is not None:
+                notes_out.append(note)
     moves = delta(prev_vitals, cur_vitals)
     out = []
     for name in VITALS:

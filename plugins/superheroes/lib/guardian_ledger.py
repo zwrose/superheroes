@@ -11,14 +11,28 @@ A settled finding is never re-derived. Nothing ever leaves the ledger; states on
 won't-fixes carry their why. The file is hand-editable markdown that outlives the plugin.
 
 **Writer preserve rule.** The writer must never rewrite the ledger file as a whole.
-It may replace **only** the fenced `json guardian-ledger` block, byte-for-byte
-preserving everything outside it (provenance line, preamble, report card, owner prose,
-comments, trailing content). Unknown top-level JSON keys inside the fence are preserved
-by merging updates into the parsed object. Unknown per-record fields are likewise merged
-by id. When the file does not exist, the full template may be authored once. When the
-fenced block cannot be located, the writer does not write at all. For roster-like fields
-(`sweeps[]` today), `None` means *preserve whatever is already on disk*; an explicit list
-is the roster to write. Passing `None` is never an erase.
+The file has exactly **two machine-owned regions**; everything else is the owner's and
+must remain byte-identical across updates:
+
+1. the fenced `json guardian-ledger` block
+2. the delimited report-card region (`<!-- guardian-report-card:begin … -->` …
+   `<!-- guardian-report-card:end -->`)
+
+Unknown top-level JSON keys inside the fence are preserved by merging updates into the
+parsed object. Unknown per-record fields are likewise merged by id. Ledger records are
+never deleted: ids present on disk but absent from an incoming roster are retained.
+When the file does not exist, the full template may be authored once. When the fenced
+block cannot be located, or more than one fence is present (ambiguous), the writer does
+not write at all. When the report-card region is absent, it is inserted immediately
+before the fence (the defined place); content outside the two machine regions stays
+untouched. For roster-like fields (`sweeps[]` today), `None` means *preserve whatever is
+already on disk*; an explicit list is the roster to write. Passing `None` is never an
+erase.
+
+**Compare-and-swap.** Like `guardian_store.write_snapshot_cas`, the writer accepts an
+`expected_fence_identity` captured at the read that produced the records. Immediately
+before writing it re-reads the fence and refuses with `reason: raced` (writes nothing)
+when the on-disk fence no longer matches — so a concurrent owner edit is never deleted.
 
 **Schema extension — `adjudicatedIn`.** Beyond the ratified §5 record shape
 (`LEDGER_RECORD_FIELDS`), a record carries `adjudicatedIn`: the **sweep id** it was first
@@ -99,6 +113,13 @@ _TRAILING_LINES_RE = re.compile(r":\d+(?:-\d+)?$")
 _WS_RE = re.compile(r"\s+")
 _LOCATION_JOIN = "<->"
 _CREATED_RE = re.compile(r"created=(\S+)")
+REPORT_CARD_BEGIN = "<!-- guardian-report-card:begin"
+REPORT_CARD_END = "<!-- guardian-report-card:end -->"
+_REPORT_CARD_REGION = re.compile(
+    r"<!--\s*guardian-report-card:begin(?:\s+updated=\S+)?\s*-->"
+    r".*?"
+    r"<!--\s*guardian-report-card:end\s*-->",
+    re.DOTALL)
 
 
 def _today():
@@ -244,7 +265,10 @@ def normalize_id(finding_id):
 def match(finding_id, ledger_by_id):
     """Find the ledger record for a candidate id → (record_or_None, note_or_None).
 
-    Exact id first, then normalized equality (see `normalize_id` for the tradeoff).
+    Normalized collision is checked before exact id. Exactness must never silence an
+    ambiguous line-drift group: if more than one ledger record shares the normalized
+    identity, the finding SURFACES with a collision note even when one raw id matches
+    exactly (see `normalize_id` for the tradeoff).
 
     COLLISION RULE — ambiguity fails OPEN. If the normalized form matches more than one
     ledger record, the identity is ambiguous: no record is returned (so the finding
@@ -255,26 +279,24 @@ def match(finding_id, ledger_by_id):
     empty or None mapping therefore matches nothing, and nothing is suppressed."""
     if not ledger_by_id:
         return (None, None)
-    if isinstance(finding_id, str) and finding_id in ledger_by_id:
-        return (ledger_by_id[finding_id], None)
 
-    target = normalize_id(finding_id)
-    if not target:
-        return (None, None)
-
+    target = normalize_id(finding_id) if isinstance(finding_id, str) else None
     hits = []
-    for rid, rec in ledger_by_id.items():
-        if not isinstance(rid, str):
-            continue
-        if normalize_id(rid) == target:
-            hits.append((rid, rec))
-    if not hits:
-        return (None, None)
+    if target:
+        for rid, rec in ledger_by_id.items():
+            if not isinstance(rid, str):
+                continue
+            if normalize_id(rid) == target:
+                hits.append((rid, rec))
     if len(hits) > 1:
         return (None, "ambiguous identity %r matches %d ledger records: %s — surfacing "
                       "rather than suppressing"
                       % (target, len(hits), ", ".join(sorted(rid for rid, _ in hits))))
-    return (hits[0][1], None)
+    if isinstance(finding_id, str) and finding_id in ledger_by_id:
+        return (ledger_by_id[finding_id], None)
+    if len(hits) == 1:
+        return (hits[0][1], None)
+    return (None, None)
 
 
 # ------------------------------------------------------------- material worsening
@@ -809,7 +831,7 @@ def _status_word(entry):
 
 
 def render(records, *, report_card=None, sweeps=None, now=None, created=None):
-    """The ledger file text: provenance line, preamble, report card, fenced JSON block.
+    """The ledger file text: provenance line, preamble, report card region, fenced JSON.
 
     Deterministic — the same inputs and the same `now` render byte-identical output, so a
     retried write is safe. `report_card` defaults to the card computed from `records`;
@@ -833,7 +855,23 @@ def render(records, *, report_card=None, sweeps=None, now=None, created=None):
         "",
     ]
     lines.extend(_PREAMBLE.rstrip("\n").splitlines())
-    lines.extend(["", "## Report card", ""])
+    lines.extend(["", _render_report_card_region(card, now=day), ""])
+
+    lines.append("```json %s" % guardian_store.LEDGER_FENCE)
+    lines.extend(json.dumps(block, indent=2).splitlines())
+    lines.append("```")
+    return "\n".join(lines) + "\n"
+
+
+def _render_report_card_region(card, *, now=None):
+    """Machine-owned report-card region body (including begin/end markers)."""
+    day = now or _today()
+    lines = [
+        "%s updated=%s -->" % (REPORT_CARD_BEGIN, day),
+        "",
+        "## Report card",
+        "",
+    ]
     if card:
         lines.extend(_CARD_HEADER.splitlines())
         for lens in sorted(card):
@@ -851,18 +889,15 @@ def render(records, *, report_card=None, sweeps=None, now=None, created=None):
             lines.append("")
     else:
         lines.extend(["_No findings adjudicated yet._", ""])
-
-    lines.append("```json %s" % guardian_store.LEDGER_FENCE)
-    lines.extend(json.dumps(block, indent=2).splitlines())
-    lines.append("```")
-    return "\n".join(lines) + "\n"
+    lines.append(REPORT_CARD_END)
+    return "\n".join(lines)
 
 
 def _read_created(path):
     """The `created=` date already on disk, so a rewrite does not reset it."""
     try:
-        with open(path, encoding="utf-8") as fh:
-            first = fh.readline()
+        with open(path, "rb") as fh:
+            first = fh.readline().decode("utf-8", errors="replace")
     except OSError:
         return None
     if guardian_store.LEDGER_FENCE not in first:
@@ -878,9 +913,9 @@ def _read_sweeps(path):
     and reads the fenced JSON block directly. Absent/malformed → empty list (nothing to
     preserve)."""
     try:
-        with open(path, encoding="utf-8") as fh:
-            text = fh.read()
-    except OSError:
+        with open(path, "rb") as fh:
+            text = fh.read().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
         return []
     block, err = guardian_store._parse_ledger_block(text)
     if err or not isinstance(block, dict):
@@ -903,34 +938,78 @@ def _merge_record_preserving_unknown(old, new):
 
 
 def _merge_records_preserving_unknown(existing_records, new_records):
+    """Merge by id; never drop a disk-only id (ledger records are never deleted)."""
     by_old = {}
     if isinstance(existing_records, list):
         for rec in existing_records:
             if isinstance(rec, dict) and isinstance(rec.get("id"), str):
                 by_old[rec["id"]] = rec
     out = []
+    seen = set()
     for rec in new_records or []:
         if not isinstance(rec, dict):
             continue
         rid = rec.get("id")
         old = by_old.get(rid) if isinstance(rid, str) else None
         out.append(_merge_record_preserving_unknown(old, rec))
+        if isinstance(rid, str):
+            seen.add(rid)
+    # Roster lacking a disk id is stale input, not an instruction to remove it.
+    if isinstance(existing_records, list):
+        for rec in existing_records:
+            if not isinstance(rec, dict):
+                continue
+            rid = rec.get("id")
+            if isinstance(rid, str) and rid not in seen:
+                out.append(dict(rec))
+                seen.add(rid)
     return out
 
 
-def _splice_ledger_fence(text, block_obj):
-    """Replace only the guardian-ledger fenced region; preserve all surrounding bytes.
+def _splice_machine_regions(text, block_obj, card_region):
+    """Replace the two machine-owned regions; preserve all other bytes.
 
-    Returns None when the fence cannot be located — callers must not write."""
-    m = guardian_store._LEDGER_BLOCK.search(text)
-    if not m:
-        return None
+    Returns (new_text, None) on success, or (None, reason) when the fence is missing,
+    ambiguous, or report-card markers are ambiguous. When the report-card region is
+    absent, it is inserted immediately before the sole fence."""
+    fences = guardian_store.find_ledger_fences(text)
+    if not fences:
+        return None, "no-fence"
+    if len(fences) > 1:
+        return None, "ambiguous"
+    cards = list(_REPORT_CARD_REGION.finditer(text))
+    if len(cards) > 1:
+        return None, "ambiguous-report-card"
+
+    fence = fences[0]
     body = json.dumps(block_obj, indent=2)
-    replacement = "```json %s\n%s\n```" % (guardian_store.LEDGER_FENCE, body)
-    return text[:m.start()] + replacement + text[m.end():]
+    fence_repl = "```json %s\n%s\n```" % (guardian_store.LEDGER_FENCE, body)
+
+    if len(cards) == 1:
+        card = cards[0]
+        if card.end() <= fence.start():
+            new_text = (
+                text[:card.start()] + card_region + text[card.end():fence.start()]
+                + fence_repl + text[fence.end():]
+            )
+        elif fence.end() <= card.start():
+            new_text = (
+                text[:fence.start()] + fence_repl + text[fence.end():card.start()]
+                + card_region + text[card.end():]
+            )
+        else:
+            return None, "overlapping-regions"
+        return new_text, None
+
+    # No marked report-card region: insert immediately before the fence.
+    new_text = (
+        text[:fence.start()] + card_region + "\n\n" + fence_repl + text[fence.end():]
+    )
+    return new_text, None
 
 
-def write_unlocked(cwd, records, *, root=None, report_card=None, sweeps=None, now=None):
+def write_unlocked(cwd, records, *, root=None, report_card=None, sweeps=None, now=None,
+                   expected_fence_identity=None):
     """Atomically update ledger.md, acquiring NO lock.
 
     For callers that ALREADY HOLD the sweep lock — `guardian_sweep.finalize` is the one that
@@ -939,13 +1018,18 @@ def write_unlocked(cwd, records, *, root=None, report_card=None, sweeps=None, no
     see its own live lock file, raise LockHeld, and report `raced` against itself. Never runs
     git; the sweep neither commits nor pushes.
 
-    **Structural preserve rule (ends the data-loss class):** this writer never re-renders the
-    whole file when the ledger already exists. It replaces **only** the fenced
-    `json guardian-ledger` block and leaves every surrounding byte untouched —
-    provenance line, preamble, report card, owner prose, comments, trailing content. Unknown
-    top-level JSON keys and unknown per-record fields are merged, not dropped. When the file
-    does not exist, the full template from `render` is authored once. When the fenced block
-    cannot be located, this returns a visible skip and does not write.
+    **Structural preserve rule:** this writer never re-renders the whole file when the ledger
+    already exists. It replaces only the two machine-owned regions (report-card markers +
+    fenced JSON) and leaves every other byte untouched. Unknown top-level JSON keys and
+    unknown per-record fields are merged, not dropped. Disk-only record ids are retained.
+    When the file does not exist, the full template from `render` is authored once. When the
+    fenced block cannot be located or is ambiguous, this returns a visible skip and does not
+    write.
+
+    **Compare-and-swap:** when `expected_fence_identity` is provided (from the read that
+    produced `records`), the on-disk fence must still match immediately before write;
+    otherwise returns `reason: raced` and writes nothing — same pattern as
+    `guardian_store.write_snapshot_cas`.
 
     **Preserve-don't-erase:** `sweeps=None` keeps the on-disk roster unchanged; pass an
     explicit list (including `[]`) to set the roster. A rewrite must never lose durable
@@ -953,21 +1037,27 @@ def write_unlocked(cwd, records, *, root=None, report_card=None, sweeps=None, no
 
     **Fail-closed schema gate:** `validate_records` runs before write. A record that
     fails validation is not persisted; the on-disk file is left untouched and the return
-    carries ok=False with the validation reasons."""
+    carries ok=False with the validation reasons.
+
+    Reads and writes are binary so CRLF ledgers round-trip outside the machine regions."""
     path = guardian_store.ledger_path(cwd, root)
     ok, reasons = validate_records(records if records is not None else [])
     if not ok:
         return {"ok": False, "reason": "invalid-records", "errors": reasons, "path": path}
 
+    day = now or _today()
+    card = report_card if report_card is not None else _report_card(
+        records if records is not None else [])
+
     if not os.path.isfile(path):
-        text = render(records, report_card=report_card, sweeps=sweeps or [], now=now,
+        text = render(records, report_card=card, sweeps=sweeps or [], now=day,
                       created=_read_created(path) if os.path.lexists(path) else None)
-        store_core.atomic_write(path, text)
+        guardian_store.atomic_write_bytes(path, text.encode("utf-8"))
         return {"ok": True, "path": path}
 
     try:
-        with open(path, encoding="utf-8") as fh:
-            existing_text = fh.read()
+        with open(path, "rb") as fh:
+            raw = fh.read()
     except OSError as exc:
         return {
             "ok": False,
@@ -975,14 +1065,44 @@ def write_unlocked(cwd, records, *, root=None, report_card=None, sweeps=None, no
             "reason": "ledger write skipped: unreadable (%s)" % type(exc).__name__,
             "path": path,
         }
+    try:
+        existing_text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return {
+            "ok": False,
+            "skipped": "ledger-unreadable",
+            "reason": "ledger write skipped: not valid UTF-8",
+            "path": path,
+        }
+
+    on_disk_id = guardian_store.ledger_fence_identity(existing_text)
+    if expected_fence_identity is not None and on_disk_id != expected_fence_identity:
+        return {
+            "ok": False,
+            "reason": "raced",
+            "onDisk": on_disk_id,
+            "expected": expected_fence_identity,
+            "path": path,
+        }
+
+    fences = guardian_store.find_ledger_fences(existing_text)
+    if len(fences) > 1:
+        return {
+            "ok": False,
+            "skipped": "ledger-ambiguous",
+            "reason": "ledger write skipped: multiple guardian-ledger fences "
+                      "(ambiguous; on-disk bytes left untouched)",
+            "path": path,
+        }
 
     existing_block, err = guardian_store._parse_ledger_block(existing_text)
     if err or not isinstance(existing_block, dict):
+        skipped = "ledger-ambiguous" if err == "ambiguous" else "ledger-no-fence"
         return {
             "ok": False,
-            "skipped": "ledger-no-fence",
+            "skipped": skipped,
             "reason": "ledger write skipped: fenced guardian-ledger block not found "
-                      "(on-disk bytes left untouched)",
+                      "or ambiguous (on-disk bytes left untouched)",
             "path": path,
         }
 
@@ -996,20 +1116,28 @@ def write_unlocked(cwd, records, *, root=None, report_card=None, sweeps=None, no
                            for s in sweeps if isinstance(s, dict)]
     # else: leave existing sweeps (or absence) untouched
 
-    spliced = _splice_ledger_fence(existing_text, block)
+    card_region = _render_report_card_region(card, now=day)
+    spliced, splice_err = _splice_machine_regions(existing_text, block, card_region)
     if spliced is None:
+        skipped = {
+            "ambiguous": "ledger-ambiguous",
+            "ambiguous-report-card": "ledger-ambiguous",
+            "overlapping-regions": "ledger-ambiguous",
+            "no-fence": "ledger-no-fence",
+        }.get(splice_err, "ledger-no-fence")
         return {
             "ok": False,
-            "skipped": "ledger-no-fence",
-            "reason": "ledger write skipped: fenced guardian-ledger block not found "
-                      "(on-disk bytes left untouched)",
+            "skipped": skipped,
+            "reason": "ledger write skipped: %s (on-disk bytes left untouched)"
+                      % (splice_err or "fence not found"),
             "path": path,
         }
-    store_core.atomic_write(path, spliced)
+    guardian_store.atomic_write_bytes(path, spliced.encode("utf-8"))
     return {"ok": True, "path": path}
 
 
-def write(cwd, records, *, root=None, report_card=None, sweeps=None, now=None):
+def write(cwd, records, *, root=None, report_card=None, sweeps=None, now=None,
+          expected_fence_identity=None):
     """Write ledger.md under the sweep lock, then delegate to `write_unlocked`.
 
     For STANDALONE callers that hold no lock — advisor triage, consult, the CLI. A caller
@@ -1028,7 +1156,8 @@ def write(cwd, records, *, root=None, report_card=None, sweeps=None, now=None):
                 "path": guardian_store.ledger_path(cwd, root)}
     try:
         return write_unlocked(cwd, records, root=root, report_card=report_card,
-                              sweeps=sweeps, now=now)
+                              sweeps=sweeps, now=now,
+                              expected_fence_identity=expected_fence_identity)
     finally:
         file_lock.release(lock_path)
 

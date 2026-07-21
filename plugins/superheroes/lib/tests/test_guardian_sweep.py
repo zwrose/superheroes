@@ -743,7 +743,7 @@ def test_finalize_appends_sweep_roster_across_cycles_and_retries(tmp_path):
     assert [s["sweepId"] for s in roster2] == [b1["sweepId"], b2["sweepId"]]
 
 
-def test_finalize_ledger_write_failure_leaves_report_snapshot_and_reports(tmp_path, monkeypatch):
+def test_finalize_ledger_write_failure_does_not_advance_baseline(tmp_path, monkeypatch):
     import guardian_ledger as gled
 
     repo = init_calibrated_repo(tmp_path)
@@ -751,6 +751,7 @@ def test_finalize_ledger_write_failure_leaves_report_snapshot_and_reports(tmp_pa
     write_guardian_layer(tmp_path, {"vitals": False})
     lens = FixtureLens(emit_red_line=True)
     bundle = gsw.collect(repo, lenses=[lens], root=root)
+    prev_identity = bundle["prevIdentity"]
     disp = [{
         "id": bundle["surfaced"][0]["id"],
         "verdict": "validated",
@@ -765,14 +766,17 @@ def test_finalize_ledger_write_failure_leaves_report_snapshot_and_reports(tmp_pa
 
     monkeypatch.setattr(gled, "write_unlocked", boom)
     result = gsw.finalize(repo, bundle, disp, root=root)
-    assert result["ok"] is True
+    assert result["ok"] is False
+    assert result["reason"] == "durable-write-failed"
     assert os.path.isfile(gs.report_path(repo, root=root))
-    assert os.path.isfile(gs.snapshot_path(repo, root=root))
+    assert not os.path.isfile(gs.snapshot_path(repo, root=root))
     assert result["ledgerWrite"]["ok"] is False
     assert "simulated ledger write failure" in result["ledgerWrite"]["reason"]
+    # Baseline unchanged — same bundle remains retryable.
+    assert gs.snapshot_identity(gs.read_snapshot(repo, root=root)) == prev_identity
 
 
-def test_finalize_vitals_append_failure_leaves_report_snapshot_and_reports(tmp_path, monkeypatch):
+def test_finalize_vitals_append_failure_does_not_advance_baseline(tmp_path, monkeypatch):
     import guardian_vitals as gv
 
     repo = init_calibrated_repo(tmp_path)
@@ -788,6 +792,7 @@ def test_finalize_vitals_append_failure_leaves_report_snapshot_and_reports(tmp_p
 
     lens = FixtureLens(emit_red_line=True)
     bundle = gsw.collect(repo, lenses=[lens], root=root, run=fake_run)
+    prev_identity = bundle["prevIdentity"]
     disp = [{
         "id": bundle["surfaced"][0]["id"],
         "verdict": "validated",
@@ -802,11 +807,13 @@ def test_finalize_vitals_append_failure_leaves_report_snapshot_and_reports(tmp_p
 
     monkeypatch.setattr(gv, "append_unlocked", boom)
     result = gsw.finalize(repo, bundle, disp, root=root)
-    assert result["ok"] is True
+    assert result["ok"] is False
+    assert result["reason"] == "durable-write-failed"
     assert os.path.isfile(gs.report_path(repo, root=root))
-    assert os.path.isfile(gs.snapshot_path(repo, root=root))
+    assert not os.path.isfile(gs.snapshot_path(repo, root=root))
     assert result["vitalsAppend"]["ok"] is False
     assert "simulated vitals append failure" in result["vitalsAppend"]["reason"]
+    assert gs.snapshot_identity(gs.read_snapshot(repo, root=root)) == prev_identity
 
 
 def test_bundle_carries_storage_mode_and_committed(tmp_path):
@@ -1507,18 +1514,22 @@ def test_finalize_malformed_sweeps_skips_write(tmp_path):
     assert open(path, "rb").read() == before
 
 
-def test_finalize_successful_sweep_preserves_outside_fence_bytes(tmp_path):
-    """Successful writable sweep: every byte outside the fence stays identical."""
+def test_finalize_successful_sweep_preserves_bytes_outside_machine_regions(tmp_path):
+    """Successful writable sweep: bytes outside report-card + fence regions stay identical."""
     repo = init_calibrated_repo(tmp_path)
     root = _store(tmp_path)
     write_guardian_layer(tmp_path, {"vitals": False})
-    outside_prefix = (
+    owner_prefix = (
         "<!-- guardian-ledger: schemaVersion=1 status=confirmed "
         "created=2026-07-01 updated=2026-07-01 -->\n\n"
         "# Owner history — must survive a successful sweep\n\n"
         "Hand-written note.\n\n"
         "<!-- owner comment -->\n\n"
+    )
+    card = (
+        "<!-- guardian-report-card:begin updated=2026-07-01 -->\n\n"
         "## Report card\n\n_custom_\n\n"
+        "<!-- guardian-report-card:end -->\n\n"
     )
     block = {
         "schemaVersion": 1,
@@ -1535,13 +1546,18 @@ def test_finalize_successful_sweep_preserves_outside_fence_bytes(tmp_path):
         }],
         "sweeps": [],
     }
-    text = outside_prefix + "```json %s\n%s\n```\n\nTrailing.\n" % (
+    text = owner_prefix + card + "```json %s\n%s\n```\n\nTrailing.\n" % (
         gs.LEDGER_FENCE, json.dumps(block, indent=2))
     path = gs.ledger_path(repo, root)
     sc.atomic_write(path, text)
     before = open(path, encoding="utf-8").read()
+    import guardian_ledger as gled
     fence_before = gs._LEDGER_BLOCK.search(before)
-    outside_before = before[:fence_before.start()] + before[fence_before.end():]
+    card_before = gled._REPORT_CARD_REGION.search(before)
+    owner_before = (
+        before[:card_before.start()] + before[card_before.end():fence_before.start()]
+        + before[fence_before.end():]
+    )
 
     lens = FixtureLens(emit_red_line=True)
     bundle = gsw.collect(repo, lenses=[lens], root=root)
@@ -1559,11 +1575,126 @@ def test_finalize_successful_sweep_preserves_outside_fence_bytes(tmp_path):
     assert result["ledgerWrite"].get("ok") is True, result["ledgerWrite"]
     after = open(path, encoding="utf-8").read()
     fence_after = gs._LEDGER_BLOCK.search(after)
-    outside_after = after[:fence_after.start()] + after[fence_after.end():]
-    assert outside_after == outside_before
+    card_after = gled._REPORT_CARD_REGION.search(after)
+    owner_after = (
+        after[:card_after.start()] + after[card_after.end():fence_after.start()]
+        + after[fence_after.end():]
+    )
+    assert owner_after == owner_before
     parsed = json.loads(fence_after.group(1))
     assert parsed["ownerNotes"] == "opaque top-level"
     assert parsed["records"][0]["extraField"] == "per-record opaque"
+    assert "_custom_" not in card_after.group(0)
+
+
+def test_ambiguous_duplicate_fences_fail_closed_collect_and_finalize(tmp_path):
+    """Two guardian-ledger fences: malformed, no suppression, no write, bytes preserved."""
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    block_v1 = {
+        "schemaVersion": 1,
+        "records": [{
+            "id": "fixture:tool:a.py:1",
+            "disposition": "accepted",
+            "date": "2026-07-01",
+            "issue": None,
+            "metricAtDisposition": {"metric": 1},
+            "reason": "stale first block",
+            "reraiseWhen": None,
+        }],
+        "sweeps": [],
+    }
+    block_v99 = {
+        "schemaVersion": 99,
+        "records": [{
+            "id": "fixture:tool:a.py:1",
+            "disposition": "declined",
+            "date": "2026-07-21",
+            "issue": None,
+            "metricAtDisposition": {"metric": 9},
+            "reason": "competing second block",
+            "reraiseWhen": None,
+        }],
+        "sweeps": [],
+    }
+    owner_text = (
+        "# Ambiguous ledger\n\n"
+        "```json %s\n%s\n```\n\n"
+        "```json %s\n%s\n```\n"
+        % (gs.LEDGER_FENCE, json.dumps(block_v1, indent=2),
+           gs.LEDGER_FENCE, json.dumps(block_v99, indent=2))
+    )
+    path = gs.ledger_path(repo, root)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "wb").write(owner_text.encode("utf-8"))
+    before = open(path, "rb").read()
+
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": {"collectorVersion": "0.0.0-test", "digest": {"v": 1}}},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+
+    class DriftLens(FixtureLens):
+        def collect(self, ctx):
+            return {
+                "candidates": [{"id": "fixture:tool:a.py:1", "metric": 1}],
+                "digest": {"v": 2},
+            }
+
+    lens = DriftLens(digest={"v": 2}, diff_new=["fixture:tool:a.py:1"])
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert bundle["ledgerState"] == "malformed"
+    assert any(s["id"] == "fixture:tool:a.py:1" for s in bundle["surfaced"])
+    assert not bundle["funnel"]["killedByLedger"]
+
+    disp = [{
+        "id": bundle["surfaced"][0]["id"],
+        "verdict": "validated",
+        "consequence": "x",
+        "receipt": "y",
+        "effort": "z",
+        "ledgerJoin": bundle["surfaced"][0]["id"],
+    }]
+    result = gsw.finalize(repo, bundle, disp, root=root)
+    assert result["ok"] is True  # intentional skip of opaque ledger still commits baseline
+    assert result["ledgerWrite"]["ok"] is False
+    skipped = (result["ledgerWrite"].get("skipped")
+               or result["ledgerWrite"].get("reason") or "")
+    assert "ambiguous" in skipped or "malformed" in skipped
+    assert open(path, "rb").read() == before
+
+
+def test_triaged_out_finding_is_not_re_derived(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    write_ledger(tmp_path, [{
+        "id": "fixture:normal",
+        "disposition": "triaged-out",
+        "date": "2026-07-01",
+        "issue": None,
+        "metricAtDisposition": {"metric": 1},
+        "reason": "noise",
+        "reraiseWhen": None,
+        "adjudicatedIn": "s0",
+    }], root=root)
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": {"collectorVersion": "0.0.0-test", "digest": {"v": 1}}},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    lens = FixtureLens(emit_normal=True, digest={"v": 2},
+                       diff_new=["fixture:normal"], metric=1)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert not any(s["id"] == "fixture:normal" for s in bundle["surfaced"])
+    assert any(k["id"] == "fixture:normal" and k["disposition"] == "triaged-out"
+               for k in bundle["funnel"]["killedByLedger"])
 
 
 def test_skill_cadence_phrase_matches_cadence_defaults():

@@ -72,16 +72,17 @@ def test_write_is_idempotent_byte_for_byte(tmp_path):
 
 
 def test_write_preserves_created_date_across_rewrites(tmp_path):
-    """Surgical updates leave the provenance line (outside the fence) untouched."""
+    """Provenance created= is outside the machine regions and stays put; report card updates."""
     repo = init_calibrated_repo(tmp_path)
-    records = [_rec("dup:jscpd:a.md", "filed", issue="#1")]
+    records = [_rec("dup:jscpd:a.md", "filed", issue="#1", adjudicatedIn="s1")]
     gled.write(repo, records, now="2026-07-01")
     gled.write(repo, records, now="2026-07-21")
     text = open(gs.ledger_path(repo), encoding="utf-8").read()
     assert "created=2026-07-01" in text
-    # Writer replaces only the fenced block — provenance `updated=` is outside it.
-    assert "updated=2026-07-01" in text
-    assert "updated=2026-07-21" not in text
+    # Report-card machine region carries a fresh updated= stamp.
+    assert "guardian-report-card:begin updated=2026-07-21" in text
+    assert "## Report card" in text
+    assert "filed" in text or "dup" in text
 
 
 def test_write_never_mutates_the_repo_with_git(tmp_path, monkeypatch):
@@ -236,12 +237,14 @@ def test_matcher_collision_fails_open_with_breadcrumb():
     assert a["id"] in note and b["id"] in note
 
 
-def test_matcher_exact_id_wins_over_collision():
+def test_matcher_exact_id_does_not_bypass_collision():
+    """Ambiguity wins over exactness: line-drift collision must surface even on exact id."""
     a = {"id": "hotspot:lizard:a/b.py:117", "disposition": "accepted", "reason": "r"}
     b = {"id": "hotspot:lizard:a/b.py:243", "disposition": "declined", "reason": "r"}
     rec, note = gled.match("hotspot:lizard:a/b.py:117", {a["id"]: a, b["id"]: b})
-    assert rec is a
-    assert note is None
+    assert rec is None
+    assert note is not None and "ambiguous" in note
+    assert a["id"] in note and b["id"] in note
 
 
 # --- 3. material worsening (fixes the float(dict) defect) --------------------
@@ -841,8 +844,8 @@ def test_cli_bad_input_reports_an_error_not_a_traceback(tmp_path):
 # --- WO-13: surgical fence preserve + metric validation ----------------------
 
 
-def test_write_unlocked_preserves_bytes_outside_fence_and_unknown_keys(tmp_path):
-    """Strong preservation: owner prose, comments, unknown top-level + per-record keys."""
+def test_write_unlocked_preserves_bytes_outside_machine_regions_and_unknown_keys(tmp_path):
+    """Strong preservation: owner prose outside both machine regions + unknown JSON keys."""
     repo = init_calibrated_repo(tmp_path)
     path = gs.ledger_path(repo)
     owner_outside = (
@@ -851,8 +854,10 @@ def test_write_unlocked_preserves_bytes_outside_fence_and_unknown_keys(tmp_path)
         "# Owner title — must survive\n\n"
         "Owner hand-written prose before the fence.\n\n"
         "<!-- owner comment outside fence -->\n\n"
+        "<!-- guardian-report-card:begin updated=2026-07-01 -->\n\n"
         "## Report card\n\n"
-        "_Owner left this alone._\n\n"
+        "_No findings adjudicated yet._\n\n"
+        "<!-- guardian-report-card:end -->\n\n"
     )
     block = {
         "schemaVersion": 1,
@@ -878,8 +883,9 @@ def test_write_unlocked_preserves_bytes_outside_fence_and_unknown_keys(tmp_path)
     sc.atomic_write(path, text)
     before = open(path, encoding="utf-8").read()
     fence_m = gs._LEDGER_BLOCK.search(before)
-    assert fence_m is not None
-    outside_before = before[:fence_m.start()] + before[fence_m.end():]
+    card_m = gled._REPORT_CARD_REGION.search(before)
+    assert fence_m is not None and card_m is not None
+    owner_before = before[:card_m.start()] + before[card_m.end():fence_m.start()] + before[fence_m.end():]
 
     new_records = [{
         "id": "dup:jscpd:a.md",
@@ -889,17 +895,24 @@ def test_write_unlocked_preserves_bytes_outside_fence_and_unknown_keys(tmp_path)
         "metricAtDisposition": {"cloneLines": 12},
         "reason": "tolerated",
         "reraiseWhen": None,
+        "adjudicatedIn": "s0",
     }]
     out = gled.write_unlocked(
-        repo, new_records,
+        repo, new_records, now="2026-07-21",
         sweeps=[{"sweepId": "s0", "sweptSha": "abc", "date": "2026-07-01"},
                 {"sweepId": "s1", "sweptSha": "def", "date": "2026-07-21"}])
     assert out["ok"] is True, out
     after = open(path, encoding="utf-8").read()
     fence_after = gs._LEDGER_BLOCK.search(after)
-    assert fence_after is not None
-    outside_after = after[:fence_after.start()] + after[fence_after.end():]
-    assert outside_after == outside_before
+    card_after = gled._REPORT_CARD_REGION.search(after)
+    assert fence_after is not None and card_after is not None
+    owner_after = (
+        after[:card_after.start()] + after[card_after.end():fence_after.start()]
+        + after[fence_after.end():]
+    )
+    assert owner_after == owner_before
+    assert "guardian-report-card:begin updated=2026-07-21" in card_after.group(0)
+    assert "_No findings adjudicated yet._" not in card_after.group(0)
     parsed = json.loads(fence_after.group(1))
     assert parsed["ownerNotes"] == "keep this top-level unknown"
     assert parsed["records"][0]["ownerAnnotation"] == "per-record unknown must survive"
@@ -916,6 +929,208 @@ def test_write_unlocked_skips_when_fence_missing(tmp_path):
     assert out["ok"] is False
     assert "no-fence" in (out.get("skipped") or "")
     assert open(path, "rb").read() == before
+
+
+def test_write_unlocked_refuses_ambiguous_duplicate_fences(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.ledger_path(repo)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    block = {
+        "schemaVersion": 1,
+        "records": [_rec("dup:t:a", "accepted", date="2026-07-01", reason="r")],
+        "sweeps": [],
+    }
+    body = json.dumps(block, indent=2)
+    text = (
+        "# two fences\n\n"
+        "```json %s\n%s\n```\n\n"
+        "```json %s\n%s\n```\n" % (gs.LEDGER_FENCE, body, gs.LEDGER_FENCE, body)
+    )
+    open(path, "wb").write(text.encode("utf-8"))
+    before = open(path, "rb").read()
+    out = gled.write_unlocked(repo, [_rec("dup:t:a", "accepted", date="2026-07-01", reason="r")])
+    assert out["ok"] is False
+    assert "ambiguous" in (out.get("skipped") or out.get("reason") or "")
+    assert open(path, "rb").read() == before
+    read = gs.read_ledger(repo)
+    assert read["status"] == "malformed"
+    assert "ambiguous" in (read.get("note") or "")
+
+
+def test_write_unlocked_cas_refuses_concurrent_owner_edit(tmp_path):
+    """Real concurrent edit: read identity, mutate disk, write must refuse and leave bytes."""
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.ledger_path(repo)
+    gled.write(repo, [_rec("dup:t:a", "filed", issue="#1", adjudicatedIn="s1")],
+               now="2026-07-01")
+    ledger = gs.read_ledger(repo)
+    assert ledger["status"] == "ok"
+    expected = ledger["fenceIdentity"]
+    assert expected
+
+    # Owner adds a new record between finalize's read and write.
+    on_disk = open(path, "rb").read().decode("utf-8")
+    fence = gs.find_ledger_fences(on_disk)[0]
+    block = json.loads(fence.group(1))
+    block["records"].append({
+        "id": "dup:t:owner-added",
+        "disposition": "accepted",
+        "date": "2026-07-21",
+        "issue": None,
+        "metricAtDisposition": None,
+        "reason": "owner concurrent edit",
+        "reraiseWhen": None,
+    })
+    mutated = (
+        on_disk[:fence.start()]
+        + "```json %s\n%s\n```" % (gs.LEDGER_FENCE, json.dumps(block, indent=2))
+        + on_disk[fence.end():]
+    )
+    open(path, "wb").write(mutated.encode("utf-8"))
+    before = open(path, "rb").read()
+
+    out = gled.write_unlocked(
+        repo, ledger["records"],
+        expected_fence_identity=expected, now="2026-07-21")
+    assert out["ok"] is False
+    assert out["reason"] == "raced"
+    assert open(path, "rb").read() == before
+    assert any(r.get("id") == "dup:t:owner-added"
+               for r in gs.read_ledger(repo)["records"])
+
+
+def test_write_unlocked_preserves_disk_only_record_ids(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.ledger_path(repo)
+    gled.write(repo, [
+        _rec("dup:t:a", "accepted", date="2026-07-01", reason="r", adjudicatedIn="s1"),
+        _rec("dup:t:b", "filed", issue="#2", adjudicatedIn="s1"),
+    ], now="2026-07-01")
+    # Stale roster omits b — writer must retain it.
+    out = gled.write_unlocked(
+        repo, [_rec("dup:t:a", "accepted", date="2026-07-01", reason="r",
+                    adjudicatedIn="s1")],
+        now="2026-07-21")
+    assert out["ok"] is True, out
+    ids = {r["id"] for r in gs.read_ledger(repo)["records"]}
+    assert ids == {"dup:t:a", "dup:t:b"}
+
+
+def test_write_unlocked_crlf_byte_preservation_outside_machine_regions(tmp_path):
+    """Genuine CRLF bytes outside machine regions must survive a surgical write."""
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.ledger_path(repo)
+    block = {
+        "schemaVersion": 1,
+        "records": [{
+            "id": "dup:t:a",
+            "disposition": "accepted",
+            "date": "2026-07-01",
+            "issue": None,
+            "metricAtDisposition": {"cloneLines": 1},
+            "reason": "r",
+            "reraiseWhen": None,
+        }],
+        "sweeps": [],
+    }
+    fence_body = json.dumps(block, indent=2)
+    # Outer document uses CRLF; fence JSON body keeps LF (as json.dumps emits).
+    text = (
+        "<!-- guardian-ledger: schemaVersion=1 status=confirmed "
+        "created=2026-07-01 updated=2026-07-01 -->\r\n"
+        "\r\n"
+        "# Owner CRLF title\r\n"
+        "\r\n"
+        "Owner prose with CRLF endings.\r\n"
+        "\r\n"
+        "<!-- guardian-report-card:begin updated=2026-07-01 -->\r\n"
+        "\r\n"
+        "## Report card\r\n"
+        "\r\n"
+        "_No findings adjudicated yet._\r\n"
+        "\r\n"
+        "<!-- guardian-report-card:end -->\r\n"
+        "\r\n"
+        "```json %s\n%s\n```\r\n"
+        "\r\n"
+        "Trailing CRLF prose.\r\n"
+    ) % (gs.LEDGER_FENCE, fence_body)
+    raw = text.encode("utf-8")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "wb").write(raw)
+    before = open(path, "rb").read()
+    assert b"\r\n# Owner CRLF title\r\n" in before
+
+    card_begin = b"<!-- guardian-report-card:begin"
+    card_end_marker = b"<!-- guardian-report-card:end -->"
+    fence_open = ("```json %s" % gs.LEDGER_FENCE).encode("utf-8")
+    i0 = before.find(card_begin)
+    i1 = before.find(card_end_marker) + len(card_end_marker)
+    i2 = before.find(fence_open)
+    # Closing fence: last ``` before trailing prose
+    i3 = before.find(b"```", i2 + len(fence_open))
+    assert i3 > i2
+    # Include trailing newline sequence after closing fence
+    i3_end = i3 + 3
+    if before[i3_end:i3_end + 2] == b"\r\n":
+        i3_end += 2
+    elif before[i3_end:i3_end + 1] == b"\n":
+        i3_end += 1
+    prefix, mid, suffix = before[:i0], before[i1:i2], before[i3_end:]
+
+    out = gled.write_unlocked(
+        repo, [{
+            "id": "dup:t:a",
+            "disposition": "accepted",
+            "date": "2026-07-01",
+            "issue": None,
+            "metricAtDisposition": {"cloneLines": 2},
+            "reason": "r",
+            "reraiseWhen": None,
+            "adjudicatedIn": "s1",
+        }],
+        now="2026-07-21")
+    assert out["ok"] is True, out
+    after = open(path, "rb").read()
+    j0 = after.find(card_begin)
+    j1 = after.find(card_end_marker) + len(card_end_marker)
+    j2 = after.find(fence_open)
+    j3 = after.find(b"```", j2 + len(fence_open))
+    j3_end = j3 + 3
+    if after[j3_end:j3_end + 2] == b"\r\n":
+        j3_end += 2
+    elif after[j3_end:j3_end + 1] == b"\n":
+        j3_end += 1
+    assert after[:j0] == prefix
+    assert after[j1:j2] == mid
+    assert after[j3_end:] == suffix
+    assert b"\r\n# Owner CRLF title\r\n" in after
+
+
+def test_report_card_updates_across_two_writes(tmp_path):
+    """Second face must refresh: empty card → adjudicated table across two writes."""
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.ledger_path(repo)
+    gled.write(repo, [], now="2026-07-01")
+    first = open(path, encoding="utf-8").read()
+    assert "_No findings adjudicated yet._" in first
+    assert "guardian-report-card:begin updated=2026-07-01" in first
+
+    records = [
+        _rec("dup:t:a", "accepted", date="2026-07-21", reason="ok", adjudicatedIn="s1"),
+        _rec("dup:t:b", "filed", issue="#1", adjudicatedIn="s1"),
+    ]
+    gled.write(repo, records, now="2026-07-21")
+    second = open(path, encoding="utf-8").read()
+    card = gled._REPORT_CARD_REGION.search(second)
+    assert card is not None
+    body = card.group(0)
+    assert "guardian-report-card:begin updated=2026-07-21" in body
+    assert "_No findings adjudicated yet._" not in body
+    assert "| dup |" in body
+    assert "created=2026-07-01" in second
+    # Owner-facing preamble (outside machine regions) still present.
+    assert "# Guardian dispositions ledger" in second
 
 
 def test_validate_record_rejects_non_numeric_metric_values():

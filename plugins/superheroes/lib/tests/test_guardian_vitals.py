@@ -260,7 +260,9 @@ def test_successful_verify_collects_suite_vitals(tmp_path):
     # a skipped test is still a test in the suite: 1703 passed + 1 skipped
     assert out["vitals"]["suiteTestCount"] == 1704
     assert out["vitals"]["suiteSkipped"] == 1
+    # Pytest summary duration wins when parseable (excludes harness/startup noise).
     assert out["vitals"]["suiteRuntimeSeconds"] == 62.10
+    assert "test-summary line" in out["sources"]["suiteRuntimeSeconds"]
     for name in _SUITE:
         assert name not in out["notCollected"]
 
@@ -417,6 +419,25 @@ def test_threshold_overrides_are_honored():
     loose = {"vulnCount": {"kind": "absolute", "limit": 10}}
     assert gv.crossings({"vulnCount": 0}, {"vulnCount": 3}, thresholds=loose) == []
     assert gv.crossings({"vulnCount": 0}, {"vulnCount": 3}) != []
+
+
+def test_invalid_threshold_override_retains_default_and_notes():
+    notes = []
+    crossings = gv.crossings(
+        {"vulnCount": 0}, {"vulnCount": 1},
+        thresholds={"vulnCount": {"kind": "absolute", "limit": "two"}},
+        notes_out=notes)
+    assert crossings, "default any-increase must still fire"
+    assert crossings[0]["threshold"] == gv.DRIFT_THRESHOLDS["vulnCount"]
+    assert notes and "vulnCount" in notes[0]
+
+    notes2 = []
+    crossings2 = gv.crossings(
+        {"suiteRuntimeSeconds": 10}, {"suiteRuntimeSeconds": 20},
+        thresholds={"suiteRuntimeSeconds": {"kind": "relative", "limit": "40%"}},
+        notes_out=notes2)
+    assert crossings2, "invalid relative limit must not disable the default 40% crossing"
+    assert notes2 and "suiteRuntimeSeconds" in notes2[0]
 
 
 def test_crossing_entry_fields():
