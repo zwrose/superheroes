@@ -323,6 +323,35 @@ def test_loader_unnameable_registration_failure_yields_module_standin(monkeypatc
     _reset_production_loader()
 
 
+def test_loader_masked_name_from_other_source_yields_module_standin(monkeypatch):
+    _reset_production_loader()
+    gl.register(FixtureLens(name="masked-lens"))
+    monkeypatch.setattr(gl, "PRODUCTION_LENS_MODULES", ("failing_mod_558",))
+    monkeypatch.setattr(gl, "PRODUCTION_LENS_NAMES", {
+        "failing_mod_558": ("masked-lens",),
+    })
+    lenses = gl.registered_lenses()
+    masked = [l for l in lenses if l.name == "masked-lens"]
+    assert len(masked) == 1
+    assert not isinstance(masked[0], gl._UnavailableLens)
+    module_standin = [l for l in lenses if l.name == "module:failing_mod_558"]
+    assert len(module_standin) == 1
+    assert isinstance(module_standin[0], gl._UnavailableLens)
+    _reset_production_loader()
+
+
+def test_loader_falsy_module_yields_unknown_standin(monkeypatch):
+    _reset_production_loader()
+    monkeypatch.setattr(gl, "PRODUCTION_LENS_MODULES", ("",))
+    monkeypatch.setattr(gl, "PRODUCTION_LENS_NAMES", {})
+    lenses = gl.registered_lenses()
+    standin = [l for l in lenses if l.name == "module:<unknown>"]
+    assert len(standin) == 1
+    assert isinstance(standin[0], gl._UnavailableLens)
+    assert gl.production_lens_load_errors()
+    _reset_production_loader()
+
+
 def test_loader_force_reload_preserves_externally_registered_replacement(monkeypatch):
     import sys
     import types

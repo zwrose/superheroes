@@ -9,14 +9,17 @@ Optional conformance hook (production lenses MUST implement; not checked by vali
 
   conformance_cases() -> {"reported-nonzero-parsed-zero": {
       "stdout": <raw tool output that reports findings but parses to zero>,
+      "clean_stdout": <raw tool output with genuinely zero findings>,
+      "exit": <exit code on a successful tool run (may be non-zero)>,
       "config": <dict | None>,
       "prev_digest": <json | None>,
   }}
 
 The harness owns the five tool-agnostic scenarios (``missing-tool``, ``timeout``,
 ``nonzero-exit``, ``findings-empty-output``, ``unparseable``) and injects its own
-``ctx["run"]`` stubs. The lens supplies only the tool-specific stdout/exit payload for
-``reported-nonzero-parsed-zero``; the harness wraps it in an ok-exit ``run`` stub. The
+``ctx["run"]`` stubs. For ``reported-nonzero-parsed-zero`` the lens supplies stdout,
+clean_stdout, and exit; the harness runs a clean probe and a findings probe, both at
+the declared exit. The
 per-lens conformance harness (test_guardian_conformance) drives every
 REQUIRED_CONFORMANCE_SCENARIOS name, classifies each collect() outcome, and fails
 registration when coverage or an honesty invariant is missing.
@@ -321,17 +324,17 @@ def registered_lenses():
     module_fallback = {}
     for err in _PRODUCTION_LOAD_ERRORS:
         names = _stub_names_for_error(err)
-        if names:
-            for name in names:
-                if name in present:
-                    continue
-                lenses.append(_UnavailableLens(name, err.get("error") or "unknown"))
-                present.add(name)
-            continue
-        module = err.get("module")
-        if not module:
-            continue
-        module_fallback.setdefault(module, []).append(err.get("error") or "unknown")
+        added_any = False
+        for name in names:
+            if name in present:
+                continue
+            lenses.append(_UnavailableLens(name, err.get("error") or "unknown"))
+            present.add(name)
+            added_any = True
+        if not added_any:
+            module = err.get("module")
+            key = module if module else "<unknown>"
+            module_fallback.setdefault(key, []).append(err.get("error") or "unknown")
     for module, reasons in module_fallback.items():
         standin_name = "module:%s" % module
         if standin_name not in present:
