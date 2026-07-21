@@ -37,6 +37,10 @@ CADENCE_DEFAULTS = {"minMerges": 10, "minDays": 14}
 # with headroom while still bounding a runaway suite.
 _DEFAULT_VERIFY_BUDGET_SECONDS = 300
 _VERIFY_STDOUT_CAP = 8 * 1024
+# Aggregate budget across all filed-issue `gh issue view` lookups in one collect.
+# Per-call timeout is capped so one hung call cannot consume the whole budget alone.
+_ISSUE_RESOLVE_BUDGET_SECONDS = 30.0
+_ISSUE_RESOLVE_PER_CALL_TIMEOUT = 10.0
 
 
 def _repo_root(cwd):
@@ -65,10 +69,12 @@ def _resolve_cadence(raw):
 def read_config(cwd, root=None):
     """Read guardian.md layer → thresholds, coverage, vitals knobs.
 
-    Empty/absent → defaults. Vitals collection is on by default; a
-    guardian-config `vitals: false` (or `collectVitals: false`) disables it.
-    `verifyBudgetSeconds` (alias `vitalsBudgetSeconds`) tunes the shared
-    verify/vitals time budget."""
+    Empty/absent → defaults with `configStatus` healthy (defaults are authoritative).
+    Unreadable / malformed / non-object config → defaults with `configStatus` degraded
+    (benching authority revoked; the degradation is visible to report_card).
+    Vitals collection is on by default; a guardian-config `vitals: false` (or
+    `collectVitals: false`) disables it. `verifyBudgetSeconds` (alias
+    `vitalsBudgetSeconds`) tunes the shared verify/vitals time budget."""
     layer_p = guardian_store.guardian_layer_path(cwd, root)
     thresholds = dict(guardian_lens.RED_LINE_THRESHOLDS)
     coverage = []
@@ -76,62 +82,44 @@ def read_config(cwd, root=None):
     verify_budget = _DEFAULT_VERIFY_BUDGET_SECONDS
     report_card = None
     cadence, cadence_tuned = _resolve_cadence(None)
-    if core_md._layer_is_empty(layer_p):
+
+    def _result(status, *, report_card_value=None, notes=None):
         return {
             "thresholds": thresholds,
             "coverage": coverage,
             "vitalsEnabled": vitals_enabled,
             "verifyBudgetSeconds": verify_budget,
-            "reportCard": report_card,
+            "reportCard": report_card_value,
             "cadence": cadence,
             "cadenceTuned": cadence_tuned,
+            "configStatus": status,
+            "configNotes": list(notes or []),
         }
+
+    if core_md._layer_is_empty(layer_p):
+        return _result("healthy")
     try:
         with open(layer_p, encoding="utf-8") as fh:
             text = fh.read()
-    except OSError:
-        return {
-            "thresholds": thresholds,
-            "coverage": coverage,
-            "vitalsEnabled": vitals_enabled,
-            "verifyBudgetSeconds": verify_budget,
-            "reportCard": report_card,
-            "cadence": cadence,
-            "cadenceTuned": cadence_tuned,
-        }
+    except OSError as exc:
+        return _result(
+            "degraded",
+            notes=["guardian-config unreadable (%s)" % type(exc).__name__])
     m = _CONFIG_BLOCK.search(text)
     if not m:
-        return {
-            "thresholds": thresholds,
-            "coverage": coverage,
-            "vitalsEnabled": vitals_enabled,
-            "verifyBudgetSeconds": verify_budget,
-            "reportCard": report_card,
-            "cadence": cadence,
-            "cadenceTuned": cadence_tuned,
-        }
+        # Layer present but no config fence — defaults authoritative (healthy).
+        return _result("healthy")
     try:
         block = json.loads(m.group(1))
     except ValueError:
-        return {
-            "thresholds": thresholds,
-            "coverage": coverage,
-            "vitalsEnabled": vitals_enabled,
-            "verifyBudgetSeconds": verify_budget,
-            "reportCard": report_card,
-            "cadence": cadence,
-            "cadenceTuned": cadence_tuned,
-        }
+        return _result(
+            "degraded",
+            notes=["guardian-config JSON is malformed"])
     if not isinstance(block, dict):
-        return {
-            "thresholds": thresholds,
-            "coverage": coverage,
-            "vitalsEnabled": vitals_enabled,
-            "verifyBudgetSeconds": verify_budget,
-            "reportCard": report_card,
-            "cadence": cadence,
-            "cadenceTuned": cadence_tuned,
-        }
+        return _result(
+            "degraded",
+            notes=["guardian-config block is not an object (got %s)"
+                   % type(block).__name__])
     if isinstance(block.get("thresholds"), dict):
         thresholds.update(block["thresholds"])
     cov = block.get("coverage")
@@ -144,18 +132,14 @@ def read_config(cwd, root=None):
         budget = block.get("vitalsBudgetSeconds")
     if isinstance(budget, (int, float)) and not isinstance(budget, bool) and budget > 0:
         verify_budget = float(budget)
+    notes = []
+    if "reportCard" in block and not isinstance(block.get("reportCard"), dict):
+        notes.append("guardian-config reportCard is not an object")
+        return _result("degraded", notes=notes)
     if isinstance(block.get("reportCard"), dict):
         report_card = block["reportCard"]
     cadence, cadence_tuned = _resolve_cadence(block.get("cadence"))
-    return {
-        "thresholds": thresholds,
-        "coverage": coverage,
-        "vitalsEnabled": vitals_enabled,
-        "verifyBudgetSeconds": verify_budget,
-        "reportCard": report_card,
-        "cadence": cadence,
-        "cadenceTuned": cadence_tuned,
-    }
+    return _result("healthy", report_card_value=report_card, notes=notes)
 
 
 def _manifest_tags(repo):
@@ -363,38 +347,66 @@ _ISSUE_NUM_RE = re.compile(r"#?(\d+)")
 _ISSUE_TERMINAL = frozenset(("closed", "merged"))
 
 
-def _resolve_issue_state(issue_ref, *, cwd):
+def _resolve_issue_state(issue_ref, *, cwd, deadline=None, cache=None):
     """Best-effort linked-issue state → 'open'|'closed'|'merged'|None.
 
-    None means unverifiable (no ref, unparseable, gh missing/failed). Callers must fail
-    closed: do not run verified-fixed/reopened until a terminal state is confirmed.
+    None means unverifiable (no ref, unparseable, gh missing/failed, or aggregate
+    resolve budget exhausted). Callers must fail closed: do not run
+    verified-fixed/reopened until a terminal state is confirmed.
     Uses subprocess.run directly — not the sweep's injectable `run`, which stubs the
-    verify shell command in tests."""
+    verify shell command in tests. Distinct issue numbers are cached; the aggregate
+    `deadline` bounds total blocked time across all lookups in one collect."""
     if not isinstance(issue_ref, str) or not issue_ref.strip():
         return None
     m = _ISSUE_NUM_RE.search(issue_ref.strip())
     if not m:
         return None
+    num = m.group(1)
+    if cache is not None and num in cache:
+        return cache[num]
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            if cache is not None:
+                cache[num] = None
+            return None
+        timeout = min(_ISSUE_RESOLVE_PER_CALL_TIMEOUT, remaining)
+    else:
+        timeout = _ISSUE_RESOLVE_PER_CALL_TIMEOUT
     try:
         r = subprocess.run(
-            ["gh", "issue", "view", m.group(1), "--json", "state"],
-            cwd=cwd, capture_output=True, text=True, timeout=30)
+            ["gh", "issue", "view", num, "--json", "state"],
+            cwd=cwd, capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
+        if cache is not None:
+            cache[num] = None
         return None
     if r.returncode != 0:
+        if cache is not None:
+            cache[num] = None
         return None
     try:
         data = json.loads(r.stdout)
     except ValueError:
+        if cache is not None:
+            cache[num] = None
         return None
     if not isinstance(data, dict):
+        if cache is not None:
+            cache[num] = None
         return None
     state = data.get("state")
     if not isinstance(state, str):
+        if cache is not None:
+            cache[num] = None
         return None
     state = state.strip().lower()
     if state in ("open", "closed", "merged"):
+        if cache is not None:
+            cache[num] = state
         return state
+    if cache is not None:
+        cache[num] = None
     return None
 
 
@@ -465,13 +477,18 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
     filed_observations = {}
 
     ledger = guardian_store.read_ledger(cwd, root)
-    # partial still exposes validated byId entries for trade suppression; unreadable/
-    # malformed/newer never suppress. Benching requires a fully ok ledger.
-    suppress_via_ledger = ledger["status"] in ("ok", "absent", "partial")
+    # partial disables ledger suppression: read_ledger drops invalid bodies from
+    # byId, which would otherwise make a normalized collision look unique and
+    # defeat fail-open. unreadable/malformed/newer never suppress. Benching
+    # requires a fully ok ledger AND a healthy guardian-config.
+    suppress_via_ledger = ledger["status"] in ("ok", "absent")
     report_card_notes = []
+    config_status = config.get("configStatus") or "healthy"
+    if config_status == "degraded":
+        report_card_notes.extend(config.get("configNotes") or [])
     card = guardian_ledger.report_card(
         ledger["records"], overrides=config.get("reportCard"),
-        notes_out=report_card_notes)
+        notes_out=report_card_notes, config_status=config_status)
     if ledger["status"] not in ("ok", "absent"):
         # Duplicate / invalid / partially-read ledger: no benching authority this sweep.
         for name, entry in card.items():
@@ -483,6 +500,8 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
         if ledger.get("note"):
             report_card_notes.append(ledger["note"])
     benched_lenses = {name for name, entry in card.items() if entry.get("benched")}
+    issue_deadline = time.monotonic() + _ISSUE_RESOLVE_BUDGET_SECONDS
+    issue_cache = {}
 
     for lens in lenses:
         if set(lens.required_facts) & unsatisfied:
@@ -632,7 +651,9 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
                 "present": matched_cand is not None,
                 "candidate": matched_cand,
                 "issue": lrec.get("issue"),
-                "issueState": _resolve_issue_state(lrec.get("issue"), cwd=cwd),
+                "issueState": _resolve_issue_state(
+                    lrec.get("issue"), cwd=cwd,
+                    deadline=issue_deadline, cache=issue_cache),
             }
 
         if lens_surfaced:
@@ -807,7 +828,8 @@ def _ledger_fully_readable(cwd, root, ledger):
     `read_ledger` means "I could not read this" on malformed/newer/unreadable/partial
     — never "there is nothing here." Only an allow-listed status (`ok` / genuine
     `absent`) with every on-disk record accepted by the shared validator (no
-    duplicates, no silently-skipped entries) is safe to rewrite."""
+    duplicates, no silently-skipped entries) and a schemaVersion exactly equal to
+    LEDGER_SCHEMA_VERSION is safe to rewrite."""
     status = ledger.get("status")
     if status not in _WRITABLE_LEDGER_STATUSES:
         return False, "ledger-%s" % (status or "unknown")
@@ -825,8 +847,16 @@ def _ledger_fully_readable(cwd, root, ledger):
     block, err = guardian_store._parse_ledger_block(text)
     if err or not isinstance(block, dict):
         return False, "ledger-malformed"
+    ver = block.get("schemaVersion")
+    if isinstance(ver, int) and not isinstance(ver, bool) and ver > guardian_store.LEDGER_SCHEMA_VERSION:
+        return False, "ledger-newer"
+    if not (isinstance(ver, int) and not isinstance(ver, bool)
+            and ver == guardian_store.LEDGER_SCHEMA_VERSION):
+        return False, "ledger-malformed"
     raw = block.get("records")
     if not isinstance(raw, list):
+        return False, "ledger-malformed"
+    if "sweeps" in block and not isinstance(block.get("sweeps"), list):
         return False, "ledger-malformed"
 
     accepted = 0
@@ -846,6 +876,11 @@ def _ledger_fully_readable(cwd, root, ledger):
         accepted += 1
     if accepted != len(ledger.get("records") or []):
         return False, "ledger-partial-skip"
+    raw_sweeps = block.get("sweeps")
+    if isinstance(raw_sweeps, list):
+        for entry in raw_sweeps:
+            if not isinstance(entry, dict):
+                return False, "ledger-partial-skip"
     return True, None
 
 
@@ -874,13 +909,16 @@ def _closure_status_lines(advances, observations):
 
 
 def finalize(cwd, bundle, dispositions, root=None):
-    """Transactional finalize: validate → closure compute → report → baseline, under lock.
+    """Transactional finalize: validate → closure compute → report → durable writes → baseline.
 
     Filed-item closure is computed BEFORE the report is rendered so the durable report
-    describes the ledger state this sweep actually advances to. After the snapshot
-    (commit marker), still inside the lock: ledger persist via write_unlocked and
-    vitals append via append_unlocked. Both are reported, never silently swallowed;
-    neither is fatal to an already-written report+snapshot."""
+    describes the ledger state this sweep actually advances to. Order inside the lock:
+    report → ledger → vitals trend → snapshot last. The snapshot is the commit marker:
+    if the process exits before it lands, a retry still sees the prior identity and can
+    finish the durable writes. A ledger/vitals failure after the report is reported, never
+    silently swallowed; neither is fatal to an already-written report, but the snapshot
+    is still written so the baseline advances only after durable-record attempts complete
+    (success or explicit failure receipt)."""
     ok, errors = validate_dispositions(bundle, dispositions)
     if not ok:
         return {"ok": False, "reason": "invalid-dispositions", "errors": errors}
@@ -937,10 +975,8 @@ def finalize(cwd, bundle, dispositions, root=None):
         rp = guardian_store.report_path(cwd, root)
         store_core.atomic_write(rp, report_md)
 
-        snap_path = guardian_store.snapshot_path(cwd, root)
-        store_core.atomic_write(
-            snap_path, json.dumps(bundle["nextSnapshot"], indent=2) + "\n")
-
+        # Durable records BEFORE the snapshot commit marker so a crash cannot advance
+        # the baseline while silently omitting ledger/trend updates.
         ledger_write = {"ok": True, "skipped": "no-change"}
         try:
             if not writable:
@@ -979,6 +1015,10 @@ def finalize(cwd, bundle, dispositions, root=None):
                     swept_sha=bundle.get("sweptSha"), root=root)
         except Exception as exc:
             vitals_append = {"ok": False, "reason": str(exc)}
+
+        snap_path = guardian_store.snapshot_path(cwd, root)
+        store_core.atomic_write(
+            snap_path, json.dumps(bundle["nextSnapshot"], indent=2) + "\n")
 
         return {
             "ok": True,

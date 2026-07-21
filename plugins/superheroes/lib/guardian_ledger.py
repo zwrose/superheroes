@@ -10,10 +10,15 @@ matcher, the material-worsening comparator, the advance-only state machine, the 
 A settled finding is never re-derived. Nothing ever leaves the ledger; states only advance;
 won't-fixes carry their why. The file is hand-editable markdown that outlives the plugin.
 
-**Writer preserve rule.** A rewrite must never be able to lose durable history that the caller
-simply did not mention. For roster-like fields (`sweeps[]` today), `None` means *preserve
-whatever is already on disk*; an explicit list is the roster to write. Passing `None` is
-never an erase.
+**Writer preserve rule.** The writer must never rewrite the ledger file as a whole.
+It may replace **only** the fenced `json guardian-ledger` block, byte-for-byte
+preserving everything outside it (provenance line, preamble, report card, owner prose,
+comments, trailing content). Unknown top-level JSON keys inside the fence are preserved
+by merging updates into the parsed object. Unknown per-record fields are likewise merged
+by id. When the file does not exist, the full template may be authored once. When the
+fenced block cannot be located, the writer does not write at all. For roster-like fields
+(`sweeps[]` today), `None` means *preserve whatever is already on disk*; an explicit list
+is the roster to write. Passing `None` is never an erase.
 
 **Schema extension — `adjudicatedIn`.** Beyond the ratified §5 record shape
 (`LEDGER_RECORD_FIELDS`), a record carries `adjudicatedIn`: the **sweep id** it was first
@@ -138,8 +143,23 @@ def validate_record(rec):
     if not _is_str_or_none(rec.get("issue")):
         reasons.append("issue must be a str or null")
     metric_at = rec.get("metricAtDisposition")
-    if metric_at is not None and not isinstance(metric_at, dict):
-        reasons.append("metricAtDisposition must be an object of metric → number, or null")
+    if metric_at is not None:
+        if not isinstance(metric_at, dict):
+            reasons.append("metricAtDisposition must be an object of metric → number, or null")
+        else:
+            for key, val in metric_at.items():
+                if not isinstance(key, str) or not key.strip():
+                    reasons.append(
+                        "metricAtDisposition keys must be non-empty strings (got %r)" % (key,))
+                    continue
+                if isinstance(val, bool) or not isinstance(val, (int, float)):
+                    reasons.append(
+                        "metricAtDisposition[%r] must be a finite number (got %r)"
+                        % (key, val))
+                elif not math.isfinite(float(val)):
+                    reasons.append(
+                        "metricAtDisposition[%r] must be a finite number (got %r)"
+                        % (key, val))
     if not _is_str_or_none(rec.get("reason")):
         reasons.append("reason must be a str or null")
     if not _is_str_or_none(rec.get("reraiseWhen")):
@@ -388,14 +408,22 @@ def _coerce_positive_int(val):
     return val
 
 
-def _resolve_thresholds(overrides):
+def _resolve_thresholds(overrides, *, config_status=None):
     """Merge report-card overrides → (cfg, notes, benching_allowed).
 
     Hand-edited guardian-config values are coerced. A mistyped override is named in
     `notes` and **revokes benching authority for the sweep** — defaults must never
-    become a silent mute button after a config typo."""
+    become a silent mute button after a config typo. A non-healthy `config_status`
+    (unreadable / malformed guardian-config) likewise revokes benching even when
+    overrides are absent."""
     cfg = dict(REPORT_CARD_DEFAULTS)
     notes = []
+    if config_status == "degraded":
+        notes.append(
+            "guardian-config is degraded — benching disabled for this sweep "
+            "(defaults are not applied as a mute)")
+        if not isinstance(overrides, dict):
+            return cfg, notes, False
     if not isinstance(overrides, dict):
         return cfg, notes, True
     for key in REPORT_CARD_DEFAULTS:
@@ -456,8 +484,9 @@ def _duplicate_exact_ids(records):
     return dups
 
 
-def _report_card(records, overrides=None, *, notes_out=None):
-    cfg, notes, benching_allowed = _resolve_thresholds(overrides)
+def _report_card(records, overrides=None, *, notes_out=None, config_status=None):
+    cfg, notes, benching_allowed = _resolve_thresholds(
+        overrides, config_status=config_status)
     if notes_out is not None:
         notes_out.extend(notes)
     bar = cfg["actionabilityBar"]
@@ -531,6 +560,10 @@ def _report_card(records, overrides=None, *, notes_out=None):
                 "%s has no benching authority this sweep: reportCard tuning is "
                 "invalid — fix the guardian-config overrides before a lens can bench."
                 % lens)
+            if config_status == "degraded":
+                reason = (
+                    "%s has no benching authority this sweep: guardian-config is "
+                    "degraded — fix the layer before a lens can bench." % lens)
 
         card[lens] = {
             "adjudicated": adjudicated,
@@ -544,7 +577,7 @@ def _report_card(records, overrides=None, *, notes_out=None):
     return card
 
 
-def report_card(records, overrides=None, *, notes_out=None):
+def report_card(records, overrides=None, *, notes_out=None, config_status=None):
     """Per-lens outcome mix + the small-N benching guard → {lens: {...}}.
 
     Benching needs an evidence base first (advisor read, finding ii): no authority until a
@@ -553,10 +586,12 @@ def report_card(records, overrides=None, *, notes_out=None):
     a red line.
 
     Mistyped `overrides` revoke benching for the sweep (never raise; never mute via
-    defaults). Ambiguous normalized-identity groups and duplicate exact ids are excluded
-    from evidence so the matcher's fail-open collision rule cannot be defeated by
+    defaults). A degraded `config_status` (unreadable/malformed guardian-config) likewise
+    revokes benching. Ambiguous normalized-identity groups and duplicate exact ids are
+    excluded from evidence so the matcher's fail-open collision rule cannot be defeated by
     benching. When `notes_out` is a list, degradation notes are appended to it."""
-    return _report_card(records, overrides, notes_out=notes_out)
+    return _report_card(records, overrides, notes_out=notes_out,
+                        config_status=config_status)
 
 
 def _bench_reason(lens, adjudicated, actionability, sweeps, benched,
@@ -856,8 +891,47 @@ def _read_sweeps(path):
     return [dict(s) for s in raw if isinstance(s, dict)]
 
 
+def _merge_record_preserving_unknown(old, new):
+    """Merge `new` over `old`, keeping unknown keys the renderer does not model."""
+    if not isinstance(old, dict):
+        return _ordered(new, _RECORD_KEY_ORDER) if isinstance(new, dict) else new
+    if not isinstance(new, dict):
+        return old
+    merged = dict(old)
+    merged.update(new)
+    return _ordered(merged, _RECORD_KEY_ORDER)
+
+
+def _merge_records_preserving_unknown(existing_records, new_records):
+    by_old = {}
+    if isinstance(existing_records, list):
+        for rec in existing_records:
+            if isinstance(rec, dict) and isinstance(rec.get("id"), str):
+                by_old[rec["id"]] = rec
+    out = []
+    for rec in new_records or []:
+        if not isinstance(rec, dict):
+            continue
+        rid = rec.get("id")
+        old = by_old.get(rid) if isinstance(rid, str) else None
+        out.append(_merge_record_preserving_unknown(old, rec))
+    return out
+
+
+def _splice_ledger_fence(text, block_obj):
+    """Replace only the guardian-ledger fenced region; preserve all surrounding bytes.
+
+    Returns None when the fence cannot be located — callers must not write."""
+    m = guardian_store._LEDGER_BLOCK.search(text)
+    if not m:
+        return None
+    body = json.dumps(block_obj, indent=2)
+    replacement = "```json %s\n%s\n```" % (guardian_store.LEDGER_FENCE, body)
+    return text[:m.start()] + replacement + text[m.end():]
+
+
 def write_unlocked(cwd, records, *, root=None, report_card=None, sweeps=None, now=None):
-    """Render + atomically write ledger.md, acquiring NO lock.
+    """Atomically update ledger.md, acquiring NO lock.
 
     For callers that ALREADY HOLD the sweep lock — `guardian_sweep.finalize` is the one that
     matters. `file_lock` is not reentrant (exclusive lock-file creation), so calling `write`
@@ -865,22 +939,73 @@ def write_unlocked(cwd, records, *, root=None, report_card=None, sweeps=None, no
     see its own live lock file, raise LockHeld, and report `raced` against itself. Never runs
     git; the sweep neither commits nor pushes.
 
+    **Structural preserve rule (ends the data-loss class):** this writer never re-renders the
+    whole file when the ledger already exists. It replaces **only** the fenced
+    `json guardian-ledger` block and leaves every surrounding byte untouched —
+    provenance line, preamble, report card, owner prose, comments, trailing content. Unknown
+    top-level JSON keys and unknown per-record fields are merged, not dropped. When the file
+    does not exist, the full template from `render` is authored once. When the fenced block
+    cannot be located, this returns a visible skip and does not write.
+
     **Preserve-don't-erase:** `sweeps=None` keeps the on-disk roster unchanged; pass an
     explicit list (including `[]`) to set the roster. A rewrite must never lose durable
     history the caller simply did not mention.
 
-    **Fail-closed schema gate:** `validate_records` runs before render/write. A record that
+    **Fail-closed schema gate:** `validate_records` runs before write. A record that
     fails validation is not persisted; the on-disk file is left untouched and the return
     carries ok=False with the validation reasons."""
     path = guardian_store.ledger_path(cwd, root)
     ok, reasons = validate_records(records if records is not None else [])
     if not ok:
         return {"ok": False, "reason": "invalid-records", "errors": reasons, "path": path}
-    if sweeps is None:
-        sweeps = _read_sweeps(path)
-    text = render(records, report_card=report_card, sweeps=sweeps, now=now,
-                  created=_read_created(path))
-    store_core.atomic_write(path, text)
+
+    if not os.path.isfile(path):
+        text = render(records, report_card=report_card, sweeps=sweeps or [], now=now,
+                      created=_read_created(path) if os.path.lexists(path) else None)
+        store_core.atomic_write(path, text)
+        return {"ok": True, "path": path}
+
+    try:
+        with open(path, encoding="utf-8") as fh:
+            existing_text = fh.read()
+    except OSError as exc:
+        return {
+            "ok": False,
+            "skipped": "ledger-unreadable",
+            "reason": "ledger write skipped: unreadable (%s)" % type(exc).__name__,
+            "path": path,
+        }
+
+    existing_block, err = guardian_store._parse_ledger_block(existing_text)
+    if err or not isinstance(existing_block, dict):
+        return {
+            "ok": False,
+            "skipped": "ledger-no-fence",
+            "reason": "ledger write skipped: fenced guardian-ledger block not found "
+                      "(on-disk bytes left untouched)",
+            "path": path,
+        }
+
+    # Merge into the parsed object so unknown top-level keys survive.
+    block = dict(existing_block)
+    block["schemaVersion"] = guardian_store.LEDGER_SCHEMA_VERSION
+    block["records"] = _merge_records_preserving_unknown(
+        existing_block.get("records"), records if records is not None else [])
+    if sweeps is not None:
+        block["sweeps"] = [_ordered(s, SWEEP_FIELDS)
+                           for s in sweeps if isinstance(s, dict)]
+    # else: leave existing sweeps (or absence) untouched
+
+    spliced = _splice_ledger_fence(existing_text, block)
+    if spliced is None:
+        return {
+            "ok": False,
+            "skipped": "ledger-no-fence",
+            "reason": "ledger write skipped: fenced guardian-ledger block not found "
+                      "(on-disk bytes left untouched)",
+            "path": path,
+        }
+    store_core.atomic_write(path, spliced)
     return {"ok": True, "path": path}
 
 

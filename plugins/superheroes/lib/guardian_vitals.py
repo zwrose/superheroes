@@ -111,6 +111,12 @@ _MARKER_RE = re.compile(r"\b(?:TODO|FIXME)")
 _COUNT_TOKEN = re.compile(
     r"(\d+)\s+(passed|failed|error|errors|skipped|deselected|xfailed|xpassed)\b")
 _DURATION_RE = re.compile(r"\bin\s+(?:(\d+)m\s*)?(\d+(?:\.\d+)?)s\b")
+# A pytest summary must name at least one ran/selected category other than bare
+# "errors", and the category token must be followed by a pytest-shaped separator
+# (comma, "in", "=", or end) — otherwise tool output like "2 failed checks" or
+# "typecheck complete: 0 errors in 3.0s" is mistaken for a suite summary.
+_PYTEST_SUMMARY_ANCHOR = re.compile(
+    r"\d+\s+(?:passed|failed|skipped|deselected|xfailed|xpassed)\b(?=\s*[,=]|\s+in\b|\s*$)")
 # Categories that mean "a test actually ran"; `deselected` tests never ran.
 _RAN_CATEGORIES = ("passed", "failed", "error", "errors", "skipped", "xfailed", "xpassed")
 
@@ -184,7 +190,12 @@ def _scan_tracked(top, paths):
 
 
 def _collect_repo_vitals(cwd, run=None):
-    """locTotal / fileCount / todoCount from git-tracked files (ignored files never count)."""
+    """locTotal / fileCount / todoCount from git-tracked files (ignored files never count).
+
+    fileCount comes from `git ls-files` and is always complete when listing succeeds.
+    locTotal / todoCount require a full text scan: if any tracked file is unreadable,
+    oversize, or a symlink, those vitals are published as not-collected rather than as
+    a partial number that could look like an improvement."""
     top = _git(cwd, ["rev-parse", "--show-toplevel"], run=run)
     if top is None:
         reason = "not a git repo (git rev-parse failed)"
@@ -196,22 +207,33 @@ def _collect_repo_vitals(cwd, run=None):
         return ({}, {n: reason for n in ("locTotal", "fileCount", "todoCount")}, {})
     paths = [p for p in listing.split("\0") if p]
     scan = _scan_tracked(top, paths)
-    vitals = {
-        "fileCount": len(paths),
-        "locTotal": scan["lines"],
-        "todoCount": scan["markers"],
-    }
-    skipped = "skipped %d binary, %d unreadable, %d oversize" % (
-        scan["binary"], scan["unreadable"], scan["oversize"])
+    incomplete = scan["unreadable"] + scan["oversize"]
     sources = {
         "fileCount": "git ls-files (%d tracked files)" % len(paths),
-        "locTotal": "git ls-files line count (%d lines across %d text files; %s)"
-                    % (scan["lines"], scan["text"], skipped),
-        "todoCount": "git ls-files scan for TODO/FIXME occurrences, not files "
-                     "(%d occurrences across %d text files; %s)"
-                     % (scan["markers"], scan["text"], skipped),
     }
-    return (vitals, {}, sources)
+    vitals = {"fileCount": len(paths)}
+    missing = {}
+    if incomplete:
+        reason = (
+            "repository scan incomplete (%d unreadable, %d oversize of %d tracked) "
+            "— locTotal/todoCount not collected rather than published as a partial count"
+            % (scan["unreadable"], scan["oversize"], len(paths)))
+        missing["locTotal"] = reason
+        missing["todoCount"] = reason
+        sources["locTotal"] = reason
+        sources["todoCount"] = reason
+    else:
+        vitals["locTotal"] = scan["lines"]
+        vitals["todoCount"] = scan["markers"]
+        skipped = "skipped %d binary, %d unreadable, %d oversize" % (
+            scan["binary"], scan["unreadable"], scan["oversize"])
+        sources["locTotal"] = "git ls-files line count (%d lines across %d text files; %s)" % (
+            scan["lines"], scan["text"], skipped)
+        sources["todoCount"] = (
+            "git ls-files scan for TODO/FIXME occurrences, not files "
+            "(%d occurrences across %d text files; %s)"
+            % (scan["markers"], scan["text"], skipped))
+    return (vitals, missing, sources)
 
 
 def _collect_digest_vitals(lens_digests):
@@ -247,36 +269,34 @@ def parse_verify_output(text):
     """Parse a verify-command transcript for suite numbers. Anything not found is None.
 
     Handles the common pytest summary shapes ("N passed", "N failed", "N skipped",
-    "N deselected", "in 62.10s", "in 2m 3.50s"). The LAST line carrying count tokens wins
-    (pytest's final summary). Deselected tests never ran, so they are not counted. A
-    recognized summary with no `skipped` token means zero skips — pytest omits empty
-    categories — which is a reading of the summary, not a default-to-zero guess."""
+    "N deselected", "in 62.10s", "in 2m 3.50s"). The LAST line matching the anchored
+    pytest-summary shape wins (pytest's final summary). Deselected tests never ran, so
+    they are not counted. A recognized summary with no `skipped` token means zero skips —
+    pytest omits empty categories — which is a reading of the summary, not a
+    default-to-zero guess. Lines that only mention "N errors" (or duration alone) are
+    not treated as pytest summaries."""
     out = {"suiteTestCount": None, "suiteSkipped": None, "suiteRuntimeSeconds": None}
     if not isinstance(text, str) or not text.strip():
         return out
 
     summary_line = None
     for line in text.splitlines():
-        if _COUNT_TOKEN.search(line):
+        if _PYTEST_SUMMARY_ANCHOR.search(line) and _COUNT_TOKEN.search(line):
             summary_line = line
-    if summary_line is not None:
-        counts = {}
-        for num, cat in _COUNT_TOKEN.findall(summary_line):
-            counts[cat] = counts.get(cat, 0) + int(num)
-        out["suiteTestCount"] = sum(
-            n for cat, n in counts.items() if cat in _RAN_CATEGORIES)
-        out["suiteSkipped"] = counts.get("skipped", 0)
+    if summary_line is None:
+        return out
 
-    dur = None
-    for candidate in ([summary_line] if summary_line else []) + list(
-            reversed(text.splitlines())):
-        if candidate is None:
-            continue
-        m = _DURATION_RE.search(candidate)
-        if m:
-            dur = (int(m.group(1)) * 60 if m.group(1) else 0) + float(m.group(2))
-            break
-    out["suiteRuntimeSeconds"] = dur
+    counts = {}
+    for num, cat in _COUNT_TOKEN.findall(summary_line):
+        counts[cat] = counts.get(cat, 0) + int(num)
+    out["suiteTestCount"] = sum(
+        n for cat, n in counts.items() if cat in _RAN_CATEGORIES)
+    out["suiteSkipped"] = counts.get("skipped", 0)
+
+    m = _DURATION_RE.search(summary_line)
+    if m:
+        out["suiteRuntimeSeconds"] = (
+            (int(m.group(1)) * 60 if m.group(1) else 0) + float(m.group(2)))
     return out
 
 

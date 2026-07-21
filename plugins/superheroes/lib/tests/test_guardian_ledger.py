@@ -72,13 +72,16 @@ def test_write_is_idempotent_byte_for_byte(tmp_path):
 
 
 def test_write_preserves_created_date_across_rewrites(tmp_path):
+    """Surgical updates leave the provenance line (outside the fence) untouched."""
     repo = init_calibrated_repo(tmp_path)
     records = [_rec("dup:jscpd:a.md", "filed", issue="#1")]
     gled.write(repo, records, now="2026-07-01")
     gled.write(repo, records, now="2026-07-21")
     text = open(gs.ledger_path(repo), encoding="utf-8").read()
     assert "created=2026-07-01" in text
-    assert "updated=2026-07-21" in text
+    # Writer replaces only the fenced block — provenance `updated=` is outside it.
+    assert "updated=2026-07-01" in text
+    assert "updated=2026-07-21" not in text
 
 
 def test_write_never_mutates_the_repo_with_git(tmp_path, monkeypatch):
@@ -833,3 +836,110 @@ def test_cli_bad_input_reports_an_error_not_a_traceback(tmp_path):
         capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     json.loads(r.stdout)
+
+
+# --- WO-13: surgical fence preserve + metric validation ----------------------
+
+
+def test_write_unlocked_preserves_bytes_outside_fence_and_unknown_keys(tmp_path):
+    """Strong preservation: owner prose, comments, unknown top-level + per-record keys."""
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.ledger_path(repo)
+    owner_outside = (
+        "<!-- guardian-ledger: schemaVersion=1 status=confirmed "
+        "created=2026-07-01 updated=2026-07-01 -->\n\n"
+        "# Owner title — must survive\n\n"
+        "Owner hand-written prose before the fence.\n\n"
+        "<!-- owner comment outside fence -->\n\n"
+        "## Report card\n\n"
+        "_Owner left this alone._\n\n"
+    )
+    block = {
+        "schemaVersion": 1,
+        "ownerNotes": "keep this top-level unknown",
+        "records": [{
+            "id": "dup:jscpd:a.md",
+            "disposition": "accepted",
+            "date": "2026-07-01",
+            "issue": None,
+            "metricAtDisposition": {"cloneLines": 10},
+            "reason": "tolerated",
+            "reraiseWhen": None,
+            "ownerAnnotation": "per-record unknown must survive",
+        }],
+        "sweeps": [{"sweepId": "s0", "sweptSha": "abc", "date": "2026-07-01"}],
+    }
+    text = (
+        owner_outside
+        + "```json %s\n%s\n```\n\n"
+        "Trailing owner prose after the fence.\n" % (
+            gs.LEDGER_FENCE, json.dumps(block, indent=2))
+    )
+    sc.atomic_write(path, text)
+    before = open(path, encoding="utf-8").read()
+    fence_m = gs._LEDGER_BLOCK.search(before)
+    assert fence_m is not None
+    outside_before = before[:fence_m.start()] + before[fence_m.end():]
+
+    new_records = [{
+        "id": "dup:jscpd:a.md",
+        "disposition": "accepted",
+        "date": "2026-07-01",
+        "issue": None,
+        "metricAtDisposition": {"cloneLines": 12},
+        "reason": "tolerated",
+        "reraiseWhen": None,
+    }]
+    out = gled.write_unlocked(
+        repo, new_records,
+        sweeps=[{"sweepId": "s0", "sweptSha": "abc", "date": "2026-07-01"},
+                {"sweepId": "s1", "sweptSha": "def", "date": "2026-07-21"}])
+    assert out["ok"] is True, out
+    after = open(path, encoding="utf-8").read()
+    fence_after = gs._LEDGER_BLOCK.search(after)
+    assert fence_after is not None
+    outside_after = after[:fence_after.start()] + after[fence_after.end():]
+    assert outside_after == outside_before
+    parsed = json.loads(fence_after.group(1))
+    assert parsed["ownerNotes"] == "keep this top-level unknown"
+    assert parsed["records"][0]["ownerAnnotation"] == "per-record unknown must survive"
+    assert parsed["records"][0]["metricAtDisposition"]["cloneLines"] == 12
+    assert len(parsed["sweeps"]) == 2
+
+
+def test_write_unlocked_skips_when_fence_missing(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.ledger_path(repo)
+    sc.atomic_write(path, "# no fence here\nowner prose only\n")
+    before = open(path, "rb").read()
+    out = gled.write_unlocked(repo, [_rec("a:b:c", "filed", issue="#1")])
+    assert out["ok"] is False
+    assert "no-fence" in (out.get("skipped") or "")
+    assert open(path, "rb").read() == before
+
+
+def test_validate_record_rejects_non_numeric_metric_values():
+    ok, reasons = gled.validate_record(_rec(
+        "dup:t:a", "accepted", reason="r",
+        metricAtDisposition={"cloneLines": "many"}))
+    assert ok is False
+    assert any("cloneLines" in r for r in reasons)
+    ok2, _ = gled.validate_record(_rec(
+        "dup:t:a", "accepted", reason="r",
+        metricAtDisposition={"cloneLines": True}))
+    assert ok2 is False
+    ok3, _ = gled.validate_record(_rec(
+        "dup:t:a", "accepted", reason="r",
+        metricAtDisposition={"": 1}))
+    assert ok3 is False
+
+
+def test_report_card_degraded_config_revokes_benching():
+    records = [
+        _rec("dup:t:%d" % i, "triaged-out", adjudicatedIn="s%d" % (i % 3))
+        for i in range(10)
+    ]
+    notes = []
+    card = gled.report_card(records, notes_out=notes, config_status="degraded")
+    assert card["dup"]["benched"] is False
+    assert any("degraded" in n for n in notes)

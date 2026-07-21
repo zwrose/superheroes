@@ -179,6 +179,22 @@ def test_parse_verify_output_garbage_is_all_none():
                    "suiteRuntimeSeconds": None}
 
 
+def test_parse_verify_output_rejects_non_pytest_error_lookalikes():
+    """Coverage gap: '0 errors' / '2 failed' outside a pytest summary must stay None."""
+    cases = [
+        "typecheck complete: 0 errors in 3.0s",
+        "eslint: 2 failed checks in 1.5s",
+        "compiler finished with 0 errors",
+    ]
+    for text in cases:
+        out = gv.parse_verify_output(text)
+        assert out == {
+            "suiteTestCount": None,
+            "suiteSkipped": None,
+            "suiteRuntimeSeconds": None,
+        }, text
+
+
 def test_parse_verify_output_none_text_is_all_none():
     assert gv.parse_verify_output(None) == {
         "suiteTestCount": None, "suiteSkipped": None, "suiteRuntimeSeconds": None}
@@ -777,3 +793,14 @@ def test_trend_round_trip_global_mode(tmp_path):
     assert gv.read_trend(repo, root=root)["records"][0]["vitals"]["locTotal"] == 5
     # global mode leaves no trace in the repo
     assert not os.path.exists(os.path.join(repo, ".claude", "superheroes", "guardian"))
+
+def test_incomplete_scan_marks_loc_and_todo_not_collected(tmp_path, monkeypatch):
+    """Oversize / unreadable tracked files must not publish a partial locTotal."""
+    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n", "big.py": "y = 2\n"})
+    monkeypatch.setattr(gv, "_MAX_FILE_BYTES", 1)
+    out = gv.collect(repo)
+    assert out["vitals"]["fileCount"] == 2
+    assert out["vitals"]["locTotal"] is None
+    assert out["vitals"]["todoCount"] is None
+    assert "incomplete" in out["notCollected"]["locTotal"]
+    assert "incomplete" in out["notCollected"]["todoCount"]

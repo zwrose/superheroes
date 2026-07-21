@@ -149,6 +149,9 @@ def read_ledger(cwd, root=None):
     failure is `unreadable`. Invalid records (failing the shared writer
     validator) are excluded from `records`/`byId` and surface as `partial`.
 
+    `schemaVersion` must be a non-bool int exactly equal to LEDGER_SCHEMA_VERSION
+    for status `ok`; a greater int is `newer`; anything else is `malformed`.
+
     Total type validation: a block that is not a dict is malformed (never
     AttributeError); a record whose id is not a non-empty str is skipped (never
     TypeError on byId); duplicate ids are ambiguous and never suppress."""
@@ -204,6 +207,9 @@ def read_ledger(cwd, root=None):
         }
 
     ver = block.get("schemaVersion")
+    # ok requires a non-bool int exactly equal to LEDGER_SCHEMA_VERSION. Missing,
+    # string, bool, zero, negative, or any other shape is malformed; only a future
+    # int is newer. (bool is a subclass of int — reject it explicitly.)
     if isinstance(ver, int) and not isinstance(ver, bool) and ver > LEDGER_SCHEMA_VERSION:
         return {
             "records": [],
@@ -211,6 +217,15 @@ def read_ledger(cwd, root=None):
             "status": "newer",
             "note": "ledger schemaVersion=%s is newer than %s"
                      % (ver, LEDGER_SCHEMA_VERSION),
+        }
+    if not (isinstance(ver, int) and not isinstance(ver, bool)
+            and ver == LEDGER_SCHEMA_VERSION):
+        return {
+            "records": [],
+            "byId": {},
+            "status": "malformed",
+            "note": "ledger schemaVersion must be int %s (got %r)"
+                     % (LEDGER_SCHEMA_VERSION, ver),
         }
 
     raw_records = block.get("records")
@@ -222,10 +237,19 @@ def read_ledger(cwd, root=None):
             "note": "ledger records is not a list",
         }
 
+    if "sweeps" in block and not isinstance(block.get("sweeps"), list):
+        return {
+            "records": [],
+            "byId": {},
+            "status": "malformed",
+            "note": "ledger sweeps is not a list",
+        }
+
     records = []
     by_id = {}
     duplicates = set()
     skipped_invalid = 0
+    bad_sweeps = 0
     for rec in raw_records:
         if not isinstance(rec, dict):
             skipped_invalid += 1
@@ -243,8 +267,9 @@ def read_ledger(cwd, root=None):
             continue
         ok, _reasons = gled.validate_record(rec)
         if not ok:
-            # Preserve on disk (caller must not rewrite); exclude from suppression
-            # inputs so a typo cannot mute detection without the required rationale.
+            # Preserve on disk (caller must not rewrite); exclude from byId so a
+            # typo cannot mute detection. Partial ledgers disable suppression in
+            # collect so a dropped invalid sibling cannot make a collision look unique.
             skipped_invalid += 1
             continue
         records.append(rec)
@@ -256,6 +281,12 @@ def read_ledger(cwd, root=None):
             continue
         by_id[rid] = rec
 
+    raw_sweeps = block.get("sweeps")
+    if isinstance(raw_sweeps, list):
+        for entry in raw_sweeps:
+            if not isinstance(entry, dict):
+                bad_sweeps += 1
+
     notes = []
     if duplicates:
         notes.append(
@@ -265,8 +296,12 @@ def read_ledger(cwd, root=None):
         notes.append(
             "skipped %d invalid or incomplete record(s) (excluded from byId; "
             "on-disk bytes must not be rewritten)" % skipped_invalid)
+    if bad_sweeps:
+        notes.append(
+            "skipped %d invalid sweeps entr%s (on-disk bytes must not be rewritten)"
+            % (bad_sweeps, "y" if bad_sweeps == 1 else "ies"))
     status = "ok"
-    if skipped_invalid or duplicates:
+    if skipped_invalid or duplicates or bad_sweeps:
         status = "partial"
     return {
         "records": records,

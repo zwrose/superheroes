@@ -1306,3 +1306,301 @@ def test_resolve_issue_state_real_gh_shim_on_path(tmp_path, monkeypatch):
     assert any(a.get("to") == "reopened" for a in advances)
     report = open(gs.report_path(repo, root), encoding="utf-8").read()
     assert "reopened" in report
+
+
+# --- WO-13 batch E regressions -----------------------------------------------
+
+
+def test_read_config_healthy_absent_vs_degraded_malformed(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    cfg = gsw.read_config(repo, root=root)
+    assert cfg["configStatus"] == "healthy"
+
+    layer = tmp_path / ".claude" / "superheroes" / "guardian.md"
+    layer.parent.mkdir(parents=True, exist_ok=True)
+    layer.write_text(
+        "<!-- guardian: schemaVersion=1 status=confirmed -->\n\n"
+        "```json guardian-config\n{ not json\n```\n")
+    cfg2 = gsw.read_config(repo, root=root)
+    assert cfg2["configStatus"] == "degraded"
+    assert cfg2["cadence"] == dict(gsw.CADENCE_DEFAULTS)
+    assert any("malformed" in n for n in cfg2["configNotes"])
+
+
+def test_read_config_non_object_report_card_is_degraded(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    write_guardian_layer(tmp_path, {"reportCard": ["nope"]})
+    cfg = gsw.read_config(repo, root=_store(tmp_path))
+    assert cfg["configStatus"] == "degraded"
+    assert cfg["reportCard"] is None
+
+
+def test_malformed_config_revokes_benching_authority(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_ledger(tmp_path, benched_fixture_ledger(), root=root)
+    layer = tmp_path / ".claude" / "superheroes" / "guardian.md"
+    layer.write_text(
+        "<!-- guardian: schemaVersion=1 status=confirmed -->\n\n"
+        "```json guardian-config\n{ broken\n```\n")
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": {"collectorVersion": "0.0.0-test", "digest": {"v": 1}}},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    lens = FixtureLens(digest={"v": 2}, diff_new=["fixture:tool:new"], emit_normal=True)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert bundle["reportCard"].get("fixture", {}).get("benched") is not True
+    assert any("degraded" in n for n in bundle.get("reportCardNotes") or [])
+
+
+def test_partial_ledger_valid_plus_invalid_collision_surfaces(tmp_path):
+    """Valid :1 + invalid :2 must not make a :3 candidate look uniquely settled."""
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    records = [
+        {
+            "id": "fixture:tool:a.py:1",
+            "disposition": "accepted",
+            "date": "2026-07-01",
+            "issue": None,
+            "metricAtDisposition": {"metric": 1},
+            "reason": "owner accepted",
+            "reraiseWhen": None,
+        },
+        {
+            "id": "fixture:tool:a.py:2",
+            "disposition": "accepted",
+            "date": "2026-07-01",
+            "issue": None,
+            "metricAtDisposition": {"metric": 1},
+            # missing required reason → invalid → partial
+        },
+    ]
+    write_ledger(tmp_path, records, root=root)
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": {"collectorVersion": "0.0.0-test", "digest": {"v": 1}}},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+
+    class CollisionLens(FixtureLens):
+        def collect(self, ctx):
+            return {
+                "candidates": [{"id": "fixture:tool:a.py:3", "metric": 1}],
+                "digest": {"v": 2},
+            }
+
+    lens = CollisionLens(digest={"v": 2}, diff_new=["fixture:tool:a.py:3"])
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert bundle["ledgerState"] == "partial"
+    assert any(s["id"] == "fixture:tool:a.py:3" for s in bundle["surfaced"]), bundle
+    assert not any(k["id"] == "fixture:tool:a.py:3"
+                   for k in bundle["funnel"]["killedByLedger"])
+
+
+def test_finalize_schema_version_matrix_skips_write_and_preserves_bytes(tmp_path):
+    """Invalid schemaVersion values must not authorize a rewrite."""
+    import pytest
+
+    cases = [
+        ("missing", None),
+        ("string-2", "2"),
+        ("bool-true", True),
+        ("zero", 0),
+        ("negative", -1),
+        ("future", 99),
+    ]
+    for label, ver in cases:
+        case_root = tmp_path / label
+        case_root.mkdir()
+        repo = init_calibrated_repo(case_root)
+        root = _store(case_root)
+        write_guardian_layer(case_root, {"vitals": False})
+        block = {
+            "records": [{
+                "id": "fixture:trade",
+                "disposition": "accepted",
+                "date": "2026-07-01",
+                "issue": None,
+                "metricAtDisposition": {"metric": 5},
+                "reason": "owner accepted this trade",
+                "reraiseWhen": None,
+            }],
+            "sweeps": [],
+            "ownerNotes": "must survive %s" % label,
+        }
+        if ver is not None:
+            block["schemaVersion"] = ver
+        owner_text = (
+            "# Owner prose %s — must survive\n\n"
+            "```json %s\n%s\n```\n"
+            % (label, gs.LEDGER_FENCE, json.dumps(block, indent=2))
+        )
+        path = gs.ledger_path(repo, root)
+        sc.atomic_write(path, owner_text)
+        before = open(path, "rb").read()
+        lens = FixtureLens(emit_red_line=True)
+        bundle = gsw.collect(repo, lenses=[lens], root=root)
+        assert bundle["ledgerState"] in ("malformed", "newer"), (label, bundle["ledgerState"])
+        disp = [{
+            "id": bundle["surfaced"][0]["id"],
+            "verdict": "validated",
+            "consequence": "x",
+            "receipt": "y",
+            "effort": "z",
+            "ledgerJoin": bundle["surfaced"][0]["id"],
+        }]
+        result = gsw.finalize(repo, bundle, disp, root=root)
+        assert result["ok"] is True
+        assert result["ledgerWrite"]["ok"] is False, label
+        skipped = (result["ledgerWrite"].get("skipped")
+                   or result["ledgerWrite"].get("reason") or "")
+        assert skipped, label
+        after = open(path, "rb").read()
+        assert after == before, label
+
+
+def test_finalize_malformed_sweeps_skips_write(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    owner_text = (
+        "# Owner history — must survive\n\n"
+        "```json %s\n%s\n```\n"
+        % (gs.LEDGER_FENCE, json.dumps({
+            "schemaVersion": 1,
+            "records": [{
+                "id": "fixture:valid",
+                "disposition": "filed",
+                "date": "2026-07-01",
+                "issue": "#1",
+                "metricAtDisposition": {"metric": 5},
+                "reason": None,
+                "reraiseWhen": None,
+            }],
+            "sweeps": "not-a-list",
+        }, indent=2))
+    )
+    path = gs.ledger_path(repo, root)
+    sc.atomic_write(path, owner_text)
+    before = open(path, "rb").read()
+    lens = FixtureLens(emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert bundle["ledgerState"] == "malformed"
+    disp = [{
+        "id": bundle["surfaced"][0]["id"],
+        "verdict": "validated",
+        "consequence": "x",
+        "receipt": "y",
+        "effort": "z",
+        "ledgerJoin": bundle["surfaced"][0]["id"],
+    }]
+    result = gsw.finalize(repo, bundle, disp, root=root)
+    assert result["ledgerWrite"]["ok"] is False
+    assert open(path, "rb").read() == before
+
+
+def test_finalize_successful_sweep_preserves_outside_fence_bytes(tmp_path):
+    """Successful writable sweep: every byte outside the fence stays identical."""
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    outside_prefix = (
+        "<!-- guardian-ledger: schemaVersion=1 status=confirmed "
+        "created=2026-07-01 updated=2026-07-01 -->\n\n"
+        "# Owner history — must survive a successful sweep\n\n"
+        "Hand-written note.\n\n"
+        "<!-- owner comment -->\n\n"
+        "## Report card\n\n_custom_\n\n"
+    )
+    block = {
+        "schemaVersion": 1,
+        "ownerNotes": "opaque top-level",
+        "records": [{
+            "id": "fixture:keep",
+            "disposition": "accepted",
+            "date": "2026-07-01",
+            "issue": None,
+            "metricAtDisposition": {"metric": 5},
+            "reason": "kept",
+            "reraiseWhen": None,
+            "extraField": "per-record opaque",
+        }],
+        "sweeps": [],
+    }
+    text = outside_prefix + "```json %s\n%s\n```\n\nTrailing.\n" % (
+        gs.LEDGER_FENCE, json.dumps(block, indent=2))
+    path = gs.ledger_path(repo, root)
+    sc.atomic_write(path, text)
+    before = open(path, encoding="utf-8").read()
+    fence_before = gs._LEDGER_BLOCK.search(before)
+    outside_before = before[:fence_before.start()] + before[fence_before.end():]
+
+    lens = FixtureLens(emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert bundle["ledgerState"] == "ok"
+    disp = [{
+        "id": bundle["surfaced"][0]["id"],
+        "verdict": "validated",
+        "consequence": "x",
+        "receipt": "y",
+        "effort": "z",
+        "ledgerJoin": bundle["surfaced"][0]["id"],
+    }]
+    result = gsw.finalize(repo, bundle, disp, root=root)
+    assert result["ok"] is True
+    assert result["ledgerWrite"].get("ok") is True, result["ledgerWrite"]
+    after = open(path, encoding="utf-8").read()
+    fence_after = gs._LEDGER_BLOCK.search(after)
+    outside_after = after[:fence_after.start()] + after[fence_after.end():]
+    assert outside_after == outside_before
+    parsed = json.loads(fence_after.group(1))
+    assert parsed["ownerNotes"] == "opaque top-level"
+    assert parsed["records"][0]["extraField"] == "per-record opaque"
+
+
+def test_skill_cadence_phrase_matches_cadence_defaults():
+    """§11 drift guard: SKILL.md cadence phrase ↔ CADENCE_DEFAULTS (no hand-typed expect)."""
+    import re
+    skill = os.path.join(
+        os.path.dirname(__file__), "..", "..", "skills", "guardian", "SKILL.md")
+    text = open(skill, encoding="utf-8").read()
+    matches = re.findall(
+        r"≥(\d+)\s+merges\s+or\s+≥(\d+)\s+days", text)
+    assert len(matches) == 1, (
+        "SKILL.md cadence phrase not uniquely parseable — reword the Cost + cadence "
+        "sentence to contain exactly one '≥N merges or ≥N days' form (found %r)"
+        % (matches,))
+    merges, days = (int(matches[0][0]), int(matches[0][1]))
+    assert merges == gsw.CADENCE_DEFAULTS["minMerges"]
+    assert days == gsw.CADENCE_DEFAULTS["minDays"]
+
+
+def test_issue_resolve_respects_aggregate_deadline(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append(kwargs.get("timeout"))
+        raise OSError("gh missing")
+
+    monkeypatch.setattr(gsw.subprocess, "run", fake_run)
+    deadline = gsw.time.monotonic() + 0.01
+    gsw.time.sleep(0.02)
+    assert gsw._resolve_issue_state("#1", cwd=str(tmp_path), deadline=deadline) is None
+    assert calls == []
+    cache = {}
+    assert gsw._resolve_issue_state("#2", cwd=str(tmp_path),
+                                    deadline=gsw.time.monotonic() + 5,
+                                    cache=cache) is None
+    assert len(calls) == 1
+    assert gsw._resolve_issue_state("#2", cwd=str(tmp_path),
+                                    deadline=gsw.time.monotonic() + 5,
+                                    cache=cache) is None
+    assert len(calls) == 1, "cached issue must not re-call gh"
