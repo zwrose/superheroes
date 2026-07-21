@@ -396,6 +396,128 @@ def test_empty_new_surface_skips_scoped_finder_with_note(tmp_path):
 
 
 # =============================================================================
+# dispatch-fixer head diff: inline OR absolute headDiffPath; unreadable → full panel (#507)
+# =============================================================================
+
+def _multifile_delta_respond(captured, fixer_artifact):
+    """A CLI responder for the multi-file delta scenario: round-1 finds one Important at f.py:1,
+    audits discharge, the scoped finder's payload is captured. The fixer's artifact (inline `headDiff`
+    and/or `headDiffPath`) is supplied by the caller so each test exercises a different head-diff
+    source."""
+    def respond(phase, payload, rnd):
+        if phase == RD.P_PANEL:
+            seats = {dm: {"findings": []} for dm in RD.DIMENSIONS}
+            if rnd == 1:
+                seats["code-reviewer"] = {"findings": [
+                    {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+            return {"seats": seats}
+        if phase == RD.P_VERIFIERS:
+            return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran"}
+                                 for c in payload.get("clusters", []) for i in c.get("ids", [])]}
+        if phase == RD.P_SYNTHESIS:
+            return {"grouping": None}
+        if phase == RD.P_AUDITS:
+            return {"results": [{"id": t["id"], "ruling": "discharged", "reason": "r",
+                                 "evidence": "e", "auditorVendor": t.get("auditorVendor")}
+                                for t in payload.get("targets", [])]}
+        if phase == RD.P_SCOPED:
+            captured["payload"] = payload
+            return {"findings": []}
+        if phase == RD.P_FIXER:
+            return dict(fixer_artifact)
+        if phase == RD.P_VERIFY:
+            return {"result": "pass"}
+        return {}
+    return respond
+
+
+def test_fixer_head_diff_path_form_end_to_end(tmp_path):
+    """A `dispatch-fixer` artifact may carry the post-fix head diff as an ABSOLUTE `headDiffPath` the
+    driver reads itself (a real git diff cannot inline into a JSON submit artifact). The delta split
+    reads the file's content, so the scoped finder's payload carries that file's new surface (#507)."""
+    d = str(tmp_path)
+    head_file = tmp_path / "head-r1.txt"
+    head_file.write_text(_R2B_HEAD_MF, encoding="utf-8")
+    captured = {"payload": None}
+    respond = _multifile_delta_respond(
+        captured, {"fixes": [], "headDiffPath": str(head_file), "changedSubjects": ["Code"]})
+    payload = _drive_cli(d, _cfg(diff=_R2B_REVIEWED), respond)
+    assert payload["verdict"] == "converged"
+    assert captured["payload"] is not None, "the scoped finder was never dispatched"
+    expected = RD.delta_surface.split_fix_surface(
+        _R2B_REVIEWED, _R2B_HEAD_MF, [{"file": "f.py", "line": 1}])["newSurface"]
+    assert captured["payload"]["hunks"] == expected and set(expected) == {"f.py", "g.py"}
+    with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
+        receipt = json.load(fh)
+    assert any(r.get("headDiffSource") == "path" for r in receipt["rounds"]), receipt["rounds"]
+
+
+def test_fixer_unreadable_head_diff_path_schedules_full_panel(tmp_path):
+    """An unreadable `headDiffPath` (no inline diff) is an UNKNOWN surface, not an empty one: the
+    delta round runs a FULL reviewer-deep panel (unknown→run-everything), never a silent scoped skip
+    over nothing. The source is journaled `unknown` and an `unknown-surface` decision is recorded."""
+    d = str(tmp_path)
+    missing = str(tmp_path / "does-not-exist.txt")
+    seen = {"panel_r2": False, "scoped": False}
+
+    def respond(phase, payload, rnd):
+        if phase == RD.P_PANEL:
+            if rnd >= 2:
+                seen["panel_r2"] = True
+            seats = {dm: {"findings": []} for dm in RD.DIMENSIONS}
+            if rnd == 1:
+                seats["code-reviewer"] = {"findings": [
+                    {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+            return {"seats": seats}
+        if phase == RD.P_VERIFIERS:
+            return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran"}
+                                 for c in payload.get("clusters", []) for i in c.get("ids", [])]}
+        if phase == RD.P_SYNTHESIS:
+            return {"grouping": None}
+        if phase == RD.P_FIXER:
+            return {"fixes": [], "headDiffPath": missing, "changedSubjects": ["Code"]}
+        if phase == RD.P_VERIFY:
+            return {"result": "pass"}
+        if phase == RD.P_SCOPED:
+            seen["scoped"] = True
+            return {"findings": []}
+        if phase in (RD.P_AUDITS, RD.P_GAPSWEEP):
+            return {"results": [], "findings": []}
+        return {}
+
+    payload = _drive_cli(d, _cfg(), respond)
+    assert seen["panel_r2"] is True, "an unreadable head diff must run a full panel, not a scoped scan"
+    assert seen["scoped"] is False
+    assert payload["verdict"] == "converged"
+    with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
+        receipt = json.load(fh)
+    assert any(r.get("headDiffSource") == "unknown" for r in receipt["rounds"]), receipt["rounds"]
+    assert any(dc["kind"] == "unknown-surface" for dc in receipt["decisions"]), receipt["decisions"]
+
+
+def test_fixer_inline_head_diff_wins_over_path(tmp_path):
+    """When BOTH inline `headDiff` and `headDiffPath` are present, inline wins: the scoped payload
+    carries the inline diff's (multi-file) new surface, not the path file's (empty) one (#507)."""
+    d = str(tmp_path)
+    other = tmp_path / "other-head.txt"
+    other.write_text(HEAD, encoding="utf-8")  # a single-file diff whose only hunk is over the fix
+    captured = {"payload": None}
+    respond = _multifile_delta_respond(captured, {
+        "fixes": [], "headDiff": _R2B_HEAD_MF, "headDiffPath": str(other),
+        "changedSubjects": ["Code"]})
+    payload = _drive_cli(d, _cfg(diff=_R2B_REVIEWED), respond)
+    assert payload["verdict"] == "converged"
+    # inline won → the scoped finder fired over the inline diff's two-file surface.
+    assert captured["payload"] is not None
+    expected = RD.delta_surface.split_fix_surface(
+        _R2B_REVIEWED, _R2B_HEAD_MF, [{"file": "f.py", "line": 1}])["newSurface"]
+    assert captured["payload"]["hunks"] == expected and set(expected) == {"f.py", "g.py"}
+    with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
+        receipt = json.load(fh)
+    assert any(r.get("headDiffSource") == "inline" for r in receipt["rounds"]), receipt["rounds"]
+
+
+# =============================================================================
 # Layer 1 — run_loop (library) on each leg shape
 # =============================================================================
 

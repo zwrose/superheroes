@@ -1072,17 +1072,46 @@ def _accumulated_findings(state):
     return out
 
 
+def _resolve_head_diff(artifact):
+    """Resolve the post-fix head diff the delta split reads. The `dispatch-fixer` artifact may carry
+    it INLINE (`headDiff`) or, since a real `git diff BASE...HEAD` can be hundreds of KB and cannot
+    reasonably inline into a JSON submit artifact, as an ABSOLUTE file path (`headDiffPath`) the
+    driver reads itself (#507). Inline WINS when present. A missing / non-absolute / unreadable path,
+    or empty file content, is NOT an empty diff — it is an UNKNOWN surface, so the caller escalates
+    to a full panel (the fail-closed unknown→run-everything rule) rather than silently computing an
+    empty scoped surface. Returns (head_or_None, source) where source is 'inline'|'path'|'unknown'."""
+    inline = artifact.get("headDiff")
+    if inline is not None:
+        return inline, "inline"
+    path = artifact.get("headDiffPath")
+    if isinstance(path, str) and path and os.path.isabs(path):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                content = fh.read()
+        except OSError:
+            content = None
+        if content:
+            return content, "path"
+    return None, "unknown"
+
+
 def _fold_fixer(state, config, artifact, changed_subjects_seam=None):
     """Record the fixer's result; the fix-batch COMPOSITION stays orchestrator-side (the artifact),
     the driver sequences + records. The post-fix head diff rides the artifact (git, per the
-    dispatch-fixer contract) so the next delta round can split_fix_surface against git. The changed
-    policy subjects the #174 confirmation re-arm consumes are SCRIPT-DERIVED here — from the
+    dispatch-fixer contract) so the next delta round can split_fix_surface against git — INLINE
+    (`headDiff`) or as an absolute `headDiffPath` the driver reads (`_resolve_head_diff`); an
+    unresolvable path fails to an unknown surface (full panel), never a silent empty scoped skip. The
+    changed policy subjects the #174 confirmation re-arm consumes are SCRIPT-DERIVED here — from the
     reviewed-vs-head diff through the accumulated findings (#157/#158), NEVER the fixer's
     self-report. The derivation is an injectable seam symmetrical with reviewer/fixer/verify:
     run_loop may inject a scripted replay (the eval harness); the library default + the CLI path
     wire the real git derivation. Unknown/unparseable surface → None → the run-everything rule."""
     state["fixBatch"] = state.get("_fixBatch") or []
-    state["headDiff"] = artifact.get("headDiff")
+    head, head_source = _resolve_head_diff(artifact)
+    state["headDiff"] = head
+    state["_headDiffSource"] = head_source
+    state["_headDiffUnknown"] = head_source == "unknown"
+    _record_round(state, "headDiffSource", head_source)
     derive = changed_subjects_seam or derive_changed_subjects
     state["_changedSubjects"] = derive(
         state.get("reviewedDiff"), state.get("headDiff"), _accumulated_findings(state))
@@ -1136,18 +1165,33 @@ def _fold_verify(state, config, artifact):
 
 # ---- delta rounds (2+) ----------------------------------------------------------------------
 
+def _schedule_full_panel_unknown(state, detail):
+    """The fail-closed unknown→run-everything rule: an unresolvable delta surface schedules a FULL
+    reviewer-deep panel, never a silently-scoped (or silently-skipped) round."""
+    _decision(state, "unknown-surface", detail)
+    _record_round(state, "roundKind", "full-panel-unknown-surface")
+    state["fullPanelRan"] = False
+    state["step"] = P_PANEL
+
+
 def _enter_delta_round(state, config):
     """Rounds 2+: split_fix_surface(reviewed, head, fixBatch). unknown → schedule a FULL panel
     (the existing unknown→run-everything rule). Else audit the fixed findings + scoped-find the new
     surface."""
+    # An unresolvable post-fix head diff (a missing/unreadable `headDiffPath`, no inline diff) is an
+    # unknown surface BEFORE the split runs — never fold it through as an empty diff (#507). This is
+    # the honest recovery for the field defect: a lost head diff now runs a full panel, not a vacuous
+    # scoped scan over nothing.
+    if state.pop("_headDiffUnknown", False):
+        _schedule_full_panel_unknown(
+            state, "post-fix head diff unresolvable (source %r) — full reviewer-deep panel"
+            % state.get("_headDiffSource"))
+        return
     split = delta_surface.split_fix_surface(
         state.get("_priorReviewedDiff") or state.get("reviewedDiff"),
         state.get("headDiff"), state.get("fixBatch") or [])
     if split.get("unknown"):
-        _decision(state, "unknown-surface", "delta surface unknown — full reviewer-deep panel")
-        _record_round(state, "roundKind", "full-panel-unknown-surface")
-        state["fullPanelRan"] = False
-        state["step"] = P_PANEL
+        _schedule_full_panel_unknown(state, "delta surface unknown — full reviewer-deep panel")
         return
     # a delta (scoped) round is NOT a full panel — reset the flag so a scoped certifying finish is
     # `audited-chain`, not `full-panel-confirmed`. A re-armed confirmation panel re-sets it True.
@@ -1493,6 +1537,7 @@ def build_receipt(state, session_dir=None):
                        "verifyResult": rec.get("verifyResult"),
                        "audits": rec.get("audits"),
                        "scopedFinder": rec.get("scopedFinder"),
+                       "headDiffSource": rec.get("headDiffSource"),
                        "unverified": rec.get("unverified"),
                        "authorJustifiedDrops": rec.get("authorJustifiedDrops"),
                        "compileDrops": rec.get("compileDrops"),
