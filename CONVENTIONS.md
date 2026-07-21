@@ -86,9 +86,15 @@ restatement):
   → `review-spec`). Narrowed in v2: it produces the `spec` only — no `plan`, no `tasks`
   (retired, #479).
 - **Review Crew** — the multi-model review layer: the spec panel (`review-spec`) and
-  `review-code`'s cross-vendor build review. Panel composition is **composed to
-  complement** the builder's vendor so the maker's vendor never dominates its own
-  checking.
+  `review-code`'s cross-vendor build review. The **spec panel runs six doc-native lenses**
+  (Clarity, Verifiability, Failure-Mode, Coherence, Safety & access, Grounding) while
+  `review-code` runs its five code reviewers — the honest doc-native identities that
+  replaced the "five code costumes" (#514 D1). (#34 proposed merging the code and test seats
+  as the weakest, on ~70% zero-finding early small-N data; at N=37 those are the two
+  strongest seats — Verifiability has the most blocking findings of any seat — and the
+  genuinely weak seat was architecture, since recast as Coherence.) Panel composition is
+  **composed to complement** the builder's vendor so the maker's vendor never dominates its
+  own checking.
 - **Test-Pilot** — browser-evidence verification: plans derived from the spec/issue,
   executed for real. Observe-and-report only — a bug it finds becomes a work order, it
   never fixes.
@@ -272,6 +278,24 @@ access, duplicates, concurrency, abuse, reach) and tagged Specify/Defer/N-A —
 brief, owned by the builder, §1). Non-functional requirements are stated as **outcomes
 with a fit-criterion**. UI/UX **references the Claude Design handoff output**, not a
 reinterpretation. This is the anti-slop core.
+
+**Provenance / citations (#517, owner-ratified #514 D3).** A load-bearing **mirror-fact** — a
+spec sentence asserting something about the *existing repo* that the repo could contradict
+("reuses/extends the existing X", "the current limit is N", "today the system does Y") — carries
+an inline **citation** naming its repo source. A **definition** (a new behavior the spec itself
+defines — the owner's *what*) carries none: it is the source of truth and mirrors nothing. The
+**mirror-vs-definition test** decides — "could today's repo contradict this sentence?" YES →
+mirror-fact → cite; NO → definition → no cite. A **noise budget** keeps citations rare: only
+load-bearing mirror-facts (ones the build relies on being true) get one, and a citation-dense
+spec is usually leaking the build's *how* (itself a finding). The citation grammar's one
+authoritative machine home is `plugins/superheroes/lib/citation_validator.py`
+(`CITATION_RE`); `templates/spec.md` carries the canonical example as the §11 drift witness, and
+this section describes the rule rather than restating a second machine-parseable literal. A
+deterministic **dangling-citation validator** (existence + anchor resolution, fail-closed) runs in
+`review-spec`'s compile step and is **advisory** — review-spec is owner-gated, so the validator
+produces findings the owner adjudicates and never blocks or writes `passed`. **Content-match** —
+whether the cited source actually *says* what the spec claims — stays the Grounding verifier's
+judgment, not the deterministic check's.
 
 ### 3.3 Location and convertibility
 
@@ -646,13 +670,25 @@ instance: it extracts the marked boundary line from both `skills/showrunner/SKIL
 `skills/workhorse/SKILL.md`, fails closed if either is missing, and asserts the two are
 byte-identical — editing one charter's boundary breaks CI until the other matches.
 
-*Worked example 2 — the reviewer roster.* The authoritative home is the set of
-`agents/*-reviewer` files. `lib/tests/test_dispatch_tables.py::test_code_reviewer_rosters_match_bundled_agents`
-reads that directory listing and asserts it equals each hand-maintained copy —
-`code_loop_plan.DIMENSIONS`, `spec_loop_plan.DIMENSIONS`, and the same roster re-keyed as
-`AGENT_SUFFIX` in both modules — duplicate-sensitive (a copy that duplicates one slug
-while dropping another cannot pass by set-collapsing). Adding, removing, or renaming a
-reviewer agent breaks CI in every enumerated copy until it is updated to match.
+*Worked example 2 — the reviewer roster (sanctioned-subset invariant).* The set of
+`agents/*-reviewer` files is the single home of the **sanctioned reviewer universe** — now
+six, including `grounding-reviewer`. The two dispatching legs each run a **sanctioned
+subset** of that universe, not the whole of it: the **code leg** (`code_loop_plan.DIMENSIONS`)
+is the five code reviewers, and the **spec leg** (`spec_loop_plan.DIMENSIONS`) is all six
+(`grounding-reviewer` is **spec-leg-only** — the doc-provenance seat with no review-code
+agent). `lib/tests/test_dispatch_tables.py::test_code_reviewer_rosters_match_bundled_agents`
+reads the `agents/` directory listing, derives each leg's sanctioned roster from it
+(`universe − grounding-reviewer` for the code leg, `universe` for the spec leg), and asserts
+**exact per-leg equality** against each hand-maintained copy — `code_loop_plan.DIMENSIONS`,
+`spec_loop_plan.DIMENSIONS`, and the same rosters re-keyed as `AGENT_SUFFIX` in both modules.
+The check is fail-closed and duplicate-sensitive (a copy that duplicates one slug while
+dropping another cannot pass by set-collapsing), and a partition guard pins the spec leg as
+exactly the code leg plus the spec-only `grounding-reviewer` seat (`spec_roster − code_roster
+== {grounding-reviewer}`). Adding, removing, renaming, or mis-legging a reviewer agent breaks CI in
+the affected copy until it is updated to match. Separately, the runtime
+`spec_loop_plan.sanction_dimensions` guard enforces the same invariant at dispatch time: a
+leg may run a subset, but only of sanctioned seats — an unsanctioned `--dimensions` input is
+dropped, never widening or corrupting the roster.
 
 **Caveat — a copy-list drift test is only as complete as the copies it enumerates.** A
 **new** copy someone adds later is invisible until it is added to the test. So the

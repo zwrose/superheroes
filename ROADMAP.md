@@ -71,21 +71,24 @@ when its receipts arrive. Epics are named by lane (S2/S3/G1), never by a promise
   unblocked, the lanes run independently of each other — see above.
   **Full-discovery issues are exempt** — discovery runs in parallel with the train, so they
   carry no precursor-epic block; only build-carrying issues take it. (Keeping this wiring true
-  by hand is toil a future backlog/TPM hero should own — #28.)
+  by hand is toil the build-dispatch discovery may eventually relieve — #526.)
 - **Discovery first where it's earned:** fuzzy items file as discovery issues (problem +
   evidence + open questions, no prescribed solution) and build only after an owner-approved
-  spec. Currently: the guardian design spike (#41, discovery ahead of the G1 build); both S2
+  spec. Currently: the guardian design spike (#41, discovery ahead of the G1 build); the
+  build-dispatch discovery (#526, owner-run with the advisor); both S2
   design spikes (#474 code loop, #514 doc loop) ratified and closed 2026-07-20, their build
   arcs filed.
 
 ## Unscheduled (deliberately)
 
-The growth backlog — backlog/TPM hero (#27 #28 #29 #31), greenfield/productionize onramps
-(#39 #40), queue controller (#22) — waits behind the stability gate: **two consecutive releases
-whose first real runs diagnose clean.** The train above is engineered to produce exactly that.
-PHILOSOPHY B7 governs: evidence before machinery. *(The maintainability guardian (#41) left
-this list 2026-07-20 — pulled forward by owner call into its own G1 lane, epic #503: the v2
-loop it needs already exists, and the lane runs alongside S2/S3.)*
+The growth backlog — greenfield/productionize onramps (#39 #40) — waits behind the stability
+gate: **two consecutive releases whose first real runs diagnose clean.** The train above is
+engineered to produce exactly that. PHILOSOPHY B7 governs: evidence before machinery.
+*(The maintainability guardian (#41) left this list 2026-07-20 — pulled forward by owner call
+into its own G1 lane, epic #503: the v2 loop it needs already exists, and the lane runs
+alongside S2/S3. The backlog/TPM-hero cluster (#27 #28 #29 #31) and queue controller (#22) left
+too — superseded by owner ruling 2026-07-21: the advisor absorbed the TPM role, and the launcher
+question is now the build-dispatch discovery #526.)*
 
 ## Keeping this file honest
 
