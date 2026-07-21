@@ -63,6 +63,24 @@ _EVAL_HEAD = (
     "+line5\n"
 ).format(f=_EVAL_FILE)
 _EVAL_LINE = 2
+# A brand-new file section appended to every synthetic post-fix head diff. No fix-batch line sits
+# over it, so `delta_surface.split_fix_surface` routes it into the delta round's `newSurface` —
+# giving the scoped finder a real surface to scan. Post #507-WO-R2b an EMPTY new surface SKIPS the
+# scoped dispatch, so the harness (which surfaces each fixture's delta findings through the
+# scoped-finder seam) must offer the driver a genuine new surface each delta round. The file is
+# DISTINCT per round (`eval-newsurf-{n}.py`): a constant file would appear in the prior round's head
+# too, so the next round's split would see it as unchanged (empty new surface). The scoped seam
+# ignores the payload and replays the fixture's findings, so fixture semantics + goldens are unchanged.
+def _eval_new_surface(n):
+    return (
+        "diff --git a/eval-newsurf-{n}.py b/eval-newsurf-{n}.py\n"
+        "index 0..1 100644\n"
+        "--- a/eval-newsurf-{n}.py\n"
+        "+++ b/eval-newsurf-{n}.py\n"
+        "@@ -0,0 +1,2 @@\n"
+        "+ns1\n"
+        "+ns2\n"
+    ).format(n=n)
 
 _TERMINAL_MAP = {
     "converged": "clean",
@@ -269,7 +287,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
         ).format(
             f=_EVAL_FILE, n=n + 2, lines=4 + n,
             adds="".join("+line%d\n" % i for i in range(1, 5 + n)),
-        )
+        ) + _eval_new_surface(n)
 
     def _next_delta_round():
         cand = sorted({e.get("round") for e in events

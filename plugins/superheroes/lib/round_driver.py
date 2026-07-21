@@ -1212,7 +1212,20 @@ def _fold_audits(state, config, artifact):
     state["_newIssues"] = outcome["newIssues"]
     for aid in outcome["notDischarged"]:
         _decision(state, "not-discharged", aid)
-    state["step"] = P_SCOPED
+    # Scoped-finder routing (#507 WO-R2b). Dispatch the scoped new-finding scan ONLY when the delta
+    # split computed a NON-EMPTY new surface (`_newSurface`, set by `_enter_delta_round`). A
+    # genuinely empty new surface (`unknown` was False — an unknown surface never reaches audits, it
+    # routes to a full panel) SKIPS the scoped dispatch with a receipt-visible note, rather than
+    # dispatching a vacuous scan that reviews nothing while looking conformant. The audits' own
+    # new-issue candidates still route through the same fold (an empty-artifact `_fold_scoped`).
+    if state.get("_newSurface"):
+        state["step"] = P_SCOPED
+        return
+    _record_round(state, "scopedFinder", "skipped-empty-surface")
+    _decision(state, "scoped-finder-skipped",
+              "scopedFinder: skipped-empty-surface — the delta split computed an empty new "
+              "surface; the scoped new-finding scan was skipped (audit new-issues still routed)")
+    _fold_scoped(state, config, {})
 
 
 def _fold_scoped(state, config, artifact):
@@ -1479,6 +1492,7 @@ def build_receipt(state, session_dir=None):
                        "blockingCount": rec.get("blockingCount"),
                        "verifyResult": rec.get("verifyResult"),
                        "audits": rec.get("audits"),
+                       "scopedFinder": rec.get("scopedFinder"),
                        "unverified": rec.get("unverified"),
                        "authorJustifiedDrops": rec.get("authorJustifiedDrops"),
                        "compileDrops": rec.get("compileDrops"),

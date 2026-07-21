@@ -47,6 +47,22 @@ def _headf(n):
             "@@ -1 +1,%d @@\n-old\n+new\n" % (n + 2)) + "".join("+z%d\n" % i for i in range(n))
 
 
+# A brand-new file section — a genuinely-new surface (no fix batch line sits over it). Appended to a
+# post-fix head diff so a delta round's scoped finder has a real surface to scan: post #507-WO-R2b an
+# EMPTY new surface SKIPS the scoped dispatch, so a test that exercises the scoped finder must offer
+# it one. The audited hunk (over the fixed line 1) stays an audit target; this is the new surface.
+def _newsurf(tag=""):
+    return ("diff --git a/newsurf.py b/newsurf.py\nindex 0..1 100644\n--- a/newsurf.py\n"
+            "+++ b/newsurf.py\n@@ -0,0 +1,2 @@\n+ns%s\n+ns2\n" % tag)
+
+
+HEAD_NEW_SURFACE = HEAD + _newsurf()
+
+
+def _headf_ns(n):
+    return _headf(n) + _newsurf(str(n))
+
+
 def _big_diff(n_files=25):
     return "".join(
         "diff --git a/f%d.py b/f%d.py\nindex 1..2 100644\n--- a/f%d.py\n+++ b/f%d.py\n"
@@ -291,6 +307,95 @@ def test_unknown_delta_surface_runs_full_panel(tmp_path):
 
 
 # =============================================================================
+# scoped-finder new-surface payload + empty-surface skip (#507 WO-R2b)
+# =============================================================================
+
+# A multi-file post-fix head diff: f.py carries the fixed hunk (over the fix's line, an AUDIT
+# target) PLUS a brand-new hunk far from it, and g.py is an entirely new surface. The split must
+# route the two off-target hunks into `newSurface` — the scoped finder's real payload.
+_R2B_REVIEWED = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
+                 "@@ -1 +1,2 @@\n-old\n+new\n+more\n")
+_R2B_HEAD_MF = ("diff --git a/f.py b/f.py\nindex 2..3 100644\n--- a/f.py\n+++ b/f.py\n"
+                "@@ -1 +1,2 @@\n-old\n+new\n+fixed\n"
+                "@@ -50,0 +50,2 @@\n+brand\n+new\n"
+                "diff --git a/g.py b/g.py\nindex 0..1 100644\n--- a/g.py\n+++ b/g.py\n"
+                "@@ -0,0 +1,3 @@\n+alpha\n+beta\n+gamma\n")
+
+
+def test_scoped_finder_payload_carries_computed_new_surface(tmp_path):
+    """The dispatch-scoped-finder payload carries EXACTLY the split's computed `newSurface` hunks
+    (file → hunk ranges + text) — a multi-file surface must arrive intact, not empty (#507 WO-R2b:
+    the field-found defect was an empty `hunks: {}` payload despite a real computed surface)."""
+    d = str(tmp_path)
+    captured = {"payload": None}
+
+    def respond(phase, payload, rnd):
+        if phase == RD.P_PANEL:
+            seats = {dm: {"findings": []} for dm in RD.DIMENSIONS}
+            if rnd == 1:
+                seats["code-reviewer"] = {"findings": [
+                    {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+            return {"seats": seats}
+        if phase == RD.P_VERIFIERS:
+            return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran"}
+                                 for c in payload.get("clusters", []) for i in c.get("ids", [])]}
+        if phase == RD.P_SYNTHESIS:
+            return {"grouping": None}
+        if phase == RD.P_AUDITS:
+            return {"results": [{"id": t["id"], "ruling": "discharged", "reason": "r",
+                                 "evidence": "e", "auditorVendor": t.get("auditorVendor")}
+                                for t in payload.get("targets", [])]}
+        if phase == RD.P_SCOPED:
+            captured["payload"] = payload
+            return {"findings": []}
+        if phase == RD.P_FIXER:
+            return {"fixes": [], "headDiff": _R2B_HEAD_MF, "changedSubjects": ["Code"]}
+        if phase == RD.P_VERIFY:
+            return {"result": "pass"}
+        return {}
+
+    payload = _drive_cli(d, _cfg(diff=_R2B_REVIEWED), respond)
+    assert payload["verdict"] == "converged"
+    assert captured["payload"] is not None, "the scoped finder was never dispatched"
+    hunks = captured["payload"]["hunks"]
+    # exactly the split's computed new surface — a non-empty, multi-file map.
+    expected = RD.delta_surface.split_fix_surface(
+        _R2B_REVIEWED, _R2B_HEAD_MF, [{"file": "f.py", "line": 1}])["newSurface"]
+    assert expected and set(expected) == {"f.py", "g.py"}, expected
+    assert hunks == expected
+    assert sum(len(v) for v in hunks.values()) == 2
+
+
+def test_empty_new_surface_skips_scoped_finder_with_note(tmp_path):
+    """A genuinely empty computed new surface (split `unknown: False`, no new hunks — the fix only
+    touched the audited lines) SKIPS the scoped-finder dispatch with a receipt-visible
+    `scopedFinder: skipped-empty-surface` note, never a vacuous scan over nothing (#507 WO-R2b)."""
+    d = str(tmp_path)
+    seen = {"scoped": False}
+
+    base = _responder(round1_findings=[
+        {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}])
+
+    def respond(phase, payload, rnd):
+        if phase == RD.P_SCOPED:
+            seen["scoped"] = True
+        return base(phase, payload, rnd)
+
+    payload = _drive_cli(d, _cfg(), respond)
+    assert payload["verdict"] == "converged"
+    assert seen["scoped"] is False, "the scoped finder was dispatched over an empty surface"
+    with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
+        receipt = json.load(fh)
+    ok, reason = RD.validate_receipt(receipt)
+    assert ok, reason
+    # the skip is journaled receipt-visibly: as a decision AND on the delta round record.
+    kinds = [dc["kind"] for dc in receipt["decisions"]]
+    assert "scoped-finder-skipped" in kinds, kinds
+    delta_round = [r for r in receipt["rounds"] if r.get("scopedFinder")]
+    assert delta_round and delta_round[0]["scopedFinder"] == "skipped-empty-surface", receipt["rounds"]
+
+
+# =============================================================================
 # Layer 1 — run_loop (library) on each leg shape
 # =============================================================================
 
@@ -450,7 +555,7 @@ def test_confirmation_budget_two_respected_end_to_end(tmp_path):
 
     def fix_step(batch, rnd, payload):
         counter["n"] += 1
-        return {"fixes": [], "headDiff": _headf(counter["n"]), "changedSubjects": ["Code"]}
+        return {"fixes": [], "headDiff": _headf_ns(counter["n"]), "changedSubjects": ["Code"]}
 
     receipt = RD.run_loop(_seams(reviewer=reviewer, fix_step=fix_step), _cfg(maxRounds=20))
     assert receipt["verdict"] == "converged"
@@ -763,7 +868,7 @@ def test_challenged_coverage_recurrence_cannot_certify(tmp_path):
         return []
 
     def fix_step(batch, rnd, payload):
-        return {"fixes": [], "headDiff": HEAD, "changedSubjects": ["Test"],
+        return {"fixes": [], "headDiff": HEAD_NEW_SURFACE, "changedSubjects": ["Test"],
                 "coverageDecisions": [{"id": "RCD-x", "classKey": "Test::coverage::x"}]}
 
     receipt = RD.run_loop(
@@ -791,11 +896,16 @@ def test_plain_recurring_finding_without_challenge_is_not_challenged_halt(tmp_pa
             return [dict(_CHALLENGED_FINDING)]
         return []
 
-    # No coverageDecisions recorded → the recurring class is never "challenged".
+    # No coverageDecisions recorded → the recurring class is never "challenged". The fix's head diff
+    # carries a real new surface so the scoped finder legitimately fires and re-raises the finding.
+    def fix_step(batch, rnd, payload):
+        return {"fixes": [], "headDiff": HEAD_NEW_SURFACE, "changedSubjects": ["Test"]}
+
     receipt = RD.run_loop(
-        _seams(reviewer=reviewer), _cfg(dimensions=["test-reviewer"],
-                                        recordsPath=str(records), maxRounds=20))
+        _seams(reviewer=reviewer, fix_step=fix_step),
+        _cfg(dimensions=["test-reviewer"], recordsPath=str(records), maxRounds=20))
     assert receipt["verdict"] != "cannot-certify"
+    assert fired["scoped"] == 1, "the scoped finder must fire over the real new surface"
 
 
 def test_corrupt_resume_records_cannot_certify(tmp_path):
