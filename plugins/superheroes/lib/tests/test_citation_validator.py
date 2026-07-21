@@ -68,17 +68,22 @@ def _run_cli(spec_path, root):
 
 def _assert_schema_complete(f, require_line=True):
     """Every emitted finding is base-rubric-schema-complete. A per-citation finding
-    carries a non-null line; the fail-closed (unreadable-spec) finding has no line to
-    point at (line is null by design), so callers pass require_line=False for it."""
+    carries a real non-null line; the fail-closed (unreadable/missing-spec) finding now
+    carries line == 1 (NOT null) so it survives review-spec §4's `line == null` drop —
+    callers pass require_line=False for it and this asserts the anchored line == 1."""
     assert f["severity"] == "Important"
     assert f["dimension"] == "Grounding"
-    assert f["taxonomy"] == "dangling-citation"
+    assert f["taxonomy"] in ("dangling-citation", "malformed-citation")
     assert f["confidence"] == "High"
     assert f["file"] is not None
     assert f["evidence"] is not None
     assert f["id"] is not None
     if require_line:
         assert f["line"] is not None
+    else:
+        # the fail-closed finding must now survive a `line == null` drop
+        assert f["line"] is not None
+        assert f["line"] == 1
 
 
 # --- (a) path resolves → no finding ---------------------------------------
@@ -189,6 +194,96 @@ def test_mixed_resolving_and_dangling_only_reports_dangling(tmp_path):
     assert len(findings) == 1
     assert findings[0]["line"] == 2
     assert findings[0]["id"] == "citation-001"  # ids number the FINDINGS, not the citations
+
+
+# --- (h) fail-closed on non-UTF-8 inputs (real bytes, no monkeypatch) ------
+
+def test_binary_cited_file_with_anchor_fails_closed(tmp_path):
+    # Cited file EXISTS but is binary/non-UTF-8: reading it to confirm the anchor raises
+    # UnicodeDecodeError (a ValueError, not OSError). Must fail CLOSED (one finding), never
+    # crash, and the message must say the cited file could not be read — NOT stale/fabricated.
+    target = os.path.join(str(tmp_path), "lib", "blob.bin")
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    with open(target, "wb") as fh:
+        fh.write(b"\xff\xfe\x00")
+    spec = _spec(tmp_path, "Reuses the [cite: lib/blob.bin § foo] helper.\n")
+    findings = CV.check(spec, str(tmp_path))
+    assert len(findings) == 1  # fail closed, not a silent clean
+    f = findings[0]
+    _assert_schema_complete(f)
+    assert f["line"] == 1
+    blob = (f["body"] + " " + f["evidence"]).lower()
+    assert "could not be read" in blob
+    assert "stale" not in blob and "fabricated" not in blob
+    # identical result through the CLI over real argv, exit 0, no crash
+    assert _run_cli(spec, tmp_path) == findings
+
+
+def test_binary_spec_fails_closed_line_not_none(tmp_path):
+    # A non-UTF-8 SPEC file: read raises UnicodeDecodeError. One fail-closed unreadable-spec
+    # finding with line NOT None (== 1), no crash.
+    p = tmp_path / "spec.md"
+    p.write_bytes(b"\xff\xfe\x00\x01 not valid utf-8 [cite: x]\n")
+    findings = CV.check(str(p), str(tmp_path))
+    assert len(findings) == 1
+    f = findings[0]
+    _assert_schema_complete(f, require_line=False)
+    assert f["line"] is not None
+    assert f["line"] == 1
+    assert f["file"] == str(p)
+    assert _run_cli(str(p), tmp_path) == findings
+
+
+# --- (i) malformed / unclosed [cite: markers fail closed -------------------
+
+def test_malformed_unclosed_marker_one_finding(tmp_path):
+    spec = _spec(tmp_path, "intro line\nbroken [cite: lib/bad.py with no closing bracket\nend\n")
+    findings = CV.check(spec, str(tmp_path))
+    assert len(findings) == 1
+    f = findings[0]
+    assert f["taxonomy"] == "malformed-citation"
+    assert f["line"] == 2
+    _assert_schema_complete(f)
+    assert _run_cli(spec, tmp_path) == findings
+
+
+def test_valid_and_malformed_on_one_line_only_malformed_flagged(tmp_path):
+    _touch(tmp_path, "lib/real.py")
+    # one VALID citation (real.py exists → clean) and one malformed marker on the same line
+    spec = _spec(tmp_path, "ok [cite: lib/real.py] but broken [cite: lib/bad.py oops\n")
+    findings = CV.check(spec, str(tmp_path))
+    assert len(findings) == 1  # only the malformed one; the valid citation is clean
+    f = findings[0]
+    assert f["taxonomy"] == "malformed-citation"
+    assert f["line"] == 1
+    assert _run_cli(spec, tmp_path) == findings
+
+
+# --- (j) two citations on ONE line → both parsed ---------------------------
+
+def test_two_citations_on_one_line_both_parsed(tmp_path):
+    spec = _spec(tmp_path, "both [cite: lib/a.py] and [cite: lib/b.py] here\n")
+    findings = CV.check(spec, str(tmp_path))
+    assert len(findings) == 2
+    assert [f["line"] for f in findings] == [1, 1]
+    assert [f["id"] for f in findings] == ["citation-001", "citation-002"]
+    assert "lib/a.py" in findings[0]["title"]
+    assert "lib/b.py" in findings[1]["title"]
+    assert _run_cli(spec, tmp_path) == findings
+
+
+# --- (k) a citation to an existing DIRECTORY → dangling, message says so ----
+
+def test_citation_to_directory_flagged_dangling_mentions_directory(tmp_path):
+    os.makedirs(os.path.join(str(tmp_path), "lib", "somedir"), exist_ok=True)
+    spec = _spec(tmp_path, "See [cite: lib/somedir] for the details.\n")
+    findings = CV.check(spec, str(tmp_path))
+    assert len(findings) == 1
+    f = findings[0]
+    assert f["taxonomy"] == "dangling-citation"
+    assert "directory" in f["body"].lower()
+    _assert_schema_complete(f)
+    assert _run_cli(spec, tmp_path) == findings
 
 
 # --- parse_citations unit coverage (the single parse entrypoint) -----------

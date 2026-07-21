@@ -63,7 +63,9 @@ tech-leak, a path reference, or `{{…}}`/TBD noise.
 
 ## Citation grammar (illustration only)
 
-`[cite: <repo-relative-path>]` or `[cite: <path> § <anchor>]`. Canonical example:
-`[cite: plugins/superheroes/lib/definition_doc.py § mint]`. This grammar is shown here
-for illustration; the one machine home for the citation grammar is `lib/citation_validator.py`
-— do not re-encode a second machine-parseable literal anywhere else.
+`[cite: <repo-relative-path>]` or `[cite: <path> § <anchor>]`. The canonical worked
+example lives in `templates/spec.md`, the §11 drift witness; this brief does not re-type it
+(a concrete copy here would be an unguarded duplicate — a future rename would leave this
+teaching doc silently stale, the §11.2 "new copy invisible to the drift test" hazard). This
+grammar is shown here for illustration only; the one machine home for the citation grammar is
+`lib/citation_validator.py` — do not re-encode a second machine-parseable literal anywhere else.
