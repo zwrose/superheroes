@@ -647,10 +647,17 @@ def test_red_lines_raises_degrades_without_crashing_siblings(tmp_path):
 
     bad = RedLinesRaisesLens(name="bad-red", emit_normal=True)
     good = FixtureLens(name="good-red", emit_red_line=True)
+    # Sweep must not raise even though a lens's red_lines() blows up.
     bundle = gsw.collect(repo, lenses=[bad, good], root=root)
     assert len(bundle["funnel"]["degradedLenses"]) == 1
     assert bundle["funnel"]["degradedLenses"][0]["lens"] == "bad-red"
     assert "diff/red_lines raised" in bundle["funnel"]["degradedLenses"][0]["reason"]
+    # The fix clears the funnel for the degraded lens: its key was popped so
+    # the degraded lens reads consistently. Without the pop, "bad-red" would
+    # still appear in raised (it collected one candidate before red_lines raised).
+    assert "bad-red" not in bundle["funnel"]["raised"]
+    # The healthy sibling is processed normally and still surfaces its red line.
+    assert bundle["funnel"]["raised"].get("good-red") == 1
     assert any(s["id"] == "good-red:red-line" for s in bundle["surfaced"])
 
 

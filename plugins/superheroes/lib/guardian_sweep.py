@@ -328,6 +328,8 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
 
             rl = _filter_red_lines(lens.red_lines(valid_candidates))
         except Exception as exc:
+            funnel_raised.pop(lens.name, None)
+            malformed[:] = [m for m in malformed if m.get("lens") != lens.name]
             degraded_lenses.append(lens.degrade("diff/red_lines raised: %s" % exc))
             continue
 

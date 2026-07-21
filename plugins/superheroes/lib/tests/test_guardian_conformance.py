@@ -7,16 +7,9 @@ import guardian_collect as gc
 import guardian_lens as gl
 import pytest
 
-_HARNESS_OWNED = frozenset((
-    "missing-tool",
-    "timeout",
-    "nonzero-exit",
-    "findings-empty-output",
-    "unparseable",
-))
-_LENS_SUPPLIED = frozenset((
-    "reported-nonzero-parsed-zero",
-))
+_HARNESS_OWNED = set(gl.REQUIRED_CONFORMANCE_SCENARIOS) - frozenset(
+    gl.LENS_SUPPLIED_CONFORMANCE_SCENARIOS)
+_LENS_SUPPLIED = frozenset(gl.LENS_SUPPLIED_CONFORMANCE_SCENARIOS)
 _REPORTED_NONZERO_PARSED_ZERO = "reported-nonzero-parsed-zero"
 _PREV_DIGEST = {"v": 1, "ids": ["prior-1"]}
 _REPORTED_NONZERO_STDOUT = json.dumps({"reported_findings": 3, "findings": []})
@@ -85,7 +78,12 @@ def _lens_supplied_run_body(stdout_text, exit_code):
 
 
 def assert_lens_conformance(lens, cwd="/tmp", root="/tmp"):
-    """Drive REQUIRED_CONFORMANCE_SCENARIOS for ``lens``; raise AssertionError on any gap."""
+    """Drive REQUIRED_CONFORMANCE_SCENARIOS for ``lens``; raise AssertionError on any gap.
+
+    The harness assumes every tool invocation routes through ctx["run"] /
+    guardian_collect.run_tool — a lens that shells out directly cannot be
+    conformance-verified.
+    """
     roster = set(gl.REQUIRED_CONFORMANCE_SCENARIOS)
     assert _HARNESS_OWNED | _LENS_SUPPLIED == roster, (
         "harness partition must cover every REQUIRED_CONFORMANCE_SCENARIOS member")
@@ -105,9 +103,9 @@ def assert_lens_conformance(lens, cwd="/tmp", root="/tmp"):
             prev_digest = dict(_PREV_DIGEST)
         elif scenario in _LENS_SUPPLIED:
             case = cases[scenario]
-            exit_code = case.get("exit", 0)
+            # Exit code is harness-controlled — lenses supply stdout only.
             run_stub, call_counter = _counting_run(
-                _lens_supplied_run_body(case["stdout"], exit_code))
+                _lens_supplied_run_body(case["stdout"], 0))
             config = case.get("config")
             prev_digest = case.get("prev_digest")
         else:
@@ -134,6 +132,8 @@ def assert_lens_conformance(lens, cwd="/tmp", root="/tmp"):
             assert status in ("not-collected", "partial"), (
                 "lens %r scenario %r: expected not-collected or partial, got %r"
                 % (lens.name, scenario, status))
+            # Belt-and-suspenders — negatively proven one layer down by
+            # guardian_lens.classify_collect (see test_guardian_lens.py).
             assert isinstance(reason, str) and reason.strip(), (
                 "lens %r scenario %r: degraded collect requires non-empty reason"
                 % (lens.name, scenario))
@@ -170,7 +170,6 @@ class CompliantFakeLens(object):
         return {
             "reported-nonzero-parsed-zero": {
                 "stdout": _REPORTED_NONZERO_STDOUT,
-                "exit": 0,
                 "config": None,
                 "prev_digest": dict(_PREV_DIGEST),
             },
@@ -264,6 +263,15 @@ class MissingReportedNonzeroFake(CompliantFakeLens):
 class SilentCleanFake(CompliantFakeLens):
     name = "silent-clean"
 
+    def conformance_cases(self):
+        return {
+            "reported-nonzero-parsed-zero": {
+                "stdout": _REPORTED_NONZERO_STDOUT,
+                # Would bypass via exit under the old contract; harness forces exit 0.
+                "exit": 9,
+            },
+        }
+
     def collect(self, ctx):
         result = gc.run_tool(["conformance-tool"], ctx=ctx, cwd=ctx.get("cwd"))
         stdout = (result.get("stdout") or "").strip()
@@ -315,6 +323,20 @@ class DigestOnNotCollectedFake(CompliantFakeLens):
         return super().collect(ctx)
 
 
+class InvokeButIgnoreFake(CompliantFakeLens):
+    """Calls ctx['run'] but ignores the outcome — caught by degraded-status assertion."""
+
+    name = "invoke-but-ignore"
+
+    def collect(self, ctx):
+        gc.run_tool(["conformance-tool"], ctx=ctx, cwd=ctx.get("cwd"))
+        return {
+            "candidates": [],
+            "digest": {"v": 1, "ids": []},
+            **gc.collected(),
+        }
+
+
 def test_compliant_fake_passes():
     assert_lens_conformance(CompliantFakeLens())
 
@@ -349,6 +371,11 @@ def test_collected_on_degraded_fake_fails():
 def test_digest_on_not_collected_fake_fails():
     with pytest.raises(AssertionError, match="overwrite digest"):
         assert_lens_conformance(DigestOnNotCollectedFake())
+
+
+def test_invoke_but_ignore_fake_fails():
+    with pytest.raises(AssertionError, match="not-collected or partial"):
+        assert_lens_conformance(InvokeButIgnoreFake())
 
 
 def _conformance_lens_ids(lens):

@@ -96,3 +96,20 @@ def test_lens_contract_covers_conformance_scenarios():
         "REQUIRED_CONFORMANCE_SCENARIOS membership changed — update this golden set "
         "AND lens-contract.md"
     )
+
+
+def test_lens_contract_covers_lens_supplied_conformance_scenarios():
+    """LENS_SUPPLIED_CONFORMANCE_SCENARIOS ↔ reference prose (§11 drift guard)."""
+    lens_supplied = guardian_lens.LENS_SUPPLIED_CONFORMANCE_SCENARIOS
+    assert lens_supplied, (
+        "guardian_lens.LENS_SUPPLIED_CONFORMANCE_SCENARIOS is empty — no authoritative home")
+    text = _read(_LENS_CONTRACT)
+    for scenario in lens_supplied:
+        assert scenario in text, (
+            "lens-contract.md missing conformance scenario %r" % scenario)
+        assert "lens-supplied" in text, (
+            "lens-contract.md must describe %r as lens-supplied" % scenario)
+    assert set(lens_supplied) == {"reported-nonzero-parsed-zero"}, (
+        "LENS_SUPPLIED_CONFORMANCE_SCENARIOS membership changed — update this golden "
+        "set AND lens-contract.md"
+    )

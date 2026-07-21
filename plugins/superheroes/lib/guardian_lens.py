@@ -9,7 +9,6 @@ Optional conformance hook (production lenses MUST implement; not checked by vali
 
   conformance_cases() -> {"reported-nonzero-parsed-zero": {
       "stdout": <raw tool output that reports findings but parses to zero>,
-      "exit": <int, default 0>,
       "config": <dict | None>,
       "prev_digest": <json | None>,
   }}
@@ -55,6 +54,13 @@ REQUIRED_CONFORMANCE_SCENARIOS = (
 The conformance harness fails registration for any registered lens that omits one.
 """
 
+LENS_SUPPLIED_CONFORMANCE_SCENARIOS = (
+    "reported-nonzero-parsed-zero",
+)
+"""Lens-supplied conformance scenarios; the harness owns every other member of
+REQUIRED_CONFORMANCE_SCENARIOS.
+"""
+
 """A lens is any object providing:
   - name: str, collector_version: str
   - cost: dict — declared collection cost, e.g. {"collectorSeconds": float, "note": str}
@@ -92,7 +98,7 @@ fail-closed when an imported module's LENSES omits an expected name.
 _PRODUCTION_LOADED = False
 _PRODUCTION_LOAD_ERRORS = []
 _PRODUCTION_COLLIDED_NAMES = set()
-_PRODUCTION_REGISTERED = set()
+_PRODUCTION_REGISTERED = []
 _PRODUCTION_MODULE_LENSES = {}
 
 
@@ -178,10 +184,8 @@ def load_production_lenses(force=False):
     _PRODUCTION_COLLIDED_NAMES.clear()
     _PRODUCTION_MODULE_LENSES.clear()
     if force:
-        reg_names = _PRODUCTION_REGISTERED
-        REGISTRY[:] = [
-            lens for lens in REGISTRY
-            if getattr(lens, "name", None) not in reg_names]
+        loader_ids = {id(lens) for lens in _PRODUCTION_REGISTERED}
+        REGISTRY[:] = [lens for lens in REGISTRY if id(lens) not in loader_ids]
         _PRODUCTION_REGISTERED.clear()
     known = {getattr(lens, "name", None) for lens in REGISTRY}
     for module_name in PRODUCTION_LENS_MODULES:
@@ -241,7 +245,7 @@ def load_production_lenses(force=False):
                 })
                 continue
             known.add(name)
-            _PRODUCTION_REGISTERED.add(name)
+            _PRODUCTION_REGISTERED.append(lens)
             _PRODUCTION_MODULE_LENSES.setdefault(module_name, set()).add(name)
     _PRODUCTION_LOADED = True
     return list(REGISTRY)
@@ -289,9 +293,11 @@ class _UnavailableLens(object):
 
 def _stub_names_for_error(entry):
     """Lens names that must appear as degraded stand-ins for a load error."""
-    named = entry.get("lens")
-    if isinstance(named, str) and named:
-        return (named,)
+    if "lens" in entry:
+        named = entry.get("lens")
+        if isinstance(named, str) and named:
+            return (named,)
+        return ()
     return PRODUCTION_LENS_NAMES.get(entry.get("module"), ())
 
 
@@ -312,25 +318,23 @@ def registered_lenses():
             lenses.append(_UnavailableLens(name, dup_error))
             present.add(name)
 
+    module_fallback = {}
     for err in _PRODUCTION_LOAD_ERRORS:
-        got_standin = False
-        for name in _stub_names_for_error(err):
-            if name in present:
-                got_standin = True
-                continue
-            lenses.append(_UnavailableLens(name, err.get("error") or "unknown"))
-            present.add(name)
-            got_standin = True
-        if got_standin:
+        names = _stub_names_for_error(err)
+        if names:
+            for name in names:
+                if name in present:
+                    continue
+                lenses.append(_UnavailableLens(name, err.get("error") or "unknown"))
+                present.add(name)
             continue
         module = err.get("module")
         if not module:
             continue
-        mod_names = _PRODUCTION_MODULE_LENSES.get(module, set())
-        if mod_names & present:
-            continue
+        module_fallback.setdefault(module, []).append(err.get("error") or "unknown")
+    for module, reasons in module_fallback.items():
         standin_name = "module:%s" % module
         if standin_name not in present:
-            lenses.append(_UnavailableLens(standin_name, err.get("error") or "unknown"))
+            lenses.append(_UnavailableLens(standin_name, "; ".join(reasons)))
             present.add(standin_name)
     return lenses

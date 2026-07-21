@@ -138,7 +138,9 @@ def test_loader_import_failure_records_error_and_stand_in(monkeypatch):
         "missing_mod_558": ("expected-lens",),
     })
     lenses = gl.registered_lenses()
-    assert any(l.name == "expected-lens" for l in lenses)
+    standin = [l for l in lenses if l.name == "expected-lens"]
+    assert len(standin) == 1
+    assert isinstance(standin[0], gl._UnavailableLens)
     errors = gl.production_lens_load_errors()
     assert len(errors) == 1
     assert errors[0]["module"] == "missing_mod_558"
@@ -157,7 +159,9 @@ def test_loader_empty_lenses_records_error_and_stand_in(monkeypatch):
         "empty_lenses_mod_558": ("empty-lens",),
     })
     lenses = gl.registered_lenses()
-    assert any(l.name == "empty-lens" for l in lenses)
+    standin = [l for l in lenses if l.name == "empty-lens"]
+    assert len(standin) == 1
+    assert isinstance(standin[0], gl._UnavailableLens)
     assert any(
         e.get("error") == "exposes no module-level LENSES"
         for e in gl.production_lens_load_errors())
@@ -180,6 +184,9 @@ def test_loader_missing_expected_name_records_error_and_stand_in(monkeypatch):
     names = {l.name for l in lenses}
     assert "only-one" in names
     assert "missing-expected" in names
+    missing = [l for l in lenses if l.name == "missing-expected"]
+    assert len(missing) == 1
+    assert isinstance(missing[0], gl._UnavailableLens)
     assert any(
         e.get("lens") == "missing-expected"
         for e in gl.production_lens_load_errors())
@@ -290,5 +297,52 @@ def test_loader_healthy_multi_lens_module_registers_both(monkeypatch):
     assert {l.name for l in lenses} == {"lens-a", "lens-b"}
     assert gl.production_lens_load_errors() == []
     del sys.modules["healthy_mod_558"]
+    _reset_production_loader()
+
+
+def test_loader_unnameable_registration_failure_yields_module_standin(monkeypatch):
+    import sys
+    import types
+    _reset_production_loader()
+    mod = types.ModuleType("partial_malformed_mod_558")
+    mod.LENSES = (FixtureLens(name="good-lens"), object())
+    sys.modules["partial_malformed_mod_558"] = mod
+    monkeypatch.setattr(gl, "PRODUCTION_LENS_MODULES", ("partial_malformed_mod_558",))
+    monkeypatch.setattr(gl, "PRODUCTION_LENS_NAMES", {
+        "partial_malformed_mod_558": ("good-lens",),
+    })
+    lenses = gl.registered_lenses()
+    names = {l.name for l in lenses}
+    assert "good-lens" in names
+    assert "module:partial_malformed_mod_558" in names
+    module_standin = [
+        l for l in lenses if l.name == "module:partial_malformed_mod_558"]
+    assert len(module_standin) == 1
+    assert isinstance(module_standin[0], gl._UnavailableLens)
+    del sys.modules["partial_malformed_mod_558"]
+    _reset_production_loader()
+
+
+def test_loader_force_reload_preserves_externally_registered_replacement(monkeypatch):
+    import sys
+    import types
+    _reset_production_loader()
+    mod = types.ModuleType("replaceable_mod_558")
+    loader_lens = FixtureLens(name="replaceable-lens")
+    mod.LENSES = (loader_lens,)
+    sys.modules["replaceable_mod_558"] = mod
+    monkeypatch.setattr(gl, "PRODUCTION_LENS_MODULES", ("replaceable_mod_558",))
+    monkeypatch.setattr(gl, "PRODUCTION_LENS_NAMES", {
+        "replaceable_mod_558": ("replaceable-lens",),
+    })
+    gl.load_production_lenses()
+    assert gl.REGISTRY[0] is loader_lens
+    gl.REGISTRY.clear()
+    external = FixtureLens(name="replaceable-lens")
+    gl.register(external)
+    gl.load_production_lenses(force=True)
+    assert len(gl.REGISTRY) == 1
+    assert gl.REGISTRY[0] is external
+    del sys.modules["replaceable_mod_558"]
     _reset_production_loader()
 
