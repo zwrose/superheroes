@@ -96,6 +96,16 @@ itself fails (`{"ok": false, "reason": "journal-fault-unrecordable"}` to stdout,
 errors to stderr, **nonzero exit**), and the library `run_loop` parks **cannot-certify** (reason
 `journal-fault-unrecordable`) rather than continuing as though the ran-evidence were intact.
 
+**Terminal receipt re-check (every terminal `next`).** A **replayed** terminal `next` — a `next` on a
+session already at its terminal step — re-emits the stored terminal pending WITHOUT re-running
+`_finalize_receipt`, so a receipt fault recorded/surfaced *after* the receipt was first written (the
+`driver-journal-fault.jsonl` marker, or a `round-receipt.json` that has become unreadable/invalid
+since) would be masked by the replay's `ok`. So **every** terminal `next` — the first emission and
+every replay — re-verifies receipt integrity before answering: the fault-marker's presence and
+`validate_receipt` over the on-disk `round-receipt.json` **re-read fresh from disk** (never a cached
+copy). Any fault → the CLI answers `{"ok": false, "reason": "receipt-fault", "detail": …}` with a
+**nonzero exit** (never `terminal`-with-ok), the same fail-loud family as `journal-fault-unrecordable`.
+
 **Receipt (`round-receipt.json`).** Required keys (shape-checked by `validate_receipt`, fail-closed):
 
 - `schemaVersion` (2)

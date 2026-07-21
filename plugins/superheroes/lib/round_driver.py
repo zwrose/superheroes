@@ -1902,6 +1902,14 @@ def cmd_next(session_dir, config_overrides=None):
         _journal_append(session_dir, {"cmd": "next", "phase": pend.get("phase"),
                                       "round": pend.get("round"), "attempt": pend.get("attempt"),
                                       "outcome": "re-emit"})
+        # A REPLAYED terminal `next` re-emits the stored terminal pending WITHOUT re-running
+        # _finalize_receipt — so re-verify the on-disk receipt (fault marker + fresh re-read +
+        # validate_receipt) here, else a fault recorded/surfaced since the first emission is masked
+        # by the replay's ok (#507). Any fault → fail-loud receipt-fault, never terminal-with-ok.
+        if pend.get("phase") == P_TERMINAL:
+            fault = _verify_terminal_receipt(session_dir)
+            if fault:
+                return _receipt_fault_response(fault)
         return _next_response(pend, state_hash(state))
     step = _advance(state, state["config"])
     attempt = 0
@@ -1918,8 +1926,15 @@ def cmd_next(session_dir, config_overrides=None):
     if step["action"] == P_TERMINAL:
         fail = _finalize_receipt(session_dir, state)
         if fail:
-            return {"ok": False, "reason": fail}
+            return _receipt_fault_response(fail)
     return _next_response(pending, state_hash(state))
+
+
+def _receipt_fault_response(detail):
+    """A terminal receipt integrity fault — the fail-loud `receipt-fault` family (the same family as
+    `journal-fault-unrecordable`). Answered on the terminal `next` (first emission or a replay) and
+    the terminating `submit`; the CLI surfaces it NONZERO and it is NEVER a `terminal`-with-ok."""
+    return {"ok": False, "reason": "receipt-fault", "detail": detail}
 
 
 def _next_response(pending, expected_hash):
@@ -1998,7 +2013,7 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact):
     if state.get("terminal"):
         fail = _finalize_receipt(session_dir, state)
         if fail:
-            return {"ok": False, "reason": fail}
+            return _receipt_fault_response(fail)
     return {"ok": True, "round": round_no, "phase": phase, "nextStep": state.get("step")}
 
 
@@ -2015,21 +2030,22 @@ def _write_receipt(session_dir, state):
     return receipt
 
 
-def _finalize_receipt(session_dir, state):
-    """At a terminal, write + read back + validate the on-disk receipt. A write failure, an
-    unreadable readback, an invalid shape, or an EMPTY scriptRan (the journal — the driver's `ran`
-    evidence — did not persist) is a RECEIPT DEFECT: return a reason so the CLI fails closed (the
-    orchestrator must treat it as a park), never certifying on a missing/short receipt (#507 v14).
-    Returns None on success."""
-    try:
-        _write_receipt(session_dir, state)
-    except OSError as exc:
-        return "terminal receipt write failed (%s) — cannot certify; treat as park" % exc
+def _verify_terminal_receipt(session_dir):
+    """Re-read the on-disk terminal receipt (FRESH from disk, never a cached copy) and re-check its
+    integrity: readable, `validate_receipt`-shaped, non-empty scriptRan, and NO durable journal
+    fault marker. Returns a reason string on ANY fault, else None.
+
+    Shared by `_finalize_receipt` (the post-write check on the terminating fold / first emission) and
+    the terminal-`next` re-check (below). A REPLAYED terminal `next` — a `next` on a session already
+    at its terminal step — re-emits the stored pending WITHOUT re-running `_finalize_receipt`, so a
+    receipt fault recorded or surfaced AFTER the receipt was first written (a fault-marker file, or a
+    round-receipt.json that has become unreadable/invalid since) would otherwise be masked by the
+    replay's `ok`. Re-checking here on every terminal `next` closes that hole (#507)."""
     try:
         with open(os.path.join(session_dir, RECEIPT_FILE), encoding="utf-8") as fh:
             on_disk = json.load(fh)
     except (OSError, ValueError) as exc:
-        return "terminal receipt unreadable after write (%s) — cannot certify; treat as park" % exc
+        return "terminal receipt unreadable (%s) — cannot certify; treat as park" % exc
     ok, why = validate_receipt(on_disk)
     if not ok:
         return "terminal receipt invalid (%s) — cannot certify; treat as park" % why
@@ -2040,6 +2056,19 @@ def _finalize_receipt(session_dir, state):
         return ("driver journal recorded a write fault — the scriptRan evidence is incomplete "
                 "(a next/submit event was lost); cannot certify; treat as park")
     return None
+
+
+def _finalize_receipt(session_dir, state):
+    """At a terminal, write + read back + validate the on-disk receipt. A write failure, an
+    unreadable readback, an invalid shape, or an EMPTY scriptRan (the journal — the driver's `ran`
+    evidence — did not persist) is a RECEIPT DEFECT: return a reason so the CLI fails closed (the
+    orchestrator must treat it as a park), never certifying on a missing/short receipt (#507 v14).
+    Returns None on success."""
+    try:
+        _write_receipt(session_dir, state)
+    except OSError as exc:
+        return "terminal receipt write failed (%s) — cannot certify; treat as park" % exc
+    return _verify_terminal_receipt(session_dir)
 
 
 def _parse_vendors(raw):
@@ -2187,7 +2216,9 @@ def _dispatch(args):
             return 0
         out = cmd_submit(args.session_dir, args.phase, args.attempt, args.state_hash, artifact)
     sys.stdout.write(json.dumps(out) + "\n")
-    return 0
+    # A terminal receipt integrity fault fails LOUD: nonzero exit, the same fail-loud family as
+    # journal-fault-unrecordable (a masked-by-replay receipt fault must never look like a clean exit).
+    return 1 if out.get("reason") == "receipt-fault" else 0
 
 
 if __name__ == "__main__":

@@ -949,6 +949,85 @@ def test_run_loop_parks_cannot_certify_on_unrecordable_journal_fault():
     assert "journal-fault-unrecordable" in receipt["certification"]["reason"]
 
 
+# --- replayed-terminal receipt-fault re-check (#507) --------------------------------------------
+# A REPLAYED terminal `next` (a `next` on a session already at its terminal step) re-emits the stored
+# pending WITHOUT re-running _finalize_receipt — so a receipt fault recorded/surfaced AFTER the first
+# emission (a fault marker, or a round-receipt.json corrupted/invalidated since) would be masked by
+# the replay's ok. Every terminal `next` — first emission AND replays — now re-verifies the on-disk
+# receipt and fails LOUD `receipt-fault` (nonzero) on any fault, never terminal-with-ok.
+
+def _drive_to_terminating_submit(session_dir, cfg, respond, max_steps=80):
+    """Drive next/submit until a submit's fold SETS the terminal, then STOP — WITHOUT calling the
+    terminal `next`. Leaves the session at terminal with the receipt written by the terminating
+    submit, so the caller can exercise the FIRST terminal `next` (e.g. after planting a fault)."""
+    first = True
+    for _ in range(max_steps):
+        n = RD.cmd_next(session_dir, cfg if first else None)
+        first = False
+        assert n["ok"], n
+        assert n["action"] != RD.P_TERMINAL, "reached the terminal `next` before a terminating submit"
+        art = respond(n["phase"], n["payload"], n["round"])
+        s = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"], art)
+        assert s["ok"], s
+        if s.get("nextStep") == RD.P_TERMINAL:
+            return
+    raise AssertionError("no terminating submit within %d steps" % max_steps)
+
+
+def test_terminal_replay_with_intact_receipt_is_idempotent_ok(tmp_path):
+    """A replayed terminal `next` with an intact on-disk receipt stays idempotent — same terminal
+    payload, ok — the re-check adds no false alarm on a healthy receipt."""
+    d = str(tmp_path)
+    _drive_cli(d, _cfg(), _responder(round1_findings=None))  # terminal + valid receipt written
+    replay = RD.cmd_next(d)
+    assert replay["ok"] is True
+    assert replay["action"] == RD.P_TERMINAL
+    assert replay["payload"]["verdict"] == "converged"
+    assert RD.main(["next", "--session-dir", d]) == 0  # CLI exit stays clean on a healthy replay
+
+
+def test_terminal_replay_after_receipt_corrupted_on_disk_is_receipt_fault(tmp_path):
+    """A replayed terminal `next` re-reads the receipt FRESH: a round-receipt.json corrupted on disk
+    since the first emission is caught (not masked by the replay's ok) → nonzero receipt-fault."""
+    d = str(tmp_path)
+    _drive_cli(d, _cfg(), _responder(round1_findings=None))
+    with open(os.path.join(d, RD.RECEIPT_FILE), "w", encoding="utf-8") as fh:
+        fh.write("{ this is no longer valid json")
+    replay = RD.cmd_next(d)
+    assert replay["ok"] is False
+    assert replay["reason"] == "receipt-fault"
+    assert "unreadable" in replay["detail"]
+    assert RD.main(["next", "--session-dir", d]) == 1  # CLI fails LOUD (nonzero)
+
+
+def test_terminal_replay_with_fault_marker_is_receipt_fault(tmp_path):
+    """A replayed terminal `next` re-checks the durable journal-fault marker too — a fault recorded
+    after the first emission is caught → nonzero receipt-fault, never masked by the replay."""
+    d = str(tmp_path)
+    _drive_cli(d, _cfg(), _responder(round1_findings=None))
+    RD._mark_journal_fault(d, {"cmd": "submit", "phase": "run-verify"}, OSError("disk full"))
+    rc = RD.main(["next", "--session-dir", d])
+    assert rc == 1
+    out = RD.cmd_next(d)
+    assert out["ok"] is False
+    assert out["reason"] == "receipt-fault"
+    assert "journal" in out["detail"]
+
+
+def test_first_terminal_emission_with_preexisting_fault_marker_is_receipt_fault(tmp_path):
+    """No ordering hole: a fault marker present BEFORE the FIRST terminal `next` (planted after the
+    terminating submit) is caught by that first emission's finalize → nonzero receipt-fault."""
+    d = str(tmp_path)
+    _drive_to_terminating_submit(d, _cfg(), _responder(round1_findings=None))
+    RD._mark_journal_fault(d, {"cmd": "submit", "phase": "run-verify"}, OSError("disk full"))
+    rc = RD.main(["next", "--session-dir", d])
+    assert rc == 1
+    out = RD.cmd_next(d)
+    assert out["ok"] is False
+    assert out["reason"] == "receipt-fault"
+    assert "journal" in out["detail"]
+
+
 def test_changed_subjects_accumulate_across_delta_rounds_for_crosscut():
     """#507 R2 residual-5: cross-cutting rework accumulates across MULTIPLE post-panel delta fixes.
     Three delta fixes of one subject each cumulate to 3 distinct subjects → cross-cutting, even
