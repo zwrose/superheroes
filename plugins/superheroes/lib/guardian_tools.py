@@ -583,11 +583,11 @@ def _route_captured(tool, argv, cwd, stdout, stderr, rc, parse):
         stdout=stdout, stderr=stderr, parsed=parsed)
 
 
-def _kill_process_tree(proc, session_created):
+def _kill_process_tree(proc, child_pgid):
     """Kill the collector and any descendants (e.g. node worker fan-out)."""
-    if session_created:
+    if child_pgid is not None:
         try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            os.killpg(child_pgid, signal.SIGKILL)
         except (OSError, AttributeError, ProcessLookupError):
             try:
                 proc.kill()
@@ -608,12 +608,12 @@ def _invoke_subprocess_bounded(tool, argv, cwd, timeout, env, parse):
         "text": True,
         "env": env,
     }
-    session_created = True
+    child_pgid = None
     try:
         popen_kwargs["start_new_session"] = True
         proc = subprocess.Popen(argv, **popen_kwargs)
+        child_pgid = proc.pid
     except TypeError:
-        session_created = False
         popen_kwargs.pop("start_new_session", None)
         try:
             proc = subprocess.Popen(argv, **popen_kwargs)
@@ -643,7 +643,7 @@ def _invoke_subprocess_bounded(tool, argv, cwd, timeout, env, parse):
         stdout_box[0] = text
         if trunc:
             truncated[0] = True
-            _kill_process_tree(proc, session_created)
+            _kill_process_tree(proc, child_pgid)
             _drain_pipe_discard(proc.stdout)
 
     def _drain_stderr():
@@ -664,12 +664,12 @@ def _invoke_subprocess_bounded(tool, argv, cwd, timeout, env, parse):
         try:
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            _kill_process_tree(proc, session_created)
+            _kill_process_tree(proc, child_pgid)
             outcome = _result_dict(
                 "timeout", tool, argv, cwd,
                 reason="%s after %ss" % (argv[0], timeout))
         except (OSError, subprocess.SubprocessError) as exc:
-            _kill_process_tree(proc, session_created)
+            _kill_process_tree(proc, child_pgid)
             outcome = _result_dict(
                 "spawn-failed", tool, argv, cwd,
                 reason="%s: %s" % (argv[0], exc))
@@ -677,7 +677,7 @@ def _invoke_subprocess_bounded(tool, argv, cwd, timeout, env, parse):
             for t in readers:
                 t.join(timeout=5)
             if any(t.is_alive() for t in readers):
-                _kill_process_tree(proc, session_created)
+                _kill_process_tree(proc, child_pgid)
                 for t in readers:
                     t.join(timeout=5)
             if any(t.is_alive() for t in readers):

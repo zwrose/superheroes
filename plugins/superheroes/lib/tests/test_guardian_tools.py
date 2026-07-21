@@ -1253,12 +1253,12 @@ def test_invoke_subprocess_bounded_captures_complete_stdout_after_exit(
         assert out["stdout"] == payload
 
 
-def test_kill_process_tree_session_created_false_uses_proc_kill_only(monkeypatch):
+def test_kill_process_tree_child_pgid_none_uses_proc_kill_only(monkeypatch):
     killpg_calls = []
 
     def fake_killpg(pgid, sig):
         killpg_calls.append((pgid, sig))
-        raise AssertionError("killpg must not run when session_created=False")
+        raise AssertionError("killpg must not run when child_pgid is None")
 
     monkeypatch.setattr(os, "killpg", fake_killpg)
     killed = []
@@ -1269,19 +1269,22 @@ def test_kill_process_tree_session_created_false_uses_proc_kill_only(monkeypatch
         def kill(self):
             killed.append(True)
 
-    gt._kill_process_tree(FakeProc(), session_created=False)
+    gt._kill_process_tree(FakeProc(), None)
     assert killed
     assert not killpg_calls
 
 
-def test_kill_process_tree_session_created_true_uses_killpg(monkeypatch):
+def test_kill_process_tree_child_pgid_uses_stored_killpg_not_getpgid(monkeypatch):
     killpg_calls = []
 
     def fake_killpg(pgid, sig):
         killpg_calls.append((pgid, sig))
 
+    def fail_getpgid(pid):
+        raise AssertionError("getpgid must not be called — use stored child_pgid")
+
     monkeypatch.setattr(os, "killpg", fake_killpg)
-    monkeypatch.setattr(os, "getpgid", lambda pid: 999)
+    monkeypatch.setattr(os, "getpgid", fail_getpgid)
 
     class FakeProc:
         pid = 12345
@@ -1289,8 +1292,51 @@ def test_kill_process_tree_session_created_true_uses_killpg(monkeypatch):
         def kill(self):
             raise AssertionError("proc.kill must not run when killpg succeeds")
 
-    gt._kill_process_tree(FakeProc(), session_created=True)
-    assert killpg_calls == [(999, signal.SIGKILL)]
+    stored_pgid = 4242
+    gt._kill_process_tree(FakeProc(), stored_pgid)
+    assert killpg_calls == [(stored_pgid, signal.SIGKILL)]
+
+
+def test_kill_process_tree_child_pgid_survives_reaped_leader(monkeypatch):
+    """Stored pgid must be used even when getpgid(proc.pid) would fail."""
+    killpg_calls = []
+
+    def fake_killpg(pgid, sig):
+        killpg_calls.append((pgid, sig))
+
+    def reaped_getpgid(pid):
+        raise ProcessLookupError(pid)
+
+    monkeypatch.setattr(os, "killpg", fake_killpg)
+    monkeypatch.setattr(os, "getpgid", reaped_getpgid)
+
+    class FakeProc:
+        pid = 12345
+
+        def kill(self):
+            raise AssertionError("proc.kill must not run when killpg succeeds")
+
+    stored_pgid = 7777
+    gt._kill_process_tree(FakeProc(), stored_pgid)
+    assert killpg_calls == [(stored_pgid, signal.SIGKILL)]
+
+
+def test_kill_process_tree_child_pgid_falls_back_to_proc_kill_on_killpg_error(monkeypatch):
+    killed = []
+
+    def fail_killpg(pgid, sig):
+        raise OSError("killpg failed")
+
+    monkeypatch.setattr(os, "killpg", fail_killpg)
+
+    class FakeProc:
+        pid = 12345
+
+        def kill(self):
+            killed.append(True)
+
+    gt._kill_process_tree(FakeProc(), 5555)
+    assert killed
 
 
 def test_version_runs_from_neutral_cwd_with_sanitized_env(tmp_path, monkeypatch):
