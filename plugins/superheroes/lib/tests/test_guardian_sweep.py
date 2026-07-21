@@ -15,6 +15,29 @@ def _store(tmp_path):
     return str(tmp_path / "store")
 
 
+def test_read_config_cadence_defaults_when_absent(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    cfg = gsw.read_config(repo, root=_store(tmp_path))
+    assert cfg["cadence"] == dict(gsw.CADENCE_DEFAULTS)
+    assert cfg["cadenceTuned"] == {}
+
+
+def test_read_config_cadence_tuned_from_guardian_layer(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    write_guardian_layer(tmp_path, {"cadence": {"minMerges": 12, "minDays": 7}})
+    cfg = gsw.read_config(repo, root=_store(tmp_path))
+    assert cfg["cadence"] == {"minMerges": 12, "minDays": 7}
+    assert cfg["cadenceTuned"] == {"minMerges": True, "minDays": True}
+
+
+def test_read_config_cadence_malformed_falls_back_to_defaults(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    write_guardian_layer(tmp_path, {"cadence": {"minMerges": "ten", "minDays": -1}})
+    cfg = gsw.read_config(repo, root=_store(tmp_path))
+    assert cfg["cadence"] == dict(gsw.CADENCE_DEFAULTS)
+    assert cfg["cadenceTuned"] == {}
+
+
 def test_first_sweep_red_line_surfaces(tmp_path):
     repo = init_calibrated_repo(tmp_path)
     lens = FixtureLens(emit_red_line=True)

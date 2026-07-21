@@ -26,6 +26,7 @@ _REPO = os.path.abspath(os.path.join(_PLUGIN, "..", ".."))
 _SKILL = os.path.join(_PLUGIN, "skills", "guardian", "SKILL.md")
 _LENS_CONTRACT = os.path.join(_PLUGIN, "skills", "guardian", "reference", "lens-contract.md")
 _CONVENTIONS = os.path.join(_REPO, "CONVENTIONS.md")
+_LEDGER_MODULE = os.path.join(_PLUGIN, "lib", "guardian_ledger.py")
 
 
 def _read(path):
@@ -61,8 +62,13 @@ def _parse_conventions_backtick_list(text, anchor_re, label):
 _OUTCOME_TOKEN = r"(?:`[^`]+`(?:\s*,\s*(?:and\s+)?|\s+and\s+)*)+"
 
 
-def _ledger_record_schema():
-    return guardian_ledger.LEDGER_RECORD_FIELDS + (guardian_ledger.ADJUDICATED_IN,)
+def _parse_ledger_extension_field():
+    """Parse the documented schema-extension field from guardian_ledger.py prose."""
+    text = _read(_LEDGER_MODULE)
+    documented = _one(
+        re.findall(r"\*\*Schema extension — `([^`]+)`\.\*\*", text),
+        "guardian_ledger.py", "schema-extension anchor")
+    return documented
 
 
 def test_skill_references_guardian_layout_paths():
@@ -147,7 +153,11 @@ def test_conventions_mentions_vitals_and_ledger_fields():
         "CONVENTIONS.md OUTCOMES_FOR drifted from guardian_ledger.OUTCOMES_FOR")
     assert tuple(guardian_ledger.OUTCOMES_AGAINST) == documented_against, (
         "CONVENTIONS.md OUTCOMES_AGAINST drifted from guardian_ledger.OUTCOMES_AGAINST")
-    assert guardian_ledger.ADJUDICATED_IN in _ledger_record_schema()
+    documented_extension = _parse_ledger_extension_field()
+    assert documented_extension == guardian_ledger.ADJUDICATED_IN, (
+        "guardian_ledger.py schema-extension prose drifted from ADJUDICATED_IN\n"
+        "  documented only: %r\n  home only: %r"
+        % (documented_extension, guardian_ledger.ADJUDICATED_IN))
 
 
 def test_skill_mentions_ledger_outcomes():
@@ -185,3 +195,15 @@ def test_conventions_vitals_guard_fails_on_home_mutation(monkeypatch):
             test_conventions_mentions_vitals_and_ledger_fields()
     finally:
         monkeypatch.setattr(guardian_vitals, "VITALS", original)
+
+
+def test_adjudicated_in_guard_fails_on_home_mutation(monkeypatch):
+    """Mutation check: a renamed ADJUDICATED_IN must fail the §11 guard."""
+    original = guardian_ledger.ADJUDICATED_IN
+    monkeypatch.setattr(guardian_ledger, "ADJUDICATED_IN", "__mutation_probe__")
+    try:
+        import pytest
+        with pytest.raises(AssertionError, match="drifted"):
+            test_conventions_mentions_vitals_and_ledger_fields()
+    finally:
+        monkeypatch.setattr(guardian_ledger, "ADJUDICATED_IN", original)

@@ -11,7 +11,6 @@ this screen carries the v2 dispatch-calibration observability surface: the EFFEC
 model for each v2 dispatch role (`## Dispatch calibration`), and the Codex model-pin detail
 (`## Engine model pins (Codex)`)."""
 import os
-import re
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -31,9 +30,6 @@ import store_sweep     # noqa: E402
 
 _NON_LAYER = ("core.md", "patterns.md")
 
-# Ratified §6 cadence default — ≥10 merges or ≥14 days (guardian SKILL Cost + cadence).
-_CADENCE_DEFAULTS = {"minMerges": 10, "minDays": 14}
-
 
 def _read(path):
     try:
@@ -43,45 +39,20 @@ def _read(path):
         return None
 
 
-def _resolve_cadence(cwd, root):
-    """Effective cadence knobs + which keys differ from the ratified defaults.
-
-    Uses guardian_sweep's config fence regex (the authoritative parser home) for the
-    cadence slice only; thresholds/coverage/reportCard come from read_config."""
-    effective = dict(_CADENCE_DEFAULTS)
-    tuned = {}
-    layer_p = guardian_store.guardian_layer_path(cwd, root)
-    if core_md._layer_is_empty(layer_p):
-        return effective, tuned
-    try:
-        with open(layer_p, encoding="utf-8") as fh:
-            text = fh.read()
-    except OSError:
-        return effective, tuned
-    m = guardian_sweep._CONFIG_BLOCK.search(text)
-    if not m:
-        return effective, tuned
-    try:
-        import json
-        block = json.loads(m.group(1))
-    except ValueError:
-        return effective, tuned
-    if not isinstance(block, dict):
-        return effective, tuned
-    cadence = block.get("cadence")
-    if isinstance(cadence, dict):
-        for key in _CADENCE_DEFAULTS:
-            val = cadence.get(key)
-            if isinstance(val, int) and not isinstance(val, bool) and val > 0:
-                if val != _CADENCE_DEFAULTS[key]:
-                    tuned[key] = True
-                effective[key] = val
-    return effective, tuned
+def _cadence_view(config):
+    """Cadence display from read_config output only (CONVENTIONS §11 — no second parser)."""
+    cadence = config.get("cadence")
+    if not isinstance(cadence, dict):
+        cadence = {}
+    cadence_tuned = config.get("cadenceTuned")
+    if not isinstance(cadence_tuned, dict):
+        cadence_tuned = {}
+    return cadence, cadence_tuned
 
 
 def _collect_guardian(cwd, root):
     config = guardian_sweep.read_config(cwd, root)
-    cadence, cadence_tuned = _resolve_cadence(cwd, root)
+    cadence, cadence_tuned = _cadence_view(config)
     ledger = guardian_store.read_ledger(cwd, root)
     report_card_notes = []
     card = guardian_ledger.report_card(
@@ -111,10 +82,14 @@ def _guardian_lines(guardian):
     if guardian is None:
         return ["(not available)"]
     lines = []
-    cadence = guardian.get("cadence") or _CADENCE_DEFAULTS
-    note = "tuned" if guardian.get("cadenceTuned") else "defaults"
-    lines.append("cadence: ≥%d merges or ≥%d days (%s)" % (
-        cadence["minMerges"], cadence["minDays"], note))
+    cadence = guardian.get("cadence") or {}
+    min_merges = cadence.get("minMerges")
+    min_days = cadence.get("minDays")
+    if isinstance(min_merges, int) and isinstance(min_days, int):
+        note = "tuned" if guardian.get("cadenceTuned") else "defaults"
+        lines.append("cadence: ≥%d merges or ≥%d days (%s)" % (min_merges, min_days, note))
+    else:
+        lines.append("cadence: (not available)")
 
     coverage = guardian.get("coverage") or []
     if not coverage:

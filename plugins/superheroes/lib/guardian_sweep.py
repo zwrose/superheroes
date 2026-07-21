@@ -29,6 +29,8 @@ import store_core       # noqa: E402
 _CONFIG_BLOCK = re.compile(
     r"```json\s+guardian-config\s*\n(.*?)\n```", re.DOTALL)
 
+CADENCE_DEFAULTS = {"minMerges": 10, "minDays": 14}
+
 # Default verify / vitals time budget. This repo's lib suite measures ~125s and
 # §3.7's worked example is 62s; 30s (the prior hard cap) made suite vitals
 # permanently "not collected" on the repos the design cites. 300s clears both
@@ -40,6 +42,24 @@ _VERIFY_STDOUT_CAP = 8 * 1024
 def _repo_root(cwd):
     out = store_core.run_git(cwd, "rev-parse", "--show-toplevel")
     return os.path.realpath(out) if out else os.path.realpath(cwd)
+
+
+def _positive_cadence_int(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _resolve_cadence(raw):
+    """Merge owner cadence over CADENCE_DEFAULTS; record positively-tuned keys."""
+    cadence = dict(CADENCE_DEFAULTS)
+    cadence_tuned = {}
+    if not isinstance(raw, dict):
+        return cadence, cadence_tuned
+    for key in CADENCE_DEFAULTS:
+        val = raw.get(key)
+        if _positive_cadence_int(val):
+            cadence[key] = val
+            cadence_tuned[key] = True
+    return cadence, cadence_tuned
 
 
 def read_config(cwd, root=None):
@@ -55,6 +75,7 @@ def read_config(cwd, root=None):
     vitals_enabled = True
     verify_budget = _DEFAULT_VERIFY_BUDGET_SECONDS
     report_card = None
+    cadence, cadence_tuned = _resolve_cadence(None)
     if core_md._layer_is_empty(layer_p):
         return {
             "thresholds": thresholds,
@@ -62,6 +83,8 @@ def read_config(cwd, root=None):
             "vitalsEnabled": vitals_enabled,
             "verifyBudgetSeconds": verify_budget,
             "reportCard": report_card,
+            "cadence": cadence,
+            "cadenceTuned": cadence_tuned,
         }
     try:
         with open(layer_p, encoding="utf-8") as fh:
@@ -73,6 +96,8 @@ def read_config(cwd, root=None):
             "vitalsEnabled": vitals_enabled,
             "verifyBudgetSeconds": verify_budget,
             "reportCard": report_card,
+            "cadence": cadence,
+            "cadenceTuned": cadence_tuned,
         }
     m = _CONFIG_BLOCK.search(text)
     if not m:
@@ -82,6 +107,8 @@ def read_config(cwd, root=None):
             "vitalsEnabled": vitals_enabled,
             "verifyBudgetSeconds": verify_budget,
             "reportCard": report_card,
+            "cadence": cadence,
+            "cadenceTuned": cadence_tuned,
         }
     try:
         block = json.loads(m.group(1))
@@ -92,6 +119,8 @@ def read_config(cwd, root=None):
             "vitalsEnabled": vitals_enabled,
             "verifyBudgetSeconds": verify_budget,
             "reportCard": report_card,
+            "cadence": cadence,
+            "cadenceTuned": cadence_tuned,
         }
     if not isinstance(block, dict):
         return {
@@ -100,6 +129,8 @@ def read_config(cwd, root=None):
             "vitalsEnabled": vitals_enabled,
             "verifyBudgetSeconds": verify_budget,
             "reportCard": report_card,
+            "cadence": cadence,
+            "cadenceTuned": cadence_tuned,
         }
     if isinstance(block.get("thresholds"), dict):
         thresholds.update(block["thresholds"])
@@ -115,12 +146,15 @@ def read_config(cwd, root=None):
         verify_budget = float(budget)
     if isinstance(block.get("reportCard"), dict):
         report_card = block["reportCard"]
+    cadence, cadence_tuned = _resolve_cadence(block.get("cadence"))
     return {
         "thresholds": thresholds,
         "coverage": coverage,
         "vitalsEnabled": vitals_enabled,
         "verifyBudgetSeconds": verify_budget,
         "reportCard": report_card,
+        "cadence": cadence,
+        "cadenceTuned": cadence_tuned,
     }
 
 
