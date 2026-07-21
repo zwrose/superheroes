@@ -62,11 +62,12 @@ def test_per_lens_baseline_new_lens_quiet_except_red_lines(tmp_path):
     }
     gs.write_snapshot_cas(repo, snap, None, root=root)
 
-    lens_b = FixtureLens(name="lens-b", emit_normal=True, digest={"v": 1})
+    lens_b = FixtureLens(name="lens-b", emit_normal=True, emit_red_line=True, digest={"v": 1})
     bundle = gsw.collect(repo, lenses=[lens_a, lens_b], root=root)
     surfaced_ids = [s["id"] for s in bundle["surfaced"]]
     assert "lens-a:normal" in surfaced_ids
     assert "lens-b:normal" not in surfaced_ids
+    assert "lens-b:red-line" in surfaced_ids
 
 
 def test_verify_command_failed_degrades_lens(tmp_path):
@@ -126,8 +127,9 @@ def test_filed_open_candidate_tracked_in_funnel_conservation(tmp_path):
     killed_drift = len(bundle["funnel"]["killedByDrift"])
     killed_ledger = len(bundle["funnel"]["killedByLedger"])
     tracked_filed = len(bundle["funnel"]["trackedFiled"])
+    malformed = len(bundle["funnel"]["malformed"])
     surfaced = len(bundle["surfaced"])
-    assert raised == killed_drift + killed_ledger + tracked_filed + surfaced
+    assert raised == malformed + killed_drift + killed_ledger + tracked_filed + surfaced
 
 
 def test_collect_skips_verify_when_lens_does_not_require_it(tmp_path):
@@ -199,7 +201,7 @@ def test_malformed_ledger_suppresses_nothing(tmp_path):
     root = _store(tmp_path)
     gs.write_snapshot_cas(repo, {
         "schemaVersion": 1, "sweptSha": "a", "vitals": {},
-        "lenses": {"fixture": {"collectorVersion": "0", "digest": {"v": 1}}},
+        "lenses": {"fixture": {"collectorVersion": "0.0.0-test", "digest": {"v": 1}}},
     }, None, root=root)
     sc.atomic_write(gs.ledger_path(repo, root), "bad ledger\n")
 
@@ -269,11 +271,24 @@ def test_finalize_writes_report_and_snapshot(tmp_path):
 def test_finalize_raced_does_not_write_report(tmp_path):
     repo = init_calibrated_repo(tmp_path)
     root = _store(tmp_path)
+    initial = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "baseline-sha",
+        "vitals": {},
+        "lenses": {},
+    }
+    gs.write_snapshot_cas(repo, initial, None, root=root)
     lens = FixtureLens(emit_red_line=True)
     bundle = gsw.collect(repo, lenses=[lens], root=root)
-    gs.write_snapshot_cas(repo, {
-        "schemaVersion": 1, "sweptSha": "racer", "vitals": {}, "lenses": {},
-    }, None, root=root)
+    concurrent = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "baseline-sha",
+        "vitals": {},
+        "lenses": {"tampered": {"collectorVersion": "x", "digest": {"v": 99}}},
+    }
+    sc.atomic_write(
+        gs.snapshot_path(repo, root=root),
+        json.dumps(concurrent, indent=2) + "\n")
     disp = [{
         "id": bundle["surfaced"][0]["id"],
         "verdict": "validated",
@@ -286,7 +301,7 @@ def test_finalize_raced_does_not_write_report(tmp_path):
     assert result["ok"] is False
     assert result["reason"] == "raced"
     assert not os.path.isfile(gs.report_path(repo, root=root))
-    assert gs.read_snapshot(repo, root=root)["sweptSha"] == "racer"
+    assert gs.read_snapshot(repo, root=root)["lenses"] == concurrent["lenses"]
 
 
 def test_finalize_invalid_dispositions_writes_nothing(tmp_path):
@@ -298,3 +313,154 @@ def test_finalize_invalid_dispositions_writes_nothing(tmp_path):
     assert result["ok"] is False
     assert not os.path.isfile(gs.report_path(repo, root=root))
     assert not os.path.isfile(gs.snapshot_path(repo, root=root))
+
+
+def test_accepted_trade_suppressed_when_not_worsened(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_ledger(tmp_path, [{
+        "id": "fixture:normal",
+        "disposition": "accepted",
+        "issue": None,
+        "metricAtDisposition": 5,
+    }], root=root)
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": {"collectorVersion": "0.0.0-test", "digest": {"v": 1}}},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    lens = FixtureLens(emit_normal=True, digest={"v": 2}, diff_new=["fixture:normal"], metric=3)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert bundle["surfaced"] == []
+    assert len(bundle["funnel"]["killedByLedger"]) == 1
+    assert bundle["funnel"]["killedByLedger"][0]["disposition"] == "accepted"
+
+
+def test_accepted_trade_resurfaces_when_materially_worsened(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_ledger(tmp_path, [{
+        "id": "fixture:normal",
+        "disposition": "accepted",
+        "issue": None,
+        "metricAtDisposition": 5,
+    }], root=root)
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": {"collectorVersion": "0.0.0-test", "digest": {"v": 1}}},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    lens = FixtureLens(emit_normal=True, digest={"v": 2}, diff_new=["fixture:normal"], metric=10)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert len(bundle["surfaced"]) == 1
+    assert bundle["surfaced"][0]["id"] == "fixture:normal"
+
+
+def test_recorded_coverage_absent_degrades_lens(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    lens = FixtureLens(required_facts=("recorded-coverage",))
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert len(bundle["funnel"]["degradedLenses"]) == 1
+    assert bundle["funnel"]["degradedLenses"][0]["lens"] == "fixture"
+
+
+def test_collector_version_change_treats_lens_as_new_baseline(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": {"collectorVersion": "1", "digest": {"v": 1}}},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    lens = FixtureLens(
+        collector_version="2", emit_normal=True, digest={"v": 2},
+        diff_new=["fixture:normal"])
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert bundle["surfaced"] == []
+    assert bundle["nextSnapshot"]["lenses"]["fixture"]["collectorVersion"] == "2"
+
+
+def test_degraded_lens_preserves_prior_baseline(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    prior_entry = {"collectorVersion": "0.0.0-test", "digest": {"v": 1}}
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": prior_entry},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    lens = FixtureLens(required_facts=("recorded-coverage",))
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert len(bundle["funnel"]["degradedLenses"]) == 1
+    assert bundle["nextSnapshot"]["lenses"]["fixture"] == prior_entry
+
+
+def test_bundle_lens_meta_for_surfaced_lens(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    lens = FixtureLens(emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[lens])
+    meta = bundle["lensMeta"]["fixture"]
+    assert meta["validationGuidance"] == lens.validation_guidance
+    assert meta["consequenceTemplate"] == lens.consequence_template
+    assert meta["cost"] == lens.cost
+
+
+def test_malformed_candidate_lands_in_funnel_malformed(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+
+    class MalformedLens(FixtureLens):
+        def collect(self, ctx):
+            out = super().collect(ctx)
+            out["candidates"] = out["candidates"] + ["not-a-dict"]
+            return out
+
+    lens = MalformedLens(emit_normal=True)
+    bundle = gsw.collect(repo, lenses=[lens])
+    assert len(bundle["funnel"]["malformed"]) == 1
+    raised = sum(bundle["funnel"]["raised"].values())
+    killed_drift = len(bundle["funnel"]["killedByDrift"])
+    killed_ledger = len(bundle["funnel"]["killedByLedger"])
+    tracked_filed = len(bundle["funnel"]["trackedFiled"])
+    malformed = len(bundle["funnel"]["malformed"])
+    surfaced = len(bundle["surfaced"])
+    assert raised == malformed + killed_drift + killed_ledger + tracked_filed + surfaced
+
+
+def test_finalize_report_written_before_snapshot_failure(tmp_path, monkeypatch):
+    import pytest
+
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    lens = FixtureLens(emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    prior_snap = gs.read_snapshot(repo, root=root)
+    disp = [{
+        "id": bundle["surfaced"][0]["id"],
+        "verdict": "validated",
+        "consequence": "x",
+        "receipt": "y",
+        "effort": "z",
+        "ledgerJoin": bundle["surfaced"][0]["id"],
+    }]
+    snap_path = gs.snapshot_path(repo, root=root)
+    real_atomic_write = sc.atomic_write
+
+    def flaky_atomic_write(path, content):
+        if path == snap_path:
+            raise OSError("simulated snapshot write failure")
+        return real_atomic_write(path, content)
+
+    monkeypatch.setattr(sc, "atomic_write", flaky_atomic_write)
+    with pytest.raises(OSError, match="simulated snapshot"):
+        gsw.finalize(repo, bundle, disp, root=root)
+    assert os.path.isfile(gs.report_path(repo, root=root))
+    assert gs.read_snapshot(repo, root=root) == prior_snap

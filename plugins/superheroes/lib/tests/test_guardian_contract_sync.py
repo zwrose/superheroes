@@ -43,3 +43,12 @@ def test_lens_contract_covers_all_parts():
     text = _read(_LENS_CONTRACT)
     for part in parts:
         assert part in text, "lens-contract.md missing contract part slug %r" % part
+
+
+def test_lens_contract_covers_all_facts():
+    """FACTS ↔ reference prose (fail-closed)."""
+    facts = guardian_lens.FACTS
+    assert facts, "guardian_lens.FACTS is empty — no authoritative home"
+    text = _read(_LENS_CONTRACT)
+    for fact in facts:
+        assert fact in text, "lens-contract.md missing FACTS member %r" % fact

@@ -144,13 +144,11 @@ session, and is never stored here.
 
 **Guardian artifact subtree.** The Guardian hero (§1) adds a `guardian.md` calibration layer
 (a per-plugin layer like any other) plus a `guardian/` artifact subtree beside `core.md`,
-holding its sweep outputs: `report.md` (the latest sweep report) and `latest.json` (the
-drift-baseline snapshot) — both written only by the sweep — and `ledger.md` (dispositions;
-read-only until the guardian memory issue lands). A `vitals.jsonl` trend file is reserved for
-that same later issue. In in-repo mode these are committed with the repo (findings are visible
-to collaborators; the artifacts dirty the working tree until committed); in global mode they
-live in the project store. The sweep is the single writer of `report.md`/`latest.json` and
-**never commits, pushes, edits code, or files issues.**
+holding its sweep outputs: a report, a drift-baseline snapshot, and a read-only dispositions
+ledger — plus a reserved vitals trend file for a later issue. In in-repo mode these are
+committed with the repo (findings are visible to collaborators; the artifacts dirty the working
+tree until committed); in global mode they live in the project store. The sweep is the single
+writer of the report and baseline snapshot and **never commits, pushes, edits code, or files issues.**
 
 ### 2.2 File format
 

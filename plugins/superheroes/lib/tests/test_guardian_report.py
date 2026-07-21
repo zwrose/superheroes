@@ -59,6 +59,7 @@ def test_render_funnel_buckets_use_constants():
     md = gr.render(_sample_bundle(), _sample_dispositions(), {"byId": {}})
     assert gr.HEADER_FUNNEL in md
     assert gr.FUNNEL_RAISED in md
+    assert gr.FUNNEL_MALFORMED in md
     assert gr.FUNNEL_KILLED_DRIFT in md
     assert gr.FUNNEL_KILLED_LEDGER in md
     assert gr.FUNNEL_DEGRADED in md
@@ -67,3 +68,16 @@ def test_render_funnel_buckets_use_constants():
     assert "fixture: 2" in md
     assert "no-drift" in md
     assert "accepted" in md
+
+
+def test_render_ledger_history_for_validated_join():
+    bundle = _sample_bundle()
+    dispositions = _sample_dispositions()
+    ledger = {
+        "byId": {
+            "a": {"id": "a", "disposition": "accepted", "issue": None},
+        },
+    }
+    md = gr.render(bundle, dispositions, ledger)
+    assert "**Ledger history:**" in md
+    assert "disposition=accepted" in md

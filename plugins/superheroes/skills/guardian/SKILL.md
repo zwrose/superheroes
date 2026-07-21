@@ -57,15 +57,15 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 python3 "$ROOT_DIR/lib/guardian_sweep.py" verify-config --cwd . | jq .
 ```
 
-The bundle carries: `surfaced` (candidates needing validation), `funnel`, `factVerdicts`, `ledgerStatus`, `redLines`, and `nextSnapshot` (the staged baseline). Read `ledgerStatus` first — filed/tracked items are already dispositioned; do not re-litigate them.
+The bundle carries: `surfaced` (candidates needing validation), `funnel`, `factVerdicts`, `ledgerStatus`, `redLines`, `lensMeta` (per-lens validation guidance and consequence templates for surfaced lenses), and `nextSnapshot` (the staged baseline). Read `ledgerStatus` first — filed/tracked items are already dispositioned; do not re-litigate them.
 
 ### 2. Validate (the one model pass)
 
 For **each** entry in the bundle's `surfaced` list, validate the candidate:
 
-- Read `CLAUDE.md`, `CONVENTIONS.md`, the calibration layers (`core.md`, plugin layers), and any relevant spec definition-docs.
+- Read `bundle.lensMeta[<lens>].validationGuidance` for the lens-specific validation rubric, then `CLAUDE.md`, `CONVENTIONS.md`, the calibration layers (`core.md`, plugin layers), and any relevant spec definition-docs.
 - **Reject** if unactionable: wrong context, sanctioned project convention, test/generated/boilerplate code, or already covered by a settled ledger trade.
-- **Validate** survivors: draft exactly **one plain sentence** consequence, its **receipt** (the measured evidence), an **effort** estimate from that evidence (not rubric severity), and a **ledgerJoin** id (stable join key for the ledger).
+- **Validate** survivors: draft exactly **one plain sentence** consequence (phrase it using `bundle.lensMeta[<lens>].consequenceTemplate` as guidance), its **receipt** (the measured evidence), an **effort** estimate from that evidence (not rubric severity), and a **ledgerJoin** id (stable join key for the ledger).
 
 Produce a **dispositions JSON** — exactly one entry per surfaced `id`:
 

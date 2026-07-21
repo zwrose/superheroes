@@ -15,6 +15,8 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import core_md      # noqa: E402
+import file_lock    # noqa: E402
+import guardian_lens  # noqa: E402
 import store_core   # noqa: E402
 
 LAYOUT = {
@@ -27,7 +29,8 @@ SNAPSHOT_SCHEMA_VERSION = 1
 SNAPSHOT_KEYS = ("schemaVersion", "sweptSha", "vitals", "lenses")
 LEDGER_SCHEMA_VERSION = 1
 LEDGER_FENCE = "guardian-ledger"
-LEDGER_MIN_FIELDS = ("id", "disposition", "issue")
+LEDGER_MIN_FIELDS = ("id", "disposition")
+SWEEP_LOCK = ".sweep.lock"
 
 _LEDGER_BLOCK = re.compile(
     r"```json\s+" + re.escape(LEDGER_FENCE) + r"\s*\n(.*?)\n```", re.DOTALL)
@@ -63,13 +66,14 @@ def vitals_path(cwd, root=None):
     return os.path.join(guardian_dir(cwd, root), LAYOUT["vitals"])
 
 
+def sweep_lock_path(cwd, root=None):
+    return os.path.join(guardian_dir(cwd, root), SWEEP_LOCK)
+
+
 def snapshot_identity(snapshot):
-    """Stable identity string for CAS. None for a None snapshot."""
+    """Content-hash identity for CAS. None for a None snapshot."""
     if snapshot is None:
         return None
-    swept = snapshot.get("sweptSha")
-    if swept:
-        return swept
     return store_core.short_hash(json.dumps(snapshot, sort_keys=True))
 
 
@@ -97,19 +101,27 @@ def read_snapshot(cwd, root=None):
 
 
 def write_snapshot_cas(cwd, next_snapshot, expected_prev_identity, root=None):
-    """Compare-and-swap write of latest.json."""
-    current = read_snapshot(cwd, root)
-    on_disk = snapshot_identity(current)
-    if on_disk != expected_prev_identity:
-        return {
-            "ok": False,
-            "reason": "raced",
-            "onDisk": on_disk,
-            "expected": expected_prev_identity,
-        }
-    path = snapshot_path(cwd, root)
-    store_core.atomic_write(path, json.dumps(next_snapshot, indent=2) + "\n")
-    return {"ok": True, "path": path}
+    """Compare-and-swap write of latest.json under the sweep lock."""
+    lock_path = sweep_lock_path(cwd, root)
+    try:
+        file_lock.acquire(lock_path)
+    except file_lock.LockHeld as exc:
+        return {"ok": False, "reason": "raced", "lockHeld": exc.holder}
+    try:
+        current = read_snapshot(cwd, root)
+        on_disk = snapshot_identity(current)
+        if on_disk != expected_prev_identity:
+            return {
+                "ok": False,
+                "reason": "raced",
+                "onDisk": on_disk,
+                "expected": expected_prev_identity,
+            }
+        path = snapshot_path(cwd, root)
+        store_core.atomic_write(path, json.dumps(next_snapshot, indent=2) + "\n")
+        return {"ok": True, "path": path}
+    finally:
+        file_lock.release(lock_path)
 
 
 def _parse_ledger_block(text):
@@ -178,6 +190,8 @@ def read_ledger(cwd, root=None):
         if not isinstance(rec, dict):
             continue
         if not all(rec.get(f) is not None for f in LEDGER_MIN_FIELDS):
+            continue
+        if rec.get("disposition") not in guardian_lens.FINDING_STATES:
             continue
         records.append(rec)
         by_id[rec["id"]] = rec

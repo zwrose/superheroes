@@ -22,6 +22,7 @@ _STANDING_BODY = """\
 """
 
 FUNNEL_RAISED = "raised"
+FUNNEL_MALFORMED = "malformed"
 FUNNEL_KILLED_DRIFT = "killed-by-drift"
 FUNNEL_KILLED_LEDGER = "killed-by-ledger"
 FUNNEL_TRACKED_FILED = "tracked-filed"
@@ -96,11 +97,23 @@ def render(bundle, dispositions, ledger):
     lines.append("")
     funnel = bundle.get("funnel") or {}
     raised = funnel.get("raised") or {}
+    lines.append("### %s" % FUNNEL_RAISED)
     if raised:
-        lines.append("### %s" % FUNNEL_RAISED)
         for lens in sorted(raised):
             lines.append("- %s: %d" % (lens, raised[lens]))
-        lines.append("")
+    else:
+        lines.append("_None._")
+    lines.append("")
+
+    malformed = funnel.get("malformed") or []
+    lines.append("### %s" % FUNNEL_MALFORMED)
+    if malformed:
+        for item in malformed:
+            lines.append("- %s[%s]: %s" % (
+                item.get("lens"), item.get("index"), item.get("repr")))
+    else:
+        lines.append("_None._")
+    lines.append("")
 
     drift = funnel.get("killedByDrift") or []
     lines.append("### %s" % FUNNEL_KILLED_DRIFT)

@@ -51,7 +51,7 @@ def test_snapshot_round_trip(tmp_path):
     }
     sc.atomic_write(gs.snapshot_path(repo), json.dumps(snap, indent=2))
     assert gs.read_snapshot(repo) == snap
-    assert gs.snapshot_identity(snap) == "abc123"
+    assert gs.snapshot_identity(snap) == sc.short_hash(json.dumps(snap, sort_keys=True))
 
 
 def test_snapshot_identity_hash_when_no_sha(tmp_path):
@@ -139,7 +139,8 @@ def test_read_ledger_drops_incomplete_records(tmp_path):
     repo = init_calibrated_repo(tmp_path)
     records = [
         {"id": "good", "disposition": "accepted", "issue": "n/a"},
-        {"id": "bad", "disposition": "accepted"},
+        {"id": "trade", "disposition": "accepted"},
+        {"id": "bad"},
     ]
     text = (
         "```json %s\n%s\n```\n"
@@ -148,4 +149,31 @@ def test_read_ledger_drops_incomplete_records(tmp_path):
     sc.atomic_write(gs.ledger_path(repo), text)
     out = gs.read_ledger(repo)
     assert "good" in out["byId"]
+    assert "trade" in out["byId"]
     assert "bad" not in out["byId"]
+
+
+def test_read_ledger_drops_unknown_disposition(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    records = [
+        {"id": "known", "disposition": "filed", "issue": "#1"},
+        {"id": "unknown", "disposition": "not-a-state", "issue": "#2"},
+    ]
+    text = (
+        "```json %s\n%s\n```\n"
+        % (gs.LEDGER_FENCE, json.dumps({"schemaVersion": 1, "records": records}))
+    )
+    sc.atomic_write(gs.ledger_path(repo), text)
+    out = gs.read_ledger(repo)
+    assert "known" in out["byId"]
+    assert "unknown" not in out["byId"]
+
+
+def test_snapshot_keys_match_ssot(tmp_path):
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {},
+    }
+    assert set(snap) == set(gs.SNAPSHOT_KEYS)

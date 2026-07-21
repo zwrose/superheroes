@@ -7,6 +7,7 @@ Stdlib-only. Deterministic shell for repo-health sweeps — never edits code or 
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -15,13 +16,14 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import core_md          # noqa: E402
+import file_lock        # noqa: E402
 import guardian_lens    # noqa: E402
 import guardian_report  # noqa: E402
 import guardian_store   # noqa: E402
 import store_core       # noqa: E402
 
-_CONFIG_BLOCK = __import__("re").compile(
-    r"```json\s+guardian-config\s*\n(.*?)\n```", __import__("re").DOTALL)
+_CONFIG_BLOCK = re.compile(
+    r"```json\s+guardian-config\s*\n(.*?)\n```", re.DOTALL)
 
 _VERIFY_TIMEOUT = 30
 
@@ -188,10 +190,19 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
     return {"facts": facts}
 
 
-def _failed_facts(fact_verdicts):
+_FACT_SATISFIED = {
+    "verify-command": "ok",
+    "recorded-coverage": "present",
+    "stack-tags": "match",
+    "paths": "ok",
+}
+
+
+def _unsatisfied_facts(fact_verdicts):
+    statuses = {f["fact"]: f["status"] for f in fact_verdicts}
     return {
-        f["fact"] for f in fact_verdicts
-        if f["status"] in ("failed", "mismatch", "dangling")
+        fact for fact, satisfied in _FACT_SATISFIED.items()
+        if statuses.get(fact) != satisfied
     }
 
 
@@ -218,6 +229,12 @@ def _materially_worsened(candidate, rec):
         return False
 
 
+def _filter_red_lines(red_lines):
+    """Drop red-line entries whose kind is not in RED_LINE_KINDS."""
+    allowed = set(guardian_lens.RED_LINE_KINDS)
+    return [r for r in red_lines if r.get("kind") in allowed]
+
+
 def collect(cwd, lenses=None, root=None, run=None, config=None):
     """Side-effect-free collection. MUST NOT write latest.json."""
     lenses = lenses if lenses is not None else guardian_lens.registered_lenses()
@@ -226,7 +243,7 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
     for lens in lenses:
         needed_facts.update(lens.required_facts)
     facts = verify_config(cwd, root, run=run, config=config, needed_facts=needed_facts)
-    failed = _failed_facts(facts["facts"])
+    unsatisfied = _unsatisfied_facts(facts["facts"])
 
     prev = guardian_store.read_snapshot(cwd, root)
     prev_identity = guardian_store.snapshot_identity(prev)
@@ -239,15 +256,17 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
     killed_by_drift = []
     killed_by_ledger = []
     degraded_lenses = []
+    malformed = []
+    lens_meta = {}
     next_lenses = {}
 
     ledger = guardian_store.read_ledger(cwd, root)
     suppress_via_ledger = ledger["status"] in ("ok", "absent")
 
     for lens in lenses:
-        if set(lens.required_facts) & failed:
-            reason = "required facts failed: %s" % (
-                ", ".join(sorted(set(lens.required_facts) & failed)))
+        if set(lens.required_facts) & unsatisfied:
+            reason = "required facts unsatisfied: %s" % (
+                ", ".join(sorted(set(lens.required_facts) & unsatisfied)))
             degraded_lenses.append(lens.degrade(reason))
             continue
 
@@ -257,22 +276,33 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
         cur_digest = out.get("digest")
         funnel_raised[lens.name] = len(candidates)
 
-        cand_by_id = {c["id"]: c for c in candidates if isinstance(c, dict) and c.get("id")}
+        cand_by_id = {}
+        for i, c in enumerate(candidates):
+            if isinstance(c, dict) and c.get("id"):
+                cand_by_id[c["id"]] = c
+            else:
+                malformed.append({"lens": lens.name, "index": i, "repr": repr(c)})
 
-        lens_new = lens.name not in prev_lenses
+        valid_candidates = list(cand_by_id.values())
+        prev_entry = prev_lenses.get(lens.name)
+        lens_new = (
+            lens.name not in prev_lenses
+            or prev_entry.get("collectorVersion") != lens.collector_version
+        )
         if lens_new:
             d = {"new": [], "worsened": [], "resolved": []}
             drift_ids = []
         else:
-            prev_digest = prev_lenses[lens.name].get("digest")
+            prev_digest = prev_entry.get("digest")
             d = lens.diff(prev_digest, cur_digest)
             drift_ids = list(d.get("new", [])) + list(d.get("worsened", []))
 
-        rl = lens.red_lines(candidates)
+        rl = _filter_red_lines(lens.red_lines(valid_candidates))
         red_line_ids = {r["id"] for r in rl}
         red_lines.extend(rl)
 
         would_surface = set(drift_ids) | red_line_ids
+        lens_surfaced = False
 
         for cid, cand in cand_by_id.items():
             if cid not in would_surface:
@@ -319,11 +349,23 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
             entry["lens"] = lens.name
             entry["driftReason"] = drift_reason
             surfaced.append(entry)
+            lens_surfaced = True
+
+        if lens_surfaced:
+            lens_meta[lens.name] = {
+                "validationGuidance": lens.validation_guidance,
+                "consequenceTemplate": lens.consequence_template,
+                "cost": lens.cost,
+            }
 
         next_lenses[lens.name] = {
             "collectorVersion": lens.collector_version,
             "digest": cur_digest,
         }
+
+    for lens in lenses:
+        if lens.name not in next_lenses and lens.name in prev_lenses:
+            next_lenses[lens.name] = prev_lenses[lens.name]
 
     swept_sha = store_core.run_git(cwd, "rev-parse", "HEAD")
     next_snapshot = {
@@ -332,16 +374,19 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
         "vitals": (prev or {}).get("vitals", {}),
         "lenses": next_lenses,
     }
+    assert set(next_snapshot) == set(guardian_store.SNAPSHOT_KEYS)
 
     return {
         "surfaced": surfaced,
         "funnel": {
             "raised": funnel_raised,
+            "malformed": malformed,
             "killedByDrift": killed_by_drift,
             "killedByLedger": killed_by_ledger,
             "trackedFiled": list(ledger_status),
             "degradedLenses": degraded_lenses,
         },
+        "lensMeta": lens_meta,
         "redLines": red_lines,
         "factVerdicts": facts["facts"],
         "ledgerStatus": ledger_status,
@@ -386,26 +431,45 @@ def validate_dispositions(bundle, dispositions):
 
 
 def finalize(cwd, bundle, dispositions, root=None):
-    """Transactional finalize: validate → render → CAS snapshot → write report."""
+    """Transactional finalize: validate → report first → baseline last, under sweep lock."""
     ok, errors = validate_dispositions(bundle, dispositions)
     if not ok:
         return {"ok": False, "reason": "invalid-dispositions", "errors": errors}
 
-    ledger = guardian_store.read_ledger(cwd, root)
-    report_md = guardian_report.render(bundle, dispositions, ledger)
+    lock_path = guardian_store.sweep_lock_path(cwd, root)
+    try:
+        file_lock.acquire(lock_path)
+    except file_lock.LockHeld as exc:
+        return {"ok": False, "reason": "raced", "lockHeld": exc.holder}
 
-    cas = guardian_store.write_snapshot_cas(
-        cwd, bundle["nextSnapshot"], bundle["prevIdentity"], root)
-    if not cas.get("ok"):
-        return {"ok": False, "reason": "raced", **cas}
+    try:
+        current = guardian_store.read_snapshot(cwd, root)
+        on_disk = guardian_store.snapshot_identity(current)
+        if on_disk != bundle["prevIdentity"]:
+            return {
+                "ok": False,
+                "reason": "raced",
+                "onDisk": on_disk,
+                "expected": bundle["prevIdentity"],
+            }
 
-    rp = guardian_store.report_path(cwd, root)
-    store_core.atomic_write(rp, report_md)
-    return {
-        "ok": True,
-        "reportPath": rp,
-        "snapshotPath": guardian_store.snapshot_path(cwd, root),
-    }
+        ledger = guardian_store.read_ledger(cwd, root)
+        report_md = guardian_report.render(bundle, dispositions, ledger)
+
+        rp = guardian_store.report_path(cwd, root)
+        store_core.atomic_write(rp, report_md)
+
+        snap_path = guardian_store.snapshot_path(cwd, root)
+        store_core.atomic_write(
+            snap_path, json.dumps(bundle["nextSnapshot"], indent=2) + "\n")
+
+        return {
+            "ok": True,
+            "reportPath": rp,
+            "snapshotPath": snap_path,
+        }
+    finally:
+        file_lock.release(lock_path)
 
 
 def main(argv=None):
