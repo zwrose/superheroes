@@ -78,6 +78,11 @@ _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
         "codex": ("gpt-5.6-sol", "xhigh"),
         "cursor": ("cursor-grok-4.5", "high"),
     },
+    "verifier": {
+        "claude": ("opus-4.8", "high"),
+        "codex": ("gpt-5.6-sol", "high"),
+        "cursor": ("cursor-grok-4.5", "high"),
+    },
     "brief-check": {
         "claude": ("opus-4.8", "xhigh"),
         "codex": ("gpt-5.6-sol", "xhigh"),
@@ -128,6 +133,14 @@ _ROLE_META: dict[str, dict] = {
         "codex_kind": "review-deep",
         "read_write": "read",
         "pin_eligible": True,
+        "owner_tunable": True,
+    },
+    "verifier": {
+        "model_tier_role": True,
+        "engine_pref_key": "reviewer",
+        "codex_kind": None,
+        "read_write": "read",
+        "pin_eligible": False,
         "owner_tunable": True,
     },
     "mechanical": {
@@ -203,6 +216,7 @@ _MODEL_TIER_ROLES = (
     "orchestrator",
     "reviewer",
     "reviewer-deep",
+    "verifier",
     "mechanical",
     "synthesis",
     "code-fixer",
