@@ -108,7 +108,8 @@ def test_safety_machinery_set_members_are_pinned():
         "precompact.py", "session_start.py",
         "escalation-base.md", "review-base.md",
         # shared review-and-fix loop (#104): deciders, durable record, and the orchestration shell
-        "panel_tally.py", "loop_synthesis.py", "verify_gate.py", "loop_readout.py",
+        "panel_tally.py", "loop_synthesis.py", "verification.py", "verify_gate.py",
+        "loop_readout.py",
         "review_result.py", "review_panel_shell.js",
     }
 

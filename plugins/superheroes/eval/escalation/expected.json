@@ -38,6 +38,7 @@
     {"path": "plugins/superheroes/hooks/session_start.py", "allow": false},
     {"path": "plugins/superheroes/lib/panel_tally.py", "allow": false},
     {"path": "plugins/superheroes/lib/loop_synthesis.py", "allow": false},
+    {"path": "plugins/superheroes/lib/verification.py", "allow": false},
     {"path": "plugins/superheroes/lib/verify_gate.py", "allow": false},
     {"path": "plugins/superheroes/lib/loop_readout.py", "allow": false},
     {"path": "plugins/superheroes/lib/review_result.py", "allow": false},
