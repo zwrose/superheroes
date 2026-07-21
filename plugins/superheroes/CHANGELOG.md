@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.17.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.16.0...superheroes-v0.17.0) (2026-07-21)
+
+
+### Features
+
+* **superheroes:** doc lens recast — six doc-native review-spec lenses, roster guard, focus flags ([#531](https://github.com/zwrose/superheroes/issues/531)) ([d9f5ea2](https://github.com/zwrose/superheroes/commit/d9f5ea222074bc6976ae2dafa6169d2eba4ce59d))
+* **superheroes:** launch-prompt discipline — command + issue pointer, intake receipts extras & flags conflicts ([#521](https://github.com/zwrose/superheroes/issues/521)) ([8c8632a](https://github.com/zwrose/superheroes/commit/8c8632a8a2da3f05c8ede940a2bea3a80f139682))
+* **superheroes:** lens enrichment — deleted-line audit, caller tracing, do-not-flag bar, grounding seat, focus flags ([#511](https://github.com/zwrose/superheroes/issues/511)) ([#532](https://github.com/zwrose/superheroes/issues/532)) ([4dfbdc7](https://github.com/zwrose/superheroes/commit/4dfbdc773d2bf3497064e2234ff003f0ad1d4f7c))
+* **superheroes:** provenance pincer — the-architect citation rule + review-spec validator + grounding seat ([#530](https://github.com/zwrose/superheroes/issues/530)) ([3a9d120](https://github.com/zwrose/superheroes/commit/3a9d120392a754f9fe00d2c49b936bd68fc6ff32))
+* **superheroes:** role/vendor taxonomy foundation — vendor registry, config ladders, role×vendor matrix, code-fixer/doc-reviser split ([#509](https://github.com/zwrose/superheroes/issues/509)) ([#523](https://github.com/zwrose/superheroes/issues/523)) ([236b69b](https://github.com/zwrose/superheroes/commit/236b69b4c9355ceeb1cb6586b3365c13013fca06))
+
+
+### Bug Fixes
+
+* **superheroes:** reconcile doc-loop cap contradiction + post-halt-edit tripwire ([#528](https://github.com/zwrose/superheroes/issues/528)) ([747677e](https://github.com/zwrose/superheroes/commit/747677e24298db03483a6400b2b64ce715115a9b))
+* **superheroes:** retire panel-level confidence escalation ([#505](https://github.com/zwrose/superheroes/issues/505)) ([#522](https://github.com/zwrose/superheroes/issues/522)) ([a7413a3](https://github.com/zwrose/superheroes/commit/a7413a3e0ecfb2e2bf6d92a10063a3cfd069fb07))
+
 ## [0.16.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.15.0...superheroes-v0.16.0) (2026-07-19)
 
 
