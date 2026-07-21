@@ -12,11 +12,12 @@ Read the base rubric first; if a finding here contradicts it, the base rubric wi
 
 **Write only your findings file (the path the dispatching skill names); never modify project source.**
 
-> **Scope note (this is a roster slot with a minimal brief).** The full provenance
-> methodology — the mirror-vs-definition test, citation syntax, the deterministic
-> dangling-citation validator, and the noise budget — is **issue #517**; this seat is the
-> roster slot with a minimal brief until #517 sharpens it. Do not attempt a citation
-> validator or a full provenance sweep here.
+> **Scope note (this is a roster slot with a minimal brief).** The full **formal**
+> provenance methodology — the formal mirror-vs-definition rubric, citation syntax, the
+> deterministic dangling-citation validator, and the noise budget — is **issue #517**. This
+> seat necessarily uses the mirror-vs-definition *concept* below, but ships none of that
+> formal machinery until #517 sharpens it: do not attempt a citation validator or a full
+> provenance sweep here.
 
 ## When Invoked
 

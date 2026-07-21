@@ -9,7 +9,10 @@ project profile at `.claude/review-profile.md`; **conventions** live in the
 project's `CLAUDE.md`. If a review finding contradicts this file, this file wins.
 
 `rubric-version` (top of file) is the staleness signal for "the rubric changed";
-bump it on any semantic change here.
+bump it on a semantic change to **this file's own stated scope** — severity,
+verification rules, findings format, triage, or verdicts. **Additively extending
+the Dimensions data list with a new lens label is NOT a version-bumping change** — it
+adds a data entry, not a rule, and no *project calibration* changed.
 
 ## Calibration comes from the profile (not baked in here)
 

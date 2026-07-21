@@ -97,8 +97,10 @@ def test_code_reviewer_rosters_match_bundled_agents():
     universe = _agent_slugs()
     code_roster = universe - SPEC_ONLY
     spec_roster = universe
-    # secondary guard: the two legs' rosters together must cover the whole sanctioned universe
-    assert code_roster | spec_roster == universe
+    # secondary guard: pin the actual partition — the spec leg is EXACTLY the code leg
+    # plus the spec-only seat(s). (The old `code_roster | spec_roster == universe` was
+    # vacuous: spec_roster IS universe, so the union always equalled it.)
+    assert spec_roster - code_roster == SPEC_ONLY
 
     import code_loop_plan
     import spec_loop_plan

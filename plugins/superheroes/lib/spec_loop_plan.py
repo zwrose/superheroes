@@ -64,6 +64,9 @@ DIMENSIONS = ["architecture-reviewer", "code-reviewer", "security-reviewer",
 AGENT_SUFFIX = {"architecture-reviewer": "architecture", "code-reviewer": "code",
                 "security-reviewer": "security", "test-reviewer": "test",
                 "premortem-reviewer": "premortem", "grounding-reviewer": "grounding"}
+# grounding-reviewer intentionally has NO review_round_policy.SUBJECT_FALLBACK entry: it
+# schedules via baseline/confirmation rounds + the default (has_findings/confidence)
+# skip-eligibility, and its policy-subject / cross-cutting wiring is deferred to #517/#518.
 _HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
 
 

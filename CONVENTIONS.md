@@ -658,8 +658,9 @@ reads the `agents/` directory listing, derives each leg's sanctioned roster from
 **exact per-leg equality** against each hand-maintained copy — `code_loop_plan.DIMENSIONS`,
 `spec_loop_plan.DIMENSIONS`, and the same rosters re-keyed as `AGENT_SUFFIX` in both modules.
 The check is fail-closed and duplicate-sensitive (a copy that duplicates one slug while
-dropping another cannot pass by set-collapsing), and the two legs' rosters must union back to
-the whole universe. Adding, removing, renaming, or mis-legging a reviewer agent breaks CI in
+dropping another cannot pass by set-collapsing), and a partition guard pins the spec leg as
+exactly the code leg plus the spec-only `grounding-reviewer` seat (`spec_roster − code_roster
+== {grounding-reviewer}`). Adding, removing, renaming, or mis-legging a reviewer agent breaks CI in
 the affected copy until it is updated to match. Separately, the runtime
 `spec_loop_plan.sanction_dimensions` guard enforces the same invariant at dispatch time: a
 leg may run a subset, but only of sanctioned seats — an unsanctioned `--dimensions` input is

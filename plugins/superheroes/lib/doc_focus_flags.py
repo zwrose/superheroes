@@ -28,12 +28,15 @@ _TRIGGERS = [
     ("migration",
      "This spec touches a migration — emphasize rollback / back-out and data-safety "
      "unhappy paths.",
-     [r"migration", r"migrate", r"backfill", r"schema change", r"data migration"]),
+     # stems catch inflections/plurals: migrate/migration/migrating/migrations,
+     # backfill/backfills/backfilling.
+     [r"migrat\w*", r"backfill\w*", r"schema change"]),
     ("external-service",
      "This spec names external services — emphasize dependency-failure, timeout, and "
      "degraded-mode paths.",
-     [r"external service", r"third-party", r"3rd-party", r"API", r"webhook",
-      r"upstream service", r"integration", r"remote service"]),
+     # APIs / webhooks / integrations catch the plural/inflected forms too.
+     [r"external service", r"third-party", r"3rd-party", r"APIs?", r"webhooks?",
+      r"upstream service", r"integrations?", r"remote service"]),
 ]
 
 _COMPILED = [

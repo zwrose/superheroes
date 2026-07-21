@@ -54,6 +54,17 @@ def test_case_insensitive():
     assert flags == ["migration"]
 
 
+def test_inflected_and_plural_forms_trigger():
+    # broadened stems catch inflections/plurals the bare word-boundary patterns missed
+    flags, _ = dff.compute_flags("We are migrating the data during the rollout.")
+    assert flags == ["migration"]
+    flags, _ = dff.compute_flags(
+        "The system shall call third-party APIs and register webhooks.")
+    assert flags == ["external-service"]
+    flags, _ = dff.compute_flags("This work item adds two data integrations.")
+    assert flags == ["external-service"]
+
+
 def test_determinism_same_input_same_output():
     text = "Migrate the ledger and call the external service webhook."
     first = dff.compute_flags(text)

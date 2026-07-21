@@ -332,7 +332,9 @@ into the spec, don't add more.** A good spec is:
 ## Output
 Write findings to $SESSION_DIR/findings-<agent>.json as a JSON array per the base
 rubric's "Findings output format" section. The `file` is the spec path. Set
-`dimension` to "<dimension>" on every entry. If you have nothing to flag, write
+`dimension` to "<dimension>" on every entry — this `<dimension>` is the **spec-leg
+dimension label**; set it on every finding, **overriding your agent's own default
+`dimension` token** for this dispatch. If you have nothing to flag, write
 `[]` — do not skip writing the file.
 ```
 
