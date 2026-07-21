@@ -1,5 +1,5 @@
 from delta_surface import (
-    parse_hunks, fixed_locations, split_fix_surface, shard_plan,
+    parse_hunks, fixed_locations, split_fix_surface, shard_plan, _overlaps,
     DEFAULT_SHARD_MAX_LINES, DEFAULT_SHARD_MAX_FILES,
 )
 
@@ -72,6 +72,24 @@ def test_parse_git_binary_patch_returns_none():
 def test_parse_garbage_hunk_header_returns_none():
     diff = "diff --git a/f.py b/f.py\n@@ this is not a hunk header @@\n+x\n"
     assert parse_hunks(diff) is None
+
+
+def test_parse_zero_count_new_side_hunk_is_zero_width_point():
+    """#507 R3: a pure-deletion hunk `+c,0` has no new-side lines. It must be the zero-width
+    point (c, c), never the inverted range (c, c-1) that `start + count - 1` would produce."""
+    diff = mk_diff([("f.py", "@@ -40,3 +40,0 @@\n-a\n-b\n-c")])
+    hunk = parse_hunks(diff)["f.py"][0]
+    assert hunk["start"] == 40 and hunk["end"] == 40
+    assert hunk["end"] >= hunk["start"]  # well-formed, never inverted
+
+
+def test_overlaps_pure_deletion_hunk():
+    """A pure-deletion hunk (zero-width point) overlaps a fixed range that contains its point and
+    does NOT overlap one that misses it — so a deletion over a fixed line is audited, not lost."""
+    over = parse_hunks(mk_diff([("f.py", "@@ -100,2 +100,0 @@\n-a\n-b")]))["f.py"][0]
+    assert _overlaps(over, [(90, 110)]) is True   # deletion point 100 lands inside the fix window
+    assert _overlaps(over, [(90, 99)]) is False   # window ends before the deletion point
+    assert _overlaps(over, [(101, 110)]) is False  # window starts after the deletion point
 
 
 # --- fixed_locations ----------------------------------------------------------
@@ -265,3 +283,40 @@ def test_shard_groups_by_top_segment_deterministic():
 def test_shard_unparseable_diff_is_big_and_unknown():
     plan = shard_plan('diff --git "a/x y" "b/x y"\n@@ -1 +1 @@\n+z\n')
     assert plan == {"big": True, "shards": [], "unknown": True}
+
+
+def test_shard_rename_form_is_big_and_unknown():
+    """#507 R3: `_scan_diff` must fail closed on a rename form (differing a/ b/ paths or a
+    `rename from`/`rename to` marker) exactly as `parse_hunks` does — otherwise an oversized
+    rename diff scans as a small parseable surface and skips the fan-out."""
+    rename = "\n".join([
+        "diff --git a/old.py b/new.py",
+        "rename from old.py",
+        "rename to new.py",
+        "@@ -1 +1 @@",
+        "+x",
+    ]) + "\n"
+    assert shard_plan(rename) == {"big": True, "shards": [], "unknown": True}
+
+
+def test_shard_binary_marker_is_big_and_unknown():
+    """#507 R3: a binary marker fails closed to the fan-out verdict, mirroring `parse_hunks`."""
+    binary = "diff --git a/i.png b/i.png\nBinary files a/i.png and b/i.png differ\n"
+    assert shard_plan(binary) == {"big": True, "shards": [], "unknown": True}
+    git_binary = "diff --git a/i.bin b/i.bin\nGIT binary patch\nliteral 4\n"
+    assert shard_plan(git_binary) == {"big": True, "shards": [], "unknown": True}
+
+
+def test_split_unknown_on_rename_head_diff():
+    """The same rename form makes `split_fix_surface` fail closed to an unknown surface — the two
+    consumers of the diff never disagree about whether it is parseable."""
+    reviewed = mk_diff([("f.py", "@@ -1 +1 @@\n+x")])
+    head = "\n".join([
+        "diff --git a/old.py b/new.py",
+        "rename from old.py",
+        "rename to new.py",
+        "@@ -1 +1 @@",
+        "+x",
+    ]) + "\n"
+    fix_batch = [{"file": "f.py", "line": 1, "title": "t", "severity": "Important"}]
+    assert split_fix_surface(reviewed, head, fix_batch)["unknown"] is True

@@ -32,7 +32,8 @@ def parse_hunks(diff_text):
     Returns {file: [{"start": int, "end": int, "text": str}]}. Returns None — never a guess — on
     any `diff --git` header it can't parse (a quoted path form `"a/x y"`, a rename/copy where the
     two paths differ), a binary hunk, or a `@@` header it can't parse. An unknown surface must
-    fail toward the full-panel path, not a mis-attributed hunk set."""
+    fail toward the full-panel path, not a mis-attributed hunk set. A pure-deletion hunk (`+c,0`,
+    zero new-side lines) is kept as the zero-width point (c, c), never an inverted range."""
     files = {}
     cur_hunks = None
     cur_hunk = None
@@ -68,7 +69,14 @@ def parse_hunks(diff_text):
             _close()
             start = int(m.group(1))
             count = int(m.group(2)) if m.group(2) is not None else 1
-            cur_hunk = {"start": start, "end": start + count - 1, "text": line}
+            # A zero-count new-side hunk (`@@ ... +c,0 @@`) is a pure deletion: the new file has
+            # NO lines in this hunk. `start + count - 1` would give `c - 1 < c` — an inverted
+            # range that silently breaks `_overlaps` (a fixed line could never land inside it, so
+            # the deletion escapes audit). Represent it instead as the zero-width point (c, c):
+            # well-formed (end is never below start) and located AT the deletion point, so a
+            # deletion over a fixed location still registers as an overlap and is never dropped.
+            end = start + count - 1 if count else start
+            cur_hunk = {"start": start, "end": end, "text": line}
             continue
         if cur_hunk is not None:
             cur_hunk["text"] += "\n" + line
@@ -186,9 +194,13 @@ def _top_segment(path):
 
 
 def _scan_diff(diff_text):
-    """(ordered files, changed-line count) for a unified diff, or None if a `diff --git` header
-    is unparseable. Changed lines = added + removed content lines (the +++/--- file headers do
-    not count)."""
+    """(ordered files, changed-line count) for a unified diff, or None if the diff is
+    unparseable / ambiguous. Mirrors `parse_hunks` strictness EXACTLY so `shard_plan` fails
+    closed on the same inputs `parse_hunks` refuses: a `diff --git` header it can't parse (a
+    quoted path form), a rename/copy where the two paths differ, or a binary marker. Without this
+    parity an oversized rename/binary diff would scan as a small, parseable surface and skip the
+    fan-out — the exact silently-small verdict the module exists to prevent. Changed lines =
+    added + removed content lines (the +++/--- file headers do not count)."""
     files = []
     seen = set()
     changed = 0
@@ -197,10 +209,19 @@ def _scan_diff(diff_text):
             m = _DIFF_GIT.match(line)
             if not m:
                 return None
-            path = m.group(2)
+            a, b = m.group(1), m.group(2)
+            if a != b:
+                # rename/copy (or a form we can't be sure about) — fail closed, don't guess
+                return None
+            path = b
             if path not in seen:
                 seen.add(path)
                 files.append(path)
+        elif (line.startswith("rename from ") or line.startswith("rename to ")
+                or line.startswith("copy from ") or line.startswith("copy to ")):
+            return None
+        elif line.startswith("Binary files ") or line.startswith("GIT binary patch"):
+            return None
         elif line.startswith("+++") or line.startswith("---"):
             continue
         elif line.startswith("+") or line.startswith("-"):
