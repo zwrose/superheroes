@@ -597,3 +597,96 @@ def test_reviewer_redispatch_bounded_by_single_home_budget(tmp_path):
     RD.run_loop(_seams(reviewer=reviewer), _cfg())
     # 1 initial dispatch + REDISPATCH_BUDGET re-dispatches for the persistently-missing seat.
     assert calls["n"] == 1 + RD.REDISPATCH_BUDGET
+
+
+# =============================================================================
+# #507 WO-D: challenged-coverage breaker + resume/records seam
+# =============================================================================
+
+_CHALLENGED_FINDING = {"title": "coverage decision is false", "severity": "Important",
+                       "file": "f.py", "line": 1, "dimension": "Test", "taxonomy": "coverage",
+                       "classKey": "Test::coverage::x"}
+
+
+def test_challenged_coverage_recurrence_cannot_certify(tmp_path):
+    """A coverage decision recorded on a principle the reviewer keeps raising (challenged) whose
+    class RECURS parks (cannot-certify) — never a silent clean (the wrong_principle property)."""
+    records = tmp_path / "round-records.json"
+    records.write_text("[]")
+    coverage = tmp_path / "coverage.json"
+
+    def reviewer(dim, tier, rnd, ctx):
+        if rnd == 1 and dim == "test-reviewer":
+            return {"findings": [dict(_CHALLENGED_FINDING)]}
+        if dim == "scoped-finder":
+            return [dict(_CHALLENGED_FINDING)]
+        return []
+
+    def fix_step(batch, rnd, payload):
+        return {"fixes": [], "headDiff": HEAD, "changedSubjects": ["Test"],
+                "coverageDecisions": [{"id": "RCD-x", "classKey": "Test::coverage::x"}]}
+
+    receipt = RD.run_loop(
+        _seams(reviewer=reviewer, fix_step=fix_step),
+        _cfg(dimensions=["test-reviewer"], recordsPath=str(records),
+             coveragePath=str(coverage), maxRounds=20))
+    assert receipt["verdict"] == "cannot-certify"
+    assert receipt["certificationShape"] is None
+    assert any(d["kind"] == "cannot-certify" for d in receipt["decisions"])
+
+
+def test_plain_recurring_finding_without_challenge_is_not_challenged_halt(tmp_path):
+    """A recurring finding WITHOUT a challenged coverage decision is NOT parked by the challenged
+    breaker (the driver's delta/audit path owns that case) — only the challenged path halts here."""
+    records = tmp_path / "round-records.json"
+    records.write_text("[]")
+
+    fired = {"scoped": 0}
+
+    def reviewer(dim, tier, rnd, ctx):
+        if rnd == 1 and dim == "test-reviewer":
+            return {"findings": [dict(_CHALLENGED_FINDING)]}
+        if dim == "scoped-finder" and fired["scoped"] == 0:
+            fired["scoped"] += 1
+            return [dict(_CHALLENGED_FINDING)]
+        return []
+
+    # No coverageDecisions recorded → the recurring class is never "challenged".
+    receipt = RD.run_loop(
+        _seams(reviewer=reviewer), _cfg(dimensions=["test-reviewer"],
+                                        recordsPath=str(records), maxRounds=20))
+    assert receipt["verdict"] != "cannot-certify"
+
+
+def test_corrupt_resume_records_cannot_certify(tmp_path):
+    """A corrupt durable round-records file fails closed in the resume seam — cannot-certify park,
+    never a run off unreadable memory."""
+    records = tmp_path / "round-records.json"
+    records.write_text("{corrupt not-a-list")
+    receipt = RD.run_loop(_seams(), _cfg(recordsPath=str(records)))
+    assert receipt["verdict"] == "cannot-certify"
+    assert receipt["certificationShape"] is None
+
+
+def test_resume_degraded_confirmation_runs_fresh_panel(tmp_path):
+    """Resuming with a seeded DEGRADED (low-confidence) confirmation panel + a pending-confirmation
+    marker owes a fresh full confirmation panel — the degraded seed cannot anchor certification."""
+    records = tmp_path / "round-records.json"
+    seed = [
+        {"schemaVersion": 2, "round": 1, "kind": "baseline", "confirmationPending": True,
+         "dimensions": {"test-reviewer": {"status": "run", "confidence": "high",
+                                          "tier": "reviewer-deep", "findings": []}},
+         "findings": [], "coverageDecisions": []},
+        {"schemaVersion": 2, "round": 2, "kind": "confirmation", "confirmationPending": True,
+         "dimensions": {"test-reviewer": {"status": "run", "confidence": "low",
+                                          "tier": "reviewer-deep", "findings": []}},
+         "findings": [], "coverageDecisions": []},
+    ]
+    records.write_text(json.dumps(seed))
+    receipt = RD.run_loop(_seams(), _cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    assert receipt["verdict"] == "converged"
+    # A fresh full confirmation panel ran at the resume round (3), certifying as a full panel —
+    # NOT anchored on the degraded round-2 seed.
+    assert receipt["certificationShape"] == "full-panel-confirmed"
+    assert any(r["round"] == 3 for r in receipt["rounds"])
+    assert any(d["kind"] == "resume-confirmation" for d in receipt["decisions"])
