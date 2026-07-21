@@ -43,6 +43,10 @@ def test_lens_contract_covers_all_parts():
     text = _read(_LENS_CONTRACT)
     for part in parts:
         assert part in text, "lens-contract.md missing contract part slug %r" % part
+    assert set(parts) == {"collector", "baseline-diff", "validation", "consequence", "cost"}, (
+        "LENS_CONTRACT_PARTS membership changed — update this golden set AND lens-contract.md "
+        "(a silent removal would stop validate_lens requiring the dropped part)"
+    )
 
 
 def test_lens_contract_covers_all_facts():
@@ -52,3 +56,6 @@ def test_lens_contract_covers_all_facts():
     text = _read(_LENS_CONTRACT)
     for fact in facts:
         assert fact in text, "lens-contract.md missing FACTS member %r" % fact
+    assert set(facts) == {"verify-command", "recorded-coverage", "stack-tags", "paths"}, (
+        "FACTS membership changed — update this golden set AND lens-contract.md"
+    )
