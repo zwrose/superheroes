@@ -993,6 +993,21 @@ def validate_receipt(receipt):
 _RUN_LOOP_GUARD = 200
 
 
+def _reviewer_findings(result):
+    """Normalize a reviewer-seam return into a findings list.
+
+    Panel seats return a full seat dict ``{findings, confidence, verificationReceipt, ...}``
+    (the JS ``reviewerAgent`` shape). Scoped-finder / gap-sweep reuse the same seam; unwrap
+    the dict so ``_fold_scoped`` / ``_fold_gapsweep`` see a list — a bare list remains valid
+    (the library tests' compact form)."""
+    if isinstance(result, list):
+        return result
+    if isinstance(result, dict):
+        findings = result.get("findings")
+        return findings if isinstance(findings, list) else []
+    return []
+
+
 def _run_seam(seams, action, payload, state, config):
     """Call the seam for one action and return its artifact in the shape `_fold` expects. Seams are
     injectable; a missing seam is a hard fail (the loop cannot proceed without the effect)."""
@@ -1015,11 +1030,13 @@ def _run_seam(seams, action, payload, state, config):
     if action == P_SYNTHESIS:
         return {"grouping": seams["synthesis"](payload.get("findings"), state["round"])}
     if action == P_GAPSWEEP:
-        return {"findings": seams["reviewer"]("gap-sweep", DEEP, state["round"], payload)}
+        return {"findings": _reviewer_findings(
+            seams["reviewer"]("gap-sweep", DEEP, state["round"], payload))}
     if action == P_AUDITS:
         return {"results": seams["auditor"](payload.get("targets"), state["round"])}
     if action == P_SCOPED:
-        return {"findings": seams["reviewer"]("scoped-finder", DEEP, state["round"], payload)}
+        return {"findings": _reviewer_findings(
+            seams["reviewer"]("scoped-finder", DEEP, state["round"], payload))}
     if action == P_VERIFY:
         return {"result": seams["verify_runner"](payload.get("command"), state["round"])}
     if action == P_FIXER:
