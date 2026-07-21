@@ -33,6 +33,12 @@ CHEAP = "reviewer"
 # circuit_breaker.is_blocking / is_critical (#276/#291) — case-normalized + fail-closed.
 BLOCKING = ("Critical", "Important")
 STATE_FILE = "loop-state.json"
+# The single home of the reviewer re-dispatch budget (#350/#525 lineage): a reviewer whose
+# result is missing/malformed is re-dispatched at most this many times before it is recorded
+# `missing` — "re-dispatch … once … never asks twice". Both Python schedulers and the JS shell
+# hold this ONE value; test_retry_budget_parity pins them together so the count can't drift from
+# the constant that names it.
+REDISPATCH_BUDGET = 1
 
 
 # --- scheduler-state I/O ------------------------------------------------------

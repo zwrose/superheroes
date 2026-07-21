@@ -30,6 +30,13 @@ def _load(path, name):
 
 CLP = _load(os.path.join(_HERE, "..", "code_loop_plan.py"), "code_loop_plan")
 SLP = _load(os.path.join(_HERE, "..", "spec_loop_plan.py"), "spec_loop_plan")
+LPC = _load(os.path.join(_HERE, "..", "loop_plan_common.py"), "loop_plan_common")
+
+
+def test_expected_redispatches_matches_budget_home():
+    # The pin (EXPECTED_REDISPATCHES) and the single-home constant must not drift: the whole
+    # point of REDISPATCH_BUDGET is that ONE value drives every leg.
+    assert EXPECTED_REDISPATCHES == LPC.REDISPATCH_BUDGET
 
 # --- code_loop_plan fixtures (mirrors test_code_loop_plan.py) -----------------
 
