@@ -19,7 +19,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 _BANNED_MODULES = frozenset({"subprocess"})
-_BANNED_OS_ATTRS = frozenset({"system", "popen"})
+_BANNED_OS_ATTRS = frozenset({"system", "popen", "posix_spawn", "posix_spawnp"})
 _BANNED_OS_ATTR_PREFIXES = ("exec", "spawn")
 _BANNED_SUBPROCESS_ATTRS = frozenset({
     "Popen", "run", "call", "check_call", "check_output",
@@ -168,3 +168,16 @@ def test_spawn_detector_flags_aliased_os_system_and_exec_spawn():
     offenders = _find_spawn_offenders(spawn_source)
     assert offenders, "expected os.spawnv to be flagged"
     assert any("spawnv" in hit for hit in offenders)
+
+
+def test_spawn_detector_flags_posix_spawn_direct_and_aliased():
+    """Non-vacuity: posix_spawn / posix_spawnp evade exec/spawn prefixes — must flag."""
+    direct_source = "import os\nos.posix_spawn('/bin/sh', ['sh'], os.environ)\n"
+    offenders = _find_spawn_offenders(direct_source)
+    assert offenders, "expected os.posix_spawn to be flagged"
+    assert any("posix_spawn" in hit for hit in offenders)
+
+    alias_source = "import os as _p\n_p.posix_spawn('/bin/sh', ['sh'], _p.environ)\n"
+    offenders = _find_spawn_offenders(alias_source)
+    assert offenders, "expected aliased posix_spawn to be flagged"
+    assert any("posix_spawn" in hit for hit in offenders)

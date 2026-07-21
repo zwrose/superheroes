@@ -13,6 +13,7 @@ import signal
 import stat
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -1176,6 +1177,54 @@ def test_invoke_subprocess_bounded_truncates_oversized_stdout(tmp_path, monkeypa
         [sys.executable, "-c", "print('x' * 128)"],
         str(tmp_path), 5, os.environ.copy(), None)
     assert res["outcome"] == "truncated-output"
+
+
+def test_invoke_subprocess_bounded_capture_incomplete_when_reader_survives_join(
+        tmp_path, monkeypatch):
+    """Surviving reader threads must not yield empty-output from a partial drain."""
+    repo = _init_repo(tmp_path)
+    payload = "complete-payload-data"
+    collector = _write_executable(
+        tmp_path / "bin" / FAKE_COLLECTOR,
+        _python_collector_shebang() +
+        "import sys\nsys.stdout.write(%r)\nsys.stdout.flush()\n" % payload)
+    monkeypatch.setenv("PATH", os.path.dirname(collector))
+
+    stall = threading.Event()
+    original_read = gt._read_pipe_bounded
+
+    def _stall_stdout_read(pipe, max_bytes):
+        if max_bytes == gt.MAX_OUTPUT_BYTES:
+            stall.wait()
+        return original_read(pipe, max_bytes)
+
+    monkeypatch.setattr(gt, "_read_pipe_bounded", _stall_stdout_read)
+
+    original_join = threading.Thread.join
+
+    def _instant_join(self, timeout=None):
+        return original_join(self, timeout=0)
+
+    monkeypatch.setattr(threading.Thread, "join", _instant_join)
+
+    out = gt.invoke(FAKE_COLLECTOR, [], repo, ["src"], run=None)
+    assert out["outcome"] == "capture-incomplete", out
+    assert out.get("reason")
+    assert out["outcome"] != "empty-output"
+
+
+def test_invoke_subprocess_bounded_ok_when_readers_drain_fully(tmp_path, monkeypatch):
+    """Fully draining readers on the success path still yield ok with complete stdout."""
+    repo = _init_repo(tmp_path)
+    payload = "drained-output"
+    collector = _write_executable(
+        tmp_path / "bin" / FAKE_COLLECTOR,
+        _python_collector_shebang() +
+        "import sys\nsys.stdout.write(%r)\nsys.stdout.flush()\n" % payload)
+    monkeypatch.setenv("PATH", os.path.dirname(collector))
+    out = gt.invoke(FAKE_COLLECTOR, [], repo, ["src"], run=None)
+    assert out["outcome"] == "ok", out
+    assert out["stdout"] == payload
 
 
 def test_invoke_subprocess_bounded_captures_complete_stdout_after_exit(

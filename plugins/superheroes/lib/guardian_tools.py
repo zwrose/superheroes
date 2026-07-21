@@ -676,7 +676,17 @@ def _invoke_subprocess_bounded(tool, argv, cwd, timeout, env, parse):
         else:
             for t in readers:
                 t.join(timeout=5)
-            if truncated[0]:
+            if any(t.is_alive() for t in readers):
+                _kill_process_tree(proc, session_created)
+                for t in readers:
+                    t.join(timeout=5)
+            if any(t.is_alive() for t in readers):
+                outcome = _result_dict(
+                    "capture-incomplete", tool, argv, cwd,
+                    returncode=proc.returncode,
+                    reason="collector output not fully drained within bound "
+                           "(a surviving descendant may hold the pipe)")
+            elif truncated[0]:
                 outcome = _result_dict(
                     "truncated-output", tool, argv, cwd,
                     returncode=proc.returncode, stdout=stdout_box[0],
