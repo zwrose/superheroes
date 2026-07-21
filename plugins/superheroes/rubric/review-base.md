@@ -1,4 +1,4 @@
-<!-- rubric-version: 6 -->
+<!-- rubric-version: 7 -->
 # review-base
 
 The source of truth for review **severity, verification rules, findings format,
@@ -46,7 +46,17 @@ Minor and Nit findings never change the verdict regardless of strictness.
    caller already guards the case, downgrade or drop. (Critical findings are also
    checked for reachability, but under the strict posture, flag when in doubt.)
 5. **Docs/spec changes:** spot-check factual claims (signatures, paths, error
-   types) against source, not just prose.
+   types) against source, not just prose. **Mirror-claim verification.** A **mirror
+   claim** — a finding asserting the spec contradicts, misstates, or fabricates a repo
+   fact — may be emitted **High** confidence only if the reviewer has **read the cited
+   source** (or, when the spec left it uncited, the repo location it mirrors). Without
+   that read, emit it **Low** (naming the unread source in `evidence`) or drop it. The
+   deterministic `citation_validator.py` covers only *existence* (does the cited
+   path/anchor resolve); whether the source *says* what the spec claims — content-match
+   — is this verifier judgment. **Carve-out:** A `[cite: …]` provenance marker is a
+   sanctioned spec construct (CONVENTIONS §3.2), not leaked implementation detail and
+   not a leftover placeholder — never strip or flag it as tech-leak, a path reference,
+   or `{{…}}`/TBD noise.
 6. **Single source of truth for cross-boundary facts.** A fact consumed across a
    module or language boundary (phase lists, event/verb names, schema field sets,
    verdict/reason tokens, path layouts, reviewer rosters) must have one

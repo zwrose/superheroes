@@ -279,6 +279,24 @@ brief, owned by the builder, §1). Non-functional requirements are stated as **o
 with a fit-criterion**. UI/UX **references the Claude Design handoff output**, not a
 reinterpretation. This is the anti-slop core.
 
+**Provenance / citations (#517, owner-ratified #514 D3).** A load-bearing **mirror-fact** — a
+spec sentence asserting something about the *existing repo* that the repo could contradict
+("reuses/extends the existing X", "the current limit is N", "today the system does Y") — carries
+an inline **citation** naming its repo source. A **definition** (a new behavior the spec itself
+defines — the owner's *what*) carries none: it is the source of truth and mirrors nothing. The
+**mirror-vs-definition test** decides — "could today's repo contradict this sentence?" YES →
+mirror-fact → cite; NO → definition → no cite. A **noise budget** keeps citations rare: only
+load-bearing mirror-facts (ones the build relies on being true) get one, and a citation-dense
+spec is usually leaking the build's *how* (itself a finding). The citation grammar's one
+authoritative machine home is `plugins/superheroes/lib/citation_validator.py`
+(`CITATION_RE`); `templates/spec.md` carries the canonical example as the §11 drift witness, and
+this section describes the rule rather than restating a second machine-parseable literal. A
+deterministic **dangling-citation validator** (existence + anchor resolution, fail-closed) runs in
+`review-spec`'s compile step and is **advisory** — review-spec is owner-gated, so the validator
+produces findings the owner adjudicates and never blocks or writes `passed`. **Content-match** —
+whether the cited source actually *says* what the spec claims — stays the Grounding verifier's
+judgment, not the deterministic check's.
+
 ### 3.3 Location and convertibility
 
 - **Location follows the storage mode (§2.3):** in-repo →
