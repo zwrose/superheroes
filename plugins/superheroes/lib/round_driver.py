@@ -128,11 +128,27 @@ def state_hash(state):
     return _sha256(_canonical(state))
 
 
+class JournalFaultUnrecordable(Exception):
+    """Last-resort fail-loud (#507 WO-FIX-RECOVERY): the journal append failed AND the durable fault
+    marker that would have made finalization park ALSO could not be written. There is NO silent tier
+    below this — the run must fail LOUDLY (the CLI exits nonzero) or PARK cannot-certify (a library
+    driver), never continue as though the ran-evidence were intact. Carries both underlying OSErrors
+    so the CLI can print them to stderr."""
+
+    def __init__(self, journal_error, marker_error):
+        self.journal_error = journal_error
+        self.marker_error = marker_error
+        super().__init__("journal write failed (%s) and the fault marker was also unwritable (%s)"
+                         % (journal_error, marker_error))
+
+
 def _journal_append(session_dir, entry):
     """Append one next/submit event to the journal — this is the `scriptRan` evidence. A journal miss
     never derails the run mid-flight, but it is NOT swallowed: a failed append is a LOST piece of the
     driver's ran-evidence, so it records a durable fault marker that `_finalize_receipt` fails closed
-    on (a partial-journal gap must never quietly certify — #507 R2 residual-4). ts via time.time."""
+    on (a partial-journal gap must never quietly certify — #507 R2 residual-4). If BOTH the journal
+    and the marker are unwritable, `_mark_journal_fault` raises `JournalFaultUnrecordable` — the
+    last-resort fail-loud, propagated here (never swallowed). ts via time.time."""
     entry = dict(entry)
     entry.setdefault("ts", time.time())
     try:
@@ -143,16 +159,18 @@ def _journal_append(session_dir, entry):
 
 
 def _mark_journal_fault(session_dir, entry, exc):
-    """Record a durable journal-write fault so finalization fails closed. Best-effort itself — if the
-    marker ALSO cannot be written, the terminal receipt write (which propagates its OSError) covers the
-    wholly-unwritable dir; this marker catches the partial case a single lost append would otherwise
-    hide."""
+    """Record a durable journal-write fault so finalization fails closed. This is the LAST recordable
+    tier: if the marker ALSO cannot be written, there is NO silent tier below it — raise
+    `JournalFaultUnrecordable` so the run fails loud (CLI nonzero) or parks cannot-certify (library),
+    never swallowing the fault (the R2 detectability gap, one level down: `except OSError: pass` here
+    let a doubly-unwritable dir go silent). The exception carries both OSErrors for the stderr
+    report. #507 WO-FIX-RECOVERY."""
     try:
         with open(os.path.join(session_dir, JOURNAL_FAULT_FILE), "a", encoding="utf-8") as fh:
             fh.write(_canonical({"ts": time.time(), "error": str(exc),
                                  "cmd": entry.get("cmd"), "phase": entry.get("phase")}) + "\n")
-    except OSError:
-        pass
+    except OSError as marker_exc:
+        raise JournalFaultUnrecordable(exc, marker_exc) from marker_exc
 
 
 def _journal_faulted(session_dir):
@@ -1321,11 +1339,21 @@ def _fold_audits(state, config, artifact):
     audit round for the audit-keyed breaker; new-issue candidates join the scoped-finder scan."""
     results = artifact.get("results") if isinstance(artifact.get("results"), list) else []
     targets = state.get("_auditTargets") or []
-    # Pass the DRIVER-recorded selected auditor per target as trusted provenance — the fold
-    # authenticates a clearing ruling against THIS map, never the result's own echo (#507 R2).
+    # The DRIVER records the SELECTED independent auditor per target (its own seating decision).
     expected_auditors = {t.get("id"): t.get("auditorVendor")
                          for t in targets if isinstance(t, dict) and t.get("id") is not None}
-    outcome = audits.apply_audit_results(targets, results, expected_auditors=expected_auditors)
+    # Provenance rests on the ORCHESTRATOR's out-of-band dispatch manifest — {result-id: vendor} the
+    # orchestrator recorded from its OWN dispatch records and carried in the submit artifact's
+    # `collectionManifest`, NEVER derived from the result contents. The fold authenticates a clearing
+    # ruling against THIS manifest (must exist AND equal the recorded selection); the in-result
+    # `auditorVendor` echo is advisory only. The driver cannot cryptographically verify engine
+    # identity and does not pretend to — the guarantee is exactly as strong as the orchestrator's
+    # dispatch manifest (#507 WO-FIX-RECOVERY).
+    collection_manifest = artifact.get("collectionManifest")
+    if not isinstance(collection_manifest, dict):
+        collection_manifest = None
+    outcome = audits.apply_audit_results(targets, results, expected_auditors=expected_auditors,
+                                         collection_manifest=collection_manifest)
     state["_auditOutcome"] = outcome
     # the audit round for check_audit_breaker: identity + effective ruling PLUS the recurrence class
     # keys the alias-tolerant stall match consumes (#507 v0) — carried straight off each audit entry
@@ -1339,8 +1367,15 @@ def _fold_audits(state, config, artifact):
     state["auditRounds"].append(audit_round)
     for pid in outcome.get("unauthenticated", []):
         _decision(state, "audit-provenance-fail",
-                  "audit result for %s lacked the selected independent auditor's echo — "
-                  "not-discharged" % pid)
+                  "audit result for %s could not be authenticated against the orchestrator's "
+                  "dispatch manifest (missing entry or wrong vendor) — not-discharged" % pid)
+    for pid in outcome.get("echoMismatch", []):
+        _decision(state, "audit-echo-mismatch",
+                  "audit result for %s echoed a vendor other than the orchestrator's dispatch "
+                  "manifest — advisory only; the manifest governed and the discharge stands" % pid)
+    # Provenance rests on the orchestrator's dispatch manifest (never the result echo) — recorded
+    # per round so the receipt discloses the trust basis (#507 WO-FIX-RECOVERY).
+    _record_round(state, "auditProvenance", "collection-manifest")
     _record_round(state, "audits", outcome["audits"])
     _record_round(state, "auditIndependence",
                   targets[0]["independence"] if targets else "n/a")
@@ -1769,7 +1804,16 @@ def _run_seam(seams, action, payload, state, config):
         return {"findings": _reviewer_findings(
             seams["reviewer"]("gap-sweep", DEEP, state["round"], payload))}
     if action == P_AUDITS:
-        return {"results": seams["auditor"](payload.get("targets"), state["round"])}
+        # This library layer IS the orchestrator here: it records its OWN dispatch manifest
+        # out-of-band from the auditor's results — {target-id: the vendor it seated}, read straight
+        # off the dispatch payload (which the driver stamped), NEVER derived from what the auditor
+        # returns. The CLI path carries the real orchestrator's `collectionManifest` in the submit
+        # artifact instead (see round-driver.md dispatch-audits). #507 WO-FIX-RECOVERY.
+        targets = payload.get("targets") or []
+        manifest = {t.get("id"): t.get("auditorVendor")
+                    for t in targets if isinstance(t, dict) and t.get("id") is not None}
+        return {"results": seams["auditor"](payload.get("targets"), state["round"]),
+                "collectionManifest": manifest}
     if action == P_SCOPED:
         return {"findings": _reviewer_findings(
             seams["reviewer"]("scoped-finder", DEEP, state["round"], payload))}
@@ -1802,19 +1846,27 @@ def run_loop(seams, config=None):
         state["_scriptRan"] = {"invocations": 0, "byPhase": {}}
         return build_receipt(state)
     guard = 0
-    while not state.get("terminal") and guard < _RUN_LOOP_GUARD:
-        guard += 1
-        step = _advance(state, state["config"])
-        action = step["action"]
-        if action == P_TERMINAL:
-            break
-        # handle the gap-sweep re-entry (verifiers → synthesis carries the merge back).
-        artifact = _run_seam(seams, action, step["payload"], state, state["config"])
-        _fold(state, state["config"], action, artifact, seams.get("changed_subjects"))
-        # a delta round routes scoped candidates through verifiers; when that path is armed the
-        # synthesis fold must re-settle the delta rather than the round-1 path.
-        if state.pop("_settleDeltaAfterSynthesis", False):
-            pass
+    try:
+        while not state.get("terminal") and guard < _RUN_LOOP_GUARD:
+            guard += 1
+            step = _advance(state, state["config"])
+            action = step["action"]
+            if action == P_TERMINAL:
+                break
+            # handle the gap-sweep re-entry (verifiers → synthesis carries the merge back).
+            artifact = _run_seam(seams, action, step["payload"], state, state["config"])
+            _fold(state, state["config"], action, artifact, seams.get("changed_subjects"))
+            # a delta round routes scoped candidates through verifiers; when that path is armed the
+            # synthesis fold must re-settle the delta rather than the round-1 path.
+            if state.pop("_settleDeltaAfterSynthesis", False):
+                pass
+    except JournalFaultUnrecordable as jf:
+        # Last-resort fail-closed: a journal fault the driver could not even record parks
+        # cannot-certify — the library layer NEVER continues (or crashes the caller) as though the
+        # ran-evidence were intact. #507 WO-FIX-RECOVERY.
+        _park_cannot_certify(state, "journal-fault-unrecordable: %s" % jf)
+        state["_scriptRan"] = {"invocations": guard, "byPhase": {}}
+        return build_receipt(state)
     if guard >= _RUN_LOOP_GUARD and not state.get("terminal"):
         state["terminal"] = "halted"
         state["certification"] = {"shape": None, "reason": "run_loop guard tripped — fail closed"}
@@ -2054,6 +2106,20 @@ def main(argv=None):
     ps.add_argument("--artifact", required=True, help="path to the artifact JSON")
 
     args = parser.parse_args(argv)
+    try:
+        return _dispatch(args)
+    except JournalFaultUnrecordable as jf:
+        # Last-resort fail-loud: the journal AND its fault marker were both unwritable — there is no
+        # silent tier below this. The CLI invocation itself FAILS: the reason to stdout, the
+        # underlying errors to stderr, nonzero exit. #507 WO-FIX-RECOVERY.
+        sys.stdout.write(json.dumps({"ok": False, "reason": "journal-fault-unrecordable",
+                                     "detail": str(jf)}) + "\n")
+        sys.stderr.write("journal write error: %s\nfault-marker write error: %s\n"
+                         % (jf.journal_error, jf.marker_error))
+        return 1
+
+
+def _dispatch(args):
     if args.cmd == "next":
         overrides = {}
         if args.leg:

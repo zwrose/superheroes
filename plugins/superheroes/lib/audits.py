@@ -51,25 +51,34 @@ def _resolve_expected_auditor(fid, finding, expected_auditors):
     return None, False
 
 
-def apply_audit_results(audited, results, expected_auditors=None):
+def apply_audit_results(audited, results, expected_auditors=None, collection_manifest=None):
     """Consume per-finding fix-audit rulings; fail-closed on ambiguity, silence, and malformation.
 
     `audited`  — findings already carrying a unique staged `id` (via verification.stage_ids)
                  plus file/line/title/severity.
-    `results`  — audit-result dicts {id, ruling, reason, evidence?, newIssues?}.
+    `results`  — audit-result dicts {id, ruling, reason, evidence?, newIssues?, auditorVendor?}.
+                 The in-result `auditorVendor` is ADVISORY only — a claimant-controlled echo that
+                 authenticates NOTHING (a fixer or misrouted worker can echo the expected vendor).
     `expected_auditors` — {finding_id: auditor_vendor} recorded by the DRIVER
-                 (round_driver._audit_targets) naming the SELECTED independent auditor per target. A
-                 clearing ruling is authenticated against THIS trusted map, NEVER the result's own
-                 echo; a target absent from it (no recorded selection) cannot be authenticated →
-                 not-discharged + disclosed. When None, the target's driver-stamped `auditorVendor`
-                 is the fallback signal; a target with neither is not provenance-enforced.
+                 (round_driver._audit_targets) naming the SELECTED independent auditor per target.
+                 When None, the target's driver-stamped `auditorVendor` is the fallback selection; a
+                 target with neither is not provenance-enforced.
+    `collection_manifest` — {result_id: vendor} the DISPATCHING ORCHESTRATOR recorded from its OWN
+                 dispatch records, out-of-band from the results (round_driver threads the submit
+                 artifact's `collectionManifest`; the library run_loop synthesizes it from the
+                 dispatch payload). This — NOT the result's echo — is the trusted provenance: a
+                 clearing ruling is authenticated iff `manifest[id]` EXISTS and EQUALS the recorded
+                 selected auditor. Provenance rests on the orchestrator's dispatch manifest; the fold
+                 cannot cryptographically verify engine identity and does not pretend to.
 
     Returns {audits, discharged, notDischarged, newIssues, unaudited, ambiguous, malformed,
-    unmatched, unauthenticated}. Each `audits` entry carries the EFFECTIVE (post-fail-closed)
-    ruling. The disclosure lists (unaudited/ambiguous/malformed/unauthenticated) are subsets of
-    notDischarged that name WHY the finding could not be certified discharged; `unmatched` names
-    results that hit no finding. `unauthenticated` names clearing rulings that did not echo the
-    target's selected independent auditor vendor (trust-boundary failure).
+    unmatched, unauthenticated, echoMismatch}. Each `audits` entry carries the EFFECTIVE
+    (post-fail-closed) ruling. The disclosure lists (unaudited/ambiguous/malformed/unauthenticated)
+    are subsets of notDischarged that name WHY the finding could not be certified discharged;
+    `unmatched` names results that hit no finding. `unauthenticated` names clearing rulings the
+    orchestrator's manifest could not authenticate (missing entry, or manifest ≠ the selected
+    independent auditor). `echoMismatch` names discharged findings whose advisory in-result echo
+    disagreed with the governing manifest (disclosed, but the manifest governed → still discharged).
     """
     # Build the id→result map, detecting duplicate ids. A finding id carried by MORE THAN ONE
     # result is ambiguous — honor none of them so a wrong `discharged` cannot silently win and
@@ -97,7 +106,17 @@ def apply_audit_results(audited, results, expected_auditors=None):
     new_issues = []
     unaudited, malformed = [], []
     unauthenticated = []
+    echo_mismatch = []
     matched_ids = set()
+
+    def _reject_unauthenticated(base, fid, reason):
+        """Fail-closed a clearing ruling the orchestrator's manifest could not authenticate:
+        not-discharged, disclosed as `unauthenticated`."""
+        if fid is not None:
+            unauthenticated.append(fid)
+            not_discharged.append(fid)
+        base.update(ruling="not-discharged", reason=reason)
+        audits.append(base)
 
     for f in audited:
         if not isinstance(f, dict):
@@ -142,36 +161,49 @@ def apply_audit_results(audited, results, expected_auditors=None):
         evidence = r.get("evidence")
 
         # Provenance (trust-boundary): a ruling that CLEARS the finding is authenticated against the
-        # DRIVER-recorded selected auditor — NEVER the result's own echo. Two fail-closed rejections
-        # (each → not-discharged + disclosed as `unauthenticated`): a target with NO recorded auditor
-        # selection cannot prove independence at all; a result echoing anything OTHER than the recorded
-        # auditor may be the fixer or a misrouted worker. When authenticated, the recorded auditor is
-        # the TRUSTED driver value (not the claimant echo) — a matching echo authenticates nothing the
-        # driver's record did not already establish.
+        # dispatching ORCHESTRATOR's out-of-band COLLECTION MANIFEST — {result-id: vendor} recorded
+        # from the orchestrator's OWN dispatch records, NEVER derived from the result's contents. The
+        # in-result `auditorVendor` echo is ADVISORY only: a forged/mistaken result simply echoes the
+        # expected value, so the echo authenticates nothing (the R2 defect: the auditor's own words
+        # used as their credential). Fail-closed rejections (each → not-discharged + disclosed as
+        # `unauthenticated`): a target with NO recorded auditor selection cannot prove independence at
+        # all; NO manifest entry means the orchestrator never recorded who executed this audit; a
+        # manifest vendor that disagrees with the recorded selection is a misroute. When authenticated
+        # by the manifest, an echo that disagrees with it is disclosed via `echoMismatch` but the
+        # manifest governs — the discharge stands.
         if provenance_enforced and ruling in ("discharged", "discharged-but-new-issue"):
-            executor = r.get("auditorVendor")
             if not expected_auditor:
-                if fid is not None:
-                    unauthenticated.append(fid)
-                    not_discharged.append(fid)
-                base.update(
-                    ruling="not-discharged",
-                    reason=("no independent auditor was recorded for this target — cannot prove the "
-                            "audit came from an independent auditor; treated as not-discharged"))
-                audits.append(base)
+                _reject_unauthenticated(
+                    base, fid,
+                    "no independent auditor was recorded for this target — cannot prove the audit "
+                    "came from an independent auditor; treated as not-discharged")
                 continue
-            if not (isinstance(executor, str) and executor == expected_auditor):
-                if fid is not None:
-                    unauthenticated.append(fid)
-                    not_discharged.append(fid)
-                base.update(
-                    ruling="not-discharged",
-                    reason=("audit result did not come from the selected independent auditor "
-                            "(expected %r, got %r) — treated as not-discharged"
-                            % (expected_auditor, executor)))
-                audits.append(base)
+            manifest_vendor = None
+            if isinstance(collection_manifest, dict) and fid is not None:
+                mv = collection_manifest.get(fid)
+                if isinstance(mv, str) and mv:
+                    manifest_vendor = mv
+            if manifest_vendor is None:
+                _reject_unauthenticated(
+                    base, fid,
+                    "no dispatch-manifest entry for this target — the orchestrator did not record "
+                    "which engine executed the audit; cannot authenticate; treated as not-discharged")
                 continue
-            base["auditor"] = expected_auditor
+            if manifest_vendor != expected_auditor:
+                _reject_unauthenticated(
+                    base, fid,
+                    "the dispatch manifest names %r but the selected independent auditor is %r — "
+                    "treated as not-discharged" % (manifest_vendor, expected_auditor))
+                continue
+            # Authenticated by the orchestrator's manifest. The recorded auditor is the TRUSTED value
+            # (the manifest, not the claimant echo). An echo that disagrees is advisory noise —
+            # disclosed via `echoMismatch`, but the manifest governs and the discharge stands.
+            base["auditor"] = manifest_vendor
+            echo = r.get("auditorVendor")
+            if isinstance(echo, str) and echo and echo != manifest_vendor:
+                if fid is not None:
+                    echo_mismatch.append(fid)
+                base["echoMismatch"] = {"echo": echo, "manifest": manifest_vendor}
 
         if ruling == "discharged":
             if has_reason:
@@ -243,4 +275,5 @@ def apply_audit_results(audited, results, expected_auditors=None):
         "malformed": malformed,
         "unmatched": unmatched,
         "unauthenticated": unauthenticated,
+        "echoMismatch": echo_mismatch,
     }

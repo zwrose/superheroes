@@ -162,7 +162,7 @@ def test_never_raises_on_junk_input():
         out = apply_audit_results(audited, results)
         assert set(out) == {"audits", "discharged", "notDischarged", "newIssues",
                             "unaudited", "ambiguous", "malformed", "unmatched",
-                            "unauthenticated"}
+                            "unauthenticated", "echoMismatch"}
 
 
 def test_idless_finding_is_kept_not_discharged():
@@ -176,31 +176,78 @@ def test_idless_finding_is_kept_not_discharged():
     assert out["audits"][0]["id"] is None
 
 
-# --- provenance: authenticate against the DRIVER-recorded auditor, not the echo ----
+# --- provenance: authenticate against the ORCHESTRATOR's dispatch manifest, not the echo ----
 
-def test_expected_auditors_map_authenticates_and_records_trusted_value():
-    """#507 R2: with the driver-passed `expected_auditors` map, a clearing ruling is authenticated
-    against the RECORDED selection and the audit entry records THAT trusted vendor — never the
-    result's own echo. A matching echo passes; the recorded `auditor` is the driver's value."""
+def test_collection_manifest_authenticates_and_records_trusted_value():
+    """#507 WO-FIX-RECOVERY: a clearing ruling is authenticated against the ORCHESTRATOR's
+    out-of-band collection manifest (must exist AND equal the driver-recorded selection). The audit
+    entry records THAT trusted vendor — never the result's own echo."""
     out = apply_audit_results(
         [finding("v0")],
         [{"id": "v0", "ruling": "discharged", "reason": "verified", "auditorVendor": "codex"}],
-        expected_auditors={"v0": "codex"})
+        expected_auditors={"v0": "codex"},
+        collection_manifest={"v0": "codex"})
     assert out["discharged"] == ["v0"]
     assert out["unauthenticated"] == []
+    assert out["echoMismatch"] == []
     assert _audit_by_id(out, "v0")["auditor"] == "codex"
 
 
-def test_expected_auditors_map_rejects_mismatched_echo():
-    """A result echoing a DIFFERENT vendor than the driver recorded (a misrouted worker or the
-    fixer) is rejected as not-discharged + unauthenticated — the echo never authenticates itself."""
+def test_missing_manifest_entry_is_unauthenticated():
+    """The R2 defect fixed at the root: a clearing ruling that echoes the expected vendor but has NO
+    manifest entry (the orchestrator never recorded who executed it) authenticates NOTHING — the
+    echo is the auditor's own words used as their credential. Fail closed to unauthenticated."""
     out = apply_audit_results(
         [finding("v0")],
-        [{"id": "v0", "ruling": "discharged", "reason": "trust me", "auditorVendor": "claude"}],
-        expected_auditors={"v0": "codex"})
+        [{"id": "v0", "ruling": "discharged", "reason": "trust me", "auditorVendor": "codex"}],
+        expected_auditors={"v0": "codex"},
+        collection_manifest={})  # orchestrator recorded no dispatch for v0
     assert out["discharged"] == []
     assert out["notDischarged"] == ["v0"]
     assert out["unauthenticated"] == ["v0"]
+
+
+def test_manifest_vendor_mismatch_is_unauthenticated():
+    """The orchestrator's manifest names a DIFFERENT vendor than the driver-recorded selection (a
+    misroute) → not-discharged + unauthenticated, regardless of what the result echoes."""
+    out = apply_audit_results(
+        [finding("v0")],
+        [{"id": "v0", "ruling": "discharged", "reason": "verified", "auditorVendor": "codex"}],
+        expected_auditors={"v0": "codex"},
+        collection_manifest={"v0": "claude"})  # dispatched to the WRONG vendor
+    assert out["discharged"] == []
+    assert out["notDischarged"] == ["v0"]
+    assert out["unauthenticated"] == ["v0"]
+
+
+def test_echo_mismatch_with_valid_manifest_discharges_and_discloses():
+    """When the manifest authenticates, the in-result `auditorVendor` echo is ADVISORY: an echo that
+    disagrees with the governing manifest is disclosed via `echoMismatch` but the discharge stands
+    (the manifest governs)."""
+    out = apply_audit_results(
+        [finding("v0")],
+        [{"id": "v0", "ruling": "discharged", "reason": "verified", "auditorVendor": "claude"}],
+        expected_auditors={"v0": "codex"},
+        collection_manifest={"v0": "codex"})  # manifest = selection; echo disagrees
+    assert out["discharged"] == ["v0"]
+    assert out["unauthenticated"] == []
+    assert out["echoMismatch"] == ["v0"]
+    entry = _audit_by_id(out, "v0")
+    assert entry["auditor"] == "codex"  # the trusted manifest value, not the "claude" echo
+    assert entry["echoMismatch"] == {"echo": "claude", "manifest": "codex"}
+
+
+def test_junk_manifest_never_raises():
+    """A malformed collection_manifest (non-dict, junk values) never raises; a clearing ruling with
+    no usable manifest entry simply fails closed to unauthenticated."""
+    for manifest in (None, "nope", 5, [], {"v0": None}, {"v0": ""}, {"v0": 7}):
+        out = apply_audit_results(
+            [finding("v0")],
+            [{"id": "v0", "ruling": "discharged", "reason": "verified", "auditorVendor": "codex"}],
+            expected_auditors={"v0": "codex"},
+            collection_manifest=manifest)
+        assert out["discharged"] == [], manifest
+        assert out["unauthenticated"] == ["v0"], manifest
 
 
 def test_target_with_no_recorded_selection_cannot_discharge():

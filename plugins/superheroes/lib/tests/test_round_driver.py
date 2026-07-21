@@ -232,9 +232,13 @@ def _responder(round1_findings=None, scoped=None, audit="discharged", verify="pa
         if phase == RD.P_GAPSWEEP:
             return {"findings": []}
         if phase == RD.P_AUDITS:
+            # The orchestrator records its dispatch manifest out-of-band from the results — the vendor
+            # it seated per target, read off the dispatch payload (never the result echo).
             return {"results": [{"id": t["id"], "ruling": audit, "reason": "r", "evidence": "e",
                                  "auditorVendor": t.get("auditorVendor")}
-                                for t in payload.get("targets", [])]}
+                                for t in payload.get("targets", [])],
+                    "collectionManifest": {t["id"]: t.get("auditorVendor")
+                                           for t in payload.get("targets", [])}}
         if phase == RD.P_SCOPED:
             if scoped and not scoped_state["fired"]:
                 scoped_state["fired"] = True
@@ -344,7 +348,9 @@ def test_scoped_finder_payload_carries_computed_new_surface(tmp_path):
         if phase == RD.P_AUDITS:
             return {"results": [{"id": t["id"], "ruling": "discharged", "reason": "r",
                                  "evidence": "e", "auditorVendor": t.get("auditorVendor")}
-                                for t in payload.get("targets", [])]}
+                                for t in payload.get("targets", [])],
+                    "collectionManifest": {t["id"]: t.get("auditorVendor")
+                                           for t in payload.get("targets", [])}}
         if phase == RD.P_SCOPED:
             captured["payload"] = payload
             return {"findings": []}
@@ -419,7 +425,9 @@ def _multifile_delta_respond(captured, fixer_artifact):
         if phase == RD.P_AUDITS:
             return {"results": [{"id": t["id"], "ruling": "discharged", "reason": "r",
                                  "evidence": "e", "auditorVendor": t.get("auditorVendor")}
-                                for t in payload.get("targets", [])]}
+                                for t in payload.get("targets", [])],
+                    "collectionManifest": {t["id"]: t.get("auditorVendor")
+                                           for t in payload.get("targets", [])}}
         if phase == RD.P_SCOPED:
             captured["payload"] = payload
             return {"findings": []}
@@ -749,23 +757,24 @@ def test_independent_auditor_selection_two_vendor(tmp_path):
 
 
 def test_audit_result_from_wrong_vendor_is_not_discharged(tmp_path):
-    """#507 v2 (audits): a clearing ruling that does NOT echo the selected independent auditor
-    (fixer or a misrouted worker) is rejected as not-discharged and disclosed as unauthenticated,
-    so it can never certify a fix the independent auditor did not clear."""
+    """#507 WO-FIX-RECOVERY (audits): a clearing ruling that the ORCHESTRATOR's dispatch manifest
+    does not authenticate is rejected as not-discharged + unauthenticated, so it can never certify a
+    fix the independent auditor did not clear. The result's own echo authenticates nothing."""
     import audits
     target = {"id": "v0", "file": "f.py", "line": 1, "title": "bug", "severity": "Important",
               "fixerVendor": "claude", "auditorVendor": "codex", "independence": "independent"}
-    # the fixer vendor tries to self-clear
+    # the fixer vendor tries to self-clear — echoing "claude" proves nothing (no manifest either)
     out = audits.apply_audit_results(
         [target], [{"id": "v0", "ruling": "discharged", "reason": "trust me",
                     "auditorVendor": "claude"}])
     assert out["discharged"] == []
     assert out["notDischarged"] == ["v0"]
     assert out["unauthenticated"] == ["v0"]
-    # the correct independent auditor clears it
+    # the orchestrator's manifest authenticates the codex dispatch → discharged, trusted vendor recorded
     ok = audits.apply_audit_results(
         [target], [{"id": "v0", "ruling": "discharged", "reason": "fix verified",
-                    "auditorVendor": "codex"}])
+                    "auditorVendor": "codex"}],
+        collection_manifest={"v0": "codex"})
     assert ok["discharged"] == ["v0"]
     assert ok["unauthenticated"] == []
     assert ok["audits"][0]["auditor"] == "codex"
@@ -898,6 +907,46 @@ def test_journal_fault_makes_finalize_park(tmp_path):
     ok, state = RD.load_state(d)
     fail = RD._finalize_receipt(d, state)
     assert fail and "journal" in fail and "park" in fail
+
+
+def test_journal_and_marker_both_unwritable_raises_unrecordable(tmp_path):
+    """#507 WO-FIX-RECOVERY: when the journal AND its fault marker are BOTH unwritable there is no
+    silent tier below the marker — `_journal_append` raises JournalFaultUnrecordable rather than
+    swallowing (the R2 detectability gap one level down). Both writers fail: the target paths are
+    directories, so each `open(..., "a")` raises OSError."""
+    d = str(tmp_path)
+    os.mkdir(os.path.join(d, RD.JOURNAL_FILE))        # journal append → OSError
+    os.mkdir(os.path.join(d, RD.JOURNAL_FAULT_FILE))  # fault marker → OSError too
+    with pytest.raises(RD.JournalFaultUnrecordable) as ei:
+        RD._journal_append(d, {"cmd": "next", "phase": "dispatch-panel"})
+    assert ei.value.journal_error is not None and ei.value.marker_error is not None
+
+
+def test_cli_fails_loud_when_journal_fault_unrecordable(tmp_path, capsys):
+    """The CLI invocation itself FAILS (nonzero) with reason `journal-fault-unrecordable` when both
+    the journal and its fault marker are unwritable; the underlying errors go to stderr."""
+    d = str(tmp_path)
+    os.mkdir(os.path.join(d, RD.JOURNAL_FILE))
+    os.mkdir(os.path.join(d, RD.JOURNAL_FAULT_FILE))
+    rc = RD.main(["next", "--session-dir", d])
+    assert rc == 1
+    cap = capsys.readouterr()
+    out = json.loads(cap.out.strip().splitlines()[-1])
+    assert out["ok"] is False
+    assert out["reason"] == "journal-fault-unrecordable"
+    assert cap.err.strip()  # underlying errors reported to stderr
+
+
+def test_run_loop_parks_cannot_certify_on_unrecordable_journal_fault():
+    """#507 WO-FIX-RECOVERY: the library path never continues (or crashes the caller) on an
+    unrecordable journal fault — run_loop parks cannot-certify. The last-resort exception is
+    injected through a seam to exercise the loop's fail-closed guard."""
+    def boom(*a, **k):
+        raise RD.JournalFaultUnrecordable(OSError("journal"), OSError("marker"))
+    receipt = RD.run_loop(_seams(reviewer=boom), _cfg())
+    assert receipt["verdict"] == "cannot-certify"
+    assert receipt["certification"]["shape"] is None
+    assert "journal-fault-unrecordable" in receipt["certification"]["reason"]
 
 
 def test_changed_subjects_accumulate_across_delta_rounds_for_crosscut():
