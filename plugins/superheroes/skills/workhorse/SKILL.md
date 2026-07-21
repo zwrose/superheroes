@@ -145,6 +145,23 @@ in the work order** where not. Never let a subagent silently inherit your (high)
 dispatch's provenance is explicit and never implicit; the preflight's dispatch-calibration readout
 gives you this per role.
 
+**Escalation is receipts-driven, not anticipation.** Implementation starts on the calibrated
+implementation engine. Leaving it requires **demonstrated fragility** — receipts from a failed round
+on the work at hand, never a pre-emptive hunch, never a precedent from a previous build, never a
+named class of work booked in advance. **The ladder comes first:** escalate **one rung up that
+engine's registry ladder**. Jumping **across vendors** additionally requires the **top rung of that
+ladder to have demonstrably failed on this same work** — a deliberately high bar — and is **always
+disclosed** in the PR's dispatch-provenance record, with the trigger receipts. This is **not** the
+fail-open engine-*selection* fallback that silently degrades when an engine is unavailable
+(CONVENTIONS `§7.5`): an escalation is a **completed result rejected on receipts and re-dispatched**,
+which `§7.5` holds fail-closed — different events, recorded differently. **Maker-family accounting:**
+every work order's provenance entry records the **maker family** — the model *family* that
+implemented it (per CONVENTIONS `§7.5`, independence keys on family, not on the dispatch CLI; one
+rung up a single engine's ladder can cross families). A surface's **deep/adversarial** review seats
+must then exclude that work order's maker family. The mechanical check of recorded maker family
+against seat assignments lands with **#510**'s seat-map machinery; until then this is the
+orchestrator's own accounting.
+
 ## 8. Verify — re-run every receipt yourself
 
 **Verification authority never delegates.** Every receipt an implementer claims — tests pass, types
@@ -223,6 +240,7 @@ curation stay with the advisor.
 | "The pilot found a bug, I'll fix it inline" | The pilot observes only. Route the fix back as an implementer work order. |
 | "These orders are related, I'll do them one by one" | Independent orders run in parallel by default, isolated worktrees. Sequence only real dependencies. |
 | "The route's unclear but I'll guess what they meant" | Disclose your call, or park. Guessed requirements are plausible-but-wrong shipped as done. |
+| "The last build escalated, so this one should too" | Escalation needs receipts from **this** work — a previous build's escalation is field evidence, never a standing rule; the registry ladder comes before any cross-vendor jump. |
 | "It's a small change, skip the brief/review" | The brief and the review are the contract and the check. Small work still gets both. |
 | "I'll bump the version / merge / wire the board" | Never — merge/release/version are the owner's; the board is the advisor's. |
 | "I found follow-up work, I'll file an issue for it" | You never wire the board. List follow-ups in the PR for the advisor to file. |

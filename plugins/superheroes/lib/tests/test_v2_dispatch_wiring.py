@@ -1,4 +1,4 @@
-"""The three v2 dispatch-wiring guards (WO-5), all FAIL-CLOSED:
+"""The four v2 dispatch-wiring guards (WO-5, #547), all FAIL-CLOSED:
 
 1. Wired-consumer guard — the new model_tier roles `implementer`/`pilot` each have a named
    consumer (the workhorse charter dispatches them), so an orphaned dispatch knob fails CI.
@@ -7,6 +7,8 @@
    key (`planAuthor`) can never re-appear in the calibration prose.
 3. Observability wiring — the workhorse charter REQUIRES recording engine+model per dispatch (§7)
    and a PR dispatch-provenance section (§11); removing either fails CI.
+4. Charter policy encoding (#547) — the workhorse charter encodes the owner-ratified implementer-
+   escalation policy; removing or hollowing out its anchor phrases fails CI.
 
 Fail-closed means: a guard that cannot find what it is looking for RAISES, it never silently
 passes. The §11 extractor in particular asserts its own found-set is non-empty before comparing
@@ -260,4 +262,34 @@ def test_workhorse_requires_dispatch_provenance():
         missing.append("dispatch provenance")
     assert not missing, (
         f"{WORKHORSE} is missing required observability wiring phrase(s): {missing}"
+    )
+
+
+# --- Guard 4: charter policy encoding (#547) --------------------------------------------------
+
+def test_workhorse_encodes_implementer_escalation_policy():
+    # Each token is a policy anchor ratified in #547.
+    POLICY_ANCHORS = (
+        "demonstrated fragility",
+        "registry ladder",
+        "maker family",
+        "deep/adversarial",
+        "#510",
+        "the last build escalated",
+    )
+    assert POLICY_ANCHORS, (
+        "POLICY_ANCHORS is empty — refusing to pass vacuously"
+    )
+    text = _read(WORKHORSE)
+    assert text, (
+        f"{WORKHORSE} is empty — refusing to pass vacuously"
+    )
+    missing = []
+    for token in POLICY_ANCHORS:
+        if not re.search(re.escape(token), text, re.I):
+            missing.append(token)
+    assert not missing, (
+        f"{WORKHORSE} is missing the #547 implementer-escalation policy anchor(s): {missing} — "
+        "the owner-ratified escalation policy is absent or was reworded past its anchors; "
+        "changing this policy requires an owner-ratified decision, not a silent edit"
     )
