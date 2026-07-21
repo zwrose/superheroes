@@ -1075,8 +1075,9 @@ def test_fix_with_guidance_attaches_guidance():
 
 
 def test_skip_with_reason_records_ledger_and_rides_disclosure():
-    """A skip needs a citable reason: it lands in the decision ledger AND rides the exit disclosure
-    (the skipped-blocking channel). With nothing left to fix, the run converges with the skip named."""
+    """A skip needs a citable reason: it lands in the decision ledger, rides the exit disclosure AND
+    the dedicated top-level `skippedBlockers` channel. With nothing left to fix, the run converges —
+    but CLEAN EXCEPT FOR SKIPPED, never a plain success (the reason leads with clean-except-skipped)."""
     state = RD.new_state(_cfg())
     RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
     RD._fold_judgment(state, state["config"], {"dispositions": [
@@ -1084,11 +1085,73 @@ def test_skip_with_reason_records_ledger_and_rides_disclosure():
     assert state["terminal"] == "converged"
     kinds = [d["kind"] for d in state["decisions"]]
     assert "judgment-skip" in kinds
+    # the certification is non-plain: shape unchanged (audited-chain) but the reason leads with
+    # the exit_skipped invariant marker.
+    cert = state.get("certification") or {}
+    assert cert.get("shape") == "audited-chain"
+    assert (cert.get("reason") or "").startswith("clean-except-skipped: 1 blocker(s) skipped")
+    assert "owner-skipped" in (cert.get("note") or "")
     receipt = RD.build_receipt(state)
+    # top-level dedicated channel — id/title/severity/reason
+    assert receipt["skippedBlockers"] == [
+        {"id": _TRADEOFF_ID, "title": "widen the API", "severity": "Important",
+         "reason": "shipping v1 narrow on purpose"}]
+    # AND the degraded disclosure prose still names it
     assert any("skipped-blocker" in dd and "shipping v1 narrow" in dd
                for dd in receipt["degraded"])
-    note = (state.get("certification") or {}).get("note") or ""
-    assert "owner-skipped" in note
+    ok, _ = RD.validate_receipt(receipt)
+    assert ok
+
+
+def test_receipt_always_carries_skipped_blockers_channel():
+    """Every terminal receipt carries the `skippedBlockers` list (empty when no skip) and
+    validate_receipt REQUIRES it — the channel can never be omitted (exit_skipped invariant)."""
+    receipt = RD.run_loop(_seams(), _cfg())
+    assert receipt["verdict"] == "converged"
+    assert receipt["skippedBlockers"] == []
+    ok, _ = RD.validate_receipt(receipt)
+    assert ok
+    # a receipt with the channel stripped is rejected
+    stripped = dict(receipt)
+    del stripped["skippedBlockers"]
+    ok2, why = RD.validate_receipt(stripped)
+    assert not ok2 and "skippedBlockers" in why
+    # a non-list channel is rejected too
+    bad = dict(receipt)
+    bad["skippedBlockers"] = None
+    ok3, why3 = RD.validate_receipt(bad)
+    assert not ok3 and "skippedBlockers" in why3
+
+
+def test_partial_skip_end_to_end_marks_clean_except_skipped(tmp_path):
+    """A run that fixes one judgment finding and skips another converges CLEAN EXCEPT FOR SKIPPED:
+    the skipped one rides the top-level channel and the certification reason leads with the marker,
+    even though real fix-and-audit work ran."""
+    trade_a = {"title": "widen the API", "severity": "Important",
+               "file": "f.py", "line": 1, "tradeoff": True}
+    trade_b = {"title": "drop the flag", "severity": "Important",
+               "file": "f.py", "line": 2, "tradeoff": True}
+
+    def judgment_gate(payload):
+        out = []
+        for f in payload["findings"]:
+            if f["id"] == "f.py::widen the api":
+                out.append({"id": f["id"], "disposition": "fix-as-suggested"})
+            else:
+                out.append({"id": f["id"], "disposition": "skip", "reason": "deferred to v2"})
+        return {"dispositions": out}
+
+    receipt = RD.run_loop(_seams(
+        reviewer=lambda dim, tier, rnd, ctx:
+            ({"findings": [dict(trade_a), dict(trade_b)]}
+             if rnd == 1 and dim == "code-reviewer" else []),
+        io={"judgment_gate": judgment_gate}), _cfg())
+    assert receipt["verdict"] == "converged"
+    assert [s["title"] for s in receipt["skippedBlockers"]] == ["drop the flag"]
+    reason = (receipt["certification"] or {}).get("reason") or ""
+    assert reason.startswith("clean-except-skipped: 1 blocker(s) skipped")
+    ok, _ = RD.validate_receipt(receipt)
+    assert ok
 
 
 def test_skip_without_reason_fails_closed_to_fix():

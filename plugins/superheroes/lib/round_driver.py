@@ -1440,7 +1440,12 @@ def _fold_stall(state, config, artifact):
 def _terminal_converged(state, config, full_panel, note=None):
     """Certify: last round's fixes all discharged + verify pass. Shape is full-panel-confirmed (a
     qualifying full confirmation panel ran) or audited-chain (scoped certifying finish, no final
-    full panel — say so). Degraded independence appends -degraded."""
+    full panel — say so). Degraded independence appends -degraded.
+
+    A converge over ANY owner-skipped judgment blocker is CLEAN EXCEPT FOR SKIPPED — never a plain
+    success (the exit_skipped invariant): the certification `reason` leads with
+    `clean-except-skipped: N blocker(s) skipped with citable reasons` (shape unchanged) so the
+    terminal reads unmistakably non-plain, and the skips also ride the top-level receipt channel."""
     base = "full-panel-confirmed" if full_panel else "audited-chain"
     shape = _cert_shape(state, base)
     state["terminal"] = "converged"
@@ -1448,6 +1453,10 @@ def _terminal_converged(state, config, full_panel, note=None):
             "independence": "degraded" if _degraded(state) else "independent"}
     if note:
         cert["note"] = note
+    skipped = state.get("_skippedBlockers") or []
+    if skipped:
+        cert["reason"] = ("clean-except-skipped: %d blocker(s) skipped with citable reasons"
+                          % len(skipped))
     state["certification"] = cert
     _decision(state, "converged", "certified as %s" % shape)
     state["step"] = P_TERMINAL
@@ -1485,8 +1494,15 @@ def build_receipt(state, session_dir=None):
         degraded.append("independence: a single live vendor — the fix's auditor is the fixer's "
                         "vendor; independence degraded and named in the certification shape")
     # The skipped-blocking channel (#507 R2a): an owner-skipped judgment blocker rides the exit
-    # disclosure — a product-choice tradeoff shipped un-fixed, cited by its owner reason.
+    # disclosure — a product-choice tradeoff shipped un-fixed, cited by its owner reason. It appears
+    # BOTH in the degraded disclosure prose AND as the dedicated top-level `skippedBlockers` list
+    # (required by validate_receipt, possibly empty) so the channel can never be omitted.
+    skipped_blockers = []
     for s in state.get("_skippedBlockers") or []:
+        if not isinstance(s, dict):
+            continue
+        skipped_blockers.append({"id": s.get("id"), "title": s.get("title"),
+                                 "severity": s.get("severity"), "reason": s.get("reason")})
         degraded.append("skipped-blocker: %r (%s:%s) owner-skipped as a product-choice tradeoff — "
                         "reason: %s" % (s.get("title"), s.get("file"), s.get("line"), s.get("reason")))
     scriptran = _scriptran_summary(session_dir) if session_dir else state.get("_scriptRan") or \
@@ -1502,18 +1518,21 @@ def build_receipt(state, session_dir=None):
         "seatMap": dict(state.get("seatMap") or {}),
         "scriptRan": scriptran,
         "degraded": degraded,
+        "skippedBlockers": skipped_blockers,
     }
 
 
 _RECEIPT_REQUIRED = ("schemaVersion", "verdict", "certificationShape", "rounds", "findings",
-                     "decisions", "seatMap", "scriptRan", "degraded")
+                     "decisions", "seatMap", "scriptRan", "degraded", "skippedBlockers")
 
 
 def validate_receipt(receipt):
     """Validate a driver receipt's SHAPE (NOT grafted onto panel_tally._valid_final_receipt — that
     is the reviewer-seat receipt; this is the loop's terminal receipt). Fail-closed: a receipt
-    missing scriptRan or the seat map, or with a non-list rounds/findings/decisions/degraded, is
-    rejected with a reason. Returns (ok, reason)."""
+    missing scriptRan or the seat map, or with a non-list rounds/findings/decisions/degraded/
+    skippedBlockers, is rejected with a reason. `skippedBlockers` is REQUIRED (possibly empty) so a
+    receipt can never omit the skipped-blocking channel (the exit_skipped invariant). Returns
+    (ok, reason)."""
     if not isinstance(receipt, dict):
         return False, "receipt is not an object"
     for key in _RECEIPT_REQUIRED:
@@ -1527,7 +1546,7 @@ def validate_receipt(receipt):
         return False, "receipt scriptRan must carry byPhase (the per-phase journal counts)"
     if not isinstance(receipt.get("seatMap"), dict):
         return False, "receipt seatMap must be an object"
-    for key in ("rounds", "findings", "decisions", "degraded"):
+    for key in ("rounds", "findings", "decisions", "degraded", "skippedBlockers"):
         if not isinstance(receipt.get(key), list):
             return False, "receipt %s must be a list" % key
     if not receipt.get("verdict"):

@@ -96,9 +96,10 @@ The receipt's `scriptRan` field summarizes it: `{invocations, byPhase}` where `b
 - `certification` — full block (`shape`, `fullPanel`, `independence`, optional `note`/`reason`)
 - `rounds` — per-round `kind`, `seatStatus`, `blockingCount`, `verifyResult`, `audits`, `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice`
 - `findings`, `decisions`, `seatMap`, `scriptRan`, `degraded` (disclosure list)
+- `skippedBlockers` — the dedicated skipped-blocking channel (`{id, title, severity, reason}` per owner-skipped judgment blocker; possibly empty). **Required** (possibly empty) so a receipt can never omit the channel — a converge over any skip is CLEAN EXCEPT FOR SKIPPED, never a plain success, and its certification `reason` leads with `clean-except-skipped: N blocker(s) skipped with citable reasons`.
 
 `validate_receipt(receipt)` returns `(ok, reason)` — a missing `scriptRan.byPhase` or non-list
-`rounds`/`findings` rejects the receipt.
+`rounds`/`findings`/`skippedBlockers` rejects the receipt.
 
 ## Certification shapes
 
