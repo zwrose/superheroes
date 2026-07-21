@@ -383,9 +383,9 @@ python3 "$ROOT_DIR/lib/round_driver.py" next \
 **The loop.** Until `action` is `terminal`:
 
 1. Parse `next` JSON: `{action, round, phase, attempt, expectedStateHash, payload}`.
-2. **Dispatch exactly one action** (panel, verifiers, synthesis, gap-sweep, audits, scoped-finder, verify, fixer, or stall menu). Round 1 = full `reviewer-deep` panel; rounds 2+ = delta rounds (fix audits + scoped finder) unless the driver schedules a full panel (#174 re-arm or unknown surface → run-everything). Degraded/single-vendor: same driver, same journal, `independence: "degraded"` stamps — stay on the path.
+2. **Dispatch exactly one action** (panel, verifiers, synthesis, gap-sweep, audits, scoped-finder, verify, fixer, judgment gate, or stall menu). Round 1 = full `reviewer-deep` panel; rounds 2+ = delta rounds (fix audits + scoped finder) unless the driver schedules a full panel (#174 re-arm or unknown surface → run-everything). Degraded/single-vendor: same driver, same journal, `independence: "degraded"` stamps — stay on the path.
 3. Write the artifact JSON, then `submit` with echoed `phase`, `attempt`, and `expectedStateHash`.
-4. On `present-stall-menu`, present the four choices from `payload.choices` (`accept-the-disclosed-risk` only when `payload.acceptRiskEligible` — CONFIRMED with receipt). Never judge the dispute yourself.
+4. On `present-judgment` (a tradeoff/product-choice blocker — an **intervention gate, not a terminal**), present each `payload.findings[]` with its `dispositions` (`fix-as-suggested`, `fix-with-guidance`, `skip`) and submit `{dispositions: [{id, disposition, guidance?, reason?}, ...]}` — `skip` needs a citable `reason`; the driver folds fixes back into the fix leg and rides skips on the exit disclosure (fail-closed: a missing/unknown disposition folds as `fix-as-suggested`). On `present-stall-menu` (the audit-stall terminal), present the four choices from `payload.choices` (`accept-the-disclosed-risk` only when `payload.acceptRiskEligible` — CONFIRMED with receipt). Never judge the dispute yourself.
 5. On `terminal`, read `payload.certification` and `round-receipt.json`; map `verdict` to `$ACTION`/`$REASON` for `--result-file` (`converged` → `exit_clean`; `halted`/`held`/`stalled`/`capped-with-open-critical` → `halt`).
 
 ```bash
@@ -396,7 +396,7 @@ python3 "$ROOT_DIR/lib/round_driver.py" submit \
   --artifact "$SESSION_DIR/round-<N>/<phase>-artifact.json"
 ```
 
-**Terminals to surface honestly:** scoped certifying finish (`audited-chain` / `audited-chain-degraded` — say so, never imply a pristine fresh pass); one invisible self-recovery on audit-stall (journaled, not offered to the owner); the stall menu; `capped-with-open-critical` park when confirmation budget is exhausted with a Critical still owed.
+**Terminals to surface honestly:** scoped certifying finish (`audited-chain` / `audited-chain-degraded` — say so, never imply a pristine fresh pass); one invisible self-recovery on audit-stall (journaled, not offered to the owner); the audit-stall stall menu; owner-skipped judgment blockers (ridden on the exit disclosure — a product-choice tradeoff shipped un-fixed, cited by its owner reason); `capped-with-open-critical` park when confirmation budget is exhausted with a Critical still owed.
 
 **Red flags** — if you catch yourself thinking "trivial fix / obviously clean / save tokens / offer another round as optional", call `next` and obey the driver instead.
 

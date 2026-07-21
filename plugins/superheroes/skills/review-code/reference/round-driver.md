@@ -78,7 +78,8 @@ Persist state under `$SESSION_DIR/loop-state.json`. Append every `next`/`submit`
 | `dispatch-scoped-finder` | Delta round: scoped scan over `payload.hunks` at `reviewer-deep`. Submit `{findings: [...]}`. |
 | `run-verify` | Run `payload.command` from the working tree (non-interactive, timeout). Submit `{result: "pass" \| "fail"}`. Fail → terminal halt, certification withheld. |
 | `dispatch-fixer` | Dispatch fixer over `payload.batch` (blocking findings the driver selected). Submit `{fixes, headDiff, escalated?}` — the head diff comes from git, never the fixer's self-report. The changed policy subjects the #174 confirmation re-arm consumes are **derived by the driver itself** from the reviewed-vs-head diff through the accumulated findings (the injectable `changed_subjects` seam — library default + CLI wire the real git derivation, #157/#158); a self-reported `changedSubjects` is ignored on the live path. |
-| `present-stall-menu` | Audit-keyed stall after one invisible self-recovery. Present `payload.choices` (four-choice menu; `accept-the-disclosed-risk` only when `payload.acceptRiskEligible` — gated on a CONFIRMED finding with receipt). Submit `{choice}`. |
+| `present-judgment` | A tradeoff/product-choice blocker is an **owner-judgment** call routed here — an **intervention gate, not a terminal**. Present each `payload.findings[]` (id, file, line, title, severity) with `payload.findings[].dispositions` (`fix-as-suggested`, `fix-with-guidance`, `skip`). Submit `{dispositions: [{id, disposition, guidance?, reason?}, ...]}` — `skip` needs a citable `reason`. Fixes fold into the round's fix batch and the loop proceeds into the fix leg; skips ride the exit disclosure. Fail-closed: a missing/unknown disposition (or a reasonless skip) folds as `fix-as-suggested` — a judgment blocker is never silently skipped. Never judge the dispute yourself. |
+| `present-stall-menu` | The **audit-stall terminal** — reached only after one invisible self-recovery (never for a judgment blocker; those go to `present-judgment`). Present `payload.choices` (four-choice menu; `accept-the-disclosed-risk` only when `payload.acceptRiskEligible` — gated on a CONFIRMED finding with receipt). Submit `{choice}`. |
 | `terminal` | Stop looping; read `payload.verdict` and `payload.certification`; surface honestly in the End-of-Loop Summary. |
 
 ## Journal and receipt
@@ -111,8 +112,9 @@ The receipt's `scriptRan` field summarizes it: `{invocations, byPhase}` where `b
 **Terminals the orchestrator must surface honestly:**
 
 - **Scoped certifying finish** (`audited-chain` / `audited-chain-degraded`) — delta rounds verified the fix chain; say so.
+- **Judgment gate is an intervention, not a terminal** — a tradeoff blocker routes to `present-judgment` (fix-as-suggested / fix-with-guidance / skip-with-reason) and folds back into the fix leg; a skipped blocker rides the exit disclosure. It never dead-ends in the stall menu.
 - **One invisible self-recovery** — audit-stall triggers a single fixer escalation (journaled); never offered as an owner menu item.
-- **Four-choice stall menu** — `ship-smaller`, `spend-more`, `accept-the-disclosed-risk` (CONFIRMED-only), `hold`.
+- **Four-choice stall menu** — `ship-smaller`, `spend-more`, `accept-the-disclosed-risk` (CONFIRMED-only), `hold`. Reached only from the audit-stall path.
 - **Capped-with-open-Critical park** — confirmation budget exhausted with a Critical still owed.
 
 ## Invariants

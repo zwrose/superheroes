@@ -1024,4 +1024,173 @@ def test_fixer_outside_pool_audits_independent_end_to_end(tmp_path):
     assert t["fixerVendor"] == "claude"
     assert t["auditorVendor"] == "codex" and t["auditorVendor"] != t["fixerVendor"]
     assert t["independence"] == "independent"
+
+
+# =============================================================================
+# the judgment gate is an INTERVENTION, not a terminal (#507 R2a)
+# =============================================================================
+
+_TRADEOFF = {"title": "widen the API", "severity": "Important",
+             "file": "f.py", "line": 1, "tradeoff": True}
+_TRADEOFF_ID = "f.py::widen the api"
+
+
+def test_tradeoff_blocker_routes_to_judgment_not_stall():
+    """A tradeoff/product-choice blocker routes to the present-judgment gate — NEVER the terminal
+    stall menu (the R2a defect: the stall menu dead-ended it so it could never be fixed)."""
+    state = RD.new_state(_cfg())
+    took = RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
+    assert took is True
+    assert state["step"] == RD.P_JUDGMENT and state["step"] != RD.P_STALL
+    step = RD._advance(state, state["config"])
+    assert step["action"] == RD.P_JUDGMENT
+    fnd = step["payload"]["findings"]
+    assert len(fnd) == 1 and fnd[0]["id"] == _TRADEOFF_ID
+    assert fnd[0]["dispositions"] == list(RD.JUDGMENT_DISPOSITIONS)
+    kinds = [d["kind"] for d in state["decisions"]]
+    assert "judgment-gate" in kinds
+
+
+def test_fix_as_suggested_folds_to_fixer_batch():
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
+    RD._fold_judgment(state, state["config"],
+                      {"dispositions": [{"id": _TRADEOFF_ID, "disposition": "fix-as-suggested"}]})
+    assert state["step"] == RD.P_FIXER
+    batch = state["_fixBatch"]
+    assert len(batch) == 1 and batch[0]["title"] == "widen the API"
+    assert batch[0]["judgmentDisposition"] == "fix-as-suggested"
+
+
+def test_fix_with_guidance_attaches_guidance():
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance",
+         "guidance": "keep it backward compatible"}]})
+    assert state["step"] == RD.P_FIXER
+    b = state["_fixBatch"][0]
+    assert b["judgmentDisposition"] == "fix-with-guidance"
+    assert b["guidance"] == "keep it backward compatible"
+
+
+def test_skip_with_reason_records_ledger_and_rides_disclosure():
+    """A skip needs a citable reason: it lands in the decision ledger AND rides the exit disclosure
+    (the skipped-blocking channel). With nothing left to fix, the run converges with the skip named."""
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _TRADEOFF_ID, "disposition": "skip", "reason": "shipping v1 narrow on purpose"}]})
+    assert state["terminal"] == "converged"
+    kinds = [d["kind"] for d in state["decisions"]]
+    assert "judgment-skip" in kinds
+    receipt = RD.build_receipt(state)
+    assert any("skipped-blocker" in dd and "shipping v1 narrow" in dd
+               for dd in receipt["degraded"])
+    note = (state.get("certification") or {}).get("note") or ""
+    assert "owner-skipped" in note
+
+
+def test_skip_without_reason_fails_closed_to_fix():
+    """A skip with no citable reason is NOT honored — it fails closed to fix-as-suggested (a judgment
+    blocker is never silently skipped)."""
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _TRADEOFF_ID, "disposition": "skip"}]})
+    assert state["step"] == RD.P_FIXER
+    assert state["_fixBatch"][0]["judgmentFailClosed"] is True
+    assert "judgment-fail-closed" in [d["kind"] for d in state["decisions"]]
+
+
+def test_missing_or_unknown_disposition_fails_closed_to_fix():
+    """A listed judgment finding with a MISSING disposition (or an UNKNOWN one) folds as
+    fix-as-suggested, flagged failClosed — never silently skipped."""
+    # missing: the artifact lists no disposition at all
+    s1 = RD.new_state(_cfg())
+    RD._route_judgment_blockers(s1, [dict(_TRADEOFF)])
+    RD._fold_judgment(s1, s1["config"], {"dispositions": []})
+    assert s1["step"] == RD.P_FIXER
+    b1 = s1["_fixBatch"][0]
+    assert b1["judgmentDisposition"] == "fix-as-suggested" and b1["judgmentFailClosed"] is True
+    # unknown: a disposition string the gate does not recognize
+    s2 = RD.new_state(_cfg())
+    RD._route_judgment_blockers(s2, [dict(_TRADEOFF)])
+    RD._fold_judgment(s2, s2["config"], {"dispositions": [
+        {"id": _TRADEOFF_ID, "disposition": "ship-it-anyway"}]})
+    assert s2["step"] == RD.P_FIXER
+    assert s2["_fixBatch"][0]["judgmentFailClosed"] is True
+
+
+def test_mechanical_blocker_carried_through_judgment_gate():
+    """A mechanical (non-tradeoff) blocker in the SAME batch is carried through the gate and rides
+    the fix batch even when the tradeoff finding is skipped — never abandoned at the gate."""
+    mech = {"title": "null deref", "severity": "Critical", "file": "f.py", "line": 2}
+    state = RD.new_state(_cfg())
+    took = RD._route_judgment_blockers(state, [mech, dict(_TRADEOFF)])
+    assert took is True and state["step"] == RD.P_JUDGMENT
+    # only the tradeoff finding is presented for judgment
+    step = RD._advance(state, state["config"])
+    assert [x["id"] for x in step["payload"]["findings"]] == [_TRADEOFF_ID]
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _TRADEOFF_ID, "disposition": "skip", "reason": "deferred to v2"}]})
+    assert state["step"] == RD.P_FIXER
+    assert [b["title"] for b in state["_fixBatch"]] == ["null deref"]
+
+
+def test_stall_menu_payload_carries_no_judgment_findings():
+    """The stall menu is the audit-stall TERMINAL only — its payload never carries judgment
+    findings (they route to present-judgment)."""
+    state = RD.new_state(_cfg())
+    state["findings"] = [{"id": "v0", "verdict": "PLAUSIBLE"}]
+    state["selfRecovered"] = True
+    RD._handle_stall(state, state["config"], {"reason": "audit-stall", "detail": "x",
+                                              "stalledIdentities": ["v0"]})
+    assert state["step"] == RD.P_STALL
+    step = RD._advance(state, state["config"])
+    assert set(step["payload"].keys()) == {"choices", "acceptRiskEligible"}
+    assert "judgmentFindings" not in step["payload"]
+
+
+def test_migrate_old_stall_routed_judgment_state(tmp_path):
+    """#507 R2a migration: a state persisted under the OLD routing (a judgment blocker parked at the
+    present-stall-menu terminal) is re-pointed to present-judgment on load, and `next` re-emits the
+    judgment action from state under the new contract (schemaVersion stays 2)."""
+    d = str(tmp_path)
+    state = RD.new_state(_cfg())
+    state["step"] = RD.P_STALL
+    state["_judgmentFindings"] = [dict(_TRADEOFF)]
+    state["_stallChoices"] = ["ship-smaller", "spend-more", "hold"]
+    state["_acceptRiskEligible"] = False
+    state["pending"] = {"action": RD.P_STALL, "round": 1, "phase": RD.P_STALL,
+                        "attempt": 0, "payload": {"choices": []}}
+    RD.save_state(d, state)
+    ok, loaded = RD.load_state(d)
+    assert ok and loaded["step"] == RD.P_JUDGMENT and loaded["pending"] is None
+    out = RD.cmd_next(d)
+    assert out["ok"] and out["action"] == RD.P_JUDGMENT
+    assert out["payload"]["findings"][0]["dispositions"] == list(RD.JUDGMENT_DISPOSITIONS)
+
+
+def test_tradeoff_finding_reaches_audited_chain_end_to_end(tmp_path):
+    """End-to-end: one tradeoff blocking finding routes to the judgment gate, the owner disposes it
+    fix-as-suggested, and the run fixes-and-audits it to an audited-chain certification — the very
+    path the R2a defect made unreachable."""
+    disposed = []
+
+    def judgment_gate(payload):
+        disposed.append(payload)
+        return {"dispositions": [{"id": f["id"], "disposition": "fix-as-suggested"}
+                                 for f in payload["findings"]]}
+
+    receipt = RD.run_loop(_seams(
+        reviewer=lambda dim, tier, rnd, ctx:
+            ({"findings": [dict(_TRADEOFF)]} if rnd == 1 and dim == "code-reviewer" else []),
+        io={"judgment_gate": judgment_gate}), _cfg())
+    assert len(disposed) == 1 and disposed[0]["findings"][0]["id"] == _TRADEOFF_ID
+    assert receipt["verdict"] == "converged"
+    assert receipt["certificationShape"] == "audited-chain"
+    assert "judgment-gate" in [d["kind"] for d in receipt["decisions"]]
+    ok, _ = RD.validate_receipt(receipt)
+    assert ok
     assert receipt["certificationShape"] == "audited-chain"  # NOT -degraded

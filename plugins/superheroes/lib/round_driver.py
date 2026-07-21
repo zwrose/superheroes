@@ -16,6 +16,13 @@ layers over one core:
   - Layer 2 (`next`/`submit` CLI): the state machine BETWEEN orchestrator dispatches — `next`
     emits the one action to run, `submit` folds its artifact and advances.
 
+A tradeoff/product-choice blocker is an OWNER-JUDGMENT call: it routes to the `present-judgment`
+INTERVENTION gate (fix-as-suggested / fix-with-guidance / skip-with-reason), whose fixes fold back
+into the round's fix leg — it is NOT a terminal (#507 R2a; the `present-stall-menu` terminal is
+reachable only from the audit-stall path). `load_state` migrates a state persisted under the OLD
+routing (a judgment blocker dead-ended at `present-stall-menu`) onto the judgment gate in place;
+`schemaVersion` stays 2 (session dirs are per-invocation — this only rescues a run parked mid-cut).
+
 Like its decider siblings (audits / delta_surface / verification): DETERMINISTIC, stdlib-only,
 FAIL-CLOSED. Junk in → conservative out + disclosure; never certify on silence; a wrong
 `discharged`, a receipt-missing seat, a lost independence, an unknown surface all fail toward
@@ -86,12 +93,20 @@ P_SCOPED = "dispatch-scoped-finder"
 P_GAPSWEEP = "dispatch-gap-sweep"
 P_VERIFY = "run-verify"
 P_FIXER = "dispatch-fixer"
+P_JUDGMENT = "present-judgment"
 P_STALL = "present-stall-menu"
 P_TERMINAL = "terminal"
 
 # The four stall-menu choices (never "judge the dispute yourself"). accept-the-risk is offerable
 # ONLY for a CONFIRMED-with-receipt finding; the menu payload gates it per-run.
 STALL_CHOICES = ("ship-smaller", "spend-more", "accept-the-disclosed-risk", "hold")
+
+# The three per-finding judgment dispositions the judgment gate offers (never "judge the dispute
+# yourself"): fix the finding as the reviewer suggested, fix it with owner free-text guidance, or
+# skip it with a citable reason (a skipped blocker rides the exit disclosure — the skipped-blocking
+# channel). The judgment gate is an INTERVENTION that folds back into the fix leg, NOT a terminal
+# (#507 R2a) — the stall menu is the ONLY terminal, reachable solely from the audit-stall path.
+JUDGMENT_DISPOSITIONS = ("fix-as-suggested", "fix-with-guidance", "skip")
 
 
 # =============================================================================================
@@ -487,7 +502,27 @@ def load_state(session_dir):
                        "per-invocation with no migration; start a fresh session dir"
                        % (data.get("schemaVersion") if isinstance(data, dict) else None,
                           SCHEMA_VERSION))
+    _migrate_judgment_step(data)
     return True, data
+
+
+def _migrate_judgment_step(state):
+    """#507 R2a step migration (schemaVersion stays 2). A state persisted under the OLD routing —
+    tradeoff/judgment blockers dead-ended at the `present-stall-menu` terminal — is re-pointed to
+    the `present-judgment` gate so `next` re-emits the judgment action under the new contract. The
+    tell is a state parked at `present-stall-menu` that still carries `_judgmentFindings` (only the
+    old judgment→stall routing set both together; the audit-stall path never sets judgment findings).
+    The stale stall `pending` is dropped so `next` recomputes the action from state. In-place."""
+    if not isinstance(state, dict):
+        return state
+    if state.get("step") == P_STALL and state.get("_judgmentFindings"):
+        state["step"] = P_JUDGMENT
+        state.pop("_stallChoices", None)
+        state.pop("_acceptRiskEligible", None)
+        pend = state.get("pending")
+        if isinstance(pend, dict) and pend.get("phase") == P_STALL:
+            state["pending"] = None
+    return state
 
 
 def save_state(session_dir, state):
@@ -635,11 +670,17 @@ def _advance(state, config):
         payload = {"batch": state.get("_fixBatch") or []}
         if state.get("_escalatedRung"):
             payload["escalatedRung"] = state["_escalatedRung"]
+    elif step == P_JUDGMENT:
+        payload = {"findings": [
+            {"id": finding_identity(f), "file": f.get("file"), "line": f.get("line"),
+             "title": f.get("title"), "severity": f.get("severity"),
+             "classification": "judgment", "dispositions": list(JUDGMENT_DISPOSITIONS)}
+            for f in (state.get("_judgmentFindings") or []) if isinstance(f, dict)]}
     elif step == P_STALL:
+        # The stall menu is the audit-stall TERMINAL only (a tradeoff/judgment blocker routes to
+        # present-judgment, never here — #507 R2a). No judgment findings ride this payload.
         payload = {"choices": list(state.get("_stallChoices") or STALL_CHOICES),
                    "acceptRiskEligible": bool(state.get("_acceptRiskEligible"))}
-        if state.get("_judgmentFindings"):
-            payload["judgmentFindings"] = list(state["_judgmentFindings"])
     return {"action": step, "round": rnd, "phase": step, "payload": payload}
 
 
@@ -676,6 +717,8 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None):
         _fold_verify(state, config, artifact)
     elif phase == P_FIXER:
         _fold_fixer(state, config, artifact, changed_subjects_seam)
+    elif phase == P_JUDGMENT:
+        _fold_judgment(state, config, artifact)
     elif phase == P_STALL:
         _fold_stall(state, config, artifact)
     return state
@@ -834,27 +877,121 @@ def _fold_gapsweep(state, config, artifact):
 def _route_judgment_blockers(state, blocking):
     """Triage before composing an autonomous fix batch. A blocking finding carrying `tradeoff: true`
     is a PRODUCT-CHOICE / judgment call — the review-code contract routes it to the OWNER, never to
-    the fixer for autonomous change. When any such blocker survives, present the disposition (the
-    stall menu) with the judgment findings flagged, and DO NOT compose a `_fixBatch`. Returns True
-    when it took over routing (the caller must return). Mechanical-only blockers proceed to the
-    fixer as before."""
+    the fixer for autonomous change. But the judgment gate is an INTERVENTION, not a terminal (#507
+    R2a — the old routing dead-ended these in the stall menu, so a tradeoff blocker could never be
+    fixed-and-audited): the owner disposes EACH judgment finding (fix-as-suggested /
+    fix-with-guidance / skip) at the `present-judgment` phase, and the loop then folds the fixes into
+    the round's fix batch and proceeds into the fix leg — the skips ride the exit disclosure. Any
+    mechanical (non-tradeoff) blockers in the SAME batch are carried through the gate and ride
+    straight into the fix batch alongside the fix-disposed judgment findings (never abandoned).
+    Returns True when it took over routing (the caller must return); False when the batch is purely
+    mechanical (the caller composes the fix batch as before)."""
     judgment = [f for f in blocking if isinstance(f, dict) and f.get("tradeoff")]
     if not judgment:
         return False
-    accept_eligible = _accept_risk_eligible(state)
-    state["_stallChoices"] = list(STALL_CHOICES) if accept_eligible else \
-        [c for c in STALL_CHOICES if c != "accept-the-disclosed-risk"]
-    state["_acceptRiskEligible"] = accept_eligible
-    state["_judgmentFindings"] = [
+    mechanical = [f for f in blocking if isinstance(f, dict) and not f.get("tradeoff")]
+    state["_judgmentFindings"] = [dict(f) for f in judgment]
+    state["_judgmentMechanical"] = [dict(f) for f in mechanical]
+    _record_round(state, "judgmentBlockers", [
         {"id": finding_identity(f), "file": f.get("file"), "line": f.get("line"),
          "title": f.get("title"), "severity": f.get("severity"), "classification": "judgment"}
-        for f in judgment]
-    _record_round(state, "judgmentBlockers", state["_judgmentFindings"])
-    _decision(state, "judgment-triage",
-              "%d tradeoff/product-choice blocker(s) routed to owner judgment — never auto-fixed: %s"
+        for f in judgment])
+    _decision(state, "judgment-gate",
+              "%d tradeoff/product-choice blocker(s) routed to owner judgment — never auto-fixed; "
+              "each offered fix-as-suggested / fix-with-guidance / skip: %s"
               % (len(judgment), "; ".join(f.get("title") or "?" for f in judgment)))
-    state["step"] = P_STALL
+    state["step"] = P_JUDGMENT
     return True
+
+
+def _skipped_note(state):
+    """The certification note for a run whose ONLY blocking work was owner-skipped judgment
+    findings — they are disclosed product-choice tradeoffs, cited in the ledger, not fixed."""
+    skipped = state.get("_skippedBlockers") or []
+    if not skipped:
+        return None
+    return ("%d blocking finding(s) owner-skipped as product-choice tradeoffs — disclosed, not "
+            "fixed: %s" % (len(skipped), "; ".join(s.get("title") or "?" for s in skipped)))
+
+
+def _fold_judgment(state, config, artifact):
+    """Fold the owner's per-finding judgment dispositions (#507 R2a — the judgment gate is an
+    INTERVENTION, not a terminal). The artifact is `{dispositions: [{id, disposition, guidance?,
+    reason?}, ...]}`, keyed to each `present-judgment` finding's identity. Each judgment finding is
+    disposed:
+
+      - `fix-as-suggested`  → folds into the round's fix batch;
+      - `fix-with-guidance` → folds into the fix batch with the owner's free-text `guidance` attached;
+      - `skip`              → requires a citable `reason` (recorded in the decision ledger); the
+                              skipped blocker rides the exit disclosure (the skipped-blocking channel).
+
+    FAIL-CLOSED: a listed judgment finding with a MISSING or UNKNOWN disposition — or a `skip` with
+    no citable reason — folds as `fix-as-suggested`. A judgment blocker is NEVER silently skipped.
+    The fixes join the round's fix batch alongside the mechanical (non-tradeoff) blockers carried
+    through the gate, and the loop proceeds to `dispatch-fixer`; when the WHOLE fix batch is empty
+    (every judgment finding skipped and no mechanical blocker) the loop settles into a converged
+    terminal with the skips disclosed."""
+    raw = artifact.get("dispositions") if isinstance(artifact.get("dispositions"), list) else []
+    by_id = {}
+    for d in raw:
+        if isinstance(d, dict) and d.get("id") is not None:
+            by_id[d.get("id")] = d
+    judgment = [f for f in (state.get("_judgmentFindings") or []) if isinstance(f, dict)]
+    fix_batch = [dict(f) for f in (state.get("_judgmentMechanical") or []) if isinstance(f, dict)]
+    skipped = []
+    disposition_log = []
+    for f in judgment:
+        fid = finding_identity(f)
+        d = by_id.get(fid) if isinstance(by_id.get(fid), dict) else {}
+        disposition = d.get("disposition")
+        reason = d.get("reason")
+        if disposition == "skip" and isinstance(reason, str) and reason.strip():
+            skipped.append({"id": fid, "file": f.get("file"), "line": f.get("line"),
+                            "title": f.get("title"), "severity": f.get("severity"),
+                            "reason": reason.strip()})
+            disposition_log.append({"id": fid, "title": f.get("title"), "disposition": "skip",
+                                    "reason": reason.strip()})
+            _decision(state, "judgment-skip",
+                      "owner skipped judgment blocker %r — reason: %s"
+                      % (f.get("title") or fid, reason.strip()))
+            continue
+        g = dict(f)
+        if disposition == "fix-with-guidance":
+            g["judgmentDisposition"] = "fix-with-guidance"
+            guidance = d.get("guidance")
+            if isinstance(guidance, str) and guidance.strip():
+                g["guidance"] = guidance.strip()
+            disposition_log.append({"id": fid, "title": f.get("title"),
+                                    "disposition": "fix-with-guidance"})
+        elif disposition == "fix-as-suggested":
+            g["judgmentDisposition"] = "fix-as-suggested"
+            disposition_log.append({"id": fid, "title": f.get("title"),
+                                    "disposition": "fix-as-suggested"})
+        else:
+            # missing / unknown disposition, or a skip with no citable reason → fail closed to fix.
+            g["judgmentDisposition"] = "fix-as-suggested"
+            g["judgmentFailClosed"] = True
+            disposition_log.append({"id": fid, "title": f.get("title"),
+                                    "disposition": "fix-as-suggested", "failClosed": True})
+            _decision(state, "judgment-fail-closed",
+                      "judgment blocker %r had no valid disposition (%r) — folded as "
+                      "fix-as-suggested (a judgment blocker is never silently skipped)"
+                      % (f.get("title") or fid, disposition))
+        fix_batch.append(g)
+    if skipped:
+        state["_skippedBlockers"] = (state.get("_skippedBlockers") or []) + skipped
+        _record_round(state, "skippedBlockers", skipped)
+    _record_round(state, "judgmentDispositions", disposition_log)
+    state.pop("_judgmentFindings", None)
+    state.pop("_judgmentMechanical", None)
+    if fix_batch:
+        state["_fixBatch"] = fix_batch
+        state["step"] = P_FIXER
+        return
+    # Everything skipped and no mechanical blocker: settle. The skipped blockers are owner-accepted
+    # product-choice tradeoffs (cited in the ledger) — converge, naming them on the exit disclosure.
+    _terminal_converged(state, config, full_panel=state.get("fullPanelRan"),
+                        note=_skipped_note(state))
 
 
 def _after_findings_settled(state, config):
@@ -1347,6 +1484,11 @@ def build_receipt(state, session_dir=None):
     if _degraded(state):
         degraded.append("independence: a single live vendor — the fix's auditor is the fixer's "
                         "vendor; independence degraded and named in the certification shape")
+    # The skipped-blocking channel (#507 R2a): an owner-skipped judgment blocker rides the exit
+    # disclosure — a product-choice tradeoff shipped un-fixed, cited by its owner reason.
+    for s in state.get("_skippedBlockers") or []:
+        degraded.append("skipped-blocker: %r (%s:%s) owner-skipped as a product-choice tradeoff — "
+                        "reason: %s" % (s.get("title"), s.get("file"), s.get("line"), s.get("reason")))
     scriptran = _scriptran_summary(session_dir) if session_dir else state.get("_scriptRan") or \
         {"invocations": 0, "byPhase": {}}
     return {
@@ -1448,6 +1590,13 @@ def _run_seam(seams, action, payload, state, config):
         return {"result": seams["verify_runner"](payload.get("command"), state["round"])}
     if action == P_FIXER:
         return seams["fix_step"](payload.get("batch"), state["round"], payload)
+    if action == P_JUDGMENT:
+        gate = io.get("judgment_gate") if isinstance(io, dict) else None
+        if callable(gate):
+            return gate(payload)
+        # No gate wired → fail closed, fix every judgment finding as suggested (never auto-skip).
+        return {"dispositions": [{"id": f.get("id"), "disposition": "fix-as-suggested"}
+                                 for f in (payload.get("findings") or [])]}
     if action == P_STALL:
         menu = io.get("stall_menu") if isinstance(io, dict) else None
         return {"choice": menu(payload) if callable(menu) else "hold"}
