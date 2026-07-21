@@ -9,7 +9,10 @@ layers over one core:
 
   - Layer 1 (`run_loop`): the ported control-flow of `review_panel_shell.js::reviewPanel` with
     every effectful step behind an injectable seam (`reviewer`, `synthesis`, `verifier`,
-    `auditor`, `fix_step`, `verify_runner`, `io`). Same run-SHAPE, not the JS idioms.
+    `auditor`, `fix_step`, `verify_runner`, `changed_subjects`, `io`). Same run-SHAPE, not the JS
+    idioms. `changed_subjects` derives the fix's changed policy subjects from git (the reviewed vs
+    head diff), NEVER the fixer's self-report (#157/#158) — the library default + the CLI path wire
+    the real derivation; the eval harness injects a scripted replay.
   - Layer 2 (`next`/`submit` CLI): the state machine BETWEEN orchestrator dispatches — `next`
     emits the one action to run, `submit` folds its artifact and advances.
 
@@ -30,6 +33,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 
@@ -648,9 +652,13 @@ def _decision(state, kind, detail):
     state["decisions"].append({"round": state["round"], "kind": kind, "detail": detail})
 
 
-def _fold(state, config, phase, artifact):
+def _fold(state, config, phase, artifact, changed_subjects_seam=None):
     """Fold one submitted artifact and advance state. Big switch on phase; each arm delegates the
-    JUDGMENT to a pure decider and only records/sequences here. Returns the mutated state."""
+    JUDGMENT to a pure decider and only records/sequences here. Returns the mutated state.
+
+    `changed_subjects_seam` is threaded to the fixer fold: run_loop passes the injected seam (the
+    eval harness replays the fixture's subjects); the CLI submit path passes None so the fixer fold
+    wires the real git derivation. It is inert for every other phase."""
     artifact = artifact if isinstance(artifact, dict) else {}
     if phase == P_PANEL:
         _fold_panel(state, config, artifact)
@@ -667,7 +675,7 @@ def _fold(state, config, phase, artifact):
     elif phase == P_VERIFY:
         _fold_verify(state, config, artifact)
     elif phase == P_FIXER:
-        _fold_fixer(state, config, artifact)
+        _fold_fixer(state, config, artifact, changed_subjects_seam)
     elif phase == P_STALL:
         _fold_stall(state, config, artifact)
     return state
@@ -878,13 +886,69 @@ def _after_findings_settled(state, config):
 
 # ---- fix + verify legs ----------------------------------------------------------------------
 
-def _fold_fixer(state, config, artifact):
+def _subjects_for_dimension(dimension):
+    """Policy subjects mentioned by a compiled finding's dimension label — a single label
+    ('Security') or a merged one ('Security + Code'). Reuses review_round_policy's mapping so the
+    driver derives subjects the one way the confirmation economics read them (never a second
+    mapping)."""
+    out = set()
+    if not isinstance(dimension, str):
+        return out
+    for token in re.split(r"[^A-Za-z-]+", dimension):
+        subject = review_round_policy._policy_subject(token)
+        if subject:
+            out.add(subject)
+    return out
+
+
+def derive_changed_subjects(reviewed_diff_text, head_diff_text, accumulated_findings):
+    """The REAL #157/#158 derivation: the policy subjects the fix TOUCHED, script-computed from git
+    and NEVER the fixer's self-report. The files whose unified-diff sections differ between the
+    reviewed diff and the post-fix head diff (`delta_surface.changed_files`), mapped to policy
+    subjects through the accumulated compiled findings — a changed file is attributed to a subject
+    when ANY reviewer cited it. Returns a KNOWN list (possibly empty) or None (unknown surface →
+    the caller's existing run-everything rule). Any unreadable / unparseable diff → None."""
+    changed = delta_surface.changed_files(reviewed_diff_text, head_diff_text)
+    if changed is None:
+        return None
+    subjects = set()
+    for f in accumulated_findings or []:
+        if isinstance(f, dict) and f.get("file") in changed:
+            subjects |= _subjects_for_dimension(f.get("dimension"))
+    return sorted(subjects)
+
+
+def _accumulated_findings(state):
+    """The attribution surface the git-derived changed-subjects mapping reads: the UNION of every
+    round's compiled findings (the in-memory record ledger) plus this round's settled findings.
+    Attributing rework through the accumulated history — not only the deciding round — is what lets
+    a confirmation panel's own surfaced findings attribute the post-panel rework files, so the
+    cross-cutting-rework re-arm is not structurally inert."""
+    out = []
+    for rec in state.get("_records") or []:
+        for f in rec.get("findings") or []:
+            if isinstance(f, dict):
+                out.append(f)
+    for f in state.get("findings") or []:
+        if isinstance(f, dict):
+            out.append(f)
+    return out
+
+
+def _fold_fixer(state, config, artifact, changed_subjects_seam=None):
     """Record the fixer's result; the fix-batch COMPOSITION stays orchestrator-side (the artifact),
-    the driver sequences + records. The post-fix head diff + changed subjects ride the artifact so
-    the next delta round can split_fix_surface against git, never the fixer's self-report."""
+    the driver sequences + records. The post-fix head diff rides the artifact (git, per the
+    dispatch-fixer contract) so the next delta round can split_fix_surface against git. The changed
+    policy subjects the #174 confirmation re-arm consumes are SCRIPT-DERIVED here — from the
+    reviewed-vs-head diff through the accumulated findings (#157/#158), NEVER the fixer's
+    self-report. The derivation is an injectable seam symmetrical with reviewer/fixer/verify:
+    run_loop may inject a scripted replay (the eval harness); the library default + the CLI path
+    wire the real git derivation. Unknown/unparseable surface → None → the run-everything rule."""
     state["fixBatch"] = state.get("_fixBatch") or []
     state["headDiff"] = artifact.get("headDiff")
-    state["_changedSubjects"] = artifact.get("changedSubjects")
+    derive = changed_subjects_seam or derive_changed_subjects
+    state["_changedSubjects"] = derive(
+        state.get("reviewedDiff"), state.get("headDiff"), _accumulated_findings(state))
     # Accumulate the fix's coverage decisions so the challenged-coverage breaker can see a decision
     # recorded on a principle a later round re-raises (annotateChallengedCoverage input).
     cds = artifact.get("coverageDecisions")
@@ -1410,7 +1474,7 @@ def run_loop(seams, config=None):
             break
         # handle the gap-sweep re-entry (verifiers → synthesis carries the merge back).
         artifact = _run_seam(seams, action, step["payload"], state, state["config"])
-        _fold(state, state["config"], action, artifact)
+        _fold(state, state["config"], action, artifact, seams.get("changed_subjects"))
         # a delta round routes scoped candidates through verifiers; when that path is armed the
         # synthesis fold must re-settle the delta rather than the round-1 path.
         if state.pop("_settleDeltaAfterSynthesis", False):

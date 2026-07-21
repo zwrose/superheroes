@@ -76,6 +76,19 @@ def parse_hunks(diff_text):
     return files
 
 
+def changed_files(reviewed_diff_text, head_diff_text):
+    """The FILES whose unified-diff sections differ between the reviewed diff and the post-fix head
+    diff — the file-level "what the fix touched" surface, derived from git (#157/#158), never a
+    self-report. Returns a set of paths, or None on ANY unparseable diff header (fail toward the
+    caller's run-everything path). Reuses `parse_hunks`, so a file present on only one side, or one
+    whose hunk set changed, counts as changed; identical sections on both sides do not."""
+    reviewed = parse_hunks(reviewed_diff_text)
+    head = parse_hunks(head_diff_text)
+    if reviewed is None or head is None:
+        return None
+    return {f for f in set(reviewed) | set(head) if reviewed.get(f) != head.get(f)}
+
+
 def fixed_locations(fix_batch, margin=10):
     """{file: [(lo, hi)]} — each finding's line ± margin. Malformed entries (no file / no int
     line) are skipped here; `split_fix_surface` is the one that maps a malformed fix_batch to an

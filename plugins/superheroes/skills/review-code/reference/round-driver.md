@@ -77,7 +77,7 @@ Persist state under `$SESSION_DIR/loop-state.json`. Append every `next`/`submit`
 | `dispatch-audits` | Delta round: one auditor per target in `payload.targets` — **never the fixer's vendor**; single-vendor runs stamp `independence: "degraded"`. Submit `{results: [...]}`. |
 | `dispatch-scoped-finder` | Delta round: scoped scan over `payload.hunks` at `reviewer-deep`. Submit `{findings: [...]}`. |
 | `run-verify` | Run `payload.command` from the working tree (non-interactive, timeout). Submit `{result: "pass" \| "fail"}`. Fail → terminal halt, certification withheld. |
-| `dispatch-fixer` | Dispatch fixer over `payload.batch` (blocking findings the driver selected). Submit `{fixes, headDiff, changedSubjects, escalated?}` — head diff and changed subjects come from git, never the fixer's self-report. |
+| `dispatch-fixer` | Dispatch fixer over `payload.batch` (blocking findings the driver selected). Submit `{fixes, headDiff, escalated?}` — the head diff comes from git, never the fixer's self-report. The changed policy subjects the #174 confirmation re-arm consumes are **derived by the driver itself** from the reviewed-vs-head diff through the accumulated findings (the injectable `changed_subjects` seam — library default + CLI wire the real git derivation, #157/#158); a self-reported `changedSubjects` is ignored on the live path. |
 | `present-stall-menu` | Audit-keyed stall after one invisible self-recovery. Present `payload.choices` (four-choice menu; `accept-the-disclosed-risk` only when `payload.acceptRiskEligible` — gated on a CONFIRMED finding with receipt). Submit `{choice}`. |
 | `terminal` | Stop looping; read `payload.verdict` and `payload.certification`; surface honestly in the End-of-Loop Summary. |
 
@@ -130,7 +130,8 @@ Pinned by `test_round_driver.py` (ported from the retired `test_code_loop_plan.p
 
 ## Port note
 
-Layer 1 (`run_loop`) is the one-entrypoint loop orchestration with injectable seams;
+Layer 1 (`run_loop`) is the one-entrypoint loop orchestration with injectable seams (`reviewer`,
+`synthesis`, `verifier`, `auditor`, `fix_step`, `verify_runner`, `changed_subjects`, `io`);
 Layer 2 (`next`/`submit`) is the state machine between orchestrator dispatches. Parity is locked
 by the goldens in `test_round_driver.py` and the PARITY receipt in `test_retry_budget_parity.py`.
 Treat `round_driver.py` as the contract of record.

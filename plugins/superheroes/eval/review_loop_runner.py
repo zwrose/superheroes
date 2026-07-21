@@ -249,6 +249,11 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
     # Track last panel dim→findings for round-record persistence.
     last_panel = {"dims": {}, "round": None, "kind": "baseline"}
     head_n = {"n": 0}
+    # The changed-subjects seam (#507 finding v2) replays THIS fix's fixture changedSubjects — the
+    # same value fix_step returns — so the driver's git-derivation seam is exercised structurally
+    # while fixture semantics + goldens stay unchanged. fix_step records it here; the driver calls
+    # the seam right after folding the fixer artifact.
+    last_fix = {"changedSubjects": None}
 
     def _head_diff():
         head_n["n"] += 1
@@ -435,6 +440,8 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
         fix = fix_queue.pop(0) if fix_queue else None
         if fix is None:
             fix = {"changedSubjects": [], "coverageDecisions": []}
+        # Record for the changed-subjects seam the driver calls right after folding this artifact.
+        last_fix["changedSubjects"] = list(fix.get("changedSubjects") or [])
         cds = list(fix.get("coverageDecisions") or [])
         ids = [d.get("id") for d in cds if isinstance(d, dict) and d.get("id")]
         fix_results.append({"round": rnd, "coverageDecisionIds": ids})
@@ -458,6 +465,13 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
 
     def verify_runner(command, rnd):
         return "pass"
+
+    def changed_subjects(reviewed_diff_text, head_diff_text, accumulated_findings):
+        # Scripted replay of the just-run fix's fixture changedSubjects — same pattern as the
+        # scripted reviewers. The driver derives these from git on the live path; the harness's
+        # synthetic single-file diffs cannot express the fixtures' explicit subjects, so the seam
+        # replays them (fixture semantics + goldens unchanged, #507 finding v2).
+        return last_fix["changedSubjects"]
 
     # After each full panel fold, persist round records (panel path may certify with no fix).
     _orig_fold_panel = RD._fold_panel
@@ -504,6 +518,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
             "auditor": auditor,
             "fix_step": fix_step,
             "verify_runner": verify_runner,
+            "changed_subjects": changed_subjects,
             "io": {
                 "stall_menu": lambda payload: "hold",
                 "seatMap": {},

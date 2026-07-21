@@ -830,3 +830,90 @@ def test_resume_degraded_confirmation_runs_fresh_panel(tmp_path):
     assert receipt["certificationShape"] == "full-panel-confirmed"
     assert any(r["round"] == 3 for r in receipt["rounds"])
     assert any(d["kind"] == "resume-confirmation" for d in receipt["decisions"])
+
+
+# =============================================================================
+# git-derived changed subjects (#507 finding v2) — the confirmation re-arm's
+# cross-cutting input is SCRIPT-computed from git, never the fixer's self-report
+# =============================================================================
+
+def _file_diff(name, n_lines, idx="1..2"):
+    """A single-file unified diff adding `n_lines` right-side lines (parseable header)."""
+    return ("diff --git a/{f} b/{f}\nindex {i} 100644\n--- a/{f}\n+++ b/{f}\n"
+            "@@ -1 +1,{n} @@\n-old\n".format(f=name, i=idx, n=n_lines)
+            + "".join("+l%d\n" % j for j in range(n_lines)))
+
+
+def test_derive_changed_subjects_crosscutting_three_subjects():
+    """Three files' sections differ between the reviewed diff and the head diff; the accumulated
+    findings attribute them to three distinct policy subjects → cross-cutting (re-arm)."""
+    reviewed = _file_diff("a.py", 2) + _file_diff("b.py", 2) + _file_diff("c.py", 2)
+    head = _file_diff("a.py", 3) + _file_diff("b.py", 3) + _file_diff("c.py", 3)
+    findings = [
+        {"file": "a.py", "dimension": "Security"},
+        {"file": "b.py", "dimension": "Code"},
+        {"file": "c.py", "dimension": "Test"},
+    ]
+    subjects = RD.derive_changed_subjects(reviewed, head, findings)
+    assert subjects == ["Code", "Security", "Test"]
+    assert RD.review_round_policy.is_cross_cutting(subjects) is True
+
+
+def test_derive_changed_subjects_narrow_single_subject_not_crosscutting():
+    """One file changed, one subject → below the cross-cutting threshold (no re-arm)."""
+    reviewed = _file_diff("a.py", 2)
+    head = _file_diff("a.py", 3)
+    findings = [{"file": "a.py", "dimension": "Code"}]
+    subjects = RD.derive_changed_subjects(reviewed, head, findings)
+    assert subjects == ["Code"]
+    assert RD.review_round_policy.is_cross_cutting(subjects) is False
+
+
+def test_derive_changed_subjects_unparseable_is_unknown_runs_everything():
+    """A quoted-path / unparseable diff header → None (unknown surface). Unknown fails toward the
+    run-everything rule: is_cross_cutting treats it as cross-cutting (one more confirmation)."""
+    garbage = 'diff --git "a/x y.py" "b/x y.py"\n@@ -1 +1 @@\n-a\n+b\n'
+    subjects = RD.derive_changed_subjects(garbage, _file_diff("a.py", 3),
+                                          [{"file": "a.py", "dimension": "Code"}])
+    assert subjects is None
+    assert RD.review_round_policy.is_cross_cutting(subjects) is True
+
+
+def test_fold_fixer_derives_subjects_from_git_not_self_report():
+    """The fixer LIES (self-reports one narrow subject); the driver derives the real cross-cutting
+    set from the reviewed-vs-head diff through the accumulated findings, ignoring the self-report."""
+    state = RD.new_state(_cfg())
+    state["reviewedDiff"] = (_file_diff("a.py", 2) + _file_diff("b.py", 2)
+                             + _file_diff("c.py", 2))
+    state["findings"] = [
+        {"file": "a.py", "dimension": "Security"},
+        {"file": "b.py", "dimension": "Code"},
+        {"file": "c.py", "dimension": "Test"},
+    ]
+    head = _file_diff("a.py", 3) + _file_diff("b.py", 3) + _file_diff("c.py", 3)
+    artifact = {"fixes": [], "headDiff": head, "changedSubjects": ["Code"]}
+    RD._fold_fixer(state, state["config"], artifact)
+    assert state["_changedSubjects"] == ["Code", "Security", "Test"]
+
+
+def test_run_loop_uses_injected_changed_subjects_seam(tmp_path):
+    """run_loop routes the derivation through the injected `changed_subjects` seam (the eval-harness
+    pattern). A seam that returns a cross-cutting set re-arms a confirmation even though the fixer's
+    self-report and the synthetic diff are narrow — proving the self-report is never consulted."""
+    calls = []
+
+    def changed_subjects(reviewed, head, accumulated):
+        calls.append((reviewed, head, accumulated))
+        return ["Security", "Code", "Test"]
+
+    def reviewer(dim, tier, rnd, ctx):
+        if rnd == 1 and dim == "code-reviewer":
+            return {"findings": [{"title": "bug", "severity": "Important",
+                                  "file": "f.py", "line": 1}]}
+        return []
+
+    seams = _seams(reviewer=reviewer)
+    seams["changed_subjects"] = changed_subjects
+    receipt = RD.run_loop(seams, _cfg(maxRounds=20))
+    assert calls  # the seam was invoked (the self-report was never consulted)
+    assert any(d["kind"] == "confirmation-rearm" for d in receipt["decisions"])
