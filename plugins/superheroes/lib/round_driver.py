@@ -46,7 +46,7 @@ import review_loop_plan  # noqa: E402
 import review_memory  # noqa: E402
 import review_round_policy  # noqa: E402
 import verification  # noqa: E402
-from finding_identity import finding_identity  # noqa: E402
+from finding_identity import finding_identity, normalize_title  # noqa: E402
 
 # --- constants (the DIMENSIONS/AGENT_SUFFIX home, moved off the retired code_loop_plan) --------
 # The code leg is the FIVE shared reviewers. `grounding-reviewer` is spec-leg-only (doc
@@ -192,12 +192,44 @@ def _nit_cap(findings):
     return kept
 
 
+def _compile_by_anchor(findings):
+    """Dedupe by the binding review workflow's per-LOCATION anchor — (file, line, normalized-title)
+    — NOT panel_tally's line-less `file::normalized-title` identity. The line was the DROPPED key:
+    two distinct findings that share a title at DIFFERENT lines are distinct blockers and BOTH must
+    survive (else a blocker at a second line is silently collapsed away). For the SAME anchor,
+    higher severity wins, dimensions are unioned, and tradeoff is OR-ed; FR-4 classification is
+    stamped from the surviving tradeoff state. All inputs are already cited (file+line present)."""
+    by_anchor = {}
+    order = []
+    for f in findings:
+        key = (f.get("file"), f.get("line"), normalize_title(str(f.get("title") or "")))
+        if key in by_anchor:
+            ex = by_anchor[key]
+            dims = panel_tally._merge_dims(ex, f)
+            if panel_tally.SEV_RANK.get(f.get("severity"), 99) \
+                    < panel_tally.SEV_RANK.get(ex.get("severity"), 99):
+                merged = dict(f)
+            else:
+                merged = dict(ex)
+            merged["dimension"] = dims
+            merged["tradeoff"] = bool(ex.get("tradeoff") or f.get("tradeoff"))
+            by_anchor[key] = merged
+        else:
+            by_anchor[key] = dict(f)
+            order.append(key)
+    out = [by_anchor[k] for k in order]
+    for f in out:  # FR-4: deterministic mechanical/judgment classification (no action taken)
+        f["classification"] = "judgment" if f.get("tradeoff") else "mechanical"
+    return out
+
+
 def mechanical_compile(findings, diff_text=None):
     """Port of SKILL §4 steps 1-4 + 6, deterministic and fail-closed:
       1. citation check — drop file/line-less findings;
       2. diff-scope check — drop findings whose (file,line) is not an anchor of the round diff;
-      4. dedupe by identity (file::normalized-title) via panel_tally.compile_findings (higher
-         severity wins, dimensions unioned — bit-compatible, panel_tally untouched);
+      4. dedupe by the per-LOCATION anchor (file, line, normalized-title) — higher severity wins,
+         dimensions unioned, tradeoff OR-ed. NOT the line-less file::title identity, which collapses
+         two distinct-line findings that share a title (a dropped blocker);
       6. nit cap.
     Returns (compiled, drops) where each drop names WHY (never silently dropped)."""
     if not isinstance(findings, list):
@@ -216,7 +248,7 @@ def mechanical_compile(findings, diff_text=None):
                           "title": f.get("title"), "reason": "outside the round diff scope"})
             continue
         kept.append(f)
-    compiled = panel_tally.compile_findings(kept)
+    compiled = _compile_by_anchor(kept)
     compiled = _nit_cap(compiled)
     return compiled, drops
 
@@ -330,6 +362,9 @@ def _default_config(overrides=None):
         # challenged-coverage breaker reads. Absent → a fresh round-1 run (the library-test shape).
         "recordsPath": None,
         "coveragePath": None,
+        # PR-mode prior review comments (a list) for the author-justification post-filter. Wired from
+        # the CLI's `--prior-comments` (#507 v7); None → the filter never fires.
+        "priorComments": None,
     }
     if isinstance(overrides, dict):
         cfg.update({k: v for k, v in overrides.items() if v is not None})
@@ -599,6 +634,8 @@ def _advance(state, config):
     elif step == P_STALL:
         payload = {"choices": list(state.get("_stallChoices") or STALL_CHOICES),
                    "acceptRiskEligible": bool(state.get("_acceptRiskEligible"))}
+        if state.get("_judgmentFindings"):
+            payload["judgmentFindings"] = list(state["_judgmentFindings"])
     return {"action": step, "round": rnd, "phase": step, "payload": payload}
 
 
@@ -647,18 +684,10 @@ def _fold_panel(state, config, artifact):
     seat_map = artifact.get("seatMap") if isinstance(artifact.get("seatMap"), dict) else {}
     if seat_map:
         state["seatMap"].update(seat_map)
-    # A full reviewer-deep panel that runs in a DELTA round (round ≥ 2) is a qualifying
-    # confirmation panel: it consumes one of the two-panel budget (the #174 bar — a qualifying panel
-    # is a fresh full deep round). Its surfaced-since tracker is RESET here and then re-seeded from
-    # the panel's OWN blocking findings below, so a NEW Critical surfaced BY a confirmation panel
-    # re-arms one more confirmation (up to the cap) instead of certifying off a scoped verify (#174
-    # requirement 2 — the confirmation panel is itself a surfacing site, not only the delta scan).
-    if state["round"] >= 2:
-        state["confirmations"] = state.get("confirmations", 0) + 1
-        state["surfacedSinceLastPanel"] = []
     raw = []
     seat_status = {}
     unverified = []
+    missing_dims = []
     for dim in _panel_dimensions(config):
         seat = seats.get(dim) if isinstance(seats, dict) else None
         findings = []
@@ -669,6 +698,13 @@ def _fold_panel(state, config, artifact):
                 status = "missing"
         elif isinstance(seat, list):
             findings = seat
+        else:
+            # A configured dimension with NO dict/list seat did not run: an omitted / null / mangled
+            # seat is a silent coverage gap. Fail closed — status `missing`, never a clean `run`, so
+            # it cannot count toward a full-panel certification (silence never certifies).
+            status = "missing"
+        if status == "missing":
+            missing_dims.append(dim)
         seat_status[dim] = status
         for f in findings:
             if not isinstance(f, dict):
@@ -680,11 +716,16 @@ def _fold_panel(state, config, artifact):
                 unverified.append({"dimension": dim, "title": g.get("title"),
                                    "file": g.get("file"), "line": g.get("line")})
             raw.append(g)
+    incomplete = bool(missing_dims)
     compiled, drops = mechanical_compile(raw, state.get("reviewedDiff"))
-    # Re-seed the surfaced-since tracker from THIS confirmation panel's blocking findings so a
-    # Critical it surfaces re-arms another confirmation (the delta round after the panel's fix reads
-    # this at its converged-candidate step). A clean panel leaves it empty → certify.
-    if state["round"] >= 2:
+    # A full reviewer-deep panel that runs COMPLETE in a DELTA round (round ≥ 2) is a qualifying
+    # confirmation panel: it consumes one of the two-panel budget (the #174 bar). An INCOMPLETE panel
+    # (a missing seat) does NOT qualify — it neither counts a confirmation nor resets/reseeds the
+    # surfaced-since tracker, so the owed confirmation stays owed rather than being discharged on a
+    # coverage gap. A complete panel resets the tracker and reseeds it from its OWN blocking findings
+    # so a Critical it surfaces re-arms another confirmation (#174 requirement 2).
+    if state["round"] >= 2 and not incomplete:
+        state["confirmations"] = state.get("confirmations", 0) + 1
         state["surfacedSinceLastPanel"] = [
             "Critical" if circuit_breaker.is_critical(f.get("severity")) else "Important"
             for f in _blocking(compiled)]
@@ -694,7 +735,14 @@ def _fold_panel(state, config, artifact):
         _record_round(state, "unverified", unverified)
         _decision(state, "receipt-missing-seat",
                   "%d finding(s) carried unverified from receipt-missing seat(s)" % len(unverified))
-    state["fullPanelRan"] = True
+    if incomplete:
+        _record_round(state, "missingSeats", list(missing_dims))
+        _decision(state, "panel-seat-missing",
+                  "panel incomplete — %d configured lens(es) did not run (%s); certification cannot "
+                  "be full-panel-confirmed" % (len(missing_dims), ", ".join(missing_dims)))
+    # Only a COMPLETE panel can anchor a full-panel-confirmed certification. A missing seat leaves
+    # fullPanelRan False so a clean finish downgrades to audited-chain and names the gap.
+    state["fullPanelRan"] = not incomplete
     # In-memory review record for the challenged-coverage / recurrence breaker: a round-1 panel is
     # `baseline`, a re-armed / resumed full panel (round ≥ 2) is a `confirmation` (its per-dim run
     # map lets _confirmation_qualifies judge whether it can anchor certification).
@@ -703,11 +751,14 @@ def _fold_panel(state, config, artifact):
     for dim in _panel_dimensions(config):
         seat = seats.get(dim) if isinstance(seats, dict) else None
         s_findings = []
-        confidence = "high"
+        # A missing seat defaults to LOW confidence, never high — an absent lens must never lend a
+        # high-confidence run to `_confirmation_qualifies`.
+        confidence = "low" if seat_status.get(dim) == "missing" else "high"
         tier = DEEP
         if isinstance(seat, dict):
             s_findings = seat.get("findings") or []
-            confidence = seat.get("confidence") or "high"
+            if seat_status.get(dim) != "missing":
+                confidence = seat.get("confidence") or "high"
             tier = seat.get("tier") or DEEP
         elif isinstance(seat, list):
             s_findings = seat
@@ -772,17 +823,53 @@ def _fold_gapsweep(state, config, artifact):
     _after_findings_settled(state, config)
 
 
+def _route_judgment_blockers(state, blocking):
+    """Triage before composing an autonomous fix batch. A blocking finding carrying `tradeoff: true`
+    is a PRODUCT-CHOICE / judgment call — the review-code contract routes it to the OWNER, never to
+    the fixer for autonomous change. When any such blocker survives, present the disposition (the
+    stall menu) with the judgment findings flagged, and DO NOT compose a `_fixBatch`. Returns True
+    when it took over routing (the caller must return). Mechanical-only blockers proceed to the
+    fixer as before."""
+    judgment = [f for f in blocking if isinstance(f, dict) and f.get("tradeoff")]
+    if not judgment:
+        return False
+    accept_eligible = _accept_risk_eligible(state)
+    state["_stallChoices"] = list(STALL_CHOICES) if accept_eligible else \
+        [c for c in STALL_CHOICES if c != "accept-the-disclosed-risk"]
+    state["_acceptRiskEligible"] = accept_eligible
+    state["_judgmentFindings"] = [
+        {"id": finding_identity(f), "file": f.get("file"), "line": f.get("line"),
+         "title": f.get("title"), "severity": f.get("severity"), "classification": "judgment"}
+        for f in judgment]
+    _record_round(state, "judgmentBlockers", state["_judgmentFindings"])
+    _decision(state, "judgment-triage",
+              "%d tradeoff/product-choice blocker(s) routed to owner judgment — never auto-fixed: %s"
+              % (len(judgment), "; ".join(f.get("title") or "?" for f in judgment)))
+    state["step"] = P_STALL
+    return True
+
+
 def _after_findings_settled(state, config):
     """After the round's findings are verified + merged + justification-filtered: route to the fix
-    leg when there is a blocking finding, else to the terminal decision (round 1 clean = certify)."""
-    # merge any gap-sweep carry back in.
+    leg when there is a blocking finding, else to the terminal decision (round 1 clean = certify).
+
+    ONE definition (no post-def override): a delta round routes its scoped/gap candidates through
+    verify+synthesis, so when the delta settle is armed it must re-settle the delta (audit breaker +
+    #174 confirmation re-arm) rather than the round-1 fix/terminal path. Either way the gap/verify
+    carry is merged back first."""
+    # merge any gap-sweep / verify carry back in.
     if state.get("_verifiedCarry") is not None:
         carry = state.pop("_verifiedCarry")
         state["findings"] = (carry or []) + (state.get("findings") or [])
         state.pop("_gapMerge", None)
+    if state.get("_settleDelta"):
+        _settle_delta(state, config)
+        return
     blocking = _blocking(state.get("findings") or [])
     _record_round(state, "blockingCount", len(blocking))
     if blocking:
+        if _route_judgment_blockers(state, blocking):
+            return
         state["_fixBatch"] = [dict(f) for f in blocking]
         state["step"] = P_FIXER
     else:
@@ -809,15 +896,33 @@ def _fold_fixer(state, config, artifact):
     state["step"] = P_VERIFY
 
 
+_VERIFY_SKIP = ("skipped", "none", "unverified")
+
+
 def _fold_verify(state, config, artifact):
-    """Fold the verify result. A fail halts (verify-gate fail = halt as today). A pass advances to
-    the next round — a DELTA round (the new normal)."""
+    """Fold the verify result. FAIL-CLOSED (#507 v10): advance ONLY on an explicit `pass` or an
+    explicit unverified skip (`skipped`/`none`/`unverified` — a profile with no verify command). A
+    `fail`, a `timeout`, a missing/None result, or any unrecognized value HALTS with an honest
+    reason that names the class — never advances into a delta round that could later certify."""
     result = artifact.get("result")
     _record_round(state, "verifyResult", result)
     if result == "fail":
         state["terminal"] = "halted"
         state["certification"] = {"shape": None, "reason": "verify gate failed"}
         _decision(state, "verify-fail", "verify gate failed — halt, certification withheld")
+        state["step"] = P_TERMINAL
+        return
+    if result in _VERIFY_SKIP:
+        _decision(state, "verify-skipped",
+                  "verify gate skipped (%s) — advancing unverified (no verify command)" % result)
+    elif result != "pass":
+        # timeout / missing / unknown → the gate did NOT pass; fail closed.
+        state["terminal"] = "halted"
+        state["certification"] = {
+            "shape": None,
+            "reason": "verify gate did not pass (result %r) — halt, certification withheld" % (result,)}
+        _decision(state, "verify-unresolved",
+                  "verify result %r is not pass/skip — fail closed, certification withheld" % (result,))
         state["step"] = P_TERMINAL
         return
     # advance to the next (delta) round. The diff the just-finished round's panel/audit saw is the
@@ -868,6 +973,12 @@ def _audit_targets(state, config, audit_targets_map):
             "id": finding_identity(f),
             "file": f.get("file"), "line": f.get("line"), "title": f.get("title"),
             "severity": f.get("severity"),
+            # Carry the recurrence class keys so the audit-stall breaker's alias-tolerant match
+            # (circuit_breaker._audit_outcome_aliases) sees them: a retitled-but-same-class finding
+            # must still stall across consecutive not-discharged rounds (#507 v0).
+            "classKey": f.get("classKey") or review_memory.class_key(f),
+            "dimension": f.get("dimension"),
+            "taxonomy": f.get("taxonomy"),
             "fixerVendor": fixer_vendor,
             "auditorVendor": auditor_vendor,
             "independence": independence,
@@ -882,10 +993,18 @@ def _fold_audits(state, config, artifact):
     targets = state.get("_auditTargets") or []
     outcome = audits.apply_audit_results(targets, results)
     state["_auditOutcome"] = outcome
-    # the audit round for check_audit_breaker: identity + effective ruling.
+    # the audit round for check_audit_breaker: identity + effective ruling PLUS the recurrence class
+    # keys the alias-tolerant stall match consumes (#507 v0) — carried straight off each audit entry
+    # (audits.apply_audit_results threads them from the target).
     audit_round = {"round": state["round"], "outcomes": [
-        {"identity": a.get("id"), "ruling": a.get("ruling")} for a in outcome["audits"]]}
+        {"identity": a.get("id"), "ruling": a.get("ruling"),
+         "classKey": a.get("classKey"), "dimension": a.get("dimension"),
+         "taxonomy": a.get("taxonomy")} for a in outcome["audits"]]}
     state["auditRounds"].append(audit_round)
+    for pid in outcome.get("unauthenticated", []):
+        _decision(state, "audit-provenance-fail",
+                  "audit result for %s lacked the selected independent auditor's echo — "
+                  "not-discharged" % pid)
     _record_round(state, "audits", outcome["audits"])
     _record_round(state, "auditIndependence",
                   targets[0]["independence"] if targets else "n/a")
@@ -960,19 +1079,35 @@ def _settle_delta(state, config):
         if crit:
             _park_capped(state, breaker.get("detail"))
             return
+        # #507 v12: at the audit-round cap, ONLY a latest round with zero not-discharged outcomes and
+        # no open blocking finding may certify. An Important still not-discharged (or a new blocker)
+        # parks — never certify clean over an unresolved blocker. Owner-accepted residual risk must
+        # route through the stall menu's accept-the-disclosed-risk, not this auto-certify.
+        if outcome.get("notDischarged") or new_blocking:
+            _park_capped_open(state, (breaker.get("detail") or "reached the audit-round cap")
+                              + " — blocking finding(s) remain not-discharged; certification withheld")
+            return
         _terminal_converged(state, config, full_panel=False, note=breaker.get("detail"))
         return
 
     # a scoped-finder / new-issue blocking finding OR a not-discharged audit means the round still
-    # has work — fix it. A not-discharged fix batch is rebuilt from the audit TARGETS (which carry
-    # file/line/severity) so the next round's split_fix_surface can re-derive its surface.
+    # has work — fix it. #507 v4: the next fix batch is the UNION of the unresolved audit targets and
+    # the new blocking findings (deduped by finding identity), so a not-discharged target is NEVER
+    # dropped when a new blocker arrives in the same round. Targets carry file/line/severity so the
+    # next round's split_fix_surface can re-derive its surface.
     if bool(outcome.get("notDischarged")) or bool(new_blocking):
-        if new_blocking:
-            state["_fixBatch"] = [dict(f) for f in new_blocking]
-        else:
-            nd = set(outcome.get("notDischarged", []))
-            state["_fixBatch"] = [dict(t) for t in (state.get("_auditTargets") or [])
-                                  if t.get("id") in nd]
+        nd = set(outcome.get("notDischarged", []))
+        nd_targets = [dict(t) for t in (state.get("_auditTargets") or []) if t.get("id") in nd]
+        batch = [dict(f) for f in new_blocking]
+        seen = {finding_identity(f) for f in batch}
+        for t in nd_targets:
+            tid = t.get("id")
+            if tid is not None and tid not in seen:
+                batch.append(t)
+                seen.add(tid)
+        if _route_judgment_blockers(state, batch):
+            return
+        state["_fixBatch"] = batch
         state["step"] = P_FIXER
         return
 
@@ -1011,6 +1146,16 @@ def _park_capped(state, detail):
     state["terminal"] = "capped-with-open-critical"
     state["certification"] = {"shape": None, "reason": detail or "capped with an open Critical — park"}
     _decision(state, "capped-with-open-critical", detail)
+    state["step"] = P_TERMINAL
+
+
+def _park_capped_open(state, detail):
+    """The audit-round cap reached with a non-Critical blocker still not-discharged: park, withhold
+    certification — never certify clean over an unresolved Important (#507 v12)."""
+    state["terminal"] = "capped-with-open-blocker"
+    state["certification"] = {"shape": None,
+                              "reason": detail or "capped with open blocking findings — park"}
+    _decision(state, "capped-with-open-blocker", detail)
     state["step"] = P_TERMINAL
 
 
@@ -1277,23 +1422,6 @@ def run_loop(seams, config=None):
     return build_receipt(state)
 
 
-# The synthesis fold, on a delta round, must re-settle the delta (breaker + confirmation) rather
-# than the round-1 fix/terminal path. Wire that by overriding _after_findings_settled routing when
-# a delta settle is armed.
-_orig_after = _after_findings_settled
-
-
-def _after_findings_settled(state, config):  # noqa: F811 — intentional post-def override
-    if state.get("_settleDelta"):
-        # merge gap/verify carry then settle the delta round.
-        if state.get("_verifiedCarry") is not None:
-            carry = state.pop("_verifiedCarry")
-            state["findings"] = (carry or []) + (state.get("findings") or [])
-        _settle_delta(state, config)
-        return
-    _orig_after(state, config)
-
-
 # =============================================================================================
 # Layer 2 — the stepwise CLI (next / submit)
 # =============================================================================================
@@ -1336,7 +1464,9 @@ def cmd_next(session_dir, config_overrides=None):
                                   "round": pending["round"], "attempt": attempt,
                                   "outcome": "emitted"})
     if step["action"] == P_TERMINAL:
-        _write_receipt(session_dir, state)
+        fail = _finalize_receipt(session_dir, state)
+        if fail:
+            return {"ok": False, "reason": fail}
     return _next_response(pending, state_hash(state))
 
 
@@ -1388,8 +1518,17 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact):
                                       "round": pending.get("round"), "attempt": attempt,
                                       "outcome": "echo-mismatch"})
         return {"ok": False, "reason": "phase/attempt echo does not match the pending step"}
+    # The state-hash echo is the anti-stale/fork fence — REQUIRED (#507 v13). A first-time fold with
+    # no hash is refused (a missing hash must never fold fail-open); exact replays are already
+    # returned as duplicates above, before this point.
+    if state_hash_arg is None:
+        _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                      "round": pending.get("round"), "attempt": attempt,
+                                      "outcome": "missing-hash"})
+        return {"ok": False, "reason": "state-hash is required — refusing a fold without the "
+                                       "expected hash echo (the anti-stale/fork fence)"}
     current_hash = state_hash(state)
-    if state_hash_arg is not None and state_hash_arg != current_hash:
+    if state_hash_arg != current_hash:
         _journal_append(session_dir, {"cmd": "submit", "phase": phase,
                                       "round": pending.get("round"), "attempt": attempt,
                                       "outcome": "hash-mismatch"})
@@ -1405,19 +1544,47 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact):
     _journal_append(session_dir, {"cmd": "submit", "phase": phase, "round": round_no,
                                   "attempt": attempt, "outcome": "accepted"})
     if state.get("terminal"):
-        _write_receipt(session_dir, state)
+        fail = _finalize_receipt(session_dir, state)
+        if fail:
+            return {"ok": False, "reason": fail}
     return {"ok": True, "round": round_no, "phase": phase, "nextStep": state.get("step")}
 
 
 def _write_receipt(session_dir, state):
+    """Write the terminal receipt atomically. OSError PROPAGATES — a receipt-write failure is itself
+    a receipt defect the CLI must surface (see _finalize_receipt), never a silent swallow (#507
+    v14)."""
     receipt = build_receipt(state, session_dir)
     path = os.path.join(session_dir, RECEIPT_FILE)
-    try:
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
-    except OSError:
-        pass
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+    os.replace(tmp, path)
     return receipt
+
+
+def _finalize_receipt(session_dir, state):
+    """At a terminal, write + read back + validate the on-disk receipt. A write failure, an
+    unreadable readback, an invalid shape, or an EMPTY scriptRan (the journal — the driver's `ran`
+    evidence — did not persist) is a RECEIPT DEFECT: return a reason so the CLI fails closed (the
+    orchestrator must treat it as a park), never certifying on a missing/short receipt (#507 v14).
+    Returns None on success."""
+    try:
+        _write_receipt(session_dir, state)
+    except OSError as exc:
+        return "terminal receipt write failed (%s) — cannot certify; treat as park" % exc
+    try:
+        with open(os.path.join(session_dir, RECEIPT_FILE), encoding="utf-8") as fh:
+            on_disk = json.load(fh)
+    except (OSError, ValueError) as exc:
+        return "terminal receipt unreadable after write (%s) — cannot certify; treat as park" % exc
+    ok, why = validate_receipt(on_disk)
+    if not ok:
+        return "terminal receipt invalid (%s) — cannot certify; treat as park" % why
+    if not (on_disk.get("scriptRan") or {}).get("invocations"):
+        return ("terminal receipt scriptRan is empty — the journal (the driver's ran evidence) did "
+                "not persist; cannot certify; treat as park")
+    return None
 
 
 def main(argv=None):
@@ -1431,6 +1598,9 @@ def main(argv=None):
     pn.add_argument("--verify-command", default=None)
     pn.add_argument("--max-rounds", type=int, default=None)
     pn.add_argument("--diff-path", default=None, help="round-1 reviewed diff (fresh state only)")
+    pn.add_argument("--prior-comments", default=None,
+                    help="PR-mode prior review comments JSON (a list) for the author-justification "
+                         "post-filter (fresh state only)")
 
     ps = sub.add_parser("submit")
     ps.add_argument("--session-dir", required=True)
@@ -1458,6 +1628,18 @@ def main(argv=None):
                 with open(args.diff_path, encoding="utf-8") as fh:
                     overrides["diff"] = fh.read()
             except OSError:
+                pass
+        if args.prior_comments:
+            # Load + validate the PR-mode prior comments into `priorComments` so the
+            # author-justification post-filter is actually reachable (#507 v7). A missing / unreadable
+            # / non-list file leaves priorComments unset (the filter simply does not fire) — never a
+            # crash and never a silent drop.
+            try:
+                with open(args.prior_comments, encoding="utf-8") as fh:
+                    loaded = json.load(fh)
+                if isinstance(loaded, list):
+                    overrides["priorComments"] = loaded
+            except (OSError, ValueError):
                 pass
         out = cmd_next(args.session_dir, overrides or None)
     else:

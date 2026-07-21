@@ -380,10 +380,11 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
 
     def auditor(targets, rnd):
         # Default: discharge — #507 scoped certification path. Fixtures that need a
-        # not-discharged stall rely on scoped-finder re-raising blocking findings.
+        # not-discharged stall rely on scoped-finder re-raising blocking findings. Echo the
+        # selected independent auditor vendor so the discharge clears the provenance gate.
         return [
             {"id": t["id"], "ruling": "discharged", "reason": "fixture discharge",
-             "evidence": "fixture"}
+             "evidence": "fixture", "auditorVendor": t.get("auditorVendor")}
             for t in (targets or [])
         ]
 

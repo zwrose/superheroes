@@ -43,9 +43,11 @@ def apply_audit_results(audited, results):
     `results`  — audit-result dicts {id, ruling, reason, evidence?, newIssues?}.
 
     Returns {audits, discharged, notDischarged, newIssues, unaudited, ambiguous, malformed,
-    unmatched}. Each `audits` entry carries the EFFECTIVE (post-fail-closed) ruling. The
-    disclosure lists (unaudited/ambiguous/malformed) are subsets of notDischarged that name WHY
-    the finding could not be certified discharged; `unmatched` names results that hit no finding.
+    unmatched, unauthenticated}. Each `audits` entry carries the EFFECTIVE (post-fail-closed)
+    ruling. The disclosure lists (unaudited/ambiguous/malformed/unauthenticated) are subsets of
+    notDischarged that name WHY the finding could not be certified discharged; `unmatched` names
+    results that hit no finding. `unauthenticated` names clearing rulings that did not echo the
+    target's selected independent auditor vendor (trust-boundary failure).
     """
     # Build the id→result map, detecting duplicate ids. A finding id carried by MORE THAN ONE
     # result is ambiguous — honor none of them so a wrong `discharged` cannot silently win and
@@ -72,6 +74,7 @@ def apply_audit_results(audited, results):
     discharged, not_discharged = [], []
     new_issues = []
     unaudited, malformed = [], []
+    unauthenticated = []
     matched_ids = set()
 
     for f in audited:
@@ -84,7 +87,14 @@ def apply_audit_results(audited, results):
         if r is not None and fid is not None:
             matched_ids.add(fid)
 
-        base = {"id": fid, "file": f.get("file"), "title": f.get("title")}
+        # The target names the SELECTED independent auditor vendor (round_driver._audit_targets). A
+        # clearing ruling that does not echo it cannot be trusted (it may come from the fixer or a
+        # misrouted worker) — fail closed. `base` also carries the recurrence class keys so the
+        # audit-stall breaker's alias-tolerant match sees a retitled-but-same-class stall (#507 v0).
+        expected_auditor = f.get("auditorVendor")
+        base = {"id": fid, "file": f.get("file"), "title": f.get("title"),
+                "classKey": f.get("classKey"), "dimension": f.get("dimension"),
+                "taxonomy": f.get("taxonomy")}
 
         # No matching result (silence) → fail-closed not-discharged, disclosed as unaudited.
         # An ambiguous id is IN seen_ids, so it never counts as silent — it is disclosed via
@@ -107,6 +117,24 @@ def apply_audit_results(audited, results):
         reason = r.get("reason")
         has_reason = isinstance(reason, str) and bool(reason.strip())
         evidence = r.get("evidence")
+
+        # Provenance (trust-boundary): a ruling that CLEARS the finding must be echoed by the
+        # selected independent auditor. A missing or mismatched executor vendor → not-discharged +
+        # disclosed as `unauthenticated`; the validated auditor identity rides the audit entry.
+        if expected_auditor and ruling in ("discharged", "discharged-but-new-issue"):
+            executor = r.get("auditorVendor")
+            if not (isinstance(executor, str) and executor == expected_auditor):
+                if fid is not None:
+                    unauthenticated.append(fid)
+                    not_discharged.append(fid)
+                base.update(
+                    ruling="not-discharged",
+                    reason=("audit result did not come from the selected independent auditor "
+                            "(expected %r, got %r) — treated as not-discharged"
+                            % (expected_auditor, executor)))
+                audits.append(base)
+                continue
+            base["auditor"] = executor
 
         if ruling == "discharged":
             if has_reason:
@@ -177,4 +205,5 @@ def apply_audit_results(audited, results):
         "ambiguous": sorted(ambiguous_ids),
         "malformed": malformed,
         "unmatched": unmatched,
+        "unauthenticated": unauthenticated,
     }

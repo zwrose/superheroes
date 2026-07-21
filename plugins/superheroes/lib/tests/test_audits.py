@@ -161,7 +161,8 @@ def test_never_raises_on_junk_input():
     ):
         out = apply_audit_results(audited, results)
         assert set(out) == {"audits", "discharged", "notDischarged", "newIssues",
-                            "unaudited", "ambiguous", "malformed", "unmatched"}
+                            "unaudited", "ambiguous", "malformed", "unmatched",
+                            "unauthenticated"}
 
 
 def test_idless_finding_is_kept_not_discharged():

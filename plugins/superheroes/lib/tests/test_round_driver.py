@@ -68,8 +68,10 @@ def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=
         return None
 
     def default_auditor(targets, rnd):
+        # Echo the selected independent auditor vendor so the discharge passes the provenance gate.
         return [{"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
-                 "evidence": "tests pass"} for t in (targets or [])]
+                 "evidence": "tests pass", "auditorVendor": t.get("auditorVendor")}
+                for t in (targets or [])]
 
     def default_fix(batch, rnd, payload):
         return {"fixes": [], "headDiff": HEAD, "changedSubjects": ["Code"]}
@@ -131,6 +133,15 @@ def test_submit_hash_mismatch_rejected(tmp_path):
     n = _first_next(d, _cfg())
     out = RD.cmd_submit(d, n["phase"], n["attempt"], "deadbeef", {"seats": {}})
     assert out["ok"] is False and "hash" in out["reason"]
+
+
+def test_submit_without_state_hash_rejected(tmp_path):
+    """#507 v13: the state-hash echo is REQUIRED — a first-time fold with no hash is refused (never
+    fold fail-open on an absent hash)."""
+    d = str(tmp_path)
+    n = _first_next(d, _cfg())
+    out = RD.cmd_submit(d, n["phase"], n["attempt"], None, {"seats": {}})
+    assert out["ok"] is False and "state-hash" in out["reason"]
 
 
 def test_submit_duplicate_is_idempotent(tmp_path):
@@ -205,7 +216,8 @@ def _responder(round1_findings=None, scoped=None, audit="discharged", verify="pa
         if phase == RD.P_GAPSWEEP:
             return {"findings": []}
         if phase == RD.P_AUDITS:
-            return {"results": [{"id": t["id"], "ruling": audit, "reason": "r", "evidence": "e"}
+            return {"results": [{"id": t["id"], "ruling": audit, "reason": "r", "evidence": "e",
+                                 "auditorVendor": t.get("auditorVendor")}
                                 for t in payload.get("targets", [])]}
         if phase == RD.P_SCOPED:
             if scoped and not scoped_state["fired"]:
@@ -360,6 +372,24 @@ def test_accept_the_risk_gated_on_confirmed(tmp_path):
     assert "accept-the-disclosed-risk" not in state2["_stallChoices"]
 
 
+def test_eligible_owner_acceptance_converges_end_to_end(tmp_path):
+    """#507 v9: exercise the eligible owner-acceptance stall path to its terminal — an eligible
+    CONFIRMED-with-receipt stall, the owner submits `accept-the-disclosed-risk`, and the run
+    converges (terminal, certification note records the accepted disclosed risk). Guards against a
+    mutation that makes an eligible acceptance hold/park instead of converge."""
+    state = RD.new_state(_cfg())
+    state["findings"] = [{"id": "v0", "verdict": "CONFIRMED", "evidence": "ran"}]
+    state["selfRecovered"] = True
+    RD._handle_stall(state, state["config"], {"reason": "audit-stall", "detail": "x",
+                                              "stalledIdentities": ["v0"]})
+    assert state["_acceptRiskEligible"] is True
+    RD._fold_stall(state, state["config"], {"choice": "accept-the-disclosed-risk"})
+    assert state["terminal"] == "converged"
+    assert state["step"] == RD.P_TERMINAL
+    note = (state.get("certification") or {}).get("note") or ""
+    assert "accepted the disclosed" in note, note
+
+
 # =============================================================================
 # confirmation economics: cap-parks-on-Critical, budget 2, re-arm
 # =============================================================================
@@ -466,6 +496,78 @@ def test_degraded_single_vendor_flows_to_certification_shape(tmp_path):
     assert receipt["degraded"], "the lost independence must be named in the receipt"
 
 
+def test_independent_auditor_selection_two_vendor(tmp_path):
+    """#507 v8: with two live vendors the fix's auditor is the NON-fixer vendor (independent). The
+    auditor seam captures its targets so the selection is asserted directly — a mutation that
+    returns the fixer vendor as `auditorVendor` (losing independence) fails this test."""
+    captured = {"targets": None}
+
+    def auditor(targets, rnd):
+        captured["targets"] = [dict(t) for t in (targets or [])]
+        return [{"id": t["id"], "ruling": "discharged", "reason": "ok", "evidence": "e",
+                 "auditorVendor": t.get("auditorVendor")} for t in (targets or [])]
+
+    receipt = RD.run_loop(_seams(
+        reviewer=lambda dim, tier, rnd, ctx:
+            ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+             if rnd == 1 and dim == "code-reviewer" else []),
+        auditor=auditor), _cfg(vendors=["claude", "codex"], fixerVendor="claude"))
+    assert receipt["verdict"] == "converged"
+    assert captured["targets"], "the auditor must have received the fix's audit targets"
+    t = captured["targets"][0]
+    assert t["fixerVendor"] == "claude"
+    assert t["auditorVendor"] == "codex"
+    assert t["independence"] == "independent"
+    assert receipt["certificationShape"] == "audited-chain"  # NOT -degraded
+
+
+def test_audit_result_from_wrong_vendor_is_not_discharged(tmp_path):
+    """#507 v2 (audits): a clearing ruling that does NOT echo the selected independent auditor
+    (fixer or a misrouted worker) is rejected as not-discharged and disclosed as unauthenticated,
+    so it can never certify a fix the independent auditor did not clear."""
+    import audits
+    target = {"id": "v0", "file": "f.py", "line": 1, "title": "bug", "severity": "Important",
+              "fixerVendor": "claude", "auditorVendor": "codex", "independence": "independent"}
+    # the fixer vendor tries to self-clear
+    out = audits.apply_audit_results(
+        [target], [{"id": "v0", "ruling": "discharged", "reason": "trust me",
+                    "auditorVendor": "claude"}])
+    assert out["discharged"] == []
+    assert out["notDischarged"] == ["v0"]
+    assert out["unauthenticated"] == ["v0"]
+    # the correct independent auditor clears it
+    ok = audits.apply_audit_results(
+        [target], [{"id": "v0", "ruling": "discharged", "reason": "fix verified",
+                    "auditorVendor": "codex"}])
+    assert ok["discharged"] == ["v0"]
+    assert ok["unauthenticated"] == []
+    assert ok["audits"][0]["auditor"] == "codex"
+
+
+def test_audit_round_outcomes_carry_class_keys_for_alias_stall(tmp_path):
+    """#507 v0: the live audit-round outcomes carry classKey/dimension/taxonomy, so the audit-stall
+    breaker's alias-tolerant match stalls a retitled-but-same-class not-discharged finding across
+    two consecutive rounds (the contract `check_audit_breaker` advertises but the wire never fed)."""
+    import circuit_breaker as CB
+    state = RD.new_state(_cfg())
+    f = {"title": "leaks memory", "severity": "Important", "file": "f.py", "line": 1,
+         "dimension": "Security", "taxonomy": "CWE-401", "classKey": "Security::CWE-401::orig"}
+    state["fixBatch"] = [f]
+    state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
+    tgt = state["_auditTargets"][0]
+    assert tgt["classKey"] == "Security::CWE-401::orig"
+    RD._fold_audits(state, state["config"], {"results": [
+        {"id": tgt["id"], "ruling": "not-discharged", "reason": "still broken"}]})
+    round1 = state["auditRounds"][-1]
+    assert round1["outcomes"][0]["classKey"] == "Security::CWE-401::orig"
+    # a SECOND round: the finding is retitled (a different identity) but keeps its classKey.
+    retitled = {"round": state["round"] + 1, "outcomes": [
+        {"identity": "f.py::memory not freed", "ruling": "not-discharged",
+         "classKey": "Security::CWE-401::orig", "dimension": "Security", "taxonomy": "CWE-401"}]}
+    brk = CB.check_audit_breaker([round1, retitled], 20)
+    assert brk["halt"] and brk["reason"] == "audit-stall", brk
+
+
 def test_receipt_missing_seat_surfaces_unverified(tmp_path):
     def reviewer(dim, tier, rnd, ctx):
         if rnd == 1 and dim == "security-reviewer":
@@ -552,6 +654,32 @@ def test_verify_fail_halts(tmp_path):
     assert receipt["certificationShape"] is None
 
 
+def test_verify_timeout_halts(tmp_path):
+    """#507 v10: a verify result that is not `pass`/skip — here `timeout` — fails closed to a halt,
+    never advancing into a delta round that could certify."""
+    receipt = RD.run_loop(_seams(
+        reviewer=lambda dim, tier, rnd, ctx:
+            ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+             if rnd == 1 and dim == "code-reviewer" else []),
+        verify_runner=lambda cmd, rnd: "timeout"), _cfg())
+    assert receipt["verdict"] == "halted"
+    assert receipt["certificationShape"] is None
+
+
+def test_omitted_panel_seat_cannot_certify_full_panel(tmp_path):
+    """#507 v11: a configured dimension with NO seat in the panel artifact is a silent coverage gap
+    → status `missing`, surfaced, and the clean finish can never be full-panel-confirmed."""
+    def reviewer(dim, tier, rnd, ctx):
+        if dim == "premortem-reviewer":
+            return None  # omitted seat
+        return []
+
+    receipt = RD.run_loop(_seams(reviewer=reviewer), _cfg())
+    assert receipt["certificationShape"] != "full-panel-confirmed"
+    r1 = [x for x in receipt["rounds"] if x["round"] == 1][0]
+    assert r1["seatStatus"]["premortem-reviewer"] == "missing"
+
+
 def test_mechanical_compile_drops_uncited_and_out_of_scope():
     findings = [
         {"title": "cited", "severity": "Important", "file": "f.py", "line": 2},   # in diff scope
@@ -565,6 +693,18 @@ def test_mechanical_compile_drops_uncited_and_out_of_scope():
     reasons = {d["reason"] for d in drops}
     assert any("uncited" in r for r in reasons)
     assert any("scope" in r for r in reasons)
+
+
+def test_mechanical_compile_keeps_distinct_lines_same_title():
+    """#507 v5: two findings sharing a title at DIFFERENT lines are distinct blockers and BOTH
+    survive — the per-location anchor (file, line, title) no longer collapses them the way the
+    line-less file::title identity did (it dropped the second line's blocker)."""
+    findings = [
+        {"title": "Same bug", "severity": "Important", "file": "f.py", "line": 1},
+        {"title": "Same bug", "severity": "Important", "file": "f.py", "line": 2},
+    ]
+    compiled, _ = RD.mechanical_compile(findings, DIFF)
+    assert sorted(f.get("line") for f in compiled) == [1, 2]
 
 
 def test_mechanical_compile_nit_cap():
