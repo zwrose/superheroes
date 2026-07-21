@@ -57,6 +57,23 @@ _Defect taxonomy — scan every diff-introduced correctness change for these rec
 
 A finding may name more than one class when they compound; cite the class(es) by name so the term routes consistently.
 
+**Deleted-line audit (a standing scan technique — not a new severity class).**
+
+- Make a *systematic* pass over every deleted (`-`) line and ask: *what guarantee, validation, invariant, or error handling did this line enforce, and does the change preserve it elsewhere?* A deletion that silently drops a null-check, a bound, a guard, an `await`, a resource release, or a returned error is a Correctness finding (label it with the matching defect-taxonomy class — usually `inverted / dropped condition`, `null / absent dereference`, `error-swallowing`, or `resource leak`). Cite the deleted line and the now-unguarded path.
+- **Relationship to the taxonomy above (state it, don't double-count):** this *operationalizes* the `inverted / dropped condition` class (line ~56) and the "control-flow change that drops a case" rule (line ~46) as a **standing deletion sweep** rather than an opportunistic catch — those rules describe the defect; this makes auditing every removed line the routine that surfaces it. It is broader than them only in *method* (sweep every `-` line), not in scope — the finding you emit is still one of the existing taxonomy classes.
+
+**Caller tracing (a forward, impact-of-change scan — not the reachability rule).**
+
+- When the diff changes a function's **signature or behavior**, grep its callers and check each call site against the *new* behavior: an argument now required, a return shape that changed, a raised/absent error the caller no longer handles, an ordering assumption the caller still makes. Cite the call site the change breaks and propose the fix. This is local caller-breakage — the diff broke a site that did not change.
+- **Distinct from the reachability rule (state it explicitly):** the base-rubric reachability check (verification rule #4 / CoV step 2, restated as rule #4 below) reads callers in the *opposite* direction — "is **my finding's** own edge case already guarded by the caller, so I should downgrade or drop it?" Caller tracing reads callers to ask "does **my change** break the caller?" Reachability shrinks false positives on a finding you already have; caller tracing *finds* a new breakage the diff caused. They are not the same pass.
+
+**Boundary note for the deleted-line audit (state it, don't cross-flag).** A removed guard is exactly where dimensions collide — route by what the removed line protected:
+
+- A guard removed from a **multi-step / systemic flow** (a transaction, a compensation, a concurrency check-then-act, a fail-closed gate default) is `premortem-reviewer`'s (Failure-Mode) — defer it.
+- A removed **auth / ownership / access-control** check is `security-reviewer`'s — defer it.
+- A removed **layering seam / abstraction boundary / module contract** is `architecture-reviewer`'s — defer it (see its reciprocal note).
+- You keep the **single-line / local** dropped-guard classes and **local caller-breakage** — a deleted null-check, a dropped local bound, a single unreleased resource, a call site the new signature breaks. Keep the existing code↔architecture boundary style: local correctness is yours, contract/coupling is theirs.
+
 **Cognitive-complexity spike (diff-introduced only).**
 
 - When the diff materially raises a *single function's* COGNITIVE complexity, flag it and name the specific structural cause: added nesting depth, newly-mixed control flow (e.g. early returns interleaved with deep branches), or boolean-operator density (long `&&`/`||`/ternary chains in one condition). Cite the line and the concrete structural cause, and propose the local de-nesting (guard clause, extracted predicate, flattened branch).

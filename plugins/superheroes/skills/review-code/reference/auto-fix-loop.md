@@ -36,7 +36,7 @@ conventions. Apply the diff-scope rule: only flag code in `+` or
 - CLAUDE.md (project conventions): CLAUDE.md
 - <PR read-only paths only> PR branch checkout: $SESSION_DIR/repo/
 - <PR mode only> Prior comments + author justifications: $SESSION_DIR/prior-comments.json
-- <if focus notes> Focus: <focus notes>
+- <if focus notes> Focus: <focus notes>  <!-- mechanical focus flags from focus_flags.py are appended here too (additions only) — see "Mechanical focus flags" below -->
 
 ## Calibration precedence
 Base rubric (binding) > CLAUDE.md (conventions) > core + layer (adder over CLAUDE.md)
@@ -86,6 +86,26 @@ omit it otherwise (see the base rubric's "Triage rubric"). Set `dimension` to
 most 5 reported per agent). If you have nothing to flag, write an empty array
 (`[]`) — do not skip writing the file.
 ```
+
+## Mechanical focus flags
+
+Before dispatching the round's specialists, the orchestrator runs the deterministic
+mechanical-focus-flag detector over the round diff (design authority: ratified #474,
+position 15 — grep-detected **additive** brief flags; **additions only, never
+classifier-driven lens removal**):
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 "$ROOT_DIR/lib/focus_flags.py" "$SESSION_DIR/round-<round>/diff.txt"
+```
+
+It prints zero or more flag lines (a changed migration file → rollback/data-safety
+emphasis; a changed dependency lockfile → supply-chain check). **Append** each emitted
+line into every specialist's `Focus:` context block, alongside any `--focus` notes — an
+addition that never replaces the `--focus` notes and never removes or down-scopes a lens
+(that classifier-driven lens-removal is banned by #474). If nothing is emitted, append
+nothing. The detector is grep-grounded and has no authority: it can only add emphasis,
+never drop a finding or a lens.
 
 > **External-engine reviewers — stdout shape contract (#38, #196).** When `$REVIEWER_ENGINE` is
 > `codex` or `cursor`, a specialist is dispatched through `engine_adapter.py` (read-only sandbox)
