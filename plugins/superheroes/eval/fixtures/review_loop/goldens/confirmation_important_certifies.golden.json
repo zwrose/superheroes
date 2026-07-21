@@ -1,0 +1,183 @@
+{
+  "benchmarkValid": true,
+  "coverageDecisionIds": [],
+  "fixContexts": [
+    {
+      "context": {
+        "changedSubjects": [],
+        "classKeys": [
+          "Test::coverage::missing test"
+        ],
+        "coverageDecisions": [],
+        "findings": [
+          {
+            "classKey": "Test::coverage::missing test",
+            "dimension": "Test",
+            "severity": "Important",
+            "synthesisUnverified": true,
+            "taxonomy": "coverage",
+            "title": "Missing test"
+          }
+        ],
+        "generalizeRequired": [],
+        "round": 1,
+        "schemaVersion": 1
+      },
+      "round": 1
+    },
+    {
+      "context": {
+        "changedSubjects": [
+          "Test"
+        ],
+        "classKeys": [
+          "Test::coverage::missing test",
+          "Security::::log line too verbose"
+        ],
+        "coverageDecisions": [],
+        "findings": [
+          {
+            "classKey": "Test::coverage::missing test",
+            "dimension": "Test",
+            "severity": "Important",
+            "synthesisUnverified": true,
+            "taxonomy": "coverage",
+            "title": "Missing test"
+          },
+          {
+            "classKey": "Security::::log line too verbose",
+            "dimension": "Security",
+            "severity": "Important",
+            "synthesisUnverified": true,
+            "title": "Log line too verbose"
+          }
+        ],
+        "generalizeRequired": [],
+        "round": 3,
+        "schemaVersion": 1
+      },
+      "round": 3
+    }
+  ],
+  "fixResults": [
+    {
+      "coverageDecisionIds": [],
+      "round": 1
+    },
+    {
+      "coverageDecisionIds": [],
+      "round": 3
+    }
+  ],
+  "roundCount": 4,
+  "seen": [
+    {
+      "reviewer": "security-reviewer",
+      "round": 1,
+      "roundKind": "baseline",
+      "tier": "reviewer-deep"
+    },
+    {
+      "reviewer": "test-reviewer",
+      "round": 1,
+      "roundKind": "baseline",
+      "tier": "reviewer-deep"
+    },
+    {
+      "reviewer": "test-reviewer",
+      "round": 2,
+      "roundKind": "intermediate",
+      "tier": "reviewer"
+    },
+    {
+      "reviewer": "security-reviewer",
+      "round": 3,
+      "roundKind": "confirmation",
+      "tier": "reviewer-deep"
+    },
+    {
+      "reviewer": "test-reviewer",
+      "round": 3,
+      "roundKind": "confirmation",
+      "tier": "reviewer-deep"
+    },
+    {
+      "reviewer": "security-reviewer",
+      "round": 4,
+      "roundKind": "intermediate",
+      "tier": "reviewer"
+    }
+  ],
+  "telemetry": {
+    "benchmarkValid": true,
+    "dimensionCounts": {
+      "security-reviewer": {
+        "cheap": 1,
+        "deep": 3,
+        "escalated": 0,
+        "run": 3,
+        "skipped": 1
+      },
+      "test-reviewer": {
+        "cheap": 1,
+        "deep": 3,
+        "escalated": 0,
+        "run": 3,
+        "skipped": 1
+      }
+    },
+    "findingOutcomes": {
+      "Security": {
+        "blocking": 1,
+        "carried": 0,
+        "raised": 1
+      },
+      "Test": {
+        "blocking": 1,
+        "carried": 0,
+        "raised": 1
+      }
+    },
+    "roundCount": 4,
+    "runId": "confirmation-important-certifies",
+    "schemaVersion": 1,
+    "terminal": "clean",
+    "tokenUsage": {
+      "complete": true,
+      "expectedLeaves": [
+        "security-reviewer:r1",
+        "test-reviewer:r1",
+        "synthesis:r1",
+        "security-reviewer:r2",
+        "test-reviewer:r2",
+        "synthesis:r2",
+        "security-reviewer:r3",
+        "test-reviewer:r3",
+        "synthesis:r3",
+        "security-reviewer:r4",
+        "test-reviewer:r4",
+        "synthesis:r4",
+        "fix:r4"
+      ],
+      "missing": [],
+      "present": [
+        "fix:r4",
+        "security-reviewer:r1",
+        "security-reviewer:r2",
+        "security-reviewer:r3",
+        "security-reviewer:r4",
+        "synthesis:r1",
+        "synthesis:r2",
+        "synthesis:r3",
+        "synthesis:r4",
+        "test-reviewer:r1",
+        "test-reviewer:r2",
+        "test-reviewer:r3",
+        "test-reviewer:r4"
+      ],
+      "total": 7006
+    }
+  },
+  "terminal": "clean",
+  "tokenTotal": 7006
+}

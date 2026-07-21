@@ -10,7 +10,7 @@ sync with the bundled agents and the rubric's dimension list.
 - Every dimension label used in a table row appears backticked in the rubric's
   Dimensions declaration.
 - The reviewer roster re-typed in code (showrunner.js REVIEW_CODE_REVIEWERS /
-  DOC_REVIEWERS, code_loop_plan/spec_loop_plan DIMENSIONS) matches the same
+  DOC_REVIEWERS, round_driver/spec_loop_plan DIMENSIONS) matches the same
   agents/ home — a CONVENTIONS §11 single-source-of-truth drift guard, fail-closed
   so a renamed literal cannot pass vacuously.
 """
@@ -102,13 +102,15 @@ def test_code_reviewer_rosters_match_bundled_agents():
     # vacuous: spec_roster IS universe, so the union always equalled it.)
     assert spec_roster - code_roster == SPEC_ONLY
 
-    import code_loop_plan
+    # #507: the code-leg roster now homes in round_driver (the ONE entrypoint that absorbed
+    # code_loop_plan's plan/record/decide); the spec leg still homes in spec_loop_plan.
+    import round_driver
     import spec_loop_plan
     rosters = {
-        "code_loop_plan.DIMENSIONS": (list(code_loop_plan.DIMENSIONS), code_roster),
+        "round_driver.DIMENSIONS": (list(round_driver.DIMENSIONS), code_roster),
         "spec_loop_plan.DIMENSIONS": (list(spec_loop_plan.DIMENSIONS), spec_roster),
         # AGENT_SUFFIX is the same roster re-keyed — its keys are a copy too.
-        "code_loop_plan.AGENT_SUFFIX": (list(code_loop_plan.AGENT_SUFFIX), code_roster),
+        "round_driver.AGENT_SUFFIX": (list(round_driver.AGENT_SUFFIX), code_roster),
         "spec_loop_plan.AGENT_SUFFIX": (list(spec_loop_plan.AGENT_SUFFIX), spec_roster),
     }
     for label, (roster, expected) in rosters.items():
@@ -148,9 +150,9 @@ def test_agent_suffix_values_are_derivable_and_match_skill_tables():
     derivation so a hand-edited value (or doc column) that diverges from
     `slug - '-reviewer'` fails, and the values stay single-homed in the keys.
     """
-    import code_loop_plan
+    import round_driver
     import spec_loop_plan
-    for label, mapping in [("code_loop_plan", code_loop_plan.AGENT_SUFFIX),
+    for label, mapping in [("round_driver", round_driver.AGENT_SUFFIX),
                            ("spec_loop_plan", spec_loop_plan.AGENT_SUFFIX)]:
         for slug, suffix in mapping.items():
             assert slug.endswith(_REVIEWER_SUFFIX), "%s: unexpected key %r" % (label, slug)

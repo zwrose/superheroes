@@ -1,0 +1,261 @@
+{
+  "benchmarkValid": true,
+  "coverageDecisionIds": [],
+  "fixContexts": [
+    {
+      "context": {
+        "changedSubjects": [],
+        "classKeys": [
+          "Test::::missing test"
+        ],
+        "coverageDecisions": [],
+        "findings": [
+          {
+            "classKey": "Test::::missing test",
+            "dimension": "Test",
+            "severity": "Important",
+            "synthesisUnverified": true,
+            "title": "Missing test"
+          }
+        ],
+        "generalizeRequired": [],
+        "round": 1,
+        "schemaVersion": 1
+      },
+      "round": 1
+    },
+    {
+      "context": {
+        "changedSubjects": [
+          "Test"
+        ],
+        "classKeys": [
+          "Test::::missing test",
+          "Security::::secret a"
+        ],
+        "coverageDecisions": [],
+        "findings": [
+          {
+            "classKey": "Test::::missing test",
+            "dimension": "Test",
+            "severity": "Important",
+            "synthesisUnverified": true,
+            "title": "Missing test"
+          },
+          {
+            "classKey": "Security::::secret a",
+            "dimension": "Security",
+            "severity": "Important",
+            "synthesisUnverified": true,
+            "title": "Secret A"
+          }
+        ],
+        "generalizeRequired": [],
+        "round": 3,
+        "schemaVersion": 1
+      },
+      "round": 3
+    },
+    {
+      "context": {
+        "changedSubjects": [
+          "Test"
+        ],
+        "classKeys": [
+          "Test::::missing test",
+          "Security::::secret a",
+          "Security::::secret b"
+        ],
+        "coverageDecisions": [],
+        "findings": [
+          {
+            "classKey": "Test::::missing test",
+            "dimension": "Test",
+            "severity": "Important",
+            "synthesisUnverified": true,
+            "title": "Missing test"
+          },
+          {
+            "classKey": "Security::::secret a",
+            "dimension": "Security",
+            "severity": "Important",
+            "synthesisUnverified": true,
+            "title": "Secret A"
+          },
+          {
+            "classKey": "Security::::secret b",
+            "dimension": "Security",
+            "severity": "Important",
+            "synthesisUnverified": true,
+            "title": "Secret B"
+          }
+        ],
+        "generalizeRequired": [],
+        "round": 4,
+        "schemaVersion": 1
+      },
+      "round": 4
+    }
+  ],
+  "fixResults": [
+    {
+      "coverageDecisionIds": [],
+      "round": 1
+    },
+    {
+      "coverageDecisionIds": [],
+      "round": 3
+    },
+    {
+      "coverageDecisionIds": [],
+      "round": 4
+    }
+  ],
+  "roundCount": 6,
+  "seen": [
+    {
+      "reviewer": "security-reviewer",
+      "round": 1,
+      "roundKind": "baseline",
+      "tier": "reviewer-deep"
+    },
+    {
+      "reviewer": "test-reviewer",
+      "round": 1,
+      "roundKind": "baseline",
+      "tier": "reviewer-deep"
+    },
+    {
+      "reviewer": "test-reviewer",
+      "round": 2,
+      "roundKind": "intermediate",
+      "tier": "reviewer"
+    },
+    {
+      "reviewer": "security-reviewer",
+      "round": 3,
+      "roundKind": "confirmation",
+      "tier": "reviewer-deep"
+    },
+    {
+      "reviewer": "test-reviewer",
+      "round": 3,
+      "roundKind": "confirmation",
+      "tier": "reviewer-deep"
+    },
+    {
+      "reviewer": "security-reviewer",
+      "round": 4,
+      "roundKind": "intermediate",
+      "tier": "reviewer"
+    },
+    {
+      "reviewer": "test-reviewer",
+      "round": 4,
+      "roundKind": "intermediate",
+      "tier": "reviewer"
+    },
+    {
+      "reviewer": "security-reviewer",
+      "round": 5,
+      "roundKind": "intermediate",
+      "tier": "reviewer"
+    },
+    {
+      "reviewer": "security-reviewer",
+      "round": 6,
+      "roundKind": "confirmation",
+      "tier": "reviewer-deep"
+    },
+    {
+      "reviewer": "test-reviewer",
+      "round": 6,
+      "roundKind": "confirmation",
+      "tier": "reviewer-deep"
+    }
+  ],
+  "telemetry": {
+    "benchmarkValid": true,
+    "dimensionCounts": {
+      "security-reviewer": {
+        "cheap": 2,
+        "deep": 4,
+        "escalated": 0,
+        "run": 5,
+        "skipped": 1
+      },
+      "test-reviewer": {
+        "cheap": 3,
+        "deep": 3,
+        "escalated": 0,
+        "run": 5,
+        "skipped": 1
+      }
+    },
+    "findingOutcomes": {
+      "Security": {
+        "blocking": 2,
+        "carried": 0,
+        "raised": 2
+      },
+      "Test": {
+        "blocking": 1,
+        "carried": 0,
+        "raised": 1
+      }
+    },
+    "roundCount": 6,
+    "runId": "confirmation-postscoped-rework-rearms",
+    "schemaVersion": 1,
+    "terminal": "clean",
+    "tokenUsage": {
+      "complete": true,
+      "expectedLeaves": [
+        "security-reviewer:r1",
+        "test-reviewer:r1",
+        "synthesis:r1",
+        "security-reviewer:r2",
+        "test-reviewer:r2",
+        "synthesis:r2",
+        "security-reviewer:r3",
+        "test-reviewer:r3",
+        "synthesis:r3",
+        "security-reviewer:r4",
+        "test-reviewer:r4",
+        "synthesis:r4",
+        "security-reviewer:r5",
+        "test-reviewer:r5",
+        "synthesis:r5",
+        "security-reviewer:r6",
+        "test-reviewer:r6",
+        "synthesis:r6",
+        "fix:r6"
+      ],
+      "missing": [],
+      "present": [
+        "fix:r6",
+        "security-reviewer:r1",
+        "security-reviewer:r2",
+        "security-reviewer:r3",
+        "security-reviewer:r4",
+        "security-reviewer:r5",
+        "security-reviewer:r6",
+        "synthesis:r1",
+        "synthesis:r2",
+        "synthesis:r3",
+        "synthesis:r4",
+        "synthesis:r5",
+        "synthesis:r6",
+        "test-reviewer:r1",
+        "test-reviewer:r2",
+        "test-reviewer:r3",
+        "test-reviewer:r4",
+        "test-reviewer:r5",
+        "test-reviewer:r6"
+      ],
+      "total": 7012
+    }
+  },
+  "terminal": "clean",
+  "tokenTotal": 7012
+}

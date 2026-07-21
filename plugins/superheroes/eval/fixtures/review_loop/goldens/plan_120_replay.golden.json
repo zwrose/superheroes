@@ -1,0 +1,272 @@
+{
+  "benchmarkValid": true,
+  "coverageDecisionIds": [
+    "RCD-plan-coverage"
+  ],
+  "fixContexts": [
+    {
+      "context": {
+        "changedSubjects": [],
+        "classKeys": [
+          "Test::coverage::missing acceptance test"
+        ],
+        "coverageDecisions": [],
+        "findings": [
+          {
+            "classKey": "Test::coverage::missing acceptance test",
+            "dimension": "Test",
+            "severity": "Important",
+            "synthesisUnverified": true,
+            "taxonomy": "coverage",
+            "title": "Missing acceptance test"
+          }
+        ],
+        "generalizeRequired": [],
+        "round": 1,
+        "schemaVersion": 1
+      },
+      "round": 1
+    },
+    {
+      "context": {
+        "changedSubjects": [
+          "Test"
+        ],
+        "classKeys": [
+          "Test::coverage::missing acceptance test",
+          "Test::coverage::missing acceptance test"
+        ],
+        "coverageDecisions": [],
+        "findings": [
+          {
+            "classKey": "Test::coverage::missing acceptance test",
+            "dimension": "Test",
+            "severity": "Important",
+            "synthesisUnverified": true,
+            "taxonomy": "coverage",
+            "title": "Missing acceptance test"
+          },
+          {
+            "classKey": "Test::coverage::missing acceptance test",
+            "dimension": "Test",
+            "severity": "Important",
+            "synthesisUnverified": true,
+            "taxonomy": "coverage",
+            "title": "Missing acceptance test"
+          }
+        ],
+        "generalizeRequired": [
+          {
+            "classKey": "Test::coverage::missing acceptance test",
+            "rounds": [
+              1,
+              2
+            ]
+          }
+        ],
+        "round": 2,
+        "schemaVersion": 1
+      },
+      "round": 2
+    }
+  ],
+  "fixResults": [
+    {
+      "coverageDecisionIds": [],
+      "round": 1
+    },
+    {
+      "coverageDecisionIds": [
+        "RCD-plan-coverage"
+      ],
+      "round": 2
+    }
+  ],
+  "roundCount": 4,
+  "seen": [
+    {
+      "reviewer": "architecture-reviewer",
+      "round": 1,
+      "roundKind": "baseline",
+      "tier": "reviewer-deep"
+    },
+    {
+      "reviewer": "code-reviewer",
+      "round": 1,
+      "roundKind": "baseline",
+      "tier": "reviewer-deep"
+    },
+    {
+      "reviewer": "premortem-reviewer",
+      "round": 1,
+      "roundKind": "baseline",
+      "tier": "reviewer-deep"
+    },
+    {
+      "reviewer": "security-reviewer",
+      "round": 1,
+      "roundKind": "baseline",
+      "tier": "reviewer-deep"
+    },
+    {
+      "reviewer": "test-reviewer",
+      "round": 1,
+      "roundKind": "baseline",
+      "tier": "reviewer-deep"
+    },
+    {
+      "reviewer": "test-reviewer",
+      "round": 2,
+      "roundKind": "intermediate",
+      "tier": "reviewer"
+    },
+    {
+      "reviewer": "test-reviewer",
+      "round": 3,
+      "roundKind": "intermediate",
+      "tier": "reviewer"
+    },
+    {
+      "reviewer": "architecture-reviewer",
+      "round": 4,
+      "roundKind": "confirmation",
+      "tier": "reviewer-deep"
+    },
+    {
+      "reviewer": "code-reviewer",
+      "round": 4,
+      "roundKind": "confirmation",
+      "tier": "reviewer-deep"
+    },
+    {
+      "reviewer": "premortem-reviewer",
+      "round": 4,
+      "roundKind": "confirmation",
+      "tier": "reviewer-deep"
+    },
+    {
+      "reviewer": "security-reviewer",
+      "round": 4,
+      "roundKind": "confirmation",
+      "tier": "reviewer-deep"
+    },
+    {
+      "reviewer": "test-reviewer",
+      "round": 4,
+      "roundKind": "confirmation",
+      "tier": "reviewer-deep"
+    }
+  ],
+  "telemetry": {
+    "benchmarkValid": true,
+    "dimensionCounts": {
+      "architecture-reviewer": {
+        "cheap": 0,
+        "deep": 4,
+        "escalated": 0,
+        "run": 2,
+        "skipped": 2
+      },
+      "code-reviewer": {
+        "cheap": 0,
+        "deep": 4,
+        "escalated": 0,
+        "run": 2,
+        "skipped": 2
+      },
+      "premortem-reviewer": {
+        "cheap": 0,
+        "deep": 4,
+        "escalated": 0,
+        "run": 2,
+        "skipped": 2
+      },
+      "security-reviewer": {
+        "cheap": 0,
+        "deep": 4,
+        "escalated": 0,
+        "run": 2,
+        "skipped": 2
+      },
+      "test-reviewer": {
+        "cheap": 2,
+        "deep": 2,
+        "escalated": 0,
+        "run": 4,
+        "skipped": 0
+      }
+    },
+    "findingOutcomes": {
+      "Test": {
+        "blocking": 1,
+        "carried": 0,
+        "raised": 1
+      }
+    },
+    "roundCount": 4,
+    "runId": "plan-120-replay",
+    "schemaVersion": 1,
+    "terminal": "clean",
+    "tokenUsage": {
+      "complete": true,
+      "expectedLeaves": [
+        "architecture-reviewer:r1",
+        "code-reviewer:r1",
+        "premortem-reviewer:r1",
+        "security-reviewer:r1",
+        "test-reviewer:r1",
+        "synthesis:r1",
+        "architecture-reviewer:r2",
+        "code-reviewer:r2",
+        "premortem-reviewer:r2",
+        "security-reviewer:r2",
+        "test-reviewer:r2",
+        "synthesis:r2",
+        "architecture-reviewer:r3",
+        "code-reviewer:r3",
+        "premortem-reviewer:r3",
+        "security-reviewer:r3",
+        "test-reviewer:r3",
+        "synthesis:r3",
+        "architecture-reviewer:r4",
+        "code-reviewer:r4",
+        "premortem-reviewer:r4",
+        "security-reviewer:r4",
+        "test-reviewer:r4",
+        "synthesis:r4",
+        "fix:r4"
+      ],
+      "missing": [],
+      "present": [
+        "architecture-reviewer:r1",
+        "architecture-reviewer:r2",
+        "architecture-reviewer:r3",
+        "architecture-reviewer:r4",
+        "code-reviewer:r1",
+        "code-reviewer:r2",
+        "code-reviewer:r3",
+        "code-reviewer:r4",
+        "fix:r4",
+        "premortem-reviewer:r1",
+        "premortem-reviewer:r2",
+        "premortem-reviewer:r3",
+        "premortem-reviewer:r4",
+        "security-reviewer:r1",
+        "security-reviewer:r2",
+        "security-reviewer:r3",
+        "security-reviewer:r4",
+        "synthesis:r1",
+        "synthesis:r2",
+        "synthesis:r3",
+        "synthesis:r4",
+        "test-reviewer:r1",
+        "test-reviewer:r2",
+        "test-reviewer:r3",
+        "test-reviewer:r4"
+      ],
+      "total": 1665011
+    }
+  },
+  "terminal": "clean",
+  "tokenTotal": 1665011
+}

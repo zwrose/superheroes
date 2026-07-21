@@ -1,0 +1,21 @@
+{
+  "benchmarkValid": false,
+  "coverageDecisionIds": [],
+  "fixContexts": [],
+  "fixResults": [],
+  "roundCount": 1,
+  "seen": [
+    {
+      "reviewer": "test-reviewer",
+      "round": 1,
+      "roundKind": "baseline",
+      "tier": "reviewer-deep"
+    }
+  ],
+  "telemetry": {
+    "benchmarkValid": false,
+    "reason": "telemetry-write-failed"
+  },
+  "terminal": "clean",
+  "tokenTotal": 1001
+}

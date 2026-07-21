@@ -1,11 +1,9 @@
 import importlib.util
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[4]
 LIB = Path(__file__).resolve().parents[1]
 FIXTURE = Path(__file__).parent / "fixtures" / "live-round-records-wf17d83964-review-code.json"
 
@@ -105,36 +103,3 @@ def test_live_wf17_round6_replays_synthesis_as_three_blockers_python_twin():
     out = LS.consume(merged, _verdicts(raw_findings))
 
     _assert_replay_output(out)
-
-
-def test_live_wf17_round6_replays_synthesis_as_three_blockers_js_twin():
-    round_findings, raw_findings = _round6_modern_dimension_results()
-    verdicts = _verdicts(raw_findings)
-    script = """
-const fs = require('fs')
-const payload = JSON.parse(fs.readFileSync(0, 'utf8'))
-const panelTally = require('./plugins/superheroes/lib/panel_tally.js')
-const loopSynthesis = require('./plugins/superheroes/lib/loop_synthesis.js')
-const circuitBreaker = require('./plugins/superheroes/lib/circuit_breaker.js')
-const merged = panelTally.compileDimensionResults(payload.roundFindings)
-const out = loopSynthesis.consume(merged, payload.verdicts)
-const identities = payload.rawFindings.map((f) => circuitBreaker.findingIdentity(f))
-process.stdout.write(JSON.stringify({ out, identities }))
-"""
-    result = subprocess.run(
-        ["node", "-e", script],
-        cwd=ROOT,
-        input=json.dumps({
-            "roundFindings": round_findings,
-            "rawFindings": raw_findings,
-            "verdicts": verdicts,
-        }),
-        text=True,
-        capture_output=True,
-        timeout=30,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    replay = json.loads(result.stdout)
-
-    assert all(identity and not identity.endswith("::") for identity in replay["identities"])
-    _assert_replay_output(replay["out"])

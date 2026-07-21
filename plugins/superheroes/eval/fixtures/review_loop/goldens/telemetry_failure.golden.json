@@ -1,0 +1,47 @@
+{
+  "benchmarkValid": true,
+  "coverageDecisionIds": [],
+  "fixContexts": [],
+  "fixResults": [],
+  "roundCount": 1,
+  "seen": [
+    {
+      "reviewer": "test-reviewer",
+      "round": 1,
+      "roundKind": "baseline",
+      "tier": "reviewer-deep"
+    }
+  ],
+  "telemetry": {
+    "benchmarkValid": true,
+    "dimensionCounts": {
+      "test-reviewer": {
+        "cheap": 0,
+        "deep": 1,
+        "escalated": 0,
+        "run": 1,
+        "skipped": 0
+      }
+    },
+    "findingOutcomes": {},
+    "roundCount": 1,
+    "runId": "telemetry-failure-does-not-change-terminal",
+    "schemaVersion": 1,
+    "terminal": "clean",
+    "tokenUsage": {
+      "complete": true,
+      "expectedLeaves": [
+        "test-reviewer:r1",
+        "synthesis:r1"
+      ],
+      "missing": [],
+      "present": [
+        "synthesis:r1",
+        "test-reviewer:r1"
+      ],
+      "total": 1001
+    }
+  },
+  "terminal": "clean",
+  "tokenTotal": 1001
+}

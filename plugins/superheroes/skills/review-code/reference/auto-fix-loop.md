@@ -72,10 +72,13 @@ findings.
 $SESSION_DIR/prior-comments.json contains prior review comments and their
 threads. If a previous review flagged a finding and the author replied
 with substantive explanatory text (not just "ok" or an emoji) explaining
-why it's intentional, do NOT re-raise the same finding unless the
-justification contains a technical error. Outdated comments (where
-`position == null`) still count — the explanation may apply even if the
-code anchor moved.
+why it's intentional, **raise the finding AND note the prior justification**
+in the body — do NOT silently omit it. The **post-verification**
+author-justification filter (after `verification.merge_and_rank`) owns the
+drop decision: it may drop only a non-CONFIRMED finding (quoting the
+justification); a CONFIRMED finding survives stamped
+`challenge: "author-justified"`. Outdated comments (where
+`position == null`) still count.
 
 ## Output
 Write findings to $SESSION_DIR/round-<round>/findings-<agent>.json as a JSON
@@ -280,18 +283,18 @@ These are the base rubric's binding verification rules; they are restated in eve
 | Posting without interactive approval                    | Every finding goes through `AskUserQuestion` (individually for Critical/Important, batched for Minor/Nit). Never auto-post anything from raw subagent output.      |
 | Not using `resolve_diff_lines.py` before posting        | Always run the script before `gh api ... reviews`. It moves out-of-hunk comments to valid lines and drops comments for files not in the diff. Skipping it → 422.   |
 | Not verifying the review was actually posted            | After `gh api ... reviews` returns success, fetch the last review and confirm `state` and `submitted_at`. Silent failures and duplicate posts have happened.       |
-| Re-flagging issues the author already justified         | PR mode: check `prior-comments.json` for substantive author replies. If the explanation is sound, don't re-raise. Outdated comments still count.                   |
+| Re-flagging issues the author already justified         | PR mode: raise the finding and note the prior justification; the post-verification filter drops only non-CONFIRMED findings (see `round-driver.md`). |
 | Using diff.txt line numbers as file line numbers        | Diff line numbers and file line numbers are different. `resolve_diff_lines.py` parses `@@` hunk headers to map between them; trust the script.                     |
-| Dropping resolved Important findings silently           | If the reachability check or author-justification filter drops an Important, mention it to the user — they may want to see what was filtered.                      |
+| Dropping resolved Important findings silently           | If reachability or the post-verification author-justification filter drops an Important, mention it — the justification is quoted in the record.                      |
 | Skipping `--post` verification when GH returns success  | `gh api` can return 200 on a malformed body that GitHub silently treats as a no-op. Always run the post-submit verify call.                                        |
 | Trying to delete a bad review via API                   | Submitted reviews cannot be deleted via the GitHub API. Never iterate by re-posting — fix `review-resolved.json` and retry only after the resolve script is clean. |
-| Tiering or skipping specialists based on "what changed" | All five specialists always run. Coverage uniformity beats saving one agent dispatch — the agent returns `[]` if there's nothing to flag.                          |
+| Tiering or skipping specialists based on "what changed" | Round 1 is always the full panel; later rounds follow `round_driver.py` `next` (delta audits + scoped finder, or a full panel on #174/unknown). Never skip by eye. |
 | Using `gh pr diff` inside the loop                      | Rounds 2+ have local fix commits not on the remote. Always recompute `git diff <baseRef>...HEAD` locally each round.                                               |
 | Auto-fixing a PR you don't have checked out             | Auto-fix needs the PR's branch as the current branch. If it isn't, stop and direct the user to `--post` or `--review-only`.                                        |
 | Re-reviewing on a broken tree                           | If `VERIFY_CMD` fails after a fix, HALT. Never run the next review round on code that doesn't pass verification. (No gate when the profile is `mode: unverified`.) |
 | Re-raising a finding the user skipped                   | Skipped identities go in the skip-set and are excluded from every later round's effective findings AND the circuit breaker.                                        |
-| Eyeballing "are we stuck?" by hand                      | Always call `circuit_breaker.py`. Finding-identity comparison across rounds is deterministic; manual judgment drifts after compaction.                             |
-| Exiting the loop early because a fix "looks done"       | The continue decision is `loop_state.py`'s, not yours (step 14). A blocking fix → another round is **mandatory**. "Trivial fix / it'll be clean / save the tokens / I'll offer it as optional" are the rationalizations it overrides — unverified fixes ship exactly this way. |
+| Eyeballing "are we stuck?" by hand                      | The audit-keyed stall breaker lives in `round_driver.py` — never call `circuit_breaker.py` inside the auto-fix loop.                                                 |
+| Exiting the loop early because a fix "looks done"       | Obey `round_driver.py` `next`/`submit` — never `code_loop_plan` or manual continuation. "Trivial fix / save tokens / offer optional round" are the rationalizations it overrides. |
 | Pushing automatically at loop end                       | The loop commits locally only. Pushing is always a separate, user-confirmed step.                                                                                 |
 | Dispatching reviewers by reading an agent file          | The five reviewers are bundled plugin agents — dispatch the `<name>` reviewer with its methodology (resolve dispatch via the host tool map (`hosts/<host>-tools.md` at the plugin root)).                  |
 | Skipping the profile bootstrap                           | If `.claude/review-profile.md` is absent, run review-init's create procedure inline first. Headless runs get a provisional strict profile.                         |

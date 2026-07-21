@@ -11,26 +11,24 @@ meaningful JSON — gates, verdicts, scalars — has never failed once.
 So the durable `round-records.json` (skeletons, written every round via the *solved* down
 direction) is the single source of truth, and these Python **deciders** read it (plus coverage
 and the deferred set) and answer O(1) meaningful JSON: *what round, what schedule, what now,
-where's the worklist* — never findings. The JS shell (`review_panel_shell.js`, cut over in the
-stacked PR-2) holds no findings: it persists the reviewer's own generated answer down, then asks
-these deciders "what now?" and makes its one branch.
+where's the worklist* — never findings. ``round_driver.py`` dispatches reviewers, persists their
+answers down, then asks these deciders "what now?" and makes its one branch.
 
 This module owns NO policy of its own. The schedule comes from `review_round_policy.plan_round`,
 the breaker from `circuit_breaker.check_circuit_breaker`, the terminal from
 `panel_tally.decide_terminal`, the confirmation-bar economics from
 `review_round_policy.confirmation_followup` / `is_cross_cutting`, recurrence from
-`review_memory.recurrent_classes` — the same parity-locked twins the JS shell calls in memory
-today. These deciders were ported faithfully from the shell's old in-memory record consumers (the
-#211 Phase-0 census: `resumeRound`, `buildPreviousDimensionState`, `carryForwardDimension`,
+`review_memory.recurrent_classes`. These deciders were ported faithfully from the retired shell's
+in-memory record consumers (the #211 Phase-0 census: `resumeRound`, `buildPreviousDimensionState`, `carryForwardDimension`,
 `confirmationReady`, `panelWindow`/`furtherConfirmationOwed`/`certificationSummary`,
 `assembleRounds`→breaker, `buildFixContext`), reading the record content from disk instead of an
 in-memory copy. Those shell consumers are gone — the deciders are now the ONLY decision path.
 
-Three scalars ride DOWN from the shell as command args because they are *decisions the shell must
-compute at the moment the reviewer answers arrive*, not content:
+Three scalars ride DOWN from ``round_driver.py`` as command args because they are *decisions the
+driver must compute at the moment the reviewer answers arrive*, not content:
   - the **gate** (clean/blocking/cannot-certify + confidence + missing[]) — the durable skeleton
     strips each dim's `verificationReceipt`, so the confirmation-round gate cannot be faithfully
-    recomputed from disk; the shell computes it from the live answers (receipts present) and
+    recomputed from disk; the driver computes it from the live answers (receipts present) and
     discards the findings immediately after persisting them down.
   - **present-blocking** — the count of current (non-carried) blocking findings, likewise from
     the live answers.
@@ -38,19 +36,16 @@ compute at the moment the reviewer answers arrive*, not content:
     `panel_tally.uncertified_reason` over the live per-seat results; the receipt-missing/stale/
     malformed flags it needs are stripped from the skeleton, so it too rides down.
 Everything else (breaker, terminal, confirmation follow-up, certification) the deciders compute
-from disk. Every fail-closed path in the shell stays fail-closed here.
+from disk. Every fail-closed path in ``round_driver.py`` stays fail-closed here.
 
 Two folds keep the round to ONE new courier leaf (#118): plan-round optionally folds the per-round
 coverage read (`--coverage-path`), and tally-round folds the fix-context compose (`--worklist-out-
 path`) so the fixer worklist is written to disk here and only its pointer rides back.
 
-These deciders are LIVE (#211 landed across three stacked PRs: deciders → shell cutover → this
-fallback-hardening + cleanup). The shell dispatches reviewers and persists their answers down, then
-asks the deciders "what now?" and receives small meaningful JSON — never findings. Their answers are
-pinned by the unit tests here (against expected values derived from the shell's logic), the
-parity fixtures, and the adversarial + scaling smokes. The transitional decider ≡ shell equivalence
-smoke that guarded the port while both paths coexisted was removed once the decider path became the
-only path.
+These deciders are LIVE (#211). ``round_driver.py`` dispatches reviewers and persists their
+answers down, then asks the deciders "what now?" and receives small meaningful JSON — never
+findings. Their answers are pinned by the unit tests here, the parity fixtures, and the
+adversarial + scaling smokes.
 """
 import argparse
 import json
@@ -112,7 +107,7 @@ def _verify_tail(records_path, round_no):
 
 # ── faithful ports of the shell's in-memory record consumers (Phase-0 census) ──
 def _resume_round(records):
-    """review_panel_shell.resumeRound — the next round to run = max persisted round + 1."""
+    """The next round to run = max persisted round + 1."""
     best = 0
     for rec in records or []:
         if not isinstance(rec, dict):
@@ -127,7 +122,7 @@ def _resume_round(records):
 
 
 def _previous_dimension_state(records):
-    """review_panel_shell.buildPreviousDimensionState — fold every round's dimensions, later
+    """Fold every round's dimensions, later
     rounds overwriting earlier, into the `previous` map plan_round consumes."""
     previous = {}
     for rec in records or []:
@@ -140,7 +135,7 @@ def _previous_dimension_state(records):
 
 
 def _carry_forward_dimension(records, name, carried_from_round):
-    """review_panel_shell.carryForwardDimension — the most recent prior state for a skipped
+    """The most recent prior state for a skipped
     dimension, stamped skipped. Missing → a low-confidence empty skip."""
     for rec in reversed(records or []):
         dims = rec.get("dimensions") if isinstance(rec, dict) else None
@@ -154,7 +149,7 @@ def _carry_forward_dimension(records, name, carried_from_round):
 
 
 def _surfaced_blocking_severities(record):
-    """review_panel_shell.surfacedBlockingSeverities — the NEW (non-carried) blocking severities
+    """The NEW (non-carried) blocking severities
     a round surfaced."""
     if not isinstance(record, dict):
         return []
@@ -169,7 +164,7 @@ def _surfaced_blocking_severities(record):
 
 
 def _confirmation_qualifies(record):
-    """review_panel_shell.confirmationQualifies — a confirmation is a qualifying FULL panel only
+    """A confirmation is a qualifying FULL panel only
     when every dimension ran FRESH at reviewer-deep with high confidence (#167 invariant)."""
     dims = record.get("dimensions") if isinstance(record, dict) else None
     if not isinstance(dims, dict) or not dims:
@@ -180,7 +175,7 @@ def _confirmation_qualifies(record):
 
 
 def _rework_across(records):
-    """review_panel_shell.reworkAcross — union of changedSubjects across records; any
+    """Union of changedSubjects across records; any
     missing/non-array surface is unknown → None → cross-cutting (fail toward one more panel)."""
     out = []
     for rec in records or []:
@@ -192,7 +187,7 @@ def _rework_across(records):
 
 
 def _panel_window(records):
-    """review_panel_shell.panelWindow — the qualifying confirmation panels and every record from
+    """The qualifying confirmation panels and every record from
     the last one onward (findings/rework since the last panel land on THOSE rounds' records)."""
     allr = [r for r in (records or []) if isinstance(r, dict)]
     qualifying = [r for r in allr if r.get("kind") == "confirmation" and _confirmation_qualifies(r)]
@@ -213,7 +208,7 @@ def _panel_window(records):
 
 
 def _further_confirmation_owed(records, doc_mode=False):
-    """review_panel_shell.furtherConfirmationOwed — is a FURTHER full confirmation still owed?
+    """Is a FURTHER full confirmation still owed?
     Before any qualifying panel the mandatory first one is owed; after, the #174 economics decide
     (Critical or cross-cutting under the cap re-arms; Critical at the cap parks)."""
     qualifying, since = _panel_window(records)
@@ -230,7 +225,7 @@ def _further_confirmation_owed(records, doc_mode=False):
 
 
 def _certification_summary(records):
-    """review_panel_shell.certificationSummary — how many QUALIFYING full panels ran and whether
+    """How many QUALIFYING full panels ran and whether
     any blocking finding surfaced since the last one (resolved by scoped verify, #174 req 4)."""
     qualifying, since = _panel_window(records)
     return {"fullPanels": len(qualifying),
@@ -238,7 +233,7 @@ def _certification_summary(records):
 
 
 def _confirmation_ready(records, round_no, just_marked, doc_mode=False):
-    """review_panel_shell.confirmationReady — whether THIS round is the full confirmation panel.
+    """Whether THIS round is the full confirmation panel.
 
     `just_marked` is the shell's loop-local truth that a fix marked confirmation THIS iteration:
     it distinguishes the within-run mandatory intermediate re-review (round marked+1, cheap) from
@@ -276,7 +271,7 @@ def _load_records(path, dimensions):
 
 
 def _load_deferred_set(path):
-    """review_panel_shell.loadDeferredSet — a missing/corrupt/odd-shaped deferred set reads as {}
+    """A missing/corrupt/odd-shaped deferred set reads as {}
     (advisory skip-set; record_deferred.py is the authoritative write path)."""
     try:
         with open(path, encoding="utf-8") as fh:
@@ -287,7 +282,7 @@ def _load_deferred_set(path):
 
 
 def _assemble_rounds(records, deferred_set):
-    """review_panel_shell.assembleRounds — prior rounds shaped for the breaker, deferred findings
+    """Prior rounds shaped for the breaker, deferred findings
     removed so a deferral never counts toward recurrence or progress."""
     skip = set((deferred_set or {}).keys())
     out = []
@@ -308,7 +303,7 @@ def _assemble_rounds(records, deferred_set):
 
 
 def _breaker_round_dimensions(dimensions):
-    """review_panel_shell._breakerRoundDimensions — {name: {status}} from a round's dimensions."""
+    """{name: {status}} from a round's dimensions."""
     out = {}
     for name, result in (dimensions or {}).items():
         if not isinstance(result, dict):
@@ -335,7 +330,7 @@ def _record_for_round(records, round_no):
 
 
 def _latest_coverage_ids(records):
-    """review_panel_shell's confirmation coverage-marker check reads the LATEST record's coverage
+    """The confirmation coverage-marker check reads the LATEST record's coverage
     decision ids (`records[records.length-1].coverageDecisions` → ids). The durable skeleton keeps
     coverageDecisions, so the plan decider surfaces this small scalar list for the shell to verify
     against the live coverage read (a decision lost between marking and confirmation → park)."""
@@ -624,7 +619,7 @@ def tally_round_decider(path, round_no, roster, max_rounds, gate, confidence, mi
             out["haltKind"] = halt_kind
         # #212 uncertified flag: a cannot-certify GATE rides the verdict even when this round routes
         # to the fix leg (terminal continue) — the readout/phase layer sees the coverage gap while
-        # fixes land. Mirrors review_panel_shell.tallyRound's `if (gate === 'cannot-certify')`.
+        # fixes land. Mirrors round_driver tallyRound's `if (gate === 'cannot-certify')`.
         if gate == "cannot-certify":
             out["uncertified"] = True
         # #118 fix-context fold: on a continue terminal, write the fixer worklist to disk here and
@@ -656,7 +651,7 @@ def compose_fix_context(records_path, current_findings_path, coverage_path, cove
     """Write the fixer's worklist to a runDir FILE and answer only {ok, path, bytes, sha256}.
 
     Content flows disk → the fixer's Read, never through a courier answer. The worklist mirrors
-    `review_panel_shell.buildFixContext`. Its `findings` array holds, in round order, every round's
+    ``compose_fix_context``. Its `findings` array holds, in round order, every round's
     findings (all severities). When `current_findings_path` is given the current round's rows are the
     FULL-bodied staged answer (evidence carried); otherwise — the folded tally-round path, which
     writes NO large body down — every round including the current one is the durable SKELETON
