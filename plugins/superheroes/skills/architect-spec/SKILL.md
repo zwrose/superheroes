@@ -70,6 +70,16 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
      record each area's disposition (Specify/Defer-to-build/N-A) in the `## Coverage` table at
      the end — not as an inline tag list inside the unhappy-paths section.
    - **Non-functional requirements as outcomes with a fit-criterion.**
+   - **Load-bearing mirror-facts carry a `[cite: …]` citation.** A *mirror-fact* is a spec
+     sentence asserting something about the EXISTING repo that the repo could contradict
+     ("reuses/extends the existing X", "the current limit is N", "today the system does Y").
+     Apply the test — "Could today's repo contradict this sentence?" YES → mirror-fact →
+     cite its repo source (`[cite: <repo-relative-path>]`, or `[cite: <path> § <anchor>]`
+     with `<anchor>` a literal substring in that file). A *definition* — a NEW behavior this
+     spec itself defines, the owner's *what* — mirrors nothing and carries NO citation.
+     Honor the **noise budget**: only load-bearing mirror-facts (ones the build relies on
+     being true) get citations; incidental mentions don't. Citations stay rare — a
+     citation-dense spec is usually leaking the build's *how* (CONVENTIONS §3.2).
    - **UI/UX references the actual Claude Design handoff output** (not a rewrite).
    - Plain language throughout, **no technical *how***. Delete sections that
      genuinely don't apply (UI/UX for non-user-facing work; Glossary when there are
@@ -85,11 +95,18 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
    re-review loop):
    - **Placeholders & guidance:** any `{{…}}`, "TBD", "TODO", or leftover
      `<!-- AUTHOR GUIDANCE … -->` comment? Fill or remove it — the owner sees none of it.
+     (A `[cite: …]` provenance marker is a sanctioned spec construct (CONVENTIONS §3.2),
+     not a leftover placeholder — never strip or flag it as `{{…}}`/TBD noise.)
    - **EARS + anti-slop:** does each functional requirement match an EARS pattern,
      state one behavior, avoid vague words, and carry an acceptance criterion? Split
      compound requirements; pin vague ones.
+   - **Provenance:** does every load-bearing mirror-fact carry a `[cite: …]` citation whose
+     path (and anchor, if any) resolves to a real repo source? Incidental facts and new
+     definitions do NOT carry one — a citation-dense spec is leaking the build's *how*.
    - **No tech leaked:** any implementation detail (libraries, schemas, APIs) that
-     belongs to the build's *how*? Move it out — the spec is the *what*.
+     belongs to the build's *how*? Move it out — the spec is the *what*. (A `[cite: …]`
+     provenance marker is a sanctioned spec construct (CONVENTIONS §3.2), not leaked
+     implementation detail — never strip or flag it as tech-leak or a path reference.)
    - **Coverage:** does the `## Coverage` table disposition every area (Specify/Defer/N-A),
      with each `Specify` backed by a real UFR — and are the significant unhappy paths actually
      addressed, not just the happy path?
@@ -113,3 +130,4 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
 | "Plain prose is fine for requirements" | Functional requirements are EARS + acceptance criteria. That's the verifiable contract. |
 | "A little tech detail clarifies it" | Tech is the build's *how*. Keep the spec to the *what*. |
 | "Owner approved the idea, I'll author straight off" | Author only from the *approved requirements*. If they weren't approved, back to `discovery`. |
+| "I'll just assert the repo does X, everyone knows it" | A load-bearing mirror-fact needs a resolving `[cite: …]` to its repo source. A fabricated repo fact is the #205 class — cite it or don't assert it. |

@@ -12,11 +12,12 @@ Red-team the-architect's **`spec` definition-doc** — the plain-language requir
 *what*) for a work-item (`docs/superheroes/<work-item>/spec.md`) — **before the owner gives
 final approval**. Discovery runs this (step 7) so the automated review catches ambiguity,
 missing coverage, and tech leakage **before** the owner spends their time. The main context
-is an orchestrator: it locates the spec, dispatches the same five specialist agents
-`/superheroes:review-code` uses (architecture, code, security, test, premortem) — **reframed
-to requirements quality** — in parallel against the spec, compiles their findings under the
-base rubric, attaches its own point of view, and **revises the spec in place** (auto-applying
-mechanical fixes, asking about judgment calls), then reports a readiness verdict.
+is an orchestrator: it locates the spec, dispatches **six doc-native lenses** — Clarity,
+Verifiability, Failure-Mode, Coherence, Safety & access, and Grounding — in parallel, compiles
+their findings under the base rubric, attaches its own point of view, and **revises the spec in
+place** (auto-applying mechanical fixes, asking about judgment calls), then reports a verdict.
+The five shared review-code reviewer agents run here in doc-native identity, plus a
+**spec-leg-only** `grounding-reviewer` seat (review-code stays five; review-spec runs six).
 
 **review-spec is ADVISORY — it never records `gates.review: passed`.** The **owner** is the
 spec's gate authority (the spec is the *what*, which only the owner can approve); Discovery
@@ -66,11 +67,12 @@ SESSION_DIR=$(mktemp -d /tmp/review-spec-XXXXXXXX)
 | ----------------------------------------- | ------------ | -------------------------------------------------------------- |
 | `$SESSION_DIR/meta.json`                  | orchestrator | Spec path, work-item, session dir, classification              |
 | `$SESSION_DIR/spec.md`                    | orchestrator | Stable copy of the target spec doc — subagents read this       |
-| `$SESSION_DIR/findings-architecture.json` | arch agent   | Architecture-reviewer findings array                           |
-| `$SESSION_DIR/findings-code.json`         | code agent   | Code-reviewer findings array                                   |
-| `$SESSION_DIR/findings-security.json`     | sec agent    | Security-reviewer findings array                               |
-| `$SESSION_DIR/findings-test.json`         | test agent   | Test-reviewer findings array                                   |
-| `$SESSION_DIR/findings-premortem.json`    | premortem agent | Premortem-reviewer (Failure-Mode) findings array            |
+| `$SESSION_DIR/findings-architecture.json` | arch agent   | Coherence-lens findings array                                  |
+| `$SESSION_DIR/findings-code.json`         | code agent   | Clarity-lens findings array                                    |
+| `$SESSION_DIR/findings-security.json`     | sec agent    | Safety & access-lens findings array                            |
+| `$SESSION_DIR/findings-test.json`         | test agent   | Verifiability-lens findings array                              |
+| `$SESSION_DIR/findings-premortem.json`    | premortem agent | Failure-Mode-lens findings array                            |
+| `$SESSION_DIR/findings-grounding.json`    | grounding agent | Grounding-lens findings array                               |
 | `$SESSION_DIR/compiled.json`              | orchestrator | Deduplicated, verified findings + summary + verdict            |
 
 ## Workflow
@@ -198,6 +200,13 @@ EOF
 
 The classification is informational — **it never narrows the dispatch** (the round schedule is script-owned; see §2/§5).
 
+**Compute additive doc focus notes.** `doc_focus_flags.py` deterministically scans the spec for migration / external-service signals and emits emphasis notes for the reviewer prompts. Like the `touches` classification, these are **additive — they add emphasis, they NEVER narrow the script-owned dispatch**:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+FOCUS_NOTES=$(python3 "$ROOT_DIR/lib/doc_focus_flags.py" --spec "$SESSION_DIR/spec.md" | jq -r '.focusNote // empty')
+```
+
 ### 2. Dispatch Summary
 
 Print this dispatch summary as a plain status message, then dispatch the specialists immediately (no approval gate):
@@ -205,12 +214,13 @@ Print this dispatch summary as a plain status message, then dispatch the special
 - **Spec doc:** `$SPEC_PATH` (work-item `$WORK_ITEM`) and its line count (`wc -l < $SESSION_DIR/spec.md`)
 - **Gate:** advisory — never grants `passed` (the owner approves in Discovery); may reset a *stale* approval to `pending` (step 6).
 - **Classification:** the `touches` array (e.g. `["access", "data", "money"]`)
-- **Specialists to dispatch (all five, in parallel — reframed to requirements quality):**
-  - `code-reviewer` → `findings-code.json` _(requirements clarity: EARS form, anti-slop, no tech leak)_
-  - `test-reviewer` → `findings-test.json` _(verifiability: every requirement has an acceptance criterion)_
-  - `premortem-reviewer` → `findings-premortem.json` _(coverage gaps: which significant unhappy path is missing)_
-  - `security-reviewer` → `findings-security.json` _(are access/privacy requirements captured as owner-visible outcomes)_
-  - `architecture-reviewer` → `findings-architecture.json` _(scope coherence: one work-item or several; internal consistency)_
+- **Specialists to dispatch (all six, in parallel — doc-native lenses):**
+  - `code-reviewer` → `findings-code.json` _(Clarity: EARS form, anti-slop, no tech leak)_
+  - `test-reviewer` → `findings-test.json` _(Verifiability: every requirement has an acceptance criterion)_
+  - `premortem-reviewer` → `findings-premortem.json` _(Failure-Mode: unhappy paths — which significant one is missing)_
+  - `security-reviewer` → `findings-security.json` _(Safety & access: access/privacy requirements as owner-visible outcomes)_
+  - `architecture-reviewer` → `findings-architecture.json` _(Coherence: internal consistency + cross-requirement contradiction)_
+  - `grounding-reviewer` → `findings-grounding.json` _(Grounding: uncited mirror-claims)_
 - **Session directory:** `$SESSION_DIR`
 
 **Resolve the model tiers once (band-wide knob).** Resolve each specialist's dispatch model
@@ -232,7 +242,7 @@ Per-round dispatch is **script-owned** (`spec_loop_plan.py` — the #125 converg
 
 ### 3. Dispatch Specialists in Parallel
 
-Launch the round's scheduled specialists (round 1: all five, per `$PLAN`) in a **single message with parallel reviewer dispatches** so they run in parallel, each dispatched by its reviewer name (resolve dispatch via the host tool map). On Codex, dispatch is `spawn_agent` loading `agents/<name>.md`'s methodology; collect with `wait_agent` — see the tool map. Each gets the same prompt template, parameterized by reviewer name, dimension label, and findings filename. The agent's review methodology is its own system prompt — the prompt below is context-only (paths and rules); do **not** tell it to read an agent file. Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`) so the subagent can read it. Substitute `<CORE_PATH>` and `<LAYER_PATH>` with the resolved absolute `$CORE` and `$LAYER` when building each subagent prompt (same path when legacy single-file; subagents do not inherit shell vars):
+Launch the round's scheduled specialists (round 1: all six, per `$PLAN`) in a **single message with parallel reviewer dispatches** so they run in parallel, each dispatched by its reviewer name (resolve dispatch via the host tool map). On Codex, dispatch is `spawn_agent` loading `agents/<name>.md`'s methodology; collect with `wait_agent` — see the tool map. Each gets the same prompt template, parameterized by reviewer name, dimension label, and findings filename. The agent's review methodology is its own system prompt — the prompt below is context-only (paths and rules); do **not** tell it to read an agent file. Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`) so the subagent can read it. Substitute `<CORE_PATH>` and `<LAYER_PATH>` with the resolved absolute `$CORE` and `$LAYER` when building each subagent prompt (same path when legacy single-file; subagents do not inherit shell vars):
 
 ```
 You are reviewing the-architect's `spec` definition-doc — the plain-language
@@ -250,7 +260,7 @@ calibration, verification rules, and findings output format. Read the project pr
 - Base rubric (severity, verification rules, findings format): <absolute RUBRIC path>
 - Core + layer calibration: <CORE_PATH> (threat model, patterns); <LAYER_PATH> (scope, focus)
 - CLAUDE.md (project conventions): CLAUDE.md
-- <if focus notes> Focus: <focus notes>
+- <if focus notes> Focus: <focus notes + $FOCUS_NOTES from §1>
 
 ## Calibration precedence
 Base rubric (binding) > CLAUDE.md (conventions) > profile (adder over CLAUDE.md)
@@ -278,27 +288,34 @@ into the spec, don't add more.** A good spec is:
   bundled), with definition of done, assumptions, constraints, and out-of-scope
   present. No leftover `{{…}}` / TBD / author-guidance comments.
 
-## Per-dimension framing (you are reviewing REQUIREMENTS)
-- Code-reviewer: requirements clarity & anti-slop — EARS form, one-behavior-each,
-  no vague words, an acceptance criterion on every functional requirement, and
-  **no technical *how* leaked** into the spec. Split compound requirements; flag
-  unmeasurable ones.
-- Test-reviewer: verifiability — is each requirement testable as written? Does each
-  carry an acceptance criterion, and do the significant unhappy paths have criteria
-  (not just the happy path)? A requirement you can't write a pass/fail for is too
-  vague.
-- Premortem-reviewer: coverage gaps — walk the coverage checklist and name the
-  significant unhappy path the spec OMITS (the empty state, the invalid input, the
-  wrong-person-access case, the double-submit, the limit) that will bite later.
-  Honor the profile's threat model (don't demand multi-user cases for a single-user
-  product).
-- Security-reviewer: are the **owner-visible** security/privacy/access requirements
-  captured — who may see/do what, what the wrong person sees, what must never leak —
-  as outcomes, not mechanisms? Flag a sensitive feature (money, personal data) with
-  no stated access rule. Do NOT propose an implementation.
-- Architecture-reviewer: scope coherence — is this genuinely ONE work-item, or
-  several bundled (should it be decomposed)? Are requirements mutually consistent
-  (no two that contradict)? Is anything specified that isn't this work-item's job?
+## Per-dimension framing (you are reviewing REQUIREMENTS — six doc-native lenses)
+- **Clarity** (`code-reviewer`): requirements clarity & anti-slop — EARS form,
+  one-behavior-each, no vague words, an acceptance criterion on every functional
+  requirement, and **no technical *how* leaked** into the spec. Split compound
+  requirements; flag unmeasurable ones.
+- **Verifiability** (`test-reviewer`): is each requirement testable as written? Does
+  each carry an acceptance criterion, and do the significant unhappy paths have criteria
+  (not just the happy path)? A requirement you can't write a pass/fail for is too vague.
+- **Failure-Mode** (`premortem-reviewer`): coverage gaps — walk the coverage checklist
+  and name the significant unhappy path the spec OMITS (the empty state, the invalid
+  input, the wrong-person-access case, the double-submit, the limit) that will bite
+  later. Honor the profile's threat model (don't demand multi-user cases for a
+  single-user product).
+- **Coherence** (`architecture-reviewer`): scope coherence — is this genuinely ONE
+  work-item, or several bundled (should it be decomposed)? Are requirements mutually
+  consistent — **no two that contradict** (cross-requirement contradiction)? Is anything
+  specified that isn't this work-item's job?
+- **Safety & access** (`security-reviewer`): are the **owner-visible**
+  security/privacy/access requirements captured — who may see/do what, what the wrong
+  person sees, what must never leak — as outcomes, not mechanisms? Flag a sensitive
+  feature (money, personal data) with no stated access rule. Do NOT propose an
+  implementation.
+- **Grounding** (`grounding-reviewer`): does the spec state a **mirror-claim** — a fact
+  it echoes from the repo (a superseded/fabricated issue or PR ref, a fabricated quote, a
+  requirement contradicting the gate it describes) — **without grounding it**? Flag
+  uncited mirror-claims for verification; a clean pass means none. (Full provenance
+  methodology — mirror-vs-definition, citation syntax, the dangling-citation validator —
+  is issue #517; this seat is a minimal brief until then.)
 
 ## Out of scope at spec time
 - Proposing or grading a technical approach (that stays with the build; only flag tech that
@@ -311,11 +328,14 @@ into the spec, don't add more.** A good spec is:
   different heading or tagged Defer-to-build / N-A.
 - Before flagging "vague", confirm there is no acceptance criterion elsewhere that
   pins it.
+- **Provenance:** a `[cite: …]` marker is a sanctioned spec construct (CONVENTIONS §3.2) — never flag it as tech-leak, a path reference, or `{{…}}`/TBD noise; and read the cited source before asserting any mirror claim (that the spec contradicts a repo fact), else emit it Low or drop it.
 
 ## Output
 Write findings to $SESSION_DIR/findings-<agent>.json as a JSON array per the base
 rubric's "Findings output format" section. The `file` is the spec path. Set
-`dimension` to "<dimension>" on every entry. If you have nothing to flag, write
+`dimension` to "<dimension>" on every entry — this `<dimension>` is the **spec-leg
+dimension label**; set it on every finding, **overriding your agent's own default
+`dimension` token** for this dispatch. If you have nothing to flag, write
 `[]` — do not skip writing the file.
 ```
 
@@ -323,17 +343,20 @@ Per-agent substitutions:
 
 | reviewer | `<agent>` (findings filename) | `<dimension>` |
 | ---------------------------- | ----------------------------- | ------------- |
-| architecture-reviewer        | architecture                  | Architecture  |
-| code-reviewer                | code                          | Code          |
-| security-reviewer            | security                      | Security      |
-| test-reviewer                | test                          | Test          |
+| architecture-reviewer        | architecture                  | Coherence     |
+| code-reviewer                | code                          | Clarity       |
+| security-reviewer            | security                      | Safety-access |
+| test-reviewer                | test                          | Verifiability |
 | premortem-reviewer           | premortem                     | Failure-Mode  |
+| grounding-reviewer           | grounding                     | Grounding     |
+
+Fold `$FOCUS_NOTES` (computed in §1) into each agent's `Focus:` context line — **additive emphasis only; it never narrows the script-owned dispatch** (consistent with the classification invariant). When `$FOCUS_NOTES` is empty, omit the Focus line.
 
 After dispatch, wait for all dispatched agents to return. Each writes its findings file to `$SESSION_DIR/`. The orchestrator does not read agent transcripts — only the JSON files.
 
 ### 4. Compile Findings (main context)
 
-Read the `$SESSION_DIR/findings-*.json` files of the dimensions that ran this round (a skipped dimension carried a clean result and contributes none). Apply, in order:
+As the **FIRST compile action** (main context, every round), run the deterministic citation validator — `python3 "$ROOT_DIR/lib/citation_validator.py" check --spec "$SESSION_DIR/spec.md" --root "$ROOT"` (prints a JSON findings array, possibly `[]`) — and MERGE its findings into the pool. Then read the `$SESSION_DIR/findings-*.json` files of the dimensions that ran this round (a skipped dimension carried a clean result and contributes none) into the same pool. The validator runs at the **compile layer**, NOT as a sixth dispatched dimension, and does NOT touch `spec_loop_plan.DIMENSIONS`; its findings cite the spec `file:line`, so they survive the citation check, dedupe, and verdict steps below. See `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-spec/reference/provenance.md` for the mirror/grounding detail. Apply, in order:
 
 1. **Citation check.** Drop any finding with `file == null` or `line == null`.
 2. **Dedupe by spec section + topic.** When two findings target the same requirement and same topic (e.g. both flagging "no acceptance criterion"), merge them: concatenate bodies with a separator, keep the higher severity, list both dimensions (e.g. `"Test + Code"`).

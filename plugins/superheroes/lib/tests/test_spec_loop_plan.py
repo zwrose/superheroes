@@ -33,10 +33,10 @@ def _load(path, name):
 SLP = _load(os.path.join(_HERE, "..", "spec_loop_plan.py"), "spec_loop_plan")
 
 DIMS = ["architecture-reviewer", "code-reviewer", "security-reviewer",
-        "test-reviewer", "premortem-reviewer"]
+        "test-reviewer", "premortem-reviewer", "grounding-reviewer"]
 SUFFIX = {"architecture-reviewer": "architecture", "code-reviewer": "code",
           "security-reviewer": "security", "test-reviewer": "test",
-          "premortem-reviewer": "premortem"}
+          "premortem-reviewer": "premortem", "grounding-reviewer": "grounding"}
 
 SPEC_V1 = "# Spec\n\n## Requirements\n\nFR-1 the system shall foo.\n\n## Coverage\n\nEmpty state: N-A.\n"
 SPEC_V2 = "# Spec\n\n## Requirements\n\nFR-1 the system shall foo precisely.\n\n## Coverage\n\nEmpty state: N-A.\n"
@@ -147,6 +147,33 @@ def test_custom_dimensions_list_is_honored(tmp_path, capsys):
     _, out = _run(capsys, "plan", "--session-dir", session_dir, "--round", "1",
                   "--dimensions", '["architecture-reviewer"]')
     assert [d["dimension"] for d in out["dims_to_run"]] == ["architecture-reviewer"]
+
+
+# --- sanctioned-subset guard (#515/#34) ---------------------------------------
+
+def test_sanction_dimensions_defaults_to_full_roster_on_none():
+    # missing input → the full sanctioned roster (all six seats), in DIMENSIONS order
+    assert SLP.sanction_dimensions(None) == list(SLP.DIMENSIONS)
+
+
+def test_sanction_dimensions_honors_a_proper_sanctioned_subset():
+    # a proper subset of sanctioned seats is honored as-is (membership, not equality),
+    # normalized to DIMENSIONS order
+    kept = SLP.sanction_dimensions('["security-reviewer", "architecture-reviewer"]')
+    assert kept == ["architecture-reviewer", "security-reviewer"]
+    assert SLP.sanction_dimensions('["grounding-reviewer"]') == ["grounding-reviewer"]
+
+
+def test_sanction_dimensions_drops_unsanctioned_but_keeps_sanctioned():
+    # an unsanctioned entry never widens/corrupts the roster; the sanctioned member is kept
+    assert SLP.sanction_dimensions(
+        '["architecture-reviewer", "rogue-reviewer"]') == ["architecture-reviewer"]
+
+
+def test_sanction_dimensions_fails_closed_when_no_sanctioned_entry():
+    # all-unsanctioned, empty, non-list, and malformed inputs all fail closed to the full roster
+    for raw in ('["rogue-reviewer"]', "[]", '"architecture-reviewer"', "{}", "not-json", ""):
+        assert SLP.sanction_dimensions(raw) == list(SLP.DIMENSIONS), raw
 
 
 def test_malformed_dimensions_falls_back_to_default_roster(tmp_path, capsys):
@@ -605,6 +632,8 @@ def test_decide_delegates_to_shared_round_policy(tmp_path, capsys):
             "test-reviewer": {"action": "skip", "tier": "reviewer-deep",
                               "reason": "sentinel-skip", "carriedFromRound": 1},
             "premortem-reviewer": {"action": "skip", "tier": "reviewer-deep",
+                                   "reason": "sentinel-skip", "carriedFromRound": 1},
+            "grounding-reviewer": {"action": "skip", "tier": "reviewer-deep",
                                    "reason": "sentinel-skip", "carriedFromRound": 1},
         },
         "escalationPolicy": "cheap-first",

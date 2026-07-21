@@ -1,4 +1,4 @@
-<!-- rubric-version: 6 -->
+<!-- rubric-version: 7 -->
 # review-base
 
 The source of truth for review **severity, verification rules, findings format,
@@ -9,7 +9,10 @@ project profile at `.claude/review-profile.md`; **conventions** live in the
 project's `CLAUDE.md`. If a review finding contradicts this file, this file wins.
 
 `rubric-version` (top of file) is the staleness signal for "the rubric changed";
-bump it on any semantic change here.
+bump it on a semantic change to **this file's own stated scope** — severity,
+verification rules, findings format, triage, or verdicts. **Additively extending
+the Dimensions data list with a new lens label is NOT a version-bumping change** — it
+adds a data entry, not a rule, and no *project calibration* changed.
 
 ## Calibration comes from the profile (not baked in here)
 
@@ -43,7 +46,17 @@ Minor and Nit findings never change the verdict regardless of strictness.
    caller already guards the case, downgrade or drop. (Critical findings are also
    checked for reachability, but under the strict posture, flag when in doubt.)
 5. **Docs/spec changes:** spot-check factual claims (signatures, paths, error
-   types) against source, not just prose.
+   types) against source, not just prose. **Mirror-claim verification.** A **mirror
+   claim** — a finding asserting the spec contradicts, misstates, or fabricates a repo
+   fact — may be emitted **High** confidence only if the reviewer has **read the cited
+   source** (or, when the spec left it uncited, the repo location it mirrors). Without
+   that read, emit it **Low** (naming the unread source in `evidence`) or drop it. The
+   deterministic `citation_validator.py` covers only *existence* (does the cited
+   path/anchor resolve); whether the source *says* what the spec claims — content-match
+   — is this verifier judgment. **Carve-out:** A `[cite: …]` provenance marker is a
+   sanctioned spec construct (CONVENTIONS §3.2), not leaked implementation detail and
+   not a leftover placeholder — never strip or flag it as tech-leak, a path reference,
+   or `{{…}}`/TBD noise.
 6. **Single source of truth for cross-boundary facts.** A fact consumed across a
    module or language boundary (phase lists, event/verb names, schema field sets,
    verdict/reason tokens, path layouts, reviewer rosters) must have one
@@ -84,11 +97,31 @@ is the one authoritative schema; agents must not redefine the fields inline.
 
 **Dimensions** (the orchestrator reads this list; it is data, not hard-wired —
 adding one later is a single-place change): `Architecture`, `Code`, `Security`,
-`Test`, `Failure-Mode`. These five are the default crew; each dispatching skill
-names the subset it runs. The dispatching skill assigns each agent its dimension
-and its `id` prefix; the default crew runs one agent per dimension (e.g. the
-Security reviewer emits `security-001`, …; the Failure-Mode reviewer emits
-`premortem-001`, …).
+`Test`, `Failure-Mode`, `Clarity`, `Verifiability`, `Coherence`, `Safety-access`,
+`Grounding`. The crew carries **two label sets drawn from the same reviewer
+agents**: a **code-leg** set (`Architecture`, `Code`, `Security`, `Test`,
+`Failure-Mode`) that `/superheroes:review-code` and `/superheroes:audit-debt`
+dispatch, and a **doc-native spec-leg** set (`Clarity`, `Verifiability`,
+`Coherence`, `Safety-access`, `Failure-Mode`, `Grounding`) that
+`/superheroes:review-spec` dispatches — the five shared reviewers reframed to
+requirements quality, plus `Grounding`, a spec-only seat with no review-code agent.
+Each dispatching skill names the subset it runs and assigns each agent its dimension
+and its `id` prefix; a leg runs one agent per dimension (e.g. the Security reviewer
+emits `security-001`, …; the Failure-Mode reviewer emits `premortem-001`, …).
+
+Separately from those five risk-domain dimensions, the review crew has one **narrow
+sixth seat — the grounding seat** (`agents/grounding-seat.md`), which is **NOT** one of
+the five code-leg risk lenses above and must not be counted as one: it adds no risk
+lens, it checks the PR's self-claims against the repo. It runs at the `reviewer` model
+tier and **never** `mechanical` — a false "the claims check out" is a silence nothing
+downstream re-checks, so it must not go to the tier whose failure mode is confident wrong
+fills. On the **spec leg** this seat is already live — it is the `Grounding` label in the
+Dimensions enumeration line above, dispatched by `/superheroes:review-spec` (as of
+#515/#517). Its **code-leg (review-code) live dispatch is owned by #510** (panel
+composition v2); until then the review-code orchestrator performs the same self-claims /
+PR-body-honesty check inline (the interim mechanism). As a code-leg lens it is not yet
+part of review-code's dispatched dimensions, and no code-leg drift test should read it as
+one.
 
 ## Severity caps
 
@@ -96,6 +129,30 @@ Security reviewer emits `security-001`, …; the Failure-Mode reviewer emits
 - **Critical / Important:** uncapped (load-bearing).
 - **Minor:** uncapped, but each must pass the verification rules; if reporting
   >10, dedupe — they're usually facets of one issue.
+
+## High-signal bar (global Do NOT Flag)
+
+This is the consolidated, citable **global "Do NOT Flag" bar** the agent briefs
+reference — the one place that names the low-signal classes every dimension drops, so
+downstream verification (synthesis, orchestrator POV) is cheaper because these never
+enter the finding stream. It does **not** restate thresholds (per CONVENTIONS §11
+single-source spirit); it **points at** the rule that already owns each class. Drop a
+candidate finding that is only:
+
+- **Pre-existing** — an issue in lines the diff did not change. Governed by the
+  **Diff-scope rule** (verification rule #2, above) and the **Pre-existing** severity
+  tier (in the Severity-tiers table, above): these are SKIPPED, not reported. (Audit/sweep
+  mode is the sole exception, per that rule.)
+- **Linter / tooling territory** — anything an automated formatter, linter, or
+  type-checker already surfaces. Governed by **CoV step 4** ("Not tooling-caught", below);
+  human-judgment style/naming/cleanup a tool does *not* catch remains reportable as a Nit.
+- **Pedantic nit** — take-it-or-leave-it style/naming the author has no real decision to
+  make on. Governed by the **Nit** severity tier (table, above) and the **Nit caps**
+  (Severity caps, above: ≤5 reported, rest summarized as a count). When in doubt whether a
+  style point clears the bar, it does not — summarize it in the count, don't flag it.
+
+An agent brief may cite this section as "the base rubric's global 'Do NOT Flag' /
+high-signal bar"; it is the shared home those citations resolve to.
 
 ## Document-review severity (applies only when `docType` is `plan` or `tasks`)
 

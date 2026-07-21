@@ -143,6 +143,7 @@ _Read side — excessive data exposure:_
 - **SSRF under a single-user / no-outbound threat model.** Profile-gated: when the profile declares single-user or no untrusted outbound surface, do not raise SSRF on a request-controlled outbound destination. Only flag under a multi-tenant/public threat model, and cite the gate. Honor the profile.
 - **BFLA/BOLA/BOPLA attacks the profile's threat model excludes.** A multi-tenant property-exposure or cross-principal function finding is out of scope when the profile declares a single-user threat model — the new OWASP-named rules are still gated by the profile's threat model and this Do NOT Flag list exactly like the existing rules. No FP inflation under restrictive threat models.
 - **Full dependency CVE/advisory sweeps.** Deferred to `/superheroes:audit-debt`. Do not audit the dependency tree for known vulnerabilities here; limit to secrets and dependencies added by the diff (see "Secrets & supply chain").
+- Anything in the base rubric's global "Do NOT Flag" (high-signal) bar or the profile's scope exclusions.
 
 ## Verification Rules
 

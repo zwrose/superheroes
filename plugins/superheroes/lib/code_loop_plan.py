@@ -50,6 +50,9 @@ import loop_plan_common as common  # noqa: E402
 
 DEEP = common.DEEP
 CHEAP = common.CHEAP
+# The code leg stays the FIVE shared reviewers. The `grounding-reviewer` seat is
+# spec-leg-only (doc provenance) — deliberately absent from the code roster; the
+# per-leg sanctioned-subset invariant is pinned in test_dispatch_tables.py.
 DIMENSIONS = ["architecture-reviewer", "code-reviewer", "security-reviewer",
               "test-reviewer", "premortem-reviewer"]
 AGENT_SUFFIX = {"architecture-reviewer": "architecture", "code-reviewer": "code",

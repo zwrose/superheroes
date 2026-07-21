@@ -74,6 +74,7 @@ At plan time also flag a missing **Failure-handling statement**: if the plan int
 - **Layering/abstraction/coupling** — `architecture-reviewer`'s.
 - Hypothetical hardware/cosmic failures, multi-region/DR concerns, and anything else the profile's scope exclusions name.
 - Pre-existing failure modes outside the diff (base rubric diff-scope rule) — in code mode, the trigger must originate in a `+`/`-` line.
+- Anything in the base rubric's global "Do NOT Flag" (high-signal) bar or the profile's scope exclusions.
 
 ## Verification Rules
 
