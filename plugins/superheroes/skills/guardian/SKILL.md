@@ -1,0 +1,124 @@
+---
+name: guardian
+description: Use to run the Guardian sweep — a periodic read-only sweep of repo health (duplication, complexity, coupling, dependency and doc freshness, dead code) that surfaces maintainability drift as plain-language consequences with receipts. Deterministic tools detect; one model pass validates each candidate against the project's own conventions and drafts the consequence. Drift-over-baseline means it reports only what changed since the last sweep, never re-raising settled trades. It never edits code, never commits or pushes, and never files issues or runs enforcement — it recommends; the advisor triages and consults the owner. Not code review of a change (that is review-code).
+user-invocable: true
+---
+
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+
+# Guardian
+
+Periodic **read-only sweep of repo health**. Deterministic collectors detect candidates; one model pass validates each against the project's declared conventions and writes plain-language consequences with receipts. Reports **drift over a baseline** — only what changed since the last sweep surfaces; settled trades stay suppressed. Per LEDGERS §2, the sweep **never edits code, never commits or pushes, never files issues, and never runs or owns enforcement** — it recommends; the advisor triages and consults the owner.
+
+This skill is **not** `/superheroes:review-code`. Review-code finds bugs in a change; Guardian surfaces maintainability drift across the whole repo on a cadence.
+
+## Invocation
+
+| Form | Behavior |
+| --- | --- |
+| `/superheroes:guardian` | Run a read-only repo-health sweep → drift report of plain-language consequences with receipts. Never edits, commits, or files. |
+
+## What a sweep is
+
+1. **Collect (deterministic).** Registered lenses run standard OSS collectors with thin normalization. Each lens diffs its digest against the prior snapshot and surfaces only new or worsened candidates. Red lines (absolute thresholds) bypass the baseline quiet rule.
+2. **Validate (one model pass, inline).** For each surfaced candidate, the running session validates against `CLAUDE.md`, `CONVENTIONS`, the calibration profile, and any spec'd designs — killing unactionable ones (wrong context, sanctioned convention, test/generated code). Survivors get a one-sentence plain consequence, its receipt, and an effort estimate priced from measured evidence, never rule-catalog severity.
+3. **Finalize (deterministic).** The sweep writes the report and compare-and-swap-replaces the drift baseline.
+
+**Drift-over-baseline.** The first sweep records a baseline and stays quiet except absolute red lines. Later sweeps surface only what changed.
+
+**Lens rollout.** The health lenses (duplication, complexity, coupling, dependency and doc freshness, dead code) land across the guardian arc. This shell ships the sweep machinery with the lens registry empty — a sweep today reports a clean baseline until lenses are added.
+
+## Run it
+
+The sweep runs in the advisor's own session, read-only. No external dispatch — the one model validation pass happens inline here.
+
+### 1. Resolve + collect
+
+Save the bundle JSON to a temp file. Sub-tools `guardian_store.py paths` and `guardian_sweep.py verify-config` are available when you need resolved artifact paths or fact verification.
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+BUNDLE=$(mktemp /tmp/guardian-bundle-XXXXXXXX.json)
+python3 "$ROOT_DIR/lib/guardian_sweep.py" collect --cwd . > "$BUNDLE"
+cat "$BUNDLE" | jq .
+```
+
+Optional — resolved storage paths (CONVENTIONS §2):
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 "$ROOT_DIR/lib/guardian_store.py" paths --cwd . | jq .
+```
+
+Optional — trust-but-verify the four FACTS before validating:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 "$ROOT_DIR/lib/guardian_sweep.py" verify-config --cwd . | jq .
+```
+
+The bundle carries: `surfaced` (candidates needing validation), `funnel`, `factVerdicts`, `ledgerStatus`, `redLines`, `lensMeta` (per-lens validation guidance and consequence templates for surfaced lenses), and `nextSnapshot` (the staged baseline). Read `ledgerStatus` first — filed/tracked items are already dispositioned; do not re-litigate them.
+
+### 2. Validate (the one model pass)
+
+For **each** entry in the bundle's `surfaced` list, validate the candidate:
+
+- Read `bundle.lensMeta[<lens>].validationGuidance` for the lens-specific validation rubric, then `CLAUDE.md`, `CONVENTIONS.md`, the calibration layers (`core.md`, plugin layers), and any relevant spec definition-docs.
+- **Reject** if unactionable: wrong context, sanctioned project convention, test/generated/boilerplate code, or already covered by a settled ledger trade.
+- **Validate** survivors: draft exactly **one plain sentence** consequence (phrase it using `bundle.lensMeta[<lens>].consequenceTemplate` as guidance), its **receipt** (the measured evidence), an **effort** estimate from that evidence (not rubric severity), and a **ledgerJoin** id (stable join key for the ledger).
+
+Produce a **dispositions JSON** — exactly one entry per surfaced `id`:
+
+```json
+[
+  {"id": "<surfaced-id>", "verdict": "validated", "consequence": "…", "receipt": "…", "effort": "…", "ledgerJoin": "…"},
+  {"id": "<surfaced-id>", "verdict": "rejected", "reason": "…"},
+  {"id": "<surfaced-id>", "verdict": "degraded", "reason": "…"}
+]
+```
+
+Verdicts: `validated` | `rejected` | `degraded`. A `validated` entry requires non-empty `consequence`, `receipt`, `effort`, and `ledgerJoin`.
+
+**Ledger-first rule.** The collect step already moved filed/tracked items into `ledgerStatus` and suppressed settled trades. The model never re-opens those — only the `surfaced` list gets validated.
+
+Write dispositions to a temp file:
+
+```bash
+DISP=$(mktemp /tmp/guardian-disp-XXXXXXXX.json)
+# write the JSON array to $DISP
+```
+
+### 3. Finalize
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 "$ROOT_DIR/lib/guardian_sweep.py" finalize --cwd . \
+  --bundle "$BUNDLE" --dispositions "$DISP" | jq .
+```
+
+On success, this writes `guardian/report.md` and compare-and-swap-replaces `guardian/latest.json`.
+
+**Refusal outcomes (surface honestly, do not retry blindly):**
+
+- `invalid-dispositions` — a surfaced id is missing, duplicated, or a `validated` entry lacks required fields. Fix the dispositions and re-run finalize with the same bundle.
+- `raced` — a concurrent sweep advanced the snapshot since collect. Re-run from step 1; the prior baseline stays intact.
+
+## The report + storage
+
+Artifacts live beside `core.md` under the band storage mode (CONVENTIONS §2):
+
+| Path | Role |
+| --- | --- |
+| `guardian/report.md` | Latest sweep report — advisor-facing plain consequences with receipts. Written only by finalize. |
+| `guardian/latest.json` | Drift-baseline snapshot. Written only by finalize (CAS). |
+| `guardian/ledger.md` | Dispositions ledger — read-only in this arc; the sweep reads it to suppress settled trades. |
+
+In in-repo mode these commit with the repo; in global mode they live in the project store. The sweep is the single writer of `report.md` and `latest.json`.
+
+## The lens contract
+
+Adding a health lens is a PR that meets [the lens contract](reference/lens-contract.md) with hands-on receipts from a real repo — a lens proposed from a tool's README is not a lens.
+
+## Cost + cadence
+
+Deterministic collectors run in seconds plus one model pass. The sweep runs on the advisor's nudge (≥10 merges or ≥14 days since the last sweep) — no superheroes-owned scheduler; the nudge/triage loop is a later arc issue.
