@@ -64,6 +64,13 @@ LENS_SUPPLIED_CONFORMANCE_SCENARIOS = (
 REQUIRED_CONFORMANCE_SCENARIOS.
 """
 
+CONFORMANCE_CASE_FIELDS = ("stdout", "clean_stdout", "exit")
+"""Authoritative field schema for a lens-supplied ``conformance_cases()`` entry.
+
+Optional keys ``config`` and ``prev_digest`` are forwarded to ``collect()`` but
+are not part of this tuple.
+"""
+
 """A lens is any object providing:
   - name: str, collector_version: str
   - cost: dict — declared collection cost, e.g. {"collectorSeconds": float, "note": str}
@@ -137,6 +144,10 @@ def validate_lens(lens):
     reasons = []
     if not isinstance(getattr(lens, "name", None), str) or not lens.name:
         reasons.append("name must be a non-empty str")
+    elif lens.name.startswith("module:"):
+        reasons.append(
+            "name must not use the reserved 'module:' prefix "
+            "(reserved for load-failure stand-ins)")
     if not isinstance(getattr(lens, "collector_version", None), str) or not lens.collector_version:
         reasons.append("collector_version must be a non-empty str")
     cost = getattr(lens, "cost", None)
@@ -323,6 +334,8 @@ def registered_lenses():
 
     module_fallback = {}
     for err in _PRODUCTION_LOAD_ERRORS:
+        if err.get("lens") in _PRODUCTION_COLLIDED_NAMES:
+            continue
         names = _stub_names_for_error(err)
         added_any = False
         for name in names:

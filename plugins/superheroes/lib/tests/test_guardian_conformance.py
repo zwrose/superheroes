@@ -163,11 +163,10 @@ def assert_lens_conformance(lens, cwd="/tmp", root="/tmp"):
                 _lens_supplied_run_body(case["stdout"], exit_code))
             out, status, reason = _run_conformance_probe(
                 lens, scenario, run_stub, call_counter, config, prev_digest, cwd, root)
-            assert not (
-                status == "collected" and (out.get("candidates") or []) == []
-            ), (
-                "lens %r scenario %r: tool reported problems must not read as "
-                "collected with zero candidates" % (lens.name, scenario))
+            assert status in ("not-collected", "partial"), (
+                "lens %r reported-nonzero-parsed-zero: a tool that reported "
+                "problems with zero parsed candidates must degrade (never read "
+                "as collected)" % (lens.name,))
 
             if status != "collected":
                 diff_out = lens.diff(prev_digest, out.get("digest"))
@@ -466,7 +465,7 @@ def test_missing_reported_nonzero_fake_fails():
 
 
 def test_silent_clean_fake_fails():
-    with pytest.raises(AssertionError, match="reported problems"):
+    with pytest.raises(AssertionError, match="must degrade \\(never read as collected\\)"):
         assert_lens_conformance(SilentCleanFake())
 
 

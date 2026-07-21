@@ -113,3 +113,18 @@ def test_lens_contract_covers_lens_supplied_conformance_scenarios():
         "LENS_SUPPLIED_CONFORMANCE_SCENARIOS membership changed — update this golden "
         "set AND lens-contract.md"
     )
+
+
+def test_lens_contract_covers_conformance_case_fields():
+    """CONFORMANCE_CASE_FIELDS ↔ reference prose (§11 drift guard)."""
+    fields = guardian_lens.CONFORMANCE_CASE_FIELDS
+    assert fields, (
+        "guardian_lens.CONFORMANCE_CASE_FIELDS is empty — no authoritative home")
+    text = _read(_LENS_CONTRACT)
+    for field in fields:
+        assert field in text, (
+            "lens-contract.md missing conformance case field %r" % field)
+    assert set(fields) == {"stdout", "clean_stdout", "exit"}, (
+        "CONFORMANCE_CASE_FIELDS membership changed — update this golden set "
+        "AND lens-contract.md"
+    )

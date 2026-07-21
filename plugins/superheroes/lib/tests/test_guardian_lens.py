@@ -122,6 +122,13 @@ def test_register_rejects_duplicate_name():
     gl.REGISTRY.clear()
 
 
+def test_register_rejects_module_prefix_name():
+    gl.REGISTRY.clear()
+    with pytest.raises(ValueError, match="reserved 'module:' prefix"):
+        gl.register(FixtureLens(name="module:foo"))
+    gl.REGISTRY.clear()
+
+
 def _reset_production_loader():
     gl.REGISTRY.clear()
     gl._PRODUCTION_LOADED = False
@@ -206,11 +213,15 @@ def test_loader_duplicate_name_across_modules_records_error(monkeypatch):
     sys.modules["dup_mod_a_558"] = mod_a
     sys.modules["dup_mod_b_558"] = mod_b
     monkeypatch.setattr(gl, "PRODUCTION_LENS_MODULES", ("dup_mod_a_558", "dup_mod_b_558"))
-    monkeypatch.setattr(gl, "PRODUCTION_LENS_NAMES", {})
+    monkeypatch.setattr(gl, "PRODUCTION_LENS_NAMES", {
+        "dup_mod_a_558": ("shared-name",),
+        "dup_mod_b_558": ("shared-name",),
+    })
     lenses = gl.registered_lenses()
-    assert sum(1 for l in lenses if l.name == "shared-name") == 1
-    dup = [l for l in lenses if l.name == "shared-name"][0]
-    assert isinstance(dup, gl._UnavailableLens)
+    collision_standins = [l for l in lenses if l.name == "shared-name"]
+    assert len(collision_standins) == 1
+    assert isinstance(collision_standins[0], gl._UnavailableLens)
+    assert not any(l.name == "module:dup_mod_b_558" for l in lenses)
     assert any("duplicate lens name" in e.get("error", "")
                for e in gl.production_lens_load_errors())
     del sys.modules["dup_mod_a_558"]
@@ -230,12 +241,16 @@ def test_loader_duplicate_name_degrades_not_first_concrete(monkeypatch):
     sys.modules["dup_lens_mod_b_558"] = mod_b
     monkeypatch.setattr(
         gl, "PRODUCTION_LENS_MODULES", ("dup_lens_mod_a_558", "dup_lens_mod_b_558"))
-    monkeypatch.setattr(gl, "PRODUCTION_LENS_NAMES", {})
+    monkeypatch.setattr(gl, "PRODUCTION_LENS_NAMES", {
+        "dup_lens_mod_a_558": ("dup-lens",),
+        "dup_lens_mod_b_558": ("dup-lens",),
+    })
     lenses = gl.registered_lenses()
-    dup = [l for l in lenses if l.name == "dup-lens"]
-    assert len(dup) == 1
-    assert isinstance(dup[0], gl._UnavailableLens)
-    assert not isinstance(dup[0], FixtureLens)
+    collision_standins = [l for l in lenses if l.name == "dup-lens"]
+    assert len(collision_standins) == 1
+    assert isinstance(collision_standins[0], gl._UnavailableLens)
+    assert not isinstance(collision_standins[0], FixtureLens)
+    assert not any(l.name == "module:dup_lens_mod_b_558" for l in lenses)
     assert any(
         e.get("lens") == "dup-lens" and "duplicate lens name" in e.get("error", "")
         for e in gl.production_lens_load_errors())
