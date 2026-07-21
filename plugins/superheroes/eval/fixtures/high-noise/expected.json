@@ -72,7 +72,7 @@
     {
       "file": "src/lib/text-utils.ts",
       "lineHint": "export function truncate(text, limit) {",
-      "whyNotFlagged": "three-call-sites — a reviewer may flag truncate as an unjustified or premature abstraction. architecture-reviewer's verification rule #2 requires grepping the call sites first and DROPPING the finding at 3+; the diff is the complete universe and shows four, in src/handlers/documents.ts, src/handlers/exports.ts, and twice in src/services/documents.ts."
+      "whyNotFlagged": "three-call-sites — a reviewer may flag truncate as an unjustified or premature abstraction. architecture-reviewer's verification rule #2 requires grepping the call sites first and DROPPING the finding at 3+; the diff is the complete universe and shows five, one each in src/handlers/documents.ts, src/handlers/exports.ts and src/lib/doc-format.ts, plus two in src/services/documents.ts."
     },
     {
       "file": "src/handlers/documents.test.ts",
@@ -97,7 +97,7 @@
     {
       "file": "src/services/publish.ts",
       "lineHint": "const response = await retryFetch(PUBLISH_ENDPOINT, {",
-      "whyNotFlagged": "retry-wrapped — a reviewer may flag the outbound CDN call as an unguarded dependency with no timeout and no bounded retry. It goes through retryFetch with an explicit timeoutMs and retries, the project's outbound wrapper per CLAUDE.md and the profile, and that wrapper's implementation (AbortController timeout, bounded attempt loop) sits at the top of this same file. premortem-reviewer's Do NOT Flag list drops guarded flows, and the realistic-trigger rule's leg 2 requires grepping for the guard before claiming it missing."
+      "whyNotFlagged": "retry-wrapped — a reviewer may flag the outbound CDN call as an unguarded dependency with no timeout and no bounded retry, or as a non-idempotent POST that retries can double-publish. It goes through retryFetch with an explicit timeoutMs and retries, the project's outbound wrapper per CLAUDE.md and the profile, and that wrapper's implementation (AbortController timeout, bounded attempt loop) sits at the top of this same file; the request also carries an Idempotency-Key header derived from the document (`cdn-publish:${workspaceId}:${id}`), the project's outbound-idempotency pattern per CLAUDE.md, so retrying the POST is safe. premortem-reviewer's Do NOT Flag list drops guarded flows, and the realistic-trigger rule's leg 2 requires grepping for the retry/timeout wrapper and the idempotency key before claiming either guard missing."
     },
     {
       "file": "src/services/publish.ts",

@@ -42,7 +42,9 @@ transaction has no such story.
 ## Outbound calls
 All outbound HTTP goes through `retryFetch(url, { timeoutMs, retries })`, defined
 at the top of `src/services/publish.ts` — it bounds each attempt with a timeout
-and caps the retries.
+and caps the retries. A non-GET outbound call that may be retried also carries an
+`Idempotency-Key` header derived from the durable identity of the operation (for
+CDN publish: `cdn-publish:${workspaceId}:${id}`), so a retry cannot double-apply.
 
 ## Migrations
 Every migration module exports BOTH `up()` and `down()`. A field swap is

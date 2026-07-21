@@ -377,7 +377,7 @@ diff --git a/src/services/publish.ts b/src/services/publish.ts
 index 1111111..2222222 100644
 --- a/src/services/publish.ts
 +++ b/src/services/publish.ts
-@@ -1,19 +1,71 @@
+@@ -1,19 +1,73 @@
  import { db } from "../db/client";
  
  // Pre-existing: every outbound call in this service goes through this
@@ -401,10 +401,12 @@ index 1111111..2222222 100644
 +const PUBLISH_ENDPOINT = "https://cdn.example.com/publish";
 +
 +export async function pushToCdn(doc) {
++  const idempotencyKey = `cdn-publish:${doc.workspaceId}:${doc.id}`;
 +  const response = await retryFetch(PUBLISH_ENDPOINT, {
 +    method: "POST",
 +    timeoutMs: 5000,
 +    retries: 3,
++    headers: { "Idempotency-Key": idempotencyKey },
 +    body: JSON.stringify({ id: doc.id, workspaceId: doc.workspaceId }),
 +  });
 +  return { ok: response.ok, status: response.status };
