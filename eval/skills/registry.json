@@ -61,6 +61,11 @@
       "see the whole project's calibration on one screen",
       "move a project between in-repo and out-of-repo storage"
     ],
+    "superheroes/guardian": [
+      "read-only sweep of repo health",
+      "never edits code",
+      "drift"
+    ],
     "superheroes/showrunner": [
       "run the long-lived advisor session for a superheroes project",
       "sizes and routes incoming work (build-ready vs. needs-discovery)",

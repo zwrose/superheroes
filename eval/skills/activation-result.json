@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-07-19",
+  "recordedAt": "2026-07-21",
   "observations": [
     {
       "skill": "superheroes/architect-discovery",
@@ -1656,6 +1656,132 @@
     {
       "skill": "superheroes/workhorse",
       "phrase": "review the code changes on this branch for bugs before merging",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "run the guardian sweep to check repo health",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "run the guardian sweep to check repo health",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "run the guardian sweep to check repo health",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "do a maintainability sweep of the whole repo and show me what drifted",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "do a maintainability sweep of the whole repo and show me what drifted",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "do a maintainability sweep of the whole repo and show me what drifted",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "run a read-only repo-health sweep and report the drift since last time",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "run a read-only repo-health sweep and report the drift since last time",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "run a read-only repo-health sweep and report the drift since last time",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "run /superheroes:guardian",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "run /superheroes:guardian",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "run /superheroes:guardian",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "review my code changes before I merge this pull request",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "review my code changes before I merge this pull request",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "review my code changes before I merge this pull request",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "write a spec for a new feature from these requirements",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "write a spec for a new feature from these requirements",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "write a spec for a new feature from these requirements",
       "direction": "should_not_fire",
       "run": 2,
       "activated": false
