@@ -27,6 +27,11 @@ ORIGINAL_FOUR = {
     "architecture-reviewer", "code-reviewer", "security-reviewer", "test-reviewer",
 }
 
+# The sanctioned-subset invariant (#515): the panel of `*-reviewer` agents is the sanctioned
+# universe. `grounding-reviewer` is a SPEC-LEG-ONLY seat (doc provenance) — it is in the
+# review-spec roster but deliberately absent from the review-code / audit-debt code roster.
+SPEC_ONLY = {"grounding-reviewer"}
+
 ROW_RE = re.compile(
     r"^\|\s*([a-z][a-z-]*-reviewer)\s*\|\s*([a-z-]+)\s*\|\s*([A-Za-z-]+)\s*\|",
     re.M)
@@ -78,30 +83,38 @@ def _js_const_str_list(rel, name):
 
 
 def test_code_reviewer_rosters_match_bundled_agents():
-    """CONVENTIONS §11: the reviewer roster is a cross-boundary fact re-typed as a
-    hand-maintained copy in Python (`code_loop_plan` / `spec_loop_plan` DIMENSIONS, and
-    the same roster re-keyed as AGENT_SUFFIX). The authoritative home is the set of
-    `agents/*-reviewer` files; each copy must equal it, so adding/removing/renaming a
-    reviewer breaks CI in every enumerated copy-holder rather than letting them silently
-    diverge (the PR #205 class). This enumeration is only as complete as the copies listed
-    below — a NEW copy must be added here (see the §11.2 caveat).
+    """CONVENTIONS §11 + the sanctioned-subset invariant (#515): the reviewer roster is a
+    cross-boundary fact re-typed as a hand-maintained copy in Python (`code_loop_plan` /
+    `spec_loop_plan` DIMENSIONS, and the same roster re-keyed as AGENT_SUFFIX). The
+    authoritative home is the set of `agents/*-reviewer` files (the sanctioned universe), but
+    the two legs sanction DIFFERENT subsets of it: the code leg runs the FIVE shared reviewers
+    (`CODE_ROSTER = universe − SPEC_ONLY`), the spec leg runs all SIX (`SPEC_ROSTER = universe`)
+    because `grounding-reviewer` is a spec-leg-only doc-provenance seat. Each copy must equal
+    its leg's sanctioned roster EXACTLY (not a union check that could mask a dropped reviewer),
+    so adding/removing/renaming/mis-legging a reviewer breaks CI in the copy-holder rather than
+    letting them silently diverge (the PR #205 class). A NEW copy must be added here (§11.2).
     """
-    home = _agent_slugs()
+    universe = _agent_slugs()
+    code_roster = universe - SPEC_ONLY
+    spec_roster = universe
+    # secondary guard: the two legs' rosters together must cover the whole sanctioned universe
+    assert code_roster | spec_roster == universe
 
     import code_loop_plan
     import spec_loop_plan
     rosters = {
-        "code_loop_plan.DIMENSIONS": list(code_loop_plan.DIMENSIONS),
-        "spec_loop_plan.DIMENSIONS": list(spec_loop_plan.DIMENSIONS),
+        "code_loop_plan.DIMENSIONS": (list(code_loop_plan.DIMENSIONS), code_roster),
+        "spec_loop_plan.DIMENSIONS": (list(spec_loop_plan.DIMENSIONS), spec_roster),
         # AGENT_SUFFIX is the same roster re-keyed — its keys are a copy too.
-        "code_loop_plan.AGENT_SUFFIX": list(code_loop_plan.AGENT_SUFFIX),
-        "spec_loop_plan.AGENT_SUFFIX": list(spec_loop_plan.AGENT_SUFFIX),
+        "code_loop_plan.AGENT_SUFFIX": (list(code_loop_plan.AGENT_SUFFIX), code_roster),
+        "spec_loop_plan.AGENT_SUFFIX": (list(spec_loop_plan.AGENT_SUFFIX), spec_roster),
     }
-    for label, roster in rosters.items():
+    for label, (roster, expected) in rosters.items():
         # duplicate-sensitive: set() alone would let a copy that duplicates one slug
         # while dropping another pass (sizes coincide once the set collapses the dup).
         assert len(roster) == len(set(roster)), "%s has a duplicate entry: %r" % (label, roster)
-        assert set(roster) == home, "%s drifted from the agents/*-reviewer home" % label
+        # exact per-leg equality — NOT a union check that could mask a dropped reviewer.
+        assert set(roster) == expected, "%s drifted from its leg's sanctioned roster" % label
 
 
 @pytest.mark.parametrize("text, name, match", [
@@ -163,7 +176,10 @@ def _rubric_dimensions():
 @pytest.mark.parametrize("skill", ["review-code", "review-spec"])
 def test_full_crew_table_has_one_row_per_agent(skill):
     rows = _table_rows(os.path.join("skills", skill, "SKILL.md"))
-    expected_set = _agent_slugs()
+    # leg-aware (#515): review-code's table is the 5-seat CODE_ROSTER; review-spec's is the
+    # 6-seat SPEC_ROSTER (grounding-reviewer is spec-leg-only).
+    universe = _agent_slugs()
+    expected_set = universe if skill == "review-spec" else universe - SPEC_ONLY
     slugs = [slug for slug, _, _ in rows]
     assert sorted(slugs) == sorted(expected_set)
 
@@ -175,13 +191,16 @@ def test_audit_debt_table_lists_exactly_the_original_four():
 
 
 @pytest.mark.parametrize("skill,expected_slugs", [
-    ("review-code", "ALL"),
-    ("review-spec", "ALL"),
+    ("review-code", "CODE"),
+    ("review-spec", "SPEC"),
     ("audit-debt", "FOUR"),
 ])
 def test_specialists_to_dispatch_prose_enumeration(skill, expected_slugs):
     text = _read(os.path.join("skills", skill, "SKILL.md"))
-    want = _agent_slugs() if expected_slugs == "ALL" else ORIGINAL_FOUR
+    # leg-aware (#515): review-spec enumerates the full 6-seat SPEC_ROSTER (incl.
+    # grounding-reviewer); review-code the 5-seat CODE_ROSTER; audit-debt the ORIGINAL_FOUR.
+    want = {"CODE": _agent_slugs() - SPEC_ONLY, "SPEC": _agent_slugs(),
+            "FOUR": ORIGINAL_FOUR}[expected_slugs]
     enumerated = set(re.findall(r"^\s*-\s*`([a-z][a-z-]*-reviewer)`\s*→", text, re.M))
     assert enumerated == want
 

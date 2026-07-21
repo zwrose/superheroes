@@ -86,9 +86,15 @@ restatement):
   → `review-spec`). Narrowed in v2: it produces the `spec` only — no `plan`, no `tasks`
   (retired, #479).
 - **Review Crew** — the multi-model review layer: the spec panel (`review-spec`) and
-  `review-code`'s cross-vendor build review. Panel composition is **composed to
-  complement** the builder's vendor so the maker's vendor never dominates its own
-  checking.
+  `review-code`'s cross-vendor build review. The **spec panel runs six doc-native lenses**
+  (Clarity, Verifiability, Failure-Mode, Coherence, Safety & access, Grounding) while
+  `review-code` runs its five code reviewers — the honest doc-native identities that
+  replaced the "five code costumes" (#514 D1). (#34 proposed merging the code and test seats
+  as the weakest, on ~70% zero-finding early small-N data; at N=37 those are the two
+  strongest seats — Verifiability has the most blocking findings of any seat — and the
+  genuinely weak seat was architecture, since recast as Coherence.) Panel composition is
+  **composed to complement** the builder's vendor so the maker's vendor never dominates its
+  own checking.
 - **Test-Pilot** — browser-evidence verification: plans derived from the spec/issue,
   executed for real. Observe-and-report only — a bug it finds becomes a work order, it
   never fixes.
@@ -640,13 +646,24 @@ instance: it extracts the marked boundary line from both `skills/showrunner/SKIL
 `skills/workhorse/SKILL.md`, fails closed if either is missing, and asserts the two are
 byte-identical — editing one charter's boundary breaks CI until the other matches.
 
-*Worked example 2 — the reviewer roster.* The authoritative home is the set of
-`agents/*-reviewer` files. `lib/tests/test_dispatch_tables.py::test_code_reviewer_rosters_match_bundled_agents`
-reads that directory listing and asserts it equals each hand-maintained copy —
-`code_loop_plan.DIMENSIONS`, `spec_loop_plan.DIMENSIONS`, and the same roster re-keyed as
-`AGENT_SUFFIX` in both modules — duplicate-sensitive (a copy that duplicates one slug
-while dropping another cannot pass by set-collapsing). Adding, removing, or renaming a
-reviewer agent breaks CI in every enumerated copy until it is updated to match.
+*Worked example 2 — the reviewer roster (sanctioned-subset invariant).* The set of
+`agents/*-reviewer` files is the single home of the **sanctioned reviewer universe** — now
+six, including `grounding-reviewer`. The two dispatching legs each run a **sanctioned
+subset** of that universe, not the whole of it: the **code leg** (`code_loop_plan.DIMENSIONS`)
+is the five code reviewers, and the **spec leg** (`spec_loop_plan.DIMENSIONS`) is all six
+(`grounding-reviewer` is **spec-leg-only** — the doc-provenance seat with no review-code
+agent). `lib/tests/test_dispatch_tables.py::test_code_reviewer_rosters_match_bundled_agents`
+reads the `agents/` directory listing, derives each leg's sanctioned roster from it
+(`universe − grounding-reviewer` for the code leg, `universe` for the spec leg), and asserts
+**exact per-leg equality** against each hand-maintained copy — `code_loop_plan.DIMENSIONS`,
+`spec_loop_plan.DIMENSIONS`, and the same rosters re-keyed as `AGENT_SUFFIX` in both modules.
+The check is fail-closed and duplicate-sensitive (a copy that duplicates one slug while
+dropping another cannot pass by set-collapsing), and the two legs' rosters must union back to
+the whole universe. Adding, removing, renaming, or mis-legging a reviewer agent breaks CI in
+the affected copy until it is updated to match. Separately, the runtime
+`spec_loop_plan.sanction_dimensions` guard enforces the same invariant at dispatch time: a
+leg may run a subset, but only of sanctioned seats — an unsanctioned `--dimensions` input is
+dropped, never widening or corrupting the roster.
 
 **Caveat — a copy-list drift test is only as complete as the copies it enumerates.** A
 **new** copy someone adds later is invisible until it is added to the test. So the

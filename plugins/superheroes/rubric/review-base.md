@@ -84,11 +84,17 @@ is the one authoritative schema; agents must not redefine the fields inline.
 
 **Dimensions** (the orchestrator reads this list; it is data, not hard-wired —
 adding one later is a single-place change): `Architecture`, `Code`, `Security`,
-`Test`, `Failure-Mode`. These five are the default crew; each dispatching skill
-names the subset it runs. The dispatching skill assigns each agent its dimension
-and its `id` prefix; the default crew runs one agent per dimension (e.g. the
-Security reviewer emits `security-001`, …; the Failure-Mode reviewer emits
-`premortem-001`, …).
+`Test`, `Failure-Mode`, `Clarity`, `Verifiability`, `Coherence`, `Safety-access`,
+`Grounding`. The crew carries **two label sets drawn from the same reviewer
+agents**: a **code-leg** set (`Architecture`, `Code`, `Security`, `Test`,
+`Failure-Mode`) that `/superheroes:review-code` and `/superheroes:audit-debt`
+dispatch, and a **doc-native spec-leg** set (`Clarity`, `Verifiability`,
+`Coherence`, `Safety-access`, `Failure-Mode`, `Grounding`) that
+`/superheroes:review-spec` dispatches — the five shared reviewers reframed to
+requirements quality, plus `Grounding`, a spec-only seat with no review-code agent.
+Each dispatching skill names the subset it runs and assigns each agent its dimension
+and its `id` prefix; a leg runs one agent per dimension (e.g. the Security reviewer
+emits `security-001`, …; the Failure-Mode reviewer emits `premortem-001`, …).
 
 ## Severity caps
 

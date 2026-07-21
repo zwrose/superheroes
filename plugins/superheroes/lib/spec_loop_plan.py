@@ -60,11 +60,31 @@ from loop_plan_common import (  # noqa: E402,F401
     _surfaced_severities_since, _full_deep_executed)
 
 DIMENSIONS = ["architecture-reviewer", "code-reviewer", "security-reviewer",
-              "test-reviewer", "premortem-reviewer"]
+              "test-reviewer", "premortem-reviewer", "grounding-reviewer"]
 AGENT_SUFFIX = {"architecture-reviewer": "architecture", "code-reviewer": "code",
                 "security-reviewer": "security", "test-reviewer": "test",
-                "premortem-reviewer": "premortem"}
+                "premortem-reviewer": "premortem", "grounding-reviewer": "grounding"}
 _HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
+
+
+def sanction_dimensions(raw):
+    """The sanctioned-subset guard (#515/#34).
+
+    A dispatching leg MAY run a subset of the roster, but only of *sanctioned* seats.
+    `raw` is the `--dimensions` JSON string. Parse it and keep only entries that are in
+    `DIMENSIONS` (the sanctioned roster), preserving DIMENSIONS order. Fail CLOSED to
+    the full `list(DIMENSIONS)` when the input is missing, malformed, not a list, empty,
+    or contains NO sanctioned entry — unsanctioned input never widens or corrupts the
+    roster. A partially-valid list keeps its sanctioned members (a real subset) and drops
+    the rest; this is membership, not equality (a proper subset is honored as-is)."""
+    try:
+        parsed = json.loads(raw) if raw else None
+    except ValueError:
+        parsed = None
+    if not isinstance(parsed, list):
+        return list(DIMENSIONS)
+    kept = [d for d in DIMENSIONS if d in parsed]
+    return kept or list(DIMENSIONS)
 
 
 # --- session-dir plumbing ---------------------------------------------------
@@ -384,18 +404,14 @@ def main(argv=None):
         p.add_argument("--session-dir", required=True)
         p.add_argument("--round", type=int, required=True, dest="rnd")
         p.add_argument("--dimensions", default=None,
-                       help="JSON list of reviewer names (default: the five specialists)")
+                       help="JSON list of reviewer names (default: the six doc-native lenses; "
+                            "unsanctioned entries are dropped, see sanction_dimensions)")
         if name == "decide":
             p.add_argument("--max-rounds", type=int, default=7)
             p.add_argument("--compiled", required=True)
             p.add_argument("--skipped-blocking", type=int, default=0)
     args = parser.parse_args(argv)
-    try:
-        dimensions = json.loads(args.dimensions) if args.dimensions else list(DIMENSIONS)
-        if not isinstance(dimensions, list) or not dimensions:
-            dimensions = list(DIMENSIONS)
-    except ValueError:
-        dimensions = list(DIMENSIONS)
+    dimensions = sanction_dimensions(args.dimensions)
     if args.cmd == "plan":
         out = cmd_plan(args.session_dir, args.rnd, dimensions)
     elif args.cmd == "record":
