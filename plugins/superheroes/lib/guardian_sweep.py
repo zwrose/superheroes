@@ -226,11 +226,12 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
                 "stdout": stdout,
                 "durationSeconds": duration,
             }
+            # Trust boundary: raw verify stdout stays local to verify_result for the
+            # vitals parser. Never leak it into factVerdicts / the model-facing bundle.
             facts.append({
                 "fact": "verify-command",
                 "status": status,
                 "receipt": receipt,
-                "stdout": stdout,
                 "durationSeconds": duration,
             })
 
@@ -374,38 +375,6 @@ def _filter_red_lines(red_lines):
     return [r for r in red_lines if r.get("kind") in allowed]
 
 
-def _metric_improved(candidate, record):
-    """True when a filed finding's metric moved in the fixed direction (down/gone)."""
-    if not isinstance(record, dict) or not isinstance(candidate, dict):
-        return False
-    metric_at = record.get("metricAtDisposition")
-    if metric_at is None:
-        return False
-    if isinstance(metric_at, dict):
-        for key in sorted(metric_at):
-            baseline = metric_at[key]
-            if isinstance(baseline, bool) or not isinstance(baseline, (int, float)):
-                continue
-            cur = candidate.get(key)
-            if cur is None and isinstance(candidate.get("metrics"), dict):
-                cur = candidate["metrics"].get(key)
-            if isinstance(cur, bool) or not isinstance(cur, (int, float)):
-                continue
-            if float(cur) < float(baseline):
-                return True
-        return False
-    if isinstance(metric_at, bool) or not isinstance(metric_at, (int, float, str)):
-        return False
-    try:
-        baseline = float(metric_at)
-    except (TypeError, ValueError):
-        return False
-    cur = candidate.get("metric")
-    if isinstance(cur, bool) or not isinstance(cur, (int, float)):
-        return False
-    return float(cur) < baseline
-
-
 def _storage_mode(cwd, root=None):
     try:
         return mode_registry.resolve(cwd, root)["mode"]
@@ -462,11 +431,23 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
     filed_observations = {}
 
     ledger = guardian_store.read_ledger(cwd, root)
-    suppress_via_ledger = ledger["status"] in ("ok", "absent")
+    # partial still exposes validated byId entries for trade suppression; unreadable/
+    # malformed/newer never suppress. Benching requires a fully ok ledger.
+    suppress_via_ledger = ledger["status"] in ("ok", "absent", "partial")
     report_card_notes = []
     card = guardian_ledger.report_card(
         ledger["records"], overrides=config.get("reportCard"),
         notes_out=report_card_notes)
+    if ledger["status"] not in ("ok", "absent"):
+        # Duplicate / invalid / partially-read ledger: no benching authority this sweep.
+        for name, entry in card.items():
+            if entry.get("benched"):
+                entry["benched"] = False
+                entry["reason"] = (
+                    "%s has no benching authority this sweep: ledger status is %s"
+                    % (name, ledger["status"]))
+        if ledger.get("note"):
+            report_card_notes.append(ledger["note"])
     benched_lenses = {name for name, entry in card.items() if entry.get("benched")}
 
     for lens in lenses:
@@ -541,6 +522,7 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
                 drift_reason = "worsened" if cid in drift_ids else "red-line"
 
             rec, match_note = (None, None)
+            ambiguous_match = False
             if suppress_via_ledger:
                 rec, match_note = guardian_ledger.match(cid, ledger["byId"])
                 if match_note:
@@ -549,6 +531,18 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
                         "lens": lens.name,
                         "note": match_note,
                     })
+                    if "ambiguous" in match_note:
+                        ambiguous_match = True
+                        # Ambiguity revokes benching for this lens — fail open end to end.
+                        if lens.name in benched_lenses:
+                            benched_lenses.discard(lens.name)
+                            lens_is_benched = False
+                            if lens.name in card:
+                                card[lens.name]["benched"] = False
+                                card[lens.name]["reason"] = (
+                                    "%s has no benching authority this sweep: "
+                                    "normalized-identity collision (matcher fail-open)"
+                                    % lens.name)
 
             if rec is not None:
                 if _is_filed_open(rec) and not is_red:
@@ -570,8 +564,9 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
                         })
                         continue
 
-            # Benching suppresses ordinary drift only — never a red line.
-            if lens_is_benched and not is_red:
+            # Benching suppresses ordinary drift only — never a red line, and never
+            # after an ambiguous identity match (fail-open must reach the surface).
+            if lens_is_benched and not is_red and not ambiguous_match:
                 killed_by_bench.append({
                     "id": cid,
                     "lens": lens.name,
@@ -633,7 +628,8 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
     }
     verify_result = facts.get("verifyResult") or {"status": "not-run"}
     budget = config.get("verifyBudgetSeconds", _DEFAULT_VERIFY_BUDGET_SECONDS)
-    if config.get("vitalsEnabled", True):
+    vitals_collected = bool(config.get("vitalsEnabled", True))
+    if vitals_collected:
         # Do not pass the sweep's injectable `run` into vitals: test doubles stub
         # the verify shell command, while vitals uses `run` only for read-only git.
         vitals_out = guardian_vitals.collect(
@@ -649,6 +645,8 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
             "sources": vitals_out.get("sources") or {},
         }
     else:
+        # Carry prior vitals in the snapshot so re-enabling has a baseline, but mark
+        # not-collected so finalize never appends stale numbers as this sweep's.
         cur_vitals = (prev or {}).get("vitals", {})
         vitals_delta = {}
 
@@ -683,6 +681,7 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
         "reportCard": card,
         "reportCardNotes": report_card_notes,
         "vitalsDelta": vitals_delta,
+        "vitalsCollected": vitals_collected,
         "nextSnapshot": next_snapshot,
         "prevIdentity": prev_identity,
         "sweptSha": swept_sha,
@@ -751,7 +750,7 @@ def _close_filed_records(records, observations, sweep_id):
             advances.append(result)
             continue
         cand = obs.get("candidate") or {}
-        if _metric_improved(cand, rec):
+        if guardian_ledger.metric_improved(cand, rec):
             new_records, result = guardian_ledger.advance(
                 new_records, rid, "verified-fixed", sweepId=sweep_id)
         else:
@@ -761,18 +760,25 @@ def _close_filed_records(records, observations, sweep_id):
     return new_records, advances
 
 
+# Allow-list only. A newly introduced reader status must NOT become writable by
+# omission — unreadable ledger content is opaque, not empty. `records: []` never
+# licenses a rewrite.
+_WRITABLE_LEDGER_STATUSES = frozenset(("ok", "absent"))
+
+
 def _ledger_fully_readable(cwd, root, ledger):
     """May we mutate this ledger?
 
-    Governing rule: unreadable ledger content is opaque, not absent. `records: []` from
-    `read_ledger` means "I could not read this" on malformed/newer — never "there is
-    nothing here." Only status `ok`/`absent` with every on-disk record accepted (no
+    Governing rule: an unreadable ledger is opaque, not empty. `records: []` from
+    `read_ledger` means "I could not read this" on malformed/newer/unreadable/partial
+    — never "there is nothing here." Only an allow-listed status (`ok` / genuine
+    `absent`) with every on-disk record accepted by the shared validator (no
     duplicates, no silently-skipped entries) is safe to rewrite."""
     status = ledger.get("status")
+    if status not in _WRITABLE_LEDGER_STATUSES:
+        return False, "ledger-%s" % (status or "unknown")
     if status == "absent":
         return True, None
-    if status != "ok":
-        return False, "ledger-%s" % status
     if ledger.get("note"):
         return False, "ledger-duplicate-ids"
 
@@ -800,18 +806,47 @@ def _ledger_fully_readable(cwd, root, ledger):
         rid = rec.get("id")
         if not isinstance(rid, str) or not rid.strip():
             return False, "ledger-partial-skip"
+        ok, _reasons = guardian_ledger.validate_record(rec)
+        if not ok:
+            return False, "ledger-partial-skip"
         accepted += 1
     if accepted != len(ledger.get("records") or []):
         return False, "ledger-partial-skip"
     return True, None
 
 
-def finalize(cwd, bundle, dispositions, root=None):
-    """Transactional finalize: validate → report first → baseline last, under sweep lock.
+def _closure_status_lines(advances, observations):
+    """Human status lines for closure outcomes that land in this sweep's report."""
+    lines = []
+    for adv in advances or []:
+        if not isinstance(adv, dict) or not adv.get("ok"):
+            continue
+        rid = adv.get("id")
+        to = adv.get("to")
+        obs = (observations or {}).get(rid) or {}
+        issue = obs.get("issue") or ""
+        if to == "verified-fixed":
+            line = "filed as %s, verified fixed this sweep" % issue
+        elif to == "reopened":
+            line = "filed as %s, reopened — metric unmoved or worsened" % issue
+        else:
+            continue
+        lines.append({
+            "id": rid,
+            "lens": guardian_ledger.lens_of(rid) if isinstance(rid, str) else "",
+            "line": line,
+        })
+    return lines
 
-    After the snapshot (commit marker), still inside the lock: ledger closure via
-    write_unlocked and vitals append via append_unlocked. Both are reported, never
-    silently swallowed; neither is fatal to an already-written report+snapshot."""
+
+def finalize(cwd, bundle, dispositions, root=None):
+    """Transactional finalize: validate → closure compute → report → baseline, under lock.
+
+    Filed-item closure is computed BEFORE the report is rendered so the durable report
+    describes the ledger state this sweep actually advances to. After the snapshot
+    (commit marker), still inside the lock: ledger persist via write_unlocked and
+    vitals append via append_unlocked. Both are reported, never silently swallowed;
+    neither is fatal to an already-written report+snapshot."""
     ok, errors = validate_dispositions(bundle, dispositions)
     if not ok:
         return {"ok": False, "reason": "invalid-dispositions", "errors": errors}
@@ -834,7 +869,36 @@ def finalize(cwd, bundle, dispositions, root=None):
             }
 
         ledger = guardian_store.read_ledger(cwd, root)
-        report_md = guardian_report.render(bundle, dispositions, ledger)
+        sweep_id = bundle.get("sweepId") or guardian_ledger.make_sweep(
+            bundle.get("sweptSha") or "unknown")["sweepId"]
+
+        new_records = list(ledger.get("records") or [])
+        advances = []
+        writable, skip_why = _ledger_fully_readable(cwd, root, ledger)
+        if writable:
+            new_records, advances = _close_filed_records(
+                ledger["records"], bundle.get("filedObservations"), sweep_id)
+
+        # Report sees proposed closure outcomes before anything is persisted.
+        report_bundle = dict(bundle)
+        closure_lines = _closure_status_lines(advances, bundle.get("filedObservations"))
+        if closure_lines:
+            prior = list(bundle.get("ledgerStatus") or [])
+            closed_ids = {c["id"] for c in closure_lines}
+            prior = [p for p in prior if p.get("id") not in closed_ids]
+            report_bundle["ledgerStatus"] = prior + closure_lines
+        report_bundle["closureAdvances"] = advances
+
+        report_ledger = {
+            "records": new_records,
+            "byId": {
+                r["id"]: r for r in new_records
+                if isinstance(r, dict) and isinstance(r.get("id"), str)
+            },
+            "status": ledger.get("status"),
+            "note": ledger.get("note"),
+        }
+        report_md = guardian_report.render(report_bundle, dispositions, report_ledger)
 
         rp = guardian_store.report_path(cwd, root)
         store_core.atomic_write(rp, report_md)
@@ -843,12 +907,8 @@ def finalize(cwd, bundle, dispositions, root=None):
         store_core.atomic_write(
             snap_path, json.dumps(bundle["nextSnapshot"], indent=2) + "\n")
 
-        sweep_id = bundle.get("sweepId") or guardian_ledger.make_sweep(
-            bundle.get("sweptSha") or "unknown")["sweepId"]
-
         ledger_write = {"ok": True, "skipped": "no-change"}
         try:
-            writable, skip_why = _ledger_fully_readable(cwd, root, ledger)
             if not writable:
                 # Opaque/unread content must never be rewritten as an empty schema-1 ledger.
                 ledger_write = {
@@ -856,10 +916,9 @@ def finalize(cwd, bundle, dispositions, root=None):
                     "skipped": skip_why,
                     "reason": "ledger write skipped: %s (on-disk bytes left untouched)"
                               % skip_why,
+                    "advances": advances,
                 }
             else:
-                new_records, advances = _close_filed_records(
-                    ledger["records"], bundle.get("filedObservations"), sweep_id)
                 card = bundle.get("reportCard")
                 if card is None:
                     card = guardian_ledger.report_card(new_records)
@@ -873,14 +932,17 @@ def finalize(cwd, bundle, dispositions, root=None):
                 ledger_write = dict(ledger_write)
                 ledger_write["advances"] = advances
         except Exception as exc:
-            ledger_write = {"ok": False, "reason": str(exc)}
+            ledger_write = {"ok": False, "reason": str(exc), "advances": advances}
 
         vitals_append = {"ok": True, "skipped": "no-vitals"}
         try:
-            vitals = (bundle.get("nextSnapshot") or {}).get("vitals") or {}
-            vitals_append = guardian_vitals.append_unlocked(
-                cwd, vitals, sweep_id=sweep_id,
-                swept_sha=bundle.get("sweptSha"), root=root)
+            if not bundle.get("vitalsCollected", True):
+                vitals_append = {"ok": True, "skipped": "vitals-not-collected"}
+            else:
+                vitals = (bundle.get("nextSnapshot") or {}).get("vitals") or {}
+                vitals_append = guardian_vitals.append_unlocked(
+                    cwd, vitals, sweep_id=sweep_id,
+                    swept_sha=bundle.get("sweptSha"), root=root)
         except Exception as exc:
             vitals_append = {"ok": False, "reason": str(exc)}
 

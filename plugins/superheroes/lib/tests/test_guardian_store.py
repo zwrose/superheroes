@@ -138,8 +138,8 @@ def test_read_ledger_newer_is_opaque(tmp_path):
 def test_read_ledger_drops_incomplete_records(tmp_path):
     repo = init_calibrated_repo(tmp_path)
     records = [
-        {"id": "good", "disposition": "accepted", "issue": "n/a"},
-        {"id": "trade", "disposition": "accepted"},
+        {"id": "good", "disposition": "filed", "issue": "n/a"},
+        {"id": "trade", "disposition": "accepted", "reason": "owner trade"},
         {"id": "bad"},
     ]
     text = (
@@ -151,6 +151,62 @@ def test_read_ledger_drops_incomplete_records(tmp_path):
     assert "good" in out["byId"]
     assert "trade" in out["byId"]
     assert "bad" not in out["byId"]
+    assert out["status"] == "partial"
+    assert "skipped" in (out["note"] or "")
+
+
+def test_read_ledger_excludes_wont_fix_without_reason(tmp_path):
+    """Shared validate_record: accepted/declined without reason must not enter byId."""
+    repo = init_calibrated_repo(tmp_path)
+    records = [
+        {"id": "valid-filed", "disposition": "filed", "issue": "#1"},
+        {"id": "mute-trade", "disposition": "accepted", "issue": None,
+         "metricAtDisposition": {"metric": 5}},
+    ]
+    text = (
+        "```json %s\n%s\n```\n"
+        % (gs.LEDGER_FENCE, json.dumps({"schemaVersion": 1, "records": records}))
+    )
+    sc.atomic_write(gs.ledger_path(repo), text)
+    out = gs.read_ledger(repo)
+    assert out["status"] == "partial"
+    assert "valid-filed" in out["byId"]
+    assert "mute-trade" not in out["byId"]
+    assert "mute-trade" not in [r.get("id") for r in out["records"]]
+
+
+def test_read_ledger_unreadable_existing_file(tmp_path):
+    """CRITICAL: existing-but-unreadable is unreadable, never absent."""
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.ledger_path(repo)
+    owner_text = (
+        "# Owner prose\n\n```json %s\n%s\n```\n"
+        % (gs.LEDGER_FENCE, json.dumps({
+            "schemaVersion": 1,
+            "records": [{
+                "id": "fixture:trade",
+                "disposition": "accepted",
+                "date": "2026-07-01",
+                "issue": None,
+                "metricAtDisposition": {"metric": 5},
+                "reason": "owner accepted this trade",
+                "reraiseWhen": None,
+            }],
+            "sweeps": [],
+        }, indent=2))
+    )
+    sc.atomic_write(path, owner_text)
+    os.chmod(path, 0)
+    try:
+        out = gs.read_ledger(repo)
+        if out["status"] == "ok":
+            pytest.skip("cannot make the ledger unreadable in this environment")
+        assert out["status"] == "unreadable"
+        assert out["records"] == []
+        assert out["byId"] == {}
+        assert out["note"]
+    finally:
+        os.chmod(path, 0o644)
 
 
 def test_read_ledger_drops_unknown_disposition(tmp_path):
@@ -165,6 +221,7 @@ def test_read_ledger_drops_unknown_disposition(tmp_path):
     )
     sc.atomic_write(gs.ledger_path(repo), text)
     out = gs.read_ledger(repo)
+    assert out["status"] == "partial"
     assert "known" in out["byId"]
     assert "unknown" not in out["byId"]
 
@@ -218,7 +275,7 @@ def test_read_ledger_unhashable_id_skipped_not_type_error(tmp_path):
     ]
     _write_ledger_block(repo, {"schemaVersion": 1, "records": records})
     out = gs.read_ledger(repo)
-    assert out["status"] == "ok"
+    assert out["status"] == "partial"
     assert "good" in out["byId"]
     assert len(out["byId"]) == 1
 
@@ -232,7 +289,7 @@ def test_read_ledger_duplicate_ids_do_not_suppress(tmp_path):
     ]
     _write_ledger_block(repo, {"schemaVersion": 1, "records": records})
     out = gs.read_ledger(repo)
-    assert out["status"] == "ok"
+    assert out["status"] == "partial"
     assert "dup" not in out["byId"]
     assert "unique" in out["byId"]
     assert out["note"] and "duplicate" in out["note"]

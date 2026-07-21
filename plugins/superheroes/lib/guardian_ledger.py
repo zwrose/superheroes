@@ -328,6 +328,42 @@ def materially_worsened(candidate, record):
     return current > baseline
 
 
+def metric_improved(candidate, record):
+    """True when every scoped comparable metric moved in the fixed direction (down).
+
+    Shares `_scoped_keys` with `materially_worsened` so closure and re-raise agree on
+    which metrics matter. A worsening (or missing) scoped metric never counts as fixed,
+    even when an ancillary metric improved. Mixed or incomplete comparisons return False
+    so the caller keeps the record filed or advances to reopened — never verified-fixed."""
+    if not isinstance(record, dict) or not isinstance(candidate, dict):
+        return False
+    metric_at = record.get("metricAtDisposition")
+    if metric_at is None:
+        return False
+
+    if isinstance(metric_at, dict):
+        keys = _scoped_keys(metric_at, record.get("reraiseWhen"))
+        if not keys:
+            return False
+        saw_improvement = False
+        for key in keys:
+            baseline = _as_number(metric_at[key])
+            current = _candidate_metric(candidate, key)
+            if baseline is None or current is None:
+                return False
+            if current > baseline:
+                return False
+            if current < baseline:
+                saw_improvement = True
+        return saw_improvement
+
+    baseline = _as_number(metric_at)
+    current = _as_number(candidate.get("metric"))
+    if baseline is None or current is None:
+        return False
+    return current < baseline
+
+
 # ----------------------------------------------------------------- report card
 
 
@@ -353,14 +389,15 @@ def _coerce_positive_int(val):
 
 
 def _resolve_thresholds(overrides):
-    """Merge report-card overrides → (cfg, notes).
+    """Merge report-card overrides → (cfg, notes, benching_allowed).
 
-    Hand-edited guardian-config values are coerced; a mistyped override falls back to the
-    documented default and is named in `notes` rather than raising into collect."""
+    Hand-edited guardian-config values are coerced. A mistyped override is named in
+    `notes` and **revokes benching authority for the sweep** — defaults must never
+    become a silent mute button after a config typo."""
     cfg = dict(REPORT_CARD_DEFAULTS)
     notes = []
     if not isinstance(overrides, dict):
-        return cfg, notes
+        return cfg, notes, True
     for key in REPORT_CARD_DEFAULTS:
         if overrides.get(key) is None:
             continue
@@ -371,29 +408,88 @@ def _resolve_thresholds(overrides):
             coerced = _coerce_positive_int(raw)
         if coerced is None:
             notes.append(
-                "reportCard.%s=%r ignored; using default %s" % (key, raw, cfg[key]))
+                "reportCard.%s=%r invalid — benching disabled for this sweep "
+                "(defaults are not applied as a mute)" % (key, raw))
         else:
             cfg[key] = coerced
-    return cfg, notes
+    return cfg, notes, (len(notes) == 0)
 
 
 def _percent(actionability):
     return "n/a" if actionability is None else "%.0f%%" % (actionability * 100)
 
 
+def _ambiguous_normalized_ids(records):
+    """Ids that share a normalized identity with a different id — fail-open evidence."""
+    groups = {}
+    for rec in records or []:
+        if not isinstance(rec, dict):
+            continue
+        rid = rec.get("id")
+        if not isinstance(rid, str) or not rid.strip():
+            continue
+        key = normalize_id(rid)
+        if not key:
+            continue
+        groups.setdefault(key, set()).add(rid)
+    ambiguous = set()
+    for ids in groups.values():
+        if len(ids) > 1:
+            ambiguous.update(ids)
+    return ambiguous
+
+
+def _duplicate_exact_ids(records):
+    """Exact ids that appear more than once in the raw record list."""
+    seen = set()
+    dups = set()
+    for rec in records or []:
+        if not isinstance(rec, dict):
+            continue
+        rid = rec.get("id")
+        if not isinstance(rid, str):
+            continue
+        if rid in seen:
+            dups.add(rid)
+        else:
+            seen.add(rid)
+    return dups
+
+
 def _report_card(records, overrides=None, *, notes_out=None):
-    cfg, notes = _resolve_thresholds(overrides)
+    cfg, notes, benching_allowed = _resolve_thresholds(overrides)
     if notes_out is not None:
         notes_out.extend(notes)
     bar = cfg["actionabilityBar"]
     min_adjudicated = cfg["minAdjudicated"]
     min_sweeps = cfg["minSweeps"]
 
+    ambiguous_ids = _ambiguous_normalized_ids(records)
+    duplicate_ids = _duplicate_exact_ids(records)
+    excluded_ids = ambiguous_ids | duplicate_ids
+    if ambiguous_ids:
+        notes_msg = (
+            "normalized-identity collision excludes %d record(s) from report-card "
+            "evidence (matcher fail-open; no benching from ambiguous groups)"
+            % len(ambiguous_ids))
+        if notes_out is not None:
+            notes_out.append(notes_msg)
+    if duplicate_ids:
+        notes_msg = (
+            "duplicate exact ids exclude %d id(s) from report-card evidence "
+            "(no benching authority from ambiguous ledger identity)"
+            % len(duplicate_ids))
+        if notes_out is not None:
+            notes_out.append(notes_msg)
+
     by_lens = {}
     for rec in records or []:
         if not isinstance(rec, dict) or not isinstance(rec.get("id"), str):
             continue
-        lens = lens_of(rec["id"])
+        rid = rec["id"]
+        if rid in excluded_ids:
+            continue
+        lens = lens_of(rid)
         entry = by_lens.setdefault(
             lens, {"for": 0, "against": 0, "sweepIds": set(), "unstamped": 0})
         disposition = rec.get("disposition")
@@ -424,7 +520,17 @@ def _report_card(records, overrides=None, *, notes_out=None):
         enough_adjudicated = adjudicated >= min_adjudicated
         enough_sweeps = sweeps is not None and sweeps >= min_sweeps
         below_bar = actionability is not None and actionability < bar
-        benched = enough_adjudicated and enough_sweeps and below_bar
+        benched = (
+            benching_allowed and enough_adjudicated and enough_sweeps and below_bar)
+
+        reason = _bench_reason(
+            lens, adjudicated, actionability, sweeps, benched,
+            enough_adjudicated, enough_sweeps, cfg)
+        if not benching_allowed:
+            reason = (
+                "%s has no benching authority this sweep: reportCard tuning is "
+                "invalid — fix the guardian-config overrides before a lens can bench."
+                % lens)
 
         card[lens] = {
             "adjudicated": adjudicated,
@@ -433,9 +539,7 @@ def _report_card(records, overrides=None, *, notes_out=None):
             "actionability": actionability,
             "sweeps": sweeps,
             "benched": benched,
-            "reason": _bench_reason(
-                lens, adjudicated, actionability, sweeps, benched,
-                enough_adjudicated, enough_sweeps, cfg),
+            "reason": reason,
         }
     return card
 
@@ -448,8 +552,10 @@ def report_card(records, overrides=None, *, notes_out=None):
     One unlucky sweep is not evidence. See the module docstring: `benched` never silences
     a red line.
 
-    Mistyped `overrides` fall back to `REPORT_CARD_DEFAULTS` (never raise). When
-    `notes_out` is a list, degradation notes for ignored overrides are appended to it."""
+    Mistyped `overrides` revoke benching for the sweep (never raise; never mute via
+    defaults). Ambiguous normalized-identity groups and duplicate exact ids are excluded
+    from evidence so the matcher's fail-open collision rule cannot be defeated by
+    benching. When `notes_out` is a list, degradation notes are appended to it."""
     return _report_card(records, overrides, notes_out=notes_out)
 
 

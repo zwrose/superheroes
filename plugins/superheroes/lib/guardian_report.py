@@ -204,6 +204,13 @@ def render(bundle, dispositions, ledger):
 
     # Report card
     _render_report_card(lines, bundle.get("reportCard") or {})
+    notes = bundle.get("reportCardNotes") or []
+    if notes:
+        lines.append("### Report-card configuration")
+        lines.append("")
+        for note in notes:
+            lines.append("- %s" % note)
+        lines.append("")
 
     # Candidate funnel
     lines.append(HEADER_FUNNEL)

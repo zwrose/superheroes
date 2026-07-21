@@ -558,8 +558,8 @@ def test_report_card_overrides_are_honored():
     assert card["benched"] is True
 
 
-def test_report_card_malformed_overrides_fall_back_to_defaults():
-    """Hand-edited string/bool/non-positive overrides must not crash collection."""
+def test_report_card_malformed_overrides_disable_benching():
+    """Invalid reportCard overrides must not mute via defaults."""
     records = _adjudicated("dup", 10, "triaged-out", ["s1", "s2", "s3"])
     notes = []
     card = gled.report_card(records, {
@@ -567,7 +567,8 @@ def test_report_card_malformed_overrides_fall_back_to_defaults():
         "minSweeps": True,
         "actionabilityBar": "0.5",
     }, notes_out=notes)["dup"]
-    assert card["benched"] is True  # defaults: 10 / 3 / 0.90
+    assert card["benched"] is False
+    assert any("benching disabled" in n for n in notes)
     assert any("minAdjudicated" in n for n in notes)
     assert any("minSweeps" in n for n in notes)
     assert any("actionabilityBar" in n for n in notes)
@@ -578,8 +579,37 @@ def test_report_card_malformed_overrides_fall_back_to_defaults():
         "minSweeps": -1,
         "actionabilityBar": 1.5,
     }, notes_out=notes2)["dup"]
-    assert card2["benched"] is True
+    assert card2["benched"] is False
     assert len(notes2) == 3
+
+
+def test_report_card_excludes_ambiguous_normalized_groups_from_bench_evidence():
+    """Ten colliding line-number identities must not manufacture a bench."""
+    records = []
+    for i in range(10):
+        records.append(_rec(
+            "fixture:tool:a.py:%d" % (i + 1), "triaged-out",
+            adjudicatedIn="s%d" % (i % 3)))
+    notes = []
+    card = gled.report_card(records, notes_out=notes)
+    assert "fixture" not in card or card["fixture"]["benched"] is False
+    assert any("collision" in n or "ambiguous" in n.lower() for n in notes)
+
+
+def test_metric_improved_honors_reraise_when_scope():
+    record = _rec(
+        "dup:t:a", "filed",
+        metricAtDisposition={"cloneLines": 177, "files": 2},
+        reraiseWhen="cloneLines grows")
+    # Primary worsened, secondary improved — not fixed.
+    assert gled.metric_improved(
+        {"cloneLines": 180, "files": 1}, record) is False
+    # Primary improved — fixed.
+    assert gled.metric_improved(
+        {"cloneLines": 100, "files": 2}, record) is True
+    # Primary equal, secondary improved — not fixed (scoped key did not improve).
+    assert gled.metric_improved(
+        {"cloneLines": 177, "files": 1}, record) is False
 
 
 def test_write_unlocked_refuses_invalid_records_without_mutating(tmp_path):

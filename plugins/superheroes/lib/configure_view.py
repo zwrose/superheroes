@@ -83,8 +83,11 @@ def _collect_guardian(cwd, root):
     config = guardian_sweep.read_config(cwd, root)
     cadence, cadence_tuned = _resolve_cadence(cwd, root)
     ledger = guardian_store.read_ledger(cwd, root)
+    report_card_notes = []
     card = guardian_ledger.report_card(
-        ledger.get("records"), config.get("reportCard"))
+        ledger.get("records"), config.get("reportCard"), notes_out=report_card_notes)
+    if ledger.get("status") not in ("ok", "absent") and ledger.get("note"):
+        report_card_notes.append(ledger["note"])
     snapshot = guardian_store.read_snapshot(cwd, root)
     trend = guardian_vitals.read_trend(cwd, root=root, limit=1)
     last_date = None
@@ -95,6 +98,7 @@ def _collect_guardian(cwd, root):
         "cadenceTuned": cadence_tuned,
         "coverage": config.get("coverage") or [],
         "card": card,
+        "reportCardNotes": report_card_notes,
         "ledgerStatus": ledger.get("status"),
         "ledgerNote": ledger.get("note"),
         "lastSweptSha": snapshot.get("sweptSha") if snapshot else None,
@@ -143,7 +147,7 @@ def _guardian_lines(guardian):
         below_floor.append(lens)
 
     ledger_status = guardian.get("ledgerStatus")
-    if ledger_status in ("malformed", "newer") and not card:
+    if ledger_status in ("malformed", "newer", "unreadable") and not card:
         note = guardian.get("ledgerNote") or ledger_status
         lines.append("benched lenses: unknown — ledger unreadable (%s)" % note)
     elif ledger_status == "absent" and not card:
@@ -154,6 +158,9 @@ def _guardian_lines(guardian):
             lines.append("  %s — %s" % (lens, card[lens].get("reason") or "(no reason)"))
     else:
         lines.append("benched lenses: none")
+
+    for note in guardian.get("reportCardNotes") or []:
+        lines.append("report-card note: %s" % note)
 
     for lens in below_floor:
         lines.append("%s — floor not met" % lens)

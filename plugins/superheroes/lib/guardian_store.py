@@ -141,18 +141,42 @@ def _parse_ledger_block(text):
 def read_ledger(cwd, root=None):
     """Read-only parse of ledger.md → {records, byId, status, note}.
 
-    Malformed or newer-version ledgers NEVER suppress findings — status reflects
-    the failure but records/byId are empty so callers surface everything.
+    Malformed, newer, unreadable, or partially-valid ledgers NEVER suppress via
+    missing data alone — status reflects the failure. An unreadable ledger is
+    opaque, not empty: `records: []` never means "safe to rewrite as blank."
+
+    Only a genuinely absent path returns status `absent`. Every other read
+    failure is `unreadable`. Invalid records (failing the shared writer
+    validator) are excluded from `records`/`byId` and surface as `partial`.
 
     Total type validation: a block that is not a dict is malformed (never
     AttributeError); a record whose id is not a non-empty str is skipped (never
     TypeError on byId); duplicate ids are ambiguous and never suppress."""
+    # Lazy import: guardian_ledger imports this module at load time.
+    import guardian_ledger as gled  # noqa: E402
+
     path = ledger_path(cwd, root)
     try:
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
-    except OSError:
+    except FileNotFoundError:
+        # Only a genuinely non-existent path is absent. If the path still
+        # lexists (permissions race, dangling weirdness), treat as unreadable.
+        if os.path.lexists(path):
+            return {
+                "records": [],
+                "byId": {},
+                "status": "unreadable",
+                "note": "ledger path exists but could not be read (FileNotFoundError)",
+            }
         return {"records": [], "byId": {}, "status": "absent", "note": None}
+    except OSError as exc:
+        return {
+            "records": [],
+            "byId": {},
+            "status": "unreadable",
+            "note": "ledger exists but could not be read (%s)" % type(exc).__name__,
+        }
 
     block, err = _parse_ledger_block(text)
     if err == "bad-json":
@@ -201,16 +225,27 @@ def read_ledger(cwd, root=None):
     records = []
     by_id = {}
     duplicates = set()
+    skipped_invalid = 0
     for rec in raw_records:
         if not isinstance(rec, dict):
+            skipped_invalid += 1
             continue
         if not all(rec.get(f) is not None for f in LEDGER_MIN_FIELDS):
+            skipped_invalid += 1
             continue
         if rec.get("disposition") not in guardian_lens.FINDING_STATES:
+            skipped_invalid += 1
             continue
         rid = rec.get("id")
         # Unhashable / empty ids must never reach byId (TypeError: unhashable type).
         if not isinstance(rid, str) or not rid.strip():
+            skipped_invalid += 1
+            continue
+        ok, _reasons = gled.validate_record(rec)
+        if not ok:
+            # Preserve on disk (caller must not rewrite); exclude from suppression
+            # inputs so a typo cannot mute detection without the required rationale.
+            skipped_invalid += 1
             continue
         records.append(rec)
         if rid in duplicates:
@@ -221,11 +256,24 @@ def read_ledger(cwd, root=None):
             continue
         by_id[rid] = rec
 
-    note = None
+    notes = []
     if duplicates:
-        note = ("duplicate ids make suppression ambiguous (not suppressing): %s"
-                % ", ".join(sorted(duplicates)))
-    return {"records": records, "byId": by_id, "status": "ok", "note": note}
+        notes.append(
+            "duplicate ids make suppression ambiguous (not suppressing): %s"
+            % ", ".join(sorted(duplicates)))
+    if skipped_invalid:
+        notes.append(
+            "skipped %d invalid or incomplete record(s) (excluded from byId; "
+            "on-disk bytes must not be rewritten)" % skipped_invalid)
+    status = "ok"
+    if skipped_invalid or duplicates:
+        status = "partial"
+    return {
+        "records": records,
+        "byId": by_id,
+        "status": status,
+        "note": "; ".join(notes) if notes else None,
+    }
 
 
 def main(argv=None):
