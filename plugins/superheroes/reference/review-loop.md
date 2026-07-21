@@ -1,4 +1,4 @@
-<!-- review-loop-version: 2 -->
+<!-- review-loop-version: 3 -->
 ## Learning Loop & Staleness Nudge
 
 These four behaviors are **non-blocking**, run **at end of run** (after the terminal summary), and are **identical across `review-code`, `review-spec`, and `audit-debt`**. Nothing here ever auto-applies a profile or `CLAUDE.md` edit — every change is user-gated.
@@ -66,16 +66,30 @@ Recurring blocking classes are detected from durable round memory and passed onl
 
 Certification after any fix requires that **one** full `reviewer-deep` confirmation round has run (all dimensions fresh, high-confidence, with valid verification receipts) and that every logged finding is fixed and verified (or explicitly deferred with a reason). A confirmation panel that surfaces new findings does **not** by itself forfeit certification: the surfaced findings are fixed and scope-verified (their dimension re-runs the next scoped round, since it carries a finding), then the loop certifies — it does not re-review until a fresh panel comes back pristine (#174). Only a **Critical** surfaced by a confirmation, or cross-cutting rework (the fix touched ≥3 of the 5 policy subjects), re-arms one additional full confirmation; new Importants are resolved by a scoped round only. At most **two** full confirmation panels run per loop; at the cap a non-Critical is resolved by scoped verify and the readout says so, while a Critical still parks (certification withheld). A blocking `clean-with-skips`, malformed receipt, stale writer, corrupt memory, or failed coverage-decision write still does not pass. The certification record states what was established — how many full panels ran and whether the last panel's findings were resolved with scoped verification — never implying a pristine fresh pass.
 
-**Document reviews diverge on the re-arm rule and the cap
-(#397).** A doc-panel round is a full-document, full-panel spend with no cheap scoped tier, so
-the total is **three completed rounds** — one baseline plus at most **two** confirmation
-panels — and **any open blocking finding** (Critical **or** Important) re-arms the one further
-confirmation, not only a Critical or cross-cutting rework. There is no scoped-round tier for
-new Importants and no scoped-verify certify at the cap: **at the cap a document review always
-parks** (certification withheld — there is no stronger downstream reviewer to catch what this
-gate would wave through). Everything else in this section — the full baseline panel, the
-convergence record, fail-closed on malformed/stale receipts — is identical. This rule is
-implemented once in `review_round_policy.confirmation_followup(doc_mode=True)` and its bundled
-JS twin; do not restate the numbers elsewhere.
+**Document reviews diverge on the re-arm rule and the confirmation budget (#397, #518).** A
+doc-panel round is a full-document, full-panel spend with no cheap scoped tier, so **any open
+blocking finding** (Critical **or** Important) re-arms the one further confirmation, not only a
+Critical or cross-cutting rework — no scoped-round tier for new Importants, no scoped-verify
+certify at the confirmation cap. **Two caps, not one (#518):** the overall round cap is **7**
+(`--max-rounds 7`, the same cap every leg runs, enforced by `loop_state.decide` /
+`circuit_breaker`), and **at that cap an open blocking finding always parks** (verdict REVISE,
+certification withheld) — a document has no stronger downstream reviewer than the owner, so the
+gate never scoped-certifies a blocker the way code review may; a spec that reaches a clean
+full-deep confirmation at the cap still certifies. The **confirmation-panel budget is separate**: at most **two** full panels
+per loop (`MAX_CONFIRMATIONS = 2` in `review_round_policy`); on the spine's doc path a doc-mode
+confirmation that reaches that budget parks too, rather than scoped-certifying. The earlier
+three-round phrasing conflated these two caps and is retired. Everything else in
+this section — the full baseline panel, the convergence record, fail-closed on malformed/stale
+receipts — is identical. The re-arm/park **rule** lives once in
+`review_round_policy.confirmation_followup(doc_mode=True)` and its bundled JS twin; the two cap
+numbers live once each — the `7` in the deciders' `--max-rounds` default (the skills' operative
+`--max-rounds 7` arg), the `2` in `MAX_CONFIRMATIONS`. Do not restate either elsewhere.
+
+**Post-halt spec edits are a named violation (#518).** That cap park is a whistle: **after the
+halt, any write to the reviewed document invalidates the loop's terminal claim** — the verdict
+covered the pre-halt content, so an edit after the whistle is an unreviewed change wearing a
+reviewed document's clothes. The receipt says so: a post-halt edit voids the READY/REVISE claim
+and the document is unreviewed until the loop re-runs. review-spec states the same at its
+receipt (§6).
 
 Telemetry records rounds, run/skip/tier counts, per-leaf token usage completeness, and benchmark validity. Telemetry failure does not change the review terminal, but incomplete benchmark telemetry cannot satisfy the cost comparison.

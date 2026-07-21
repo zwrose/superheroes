@@ -111,10 +111,37 @@ def test_review_dispatch_prompts_require_bounded_session_artifact_reads():
 
 
 def test_review_loop_has_doc_mode_carveout():
+    import re as _re
+    import review_round_policy
     text = _read_repo("plugins/superheroes/reference/review-loop.md")
-    assert "review-loop-version: 2" in text
-    assert "document review" in text.lower() and "three completed rounds" in text.lower()
-    assert "any open blocking finding" in text.lower() or "Critical **or** Important" in text
+    assert "review-loop-version: 3" in text
+    # #518: the retired, contradictory "three completed rounds" claim must be gone for good.
+    assert "three completed rounds" not in text.lower()
+    # doc-mode re-arm rule preserved
+    norm = " ".join(text.split())
+    assert "any open blocking finding" in norm.lower()
+    # #518 drift guard — the two caps are stated separately and bound to their CODE homes:
+    # (a) overall round cap in the prose == the deciders' --max-rounds default == the skill's
+    #     operative --max-rounds CLI arg (binds the reconciled 7 to code, not prose-to-prose).
+    spec_plan = _read_repo("plugins/superheroes/lib/spec_loop_plan.py")
+    m_call = _re.search(r'add_argument\(\s*"--max-rounds"[^)]*\)', spec_plan)
+    assert m_call, "spec_loop_plan.py must declare a --max-rounds argument"
+    m_def = _re.search(r"default=(\d+)", m_call.group(0))
+    assert m_def, "spec_loop_plan.py --max-rounds must have a numeric default"
+    cap = m_def.group(1)
+    spec_skill = _read_repo("plugins/superheroes/skills/review-spec/SKILL.md")
+    m_skill = _re.search(r"--max-rounds\s+(\d+)", spec_skill)
+    assert m_skill and m_skill.group(1) == cap, "skill --max-rounds must match the code default"
+    assert _re.search(rf"overall round cap is \*\*{cap}\*\*", text), \
+        f"review-loop.md must state the overall round cap as {cap} in its cap sentence"
+    # (b) confirmation-panel budget in the prose == review_round_policy.MAX_CONFIRMATIONS
+    n_conf = review_round_policy.MAX_CONFIRMATIONS
+    assert _re.search(rf"MAX_CONFIRMATIONS = {n_conf}\b", text), \
+        f"review-loop.md must state the confirmation budget as MAX_CONFIRMATIONS = {n_conf}"
+    # #518: the post-halt-edit named violation is stated in the shared contract...
+    assert "post-halt" in text.lower()
+    # ...and carried by review-spec's receipt (the "receipt says so" requirement).
+    assert "post-halt" in spec_skill.lower() and "terminal claim" in spec_skill.lower()
 
 
 def test_host_maps_document_claude_dispatch_recovery_and_codex_asymmetry():
