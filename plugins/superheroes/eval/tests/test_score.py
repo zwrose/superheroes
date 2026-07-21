@@ -443,3 +443,218 @@ def test_smoke_bait_fixture_traps_are_live():
     assert len(expected["traps"]) == 3
     r = score.score_fixture(fdir, findings)
     assert r["precision"]["traps_flagged"] == len(expected["traps"])
+
+
+# ---- real-fixture liveness smokes (high-noise fixture) ---------------------
+
+def _raw_diff_occurrences(diff_text):
+    """Per-file list of (new_line, prefix, stripped) for '+' and context lines.
+
+    Mirrors _parse_diff_lines line-number accounting; keeps every occurrence
+    (not first-occurrence-wins) so uniqueness can be asserted.
+    """
+    by_file = {}
+    cur_file = None
+    new_lineno = 0
+    for raw in diff_text.splitlines():
+        if raw.startswith("diff --git"):
+            cur_file = None
+            continue
+        if raw.startswith("+++ "):
+            path = raw[4:].strip()
+            if path.startswith("b/"):
+                path = path[2:]
+            cur_file = path
+            by_file.setdefault(cur_file, [])
+            continue
+        if raw.startswith("--- "):
+            continue
+        if raw.startswith("@@"):
+            try:
+                plus = raw.split("+", 1)[1]
+                new_start = int(plus.split(",", 1)[0].split(" ", 1)[0])
+                new_lineno = new_start - 1
+            except (IndexError, ValueError):
+                new_lineno = 0
+            continue
+        if cur_file is None:
+            continue
+        if raw.startswith("+"):
+            new_lineno += 1
+            by_file[cur_file].append((new_lineno, "+", raw[1:].strip()))
+        elif raw.startswith("-"):
+            continue
+        else:
+            new_lineno += 1
+            text = raw[1:].strip() if raw.startswith(" ") else raw.strip()
+            by_file[cur_file].append((new_lineno, " ", text))
+    return by_file
+
+
+def _high_noise_fixture():
+    fdir = _real_fixture("high-noise")
+    expected = score.load_expected(fdir)
+    with open(fdir + "/diff.txt") as f:
+        diff_text = f.read()
+    by_file = score._parse_diff_lines(diff_text)
+    raw_by_file = _raw_diff_occurrences(diff_text)
+    return fdir, expected, by_file, raw_by_file
+
+
+def test_smoke_high_noise_hints_resolve_and_are_unique():
+    # Liveness: own-dimension recall 1/1 and traps_flagged == 0 are both
+    # vacuously satisfiable by a broken fixture — an unresolvable lineHint is
+    # silently never matched, and a dead trap can never be flagged (score.py
+    # warns about neither). Pin every seed/trap lineHint to exactly one diff
+    # line and to _resolve_line's answer before any agent ever runs.
+    fdir, expected, by_file, raw_by_file = _high_noise_fixture()
+    for seed in expected["seeds"]:
+        hint = seed["lineHint"].strip()
+        assert hint, f"seed lineHint is blank: {seed!r}"
+        occs = [(ln, pfx) for ln, pfx, txt in raw_by_file[seed["file"]] if txt == hint]
+        assert len(occs) == 1, (
+            f"seed lineHint must occur exactly once in {seed['file']!r}: {hint!r} ({len(occs)} hits)")
+        line, prefix = occs[0]
+        resolved = score._resolve_line(by_file, seed["file"], seed["lineHint"])
+        assert resolved == line
+        assert prefix == "+", (
+            f"seed lineHint must sit on a '+' line per README contract: {hint!r}")
+    for trap in expected["traps"]:
+        hint = trap["lineHint"].strip()
+        assert hint, f"trap lineHint is blank: {trap!r}"
+        occs = [(ln, pfx) for ln, pfx, txt in raw_by_file[trap["file"]] if txt == hint]
+        assert len(occs) == 1, (
+            f"trap lineHint must occur exactly once in {trap['file']!r}: {hint!r} ({len(occs)} hits)")
+        line, _prefix = occs[0]
+        resolved = score._resolve_line(by_file, trap["file"], trap["lineHint"])
+        assert resolved == line
+
+
+def test_smoke_high_noise_perfect_recall():
+    # Liveness: one finding per seed on its resolved line with that seed's
+    # dimension must score recall.matched == recall.total == 5 and
+    # traps_flagged == 0 — the fixture's two acceptance bars together.
+    fdir, expected, by_file, _raw = _high_noise_fixture()
+    findings = []
+    for seed in expected["seeds"]:
+        line = score._resolve_line(by_file, seed["file"], seed["lineHint"])
+        findings.append({"dimension": seed["dimension"],
+                         "file": seed["file"], "line": line,
+                         "taxonomy": seed.get("taxonomy")})
+    r = score.score_fixture(fdir, findings)
+    assert r["recall"]["matched"] == r["recall"]["total"] == 5
+    for dim in r["recall"]["by_dimension"]:
+        assert r["recall"]["by_dimension"][dim]["matched"] == r["recall"]["by_dimension"][dim]["total"]
+    assert r["precision"]["traps_flagged"] == 0
+
+
+def test_smoke_high_noise_every_trap_is_live():
+    # Liveness: traps_flagged == 0 is vacuously satisfiable by a dead trap
+    # whose lineHint never matches (no warning from score.py). One finding at
+    # a time proves each trap fires alone — no dead traps and no overlapping
+    # windows that double-count two traps from one finding.
+    fdir, expected, by_file, _raw = _high_noise_fixture()
+    assert len(expected["traps"]) == 14
+    for trap in expected["traps"]:
+        line = score._resolve_line(by_file, trap["file"], trap["lineHint"])
+        findings = [{"dimension": "Code", "file": trap["file"], "line": line}]
+        r = score.score_fixture(fdir, findings)
+        assert r["precision"]["traps_flagged"] == 1
+        assert r["precision"]["trap_hits"] == ["%s:%s" % (trap["file"], line)]
+
+
+def test_smoke_high_noise_seed_windows_never_touch_a_trap():
+    # Collision proof: trap matching ignores the finding's dimension, so a
+    # correct finding on a seed that drifts a few lines can land in a nearby
+    # trap's window and score as a false positive — the artifact documented
+    # in RESULTS.md for the 0.14.0 run. Every line of each seed's accepted
+    # window must keep traps_flagged == 0 while still matching that seed.
+    fdir, expected, by_file, _raw = _high_noise_fixture()
+    for seed in expected["seeds"]:
+        line = score._resolve_line(by_file, seed["file"], seed["lineHint"])
+        taxonomy = seed.get("taxonomy")
+        window = (score.FUNCTION_WINDOW if taxonomy in score.FUNCTION_SCOPED
+                  else score.LINE_SLACK)
+        for offset in range(-window, window + 1):
+            at_line = line + offset
+            findings = [{"dimension": seed["dimension"],
+                         "file": seed["file"], "line": at_line,
+                         "taxonomy": taxonomy}]
+            r = score.score_fixture(fdir, findings)
+            assert r["precision"]["traps_flagged"] == 0, (
+                f"seed {taxonomy!r} at line {at_line} (offset {offset:+d}) hit a trap")
+            assert r["recall"]["matched"] == 1, (
+                f"seed {taxonomy!r} at line {at_line} (offset {offset:+d}) missed recall")
+
+
+def test_smoke_high_noise_trap_scope_tokens_match_intended_scope():
+    # Token guard: only reasons in FUNCTION_SCOPED_TRAP_REASONS widen a trap
+    # to ±15 (substring containment); every other reason silently degrades to
+    # ±2. If a whole-symbol trap loses its token it narrows to ±2, a real false
+    # positive lands in net_new instead of traps, and the FP rate is under-reported.
+    fdir, expected, by_file, _raw = _high_noise_fixture()
+    function_prefixes = (
+        "size-only",
+        "clear-non-duplicative",
+        "retry-wrapped",
+        "framework-transaction",
+    )
+    function_scoped_traps = []
+    line_scoped_traps = []
+    for trap in expected["traps"]:
+        reason = trap.get("whyNotFlagged") or ""
+        hits = [pfx for pfx in function_prefixes if reason.startswith(pfx)]
+        assert len(hits) <= 1, (
+            f"trap carries more than one function-scope token: {reason!r}")
+        if hits:
+            function_scoped_traps.append(trap)
+        else:
+            line_scoped_traps.append(trap)
+    assert len(function_scoped_traps) == 4
+    assert {t["whyNotFlagged"].split(" —", 1)[0] for t in function_scoped_traps} == set(function_prefixes)
+    assert len(line_scoped_traps) == 10
+
+    func_trap = function_scoped_traps[0]
+    func_line = score._resolve_line(by_file, func_trap["file"], func_trap["lineHint"])
+    r = score.score_fixture(fdir, [{"dimension": "Code",
+                                      "file": func_trap["file"],
+                                      "line": func_line + 10}])
+    assert r["precision"]["traps_flagged"] == 1
+
+    line_trap = line_scoped_traps[0]
+    line_trap_line = score._resolve_line(by_file, line_trap["file"], line_trap["lineHint"])
+    r = score.score_fixture(fdir, [{"dimension": "Code",
+                                    "file": line_trap["file"],
+                                    "line": line_trap_line + 10}])
+    assert r["precision"]["traps_flagged"] == 0
+
+
+def test_smoke_high_noise_expected_shape():
+    # Cheap structural pin: five seeds, fourteen traps, required fields present,
+    # and the five lens dimensions exactly as the fixture claims.
+    _fdir, expected, _by_file, _raw = _high_noise_fixture()
+    assert len(expected["seeds"]) == 5
+    assert len(expected["traps"]) == 14
+    seed_dims = set()
+    for seed in expected["seeds"]:
+        assert seed.get("dimension")
+        assert seed.get("severity")
+        assert seed.get("taxonomy")
+        assert seed.get("file")
+        assert seed.get("lineHint")
+        assert seed.get("why")
+        seed_dims.add(seed["dimension"])
+    # taxonomy selects function-scoped vs line-scoped matching windows in score.py —
+    # frozen ground truth, not an incidental label.
+    assert {(s["dimension"], s["taxonomy"]) for s in expected["seeds"]} == {
+        ("Security", "BOLA"),
+        ("Code", "hardcoded-error-string"),
+        ("Architecture", "premature-abstraction"),
+        ("Failure-Mode", "partial-failure"),
+        ("Test", "claim-test-mismatch"),
+    }
+    for trap in expected["traps"]:
+        assert trap.get("file")
+        assert trap.get("lineHint")
+        assert trap.get("whyNotFlagged")
+    assert seed_dims == {"Architecture", "Code", "Security", "Test", "Failure-Mode"}

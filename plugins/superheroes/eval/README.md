@@ -35,8 +35,9 @@ self-contained set: a unified diff, a frozen review profile, a `CLAUDE.md`, and 
 | `fixtures/refactor/`    | refactors existing service modules | the new Plan-5 rules: Architecture AcyclicDependencies (import cycle), Code cognitive-complexity, Security BFLA (missing function-level authz) + BOPLA (mass-assignment), Test mock-echo + three traps (size-only growth, clear-non-duplicative shape, framework-escaped input) |
 | `fixtures/failure-modes/` | adds credits/voucher/notify/cache/migration/risk-gate/queue flows | **premortem-only, single-variant** — seven Failure-Mode seeds, one per diff-mode class (`partial-failure`, `concurrency/race`, `dependency-failure`, `resource-exhaustion`, `migration-rollback`, `fail-direction`, `transport-contract`); multi-tenant profile; bar: `matched == total` |
 | `fixtures/failure-modes-bait/` | adds guarded sync/backup/archive flows | **premortem-only, single-variant** — zero seeds, three whole-flow traps (`profile-excluded-race`, `retry-wrapped`, `framework-transaction`); single-user profile; bar: `traps_flagged == 0` |
+| `fixtures/high-noise/` | sprawling nine-file multi-tenant workspace-documents change | **five-lens single-variant** — five seeds, one per lens (Security `BOLA`, Code `hardcoded-error-string`, Architecture `premature-abstraction`, Failure-Mode `partial-failure`, Test `claim-test-mismatch`) against **fourteen** near-miss traps; multi-tenant profile with deliberately no focus hints; bars: own-dimension recall 1/1 per lens and `traps_flagged == 0` |
 
-`expected.json` schema (both fixtures):
+`expected.json` schema (every fixture):
 
 ```json
 {
@@ -44,10 +45,15 @@ self-contained set: a unified diff, a frozen review profile, a `CLAUDE.md`, and 
     {"dimension":"<Architecture|Code|Security|Test|Failure-Mode>","severity":"<tier>","taxonomy":"<term>","file":"<path>","lineHint":"<the + line text>","why":"..."}
   ],
   "traps": [
-    {"file":"<path>","lineHint":"<line text>","whyNotFlagged":"<context-line | theme-token | sibling-import | size-only | framework-escaped | clear-non-duplicative | profile-excluded-race | retry-wrapped | framework-transaction>"}
+    {"file":"<path>","lineHint":"<line text>","whyNotFlagged":"<context-line | theme-token | sibling-import | size-only | framework-escaped | clear-non-duplicative | profile-excluded-race | retry-wrapped | framework-transaction | tooling-caught | adequate-primary-defense | three-call-sites | pragmatic-test-mocks | test-file-layering | migration-reversible | profile-excluded-scale>"}
   ]
 }
 ```
+
+Only the reasons in `score.py`'s `FUNCTION_SCOPED_TRAP_REASONS` widen a trap to
+the ±15 window (detection is substring containment); every other reason is
+line-scoped at ±2 — so a whole-symbol trap MUST carry one of those tokens and a
+line-scoped trap must carry none.
 
 Every seed's `lineHint` is the text of a `+` line in that fixture's `diff.txt`
 (in diff scope). Every trap is genuinely out of scope: it sits on a context
@@ -202,7 +208,7 @@ wrong: revise that agent file and re-run its four dispatches (2 fixtures × 2
 variants). Do not weaken a fixture to make an agent pass — the fixtures are the
 frozen ground truth.
 
-## Single-variant fixtures (failure-modes, failure-modes-bait)
+## Single-variant fixtures (failure-modes, failure-modes-bait, high-noise)
 
 The two `failure-modes*` fixtures were added with the `premortem-reviewer`
 agent (review-crew 0.3.0). No five-agent baseline exists at `5a05714`, so the
@@ -213,6 +219,23 @@ conflate other agents' findings into the bars):
 
 - `failure-modes` passes iff `matched == total` (zero missed seeds).
 - `failure-modes-bait` passes iff `traps_flagged == 0`.
+
+`high-noise` also runs **single-variant** (`gate: n/a`) like the failure-modes
+pair, because it post-dates the historical four-agent baseline at `5a05714`, so
+the §Gate A/B does not apply to it. It dispatches **all five lenses** (the four
+in §Procedure plus `premortem-reviewer` with `<Dimension>` = `Failure-Mode`), one
+dispatch per lens, each blind to `expected.json`. Mechanical bars:
+
+- **own-dimension recall 1/1** for each of the five lenses (read from
+  `score.py`'s `recall.by_dimension`, since a single lens scored alone shows
+  union recall 1/5 even when its own dimension is perfect), AND
+- union `traps_flagged == 0` over all five outputs.
+
+Scoring records **five per-lens scores plus one union score** (score the
+directory of all five findings files). The dispatch prompt must require
+**new-file line numbers** (not diff-relative), the recurring runner error
+documented in `RESULTS.md`. This is the harness's **false-positive-rate
+instrument**, so unlike the other fixtures its profile carries no focus hints.
 
 Everything in §Sources-under-test, §Procedure, and §Gate above stays anchored
 to the historical four-agent baseline as-is; this section is additive. The

@@ -232,3 +232,84 @@ strict scorer OR hand-verification can see (the one strict trap FAIL is a hand-v
 symmetric across variants and semantically caught by both), zero real false positives,
 two genuine improvements (security/web-handler recall, test/refactor precision), both
 premortem mechanical bars green on first attempt.
+
+## 2026-07-21 — high-noise fixture, first scored run (five-lens single-variant)
+
+**Instrument:** the first scored run of the new `fixtures/high-noise/` precision
+fixture (issue #546) — the harness's first direct false-positive-rate measurement.
+Five-lens single-variant per `README.md` §Single-variant fixtures: one dispatch per
+lens, each an **opus** generic subagent reading its agent file + `rubric/review-base.md`
++ the fixture from disk, matching the 0.10.0/0.11.0 single-variant method.
+`gate: n/a` (no baseline variant); the mechanical bars below are the acceptance.
+Reviewers were **mechanically blind** to `expected.json` — they were pointed at a
+staged copy of the fixture directory containing only `diff.txt`, `profile.md` and
+`CLAUDE.md`, rather than merely instructed not to read the ground truth, which is a
+methodology tightening over previous runs. The dispatch prompt explicitly required
+**new-file** line numbers, the recurring runner error documented in the 2026-06-11
+and 0.10.0 caveats above.
+
+**Date:** 2026-07-21. **Agents/rubric ref:** working tree at branch
+`claude/superheroes-issue-546-5ae391` (base `main` @ `cd7833d`);
+`plugins/superheroes/agents/` and `plugins/superheroes/rubric/` last changed at
+`75a0c46`. **Fixture:** `fixtures/high-noise/` as introduced by this branch.
+
+Own-dimension recall (strict `score.py`) + traps, per dispatch:
+
+| Lens | Own-dimension recall | Traps flagged | Findings emitted | Net-new (inspected) | Tokens |
+|---|---|---|---|---|---|
+| architecture-reviewer | **1/1** (premature-abstraction) | 0 | 3 | 2 | 86,474 |
+| code-reviewer | **1/1** (hardcoded-error-string) | 0 | 2 | 1 | 94,748 |
+| security-reviewer | **1/1** (BOLA) | 0 | 1 | 0 | 78,156 |
+| test-reviewer | **1/1** (claim-test-mismatch) | 0 | 6 | 5 | 81,177 |
+| premortem-reviewer | **1/1** (partial-failure) | 0 | 1 | 0 | 78,824 |
+
+**Union score (all five findings files scored together):** `recall.matched == 5` of 5,
+every `by_dimension` entry 1/1, `precision.traps_flagged == 0`, 8 net-new.
+
+**Mechanical bars — both PASS, first run, no prompt iterations:** own-dimension
+recall 1/1 for each of the five lenses (union 5/5) ✓; `traps_flagged == 0` across
+all five dispatches ✓. **All fourteen traps held** — context-line, sibling-import,
+framework-escaped, tooling-caught, adequate-primary-defense, three-call-sites,
+pragmatic-test-mocks, test-file-layering, size-only, clear-non-duplicative,
+retry-wrapped, framework-transaction, migration-reversible, profile-excluded-scale.
+
+**Net-new — 8, every one hand-inspected by the orchestrator; none is a false
+positive:**
+- 3 are **cross-dimension true positives** — the same seeded defect caught by a
+  second lens, which `score.py` lists as net-new because it requires a dimension
+  match: architecture and code both flagged the `getDocument` id-only lookup
+  (Security's `BOLA` seed) at `src/handlers/documents.ts:31`, and architecture
+  flagged the inline 404 payload (Code's `hardcoded-error-string` seed) at
+  `src/handlers/exports.ts:36`.
+- 5 are **real but unseeded defects the fixture contains incidentally**, all from
+  test-reviewer on `src/handlers/documents.test.ts`: a second claim/test mismatch
+  on the `listDocuments` test (its name claims workspace filtering but only one
+  document, in the caller's own workspace, is seeded); no unauthorized-path or
+  not-found-path coverage for either handler suite; `searchDocuments` added with
+  no test at all; the `beforeEach` clears the fake rows but does not reset the
+  module mocks; and a status-code-only assertion on the `getDocument` happy path.
+
+**Tokens:** per-dispatch totals are in the table (subagent total including reading
+the agent file, the rubric and the fixture — the same measure the 0.10.0/0.11.0
+runs recorded, not output-only). **419,379 across the five dispatches.**
+
+**Verdict: PASS** on both mechanical bars on the first attempt. The headline result
+is that on the harness's noisiest fixture — a sprawling nine-file diff whose
+profile deliberately carries no focus hints — the five lenses flagged **zero of
+fourteen** planted near-miss traps while recovering every seed in its own
+dimension, and produced **no false positives at all** on hand inspection. Against
+the ~15–17% unfiltered precision that external benchmarks report for LLM reviewers,
+this run measured no measurable FP inflation on planted bait. Two caveats, stated
+plainly: (1) absolute numbers remain non-comparable across runs per the 2026-06-11
+caveat; (2) the five unseeded test-file findings show the fixture is noisier than
+its five seeds suggest — legitimate extra findings are expected on it, and one of
+them landed 4 lines from the `test-file-layering` trap's anchor, just outside its
+±2 window. That margin, not the bars, is the thing to watch on re-runs.
+
+**No-fly-zone constraint:** the two files carrying function-scoped traps
+(`src/services/documents.ts`, `src/services/publish.ts`) have ±15 trap windows
+covering most of each file, and trap matching ignores dimension, so any
+legitimately reportable defect added to those two files would score as a false
+positive. They must stay free of every reportable defect other than the intended
+traps. This is a semantic property the liveness smokes cannot check; it is guarded
+by review.
