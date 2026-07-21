@@ -107,13 +107,23 @@ On success, this writes `guardian/report.md` and compare-and-swap-replaces `guar
 
 Artifacts live beside `core.md` under the band storage mode (CONVENTIONS §2):
 
-| Path | Role |
-| --- | --- |
-| `guardian/report.md` | Latest sweep report — advisor-facing plain consequences with receipts. Written only by finalize. |
-| `guardian/latest.json` | Drift-baseline snapshot. Written only by finalize (CAS). |
-| `guardian/ledger.md` | Dispositions ledger — read-only in this arc; the sweep reads it to suppress settled trades. |
+| Path | Role | Written by |
+| --- | --- | --- |
+| `guardian.md` | Calibration layer — thresholds, cadence, coverage records | configure / rarely |
+| `guardian/report.md` | Latest sweep report — advisor-facing plain consequences with receipts | the sweep, each finalize |
+| `guardian/latest.json` | Drift-baseline snapshot (CAS) | the sweep, each finalize |
+| `guardian/ledger.md` | Dispositions ledger + per-lens report card | the sweep at closure; the advisor at triage/consult |
+| `guardian/vitals.jsonl` | Append-only vitals trend history (one line per sweep) | the sweep, each finalize |
 
-In in-repo mode these commit with the repo; in global mode they live in the project store. The sweep is the single writer of `report.md` and `latest.json`.
+In in-repo mode these commit with the repo; in global mode they live in the project store.
+The sweep writes `report.md`, `latest.json`, ledger closures, and vitals appends; the advisor
+writes ledger dispositions at triage. `configure`'s one-screen view surfaces cadence,
+coverage, and benched lenses (CONVENTIONS §2.1).
+
+**Ledger outcomes (report card).** Adjudicated dispositions count toward each lens's
+actionability mix: `filed`, `verified-fixed`, `accepted`, and `reopened` count for;
+`triaged-out` and `declined` count against. A lens under the actionability bar — once it
+has enough adjudicated findings across enough sweeps — is benched (see CONVENTIONS §2.1).
 
 ## The lens contract
 

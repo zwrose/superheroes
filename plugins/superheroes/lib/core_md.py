@@ -708,7 +708,11 @@ def _migration_recorded(repo_root, core_p, legacy, layer_p=None):
 
 import argparse
 
-_HEROES = ("review-crew", "test-pilot")
+# Unified-layer hero roster for migrate/confirm/write-layer and configure's offerable set.
+# Deliberately NOT mirrored in mode_registry's per-hero dicts: guardian has no legacy profile
+# (_HERO_LEGACY_INREPO has no entry → _legacy_path is a no-op), and mode_registry._hero_global_root
+# falls through to test-pilot's store for unknown names — adding guardian there would mis-route it.
+_HEROES = ("review-crew", "test-pilot", "guardian")
 
 
 def resolve_shared(cwd, *, root=None):

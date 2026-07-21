@@ -25,6 +25,7 @@ class FixtureLens:
         diff_resolved=None,
         required_facts=(),
         metric=1,
+        candidate_fields=None,
     ):
         self.name = name
         self.collector_version = collector_version
@@ -39,21 +40,26 @@ class FixtureLens:
         self._diff_worsened = diff_worsened if diff_worsened is not None else []
         self._diff_resolved = diff_resolved if diff_resolved is not None else []
         self._metric = metric
+        self._candidate_fields = dict(candidate_fields or {})
 
     def collect(self, ctx):
         candidates = []
         if self._emit_red_line:
-            candidates.append({
+            cand = {
                 "id": "%s:red-line" % self.name,
                 "complexity": gl.RED_LINE_THRESHOLDS["complexity"],
                 "metric": self._metric,
-            })
+            }
+            cand.update(self._candidate_fields)
+            candidates.append(cand)
         if self._emit_normal:
-            candidates.append({
+            cand = {
                 "id": "%s:normal" % self.name,
                 "complexity": 5,
                 "metric": self._metric,
-            })
+            }
+            cand.update(self._candidate_fields)
+            candidates.append(cand)
         return {"candidates": candidates, "digest": self._digest}
 
     def diff(self, prev_digest, cur_digest):
@@ -134,7 +140,38 @@ def write_ledger(tmp_path, records, schema_version=1, root=None):
     return gs.ledger_path(cwd, root)
 
 
+def benched_fixture_ledger(n_against=10, sweeps=3, lens="fixture"):
+    """Enough adjudicated-against records to bench `lens` under report-card defaults."""
+    records = []
+    for i in range(n_against):
+        records.append({
+            "id": "%s:tool:loc-%d" % (lens, i),
+            "disposition": "triaged-out",
+            "date": "2026-07-01",
+            "issue": None,
+            "metricAtDisposition": None,
+            "reason": None,
+            "reraiseWhen": None,
+            "adjudicatedIn": "s%d" % (i % sweeps),
+        })
+    return records
+
+
 def ensure_store(cwd, root):
     """Ensure project store exists and return store root path."""
     mr.ensure_project_store(cwd, root=root)
     return root
+
+
+def funnel_conserved(bundle):
+    """raised == malformed + killed* + tracked + surfaced (match notes are breadcrumbs)."""
+    funnel = bundle["funnel"]
+    raised = sum(funnel["raised"].values())
+    return raised == (
+        len(funnel.get("malformed") or [])
+        + len(funnel.get("killedByDrift") or [])
+        + len(funnel.get("killedByLedger") or [])
+        + len(funnel.get("killedByBench") or [])
+        + len(funnel.get("trackedFiled") or [])
+        + len(bundle.get("surfaced") or [])
+    )

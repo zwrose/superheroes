@@ -144,11 +144,22 @@ session, and is never stored here.
 
 **Guardian artifact subtree.** The Guardian hero (§1) adds a `guardian.md` calibration layer
 (a per-plugin layer like any other) plus a `guardian/` artifact subtree beside `core.md`,
-holding its sweep outputs: a report, a drift-baseline snapshot, and a read-only dispositions
-ledger — plus a reserved vitals trend file for a later issue. In in-repo mode these are
+holding its sweep outputs: a report, a drift-baseline snapshot, a dispositions ledger (with
+its per-lens report card), and an append-only vitals trend file. In in-repo mode these are
 committed with the repo (findings are visible to collaborators; the artifacts dirty the working
-tree until committed); in global mode they live in the project store. The sweep is the single
-writer of the report and baseline snapshot and **never commits, pushes, edits code, or files issues.**
+tree until committed); in global mode they live in the project store. The sweep writes the
+report, baseline snapshot, ledger closures, and vitals trend append; the advisor writes ledger
+dispositions at triage/consult. The sweep **never commits, pushes, edits code, or files issues.**
+
+The dispositions ledger record shape (authoritative home: `guardian_ledger.LEDGER_RECORD_FIELDS`)
+carries `id`, `disposition`, `date`, `issue`, `metricAtDisposition`, `reason`, and
+`reraiseWhen`. The report card grades each lens from adjudicated outcomes: `filed`,
+`verified-fixed`, `accepted`, and `reopened` count for; `triaged-out` and `declined` count
+against (authoritative home: `guardian_ledger.OUTCOMES_FOR` / `OUTCOMES_AGAINST`). Vitals
+tracked each sweep (`locTotal`, `fileCount`, `duplicationPercent`, `todoCount`, `majorsBehind`,
+`vulnCount`, `suiteRuntimeSeconds`, `suiteTestCount`, `suiteSkipped`; authoritative home:
+`guardian_vitals.VITALS`) each carry a drift threshold (authoritative home:
+`guardian_vitals.DRIFT_THRESHOLDS`).
 
 ### 2.2 File format
 
@@ -176,6 +187,10 @@ Every file begins with a one-line **provenance comment**:
 
   A plugin layer keeps its own block where it has one (e.g. test-pilot's existing
   `json test-pilot-config` block moves into `test-pilot.md` verbatim).
+- **`guardian/vitals.jsonl` provenance (deliberate §2.2 reading).** The vitals trend file
+  must both carry provenance and stay valid JSONL — an HTML comment would not parse. Its
+  first line is therefore a JSON provenance object (not an HTML comment), written once at
+  creation; readers validate and skip it.
 - **CLAUDE.md-aware adder.** A profile carries only what the project's `CLAUDE.md` does
   not already state. Conventions live in `CLAUDE.md`; the profile adds calibration on
   top.

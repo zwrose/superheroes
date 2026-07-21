@@ -13,6 +13,7 @@ HEADER_STANDING_INSTRUCTIONS = "## Standing instructions"
 HEADER_VALIDATED = "## Validated findings"
 HEADER_TRACKED = "## Tracked / filed"
 HEADER_VITALS = "## Vitals delta"
+HEADER_REPORT_CARD = "## Report card"
 HEADER_FUNNEL = "## Candidate funnel"
 
 _STANDING_BODY = """\
@@ -25,17 +26,115 @@ FUNNEL_RAISED = "raised"
 FUNNEL_MALFORMED = "malformed"
 FUNNEL_KILLED_DRIFT = "killed-by-drift"
 FUNNEL_KILLED_LEDGER = "killed-by-ledger"
+FUNNEL_KILLED_BENCH = "benched-suppressed"
+FUNNEL_MATCH_NOTES = "matcher-notes"
 FUNNEL_TRACKED_FILED = "tracked-filed"
 FUNNEL_DEGRADED = "degraded-lenses"
 FUNNEL_REJECTED = "model-rejected"
 FUNNEL_VALIDATED = "surfaced-and-validated"
 
 
+def _storage_header(bundle):
+    """One actionable line for storage mode + durability consequence."""
+    mode = bundle.get("storageMode") or "in-repo"
+    committed = bundle.get("committed", "uncommitted")
+    if mode == "global":
+        return ("storage: global — history is machine-local to this project store "
+                "(not shared via the repo)")
+    if committed == "committed":
+        return ("storage: in-repo — guardian artifacts are committed with the repo")
+    return ("storage: in-repo — guardian artifacts are generated uncommitted; "
+            "durability requires a PR")
+
+
+def _fmt_delta_entry(name, move):
+    if not isinstance(move, dict):
+        return "%s: %s" % (name, move)
+    prev, cur = move.get("prev"), move.get("cur")
+    change = move.get("change")
+    return "%s: %s → %s (%s)" % (name, prev, cur, change)
+
+
+def _render_vitals(lines, vd):
+    lines.append(HEADER_VITALS)
+    lines.append("")
+    if not vd:
+        lines.append("_No vitals movement._")
+        lines.append("")
+        return
+
+    crossings = vd.get("crossings") if isinstance(vd, dict) else None
+    delta = vd.get("delta") if isinstance(vd, dict) else None
+    if crossings is None and delta is None and isinstance(vd, dict):
+        # Legacy flat map shape.
+        for k in sorted(vd):
+            lines.append("- %s: %s" % (k, vd[k]))
+        lines.append("")
+        return
+
+    crossing_vitals = set()
+    if crossings:
+        for c in crossings:
+            if not isinstance(c, dict):
+                continue
+            crossing_vitals.add(c.get("vital"))
+            sentence = c.get("sentence") or _fmt_delta_entry(
+                c.get("vital"), c)
+            lines.append("- %s" % sentence)
+    if delta:
+        non_crossing = []
+        for name in sorted(delta):
+            if name in crossing_vitals:
+                continue
+            non_crossing.append(_fmt_delta_entry(name, delta[name]))
+        if non_crossing:
+            if crossings:
+                lines.append("")
+                lines.append("Other movement:")
+            for item in non_crossing:
+                lines.append("- %s" % item)
+    if not crossings and not (delta or {}):
+        lines.append("_No vitals movement._")
+    lines.append("")
+
+
+def _percent(actionability):
+    return "n/a" if actionability is None else "%.0f%%" % (actionability * 100)
+
+
+def _render_report_card(lines, card):
+    lines.append(HEADER_REPORT_CARD)
+    lines.append("")
+    if not card:
+        lines.append("_No lenses graded yet._")
+        lines.append("")
+        return
+    for lens in sorted(card):
+        entry = card[lens]
+        if not isinstance(entry, dict):
+            continue
+        lines.append("- %s: %d for / %d against (%s actionability, sweeps=%s)" % (
+            lens,
+            entry.get("for", 0),
+            entry.get("against", 0),
+            _percent(entry.get("actionability")),
+            "unknown" if entry.get("sweeps") is None else entry.get("sweeps"),
+        ))
+        if entry.get("benched"):
+            lines.append("  - %s" % (entry.get("reason") or ("%s is benched" % lens)))
+        elif entry.get("adjudicated", 0) == 0 or entry.get("sweeps") is None \
+                or not entry.get("reason", "").startswith(lens + " is active"):
+            # Below the small-N floor — must not read as passing.
+            reason = entry.get("reason")
+            if reason:
+                lines.append("  - %s" % reason)
+    lines.append("")
+
+
 def render(bundle, dispositions, ledger):
     """Deterministic markdown report from a collect bundle + model dispositions."""
     lines = [HEADER_TITLE, ""]
-    committed = bundle.get("committed", "uncommitted")
-    lines.append("committed: %s" % committed)
+    lines.append(_storage_header(bundle))
     lines.append("")
     lines.append(HEADER_STANDING_INSTRUCTIONS)
     lines.append("")
@@ -82,15 +181,10 @@ def render(bundle, dispositions, ledger):
     lines.append("")
 
     # Vitals delta
-    lines.append(HEADER_VITALS)
-    lines.append("")
-    vd = bundle.get("vitalsDelta") or {}
-    if vd:
-        for k in sorted(vd):
-            lines.append("- %s: %s" % (k, vd[k]))
-    else:
-        lines.append("_No vitals movement._")
-    lines.append("")
+    _render_vitals(lines, bundle.get("vitalsDelta") or {})
+
+    # Report card
+    _render_report_card(lines, bundle.get("reportCard") or {})
 
     # Candidate funnel
     lines.append(HEADER_FUNNEL)
@@ -131,6 +225,26 @@ def render(bundle, dispositions, ledger):
         for item in ledger_killed:
             lines.append("- %s (%s): %s" % (
                 item.get("id"), item.get("lens"), item.get("disposition")))
+    else:
+        lines.append("_None._")
+    lines.append("")
+
+    benched = funnel.get("killedByBench") or []
+    lines.append("### %s" % FUNNEL_KILLED_BENCH)
+    if benched:
+        for item in benched:
+            lines.append("- %s (%s): %s" % (
+                item.get("id"), item.get("lens"), item.get("reason")))
+    else:
+        lines.append("_None._")
+    lines.append("")
+
+    match_notes = funnel.get("matchNotes") or []
+    lines.append("### %s" % FUNNEL_MATCH_NOTES)
+    if match_notes:
+        for item in match_notes:
+            lines.append("- %s (%s): %s" % (
+                item.get("id"), item.get("lens"), item.get("note")))
     else:
         lines.append("_None._")
     lines.append("")

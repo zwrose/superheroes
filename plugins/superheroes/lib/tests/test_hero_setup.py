@@ -12,6 +12,10 @@ import core_md
 import hero_setup as HS
 
 
+def _expected_optional():
+    return set(core_md._HEROES) - HS.MANDATORY
+
+
 def test_declined_empty_by_default(tmp_path):
     repo = str(tmp_path)
     store = str(tmp_path / "store")
@@ -63,10 +67,8 @@ def test_mark_declined_unknown_hero_is_noop(tmp_path):
 def test_offerable_lists_optional_unset_undeclined_only(tmp_path):
     repo = str(tmp_path)
     store = str(tmp_path / "store")
-    # fresh: test-pilot (optional) is offerable; review-crew (mandatory) is NOT
-    off = HS.offerable(repo, store)
-    assert "test-pilot" in off
-    assert "review-crew" not in off
+    # fresh: every optional hero is offerable; review-crew (mandatory) is NOT
+    assert set(HS.offerable(repo, store)) == _expected_optional()
 
 
 def test_offerable_excludes_a_set_up_hero(tmp_path):
@@ -88,9 +90,10 @@ def test_offerable_excludes_a_declined_hero(tmp_path):
 def test_cli_offerable_and_decline(tmp_path, capsys):
     repo = str(tmp_path)
     store = str(tmp_path / "store")
+    expected = _expected_optional()
     HS.main(["offerable", "--cwd", repo, "--root", store])
-    assert "test-pilot" in json.loads(capsys.readouterr().out)["offerable"]
+    assert set(json.loads(capsys.readouterr().out)["offerable"]) == expected
     HS.main(["decline", "--cwd", repo, "--root", store, "--hero", "test-pilot"])
     capsys.readouterr()
     HS.main(["offerable", "--cwd", repo, "--root", store])
-    assert "test-pilot" not in json.loads(capsys.readouterr().out)["offerable"]
+    assert set(json.loads(capsys.readouterr().out)["offerable"]) == (expected - {"test-pilot"})

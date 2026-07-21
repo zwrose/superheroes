@@ -142,7 +142,11 @@ def read_ledger(cwd, root=None):
     """Read-only parse of ledger.md → {records, byId, status, note}.
 
     Malformed or newer-version ledgers NEVER suppress findings — status reflects
-    the failure but records/byId are empty so callers surface everything."""
+    the failure but records/byId are empty so callers surface everything.
+
+    Total type validation: a block that is not a dict is malformed (never
+    AttributeError); a record whose id is not a non-empty str is skipped (never
+    TypeError on byId); duplicate ids are ambiguous and never suppress."""
     path = ledger_path(cwd, root)
     try:
         with open(path, encoding="utf-8") as fh:
@@ -166,6 +170,15 @@ def read_ledger(cwd, root=None):
             "note": "ledger has no %s fenced block" % LEDGER_FENCE,
         }
 
+    # Hand-edited ledgers can parse to a list/string/number — never .get on those.
+    if not isinstance(block, dict):
+        return {
+            "records": [],
+            "byId": {},
+            "status": "malformed",
+            "note": "ledger block is not an object (got %s)" % type(block).__name__,
+        }
+
     ver = block.get("schemaVersion")
     if isinstance(ver, int) and not isinstance(ver, bool) and ver > LEDGER_SCHEMA_VERSION:
         return {
@@ -187,6 +200,7 @@ def read_ledger(cwd, root=None):
 
     records = []
     by_id = {}
+    duplicates = set()
     for rec in raw_records:
         if not isinstance(rec, dict):
             continue
@@ -194,10 +208,24 @@ def read_ledger(cwd, root=None):
             continue
         if rec.get("disposition") not in guardian_lens.FINDING_STATES:
             continue
+        rid = rec.get("id")
+        # Unhashable / empty ids must never reach byId (TypeError: unhashable type).
+        if not isinstance(rid, str) or not rid.strip():
+            continue
         records.append(rec)
-        by_id[rec["id"]] = rec
+        if rid in duplicates:
+            continue
+        if rid in by_id:
+            duplicates.add(rid)
+            by_id.pop(rid, None)
+            continue
+        by_id[rid] = rec
 
-    return {"records": records, "byId": by_id, "status": "ok", "note": None}
+    note = None
+    if duplicates:
+        note = ("duplicate ids make suppression ambiguous (not suppressing): %s"
+                % ", ".join(sorted(duplicates)))
+    return {"records": records, "byId": by_id, "status": "ok", "note": note}
 
 
 def main(argv=None):

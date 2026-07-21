@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -17,15 +18,23 @@ if _LIB_DIR not in sys.path:
 
 import core_md          # noqa: E402
 import file_lock        # noqa: E402
+import guardian_ledger  # noqa: E402
 import guardian_lens    # noqa: E402
 import guardian_report  # noqa: E402
 import guardian_store   # noqa: E402
+import guardian_vitals  # noqa: E402
+import mode_registry    # noqa: E402
 import store_core       # noqa: E402
 
 _CONFIG_BLOCK = re.compile(
     r"```json\s+guardian-config\s*\n(.*?)\n```", re.DOTALL)
 
-_VERIFY_TIMEOUT = 30
+# Default verify / vitals time budget. This repo's lib suite measures ~125s and
+# §3.7's worked example is 62s; 30s (the prior hard cap) made suite vitals
+# permanently "not collected" on the repos the design cites. 300s clears both
+# with headroom while still bounding a runaway suite.
+_DEFAULT_VERIFY_BUDGET_SECONDS = 300
+_VERIFY_STDOUT_CAP = 8 * 1024
 
 
 def _repo_root(cwd):
@@ -34,32 +43,85 @@ def _repo_root(cwd):
 
 
 def read_config(cwd, root=None):
-    """Read guardian.md layer → {thresholds, coverage}. Empty/absent → defaults."""
+    """Read guardian.md layer → thresholds, coverage, vitals knobs.
+
+    Empty/absent → defaults. Vitals collection is on by default; a
+    guardian-config `vitals: false` (or `collectVitals: false`) disables it.
+    `verifyBudgetSeconds` (alias `vitalsBudgetSeconds`) tunes the shared
+    verify/vitals time budget."""
     layer_p = guardian_store.guardian_layer_path(cwd, root)
     thresholds = dict(guardian_lens.RED_LINE_THRESHOLDS)
     coverage = []
+    vitals_enabled = True
+    verify_budget = _DEFAULT_VERIFY_BUDGET_SECONDS
+    report_card = None
     if core_md._layer_is_empty(layer_p):
-        return {"thresholds": thresholds, "coverage": coverage}
+        return {
+            "thresholds": thresholds,
+            "coverage": coverage,
+            "vitalsEnabled": vitals_enabled,
+            "verifyBudgetSeconds": verify_budget,
+            "reportCard": report_card,
+        }
     try:
         with open(layer_p, encoding="utf-8") as fh:
             text = fh.read()
     except OSError:
-        return {"thresholds": thresholds, "coverage": coverage}
+        return {
+            "thresholds": thresholds,
+            "coverage": coverage,
+            "vitalsEnabled": vitals_enabled,
+            "verifyBudgetSeconds": verify_budget,
+            "reportCard": report_card,
+        }
     m = _CONFIG_BLOCK.search(text)
     if not m:
-        return {"thresholds": thresholds, "coverage": coverage}
+        return {
+            "thresholds": thresholds,
+            "coverage": coverage,
+            "vitalsEnabled": vitals_enabled,
+            "verifyBudgetSeconds": verify_budget,
+            "reportCard": report_card,
+        }
     try:
         block = json.loads(m.group(1))
     except ValueError:
-        return {"thresholds": thresholds, "coverage": coverage}
+        return {
+            "thresholds": thresholds,
+            "coverage": coverage,
+            "vitalsEnabled": vitals_enabled,
+            "verifyBudgetSeconds": verify_budget,
+            "reportCard": report_card,
+        }
     if not isinstance(block, dict):
-        return {"thresholds": thresholds, "coverage": coverage}
+        return {
+            "thresholds": thresholds,
+            "coverage": coverage,
+            "vitalsEnabled": vitals_enabled,
+            "verifyBudgetSeconds": verify_budget,
+            "reportCard": report_card,
+        }
     if isinstance(block.get("thresholds"), dict):
         thresholds.update(block["thresholds"])
     cov = block.get("coverage")
     if isinstance(cov, list):
         coverage = cov
-    return {"thresholds": thresholds, "coverage": coverage}
+    if block.get("vitals") is False or block.get("collectVitals") is False:
+        vitals_enabled = False
+    budget = block.get("verifyBudgetSeconds")
+    if budget is None:
+        budget = block.get("vitalsBudgetSeconds")
+    if isinstance(budget, (int, float)) and not isinstance(budget, bool) and budget > 0:
+        verify_budget = float(budget)
+    if isinstance(block.get("reportCard"), dict):
+        report_card = block["reportCard"]
+    return {
+        "thresholds": thresholds,
+        "coverage": coverage,
+        "vitalsEnabled": vitals_enabled,
+        "verifyBudgetSeconds": verify_budget,
+        "reportCard": report_card,
+    }
 
 
 def _manifest_tags(repo):
@@ -86,15 +148,34 @@ def _config_paths(config):
     return paths
 
 
+def _bound_stdout(text):
+    if not isinstance(text, str):
+        return ""
+    if len(text) <= _VERIFY_STDOUT_CAP:
+        return text
+    return text[-_VERIFY_STDOUT_CAP:]
+
+
 def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
-    """Trust-but-verify the four FACTS. `run` is injectable for tests."""
+    """Trust-but-verify the four FACTS. `run` is injectable for tests.
+
+    When `verify-command` is needed, runs it once and returns bounded stdout +
+    elapsed seconds alongside the fact verdict so vitals can share the same
+    execution (never a second run)."""
     run = run or subprocess.run
     config = config if config is not None else read_config(cwd, root)
+    budget = config.get("verifyBudgetSeconds", _DEFAULT_VERIFY_BUDGET_SECONDS)
     repo = _repo_root(cwd)
     facts = []
     needed = needed_facts if needed_facts is not None else set()
+    verify_result = {
+        "status": "not-run",
+        "receipt": "no requester depends on verify-command",
+        "stdout": "",
+        "durationSeconds": None,
+    }
 
-    # 1. verify-command — only probe when a lens actually depends on it
+    # 1. verify-command — only probe when a lens or vitals depends on it
     core = core_md.read(cwd, root)
     if "verify-command" not in needed:
         facts.append({
@@ -105,25 +186,53 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
     else:
         vcmd = (core or {}).get("verifyCommand")
         if not vcmd:
+            verify_result = {
+                "status": "absent",
+                "receipt": "no verifyCommand in core.md",
+                "stdout": "",
+                "durationSeconds": None,
+            }
             facts.append({
                 "fact": "verify-command",
                 "status": "absent",
                 "receipt": "no verifyCommand in core.md",
             })
         else:
+            stdout = ""
+            duration = None
             try:
+                t0 = time.monotonic()
                 r = run(vcmd, shell=True, cwd=cwd, capture_output=True, text=True,
-                        timeout=_VERIFY_TIMEOUT)
+                        timeout=budget)
+                duration = time.monotonic() - t0
+                stdout = _bound_stdout(getattr(r, "stdout", None) or "")
                 if r.returncode == 0:
                     status, receipt = "ok", "%s → exit 0" % vcmd
                 else:
                     status, receipt = "failed", "%s → exit %d" % (vcmd, r.returncode)
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as exc:
+                duration = budget
+                stdout = _bound_stdout(
+                    (getattr(exc, "stdout", None) or "")
+                    if isinstance(getattr(exc, "stdout", None), str)
+                    else "")
                 status, receipt = "not-collected", "%s → timeout" % vcmd
             except (OSError, subprocess.SubprocessError) as exc:
                 status, receipt = "not-collected", "%s → %s" % (vcmd, exc)
 
-            facts.append({"fact": "verify-command", "status": status, "receipt": receipt})
+            verify_result = {
+                "status": status,
+                "receipt": receipt,
+                "stdout": stdout,
+                "durationSeconds": duration,
+            }
+            facts.append({
+                "fact": "verify-command",
+                "status": status,
+                "receipt": receipt,
+                "stdout": stdout,
+                "durationSeconds": duration,
+            })
 
     # 2. recorded-coverage
     cov = config.get("coverage") or []
@@ -187,7 +296,7 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
                 "receipt": {"checked": paths, "dangling": []},
             })
 
-    return {"facts": facts}
+    return {"facts": facts, "verifyResult": verify_result}
 
 
 _FACT_SATISFIED = {
@@ -215,24 +324,67 @@ def _is_trade_disposition(rec):
     return rec.get("disposition") in ("accepted", "declined")
 
 
-def _materially_worsened(candidate, rec):
-    """Best-effort: compare candidate metric against ledger metricAtDisposition."""
-    metric_at = rec.get("metricAtDisposition")
-    if metric_at is None:
-        return False
-    cur = candidate.get("metric")
-    if cur is None:
-        return False
-    try:
-        return float(cur) > float(metric_at)
-    except (TypeError, ValueError):
-        return False
-
-
 def _filter_red_lines(red_lines):
     """Drop red-line entries whose kind is not in RED_LINE_KINDS."""
     allowed = set(guardian_lens.RED_LINE_KINDS)
     return [r for r in red_lines if r.get("kind") in allowed]
+
+
+def _metric_improved(candidate, record):
+    """True when a filed finding's metric moved in the fixed direction (down/gone)."""
+    if not isinstance(record, dict) or not isinstance(candidate, dict):
+        return False
+    metric_at = record.get("metricAtDisposition")
+    if metric_at is None:
+        return False
+    if isinstance(metric_at, dict):
+        for key in sorted(metric_at):
+            baseline = metric_at[key]
+            if isinstance(baseline, bool) or not isinstance(baseline, (int, float)):
+                continue
+            cur = candidate.get(key)
+            if cur is None and isinstance(candidate.get("metrics"), dict):
+                cur = candidate["metrics"].get(key)
+            if isinstance(cur, bool) or not isinstance(cur, (int, float)):
+                continue
+            if float(cur) < float(baseline):
+                return True
+        return False
+    if isinstance(metric_at, bool) or not isinstance(metric_at, (int, float, str)):
+        return False
+    try:
+        baseline = float(metric_at)
+    except (TypeError, ValueError):
+        return False
+    cur = candidate.get("metric")
+    if isinstance(cur, bool) or not isinstance(cur, (int, float)):
+        return False
+    return float(cur) < baseline
+
+
+def _storage_mode(cwd, root=None):
+    try:
+        return mode_registry.resolve(cwd, root)["mode"]
+    except Exception:
+        return mode_registry.IN_REPO
+
+
+def _guardian_committed(cwd, root, storage_mode):
+    """Whether in-repo guardian artifacts are clean in the working tree."""
+    if storage_mode == mode_registry.GLOBAL:
+        return "machine-local"
+    gdir = guardian_store.guardian_dir(cwd, root)
+    rel = os.path.relpath(gdir, _repo_root(cwd))
+    porcelain = store_core.run_git(cwd, "status", "--porcelain", "--", rel)
+    if porcelain is None:
+        return "unknown"
+    if porcelain.strip():
+        return "uncommitted"
+    # Untracked-but-absent dir (no artifacts yet) is still "uncommitted" until a PR.
+    tracked = store_core.run_git(cwd, "ls-files", "--", rel)
+    if not (tracked or "").strip():
+        return "uncommitted"
+    return "committed"
 
 
 def collect(cwd, lenses=None, root=None, run=None, config=None):
@@ -242,6 +394,8 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
     needed_facts = set()
     for lens in lenses:
         needed_facts.update(lens.required_facts)
+    if config.get("vitalsEnabled", True):
+        needed_facts.add("verify-command")
     facts = verify_config(cwd, root, run=run, config=config, needed_facts=needed_facts)
     unsatisfied = _unsatisfied_facts(facts["facts"])
 
@@ -255,13 +409,19 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
     funnel_raised = {}
     killed_by_drift = []
     killed_by_ledger = []
+    killed_by_bench = []
+    match_notes = []
     degraded_lenses = []
     malformed = []
     lens_meta = {}
     next_lenses = {}
+    filed_observations = {}
 
     ledger = guardian_store.read_ledger(cwd, root)
     suppress_via_ledger = ledger["status"] in ("ok", "absent")
+    card = guardian_ledger.report_card(
+        ledger["records"], overrides=config.get("reportCard"))
+    benched_lenses = {name for name, entry in card.items() if entry.get("benched")}
 
     for lens in lenses:
         if set(lens.required_facts) & unsatisfied:
@@ -312,6 +472,7 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
 
         would_surface = set(drift_ids) | red_line_ids
         lens_surfaced = False
+        lens_is_benched = lens.name in benched_lenses
 
         for cid, cand in cand_by_id.items():
             if cid not in would_surface:
@@ -333,8 +494,17 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
             else:
                 drift_reason = "worsened" if cid in drift_ids else "red-line"
 
-            if suppress_via_ledger and cid in ledger["byId"]:
-                rec = ledger["byId"][cid]
+            rec, match_note = (None, None)
+            if suppress_via_ledger:
+                rec, match_note = guardian_ledger.match(cid, ledger["byId"])
+                if match_note:
+                    match_notes.append({
+                        "id": cid,
+                        "lens": lens.name,
+                        "note": match_note,
+                    })
+
+            if rec is not None:
                 if _is_filed_open(rec) and not is_red:
                     issue = rec.get("issue", "")
                     ledger_status.append({
@@ -344,7 +514,7 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
                     })
                     continue
                 if _is_trade_disposition(rec) and not is_red:
-                    if _materially_worsened(cand, rec):
+                    if guardian_ledger.materially_worsened(cand, rec):
                         pass  # surface — materially worsened
                     else:
                         killed_by_ledger.append({
@@ -354,11 +524,39 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
                         })
                         continue
 
+            # Benching suppresses ordinary drift only — never a red line.
+            if lens_is_benched and not is_red:
+                killed_by_bench.append({
+                    "id": cid,
+                    "lens": lens.name,
+                    "reason": card[lens.name].get("reason") or "benched",
+                })
+                continue
+
             entry = dict(cand)
             entry["lens"] = lens.name
             entry["driftReason"] = drift_reason
             surfaced.append(entry)
             lens_surfaced = True
+
+        # Filed-closure observations for every filed record of this lens.
+        for lrec in ledger["records"]:
+            if not isinstance(lrec, dict) or lrec.get("disposition") != "filed":
+                continue
+            rid = lrec.get("id")
+            if not isinstance(rid, str) or guardian_ledger.lens_of(rid) != lens.name:
+                continue
+            matched_cand = cand_by_id.get(rid)
+            if matched_cand is None:
+                for cid, c in cand_by_id.items():
+                    hit, _ = guardian_ledger.match(cid, {rid: lrec})
+                    if hit is not None:
+                        matched_cand = c
+                        break
+            filed_observations[rid] = {
+                "present": matched_cand is not None,
+                "candidate": matched_cand,
+            }
 
         if lens_surfaced:
             lens_meta[lens.name] = {
@@ -377,13 +575,45 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
             next_lenses[lens.name] = prev_lenses[lens.name]
 
     swept_sha = store_core.run_git(cwd, "rev-parse", "HEAD")
+    sweep = guardian_ledger.make_sweep(swept_sha or "unknown")
+    sweep_id = sweep["sweepId"]
+
+    lens_digests = {
+        name: entry.get("digest")
+        for name, entry in next_lenses.items()
+        if isinstance(entry, dict)
+    }
+    verify_result = facts.get("verifyResult") or {"status": "not-run"}
+    budget = config.get("verifyBudgetSeconds", _DEFAULT_VERIFY_BUDGET_SECONDS)
+    if config.get("vitalsEnabled", True):
+        # Do not pass the sweep's injectable `run` into vitals: test doubles stub
+        # the verify shell command, while vitals uses `run` only for read-only git.
+        vitals_out = guardian_vitals.collect(
+            cwd, root=root, lens_digests=lens_digests,
+            verify_result=verify_result, budget_seconds=budget)
+        cur_vitals = vitals_out.get("vitals") or {}
+        prev_vitals = (prev or {}).get("vitals") or {}
+        vitals_delta = {
+            "delta": guardian_vitals.delta(prev_vitals, cur_vitals),
+            "crossings": guardian_vitals.crossings(
+                prev_vitals, cur_vitals, thresholds=config.get("thresholds")),
+            "notCollected": vitals_out.get("notCollected") or {},
+            "sources": vitals_out.get("sources") or {},
+        }
+    else:
+        cur_vitals = (prev or {}).get("vitals", {})
+        vitals_delta = {}
+
     next_snapshot = {
         "schemaVersion": guardian_store.SNAPSHOT_SCHEMA_VERSION,
         "sweptSha": swept_sha,
-        "vitals": (prev or {}).get("vitals", {}),
+        "vitals": cur_vitals,
         "lenses": next_lenses,
     }
     assert set(next_snapshot) == set(guardian_store.SNAPSHOT_KEYS)
+
+    storage_mode = _storage_mode(cwd, root)
+    committed = _guardian_committed(cwd, root, storage_mode)
 
     return {
         "surfaced": surfaced,
@@ -392,6 +622,8 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
             "malformed": malformed,
             "killedByDrift": killed_by_drift,
             "killedByLedger": killed_by_ledger,
+            "killedByBench": killed_by_bench,
+            "matchNotes": match_notes,
             "trackedFiled": list(ledger_status),
             "degradedLenses": degraded_lenses,
         },
@@ -400,10 +632,15 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
         "factVerdicts": facts["facts"],
         "ledgerStatus": ledger_status,
         "ledgerState": ledger["status"],
-        "vitalsDelta": {},
+        "reportCard": card,
+        "vitalsDelta": vitals_delta,
         "nextSnapshot": next_snapshot,
         "prevIdentity": prev_identity,
         "sweptSha": swept_sha,
+        "sweepId": sweep_id,
+        "filedObservations": filed_observations,
+        "committed": committed,
+        "storageMode": storage_mode,
     }
 
 
@@ -439,8 +676,44 @@ def validate_dispositions(bundle, dispositions):
     return (len(errors) == 0, errors)
 
 
+def _close_filed_records(records, observations, sweep_id):
+    """Advance filed records from current metrics → (new_records, advances).
+
+    Finding gone or metric improved → verified-fixed; still present without
+    improvement → reopened (post-merge verification at the next sweep)."""
+    new_records = list(records or [])
+    advances = []
+    for rec in list(new_records):
+        if not isinstance(rec, dict) or rec.get("disposition") != "filed":
+            continue
+        rid = rec.get("id")
+        if not isinstance(rid, str):
+            continue
+        obs = (observations or {}).get(rid)
+        if obs is None:
+            continue
+        if not obs.get("present"):
+            new_records, result = guardian_ledger.advance(
+                new_records, rid, "verified-fixed", sweepId=sweep_id)
+            advances.append(result)
+            continue
+        cand = obs.get("candidate") or {}
+        if _metric_improved(cand, rec):
+            new_records, result = guardian_ledger.advance(
+                new_records, rid, "verified-fixed", sweepId=sweep_id)
+        else:
+            new_records, result = guardian_ledger.advance(
+                new_records, rid, "reopened", sweepId=sweep_id)
+        advances.append(result)
+    return new_records, advances
+
+
 def finalize(cwd, bundle, dispositions, root=None):
-    """Transactional finalize: validate → report first → baseline last, under sweep lock."""
+    """Transactional finalize: validate → report first → baseline last, under sweep lock.
+
+    After the snapshot (commit marker), still inside the lock: ledger closure via
+    write_unlocked and vitals append via append_unlocked. Both are reported, never
+    silently swallowed; neither is fatal to an already-written report+snapshot."""
     ok, errors = validate_dispositions(bundle, dispositions)
     if not ok:
         return {"ok": False, "reason": "invalid-dispositions", "errors": errors}
@@ -472,10 +745,43 @@ def finalize(cwd, bundle, dispositions, root=None):
         store_core.atomic_write(
             snap_path, json.dumps(bundle["nextSnapshot"], indent=2) + "\n")
 
+        sweep_id = bundle.get("sweepId") or guardian_ledger.make_sweep(
+            bundle.get("sweptSha") or "unknown")["sweepId"]
+
+        ledger_write = {"ok": True, "skipped": "no-change"}
+        try:
+            new_records, advances = _close_filed_records(
+                ledger["records"], bundle.get("filedObservations"), sweep_id)
+            card = bundle.get("reportCard")
+            if card is None:
+                card = guardian_ledger.report_card(new_records)
+            sweep = guardian_ledger.make_sweep(
+                bundle.get("sweptSha") or "unknown", sweep_id=sweep_id)
+            sweeps = guardian_ledger.append_sweep(
+                guardian_ledger._read_sweeps(guardian_store.ledger_path(cwd, root)),
+                sweep)
+            ledger_write = guardian_ledger.write_unlocked(
+                cwd, new_records, root=root, report_card=card, sweeps=sweeps)
+            ledger_write = dict(ledger_write)
+            ledger_write["advances"] = advances
+        except Exception as exc:
+            ledger_write = {"ok": False, "reason": str(exc)}
+
+        vitals_append = {"ok": True, "skipped": "no-vitals"}
+        try:
+            vitals = (bundle.get("nextSnapshot") or {}).get("vitals") or {}
+            vitals_append = guardian_vitals.append_unlocked(
+                cwd, vitals, sweep_id=sweep_id,
+                swept_sha=bundle.get("sweptSha"), root=root)
+        except Exception as exc:
+            vitals_append = {"ok": False, "reason": str(exc)}
+
         return {
             "ok": True,
             "reportPath": rp,
             "snapshotPath": snap_path,
+            "ledgerWrite": ledger_write,
+            "vitalsAppend": vitals_append,
         }
     finally:
         file_lock.release(lock_path)

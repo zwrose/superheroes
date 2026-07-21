@@ -177,3 +177,63 @@ def test_snapshot_keys_match_ssot(tmp_path):
         "lenses": {},
     }
     assert set(snap) == set(gs.SNAPSHOT_KEYS)
+
+
+def _write_ledger_block(repo, payload):
+    text = (
+        "```json %s\n%s\n```\n"
+        % (gs.LEDGER_FENCE, json.dumps(payload, indent=2))
+    )
+    sc.atomic_write(gs.ledger_path(repo), text)
+
+
+def test_read_ledger_list_block_malformed_not_attribute_error(tmp_path):
+    """Regression: list block used to raise AttributeError on block.get."""
+    repo = init_calibrated_repo(tmp_path)
+    _write_ledger_block(repo, [{"id": "x", "disposition": "filed"}])
+    out = gs.read_ledger(repo)
+    assert out["status"] == "malformed"
+    assert out["records"] == []
+    assert out["byId"] == {}
+    assert "not an object" in (out["note"] or "")
+
+
+def test_read_ledger_string_block_malformed_not_attribute_error(tmp_path):
+    """Regression: string block used to raise AttributeError on block.get."""
+    repo = init_calibrated_repo(tmp_path)
+    _write_ledger_block(repo, "not-an-object")
+    out = gs.read_ledger(repo)
+    assert out["status"] == "malformed"
+    assert out["records"] == []
+    assert out["byId"] == {}
+    assert "not an object" in (out["note"] or "")
+
+
+def test_read_ledger_unhashable_id_skipped_not_type_error(tmp_path):
+    """Regression: list id used to raise TypeError: unhashable type: 'list'."""
+    repo = init_calibrated_repo(tmp_path)
+    records = [
+        {"id": ["unhashable"], "disposition": "filed", "issue": "#1"},
+        {"id": "good", "disposition": "filed", "issue": "#2"},
+    ]
+    _write_ledger_block(repo, {"schemaVersion": 1, "records": records})
+    out = gs.read_ledger(repo)
+    assert out["status"] == "ok"
+    assert "good" in out["byId"]
+    assert len(out["byId"]) == 1
+
+
+def test_read_ledger_duplicate_ids_do_not_suppress(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    records = [
+        {"id": "dup", "disposition": "accepted", "issue": None, "reason": "a"},
+        {"id": "dup", "disposition": "declined", "issue": None, "reason": "b"},
+        {"id": "unique", "disposition": "filed", "issue": "#1"},
+    ]
+    _write_ledger_block(repo, {"schemaVersion": 1, "records": records})
+    out = gs.read_ledger(repo)
+    assert out["status"] == "ok"
+    assert "dup" not in out["byId"]
+    assert "unique" in out["byId"]
+    assert out["note"] and "duplicate" in out["note"]
+    assert "dup" in out["note"]

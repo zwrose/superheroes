@@ -10,7 +10,9 @@ config-free (#482), so `permission_rules` is dead and there is nothing to render
 this screen carries the v2 dispatch-calibration observability surface: the EFFECTIVE engine +
 model for each v2 dispatch role (`## Dispatch calibration`), and the Codex model-pin detail
 (`## Engine model pins (Codex)`)."""
+import json
 import os
+import re
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -19,12 +21,22 @@ if _LIB_DIR not in sys.path:
 
 import core_md         # noqa: E402
 import engine_pref     # noqa: E402
+import guardian_ledger  # noqa: E402
+import guardian_store  # noqa: E402
+import guardian_sweep  # noqa: E402
+import guardian_vitals  # noqa: E402
 import mode_reconcile  # noqa: E402
 import mode_registry   # noqa: E402
 import model_tier_overrides  # noqa: E402
 import store_sweep     # noqa: E402
 
 _NON_LAYER = ("core.md", "patterns.md")
+
+_CONFIG_BLOCK = re.compile(
+    r"```json\s+guardian-config\s*\n(.*?)\n```", re.DOTALL)
+
+# Ratified §6 cadence default — ≥10 merges or ≥14 days.
+_CADENCE_DEFAULTS = {"minMerges": 10, "minDays": 14}
 
 
 def _read(path):
@@ -33,6 +45,126 @@ def _read(path):
             return fh.read()
     except OSError:
         return None
+
+
+def _guardian_config_block(cwd, root):
+    """The guardian-config JSON object from guardian.md, or None."""
+    layer_p = guardian_store.guardian_layer_path(cwd, root)
+    if core_md._layer_is_empty(layer_p):
+        return None
+    try:
+        with open(layer_p, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    m = _CONFIG_BLOCK.search(text)
+    if not m:
+        return None
+    try:
+        block = json.loads(m.group(1))
+    except ValueError:
+        return None
+    return block if isinstance(block, dict) else None
+
+
+def _resolve_cadence(block):
+    """Effective cadence knobs + which keys differ from the ratified defaults."""
+    effective = dict(_CADENCE_DEFAULTS)
+    tuned = {}
+    cadence = block.get("cadence") if isinstance(block, dict) else None
+    if isinstance(cadence, dict):
+        for key in _CADENCE_DEFAULTS:
+            val = cadence.get(key)
+            if isinstance(val, int) and not isinstance(val, bool) and val > 0:
+                if val != _CADENCE_DEFAULTS[key]:
+                    tuned[key] = True
+                effective[key] = val
+    return effective, tuned
+
+
+def _collect_guardian(cwd, root):
+    block = _guardian_config_block(cwd, root)
+    cadence, cadence_tuned = _resolve_cadence(block or {})
+    config = guardian_sweep.read_config(cwd, root)
+    ledger = guardian_store.read_ledger(cwd, root)
+    card = guardian_ledger.report_card(
+        ledger.get("records"), config.get("reportCard"))
+    snapshot = guardian_store.read_snapshot(cwd, root)
+    trend = guardian_vitals.read_trend(cwd, root=root, limit=1)
+    last_date = None
+    if trend.get("records"):
+        last_date = trend["records"][-1].get("date")
+    return {
+        "cadence": cadence,
+        "cadenceTuned": cadence_tuned,
+        "coverage": config.get("coverage") or [],
+        "card": card,
+        "ledgerStatus": ledger.get("status"),
+        "lastSweptSha": snapshot.get("sweptSha") if snapshot else None,
+        "lastSweepDate": last_date,
+    }
+
+
+def _guardian_lines(guardian):
+    """Plain-text guardian observability rows for the one-screen view."""
+    if guardian is None:
+        return ["(not available)"]
+    lines = []
+    cadence = guardian.get("cadence") or _CADENCE_DEFAULTS
+    note = "tuned" if guardian.get("cadenceTuned") else "defaults"
+    lines.append("cadence: ≥%d merges or ≥%d days (%s)" % (
+        cadence["minMerges"], cadence["minDays"], note))
+
+    coverage = guardian.get("coverage") or []
+    if not coverage:
+        lines.append("coverage: none recorded")
+    else:
+        parts = []
+        for entry in coverage:
+            if not isinstance(entry, dict):
+                continue
+            path = entry.get("path")
+            tool = entry.get("tool")
+            if isinstance(path, str) and path.strip():
+                label = path.strip()
+                if isinstance(tool, str) and tool.strip():
+                    label = "%s (%s)" % (label, tool.strip())
+                parts.append(label)
+        lines.append("coverage: " + (", ".join(parts) if parts else "none recorded"))
+
+    card = guardian.get("card") or {}
+    benched = sorted(lens for lens, entry in card.items() if entry.get("benched"))
+    below_floor = []
+    for lens, entry in sorted(card.items()):
+        if entry.get("benched"):
+            continue
+        if not entry.get("adjudicated"):
+            continue
+        reason = entry.get("reason") or ""
+        if "is active:" in reason:
+            continue
+        below_floor.append(lens)
+
+    if guardian.get("ledgerStatus") == "absent" and not card:
+        lines.append("benched lenses: no sweep history yet")
+    elif benched:
+        lines.append("benched lenses:")
+        for lens in benched:
+            lines.append("  %s — %s" % (lens, card[lens].get("reason") or "(no reason)"))
+    else:
+        lines.append("benched lenses: none")
+
+    for lens in below_floor:
+        lines.append("%s — floor not met" % lens)
+
+    sha = guardian.get("lastSweptSha")
+    if sha:
+        date = guardian.get("lastSweepDate")
+        if date:
+            lines.append("last sweep: %s (%s)" % (sha, date))
+        else:
+            lines.append("last sweep: %s" % sha)
+    return lines
 
 
 def collect(cwd, root=None):
@@ -74,10 +206,14 @@ def collect(cwd, root=None):
         engine_prefs = engine_pref.load_engine_prefs(cwd, root)
     except Exception:
         engine_prefs = {}
+    try:
+        guardian = _collect_guardian(cwd, root)
+    except Exception:
+        guardian = None
     return {"core": core, "layers": layers, "patterns": patterns, "mode": mode,
             "drift": drift, "storeHealth": health,
             "modelTiers": tiers, "modelTierOverrides": overrides, "modelTierProfile": profile,
-            "enginePrefs": engine_prefs}
+            "enginePrefs": engine_prefs, "guardian": guardian}
 
 
 def _health_line(counts):
@@ -165,6 +301,10 @@ def render(cwd, *, root=None):
         for role in model_tier_overrides.KNOWN_ROLES:
             out.append(f"{role}: {tiers.get(role)}")
     out.append("orchestrator: (session model — not owner-configurable)")
+    out.append("")
+    out.append("## Guardian")
+    for line in _guardian_lines(data.get("guardian")):
+        out.append(line)
     out.append("")
     out.append("## Pinned patterns")
     out.append((data["patterns"] or "(none)").strip())

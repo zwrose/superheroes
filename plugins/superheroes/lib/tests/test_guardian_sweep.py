@@ -6,7 +6,8 @@ import guardian_store as gs
 import guardian_sweep as gsw
 import store_core as sc
 from guardian_fixtures import (
-    FixtureLens, init_calibrated_repo, write_guardian_layer, write_ledger,
+    FixtureLens, benched_fixture_ledger, funnel_conserved, init_calibrated_repo,
+    write_guardian_layer, write_ledger,
 )
 
 
@@ -130,11 +131,17 @@ def test_filed_open_candidate_tracked_in_funnel_conservation(tmp_path):
     malformed = len(bundle["funnel"]["malformed"])
     surfaced = len(bundle["surfaced"])
     assert raised == malformed + killed_drift + killed_ledger + tracked_filed + surfaced
+    assert funnel_conserved(bundle)
 
 
 def test_collect_skips_verify_when_lens_does_not_require_it(tmp_path):
+    """With vitals disabled, verify stays not-run when no lens requests it.
+
+    Finding: vitals (default on) is now a legitimate verify-command requester, so
+    this pin only holds when vitals collection is off."""
     repo = init_calibrated_repo(tmp_path, verify_command="false")
     root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
     calls = []
 
     def fake_run(cmd, **kwargs):
@@ -152,6 +159,27 @@ def test_collect_skips_verify_when_lens_does_not_require_it(tmp_path):
     assert calls == []
 
 
+def test_collect_runs_verify_once_when_lens_and_vitals_both_need_it(tmp_path):
+    repo = init_calibrated_repo(tmp_path, verify_command="false")
+    root = _store(tmp_path)
+    verify_calls = []
+
+    def fake_run(cmd, **kwargs):
+        if kwargs.get("shell"):
+            verify_calls.append(cmd)
+        class R:
+            returncode = 0
+            stdout = "1 passed in 0.01s"
+            stderr = ""
+        return R()
+
+    lens = FixtureLens(required_facts=("verify-command",))
+    bundle = gsw.collect(repo, lenses=[lens], root=root, run=fake_run)
+    facts = {f["fact"]: f["status"] for f in bundle["factVerdicts"]}
+    assert facts["verify-command"] == "ok"
+    assert len(verify_calls) == 1
+
+
 def test_collect_runs_verify_when_lens_requires_it(tmp_path):
     repo = init_calibrated_repo(tmp_path, verify_command="false")
     root = _store(tmp_path)
@@ -166,6 +194,8 @@ def test_collect_runs_verify_when_lens_requires_it(tmp_path):
         return R()
 
     lens = FixtureLens(required_facts=("verify-command",))
+    # Vitals off so only the lens requests verify — preserves the original pin.
+    write_guardian_layer(tmp_path, {"vitals": False})
     bundle = gsw.collect(repo, lenses=[lens], root=root, run=fake_run)
     facts = {f["fact"]: f["status"] for f in bundle["factVerdicts"]}
     assert facts["verify-command"] == "ok"
@@ -496,3 +526,252 @@ def test_finalize_report_written_before_snapshot_failure(tmp_path, monkeypatch):
         gsw.finalize(repo, bundle, disp, root=root)
     assert os.path.isfile(gs.report_path(repo, root=root))
     assert gs.read_snapshot(repo, root=root) == prior_snap
+
+
+def test_benched_lens_still_surfaces_red_line_first_and_later_sweep(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_ledger(tmp_path, benched_fixture_ledger(), root=root)
+    write_guardian_layer(tmp_path, {"vitals": False})
+
+    lens = FixtureLens(emit_red_line=True, emit_normal=True)
+    first = gsw.collect(repo, lenses=[lens], root=root)
+    assert first["reportCard"]["fixture"]["benched"] is True
+    ids = [s["id"] for s in first["surfaced"]]
+    assert "fixture:red-line" in ids
+    assert "fixture:normal" not in ids
+
+    gs.write_snapshot_cas(repo, first["nextSnapshot"], first["prevIdentity"], root=root)
+    later = FixtureLens(
+        emit_red_line=True, emit_normal=True, digest={"v": 2},
+        diff_new=["fixture:normal"])
+    second = gsw.collect(repo, lenses=[later], root=root)
+    ids2 = [s["id"] for s in second["surfaced"]]
+    assert "fixture:red-line" in ids2
+    assert "fixture:normal" not in ids2
+    assert any(k["id"] == "fixture:normal" for k in second["funnel"]["killedByBench"])
+    assert funnel_conserved(second)
+
+
+def test_object_shaped_metric_at_disposition_reraises_on_worsening(tmp_path):
+    """Regression: float(dict) on {"cloneLines": 177} used to swallow worsening."""
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_ledger(tmp_path, [{
+        "id": "fixture:normal",
+        "disposition": "accepted",
+        "issue": None,
+        "reason": "tolerated pending shared include",
+        "metricAtDisposition": {"cloneLines": 177},
+        "reraiseWhen": "cloneLines grows",
+    }], root=root)
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": {"collectorVersion": "0.0.0-test", "digest": {"v": 1}}},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    lens = FixtureLens(
+        emit_normal=True, digest={"v": 2}, diff_new=["fixture:normal"],
+        candidate_fields={"cloneLines": 400})
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert len(bundle["surfaced"]) == 1
+    assert bundle["surfaced"][0]["id"] == "fixture:normal"
+
+
+def test_ambiguous_matcher_collision_surfaces_with_breadcrumb(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_ledger(tmp_path, [
+        {"id": "fixture:tool:a.py:10", "disposition": "accepted",
+         "issue": None, "reason": "a", "metricAtDisposition": 1},
+        {"id": "fixture:tool:a.py:20", "disposition": "declined",
+         "issue": None, "reason": "b", "metricAtDisposition": 1},
+    ], root=root)
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": {"collectorVersion": "0.0.0-test", "digest": {"v": 1}}},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    write_guardian_layer(tmp_path, {"vitals": False})
+
+    class CollisionLens(FixtureLens):
+        def collect(self, ctx):
+            return {
+                "candidates": [{"id": "fixture:tool:a.py:15", "complexity": 5, "metric": 1}],
+                "digest": {"v": 2},
+            }
+
+    lens = CollisionLens(digest={"v": 2}, diff_new=["fixture:tool:a.py:15"])
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert any(s["id"] == "fixture:tool:a.py:15" for s in bundle["surfaced"])
+    notes = bundle["funnel"]["matchNotes"]
+    assert notes and "ambiguous" in notes[0]["note"]
+
+
+def test_finalize_idempotent_vitals_append_on_retry(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    lens = FixtureLens(emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    disp = [{
+        "id": bundle["surfaced"][0]["id"],
+        "verdict": "validated",
+        "consequence": "x",
+        "receipt": "y",
+        "effort": "z",
+        "ledgerJoin": bundle["surfaced"][0]["id"],
+    }]
+    first = gsw.finalize(repo, bundle, disp, root=root)
+    assert first["ok"] is True
+    # Retried finalize against the same prevIdentity will race — rebuild bundle
+    # identity to the just-written snapshot so the retry exercises append idempotency.
+    bundle2 = dict(bundle)
+    bundle2["prevIdentity"] = gs.snapshot_identity(
+        gs.read_snapshot(repo, root=root))
+    second = gsw.finalize(repo, bundle2, disp, root=root)
+    assert second["ok"] is True
+    assert second["vitalsAppend"].get("skipped") == "duplicate-sweepId" \
+        or second["vitalsAppend"].get("ok") is True
+    trend = __import__("guardian_vitals", fromlist=["read_trend"]).read_trend(
+        repo, root=root)
+    matching = [r for r in trend["records"] if r.get("sweepId") == bundle["sweepId"]]
+    assert len(matching) == 1
+
+
+def _ledger_sweeps(repo, root=None):
+    text = open(gs.ledger_path(repo, root), encoding="utf-8").read()
+    fence = gs.LEDGER_FENCE
+    block = json.loads(text.split("```json %s\n" % fence)[1].split("\n```")[0])
+    return block.get("sweeps") or []
+
+
+def test_finalize_appends_sweep_roster_across_cycles_and_retries(tmp_path):
+    """Seam guard: two real collect→finalize cycles grow the roster; a retry does not.
+
+    Would have caught the original defect where finalize hard-coded sweeps=None and
+    write_unlocked treated None as erase."""
+    import subprocess
+
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+
+    lens1 = FixtureLens(emit_red_line=True, digest={"v": 1})
+    b1 = gsw.collect(repo, lenses=[lens1], root=root)
+    disp1 = [{
+        "id": b1["surfaced"][0]["id"],
+        "verdict": "validated",
+        "consequence": "x",
+        "receipt": "y",
+        "effort": "z",
+        "ledgerJoin": b1["surfaced"][0]["id"],
+    }]
+    r1 = gsw.finalize(repo, b1, disp1, root=root)
+    assert r1["ok"] is True
+    roster1 = _ledger_sweeps(repo, root)
+    assert len(roster1) == 1
+    assert roster1[0]["sweepId"] == b1["sweepId"]
+
+    # Retried finalize of the same sweepId must leave the roster at one entry.
+    b1_retry = dict(b1)
+    b1_retry["prevIdentity"] = gs.snapshot_identity(
+        gs.read_snapshot(repo, root=root))
+    r1_retry = gsw.finalize(repo, b1_retry, disp1, root=root)
+    assert r1_retry["ok"] is True
+    assert len(_ledger_sweeps(repo, root)) == 1
+
+    # Second cycle needs a distinct sweptSha so sweepId differs.
+    subprocess.run(
+        ["git", "-C", repo,
+         "-c", "user.email=guardian@test.local", "-c", "user.name=guardian-test",
+         "commit", "-q", "--allow-empty", "-m", "second-sweep"],
+        check=True)
+    lens2 = FixtureLens(emit_red_line=True, digest={"v": 2})
+    b2 = gsw.collect(repo, lenses=[lens2], root=root)
+    assert b2["sweepId"] != b1["sweepId"]
+    disp2 = [{
+        "id": b2["surfaced"][0]["id"],
+        "verdict": "validated",
+        "consequence": "x",
+        "receipt": "y",
+        "effort": "z",
+        "ledgerJoin": b2["surfaced"][0]["id"],
+    }]
+    r2 = gsw.finalize(repo, b2, disp2, root=root)
+    assert r2["ok"] is True
+    roster2 = _ledger_sweeps(repo, root)
+    assert [s["sweepId"] for s in roster2] == [b1["sweepId"], b2["sweepId"]]
+
+
+def test_finalize_ledger_write_failure_leaves_report_snapshot_and_reports(tmp_path, monkeypatch):
+    import guardian_ledger as gled
+
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    lens = FixtureLens(emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    disp = [{
+        "id": bundle["surfaced"][0]["id"],
+        "verdict": "validated",
+        "consequence": "x",
+        "receipt": "y",
+        "effort": "z",
+        "ledgerJoin": bundle["surfaced"][0]["id"],
+    }]
+
+    def boom(*args, **kwargs):
+        raise OSError("simulated ledger write failure")
+
+    monkeypatch.setattr(gled, "write_unlocked", boom)
+    result = gsw.finalize(repo, bundle, disp, root=root)
+    assert result["ok"] is True
+    assert os.path.isfile(gs.report_path(repo, root=root))
+    assert os.path.isfile(gs.snapshot_path(repo, root=root))
+    assert result["ledgerWrite"]["ok"] is False
+    assert "simulated ledger write failure" in result["ledgerWrite"]["reason"]
+
+
+def test_finalize_vitals_append_failure_leaves_report_snapshot_and_reports(tmp_path, monkeypatch):
+    import guardian_vitals as gv
+
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    lens = FixtureLens(emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    disp = [{
+        "id": bundle["surfaced"][0]["id"],
+        "verdict": "validated",
+        "consequence": "x",
+        "receipt": "y",
+        "effort": "z",
+        "ledgerJoin": bundle["surfaced"][0]["id"],
+    }]
+
+    def boom(*args, **kwargs):
+        raise OSError("simulated vitals append failure")
+
+    monkeypatch.setattr(gv, "append_unlocked", boom)
+    result = gsw.finalize(repo, bundle, disp, root=root)
+    assert result["ok"] is True
+    assert os.path.isfile(gs.report_path(repo, root=root))
+    assert os.path.isfile(gs.snapshot_path(repo, root=root))
+    assert result["vitalsAppend"]["ok"] is False
+    assert "simulated vitals append failure" in result["vitalsAppend"]["reason"]
+
+
+def test_bundle_carries_storage_mode_and_committed(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    bundle = gsw.collect(repo, lenses=[], root=_store(tmp_path))
+    assert bundle["storageMode"] in ("in-repo", "global")
+    assert bundle["committed"] in ("committed", "uncommitted", "machine-local", "unknown")
+    assert bundle["sweepId"]
+    assert "vitals" in bundle["nextSnapshot"]

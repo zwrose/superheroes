@@ -47,8 +47,10 @@ action that owns it, leaving the rest of the calibration untouched:
   ```
 
   This is the mandatory/optional split: a missing **review-crew** layer is an incomplete set-up the
-  route already sends to `fix`; optional heroes (test-pilot) never force a repair — they surface
-  here as an offer. A hero the owner declines (here or at set-up) is recorded so it is not re-offered.
+  route already sends to `fix`; optional heroes (test-pilot, guardian) never force a repair — they
+  surface here as an offer. A hero the owner declines (here or at set-up) is recorded so it is not
+  re-offered. The combined view renders each hero layer — including guardian — under
+  `## Layer: <hero>`.
 - **Sweep orphaned per-project stores** → when the view's `storage health` line reports orphaned
   or unknown-provenance stores, offer the sweep. Always report first, show the counts and the
   orphan list, and delete only on the owner's explicit confirm:

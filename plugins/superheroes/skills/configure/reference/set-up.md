@@ -52,10 +52,16 @@ their choice. Never guess a command.
 
 ## 4 — Offer the heavier heroes (FR-3), decline still completes
 
-Where a heavier or optional hero applies (test-pilot, or any hero needing extra tooling such as a
-connected browser), **offer** to set it up now or leave it for later. If the owner declines, set-up
-still **completes** and the project is usable without it. If they opt into test-pilot but no browser
-tool is connected, guide them to connect one (or set it aside) rather than fail (UFR-4).
+Where a heavier or optional hero applies (**test-pilot**, **guardian**, or any hero needing extra
+tooling such as a connected browser), **offer** to set it up now or leave it for later. If the owner
+declines, set-up still **completes** and the project is usable without it. If they opt into
+test-pilot but no browser tool is connected, guide them to connect one (or set it aside) rather than
+fail (UFR-4).
+
+**Guardian** works with zero configuration on plugin defaults — sweeps run even when the owner
+skips the offer. Offer guardian only when the owner wants to tune thresholds or cadence, or to
+confirm owner-toolchain coverage; `guardian.md` is a thin adder for those deviations (empty is
+valid). An owner who skips guardian still gets working sweeps.
 
 When the owner **explicitly declines** an optional hero (not merely "later"), record it so the
 view tune-menu does not re-offer it on every run (FR-6 / #121):
@@ -63,6 +69,8 @@ view tune-menu does not re-offer it on every run (FR-6 / #121):
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 python3 "$ROOT_DIR/lib/hero_setup.py" decline --cwd . --hero test-pilot
+# or, for guardian:
+python3 "$ROOT_DIR/lib/hero_setup.py" decline --cwd . --hero guardian
 ```
 
 ## 4.5 — Offer an external engine per role (FR-11/12/13/14), decline still completes
