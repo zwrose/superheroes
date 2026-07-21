@@ -107,3 +107,14 @@ def test_reference_states_the_fail_closed_fallback():
     assert "no findings dropped" in text, (
         "verification-pass.md must state the no-findings-dropped fallback"
     )
+
+
+def test_reference_delegates_rules_to_lib_not_reimplemented():
+    # The guarantee the deleted test_synthesis_pass_wired.py carried: the fail-closed rules
+    # live in lib/verification.py and are NOT reimplemented in the reference or a second script.
+    text = _read(REF)
+    lowered = text.lower()
+    assert "do not reimplement" in lowered or "live in `lib/verification.py`" in text, (
+        "verification-pass.md must state the fail-closed rules live in lib/verification.py "
+        "and are not reimplemented"
+    )

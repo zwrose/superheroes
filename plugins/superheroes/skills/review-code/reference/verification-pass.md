@@ -30,14 +30,26 @@ reads only small JSON files; it never loads the diff.
    Persist the staged array to `$SESSION_DIR/round-<N>/merged.json`. Then cluster with
    `verification.cluster_findings` — one cluster per `(file, line // 100)` bucket.
 
+**Before dispatching this round's verifiers, clear any stale verdict files.** On a same-round
+restart/resume the round dir may already hold `verdicts-*.json` from a prior, abandoned attempt.
+Remove them first — `find "$SESSION_DIR/round-<N>" -maxdepth 1 -name 'verdicts-*.json' -delete 2>/dev/null`
+— so each attempt writes a **fresh** set and the Applying glob only ever concatenates THIS
+attempt's files. (This is a glob-free `find … -delete`, not a shell glob: under zsh an unmatched
+`*.json` glob aborts the command with `no matches found` (exit 1) — i.e. it would fail exactly on
+the empty/fresh round dir where there is nothing to clean. `find` never lets the shell expand a
+glob, so it no-ops cleanly, exit 0, on an empty dir.) A stale per-cluster file from a prior
+attempt must never be globbed and honored.
+
 2. **Dispatch one fresh verifier per cluster** — `model: $VERIFIER_MODEL` (the **verifier**
    tier, resolved via `--role verifier`; never the session model). Dispatch on the **reviewer
    engine** (`$REVIEWER_ENGINE`). Each verifier reads the cluster's findings (with their staged
    `id`s), the round diff, and the repo — the working tree on branch/auto-fix paths, or
    `$SESSION_DIR/repo` on `--post` / `--review-only`. It must **never** read the PR's own
-   description or narrative (the #230 immunity). It writes a bare JSON array to
-   `$SESSION_DIR/round-<N>/verdicts.json` (one file per cluster, or merge cluster outputs into
-   one array before apply — the consumer keys on `id`).
+   description or narrative (the #230 immunity). The clusters' verifiers run in **parallel**,
+   so each writes its **OWN** file — `$SESSION_DIR/round-<N>/verdicts-<cluster-index>.json`,
+   where `<cluster-index>` is the cluster's 0-based position in the `cluster_findings` order —
+   so no two verifiers race on a shared path. The apply step below concatenates every
+   per-cluster file into one array (the consumer keys on `id`).
 
    Prompt (embed the absolute paths):
 
@@ -82,22 +94,33 @@ reads only small JSON files; it never loads the diff.
    - Every verdict carries quoted evidence in reason (and evidence for CONFIRMED).
 
    ## Output
-   Write a JSON array to <absolute verdicts.json path>:
+   Write a JSON array to <absolute round-<N>/verdicts-<cluster-index>.json path — THIS
+   cluster's own file, never a shared verdicts.json>:
    [{ "id", "verdict", "reason", "severity?", "evidence?" }] — exactly one entry per cluster
    finding.
    ```
 
 ## Applying the verdicts
 
-Collect all cluster verdict arrays into one list, then apply deterministically:
+Concatenate **every** per-cluster verdict file into one list — **sorted by cluster index** so
+the merged order is deterministic — then apply. (The glob below trusts that stale `verdicts-*.json`
+from a prior same-round attempt were already removed before dispatch by the glob-free
+`find … -delete` in "The verifier dispatch" — so it only ever sees the current attempt's fresh set.)
 
 ```bash
 python3 -c "
-import json, sys
+import json, sys, glob, os, re
 sys.path.insert(0, '$ROOT_DIR/lib')
 import verification
 merged = json.load(open('$SESSION_DIR/round-<N>/merged.json'))
-verdicts = json.load(open('$SESSION_DIR/round-<N>/verdicts.json'))
+def _idx(p):
+    m = re.search(r'verdicts-(\d+)\.json$', os.path.basename(p))
+    return int(m.group(1)) if m else 0
+verdicts = []
+for p in sorted(glob.glob('$SESSION_DIR/round-<N>/verdicts-*.json'), key=_idx):
+    part = json.load(open(p))
+    if isinstance(part, list):
+        verdicts.extend(part)
 print(json.dumps(verification.apply_verdicts(merged, verdicts)))
 " > "$SESSION_DIR/round-<N>/verified.json"
 ```
@@ -119,6 +142,12 @@ print(json.dumps(verification.apply_verdicts(merged, verdicts)))
   `downgrades` with `{id, file, title, from, to, reason?}`.
 - **Unmatched** — verdict ids that match no finding are surfaced in `unmatched` (disclosed,
   never a silent no-op).
+- **Unverified** — finding ids that received **no** matching verdict this round (verifier
+  silence or a lost verdict file) are surfaced in `unverified`; the findings still survive as
+  PLAUSIBLE (keep-on-uncertain), but the coverage gap is disclosed, never invisible.
+- **Ambiguous** — a finding id carried by more than one verdict is ambiguous: honor none of
+  them (keep-on-uncertain, so a later REFUTED can't silently drop it) and surface the id in
+  `ambiguous`.
 
 ## Synthesis merge + rank
 
@@ -144,8 +173,12 @@ print(json.dumps(verification.merge_and_rank(survivors, grouping)))
 `verification.merge_and_rank(survivors, grouping)` applies the grouping under a **coverage
 guarantee**: every survivor's staged id appears exactly once in the output; invalid or missing
 grouping fails open to unmerged survivors; **synthesis drops nothing**. Merged groups combine
-bodies and take the highest severity; `verdict` becomes CONFIRMED if any member was CONFIRMED,
-else PLAUSIBLE. Findings are ranked Critical → Important → Minor → Nit, then by file and line.
+bodies and take the highest severity; the merged `verdict` is **CONFIRMED only when a member at
+the merged (highest) severity is CONFIRMED-with-evidence** — computed **order-independently**, so
+model-supplied member order can't flip GATE-eligibility, and carrying that member's receipt (the
+first such member in input order). A lower-severity confirmation **never promotes** the merged
+finding (no receiptless CONFIRMED is fabricated onto the higher-severity finding); otherwise the
+merge is PLAUSIBLE. Findings are ranked Critical → Important → Minor → Nit, then by file and line.
 
 Use `synthesized.findings` as `compiled.findings`. Carry `verified.drops`, `verified.downgrades`,
 and `synthesized.merges` into the round record as appropriate.
@@ -186,7 +219,11 @@ Nothing verified away silently:
 - **`downgrades`** — every blocking→non-blocking re-tier, shown `from → to`.
 - **`advisory: true` skips** — PLAUSIBLE-Critical grounded advisories listed distinctly in the
   End-of-Loop Summary (disclosed unproven blockers the owner reads at review).
-- **`unmatched`** — mis-keyed verdict ids disclosed loudly.
+- **`unmatched`** — mis-keyed verdict ids (a verdict that matched no finding) disclosed loudly.
+- **`unverified`** — findings that received no verdict this round (verifier silence / a lost
+  verdict file); they survive as PLAUSIBLE, but the coverage gap is disclosed, never invisible.
+- **`ambiguous`** — findings whose id carried conflicting duplicate verdicts; honored as none
+  (keep-on-uncertain) and disclosed, never a silent last-write-wins drop.
 
 All of the above reach the End-of-Loop Summary; the loop may filter false positives or re-tier,
 but it may never silently discard or quietly demote a blocker.

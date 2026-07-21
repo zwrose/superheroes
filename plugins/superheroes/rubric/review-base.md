@@ -231,7 +231,7 @@ This is a ban on re-**finding**, not on **verifying**. A distinct judgment stage
 run over the *already-emitted* findings — deciding per finding whether it holds
 against the artifact and never searching for new ones — is **not** a second finder
 pass. It is the documented low-noise production pattern and is band policy: on the
-**code panel**, **per-finding verification** applies 3-state CONFIRMED/PLAUSIBLE/REFUTED
+**standalone review-code path**, **per-finding verification** applies 3-state CONFIRMED/PLAUSIBLE/REFUTED
 verdicts with quoted evidence — REFUTED drops only with a reason, silence or malformed
 verdicts keep the finding as PLAUSIBLE (keep-on-uncertain), and a dropped Critical/Important
 is flagged for human scrutiny; a **synthesis** judge then merges same-root-cause survivors
