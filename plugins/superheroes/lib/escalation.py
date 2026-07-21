@@ -117,6 +117,7 @@ SAFETY_MACHINERY = (
     # orchestration shell — anything its correctness or audit trail depends on (FR-24).
     "panel_tally.py",         # terminal/accounting decider + rounds-assembler + resume + fail-closed
     "loop_synthesis.py",      # panel synthesis drop/keep/normalize decider
+    "verification.py",          # per-finding verification 3-state verdict fold (#506)
     "verify_gate.py",         # code-leg verify gate decider
     "loop_readout.py",        # the audit-trail readout renderer
     "review_result.py",       # the durable terminal-record writer (UFR-9)
