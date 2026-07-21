@@ -583,6 +583,12 @@ Two PR-body markers from the retired execution spine survive independently of it
   **review-code**'s review seat verifies it in PR mode (the deterministic gate is not
   reinstated; the mandate and the seat are the enforcement).
 
+This self-claims / DoD-grounding check is formalized as the **grounding seat**
+(`plugins/superheroes/agents/grounding-seat.md`, `reviewer` tier — never `mechanical`,
+since a false "claims check out" is a silence nothing downstream re-checks); it is
+currently instantiated by the **review-code** orchestrator inline (the interim
+mechanism — the PR-body honesty check above), with live dispatch owned by #510.
+
 Both are cited by `rubric/review-discipline.md`, the canonical statement of the band's
 review convention (no unreviewed PRs, §7.4).
 

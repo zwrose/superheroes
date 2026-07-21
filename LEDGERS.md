@@ -47,8 +47,18 @@ Owner-ratified negative space (2026-07-05 complexity-audit walkthrough, amended
 2026-07-08/09). When tempted to propose any of these, the answer is no unless the
 stated unlock condition is met — cite this ledger instead of re-arguing.
 
-- **No sixth review seat.** #184's decision framework requires escape/recall evidence
-  first; the remediation order is rubric amendment → seat swap → sixth seat.
+- **No sixth review LENS.** The ban always meant *lens*: no sixth **risk-domain review
+  lens** without escape/recall evidence; the remediation order is unchanged — rubric
+  amendment → seat swap → sixth lens. #184 (the old decision-framework owner) closed into
+  **#474 + #131** in the v2 audit, so the evidence bar for any future lens now points at
+  **#131 (the benchmark)**. The owner-ratified (#474, 2026-07-20) **grounding seat** is
+  deliberately **NOT a lens** — it is a narrow claims-vs-repo check (PR self-claims, DoD
+  rows), `reviewer` tier, never `mechanical`, with **no risk domain** — so it neither adds
+  a lens nor drops one: the five lenses stay five. **#511 is this framework working as
+  designed:** its deleted-line audit, caller tracing, and do-not-flag bar are all **rung-1
+  (rubric amendments into the existing briefs)** — exactly the path the ban prefers. #511
+  formalizes the grounding seat's brief + tier bar only; its live dispatch is gated to
+  **#510**.
 - **No traceability reviewer built on spec.** Parked behind #184 + a named consumer;
   #230's conditional-dispatch seam makes it cheap IF evidence ever calls. *(The #33
   investigation itself unlocked 2026-07-09 — the false merge-ready escape + the terminal
