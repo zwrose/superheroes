@@ -414,6 +414,38 @@ def test_bundle_lens_meta_for_surfaced_lens(tmp_path):
     assert meta["cost"] == lens.cost
 
 
+def test_duplicate_candidate_id_lands_in_malformed_and_conserves_funnel(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+
+    class DuplicateIdLens(FixtureLens):
+        def collect(self, ctx):
+            return {
+                "candidates": [
+                    {"id": "fixture:dup", "complexity": 5, "metric": 1},
+                    {"id": "fixture:dup", "complexity": 5, "metric": 2},
+                ],
+                "digest": {"v": 1},
+            }
+
+    lens = DuplicateIdLens()
+    bundle = gsw.collect(repo, lenses=[lens])
+    malformed = bundle["funnel"]["malformed"]
+    assert len(malformed) == 1
+    assert malformed[0]["reason"] == "duplicate-id"
+    assert malformed[0]["index"] == 1
+    assert bundle["surfaced"] == []
+    assert len(bundle["funnel"]["killedByDrift"]) == 1
+    assert bundle["funnel"]["killedByDrift"][0]["id"] == "fixture:dup"
+
+    raised = sum(bundle["funnel"]["raised"].values())
+    killed_drift = len(bundle["funnel"]["killedByDrift"])
+    killed_ledger = len(bundle["funnel"]["killedByLedger"])
+    tracked_filed = len(bundle["funnel"]["trackedFiled"])
+    malformed_count = len(bundle["funnel"]["malformed"])
+    surfaced = len(bundle["surfaced"])
+    assert raised == malformed_count + killed_drift + killed_ledger + tracked_filed + surfaced
+
+
 def test_malformed_candidate_lands_in_funnel_malformed(tmp_path):
     repo = init_calibrated_repo(tmp_path)
 

@@ -31,6 +31,7 @@ LEDGER_SCHEMA_VERSION = 1
 LEDGER_FENCE = "guardian-ledger"
 LEDGER_MIN_FIELDS = ("id", "disposition")
 SWEEP_LOCK = ".sweep.lock"
+SWEEP_LOCK_TTL = 120
 
 _LEDGER_BLOCK = re.compile(
     r"```json\s+" + re.escape(LEDGER_FENCE) + r"\s*\n(.*?)\n```", re.DOTALL)
@@ -104,7 +105,7 @@ def write_snapshot_cas(cwd, next_snapshot, expected_prev_identity, root=None):
     """Compare-and-swap write of latest.json under the sweep lock."""
     lock_path = sweep_lock_path(cwd, root)
     try:
-        file_lock.acquire(lock_path)
+        file_lock.acquire(lock_path, ttl=SWEEP_LOCK_TTL)
     except file_lock.LockHeld as exc:
         return {"ok": False, "reason": "raced", "lockHeld": exc.holder}
     try:

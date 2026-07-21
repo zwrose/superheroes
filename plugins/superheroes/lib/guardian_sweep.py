@@ -279,7 +279,16 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
         cand_by_id = {}
         for i, c in enumerate(candidates):
             if isinstance(c, dict) and c.get("id"):
-                cand_by_id[c["id"]] = c
+                cid = c["id"]
+                if cid in cand_by_id:
+                    malformed.append({
+                        "lens": lens.name,
+                        "index": i,
+                        "repr": repr(c),
+                        "reason": "duplicate-id",
+                    })
+                else:
+                    cand_by_id[cid] = c
             else:
                 malformed.append({"lens": lens.name, "index": i, "repr": repr(c)})
 
@@ -438,7 +447,7 @@ def finalize(cwd, bundle, dispositions, root=None):
 
     lock_path = guardian_store.sweep_lock_path(cwd, root)
     try:
-        file_lock.acquire(lock_path)
+        file_lock.acquire(lock_path, ttl=guardian_store.SWEEP_LOCK_TTL)
     except file_lock.LockHeld as exc:
         return {"ok": False, "reason": "raced", "lockHeld": exc.holder}
 
