@@ -16,7 +16,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import readout  # noqa: E402  (the band's single scrub seam; same-tree sibling)
-import engine_pref  # noqa: E402  (provider-specific model policy; same-tree sibling)
+import model_registry  # noqa: E402  (band-wide model taxonomy; same-tree sibling)
 
 # The SINGLE-SOURCED commit trailer. The committer (commit_result, Task 7) and the
 # build_state_cli git-log parser both reference this so the convention cannot fork.
@@ -36,37 +36,17 @@ TASK_ID_TRAILER = "Task-Id"
 # commit-failed. It is NOT modeled as a new acceptance outcome class.
 HISTORY_SHAPE_UNREPRESENTABLE = "history-shape-fix-unrepresentable"
 
-# Explicit model per engine (Config-determinism NFR — never the developer's ambient default).
-# Codex maps the shared tier through engine_pref and accepts a separate concrete engine-model pin;
-# this compatibility alias remains the capable no-tier default used by display/readout callers.
-_CODEX_MODEL_BY_TIER = dict(engine_pref.CODEX_MODEL_BY_TIER)
-_CODEX_MODEL = _CODEX_MODEL_BY_TIER["opus"]
-_CODEX_MODELS = tuple(engine_pref.CODEX_MODELS)
-_CURSOR_MODEL = "composer-2.5-fast"
-
-# Native model-tier short-name -> cursor model id — the OWNER POLICY map (ratified 2026-07-09).
-# Cursor is the TOKEN-EFFICIENCY engine: its whole point is the highly token-efficient composer-2.5,
-# so ALL work roles (build/fix/review/reviewer-deep) dispatch the pinned _CURSOR_MODEL composer
-# default, and premium Claude models are NEVER routed through cursor by default. The ONE deliberate
-# exception is the `fable` tier: an owner who explicitly overrides a role to `fable` and routes that
-# role via cursor dispatches Fable — hence `fable` is the map's ONLY entry (id verified live against
-# `cursor-agent models` 2026-07-03). Every other tier (opus/sonnet/haiku, or any owner override)
-# DELIBERATELY falls through build_argv's `.get(..., _CURSOR_MODEL)` to composer — that fall-through
-# IS the policy, not a gap; do not "complete" this map with premium ids. EVERY cursor dispatch
-# threads its role's resolved tier (#308) through this map, and display_model resolves through this
-# SAME map (SSOT), so the preflight readout row shows the composer truth and can never disagree with
-# the dispatched argv by construction (#308 / #162).
-_CURSOR_MODEL_BY_TIER = {
-    "fable": "claude-fable-5-thinking-xhigh",
-}
+# Cursor dispatches a single composer model; codex model selection is resolved inline via model_registry.
+_CURSOR_MODEL = model_registry.dispatch_token("cursor", "composer-2.5")
 
 
 def build_argv(engine, role_kind, effort, opts):
     """Return the argv list to dispatch `engine` for `role_kind` at `effort`. READ (review) →
     read-only sandbox; WRITE (build|fix) → workspace-write. Always explicit
     model+effort. opts keys: cwd, schema_path, model (native tier short name), engine_model
-    (provider-specific concrete model pin). Cursor maps the tier via _CURSOR_MODEL_BY_TIER; Codex
-    uses a valid engine_model pin or maps the shared tier. The PROMPT is NOT
+    (provider-specific concrete model pin). Cursor dispatches the composer default (`_CURSOR_MODEL`);
+    a `fable` tier is anthropic-only and unrunnable on cursor. Codex uses a valid engine_model pin
+    or maps the shared tier. The PROMPT is NOT
     encoded here — codex reads it from stdin (trailing `-`) and cursor-agent reads it from stdin
     when given no positional prompt; the JS runner (Task 10) feeds the staged prompt file to the
     process stdin. Deterministic; fully unit-testable."""
@@ -76,8 +56,15 @@ def build_argv(engine, role_kind, effort, opts):
     is_read = role_kind == "review"
     if engine == "codex":
         engine_model = opts.get("engine_model")
-        if not isinstance(engine_model, str) or engine_model not in _CODEX_MODELS:
-            engine_model = _CODEX_MODEL_BY_TIER.get(opts.get("model"), _CODEX_MODEL)
+        if not isinstance(engine_model, str) or not model_registry.is_registered("codex", engine_model):
+            try:
+                engine_model = model_registry.codex_peer_for_claude_tier(opts.get("model"))
+            except ValueError:
+                return []  # fable/anthropic-only on codex — unrunnable → JS falls open to claude
+        ok, _reason = model_registry.validate_config(
+            "codex", engine_model, effort, allow_override_only=True)
+        if not ok:
+            return []  # invalid (model,effort) — fail loud: do not dispatch a silently-misconfigured codex
         sandbox = "read-only" if is_read else "workspace-write"
         argv = ["codex", "exec", "--sandbox", sandbox,
                 "-m", engine_model,
@@ -97,7 +84,9 @@ def build_argv(engine, role_kind, effort, opts):
         # headless run (without it it goes interactive and --output-format is a no-op); --trust
         # clears the workspace-trust gate that otherwise HANGS a headless run (needed for the
         # read/--mode-plan role — the write role's -f also trusts, but --trust covers both).
-        model = _CURSOR_MODEL_BY_TIER.get(opts.get("model"), _CURSOR_MODEL)
+        if opts.get("model") == "fable":
+            return []  # fable is anthropic-only; the cursor fable channel is retired — fall open to claude
+        model = _CURSOR_MODEL  # composer-2.5 (per-role grok selection is issue #510's composition layer)
         argv = ["cursor-agent", "--model", model, "-p", "--trust"]
         if is_read:
             argv += ["--mode", "plan"]     # read-only planning mode
@@ -388,7 +377,7 @@ def main(argv):
     b.add_argument("--cwd", default=None)
     b.add_argument("--schema-path", default=None)
     b.add_argument("--model", default=None,
-                   help="native tier short name; cursor maps ONLY fable (owner policy), else composer")
+                   help="native tier short name; cursor dispatches composer (fable is anthropic-only, unrunnable on cursor)")
     b.add_argument("--engine-model", default=None,
                    help="provider-specific concrete model id; currently used by codex pins")
     b.add_argument("--verify", action="append", default=None,

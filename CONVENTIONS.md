@@ -73,7 +73,8 @@ restatement):
 
 - **Showrunner** — the advisor session: project-level, long-lived, typically one per
   project. Sizes and routes incoming work (build-ready vs. needs-discovery), decomposes
-  big asks into small mergeable issues, vets every PR from its artifacts against the
+  big asks into small mergeable issues, drafts the builder's launch prompt (command + issue
+  pointer; durable build context lives in the issue), vets every PR from its artifacts against the
   issue/spec and the build brief, owns board hygiene and release coordination, keeps
   durable memory. **Never builds, never merges.**
 - **Workhorse** — the builder session: issue-scoped, disposable, parallelizable. Takes a
@@ -513,27 +514,38 @@ dispatch prompt, so both paths carry identical instructions by construction.
 engine axis is orthogonal to the model tier: `model_tier` still governs *which Claude
 model* runs when the engine is `claude`; when the engine is external,
 `engine_pref.resolve_effort` governs the engine's depth. Every external dispatch also
-threads the role's resolved model into the engine argv as a dispatch fact — the
-adapter's owner-policy model map decides what actually runs.
+threads the role's resolved model into the engine argv as a dispatch fact —
+`lib/model_registry.py` (the vendor registry + role×vendor matrix) decides what
+actually runs; the adapter and `engine_pref` re-derive from it.
 
-Codex tier map: haiku=gpt-5.6-luna, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol,
-fable=gpt-5.6-sol. An optional per-role `enginePreferences.codexModels` pin may select
-one of those canonical IDs or `gpt-5.5`; a one-run preflight pin wins over the
-persistent pin, which wins over tier mapping. The provider-specific pin is carried
-separately from the shared tier so a failed Codex dispatch falls directly open to
-Claude with a valid native model — never automatically downgrading to another GPT
-model. Effort stays orthogonal: existing role defaults remain, `max` is owner-opt-in on
-GPT-5.6 only, and `gpt-5.5` + `max` is rejected before dispatch. The GPT-5.6 tier
-requires a sufficiently new Codex CLI; an unavailable model follows the observable
-fall-open path to Claude, never a guessed version gate. Dispatch provenance — the
-concrete engine, model, and effort actually used — is recorded in the PR body (the
-Workhorse charter's "dispatch provenance" section), not a separate journal.
+Codex tier map: haiku=gpt-5.6-terra, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol.
+An optional per-role `enginePreferences.codexModels` pin may select one of those
+canonical IDs; a one-run preflight pin wins over the persistent pin, which wins
+over tier mapping. The provider-specific pin is carried separately from the shared
+tier so a failed Codex dispatch falls directly open to Claude with a valid native
+model — never automatically downgrading to another GPT model. Effort stays
+orthogonal: existing role defaults remain, and `max` is owner-opt-in only. The
+registry validates a codex `(model, effort)` before dispatch (the CLI does no
+client-side effort validation), rejecting an unknown effort fail-loud. A tier or
+pin the target engine **cannot honor** — e.g. an anthropic-only `fable` tier
+routed to codex or cursor — **fails loud** (the role falls open to Claude, where
+that model lives); there is **no cross-family substitution** (this replaces the
+old silent `fable→gpt-5.6-sol` remap). The GPT-5.6 tier requires a sufficiently
+new Codex CLI; an unavailable model follows the observable fall-open path to
+Claude, never a guessed version gate. Dispatch provenance — the concrete engine,
+model, and effort actually used — is recorded in the PR body (the Workhorse
+charter's "dispatch provenance" section), not a separate journal.
 
-**Cursor is the token-efficiency engine** (owner-ratified 2026-07-09): the
-token-efficient composer-2.5 model runs cursor-dispatched work by default, and premium
-Claude models are **never routed through cursor by default**. Each dispatch carries a
-role-appropriate timeout ceiling and idle-stall watchdog (`engine_pref.resolve_timeout` /
-`resolve_idle`) so a stalled external CLI is killed well before the ceiling; an owner may
+**Cursor is the token-efficiency engine** (owner-ratified 2026-07-09): Cursor is a
+**gateway CLI, not a single vendor** — the same `cursor-agent` account dispatches
+models from different families (the token-efficient `composer-2.5` is the cursor
+family; `cursor-grok-4.5` is the xAI family; it can also reach Anthropic/OpenAI
+models). Because of that, **panel independence keys on a model's family, not on
+the dispatch CLI** (consumed by the review-composition work, #510). The default
+cursor dispatch stays `composer-2.5`; premium/Anthropic models are never routed
+through cursor by default. Each dispatch carries a role-appropriate timeout
+ceiling and idle-stall watchdog (`engine_pref.resolve_timeout` / `resolve_idle`)
+so a stalled external CLI is killed well before the ceiling; an owner may
 override either limit via `enginePreferences`, and an override never disables the
 ceiling.
 

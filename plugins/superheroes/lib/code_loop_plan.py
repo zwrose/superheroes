@@ -166,8 +166,10 @@ def _subjects_for_dimension(dimension):
 
 
 def _prior_findings(session_dir, upto_round):
-    """The UNION of compiled findings across every round 1..`upto_round` — the prose twin of the
-    spine's `fixContext.priorFindings` (`showrunner.js _policyChangedSubjects`). A changed file is
+    """The UNION of compiled findings across every round 1..`upto_round` — the accumulated
+    prior-findings union across rounds (formerly mirrored by the retired execution spine's
+    `fixContext.priorFindings`; the spine was retired in #468, so this is now the sole home).
+    A changed file is
     attributed to a policy subject when ANY round's reviewer cited it, not only the deciding
     round's. This matters on the realistic certify path: the deciding round is clean (that is why
     it reached exit), so its own compiled findings are empty; attributing rework through the

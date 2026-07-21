@@ -47,8 +47,8 @@ def test_build_argv_codex_fix_low_effort():
 
 
 def test_build_argv_codex_maps_shared_tier_to_gpt_5_6_model():
-    expected = {"haiku": "gpt-5.6-luna", "sonnet": "gpt-5.6-terra",
-                "opus": "gpt-5.6-sol", "fable": "gpt-5.6-sol"}
+    expected = {"haiku": "gpt-5.6-terra", "sonnet": "gpt-5.6-terra",
+                "opus": "gpt-5.6-sol"}
     for tier, model in expected.items():
         argv = EA.build_argv("codex", "review", "high", {"model": tier})
         assert argv[argv.index("-m") + 1] == model
@@ -56,8 +56,8 @@ def test_build_argv_codex_maps_shared_tier_to_gpt_5_6_model():
 
 def test_build_argv_codex_explicit_engine_model_pin_wins():
     argv = EA.build_argv("codex", "review", "xhigh",
-                         {"model": "opus", "engine_model": "gpt-5.5"})
-    assert argv[argv.index("-m") + 1] == "gpt-5.5"
+                         {"model": "opus", "engine_model": "gpt-5.6-terra"})
+    assert argv[argv.index("-m") + 1] == "gpt-5.6-terra"
 
 
 def test_build_argv_codex_invalid_engine_model_fails_capable():
@@ -66,12 +66,18 @@ def test_build_argv_codex_invalid_engine_model_fails_capable():
     assert argv[argv.index("-m") + 1] == "gpt-5.6-terra"
 
 
+def test_build_argv_codex_invalid_engine_model_pin_falls_back_to_tier():
+    argv = EA.build_argv("codex", "review", "high",
+                         {"model": "opus", "engine_model": "gpt-5.5"})
+    assert argv[argv.index("-m") + 1] == "gpt-5.6-sol"
+
+
 def test_build_argv_cursor_review_plan_mode():
     argv = EA.build_argv("cursor", "review", "composer", {"cwd": "/wt"})
     assert argv[0] == "cursor-agent"
     assert "--mode" in argv and argv[argv.index("--mode") + 1] == "plan"
     # cursor-agent 2026.06.26: --model (not -m); -p (headless) + --trust (clear the trust gate) required.
-    assert "--model" in argv and argv[argv.index("--model") + 1] == "composer-2.5-fast"
+    assert "--model" in argv and argv[argv.index("--model") + 1] == "composer-2.5"
     assert "-p" in argv and "--trust" in argv
     assert "-m" not in argv                  # the old short flag is rejected by this cursor-agent
 
@@ -81,15 +87,15 @@ def test_build_argv_cursor_build_force_write():
     assert argv[0] == "cursor-agent"
     assert "-f" in argv                      # workspace-write / force
     assert "-p" in argv and "--trust" in argv
-    assert argv[argv.index("--model") + 1] == "composer-2.5-fast"
+    assert argv[argv.index("--model") + 1] == "composer-2.5"
 
 
 def test_build_argv_cli(capsys):
     rc = EA.main(["build-argv", "--engine", "codex", "--role", "build", "--effort", "high",
-                  "--cwd", "/wt", "--model", "opus", "--engine-model", "gpt-5.5"])
+                  "--cwd", "/wt", "--model", "opus", "--engine-model", "gpt-5.6-terra"])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0 and out[0] == "codex" and "workspace-write" in out
-    assert out[out.index("-m") + 1] == "gpt-5.5"
+    assert out[out.index("-m") + 1] == "gpt-5.6-terra"
 
 
 def test_parse_result_codex_review_critical():
@@ -328,56 +334,35 @@ def test_parse_result_cli(capsys):
     assert rc == 0 and out["signal"] == "ok"
 
 
-def test_build_argv_cursor_fable_tier_maps_fable_model():
-    # An owner who overrides a role to the `fable` tier and routes it via cursor dispatches Fable —
-    # the map's one deliberate premium exception. Exercised here on a write role.
-    argv = EA.build_argv("cursor", "build", "composer", {"cwd": "/wt", "model": "fable"})
-    assert argv[0] == "cursor-agent"
-    assert argv[argv.index("--model") + 1] == "claude-fable-5-thinking-xhigh"
-    assert "-f" in argv                       # workspace-write
-    assert "--mode" not in argv               # not the read-only plan mode
-
-
 def test_build_argv_cursor_work_roles_stay_on_composer_for_every_premium_tier():
     # OWNER POLICY (ratified 2026-07-09): cursor is the token-efficiency engine — composer-2.5 for
     # ALL work roles; premium Claude models are NEVER routed through cursor by default. A threaded
-    # opus/sonnet/haiku tier deliberately falls through to the pinned composer default (the map's
-    # only entry is the fable tier). This is the policy, not a coverage gap.
+    # opus/sonnet/haiku tier deliberately falls through to the pinned composer default.
     for role in ("review", "build", "fix"):
         for tier in ("opus", "sonnet", "haiku"):
             argv = EA.build_argv("cursor", role, "composer", {"cwd": "/wt", "model": tier})
-            assert argv[argv.index("--model") + 1] == "composer-2.5-fast", (role, tier)
-
-
-def test_build_argv_cursor_fable_is_the_only_mapped_tier():
-    # The one deliberate exception: the `fable` tier routed via cursor dispatches Fable. The map
-    # contains fable and NOTHING else — adding premium ids would invert the owner policy (see
-    # _CURSOR_MODEL_BY_TIER's comment).
-    assert EA._CURSOR_MODEL_BY_TIER == {"fable": "claude-fable-5-thinking-xhigh"}
+            assert argv[argv.index("--model") + 1] == "composer-2.5", (role, tier)
 
 
 def test_build_argv_cursor_unmapped_model_keeps_composer_default():
-    # opus included: only the fable tier gets a premium cursor model — an opus tier stays on composer
-    # per the owner policy.
+    # opus included: every tier stays on composer per the owner policy.
     for model in (None, "", "bogus-tier", "opus"):
         argv = EA.build_argv("cursor", "build", "composer", {"model": model})
-        assert argv[argv.index("--model") + 1] == "composer-2.5-fast"
+        assert argv[argv.index("--model") + 1] == "composer-2.5"
     argv = EA.build_argv("cursor", "review", "composer", {})
-    assert argv[argv.index("--model") + 1] == "composer-2.5-fast"
+    assert argv[argv.index("--model") + 1] == "composer-2.5"
 
 
-def test_build_argv_codex_fable_tier_maps_capability_to_sol():
-    argv = EA.build_argv("codex", "build", "xhigh", {"cwd": "/wt", "model": "fable"})
-    assert argv[argv.index("-m") + 1] == "gpt-5.6-sol"
-    assert argv[argv.index("--sandbox") + 1] == "workspace-write"
-    assert "model_reasoning_effort=xhigh" in argv
+def test_build_argv_codex_fable_tier_returns_empty_argv():
+    assert EA.build_argv("codex", "build", "xhigh", {"cwd": "/wt", "model": "fable"}) == []
 
 
-def test_build_argv_cli_cursor_fable_model(capsys):
-    rc = EA.main(["build-argv", "--engine", "cursor", "--role", "build",
-                  "--effort", "composer", "--model", "fable"])
-    argv = json.loads(capsys.readouterr().out)
-    assert rc == 0 and argv[argv.index("--model") + 1] == "claude-fable-5-thinking-xhigh"
+def test_build_argv_codex_invalid_effort_returns_empty_argv():
+    assert EA.build_argv("codex", "build", "banana", {"model": "opus"}) == []
+
+
+def test_build_argv_cursor_fable_tier_returns_empty_argv():
+    assert EA.build_argv("cursor", "build", "composer", {"cwd": "/wt", "model": "fable"}) == []
 
 
 def test_engine_reviewer_stdout_contract_is_stated_in_dispatch_reference():

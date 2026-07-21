@@ -48,7 +48,11 @@ code, so you catch what the maker's context hid.
    an order only where a real dependency forces one (or in stages, when only some of the work is
    independent). Mark each issue's route — **build-ready** (the builder goes straight to the brief)
    or **needs-discovery** (the builder runs discovery with the owner first) — and **draft the
-   starting prompt** the builder begins from. (A mis-routed "ready" issue that turns out unclear is
+   launch prompt** the builder begins from: **the workhorse command + the issue pointer, nothing
+   else.** Everything durable belongs in the issue at routing time — scope and owner decisions,
+   process constraints (test right-sizing, E2E policy), and launch context (local export paths,
+   known-broken links, environment quirks). If it matters to the build it is an issue line anyone can
+   read, never a launch line that evaporates with the session. (A mis-routed "ready" issue that turns out unclear is
    caught by the builder's stop-and-report safeguard — see the **workhorse** charter; you own the
    route, the builder owns that safeguard.)
 4. **Vet PRs from artifacts, never narratives.** Your core check:

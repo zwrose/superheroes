@@ -32,6 +32,7 @@
     {"path": "plugins/superheroes/lib/enforcer.py", "allow": false},
     {"path": "plugins/superheroes/lib/allowance.py", "allow": false},
     {"path": "plugins/superheroes/lib/model_tier.py", "allow": false},
+    {"path": "plugins/superheroes/lib/model_registry.py", "allow": false},
     {"path": "plugins/superheroes/hooks/hooks.json", "allow": false},
     {"path": "plugins/superheroes/hooks/precompact.py", "allow": false},
     {"path": "plugins/superheroes/hooks/session_start.py", "allow": false},
