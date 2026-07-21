@@ -20,6 +20,7 @@ _FALLBACK = {
     "orchestrator": None,
     "reviewer": "sonnet",
     "reviewer-deep": "opus",
+    "verifier": "opus",
     "mechanical": "haiku",
     "synthesis": "opus",
     "code-fixer": "sonnet",

@@ -23,6 +23,11 @@ def test_defaults_per_role():
     assert MT.resolve_model("mechanical") == "haiku"
 
 
+def test_verifier_role_defaults_to_opus():
+    assert MT.resolve_model("verifier") == "opus"
+    assert "verifier" in MT.ROLES and "verifier" in MT.DEFAULT_TIERS
+
+
 def test_profile_override_wins():
     overrides = {"mechanical": "sonnet"}
     assert MT.resolve_model("mechanical", overrides) == "sonnet"

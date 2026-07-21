@@ -141,6 +141,7 @@ def test_severity_vocabulary_is_single_sourced():
     import panel_tally
     import review_memory
     import review_telemetry
+    import verification
 
     # Python copy-holders (read at runtime) — every BLOCKING constant.
     py_blocking = {
@@ -155,6 +156,8 @@ def test_severity_vocabulary_is_single_sourced():
 
     assert list(loop_state._ALL_SEVERITIES) == tiers, "loop_state._ALL_SEVERITIES order/vocab drift"
     assert list(loop_synthesis._TIERS) == tiers, "loop_synthesis._TIERS order/vocab drift"
+    assert list(verification._TIERS) == tiers, "verification._TIERS order/vocab drift"
+    assert verification._SEV_RANK == rank, "verification._SEV_RANK drift"
     assert panel_tally.SEV_RANK == rank, "panel_tally.SEV_RANK drift"
 
     # #276: the shared FAIL-CLOSED blocking predicate has ONE home (circuit_breaker).
