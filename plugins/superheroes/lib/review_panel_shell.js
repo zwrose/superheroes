@@ -807,15 +807,14 @@ async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundF
     escalated = true
     // #212: the escalation to reviewer-deep IS a re-dispatch — carry the corrective retryReason when
     // the shallow answer had a curable defect (null when it was just an honest low, nothing to correct).
+    // #525: this single escalation is the seat's ONE bounded re-dispatch — parity with the deep-start
+    // corrective retry (else-if below) and both Python schedulers code_loop_plan/spec_loop_plan (escalate
+    // once, then a still-invalid result is terminal `missing`). A still-retryable escalated answer falls
+    // through to the missing record below; it is never re-dispatched a second time.
     const deepOpts = Object.assign({}, baseOpts, { tier: 'reviewer-deep', escalatedFrom: 'reviewer', retryReason: _retryReason(out) })
     // #350: this re-dispatch DISCARDS the cheap answer (its findings included) — disclose it before overwriting.
     _discloseRetry(context, reviewer, round, 'escalation:reviewer->reviewer-deep', out)
     out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, deepOpts), deepOpts)
-    if (_retryableReviewerIssue(out)) {
-      // #350: a second re-dispatch discards the first deep answer — disclose it too (distinct cause + hash).
-      _discloseRetry(context, reviewer, round, 'retry:reviewer-deep:' + (_retryReason(out) || 'malformed'), out)
-      out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, deepOpts, { retryFrom: 'reviewer-deep', retryReason: _retryReason(out) })), deepOpts)
-    }
   } else if (baseOpts.tier === 'reviewer-deep' && _retryableReviewerIssue(out)) {
     // #350: the deep-tier corrective retry discards the first deep answer — disclose the re-execution.
     _discloseRetry(context, reviewer, round, 'retry:reviewer-deep:' + (_retryReason(out) || 'malformed'), out)
