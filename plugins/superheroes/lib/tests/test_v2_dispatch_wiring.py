@@ -8,14 +8,16 @@
 3. Observability wiring — the workhorse charter REQUIRES recording engine+model per dispatch (§7)
    and a PR dispatch-provenance section (§11); removing either fails CI.
 4. Charter §7 ratification digest (#547) — a SHA-256 digest of the workhorse charter's §7
-   section (heading-bounded ## 7 → ## 8). Any undeclared change to that section fails CI. This
+   section (exactly one non-fenced ## 7 → exactly one non-fenced ## 8; headings inside
+   ``` / ~~~ fences are ignored). Any undeclared change to that section fails CI. This
    detects *change*, not meaning: every edit — deliberate or accidental, inversion or paraphrase
    — changes the bytes. Updating the recorded digest requires an owner-ratified ruling in the
    same commit.
 
-Fail-closed means: a guard that cannot find what it is looking for RAISES, it never silently
-passes. The §11 extractor in particular asserts its own found-set is non-empty before comparing
-it against the schema, so an extractor that regresses to matching nothing cannot vacuously pass.
+Fail-closed means: a guard that cannot find what it is looking for — or finds an ambiguous
+duplicate of an authoritative target — RAISES, it never silently picks one. The §11 extractor
+in particular asserts its own found-set is non-empty before comparing it against the schema, so
+an extractor that regresses to matching nothing cannot vacuously pass.
 """
 import hashlib
 import json
@@ -270,18 +272,69 @@ def test_workhorse_requires_dispatch_provenance():
 
 
 # --- Guard 4: charter §7 ratification digest (#547) ------------------------------------------
-
-# SHA-256 of the normalized §7 slice (## 7 heading → just before ## 8). Recorded 2026-07-21 for
-# issue #547 after review evidence showed regex "semantic invariants" cannot decide policy meaning.
-# Trivia (trailing whitespace, CRLF vs LF, surrounding blank lines) is normalized away before
-# hashing; wording, punctuation, and case are NOT — those are the policy. Updating this constant
-# requires an owner-ratified ruling named in the same commit.
+#
+# Drift guard, not a security boundary: any edit to the §7 slice fails CI until someone
+# deliberately re-ratifies by updating the digest below. Anyone who can edit the charter can
+# also edit the digest, so residual bypasses that need deliberate construction (unterminated
+# fence openers, 4-space / tab-indented fences, homoglyph or zero-width tweaks, setext / HTML
+# headings) are out of scope by design — hardening them adds parser complexity for no real
+# protection (see the two guard rewrites in #547). The non-fenced exactly-one-boundary checks
+# stay: those catch accidents, which is in scope.
+#
+# The digest covers all of §7 (## 7 → ## 8) on purpose — a stable structural boundary beats a
+# fragile prose anchor — even though #547 only ratified the dispatch-contract clauses within it.
+#
+# SHA-256 of the normalized §7 slice. Recorded 2026-07-21 for #547 after review evidence showed
+# regex "semantic invariants" cannot decide policy meaning. Trivia (trailing whitespace, CRLF
+# vs LF, surrounding blank lines) is normalized away; wording, punctuation, and case are NOT.
+# Any deliberate §7 edit updates this constant in the same commit with the reason stated in the
+# commit message.
 _SECTION_7_RATIFICATION_DIGEST = (
     "be356ea7ff480ce7cd2768e86c8725b72e2be5e22950891174847c751d370e83"
 )
 
 _SECTION_7_HEADING_RE = re.compile(r"(?m)^## 7\b.*$")
 _SECTION_8_HEADING_RE = re.compile(r"(?m)^## 8\b.*$")
+_FENCE_LINE_RE = re.compile(r"^( {0,3})(`{3,}|~{3,})(.*)$")
+
+
+def _mask_fenced_regions(text):
+    """Replace fenced code regions (``` / ~~~, including info strings) with spaces.
+
+    Preserves length and newlines so match offsets still index into the original text.
+    A heading line inside a fence is example text, never a section boundary.
+    """
+    parts = []
+    in_fence = False
+    fence_char = None
+    fence_len = 0
+    for line in text.splitlines(keepends=True):
+        body_end = len(line.rstrip("\r\n"))
+        body, newline = line[:body_end], line[body_end:]
+        mask_line = in_fence
+        m = _FENCE_LINE_RE.match(body)
+        if m:
+            marker, info = m.group(2), m.group(3)
+            if not in_fence:
+                if not (marker[0] == "`" and "`" in info):
+                    in_fence = True
+                    fence_char = marker[0]
+                    fence_len = len(marker)
+                    mask_line = True
+            elif (
+                marker[0] == fence_char
+                and len(marker) >= fence_len
+                and info.strip() == ""
+            ):
+                in_fence = False
+                fence_char = None
+                fence_len = 0
+                mask_line = True
+        if mask_line:
+            parts.append(" " * len(body) + newline)
+        else:
+            parts.append(line)
+    return "".join(parts)
 
 
 def normalize_section_for_digest(section):
@@ -301,8 +354,9 @@ def normalize_section_for_digest(section):
 def extract_section_7(charter_text):
     """Return the charter's §7 slice (## 7 heading up to, not including, ## 8), or raise.
 
-    Heading-bounded extraction only. Fail-closed: missing either boundary, or an empty slice,
-    RAISES. No whole-file fallback.
+    Heading-bounded extraction only. Headings inside fenced code blocks are ignored.
+    Fail-closed: missing either boundary, duplicated either boundary, wrong order, or an
+    empty slice RAISES. No whole-file fallback; never silently picks among ambiguous matches.
     """
     assert isinstance(charter_text, str), (
         "extract_section_7 requires str input, got %r" % (type(charter_text),)
@@ -310,16 +364,18 @@ def extract_section_7(charter_text):
     assert charter_text, (
         "charter text is empty — refusing to pass vacuously"
     )
-    m7 = _SECTION_7_HEADING_RE.search(charter_text)
-    m8 = _SECTION_8_HEADING_RE.search(charter_text)
-    assert m7 is not None, (
-        "failed to find ## 7 heading in charter — refusing to pass vacuously; "
-        "whole-file fallback is forbidden"
+    searchable = _mask_fenced_regions(charter_text)
+    matches_7 = list(_SECTION_7_HEADING_RE.finditer(searchable))
+    matches_8 = list(_SECTION_8_HEADING_RE.finditer(searchable))
+    assert len(matches_7) == 1, (
+        "## 7 boundary duplicated or missing — expected exactly 1 non-fenced heading, "
+        "found %d — refusing to pass on ambiguous/missing boundary" % len(matches_7)
     )
-    assert m8 is not None, (
-        "failed to find ## 8 heading in charter — refusing to pass vacuously; "
-        "whole-file fallback is forbidden"
+    assert len(matches_8) == 1, (
+        "## 8 boundary duplicated or missing — expected exactly 1 non-fenced heading, "
+        "found %d — refusing to pass on ambiguous/missing boundary" % len(matches_8)
     )
+    m7, m8 = matches_7[0], matches_8[0]
     assert m7.start() < m8.start(), (
         "## 7 heading must precede ## 8 heading — refusing to pass vacuously"
     )
@@ -344,22 +400,26 @@ def test_workhorse_section_7_ratification_digest():
     assert text, (
         f"{WORKHORSE} is empty — refusing to pass vacuously"
     )
-    actual = section_7_digest(text)
+    section = extract_section_7(text)
+    normalized = normalize_section_for_digest(section)
+    actual = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    # Preview is read from the charter at failure time — never a stored policy summary (§11).
+    preview = "\n".join(normalized.split("\n")[:2])
     assert actual == _SECTION_7_RATIFICATION_DIGEST, (
-        f"{WORKHORSE} §7 dispatch/escalation section digest changed without re-ratification.\n"
+        f"{WORKHORSE} §7 dispatch-contract digest changed without re-ratification.\n"
         "\n"
-        "What changed: the workhorse charter's §7 section (## 7 → ## 8), which encodes "
-        "owner-ratified dispatch/escalation policy from #547 (trigger = demonstrated "
-        "fragility; ladder-first with a high, always-disclosed cross-vendor bar; "
-        "per-work-order maker-family accounting with deep/adversarial seats excluding that "
-        "family).\n"
+        f"Authoritative home: {WORKHORSE} §7 (## 7 → ## 8). Open that section — this "
+        "message does not restate the policy.\n"
         "\n"
-        "Why CI cares: this guard detects *change* to the ratified bytes — any undeclared "
-        "edit fails CI. It does not judge meaning; completeness is the point.\n"
+        "Why digest-protected: issue #547. The whole of §7 is covered deliberately (stable "
+        "## 7 → ## 8 boundary); #547 is why the protection exists, not a claim that every "
+        "clause in the span was ratified by that issue.\n"
         "\n"
-        "What to do: if the edit is deliberate, update `_SECTION_7_RATIFICATION_DIGEST` in "
-        "the same commit and state in the commit message which owner ruling licenses the "
-        "change; if it is not deliberate, revert the charter edit.\n"
+        "What to do: any deliberate §7 edit — #547-related or not — updates "
+        "`_SECTION_7_RATIFICATION_DIGEST` in the same commit and states the reason in the "
+        "commit message; otherwise revert the charter edit.\n"
+        "\n"
+        f"Section starts:\n{preview}\n"
         "\n"
         f"expected: {_SECTION_7_RATIFICATION_DIGEST}\n"
         f"actual:   {actual}"
@@ -372,6 +432,13 @@ def test_workhorse_section_7_ratification_digest():
     )
 
 
+def _naive_first_match_extract_section_7(charter_text):
+    """Pre-fix first-match extractor — documents the decoy regression this guard closed."""
+    m7 = _SECTION_7_HEADING_RE.search(charter_text)
+    m8 = _SECTION_8_HEADING_RE.search(charter_text)
+    return charter_text[m7.start():m8.start()]
+
+
 def test_extract_section_7_fail_closed():
     with pytest.raises(AssertionError):
         extract_section_7("")
@@ -381,3 +448,51 @@ def test_extract_section_7_fail_closed():
         extract_section_7("## 7. Only seven\ncontent\n")  # missing ## 8
     with pytest.raises(AssertionError):
         extract_section_7(None)  # type: ignore[arg-type]
+
+    # Decoy attack: unchanged §7 copy + decoy ## 8 prefixed to a charter whose real §7 is
+    # inverted. Naive first-match returns the recorded digest (CI green, policy inverted);
+    # fail-closed extraction must RAISE on the duplicated boundaries.
+    original = _read(WORKHORSE)
+    section_copy = _naive_first_match_extract_section_7(original)
+    negated = original.replace(
+        "Leaving it requires", "Leaving it no longer requires", 1
+    )
+    decoy = section_copy + "## 8. decoy\n\n" + negated
+    naive_digest = hashlib.sha256(
+        normalize_section_for_digest(
+            _naive_first_match_extract_section_7(decoy)
+        ).encode("utf-8")
+    ).hexdigest()
+    assert naive_digest == _SECTION_7_RATIFICATION_DIGEST, (
+        "decoy fixture is vacuous — naive first-match did not reproduce the recorded digest"
+    )
+    with pytest.raises(AssertionError, match=r"## 7 boundary duplicated or missing"):
+        extract_section_7(decoy)
+
+    with pytest.raises(AssertionError, match=r"## 8 boundary duplicated or missing"):
+        extract_section_7("## 7. Real\ncontent\n## 8. First\n## 8. Second\n")
+
+    # Fenced headings are example text, not boundaries — extract the real section.
+    fenced = (
+        "```markdown\n"
+        "## 7. Example\n"
+        "placeholder\n"
+        "## 8. Example\n"
+        "```\n"
+        "## 7. Real section\n"
+        "real content\n"
+        "## 8. Next\n"
+        "after\n"
+    )
+    assert extract_section_7(fenced) == "## 7. Real section\nreal content\n"
+
+    fenced_tilde = (
+        "~~~\n"
+        "## 7. Example\n"
+        "## 8. Example\n"
+        "~~~\n"
+        "## 7. Real tilde\n"
+        "tilde body\n"
+        "## 8. After\n"
+    )
+    assert extract_section_7(fenced_tilde) == "## 7. Real tilde\ntilde body\n"
