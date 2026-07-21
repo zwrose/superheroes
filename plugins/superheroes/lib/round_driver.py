@@ -82,6 +82,7 @@ MAX_CONFIRMATIONS = review_round_policy.MAX_CONFIRMATIONS
 SCHEMA_VERSION = 2
 STATE_FILE = "loop-state.json"
 JOURNAL_FILE = "driver-journal.jsonl"
+JOURNAL_FAULT_FILE = "driver-journal-fault.jsonl"
 RECEIPT_FILE = "round-receipt.json"
 
 # Phases (the `action` a `next` emits; each is fulfilled by exactly one orchestrator dispatch).
@@ -128,15 +129,34 @@ def state_hash(state):
 
 
 def _journal_append(session_dir, entry):
-    """Append one next/submit event to the journal — this is the `scriptRan` evidence. Best-effort
-    (a journal miss never derails the run); ts via time.time (runtime code, not a Workflow script)."""
+    """Append one next/submit event to the journal — this is the `scriptRan` evidence. A journal miss
+    never derails the run mid-flight, but it is NOT swallowed: a failed append is a LOST piece of the
+    driver's ran-evidence, so it records a durable fault marker that `_finalize_receipt` fails closed
+    on (a partial-journal gap must never quietly certify — #507 R2 residual-4). ts via time.time."""
     entry = dict(entry)
     entry.setdefault("ts", time.time())
     try:
         with open(os.path.join(session_dir, JOURNAL_FILE), "a", encoding="utf-8") as fh:
             fh.write(_canonical(entry) + "\n")
+    except OSError as exc:
+        _mark_journal_fault(session_dir, entry, exc)
+
+
+def _mark_journal_fault(session_dir, entry, exc):
+    """Record a durable journal-write fault so finalization fails closed. Best-effort itself — if the
+    marker ALSO cannot be written, the terminal receipt write (which propagates its OSError) covers the
+    wholly-unwritable dir; this marker catches the partial case a single lost append would otherwise
+    hide."""
+    try:
+        with open(os.path.join(session_dir, JOURNAL_FAULT_FILE), "a", encoding="utf-8") as fh:
+            fh.write(_canonical({"ts": time.time(), "error": str(exc),
+                                 "cmd": entry.get("cmd"), "phase": entry.get("phase")}) + "\n")
     except OSError:
         pass
+
+
+def _journal_faulted(session_dir):
+    return os.path.exists(os.path.join(session_dir, JOURNAL_FAULT_FILE))
 
 
 def read_journal(session_dir):
@@ -415,6 +435,15 @@ def new_state(config=None):
         "headDiff": None,
         "fixBatch": [],
         "fullPanelRan": False,
+        # A configured lens that never ran is an OUTSTANDING coverage gap: set when a panel is
+        # incomplete, cleared only when a COMPLETE panel re-establishes coverage. A converge resting
+        # on it is withheld (silence never certifies — #507 R2 residual-1).
+        "_incompletePanel": False,
+        # The UNION of policy subjects the fix touched since the last full panel — the cross-cutting
+        # re-arm reads THIS accumulation, not a single round's delta, so rework that spreads across
+        # MULTIPLE post-confirmation fixes still trips the bar (#507 R2 residual-5). None = an unknown
+        # surface since the panel (fail toward one more confirmation).
+        "_changedSubjectsSincePanel": [],
         "terminal": None,
         "certification": None,
         # #507 WO-D: the in-memory review-record ledger (one record per REVIEW round) the
@@ -672,7 +701,7 @@ def _advance(state, config):
             payload["escalatedRung"] = state["_escalatedRung"]
     elif step == P_JUDGMENT:
         payload = {"findings": [
-            {"id": finding_identity(f), "file": f.get("file"), "line": f.get("line"),
+            {"id": _judgment_finding_id(f), "file": f.get("file"), "line": f.get("line"),
              "title": f.get("title"), "severity": f.get("severity"),
              "classification": "judgment", "dispositions": list(JUDGMENT_DISPOSITIONS)}
             for f in (state.get("_judgmentFindings") or []) if isinstance(f, dict)]}
@@ -794,6 +823,15 @@ def _fold_panel(state, config, artifact):
     # Only a COMPLETE panel can anchor a full-panel-confirmed certification. A missing seat leaves
     # fullPanelRan False so a clean finish downgrades to audited-chain and names the gap.
     state["fullPanelRan"] = not incomplete
+    # Track the OUTSTANDING coverage gap across the loop: an incomplete panel arms it (a converge
+    # resting on it is withheld — a lens never ran); a COMPLETE panel recovers coverage and clears it
+    # (#507 R2 residual-1). A scoped delta round leaves it untouched, so a round-1 gap never silently
+    # clears on a delta finish.
+    state["_incompletePanel"] = incomplete
+    # A full panel re-establishes the review baseline: reset the cross-cutting-rework accumulator so a
+    # broad fix BEFORE this panel does not count as the panel's rework, and the union runs from this
+    # panel forward across every later fix (#507 R2 residual-5).
+    state["_changedSubjectsSincePanel"] = []
     # In-memory review record for the challenged-coverage / recurrence breaker: a round-1 panel is
     # `baseline`, a re-armed / resumed full panel (round ≥ 2) is a `confirmation` (its per-dim run
     # map lets _confirmation_qualifies judge whether it can anchor certification).
@@ -874,6 +912,14 @@ def _fold_gapsweep(state, config, artifact):
     _after_findings_settled(state, config)
 
 
+def _judgment_finding_id(finding):
+    """The per-LOCATION disposition key for a judgment finding — the line-less `finding_identity`
+    PLUS the line. Two same-title tradeoff blockers at DIFFERENT lines get DISTINCT ids, so the
+    owner's disposition for one never collides onto the other (the line-less identity did — #507 R2
+    v5). The present-judgment payload emits this id and the fold keys the dispositions on it."""
+    return "%s@L%s" % (finding_identity(finding), finding.get("line"))
+
+
 def _route_judgment_blockers(state, blocking):
     """Triage before composing an autonomous fix batch. A blocking finding carrying `tradeoff: true`
     is a PRODUCT-CHOICE / judgment call — the review-code contract routes it to the OWNER, never to
@@ -893,7 +939,7 @@ def _route_judgment_blockers(state, blocking):
     state["_judgmentFindings"] = [dict(f) for f in judgment]
     state["_judgmentMechanical"] = [dict(f) for f in mechanical]
     _record_round(state, "judgmentBlockers", [
-        {"id": finding_identity(f), "file": f.get("file"), "line": f.get("line"),
+        {"id": _judgment_finding_id(f), "file": f.get("file"), "line": f.get("line"),
          "title": f.get("title"), "severity": f.get("severity"), "classification": "judgment"}
         for f in judgment])
     _decision(state, "judgment-gate",
@@ -941,7 +987,7 @@ def _fold_judgment(state, config, artifact):
     skipped = []
     disposition_log = []
     for f in judgment:
-        fid = finding_identity(f)
+        fid = _judgment_finding_id(f)
         d = by_id.get(fid) if isinstance(by_id.get(fid), dict) else {}
         disposition = d.get("disposition")
         reason = d.get("reason")
@@ -1115,6 +1161,20 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None):
     derive = changed_subjects_seam or derive_changed_subjects
     state["_changedSubjects"] = derive(
         state.get("reviewedDiff"), state.get("headDiff"), _accumulated_findings(state))
+    # Accumulate the changed subjects since the last full panel so the #174 cross-cutting re-arm sees
+    # rework that spreads across MULTIPLE post-confirmation fixes, not just this round's single-pair
+    # delta (#507 R2 residual-5). ONLY delta/confirmation-round fixes (round ≥ 2) count as the
+    # confirmation's rework — the round-1 BASELINE fix that resolves the initial review is not "rework
+    # since the panel" (a broad baseline fix must not force a confirmation). An unknown surface (None)
+    # makes the accumulation sticky-unknown (fail toward one more confirmation) until a panel resets it.
+    subjects = state.get("_changedSubjects")
+    if state["round"] >= 2:
+        if subjects is None:
+            state["_changedSubjectsSincePanel"] = None
+        elif state.get("_changedSubjectsSincePanel") is not None:
+            acc = set(state.get("_changedSubjectsSincePanel") or [])
+            acc |= {s for s in subjects if isinstance(s, str)}
+            state["_changedSubjectsSincePanel"] = sorted(acc)
     # Accumulate the fix's coverage decisions so the challenged-coverage breaker can see a decision
     # recorded on a principle a later round re-raises (annotateChallengedCoverage input).
     cds = artifact.get("coverageDecisions")
@@ -1129,11 +1189,22 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None):
 _VERIFY_SKIP = ("skipped", "none", "unverified")
 
 
+def _verify_command_configured(config):
+    """True when the profile configures a REAL verify command (not absent / `none`). A configured
+    command must actually PASS — a skip result then means the run did not execute, so it fails closed
+    rather than advancing unverified (#507 R2 residual-2)."""
+    cmd = config.get("verifyCommand")
+    if not isinstance(cmd, str):
+        return False
+    return cmd.strip().lower() not in ("", "none")
+
+
 def _fold_verify(state, config, artifact):
-    """Fold the verify result. FAIL-CLOSED (#507 v10): advance ONLY on an explicit `pass` or an
-    explicit unverified skip (`skipped`/`none`/`unverified` — a profile with no verify command). A
-    `fail`, a `timeout`, a missing/None result, or any unrecognized value HALTS with an honest
-    reason that names the class — never advances into a delta round that could later certify."""
+    """Fold the verify result. FAIL-CLOSED (#507 v10): advance ONLY on an explicit `pass` or — WHEN NO
+    verify command is configured — an explicit unverified skip (`skipped`/`none`/`unverified`). A
+    `fail`, a `timeout`, a missing/None result, any unrecognized value, OR a skip result while a real
+    verify command IS configured (the command did not actually run) HALTS with an honest reason that
+    names the class — never advances into a delta round that could later certify."""
     result = artifact.get("result")
     _record_round(state, "verifyResult", result)
     if result == "fail":
@@ -1143,6 +1214,20 @@ def _fold_verify(state, config, artifact):
         state["step"] = P_TERMINAL
         return
     if result in _VERIFY_SKIP:
+        if _verify_command_configured(config):
+            # A configured verify command reported a skip — it did NOT actually run its checks. Fail
+            # closed: a configured verification must PASS, never advance on a skip (#507 R2 residual-2).
+            state["terminal"] = "halted"
+            state["certification"] = {
+                "shape": None,
+                "reason": ("verify gate reported %r but a verify command is configured (%r) — the "
+                           "gate did not run; halt, certification withheld"
+                           % (result, config.get("verifyCommand")))}
+            _decision(state, "verify-skip-but-configured",
+                      "verify result %r with a configured verify command — fail closed, the gate "
+                      "did not actually run" % result)
+            state["step"] = P_TERMINAL
+            return
         _decision(state, "verify-skipped",
                   "verify gate skipped (%s) — advancing unverified (no verify command)" % result)
     elif result != "pass":
@@ -1236,13 +1321,19 @@ def _fold_audits(state, config, artifact):
     audit round for the audit-keyed breaker; new-issue candidates join the scoped-finder scan."""
     results = artifact.get("results") if isinstance(artifact.get("results"), list) else []
     targets = state.get("_auditTargets") or []
-    outcome = audits.apply_audit_results(targets, results)
+    # Pass the DRIVER-recorded selected auditor per target as trusted provenance — the fold
+    # authenticates a clearing ruling against THIS map, never the result's own echo (#507 R2).
+    expected_auditors = {t.get("id"): t.get("auditorVendor")
+                         for t in targets if isinstance(t, dict) and t.get("id") is not None}
+    outcome = audits.apply_audit_results(targets, results, expected_auditors=expected_auditors)
     state["_auditOutcome"] = outcome
     # the audit round for check_audit_breaker: identity + effective ruling PLUS the recurrence class
     # keys the alias-tolerant stall match consumes (#507 v0) — carried straight off each audit entry
-    # (audits.apply_audit_results threads them from the target).
+    # (audits.apply_audit_results threads them from the target). The `title` MUST ride too: without it
+    # the breaker's canonical class key collapses to a title-less `dim::tax::` alias that merges two
+    # DISTINCT classKeys sharing dimension/taxonomy into a false stall (#507 R2 v2).
     audit_round = {"round": state["round"], "outcomes": [
-        {"identity": a.get("id"), "ruling": a.get("ruling"),
+        {"identity": a.get("id"), "ruling": a.get("ruling"), "title": a.get("title"),
          "classKey": a.get("classKey"), "dimension": a.get("dimension"),
          "taxonomy": a.get("taxonomy")} for a in outcome["audits"]]}
     state["auditRounds"].append(audit_round)
@@ -1357,12 +1448,16 @@ def _settle_delta(state, config):
         nd = set(outcome.get("notDischarged", []))
         nd_targets = [dict(t) for t in (state.get("_auditTargets") or []) if t.get("id") in nd]
         batch = [dict(f) for f in new_blocking]
-        seen = {finding_identity(f) for f in batch}
+        # Dedupe on the per-LOCATION key (line-less identity + line), NOT the line-less identity alone:
+        # a new blocker sharing a target's file+title at a DIFFERENT line is a DISTINCT finding, so
+        # keying on identity alone would silently drop the unresolved audit target (#507 R2 residual-3).
+        seen = {(finding_identity(f), f.get("line")) for f in batch}
         for t in nd_targets:
             tid = t.get("id")
-            if tid is not None and tid not in seen:
+            key = (tid, t.get("line"))
+            if tid is not None and key not in seen:
                 batch.append(t)
-                seen.add(tid)
+                seen.add(key)
         if _route_judgment_blockers(state, batch):
             return
         state["_fixBatch"] = batch
@@ -1373,7 +1468,13 @@ def _settle_delta(state, config):
     # confirmation economics before certifying — a Critical surfaced since the last qualifying
     # panel, or cross-cutting rework, owes one more full confirmation panel (budget 2).
     surfaced = list(state.get("surfacedSinceLastPanel") or [])
-    cross = review_round_policy.is_cross_cutting(state.get("_changedSubjects"))
+    # Cross-cutting fires when EITHER the round's own resolving fix is cross-cutting (the single-round
+    # signal) OR the UNION of delta rework since the last full panel is (reset in _fold_panel,
+    # accumulated in _fold_fixer). The union disjunct is additive — it catches rework that spreads
+    # across MULTIPLE post-confirmation fixes where no single fix is broad (#507 R2 residual-5),
+    # without ever suppressing a re-arm the single-round signal already earns.
+    cross = (review_round_policy.is_cross_cutting(state.get("_changedSubjects"))
+             or review_round_policy.is_cross_cutting(state.get("_changedSubjectsSincePanel")))
     followup = review_round_policy.confirmation_followup(
         surfaced, state.get("confirmations", 0), cross,
         max_confirmations=MAX_CONFIRMATIONS, doc_mode=config.get("docMode", False))
@@ -1503,6 +1604,14 @@ def _terminal_converged(state, config, full_panel, note=None):
     success (the exit_skipped invariant): the certification `reason` leads with
     `clean-except-skipped: N blocker(s) skipped with citable reasons` (shape unchanged) so the
     terminal reads unmistakably non-plain, and the skips also ride the top-level receipt channel."""
+    # An OUTSTANDING incomplete panel (a configured lens never ran, never recovered by a later
+    # complete panel) cannot certify clean — a zero-finding finish over a coverage gap is "we did not
+    # look", not "audited-chain". Silence never certifies: withhold + park (#507 R2 residual-1).
+    if state.get("_incompletePanel"):
+        _park_cannot_certify(
+            state, "panel incomplete — a configured lens never ran and no complete panel has since "
+            "recovered the coverage; certification withheld")
+        return
     base = "full-panel-confirmed" if full_panel else "audited-chain"
     shape = _cert_shape(state, base)
     state["terminal"] = "converged"
@@ -1875,6 +1984,9 @@ def _finalize_receipt(session_dir, state):
     if not (on_disk.get("scriptRan") or {}).get("invocations"):
         return ("terminal receipt scriptRan is empty — the journal (the driver's ran evidence) did "
                 "not persist; cannot certify; treat as park")
+    if _journal_faulted(session_dir):
+        return ("driver journal recorded a write fault — the scriptRan evidence is incomplete "
+                "(a next/submit event was lost); cannot certify; treat as park")
     return None
 
 
@@ -1922,6 +2034,11 @@ def main(argv=None):
                     help="live vendors (fresh state only): a JSON list ('[\"codex\",\"cursor\"]') "
                          "OR a comma-separated string ('codex,cursor'). Unparseable / unknown / "
                          "on non-fresh state → fails loud (nonzero), never a silent default")
+    pn.add_argument("--fixer-vendor", default=None,
+                    help="the ACTUAL fix-implementer vendor (fresh state only): the auditor is seated "
+                         "as a DIFFERENT vendor, so a wrong value labels a self-audit independent. "
+                         "Unknown vendor / on non-fresh state → fails loud (nonzero), never a silent "
+                         "default")
     pn.add_argument("--verify-command", default=None)
     pn.add_argument("--max-rounds", type=int, default=None)
     pn.add_argument("--diff-path", default=None, help="round-1 reviewed diff (fresh state only)")
@@ -1956,6 +2073,21 @@ def main(argv=None):
                                              "value": args.vendors}) + "\n")
                 return 1
             overrides["vendors"] = vendors
+        if args.fixer_vendor is not None:
+            # The fixer vendor is read ONCE at new_state and drives the independent-auditor seating —
+            # an unknown vendor or a later `next` on existing state that silently ignored it would
+            # mislabel a self-audit independent. Reject loudly, same discipline as `--vendors` (#507).
+            fixer = args.fixer_vendor.strip()
+            if fixer not in model_registry.VENDORS:
+                sys.stdout.write(json.dumps({"ok": False, "reason": "fixer-vendor-unknown",
+                                             "value": args.fixer_vendor}) + "\n")
+                return 1
+            st_ok, st = load_state(args.session_dir)
+            if not (st_ok and st is None):
+                sys.stdout.write(json.dumps({"ok": False, "reason": "fixer-vendor-not-fresh-state",
+                                             "value": args.fixer_vendor}) + "\n")
+                return 1
+            overrides["fixerVendor"] = fixer
         if args.verify_command is not None:
             overrides["verifyCommand"] = args.verify_command
         if args.max_rounds is not None:

@@ -11,10 +11,12 @@ Fail-closed synthesis fold (`loop_synthesis.py`) for the doc-loop acceptance pat
 `loop_synthesis.py` is the fail-closed judgment fold that turns a synthesis judge's per-finding
 keep/drop verdicts into a deterministic survivor set. It survives for **one** consumer: the
 **doc-loop acceptance path** (`acceptance_rereview.py --acceptance-only`, drop/downgrade-stripped).
-`round_driver.py` does **not** call `loop_synthesis` — its `_fold_synthesis` runs
-`verification.apply_verdicts` + `verification.merge_and_rank` (the #506 verification path). Any
-future eval surface that calls `loop_synthesis.consume` directly documents itself as such; it is
-never a `round_driver` callee.
+`round_driver.py` does **not** call `loop_synthesis` — it runs the #506 verification path across
+TWO folds: `_fold_verifiers` stages ids and applies verdicts (`verification.stage_ids` +
+`verification.apply_verdicts`), then `_fold_synthesis` groups same-root-cause survivors
+(`verification.merge_and_rank`) plus the author-justification post-filter. Any future eval surface
+that calls `loop_synthesis.consume` directly documents itself as such; it is never a `round_driver`
+callee.
 
 **Neither standalone `review-code` nor the native code panel runs this fold.** As of #506 the
 code auto-fix loop's keep/drop realness check — standalone `review-code` **and** the native
@@ -35,9 +37,10 @@ filters and **before** the verdict — so the verdict counts only the survivors:
   (`acceptance_rereview.py --acceptance-only`, drop/downgrade-stripped).
 
 The native code auto-fix loop — standalone `review-code` **and** the native eval/convergence panel
-driven by `round_driver.run_loop` — uses per-finding verification instead (`verification-pass.md`
-via `round_driver.py::_fold_synthesis` → `verification.apply_verdicts` + `merge_and_rank`), and the
-interactive doc reviews run no general keep/drop judge at all — see the Cross-surface section below.
+driven by `round_driver.run_loop` — uses per-finding verification instead (`verification-pass.md`:
+`round_driver.py::_fold_verifiers` runs `verification.stage_ids` + `verification.apply_verdicts`,
+then `_fold_synthesis` runs `verification.merge_and_rank`), and the interactive doc reviews run no
+general keep/drop judge at all — see the Cross-surface section below.
 
 ## The pass
 
@@ -138,7 +141,7 @@ a judge/consumer split must **stage a precomputed id and have the judge echo it 
 | Surface | Where the id is staged | Fold |
 | --- | --- | --- |
 | Standalone `review-code` | `stage_ids` assigns `v0..vN`; verifier echoes staged ids; synthesis groups survivors | `verification.apply_verdicts` + `verification.merge_and_rank` (contract: `verification-pass.md`); `loop_synthesis` remains only for the doc acceptance path |
-| Native code panel (`round_driver.run_loop`) | `round_driver.py::_fold_synthesis` stages ids | `verification.apply_verdicts` + `verification.merge_and_rank` (NOT `loop_synthesis`) |
+| Native code panel (`round_driver.run_loop`) | `round_driver.py::_fold_verifiers` stages ids (`verification.stage_ids`) | `verification.apply_verdicts` (in `_fold_verifiers`) + `verification.merge_and_rank` (in `_fold_synthesis`) — NOT `loop_synthesis` |
 | Doc-loop acceptance | id copied verbatim from `acceptance-candidates.json` | `lib/loop_synthesis.py::consume` via `acceptance_rereview.py --acceptance-only` |
 
 A verdict whose id matches no finding is **kept fail-closed AND disclosed loudly** in `unmatched`

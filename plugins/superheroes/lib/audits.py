@@ -35,12 +35,34 @@ def _valid_new_issues(candidates, origin_id):
     return out
 
 
-def apply_audit_results(audited, results):
+def _resolve_expected_auditor(fid, finding, expected_auditors):
+    """The TRUSTED independent-auditor selection for a target — the DRIVER's record, never the
+    result's own echo (#507 R2). Prefer the explicit `expected_auditors` map the driver passes
+    (round_driver._audit_targets); fall back to the target's driver-stamped `auditorVendor`. Returns
+    (expected_vendor_or_None, enforced): `enforced` is True whenever the driver supplied a provenance
+    signal (a map, or an auditorVendor on the target). When enforced but the expected vendor is falsy
+    (a target with NO recorded selection), a clearing ruling cannot prove independence → fail closed."""
+    if isinstance(expected_auditors, dict):
+        v = expected_auditors.get(fid)
+        return (v if isinstance(v, str) and v else None), True
+    v = finding.get("auditorVendor") if isinstance(finding, dict) else None
+    if isinstance(v, str) and v:
+        return v, True
+    return None, False
+
+
+def apply_audit_results(audited, results, expected_auditors=None):
     """Consume per-finding fix-audit rulings; fail-closed on ambiguity, silence, and malformation.
 
     `audited`  — findings already carrying a unique staged `id` (via verification.stage_ids)
                  plus file/line/title/severity.
     `results`  — audit-result dicts {id, ruling, reason, evidence?, newIssues?}.
+    `expected_auditors` — {finding_id: auditor_vendor} recorded by the DRIVER
+                 (round_driver._audit_targets) naming the SELECTED independent auditor per target. A
+                 clearing ruling is authenticated against THIS trusted map, NEVER the result's own
+                 echo; a target absent from it (no recorded selection) cannot be authenticated →
+                 not-discharged + disclosed. When None, the target's driver-stamped `auditorVendor`
+                 is the fallback signal; a target with neither is not provenance-enforced.
 
     Returns {audits, discharged, notDischarged, newIssues, unaudited, ambiguous, malformed,
     unmatched, unauthenticated}. Each `audits` entry carries the EFFECTIVE (post-fail-closed)
@@ -87,11 +109,12 @@ def apply_audit_results(audited, results):
         if r is not None and fid is not None:
             matched_ids.add(fid)
 
-        # The target names the SELECTED independent auditor vendor (round_driver._audit_targets). A
-        # clearing ruling that does not echo it cannot be trusted (it may come from the fixer or a
-        # misrouted worker) — fail closed. `base` also carries the recurrence class keys so the
-        # audit-stall breaker's alias-tolerant match sees a retitled-but-same-class stall (#507 v0).
-        expected_auditor = f.get("auditorVendor")
+        # The DRIVER records the SELECTED independent auditor vendor per target (round_driver.
+        # _audit_targets) and passes it here as trusted provenance. A clearing ruling is authenticated
+        # against THAT record — never the result's own claimant-controlled echo. `base` also carries
+        # the recurrence class keys so the audit-stall breaker's alias-tolerant match sees a
+        # retitled-but-same-class stall (#507 v0).
+        expected_auditor, provenance_enforced = _resolve_expected_auditor(fid, f, expected_auditors)
         base = {"id": fid, "file": f.get("file"), "title": f.get("title"),
                 "classKey": f.get("classKey"), "dimension": f.get("dimension"),
                 "taxonomy": f.get("taxonomy")}
@@ -118,11 +141,25 @@ def apply_audit_results(audited, results):
         has_reason = isinstance(reason, str) and bool(reason.strip())
         evidence = r.get("evidence")
 
-        # Provenance (trust-boundary): a ruling that CLEARS the finding must be echoed by the
-        # selected independent auditor. A missing or mismatched executor vendor → not-discharged +
-        # disclosed as `unauthenticated`; the validated auditor identity rides the audit entry.
-        if expected_auditor and ruling in ("discharged", "discharged-but-new-issue"):
+        # Provenance (trust-boundary): a ruling that CLEARS the finding is authenticated against the
+        # DRIVER-recorded selected auditor — NEVER the result's own echo. Two fail-closed rejections
+        # (each → not-discharged + disclosed as `unauthenticated`): a target with NO recorded auditor
+        # selection cannot prove independence at all; a result echoing anything OTHER than the recorded
+        # auditor may be the fixer or a misrouted worker. When authenticated, the recorded auditor is
+        # the TRUSTED driver value (not the claimant echo) — a matching echo authenticates nothing the
+        # driver's record did not already establish.
+        if provenance_enforced and ruling in ("discharged", "discharged-but-new-issue"):
             executor = r.get("auditorVendor")
+            if not expected_auditor:
+                if fid is not None:
+                    unauthenticated.append(fid)
+                    not_discharged.append(fid)
+                base.update(
+                    ruling="not-discharged",
+                    reason=("no independent auditor was recorded for this target — cannot prove the "
+                            "audit came from an independent auditor; treated as not-discharged"))
+                audits.append(base)
+                continue
             if not (isinstance(executor, str) and executor == expected_auditor):
                 if fid is not None:
                     unauthenticated.append(fid)
@@ -134,7 +171,7 @@ def apply_audit_results(audited, results):
                             % (expected_auditor, executor)))
                 audits.append(base)
                 continue
-            base["auditor"] = executor
+            base["auditor"] = expected_auditor
 
         if ruling == "discharged":
             if has_reason:

@@ -364,7 +364,7 @@ Runs when neither `--post` nor `--review-only` is set, and the profile's verify 
 
 **If context was compacted mid-loop**, re-read `$SESSION_DIR/meta.json`, `$SESSION_DIR/loop-state.json`, and `$SESSION_DIR/driver-journal.jsonl`. Resume by calling `next` — a pending step re-emits idempotently.
 
-**Bootstrap.** `mkdir -p $SESSION_DIR/round-1`. Regenerate the diff: `git diff "$BASE_REF"...HEAD > $SESSION_DIR/round-1/diff.txt` (size with `wc -l` only). First `next` seeds state. Pass **`--vendors`** — the live reviewer/fixer vendors, either a JSON list (`["codex","cursor"]`) or a comma-separated string (`codex,cursor`) — so the driver can seat a **different** auditor vendor for each fix (independent audit). An unparseable value, an unknown vendor, or `--vendors` on non-fresh state **fails loud** (nonzero exit + `{"ok": false, "reason": ...}`) — it never falls through to a silent default. **Omitting `--vendors` degrades every run to the single vendor `["claude"]`:** the audit still runs but independence is **lost** and every terminal is stamped `-degraded` (e.g. `audited-chain-degraded`) — reserve that only for an environment that genuinely has one usable vendor. In PR mode also pass **`--prior-comments`** (the author-justification post-filter reads it; ignored when the file is absent):
+**Bootstrap.** `mkdir -p $SESSION_DIR/round-1`. Regenerate the diff: `git diff "$BASE_REF"...HEAD > $SESSION_DIR/round-1/diff.txt` (size with `wc -l` only). First `next` seeds state. Pass **`--vendors`** — the live reviewer/fixer vendors, either a JSON list (`["codex","cursor"]`) or a comma-separated string (`codex,cursor`) — so the driver can seat a **different** auditor vendor for each fix (independent audit). Also pass **`--fixer-vendor`** — the **actual** fix-implementer vendor (`$IMPL_ENGINE` from the calibration / engine resolution) — so the auditor is seated as a **different** vendor than the one that fixed; omitting it leaves the fixer defaulting to `claude`, which mislabels a `codex`-fixed → `codex`-audited run as independent. An unparseable value, an unknown vendor, or either flag on non-fresh state **fails loud** (nonzero exit + `{"ok": false, "reason": ...}`) — never a silent default. **Omitting `--vendors` degrades every run to the single vendor `["claude"]`:** the audit still runs but independence is **lost** and every terminal is stamped `-degraded` (e.g. `audited-chain-degraded`) — reserve that only for an environment that genuinely has one usable vendor. In PR mode also pass **`--prior-comments`** (the author-justification post-filter reads it; ignored when the file is absent):
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -376,6 +376,7 @@ python3 "$ROOT_DIR/lib/round_driver.py" next \
   --diff-path "$SESSION_DIR/round-1/diff.txt" \
   --verify-command "${VERIFY_CMD:-none}" \
   --vendors "$VENDORS" \
+  --fixer-vendor "$IMPL_ENGINE" \
   --prior-comments "$SESSION_DIR/prior-comments.json" \
   --max-rounds 7
 ```

@@ -158,8 +158,20 @@ def split_fix_surface(reviewed_diff_text, head_diff_text, fix_batch):
     for file in set(reviewed) | set(head):
         if reviewed.get(file) == head.get(file):
             continue  # section unchanged between the two diffs → the fix did not touch it
+        head_hunks = head.get(file) or []
+        if not head_hunks and (reviewed.get(file) or []):
+            # The file was present in the reviewed diff but has NO hunks on the head side — the fix
+            # REMOVED (or fully reverted) it between the reviewed and head diffs. A whole-file removal
+            # has no head content to attribute to a fixed line, so it would otherwise vanish from BOTH
+            # maps and escape audit AND scoped review (a deleted guard ships unseen). Fail closed into
+            # `newSurface` as an explicit removal marker the scoped finder MUST scan — fresh eyes see
+            # every deletion (#507 R2 v0). Never dropped from both surfaces.
+            new_surface.setdefault(file, []).append(
+                {"start": 0, "end": 0, "removed": True,
+                 "text": "@@ file removed between the reviewed and head diffs @@"})
+            continue
         file_locs = locs.get(file) or []
-        for hunk in head.get(file) or []:
+        for hunk in head_hunks:
             if _overlaps(hunk, file_locs):
                 audit_targets.setdefault(file, []).append(hunk)
             else:

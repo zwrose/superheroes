@@ -139,6 +139,38 @@ def test_split_new_file_touched_only_in_head():
     assert [h["start"] for h in out["newSurface"]["g.py"]] == [1]
 
 
+# --- split_fix_surface: file removal → fail-closed into new surface -----------
+
+def test_split_file_removed_between_reviewed_and_head_is_new_surface():
+    """#507 R2 v0: a file present in the reviewed diff but ABSENT from the head diff was removed
+    (or fully reverted) by the fix. It has no head hunks, so it would otherwise vanish from BOTH
+    surfaces and escape audit AND scoped review. It fails closed into `newSurface` as a removal
+    marker the scoped finder must scan — a deleted guard is never invisible."""
+    reviewed = mk_diff([("evil.py", "@@ -1,2 +1,2 @@\n-a\n+b"),
+                        ("fixed.py", "@@ -1 +100,1 @@\n-old\n+new")])
+    # head: evil.py gone; only the audited hunk over fixed.py line 100 remains
+    head = mk_diff([("fixed.py", "@@ -1 +100,1 @@\n-old\n+patched")])
+    fix_batch = [{"file": "fixed.py", "line": 100, "title": "t", "severity": "Important"}]
+    out = split_fix_surface(reviewed, head, fix_batch)
+    assert out["unknown"] is False
+    # the audited hunk stays an audit target
+    assert [h["start"] for h in out["auditTargets"]["fixed.py"]] == [100]
+    # the removed file rides new surface (non-empty → the driver dispatches the scoped finder)
+    assert "evil.py" in out["newSurface"]
+    assert out["newSurface"]["evil.py"][0]["removed"] is True
+
+
+def test_split_file_removed_when_only_non_overlap_change():
+    """The regression exactly: the ONLY non-overlap change is a whole-file removal. `newSurface`
+    must be non-empty so the driver never skips the scoped finder over the vanished path."""
+    reviewed = mk_diff([("evil.py", "@@ -1,2 +1,2 @@\n-a\n+b"),
+                        ("fixed.py", "@@ -1 +100,1 @@\n-old\n+new")])
+    head = mk_diff([("fixed.py", "@@ -1 +100,1 @@\n-old\n+patched")])
+    fix_batch = [{"file": "fixed.py", "line": 100, "title": "t", "severity": "Important"}]
+    out = split_fix_surface(reviewed, head, fix_batch)
+    assert out["newSurface"], "a whole-file removal must never leave an empty new surface"
+
+
 # --- split_fix_surface: fail-closed unknown -----------------------------------
 
 def test_split_unknown_on_bad_reviewed_diff():

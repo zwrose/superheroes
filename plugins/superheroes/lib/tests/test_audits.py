@@ -176,6 +176,58 @@ def test_idless_finding_is_kept_not_discharged():
     assert out["audits"][0]["id"] is None
 
 
+# --- provenance: authenticate against the DRIVER-recorded auditor, not the echo ----
+
+def test_expected_auditors_map_authenticates_and_records_trusted_value():
+    """#507 R2: with the driver-passed `expected_auditors` map, a clearing ruling is authenticated
+    against the RECORDED selection and the audit entry records THAT trusted vendor — never the
+    result's own echo. A matching echo passes; the recorded `auditor` is the driver's value."""
+    out = apply_audit_results(
+        [finding("v0")],
+        [{"id": "v0", "ruling": "discharged", "reason": "verified", "auditorVendor": "codex"}],
+        expected_auditors={"v0": "codex"})
+    assert out["discharged"] == ["v0"]
+    assert out["unauthenticated"] == []
+    assert _audit_by_id(out, "v0")["auditor"] == "codex"
+
+
+def test_expected_auditors_map_rejects_mismatched_echo():
+    """A result echoing a DIFFERENT vendor than the driver recorded (a misrouted worker or the
+    fixer) is rejected as not-discharged + unauthenticated — the echo never authenticates itself."""
+    out = apply_audit_results(
+        [finding("v0")],
+        [{"id": "v0", "ruling": "discharged", "reason": "trust me", "auditorVendor": "claude"}],
+        expected_auditors={"v0": "codex"})
+    assert out["discharged"] == []
+    assert out["notDischarged"] == ["v0"]
+    assert out["unauthenticated"] == ["v0"]
+
+
+def test_target_with_no_recorded_selection_cannot_discharge():
+    """#507 R2 residual: a clearing ruling on a target with NO recorded independent-auditor
+    selection (absent from the driver map, and no auditorVendor on the target) cannot prove
+    independence — fail closed to not-discharged + unauthenticated, even if the result echoes a
+    vendor. Previously the missing selection SKIPPED the provenance check (fail-open)."""
+    target = {"id": "v0", "file": "f.py", "line": 1, "title": "bug", "severity": "Important"}
+    out = apply_audit_results(
+        [target],
+        [{"id": "v0", "ruling": "discharged", "reason": "verified", "auditorVendor": "codex"}],
+        expected_auditors={})  # driver enforced provenance, but no selection for v0
+    assert out["discharged"] == []
+    assert out["notDischarged"] == ["v0"]
+    assert out["unauthenticated"] == ["v0"]
+
+
+def test_no_provenance_signal_preserves_library_accounting():
+    """With NEITHER an expected_auditors map NOR a target auditorVendor, provenance is not enforced
+    (the pure discharge-accounting library shape) — a discharge is honored as before."""
+    out = apply_audit_results(
+        [finding("v0")],
+        [{"id": "v0", "ruling": "discharged", "reason": "verified"}])
+    assert out["discharged"] == ["v0"]
+    assert out["unauthenticated"] == []
+
+
 # --- multiple findings, mixed rulings, partition completeness -----------------
 
 def test_mixed_batch_partition():

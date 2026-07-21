@@ -795,6 +795,198 @@ def test_audit_round_outcomes_carry_class_keys_for_alias_stall(tmp_path):
     assert brk["halt"] and brk["reason"] == "audit-stall", brk
 
 
+def test_audit_outcome_carries_title_so_distinct_classkeys_dont_false_stall(tmp_path):
+    """#507 R2 v2: two DISTINCT classKeys that share dimension+taxonomy must NOT collide into a
+    false audit-stall. The live outcome now carries `title`, so the breaker's canonical class key is
+    the full `dim::tax::title`, not the title-less `dim::tax::` alias that merged unrelated findings."""
+    import circuit_breaker as CB
+
+    def fold(title, classkey):
+        state = RD.new_state(_cfg())
+        state["fixBatch"] = [{"title": title, "severity": "Important", "file": "f.py", "line": 1,
+                              "dimension": "Security", "taxonomy": "CWE-401", "classKey": classkey}]
+        state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
+        tgt = state["_auditTargets"][0]
+        RD._fold_audits(state, state["config"], {"results": [
+            {"id": tgt["id"], "ruling": "not-discharged", "reason": "still broken"}]})
+        return state["auditRounds"][-1]
+
+    r1 = fold("secret a", "Security::CWE-401::secret a")
+    assert r1["outcomes"][0]["title"] == "secret a"
+    r2 = {"round": 2, "outcomes": fold("secret b", "Security::CWE-401::secret b")["outcomes"]}
+    brk = CB.check_audit_breaker([r1, r2], 20)
+    assert not brk["halt"], brk  # two distinct classKeys → NOT a stall
+
+
+def test_omitted_seat_zero_finding_withholds_certification(tmp_path):
+    """#507 R2 residual-1: an omitted panel seat with ZERO findings must WITHHOLD certification — an
+    incomplete panel is 'we did not look', never a clean audited-chain. The converge parks."""
+    def reviewer(dim, tier, rnd, ctx):
+        return None if dim == "premortem-reviewer" else []
+
+    receipt = RD.run_loop(_seams(reviewer=reviewer), _cfg())
+    assert receipt["verdict"] == "cannot-certify"
+    assert receipt["certificationShape"] is None
+
+
+def test_incomplete_panel_flag_cleared_by_complete_panel():
+    """The outstanding-coverage-gap flag arms on an incomplete panel and is CLEARED only when a
+    complete panel re-establishes coverage (a scoped delta leaves it untouched)."""
+    state = RD.new_state(_cfg())
+    RD._fold_panel(state, state["config"], {"seats": {
+        d: {"findings": []} for d in RD.DIMENSIONS if d != "premortem-reviewer"}})
+    assert state["_incompletePanel"] is True
+    state["round"] = 3
+    RD._fold_panel(state, state["config"], {"seats": {d: {"findings": []} for d in RD.DIMENSIONS}})
+    assert state["_incompletePanel"] is False
+
+
+def test_verify_skip_with_configured_command_halts(tmp_path):
+    """#507 R2 residual-2: a skip result while a REAL verify command is configured means the gate
+    did NOT run — fail closed to halt, never advance unverified into a round that could certify."""
+    receipt = RD.run_loop(_seams(
+        reviewer=lambda dim, tier, rnd, ctx:
+            ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+             if rnd == 1 and dim == "code-reviewer" else []),
+        verify_runner=lambda cmd, rnd: "skipped"), _cfg(verifyCommand="pytest -q"))
+    assert receipt["verdict"] == "halted"
+    assert receipt["certificationShape"] is None
+
+
+def test_verify_skip_with_no_command_still_advances(tmp_path):
+    """A skip result with NO verify command configured is a legitimate unverified advance."""
+    receipt = RD.run_loop(_seams(
+        reviewer=lambda dim, tier, rnd, ctx:
+            ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+             if rnd == 1 and dim == "code-reviewer" else []),
+        verify_runner=lambda cmd, rnd: "none"), _cfg(verifyCommand="none"))
+    assert receipt["verdict"] == "converged"
+
+
+def test_new_blocker_does_not_drop_unresolved_target_at_different_line():
+    """#507 R2 residual-3: a new blocker sharing a not-discharged target's file+title at a DIFFERENT
+    line is a distinct finding — the union keys on (identity, line), so the unresolved target is
+    NEVER dropped when the new blocker has the same line-less identity."""
+    state = RD.new_state(_cfg())
+    state["round"] = 2
+    state["_auditTargets"] = [{"id": "f.py::same bug", "file": "f.py", "line": 1,
+                               "title": "same bug", "severity": "Important"}]
+    state["_auditOutcome"] = {"notDischarged": ["f.py::same bug"], "discharged": []}
+    state["auditRounds"] = [{"round": 2, "outcomes": [
+        {"identity": "f.py::same bug", "ruling": "not-discharged"}]}]
+    state["findings"] = [{"title": "same bug", "severity": "Important", "file": "f.py", "line": 2}]
+    RD._settle_delta(state, state["config"])
+    assert state["step"] == RD.P_FIXER
+    assert sorted(b.get("line") for b in state["_fixBatch"]) == [1, 2]
+
+
+def test_journal_append_records_fault_on_oserror(tmp_path):
+    """#507 R2 residual-4: a journal append failure is NOT swallowed — it records a durable fault
+    marker (the driver's ran-evidence lost an entry)."""
+    d = str(tmp_path)
+    os.mkdir(os.path.join(d, RD.JOURNAL_FILE))  # a dir where the file should be → append OSErrors
+    RD._journal_append(d, {"cmd": "next", "phase": "dispatch-panel"})
+    assert RD._journal_faulted(d) is True
+
+
+def test_journal_fault_makes_finalize_park(tmp_path):
+    """A recorded journal fault makes finalization fail closed (park) — the scriptRan evidence is
+    incomplete, so the terminal never certifies over a partial-journal gap."""
+    d = str(tmp_path)
+    _drive_cli(d, _cfg(), _responder(round1_findings=None))  # a real terminal + valid receipt
+    RD._mark_journal_fault(d, {"cmd": "submit", "phase": "run-verify"}, OSError("disk full"))
+    ok, state = RD.load_state(d)
+    fail = RD._finalize_receipt(d, state)
+    assert fail and "journal" in fail and "park" in fail
+
+
+def test_changed_subjects_accumulate_across_delta_rounds_for_crosscut():
+    """#507 R2 residual-5: cross-cutting rework accumulates across MULTIPLE post-panel delta fixes.
+    Three delta fixes of one subject each cumulate to 3 distinct subjects → cross-cutting, even
+    though no single fix is broad (the latest-only read under-fired)."""
+    import review_round_policy as RRP
+    state = RD.new_state(_cfg())
+    RD._fold_panel(state, state["config"], {"seats": {d: {"findings": []} for d in RD.DIMENSIONS}})
+    assert state["_changedSubjectsSincePanel"] == []
+    for subj in (["Security"], ["Code"], ["Test"]):
+        state["round"] = 2
+        RD._fold_fixer(state, state["config"], {"fixes": [], "headDiff": HEAD},
+                       lambda r, h, a, _s=subj: _s)
+    assert sorted(state["_changedSubjectsSincePanel"]) == ["Code", "Security", "Test"]
+    assert RRP.is_cross_cutting(state["_changedSubjectsSincePanel"]) is True
+
+
+def test_panel_resets_accumulator_and_baseline_fix_excluded():
+    """A full panel resets the cross-cutting accumulator (a broad fix BEFORE it does not count as the
+    panel's rework), and a round-1 BASELINE fix never accumulates (it is not confirmation rework)."""
+    # a broad ROUND-1 baseline fix is excluded
+    state = RD.new_state(_cfg())
+    RD._fold_panel(state, state["config"], {"seats": {d: {"findings": []} for d in RD.DIMENSIONS}})
+    state["round"] = 1
+    RD._fold_fixer(state, state["config"], {"fixes": [], "headDiff": HEAD},
+                   lambda r, h, a: ["Code", "Security", "Test"])
+    assert state["_changedSubjectsSincePanel"] == []
+    # a broad delta fix accumulates, then a later panel resets it
+    state["round"] = 2
+    RD._fold_fixer(state, state["config"], {"fixes": [], "headDiff": HEAD},
+                   lambda r, h, a: ["Code", "Security", "Test"])
+    assert sorted(state["_changedSubjectsSincePanel"]) == ["Code", "Security", "Test"]
+    state["round"] = 3
+    RD._fold_panel(state, state["config"], {"seats": {d: {"findings": []} for d in RD.DIMENSIONS}})
+    assert state["_changedSubjectsSincePanel"] == []
+
+
+def test_fold_audits_authenticates_against_recorded_auditor(tmp_path):
+    """#507 R2 residual-6: _fold_audits passes the DRIVER-recorded auditor map, so a clearing result
+    echoing the FIXER vendor (a self-audit) is rejected not-discharged — the claimant echo never
+    authenticates, and the recorded auditor is the trusted driver value."""
+    state = RD.new_state(_cfg())  # vendors claude+codex, fixer claude → the auditor is codex
+    state["round"] = 2
+    state["fixBatch"] = [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]
+    state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
+    tgt = state["_auditTargets"][0]
+    assert tgt["auditorVendor"] == "codex"
+    RD._fold_audits(state, state["config"], {"results": [
+        {"id": tgt["id"], "ruling": "discharged", "reason": "self-clear",
+         "auditorVendor": "claude"}]})  # echoes the FIXER, not the recorded codex
+    assert state["_auditOutcome"]["unauthenticated"] == [tgt["id"]]
+    assert state["_auditOutcome"]["discharged"] == []
+
+
+def test_judgment_dispositions_distinct_for_same_title_different_lines():
+    """#507 R2 v5: two same-title tradeoff blockers at DIFFERENT lines get DISTINCT disposition ids,
+    so a skip for the one never collides onto the other (the line-less id collapsed them)."""
+    a = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 10,
+         "tradeoff": True}
+    b = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 20,
+         "tradeoff": True}
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [dict(a), dict(b)])
+    step = RD._advance(state, state["config"])
+    ids = [f["id"] for f in step["payload"]["findings"]]
+    assert len(set(ids)) == 2, ids
+    id_a, id_b = ids
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": id_a, "disposition": "fix-as-suggested"},
+        {"id": id_b, "disposition": "skip", "reason": "defer the line-20 choice"}]})
+    assert state["step"] == RD.P_FIXER
+    assert [f["line"] for f in state["_fixBatch"]] == [10]
+    assert [s["line"] for s in state["_skippedBlockers"]] == [20]
+
+
+def test_fixer_vendor_flag_rejects_unknown_and_wires_fresh(tmp_path):
+    """#507 R2 v4: --fixer-vendor sets the ACTUAL fixer so the auditor is seated as a DIFFERENT
+    vendor. An unknown vendor or a non-fresh state fails loud (nonzero), never a silent default."""
+    d = str(tmp_path)
+    assert RD.main(["next", "--session-dir", d, "--fixer-vendor", "nope"]) == 1
+    assert RD.main(["next", "--session-dir", d, "--fixer-vendor", "codex",
+                    "--vendors", "codex,cursor"]) == 0
+    ok, state = RD.load_state(d)
+    assert ok and state["config"]["fixerVendor"] == "codex"
+    # non-fresh: a later --fixer-vendor cannot take effect → rejected loud
+    assert RD.main(["next", "--session-dir", d, "--fixer-vendor", "cursor"]) == 1
+
+
 def test_receipt_missing_seat_surfaces_unverified(tmp_path):
     def reviewer(dim, tier, rnd, ctx):
         if rnd == 1 and dim == "security-reviewer":
@@ -1264,7 +1456,9 @@ def test_fixer_outside_pool_audits_independent_end_to_end(tmp_path):
 
 _TRADEOFF = {"title": "widen the API", "severity": "Important",
              "file": "f.py", "line": 1, "tradeoff": True}
-_TRADEOFF_ID = "f.py::widen the api"
+# The judgment disposition key is the per-LOCATION id (line-less finding_identity + line) so two
+# same-title tradeoff blockers at different lines never collide (#507 R2 v5).
+_TRADEOFF_ID = "f.py::widen the api@L1"
 
 
 def test_tradeoff_blocker_routes_to_judgment_not_stall():
@@ -1367,7 +1561,7 @@ def test_partial_skip_end_to_end_marks_clean_except_skipped(tmp_path):
     def judgment_gate(payload):
         out = []
         for f in payload["findings"]:
-            if f["id"] == "f.py::widen the api":
+            if f["id"] == "f.py::widen the api@L1":
                 out.append({"id": f["id"], "disposition": "fix-as-suggested"})
             else:
                 out.append({"id": f["id"], "disposition": "skip", "reason": "deferred to v2"})
