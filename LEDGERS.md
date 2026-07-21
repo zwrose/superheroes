@@ -21,16 +21,17 @@ execution spine, and with it the four divergences this ledger tracked — record
 below as B6 requires (a divergence that retires leaves its record, not a blank). No
 maintained spine divergence remains. A new, non-spine divergence is now maintained: the
 restored owner-authority gate (issue #482, §1.1 below) — a minimal PreToolUse hook,
-distinct from (and much smaller than) the retired enforcer it partially recreates. The
-remaining known bespoke surface — review-code's multi-model review panel — gets its own
-entry here via issue #513 (filed 2026-07-20 from the ratified #474 design, the S2
-Review-Crew-v2 lane); it is a fresh B6 analysis, not authored on the spine's exit.
+distinct from (and much smaller than) the retired enforcer it partially recreates. A
+second maintained divergence now has its entry in §1.1: review-code's multi-model review
+panel (issue #513, from the ratified #474 design, the S2 Review-Crew-v2 lane) — a fresh
+B6 analysis, not authored on the spine's exit.
 
 ### 1.1 Maintained divergences
 
 | Mechanism | Platform primitive that could absorb it | Why we still diverge | Re-check trigger |
 |---|---|---|---|
 | **Owner-authority gate (minimal PreToolUse Bash hook, issue #482)** — emits a native `ask` on the enumerated merge/release/publish/force-push/push-to-default set, scoped to superheroes-calibrated projects; the never-merge floor as a mechanical tripwire behind the covenant's hardest line | Plugin-shippable native permission rules — a plugin able to ship declarative deny/ask permission sets (the platform's permission model does not today let a plugin ship an owner-authority ask set; it must be a hook) | No plugin-shippable permission-rule primitive exists yet, so the floor must be a bespoke PreToolUse hook; owner policy requires an owner-named risk (never-merge) to have a mechanical tripwire, not prose alone (PHILOSOPHY B6) | Claude Code ships plugin-shippable native permission rules (declarative deny/ask sets a plugin can carry) → move the gate onto the primitive and retire the hook |
+| **Multi-model review panel (review-code's multi-model review loop)** — the five-lens cross-vendor panel + fix loop + durable receipts, shipped as the review-code v2 arc (#505–#513, design #474) | Anthropic's upstream code-review surfaces — the public code-review plugin and the built-in `/code-review` skill. The #474 design deliberately adopted three of their patterns where they CONVERGED with ours: per-finding verification with a CONFIRMED/PLAUSIBLE/REFUTED verdict ladder requiring quoted evidence, an explicit do-not-flag list, and a no-silent-drops final merge | Four capabilities the upstream surfaces lack: multi-round fix loops with fresh-eyes fix audits, cross-vendor seats (family-keyed independence), durable receipts posted on the PR, and owner-facing stall/park handling. These are the product's spine — PHILOSOPHY promises 4/6 — not incidental extras a single-pass code-review skill could stand in for | An upstream release absorbing ANY of those four capabilities → re-walk this row (the orientation review, #318, owns the cadence). Logged: the upstream low/medium/high effort-cells mechanic was evaluated and DEFERRED as adoptable-later (#474 position 14) — delta rounds fixed the cost curve instead |
 | **Dangling-citation validator (`lib/citation_validator.py`, issue #517)** — a deterministic existence check of a spec's `[cite: …]` provenance markers (cited path resolves, and its anchor text occurs in that file; fail-closed), invoked by `review-spec`'s compile step; the #205 fabricated-fact class made mechanically catchable | None today — no platform primitive validates a doc's internal repo citations (and per the §2 "no plugin-owned enforcement" bar this stays advisory analysis, not enforcement) | It is an **advisory review-seat finding producer** inside an owner-gated review (never blocks, never writes `passed`), so it is neither a new standing honesty/grounding gate (§2 "No new honesty/grounding gates…") nor plugin-owned enforcement machinery (§2 "No plugin-owned enforcement machinery"); owner-ratified #514 D3 (2026-07-20) against the #205 fabricated-fact corpus | A platform (or owner-toolchain) doc-citation/link validator that resolves repo paths lands, OR the dispatched Grounding seat's judgment (wired in the lens-recast issue #514 D1) subsumes the deterministic check |
 
 ### 1.2 Retired divergences (record kept per B6)
@@ -100,8 +101,13 @@ stated unlock condition is met — cite this ledger instead of re-arguing.
   on/off) — pick once, deliberately. *(An owner-declared degradation **policy** is
   calibration — an owner trade under promise 5 — not an implementation hedge; that
   distinction was ruled in its issue, not here.)*
-- **Backlog/TPM hero (#27–#31) + queue controller (#22).** Hold behind demonstrated
-  multi-item queue pain; evaluate the pair together when it arrives.
+- **No queue machinery ahead of the build-dispatch discovery (#526).** The
+  multi-item pain the old backlog/TPM-hero + queue-controller cluster (#27–#31, #22)
+  waited on arrived — the 2026-07-20/21 multi-build waves — and the owner ruled
+  2026-07-21 that the cluster is superseded: the advisor absorbed the TPM role, and the
+  remaining launcher question is now the build-dispatch discovery **#526**. No queue
+  machinery gets built before #526's discovery concludes and B7's evidence bar is met;
+  cite #526 instead of re-proposing the pair.
 - **Nothing already shipped gets rebuilt** because a session forgot it exists — check
   the store, the CHANGELOG, and the Project first.
 

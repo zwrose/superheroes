@@ -9,7 +9,10 @@ project profile at `.claude/review-profile.md`; **conventions** live in the
 project's `CLAUDE.md`. If a review finding contradicts this file, this file wins.
 
 `rubric-version` (top of file) is the staleness signal for "the rubric changed";
-bump it on any semantic change here.
+bump it on a semantic change to **this file's own stated scope** — severity,
+verification rules, findings format, triage, or verdicts. **Additively extending
+the Dimensions data list with a new lens label is NOT a version-bumping change** — it
+adds a data entry, not a rule, and no *project calibration* changed.
 
 ## Calibration comes from the profile (not baked in here)
 
@@ -94,15 +97,17 @@ is the one authoritative schema; agents must not redefine the fields inline.
 
 **Dimensions** (the orchestrator reads this list; it is data, not hard-wired —
 adding one later is a single-place change): `Architecture`, `Code`, `Security`,
-`Test`, `Failure-Mode`, `Grounding`. The **first five** are the dispatched default
-crew; each dispatching skill names the subset it runs. The dispatching skill assigns
-each dispatched agent its dimension and its `id` prefix; the default crew runs one
-agent per dimension (e.g. the Security reviewer emits `security-001`, …; the
-Failure-Mode reviewer emits `premortem-001`, …) — **five agents dispatch**.
-`Grounding` is the **deterministic/validator dimension**: its findings come from
-`citation_validator.py`'s output merged at the review-spec compile step, not from a
-dispatched reviewer. Its dispatched reviewer seat is **deferred to the lens-recast
-issue (#514 D1)**, so `Grounding` is NOT one of the dispatched default crew yet.
+`Test`, `Failure-Mode`, `Clarity`, `Verifiability`, `Coherence`, `Safety-access`,
+`Grounding`. The crew carries **two label sets drawn from the same reviewer
+agents**: a **code-leg** set (`Architecture`, `Code`, `Security`, `Test`,
+`Failure-Mode`) that `/superheroes:review-code` and `/superheroes:audit-debt`
+dispatch, and a **doc-native spec-leg** set (`Clarity`, `Verifiability`,
+`Coherence`, `Safety-access`, `Failure-Mode`, `Grounding`) that
+`/superheroes:review-spec` dispatches — the five shared reviewers reframed to
+requirements quality, plus `Grounding`, a spec-only seat with no review-code agent.
+Each dispatching skill names the subset it runs and assigns each agent its dimension
+and its `id` prefix; a leg runs one agent per dimension (e.g. the Security reviewer
+emits `security-001`, …; the Failure-Mode reviewer emits `premortem-001`, …).
 
 ## Severity caps
 
