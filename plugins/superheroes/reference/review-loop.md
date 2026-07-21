@@ -60,7 +60,7 @@ The staleness nudge, the learning-loop proposal, and the provisional-profile con
 
 ## Convergent Shared Review Loop
 
-Round 1 is always a full `reviewer-deep` panel. Intermediate rounds may skip only dimensions with a high-confidence clean result whose subject area was not touched; unknown subject impact runs all dimensions. Intermediate run dimensions start at `reviewer` and escalate to `reviewer-deep` whenever the result is missing or low-confidence.
+Round 1 is always a full `reviewer-deep` panel. Intermediate rounds may skip only dimensions with a high-confidence clean result whose subject area was not touched; unknown subject impact runs all dimensions. Intermediate run dimensions start at `reviewer` and escalate to `reviewer-deep` whenever the result is missing or unparseable (transport failure).
 
 Recurring blocking classes are detected from durable round memory and passed only to the reviser/fix step as `generalizeRequired`. Reviewers never receive prior-round finding lists. Any dismissal or class-covering principle is recorded as a visible coverage decision and is passed to every later reviewer as a challengeable claim.
 

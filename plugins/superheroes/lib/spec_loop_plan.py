@@ -19,18 +19,16 @@ What it adds is the evidence plumbing the prose path was missing:
   - **Executed-evidence gate.** When a dimension is scheduled to run, its previous
     `findings-*.json` is archived first; only a file written after that counts. A
     prompt-dropped agent that burned no tokens leaves no fresh file, so its stale "clean"
-    can never license a skip (the 2026-07-03 zero-token-stub class). Dimension confidence
-    is derived from the findings JSON shape (the spine's legacy-array rule: an array is
-    high-confidence unless it is a non-empty `reviewer`-tier result), never from prose.
+    can never license a skip (the 2026-07-03 zero-token-stub class). A valid findings file
+    (any shape or tier) is high-confidence; only a missing or unparseable (transport)
+    result fails.
   - **Changed surface from the script's own snapshots.** Each round's spec copy is
     snapshotted (`spec-r<N>.md`); the changed surface for round N+1 is the diff of the
     script's snapshots — section headings whose text differs — never the reviser's
     self-report (#158's lesson: derive the surface from what actually changed). Any
     diff/shape failure yields "unknown" → run-all.
-  - **Escalation semantic (#145).** A low-confidence `reviewer` result escalates ONCE to
-    `reviewer-deep`; a missing/malformed result retries ONCE at `reviewer-deep`; after
-    that it is recorded as missing (low confidence) — never a loop, and a low-confidence
-    executed result stays recorded.
+  - **Escalation semantic (#145).** A missing/unparseable result retries ONCE at
+    `reviewer-deep`; after that it is recorded as missing — never a loop.
   - **Confirmation invariant.** `exit_clean`/`exit_skipped` are honored only off a round
     whose every dimension ran fresh at `reviewer-deep` with high confidence; otherwise one
     full-deep confirmation round is scheduled (that bound is what makes cheap skips safe).
@@ -259,14 +257,13 @@ def cmd_record(session_dir, round_no, dimensions):
         already = bool(escalations.get(d))
         tier = DEEP if already else (sched.get("tier") or DEEP)
         result = _read_findings(session_dir, d, tier)
-        needs_more = (not result["valid"]) or (tier == CHEAP and result["confidence"] != "high")
+        needs_more = not result["valid"]
         if needs_more and not already:
-            # one escalation/retry at reviewer-deep — archive the low/invalid result so
+            # one escalation/retry at reviewer-deep — archive the invalid result so
             # only a freshly-written file can count as the deep answer
             escalations[d] = {"from": tier}
-            _archive_findings(session_dir, d, round_no,
-                              tag="cheap" if tier == CHEAP else "retry")
-            why = result.get("why") or ("low-confidence %s result" % CHEAP)
+            _archive_findings(session_dir, d, round_no, tag="retry")
+            why = result.get("why")
             escalate.append({"dimension": d, "tier": DEEP,
                              "reason": "%s — re-dispatch once at %s" % (why, DEEP)})
             dims[d] = {"dimension": d, "status": "escalation-pending", "round": round_no}

@@ -7,8 +7,8 @@ by the orchestrator. These tests pin:
   - delegation to the parity-locked shared policy (`review_round_policy.plan_round`) so the
     prose path and the spine share ONE scheduler implementation;
   - the executed-evidence gate (a stale or missing findings file never counts as clean);
-  - the escalation semantic (cheap low-confidence escalates ONCE to deep; a deep receipt
-    miss retries ONCE; low-confidence results stay recorded as executed);
+  - the escalation semantic (a missing/malformed findings file escalates ONCE to deep; a deep receipt
+    miss retries ONCE; transport failures stay recorded as missing);
   - the changed-surface derivation (diff of the script's own per-round spec snapshots,
     never the reviser's self-report; any failure → run-all);
   - the full reviewer-deep confirmation round before any exit;
@@ -207,15 +207,26 @@ def test_non_dict_findings_entry_is_receipt_miss(tmp_path, capsys):
     assert [e["dimension"] for e in first["escalate"]] == ["architecture-reviewer"]
 
 
-def test_invalid_object_confidence_is_receipt_miss(tmp_path, capsys):
+def _patch_dim_confidence(session_dir, round_no, dim, confidence):
+    path = os.path.join(session_dir, "loop-state.json")
+    with open(path, encoding="utf-8") as fh:
+        state = json.load(fh)
+    state["rounds"][str(round_no)]["dims"][dim]["confidence"] = confidence
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(state, fh)
+
+
+def test_invalid_object_confidence_is_ignored(tmp_path, capsys):
     session_dir = _session(tmp_path)
     _plan(capsys, session_dir, 1)
     for dim in DIMS[1:]:
         _write_findings(session_dir, dim, [])
     _write_findings(session_dir, "architecture-reviewer",
                     {"confidence": "maybe", "findings": []})
-    first = _record(capsys, session_dir, 1)
-    assert [e["dimension"] for e in first["escalate"]] == ["architecture-reviewer"]
+    rec = _record(capsys, session_dir, 1)
+    assert rec["escalate"] == []
+    d = rec["dimensions"]["architecture-reviewer"]
+    assert d["status"] == "run" and d["confidence"] == "high"
 
 
 def test_record_accepts_structured_object_shape(tmp_path, capsys):
@@ -232,7 +243,7 @@ def test_record_accepts_structured_object_shape(tmp_path, capsys):
     assert d["blockingCount"] == 1
 
 
-def test_deep_low_confidence_result_forces_confirmation(tmp_path, capsys):
+def test_object_wrapper_confidence_is_ignored(tmp_path, capsys):
     session_dir = _session(tmp_path)
     _plan(capsys, session_dir, 1)
     for dim in DIMS[1:]:
@@ -242,15 +253,15 @@ def test_deep_low_confidence_result_forces_confirmation(tmp_path, capsys):
     rec = _record(capsys, session_dir, 1)
     assert rec["escalate"] == []
     d = rec["dimensions"]["architecture-reviewer"]
-    assert d["status"] == "run" and d["confidence"] == "low"
+    assert d["status"] == "run" and d["confidence"] == "high"
     _write_compiled(session_dir, [])
     out = _decide(capsys, session_dir, 1)
-    assert out["action"] == "review" and out["roundKind"] == "confirmation"
+    assert out["action"] == "exit_clean"
 
 
 def test_plan_overlays_pending_escalation_at_deep(tmp_path, capsys):
     session_dir, _ = _reach_round2_with_cheap_arch(tmp_path, capsys)
-    _write_findings(session_dir, "architecture-reviewer", [_blocker("Architecture")])
+    # missing findings file → transport miss → escalation pending at deep
     rec = _record(capsys, session_dir, 2)
     assert [e["dimension"] for e in rec["escalate"]] == ["architecture-reviewer"]
     replay = _plan(capsys, session_dir, 2)
@@ -303,20 +314,14 @@ def test_stale_result_never_counts_as_executed(tmp_path, capsys):
     assert second["dimensions"]["architecture-reviewer"]["status"] == "missing"
 
 
-def test_cheap_nonempty_escalates_once_to_deep(tmp_path, capsys):
+def test_cheap_nonempty_stands_without_escalation(tmp_path, capsys):
     session_dir, _ = _reach_round2_with_cheap_arch(tmp_path, capsys)
     _write_findings(session_dir, "architecture-reviewer", [_blocker("Architecture")])
-    first = _record(capsys, session_dir, 2)
-    assert first["escalate"] == [{"dimension": "architecture-reviewer", "tier": "reviewer-deep",
-                                  "reason": first["escalate"][0]["reason"]}]
-    # the low-confidence cheap result was archived so the deep re-run must write fresh
-    assert not os.path.exists(os.path.join(session_dir, "findings-architecture.json"))
-    _write_findings(session_dir, "architecture-reviewer", [])
-    second = _record(capsys, session_dir, 2)
-    assert second["escalate"] == []
-    d = second["dimensions"]["architecture-reviewer"]
+    rec = _record(capsys, session_dir, 2)
+    assert rec["escalate"] == []
+    d = rec["dimensions"]["architecture-reviewer"]
     assert d["status"] == "run" and d["confidence"] == "high"
-    assert d["escalated"] is True and d["tier"] == "reviewer-deep"
+    assert d["tier"] == "reviewer" and d["escalated"] is False
 
 
 def test_cheap_empty_result_stands_without_escalation(tmp_path, capsys):
@@ -402,8 +407,8 @@ def _confirmation_round3_surfacing(tmp_path, capsys, severity):
 
 
 def _record_with_escalation(capsys, session_dir, rnd, findings_by_dim):
-    """Record a round, satisfying a single cheap→deep escalation (a scoped dim carrying a finding
-    starts at `reviewer` and escalates once) by re-writing the escalated dims and recording again."""
+    """Record a round; if record returns any escalation (a transport failure), re-write those
+    dims and record again."""
     for dim in DIMS:
         _write_findings(session_dir, dim, findings_by_dim.get(dim, []))
     rec = _record(capsys, session_dir, rnd)
@@ -458,7 +463,8 @@ def test_spec_degraded_confirmation_owes_proper_panel(tmp_path, capsys):
     _record(capsys, session_dir, 2)
     _write_compiled(session_dir, [])
     _decide(capsys, session_dir, 2)  # → confirmation round 3
-    # round 3 confirmation: architecture comes back low-confidence (object-shaped result), rest clean
+    # round 3 confirmation: architecture recorded clean, then state patched to low-confidence
+    # (synthetic — tier+shape no longer derives low; round-gate/scheduling still read it)
     for dim in DIMS:
         if dim == "architecture-reviewer":
             path = os.path.join(session_dir, "findings-architecture.json")
@@ -467,6 +473,7 @@ def test_spec_degraded_confirmation_owes_proper_panel(tmp_path, capsys):
         else:
             _write_findings(session_dir, dim, [])
     _record(capsys, session_dir, 3)
+    _patch_dim_confidence(session_dir, 3, "architecture-reviewer", "low")
     _write_compiled(session_dir, [])
     out = _decide(capsys, session_dir, 3)
     assert out["action"] == "review" and out["roundKind"] == "confirmation", out

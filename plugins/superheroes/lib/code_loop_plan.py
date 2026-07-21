@@ -22,7 +22,8 @@ It owns NO policy of its own — identical in spirit to `spec_loop_plan.py`:
 
 The code-leg specifics this module adds:
   - **Round-scoped findings.** review-code writes `round-<N>/findings-<agent>.json`; the
-    executed-evidence gate (#145) archives a stale/low result before an escalation so only a
+    executed-evidence gate (#145) archives a stale/invalid (transport) result before an
+    escalation so only a
     fresh deep re-dispatch can license a skip.
   - **Changed surface from what ACTUALLY changed (#157/#158).** The changed surface for the
     next round is derived from the git diff of the branch — `round-<N>/diff.txt` (what the
@@ -266,14 +267,13 @@ def cmd_record(session_dir, round_no, dimensions):
         already = bool(escalations.get(d))
         tier = DEEP if already else (sched.get("tier") or DEEP)
         result = common.read_findings_file(_findings_path(session_dir, round_no, d), tier)
-        needs_more = (not result["valid"]) or (tier == CHEAP and result["confidence"] != "high")
+        needs_more = not result["valid"]
         if needs_more and not already:
-            # one escalation/retry at reviewer-deep — archive the low/invalid result so only a
+            # one escalation/retry at reviewer-deep — archive the invalid result so only a
             # freshly-written file can count as the deep answer
             escalations[d] = {"from": tier}
-            _archive_findings(session_dir, round_no, d,
-                              tag="cheap" if tier == CHEAP else "retry")
-            why = result.get("why") or ("low-confidence %s result" % CHEAP)
+            _archive_findings(session_dir, round_no, d, tag="retry")
+            why = result.get("why")
             escalate.append({"dimension": d, "tier": DEEP,
                              "reason": "%s — re-dispatch once at %s" % (why, DEEP)})
             dims[d] = {"dimension": d, "status": "escalation-pending", "round": round_no}

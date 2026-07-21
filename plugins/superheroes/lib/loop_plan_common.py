@@ -87,10 +87,9 @@ def _round_entry(state, round_no):
 # --- findings-file evidence ---------------------------------------------------
 
 def read_findings_file(path, tier):
-    """Derive a dimension result from its findings JSON at *path*. Confidence is the spine's
-    legacy-array rule (`_shapeReviewerResult`): an array is high-confidence unless it is a
-    non-empty `reviewer`-tier result; an object may carry its own {findings, confidence}. Both
-    legs share this single confidence rule; they differ only in where the file lives."""
+    """Derive a dimension result from its findings JSON at *path*. A valid file — array or
+    object with a findings list — is always high-confidence; wrapper confidence is ignored.
+    Invalid/missing files fail loud as transport errors."""
     try:
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
@@ -102,14 +101,12 @@ def read_findings_file(path, tier):
         if any(not isinstance(f, dict) for f in data):
             return {"valid": False, "why": "malformed"}
         findings = data
-        confidence = "low" if (tier == CHEAP and len(findings) > 0) else "high"
+        confidence = "high"
     elif isinstance(data, dict) and isinstance(data.get("findings"), list):
         if any(not isinstance(f, dict) for f in data["findings"]):
             return {"valid": False, "why": "malformed"}
         findings = data["findings"]
-        confidence = str(data.get("confidence") or "").lower()
-        if confidence not in ("high", "low"):
-            return {"valid": False, "why": "malformed"}
+        confidence = "high"
     else:
         return {"valid": False, "why": "malformed"}
     return {
