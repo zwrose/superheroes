@@ -59,7 +59,8 @@ def _render_vitals(lines, vd):
     lines.append(HEADER_VITALS)
     lines.append("")
     if not vd:
-        lines.append("_No vitals movement._")
+        lines.append(
+            "_Vitals collection is turned off for this project — no trend this sweep._")
         lines.append("")
         return
 
@@ -72,6 +73,10 @@ def _render_vitals(lines, vd):
         lines.append("")
         return
 
+    not_collected = vd.get("notCollected") if isinstance(vd, dict) else None
+    if not isinstance(not_collected, dict):
+        not_collected = {}
+
     crossing_vitals = set()
     if crossings:
         for c in crossings:
@@ -81,8 +86,8 @@ def _render_vitals(lines, vd):
             sentence = c.get("sentence") or _fmt_delta_entry(
                 c.get("vital"), c)
             lines.append("- %s" % sentence)
+    non_crossing = []
     if delta:
-        non_crossing = []
         for name in sorted(delta):
             if name in crossing_vitals:
                 continue
@@ -93,8 +98,22 @@ def _render_vitals(lines, vd):
                 lines.append("Other movement:")
             for item in non_crossing:
                 lines.append("- %s" % item)
-    if not crossings and not (delta or {}):
-        lines.append("_No vitals movement._")
+
+    measured_movement = bool(crossings) or bool(non_crossing)
+    if not_collected:
+        if measured_movement:
+            lines.append("")
+        lines.append("Not collected:")
+        for name in sorted(not_collected):
+            reason = not_collected[name]
+            lines.append("- %s: %s" % (name, reason))
+
+    if not measured_movement:
+        if not_collected:
+            lines.append(
+                "_No vitals movement — nothing was collected this sweep._")
+        else:
+            lines.append("_No vitals movement._")
     lines.append("")
 
 

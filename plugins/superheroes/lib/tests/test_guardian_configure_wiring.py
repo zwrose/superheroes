@@ -32,9 +32,10 @@ _SET_UP = os.path.join(_PLUGIN, "skills", "configure", "reference", "set-up.md")
 _VIEW_TUNE = os.path.join(_PLUGIN, "skills", "configure", "reference", "view-and-tune.md")
 _CORE_MD_CLI = os.path.join(_LIB, "core_md.py")
 
-_HERO_SLUG_RE = re.compile(
-    r"\b(" + "|".join(re.escape(h) for h in core_md._HEROES) + r")\b"
-)
+_SET_UP_OPTIONAL_ANCHOR = re.compile(
+    r"\(\*\*test-pilot\*\*,\s*\*\*guardian\*\*")
+_VIEW_TUNE_OPTIONAL_ANCHOR = re.compile(
+    r"optional heroes \(([^)]+)\)")
 
 
 def _optional_heroes():
@@ -46,25 +47,40 @@ def _read(path):
         return fh.read()
 
 
-def _optional_mentioned_in(text):
-    """Optional heroes cited in configure prose — fail-closed anchor for the §11 drift guard."""
-    return {h for h in _HERO_SLUG_RE.findall(text) if h not in HS.MANDATORY}
+def _parse_optional_heroes_from_set_up(text):
+    assert _SET_UP_OPTIONAL_ANCHOR.search(text), (
+        "set-up.md: optional-hero anchor missing (reworded or moved?)")
+    m = re.search(r"\(\*\*([\w-]+)\*\*,\s*\*\*([\w-]+)\*\*", text)
+    assert m, "set-up.md: could not parse optional hero roster from anchor"
+    return {m.group(1), m.group(2)}
+
+
+def _parse_optional_heroes_from_view_tune(text):
+    m = _VIEW_TUNE_OPTIONAL_ANCHOR.search(text)
+    assert m, "view-and-tune.md: optional-hero parenthetical anchor missing"
+    return {h.strip() for h in m.group(1).split(",") if h.strip()}
 
 
 def test_optional_hero_roster_named_in_configure_reference_docs():
-    """§11 drift guard: every optional hero in _HEROES appears in both configure reference docs."""
+    """§11 drift guard: optional hero roster matches both configure reference docs exactly."""
     optional = _optional_heroes()
     assert optional, "core_md._HEROES minus MANDATORY is empty — no authoritative optional roster"
     set_up = _read(_SET_UP)
     view_tune = _read(_VIEW_TUNE)
-    for label, text in (("set-up.md", set_up), ("view-and-tune.md", view_tune)):
-        mentioned = _optional_mentioned_in(text)
-        assert mentioned, (
+    for label, text, parser in (
+        ("set-up.md", set_up, _parse_optional_heroes_from_set_up),
+        ("view-and-tune.md", view_tune, _parse_optional_heroes_from_view_tune),
+    ):
+        documented = parser(text)
+        assert documented, (
             "%s: parsed NO optional heroes — refusing to pass vacuously (file moved or reworded?)"
             % label
         )
-        missing = optional - mentioned
+        missing = optional - documented
+        extra = documented - optional
         assert not missing, "%s missing optional hero name(s): %s" % (label, sorted(missing))
+        assert not extra, "%s documents stale/extra optional hero name(s): %s" % (
+            label, sorted(extra))
 
 
 def test_guardian_is_offerable_not_mandatory(tmp_path):

@@ -324,6 +324,50 @@ def _is_trade_disposition(rec):
     return rec.get("disposition") in ("accepted", "declined")
 
 
+_ISSUE_NUM_RE = re.compile(r"#?(\d+)")
+_ISSUE_TERMINAL = frozenset(("closed", "merged"))
+
+
+def _resolve_issue_state(issue_ref, *, cwd):
+    """Best-effort linked-issue state → 'open'|'closed'|'merged'|None.
+
+    None means unverifiable (no ref, unparseable, gh missing/failed). Callers must fail
+    closed: do not run verified-fixed/reopened until a terminal state is confirmed.
+    Uses subprocess.run directly — not the sweep's injectable `run`, which stubs the
+    verify shell command in tests."""
+    if not isinstance(issue_ref, str) or not issue_ref.strip():
+        return None
+    m = _ISSUE_NUM_RE.search(issue_ref.strip())
+    if not m:
+        return None
+    try:
+        r = subprocess.run(
+            ["gh", "issue", "view", m.group(1), "--json", "state"],
+            cwd=cwd, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode != 0:
+        return None
+    try:
+        data = json.loads(r.stdout)
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    state = data.get("state")
+    if not isinstance(state, str):
+        return None
+    state = state.strip().lower()
+    if state in ("open", "closed", "merged"):
+        return state
+    return None
+
+
+def _issue_ready_for_closure(issue_state):
+    """True only when the linked issue is confirmed merged or closed."""
+    return issue_state in _ISSUE_TERMINAL
+
+
 def _filter_red_lines(red_lines):
     """Drop red-line entries whose kind is not in RED_LINE_KINDS."""
     allowed = set(guardian_lens.RED_LINE_KINDS)
@@ -419,8 +463,10 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
 
     ledger = guardian_store.read_ledger(cwd, root)
     suppress_via_ledger = ledger["status"] in ("ok", "absent")
+    report_card_notes = []
     card = guardian_ledger.report_card(
-        ledger["records"], overrides=config.get("reportCard"))
+        ledger["records"], overrides=config.get("reportCard"),
+        notes_out=report_card_notes)
     benched_lenses = {name for name, entry in card.items() if entry.get("benched")}
 
     for lens in lenses:
@@ -556,6 +602,8 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
             filed_observations[rid] = {
                 "present": matched_cand is not None,
                 "candidate": matched_cand,
+                "issue": lrec.get("issue"),
+                "issueState": _resolve_issue_state(lrec.get("issue"), cwd=cwd),
             }
 
         if lens_surfaced:
@@ -633,6 +681,7 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
         "ledgerStatus": ledger_status,
         "ledgerState": ledger["status"],
         "reportCard": card,
+        "reportCardNotes": report_card_notes,
         "vitalsDelta": vitals_delta,
         "nextSnapshot": next_snapshot,
         "prevIdentity": prev_identity,
@@ -679,8 +728,10 @@ def validate_dispositions(bundle, dispositions):
 def _close_filed_records(records, observations, sweep_id):
     """Advance filed records from current metrics → (new_records, advances).
 
-    Finding gone or metric improved → verified-fixed; still present without
-    improvement → reopened (post-merge verification at the next sweep)."""
+    verified-fixed / reopened run only after the linked issue is confirmed merged or
+    closed (§4.7: reopened is merged-but-metric-unmoved). While the issue is still open,
+    or its state cannot be determined, the record stays `filed` — the quieter, truthful
+    state the collect path already renders as "filed as #N, verification pending"."""
     new_records = list(records or [])
     advances = []
     for rec in list(new_records):
@@ -691,6 +742,8 @@ def _close_filed_records(records, observations, sweep_id):
             continue
         obs = (observations or {}).get(rid)
         if obs is None:
+            continue
+        if not _issue_ready_for_closure(obs.get("issueState")):
             continue
         if not obs.get("present"):
             new_records, result = guardian_ledger.advance(
@@ -706,6 +759,51 @@ def _close_filed_records(records, observations, sweep_id):
                 new_records, rid, "reopened", sweepId=sweep_id)
         advances.append(result)
     return new_records, advances
+
+
+def _ledger_fully_readable(cwd, root, ledger):
+    """May we mutate this ledger?
+
+    Governing rule: unreadable ledger content is opaque, not absent. `records: []` from
+    `read_ledger` means "I could not read this" on malformed/newer — never "there is
+    nothing here." Only status `ok`/`absent` with every on-disk record accepted (no
+    duplicates, no silently-skipped entries) is safe to rewrite."""
+    status = ledger.get("status")
+    if status == "absent":
+        return True, None
+    if status != "ok":
+        return False, "ledger-%s" % status
+    if ledger.get("note"):
+        return False, "ledger-duplicate-ids"
+
+    path = guardian_store.ledger_path(cwd, root)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return False, "ledger-unreadable"
+    block, err = guardian_store._parse_ledger_block(text)
+    if err or not isinstance(block, dict):
+        return False, "ledger-malformed"
+    raw = block.get("records")
+    if not isinstance(raw, list):
+        return False, "ledger-malformed"
+
+    accepted = 0
+    for rec in raw:
+        if not isinstance(rec, dict):
+            return False, "ledger-partial-skip"
+        if not all(rec.get(f) is not None for f in guardian_store.LEDGER_MIN_FIELDS):
+            return False, "ledger-partial-skip"
+        if rec.get("disposition") not in guardian_lens.FINDING_STATES:
+            return False, "ledger-partial-skip"
+        rid = rec.get("id")
+        if not isinstance(rid, str) or not rid.strip():
+            return False, "ledger-partial-skip"
+        accepted += 1
+    if accepted != len(ledger.get("records") or []):
+        return False, "ledger-partial-skip"
+    return True, None
 
 
 def finalize(cwd, bundle, dispositions, root=None):
@@ -750,20 +848,30 @@ def finalize(cwd, bundle, dispositions, root=None):
 
         ledger_write = {"ok": True, "skipped": "no-change"}
         try:
-            new_records, advances = _close_filed_records(
-                ledger["records"], bundle.get("filedObservations"), sweep_id)
-            card = bundle.get("reportCard")
-            if card is None:
-                card = guardian_ledger.report_card(new_records)
-            sweep = guardian_ledger.make_sweep(
-                bundle.get("sweptSha") or "unknown", sweep_id=sweep_id)
-            sweeps = guardian_ledger.append_sweep(
-                guardian_ledger._read_sweeps(guardian_store.ledger_path(cwd, root)),
-                sweep)
-            ledger_write = guardian_ledger.write_unlocked(
-                cwd, new_records, root=root, report_card=card, sweeps=sweeps)
-            ledger_write = dict(ledger_write)
-            ledger_write["advances"] = advances
+            writable, skip_why = _ledger_fully_readable(cwd, root, ledger)
+            if not writable:
+                # Opaque/unread content must never be rewritten as an empty schema-1 ledger.
+                ledger_write = {
+                    "ok": False,
+                    "skipped": skip_why,
+                    "reason": "ledger write skipped: %s (on-disk bytes left untouched)"
+                              % skip_why,
+                }
+            else:
+                new_records, advances = _close_filed_records(
+                    ledger["records"], bundle.get("filedObservations"), sweep_id)
+                card = bundle.get("reportCard")
+                if card is None:
+                    card = guardian_ledger.report_card(new_records)
+                sweep = guardian_ledger.make_sweep(
+                    bundle.get("sweptSha") or "unknown", sweep_id=sweep_id)
+                sweeps = guardian_ledger.append_sweep(
+                    guardian_ledger._read_sweeps(guardian_store.ledger_path(cwd, root)),
+                    sweep)
+                ledger_write = guardian_ledger.write_unlocked(
+                    cwd, new_records, root=root, report_card=card, sweeps=sweeps)
+                ledger_write = dict(ledger_write)
+                ledger_write["advances"] = advances
         except Exception as exc:
             ledger_write = {"ok": False, "reason": str(exc)}
 

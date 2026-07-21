@@ -775,3 +775,168 @@ def test_bundle_carries_storage_mode_and_committed(tmp_path):
     assert bundle["committed"] in ("committed", "uncommitted", "machine-local", "unknown")
     assert bundle["sweepId"]
     assert "vitals" in bundle["nextSnapshot"]
+
+
+def test_finalize_leaves_newer_ledger_bytes_untouched(tmp_path):
+    """CRITICAL: records=[] from a newer-schema read is opaque, not empty — do not rewrite."""
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    owner_text = (
+        "# Owner ledger prose — must survive\n\n"
+        "```json %s\n%s\n```\n"
+        % (gs.LEDGER_FENCE, json.dumps({
+            "schemaVersion": 99,
+            "records": [{
+                "id": "fixture:trade",
+                "disposition": "accepted",
+                "date": "2026-07-01",
+                "issue": None,
+                "metricAtDisposition": {"metric": 5},
+                "reason": "owner accepted this trade",
+                "reraiseWhen": None,
+            }],
+            "sweeps": [{"sweepId": "owner-s0", "sweptSha": "abc", "date": "2026-07-01"}],
+        }, indent=2))
+    )
+    path = gs.ledger_path(repo, root)
+    sc.atomic_write(path, owner_text)
+    before = open(path, "rb").read()
+
+    lens = FixtureLens(emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert bundle["ledgerState"] == "newer"
+    disp = [{
+        "id": bundle["surfaced"][0]["id"],
+        "verdict": "validated",
+        "consequence": "x",
+        "receipt": "y",
+        "effort": "z",
+        "ledgerJoin": bundle["surfaced"][0]["id"],
+    }]
+    result = gsw.finalize(repo, bundle, disp, root=root)
+    assert result["ok"] is True
+    assert result["ledgerWrite"]["ok"] is False
+    assert "newer" in (result["ledgerWrite"].get("skipped")
+                       or result["ledgerWrite"].get("reason") or "")
+    after = open(path, "rb").read()
+    assert after == before, "newer-schema ledger bytes must be left untouched"
+    assert b"owner accepted this trade" in after
+    assert b"Owner ledger prose" in after
+
+
+def test_finalize_leaves_malformed_ledger_bytes_untouched(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    path = gs.ledger_path(repo, root)
+    owner_text = "# hand-damaged\n\n```json guardian-ledger\n{not json\n```\n"
+    sc.atomic_write(path, owner_text)
+    before = open(path, "rb").read()
+
+    lens = FixtureLens(emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert bundle["ledgerState"] == "malformed"
+    disp = [{
+        "id": bundle["surfaced"][0]["id"],
+        "verdict": "validated",
+        "consequence": "x",
+        "receipt": "y",
+        "effort": "z",
+        "ledgerJoin": bundle["surfaced"][0]["id"],
+    }]
+    result = gsw.finalize(repo, bundle, disp, root=root)
+    assert result["ok"] is True
+    assert result["ledgerWrite"]["ok"] is False
+    assert open(path, "rb").read() == before
+
+
+def test_filed_open_issue_stays_filed_after_sweep(tmp_path, monkeypatch):
+    """A still-open filed issue must not flip to reopened on the next sweep."""
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    write_ledger(tmp_path, [{
+        "id": "fixture:normal",
+        "disposition": "filed",
+        "date": "2026-07-01",
+        "issue": "#123",
+        "metricAtDisposition": {"metric": 5},
+        "reason": None,
+        "reraiseWhen": None,
+        "adjudicatedIn": "s0",
+    }], root=root)
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": {"collectorVersion": "0.0.0-test", "digest": {"v": 1}}},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    monkeypatch.setattr(gsw, "_resolve_issue_state", lambda *a, **k: "open")
+
+    lens = FixtureLens(
+        emit_normal=True, digest={"v": 2}, diff_new=["fixture:normal"], metric=5)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    obs = bundle["filedObservations"]["fixture:normal"]
+    assert obs["present"] is True
+    assert obs["issueState"] == "open"
+    result = gsw.finalize(repo, bundle, [], root=root)
+    assert result["ok"] is True
+    advances = result["ledgerWrite"].get("advances") or []
+    assert advances == []
+    read = gs.read_ledger(repo, root=root)
+    assert read["byId"]["fixture:normal"]["disposition"] == "filed"
+
+
+def test_filed_closed_issue_unmoved_metric_reopens(tmp_path, monkeypatch):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    write_ledger(tmp_path, [{
+        "id": "fixture:normal",
+        "disposition": "filed",
+        "date": "2026-07-01",
+        "issue": "#123",
+        "metricAtDisposition": {"metric": 5},
+        "reason": None,
+        "reraiseWhen": None,
+        "adjudicatedIn": "s0",
+    }], root=root)
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": {"collectorVersion": "0.0.0-test", "digest": {"v": 1}}},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    monkeypatch.setattr(gsw, "_resolve_issue_state", lambda *a, **k: "closed")
+
+    lens = FixtureLens(
+        emit_normal=True, digest={"v": 2}, diff_new=["fixture:normal"], metric=5)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    result = gsw.finalize(repo, bundle, [], root=root)
+    assert result["ok"] is True
+    advances = result["ledgerWrite"].get("advances") or []
+    assert any(a.get("to") == "reopened" for a in advances)
+    read = gs.read_ledger(repo, root=root)
+    assert read["byId"]["fixture:normal"]["disposition"] == "reopened"
+
+
+def test_malformed_report_card_overrides_do_not_abort_collect(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {
+        "vitals": False,
+        "reportCard": {
+            "minAdjudicated": "ten",
+            "minSweeps": False,
+            "actionabilityBar": "high",
+        },
+    })
+    write_ledger(tmp_path, benched_fixture_ledger(), root=root)
+    lens = FixtureLens(emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert bundle["reportCard"]["fixture"]["benched"] is True
+    assert bundle["reportCardNotes"]
+    assert any("minAdjudicated" in n for n in bundle["reportCardNotes"])

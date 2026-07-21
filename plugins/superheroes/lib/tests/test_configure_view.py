@@ -182,6 +182,9 @@ def test_render_guardian_degrades_with_malformed_ledger(tmp_path):
     screen = cv.render(repo, root=root)
     assert "## Guardian" in screen
     assert "cadence:" in screen
+    assert "benched lenses: unknown — ledger unreadable" in screen
+    assert "ledger JSON block is malformed" in screen
+    assert "benched lenses: none" not in screen
     assert "## Core" in screen
     assert "verify command: true" in screen
 

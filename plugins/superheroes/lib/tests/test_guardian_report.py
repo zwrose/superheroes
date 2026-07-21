@@ -1,4 +1,6 @@
 import guardian_report as gr
+import guardian_sweep as gsw
+from guardian_fixtures import FixtureLens, init_calibrated_repo, write_guardian_layer
 
 
 def _sample_bundle():
@@ -127,6 +129,68 @@ def test_render_vitals_crossings_like_findings():
     assert "fileCount: 10 → 11" in md
     assert "critical" not in md.lower()
     assert "severity" not in md.lower()
+
+
+def test_render_vitals_measured_no_movement():
+    bundle = _sample_bundle()
+    bundle["vitalsDelta"] = {
+        "crossings": [],
+        "delta": {},
+        "notCollected": {},
+    }
+    md = gr.render(bundle, [], {"byId": {}})
+    assert "_No vitals movement._" in md
+    assert "turned off" not in md.lower()
+    assert "Not collected:" not in md
+
+
+def test_render_vitals_disabled_via_real_collect(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    store = str(tmp_path / "store")
+    write_guardian_layer(tmp_path, {"vitals": False})
+    bundle = gsw.collect(cwd=repo, lenses=[FixtureLens()], root=store)
+    assert bundle["vitalsDelta"] == {}
+
+    md = gr.render(bundle, [], {"byId": {}})
+    assert "Vitals collection is turned off for this project" in md
+    assert "no trend this sweep" in md
+    assert "_No vitals movement._" not in md
+
+
+def test_render_vitals_not_collected_shows_reasons_not_stable_empty():
+    bundle = _sample_bundle()
+    bundle["vitalsDelta"] = {
+        "crossings": [],
+        "delta": {},
+        "notCollected": {
+            "suiteTestCount": "verify suite produced no parseable summary",
+            "todoCount": "git unavailable",
+        },
+    }
+    md = gr.render(bundle, [], {"byId": {}})
+    assert "Not collected:" in md
+    assert "suiteTestCount: verify suite produced no parseable summary" in md
+    assert "todoCount: git unavailable" in md
+    assert "_No vitals movement — nothing was collected this sweep._" in md
+    assert md.count("_No vitals movement._") == 0
+
+
+def test_render_vitals_not_collected_alongside_movement():
+    bundle = _sample_bundle()
+    bundle["vitalsDelta"] = {
+        "crossings": [],
+        "delta": {
+            "fileCount": {"prev": 10, "cur": 11, "change": 1, "pct": 0.1},
+        },
+        "notCollected": {
+            "suiteTestCount": "verify suite produced no parseable summary",
+        },
+    }
+    md = gr.render(bundle, [], {"byId": {}})
+    assert "fileCount: 10 → 11" in md
+    assert "Not collected:" in md
+    assert "suiteTestCount: verify suite produced no parseable summary" in md
+    assert "nothing was collected" not in md
 
 
 def test_render_report_card_benched_and_below_floor():

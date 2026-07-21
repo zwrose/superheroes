@@ -10,7 +10,6 @@ config-free (#482), so `permission_rules` is dead and there is nothing to render
 this screen carries the v2 dispatch-calibration observability surface: the EFFECTIVE engine +
 model for each v2 dispatch role (`## Dispatch calibration`), and the Codex model-pin detail
 (`## Engine model pins (Codex)`)."""
-import json
 import os
 import re
 import sys
@@ -32,10 +31,7 @@ import store_sweep     # noqa: E402
 
 _NON_LAYER = ("core.md", "patterns.md")
 
-_CONFIG_BLOCK = re.compile(
-    r"```json\s+guardian-config\s*\n(.*?)\n```", re.DOTALL)
-
-# Ratified §6 cadence default — ≥10 merges or ≥14 days.
+# Ratified §6 cadence default — ≥10 merges or ≥14 days (guardian SKILL Cost + cadence).
 _CADENCE_DEFAULTS = {"minMerges": 10, "minDays": 14}
 
 
@@ -47,31 +43,32 @@ def _read(path):
         return None
 
 
-def _guardian_config_block(cwd, root):
-    """The guardian-config JSON object from guardian.md, or None."""
+def _resolve_cadence(cwd, root):
+    """Effective cadence knobs + which keys differ from the ratified defaults.
+
+    Uses guardian_sweep's config fence regex (the authoritative parser home) for the
+    cadence slice only; thresholds/coverage/reportCard come from read_config."""
+    effective = dict(_CADENCE_DEFAULTS)
+    tuned = {}
     layer_p = guardian_store.guardian_layer_path(cwd, root)
     if core_md._layer_is_empty(layer_p):
-        return None
+        return effective, tuned
     try:
         with open(layer_p, encoding="utf-8") as fh:
             text = fh.read()
     except OSError:
-        return None
-    m = _CONFIG_BLOCK.search(text)
+        return effective, tuned
+    m = guardian_sweep._CONFIG_BLOCK.search(text)
     if not m:
-        return None
+        return effective, tuned
     try:
+        import json
         block = json.loads(m.group(1))
     except ValueError:
-        return None
-    return block if isinstance(block, dict) else None
-
-
-def _resolve_cadence(block):
-    """Effective cadence knobs + which keys differ from the ratified defaults."""
-    effective = dict(_CADENCE_DEFAULTS)
-    tuned = {}
-    cadence = block.get("cadence") if isinstance(block, dict) else None
+        return effective, tuned
+    if not isinstance(block, dict):
+        return effective, tuned
+    cadence = block.get("cadence")
     if isinstance(cadence, dict):
         for key in _CADENCE_DEFAULTS:
             val = cadence.get(key)
@@ -83,9 +80,8 @@ def _resolve_cadence(block):
 
 
 def _collect_guardian(cwd, root):
-    block = _guardian_config_block(cwd, root)
-    cadence, cadence_tuned = _resolve_cadence(block or {})
     config = guardian_sweep.read_config(cwd, root)
+    cadence, cadence_tuned = _resolve_cadence(cwd, root)
     ledger = guardian_store.read_ledger(cwd, root)
     card = guardian_ledger.report_card(
         ledger.get("records"), config.get("reportCard"))
@@ -100,6 +96,7 @@ def _collect_guardian(cwd, root):
         "coverage": config.get("coverage") or [],
         "card": card,
         "ledgerStatus": ledger.get("status"),
+        "ledgerNote": ledger.get("note"),
         "lastSweptSha": snapshot.get("sweptSha") if snapshot else None,
         "lastSweepDate": last_date,
     }
@@ -145,7 +142,11 @@ def _guardian_lines(guardian):
             continue
         below_floor.append(lens)
 
-    if guardian.get("ledgerStatus") == "absent" and not card:
+    ledger_status = guardian.get("ledgerStatus")
+    if ledger_status in ("malformed", "newer") and not card:
+        note = guardian.get("ledgerNote") or ledger_status
+        lines.append("benched lenses: unknown — ledger unreadable (%s)" % note)
+    elif ledger_status == "absent" and not card:
         lines.append("benched lenses: no sweep history yet")
     elif benched:
         lines.append("benched lenses:")

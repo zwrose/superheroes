@@ -634,6 +634,74 @@ def test_read_trend_absent(tmp_path):
     assert out["provenance"] is None
 
 
+def test_read_trend_requires_first_line_provenance(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.vitals_path(repo)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "w", encoding="utf-8").write(
+        json.dumps({"date": "2026-07-21", "sweepId": "s1", "vitals": {}}) + "\n")
+    out = gv.read_trend(repo)
+    assert out["status"] == "malformed"
+    assert out["records"] == []
+
+
+def test_read_trend_newer_provenance_is_opaque(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.vitals_path(repo)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "w", encoding="utf-8").write(
+        json.dumps({"schemaVersion": 99, "file": "guardian-vitals",
+                    "created": "2026-07-21"}) + "\n"
+        + json.dumps({"date": "2026-07-21", "sweepId": "s1", "vitals": {"locTotal": 1}})
+        + "\n")
+    out = gv.read_trend(repo)
+    assert out["status"] == "newer"
+    assert out["records"] == []
+    assert out["provenance"] is None
+
+
+def test_read_trend_malformed_provenance_schema_version(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.vitals_path(repo)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "w", encoding="utf-8").write(
+        json.dumps({"schemaVersion": "1", "file": "guardian-vitals",
+                    "created": "2026-07-21"}) + "\n")
+    out = gv.read_trend(repo)
+    assert out["status"] == "malformed"
+    assert out["records"] == []
+
+
+def test_append_unlocked_refuses_newer_trend_schema(tmp_path):
+    """Rollback must not append v1 records into a future-schema trend."""
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.vitals_path(repo)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    before = (
+        json.dumps({"schemaVersion": 99, "file": "guardian-vitals",
+                    "created": "2026-07-21"}) + "\n"
+        + json.dumps({"date": "2026-07-21", "sweepId": "old", "vitals": {"locTotal": 1}})
+        + "\n"
+    )
+    open(path, "w", encoding="utf-8").write(before)
+    out = gv.append_unlocked(repo, {"locTotal": 2}, sweep_id="s2", now="2026-07-22")
+    assert out["ok"] is False
+    assert out.get("status") == "newer" or "newer" in out.get("reason", "")
+    assert open(path, encoding="utf-8").read() == before
+
+
+def test_append_unlocked_refuses_missing_provenance(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.vitals_path(repo)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    before = json.dumps({"date": "2026-07-21", "sweepId": "s1",
+                         "vitals": {"locTotal": 1}}) + "\n"
+    open(path, "w", encoding="utf-8").write(before)
+    out = gv.append_unlocked(repo, {"locTotal": 2}, sweep_id="s2", now="2026-07-22")
+    assert out["ok"] is False
+    assert open(path, encoding="utf-8").read() == before
+
+
 def test_read_trend_limit_tails(tmp_path):
     repo = init_calibrated_repo(tmp_path)
     for i in range(1, 6):

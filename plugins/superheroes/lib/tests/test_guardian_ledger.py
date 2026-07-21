@@ -111,17 +111,24 @@ def test_sweeps_roster_round_trips(tmp_path):
     assert block["schemaVersion"] == gs.LEDGER_SCHEMA_VERSION
 
 
-def test_make_sweep_id_is_stable_and_append_dedupes():
+def test_make_sweep_id_is_unique_per_run_and_explicit_id_dedupes():
+    """Default ids are unique per run; an explicit sweepId is reused for finalize retry.
+
+    Same-sha same-day must NOT collapse two collects into one id (vitals/roster need
+    distinct sweeps). The benching floor still only counts adjudicatedIn stamps, so
+    unique ids alone cannot manufacture evidence."""
     a = gled.make_sweep("abc123", "2026-07-21")
     b = gled.make_sweep("abc123", "2026-07-21")
-    assert a["sweepId"] == b["sweepId"]
-    c = gled.make_sweep("def456", "2026-07-21")
-    assert c["sweepId"] != a["sweepId"]
+    assert a["sweepId"] != b["sweepId"]
+    assert a["sweptSha"] == b["sweptSha"] == "abc123"
+    assert a["date"] == b["date"] == "2026-07-21"
+    retry = gled.make_sweep("abc123", "2026-07-21", sweep_id=a["sweepId"])
+    assert retry["sweepId"] == a["sweepId"]
     roster = gled.append_sweep([], a)
-    roster = gled.append_sweep(roster, b)
+    roster = gled.append_sweep(roster, retry)
     assert roster == [a]
-    roster = gled.append_sweep(roster, c)
-    assert [s["sweepId"] for s in roster] == [a["sweepId"], c["sweepId"]]
+    roster = gled.append_sweep(roster, b)
+    assert [s["sweepId"] for s in roster] == [a["sweepId"], b["sweepId"]]
 
 
 def test_append_sweep_preserves_prior_order_and_is_idempotent_on_sweep_id():
@@ -549,6 +556,49 @@ def test_report_card_overrides_are_honored():
     card = gled.report_card(
         records, {"minAdjudicated": 2, "minSweeps": 1, "actionabilityBar": 0.5})["dup"]
     assert card["benched"] is True
+
+
+def test_report_card_malformed_overrides_fall_back_to_defaults():
+    """Hand-edited string/bool/non-positive overrides must not crash collection."""
+    records = _adjudicated("dup", 10, "triaged-out", ["s1", "s2", "s3"])
+    notes = []
+    card = gled.report_card(records, {
+        "minAdjudicated": "ten",
+        "minSweeps": True,
+        "actionabilityBar": "0.5",
+    }, notes_out=notes)["dup"]
+    assert card["benched"] is True  # defaults: 10 / 3 / 0.90
+    assert any("minAdjudicated" in n for n in notes)
+    assert any("minSweeps" in n for n in notes)
+    assert any("actionabilityBar" in n for n in notes)
+
+    notes2 = []
+    card2 = gled.report_card(records, {
+        "minAdjudicated": 0,
+        "minSweeps": -1,
+        "actionabilityBar": 1.5,
+    }, notes_out=notes2)["dup"]
+    assert card2["benched"] is True
+    assert len(notes2) == 3
+
+
+def test_write_unlocked_refuses_invalid_records_without_mutating(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    gled.write(repo, [_rec("dup:t:a", "filed", issue="#1")], now="2026-07-21")
+    before = open(gs.ledger_path(repo), encoding="utf-8").read()
+    out = gled.write_unlocked(
+        repo, [_rec("dup:t:a", "accepted")], now="2026-07-21")  # no reason
+    assert out["ok"] is False
+    assert out["reason"] == "invalid-records"
+    assert open(gs.ledger_path(repo), encoding="utf-8").read() == before
+
+
+def test_advance_refuses_accepted_without_a_reason():
+    records = [_rec("dup:t:a", "surfaced")]
+    new, result = gled.advance(records, "dup:t:a", "accepted")
+    assert result["ok"] is False
+    assert any("reason" in e for e in result.get("errors") or [])
+    assert new[0]["disposition"] == "surfaced"
 
 
 def test_report_card_defaults_match_the_ratified_bar():

@@ -494,7 +494,41 @@ def _provenance(created):
 
 
 def _is_provenance(obj):
+    """True for any object that *claims* to be trend provenance (file id match).
+
+    Callers that need the supported contract must use `_provenance_gate` — a file-id
+    match alone is not enough to treat the stream as readable or appendable."""
     return isinstance(obj, dict) and obj.get("file") == TREND_FILE_ID
+
+
+def _provenance_gate(obj):
+    """Validate a candidate first-line provenance object → (status, provenance|None).
+
+    CONVENTIONS §2.2 / §6.4: the first non-blank JSONL object must be the supported
+    provenance shape; missing/malformed/newer fail closed with no records."""
+    if not isinstance(obj, dict):
+        return "malformed", None
+    if obj.get("file") != TREND_FILE_ID:
+        return "malformed", None
+    ver = obj.get("schemaVersion")
+    if not isinstance(ver, int) or isinstance(ver, bool):
+        return "malformed", None
+    if ver > TREND_SCHEMA_VERSION:
+        return "newer", None
+    if ver != TREND_SCHEMA_VERSION:
+        return "malformed", None
+    created = obj.get("created")
+    if not isinstance(created, str) or not created.strip():
+        return "malformed", None
+    return "ok", obj
+
+
+def _first_nonblank_obj(text):
+    for line in (text or "").splitlines():
+        if not line.strip():
+            continue
+        return _parse_line(line)
+    return None
 
 
 def _parse_line(line):
@@ -518,7 +552,11 @@ def append_unlocked(cwd, vitals, *, sweep_id, swept_sha=None, root=None, now=Non
     two sweeps of the same commit are two sweeps. A torn trailing line from a crashed append
     is kept as evidence, reported as `recovered`, and appended past. Never runs git, never
     commits. An I/O failure returns ok=False rather than raising — losing a trend point must
-    never fail a sweep."""
+    never fail a sweep.
+
+    **Fail closed on unknown schema:** an existing trend whose first non-blank line is not
+    the supported provenance (missing / malformed / newer) is not appended into — a plugin
+    rollback must not write v1 records into a future-schema stream."""
     path = guardian_store.vitals_path(cwd, root)
     known = {k: v for k, v in (vitals or {}).items() if k in VITALS}
     dropped = sorted(k for k in (vitals or {}) if k not in VITALS)
@@ -531,7 +569,11 @@ def append_unlocked(cwd, vitals, *, sweep_id, swept_sha=None, root=None, now=Non
     except OSError as exc:
         return {"ok": False, "path": path, "reason": "read failed: %s" % exc}
 
-    if existing:
+    if existing and existing.strip():
+        status, _prov = _provenance_gate(_first_nonblank_obj(existing))
+        if status != "ok":
+            return {"ok": False, "path": path, "reason": "trend-%s" % status,
+                    "status": status}
         for line in existing.splitlines():
             obj = _parse_line(line)
             if obj is not None and not _is_provenance(obj) and obj.get("sweepId") == sweep_id:
@@ -599,9 +641,11 @@ def append(cwd, vitals, *, sweep_id, swept_sha=None, root=None, now=None):
 def read_trend(cwd, *, root=None, limit=None):
     """Read vitals.jsonl → {status, path, provenance, records, malformed}.
 
-    The first-line provenance record is validated and skipped; unparseable lines (e.g. a
-    torn trailing line kept as evidence) are counted in `malformed`, never returned as
-    records. `limit` tails the last N records."""
+    The first non-blank JSONL object must be the exact supported provenance shape
+    (schemaVersion == TREND_SCHEMA_VERSION, file == guardian-vitals, created set).
+    Missing, malformed, or newer provenance fails closed: status is non-ok and records
+    are empty — never silently presented as current history. Unparseable body lines are
+    counted in `malformed`. `limit` tails the last N records."""
     path = guardian_store.vitals_path(cwd, root)
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
@@ -613,19 +657,34 @@ def read_trend(cwd, *, root=None, limit=None):
         return {"status": "unreadable", "path": path, "provenance": None,
                 "records": [], "malformed": 0, "note": str(exc)}
 
-    provenance = None
+    if not text.strip():
+        return {"status": "malformed", "path": path, "provenance": None,
+                "records": [], "malformed": 0,
+                "note": "vitals trend has no provenance record"}
+
+    first = _first_nonblank_obj(text)
+    status, provenance = _provenance_gate(first)
+    if status != "ok":
+        return {"status": status, "path": path, "provenance": None,
+                "records": [], "malformed": 0,
+                "note": "vitals trend provenance is %s" % status}
+
     records = []
     malformed = 0
-    for i, line in enumerate(text.splitlines()):
+    seen_first = False
+    for line in text.splitlines():
         if not line.strip():
             continue
         obj = _parse_line(line)
+        if not seen_first:
+            seen_first = True
+            continue  # provenance already validated
         if obj is None:
             malformed += 1
             continue
         if _is_provenance(obj):
-            if provenance is None:
-                provenance = obj
+            # A second provenance claim mid-file is not a sweep record.
+            malformed += 1
             continue
         if "sweepId" not in obj:
             malformed += 1

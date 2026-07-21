@@ -39,8 +39,10 @@ import argparse
 import copy
 import datetime
 import json
+import math
 import os
 import re
+import secrets
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -329,21 +331,60 @@ def materially_worsened(candidate, record):
 # ----------------------------------------------------------------- report card
 
 
+def _coerce_actionability_bar(val):
+    """Finite numeric bar in (0, 1], or None when the override is unusable."""
+    if isinstance(val, bool) or not isinstance(val, (int, float)):
+        return None
+    if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+        return None
+    bar = float(val)
+    if not (0.0 < bar <= 1.0):
+        return None
+    return bar
+
+
+def _coerce_positive_int(val):
+    """Positive non-bool int, or None when the override is unusable."""
+    if isinstance(val, bool) or not isinstance(val, int):
+        return None
+    if val <= 0:
+        return None
+    return val
+
+
 def _resolve_thresholds(overrides):
+    """Merge report-card overrides → (cfg, notes).
+
+    Hand-edited guardian-config values are coerced; a mistyped override falls back to the
+    documented default and is named in `notes` rather than raising into collect."""
     cfg = dict(REPORT_CARD_DEFAULTS)
-    if isinstance(overrides, dict):
-        for key in REPORT_CARD_DEFAULTS:
-            if overrides.get(key) is not None:
-                cfg[key] = overrides[key]
-    return cfg
+    notes = []
+    if not isinstance(overrides, dict):
+        return cfg, notes
+    for key in REPORT_CARD_DEFAULTS:
+        if overrides.get(key) is None:
+            continue
+        raw = overrides[key]
+        if key == "actionabilityBar":
+            coerced = _coerce_actionability_bar(raw)
+        else:
+            coerced = _coerce_positive_int(raw)
+        if coerced is None:
+            notes.append(
+                "reportCard.%s=%r ignored; using default %s" % (key, raw, cfg[key]))
+        else:
+            cfg[key] = coerced
+    return cfg, notes
 
 
 def _percent(actionability):
     return "n/a" if actionability is None else "%.0f%%" % (actionability * 100)
 
 
-def _report_card(records, overrides=None):
-    cfg = _resolve_thresholds(overrides)
+def _report_card(records, overrides=None, *, notes_out=None):
+    cfg, notes = _resolve_thresholds(overrides)
+    if notes_out is not None:
+        notes_out.extend(notes)
     bar = cfg["actionabilityBar"]
     min_adjudicated = cfg["minAdjudicated"]
     min_sweeps = cfg["minSweeps"]
@@ -399,14 +440,17 @@ def _report_card(records, overrides=None):
     return card
 
 
-def report_card(records, overrides=None):
+def report_card(records, overrides=None, *, notes_out=None):
     """Per-lens outcome mix + the small-N benching guard → {lens: {...}}.
 
     Benching needs an evidence base first (advisor read, finding ii): no authority until a
     lens has ≥ minAdjudicated adjudicated candidates across ≥ minSweeps distinct sweeps.
     One unlucky sweep is not evidence. See the module docstring: `benched` never silences
-    a red line."""
-    return _report_card(records, overrides)
+    a red line.
+
+    Mistyped `overrides` fall back to `REPORT_CARD_DEFAULTS` (never raise). When
+    `notes_out` is a list, degradation notes for ignored overrides are appended to it."""
+    return _report_card(records, overrides, notes_out=notes_out)
 
 
 def _bench_reason(lens, adjudicated, actionability, sweeps, benched,
@@ -472,7 +516,11 @@ def advance(records, finding_id, to_state, **fields):
 
     An id with no record is CREATED at the target state when that state is legal from
     `candidate` — creation is a record's birth, not an advance, so `candidate` itself is also
-    a legal creation target. Any more advanced target is refused with a reason."""
+    a legal creation target. Any more advanced target is refused with a reason.
+
+    The proposed record is validated before the advance is accepted: a state that cannot
+    legally be persisted (e.g. `accepted` without a reason) returns ok=False and leaves
+    the caller's records unchanged."""
     new_records = copy.deepcopy(list(records or []))
     date = fields.get("date") or _today()
 
@@ -496,6 +544,12 @@ def advance(records, finding_id, to_state, **fields):
             })
         rec = {"id": finding_id, "disposition": to_state, "date": date}
         _stamp(rec, to_state, fields)
+        ok_v, reasons = validate_record(rec)
+        if not ok_v:
+            return (new_records, {
+                "ok": False, "id": finding_id, "from": None, "to": to_state,
+                "created": False, "reason": "; ".join(reasons), "errors": reasons,
+            })
         new_records.append(rec)
         return (new_records, {
             "ok": True, "id": finding_id, "from": None, "to": to_state, "created": True,
@@ -510,9 +564,17 @@ def advance(records, finding_id, to_state, **fields):
             "created": False, "reason": reason,
         })
 
-    rec["disposition"] = to_state
-    rec["date"] = date
-    _stamp(rec, to_state, fields)
+    proposed = copy.deepcopy(rec)
+    proposed["disposition"] = to_state
+    proposed["date"] = date
+    _stamp(proposed, to_state, fields)
+    ok_v, reasons = validate_record(proposed)
+    if not ok_v:
+        return (new_records, {
+            "ok": False, "id": finding_id, "from": from_state, "to": to_state,
+            "created": False, "reason": "; ".join(reasons), "errors": reasons,
+        })
+    new_records[index] = proposed
     return (new_records, {
         "ok": True, "id": finding_id, "from": from_state, "to": to_state, "created": False,
     })
@@ -532,9 +594,23 @@ def _stamp(rec, to_state, fields):
 
 
 def make_sweep(swept_sha, date=None, sweep_id=None):
-    """A `sweeps[]` entry. `sweepId` is caller-supplied, else derived from sweptSha + date."""
+    """A `sweeps[]` entry. `sweepId` is caller-supplied, else minted unique per run.
+
+    Deliberate identity rule (not an accident — review finding on same-sha same-day
+    collisions): the vitals trend treats two sweeps of the same commit as two sweeps, so a
+    default id must be unique per collect. The report-card benching floor, however, must
+    stay hard to inflate — it counts distinct `adjudicatedIn` stamps on adjudicated
+    records, never the roster length — so same-sha same-day repeats that mint new sweep
+    ids still cannot manufacture benching evidence without new adjudications. `sweptSha`
+    and `date` remain audit fields on the entry; they are not the identity. Pass the
+    collect-time `sweepId` back into finalize (and into a retried finalize of the same
+    bundle) so a retry dedupes rather than double-counting."""
     day = date or _today()
-    sid = sweep_id or store_core.short_hash("%s|%s" % (swept_sha, day))[:8]
+    if sweep_id:
+        sid = sweep_id
+    else:
+        sid = store_core.short_hash(
+            "%s|%s|%s" % (swept_sha, day, secrets.token_hex(8)))[:8]
     return {"sweepId": sid, "sweptSha": swept_sha, "date": day}
 
 
@@ -685,8 +761,15 @@ def write_unlocked(cwd, records, *, root=None, report_card=None, sweeps=None, no
 
     **Preserve-don't-erase:** `sweeps=None` keeps the on-disk roster unchanged; pass an
     explicit list (including `[]`) to set the roster. A rewrite must never lose durable
-    history the caller simply did not mention."""
+    history the caller simply did not mention.
+
+    **Fail-closed schema gate:** `validate_records` runs before render/write. A record that
+    fails validation is not persisted; the on-disk file is left untouched and the return
+    carries ok=False with the validation reasons."""
     path = guardian_store.ledger_path(cwd, root)
+    ok, reasons = validate_records(records if records is not None else [])
+    if not ok:
+        return {"ok": False, "reason": "invalid-records", "errors": reasons, "path": path}
     if sweeps is None:
         sweeps = _read_sweeps(path)
     text = render(records, report_card=report_card, sweeps=sweeps, now=now,

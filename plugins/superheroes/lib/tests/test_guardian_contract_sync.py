@@ -8,12 +8,13 @@ Authoritative homes:
   - guardian_store.LAYOUT
   - guardian_lens.LENS_CONTRACT_PARTS
   - guardian_lens.FACTS
-  - guardian_ledger.LEDGER_RECORD_FIELDS
+  - guardian_ledger.LEDGER_RECORD_FIELDS + guardian_ledger.ADJUDICATED_IN
   - guardian_ledger.OUTCOMES_FOR / OUTCOMES_AGAINST
   - guardian_vitals.VITALS
   - guardian_vitals.DRIFT_THRESHOLDS
 """
 import os
+import re
 
 import guardian_ledger
 import guardian_lens
@@ -32,22 +33,50 @@ def _read(path):
         return fh.read()
 
 
+def _one(matches, label, shape):
+    assert len(matches) == 1, (
+        "%s: expected exactly one %s, found %d (rename or reformat broke the parser)"
+        % (label, shape, len(matches)))
+    return matches[0]
+
+
+def _parse_skill_layout_paths(skill_text):
+    """Parse guardian/ artifact paths from the SKILL storage table."""
+    anchor = _one(
+        re.findall(r"\| `guardian\.md` \|", skill_text),
+        "SKILL.md", "`guardian.md` table anchor")
+    assert anchor, "SKILL.md storage table anchor missing"
+    paths = re.findall(r"`(guardian/[^`]+)`", skill_text)
+    assert paths, "SKILL.md: no `guardian/...` paths parsed from storage table"
+    return tuple(sorted(set(paths)))
+
+
+def _parse_conventions_backtick_list(text, anchor_re, label):
+    block = _one(re.findall(anchor_re, text, re.DOTALL), label, "backtick list anchor")
+    items = re.findall(r"`([^`]+)`", block)
+    assert items, "%s: anchor matched but no backtick tokens parsed" % label
+    return tuple(items)
+
+
+_OUTCOME_TOKEN = r"(?:`[^`]+`(?:\s*,\s*(?:and\s+)?|\s+and\s+)*)+"
+
+
+def _ledger_record_schema():
+    return guardian_ledger.LEDGER_RECORD_FIELDS + (guardian_ledger.ADJUDICATED_IN,)
+
+
 def test_skill_references_guardian_layout_paths():
-    """Storage layout ↔ SKILL prose (fail-closed)."""
-    layout = guardian_store.LAYOUT
-    assert layout, "guardian_store.LAYOUT is empty — no authoritative home"
+    """Storage layout ↔ SKILL prose (fail-closed, exact equality both directions)."""
+    home_paths = tuple(
+        sorted("guardian/" + guardian_store.LAYOUT[key] for key in guardian_store.LAYOUT))
+    assert home_paths, "guardian_store.LAYOUT is empty — no authoritative home"
     skill = _read(_SKILL)
-    checked = set()
-    for key in layout:
-        filename = layout[key]
-        assert filename, "LAYOUT[%r] is empty" % key
-        guardian_path = "guardian/" + filename
-        assert guardian_path in skill or filename in skill, (
-            "SKILL.md must reference %r (guardian/%s)" % (guardian_path, filename))
-        checked.add(key)
-    assert checked == set(layout.keys()), (
-        "layout path loop must cover every LAYOUT key (checked %s, layout has %s)"
-        % (sorted(checked), sorted(layout.keys())))
+    documented = _parse_skill_layout_paths(skill)
+    assert documented == home_paths, (
+        "SKILL.md layout paths drifted from guardian_store.LAYOUT\n"
+        "  documented only: %s\n  home only: %s"
+        % (sorted(set(documented) - set(home_paths)),
+           sorted(set(home_paths) - set(documented))))
 
 
 def test_lens_contract_covers_all_parts():
@@ -86,18 +115,73 @@ def test_vitals_and_drift_thresholds_agree():
 
 
 def test_conventions_mentions_vitals_and_ledger_fields():
-    """CONVENTIONS §2.1 prose ↔ vitals set + ledger record fields (fail-closed)."""
+    """CONVENTIONS §2.1 prose ↔ vitals set + ledger record fields (exact equality)."""
     text = _read(_CONVENTIONS)
-    for vital in guardian_vitals.VITALS:
-        assert vital in text, "CONVENTIONS.md missing vital %r" % vital
-    for field in guardian_ledger.LEDGER_RECORD_FIELDS:
-        assert field in text, "CONVENTIONS.md missing ledger record field %r" % field
-    for outcome in guardian_ledger.OUTCOMES_FOR + guardian_ledger.OUTCOMES_AGAINST:
-        assert outcome in text, "CONVENTIONS.md missing ledger outcome %r" % outcome
+    documented_vitals = _parse_conventions_backtick_list(
+        text,
+        r"tracked each sweep \(([^;]+);",
+        "CONVENTIONS.md vitals list")
+    assert tuple(guardian_vitals.VITALS) == documented_vitals, (
+        "CONVENTIONS.md vitals list drifted from guardian_vitals.VITALS\n"
+        "  documented only: %s\n  home only: %s"
+        % (sorted(set(documented_vitals) - set(guardian_vitals.VITALS)),
+           sorted(set(guardian_vitals.VITALS) - set(documented_vitals))))
+    documented_fields = _parse_conventions_backtick_list(
+        text,
+        r"LEDGER_RECORD_FIELDS`\)\s+carries ([^.]+)\.",
+        "CONVENTIONS.md ledger record fields")
+    assert tuple(guardian_ledger.LEDGER_RECORD_FIELDS) == documented_fields, (
+        "CONVENTIONS.md ledger fields drifted from guardian_ledger.LEDGER_RECORD_FIELDS\n"
+        "  documented only: %s\n  home only: %s"
+        % (sorted(set(documented_fields) - set(guardian_ledger.LEDGER_RECORD_FIELDS)),
+           sorted(set(guardian_ledger.LEDGER_RECORD_FIELDS) - set(documented_fields))))
+    documented_for = _parse_conventions_backtick_list(
+        text,
+        r"(" + _OUTCOME_TOKEN + r") count for;",
+        "CONVENTIONS.md outcomes-for list")
+    documented_against = _parse_conventions_backtick_list(
+        text,
+        r"(" + _OUTCOME_TOKEN + r") count\s+against",
+        "CONVENTIONS.md outcomes-against list")
+    assert tuple(guardian_ledger.OUTCOMES_FOR) == documented_for, (
+        "CONVENTIONS.md OUTCOMES_FOR drifted from guardian_ledger.OUTCOMES_FOR")
+    assert tuple(guardian_ledger.OUTCOMES_AGAINST) == documented_against, (
+        "CONVENTIONS.md OUTCOMES_AGAINST drifted from guardian_ledger.OUTCOMES_AGAINST")
+    assert guardian_ledger.ADJUDICATED_IN in _ledger_record_schema()
 
 
 def test_skill_mentions_ledger_outcomes():
-    """SKILL prose ↔ ledger outcome maps (fail-closed)."""
+    """SKILL prose ↔ ledger outcome maps (exact equality both directions)."""
     skill = _read(_SKILL)
-    for outcome in guardian_ledger.OUTCOMES_FOR + guardian_ledger.OUTCOMES_AGAINST:
-        assert outcome in skill, "SKILL.md missing ledger outcome %r" % outcome
+    documented_for = _parse_conventions_backtick_list(
+        skill,
+        r"(" + _OUTCOME_TOKEN + r") count for;",
+        "SKILL.md outcomes-for list")
+    documented_against = _parse_conventions_backtick_list(
+        skill,
+        r"(" + _OUTCOME_TOKEN + r") count against",
+        "SKILL.md outcomes-against list")
+    assert tuple(guardian_ledger.OUTCOMES_FOR) == documented_for, (
+        "SKILL.md OUTCOMES_FOR drifted from guardian_ledger.OUTCOMES_FOR\n"
+        "  documented only: %s\n  home only: %s"
+        % (sorted(set(documented_for) - set(guardian_ledger.OUTCOMES_FOR)),
+           sorted(set(guardian_ledger.OUTCOMES_FOR) - set(documented_for))))
+    assert tuple(guardian_ledger.OUTCOMES_AGAINST) == documented_against, (
+        "SKILL.md OUTCOMES_AGAINST drifted from guardian_ledger.OUTCOMES_AGAINST\n"
+        "  documented only: %s\n  home only: %s"
+        % (sorted(set(documented_against) - set(guardian_ledger.OUTCOMES_AGAINST)),
+           sorted(set(guardian_ledger.OUTCOMES_AGAINST) - set(documented_against))))
+
+
+def test_conventions_vitals_guard_fails_on_home_mutation(monkeypatch):
+    """Mutation check: a changed authoritative vital must fail the §11 guard."""
+    original = guardian_vitals.VITALS
+    monkeypatch.setattr(
+        guardian_vitals, "VITALS",
+        original + ("__mutation_probe__",))
+    try:
+        import pytest
+        with pytest.raises(AssertionError, match="drifted"):
+            test_conventions_mentions_vitals_and_ledger_fields()
+    finally:
+        monkeypatch.setattr(guardian_vitals, "VITALS", original)
