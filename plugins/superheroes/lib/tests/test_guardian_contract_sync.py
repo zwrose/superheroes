@@ -59,3 +59,18 @@ def test_lens_contract_covers_all_facts():
     assert set(facts) == {"verify-command", "recorded-coverage", "stack-tags", "paths"}, (
         "FACTS membership changed — update this golden set AND lens-contract.md"
     )
+
+
+def test_lens_contract_requires_guardian_tools_invocation_seam():
+    """Tool invocation ↔ reference prose (§11 copy-holder — RHS traces to lib home)."""
+    text = _read(_LENS_CONTRACT)
+    assert "## Tool invocation" in text
+    assert "guardian_tools.invoke" in text
+    assert "guardian_tools.resolve" in text
+    assert "guardian_tools.version" in text
+    assert "contract violation" in text.lower()
+    assert "guardian_tools.INSTALL_COMMANDS" in text
+    import guardian_tools
+    assert guardian_tools.INSTALL_COMMANDS, (
+        "guardian_tools.INSTALL_COMMANDS is the authoritative install-command home"
+    )
