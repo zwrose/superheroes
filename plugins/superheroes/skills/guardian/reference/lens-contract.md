@@ -53,3 +53,16 @@ The seam (`plugins/superheroes/lib/guardian_tools.py`) provides these guarantees
 5. **No fetch at sweep time** — absent tools degrade with a message quoting `guardian_tools.INSTALL_COMMANDS`; the seam never installs or fetches.
 
 Install guidance for collectors lives only in `guardian_tools.INSTALL_COMMANDS`.
+
+## Collection honesty
+
+Every registered lens must satisfy the honesty invariants (enforced by the per-lens conformance suite).
+
+`collect()` returns a **status** from `COLLECT_STATUSES`: `collected`, `partial`, or `not-collected` (default `collected` when omitted). A lens that could not collect returns `not-collected` with a non-empty `reason` — never an empty candidate list that reads as clean.
+
+- **`not-collected`** — the sweep records a `degradedLenses` entry, surfaces nothing, does not set `funnel["raised"]` for that lens, and preserves the prior snapshot digest (or omits the lens when there is no prior entry).
+- **`partial`** — the sweep records degradation **and** processes the candidates and digest the lens did collect. The lens owns merging `ctx["prevDigest"]` for the portions it could not collect this run. When the collector version changed, a `partial` result does not advance the baseline digest until a full `collected` result lands.
+
+The production loader degrades a broken lens **visibly by name** (stand-in with the expected lens name) — never silent omission, never fatal to the sweep.
+
+Tool-running and status-builder helpers live in `guardian_collect.py` — the single home for that behavior (CONVENTIONS §11). Lenses use `run_tool`, `collected()`, `partial()`, and `not_collected()` rather than re-implementing subprocess handling.
