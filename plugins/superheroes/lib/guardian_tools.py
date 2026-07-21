@@ -16,9 +16,11 @@ Guarantees by construction:
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -83,6 +85,7 @@ COLLECTOR_ENV_CODE_LOADING = frozenset({
 })
 
 _NEUTRAL_COLLECTOR_CWD = None
+_NEUTRAL_COLLECTOR_CWD_LOCK = threading.Lock()
 
 
 def _git_toplevel(cwd):
@@ -122,6 +125,57 @@ def _is_under(path, root):
         if parent == cur:
             return False
         cur = parent
+
+
+def _is_confidently_under(path, root):
+    """True only on a definite positive samefile match during the ancestor walk.
+
+    Unlike ``_realpath_is_under`` / ``_is_under``, OSError and no-match both
+    return False — operands must fail closed toward rejection.  Nonexistent
+    leaves still resolve via the nearest existing ancestor (same as PATH logic).
+    """
+    try:
+        root_real = os.path.realpath(root)
+    except OSError:
+        return False
+
+    cur = path
+    if not os.path.isabs(cur):
+        try:
+            cur = os.path.abspath(cur)
+        except OSError:
+            return False
+
+    probe = cur
+    while not os.path.lexists(probe):
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            break
+        probe = parent
+
+    walk = probe
+    if os.path.exists(walk):
+        try:
+            walk = os.path.realpath(walk)
+        except OSError:
+            return False
+
+    while True:
+        try:
+            if os.path.samefile(walk, root_real):
+                return True
+        except OSError:
+            return False
+        parent = os.path.dirname(walk)
+        if parent == walk:
+            return False
+        if os.path.exists(parent):
+            try:
+                walk = os.path.realpath(parent)
+            except OSError:
+                return False
+        else:
+            walk = parent
 
 
 def _realpath_is_under(path, root):
@@ -429,7 +483,7 @@ def absolute_repo_operands(repo, targets):
             abs_target = os.path.realpath(target)
         else:
             abs_target = os.path.realpath(os.path.join(repo_real, target))
-        if not _realpath_is_under(abs_target, repo_real):
+        if not _is_confidently_under(abs_target, repo_real):
             raise ValueError(
                 "cruise target %r resolves outside the swept repo %r"
                 % (target, repo_real))
@@ -446,10 +500,11 @@ def neutral_collector_cwd(repo):
         raise RuntimeError(
             "temp base %r resolves inside the swept repo %r — cannot create a "
             "neutral collector cwd" % (tmp_base, repo_real))
-    if _NEUTRAL_COLLECTOR_CWD is None or not os.path.isdir(_NEUTRAL_COLLECTOR_CWD):
-        _NEUTRAL_COLLECTOR_CWD = tempfile.mkdtemp(
-            prefix="superheroes-guardian-collector-")
-    result = _NEUTRAL_COLLECTOR_CWD
+    with _NEUTRAL_COLLECTOR_CWD_LOCK:
+        if _NEUTRAL_COLLECTOR_CWD is None or not os.path.isdir(_NEUTRAL_COLLECTOR_CWD):
+            _NEUTRAL_COLLECTOR_CWD = tempfile.mkdtemp(
+                prefix="superheroes-guardian-collector-")
+        result = _NEUTRAL_COLLECTOR_CWD
     if _realpath_is_under(result, repo_real):
         raise RuntimeError(
             "neutral collector cwd %r resolves inside the swept repo %r"
@@ -528,13 +583,40 @@ def _route_captured(tool, argv, cwd, stdout, stderr, rc, parse):
         stdout=stdout, stderr=stderr, parsed=parsed)
 
 
-def _invoke_subprocess_bounded(tool, argv, cwd, timeout, env, parse):
-    import threading
-
+def _kill_process_tree(proc):
+    """Kill the collector and any descendants (e.g. node worker fan-out)."""
     try:
-        proc = subprocess.Popen(
-            argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, env=env)
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (OSError, AttributeError, ProcessLookupError):
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+
+def _invoke_subprocess_bounded(tool, argv, cwd, timeout, env, parse):
+    popen_kwargs = {
+        "cwd": cwd,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+        "env": env,
+    }
+    try:
+        popen_kwargs["start_new_session"] = True
+        proc = subprocess.Popen(argv, **popen_kwargs)
+    except TypeError:
+        popen_kwargs.pop("start_new_session", None)
+        try:
+            proc = subprocess.Popen(argv, **popen_kwargs)
+        except FileNotFoundError:
+            return _result_dict(
+                "spawn-failed", tool, argv, cwd,
+                reason="executable not found: %s" % (argv[0] if argv else tool))
+        except OSError as exc:
+            return _result_dict(
+                "spawn-failed", tool, argv, cwd,
+                reason="%s: %s" % (argv[0] if argv else tool, exc))
     except FileNotFoundError:
         return _result_dict(
             "spawn-failed", tool, argv, cwd,
@@ -553,10 +635,7 @@ def _invoke_subprocess_bounded(tool, argv, cwd, timeout, env, parse):
         stdout_box[0] = text
         if trunc:
             truncated[0] = True
-            try:
-                proc.kill()
-            except OSError:
-                pass
+            _kill_process_tree(proc)
             _drain_pipe_discard(proc.stdout)
 
     def _drain_stderr():
@@ -572,43 +651,40 @@ def _invoke_subprocess_bounded(tool, argv, cwd, timeout, env, parse):
     for t in readers:
         t.daemon = True
         t.start()
+    outcome = None
     try:
-        proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
         try:
-            proc.kill()
-        except OSError:
-            pass
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_process_tree(proc)
+            outcome = _result_dict(
+                "timeout", tool, argv, cwd,
+                reason="%s after %ss" % (argv[0], timeout))
+        except (OSError, subprocess.SubprocessError) as exc:
+            _kill_process_tree(proc)
+            outcome = _result_dict(
+                "spawn-failed", tool, argv, cwd,
+                reason="%s: %s" % (argv[0], exc))
+        else:
+            if truncated[0]:
+                outcome = _result_dict(
+                    "truncated-output", tool, argv, cwd,
+                    returncode=proc.returncode, stdout=stdout_box[0],
+                    stderr=stderr_box[0], truncated=True)
+            else:
+                rc = proc.returncode if proc.returncode is not None else 0
+                outcome = _route_captured(
+                    tool, argv, cwd, stdout_box[0], stderr_box[0], rc, parse)
+    finally:
         for t in readers:
             t.join(timeout=5)
-        return _result_dict(
-            "timeout", tool, argv, cwd, reason="%s after %ss" % (argv[0], timeout))
-    except (OSError, subprocess.SubprocessError) as exc:
-        try:
-            proc.kill()
-        except OSError:
-            pass
-        for t in readers:
-            t.join(timeout=5)
-        return _result_dict(
-            "spawn-failed", tool, argv, cwd,
-            reason="%s: %s" % (argv[0], exc))
-    for t in readers:
-        t.join(timeout=5)
-    for pipe in (proc.stdout, proc.stderr):
-        if pipe is not None:
-            try:
-                pipe.close()
-            except OSError:
-                pass
-    if truncated[0]:
-        return _result_dict(
-            "truncated-output", tool, argv, cwd,
-            returncode=proc.returncode, stdout=stdout_box[0],
-            stderr=stderr_box[0], truncated=True)
-    rc = proc.returncode if proc.returncode is not None else 0
-    return _route_captured(
-        tool, argv, cwd, stdout_box[0], stderr_box[0], rc, parse)
+        for pipe in (proc.stdout, proc.stderr):
+            if pipe is not None:
+                try:
+                    pipe.close()
+                except OSError:
+                    pass
+    return outcome
 
 
 def _invoke(run, tool, argv, cwd, timeout, env, parse):
@@ -641,18 +717,19 @@ def _invoke(run, tool, argv, cwd, timeout, env, parse):
 def invoke(tool, fixed_args, repo, targets, *, run=None, cwd=None,
            timeout=COLLECT_TIMEOUT, env=None, parse=None, extra_node_path=None):
     """The single external-tool invocation seam for Guardian lenses."""
+    if not repo or not os.path.isabs(repo):
+        raise ValueError("repo must be an absolute path, got %r" % (repo,))
+    repo_abs = os.path.realpath(repo)
+
     res = resolve(tool, repo)
     if not res["found"]:
-        return {
-            "outcome": "tool-absent",
-            "tool": tool,
-            "reason": missing_tool_reason(tool, res.get("rejection")),
-            "argv": None,
-        }
-
-    repo_abs = os.path.realpath(repo)
-    if not os.path.isabs(repo_abs):
-        raise ValueError("repo must be an absolute path, got %r" % (repo,))
+        return _result_dict(
+            "tool-absent", tool, None, None,
+            reason=missing_tool_reason(tool, res.get("rejection")))
+    if _is_under(res["path"], repo_abs):
+        return _result_dict(
+            "tool-absent", tool, None, None,
+            reason=missing_tool_reason(tool, REJECTION_REPO_LOCAL))
 
     argv = append_repo_operands(
         [res["path"]] + list(fixed_args),

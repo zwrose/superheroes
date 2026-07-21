@@ -182,6 +182,44 @@ def test_resolve_ignores_dot_path_entry(tmp_path, monkeypatch):
     assert out2.get("rejection") == gt.REJECTION_REPO_LOCAL
 
 
+def test_resolve_rejects_relative_path_entry_resolving_outside_repo(
+        tmp_path, monkeypatch):
+    """Relative PATH entries are cwd-unstable and must be refused even when they
+    resolve outside the scanned repo.
+
+    Deleting ``_resolved_via_relative_path_entry`` makes this test fail — the
+    F5 fixture (``test_resolve_rejects_relative_path_when_process_cwd_differs``)
+    cannot cover this because its relative entry resolves inside the repo and
+    ``_is_under`` rejects first.
+    """
+    repo = tmp_path / "scanned"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    proc = tmp_path / "proc"
+    proc.mkdir()
+
+    ext_bin = proc / "external" / "bin"
+    ext_bin.mkdir(parents=True)
+    proc_tool = proc / "jscpd"
+    proc_tool.write_text("#!/bin/sh\necho external-ok\n")
+    proc_tool.chmod(proc_tool.stat().st_mode | stat.S_IXUSR)
+
+    monkeypatch.setenv("PATH", ".")
+    old = os.getcwd()
+    try:
+        os.chdir(str(proc))
+        assert not gt._is_under(str(proc_tool), str(repo))
+        hit = shutil.which("jscpd")
+        assert hit is not None
+        assert os.path.samefile(hit, proc_tool)
+        out = gt.resolve("jscpd", str(repo))
+    finally:
+        os.chdir(old)
+    assert out["found"] is False
+    assert out["path"] is None
+    assert out.get("rejection") == gt.REJECTION_REPO_LOCAL
+
+
 def test_resolve_rejects_relative_path_when_process_cwd_differs(tmp_path, monkeypatch):
     """Relative PATH hits must be judged against process cwd, not scanned-repo cwd.
 
@@ -975,6 +1013,10 @@ def _write_executable(path, body):
     return path
 
 
+def _python_collector_shebang():
+    return "#!" + sys.executable + "\n"
+
+
 def _assert_hardened_argv(argv, expected_operands=None, repo=None):
     assert "--" in argv, "end-of-options separator missing"
     sep = argv.index("--")
@@ -1000,8 +1042,64 @@ def test_invoke_rejects_repo_local_tool_without_spawning(tmp_path, monkeypatch):
     out = gt.invoke(FAKE_COLLECTOR, ["--probe"], repo, ["src"])
     assert out["outcome"] == "tool-absent"
     assert out["argv"] is None
+    assert out["cwd"] is None
+    assert out["returncode"] is None
+    assert out["stdout"] == ""
+    assert out["stderr"] == ""
+    assert out["truncated"] is False
+    assert "reason" in out
     assert run.calls == []
     assert os.path.isfile(binp)
+
+
+def test_invoke_raises_on_relative_repo(tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path)
+    ext = _make_external_tool(tmp_path, FAKE_COLLECTOR)
+    monkeypatch.setenv("PATH", os.path.dirname(ext))
+    with pytest.raises(ValueError, match="repo must be an absolute path"):
+        gt.invoke(FAKE_COLLECTOR, [], os.path.basename(repo), ["src"], run=_FakeRun())
+
+
+def test_invoke_raises_when_explicit_cwd_inside_repo(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    ext = _make_external_tool(tmp_path, FAKE_COLLECTOR)
+    monkeypatch.setenv("PATH", os.path.dirname(ext))
+    os.makedirs(os.path.join(repo, "src"))
+    inner = os.path.join(repo, "inner")
+    os.makedirs(inner)
+    with pytest.raises(ValueError, match="collector cwd must not be inside"):
+        gt.invoke(
+            FAKE_COLLECTOR, [], repo, ["src"],
+            cwd=inner, run=_FakeRun())
+
+
+def test_absolute_repo_operands_rejects_indeterminate_containment(tmp_path):
+    repo = _init_repo(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = os.path.join(repo, "operand-link")
+    os.symlink(str(outside), link)
+    with pytest.raises(ValueError, match="resolves outside the swept repo"):
+        gt.absolute_repo_operands(repo, [link])
+
+
+def test_invoke_rejects_executable_under_repo_despite_nested_git(
+        tmp_path, monkeypatch):
+    """Authoritative sweep root wins over a nested rogue ``.git`` in resolve."""
+    repo = _init_repo(tmp_path)
+    nested = os.path.join(repo, "nested")
+    os.makedirs(nested)
+    os.makedirs(os.path.join(nested, ".git"))
+    ext = _make_external_tool(tmp_path, FAKE_COLLECTOR, leaf="outside")
+    tool_in_repo = os.path.join(repo, FAKE_COLLECTOR)
+    shutil.copy2(ext, tool_in_repo)
+    os.chmod(tool_in_repo, os.stat(tool_in_repo).st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("PATH", os.path.dirname(tool_in_repo))
+    # Without the invoke belt, resolve would accept (nested .git shrinks trust root).
+    monkeypatch.setattr(gt, "_git_toplevel", lambda cwd: nested)
+    out = gt.invoke(FAKE_COLLECTOR, [], repo, ["src"])
+    assert out["outcome"] == "tool-absent"
+    assert gt.REJECTION_REPO_LOCAL in out.get("reason", "")
 
 
 def test_invoke_builds_argv_with_resolved_head_fixed_args_and_absolute_targets(
@@ -1111,6 +1209,30 @@ def test_sanitized_env_drops_empty_relative_and_repo_path_never_absolutizes(tmp_
         os.path.realpath(p) for p in parts if p]
     assert os.path.realpath(repo_bin) not in [os.path.realpath(p) for p in parts if p]
     assert "/usr/bin" in parts
+
+
+def test_sanitized_env_falls_back_to_safe_path_when_all_stripped(tmp_path):
+    repo = _init_repo(tmp_path)
+    rel = "rel-bin"
+    os.makedirs(os.path.join(repo, rel))
+    repo_bin = os.path.join(repo, "bin")
+    os.makedirs(repo_bin)
+    old = os.getcwd()
+    try:
+        os.chdir(repo)
+        env = gt.sanitized_env(
+            base_env={"PATH": os.pathsep.join(["", ".", rel, repo_bin, ""])},
+            repo=repo)
+    finally:
+        os.chdir(old)
+    path = env.get("PATH") or ""
+    assert path != ""
+    assert path == gt._default_safe_path()
+    parts = path.split(os.pathsep)
+    assert "" not in parts
+    for part in gt._DEFAULT_SAFE_PATH_PARTS:
+        if os.path.isdir(part):
+            assert part in parts
 
 
 def test_sanitized_env_keeps_nonexistent_outside_toolchain_node_path():
@@ -1237,9 +1359,8 @@ def test_rce_regression_node_path_inside_repo_never_loads_repo_packages(
         pytest.skip("node not installed (positive control gated)")
     control_env = dict(os.environ)
     control_env[gt.NODE_PATH_ENV] = nm
-    probe = os.path.join(pkg_dir, "index.js")
     subprocess.run(
-        [node, "-r", probe, "-e", "process.exit(0)"],
+        [node, "-e", "require('guardian_rce_probe')"],
         cwd=repo, env=control_env, capture_output=True, text=True,
         timeout=30, check=False)
     assert os.path.isfile(marker)
@@ -1326,7 +1447,7 @@ def test_rce_regression_depcruise_webpack_config_never_executes_during_lens_coll
             "module.exports = {};\n" % RCE_MARKER_NAME)
     collector = _write_executable(
         tmp_path / "bin" / FAKE_COLLECTOR,
-        "#!/usr/bin/env python3\n"
+        _python_collector_shebang() +
         "import os\n"
         "cfg = '.dependency-cruiser.js'\n"
         "if os.path.isfile(cfg):\n"
@@ -1335,7 +1456,8 @@ def test_rce_regression_depcruise_webpack_config_never_executes_during_lens_coll
     monkeypatch.setenv("PATH", os.path.dirname(collector))
     assert not os.path.exists(marker)
 
-    gt.invoke(FAKE_COLLECTOR, [], repo, ["src"], run=None)
+    out = gt.invoke(FAKE_COLLECTOR, [], repo, ["src"], run=None)
+    assert out["outcome"] == "ok", out
     assert not os.path.exists(marker)
 
     subprocess.run(
@@ -1358,7 +1480,7 @@ def test_rce_regression_import_linter_contract_types_never_imports_repo_code(
             "[importlinter]\nroot_package = app\ncontract_types = pwn: app.payload.Attack\n")
     collector = _write_executable(
         tmp_path / "bin" / FAKE_COLLECTOR,
-        "#!/usr/bin/env python3\n"
+        _python_collector_shebang() +
         "import configparser, importlib, os, sys\n"
         "sys.path.insert(0, os.getcwd())\n"
         "cp = configparser.ConfigParser()\n"
@@ -1372,7 +1494,8 @@ def test_rce_regression_import_linter_contract_types_never_imports_repo_code(
     monkeypatch.setenv("PATH", os.path.dirname(collector))
     assert not os.path.exists(marker)
 
-    gt.invoke(FAKE_COLLECTOR, [], repo, ["app"], run=None)
+    out = gt.invoke(FAKE_COLLECTOR, [], repo, ["app"], run=None)
+    assert out["outcome"] == "ok", out
     assert not os.path.exists(marker)
 
     subprocess.run(

@@ -3,6 +3,9 @@
 Statically scans every guardian lens module and asserts none import or call
 subprocess/os spawn primitives directly — external invocation must route through
 guardian_tools (the seam module itself is exempt).
+
+Sanctioned spawners outside the lens set: guardian_sweep.py (orchestrator) and
+guardian_tools.py (invocation seam).
 """
 import ast
 import glob
@@ -17,12 +20,49 @@ if _LIB not in sys.path:
 
 _BANNED_MODULES = frozenset({"subprocess"})
 _BANNED_OS_ATTRS = frozenset({"system", "popen"})
-_BANNED_SUBPROCESS_ATTRS = frozenset({"Popen", "run", "call", "check_call", "check_output"})
+_BANNED_OS_ATTR_PREFIXES = ("exec", "spawn")
+_BANNED_SUBPROCESS_ATTRS = frozenset({
+    "Popen", "run", "call", "check_call", "check_output",
+})
+_BANNED_OS_FROM_NAMES = frozenset({
+    "system", "popen", "posix_spawn", "posix_spawnp",
+})
+_BANNED_SUBPROCESS_FROM_NAMES = _BANNED_SUBPROCESS_ATTRS
 
 
 def _lens_module_paths():
     pattern = os.path.join(_LIB, "guardian_lens*.py")
     return sorted(glob.glob(pattern))
+
+
+def _os_attr_is_banned(attr):
+    if attr in _BANNED_OS_ATTRS:
+        return True
+    return any(attr.startswith(prefix) for prefix in _BANNED_OS_ATTR_PREFIXES)
+
+
+def _os_from_name_is_banned(name):
+    if name in _BANNED_OS_FROM_NAMES:
+        return True
+    return any(name.startswith(prefix) for prefix in _BANNED_OS_ATTR_PREFIXES)
+
+
+def _collect_imported_spawn_names(tree):
+    """Map bare names imported from os/subprocess to their spawn primitives."""
+    imported = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom) or not node.module:
+            continue
+        mod_root = node.module.split(".")[0]
+        if mod_root == "os":
+            for alias in node.names:
+                if _os_from_name_is_banned(alias.name):
+                    imported[alias.asname or alias.name] = "os.%s" % alias.name
+        elif mod_root == "subprocess":
+            for alias in node.names:
+                if alias.name in _BANNED_SUBPROCESS_FROM_NAMES:
+                    imported[alias.asname or alias.name] = "subprocess.%s" % alias.name
+    return imported
 
 
 def _imports_banned(node):
@@ -36,18 +76,36 @@ def _imports_banned(node):
     return None
 
 
-def _call_is_banned(node):
+def _call_is_banned(node, imported_spawn_names):
     if not isinstance(node, ast.Call):
         return None
     func = node.func
     if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
-        if func.value.id == "os" and func.attr in _BANNED_OS_ATTRS:
+        if func.value.id == "os" and _os_attr_is_banned(func.attr):
             return "os.%s" % func.attr
         if func.value.id == "subprocess" and func.attr in _BANNED_SUBPROCESS_ATTRS:
             return "subprocess.%s" % func.attr
-    if isinstance(func, ast.Name) and func.id == "Popen":
-        return "Popen"
+    if isinstance(func, ast.Name):
+        if func.id == "Popen":
+            return "Popen"
+        if func.id in imported_spawn_names:
+            return "call %s (imported spawn)" % imported_spawn_names[func.id]
     return None
+
+
+def _find_spawn_offenders(source, filename="<memory>"):
+    tree = ast.parse(source, filename=filename)
+    imported_spawn_names = _collect_imported_spawn_names(tree)
+    offenders = []
+    for node in ast.walk(tree):
+        banned_import = _imports_banned(node)
+        if banned_import:
+            offenders.append("import %s" % banned_import)
+            break
+        banned_call = _call_is_banned(node, imported_spawn_names)
+        if banned_call:
+            offenders.append("call %s" % banned_call)
+    return offenders
 
 
 def test_lens_modules_do_not_spawn_directly():
@@ -59,16 +117,18 @@ def test_lens_modules_do_not_spawn_directly():
         if os.path.basename(path) == "guardian_tools.py":
             continue
         with open(path, encoding="utf-8") as fh:
-            tree = ast.parse(fh.read(), filename=path)
-        for node in ast.walk(tree):
-            banned_import = _imports_banned(node)
-            if banned_import:
-                offenders.append((path, "import %s" % banned_import))
-                break
-            banned_call = _call_is_banned(node)
-            if banned_call:
-                offenders.append((path, "call %s" % banned_call))
+            source = fh.read()
+        for hit in _find_spawn_offenders(source, filename=path):
+            offenders.append((path, hit))
     assert offenders == [], (
         "lens modules must not spawn directly — use guardian_tools.invoke: %s"
         % offenders
     )
+
+
+def test_spawn_detector_flags_imported_os_system():
+    """Non-vacuity: broadened detector must catch `from os import system` + bare call."""
+    source = "from os import system\nsystem('x')\n"
+    offenders = _find_spawn_offenders(source)
+    assert offenders, "expected imported os.system to be flagged"
+    assert any("system" in hit for hit in offenders)
