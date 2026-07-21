@@ -232,3 +232,96 @@ strict scorer OR hand-verification can see (the one strict trap FAIL is a hand-v
 symmetric across variants and semantically caught by both), zero real false positives,
 two genuine improvements (security/web-handler recall, test/refactor precision), both
 premortem mechanical bars green on first attempt.
+
+## 2026-07-21 — high-noise fixture, first scored run (five-lens single-variant)
+
+**Instrument:** the first scored run of the new `fixtures/high-noise/` precision
+fixture (issue #546) — the harness's first direct false-positive-rate measurement.
+This is the **re-run** against the corrected fixture. Five-lens single-variant per
+`README.md` §Single-variant fixtures: one dispatch per lens, each an **opus**
+generic subagent reading its agent file + `rubric/review-base.md` + the fixture
+from disk, matching the 0.10.0/0.11.0 single-variant method. `gate: n/a` (no
+baseline variant); the mechanical bars below are the acceptance. Reviewers were
+**mechanically blind** to `expected.json` — they were pointed at a staged copy of
+the fixture directory containing only `diff.txt`, `profile.md` and `CLAUDE.md`,
+rather than merely instructed not to read the ground truth, which is a
+methodology tightening over previous runs. The dispatch prompt explicitly required
+**new-file** line numbers, the recurring runner error documented in the 2026-06-11
+and 0.10.0 caveats above.
+
+**Supersedes:** two earlier runs of this fixture were **discarded**. The first,
+because the round-1 panel found the `retry-wrapped` trap unfair (a non-idempotent
+POST retried without an idempotency key, flaggable per
+`premortem-reviewer.md:57`) and the `three-call-sites` rationale miscounted its
+call sites; the second, because the round-2 panel found `publishDocument` was
+atomic but not idempotent (two concurrent publishes double-counted
+`publishedCount`), and the test file's hunk header declared 52 new lines over a
+53-line body, so the advertised patch would not apply intact. Each time the
+fixture changed, the measurement was re-run in full, because a result recorded
+against a superseded artifact is not a valid receipt.
+
+**Date:** 2026-07-21. **Agents/rubric ref:** working tree at branch
+`claude/superheroes-issue-546-5ae391` (base `main` @ `cd7833d`);
+`plugins/superheroes/agents/` and `plugins/superheroes/rubric/` last changed at
+`75a0c46`. **Fixture:** `fixtures/high-noise/` at commit `63e9702`
+(post-round-2-fix).
+
+Own-dimension recall (strict `score.py`) + traps, per dispatch:
+
+| Lens | Own-dimension recall | Traps flagged | Findings emitted | Net-new (inspected) | Tokens |
+|---|---|---|---|---|---|
+| architecture-reviewer | **1/1** (premature-abstraction) | 0 | 2 | 1 | 87,846 |
+| code-reviewer | **1/1** (hardcoded-error-string) | 0 | 2 | 1 | 84,861 |
+| security-reviewer | **1/1** (BOLA) | 0 | 1 | 0 | 78,492 |
+| test-reviewer | **1/1** (claim-test-mismatch) | 0 | 6 | 5 | 81,446 |
+| premortem-reviewer | **1/1** (partial-failure) | 0 | 1 | 0 | 78,725 |
+
+**Union score (all five findings files scored together):** `recall.matched == 5` of 5,
+every `by_dimension` entry 1/1, `missed: []`, `precision.traps_flagged == 0`, 7
+net-new.
+
+**Mechanical bars — both PASS, first attempt on the corrected fixture:**
+own-dimension recall 1/1 for each of the five lenses (union 5/5) ✓;
+`traps_flagged == 0` across all five dispatches ✓. All fourteen traps held.
+
+**Net-new — 7, each hand-inspected; none is a false positive:**
+- **2 cross-dimension true positives** (the same seeded defect caught by a second
+  lens; `score.py` lists them as net-new because a recall match requires the
+  dimension to match): architecture flagged the inline 404 payload (Code's seed) at
+  `src/handlers/exports.ts:36`; code flagged the id-only lookup (Security's seed)
+  at `src/handlers/documents.ts:31`.
+- **5 real but unseeded defects the fixture contains incidentally**, all from
+  test-reviewer on `src/handlers/documents.test.ts`: a second claim/test mismatch
+  on the `listDocuments` test; no unauthorized-path coverage for either handler;
+  `getDocument`'s not-found path never exercised; `searchDocuments` shipped with no
+  test; and a `beforeEach` that resets the fake's rows but not the auth mock.
+
+**Tokens:** per-dispatch totals are in the table (subagent total including reading
+the agent file, the rubric and the fixture — the same measure the 0.10.0/0.11.0
+runs recorded, not output-only). **411,370 across the five dispatches.**
+
+**Verdict: PASS** on both mechanical bars, first attempt on the corrected fixture.
+The result held across all three runs (the two discarded ones and this one) —
+own-dimension recall 1/1 for every lens and zero of fourteen traps flagged each
+time — so the headline is a repeated observation, not a single lucky pass. On
+the harness's noisiest fixture — a sprawling nine-file diff whose profile
+deliberately carries no focus hints — the five lenses flagged **zero of fourteen**
+planted near-miss traps while recovering every seed in its own dimension, and
+produced no false positives on hand inspection. Against the ~15–17% unfiltered
+precision external benchmarks report for LLM reviewers, this run measured no FP
+inflation on planted bait. Caveats, stated plainly: (1) absolute numbers remain
+non-comparable across runs per the 2026-06-11 caveat; (2) the five unseeded
+findings show the fixture is noisier than its five seeds suggest, so legitimate
+extra findings are expected on it; (3) three of those net-new landed within 2–5
+lines of a trap's window edge (closest: the `beforeEach` finding, 2 lines outside
+the `test-file-layering` trap's ±2 window). That margin, not the bars, is what to
+watch on re-runs — a small fixture edit could turn a correct finding into a scored
+false positive.
+
+**No-fly-zone constraint:** the two files carrying function-scoped traps
+(`src/services/documents.ts`, `src/services/publish.ts`) have ±15 trap windows
+covering most of each file, and trap matching ignores dimension, so any
+legitimately reportable defect added to those two files would score as a false
+positive. They must stay free of every reportable defect other than the intended
+traps. This is a semantic property the liveness smokes cannot check; it is guarded
+by review.

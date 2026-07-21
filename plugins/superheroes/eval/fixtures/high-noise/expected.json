@@ -1,0 +1,118 @@
+{
+  "fixture": "high-noise",
+  "description": "The high-noise precision fixture and the repo's first direct false-positive-rate instrument: a sprawling nine-file multi-tenant workspace-documents diff carrying only five seeds (one per code-leg lens) against fourteen plausible near-miss traps, so most of what a reviewer reads is ordinary code. Acceptance bars are mechanical, in the failure-modes single-variant precedent: own-dimension recall 1/1 for each of the five lenses (union recall.matched == 5 of 5) AND precision.traps_flagged == 0. Unlike the four earlier fixtures, the profile deliberately carries NO focus hints — hints that point at the seeded issues are exactly what this fixture exists to avoid. Every file in diff.txt shows its complete post-change content (added files as a single @@ -0,0 +1,N @@ hunk; modified files as one whole-file @@ -1,M +1,N @@ hunk with every unchanged line present as context), because the diff is the complete universe for every symbol it references: each caller, guard, wrapper and transaction a trap depends on is visibly present, so grep-before-flag is satisfiable without a worktree. Every seed lineHint sits on a '+' line and every seed/trap lineHint is unique within its file (score.py resolves line text first-occurrence-wins); seeds and traps are spaced so no correct finding can land in a trap window — function-scoped seeds (premature-abstraction, partial-failure) get a trap-free file, a line-scoped seed sits at least 10 lines from any line-scoped trap, and two function-scoped traps sit at least 31 lines apart. The two files carrying function-scoped traps (src/services/documents.ts, src/services/publish.ts) are effectively no-fly zones: a ±15 trap window covers most of each file and trap matching ignores dimension, so ANY legitimately reportable defect added to those two files would score as a false positive — they must be kept free of every reportable defect other than the intended traps. That is a semantic property the liveness smokes cannot check, so it is guarded by review rather than by a test. A known residual limitation: the no-fly-zone files contain exported units with no test in the fixture (notably `pushToCdn` and `publishDocument` in `src/services/publish.ts`; the fixture's only test file is `src/handlers/documents.test.ts`), so a coverage-strategy finding cited in those files would score as a false positive; a maintainer seeing `traps_flagged > 0` from such a finding should treat it as this known limitation rather than a reviewer regression.",
+  "seeds": [
+    {
+      "dimension": "Security",
+      "severity": "Critical",
+      "taxonomy": "BOLA",
+      "file": "src/handlers/documents.ts",
+      "lineHint": "const doc = await db.documents.findOne({ id });",
+      "why": "getDocument looks the document up by id ALONE — no workspaceId in the filter. The profile declares a multi-tenant threat model and CLAUDE.md documents the ownership filter { id, workspaceId: session.workspaceId }; listDocuments, directly above in the same diff, applies the workspace scope correctly. Any authenticated principal who learns or guesses a document id reads another workspace's document, across a trust boundary. Fix: add workspaceId: session.workspaceId to the findOne filter."
+    },
+    {
+      "dimension": "Code",
+      "severity": "Important",
+      "taxonomy": "hardcoded-error-string",
+      "file": "src/handlers/exports.ts",
+      "lineHint": "return res.status(404).json({ error: \"Export not found\", code: \"EXPORT_MISSING\" });",
+      "why": "downloadExport builds an inline 404 payload instead of the centralized notFound(res) helper. CLAUDE.md and the profile name src/handlers/responses.ts as the one home for user-facing response payloads, and this very file imports notFound and uses it correctly in getExport and cancelExport — so the convention and its symbol are both visible in the diff. Convention drift on a '+' line: replace the inline payload with notFound(res)."
+    },
+    {
+      "dimension": "Architecture",
+      "severity": "Minor",
+      "taxonomy": "premature-abstraction",
+      "file": "src/lib/doc-format.ts",
+      "lineHint": "function withFormatting(doc) {",
+      "why": "withFormatting is a module-local wrapper around a single call to the formatter pair, invoked from exactly one place — renderDocument, four lines below. The abstraction bar is two existing callers or a documented near-future second use; formatTitle and formatBody each have two callers in this file, withFormatting has one. Grep-before-flag is satisfiable inside the diff: CLAUDE.md declares every call site of a non-exported helper visible in its declaring file. Inline it until a second caller appears."
+    },
+    {
+      "dimension": "Failure-Mode",
+      "severity": "Important",
+      "taxonomy": "partial-failure",
+      "file": "src/services/indexing.ts",
+      "lineHint": "export async function reindexDocument(doc) {",
+      "why": "reindexDocument performs two dependent writes — insert the search-index row, then set indexed/indexedAt on the document — outside db.transaction(async (tx) => ...), the idiom CLAUDE.md and the profile document for writes that must land together. Trigger: a process crash or deploy restart between the two awaits. Propagation: no transaction, no compensation, and no idempotency key on the index insert (grep the diff: db.transaction appears only in src/services/publish.ts). Impact: the index row lands while the document stays indexed: false, so reindexWorkspace re-selects it and inserts a duplicate index row on the next pass. Wrap both writes in the transaction idiom."
+    },
+    {
+      "dimension": "Test",
+      "severity": "Important",
+      "taxonomy": "claim-test-mismatch",
+      "file": "src/handlers/documents.test.ts",
+      "lineHint": "it(\"rejects a document from another workspace\", async () => {",
+      "why": "The test named \"rejects a document from another workspace\" never arranges a second workspace: it seeds document d3 into w1 — the same workspace the session carries — and then asserts only that the call resolves. The name claims an authorization behavior the body never exercises, so the test passes for the wrong reason and gives false confidence that the cross-workspace path is covered. Fix: seed the document into a different workspace and assert the not-found/forbidden response."
+    }
+  ],
+  "traps": [
+    {
+      "file": "src/handlers/documents.ts",
+      "lineHint": "const removed = await db.documents.delete({ id: target });",
+      "whyNotFlagged": "context-line — a reviewer may read deleteDocument's id-alone lookup as a cross-workspace (BOLA) hole. It genuinely is one, but every line of that function is a context line this diff does not change. The base rubric's diff-scope rule (verification rule #2) and the Pre-existing severity tier require SKIPPING it rather than reporting it at any severity; audit-debt owns it, not this review."
+    },
+    {
+      "file": "src/handlers/documents.ts",
+      "lineHint": "import { ok, notFound, unauthorized } from \"./responses\";",
+      "whyNotFlagged": "sibling-import — a reviewer may flag the relative \"./responses\" import as a path-convention violation. responses.ts is a colocated sibling in src/handlers/, and code-reviewer's verification rule #3 says a colocated sibling's \"./\" import is intentional and fine, so the candidate is dropped before emission."
+    },
+    {
+      "file": "src/handlers/documents.ts",
+      "lineHint": "[session.workspaceId, req.query.q],",
+      "whyNotFlagged": "framework-escaped — a reviewer may read req.query.q reaching a SQL string as injection. It is passed as a bound ? parameter, and CLAUDE.md records that the data layer escapes every bound value. security-reviewer's Do NOT Flag list drops theoretical injection in places the framework already escapes by default."
+    },
+    {
+      "file": "src/handlers/exports.ts",
+      "lineHint": "const counts = { total: rows.length,   ready: ready.length,  failed: failed.length,   pending: pending.length };",
+      "whyNotFlagged": "tooling-caught — a reviewer may flag this over-long, irregularly-spaced object literal. Line width, indentation and spacing belong to the project's Prettier pre-commit hook (CLAUDE.md, and the profile's canonical patterns), which rewrites this line on the way in. The base rubric's global Do-NOT-Flag bar (linter/tooling territory) and CoV step 4 drop it entirely — it is pure formatter output, not a human-judgment naming or style point that would survive as a Nit."
+    },
+    {
+      "file": "src/handlers/exports.ts",
+      "lineHint": "const job = await db.exports.findOne({ id, workspaceId: session.workspaceId });",
+      "whyNotFlagged": "adequate-primary-defense — a reviewer may propose stacking a second authorization check (a per-user check on top of the workspace filter) onto this correctly scoped lookup. The ownership filter CLAUDE.md documents is present and correct, and CLAUDE.md states it is sufficient on its own; security-reviewer's Do NOT Flag list drops defense-in-depth suggestions on a primary defense that is already adequate."
+    },
+    {
+      "file": "src/lib/text-utils.ts",
+      "lineHint": "export function truncate(text, limit) {",
+      "whyNotFlagged": "three-call-sites — a reviewer may flag truncate as an unjustified or premature abstraction. architecture-reviewer's verification rule #2 requires grepping the call sites first and DROPPING the finding at 3+; the diff is the complete universe and shows five, one each in src/handlers/documents.ts, src/handlers/exports.ts and src/lib/doc-format.ts, plus two in src/services/documents.ts."
+    },
+    {
+      "file": "src/handlers/documents.test.ts",
+      "lineHint": "vi.mock(\"../db/client\");",
+      "whyNotFlagged": "pragmatic-test-mocks — a reviewer may call two vi.mock calls in one handler test excessive mocking. test-reviewer's Do NOT Flag list keeps mocks that look excessive but are necessary for module isolation: the handler under test imports exactly these two modules (auth, db), so each mock isolates the unit rather than padding the setup."
+    },
+    {
+      "file": "src/handlers/documents.test.ts",
+      "lineHint": "db.documents.__rows.push({ id, workspaceId, title: \"Draft\", body: \"body\" });",
+      "whyNotFlagged": "test-file-layering — a reviewer may flag the setup helper reaching the fake data layer directly instead of going through the service layer. architecture-reviewer's Do NOT Flag list drops layering nits in test files: test setup, mocks and fixtures may be pragmatic and do not need production separation of concerns. This is fixture arrangement, not a test-architecture failure."
+    },
+    {
+      "file": "src/services/documents.ts",
+      "lineHint": "parts.push(`id=${doc.id}`);",
+      "whyNotFlagged": "size-only — a reviewer may flag summarizeDocument for having grown. No size threshold is even crossed (the function is 12 lines, the file 57, against the 50/500 defaults), and architecture-reviewer.md's complexity rule requires a SECOND symptom — mixed concerns, more than one responsibility, high fan-in/out, must-change-together duplication — before raw length is promoted past a Nit. The function stays flat, un-nested and single-concern: it builds one human-readable summary line, so there is no second symptom to name and nothing to emit."
+    },
+    {
+      "file": "src/services/documents.ts",
+      "lineHint": "export function statusLabel(status) {",
+      "whyNotFlagged": "clear-non-duplicative — a reviewer may raise \"this mapper could be more abstract\" or \"make it table-driven\". architecture-reviewer's Do NOT Flag list drops \"could be more abstract\" when the current shape is clear and not duplicative: statusLabel is an explicit four-way mapper, nothing else in the diff encodes these labels, and concrete beats generic by default unless the project's conventions say otherwise."
+    },
+    {
+      "file": "src/services/publish.ts",
+      "lineHint": "const response = await retryFetch(PUBLISH_ENDPOINT, {",
+      "whyNotFlagged": "retry-wrapped — a reviewer may flag the outbound CDN call as an unguarded dependency with no timeout and no bounded retry, or as a non-idempotent POST that retries can double-publish. It goes through retryFetch with an explicit timeoutMs and retries, the project's outbound wrapper per CLAUDE.md and the profile, and that wrapper's implementation (AbortController timeout, bounded attempt loop) sits at the top of this same file; the request also carries an Idempotency-Key header derived from the document (`cdn-publish:${workspaceId}:${id}`), the project's outbound-idempotency pattern per CLAUDE.md, so retrying the POST is safe. premortem-reviewer's Do NOT Flag list drops guarded flows, and the realistic-trigger rule's leg 2 requires grepping for the retry/timeout wrapper and the idempotency key before claiming either guard missing."
+    },
+    {
+      "file": "src/services/publish.ts",
+      "lineHint": "return db.transaction(async (tx) => {",
+      "whyNotFlagged": "framework-transaction — a reviewer may flag publishDocument's three dependent writes (document status, publish log, workspace counter) as an unprotected multi-step write. All three run inside db.transaction(async (tx) => ...), the data layer's atomic idiom per CLAUDE.md, so a crash mid-flow rolls every one of them back and no inconsistent state is observable. premortem-reviewer's Do NOT Flag list drops multi-step writes inside the project's transaction idiom."
+    },
+    {
+      "file": "src/migrations/006_add_tags.ts",
+      "lineHint": "export async function down() {",
+      "whyNotFlagged": "migration-reversible — a reviewer may raise the migration-rollback class (\"this migration has no rollback story\"). The module exports BOTH up() and down(), the canonical migration shape CLAUDE.md and the profile record, and the pass is additive: it writes the new tags field and leaves the legacy tagString for a later, verified migration. The migration-rollback class needs an absent rollback, a destructive step in the same pass, or new data the previous deploy cannot read; grep-before-flag finds down() declared right here, so the finding is dropped."
+    },
+    {
+      "file": "src/migrations/006_add_tags.ts",
+      "lineHint": "for (let offset = 0; offset < docs.length; offset += BATCH_SIZE) {",
+      "whyNotFlagged": "profile-excluded-scale — a reviewer may raise \"this loads every document and will not scale to 10k rows\" or argue about the batch size. The profile's scope exclusions rule capacity and scalability planning out entirely (a fixed, small deployment), and both premortem-reviewer and architecture-reviewer drop hypothetical scalability the profile's threat model and scope do not call for. The exclusion is capacity-only, so it does not shield any correctness or data-loss finding — and there is none here: each row update is independent and the filter re-selects unmigrated rows, so an interrupted run resumes where it stopped."
+    }
+  ]
+}
