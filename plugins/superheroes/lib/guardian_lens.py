@@ -4,6 +4,19 @@
 
 Stdlib-only. A lens is any object providing the five contract parts. Production lenses
 are named in PRODUCTION_LENS_MODULES and loaded (fail-closed) by load_production_lenses().
+
+Optional conformance hook (production lenses MUST implement; not checked by validate_lens):
+
+  conformance_cases() -> {scenario_name: {
+      "run": <callable — ctx["run"] stand-in>,
+      "config": <dict | None>,
+      "prev_digest": <json | None>,
+  }}
+
+For each name in REQUIRED_CONFORMANCE_SCENARIOS, the lens supplies a case whose ``run``
+stub simulates that tool outcome. The per-lens conformance harness (test_guardian_conformance)
+drives each case, classifies the collect() outcome, and fails registration when coverage or
+an honesty invariant is missing.
 """
 import importlib
 import os
@@ -25,6 +38,19 @@ RED_LINE_KINDS = ("critical-vuln", "new-high-complexity", "large-fresh-clone")
 FACTS = ("verify-command", "recorded-coverage", "stack-tags", "paths")
 COLLECT_STATUSES = ("collected", "partial", "not-collected")
 
+REQUIRED_CONFORMANCE_SCENARIOS = (
+    "missing-tool",
+    "timeout",
+    "nonzero-exit",
+    "findings-empty-output",
+    "unparseable",
+    "reported-nonzero-parsed-zero",
+)
+"""Tool-honesty scenarios every production lens must cover via conformance_cases().
+
+The conformance harness fails registration for any registered lens that omits one.
+"""
+
 """A lens is any object providing:
   - name: str, collector_version: str
   - cost: dict — declared collection cost, e.g. {"collectorSeconds": float, "note": str}
@@ -39,6 +65,8 @@ COLLECT_STATUSES = ("collected", "partial", "not-collected")
   - diff(prev_digest, cur_digest) -> {"new": [ids], "worsened": [ids], "resolved": [ids]}
   - red_lines(candidates) -> [{"kind": <RED_LINE_KINDS>, "id": str, "detail": str}]
   - degrade(reason) -> {"lens": name, "degraded": True, "reason": reason}
+  - conformance_cases() -> dict (optional on the protocol; REQUIRED for production lenses)
+      Maps each REQUIRED_CONFORMANCE_SCENARIOS name to a harness case (see module docstring).
 """
 
 REGISTRY = []
