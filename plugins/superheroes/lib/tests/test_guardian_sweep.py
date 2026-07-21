@@ -635,3 +635,47 @@ def test_collect_raises_degrades_without_crashing_siblings(tmp_path):
     assert bundle["funnel"]["degradedLenses"][0]["lens"] == "bad"
     assert "collect raised" in bundle["funnel"]["degradedLenses"][0]["reason"]
     assert any(s["id"] == "good:red-line" for s in bundle["surfaced"])
+
+
+def test_red_lines_raises_degrades_without_crashing_siblings(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+
+    class RedLinesRaisesLens(FixtureLens):
+        def red_lines(self, candidates):
+            raise RuntimeError("red_lines boom")
+
+    bad = RedLinesRaisesLens(name="bad-red", emit_normal=True)
+    good = FixtureLens(name="good-red", emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[bad, good], root=root)
+    assert len(bundle["funnel"]["degradedLenses"]) == 1
+    assert bundle["funnel"]["degradedLenses"][0]["lens"] == "bad-red"
+    assert "diff/red_lines raised" in bundle["funnel"]["degradedLenses"][0]["reason"]
+    assert any(s["id"] == "good-red:red-line" for s in bundle["surfaced"])
+
+
+def test_partial_digest_none_preserves_baseline(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    prior_entry = {"collectorVersion": "0.0.0-test", "digest": {"v": 1, "prior": True}}
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": prior_entry},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+
+    class PartialNoDigestLens(FixtureLens):
+        def collect(self, ctx):
+            return {
+                "candidates": [{"id": "fixture:normal", "complexity": 5, "metric": 1}],
+                "digest": None,
+                "status": "partial",
+                "reason": "incomplete digest",
+            }
+
+    lens = PartialNoDigestLens(emit_normal=True, diff_new=["fixture:normal"])
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert len(bundle["funnel"]["degradedLenses"]) == 1
+    assert bundle["nextSnapshot"]["lenses"]["fixture"] == prior_entry

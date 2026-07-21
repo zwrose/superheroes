@@ -318,14 +318,19 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
                 malformed.append({"lens": lens.name, "index": i, "repr": repr(c)})
 
         valid_candidates = list(cand_by_id.values())
-        if lens_new:
-            d = {"new": [], "worsened": [], "resolved": []}
-            drift_ids = []
-        else:
-            d = lens.diff(ctx["prevDigest"], cur_digest)
-            drift_ids = list(d.get("new", [])) + list(d.get("worsened", []))
+        try:
+            if lens_new:
+                d = {"new": [], "worsened": [], "resolved": []}
+                drift_ids = []
+            else:
+                d = lens.diff(ctx["prevDigest"], cur_digest)
+                drift_ids = list(d.get("new", [])) + list(d.get("worsened", []))
 
-        rl = _filter_red_lines(lens.red_lines(valid_candidates))
+            rl = _filter_red_lines(lens.red_lines(valid_candidates))
+        except Exception as exc:
+            degraded_lenses.append(lens.degrade("diff/red_lines raised: %s" % exc))
+            continue
+
         red_line_ids = {r["id"] for r in rl}
         red_lines.extend(rl)
 
@@ -386,7 +391,8 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
                 "cost": lens.cost,
             }
 
-        if not (lens_new and status == "partial"):
+        if status == "collected" or (
+                status == "partial" and not lens_new and cur_digest is not None):
             next_lenses[lens.name] = {
                 "collectorVersion": lens.collector_version,
                 "digest": cur_digest,

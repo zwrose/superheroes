@@ -74,3 +74,25 @@ def test_lens_contract_requires_guardian_tools_invocation_seam():
     assert guardian_tools.INSTALL_COMMANDS, (
         "guardian_tools.INSTALL_COMMANDS is the authoritative install-command home"
     )
+
+
+def test_lens_contract_covers_conformance_scenarios():
+    """REQUIRED_CONFORMANCE_SCENARIOS ↔ reference prose (§11 drift guard)."""
+    scenarios = guardian_lens.REQUIRED_CONFORMANCE_SCENARIOS
+    assert scenarios, (
+        "guardian_lens.REQUIRED_CONFORMANCE_SCENARIOS is empty — no authoritative home")
+    text = _read(_LENS_CONTRACT)
+    for scenario in scenarios:
+        assert scenario in text, (
+            "lens-contract.md missing conformance scenario %r" % scenario)
+    assert set(scenarios) == {
+        "missing-tool",
+        "timeout",
+        "nonzero-exit",
+        "findings-empty-output",
+        "unparseable",
+        "reported-nonzero-parsed-zero",
+    }, (
+        "REQUIRED_CONFORMANCE_SCENARIOS membership changed — update this golden set "
+        "AND lens-contract.md"
+    )

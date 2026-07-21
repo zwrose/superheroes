@@ -126,6 +126,9 @@ def _reset_production_loader():
     gl.REGISTRY.clear()
     gl._PRODUCTION_LOADED = False
     gl._PRODUCTION_LOAD_ERRORS.clear()
+    gl._PRODUCTION_COLLIDED_NAMES.clear()
+    gl._PRODUCTION_REGISTERED.clear()
+    gl._PRODUCTION_MODULE_LENSES.clear()
 
 
 def test_loader_import_failure_records_error_and_stand_in(monkeypatch):
@@ -199,10 +202,76 @@ def test_loader_duplicate_name_across_modules_records_error(monkeypatch):
     monkeypatch.setattr(gl, "PRODUCTION_LENS_NAMES", {})
     lenses = gl.registered_lenses()
     assert sum(1 for l in lenses if l.name == "shared-name") == 1
+    dup = [l for l in lenses if l.name == "shared-name"][0]
+    assert isinstance(dup, gl._UnavailableLens)
     assert any("duplicate lens name" in e.get("error", "")
                for e in gl.production_lens_load_errors())
     del sys.modules["dup_mod_a_558"]
     del sys.modules["dup_mod_b_558"]
+    _reset_production_loader()
+
+
+def test_loader_duplicate_name_degrades_not_first_concrete(monkeypatch):
+    import sys
+    import types
+    _reset_production_loader()
+    mod_a = types.ModuleType("dup_lens_mod_a_558")
+    mod_a.LENSES = (FixtureLens(name="dup-lens"),)
+    mod_b = types.ModuleType("dup_lens_mod_b_558")
+    mod_b.LENSES = (FixtureLens(name="dup-lens"),)
+    sys.modules["dup_lens_mod_a_558"] = mod_a
+    sys.modules["dup_lens_mod_b_558"] = mod_b
+    monkeypatch.setattr(
+        gl, "PRODUCTION_LENS_MODULES", ("dup_lens_mod_a_558", "dup_lens_mod_b_558"))
+    monkeypatch.setattr(gl, "PRODUCTION_LENS_NAMES", {})
+    lenses = gl.registered_lenses()
+    dup = [l for l in lenses if l.name == "dup-lens"]
+    assert len(dup) == 1
+    assert isinstance(dup[0], gl._UnavailableLens)
+    assert not isinstance(dup[0], FixtureLens)
+    assert any(
+        e.get("lens") == "dup-lens" and "duplicate lens name" in e.get("error", "")
+        for e in gl.production_lens_load_errors())
+    del sys.modules["dup_lens_mod_a_558"]
+    del sys.modules["dup_lens_mod_b_558"]
+    _reset_production_loader()
+
+
+def test_loader_missing_names_mapping_stand_in_and_roster_error(monkeypatch):
+    _reset_production_loader()
+    monkeypatch.setattr(gl, "PRODUCTION_LENS_MODULES", ("definitely_missing_558",))
+    monkeypatch.setattr(gl, "PRODUCTION_LENS_NAMES", {})
+    lenses = gl.registered_lenses()
+    standins = [l for l in lenses if l.name == "module:definitely_missing_558"]
+    assert len(standins) == 1
+    assert isinstance(standins[0], gl._UnavailableLens)
+    errors = gl.production_lens_load_errors()
+    assert any(
+        e.get("module") == "definitely_missing_558"
+        and "roster misconfiguration" in e.get("error", "")
+        for e in errors)
+    _reset_production_loader()
+
+
+def test_loader_force_reload_no_spurious_duplicates(monkeypatch):
+    import sys
+    import types
+    _reset_production_loader()
+    mod = types.ModuleType("force_reload_mod_558")
+    mod.LENSES = (FixtureLens(name="force-lens"),)
+    sys.modules["force_reload_mod_558"] = mod
+    monkeypatch.setattr(gl, "PRODUCTION_LENS_MODULES", ("force_reload_mod_558",))
+    monkeypatch.setattr(gl, "PRODUCTION_LENS_NAMES", {
+        "force_reload_mod_558": ("force-lens",),
+    })
+    gl.load_production_lenses()
+    assert sum(1 for l in gl.REGISTRY if l.name == "force-lens") == 1
+    gl.load_production_lenses(force=True)
+    assert sum(1 for l in gl.REGISTRY if l.name == "force-lens") == 1
+    assert not any(
+        "duplicate lens name" in e.get("error", "")
+        for e in gl.production_lens_load_errors())
+    del sys.modules["force_reload_mod_558"]
     _reset_production_loader()
 
 
