@@ -1,4 +1,4 @@
-<!-- rubric-version: 6 -->
+<!-- rubric-version: 7 -->
 # review-base
 
 The source of truth for review **severity, verification rules, findings format,
@@ -43,7 +43,17 @@ Minor and Nit findings never change the verdict regardless of strictness.
    caller already guards the case, downgrade or drop. (Critical findings are also
    checked for reachability, but under the strict posture, flag when in doubt.)
 5. **Docs/spec changes:** spot-check factual claims (signatures, paths, error
-   types) against source, not just prose.
+   types) against source, not just prose. **Mirror-claim verification.** A **mirror
+   claim** — a finding asserting the spec contradicts, misstates, or fabricates a repo
+   fact — may be emitted **High** confidence only if the reviewer has **read the cited
+   source** (or, when the spec left it uncited, the repo location it mirrors). Without
+   that read, emit it **Low** (naming the unread source in `evidence`) or drop it. The
+   deterministic `citation_validator.py` covers only *existence* (does the cited
+   path/anchor resolve); whether the source *says* what the spec claims — content-match
+   — is this verifier judgment. **Carve-out:** A `[cite: …]` provenance marker is a
+   sanctioned spec construct (CONVENTIONS §3.2), not leaked implementation detail and
+   not a leftover placeholder — never strip or flag it as tech-leak, a path reference,
+   or `{{…}}`/TBD noise.
 6. **Single source of truth for cross-boundary facts.** A fact consumed across a
    module or language boundary (phase lists, event/verb names, schema field sets,
    verdict/reason tokens, path layouts, reviewer rosters) must have one
@@ -84,11 +94,15 @@ is the one authoritative schema; agents must not redefine the fields inline.
 
 **Dimensions** (the orchestrator reads this list; it is data, not hard-wired —
 adding one later is a single-place change): `Architecture`, `Code`, `Security`,
-`Test`, `Failure-Mode`. These five are the default crew; each dispatching skill
-names the subset it runs. The dispatching skill assigns each agent its dimension
-and its `id` prefix; the default crew runs one agent per dimension (e.g. the
-Security reviewer emits `security-001`, …; the Failure-Mode reviewer emits
-`premortem-001`, …).
+`Test`, `Failure-Mode`, `Grounding`. The **first five** are the dispatched default
+crew; each dispatching skill names the subset it runs. The dispatching skill assigns
+each dispatched agent its dimension and its `id` prefix; the default crew runs one
+agent per dimension (e.g. the Security reviewer emits `security-001`, …; the
+Failure-Mode reviewer emits `premortem-001`, …) — **five agents dispatch**.
+`Grounding` is the **deterministic/validator dimension**: its findings come from
+`citation_validator.py`'s output merged at the review-spec compile step, not from a
+dispatched reviewer. Its dispatched reviewer seat is **deferred to the lens-recast
+issue (#514 D1)**, so `Grounding` is NOT one of the dispatched default crew yet.
 
 ## Severity caps
 

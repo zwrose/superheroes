@@ -20,6 +20,32 @@
   result the owner could see, and carries >=1 acceptance criterion (the verifiable face).
 -->
 
+<!-- AUTHOR GUIDANCE (provenance / citations) — DELETE this whole comment before delivering.
+
+  A load-bearing MIRROR-FACT — a spec sentence asserting something about the EXISTING repo
+  that the repo could contradict ("reuses/extends the existing X", "the current limit is N",
+  "today the system does Y") — carries an inline CITATION naming its repo source. A
+  DEFINITION (a NEW behavior/requirement this spec itself defines — the owner's *what*)
+  carries NO citation: it is the source of truth, it mirrors nothing.
+
+  The test: "Could today's repo contradict this sentence?" YES → mirror-fact → cite.
+  NO (a new thing the spec defines) → definition → no cite.
+
+  NOISE BUDGET: only LOAD-BEARING mirror-facts (ones the build relies on being true) get
+  citations; incidental mentions don't. Citations stay rare — a spec dense with them is
+  usually leaking the build's *how* (itself a finding). No cite-everything.
+
+  Grammar (illustration only — the ONE authoritative machine home of this grammar is
+  plugins/superheroes/lib/citation_validator.py's CITATION_RE):
+    [cite: <repo-relative-path>]
+    [cite: <repo-relative-path> § <anchor>]    (anchor = a literal substring findable in the file)
+  Canonical example: [cite: plugins/superheroes/lib/definition_doc.py § mint]
+
+  A `[cite: …]` provenance marker is a sanctioned spec construct (CONVENTIONS §3.2), not
+  leaked implementation detail and not a leftover placeholder — never strip or flag it as
+  tech-leak, a path reference, or `{{…}}`/TBD noise.
+-->
+
 ## Purpose
 
 {{Why this work exists, in the owner's words: the problem or opportunity, and the

@@ -311,6 +311,7 @@ into the spec, don't add more.** A good spec is:
   different heading or tagged Defer-to-build / N-A.
 - Before flagging "vague", confirm there is no acceptance criterion elsewhere that
   pins it.
+- **Provenance:** a `[cite: …]` marker is a sanctioned spec construct (CONVENTIONS §3.2) — never flag it as tech-leak, a path reference, or `{{…}}`/TBD noise; and read the cited source before asserting any mirror claim (that the spec contradicts a repo fact), else emit it Low or drop it.
 
 ## Output
 Write findings to $SESSION_DIR/findings-<agent>.json as a JSON array per the base
@@ -333,7 +334,7 @@ After dispatch, wait for all dispatched agents to return. Each writes its findin
 
 ### 4. Compile Findings (main context)
 
-Read the `$SESSION_DIR/findings-*.json` files of the dimensions that ran this round (a skipped dimension carried a clean result and contributes none). Apply, in order:
+As the **FIRST compile action** (main context, every round), run the deterministic citation validator — `python3 "$ROOT_DIR/lib/citation_validator.py" check --spec "$SESSION_DIR/spec.md" --root "$ROOT"` (prints a JSON findings array, possibly `[]`) — and MERGE its findings into the pool. Then read the `$SESSION_DIR/findings-*.json` files of the dimensions that ran this round (a skipped dimension carried a clean result and contributes none) into the same pool. The validator runs at the **compile layer**, NOT as a sixth dispatched dimension, and does NOT touch `spec_loop_plan.DIMENSIONS`; its findings cite the spec `file:line`, so they survive the citation check, dedupe, and verdict steps below. See `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-spec/reference/provenance.md` for the mirror/grounding detail. Apply, in order:
 
 1. **Citation check.** Drop any finding with `file == null` or `line == null`.
 2. **Dedupe by spec section + topic.** When two findings target the same requirement and same topic (e.g. both flagging "no acceptance criterion"), merge them: concatenate bodies with a separator, keep the higher severity, list both dimensions (e.g. `"Test + Code"`).
