@@ -1,4 +1,5 @@
 import json
+import re
 
 import pytest
 import score
@@ -718,3 +719,60 @@ def test_smoke_high_noise_expected_shape():
         assert trap.get("lineHint")
         assert trap.get("whyNotFlagged")
     assert seed_dims == {"Architecture", "Code", "Security", "Test", "Failure-Mode"}
+
+
+def test_smoke_high_noise_hunk_headers_match_their_bodies():
+    # Without this, a hunk whose @@ header advertises lengths that disagree
+    # with its body still leaves every other high-noise smoke green:
+    # score._parse_diff_lines and _raw_diff_occurrences both derive line
+    # numbers from the @@ start and ignore declared lengths entirely. The
+    # advertised patch then stops applying intact (git apply treats surplus
+    # body lines as outside the hunk) while CI stays silent. That regression
+    # actually occurred on the documents.test.ts hunk (+1,52 vs 53 body
+    # lines) and was repaired; this pin keeps it from returning.
+    fdir = _real_fixture("high-noise")
+    with open(fdir + "/diff.txt") as f:
+        lines = f.read().splitlines()
+
+    hunk_re = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+    files_seen = set()
+    cur_file = None
+    i = 0
+    while i < len(lines):
+        raw = lines[i]
+        if raw.startswith("+++ "):
+            path = raw[4:].strip()
+            if path.startswith("b/"):
+                path = path[2:]
+            cur_file = path
+            files_seen.add(cur_file)
+            i += 1
+            continue
+        m = hunk_re.match(raw)
+        if m is None:
+            i += 1
+            continue
+        old_len = int(m.group(2)) if m.group(2) is not None else 1
+        new_len = int(m.group(4)) if m.group(4) is not None else 1
+        context = removed = added = 0
+        i += 1
+        while i < len(lines):
+            body = lines[i]
+            if (body.startswith("@@") or body.startswith("diff --git")
+                    or body.startswith("--- ") or body.startswith("+++ ")):
+                break
+            if body.startswith("\\"):
+                i += 1
+                continue
+            if body.startswith("+"):
+                added += 1
+            elif body.startswith("-"):
+                removed += 1
+            else:
+                context += 1
+            i += 1
+        assert context + removed == old_len, (
+            f"{cur_file}: context+removed={context + removed} != oldLen={old_len}")
+        assert context + added == new_len, (
+            f"{cur_file}: context+added={context + added} != newLen={new_len}")
+    assert len(files_seen) == 9
