@@ -1680,6 +1680,10 @@ def build_receipt(state, session_dir=None):
                        "blockingCount": rec.get("blockingCount"),
                        "verifyResult": rec.get("verifyResult"),
                        "audits": rec.get("audits"),
+                       # The manifest-keyed audit-provenance boundary (LEDGERS §3): a round that ran
+                       # fix audits records `collection-manifest` here so the boundary — attestation,
+                       # not cryptographic executor identity — is visible at vet, matching the ledger.
+                       "auditProvenance": rec.get("auditProvenance"),
                        "scopedFinder": rec.get("scopedFinder"),
                        "headDiffSource": rec.get("headDiffSource"),
                        "unverified": rec.get("unverified"),
@@ -1734,8 +1738,9 @@ def validate_receipt(receipt):
     is the reviewer-seat receipt; this is the loop's terminal receipt). Fail-closed: a receipt
     missing scriptRan or the seat map, or with a non-list rounds/findings/decisions/degraded/
     skippedBlockers, is rejected with a reason. `skippedBlockers` is REQUIRED (possibly empty) so a
-    receipt can never omit the skipped-blocking channel (the exit_skipped invariant). Returns
-    (ok, reason)."""
+    receipt can never omit the skipped-blocking channel (the exit_skipped invariant). Per-round entries
+    may carry an `auditProvenance` field (`collection-manifest` when the round ran fix audits) — it is
+    ACCEPTED, not required. Returns (ok, reason)."""
     if not isinstance(receipt, dict):
         return False, "receipt is not an object"
     for key in _RECEIPT_REQUIRED:
@@ -1905,9 +1910,10 @@ def cmd_next(session_dir, config_overrides=None):
         # A REPLAYED terminal `next` re-emits the stored terminal pending WITHOUT re-running
         # _finalize_receipt — so re-verify the on-disk receipt (fault marker + fresh re-read +
         # validate_receipt) here, else a fault recorded/surfaced since the first emission is masked
-        # by the replay's ok (#507). Any fault → fail-loud receipt-fault, never terminal-with-ok.
+        # by the replay's ok (#507). Any fault → fail-loud receipt-fault, never terminal-with-ok. The
+        # gate re-verifies from disk (never re-writes) so a fault stays durable across invocations.
         if pend.get("phase") == P_TERMINAL:
-            fault = _verify_terminal_receipt(session_dir)
+            fault = _terminal_receipt_gate(session_dir, state)
             if fault:
                 return _receipt_fault_response(fault)
         return _next_response(pend, state_hash(state))
@@ -1924,7 +1930,7 @@ def cmd_next(session_dir, config_overrides=None):
                                   "round": pending["round"], "attempt": attempt,
                                   "outcome": "emitted"})
     if step["action"] == P_TERMINAL:
-        fail = _finalize_receipt(session_dir, state)
+        fail = _terminal_receipt_gate(session_dir, state)
         if fail:
             return _receipt_fault_response(fail)
     return _next_response(pending, state_hash(state))
@@ -2011,7 +2017,7 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact):
     _journal_append(session_dir, {"cmd": "submit", "phase": phase, "round": round_no,
                                   "attempt": attempt, "outcome": "accepted"})
     if state.get("terminal"):
-        fail = _finalize_receipt(session_dir, state)
+        fail = _terminal_receipt_gate(session_dir, state)
         if fail:
             return _receipt_fault_response(fail)
     return {"ok": True, "round": round_no, "phase": phase, "nextStep": state.get("step")}
@@ -2069,6 +2075,30 @@ def _finalize_receipt(session_dir, state):
     except OSError as exc:
         return "terminal receipt write failed (%s) — cannot certify; treat as park" % exc
     return _verify_terminal_receipt(session_dir)
+
+
+def _terminal_receipt_gate(session_dir, state):
+    """The single terminal-answer gate — WRITE-ONCE, then RE-VERIFY-FROM-DISK forever. The FIRST
+    terminal answer (whichever fires first: the terminating `submit` fold or the first terminal
+    `next`) writes + verifies the receipt via `_finalize_receipt` and marks it finalized. EVERY later
+    terminal invocation re-verifies the ON-DISK receipt via `_verify_terminal_receipt` and NEVER
+    re-writes it.
+
+    So a receipt fault detected at ANY terminal answer is DURABLE across invocations: a re-write from
+    in-memory state can never overwrite a faulted receipt into an ok one — the auditor's path was a
+    fault produced at the terminating `submit` (e.g. the receipt write failed) being masked by a
+    later replayed `next` that re-wrote the receipt from state and answered ok. Once finalized, only a
+    genuinely valid ON-DISK receipt (re-read fresh each call) clears the fault; a state overwrite
+    cannot. Returns a fault detail string or None, persisting the finalized mark and the durable
+    `_receiptFault` detail so the durability survives across separate CLI processes (#507)."""
+    if state.get("_receiptFinalized"):
+        fault = _verify_terminal_receipt(session_dir)
+    else:
+        fault = _finalize_receipt(session_dir, state)
+        state["_receiptFinalized"] = True
+    state["_receiptFault"] = fault or None
+    save_state(session_dir, state)
+    return fault
 
 
 def _parse_vendors(raw):

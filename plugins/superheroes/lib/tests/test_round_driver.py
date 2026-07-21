@@ -1016,7 +1016,8 @@ def test_terminal_replay_with_fault_marker_is_receipt_fault(tmp_path):
 
 def test_first_terminal_emission_with_preexisting_fault_marker_is_receipt_fault(tmp_path):
     """No ordering hole: a fault marker present BEFORE the FIRST terminal `next` (planted after the
-    terminating submit) is caught by that first emission's finalize → nonzero receipt-fault."""
+    terminating submit finalized) is caught by the terminal `next` re-verify → nonzero receipt-fault,
+    not masked by the re-emit."""
     d = str(tmp_path)
     _drive_to_terminating_submit(d, _cfg(), _responder(round1_findings=None))
     RD._mark_journal_fault(d, {"cmd": "submit", "phase": "run-verify"}, OSError("disk full"))
@@ -1026,6 +1027,54 @@ def test_first_terminal_emission_with_preexisting_fault_marker_is_receipt_fault(
     assert out["ok"] is False
     assert out["reason"] == "receipt-fault"
     assert "journal" in out["detail"]
+
+
+def test_replay_next_after_failed_terminating_submit_stays_receipt_fault(tmp_path):
+    """The codex-audit path: a receipt fault produced at the TERMINATING SUBMIT (here the receipt
+    write itself fails) must be DURABLE — a later replayed `next` must NOT re-write the receipt from
+    state and answer ok. Once finalized-with-fault, every subsequent invocation re-verifies from disk
+    and keeps answering receipt-fault (nonzero), even after the transient write condition clears."""
+    d = str(tmp_path)
+    cfg = _cfg()
+    respond = _responder(round1_findings=None)
+    term = None
+    first = True
+    for _ in range(80):
+        n = RD.cmd_next(d, cfg if first else None)
+        first = False
+        assert n["ok"], n
+        assert n["action"] != RD.P_TERMINAL
+        art = respond(n["phase"], n["payload"], n["round"])
+        block = os.path.join(d, RD.RECEIPT_FILE)
+        os.mkdir(block)  # os.replace onto a directory fails → the receipt WRITE OSErrors
+        s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], art)
+        os.rmdir(block)  # transient condition clears — a re-write WOULD now succeed (masking vector)
+        if not s["ok"]:
+            term = s
+            break
+    assert term is not None, "no terminating submit reached"
+    assert term["reason"] == "receipt-fault"  # the terminating submit failed to write the receipt
+    # a replayed `next` must NOT silently re-write the receipt from state and answer ok.
+    replay = RD.cmd_next(d)
+    assert replay["ok"] is False
+    assert replay["reason"] == "receipt-fault"
+    assert RD.main(["next", "--session-dir", d]) == 1  # durable + nonzero across invocations
+    assert RD.cmd_next(d)["reason"] == "receipt-fault"  # and again
+
+
+def test_receipt_carries_audit_provenance_per_round(tmp_path):
+    """The manifest-keyed audit-provenance boundary (LEDGERS §3) is visible in the receipt: a round
+    that ran fix audits records `auditProvenance: collection-manifest`, and validate_receipt accepts
+    the field (build_receipt must project it, not leave it recorded in state only)."""
+    d = str(tmp_path)
+    _drive_cli(d, _cfg(), _responder(
+        round1_findings=[{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]))
+    with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
+        receipt = json.load(fh)
+    provs = [r.get("auditProvenance") for r in receipt["rounds"]]
+    assert "collection-manifest" in provs, provs
+    ok, reason = RD.validate_receipt(receipt)
+    assert ok, reason
 
 
 def test_changed_subjects_accumulate_across_delta_rounds_for_crosscut():
