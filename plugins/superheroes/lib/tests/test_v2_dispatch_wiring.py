@@ -7,15 +7,17 @@
    key (`planAuthor`) can never re-appear in the calibration prose.
 3. Observability wiring — the workhorse charter REQUIRES recording engine+model per dispatch (§7)
    and a PR dispatch-provenance section (§11); removing either fails CI.
-4. Charter policy encoding (#547) — the workhorse charter's §7 escalation paragraph encodes the
-   owner-ratified implementer-escalation *relationships* (trigger, one-rung, cross-vendor bar,
-   maker-family exclusion, #510 consumer); deletion *or semantic inversion* of those
-   relationships fails CI (negative mutation cases prove the detector is not a tautology).
+4. Charter §7 ratification digest (#547) — a SHA-256 digest of the workhorse charter's §7
+   section (heading-bounded ## 7 → ## 8). Any undeclared change to that section fails CI. This
+   detects *change*, not meaning: every edit — deliberate or accidental, inversion or paraphrase
+   — changes the bytes. Updating the recorded digest requires an owner-ratified ruling in the
+   same commit.
 
 Fail-closed means: a guard that cannot find what it is looking for RAISES, it never silently
 passes. The §11 extractor in particular asserts its own found-set is non-empty before comparing
 it against the schema, so an extractor that regresses to matching nothing cannot vacuously pass.
 """
+import hashlib
 import json
 import os
 import re
@@ -267,247 +269,115 @@ def test_workhorse_requires_dispatch_provenance():
     )
 
 
-# --- Guard 4: charter policy encoding (#547) --------------------------------------------------
+# --- Guard 4: charter §7 ratification digest (#547) ------------------------------------------
 
-# Slice the §7 escalation paragraph (bolded receipts-driven lead-in → start of ## 8). Fail-closed:
-# no match means the guard raises; there is deliberately no whole-file fallback.
-_ESCALATION_SECTION_RE = re.compile(
-    r"(?is)"
-    r"\*\*Escalation\s+is\s+receipts-driven[^*]*\*\*"
-    r".*?"
-    r"(?=\n##\s*8\b)",
+# SHA-256 of the normalized §7 slice (## 7 heading → just before ## 8). Recorded 2026-07-21 for
+# issue #547 after review evidence showed regex "semantic invariants" cannot decide policy meaning.
+# Trivia (trailing whitespace, CRLF vs LF, surrounding blank lines) is normalized away before
+# hashing; wording, punctuation, and case are NOT — those are the policy. Updating this constant
+# requires an owner-ratified ruling named in the same commit.
+_SECTION_7_RATIFICATION_DIGEST = (
+    "be356ea7ff480ce7cd2768e86c8725b72e2be5e22950891174847c751d370e83"
 )
 
-# Operative relationships ratified in #547. Tolerant of whitespace / ** markers / light copy-edit;
-# strict about direction and quantity. Each entry is (name, compiled regex that must match).
-_ESCALATION_INVARIANTS = (
-    (
-        "trigger: requires demonstrated fragility with receipts from the work at hand",
-        re.compile(
-            r"(?is)(?<!never\s)requires\s+\*{0,2}demonstrated\s+fragility\*{0,2}"
-            r".{0,120}receipts.{0,80}work\s+at\s+hand"
-        ),
-    ),
-    (
-        "trigger: not pre-emptive (rejects hunch / previous-build precedent / named class)",
-        re.compile(
-            r"(?is)never\s+a\s+pre-?emptive\s+hunch"
-            r".{0,80}never\s+a\s+precedent\s+from\s+a\s+previous\s+build"
-            r".{0,80}never\s+a\s+named\s+class"
-        ),
-    ),
-    (
-        "one rung: escalate one rung up the registry ladder",
-        re.compile(
-            r"(?is)escalat\w*.{0,60}one\s+rung\s+up.{0,40}registry\s+ladder"
-        ),
-    ),
-    (
-        "cross-vendor: top rung must have demonstrably failed on this same work",
-        re.compile(
-            r"(?is)(?:across|cross(?:ing)?)\s+vendors?.{0,160}"
-            r"top\s+rung.{0,100}\*{0,2}demonstrably\*{0,2}\s+failed"
-            r".{0,60}this\s+same\s+work"
-        ),
-    ),
-    (
-        "cross-vendor: always disclosed",
-        re.compile(r"(?is)always\s+disclosed"),
-    ),
-    (
-        "ladder-first: the ladder comes first",
-        re.compile(r"(?is)ladder\s+comes\s+first"),
-    ),
-    (
-        "maker-family: every work order records the maker family",
-        re.compile(
-            r"(?is)\bevery\s+work\s+orders?\b.{0,120}maker\s+family"
-        ),
-    ),
-    (
-        "maker-family: deep/adversarial seats exclude that family",
-        re.compile(
-            r"(?is)deep\s*/\s*adversarial.{0,120}must\s+then\s+exclude"
-        ),
-    ),
-    (
-        "#510 named as the seat-check consumer",
-        re.compile(r"(?is)#\s*510"),
-    ),
-)
+_SECTION_7_HEADING_RE = re.compile(r"(?m)^## 7\b.*$")
+_SECTION_8_HEADING_RE = re.compile(r"(?m)^## 8\b.*$")
 
 
-def extract_escalation_policy_section(charter_text):
-    """Return the §7 escalation paragraph from charter_text, or raise (fail closed).
+def normalize_section_for_digest(section):
+    """Normalize trivia only: line endings, per-line trailing whitespace, edge blank lines.
 
-    Slices from the bolded 'Escalation is receipts-driven…' lead-in through (but not including)
-    the `## 8` heading. A failed extraction RAISES — never falls back to scanning the whole file.
+    Does not alter wording, punctuation, or case — those are the ratified policy bytes.
+    """
+    text = section.replace("\r\n", "\n").replace("\r", "\n")
+    lines = [line.rstrip() for line in text.split("\n")]
+    while lines and lines[0] == "":
+        lines.pop(0)
+    while lines and lines[-1] == "":
+        lines.pop()
+    return "\n".join(lines)
+
+
+def extract_section_7(charter_text):
+    """Return the charter's §7 slice (## 7 heading up to, not including, ## 8), or raise.
+
+    Heading-bounded extraction only. Fail-closed: missing either boundary, or an empty slice,
+    RAISES. No whole-file fallback.
     """
     assert isinstance(charter_text, str), (
-        "extract_escalation_policy_section requires str input, got %r" % (type(charter_text),)
+        "extract_section_7 requires str input, got %r" % (type(charter_text),)
     )
     assert charter_text, (
         "charter text is empty — refusing to pass vacuously"
     )
-    match = _ESCALATION_SECTION_RE.search(charter_text)
-    assert match, (
-        "failed to extract the §7 escalation policy section (receipts-driven lead-in → ## 8) — "
-        "refusing to pass vacuously; whole-file fallback is forbidden"
+    m7 = _SECTION_7_HEADING_RE.search(charter_text)
+    m8 = _SECTION_8_HEADING_RE.search(charter_text)
+    assert m7 is not None, (
+        "failed to find ## 7 heading in charter — refusing to pass vacuously; "
+        "whole-file fallback is forbidden"
     )
-    section = match.group(0)
+    assert m8 is not None, (
+        "failed to find ## 8 heading in charter — refusing to pass vacuously; "
+        "whole-file fallback is forbidden"
+    )
+    assert m7.start() < m8.start(), (
+        "## 7 heading must precede ## 8 heading — refusing to pass vacuously"
+    )
+    section = charter_text[m7.start():m8.start()]
     assert section.strip(), (
-        "extracted §7 escalation policy section is empty — refusing to pass vacuously"
+        "extracted §7 section is empty — refusing to pass vacuously"
     )
     return section
 
 
-def check_escalation_policy_invariants(section):
-    """Return a list of invariant names that fail over `section` (empty = all hold).
-
-    Fail-closed on an empty invariant set: raises rather than reporting "no violations."
-    """
-    assert _ESCALATION_INVARIANTS, (
-        "_ESCALATION_INVARIANTS is empty — refusing to pass vacuously"
+def section_7_digest(charter_text):
+    """SHA-256 hex digest of the normalized §7 slice (fail-closed via extract_section_7)."""
+    normalized = normalize_section_for_digest(extract_section_7(charter_text))
+    assert normalized, (
+        "normalized §7 section is empty — refusing to pass vacuously"
     )
-    assert isinstance(section, str) and section.strip(), (
-        "escalation policy section is empty — refusing to pass vacuously"
-    )
-    return [
-        name
-        for name, pattern in _ESCALATION_INVARIANTS
-        if pattern.search(section) is None
-    ]
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
-def _delete_cross_vendor_clause(section):
-    """Drop the 'Jumping across vendors…' sentence (through its terminating period)."""
-    return re.sub(
-        r"(?is)Jumping\s+\*{0,2}across\s+vendors\*{0,2}.*?(?:\.\s|\.$)",
-        "",
-        section,
-        count=1,
-    )
-
-
-def _delete_always_disclosed_clause(section):
-    """Drop the 'always disclosed' conjunct from the cross-vendor sentence."""
-    return re.sub(
-        r"(?is),?\s*and is\s+\*{0,2}always\s+disclosed\*{0,2}"
-        r".{0,120}?trigger receipts",
-        "",
-        section,
-        count=1,
-    )
-
-
-# (label, pattern_or_callable, replacement) — pattern is a regex str (re.I) or a callable(section).
-# Callables ignore `replacement`. These prove the checker detects weakening, not just deletion.
-_ESCALATION_POLICY_MUTATIONS = (
-    (
-        "maker-family exclusion reversed",
-        r"must then exclude",
-        "may then include",
-    ),
-    (
-        "per-order accounting weakened",
-        r"every work order",
-        "some work orders",
-    ),
-    (
-        "one-rung limit broken (two rungs)",
-        r"one rung up",
-        "two rungs up",
-    ),
-    (
-        "one-rung limit broken (any rung)",
-        r"one rung up",
-        "any rung",
-    ),
-    (
-        "trigger inverted (requires → never requires)",
-        r"requires",
-        "never requires",
-    ),
-    (
-        "ladder-first inverted",
-        r"The ladder comes first",
-        "the registry ladder may be skipped",
-    ),
-    (
-        "cross-vendor clause deleted",
-        _delete_cross_vendor_clause,
-        None,
-    ),
-    (
-        "always-disclosed clause deleted",
-        _delete_always_disclosed_clause,
-        None,
-    ),
-    (
-        "cross-vendor bar softened (demonstrably → optionally)",
-        r"demonstrably failed",
-        "optionally failed",
-    ),
-    (
-        "cross-vendor bar softened (to have demonstrably failed → to have possibly failed)",
-        r"to have demonstrably failed",
-        "to have possibly failed",
-    ),
-)
-
-
-def _apply_escalation_mutation(section, pattern_or_callable, replacement):
-    if callable(pattern_or_callable):
-        return pattern_or_callable(section)
-    mutated = re.sub(pattern_or_callable, replacement, section, flags=re.I)
-    assert mutated != section, (
-        "mutation pattern %r did not alter the extracted section — case is a no-op"
-        % (pattern_or_callable,)
-    )
-    return mutated
-
-
-def test_workhorse_encodes_implementer_escalation_policy():
-    assert _ESCALATION_INVARIANTS, (
-        "_ESCALATION_INVARIANTS is empty — refusing to pass vacuously"
-    )
-    assert _ESCALATION_POLICY_MUTATIONS, (
-        "_ESCALATION_POLICY_MUTATIONS is empty — refusing to pass vacuously"
-    )
+def test_workhorse_section_7_ratification_digest():
     text = _read(WORKHORSE)
     assert text, (
         f"{WORKHORSE} is empty — refusing to pass vacuously"
     )
-
-    section = extract_escalation_policy_section(text)
-    violations = check_escalation_policy_invariants(section)
-    assert not violations, (
-        f"{WORKHORSE} §7 escalation paragraph violates #547 invariant(s): {violations} — "
-        "the owner-ratified escalation policy is absent, inverted, or was reworded past its "
-        "operative relationships; changing this policy requires an owner-ratified decision, "
-        "not a silent edit"
+    actual = section_7_digest(text)
+    assert actual == _SECTION_7_RATIFICATION_DIGEST, (
+        f"{WORKHORSE} §7 dispatch/escalation section digest changed without re-ratification.\n"
+        "\n"
+        "What changed: the workhorse charter's §7 section (## 7 → ## 8), which encodes "
+        "owner-ratified dispatch/escalation policy from #547 (trigger = demonstrated "
+        "fragility; ladder-first with a high, always-disclosed cross-vendor bar; "
+        "per-work-order maker-family accounting with deep/adversarial seats excluding that "
+        "family).\n"
+        "\n"
+        "Why CI cares: this guard detects *change* to the ratified bytes — any undeclared "
+        "edit fails CI. It does not judge meaning; completeness is the point.\n"
+        "\n"
+        "What to do: if the edit is deliberate, update `_SECTION_7_RATIFICATION_DIGEST` in "
+        "the same commit and state in the commit message which owner ruling licenses the "
+        "change; if it is not deliberate, revert the charter edit.\n"
+        "\n"
+        f"expected: {_SECTION_7_RATIFICATION_DIGEST}\n"
+        f"actual:   {actual}"
     )
 
-    # Rationalization-table row lives outside the §7 paragraph; guard presence only, not wording.
+    # Rationalization-table row lives outside §7; presence-only check is honest for it.
     assert re.search(r"the last build escalated", text, re.I), (
         f"{WORKHORSE} is missing the escalation rationalization-table row anchor "
         "('the last build escalated') — the anti-pattern table entry was removed"
     )
 
-    # Negative cases: each in-memory weakening must make the checker report a violation.
-    for label, pattern_or_callable, replacement in _ESCALATION_POLICY_MUTATIONS:
-        mutated = _apply_escalation_mutation(section, pattern_or_callable, replacement)
-        mutated_violations = check_escalation_policy_invariants(mutated)
-        assert mutated_violations, (
-            f"Guard 4 mutation {label!r} did not trigger any invariant violation — the checker "
-            "is blind to this weakening (detector tautology)"
-        )
 
-
-def test_extract_escalation_policy_section_fail_closed():
+def test_extract_section_7_fail_closed():
     with pytest.raises(AssertionError):
-        extract_escalation_policy_section("")
+        extract_section_7("")
     with pytest.raises(AssertionError):
-        extract_escalation_policy_section("no escalation section here\n## 8. Verify\n")
+        extract_section_7("no section 7 heading here\n## 8. Verify\n")
     with pytest.raises(AssertionError):
-        extract_escalation_policy_section(None)  # type: ignore[arg-type]
+        extract_section_7("## 7. Only seven\ncontent\n")  # missing ## 8
+    with pytest.raises(AssertionError):
+        extract_section_7(None)  # type: ignore[arg-type]
