@@ -189,6 +189,24 @@ def test_render_guardian_degrades_with_malformed_ledger(tmp_path):
     assert "verify command: true" in screen
 
 
+def test_render_guardian_partial_ledger_does_not_claim_benched_lenses(tmp_path):
+    records = benched_fixture_ledger()
+    records.append({
+        "id": "invalid-trade",
+        "disposition": "accepted",
+        "date": "2026-07-01",
+        "issue": None,
+        "metricAtDisposition": {"metric": 5},
+    })
+    repo, root = _seed_guardian_view_repo(tmp_path, ledger_records=records)
+    screen = cv.render(repo, root=root)
+    assert "## Guardian" in screen
+    assert "cadence:" in screen
+    assert "benched lenses: uncertain — ledger is partial" in screen
+    assert "fixture is benched" not in screen
+    assert "benched lenses:\n" not in screen
+
+
 def test_render_guardian_lens_below_floor_not_passing(tmp_path):
     records = [{
         "id": "dup:tool:loc-%d" % i,

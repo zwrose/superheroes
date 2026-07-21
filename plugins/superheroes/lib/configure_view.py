@@ -122,9 +122,22 @@ def _guardian_lines(guardian):
         below_floor.append(lens)
 
     ledger_status = guardian.get("ledgerStatus")
-    if ledger_status in ("malformed", "newer", "unreadable") and not card:
-        note = guardian.get("ledgerNote") or ledger_status
-        lines.append("benched lenses: unknown — ledger unreadable (%s)" % note)
+    bench_authoritative = ledger_status in ("ok", "absent")
+
+    if not bench_authoritative:
+        if ledger_status == "partial":
+            note = guardian.get("ledgerNote") or "ledger partially parsed"
+            lines.append("benched lenses: uncertain — ledger is partial (%s)" % note)
+        elif ledger_status in ("malformed", "newer", "unreadable"):
+            note = guardian.get("ledgerNote") or ledger_status
+            if not card:
+                lines.append("benched lenses: unknown — ledger unreadable (%s)" % note)
+            else:
+                lines.append("benched lenses: uncertain — ledger unreadable (%s)" % note)
+        else:
+            note = guardian.get("ledgerNote") or (ledger_status or "unknown")
+            lines.append("benched lenses: uncertain — ledger status %s (%s)"
+                         % (ledger_status, note))
     elif ledger_status == "absent" and not card:
         lines.append("benched lenses: no sweep history yet")
     elif benched:

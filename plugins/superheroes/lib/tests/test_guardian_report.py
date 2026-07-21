@@ -166,13 +166,52 @@ def test_render_vitals_not_collected_shows_reasons_not_stable_empty():
             "suiteTestCount": "verify suite produced no parseable summary",
             "todoCount": "git unavailable",
         },
+        "sources": {
+            "fileCount": "git ls-files line count (10 files)",
+            "locTotal": "git ls-files line count (100 lines)",
+        },
     }
     md = gr.render(bundle, [], {"byId": {}})
     assert "Not collected:" in md
     assert "suiteTestCount: verify suite produced no parseable summary" in md
     assert "todoCount: git unavailable" in md
-    assert "_No vitals movement — nothing was collected this sweep._" in md
+    assert "2 value(s) collected" in md
+    assert "some vitals were unavailable" in md
+    assert "nothing was collected" not in md
     assert md.count("_No vitals movement._") == 0
+
+
+def test_render_vitals_all_uncollected_says_nothing_collected():
+    bundle = _sample_bundle()
+    bundle["vitalsDelta"] = {
+        "crossings": [],
+        "delta": {},
+        "notCollected": {
+            "suiteTestCount": "verify suite produced no parseable summary",
+            "todoCount": "git unavailable",
+        },
+        "sources": {},
+    }
+    md = gr.render(bundle, [], {"byId": {}})
+    assert "_No vitals movement — nothing was collected this sweep._" in md
+
+
+def test_render_vitals_first_sweep_establishing_baseline():
+    bundle = _sample_bundle()
+    bundle["vitalsDelta"] = {
+        "crossings": [],
+        "delta": {},
+        "notCollected": {},
+        "sources": {
+            "fileCount": "git ls-files line count (10 files)",
+            "locTotal": "git ls-files line count (100 lines)",
+        },
+    }
+    md = gr.render(bundle, [], {"byId": {}})
+    assert "first sweep" in md.lower()
+    assert "establishing baseline" in md.lower()
+    assert "2 value(s) collected" in md
+    assert "nothing was collected" not in md
 
 
 def test_render_vitals_not_collected_alongside_movement():

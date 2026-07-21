@@ -76,6 +76,9 @@ def _render_vitals(lines, vd):
     not_collected = vd.get("notCollected") if isinstance(vd, dict) else None
     if not isinstance(not_collected, dict):
         not_collected = {}
+    sources = vd.get("sources") if isinstance(vd, dict) else None
+    if not isinstance(sources, dict):
+        sources = {}
 
     crossing_vitals = set()
     if crossings:
@@ -109,9 +112,18 @@ def _render_vitals(lines, vd):
             lines.append("- %s: %s" % (name, reason))
 
     if not measured_movement:
-        if not_collected:
+        if not_collected and not sources:
             lines.append(
                 "_No vitals movement — nothing was collected this sweep._")
+        elif not_collected:
+            lines.append(
+                "_No vitals movement — %d value(s) collected; "
+                "some vitals were unavailable._" % len(sources))
+        elif sources:
+            lines.append(
+                "_No vitals movement — first sweep establishing baseline "
+                "(%d value(s) collected)._"
+                % len(sources))
         else:
             lines.append("_No vitals movement._")
     lines.append("")
