@@ -1,0 +1,81 @@
+{
+  "benchmarkValid": true,
+  "coverageDecisionIds": [],
+  "fixContexts": [],
+  "fixResults": [],
+  "roundCount": 3,
+  "seen": [
+    {
+      "reviewer": "security-reviewer",
+      "round": 3,
+      "roundKind": "confirmation",
+      "tier": "reviewer-deep"
+    },
+    {
+      "reviewer": "test-reviewer",
+      "round": 3,
+      "roundKind": "confirmation",
+      "tier": "reviewer-deep"
+    }
+  ],
+  "telemetry": {
+    "benchmarkValid": true,
+    "dimensionCounts": {
+      "security-reviewer": {
+        "cheap": 0,
+        "deep": 3,
+        "escalated": 0,
+        "run": 3,
+        "skipped": 0
+      },
+      "test-reviewer": {
+        "cheap": 0,
+        "deep": 3,
+        "escalated": 0,
+        "run": 3,
+        "skipped": 0
+      }
+    },
+    "findingOutcomes": {
+      "Test": {
+        "blocking": 1,
+        "carried": 0,
+        "raised": 1
+      }
+    },
+    "roundCount": 3,
+    "runId": "confirmation-degraded-panel-not-counted",
+    "schemaVersion": 1,
+    "terminal": "clean",
+    "tokenUsage": {
+      "complete": false,
+      "expectedLeaves": [
+        "security-reviewer:r1",
+        "test-reviewer:r1",
+        "synthesis:r1",
+        "security-reviewer:r2",
+        "test-reviewer:r2",
+        "synthesis:r2",
+        "security-reviewer:r3",
+        "test-reviewer:r3",
+        "synthesis:r3"
+      ],
+      "missing": [
+        "security-reviewer:r1",
+        "test-reviewer:r1",
+        "synthesis:r1",
+        "security-reviewer:r2",
+        "test-reviewer:r2",
+        "synthesis:r2"
+      ],
+      "present": [
+        "security-reviewer:r3",
+        "synthesis:r3",
+        "test-reviewer:r3"
+      ],
+      "total": 2001
+    }
+  },
+  "terminal": "clean",
+  "tokenTotal": 2001
+}

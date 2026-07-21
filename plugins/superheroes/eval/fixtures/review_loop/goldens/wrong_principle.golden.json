@@ -1,0 +1,153 @@
+{
+  "benchmarkValid": true,
+  "coverageDecisionIds": [
+    "RCD-wrong"
+  ],
+  "fixContexts": [
+    {
+      "context": {
+        "changedSubjects": [],
+        "classKeys": [
+          "Test::coverage::missing acceptance test"
+        ],
+        "coverageDecisions": [],
+        "findings": [
+          {
+            "classKey": "Test::coverage::missing acceptance test",
+            "dimension": "Test",
+            "severity": "Important",
+            "synthesisUnverified": true,
+            "taxonomy": "coverage",
+            "title": "Missing acceptance test"
+          }
+        ],
+        "generalizeRequired": [],
+        "round": 1,
+        "schemaVersion": 1
+      },
+      "round": 1
+    },
+    {
+      "context": {
+        "changedSubjects": [
+          "Test"
+        ],
+        "classKeys": [
+          "Test::coverage::missing acceptance test",
+          "Test::coverage::missing acceptance test"
+        ],
+        "coverageDecisions": [
+          {
+            "classKey": "Test::coverage::missing acceptance test",
+            "id": "RCD-wrong",
+            "runId": "wrong-principle-final-confirmation",
+            "text": "Only happy-path acceptance tests are required."
+          }
+        ],
+        "findings": [
+          {
+            "classKey": "Test::coverage::missing acceptance test",
+            "dimension": "Test",
+            "severity": "Important",
+            "synthesisUnverified": true,
+            "taxonomy": "coverage",
+            "title": "Missing acceptance test"
+          },
+          {
+            "classKey": "Test::coverage::missing acceptance test",
+            "dimension": "Test",
+            "severity": "Important",
+            "synthesisUnverified": true,
+            "taxonomy": "coverage",
+            "title": "Coverage decision is false"
+          }
+        ],
+        "generalizeRequired": [],
+        "round": 2,
+        "schemaVersion": 1
+      },
+      "round": 2
+    }
+  ],
+  "fixResults": [
+    {
+      "coverageDecisionIds": [
+        "RCD-wrong"
+      ],
+      "round": 1
+    },
+    {
+      "coverageDecisionIds": [],
+      "round": 2
+    }
+  ],
+  "roundCount": 3,
+  "seen": [
+    {
+      "reviewer": "test-reviewer",
+      "round": 1,
+      "roundKind": "baseline",
+      "tier": "reviewer-deep"
+    },
+    {
+      "reviewer": "test-reviewer",
+      "round": 2,
+      "roundKind": "intermediate",
+      "tier": "reviewer"
+    },
+    {
+      "reviewer": "test-reviewer",
+      "round": 3,
+      "roundKind": "intermediate",
+      "tier": "reviewer"
+    }
+  ],
+  "telemetry": {
+    "benchmarkValid": true,
+    "dimensionCounts": {
+      "test-reviewer": {
+        "cheap": 2,
+        "deep": 1,
+        "escalated": 0,
+        "run": 3,
+        "skipped": 0
+      }
+    },
+    "findingOutcomes": {
+      "Test": {
+        "blocking": 1,
+        "carried": 0,
+        "raised": 1
+      }
+    },
+    "roundCount": 3,
+    "runId": "wrong-principle-final-confirmation",
+    "schemaVersion": 1,
+    "terminal": "halted",
+    "tokenUsage": {
+      "complete": true,
+      "expectedLeaves": [
+        "test-reviewer:r1",
+        "synthesis:r1",
+        "test-reviewer:r2",
+        "synthesis:r2",
+        "test-reviewer:r3",
+        "synthesis:r3",
+        "fix:r3"
+      ],
+      "missing": [],
+      "present": [
+        "fix:r3",
+        "synthesis:r1",
+        "synthesis:r2",
+        "synthesis:r3",
+        "test-reviewer:r1",
+        "test-reviewer:r2",
+        "test-reviewer:r3"
+      ],
+      "total": 3004
+    }
+  },
+  "terminal": "halted",
+  "tokenTotal": 3004
+}
