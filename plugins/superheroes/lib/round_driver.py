@@ -1970,12 +1970,34 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact):
         return {"ok": False, "reason": "no loop-state.json — call next first"}
     state = loaded
     art_hash = _sha256(_canonical(artifact if artifact is not None else {}))
-
-    # duplicate detection FIRST (an already-accepted submit re-sent — its state hash is now stale,
-    # but the phase/attempt/artifact triple identifies it as an exact replay).
     prior = state.get("lastAccepted")
-    if prior and prior.get("phase") == phase and prior.get("attempt") == attempt \
-            and prior.get("artifactHash") == art_hash:
+    is_duplicate = bool(prior and prior.get("phase") == phase and prior.get("attempt") == attempt
+                        and prior.get("artifactHash") == art_hash)
+
+    # CLASS invariant (#507, third audit): while the session is ALREADY at its terminal phase on
+    # entry, NO submit answer — including a duplicate/replayed submit — may return ok without a FRESH
+    # on-disk receipt verification. Route every terminal-phase submit through the gate before any
+    # answer; a persisted or freshly-detected fault answers receipt-fault nonzero (the duplicate flag
+    # preserved in the detail for honesty), never a masked ok. (The terminating submit itself reaches
+    # terminal via THIS call's fold below, gated at its own site.)
+    if state.get("terminal"):
+        fault = _terminal_receipt_gate(session_dir, state)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": prior.get("round") if prior else None,
+                                          "attempt": attempt,
+                                          "outcome": "duplicate-receipt-fault" if is_duplicate
+                                          else "terminal-receipt-fault"})
+            resp = _receipt_fault_response(
+                ("duplicate submit replay; %s" % fault) if is_duplicate else fault)
+            if is_duplicate:
+                resp["duplicate"] = True
+            return resp
+
+    # duplicate detection (an already-accepted submit re-sent — its state hash is now stale, but the
+    # phase/attempt/artifact triple identifies it as an exact replay). At a terminal phase the gate
+    # above already re-verified the receipt, so this only answers ok when the receipt is intact.
+    if is_duplicate:
         _journal_append(session_dir, {"cmd": "submit", "phase": phase,
                                       "round": prior.get("round"), "attempt": attempt,
                                       "outcome": "duplicate"})
@@ -2090,7 +2112,11 @@ def _terminal_receipt_gate(session_dir, state):
     later replayed `next` that re-wrote the receipt from state and answered ok. Once finalized, only a
     genuinely valid ON-DISK receipt (re-read fresh each call) clears the fault; a state overwrite
     cannot. Returns a fault detail string or None, persisting the finalized mark and the durable
-    `_receiptFault` detail so the durability survives across separate CLI processes (#507)."""
+    `_receiptFault` detail so the durability survives across separate CLI processes (#507).
+
+    INVARIANT (#507, third audit): no terminal-phase invocation — first-emission next, replayed next,
+    terminating submit, or a duplicate/replayed submit — may answer ok without a fresh on-disk receipt
+    verification through this gate, no exceptions."""
     if state.get("_receiptFinalized"):
         fault = _verify_terminal_receipt(session_dir)
     else:

@@ -1077,6 +1077,103 @@ def test_receipt_carries_audit_provenance_per_round(tmp_path):
     assert ok, reason
 
 
+# --- CLASS: every terminal-phase answer routes through the receipt gate (#507, third audit) --------
+# The invariant: NO terminal-phase invocation may answer ok without a fresh on-disk receipt
+# verification — first-emission next, replayed next, terminating submit, AND duplicate submit replay.
+
+def _drive_capturing_terminating_submit(session_dir, plant_fault, max_steps=80):
+    """Drive to the terminating submit and return (submit_args, submit_response). `submit_args` is the
+    (phase, attempt, hash, artifact) tuple of the submit that reached terminal — replay it for the
+    duplicate-submit path. When `plant_fault`, a durable journal fault marker is planted before every
+    submit so the terminal receipt verifies FAULTED (inert on non-terminal submits — no finalize
+    runs there; caught by the terminating submit's finalize)."""
+    cfg = _cfg()
+    respond = _responder(round1_findings=None)
+    first = True
+    for _ in range(max_steps):
+        n = RD.cmd_next(session_dir, cfg if first else None)
+        first = False
+        assert n["ok"], n
+        assert n["action"] != RD.P_TERMINAL
+        art = respond(n["phase"], n["payload"], n["round"])
+        args = (n["phase"], n["attempt"], n["expectedStateHash"], art)
+        if plant_fault:
+            RD._mark_journal_fault(session_dir, {"cmd": "submit", "phase": n["phase"]},
+                                   OSError("disk full"))
+        s = RD.cmd_submit(session_dir, *args)
+        terminated = s.get("nextStep") == RD.P_TERMINAL or \
+            (not s.get("ok") and s.get("reason") == "receipt-fault")
+        if terminated:
+            return args, s
+    raise AssertionError("no terminating submit reached")
+
+
+def _path_terminating_submit(d, plant_fault):
+    _args, s = _drive_capturing_terminating_submit(d, plant_fault)
+    return s
+
+
+def _path_first_terminal_next(d, plant_fault):
+    _drive_capturing_terminating_submit(d, plant_fault)
+    return RD.cmd_next(d)
+
+
+def _path_replayed_next(d, plant_fault):
+    _drive_capturing_terminating_submit(d, plant_fault)
+    RD.cmd_next(d)             # first terminal `next`
+    return RD.cmd_next(d)      # the replay
+
+
+def _path_duplicate_submit(d, plant_fault):
+    args, _s = _drive_capturing_terminating_submit(d, plant_fault)
+    return RD.cmd_submit(d, *args)  # re-send the terminating submit → duplicate replay
+
+
+_TERMINAL_PATHS = [
+    pytest.param(_path_terminating_submit, id="terminating-submit"),
+    pytest.param(_path_first_terminal_next, id="first-terminal-next"),
+    pytest.param(_path_replayed_next, id="replayed-next"),
+    pytest.param(_path_duplicate_submit, id="duplicate-submit-replay"),
+]
+
+
+@pytest.mark.parametrize("path", _TERMINAL_PATHS)
+def test_terminal_phase_answer_ok_on_intact_receipt(tmp_path, path):
+    """Intact receipt → every terminal-phase answer path returns ok (the gate adds no false alarm)."""
+    resp = path(str(tmp_path), plant_fault=False)
+    assert resp["ok"] is True, resp
+
+
+@pytest.mark.parametrize("path", _TERMINAL_PATHS)
+def test_terminal_phase_answer_receipt_fault_on_persisted_fault(tmp_path, path):
+    """Persisted fault → EVERY terminal-phase answer path (including the duplicate-submit replay)
+    fails loud receipt-fault, never a masked ok — the CLASS the third audit demanded."""
+    resp = path(str(tmp_path), plant_fault=True)
+    assert resp["ok"] is False, resp
+    assert resp["reason"] == "receipt-fault", resp
+
+
+def test_duplicate_terminating_submit_fault_preserves_duplicate_flag_and_exits_nonzero(tmp_path):
+    """The duplicate-submit replay at a persisted fault answers receipt-fault with the duplicate flag
+    preserved (in the response AND the detail for honesty), and the CLI exits nonzero."""
+    d = str(tmp_path)
+    args, first = _drive_capturing_terminating_submit(d, plant_fault=True)
+    assert first["ok"] is False and first["reason"] == "receipt-fault"
+    phase, attempt, shash, artifact = args
+    dup = RD.cmd_submit(d, *args)
+    assert dup["ok"] is False
+    assert dup["reason"] == "receipt-fault"
+    assert dup["duplicate"] is True
+    assert "duplicate" in dup["detail"]
+    # nonzero exit through the CLI (submit via main, artifact from a file).
+    art_path = os.path.join(d, "artifact.json")
+    with open(art_path, "w", encoding="utf-8") as fh:
+        json.dump(artifact, fh)
+    rc = RD.main(["submit", "--session-dir", d, "--phase", phase, "--attempt", str(attempt),
+                  "--state-hash", shash, "--artifact", art_path])
+    assert rc == 1
+
+
 def test_changed_subjects_accumulate_across_delta_rounds_for_crosscut():
     """#507 R2 residual-5: cross-cutting rework accumulates across MULTIPLE post-panel delta fixes.
     Three delta fixes of one subject each cumulate to 3 distinct subjects → cross-cutting, even
