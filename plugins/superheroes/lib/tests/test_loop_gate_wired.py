@@ -12,20 +12,18 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SKILLS = os.path.normpath(os.path.join(HERE, "..", "..", "skills"))
 
 # Every surviving review-crew fix-then-re-review loop runs THROUGH a script-owned scheduler
-# that wraps `loop_state.decide` and emits the next round's dims_to_run. review-spec via
-# `spec_loop_plan.py decide` (#164); review-code via `code_loop_plan.py decide` (#174 PR 2).
-# (The plan/tasks legs that called `loop_state.py" --round` directly retired in S1 train 2
-# (#469); audit-debt's loop is loop-until-dry discovery, intentionally not gate-wrapped.)
+# that wraps the deterministic continuation deciders and emits the next round's schedule.
+# review-spec via `spec_loop_plan.py decide` (#164). review-code (#507) collapsed its per-round
+# choreography into the ONE entrypoint `round_driver.py`; its SKILL.md invocation is rewritten in
+# a later order (phase 3), so this test pins the DRIVER'S OWN CONTRACT here (see
+# test_round_driver_is_the_one_entrypoint) rather than the phase-3 SKILL prose. (The plan/tasks
+# legs that called `loop_state.py" --round` directly retired in S1 train 2 (#469); audit-debt's
+# loop is loop-until-dry discovery, intentionally not gate-wrapped.)
 GATE_WRAPPED_SKILLS = {
     "review-spec": [
         'spec_loop_plan.py" decide --session-dir',
         'spec_loop_plan.py" record --session-dir',
         'spec_loop_plan.py" plan --session-dir',
-    ],
-    "review-code": [
-        'code_loop_plan.py" decide --session-dir',
-        'code_loop_plan.py" record --session-dir',
-        'code_loop_plan.py" plan --session-dir',
     ],
 }
 
@@ -56,15 +54,25 @@ def test_spec_loop_plan_wires_the_continuation_gate():
     assert "import review_round_policy" in src and "review_round_policy.plan_round(" in src
 
 
-def test_code_loop_plan_wires_the_continuation_gate():
-    """review-code's wrapper (#174 PR 2) must genuinely delegate the continue/exit decision to
-    loop_state and the round schedule to the parity-locked shared policy — not reimplement
-    either. Source-level pin so the wiring can't silently drop while the SKILL.md marker matches."""
-    path = os.path.join(SKILLS, "..", "lib", "code_loop_plan.py")
+def test_round_driver_is_the_one_entrypoint():
+    """#507: review-code's per-round choreography collapsed into the ONE entrypoint round_driver.py.
+    The driver must genuinely delegate its JUDGMENTS to the parity-locked pure deciders — the
+    audit-keyed stall breaker, the #174 confirmation economics, per-finding verification, and the
+    fix-audit fold — not reimplement them. Source-level pin so the wiring can't silently drop, and
+    so the retired code_loop_plan is really gone."""
+    lib = os.path.join(SKILLS, "..", "lib")
+    assert not os.path.exists(os.path.join(lib, "code_loop_plan.py")), \
+        "code_loop_plan.py must be retired — round_driver absorbed plan/record/decide"
+    path = os.path.join(lib, "round_driver.py")
+    assert os.path.isfile(path), "the ONE entrypoint round_driver.py must exist"
     with open(path, encoding="utf-8") as fh:
         src = fh.read()
-    assert "import loop_state" in src and "loop_state.decide(" in src
-    assert "import review_round_policy" in src and "review_round_policy.plan_round(" in src
+    assert "import circuit_breaker" in src and "check_audit_breaker(" in src
+    assert "import review_round_policy" in src and "confirmation_followup(" in src
+    assert "import verification" in src and "apply_verdicts(" in src
+    assert "import audits" in src and "apply_audit_results(" in src
+    # the reviewer re-dispatch budget rides its single home, never a local literal.
+    assert "loop_plan_common.REDISPATCH_BUDGET" in src
 
 
 def test_loop_state_lib_exists():
