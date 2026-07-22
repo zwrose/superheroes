@@ -125,9 +125,7 @@ an external editor honors) is an accepted, documented residual (LEDGERS §3). Th
 JSON block and the report-card region are machine-owned**; owner hand-edits belong to the
 surrounding prose, which the never-clobber re-splice preserves byte-for-byte.
 
-If `commit-ledger` is skipped or fails, closures simply defer to the next consult — the
-records keep their prior state and the next sweep re-proposes the same closure; nothing is
-lost.
+If `commit-ledger` is skipped or fails, closures simply defer to the next consult — the records keep their prior state and the next sweep re-proposes the same closure, so **no closure or owner content is lost**. One benign caveat: because `finalize` already appended this sweep's `vitals.jsonl` line, a skipped commit can leave the vitals trend one entry ahead of the ledger's sweep roster until the next successful commit — a fail-closed parity drift (the benching floor simply counts one fewer sweep), not data loss.
 
 **Refusal outcomes (surface honestly, do not retry blindly):**
 
