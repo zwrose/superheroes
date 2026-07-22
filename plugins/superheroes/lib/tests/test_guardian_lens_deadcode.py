@@ -1021,23 +1021,42 @@ def test_conformance_case_declares_knip_dual_exits():
 # --- #564: git-tracked census confinement -----------------------------------------
 
 def test_untracked_twin_does_not_change_python_candidates(tmp_path):
-    """#564: an untracked near-duplicate must not alter vulture candidates."""
+    """#564: an untracked near-duplicate must not alter vulture candidates.
+
+    Tracked-operand confinement: vulture operands after ``--`` must include tracked
+    ``.py`` files and exclude on-disk untracked twins. Post-filter confinement: vulture
+    stdout may report untracked hits, but they must not become candidates.
+    """
     repo = _py_repo(tmp_path, {"lib/tracked.py": "def unused():\n    pass\n"})
-    untracked_body = "def unused():\n    pass\n"
-    (tmp_path / "lib" / "untracked_twin.py").write_text(untracked_body)
     hit = "lib/tracked.py:1: unused function 'unused' (100% confidence)\n"
-    run = FakeRun([("vulture", (3, hit, ""))], tracked=["lib/tracked.py"])
-    baseline = gld.LENS.collect(_ctx(repo, run))
+    tracked = ["lib/tracked.py"]
+    baseline = gld.LENS.collect(_ctx(
+        repo, FakeRun([("vulture", (3, hit, ""))], tracked=tracked)))
     assert baseline["status"] == "collected", baseline.get("reason")
     assert len(baseline["candidates"]) == 1
-    edges_before = baseline["digest"]["ecosystems"]["python"].get("untrackedFiltered", 0)
+    assert baseline["digest"]["ecosystems"]["python"].get("untrackedFiltered", 0) == 0
 
-    run2 = FakeRun([("vulture", (3, hit, ""))], tracked=["lib/tracked.py"])
+    untracked_body = "def unused():\n    pass\n"
+    (tmp_path / "lib" / "untracked_twin.py").write_text(untracked_body)
+
+    hit_untracked = (
+        "lib/untracked_twin.py:1: unused function 'unused' (100% confidence)\n")
+    combined = hit + hit_untracked
+    run2 = FakeRun([("vulture", (3, combined, ""))], tracked=tracked)
     with_twin = gld.LENS.collect(_ctx(repo, run2))
     assert with_twin["status"] == "collected"
     assert len(with_twin["candidates"]) == len(baseline["candidates"])
-    assert with_twin["digest"]["ecosystems"]["python"].get("untrackedFiltered", 0) == (
-        edges_before)
+
+    vulture_calls = [c[0] for c in run2.calls if c[0] and c[0][0] == "vulture"]
+    assert len(vulture_calls) == 1
+    argv = vulture_calls[0]
+    assert "--" in argv
+    operands = argv[argv.index("--") + 1:]
+    assert operands, argv
+    assert any("lib/tracked.py" in arg for arg in operands)
+    assert not any("untracked_twin.py" in arg for arg in operands)
+
+    assert with_twin["digest"]["ecosystems"]["python"].get("untrackedFiltered", 0) == 1
 
 
 def test_untracked_twin_does_not_change_knip_candidates(tmp_path):

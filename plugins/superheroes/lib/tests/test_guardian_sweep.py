@@ -1919,6 +1919,52 @@ def test_not_collected_lens_degrades_preserves_snapshot(tmp_path):
     assert bundle["nextSnapshot"]["lenses"]["fixture"] == prior_entry
 
 
+def test_trend_ahead_of_snapshot_no_false_vitals_crossing(tmp_path):
+    """Snapshot stuck on s1 while trend has s2 — completeness join must use s1, not s2."""
+    import guardian_vitals as gv
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "sweepId": "s1",
+        "vitals": {"vulnCount": 2},
+        "lenses": {},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    gv.append_unlocked(repo, {"vulnCount": 2}, sweep_id="s1",
+                       completeness={"vulnCount": {"state": "complete"}},
+                       root=root, now="2026-07-21")
+    gap = "orphan trend row from failed snapshot write"
+    gv.append_unlocked(repo, {"vulnCount": 2}, sweep_id="s2",
+                       completeness={"vulnCount": {"state": "partial",
+                                                   "reason": gap}},
+                       root=root, now="2026-07-22")
+
+    class DepsLens:
+        name = "deps"
+
+        def vitals(self, digest):
+            return {"vulnCount": (2, gap)}
+
+        def collect(self, ctx):
+            return {"candidates": [], "digest": {}}
+
+        required_facts = ()
+        collector_version = "0"
+        red_lines = lambda self, c: []
+        diff = lambda self, p, c: {"new": [], "worsened": [], "resolved": []}
+        degrade = lambda self, r: {"lens": self.name, "reason": r}
+
+    bundle = gsw.collect(repo, lenses=[DepsLens()], root=root)
+    # Wrong join (s2 partial) would compare partial→partial with matching gap and
+    # fabricate a quiet delta; s1 complete vs cur partial must surface non-comparable.
+    assert bundle["vitalsDelta"].get("crossings") == []
+    not_comp = bundle["vitalsDelta"].get("delta", {}).get("_notComparable", {})
+    assert "vulnCount" in not_comp
+    assert gv.completeness_for_sweep(repo, "s1", root=root)["vulnCount"]["state"] == "complete"
+
+
 def test_partial_lens_degrades_and_processes_candidates(tmp_path):
     repo = init_calibrated_repo(tmp_path)
     root = _store(tmp_path)

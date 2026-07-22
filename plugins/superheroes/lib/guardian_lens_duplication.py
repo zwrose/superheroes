@@ -579,7 +579,19 @@ class DuplicationLens:
     # genuine tracked clone at/above threshold re-fires as a `large-fresh-clone` red line
     # on the first post-fix sweep. That is by design — a red line must always surface,
     # even across a re-baseline.
-    collector_version = "2.1.0"
+    # 2.2.0 (#566): the census POPULATION broadened again — guardian_census.tracked_existing_files
+    # deliberately retains legitimate tracked pathnames containing `{` or `=>` (e.g.
+    # `src/{generated}.py`). The old private census dropped them. The digest SCHEMA is
+    # unchanged, but a prior baseline may omit pairs that only the broadened population
+    # admits; bump the version so guardian_sweep.py (any version delta ⇒ lens_new) records
+    # a quiet re-baseline FOR DRIFT — the new/worsened/resolved diff runs with _prev_digest
+    # treated as absent, so the newly-admitted files do not surface as false `new` drift and
+    # excluded pairs do not surface as false `resolved` drift. This "quiet" scope is DRIFT
+    # ONLY: red_lines() still runs unconditionally (with prev_pairs empty on a version-delta
+    # sweep), so a genuine tracked clone at/above threshold re-fires as a `large-fresh-clone`
+    # red line on the first post-fix sweep. That is by design — a red line must always surface,
+    # even across a re-baseline.
+    collector_version = "2.2.0"
     required_facts = ()
     cost = {
         "collectorSeconds": 0.9,

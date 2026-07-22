@@ -1096,3 +1096,59 @@ def test_completeness_persisted_in_trend_record(tmp_path):
                        completeness=completeness, now="2026-07-21")
     rec = gv.read_trend(repo)["records"][0]
     assert rec["completeness"]["locTotal"]["state"] == "complete"
+
+
+def test_not_collected_lens_result_uses_real_reason_not_did_not_run(tmp_path):
+    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
+    fail_reason = "jscpd timed out after 120s"
+    out = gv.collect(repo, lens_results={
+        "duplication": {
+            "lens": gld.LENS,
+            "status": "not-collected",
+            "digest": None,
+            "reason": fail_reason,
+            "fresh": True,
+        },
+    })
+    _assert_not_collected(out, ("duplicationPercent",))
+    assert fail_reason in out["notCollected"]["duplicationPercent"]
+    assert "did not run" not in out["notCollected"]["duplicationPercent"]
+    assert out["completeness"]["duplicationPercent"]["reason"] == fail_reason
+
+
+def test_absent_lens_result_still_reads_did_not_run(tmp_path):
+    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
+    out = gv.collect(repo, lens_results={})
+    assert "did not run" in out["notCollected"]["duplicationPercent"]
+
+
+def test_completeness_for_sweep_joins_on_sweep_id(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    gv.append_unlocked(repo, {"locTotal": 10}, sweep_id="s1",
+                       completeness={"locTotal": {"state": "complete"}},
+                       now="2026-07-21")
+    gv.append_unlocked(repo, {"locTotal": 20}, sweep_id="s2",
+                       completeness={"locTotal": {"state": "partial",
+                                                   "reason": "newer sweep"}},
+                       now="2026-07-22")
+    assert gv.completeness_for_sweep(repo, "s1") == {
+        "locTotal": {"state": "complete"}}
+    assert gv.completeness_for_sweep(repo, "s2")["locTotal"]["state"] == "partial"
+    assert gv.completeness_for_sweep(repo, "missing") == {}
+
+
+def test_trend_ahead_of_snapshot_suppresses_false_crossing(tmp_path):
+    """Trend advanced past snapshot → unknown prev completeness → no crossing."""
+    prev_comp = {"vulnCount": {"state": "complete"}}
+    newer_comp = {"vulnCount": {"state": "partial", "reason": "from newer sweep"}}
+    prev = {"vulnCount": 2}
+    cur = {"vulnCount": 5}
+    # Wrong join (newer completeness) would allow crossing complete→partial mismatch
+    # to be suppressed differently; with empty prev completeness, delta is not comparable.
+    assert gv.crossings(prev, cur, prev_completeness={},
+                        cur_completeness=newer_comp) == []
+    assert gv.crossings(prev, cur, prev_completeness=prev_comp,
+                        cur_completeness=newer_comp) == []
+    assert "vulnCount" in gv.delta(prev, cur, prev_completeness={},
+                                   cur_completeness=newer_comp).get(
+                                       "_notComparable", {})

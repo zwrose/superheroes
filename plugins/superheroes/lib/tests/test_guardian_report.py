@@ -232,6 +232,44 @@ def test_render_vitals_not_collected_alongside_movement():
     assert "nothing was collected" not in md
 
 
+def test_render_vitals_partial_shows_value_and_gap_reason():
+    bundle = _sample_bundle()
+    gap = "Python advisories unrated, #569"
+    bundle["vitalsDelta"] = {
+        "crossings": [],
+        "delta": {},
+        "notCollected": {},
+        "sources": {"vulnCount": "deps lens vitals() this sweep"},
+        "completeness": {
+            "vulnCount": {"state": "partial", "reason": gap},
+        },
+    }
+    bundle["nextSnapshot"] = {
+        "vitals": {"vulnCount": 4},
+    }
+    md = gr.render(bundle, [], {"byId": {}})
+    assert "Partial measurements:" in md
+    assert "vulnCount: 4 (partial: %s)" % gap in md
+
+
+def test_render_vitals_partial_delta_movement_is_qualified():
+    bundle = _sample_bundle()
+    gap = "python ratings unavailable until issue #569"
+    bundle["vitalsDelta"] = {
+        "crossings": [],
+        "delta": {
+            "vulnCount": {"prev": 2, "cur": 4, "change": 2, "pct": 1.0},
+        },
+        "notCollected": {},
+        "completeness": {
+            "vulnCount": {"state": "partial", "reason": gap},
+        },
+    }
+    md = gr.render(bundle, [], {"byId": {}})
+    assert "vulnCount: 2 → 4 (2) (partial: %s)" % gap in md
+    assert "Partial measurements:" not in md
+
+
 def test_render_report_card_benched_and_below_floor():
     bundle = _sample_bundle()
     bundle["reportCard"] = {

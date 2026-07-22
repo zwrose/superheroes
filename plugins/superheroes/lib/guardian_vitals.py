@@ -325,9 +325,11 @@ def _collect_lens_vitals(lens_results):
             continue
         status = entry.get("status")
         if status == "not-collected":
-            label = entry.get("lens")
-            lens_label = getattr(label, "name", None) or lens_names[0]
-            reason = "%s lens status is %s this sweep" % (lens_label, status)
+            reason = entry.get("reason")
+            if not (isinstance(reason, str) and reason.strip()):
+                label = entry.get("lens")
+                lens_label = getattr(label, "name", None) or lens_names[0]
+                reason = "%s lens collection failed this sweep" % lens_label
             missing[vital_name] = reason
             completeness[vital_name] = _completeness_entry("not-collected", reason)
             continue
@@ -861,6 +863,23 @@ def append(cwd, vitals, *, sweep_id, swept_sha=None, root=None, now=None,
                                root=root, now=now, completeness=completeness)
     finally:
         file_lock.release(lock_path)
+
+
+def completeness_for_sweep(cwd, sweep_id, *, root=None):
+    """Return completeness for the trend record whose ``sweepId`` matches, or {} if unknown.
+
+    Joins on identity rather than taking the newest trend row — a trend that advanced
+    past a stale snapshot must not supply completeness for the wrong sweep."""
+    if not isinstance(sweep_id, str) or not sweep_id.strip():
+        return {}
+    trend = read_trend(cwd, root=root)
+    if trend.get("status") != "ok":
+        return {}
+    for rec in reversed(trend.get("records") or []):
+        if rec.get("sweepId") == sweep_id:
+            comp = rec.get("completeness")
+            return comp if isinstance(comp, dict) else {}
+    return {}
 
 
 def read_trend(cwd, *, root=None, limit=None):

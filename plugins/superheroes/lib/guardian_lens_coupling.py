@@ -418,11 +418,21 @@ def census(ctx, repo, ecosystem):
     For the Python ecosystem, only regular non-symlink tracked files are censused — a
     committed symlink or FIFO must never reach `_python_edges` open().
     """
-    tracked, census_reason = guardian_census.tracked_existing_files(
-        ctx, repo, exclude_symlinks=True)
-    if tracked is None:
-        return None, census_reason
-    tracked_set = set(tracked)
+    res = guardian_census._git(ctx, repo, ["ls-files", "-z"])
+    if not res.get("ok"):
+        return None, res.get("reason")
+    git_tracked_names = set()
+    tracked_set = set()
+    for raw in (res.get("stdout") or "").split("\0"):
+        if not raw:
+            continue
+        git_tracked_names.add(raw)
+        full = os.path.join(repo, raw)
+        if not os.path.isfile(full):
+            continue
+        if os.path.islink(full):
+            continue
+        tracked_set.add(raw)
     ext_lang = JS_EXT_LANG if ecosystem == "js" else PY_EXT_LANG
     manifests = (JS_MANIFEST,) if ecosystem == "js" else PY_MANIFESTS
     workspaces = {ROOT_WORKSPACE}
@@ -445,11 +455,12 @@ def census(ctx, repo, ecosystem):
                 continue
             rel_file = rel_dir + CLUSTER_SEP + fn if rel_dir else fn
             if rel_file not in tracked_set:
-                # Still surface symlinks/FIFOs the walk sees so Python measurement can
-                # degrade — even when exclude_symlinks kept them out of tracked_set.
-                if ecosystem == "py":
+                # Tracked non-regular paths (symlinks/FIFOs) excluded from tracked_set
+                # by exclude_symlinks still degrade Python measurement; untracked paths
+                # are simply outside the population and must not degrade.
+                if ecosystem == "py" and rel_file in git_tracked_names:
                     abs_path = os.path.join(dirpath, fn)
-                    if ext_lang.get(_ext_of(fn)) and not _is_regular_file(abs_path):
+                    if not _is_regular_file(abs_path):
                         skipped_non_regular.append(rel_file)
                 continue
             abs_path = os.path.join(dirpath, fn)
@@ -836,8 +847,8 @@ class CouplingLens(object):
         digest = self._build_digest(
             ecosystems, all_rows, candidates, vocabulary, check, versions,
             per_workspace, total_parsed, total_sources,
-            js_census if js_census["total"] else None,
-            py_census if py_census["total"] else None)
+            js_census if js_census and js_census["total"] else None,
+            py_census if py_census and py_census["total"] else None)
 
         size = len(json.dumps(digest, sort_keys=True).encode("utf-8"))
         if size > DIGEST_MAX_BYTES:
@@ -907,17 +918,17 @@ class CouplingLens(object):
             counters = digest.get("counters")
             if not isinstance(counters, dict):
                 return {"couplingEdges": (None, "counters missing")}
-            edges = counters.get("edges")
+            edges = counters.get("crossClusterEdges")
             if edges is None:
-                return {"couplingEdges": (None, "counters.edges missing")}
+                return {"couplingEdges": (None, "counters.crossClusterEdges missing")}
             if isinstance(edges, bool) or not isinstance(edges, (int, float)):
-                return {"couplingEdges": (None, "counters.edges is not numeric")}
+                return {"couplingEdges": (None, "counters.crossClusterEdges is not numeric")}
             try:
                 value = float(edges)
             except (TypeError, ValueError):
-                return {"couplingEdges": (None, "counters.edges is not numeric")}
+                return {"couplingEdges": (None, "counters.crossClusterEdges is not numeric")}
             if value != value:  # NaN
-                return {"couplingEdges": (None, "counters.edges is not finite")}
+                return {"couplingEdges": (None, "counters.crossClusterEdges is not finite")}
             ecosystems = digest.get("ecosystems")
             if not isinstance(ecosystems, dict):
                 return {"couplingEdges": (None, "ecosystems missing")}
@@ -1244,7 +1255,10 @@ class CouplingLens(object):
         matrix, truncated = _truncate_matrix(safe_full)
         excluded = {}
         eligible_rows = 0
+        cross_cluster_edges = 0
         for row in rows:
+            if row["fromCluster"] != row["toCluster"]:
+                cross_cluster_edges += 1
             if row["exclusion"] is None:
                 eligible_rows += 1
             else:
@@ -1274,6 +1288,7 @@ class CouplingLens(object):
             "eligible": {c["id"]: c["metric"] for c in safe_candidates},
             "counters": {
                 "edges": len(rows),
+                "crossClusterEdges": cross_cluster_edges,
                 "eligible": eligible_rows,
                 "surfaced": len(safe_candidates),
                 "excludedByBar": len(rows) - eligible_rows,

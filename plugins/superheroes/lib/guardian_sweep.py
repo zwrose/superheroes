@@ -550,6 +550,13 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
 
         if status == "not-collected":
             degraded_lenses.append(lens.degrade(reason))
+            lens_results[lens.name] = {
+                "lens": lens,
+                "status": status,
+                "digest": out.get("digest"),
+                "reason": reason,
+                "fresh": True,
+            }
             continue
 
         if status == "partial":
@@ -749,9 +756,11 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
     vitals_collected = bool(config.get("vitalsEnabled", True))
     if vitals_collected:
         prev_completeness = {}
-        trend = guardian_vitals.read_trend(cwd, root=root, limit=1)
-        if trend.get("records"):
-            prev_completeness = trend["records"][-1].get("completeness") or {}
+        if prev:
+            prev_sweep_id = prev.get("sweepId")
+            if isinstance(prev_sweep_id, str) and prev_sweep_id.strip():
+                prev_completeness = guardian_vitals.completeness_for_sweep(
+                    cwd, prev_sweep_id, root=root)
         # Do not pass the sweep's injectable `run` into vitals: test doubles stub
         # the verify shell command, while vitals uses `run` only for read-only git.
         vitals_out = guardian_vitals.collect(

@@ -2060,10 +2060,16 @@ def test_case_only_differing_parsed_paths_count_distinctly(tmp_path):
 # #564: git-tracked census confinement + vitals()
 # ======================================================================================
 
-def _vitals_digest(edges=3, ecosystems=None, outcome="ok", matrix_truncated=False):
+def _vitals_digest(cross_cluster_edges=3, edges=None, ecosystems=None, outcome="ok",
+                   matrix_truncated=False):
+    if edges is None:
+        edges = cross_cluster_edges + 2
     return {
         "outcome": outcome,
-        "counters": {"edges": edges},
+        "counters": {
+            "edges": edges,
+            "crossClusterEdges": cross_cluster_edges,
+        },
         "ecosystems": ecosystems if ecosystems is not None else {
             "js": {"status": "collected"},
         },
@@ -2138,8 +2144,8 @@ def test_coupling_vitals_complete_on_good_digest():
 
 
 def test_coupling_vitals_partial_when_ecosystem_incomplete():
-    digest = _vitals_digest(5, {"js": {"status": "collected"},
-                                  "py": {"status": "not-collected"}})
+    digest = _vitals_digest(5, ecosystems={"js": {"status": "collected"},
+                                              "py": {"status": "not-collected"}})
     val, reason = glc.LENS.vitals(digest)["couplingEdges"]
     assert val == 5.0
     assert reason and "py" in reason
@@ -2160,9 +2166,87 @@ def test_coupling_vitals_not_collected_on_malformed_digest():
 
 def test_coupling_vitals_not_collected_on_non_numeric_edges():
     digest = _vitals_digest(3)
-    digest["counters"]["edges"] = "many"
+    digest["counters"]["crossClusterEdges"] = "many"
     val, reason = glc.LENS.vitals(digest)["couplingEdges"]
     assert val is None and "numeric" in reason
+
+
+def test_coupling_vitals_counts_cross_cluster_edges_only():
+    """couplingEdges vital reads crossClusterEdges, not total edge rows."""
+    the_lens = lens()
+    vocab = glc.deferred_vocabulary()
+    check = glc.deferred_check_the_check()
+    census = {"workspaces": ["."]}
+    intra = {
+        "from": "pkg/a.py", "to": "pkg/b.py",
+        "fromCluster": "pkg", "toCluster": "pkg",
+        "exclusion": glc.EXCLUSION_INTRA_CLUSTER,
+    }
+    cross = {
+        "from": "pkg/a.py", "to": "other/c.py",
+        "fromCluster": "pkg", "toCluster": "other",
+        "exclusion": None,
+    }
+
+    def _digest(rows):
+        return the_lens._build_digest(
+            ecosystems={}, rows=rows, candidates=[], vocabulary=vocab, check=check,
+            versions={}, per_workspace={}, parsed_total=0, sources_total=0,
+            js_census=census, py_census=None)
+
+    digest_cross_only = _digest([cross])
+    digest_with_intra = _digest([cross, intra, intra])
+    assert digest_cross_only["counters"]["edges"] == 1
+    assert digest_cross_only["counters"]["crossClusterEdges"] == 1
+    assert digest_with_intra["counters"]["edges"] == 3
+    assert digest_with_intra["counters"]["crossClusterEdges"] == 1
+    val_only, _ = glc.LENS.vitals(digest_cross_only)["couplingEdges"]
+    val_with_intra, _ = glc.LENS.vitals(digest_with_intra)["couplingEdges"]
+    assert val_only == 1.0
+    assert val_with_intra == 1.0
+
+
+def test_one_ecosystem_census_failure_yields_partial_with_other_measurement(tmp_path):
+    """When one ecosystem's census fails, the other ecosystem still publishes partial."""
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "mypkg/__init__.py", "")
+    write(repo, "mypkg/a.py", "x = 1\n")
+    tracked = ["mypkg/__init__.py", "mypkg/a.py"]
+    git_calls = [0]
+
+    def run(argv, **kwargs):
+        if argv and argv[0] == "git":
+            git_calls[0] += 1
+            if git_calls[0] == 1:
+                return _Completed(128, "", "transient failure")
+            return _git_ls_files_result(kwargs, tracked=tracked)
+        raise AssertionError("unexpected tool: %s" % argv)
+
+    out = lens().collect(ctx(repo, tmp_path, run=run))
+    assert st(out) == "partial"
+    assert out["digest"] is not None
+    assert out["digest"]["ecosystems"]["py"]["status"] == "collected"
+    assert out["digest"]["ecosystems"]["js"]["status"] == "not-collected"
+    assert "git ls-files failed" in (out.get("reason") or "")
+
+
+def test_untracked_symlink_does_not_degrade_python_census(tmp_path):
+    """An untracked symlink on disk is outside the tracked population — not a degrade."""
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "pkg/__init__.py", "")
+    write(repo, "pkg/a.py", "x = 1\n")
+    os.symlink("a.py", str(tmp_path / "pkg" / "link.py"))
+    got, err = glc.census(
+        census_ctx(repo, tracked=["pkg/__init__.py", "pkg/a.py"]),
+        repo, "py")
+    assert err is None
+    assert got["skippedNonRegular"] == []
+    out = lens().collect(ctx(
+        repo, tmp_path,
+        run=make_run(lambda _a, _k: _Completed(127, "", ""),
+                     tracked=["pkg/__init__.py", "pkg/a.py"])))
+    assert st(out) == "collected"
+    assert out["digest"]["ecosystems"]["py"]["status"] == "collected"
 
 
 def test_coupling_vitals_reports_edges_when_matrix_truncated():
