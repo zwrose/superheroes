@@ -96,12 +96,46 @@ python3 "$ROOT_DIR/lib/guardian_sweep.py" finalize --cwd . \
   --bundle "$BUNDLE" --dispositions "$DISP" | jq .
 ```
 
-On success, this writes `guardian/report.md` and compare-and-swap-replaces `guardian/latest.json`.
+On success, finalize writes **only** `guardian/report.md`, compare-and-swap-replaces
+`guardian/latest.json`, and appends one line to `guardian/vitals.jsonl` — it **does not
+write `ledger.md`**. The report shows **proposed** closures (the advisor commits them in
+the next step). If the ledger is unreadable, finalize marks closures **deferred** rather
+than implying none; the baseline still advances.
 
 **Refusal outcomes (surface honestly, do not retry blindly):**
 
 - `invalid-dispositions` — a surfaced id is missing, duplicated, or a `validated` entry lacks required fields. Fix the dispositions and re-run finalize with the same bundle.
 - `raced` — a concurrent sweep advanced the snapshot since collect. Re-run from step 1; the prior baseline stays intact.
+
+### 4. Commit the ledger (advisor, at consult/triage)
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 "$ROOT_DIR/lib/guardian_sweep.py" commit-ledger --cwd . \
+  --bundle "$BUNDLE" --dispositions "$DISP" | jq .
+```
+
+This is the **only** place `ledger.md` is written — filed-item closures **and** the
+per-lens report card share this one write path. It is **safe to re-run** (idempotent). It
+**fails closed** on an opaque/unreadable ledger and on a stale bundle (`stale-bundle` — a
+newer sweep advanced the baseline since this bundle) and on a roster-read failure
+(`roster-read-failed`, retryable) — in each case leaving on-disk bytes untouched. The
+residual (an owner hand-editing the file in another window at the write instant — no lock
+an external editor honors) is an accepted, documented residual (LEDGERS §3). The **fenced
+JSON block and the report-card region are machine-owned**; owner hand-edits belong to the
+surrounding prose, which the never-clobber re-splice preserves byte-for-byte.
+
+If `commit-ledger` is skipped or fails, closures simply defer to the next consult — the
+records keep their prior state and the next sweep re-proposes the same closure; nothing is
+lost.
+
+**Refusal outcomes (surface honestly, do not retry blindly):**
+
+- `invalid-dispositions` — same shape as finalize; fix the dispositions and re-run.
+- `stale-bundle` — a newer sweep advanced `latest.json` since this bundle; re-run from step 1 or use a fresh bundle from the current sweep.
+- `roster-read-failed` — transient roster read error; **retryable**.
+- opaque-ledger skip — ledger content is unreadable; on-disk bytes stay untouched; closures defer.
+- `raced-out` — the never-clobber loop exhausted its bounded retries; on-disk bytes stay untouched; retry after the concurrent edit settles.
 
 ## The report + storage
 
@@ -112,12 +146,13 @@ Artifacts live beside `core.md` under the band storage mode (CONVENTIONS §2):
 | `guardian.md` | Calibration layer — thresholds, cadence, coverage records | configure / rarely |
 | `guardian/report.md` | Latest sweep report — advisor-facing plain consequences with receipts | the sweep, each finalize |
 | `guardian/latest.json` | Drift-baseline snapshot (CAS) | the sweep, each finalize |
-| `guardian/ledger.md` | Dispositions ledger + per-lens report card | the sweep at closure; the advisor at triage/consult |
+| `guardian/ledger.md` | Dispositions ledger + per-lens report card | the advisor, at consult/triage (sole writer) |
 | `guardian/vitals.jsonl` | Append-only vitals trend history (one line per sweep) | the sweep, each finalize |
 
 In in-repo mode these commit with the repo; in global mode they live in the project store.
-The sweep writes `report.md`, `latest.json`, ledger closures, and vitals appends; the advisor
-writes ledger dispositions at triage. `configure`'s one-screen view surfaces cadence,
+The sweep writes `report.md`, `latest.json`, and vitals appends; the advisor is the sole
+writer of `ledger.md` (closures, the per-lens report card, and dispositions) at
+consult/triage. `configure`'s one-screen view surfaces cadence,
 coverage, and benched lenses (CONVENTIONS §2.1).
 
 **Ledger outcomes (report card).** Adjudicated dispositions count toward each lens's

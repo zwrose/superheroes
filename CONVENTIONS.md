@@ -147,9 +147,12 @@ session, and is never stored here.
 holding its sweep outputs: a report, a drift-baseline snapshot, a dispositions ledger (with
 its per-lens report card), and an append-only vitals trend file. In in-repo mode these are
 committed with the repo (findings are visible to collaborators; the artifacts dirty the working
-tree until committed); in global mode they live in the project store. The sweep writes the
-report, baseline snapshot, ledger closures, and vitals trend append; the advisor writes ledger
-dispositions at triage/consult. The sweep **never commits, pushes, edits code, or files issues.**
+tree until committed); in global mode they live in the project store. The advisor is the
+sole automated writer of `guardian/ledger.md` (closures and the per-lens report card),
+written at consult/triage via `commit-ledger`; the deterministic sweep `finalize` is
+**read-only** on the ledger and writes only the report, the baseline snapshot
+(`latest.json`), and the vitals trend append (`vitals.jsonl`). The sweep **never commits,
+pushes, edits code, or files issues.**
 
 The dispositions ledger record shape (authoritative home: `guardian_ledger.LEDGER_RECORD_FIELDS`)
 carries `id`, `disposition`, `date`, `issue`, `metricAtDisposition`, `reason`, and
