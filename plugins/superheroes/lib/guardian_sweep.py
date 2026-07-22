@@ -1160,6 +1160,12 @@ def main(argv=None):
     fp.add_argument("--bundle", required=True)
     fp.add_argument("--dispositions", required=True)
 
+    clp = sub.add_parser("commit-ledger")
+    clp.add_argument("--cwd", default=".")
+    clp.add_argument("--root", default=None)
+    clp.add_argument("--bundle", required=True)
+    clp.add_argument("--dispositions", required=True)
+
     vp = sub.add_parser("verify-config")
     vp.add_argument("--cwd", default=".")
     vp.add_argument("--root", default=None)
@@ -1174,6 +1180,12 @@ def main(argv=None):
             with open(args.dispositions, encoding="utf-8") as fh:
                 dispositions = json.load(fh)
             out = finalize(args.cwd, bundle, dispositions, root=args.root)
+        elif args.cmd == "commit-ledger":
+            with open(args.bundle, encoding="utf-8") as fh:
+                bundle = json.load(fh)
+            with open(args.dispositions, encoding="utf-8") as fh:
+                dispositions = json.load(fh)
+            out = commit_ledger(args.cwd, bundle, dispositions, root=args.root)
         else:
             # Standalone CLI has no lenses — skip spawning the verify command.
             out = verify_config(args.cwd, root=args.root, needed_facts=set())

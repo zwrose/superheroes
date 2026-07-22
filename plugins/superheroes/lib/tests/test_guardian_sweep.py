@@ -2172,3 +2172,52 @@ def test_commit_ledger_genuinely_empty_roster_appends(tmp_path):
     roster = _ledger_sweeps(repo, root)
     assert len(roster) == 1
     assert roster[0]["sweepId"] == bundle["sweepId"]
+
+
+def test_cli_commit_ledger_writes_ledger(tmp_path):
+    """Real CLI: main(['commit-ledger', ...]) writes roster + report card to ledger.md."""
+    import io
+    from contextlib import redirect_stdout
+
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    lens = FixtureLens(emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    disp = [{
+        "id": bundle["surfaced"][0]["id"],
+        "verdict": "validated",
+        "consequence": "x",
+        "receipt": "y",
+        "effort": "z",
+        "ledgerJoin": bundle["surfaced"][0]["id"],
+    }]
+    fin = gsw.finalize(repo, bundle, disp, root=root)
+    assert fin["ok"] is True
+    assert "ledgerWrite" not in fin
+
+    bundle_path = str(tmp_path / "bundle.json")
+    disp_path = str(tmp_path / "disp.json")
+    open(bundle_path, "w", encoding="utf-8").write(json.dumps(bundle))
+    open(disp_path, "w", encoding="utf-8").write(json.dumps(disp))
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = gsw.main([
+            "commit-ledger",
+            "--cwd", repo,
+            "--root", root,
+            "--bundle", bundle_path,
+            "--dispositions", disp_path,
+        ])
+    assert rc == 0
+    out = json.loads(buf.getvalue())
+    assert out["ok"] is True, out
+    path = gs.ledger_path(repo, root)
+    assert os.path.isfile(path)
+    roster = _ledger_sweeps(repo, root)
+    assert len(roster) == 1
+    assert roster[0]["sweepId"] == bundle["sweepId"]
+    text = open(path, encoding="utf-8").read()
+    assert "guardian-report-card:begin" in text
+    assert "```json %s" % gs.LEDGER_FENCE in text

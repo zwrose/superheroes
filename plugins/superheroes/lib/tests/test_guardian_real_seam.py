@@ -191,13 +191,22 @@ def _real_seam_both_modes(tmp_path, *, mode):
 
     result = gsw.finalize(repo, bundle, _dispositions_for(bundle), root=root)
     assert result["ok"] is True
-    assert result["ledgerWrite"].get("ok") is True
+    assert "ledgerWrite" not in result
     _assert_five_files(repo, root)
 
-    # Ledger history survives finalize — regression guard for opaque-ledger overwrite.
+    # finalize is read-only on the ledger — seeded history still present before commit.
+    before_commit = _ledger_record_ids(repo, root)
+    for rid, seeded in seeded_ids.items():
+        assert rid in before_commit, "seeded record %s missing after finalize" % rid
+        assert before_commit[rid]["disposition"] == seeded["disposition"]
+
+    commit = gsw.commit_ledger(repo, bundle, _dispositions_for(bundle), root=root)
+    assert commit["ok"] is True, commit
+
+    # Ledger history survives commit — regression guard for opaque-ledger overwrite.
     after_by_id = _ledger_record_ids(repo, root)
     for rid, seeded in seeded_ids.items():
-        assert rid in after_by_id, "seeded record %s missing after finalize" % rid
+        assert rid in after_by_id, "seeded record %s missing after commit_ledger" % rid
         assert after_by_id[rid]["disposition"] == seeded["disposition"]
         if seeded.get("reason") is not None:
             assert after_by_id[rid].get("reason") == seeded["reason"]
@@ -237,10 +246,15 @@ def _real_seam_both_modes(tmp_path, *, mode):
     matching = [r for r in trend["records"] if r.get("sweepId") == bundle["sweepId"]]
     assert len(matching) == 1
     assert len(_ledger_sweeps(repo, root)) == 1
-    # Seeded history still intact after retry.
+    # Seeded history still intact after finalize retry (ledger write is commit_ledger's).
     after_retry = _ledger_record_ids(repo, root)
     for rid in seeded_ids:
         assert after_retry[rid]["disposition"] == seeded_ids[rid]["disposition"]
+    # Retried commit of the same sweepId must leave the roster at one entry.
+    commit_retry = gsw.commit_ledger(
+        repo, bundle, _dispositions_for(bundle), root=root)
+    assert commit_retry["ok"] is True, commit_retry
+    assert len(_ledger_sweeps(repo, root)) == 1
 
     # Second real sweep grows the roster — five-file assertion also means history grows.
     subprocess.run(
@@ -257,6 +271,8 @@ def _real_seam_both_modes(tmp_path, *, mode):
     assert bundle3["sweepId"] != bundle["sweepId"]
     result2 = gsw.finalize(repo, bundle3, _dispositions_for(bundle3), root=root)
     assert result2["ok"] is True
+    commit2 = gsw.commit_ledger(repo, bundle3, _dispositions_for(bundle3), root=root)
+    assert commit2["ok"] is True, commit2
     _assert_five_files(repo, root)
     roster = _ledger_sweeps(repo, root)
     assert [s["sweepId"] for s in roster] == [bundle["sweepId"], bundle3["sweepId"]]

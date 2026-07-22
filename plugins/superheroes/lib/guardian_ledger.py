@@ -1137,7 +1137,8 @@ def _prepare_ledger_write(path, records, *, report_card=None, sweeps=None, now=N
     Returns a dict:
       - ``{"kind": "fail", "result": {...}}`` — fail-closed skip / invalid
       - ``{"kind": "author", "bytes": b...}`` — file absent; full template ready
-      - ``{"kind": "splice", "spliced": str, "on_disk_id": ...}`` — ready to CAS-write
+      - ``{"kind": "splice", "spliced": str, "on_disk_id": ..., "existing_raw": b...}``
+        — ready to CAS-write; ``existing_raw`` is the exact bytes the splice was built from
     """
     ok, reasons = validate_records(records if records is not None else [])
     if not ok:
@@ -1241,7 +1242,12 @@ def _prepare_ledger_write(path, records, *, report_card=None, sweeps=None, now=N
                 "path": path,
             },
         }
-    return {"kind": "splice", "spliced": spliced, "on_disk_id": on_disk_id}
+    return {
+        "kind": "splice",
+        "spliced": spliced,
+        "on_disk_id": on_disk_id,
+        "existing_raw": raw,
+    }
 
 
 def write(cwd, records, *, root=None, report_card=None, sweeps=None, now=None,
@@ -1255,9 +1261,10 @@ def write(cwd, records, *, root=None, report_card=None, sweeps=None, now=None,
     Under the sweep lock (against a concurrent *sweep*; the owner's editor honors no lock),
     runs up to `_WRITE_ATTEMPTS` (5) attempts. Each attempt re-reads fresh bytes, re-merges
     the caller's records onto that fresh content, re-splices from scratch, and re-checks
-    the fence identity **immediately before** `atomic_write_bytes`. A change at that final
-    check triggers another attempt — never a clobber with a stale splice. Exhaustion returns
-    ``reason: raced-out`` and writes nothing.
+    **full file bytes** (not just fence identity) **immediately before** `atomic_write_bytes`.
+    Any change — including prose-only edits that leave the fence unchanged — triggers another
+    attempt — never a clobber with a stale splice. Exhaustion returns ``reason: raced-out``
+    and writes nothing.
 
     `expected_fence_identity` is accepted for API compatibility but ignored: the loop always
     re-reads fresh and never refuses solely on a stale caller-held identity.
@@ -1284,12 +1291,12 @@ def write(cwd, records, *, root=None, report_card=None, sweeps=None, now=None,
                 return {"ok": True, "path": path}
 
             on_disk_id = prepared["on_disk_id"]
-            # Final fence-identity check immediately before write.
+            existing_raw = prepared["existing_raw"]
+            # Final full-byte check immediately before write (prose + fence + card).
             try:
                 with open(path, "rb") as fh:
                     recheck_raw = fh.read()
-                recheck_text = recheck_raw.decode("utf-8")
-            except (OSError, UnicodeDecodeError) as exc:
+            except OSError as exc:
                 return {
                     "ok": False,
                     "skipped": "ledger-unreadable",
@@ -1297,11 +1304,16 @@ def write(cwd, records, *, root=None, report_card=None, sweeps=None, now=None,
                               % type(exc).__name__,
                     "path": path,
                 }
-            if guardian_store.ledger_fence_identity(recheck_text) != on_disk_id:
+            if recheck_raw != existing_raw:
+                try:
+                    recheck_text = recheck_raw.decode("utf-8")
+                    recheck_id = guardian_store.ledger_fence_identity(recheck_text)
+                except UnicodeDecodeError:
+                    recheck_id = None
                 last = {
                     "ok": False,
                     "reason": "raced-retry",
-                    "onDisk": guardian_store.ledger_fence_identity(recheck_text),
+                    "onDisk": recheck_id,
                     "expected": on_disk_id,
                     "path": path,
                 }
