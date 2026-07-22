@@ -619,12 +619,6 @@ PYTHON_VULN_RED_LINE_GAP_REASON = (
     "Python advisories carry no severity rating; the critical-vuln red line therefore "
     "cannot fire for those advisories")
 
-PYTHON_VULN_RED_LINE_GAP = {
-    "ecosystem": "python",
-    "tool": "osv-scanner",
-    "missing": "severity ratings — critical-vuln red line cannot fire for Python",
-}
-
 PYTHON_VULN_NO_DEPS_SCOPE_REASON = (
     "osv-scanner ran with --no-resolve: only the enumerated packages in "
     "requirements.txt were audited; transitive dependencies were NOT resolved (a "
@@ -639,6 +633,11 @@ PYTHON_VULN_NO_DEPS_COVERAGE_GAP = {
                "requirements.txt enumerates; a vulnerable transitive dependency is not "
                "surfaced and prior transitive advisories are not re-measured",
 }
+
+PYTHON_VULN_PIP_AUDIT_RED_LINE_GAP_REASON = (
+    "Python advisories carry no severity (pip-audit reports none); the "
+    "critical-vuln red line therefore cannot fire for Python in this collector "
+    "version")
 
 PYTHON_VULN_PIP_AUDIT_RED_LINE_GAP = {
     "ecosystem": "python",
@@ -939,12 +938,17 @@ def collect_python_vulns_osv(ctx, repo):
 
     if malformed:
         if any(m.get("package") is None for m in malformed):
-            return _carry_forward(
-                prev_section, "partial",
-                "%s returned %d malformed vulnerability group(s) that did not normalize; "
-                "the prior python-vulns section is carried forward, never resolved"
-                % (tool, len(malformed)),
-                tool)
+            carried = _carry_prior_items(prev_section, items, lambda _pkg: True)
+            reason = (
+                "%s returned %d malformed vulnerability group(s) including at least one "
+                "that could not be attributed to a package; the whole prior python-vulns "
+                "section is therefore carried forward and nothing resolves; advisories "
+                "measured this run are still reported"
+                % (tool, len(malformed)))
+            return _section(
+                "partial", reason, tool=tool, items=items,
+                carriedForward=bool(carried), seconds=seconds, argv=argv,
+                ratedBy=tool, boundary=False)
         malformed_set = set(malformed_packages)
         carried = _carry_prior_items(
             prev_section, items, lambda pkg: pkg in malformed_set)
@@ -957,7 +961,7 @@ def collect_python_vulns_osv(ctx, repo):
             "partial", reason, tool=tool, items=items,
             malformedEntries=sorted(malformed_set),
             carriedForward=bool(carried), seconds=seconds, argv=argv,
-            ratedBy=tool, boundary=True)
+            ratedBy=tool, boundary=False)
         _carry_prior_items(prev_section, items, lambda pkg: pkg not in audited_pkgs)
         return partial
 
@@ -1116,9 +1120,7 @@ def collect_python_vulns_pip_audit(ctx, repo):
     return _section(
         "partial",
         "%s; %s" % (
-            "Python advisories carry no severity (pip-audit reports none); the "
-            "critical-vuln red line therefore cannot fire for Python in this collector "
-            "version",
+            PYTHON_VULN_PIP_AUDIT_RED_LINE_GAP_REASON,
             PYTHON_VULN_PIP_AUDIT_NO_DEPS_SCOPE_REASON),
         tool=tool, items=items, seconds=seconds, argv=argv,
         severityNote="pip-audit reports no severity field; every python advisory ranks "

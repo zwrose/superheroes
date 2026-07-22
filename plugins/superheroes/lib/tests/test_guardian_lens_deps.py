@@ -764,6 +764,124 @@ def test_osv_ambiguous_reconciliation_degrades(tmp_path):
     assert "ambiguous" in vulns["reason"].lower()
 
 
+def test_osv_unattributable_malformed_keeps_critical_red_line(tmp_path):
+    """Fail-open regression: an unattributable malformed entry must not discard this run's
+    findings via _carry_forward.
+
+    Fail-before: without the fix the unattributable branch returns _carry_forward(prev)
+    only — the critical advisory measured this run vanishes and red_lines() emits nothing."""
+    repo = _python_repo(tmp_path, "pyyaml==5.3.1\n")
+    payload = json.dumps({
+        "results": [{
+            "source": {"path": "/abs/requirements.txt", "type": "lockfile"},
+            "packages": [
+                {
+                    "package": {"name": "pyyaml", "version": "5.3.1", "ecosystem": "PyPI"},
+                    "groups": [{
+                        "ids": ["PYSEC-2021-142", "GHSA-8q59-q68h-6hv4"],
+                        "aliases": ["CVE-2020-14343", "GHSA-8q59-q68h-6hv4", "PYSEC-2021-142"],
+                        "max_severity": "9.8",
+                    }],
+                    "vulnerabilities": [
+                        {"id": "PYSEC-2021-142",
+                         "aliases": ["CVE-2020-14343", "GHSA-8q59-q68h-6hv4"]},
+                        {"id": "GHSA-8q59-q68h-6hv4",
+                         "aliases": ["CVE-2020-14343", "PYSEC-2021-142"],
+                         "database_specific": {"severity": "CRITICAL"}},
+                    ],
+                },
+                {"groups": ["not-attributable-no-package-object"], "vulnerabilities": []},
+            ],
+        }],
+    })
+    critical_id = "deps:audit:python:pyyaml:CVE-2020-14343"
+    prev_id = "deps:audit:python:urllib3:PYSEC-2021-108"
+    prev = {
+        "detected": ["python"],
+        "ecosystems": {"python": {
+            "freshness": {"status": "not-collected", "reason": "policy", "items": {}},
+            "vulns": {"status": "partial", "items": {
+                prev_id: {"id": prev_id, "package": "urllib3", "metric": 0},
+            }},
+        }},
+    }
+    out = gld.LENS.collect(
+        _ctx(repo, _run(osv_scanner=payload, osv_scanner_exit=1), prev=prev))
+    vulns = out["digest"]["ecosystems"]["python"]["vulns"]
+    assert vulns["status"] == "partial"
+    assert critical_id in vulns["items"]
+    assert vulns["items"][critical_id].get("severity") == "critical"
+    red = gld.LENS.red_lines(out["candidates"])
+    assert any(r["kind"] == "critical-vuln" and r["id"] == critical_id for r in red)
+    assert prev_id in vulns["items"]
+    assert vulns["items"][prev_id].get("carriedForward") is True
+    d = gld.LENS.diff(prev, out["digest"])
+    assert d["resolved"] == []
+
+
+def test_osv_malformed_not_permanent_boundary(tmp_path):
+    """Malformed groups are transient schema drift — never seed permanentBoundary."""
+    repo = _python_repo(tmp_path)
+    attributable = json.dumps({
+        "results": [{
+            "source": {"path": "/abs/requirements.txt", "type": "lockfile"},
+            "packages": [
+                {
+                    "package": {"name": "good", "version": "1.0", "ecosystem": "PyPI"},
+                    "groups": [{
+                        "ids": ["GHSA-good-good-good"],
+                        "aliases": ["CVE-2024-0002"],
+                        "max_severity": "9.8",
+                    }],
+                    "vulnerabilities": [{
+                        "id": "GHSA-good-good-good",
+                        "database_specific": {"severity": "CRITICAL"},
+                    }],
+                },
+                {
+                    "package": {"name": "bad", "version": "1.0", "ecosystem": "PyPI"},
+                    "groups": ["not-a-dict"],
+                    "vulnerabilities": [],
+                },
+            ],
+        }],
+    })
+    out_attr = gld.LENS.collect(
+        _ctx(repo, _run(osv_scanner=attributable, osv_scanner_exit=1)))
+    vulns_attr = out_attr["digest"]["ecosystems"]["python"]["vulns"]
+    assert vulns_attr["status"] == "partial"
+    assert vulns_attr.get("boundary") is not True
+    assert "permanentBoundary" not in out_attr
+
+    unattributable = json.dumps({
+        "results": [{
+            "source": {"path": "/abs/requirements.txt", "type": "lockfile"},
+            "packages": [
+                {
+                    "package": {"name": "pyyaml", "version": "5.3.1", "ecosystem": "PyPI"},
+                    "groups": [{
+                        "ids": ["PYSEC-2021-142", "GHSA-8q59-q68h-6hv4"],
+                        "aliases": ["CVE-2020-14343", "GHSA-8q59-q68h-6hv4", "PYSEC-2021-142"],
+                        "max_severity": "9.8",
+                    }],
+                    "vulnerabilities": [
+                        {"id": "GHSA-8q59-q68h-6hv4",
+                         "aliases": ["CVE-2020-14343", "PYSEC-2021-142"],
+                         "database_specific": {"severity": "CRITICAL"}},
+                    ],
+                },
+                {"groups": ["no-package-object"], "vulnerabilities": []},
+            ],
+        }],
+    })
+    out_unattr = gld.LENS.collect(
+        _ctx(repo, _run(osv_scanner=unattributable, osv_scanner_exit=1)))
+    vulns_unattr = out_unattr["digest"]["ecosystems"]["python"]["vulns"]
+    assert vulns_unattr["status"] == "partial"
+    assert vulns_unattr.get("boundary") is not True
+    assert "permanentBoundary" not in out_unattr
+
+
 def test_osv_malformed_group_beside_valid_carries_prior_not_resolves(tmp_path):
     repo = _python_repo(tmp_path)
     payload = json.dumps({
