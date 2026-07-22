@@ -295,11 +295,13 @@ def test_collect_degrades_not_collected_on_git_failure(tmp_path):
 # End-to-end collect
 # ---------------------------------------------------------------------------
 
-def _basic_tools(tmp_path, *, numstat, lsfiles, radon=None, lizard=None, log=None):
+def _basic_tools(tmp_path, *, numstat, lsfiles, radon=None, lizard=None, log=None,
+                 fail_markers=None):
     return Tools(
         shallow="false\n",
         log=log if log is not None else "2026-05-01T00:00:00+00:00\n",
         numstat=numstat, lsfiles=lsfiles, radon=radon, lizard=lizard,
+        fail_markers=fail_markers,
     )
 
 
@@ -614,6 +616,78 @@ def test_radon_contract_mismatch_mixed_repo_is_partial_not_whole_lens(tmp_path):
     # js collected its candidate; the lens did not abort before lizard ran.
     assert "hotspots:b.js" in {c["id"] for c in out["candidates"]}
     assert out["diagnostics"]["complexityCoverage"]["javascript"] == "collected"
+
+
+# ---------------------------------------------------------------------------
+# _run_radon / _run_lizard tool-FAILURE sibling (`if not res["ok"]`): the tool
+# missing / non-zero-exit branch — distinct from the empty-output sibling above.
+# Both failure flavors are exercised: a non-zero exit (fail_markers={tool: rc})
+# and a tool-missing raise (fail_markers={tool: FileNotFoundError(...)}).
+# ---------------------------------------------------------------------------
+
+def test_radon_tool_failure_python_only_not_collected(tmp_path):
+    """radon exits non-zero (the `not res['ok']` sibling, NOT empty output) for the only
+    needed language → whole-lens not-collected naming radon's failure."""
+    _write(tmp_path, "a.py", 10)
+    run = _basic_tools(tmp_path, numstat="10\t0\ta.py\n", lsfiles=["a.py"],
+                       fail_markers={"radon": 1})  # non-zero exit → run_tool ok=False
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"
+    assert out["digest"] is None
+    assert "radon failed" in reason
+
+
+def test_radon_tool_failure_mixed_repo_is_partial_not_whole_lens(tmp_path):
+    """radon exits non-zero (tool-failure sibling) but js still collects → partial, python
+    degraded, the js candidate preserved (mirrors the contract-mismatch test)."""
+    _write(tmp_path, "a.py", 20)
+    _write(tmp_path, "b.js", 20)
+    run = _basic_tools(
+        tmp_path, numstat="20\t0\ta.py\n20\t0\tb.js\n", lsfiles=["a.py", "b.js"],
+        fail_markers={"radon": 1},  # non-zero exit → radon (python) failed
+        lizard="20,30,10,0,20,hot@1-20@b.js,b.js,hot,sig,1,20\n")
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+    status, reason = gl.classify_collect(out)
+    assert status == "partial"
+    assert "python" in reason
+    assert "radon failed" in reason
+    # js collected its candidate; the lens did not abort before lizard ran.
+    assert "hotspots:b.js" in {c["id"] for c in out["candidates"]}
+    assert out["diagnostics"]["complexityCoverage"]["javascript"] == "collected"
+
+
+def test_lizard_tool_failure_js_only_not_collected(tmp_path):
+    """lizard is missing (raise → the `not res['ok']` sibling, NOT empty output) for the
+    only needed language → whole-lens not-collected naming lizard's failure."""
+    _write(tmp_path, "b.js", 10)
+    run = _basic_tools(
+        tmp_path, numstat="10\t0\tb.js\n", lsfiles=["b.js"],
+        fail_markers={"lizard": FileNotFoundError(2, "lizard")})  # raise → ok=False
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"
+    assert out["digest"] is None
+    assert "lizard failed" in reason
+
+
+def test_lizard_tool_failure_mixed_repo_is_partial_not_whole_lens(tmp_path):
+    """lizard fails (tool-failure sibling) but python still collects → partial, javascript
+    degraded, the python candidate preserved."""
+    _write(tmp_path, "a.py", 20)
+    _write(tmp_path, "b.js", 20)
+    run = _basic_tools(
+        tmp_path, numstat="20\t0\ta.py\n20\t0\tb.js\n", lsfiles=["a.py", "b.js"],
+        radon={"a.py": [{"complexity": 15, "name": "f", "lineno": 1}]},
+        fail_markers={"lizard": 1})  # non-zero exit → lizard (javascript) failed
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+    status, reason = gl.classify_collect(out)
+    assert status == "partial"
+    assert "javascript" in reason
+    assert "lizard failed" in reason
+    # python collected its candidate; the lens did not abort on the js failure.
+    assert "hotspots:a.py" in {c["id"] for c in out["candidates"]}
+    assert out["diagnostics"]["complexityCoverage"]["python"] == "collected"
 
 
 # ---------------------------------------------------------------------------
