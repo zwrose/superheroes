@@ -287,8 +287,9 @@ OSV_MIXED_ALLPACKAGES_JSON = json.dumps({
     }],
 })
 
-# Accepted alternate shape: empty ``groups`` list (still valid, distinct from absent-key).
-OSV_EMPTY_GROUPS_ALLPACKAGES_JSON = json.dumps({
+# Synthetic (not captured): empty ``groups`` list exercises acceptance distinct from the
+# real absent-key clean shape in OSV_ALLCLEAN_ALLPACKAGES_JSON.
+OSV_SYNTHETIC_EMPTY_GROUPS_JSON = json.dumps({
     "results": [{
         "source": {"path": "/abs/requirements.txt", "type": "lockfile"},
         "packages": [{
@@ -679,6 +680,175 @@ def test_freshness_candidates_are_never_red_lines(tmp_path):
 
 
 # ===================================================================================
+# Requirements pin parser (PEP 440 / PEP 503)
+# ===================================================================================
+
+@pytest.mark.parametrize("line,expected_kind,expected_key", [
+    ("pkg==1.0", "pin", "pkg"),
+    ("pkg==1.*", "unpinned", None),
+    ("pkg===1.0", "pin", "pkg"),
+    ("pkg>=1.0", "unpinned", None),
+    ("pkg>1.0", "unpinned", None),
+    ("pkg<2.0", "unpinned", None),
+    ("pkg<=2.0", "unpinned", None),
+    ("pkg~=1.0", "unpinned", None),
+    ("pkg!=1.0.1", "unpinned", None),
+    ("pkg>=1.0,<2.0", "unpinned", None),
+    ("pkg==1.0,!=1.0.1", "unpinned", None),
+    ("extraspkg[extra]==1.0", "pin", "extraspkg"),
+    ("Under_Score_Pkg==2.0", "pin", "under-score-pkg"),
+    ("Mixed.Case_Pkg==1.0", "pin", "mixed-case-pkg"),
+    ("pkg==1.0  # inline comment", "pin", "pkg"),
+    ("pkg==1.0 --hash=sha256:abcdef", "pin", "pkg"),
+    ("pkg==1.0; python_version < \"3.9\"", "conditional", None),
+    ("-e git+https://example.com/pkg.git", "unpinned", None),
+    ("pkg @ https://example.com/pkg-1.0.tar.gz", "unpinned", None),
+    ("pkg", "unpinned", None),
+    ("-r other.txt", "include", None),
+    ("-c constraints.txt", "include", None),
+    ("wildcardpkg==1.*", "unpinned", None),
+])
+def test_requirements_pin_classification_table(line, expected_kind, expected_key):
+    kind, name_or_echo, _version = gld._classify_requirements_line(line)
+    assert kind == expected_kind
+    if expected_kind == "pin":
+        assert name_or_echo == expected_key
+
+
+def test_requirements_file_utf8_bom_stripped(tmp_path):
+    repo = _repo(tmp_path, {"pyproject.toml": "[project]\n"})
+    req_path = tmp_path / "requirements.txt"
+    req_path.write_bytes(b"\xef\xbb\xbfpkg==1.0\n")
+    pin_info = gld._parse_requirements_pins(str(req_path))
+    assert list(pin_info["pins"].keys()) == ["pkg"]
+
+
+def test_requirements_hash_continuation_line_is_pin(tmp_path):
+    repo = _repo(tmp_path, {
+        "pyproject.toml": "[project]\n",
+        "requirements.txt": "pkg==1.0 \\\n    --hash=sha256:abcdef\n",
+    })
+    pin_info = gld._parse_requirements_pins(os.path.join(repo, "requirements.txt"))
+    assert list(pin_info["pins"].keys()) == ["pkg"]
+    assert pin_info["unpinned"] == []
+
+
+def test_pin_gate_blocks_false_resolve_on_ranged_requirement(tmp_path):
+    """Killing test: without the exact_pins gate, a clean osv audit false-resolves priors."""
+    repo = _python_repo(tmp_path, "pyyaml>=5.0\n")
+    prev_id = "deps:audit:python:pyyaml:PYSEC-PRIOR-ONLY"
+    prev = {
+        "detected": ["python"],
+        "ecosystems": {"python": {
+            "freshness": {"status": "not-collected", "reason": "policy", "items": {}},
+            "vulns": {"status": "partial", "items": {
+                prev_id: {
+                    "id": prev_id,
+                    "package": "pyyaml",
+                    "advisory": "PYSEC-PRIOR-ONLY",
+                    "metric": 5,
+                },
+            }},
+        }},
+    }
+    out = gld.LENS.collect(
+        _ctx(repo, _run(osv_scanner=OSV_PYYAML_CLEAN_ALLPACKAGES_JSON), prev=prev))
+    vulns = out["digest"]["ecosystems"]["python"]["vulns"]
+    assert prev_id in vulns["items"]
+    assert vulns["items"][prev_id].get("carriedForward") is True
+    d = gld.LENS.diff(prev, out["digest"])
+    assert prev_id not in d["resolved"]
+
+
+def test_extraspkg_extras_canonical_name_audited_and_resolves_prior(tmp_path):
+    """extras in requirements must key pins on PEP 503 canonical name osv-scanner emits."""
+    repo = _python_repo(tmp_path, "extraspkg[extra]==1.0\n")
+    prev_id = "deps:audit:python:extraspkg:PYSEC-OLD-1"
+    prev = {
+        "detected": ["python"],
+        "ecosystems": {"python": {
+            "freshness": {"status": "not-collected", "reason": "policy", "items": {}},
+            "vulns": {"status": "partial",
+                      "items": {prev_id: {"id": prev_id, "package": "extraspkg", "metric": 0}}},
+        }},
+    }
+    payload = json.dumps({
+        "results": [{
+            "source": {"path": "/abs/requirements.txt", "type": "lockfile"},
+            "packages": [{
+                "package": {"name": "extraspkg", "version": "1.0", "ecosystem": "PyPI"},
+            }],
+        }],
+    })
+    out = gld.LENS.collect(_ctx(repo, _run(osv_scanner=payload), prev=prev))
+    cov = out["digest"]["ecosystems"]["python"]["vulns"]["auditCoverage"]
+    assert cov["pinsClassified"] == 1
+    assert cov["packagesAudited"] == 1
+    assert prev_id in gld.LENS.diff(prev, out["digest"])["resolved"]
+
+
+def test_under_score_pkg_canonical_name_audited_and_resolves_prior(tmp_path):
+    """PEP 503 canonical name must match osv-scanner's under-score-pkg emission."""
+    repo = _python_repo(tmp_path, "Under_Score_Pkg==2.0\n")
+    prev_id = "deps:audit:python:under-score-pkg:PYSEC-OLD-1"
+    prev = {
+        "detected": ["python"],
+        "ecosystems": {"python": {
+            "freshness": {"status": "not-collected", "reason": "policy", "items": {}},
+            "vulns": {"status": "partial", "items": {
+                prev_id: {"id": prev_id, "package": "under-score-pkg", "metric": 0},
+            }},
+        }},
+    }
+    payload = json.dumps({
+        "results": [{
+            "source": {"path": "/abs/requirements.txt", "type": "lockfile"},
+            "packages": [{
+                "package": {"name": "under-score-pkg", "version": "2.0", "ecosystem": "PyPI"},
+            }],
+        }],
+    })
+    out = gld.LENS.collect(_ctx(repo, _run(osv_scanner=payload), prev=prev))
+    cov = out["digest"]["ecosystems"]["python"]["vulns"]["auditCoverage"]
+    assert cov["packagesAudited"] == 1
+    assert prev_id in gld.LENS.diff(prev, out["digest"])["resolved"]
+
+
+def test_requirements_decode_error_degrades_python_only(tmp_path):
+    repo = _repo(tmp_path, {
+        "package.json": PACKAGE_JSON,
+        "package-lock.json": "{}",
+        "pyproject.toml": "[project]\n",
+    })
+    req_path = tmp_path / "requirements.txt"
+    req_path.write_bytes(b"\xff\xfe not utf-8\n")
+    out = gld.LENS.collect(_ctx(
+        repo,
+        _run(
+            ncu=NCU_JSON,
+            audit=NPM_AUDIT_JSON,
+            audit_exit=1,
+            osv_scanner=OSV_ALLCLEAN_ALLPACKAGES_JSON,
+            pip_audit=FileNotFoundError("pip-audit"),
+        )))
+    assert out["digest"]["ecosystems"]["node"]["freshness"]["status"] == "collected"
+    py_vulns = out["digest"]["ecosystems"]["python"]["vulns"]
+    assert py_vulns["status"] == "not-collected"
+    assert "unreadable" in py_vulns["reason"].lower()
+
+
+def test_audit_coverage_evidence_in_digest(tmp_path):
+    repo = _repo(tmp_path, {"pyproject.toml": "[project]\n",
+                            "requirements.txt": "pyyaml==5.3.1\nsix==1.16.0\n"})
+    out = gld.LENS.collect(
+        _ctx(repo, _run(osv_scanner=OSV_MIXED_ALLPACKAGES_JSON, osv_scanner_exit=1)))
+    cov = out["digest"]["ecosystems"]["python"]["vulns"]["auditCoverage"]
+    assert cov["pinsClassified"] == 2
+    assert cov["packagesAudited"] == 2
+    assert cov["unpinnedCount"] == 0
+
+
+# ===================================================================================
 # osv-scanner python vulns (rated primary; pip-audit fallback)
 # ===================================================================================
 
@@ -812,9 +982,9 @@ def test_osv_ambiguous_reconciliation_keeps_critical_partial(tmp_path):
     assert "ambiguous" in vulns["reason"].lower()
     critical_id = "deps:audit:python:pyyaml:CVE-2020-14343"
     assert critical_id in vulns["items"]
+    assert vulns["items"][critical_id].get("severity") == "critical"
     reds = gld.LENS.red_lines([
-        {"id": critical_id, "lensKind": "vulnerability", "severity": "critical",
-         "package": "pyyaml", "advisory": "CVE-2020-14343", "receipt": "x"}])
+        vulns["items"][critical_id] | {"lensKind": "vulnerability"}])
     assert any(r["kind"] == "critical-vuln" for r in reds)
     assert vulns["items"]["deps:audit:python:pyyaml:PYSEC-2021-142"].get("carriedForward")
     assert vulns["items"]["deps:audit:python:pyyaml:GHSA-8q59-q68h-6hv4"].get("carriedForward")
@@ -1013,7 +1183,7 @@ def test_osv_contradiction_gate_exit1_zero_normalized(tmp_path):
 
 
 def test_osv_scanner_argv_pins_neutral_config_and_all_packages(tmp_path):
-    repo = _python_repo(tmp_path)
+    repo = _python_repo(tmp_path, "six==1.16.0\n")
     out = gld.LENS.collect(_ctx(repo, _run(osv_scanner=OSV_ALLCLEAN_ALLPACKAGES_JSON)))
     argv = out["digest"]["ecosystems"]["python"]["vulns"]["argv"]
     assert "--all-packages" in argv
@@ -1066,13 +1236,15 @@ def test_permanent_boundary_on_osv_success(tmp_path):
     assert out.get(gl.PERMANENT_BOUNDARY_KEY) is True
 
 
-def test_osv_fallback_sets_permanent_boundary(tmp_path):
-    """Fail-before: pip-audit fallback with boundary=False strands repos in quiet-baseline."""
+def test_osv_fallback_sets_transient_boundary(tmp_path):
+    """pip-audit fallback after osv absence is transient — not a structural boundary."""
     repo = _python_repo(tmp_path, "requests==2.0\n")
     payload = json.dumps({"dependencies": [
         {"name": "requests", "version": "2.0", "vulns": []}]})
     out = gld.LENS.collect(_ctx(repo, _run(pip_audit=payload, pip_audit_exit=0)))
-    assert out.get(gl.PERMANENT_BOUNDARY_KEY) is True
+    vulns = out["digest"]["ecosystems"]["python"]["vulns"]
+    assert vulns.get("boundary") is not True
+    assert "permanentBoundary" not in out
 
 
 def test_both_fail_no_requirements_is_structural_boundary(tmp_path):
@@ -1158,7 +1330,7 @@ def test_osv_clean_package_absent_keys_not_malformed(tmp_path):
 
 
 def test_osv_empty_groups_list_still_audits_clean(tmp_path):
-    """Empty ``groups`` list is accepted (distinct from absent-key clean shape)."""
+    """Synthetic empty ``groups`` list is accepted (distinct from absent-key clean shape)."""
     repo = _python_repo(tmp_path, "six==1.16.0\n")
     prev_id = "deps:audit:python:six:PYSEC-OLD-1"
     prev = {
@@ -1170,7 +1342,7 @@ def test_osv_empty_groups_list_still_audits_clean(tmp_path):
         }},
     }
     out = gld.LENS.collect(
-        _ctx(repo, _run(osv_scanner=OSV_EMPTY_GROUPS_ALLPACKAGES_JSON), prev=prev))
+        _ctx(repo, _run(osv_scanner=OSV_SYNTHETIC_EMPTY_GROUPS_JSON), prev=prev))
     assert prev_id in gld.LENS.diff(prev, out["digest"])["resolved"]
 
 
@@ -1200,13 +1372,19 @@ def test_osv_fixed_critical_does_not_redline_forever(tmp_path):
 
 def test_osv_ranged_requirement_pin_scope_gap(tmp_path):
     repo = _python_repo(tmp_path, "pyyaml>=5.0\n")
-    prev_id = "deps:audit:python:pyyaml:CVE-2020-14343"
+    prev_id = "deps:audit:python:pyyaml:PYSEC-PRIOR-ONLY"
     prev = {
         "detected": ["python"],
         "ecosystems": {"python": {
             "freshness": {"status": "not-collected", "reason": "policy", "items": {}},
-            "vulns": {"status": "partial",
-                      "items": {prev_id: {"id": prev_id, "package": "pyyaml", "metric": 5}}},
+            "vulns": {"status": "partial", "items": {
+                prev_id: {
+                    "id": prev_id,
+                    "package": "pyyaml",
+                    "advisory": "PYSEC-PRIOR-ONLY",
+                    "metric": 5,
+                },
+            }},
         }},
     }
     out = gld.LENS.collect(
@@ -1216,6 +1394,9 @@ def test_osv_ranged_requirement_pin_scope_gap(tmp_path):
     assert isinstance(gap, dict)
     assert "pyyaml>=5.0" in gap.get("unpinned", [])
     assert prev_id in vulns["items"]
+    assert vulns["items"][prev_id].get("carriedForward") is True
+    fresh_id = "deps:audit:python:pyyaml:CVE-2020-14343"
+    assert fresh_id in vulns["items"]
     d = gld.LENS.diff(prev, out["digest"])
     assert prev_id not in d["resolved"]
 
@@ -1275,6 +1456,8 @@ def test_osv_vulnerabilities_without_groups_is_malformed_carries_prior(tmp_path)
     assert vulns["status"] == "partial"
     assert prev_id in vulns["items"]
     assert vulns["items"][prev_id].get("carriedForward")
+    assert "malformed" in vulns["reason"].lower()
+    assert vulns.get("boundary") is not True
     assert isinstance(vulns.get("coverageGap"), dict)
     d = gld.LENS.diff(prev, out["digest"])
     assert prev_id not in d["resolved"]

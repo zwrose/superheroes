@@ -155,6 +155,12 @@ _LEADING_INT = re.compile(r"^(\d+)")
 _GHSA = re.compile(r"(GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4})", re.IGNORECASE)
 _DEPENDABOT_ECOSYSTEM_LINE = re.compile(
     r"^\s*-?\s*package-ecosystem\s*:\s*[\"']?([A-Za-z0-9_-]+)[\"']?", re.MULTILINE)
+_REQUIREMENTS_MAX_BYTES = 1_048_576
+_PIN_SCOPE_LINE_MAX = 200
+_REQ_NAME_EXTRAS = re.compile(
+    r"^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)(\[[^\]]+\])?")
+_REQ_SPECIFIER = re.compile(
+    r"(===|==|!=|>=|<=|~=|>|<)\s*([^,;\s]+(?:\s+[^,;]+)?)")
 
 
 # --------------------------------------------------------------------------- helpers
@@ -791,16 +797,184 @@ def _osv_group_severity(group, byid):
     return ("unknown", max_rank, True)
 
 
+def _pep503_canonical(name):
+    """PEP 503 normalized name: lowercase; collapse runs of ``-._`` to a single ``-``."""
+    if not isinstance(name, str) or not name:
+        return ""
+    return re.sub(r"[-_.]+", "-", name.lower())
+
+
+def _pin_scope_line_echo(line):
+    """Bounded echo of a requirement line for pinScopeGap disclosure."""
+    if not isinstance(line, str):
+        return ""
+    s = line.strip()
+    if len(s) <= _PIN_SCOPE_LINE_MAX:
+        return s
+    return s[:_PIN_SCOPE_LINE_MAX - 3] + "..."
+
+
+def _strip_requirement_options(fragment):
+    """Drop pip option tokens (``--hash=`` etc.) from the tail of a requirement fragment."""
+    parts = fragment.split()
+    kept = []
+    for part in parts:
+        if part.startswith("--"):
+            break
+        kept.append(part)
+    return " ".join(kept).strip()
+
+
+def _split_requirement_marker(body):
+    """Split ``specifiers ; marker`` without treating ``#`` inside URLs as a marker."""
+    if ";" not in body:
+        return (body, None)
+    spec_part, marker = body.split(";", 1)
+    return (spec_part.strip(), marker.strip() or None)
+
+
+def _is_exact_pin_specifier(operator, version):
+    """True only when a single concrete version is positively provable."""
+    if operator == "===":
+        return bool(version)
+    if operator != "==":
+        return False
+    if not version or "*" in version:
+        return False
+    if any(op in version for op in (">", "<", "!", "=", "~")):
+        return False
+    return True
+
+
+def _parse_requirement_specifiers(spec_part):
+    """Return [(operator, version), ...] from the specifier tail of a requirement."""
+    spec_part = _strip_requirement_options(spec_part)
+    if not spec_part:
+        return []
+    out = []
+    for match in _REQ_SPECIFIER.finditer(spec_part):
+        op, ver = match.group(1), match.group(2).strip()
+        out.append((op, ver))
+    return out
+
+
+def _classify_requirements_line(line):
+    """Classify one logical requirements.txt line.
+
+    Returns ``(kind, canonical_name_or_echo, version)`` where *kind* is one of
+    ``skip``, ``include``, ``pin``, ``conditional``, or ``unpinned``.
+    """
+    raw = (line or "").strip()
+    if not raw or raw.startswith("#"):
+        return ("skip", None, None)
+    if raw.startswith(("-r", "-c", "--requirement", "--constraint")):
+        return ("include", None, None)
+    if raw.startswith(("-e", "--editable")):
+        return ("unpinned", _pin_scope_line_echo(raw), None)
+    if "://" in raw or raw.startswith(("git+", "hg+", "svn+", "bzr+")):
+        return ("unpinned", _pin_scope_line_echo(raw), None)
+
+    body = raw
+    hash_idx = body.find(" #")
+    if hash_idx >= 0:
+        body = body[:hash_idx].rstrip()
+
+    name_match = _REQ_NAME_EXTRAS.match(body)
+    if not name_match:
+        return ("unpinned", _pin_scope_line_echo(raw), None)
+    name = name_match.group(1)
+    tail = body[name_match.end():].strip()
+    spec_part, marker = _split_requirement_marker(tail)
+    if marker:
+        return ("conditional", _pin_scope_line_echo(raw), None)
+    if not spec_part:
+        return ("unpinned", _pin_scope_line_echo(raw), None)
+
+    specifiers = _parse_requirement_specifiers(spec_part)
+    if not specifiers:
+        return ("unpinned", _pin_scope_line_echo(raw), None)
+    if len(specifiers) != 1:
+        return ("unpinned", _pin_scope_line_echo(raw), None)
+    operator, version = specifiers[0]
+    if operator in (">=", ">", "<", "<=", "~=", "!="):
+        return ("unpinned", _pin_scope_line_echo(raw), None)
+    if _is_exact_pin_specifier(operator, version):
+        return ("pin", _pep503_canonical(name), version)
+    return ("unpinned", _pin_scope_line_echo(raw), None)
+
+
+def _join_requirement_lines(raw_text):
+    """Join ``\\`` continuations and return logical requirement lines."""
+    physical = raw_text.splitlines()
+    logical = []
+    buf = ""
+    for line in physical:
+        stripped = line.rstrip()
+        if stripped.endswith("\\"):
+            buf += stripped[:-1]
+            continue
+        logical.append(buf + stripped)
+        buf = ""
+    if buf:
+        logical.append(buf)
+    return logical
+
+
+def _parse_requirements_pins(req_abs):
+    """Parse requirements.txt into exactly-pinned vs unpinned requirement lines."""
+    pins = {}
+    unpinned = []
+    conditional = []
+    has_includes = False
+    truncated = False
+    try:
+        with open(req_abs, "rb") as fh:
+            raw_bytes = fh.read(_REQUIREMENTS_MAX_BYTES + 1)
+        if len(raw_bytes) > _REQUIREMENTS_MAX_BYTES:
+            truncated = True
+            raw_bytes = raw_bytes[:_REQUIREMENTS_MAX_BYTES]
+        if raw_bytes.startswith(b"\xef\xbb\xbf"):
+            raw_bytes = raw_bytes[3:]
+        text = raw_bytes.decode("utf-8")
+    except (OSError, ValueError) as exc:
+        return {
+            "pins": pins,
+            "unpinned": unpinned,
+            "conditional": conditional,
+            "hasIncludes": has_includes,
+            "truncated": truncated,
+            "readError": str(exc),
+        }
+    for line in _join_requirement_lines(text):
+        kind, name_or_line, _version = _classify_requirements_line(line)
+        if kind == "pin":
+            pins[name_or_line] = name_or_line
+        elif kind == "conditional":
+            conditional.append(name_or_line)
+        elif kind == "unpinned":
+            unpinned.append(name_or_line)
+        elif kind == "include":
+            has_includes = True
+    return {
+        "pins": pins,
+        "unpinned": unpinned,
+        "conditional": conditional,
+        "hasIncludes": has_includes,
+        "truncated": truncated,
+    }
+
+
 def _reconcile_python_vuln_id(package, alias_set, prev_section, base_id):
     """Match a current advisory to a prior item by package + alias intersection."""
     prev_items = prev_section.get("items") if isinstance(prev_section, dict) else None
     if not isinstance(prev_items, dict):
         return (base_id, None)
+    pkg_key = _pep503_canonical(package)
     matches = []
     for pid, rec in prev_items.items():
         if not isinstance(rec, dict):
             continue
-        if rec.get("package") != package:
+        if _pep503_canonical(rec.get("package")) != pkg_key:
             continue
         if alias_set & _prior_alias_set(rec):
             matches.append(pid)
@@ -812,53 +986,6 @@ def _reconcile_python_vuln_id(package, alias_set, prev_section, base_id):
     return (base_id, None)
 
 
-def _classify_requirements_line(line):
-    """Classify one requirements.txt line. Returns ('pin', name, version) or a skip tag."""
-    raw = line.strip()
-    if not raw or raw.startswith("#"):
-        return ("skip", None, None)
-    if raw.startswith("-r") or raw.startswith("-c") or raw.startswith("--requirement"):
-        return ("include", None, None)
-    if raw.startswith("-e") or raw.startswith("--editable"):
-        return ("unpinned", raw, None)
-    if "://" in raw or raw.startswith(("git+", "hg+", "svn+", "bzr+")):
-        return ("unpinned", raw, None)
-    if ";" in raw:
-        return ("unpinned", raw, None)
-    if "==" not in raw:
-        return ("unpinned", raw, None)
-    parts = raw.split("==")
-    if len(parts) != 2:
-        return ("unpinned", raw, None)
-    name, version = parts[0].strip(), parts[1].strip()
-    if not name or not version:
-        return ("unpinned", raw, None)
-    if any(c in name for c in " <>,=") or any(c in version for c in " <>,;"):
-        return ("unpinned", raw, None)
-    return ("pin", name, version)
-
-
-def _parse_requirements_pins(req_abs):
-    """Parse requirements.txt into exactly-pinned vs unpinned requirement lines."""
-    pins = {}
-    unpinned = []
-    has_includes = False
-    try:
-        with open(req_abs, encoding="utf-8") as fh:
-            lines = fh.readlines()
-    except OSError:
-        return {"pins": pins, "unpinned": unpinned, "hasIncludes": has_includes}
-    for line in lines:
-        kind, name_or_line, version = _classify_requirements_line(line)
-        if kind == "pin":
-            pins[name_or_line.lower()] = name_or_line
-        elif kind == "unpinned":
-            unpinned.append(name_or_line)
-        elif kind == "include":
-            has_includes = True
-    return {"pins": pins, "unpinned": unpinned, "hasIncludes": has_includes}
-
-
 def _finalize_osv_python_section(items, prev_section, audited_pkgs, pin_info,
                                   seconds, argv, tool, boundary=True,
                                   ambiguity_disclosures=None, carry_all_prior=False):
@@ -868,7 +995,7 @@ def _finalize_osv_python_section(items, prev_section, audited_pkgs, pin_info,
     else:
         _carry_prior_items(
             prev_section, items,
-            lambda pkg: (pkg or "").lower() not in audited_pkgs)
+            lambda pkg: _pep503_canonical(pkg or "") not in audited_pkgs)
 
     unrated = [i for i in items.values()
                if isinstance(i, dict) and not i.get("severityKnown")]
@@ -881,9 +1008,15 @@ def _finalize_osv_python_section(items, prev_section, audited_pkgs, pin_info,
         "ratedBy": tool,
         "boundary": boundary,
         "coverageGap": dict(PYTHON_VULN_NO_RESOLVE_COVERAGE_GAP),
+        "auditCoverage": {
+            "pinsClassified": len(pin_info.get("pins") or {}),
+            "packagesAudited": len(audited_pkgs),
+            "unpinnedCount": len(pin_info.get("unpinned") or []),
+        },
     }
     unpinned = pin_info.get("unpinned") or []
-    if unpinned or pin_info.get("hasIncludes"):
+    conditional = pin_info.get("conditional") or []
+    if unpinned or conditional or pin_info.get("hasIncludes"):
         extra["pinScopeGap"] = {
             "ecosystem": "python",
             "tool": tool,
@@ -891,12 +1024,22 @@ def _finalize_osv_python_section(items, prev_section, audited_pkgs, pin_info,
             "count": len(unpinned),
             "hasIncludes": bool(pin_info.get("hasIncludes")),
         }
+        if conditional:
+            extra["pinScopeGap"]["conditional"] = list(conditional)
+            extra["pinScopeGap"]["conditionalCount"] = len(conditional)
+        if pin_info.get("truncated"):
+            extra["pinScopeGap"]["truncated"] = True
         include_note = ""
         if pin_info.get("hasIncludes"):
             include_note = (
                 "; requirements.txt contains -r/-c includes — nested requirements the "
                 "scan never saw are not audited")
-        reason_parts.append("%s%s" % (PYTHON_VULN_UNPINNED_AUDIT_NOTE, include_note))
+        unpinned_note = PYTHON_VULN_UNPINNED_AUDIT_NOTE
+        if conditional:
+            unpinned_note = (
+                "some requirements carry environment markers (conditional install) and "
+                "are not exactly pinned — their prior advisories are never resolved")
+        reason_parts.append("%s%s" % (unpinned_note, include_note))
     if ambiguity_disclosures:
         reason_parts.append(
             "ambiguous advisory identity (%s) — current findings are reported under fresh "
@@ -954,6 +1097,12 @@ def collect_python_vulns_osv(ctx, repo):
             "not build from inside the repo — supply-chain policy" % tool, tool=tool)
 
     pin_info = _parse_requirements_pins(req_abs)
+    if pin_info.get("readError"):
+        return _section(
+            "not-collected",
+            "%s: requirements.txt unreadable (%s)" % (tool, pin_info["readError"]),
+            tool=tool,
+            boundary=False)
     exact_pins = pin_info.get("pins") or {}
 
     config_path = gt.neutral_tool_config(repo, tool)
@@ -1008,22 +1157,22 @@ def collect_python_vulns_osv(ctx, repo):
             has_vulnerabilities = "vulnerabilities" in pkg_entry
             groups = pkg_entry.get("groups")
             if not has_groups and not has_vulnerabilities:
-                if name.lower() in exact_pins:
-                    audited_pkgs.add(name.lower())
+                if _pep503_canonical(name) in exact_pins:
+                    audited_pkgs.add(_pep503_canonical(name))
                 continue
             if has_vulnerabilities and not has_groups:
                 malformed.append({
                     "package": name,
                     "why": "vulnerabilities present without groups",
                 })
-                malformed_packages.add(name.lower())
+                malformed_packages.add(_pep503_canonical(name))
                 continue
             if not isinstance(groups, list):
                 malformed.append({"package": name, "why": "non-list groups"})
-                malformed_packages.add(name.lower())
+                malformed_packages.add(_pep503_canonical(name))
                 continue
-            if name.lower() in exact_pins:
-                audited_pkgs.add(name.lower())
+            if _pep503_canonical(name) in exact_pins:
+                audited_pkgs.add(_pep503_canonical(name))
             byid = {}
             for rec in pkg_entry.get("vulnerabilities") or []:
                 if isinstance(rec, dict) and isinstance(rec.get("id"), str):
@@ -1032,16 +1181,16 @@ def collect_python_vulns_osv(ctx, repo):
                 raw_groups += 1
                 if not isinstance(group, dict):
                     malformed.append({"package": name, "why": "group is not an object"})
-                    malformed_packages.add(name.lower())
+                    malformed_packages.add(_pep503_canonical(name))
                     continue
                 ids = group.get("ids")
                 if not isinstance(ids, list) or not ids:
                     malformed.append({"package": name, "why": "group missing ids"})
-                    malformed_packages.add(name.lower())
+                    malformed_packages.add(_pep503_canonical(name))
                     continue
                 if not all(isinstance(i, str) and i for i in ids):
                     malformed.append({"package": name, "why": "group ids are not strings"})
-                    malformed_packages.add(name.lower())
+                    malformed_packages.add(_pep503_canonical(name))
                     continue
                 alias_set = _osv_alias_set(group)
                 preferred = _osv_preferred_id(alias_set)
@@ -1065,7 +1214,7 @@ def collect_python_vulns_osv(ctx, repo):
                     receipt = (
                         "%s %s: %s [severity not recognized from osv-scanner evidence]"
                         % (name, version, preferred))
-                if name.lower() not in exact_pins:
+                if _pep503_canonical(name) not in exact_pins:
                     receipt += " [audited lowest satisfying version — requirement not exactly pinned]"
                 item = items.get(cid)
                 if item is None:
@@ -1104,7 +1253,7 @@ def collect_python_vulns_osv(ctx, repo):
             malformed_set = set(malformed_packages)
             _carry_prior_items(
                 prev_section, items, lambda pkg: isinstance(pkg, str)
-                and pkg.lower() in malformed_set)
+                and _pep503_canonical(pkg) in malformed_set)
         reason = (
             "%s returned %d malformed vulnerability group(s)%s; advisories measured this "
             "run are still reported"
@@ -1188,7 +1337,7 @@ def collect_python_vulns_pip_audit(ctx, repo):
         name = dep.get("name")
         version = dep.get("version")
         if isinstance(name, str) and name:
-            audited_pkgs.add(name)
+            audited_pkgs.add(_pep503_canonical(name))
         for vuln in dep.get("vulns") or []:
             raw_entries += 1
             if not isinstance(vuln, dict):
@@ -1251,7 +1400,8 @@ def collect_python_vulns_pip_audit(ctx, repo):
     if contradiction is not None:
         return _section("not-collected", contradiction, tool=tool)
 
-    _carry_prior_items(prev_section, items, lambda pkg: pkg not in audited_pkgs)
+    _carry_prior_items(prev_section, items,
+                       lambda pkg: _pep503_canonical(pkg or "") not in audited_pkgs)
 
     return _section(
         "partial",
@@ -1273,6 +1423,8 @@ def collect_python_vulns(ctx, repo):
     if osv["status"] in ("collected", "partial"):
         return osv
     osv_reason = osv.get("reason") or "osv-scanner not collected"
+    req_abs = os.path.join(repo, "requirements.txt")
+    structural = not os.path.isfile(req_abs)
     pip = collect_python_vulns_pip_audit(ctx, repo)
     if pip["status"] in ("collected", "partial"):
         pip = dict(pip)
@@ -1291,11 +1443,9 @@ def collect_python_vulns(ctx, repo):
         pip["reason"] = (
             "rated source osv-scanner was unavailable (%s); %s"
             % (osv_reason, pip.get("reason") or "pip-audit fallback"))
-        pip["boundary"] = True
+        pip["boundary"] = structural
         return pip
     pip_reason = pip.get("reason") or "pip-audit not collected"
-    req_abs = os.path.join(repo, "requirements.txt")
-    structural = not os.path.isfile(req_abs)
     return _section(
         "not-collected",
         "osv-scanner: %s; pip-audit: %s" % (osv_reason, pip_reason),
