@@ -20,9 +20,11 @@ Two modes:
        --jsonUpgraded`` (PATH-only; the pinned-npx fetch fallback is gone — an absent
        tool degrades to not-collected quoting the install command).
      * node vulns      : ``npm audit --json --prefix <abs repo>``.
-     * python vulns    : ``pip-audit --format=json -r <abs requirements.txt>`` (PATH).
-       pip-audit reports NO severity, so python vulns are always ``partial`` with an
-       explicit ``redLineGap``.
+     * python vulns    : ``osv-scanner scan source --format json --no-resolve`` with a
+       pinned neutral ``--config`` and ``-L requirements.txt:<abs path>`` (PATH). Severity
+       is rated from OSV evidence when present; unrated advisories still disclose a
+       ``redLineGap``. When osv-scanner is absent or degrades, falls back to
+       ``pip-audit --format=json --no-deps -r <abs requirements.txt>`` (PATH, unrated).
      * python freshness: NOT collected. ``pip list --outdated`` needs the project's
        installed environment, which the sweep will not execute from inside the
        repository (supply-chain policy). The degradation is disclosed, never faked.
@@ -53,11 +55,11 @@ Severity rank (candidate `metric` for vulnerability candidates; higher is worse)
 
     critical 5 | high 4 | moderate/medium 3 | low 2 | info 1 | unknown 0
 
-`unknown` (rank 0) means THE TOOL REPORTED NO SEVERITY — it does not mean harmless.
-pip-audit's JSON carries no severity field at all (verified against pip-audit 2.9.0
-output), so every python advisory ranks 0 and carries `severityKnown: False`; the
-consequence template requires saying so rather than inventing a severity. Only a
-tool-reported `critical` raises the `critical-vuln` red line, which is the only
+`unknown` (rank 0) means THE TOOL REPORTED NO RECOGNIZED SEVERITY — it does not mean harmless.
+osv-scanner rates most advisories from OSV evidence; pip-audit (the unrated fallback) carries
+no severity field at all. An advisory with `severityKnown: False` is unrated, not
+low-severity; the consequence template requires saying so rather than inventing a rating.
+Only a tool-reported `critical` raises the `critical-vuln` red line, which is the only
 RED_LINE_KINDS member this lens emits.
 
 Fail-closed, visibly: a tool that is missing, times out, errors, or returns unparseable
@@ -69,6 +71,7 @@ degrades (`not-collected`) rather than reporting a clean scan (the unified contr
 gate — see ``_vuln_contradiction``).
 """
 import json
+import math
 import os
 import re
 import sys
@@ -79,15 +82,17 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import guardian_collect as gc  # noqa: E402
+import guardian_tools as gt  # noqa: E402
 
 LENS_NAME = "deps"
-COLLECTOR_VERSION = "1.0.0"
+COLLECTOR_VERSION = "1.1.0"
 DIGEST_SCHEMA = 1
 
 # Timeouts are per tool: npm-check-updates queries the registry for every package.
 FRESHNESS_TIMEOUT = 180
 NPM_AUDIT_TIMEOUT = 120
 PIP_AUDIT_TIMEOUT = 180
+OSV_TIMEOUT = 180
 GIT_TIMEOUT = 60
 
 DEFAULT_STALE_DAYS = 90
@@ -611,22 +616,43 @@ PYTHON_FRESHNESS_POLICY_REASON = (
     "is disclosed as NOT measured, never faked or read as clean")
 
 PYTHON_VULN_RED_LINE_GAP_REASON = (
-    "Python advisories carry no severity (pip-audit reports none); the "
-    "critical-vuln red line therefore cannot fire for Python in this collector version")
+    "Python advisories carry no severity rating; the critical-vuln red line therefore "
+    "cannot fire for those advisories")
 
 PYTHON_VULN_RED_LINE_GAP = {
+    "ecosystem": "python",
+    "tool": "osv-scanner",
+    "missing": "severity ratings — critical-vuln red line cannot fire for Python",
+}
+
+PYTHON_VULN_NO_DEPS_SCOPE_REASON = (
+    "osv-scanner ran with --no-resolve: only the enumerated packages in "
+    "requirements.txt were audited; transitive dependencies were NOT resolved (a "
+    "vulnerable transitive is invisible to this scan), so prior advisories for packages "
+    "this manifest does not enumerate are carried forward, never resolved")
+
+PYTHON_VULN_NO_DEPS_COVERAGE_GAP = {
+    "ecosystem": "python",
+    "tool": "osv-scanner",
+    "scope": "enumerated-manifest-only",
+    "missing": "transitive dependency resolution — --no-resolve audits only the packages "
+               "requirements.txt enumerates; a vulnerable transitive dependency is not "
+               "surfaced and prior transitive advisories are not re-measured",
+}
+
+PYTHON_VULN_PIP_AUDIT_RED_LINE_GAP = {
     "ecosystem": "python",
     "tool": "pip-audit",
     "missing": "severity ratings — critical-vuln red line cannot fire for Python",
 }
 
-PYTHON_VULN_NO_DEPS_SCOPE_REASON = (
+PYTHON_VULN_PIP_AUDIT_NO_DEPS_SCOPE_REASON = (
     "pip-audit ran with --no-deps: only the enumerated packages in requirements.txt were "
     "audited; transitive dependencies were NOT resolved (a vulnerable transitive is "
     "invisible to this scan), so prior advisories for packages this manifest does not "
     "enumerate are carried forward, never resolved")
 
-PYTHON_VULN_NO_DEPS_COVERAGE_GAP = {
+PYTHON_VULN_PIP_AUDIT_NO_DEPS_COVERAGE_GAP = {
     "ecosystem": "python",
     "tool": "pip-audit",
     "scope": "enumerated-manifest-only",
@@ -634,6 +660,128 @@ PYTHON_VULN_NO_DEPS_COVERAGE_GAP = {
                "requirements.txt enumerates; a vulnerable transitive dependency is not "
                "surfaced and prior transitive advisories are not re-measured",
 }
+
+
+def _prior_alias_set(rec):
+    """Alias set for reconciling advisory identity across collectors and sweeps."""
+    aliases = set()
+    if isinstance(rec, dict):
+        adv = rec.get("advisory")
+        if isinstance(adv, str) and adv:
+            aliases.add(adv)
+        for field in ("aliases", "aliasIds"):
+            for alias in rec.get(field) or []:
+                if isinstance(alias, str) and alias:
+                    aliases.add(alias)
+    return aliases
+
+
+def _osv_alias_set(group):
+    aliases = set()
+    if isinstance(group, dict):
+        for gid in group.get("ids") or []:
+            if isinstance(gid, str) and gid:
+                aliases.add(gid)
+        for alias in group.get("aliases") or []:
+            if isinstance(alias, str) and alias:
+                aliases.add(alias)
+    return aliases
+
+
+def _osv_preferred_id(alias_set):
+    """Deterministic advisory id: CVE-* > GHSA-* > PYSEC-* > other (lexicographic)."""
+    strings = sorted(a for a in alias_set if isinstance(a, str) and a)
+    for prefix in ("CVE-", "GHSA-", "PYSEC-"):
+        tier = sorted(a for a in strings if a.upper().startswith(prefix))
+        if tier:
+            return tier[0].upper()
+    return strings[0].upper() if strings else "UNKNOWN"
+
+
+def _osv_score_band(score):
+    if score >= 9.0:
+        return "critical"
+    if score >= 7.0:
+        return "high"
+    if score >= 4.0:
+        return "moderate"
+    if score > 0:
+        return "low"
+    return None
+
+
+def _osv_parse_max_severity(value):
+    """Parse group.max_severity into a severity band, or None when unrecognized."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, (list, dict)):
+        return None
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(score) or score <= 0:
+        return None
+    return _osv_score_band(score)
+
+
+def _osv_group_severity(group, byid):
+    """Return (severity_str, rank, known_bool) from ALL recognized evidence (max rank)."""
+    ranks = []
+    severities = []
+    for gid in group.get("ids") or []:
+        if not isinstance(gid, str):
+            continue
+        rec = byid.get(gid)
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("withdrawn"):
+            continue
+        db = rec.get("database_specific")
+        if not isinstance(db, dict):
+            continue
+        label = db.get("severity")
+        if not isinstance(label, str) or not label.strip():
+            continue
+        sev = label.strip().lower()
+        rank = SEVERITY_RANK.get(sev)
+        if rank is not None:
+            ranks.append(rank)
+            severities.append(sev)
+    band = _osv_parse_max_severity(group.get("max_severity"))
+    if band is not None:
+        rank = SEVERITY_RANK.get(band)
+        if rank is not None:
+            ranks.append(rank)
+            severities.append(band)
+    if not ranks:
+        return ("unknown", 0, False)
+    max_rank = max(ranks)
+    for sev, rank in zip(severities, ranks):
+        if rank == max_rank:
+            return (sev, max_rank, True)
+    return ("unknown", max_rank, True)
+
+
+def _reconcile_python_vuln_id(package, alias_set, prev_section, base_id):
+    """Match a current advisory to a prior item by package + alias intersection."""
+    prev_items = prev_section.get("items") if isinstance(prev_section, dict) else None
+    if not isinstance(prev_items, dict):
+        return (base_id, None)
+    matches = []
+    for pid, rec in prev_items.items():
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("package") != package:
+            continue
+        if alias_set & _prior_alias_set(rec):
+            matches.append(pid)
+    if len(matches) == 1:
+        return (matches[0], None)
+    if len(matches) > 1:
+        return (None, "ambiguous advisory identity for package %s: prior items %s both "
+                      "intersect the current alias set" % (package, ", ".join(sorted(matches))))
+    return (base_id, None)
 
 
 def collect_python_freshness(ctx, repo, manifest_rel):
@@ -647,10 +795,201 @@ def collect_python_freshness(ctx, repo, manifest_rel):
     del ctx
     return _section(
         "not-collected", PYTHON_FRESHNESS_POLICY_REASON,
-        tool="pip list --outdated", manifest=manifest_rel)
+        tool="pip list --outdated", manifest=manifest_rel, boundary=True)
 
 
-def collect_python_vulns(ctx, repo):
+def collect_python_vulns_osv(ctx, repo):
+    """osv-scanner scan source → {id: item}, one per vulnerability group (not per record).
+
+    Audits requirements.txt by ABSOLUTE path with a pinned neutral config so repo-local
+    osv-scanner.toml cannot suppress findings. Successful collection is always `partial`:
+    --no-resolve audits only enumerated packages. A findings signal with zero normalized
+    candidates degrades via the contradiction gate.
+    """
+    tool = "osv-scanner"
+    req_rel = "requirements.txt"
+    req_abs = os.path.join(repo, req_rel)
+    if not os.path.isfile(req_abs):
+        return _section(
+            "not-collected",
+            "%s: no requirements.txt at the repo root to audit by absolute path; "
+            "auditing a pyproject.toml statically is not supported and resolving it "
+            "would require the project's installed environment, which the sweep will "
+            "not build from inside the repo — supply-chain policy" % tool, tool=tool)
+
+    config_path = gt.neutral_tool_config(repo, tool)
+    # --config is mandatory: osv-scanner auto-discovers osv-scanner.toml in the scanned
+    # tree and has no --no-config flag. A repo-local [[IgnoredVulns]] entry can make an
+    # affected package vanish from JSON entirely — the red line would silently never fire.
+    argv = [
+        tool, "scan", "source", "--format", "json", "--no-resolve",
+        "--config", config_path,
+        "-L", "requirements.txt:%s" % req_abs,
+    ]
+    started = time.time()
+    res = gc.run_tool(argv, ctx, timeout=OSV_TIMEOUT, cwd=repo, ok_exits=(0, 1))
+    seconds = round(time.time() - started, 3)
+    data, reason = _payload(res, tool)
+    if data is None:
+        return _section("not-collected", reason, tool=tool)
+    results = data.get("results")
+    if not isinstance(results, list):
+        return _section(
+            "not-collected",
+            "%s: output carried no 'results' array" % tool, tool=tool)
+
+    items = {}
+    raw_groups = 0
+    malformed = []
+    malformed_packages = set()
+    audited_pkgs = set()
+    prev_section = _prev_part((ctx or {}).get("prevDigest"), "python", "vulns")
+    used_ids = {}
+
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        packages = result.get("packages")
+        if not isinstance(packages, list):
+            continue
+        for pkg_entry in packages:
+            if not isinstance(pkg_entry, dict):
+                continue
+            pkg_info = pkg_entry.get("package")
+            if not isinstance(pkg_info, dict):
+                malformed.append({"package": None, "why": "missing package object"})
+                continue
+            name = pkg_info.get("name")
+            version = pkg_info.get("version")
+            if not isinstance(name, str) or not name:
+                malformed.append({"package": None, "why": "missing package name"})
+                continue
+            audited_pkgs.add(name)
+            byid = {}
+            for rec in pkg_entry.get("vulnerabilities") or []:
+                if isinstance(rec, dict) and isinstance(rec.get("id"), str):
+                    byid[rec["id"]] = rec
+            groups = pkg_entry.get("groups")
+            if not isinstance(groups, list):
+                continue
+            for group in groups:
+                raw_groups += 1
+                if not isinstance(group, dict):
+                    malformed.append({"package": name, "why": "group is not an object"})
+                    malformed_packages.add(name)
+                    continue
+                ids = group.get("ids")
+                if not isinstance(ids, list) or not ids:
+                    malformed.append({"package": name, "why": "group missing ids"})
+                    malformed_packages.add(name)
+                    continue
+                if not all(isinstance(i, str) and i for i in ids):
+                    malformed.append({"package": name, "why": "group ids are not strings"})
+                    malformed_packages.add(name)
+                    continue
+                alias_set = _osv_alias_set(group)
+                preferred = _osv_preferred_id(alias_set)
+                base_id = "deps:audit:python:%s:%s" % (name, preferred)
+                cid, reconcile_err = _reconcile_python_vuln_id(
+                    name, alias_set, prev_section, base_id)
+                if reconcile_err is not None:
+                    return _section("not-collected", "%s: %s" % (tool, reconcile_err),
+                                    tool=tool)
+                if cid in used_ids and used_ids[cid] != alias_set:
+                    return _section(
+                        "not-collected",
+                        "%s: ambiguous advisory identity: two groups reconciled to the same "
+                        "id %s" % (tool, cid),
+                        tool=tool)
+                used_ids[cid] = alias_set
+                severity, rank, known = _osv_group_severity(group, byid)
+                if known:
+                    receipt = "%s %s: %s [%s]" % (name, version, preferred, severity)
+                else:
+                    receipt = (
+                        "%s %s: %s [severity not recognized from osv-scanner evidence]"
+                        % (name, version, preferred))
+                item = items.get(cid)
+                if item is None:
+                    items[cid] = {
+                        "id": cid,
+                        "package": name,
+                        "installed": version,
+                        "advisory": preferred,
+                        "aliases": sorted(a for a in alias_set if a != preferred),
+                        "aliasIds": sorted(alias_set),
+                        "severity": severity,
+                        "severityKnown": known,
+                        "metric": rank,
+                        "occurrences": 1,
+                        "receipt": receipt,
+                    }
+                else:
+                    item["occurrences"] += 1
+                    if rank > item["metric"]:
+                        item["metric"] = rank
+                        item["severity"] = severity
+                        item["severityKnown"] = known
+                    item["receipt"] += " | " + receipt
+
+    contradiction = _vuln_contradiction(
+        tool, 0, res.get("exit") == 1, raw_groups, items, ())
+    if contradiction is not None:
+        return _section("not-collected", contradiction, tool=tool)
+
+    if malformed:
+        if any(m.get("package") is None for m in malformed):
+            return _carry_forward(
+                prev_section, "partial",
+                "%s returned %d malformed vulnerability group(s) that did not normalize; "
+                "the prior python-vulns section is carried forward, never resolved"
+                % (tool, len(malformed)),
+                tool)
+        malformed_set = set(malformed_packages)
+        carried = _carry_prior_items(
+            prev_section, items, lambda pkg: pkg in malformed_set)
+        reason = (
+            "%s returned %d malformed vulnerability group(s) (package(s): %s) that did "
+            "not normalize to an advisory; their prior advisories are carried forward, "
+            "never resolved — a signalled-but-unparseable entry is not a clean scan"
+            % (tool, len(malformed), ", ".join(sorted(malformed_set))))
+        partial = _section(
+            "partial", reason, tool=tool, items=items,
+            malformedEntries=sorted(malformed_set),
+            carriedForward=bool(carried), seconds=seconds, argv=argv,
+            ratedBy=tool, boundary=True)
+        _carry_prior_items(prev_section, items, lambda pkg: pkg not in audited_pkgs)
+        return partial
+
+    _carry_prior_items(prev_section, items, lambda pkg: pkg not in audited_pkgs)
+
+    unrated = [i for i in items.values()
+               if isinstance(i, dict) and not i.get("severityKnown")]
+    extra = {
+        "tool": tool,
+        "items": items,
+        "seconds": seconds,
+        "argv": argv,
+        "ratedBy": tool,
+        "boundary": True,
+        "coverageGap": dict(PYTHON_VULN_NO_DEPS_COVERAGE_GAP),
+    }
+    if unrated:
+        extra["redLineGap"] = {
+            "ecosystem": "python",
+            "tool": tool,
+            "missing": ("%d of %d advisories carry no severity rating; the critical-vuln "
+                        "red line cannot fire for those"
+                        % (len(unrated), len(items) or len(unrated))),
+        }
+        reason = "%s; %s" % (
+            PYTHON_VULN_RED_LINE_GAP_REASON, PYTHON_VULN_NO_DEPS_SCOPE_REASON)
+    else:
+        reason = PYTHON_VULN_NO_DEPS_SCOPE_REASON
+    return _section("partial", reason, **extra)
+
+
+def collect_python_vulns_pip_audit(ctx, repo):
     """pip-audit --format=json -r <abs requirements.txt> → {id: item}. NO severity.
 
     Audits the project's requirements by ABSOLUTE path (the collector runs from a neutral
@@ -701,34 +1040,48 @@ def collect_python_vulns(ctx, repo):
     items = {}
     raw_entries = 0
     audited_pkgs = set()
+    prev_section = _prev_part((ctx or {}).get("prevDigest"), "python", "vulns")
+    used_ids = {}
     for dep in deps:
         if not isinstance(dep, dict):
             continue
         name = dep.get("name")
         version = dep.get("version")
         if isinstance(name, str) and name:
-            # The packages pip-audit actually enumerated under --no-deps — the audited
-            # scope. A prior advisory for a package NOT in this set was not re-measured.
             audited_pkgs.add(name)
         for vuln in dep.get("vulns") or []:
             raw_entries += 1
             if not isinstance(vuln, dict):
                 continue
             advisory = str(vuln.get("id") or "").strip().upper()
+            aliases = [a for a in (vuln.get("aliases") or []) if isinstance(a, str)]
+            alias_set = set(aliases)
+            if advisory:
+                alias_set.add(advisory)
             if not advisory:
-                aliases = [a for a in (vuln.get("aliases") or []) if isinstance(a, str)]
                 if aliases:
                     advisory = aliases[0].upper()
                 else:
-                    # Distinguish unidentified advisories (R12) — fix versions or
-                    # normalized description, not package alone.
                     fixes = [f for f in (vuln.get("fix_versions") or [])
                              if isinstance(f, str)]
                     disc = ",".join(fixes) if fixes else (
                         re.sub(r"\s+", "-", str(vuln.get("description") or "unknown")
                                .strip().lower())[:40] or "unknown")
                     advisory = "%s-UNIDENTIFIED-%s" % (str(name).upper(), disc)
-            cid = "deps:audit:python:%s:%s" % (name, advisory)
+                    alias_set.add(advisory)
+            base_id = "deps:audit:python:%s:%s" % (name, advisory)
+            cid, reconcile_err = _reconcile_python_vuln_id(
+                name, alias_set, prev_section, base_id)
+            if reconcile_err is not None:
+                return _section("not-collected", "%s: %s" % (tool, reconcile_err),
+                                tool=tool)
+            if cid in used_ids and used_ids[cid] != alias_set:
+                return _section(
+                    "not-collected",
+                    "%s: ambiguous advisory identity: two advisories reconciled to the "
+                    "same id %s" % (tool, cid),
+                    tool=tool)
+            used_ids[cid] = alias_set
             fixes = [f for f in (vuln.get("fix_versions") or []) if isinstance(f, str)]
             occurrence = "%s %s: %s%s [severity not reported by pip-audit]" % (
                 name, version, advisory,
@@ -740,8 +1093,8 @@ def collect_python_vulns(ctx, repo):
                     "package": name,
                     "installed": version,
                     "advisory": advisory,
-                    "aliases": [a for a in (vuln.get("aliases") or [])
-                                if isinstance(a, str)],
+                    "aliases": [a for a in aliases if a != advisory],
+                    "aliasIds": sorted(alias_set),
                     "severity": "unknown",
                     "severityKnown": False,
                     "metric": SEVERITY_RANK["unknown"],
@@ -753,31 +1106,60 @@ def collect_python_vulns(ctx, repo):
                 item["occurrences"] += 1
                 item["receipt"] += " | " + occurrence
 
-    # SAME contradiction gate as npm audit: pip-audit signalling findings (exit 1 or
-    # non-empty raw advisory entries) with zero normalized candidates degrades — never
-    # `partial`, which would let diff() resolve prior ids into a false `fixed`.
     contradiction = _vuln_contradiction(
         tool, 0, res.get("exit") == 1, raw_entries, items, ())
     if contradiction is not None:
         return _section("not-collected", contradiction, tool=tool)
 
-    # H1: --no-deps narrows the audit to the enumerated packages only. Carry forward any
-    # prior advisory for a package this manifest does not enumerate — it was NOT
-    # re-measured, so it must never read as `resolved` (a false fixed). A fully-enumerated
-    # (lock / pip-compiled) manifest audits every package, so nothing is carried and prior
-    # advisories resolve normally. The coverage gap is disclosed either way, so the section
-    # is never read as a full-graph clean scan.
-    prev_section = _prev_part((ctx or {}).get("prevDigest"), "python", "vulns")
     _carry_prior_items(prev_section, items, lambda pkg: pkg not in audited_pkgs)
 
     return _section(
         "partial",
-        "%s; %s" % (PYTHON_VULN_RED_LINE_GAP_REASON, PYTHON_VULN_NO_DEPS_SCOPE_REASON),
+        "%s; %s" % (
+            "Python advisories carry no severity (pip-audit reports none); the "
+            "critical-vuln red line therefore cannot fire for Python in this collector "
+            "version",
+            PYTHON_VULN_PIP_AUDIT_NO_DEPS_SCOPE_REASON),
         tool=tool, items=items, seconds=seconds, argv=argv,
         severityNote="pip-audit reports no severity field; every python advisory ranks "
                      "0 = unknown, which means unrated, NOT harmless",
-        redLineGap=dict(PYTHON_VULN_RED_LINE_GAP),
-        coverageGap=dict(PYTHON_VULN_NO_DEPS_COVERAGE_GAP))
+        redLineGap=dict(PYTHON_VULN_PIP_AUDIT_RED_LINE_GAP),
+        coverageGap=dict(PYTHON_VULN_PIP_AUDIT_NO_DEPS_COVERAGE_GAP),
+        ratedBy=tool,
+        boundary=False)
+
+
+def collect_python_vulns(ctx, repo):
+    """Try osv-scanner first; fall back to pip-audit when the rated source degrades."""
+    osv = collect_python_vulns_osv(ctx, repo)
+    if osv["status"] in ("collected", "partial"):
+        return osv
+    osv_reason = osv.get("reason") or "osv-scanner not collected"
+    pip = collect_python_vulns_pip_audit(ctx, repo)
+    if pip["status"] in ("collected", "partial"):
+        pip = dict(pip)
+        items = dict(pip.get("items") or {})
+        prev_section = _prev_part((ctx or {}).get("prevDigest"), "python", "vulns")
+        if isinstance(prev_section, dict) and isinstance(prev_section.get("items"), dict):
+            for pid, rec in prev_section["items"].items():
+                if pid in items:
+                    continue
+                if not isinstance(rec, dict):
+                    continue
+                copy = dict(rec)
+                copy["carriedForward"] = True
+                items[pid] = copy
+        pip["items"] = items
+        pip["reason"] = (
+            "rated source osv-scanner was unavailable (%s); %s"
+            % (osv_reason, pip.get("reason") or "pip-audit fallback"))
+        pip["boundary"] = False
+        return pip
+    pip_reason = pip.get("reason") or "pip-audit not collected"
+    return _section(
+        "not-collected",
+        "osv-scanner: %s; pip-audit: %s" % (osv_reason, pip_reason),
+        tool="osv-scanner")
 
 
 # ------------------------------------------------------------------------ check-the-check
@@ -1227,10 +1609,13 @@ not a drift:
 Never kill a candidate merely for being one of many, and never kill a critical-severity
 vulnerability for tidiness. An ecosystem or collector the digest marks not-collected is
 NOT clean — do not validate it away, and do not let it be reported as if it were measured.
-Python vulnerability collection via pip-audit is ALWAYS partial in this collector version:
-pip-audit reports no severity field, so the `critical-vuln` red line cannot fire for
-Python — see the digest's `redLineGap`. That is a known capability gap, not a clean bill
-of health; do not treat an unrated advisory as low-severity or as already triaged. Python
+Python vulnerability collection is partial in this collector version: osv-scanner rates
+advisories when present (so the `critical-vuln` red line can fire for Python), but
+`--no-resolve` audits only enumerated requirements.txt packages — transitive dependencies
+are not resolved. When osv-scanner is absent the lens falls back to unrated pip-audit and
+discloses that the rated source was unavailable. See the digest's `redLineGap` when any
+emitted advisory is still unrated. That is a known capability gap, not a clean bill of
+health; do not treat an unrated advisory as low-severity or as already triaged. Python
 freshness is not measured at all (it needs the project's installed environment, which the
 sweep will not run from inside the repo) — the digest marks it not-collected; that is a
 disclosed gap, never a clean bill.
@@ -1244,8 +1629,9 @@ State the not-a-vulnerability-today half explicitly ONLY when the vulnerability 
 actually ran for that ecosystem and found nothing; if it did not run, say that instead —
 never let a missing collector read as a clean bill of health.
 Vulnerabilities get their own sentence, in the register of present danger, and never
-borrow freshness's soft framing. When the tool reported no severity (pip-audit reports
-none), say the severity is unrated rather than assigning one.
+borrow freshness's soft framing. When severity is unrated (pip-audit fallback or
+osv-scanner evidence missing for an advisory), say the severity is unrated rather than
+assigning one.
 Coverage findings speak about the check, not the packages:
   "Renovate is configured but hasn't landed a dependency update in 137 days; your
    dependencies are drifting behind a check that looks alive on paper."
@@ -1262,23 +1648,26 @@ class DepsLens(object):
     required_facts = ()
     validation_guidance = VALIDATION_GUIDANCE
     consequence_template = CONSEQUENCE_TEMPLATE
-    # Measured 2026-07-21 at the command line, not estimated:
+    # Measured 2026-07-21/22 at the command line, not estimated:
     #   weekly-eats (1099 deps): npm-check-updates --jsonUpgraded 3.2s, npm audit 1.2s
-    #   aiogrilla: pip-audit 2.2s (pip-audit 2.9.0)
+    #   home-assistant/core (59 packages): osv-scanner 0.63–0.74s (queries remote OSV DB)
+    #   aiogrilla: pip-audit 2.2s (pip-audit 2.9.0, unrated fallback)
     #   renovate liveness from git history: 0.02s
     cost = {
         "collectorSeconds": 6.5,
-        "note": "measured on real repos 2026-07-21: npm-check-updates 3.2s + npm audit "
-                "1.2s (weekly-eats, 1099 deps), pip-audit 2.2s (aiogrilla), git liveness "
-                "0.02s. All collectors are PATH-only through the guardian seam (no npx "
-                "fetch, no repo-local interpreter). Freshness collection is skipped "
-                "entirely for ecosystems an owner-confirmed `covers` list proves are "
-                "covered (proven liveness within the staleness threshold required; stale "
-                "coverage suppresses nothing). Python freshness is NOT measured (it needs "
-                "the project's installed environment); python vulns need a repo-root "
-                "requirements.txt for pip-audit to audit by absolute path. pip-audit "
-                "reports no severity — the critical-vuln red line cannot fire for Python "
-                "in this collector version (see digest redLineGap).",
+        "note": "measured on real repos 2026-07-21/22: npm-check-updates 3.2s + npm audit "
+                "1.2s (weekly-eats, 1099 deps), osv-scanner 0.63–0.74s over a 59-package "
+                "requirements.txt (home-assistant/core, queries remote OSV database), "
+                "pip-audit 2.2s (aiogrilla, unrated fallback), git liveness 0.02s. All "
+                "collectors are PATH-only through the guardian seam (no npx fetch, no "
+                "repo-local interpreter). Freshness collection is skipped entirely for "
+                "ecosystems an owner-confirmed `covers` list proves are covered (proven "
+                "liveness within the staleness threshold required; stale coverage "
+                "suppresses nothing). Python freshness is NOT measured (it needs the "
+                "project's installed environment); python vulns need a repo-root "
+                "requirements.txt. osv-scanner rates Python advisories when present; "
+                "pip-audit is the unrated fallback when osv-scanner is absent (see digest "
+                "redLineGap for any still-unrated advisories).",
     }
 
     # -------------------------------------------------------------------------- collect
@@ -1297,6 +1686,7 @@ class DepsLens(object):
         ecosystems = {}
         candidates = list(cov_candidates)
         reasons = list(cov_reasons)
+        boundary_contributors = [False] * len(cov_reasons)
         collected_any = bool(cov_candidates)
         notes = []
         red_line_gaps = []
@@ -1309,9 +1699,12 @@ class DepsLens(object):
                 section["reason"] = why
                 section["freshness"] = _carry_forward(
                     _prev_part(prev, ecosystem, "freshness"), "not-collected", why, None)
+                section["freshness"]["boundary"] = True
                 section["vulns"] = _carry_forward(
                     _prev_part(prev, ecosystem, "vulns"), "not-collected", why, None)
+                section["vulns"]["boundary"] = True
                 reasons.append(why)
+                boundary_contributors.append(True)
                 notes.append(why)
                 ecosystems[ecosystem] = section
                 continue
@@ -1341,11 +1734,13 @@ class DepsLens(object):
                         candidates.append(self._candidate(ecosystem, part_name, part, item))
                     if part["status"] == "partial" and part.get("reason"):
                         reasons.append(part["reason"])
+                        boundary_contributors.append(part.get("boundary") is True)
                     gap = part.get("redLineGap")
                     if isinstance(gap, dict):
                         red_line_gaps.append(gap)
                 elif part["status"] == "not-collected":
                     reasons.append(part["reason"])
+                    boundary_contributors.append(part.get("boundary") is True)
                     merged = _carry_forward(
                         _prev_part(prev, ecosystem, part_name), "not-collected",
                         part["reason"], part.get("tool"))
@@ -1399,8 +1794,12 @@ class DepsLens(object):
                 candidates=[], digest=None,
                 **gc.not_collected("; ".join(reasons) or "no dependency data collected"))
         if reasons:
-            return dict(candidates=candidates, digest=digest,
+            out = dict(candidates=candidates, digest=digest,
                         **gc.partial("; ".join(reasons)))
+            if (out.get("status") == "partial" and boundary_contributors
+                    and all(boundary_contributors)):
+                out["permanentBoundary"] = True
+            return out
         return dict(candidates=candidates, digest=digest, **gc.collected())
 
     @staticmethod
