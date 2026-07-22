@@ -309,6 +309,12 @@ def _filter_knip_issues(issues, tracked, repo):
             else:
                 dropped += len(exports)
                 new_entry["exports"] = []
+        # Retain every entry with emptied ``files`` / ``exports`` lists — do not drop
+        # fully-filtered entries. ``collect_node``'s exit-1 contradiction gate uses
+        # ``not issues`` to mean "knip reported nothing"; a nonempty ``issues`` whose
+        # in-scope signals were all untracked must reach the out-of-scope branch as
+        # collected. Skipping emptied entries would false-degrade that clean-for-tracked
+        # result to not-collected.
         out.append(new_entry)
     return out, dropped
 

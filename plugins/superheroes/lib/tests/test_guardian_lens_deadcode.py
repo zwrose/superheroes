@@ -1124,6 +1124,23 @@ def test_vulture_exit3_all_untracked_hits_collected_not_contradiction(tmp_path):
     assert out["digest"]["ecosystems"]["python"]["untrackedFiltered"] == 1
 
 
+def test_knip_exit1_all_untracked_hits_collected_not_contradiction(tmp_path):
+    """Exit 1 with in-scope signals that filter to zero (all untracked) is collected."""
+    repo = _node_repo(tmp_path)
+    untracked_only = json.dumps({"issues": [
+        {"file": "src/untracked.js", "files": [{"name": "src/untracked.js"}], "exports": []},
+    ]})
+    (tmp_path / "src").mkdir(exist_ok=True)
+    (tmp_path / "src" / "untracked.js").write_text("export const y = 1;\n")
+    tracked = ["package.json", "node_modules/.gitkeep", "src/tracked.js"]
+    run = FakeRun([("knip", (1, untracked_only, ""))], tracked=tracked)
+    out = gld.LENS.collect(_ctx(repo, run))
+    assert out["status"] == "collected", out.get("reason")
+    assert out["candidates"] == []
+    assert out["digest"]["ecosystems"]["node"]["status"] == "collected"
+    assert out["digest"]["ecosystems"]["node"]["untrackedFiltered"] == 1
+
+
 def test_knip_filtered_untracked_does_not_trip_contradiction_gate(tmp_path):
     """Post-filter in-scope counting: untracked knip signals must not degrade."""
     repo = _node_repo(tmp_path)
