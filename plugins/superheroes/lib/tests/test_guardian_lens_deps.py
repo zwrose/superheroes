@@ -248,19 +248,19 @@ OSV_CERTIFI_DISAGREE_JSON = json.dumps({
     }],
 })
 
+# Real osv-scanner 2.4.0 --all-packages capture: clean audited package carries only
+# ``package`` — no ``groups`` or ``vulnerabilities`` keys (allclean-allpackages.json).
 OSV_ALLCLEAN_ALLPACKAGES_JSON = json.dumps({
     "results": [{
         "source": {"path": "/abs/requirements.txt", "type": "lockfile"},
         "packages": [{
             "package": {"name": "six", "version": "1.16.0", "ecosystem": "PyPI"},
-            "groups": [],
-            "vulnerabilities": [],
         }],
     }],
 })
 
-# Real osv-scanner 2.4.0 --all-packages capture (pyyaml CRITICAL + six clean); six
-# normalized to groups: [] per measured clean-package shape.
+# Real osv-scanner 2.4.0 --all-packages capture (mixed-allpackages.json): pyyaml with
+# findings + six clean (package key only).
 OSV_MIXED_ALLPACKAGES_JSON = json.dumps({
     "results": [{
         "source": {"path": "/abs/requirements.txt", "type": "lockfile"},
@@ -282,10 +282,29 @@ OSV_MIXED_ALLPACKAGES_JSON = json.dumps({
             },
             {
                 "package": {"name": "six", "version": "1.16.0", "ecosystem": "PyPI"},
-                "groups": [],
-                "vulnerabilities": [],
             },
         ],
+    }],
+})
+
+# Accepted alternate shape: empty ``groups`` list (still valid, distinct from absent-key).
+OSV_EMPTY_GROUPS_ALLPACKAGES_JSON = json.dumps({
+    "results": [{
+        "source": {"path": "/abs/requirements.txt", "type": "lockfile"},
+        "packages": [{
+            "package": {"name": "six", "version": "1.16.0", "ecosystem": "PyPI"},
+            "groups": [],
+        }],
+    }],
+})
+
+# Fixed pyyaml: real clean-package shape after upgrade (package key only).
+OSV_PYYAML_CLEAN_ALLPACKAGES_JSON = json.dumps({
+    "results": [{
+        "source": {"path": "/abs/requirements.txt", "type": "lockfile"},
+        "packages": [{
+            "package": {"name": "pyyaml", "version": "6.0.2", "ecosystem": "PyPI"},
+        }],
     }],
 })
 
@@ -1095,6 +1114,66 @@ def test_osv_all_packages_clean_audited_package_resolves_prior(tmp_path):
     assert prev_id in d["resolved"]
 
 
+def test_osv_fixed_pyyaml_critical_resolves_no_redline(tmp_path):
+    """Fail-before: fixed critical red-lines forever — clean audited package misread as
+    malformed carries the prior CRITICAL forward, diff() resolves nothing, and
+    red_lines() keeps firing critical-vuln."""
+    repo = _python_repo(tmp_path, "pyyaml==6.0.2\n")
+    prev_id = "deps:audit:python:pyyaml:CVE-2020-14343"
+    prev = {
+        "detected": ["python"],
+        "ecosystems": {"python": {
+            "freshness": {"status": "not-collected", "reason": "policy", "items": {}},
+            "vulns": {"status": "partial", "items": {
+                prev_id: {
+                    "id": prev_id, "package": "pyyaml", "severity": "critical",
+                    "severityKnown": True, "metric": 5,
+                },
+            }},
+        }},
+    }
+    out = gld.LENS.collect(
+        _ctx(repo, _run(osv_scanner=OSV_PYYAML_CLEAN_ALLPACKAGES_JSON), prev=prev))
+    vulns = out["digest"]["ecosystems"]["python"]["vulns"]
+    assert prev_id not in (vulns.get("items") or {})
+    assert gld.LENS.red_lines(out["candidates"]) == []
+    d = gld.LENS.diff(prev, out["digest"])
+    assert prev_id in d["resolved"]
+
+
+def test_osv_clean_package_absent_keys_not_malformed(tmp_path):
+    """Real mixed shape: six (package key only) is audited, not malformed."""
+    repo = _repo(tmp_path, {"pyproject.toml": "[project]\n",
+                            "requirements.txt": "pyyaml==5.3.1\nsix==1.16.0\n"})
+    out = gld.LENS.collect(
+        _ctx(repo, _run(osv_scanner=OSV_MIXED_ALLPACKAGES_JSON, osv_scanner_exit=1)))
+    vulns = out["digest"]["ecosystems"]["python"]["vulns"]
+    vuln_cands = [c for c in out["candidates"] if c.get("lensKind") == "vulnerability"]
+    assert len(vuln_cands) == 1
+    assert vuln_cands[0].get("package") == "pyyaml"
+    malformed = vulns.get("malformedEntries") or []
+    assert "six" not in malformed
+    reason = vulns.get("reason") or ""
+    assert "six" not in reason or "malformed" not in reason
+
+
+def test_osv_empty_groups_list_still_audits_clean(tmp_path):
+    """Empty ``groups`` list is accepted (distinct from absent-key clean shape)."""
+    repo = _python_repo(tmp_path, "six==1.16.0\n")
+    prev_id = "deps:audit:python:six:PYSEC-OLD-1"
+    prev = {
+        "detected": ["python"],
+        "ecosystems": {"python": {
+            "freshness": {"status": "not-collected", "reason": "policy", "items": {}},
+            "vulns": {"status": "partial",
+                      "items": {prev_id: {"id": prev_id, "package": "six", "metric": 0}}},
+        }},
+    }
+    out = gld.LENS.collect(
+        _ctx(repo, _run(osv_scanner=OSV_EMPTY_GROUPS_ALLPACKAGES_JSON), prev=prev))
+    assert prev_id in gld.LENS.diff(prev, out["digest"])["resolved"]
+
+
 def test_osv_fixed_critical_does_not_redline_forever(tmp_path):
     """Fail-before: a fixed critical carried forward keeps raising critical-vuln forever."""
     repo = _python_repo(tmp_path, "six==1.16.0\n")
@@ -1169,7 +1248,8 @@ def test_osv_unknown_label_is_unrated(tmp_path):
     assert out["digest"]["ecosystems"]["python"]["vulns"].get("redLineGap")
 
 
-def test_osv_missing_groups_is_malformed_carries_prior(tmp_path):
+def test_osv_vulnerabilities_without_groups_is_malformed_carries_prior(tmp_path):
+    """Schema drift: ``vulnerabilities`` present while ``groups`` absent is malformed."""
     repo = _python_repo(tmp_path, "good==1.0\n")
     payload = json.dumps({
         "results": [{

@@ -1004,9 +1004,22 @@ def collect_python_vulns_osv(ctx, repo):
             if not isinstance(name, str) or not name:
                 malformed.append({"package": None, "why": "missing package name"})
                 continue
+            has_groups = "groups" in pkg_entry
+            has_vulnerabilities = "vulnerabilities" in pkg_entry
             groups = pkg_entry.get("groups")
+            if not has_groups and not has_vulnerabilities:
+                if name.lower() in exact_pins:
+                    audited_pkgs.add(name.lower())
+                continue
+            if has_vulnerabilities and not has_groups:
+                malformed.append({
+                    "package": name,
+                    "why": "vulnerabilities present without groups",
+                })
+                malformed_packages.add(name.lower())
+                continue
             if not isinstance(groups, list):
-                malformed.append({"package": name, "why": "missing or non-list groups"})
+                malformed.append({"package": name, "why": "non-list groups"})
                 malformed_packages.add(name.lower())
                 continue
             if name.lower() in exact_pins:
