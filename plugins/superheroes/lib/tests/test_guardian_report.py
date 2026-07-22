@@ -252,6 +252,58 @@ def test_render_vitals_partial_shows_value_and_gap_reason():
     assert "vulnCount: 4 (partial: %s)" % gap in md
 
 
+def test_render_vitals_not_comparable_skipped_not_no_movement():
+    """F3 regression: skipped comparison must not render as no-movement/first-sweep."""
+    bundle = _sample_bundle()
+    reason = "completeness not comparable across sweeps (None -> 'complete')"
+    bundle["vitalsDelta"] = {
+        "crossings": [],
+        "delta": {
+            "_notComparable": {"vulnCount": reason},
+        },
+        "notCollected": {},
+        "sources": {"vulnCount": "deps lens vitals() this sweep"},
+    }
+    md = gr.render(bundle, [], {"byId": {}})
+    assert "Comparison skipped:" in md
+    assert "vulnCount: %s" % reason in md
+    assert "No vitals movement" not in md
+    assert "first sweep" not in md.lower()
+
+
+def test_render_vitals_comparable_no_movement_unchanged():
+    bundle = _sample_bundle()
+    bundle["vitalsDelta"] = {
+        "crossings": [],
+        "delta": {},
+        "notCollected": {},
+        "completeness": {"vulnCount": {"state": "complete"}},
+    }
+    md = gr.render(bundle, [], {"byId": {}})
+    assert "_No vitals movement._" in md
+    assert "Comparison skipped:" not in md
+    assert "first sweep" not in md.lower()
+
+
+def test_render_vitals_mixed_movement_and_not_comparable():
+    bundle = _sample_bundle()
+    reason = "completeness not comparable across sweeps ('partial' -> 'complete')"
+    bundle["vitalsDelta"] = {
+        "crossings": [],
+        "delta": {
+            "fileCount": {"prev": 10, "cur": 12, "change": 2, "pct": 0.2},
+            "_notComparable": {"vulnCount": reason},
+        },
+        "notCollected": {},
+    }
+    md = gr.render(bundle, [], {"byId": {}})
+    assert "fileCount: 10 → 12" in md
+    assert "Comparison skipped:" in md
+    assert "vulnCount: %s" % reason in md
+    assert "No vitals movement" not in md
+    assert "first sweep" not in md.lower()
+
+
 def test_render_vitals_partial_delta_movement_is_qualified():
     bundle = _sample_bundle()
     gap = "python ratings unavailable until issue #569"

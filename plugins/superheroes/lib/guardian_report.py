@@ -98,6 +98,13 @@ def _render_vitals(lines, vd, snapshot=None):
         if isinstance(entry, dict) and entry.get("state") == "partial"
     }
 
+    not_comparable = {}
+    if isinstance(delta, dict):
+        raw_nc = delta.get("_notComparable")
+        if isinstance(raw_nc, dict):
+            not_comparable = raw_nc
+    skipped_comparisons = bool(not_comparable)
+
     crossing_vitals = set()
     if crossings:
         for c in crossings:
@@ -127,6 +134,13 @@ def _render_vitals(lines, vd, snapshot=None):
                 lines.append("- %s" % item)
 
     measured_movement = bool(crossings) or bool(non_crossing)
+    if not_comparable:
+        if measured_movement:
+            lines.append("")
+        lines.append("Comparison skipped:")
+        for name in sorted(not_comparable):
+            lines.append("- %s: %s" % (name, not_comparable[name]))
+
     if not_collected:
         if measured_movement:
             lines.append("")
@@ -140,7 +154,7 @@ def _render_vitals(lines, vd, snapshot=None):
     }
     partial_only = partial_vitals - shown_in_movement - set(not_collected.keys())
     if partial_only:
-        if measured_movement or not_collected:
+        if measured_movement or not_collected or skipped_comparisons:
             lines.append("")
         lines.append("Partial measurements:")
         for name in sorted(partial_only):
@@ -154,7 +168,7 @@ def _render_vitals(lines, vd, snapshot=None):
                 value = snapshot_vitals.get(name)
             lines.append("- %s: %s (partial: %s)" % (name, value, reason))
 
-    if not measured_movement:
+    if not measured_movement and not skipped_comparisons:
         if not_collected and not sources:
             lines.append(
                 "_No vitals movement — nothing was collected this sweep._")
