@@ -143,8 +143,8 @@ in its own isolated worktree** (native subagent worktree isolation) — you inte
 **sequence only on real overlap or a real dependency**, not convenience. Sequential/dependent orders
 may ride the session worktree — **commit the landed work before dispatching the next order against
 that worktree**, so a later order's `git checkout --` can never wipe a prior order's work.
-**Subagents always run flat/synchronous**
-— never a background agent that spawns another background agent (the notification chain breaks).
+**Subagents always run flat/synchronous** — never a background agent that spawns another background
+agent (the notification chain breaks).
 
 ## 7. Delegate every implementation (no direct-typing exception)
 
@@ -221,10 +221,10 @@ what is a design signal. Say what the seam problem looks like instead of shippin
 The round-scoping and cap economics inside that loop are `review-code`'s own contract; **the
 delta-grading in §12 does not apply here** — every pre-handback review is the full loop. Record how
 you handled each finding in a **dispositions table** — a short table of each finding and what you
-did about it, **dispositioning any finding that argues from a general convention against the issue's
-ratified scope as a follow-up**, not absorbed into this diff — in the PR body,
-and **link the review results as a durable receipt** posted on the PR (a comment or similar, not
-something that only lives in your session), so the advisor can check them without your context.
+did about it — in the PR body, and **link the review results as a durable receipt** posted on the PR
+(a comment or similar, not something that only lives in your session), so the advisor can check
+them without your context. A finding that argues from a general convention against the issue's
+ratified scope is recorded as a follow-up for the advisor, not folded into this diff.
 
 ## 11. Hand back the ready PR
 

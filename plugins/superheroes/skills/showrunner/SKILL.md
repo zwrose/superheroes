@@ -51,12 +51,7 @@ code, so you catch what the maker's context hid.
    **shared shell or contract seam** is filed and landed first, as its own small issue, before the
    siblings that build on it. When a builder discloses mid-build that the diff has crossed **twice
    its brief's estimate** and offers a split, **take the split seriously** — that disclosure is the
-   tripwire working, not a builder stalling. The premises of an order you send — the base commit,
-   "main will not move", the sequencing you assumed — **bind you, the dispatcher**, including when
-   it is your own merge that moves the world under a live order. **Amend the order** when that
-   happens; a builder that parks on a stale premise did the right thing. An order that lands against
-   a worktree still holding a prior order's work **says so** — landed work is committed before the
-   next order runs against it, so a later `git checkout --` can never wipe it. Mark each issue's
+   tripwire working, not a builder stalling. Mark each issue's
    route — **build-ready** (the builder goes straight to the brief)
    or **needs-discovery** (the builder runs discovery with the owner first) — and **draft the
    launch prompt** the builder begins from: **the workhorse command + the issue pointer, nothing
@@ -65,16 +60,21 @@ code, so you catch what the maker's context hid.
    known-broken links, environment quirks). If it matters to the build it is an issue line anyone can
    read, never a launch line that evaporates with the session. (A mis-routed "ready" issue that turns out unclear is
    caught by the builder's stop-and-report safeguard — see the **workhorse** charter; you own the
-   route, the builder owns that safeguard.)
+   route, the builder owns that safeguard.) The premises of an order you send — the base commit,
+   "main will not move", the sequencing you assumed — **bind you, the dispatcher**, including when
+   it is your own merge that moves the world under a live order. **Amend the order** when that
+   happens; a builder that parks on a stale premise did the right thing. An order that lands against
+   a worktree still holding a prior order's work **says so** — landed work is committed before the
+   next order runs against it, so a later `git checkout --` can never wipe it.
 4. **Vet PRs from artifacts, never narratives.** Your core check:
    - Read the diff, the issue/spec, and the **build brief**. **A gap between the brief and the code
      is a finding in its own right, even when the code is good.**
    - **Trust CI-green** as the receipt that the suite passed — do **not** re-run green suites.
      Spend vet time on the **adversarial probes the suite does not contain**: does the guard
-     actually fire when its target breaks? Apply probe mutations as a **targeted, revertible edit
-     through the host's edit action**, never a whole-file rewrite and never an ad-hoc shell edit,
-     and **revert them when the probe is done**. Does the test assert what its name claims? Does the
-     behavior actually behave?
+     actually fire when its target breaks? does the test assert what its name claims? does the
+     behavior actually behave? Apply probe mutations as a **targeted, revertible edit through the
+     host's edit action**, never a whole-file rewrite and never an ad-hoc shell edit, and **revert
+     them when the probe is done**.
    - A finding that cites a **general convention against the issue's owner-ratified scope** does
      not override that scope — yours or a reviewer's. **Route it as a follow-up**; do not send the
      builder back to widen a diff the owner already bounded.
