@@ -15,9 +15,9 @@ consequences with receipts). Neither hero merges — that act stays the owner's,
 
 **Why this roadmap looks the way it does:** [PHILOSOPHY.md](PHILOSOPHY.md) — the promises and
 bets this train exists to deliver. Issue-level status lives on the
-[GitHub Project](https://github.com/users/zwrose/projects/1); an area's constituents and their
-status live in that area's **epic issue**. This file carries only the coarse train: the cut
-rules, the cut record, and the areas of focus.
+[GitHub Project](https://github.com/users/zwrose/projects/1); an area's constituents live in
+that area's **milestone**. This file carries only the coarse train: the cut rules, the cut
+record, and the areas of focus.
 
 ## When we cut a release
 
@@ -49,40 +49,44 @@ Status vocabulary: *cut → first-run-clean*.
 
 ## Areas of focus
 
-The active work organizes into a few **areas of focus**, each carried by an **area epic** — the
-epic holds the area's constituents (as native sub-issues), their status, and the claims →
-receipts record. This file names each area, what it is about, and the bar that closes it —
-nothing finer. If you want to know what's in an area right now, read its epic, not this file.
+The active work organizes into a few **areas of focus**, each carried by a **milestone** — an
+issue's milestone is its area, and the milestone's progress is the area's state. This file
+names each area and what it is about — nothing finer. If you want to know what's in an area
+right now, read its milestone, not this file. A few one-off issues deliberately float with no
+milestone; a milestone is a grouping, not a mandate.
 
-- **Review quality** (epic #476, "S2") — Review Crew v2: the code-review loop and the doc/spec
-  review leg — loop mechanics, panel composition, durable receipts, reviewer-seat reliability,
-  benchmark growth. *Close bar:* review-code v2 ships and one real PR goes through it clean.
-  *Status:* in window — tranches cut in 0.17.0 and 0.18.0; the epic carries the remainder.
-- **Front-half depth** (epic #477, "S3") — Test-Pilot depth: test plans derive from the spec;
-  a documented-command surface so CLI/library projects get exercised too. *Close bar:* a real
-  spec-to-build run diagnosed clean. *Status:* planned.
-- **Maintainability guardian** (epic #503, "G1") — the Guardian hero: read-only repo-health
-  sweeps that turn drift into plain-language consequences with receipts. *Close bar:* sweeps
-  run on ≥1 real calibrated project beyond this repo and one full loop (sweep finding → blessed
-  issue → build → merge) completes. *Status:* **build-complete 2026-07-22** — the hero shipped
-  in 0.18.0, and the inaugural sweep was the cut's qualifying receipt (it caught a real fidelity
-  bug pre-cut — cut rule 2 doing its job); close bar pending, integration follow-ups on the epic.
+- **Review quality** — the review layer: the code-review loop and the doc/spec review leg —
+  loop mechanics, panel composition, durable receipts, reviewer-seat reliability, eval growth.
+  *Status:* active — tranches cut in 0.17.0 and 0.18.0.
+- **Front-half depth** — Architect + Test-Pilot depth: test plans derive from the spec; a
+  documented-command surface so CLI/library projects get exercised too. *Status:* queued.
+- **Maintainability guardian** — the Guardian hero: read-only repo-health sweeps that turn
+  drift into plain-language consequences with receipts. *Status:* **build-complete
+  2026-07-22** — the hero shipped in 0.18.0, and the inaugural sweep was the cut's qualifying
+  receipt (it caught a real fidelity bug pre-cut — cut rule 2 doing its job). Standing
+  commitment before this area winds down: a sweep on ≥1 real calibrated project beyond this
+  repo, and one full loop (sweep finding → blessed issue → build → merge).
+- **Build dispatch & orchestration** — who launches and watches builder sessions; the
+  advisor's operational surface. *Status:* discovery-first — the build-dispatch discovery is
+  the anchor; build items land here after the owner ratifies its outcome.
+- **Growth** — the post-stabilization backlog; see Unscheduled below.
 
-Areas are **largely seam-independent** — the review layer, the front half, and the guardian
-hero barely share files — and interleave freely where their builders don't collide. This is
-deliberately **not a step ladder**: per cut rule 1, receipts decide the actual cut order, not
-the order the areas are listed in. **Version numbers float free of the areas** — a release cuts
-whenever merged receipts justify one (the 0.16.0 cut on hardening smalls is the standing
-precedent), and an area's work lands in whatever minor is next when its receipts arrive. Epics
-are named by area, never by a promised version — they open when an area of focus opens and
-close at its close bar, not at a release.
+Areas are **largely seam-independent** and interleave freely where their builders don't
+collide. This is deliberately **not a step ladder**: per cut rule 1, receipts decide the
+actual cut order, not the order the areas are listed in. **Version numbers float free of the
+areas** — a release cuts whenever merged receipts justify one (the 0.16.0 cut on hardening
+smalls is the standing precedent), and an area's work lands in whatever minor is next when its
+receipts arrive. An area closes when its work runs dry — an owner judgment, not a formal gate.
 
 ## How work is tracked
 
-- **Area epics, off-board:** one epic issue per area of focus — its constituents attached as
-  GitHub **native sub-issues** (the epic's sub-issue progress is the area's completion state)
-  plus the claims→receipts record. An epic closes when the area's close bar is met, never
-  merely because a release cut.
+- **Milestones carry the areas:** each area of focus is a GitHub milestone, and an issue's
+  milestone is its area. One-off issues may float with no milestone.
+- **Epics decompose big pieces:** an epic is an ordinary issue that breaks one sizable piece
+  of work into GitHub **native sub-issues** — short-lived, closing when its piece ships. An
+  epic and its sub-issues live in the same milestone. Epics are never area containers.
+  (The guardian build arc is the house example of the shape; the retired area epics each
+  closed with a conversion receipt, 2026-07-22.)
 - **Dependencies:** real technical dependencies between work items carry GitHub's native
   blocked-by/blocking links — nothing else is serialized. (The v2 reframe was mechanically
   serialized behind 0.15.0's release epic until it closed clean; that boundary is history.)
@@ -103,8 +107,7 @@ build-dispatch discovery.)*
 
 ## Keeping this file honest
 
-Update this file when — and only when — a release cuts, an area of focus opens or closes (or
-its close bar changes), or a cut rule changes. Issue-level status never lives here (that's the
-Project and the area epics), and **no individual work item is ever named in an area entry** —
-the moment one appears, this file has drifted into being a status board; stop and fix the
-process instead.
+Update this file when — and only when — a release cuts, an area of focus opens or closes, or
+a cut rule changes. Issue-level status never lives here (that's the Project and the
+milestones), and **no individual work item is ever named in an area entry** — the moment one
+appears, this file has drifted into being a status board; stop and fix the process instead.
