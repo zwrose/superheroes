@@ -1,10 +1,30 @@
 #!/usr/bin/env python3
 # plugins/superheroes/lib/guardian_lens.py
-"""The Guardian lens contract — protocol enforcement + production registry (empty here).
+"""The Guardian lens contract — protocol enforcement + production lens registry.
 
-Stdlib-only. A lens is any object providing the five contract parts; real lenses register
-in future issues. This order ships validate_lens + an empty REGISTRY.
+Stdlib-only. A lens is any object providing the five contract parts. Production lenses
+are named in PRODUCTION_LENS_MODULES and loaded (fail-closed) by load_production_lenses().
+
+Optional conformance hook (production lenses MUST implement; not checked by validate_lens):
+
+  conformance_cases() -> {"reported-nonzero-parsed-zero": {
+      "stdout": <raw tool output that reports findings but parses to zero>,
+      "clean_stdout": <raw tool output with genuinely zero findings>,
+      "exit": <exit code on a successful tool run (may be non-zero)>,
+      "config": <dict | None>,
+      "prev_digest": <json | None>,
+  }}
+
+The harness owns the five tool-agnostic scenarios (``missing-tool``, ``timeout``,
+``nonzero-exit``, ``findings-empty-output``, ``unparseable``) and injects its own
+``ctx["run"]`` stubs. For ``reported-nonzero-parsed-zero`` the lens supplies stdout,
+clean_stdout, and exit; the harness runs a clean probe and a findings probe, both at
+the declared exit. The
+per-lens conformance harness (test_guardian_conformance) drives every
+REQUIRED_CONFORMANCE_SCENARIOS name, classifies each collect() outcome, and fails
+registration when coverage or an honesty invariant is missing.
 """
+import importlib
 import os
 import sys
 
@@ -22,6 +42,34 @@ FINDING_STATES = (
 RED_LINE_THRESHOLDS = {"complexity": 100, "cloneLines": 100}
 RED_LINE_KINDS = ("critical-vuln", "new-high-complexity", "large-fresh-clone")
 FACTS = ("verify-command", "recorded-coverage", "stack-tags", "paths")
+COLLECT_STATUSES = ("collected", "partial", "not-collected")
+
+REQUIRED_CONFORMANCE_SCENARIOS = (
+    "missing-tool",
+    "timeout",
+    "nonzero-exit",
+    "findings-empty-output",
+    "unparseable",
+    "reported-nonzero-parsed-zero",
+)
+"""Tool-honesty scenarios every production lens must cover via conformance_cases().
+
+The conformance harness fails registration for any registered lens that omits one.
+"""
+
+LENS_SUPPLIED_CONFORMANCE_SCENARIOS = (
+    "reported-nonzero-parsed-zero",
+)
+"""Lens-supplied conformance scenarios; the harness owns every other member of
+REQUIRED_CONFORMANCE_SCENARIOS.
+"""
+
+CONFORMANCE_CASE_FIELDS = ("stdout", "clean_stdout", "exit")
+"""Authoritative field schema for a lens-supplied ``conformance_cases()`` entry.
+
+Optional keys ``config`` and ``prev_digest`` are forwarded to ``collect()`` but
+are not part of this tuple.
+"""
 
 """A lens is any object providing:
   - name: str, collector_version: str
@@ -29,13 +77,66 @@ FACTS = ("verify-command", "recorded-coverage", "stack-tags", "paths")
   - required_facts: tuple — subset of FACTS this lens depends on
   - validation_guidance: str — non-empty text for model validation
   - consequence_template: str — non-empty text guiding plain-sentence consequences
-  - collect(ctx) -> {"candidates": [{"id": str, ...}], "digest": <json>}
+  - collect(ctx) -> {"candidates": [{"id": str, ...}], "digest": <json>,
+                     "status": <COLLECT_STATUSES member, default "collected">,
+                     "reason": str | None}
+      ctx carries {"cwd", "root", "config", "run", "prevDigest"}. A lens that could not
+      collect returns status "not-collected" (never an empty candidate list).
   - diff(prev_digest, cur_digest) -> {"new": [ids], "worsened": [ids], "resolved": [ids]}
   - red_lines(candidates) -> [{"kind": <RED_LINE_KINDS>, "id": str, "detail": str}]
   - degrade(reason) -> {"lens": name, "degraded": True, "reason": reason}
+  - conformance_cases() -> dict (optional on the protocol; REQUIRED for production lenses)
+      Maps each REQUIRED_CONFORMANCE_SCENARIOS name to a harness case (see module docstring).
 """
 
 REGISTRY = []
+
+PRODUCTION_LENS_MODULES = ()
+"""Authoritative runtime roster of production lens module names (under lib/).
+
+Rebasing lens PRs populate this tuple; each module MUST expose a module-level LENSES
+tuple of ready-to-register lens objects.
+"""
+
+PRODUCTION_LENS_NAMES = {}
+"""Map module-name → tuple of lens names the module is expected to export (empty on main).
+
+Used to synthesize correctly-named stand-ins when a module fails to load and to
+fail-closed when an imported module's LENSES omits an expected name.
+"""
+
+_PRODUCTION_LOADED = False
+_PRODUCTION_LOAD_ERRORS = []
+_PRODUCTION_COLLIDED_NAMES = set()
+_PRODUCTION_REGISTERED = []
+_PRODUCTION_MODULE_LENSES = {}
+
+
+class MalformedCollect(ValueError):
+    """A collect() outcome that is structurally unusable."""
+
+
+def classify_collect(out):
+    """Return (status, reason) for a collect() outcome. Fail-closed."""
+    if not isinstance(out, dict):
+        raise MalformedCollect(
+            "collect() must return a dict, got %s" % type(out).__name__)
+    status = out.get("status", "collected")
+    reason = out.get("reason")
+    if status not in COLLECT_STATUSES:
+        return ("not-collected", "invalid collect status: %r" % (status,))
+    if status in ("partial", "not-collected"):
+        if not isinstance(reason, str) or not reason:
+            return (status, "%s reported without a reason (contract violation)" % status)
+        return (status, reason)
+    if status == "collected":
+        if "candidates" not in out or not isinstance(out.get("candidates"), list):
+            raise MalformedCollect(
+                "collected outcome requires a list 'candidates', got %r"
+                % (out.get("candidates"),))
+        if "digest" not in out:
+            raise MalformedCollect("collected outcome requires a 'digest' key")
+    return ("collected", None)
 
 
 def validate_lens(lens):
@@ -43,6 +144,10 @@ def validate_lens(lens):
     reasons = []
     if not isinstance(getattr(lens, "name", None), str) or not lens.name:
         reasons.append("name must be a non-empty str")
+    elif lens.name.startswith("module:"):
+        reasons.append(
+            "name must not use the reserved 'module:' prefix "
+            "(reserved for load-failure stand-ins)")
     if not isinstance(getattr(lens, "collector_version", None), str) or not lens.collector_version:
         reasons.append("collector_version must be a non-empty str")
     cost = getattr(lens, "cost", None)
@@ -64,12 +169,188 @@ def validate_lens(lens):
 
 
 def register(lens):
-    """Validate and append to REGISTRY. Raises ValueError on invalid lens."""
+    """Validate and append to REGISTRY. Raises ValueError on invalid or duplicate lens."""
     ok, reasons = validate_lens(lens)
     if not ok:
         raise ValueError("; ".join(reasons))
+    if any(existing.name == lens.name for existing in REGISTRY):
+        raise ValueError(
+            "duplicate lens name %r already registered — lens names are the sweep's "
+            "per-lens baseline key and must be unique" % lens.name)
     REGISTRY.append(lens)
 
 
-def registered_lenses():
+def _record_production_error(entry):
+    _PRODUCTION_LOAD_ERRORS.append(entry)
+    sys.stderr.write("guardian_lens: production lens load failed: %r\n" % (entry,))
+
+
+def load_production_lenses(force=False):
+    """Import + register every PRODUCTION_LENS_MODULES entry. Idempotent.
+
+    A broken lens degrades visibly by name — never silently omitted, never fatal to the
+    sweep. Returns list(REGISTRY).
+    """
+    global _PRODUCTION_LOADED
+    if _PRODUCTION_LOADED and not force:
+        return list(REGISTRY)
+    del _PRODUCTION_LOAD_ERRORS[:]
+    _PRODUCTION_COLLIDED_NAMES.clear()
+    _PRODUCTION_MODULE_LENSES.clear()
+    if force:
+        loader_ids = {id(lens) for lens in _PRODUCTION_REGISTERED}
+        REGISTRY[:] = [lens for lens in REGISTRY if id(lens) not in loader_ids]
+        _PRODUCTION_REGISTERED.clear()
+    known = {getattr(lens, "name", None) for lens in REGISTRY}
+    for module_name in PRODUCTION_LENS_MODULES:
+        expected = PRODUCTION_LENS_NAMES.get(module_name, ())
+        if not expected:
+            _record_production_error({
+                "module": module_name,
+                "error": (
+                    "module has no PRODUCTION_LENS_NAMES mapping — roster misconfiguration"),
+            })
+        try:
+            module = importlib.import_module(module_name)
+            lenses = tuple(getattr(module, "LENSES", ()) or ())
+        except Exception as exc:  # noqa: BLE001 — a broken module must not kill the sweep
+            _record_production_error({
+                "module": module_name,
+                "error": "%s: %s" % (type(exc).__name__, exc),
+            })
+            continue
+        if not lenses:
+            _record_production_error({
+                "module": module_name,
+                "error": "exposes no module-level LENSES",
+            })
+            continue
+        exported_names = tuple(
+            getattr(lens, "name", None) for lens in lenses
+            if isinstance(getattr(lens, "name", None), str) and lens.name)
+        for want in expected:
+            if want not in exported_names:
+                _record_production_error({
+                    "module": module_name,
+                    "lens": want,
+                    "error": "expected lens %r missing from LENSES export" % want,
+                })
+        for lens in lenses:
+            name = getattr(lens, "name", None)
+            if name in known:
+                _PRODUCTION_COLLIDED_NAMES.add(name)
+                _record_production_error({
+                    "module": module_name,
+                    "lens": name,
+                    "error": (
+                        "duplicate lens name %r already registered — lens names are the "
+                        "sweep's per-lens baseline key and must be unique" % name),
+                })
+                continue
+            try:
+                register(lens)
+            except ValueError as exc:
+                if name and "duplicate lens name" in str(exc):
+                    _PRODUCTION_COLLIDED_NAMES.add(name)
+                _record_production_error({
+                    "module": module_name,
+                    "lens": name,
+                    "error": str(exc),
+                })
+                continue
+            known.add(name)
+            _PRODUCTION_REGISTERED.append(lens)
+            _PRODUCTION_MODULE_LENSES.setdefault(module_name, set()).add(name)
+    _PRODUCTION_LOADED = True
     return list(REGISTRY)
+
+
+def production_lens_load_errors():
+    """Visible record of production-lens load/registration failures from the last load."""
+    return list(_PRODUCTION_LOAD_ERRORS)
+
+
+class _UnavailableLens(object):
+    """Stand-in for a production lens that failed to load/register."""
+
+    def __init__(self, name, error):
+        self.name = name
+        self.collector_version = "0"
+        self.cost = {
+            "collectorSeconds": 0.0,
+            "note": "production lens unavailable — load/registration failed",
+        }
+        self.required_facts = ()
+        self.validation_guidance = (
+            "This production lens failed to load; there is nothing to validate.")
+        self.consequence_template = (
+            "Production lens %s is unavailable." % name)
+        self._error = error
+
+    def collect(self, ctx):
+        return {
+            "candidates": [],
+            "digest": None,
+            "status": "not-collected",
+            "reason": "%s: production lens unavailable — %s" % (self.name, self._error),
+        }
+
+    def diff(self, prev_digest, cur_digest):
+        return {"new": [], "worsened": [], "resolved": []}
+
+    def red_lines(self, candidates):
+        return []
+
+    def degrade(self, reason):
+        return {"lens": self.name, "degraded": True, "reason": reason}
+
+
+def _stub_names_for_error(entry):
+    """Lens names that must appear as degraded stand-ins for a load error."""
+    if "lens" in entry:
+        named = entry.get("lens")
+        if isinstance(named, str) and named:
+            return (named,)
+        return ()
+    return PRODUCTION_LENS_NAMES.get(entry.get("module"), ())
+
+
+def registered_lenses():
+    load_production_lenses()
+    lenses = list(REGISTRY)
+    present = {getattr(lens, "name", None) for lens in lenses}
+
+    if _PRODUCTION_COLLIDED_NAMES:
+        lenses = [l for l in lenses if l.name not in _PRODUCTION_COLLIDED_NAMES]
+        present = {getattr(lens, "name", None) for lens in lenses}
+        for name in sorted(_PRODUCTION_COLLIDED_NAMES):
+            dup_error = "duplicate lens name"
+            for err in _PRODUCTION_LOAD_ERRORS:
+                if err.get("lens") == name and "duplicate lens name" in err.get("error", ""):
+                    dup_error = err.get("error") or dup_error
+                    break
+            lenses.append(_UnavailableLens(name, dup_error))
+            present.add(name)
+
+    module_fallback = {}
+    for err in _PRODUCTION_LOAD_ERRORS:
+        if err.get("lens") in _PRODUCTION_COLLIDED_NAMES:
+            continue
+        names = _stub_names_for_error(err)
+        added_any = False
+        for name in names:
+            if name in present:
+                continue
+            lenses.append(_UnavailableLens(name, err.get("error") or "unknown"))
+            present.add(name)
+            added_any = True
+        if not added_any:
+            module = err.get("module")
+            key = module if module else "<unknown>"
+            module_fallback.setdefault(key, []).append(err.get("error") or "unknown")
+    for module, reasons in module_fallback.items():
+        standin_name = "module:%s" % module
+        if standin_name not in present:
+            lenses.append(_UnavailableLens(standin_name, "; ".join(reasons)))
+            present.add(standin_name)
+    return lenses

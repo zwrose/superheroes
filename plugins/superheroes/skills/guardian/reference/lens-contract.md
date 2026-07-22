@@ -53,3 +53,18 @@ The seam (`plugins/superheroes/lib/guardian_tools.py`) provides these guarantees
 5. **No fetch at sweep time** — absent tools degrade with a message quoting `guardian_tools.INSTALL_COMMANDS`; the seam never installs or fetches.
 
 Install guidance for collectors lives only in `guardian_tools.INSTALL_COMMANDS`.
+
+## Collection honesty
+
+Every registered lens must satisfy the honesty invariants (enforced by the per-lens conformance suite).
+
+`collect()` returns a **status** from `COLLECT_STATUSES`: `collected`, `partial`, or `not-collected` (default `collected` when omitted). A lens that could not collect returns `not-collected` with a non-empty `reason` — never an empty candidate list that reads as clean.
+
+- **`not-collected`** — the sweep records a `degradedLenses` entry, surfaces nothing, does not set `funnel["raised"]` for that lens, and preserves the prior snapshot digest (or omits the lens when there is no prior entry).
+- **`partial`** — the sweep records degradation **and** processes the candidates and digest the lens did collect. The lens owns merging `ctx["prevDigest"]` for the portions it could not collect this run. When the collector version changed, a `partial` result does not advance the baseline digest until a full `collected` result lands.
+
+The production loader degrades a broken lens **visibly by name** (stand-in with the expected lens name) — never silent omission, never fatal to the sweep.
+
+Tool-running and status-builder helpers live in `guardian_collect.py` — the single home for that behavior (CONVENTIONS §11). Lenses use `run_tool`, `collected()`, `partial()`, and `not_collected()` rather than re-implementing subprocess handling. The conformance harness assumes every tool invocation routes through `ctx["run"]` / `guardian_collect.run_tool`; a lens that shells out directly cannot be conformance-verified.
+
+Every production lens MUST implement `conformance_cases()` supplying the tool-specific payload for `reported-nonzero-parsed-zero` (the only lens-supplied scenario — see `guardian_lens.LENS_SUPPLIED_CONFORMANCE_SCENARIOS`). Required case fields are defined in `guardian_lens.CONFORMANCE_CASE_FIELDS`: `stdout` (raw output that reports findings but normalizes to zero candidates), `clean_stdout` (raw output from the same tool with genuinely zero findings), and `exit` (the exit code the tool returns on a successful run — may be non-zero for findings-on-success analyzers). Optional `config` and `prev_digest` keys are forwarded to `collect()`. The harness owns the five tool-agnostic scenarios in `guardian_lens.REQUIRED_CONFORMANCE_SCENARIOS` (`missing-tool`, `timeout`, `nonzero-exit`, `findings-empty-output`, `unparseable`) and injects its own `ctx["run"]` stubs — lenses supply nothing for those. CONVENTIONS §11 — that tuple is the scenario roster's one home. For `reported-nonzero-parsed-zero` the harness runs two probes at the declared exit: a **clean probe** (`clean_stdout`) that must return `collected`, and a **findings probe** (`stdout`) that must degrade (`not-collected` or `partial`) — a tool that reported problems with zero parsed candidates must never read as `collected`. The per-lens conformance suite (`test_guardian_conformance.py`) runs against every registered lens and **fails registration** when `reported-nonzero-parsed-zero` is missing or an honesty invariant breaks: harness-owned degraded tool outcomes (`missing-tool`, `timeout`, `nonzero-exit`, `findings-empty-output`, `unparseable`) must never read as `collected`; a tool that reported problems must never yield `collected` with zero candidates; and when collection stops, `diff()` must never emit `resolved` ids.

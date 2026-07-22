@@ -74,3 +74,57 @@ def test_lens_contract_requires_guardian_tools_invocation_seam():
     assert guardian_tools.INSTALL_COMMANDS, (
         "guardian_tools.INSTALL_COMMANDS is the authoritative install-command home"
     )
+
+
+def test_lens_contract_covers_conformance_scenarios():
+    """REQUIRED_CONFORMANCE_SCENARIOS ↔ reference prose (§11 drift guard)."""
+    scenarios = guardian_lens.REQUIRED_CONFORMANCE_SCENARIOS
+    assert scenarios, (
+        "guardian_lens.REQUIRED_CONFORMANCE_SCENARIOS is empty — no authoritative home")
+    text = _read(_LENS_CONTRACT)
+    for scenario in scenarios:
+        assert scenario in text, (
+            "lens-contract.md missing conformance scenario %r" % scenario)
+    assert set(scenarios) == {
+        "missing-tool",
+        "timeout",
+        "nonzero-exit",
+        "findings-empty-output",
+        "unparseable",
+        "reported-nonzero-parsed-zero",
+    }, (
+        "REQUIRED_CONFORMANCE_SCENARIOS membership changed — update this golden set "
+        "AND lens-contract.md"
+    )
+
+
+def test_lens_contract_covers_lens_supplied_conformance_scenarios():
+    """LENS_SUPPLIED_CONFORMANCE_SCENARIOS ↔ reference prose (§11 drift guard)."""
+    lens_supplied = guardian_lens.LENS_SUPPLIED_CONFORMANCE_SCENARIOS
+    assert lens_supplied, (
+        "guardian_lens.LENS_SUPPLIED_CONFORMANCE_SCENARIOS is empty — no authoritative home")
+    text = _read(_LENS_CONTRACT)
+    for scenario in lens_supplied:
+        assert scenario in text, (
+            "lens-contract.md missing conformance scenario %r" % scenario)
+        assert "lens-supplied" in text, (
+            "lens-contract.md must describe %r as lens-supplied" % scenario)
+    assert set(lens_supplied) == {"reported-nonzero-parsed-zero"}, (
+        "LENS_SUPPLIED_CONFORMANCE_SCENARIOS membership changed — update this golden "
+        "set AND lens-contract.md"
+    )
+
+
+def test_lens_contract_covers_conformance_case_fields():
+    """CONFORMANCE_CASE_FIELDS ↔ reference prose (§11 drift guard)."""
+    fields = guardian_lens.CONFORMANCE_CASE_FIELDS
+    assert fields, (
+        "guardian_lens.CONFORMANCE_CASE_FIELDS is empty — no authoritative home")
+    text = _read(_LENS_CONTRACT)
+    for field in fields:
+        assert field in text, (
+            "lens-contract.md missing conformance case field %r" % field)
+    assert set(fields) == {"stdout", "clean_stdout", "exit"}, (
+        "CONFORMANCE_CASE_FIELDS membership changed — update this golden set "
+        "AND lens-contract.md"
+    )
