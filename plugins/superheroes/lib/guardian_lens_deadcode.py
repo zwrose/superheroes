@@ -397,6 +397,26 @@ def _knip_inscope_signals(issues):
     return n
 
 
+def _knip_malformed_inscope(issues):
+    """Count PRESENT-BUT-MALFORMED in-scope (``files`` / ``exports``) fields — a present
+    key whose value is not a list, a shape ``aggregate_knip`` cannot normalize (H3).
+
+    A malformed in-scope field is an in-scope signal knip EMITTED that this lens failed to
+    parse. ``_knip_inscope_signals`` above counts only well-formed nonempty lists, so a
+    present-but-non-list ``exports={"bad": "shape"}`` counts as ZERO there and — absent this
+    detector — an exit-1 run carrying only that field (or that field beside a valid
+    candidate) would read collected-clean, silently dropping the malformed signal. A
+    genuinely ABSENT in-scope field (the out-of-scope-only exemption) is NOT malformed."""
+    n = 0
+    for entry in issues or []:
+        if not isinstance(entry, dict):
+            continue
+        for key in ("files", "exports"):
+            if key in entry and not isinstance(entry.get(key), list):
+                n += 1
+    return n
+
+
 def aggregate_knip(issues):
     """{id: candidate} from knip's per-file issue entries — unused files + unused
     exports only (types/enumMembers/dependencies/etc. are out of scope for this lens)."""
@@ -458,6 +478,19 @@ def collect_node(ctx, repo):
     if err is not None:
         return ("not-collected", err, {}, argv, tried)
     candidates = aggregate_knip(issues)
+    # H3: a present-but-malformed in-scope field (e.g. `exports={"bad": "shape"}`) is an
+    # in-scope signal knip emitted that we could not normalize. It must degrade even when a
+    # VALID candidate sits beside it (which would otherwise mask it past the `not candidates`
+    # gate below) — dropping it silently would read a contradiction as a clean scan. Gate on
+    # the findings exit; a clean (exit 0) run carries no such contradiction.
+    if res.get("exit") == 1:
+        malformed = _knip_malformed_inscope(issues)
+        if malformed:
+            return ("not-collected",
+                    "knip exited 1 (issues found) with %d present-but-malformed in-scope "
+                    "files/exports field(s) that did not normalize — refusing to drop a "
+                    "signalled-but-unparseable in-scope signal as a clean scan"
+                    % malformed, {}, argv, tried)
     # Exit 1 means "issues found". A parsed-but-empty CANDIDATE set (not just an empty
     # raw `issues` list — the gate must check the NORMALIZED candidates, since
     # aggregate_knip drops out-of-scope entries) is the R2/R11 "findings-exit reported as

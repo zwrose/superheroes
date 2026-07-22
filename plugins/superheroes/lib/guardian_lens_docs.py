@@ -241,9 +241,17 @@ def extract_references(text):
 
 
 def _read_doc(path):
-    """(text, None) or (None, reason). Absent is distinct from unreadable."""
-    if not os.path.isfile(path):
+    """(text, None) or (None, reason). Absent is distinct from unreadable.
+
+    ABSENT — the path does not exist on disk this sweep. UNREADABLE — the path EXISTS but
+    is not a readable regular file: a directory, a bad-permissions file, or one that is not
+    valid UTF-8. Both carry prior references forward (a doc not read is not a doc fixed),
+    and both degrade the lens to `partial`, but the reason must say which so an owner can
+    tell "the doc is gone" from "the doc is there but I could not read it" (H4)."""
+    if not os.path.exists(path):
         return (None, "absent")
+    if not os.path.isfile(path):
+        return (None, "unreadable: exists but is not a regular file (e.g. a directory)")
     try:
         with open(path, encoding="utf-8") as fh:
             return (fh.read(), None)
@@ -462,8 +470,18 @@ class DocsLens(object):
         # them. Only a reference re-measured from a doc we actually READ (and now gone from
         # it) may resolve. Without this, all-docs-absent would report every prior broken
         # reference as `resolved` ("fixed") when the truth is the doc is gone.
+        #
+        # H4: whenever an absent doc actually CARRIES a prior reference forward, the lens
+        # must degrade to `partial` naming it — otherwise a tracked doc going unmeasured
+        # (with other docs + verify still collecting) would read as a clean `collected`,
+        # hiding that a doc we used to check is gone. A genuinely never-tracked absent doc
+        # (nothing to carry) is not a degradation — many repos simply lack README/CONVENTIONS.
         for doc in docs_absent:
-            _carry_forward(ctx.get("prevDigest"), refs, "docs:ref:%s:" % doc)
+            carried = _carry_forward(ctx.get("prevDigest"), refs, "docs:ref:%s:" % doc)
+            if carried:
+                degradations.append(
+                    "%s not read this sweep (absent) — %d prior reference%s carried "
+                    "forward, not resolved" % (doc, carried, "" if carried == 1 else "s"))
 
         verify = self._collect_verify(ctx, repo, refs, candidates)
         if verify["reason"]:
@@ -629,14 +647,14 @@ class DocsLens(object):
         The harness never sets `ctx["verifyCommand"]`, so the verify subcheck always
         degrades (uncollected) and carries the `docs:verify-cmd:` portion forward from the
         prior digest — that is the carry-forward vehicle these cases exercise. (The harness
-        materializes an `unreadable` path as a **directory**, which this lens reads as an
-        *absent* doc, not an *unreadable* one — so the prior findings under an unreadable
-        path live on the verify subcheck, never under the vanished doc, which is exactly
-        why they must not be resolved.)
+        materializes an `unreadable` path as a **directory**; `_read_doc` reads a path that
+        EXISTS but is not a regular file as *unreadable* (H4), so `README.md` degrades the
+        lens to `partial` naming it. The prior verify finding still lives on the verify
+        subcheck — carried and never resolved — which is why the sentinel stays unresolved.)
 
         - `unreadable-input` — a readable `CLAUDE.md` plus a directory at `README.md`
-          (read as absent) → `partial`; the prior unresolved verify finding is carried, so
-          `diff()` resolves nothing (no false clean).
+          (read as unreadable) → `partial`; the prior unresolved verify finding is carried,
+          so `diff()` resolves nothing (no false clean).
         - `all-inputs-unavailable` — no docs and no verifyCommand → whole-lens
           `not-collected` with a reason; the prior digest holds no unresolved reference, so
           nothing is resolved.

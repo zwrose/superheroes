@@ -13,6 +13,7 @@ Authoritative homes:
   - guardian_vitals.VITALS
   - guardian_vitals.DRIFT_THRESHOLDS
 """
+import importlib
 import os
 import re
 
@@ -390,3 +391,37 @@ def test_production_lens_modules_sync_guard_is_not_vacuous():
     assert modules == name_keys
     assert (modules | {"guardian_lens_phantom"}) != name_keys
     assert modules != (name_keys | {"guardian_lens_phantom"})
+
+
+def _module_exported_lens_names(module_name):
+    """The set of lens names a rostered module actually EXPORTS via its module-level
+    LENSES tuple."""
+    module = importlib.import_module(module_name)
+    exported = tuple(getattr(module, "LENSES", ()) or ())
+    return {getattr(lens, "name", None) for lens in exported}
+
+
+def test_module_exports_equal_declared_production_names():
+    """H7: each rostered module's EXPORTED lens-name set must EQUAL its declared
+    PRODUCTION_LENS_NAMES tuple — not merely be a superset. The loader fails closed on a
+    MISSING expected name; an EXTRA undeclared export (a module shipping a lens no roster
+    entry accounts for) would otherwise register silently. Set-equality rejects both."""
+    for module_name, declared in guardian_lens.PRODUCTION_LENS_NAMES.items():
+        exported = _module_exported_lens_names(module_name)
+        assert None not in exported, (
+            "module %r exports a lens object with no .name" % module_name)
+        assert exported == set(declared), (
+            "module %r exports lens names %s but PRODUCTION_LENS_NAMES declares %s — an "
+            "undeclared surplus or a missing export"
+            % (module_name, sorted(exported), sorted(declared)))
+
+
+def test_module_export_equality_guard_is_not_vacuous():
+    """The H7 guard must fail closed on an undeclared surplus export, not only a miss."""
+    module_name = guardian_lens.PRODUCTION_LENS_MODULES[0]
+    declared = set(guardian_lens.PRODUCTION_LENS_NAMES[module_name])
+    exported = _module_exported_lens_names(module_name)
+    assert exported == declared  # baseline agreement (proven by the sibling test)
+    # An extra undeclared export and a missing export must both break equality.
+    assert (exported | {"phantom-lens"}) != declared
+    assert exported != (declared | {"phantom-lens"})

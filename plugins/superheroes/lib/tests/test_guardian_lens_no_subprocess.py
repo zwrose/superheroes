@@ -19,13 +19,17 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 _BANNED_MODULES = frozenset({"subprocess"})
-_BANNED_OS_ATTRS = frozenset({"system", "popen", "posix_spawn", "posix_spawnp"})
+# fork / forkpty do not start with an exec/spawn prefix and are not posix_spawn(p), so they
+# must be banned by exact name — the runtime patch (test_guardian_conformance) already
+# guards them; this is the fail-closed static complement (H5).
+_BANNED_OS_ATTRS = frozenset(
+    {"system", "popen", "fork", "forkpty", "posix_spawn", "posix_spawnp"})
 _BANNED_OS_ATTR_PREFIXES = ("exec", "spawn")
 _BANNED_SUBPROCESS_ATTRS = frozenset({
     "Popen", "run", "call", "check_call", "check_output",
 })
 _BANNED_OS_FROM_NAMES = frozenset({
-    "system", "popen", "posix_spawn", "posix_spawnp",
+    "system", "popen", "fork", "forkpty", "posix_spawn", "posix_spawnp",
 })
 _BANNED_SUBPROCESS_FROM_NAMES = _BANNED_SUBPROCESS_ATTRS
 
@@ -168,6 +172,31 @@ def test_spawn_detector_flags_aliased_os_system_and_exec_spawn():
     offenders = _find_spawn_offenders(spawn_source)
     assert offenders, "expected os.spawnv to be flagged"
     assert any("spawnv" in hit for hit in offenders)
+
+
+def test_spawn_detector_flags_os_fork_and_forkpty():
+    """H5 non-vacuity: os.fork / os.forkpty evade the exec/spawn prefixes and are not
+    posix_spawn(p) — a planted os.fork() in a fake lens must be caught, direct + aliased +
+    `from os import fork`."""
+    direct_source = "import os\nos.fork()\n"
+    offenders = _find_spawn_offenders(direct_source)
+    assert offenders, "expected os.fork to be flagged"
+    assert any("fork" in hit for hit in offenders)
+
+    forkpty_source = "import os\nos.forkpty()\n"
+    offenders = _find_spawn_offenders(forkpty_source)
+    assert offenders, "expected os.forkpty to be flagged"
+    assert any("forkpty" in hit for hit in offenders)
+
+    alias_source = "import os as _p\n_p.fork()\n"
+    offenders = _find_spawn_offenders(alias_source)
+    assert offenders, "expected aliased os.fork to be flagged"
+    assert any("fork" in hit for hit in offenders)
+
+    from_source = "from os import fork\nfork()\n"
+    offenders = _find_spawn_offenders(from_source)
+    assert offenders, "expected `from os import fork` + bare call to be flagged"
+    assert any("fork" in hit for hit in offenders)
 
 
 def test_spawn_detector_flags_posix_spawn_direct_and_aliased():

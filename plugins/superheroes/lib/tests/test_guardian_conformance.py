@@ -333,7 +333,16 @@ def _assert_tool_free_conformance(lens):
     for scenario in gl.TOOL_FREE_CONFORMANCE_SCENARIOS:
         case = cases[scenario]
         config = case.get("config")
-        prev_digest = case.get("prev_digest", dict(_PREV_DIGEST))
+        # H6: mirror the tool-using branch — feed the lens's SENTINEL-BEARING prior digest
+        # (conformance_prev_digest()["prev"]) into every stopped-measurement probe, not each
+        # case's own (possibly empty) prev_digest. With an empty prior, a lens's
+        # `cur_digest is None` / references guard could be deleted and tool-free conformance
+        # would still pass vacuously; feeding the sentinel prior (proven resolvable by the
+        # pre-loop non-vacuity check) makes that guard load-bearing — a not-collected digest
+        # (None) diffed against a sentinel-carrying prior WOULD resolve the sentinel unless
+        # the guard stops it. Falls back to the case's prev_digest when the lens supplies no
+        # conformance_prev_digest hook.
+        prev_digest = _conformance_prev_spec(lens, case)["prev"]
         with _tool_free_workspace(case) as workspace:
             ctx = {
                 "cwd": workspace,

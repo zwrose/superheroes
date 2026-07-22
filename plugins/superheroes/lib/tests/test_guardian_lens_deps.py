@@ -726,6 +726,135 @@ def test_pip_audit_genuinely_clean_stays_partial_not_degraded(tmp_path):
     assert isinstance(vulns.get("redLineGap"), dict)
 
 
+def test_pip_audit_no_deps_narrowed_scope_discloses_and_carries_transitive(tmp_path):
+    """H1: --no-deps audits only the enumerated (top-level) manifest, so a prior TRANSITIVE
+    advisory it never re-measured must be carried forward (not falsely `resolved`), and the
+    section must DISCLOSE the narrowed coverage.
+
+    Fail-before: without the fix the section resolves the transitive prior (it read the
+    clean top-level audit as a full-graph clean scan) and carries no coverageGap — both
+    assertions bite."""
+    repo = _repo(tmp_path, {"pyproject.toml": "[project]\n",
+                            "requirements.txt": "requests==2.0\n"})
+    # A prior advisory for urllib3 — a TRANSITIVE dependency of requests, not enumerated in
+    # requirements.txt and therefore invisible to a --no-deps audit of the top-level manifest.
+    prev_id = "deps:audit:python:urllib3:PYSEC-2021-108"
+    prev = {
+        "detected": ["python"],
+        "ecosystems": {"python": {
+            "freshness": {"status": "not-collected", "reason": "policy", "items": {}},
+            "vulns": {"status": "partial",
+                      "items": {prev_id: {"id": prev_id, "package": "urllib3",
+                                          "metric": 0}}},
+        }},
+    }
+    # This sweep audits ONLY the enumerated top-level package, clean. urllib3 is invisible.
+    payload = json.dumps({"dependencies": [
+        {"name": "requests", "version": "2.0", "vulns": []}]})
+    out = gld.LENS.collect(
+        _ctx(repo, _run(pip_audit=payload, pip_audit_exit=0), prev=prev))
+    vulns = out["digest"]["ecosystems"]["python"]["vulns"]
+    assert vulns["status"] == "partial"
+    # (1) discloses the narrowed --no-deps coverage
+    assert "transitive" in vulns["reason"].lower()
+    assert isinstance(vulns.get("coverageGap"), dict)
+    assert vulns["coverageGap"].get("scope") == "enumerated-manifest-only"
+    # (2) carries the unaudited transitive advisory forward, NEVER resolving it
+    assert prev_id in (vulns.get("items") or {})
+    assert (vulns["items"][prev_id].get("carriedForward")) is True
+    d = gld.LENS.diff(prev, out["digest"])
+    assert prev_id not in d["resolved"], (
+        "an unaudited transitive advisory must never read as fixed under --no-deps")
+
+
+def test_pip_audit_no_deps_resolves_an_enumerated_package_that_is_now_clean(tmp_path):
+    """H1 counterpart: a prior advisory for a package the manifest DOES enumerate WAS
+    re-measured this sweep — a clean re-audit genuinely resolves it (carry-forward is scoped
+    to unaudited packages, so it does not freeze legitimate fixes)."""
+    repo = _repo(tmp_path, {"pyproject.toml": "[project]\n",
+                            "requirements.txt": "requests==2.0\n"})
+    prev_id = "deps:audit:python:requests:PYSEC-2020-9"
+    prev = {
+        "detected": ["python"],
+        "ecosystems": {"python": {
+            "freshness": {"status": "not-collected", "reason": "policy", "items": {}},
+            "vulns": {"status": "partial",
+                      "items": {prev_id: {"id": prev_id, "package": "requests",
+                                          "metric": 0}}},
+        }},
+    }
+    payload = json.dumps({"dependencies": [
+        {"name": "requests", "version": "2.0", "vulns": []}]})
+    out = gld.LENS.collect(
+        _ctx(repo, _run(pip_audit=payload, pip_audit_exit=0), prev=prev))
+    vulns = out["digest"]["ecosystems"]["python"]["vulns"]
+    assert prev_id not in (vulns.get("items") or {}), (
+        "an ENUMERATED package re-audited clean is not carried forward")
+    d = gld.LENS.diff(prev, out["digest"])
+    assert prev_id in d["resolved"]
+
+
+def test_npm_audit_valid_plus_malformed_entry_carries_not_resolves(tmp_path):
+    """H2: one valid advisory + one malformed (non-dict) entry. The valid candidate keeps
+    `items` truthy and clears the contradiction gate, but the malformed sibling must still
+    degrade — carrying that package's prior advisory forward, never resolving it.
+
+    Fail-before: without the fix the malformed entry is silently dropped, the section reads
+    `collected`, and diff() resolves the malformed package's prior advisory (false fixed) —
+    the status, reason, and no-false-resolved assertions all bite."""
+    repo = _node_repo(tmp_path)
+    prev_id = "deps:audit:node:left-pad:GHSA-AAAA-BBBB-CCCC"
+    prev = {
+        "detected": ["node"],
+        "ecosystems": {"node": {
+            "freshness": {"status": "collected", "items": {}},
+            "vulns": {"status": "collected",
+                      "items": {prev_id: {"id": prev_id, "package": "left-pad",
+                                          "metric": 4}}},
+        }},
+    }
+    audit = json.dumps({
+        "vulnerabilities": {
+            "js-yaml": {
+                "name": "js-yaml", "severity": "high", "range": "<3.13.1",
+                "via": [{"severity": "high", "title": "code injection",
+                         "url": "https://github.com/advisories/GHSA-52cp-r559-cp3m",
+                         "range": "<3.13.1"}],
+            },
+            "left-pad": "garbage-not-a-dict",  # malformed sibling; prior advisory present
+        },
+        "metadata": {"vulnerabilities": {"total": 1, "high": 1, "critical": 0}},
+    })
+    out = gld.LENS.collect(_ctx(repo, _run(audit=audit, ncu="{}"), prev=prev))
+    vulns = out["digest"]["ecosystems"]["node"]["vulns"]
+    # the valid advisory is present
+    assert "deps:audit:node:js-yaml:GHSA-52CP-R559-CP3M" in vulns["items"]
+    # the malformed sibling degrades the section and discloses the dropped package
+    assert vulns["status"] == "partial"
+    assert "left-pad" in vulns["reason"]
+    assert "left-pad" in (vulns.get("malformedEntries") or [])
+    # the malformed package's prior advisory is carried forward, NOT resolved
+    assert prev_id in vulns["items"]
+    assert vulns["items"][prev_id].get("carriedForward") is True
+    d = gld.LENS.diff(prev, out["digest"])
+    assert prev_id not in d["resolved"]
+
+
+def test_npm_audit_clean_empty_map_stays_collected_no_over_degrade(tmp_path):
+    """H2 guardrail: a legitimately empty ``vulnerabilities: {}`` has no malformed entries
+    and must stay `collected` — the malformed-entry degradation must not over-fire."""
+    repo = _node_repo(tmp_path)
+    empty = json.dumps({
+        "vulnerabilities": {},
+        "metadata": {"vulnerabilities": {"total": 0}},
+    })
+    out = gld.LENS.collect(
+        _ctx(repo, _run(audit=empty, audit_exit=0, ncu="{}")))
+    vulns = out["digest"]["ecosystems"]["node"]["vulns"]
+    assert vulns["status"] == "collected"
+    assert not vulns.get("malformedEntries")
+
+
 def test_two_unidentified_advisories_for_same_package_are_distinct(tmp_path):
     """R12: fallback advisory identity must not collapse distinct vulns."""
     audit = {

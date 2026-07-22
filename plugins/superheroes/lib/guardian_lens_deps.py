@@ -260,6 +260,30 @@ def _prev_part(prev_digest, ecosystem, part):
     return got if isinstance(got, dict) else None
 
 
+def _carry_prior_items(prev_section, items, predicate):
+    """Copy prior advisory items whose ``package`` satisfies ``predicate`` into ``items``
+    as carried-forward (never overwriting a fresh item), returning the carried ids.
+
+    The carry-forward vehicle for advisories this sweep did NOT actually re-measure —
+    either because the collector could not parse a signalled entry (npm, H2) or because
+    the narrowed --no-deps scope never audited that package (python, H1). A carried item
+    stays visible to diff() with the SAME id, so a stopped/narrowed measurement can never
+    read as a `resolved` (false fixed)."""
+    carried = []
+    prev_items = prev_section.get("items") if isinstance(prev_section, dict) else None
+    if not isinstance(prev_items, dict):
+        return carried
+    for cid, rec in prev_items.items():
+        if cid in items or not isinstance(rec, dict):
+            continue
+        if predicate(rec.get("package")):
+            copy = dict(rec)
+            copy["carriedForward"] = True
+            items[cid] = copy
+            carried.append(cid)
+    return carried
+
+
 def _metric_of(item):
     try:
         return float(item.get("metric"))
@@ -448,9 +472,15 @@ def collect_node_vulns(ctx, repo):
 
     items = {}
     transitive_only = []
+    malformed_pkgs = []
     for pkg_name in sorted(vulns):
         entry = vulns[pkg_name]
         if not isinstance(entry, dict):
+            # A signalled-but-unparseable entry: record the package so a prior advisory for
+            # it is carried forward (never silently dropped, never falsely resolved) even
+            # when a VALID sibling entry keeps `items` truthy and clears the contradiction
+            # gate below (H2).
+            malformed_pkgs.append(pkg_name)
             continue
         via_list = entry.get("via")
         via_list = via_list if isinstance(via_list, list) else []
@@ -517,6 +547,28 @@ def collect_node_vulns(ctx, repo):
     if contradiction is not None:
         return _section("not-collected", contradiction, tool=tool)
 
+    # H2: at least one candidate normalized (the gate cleared), but a malformed sibling
+    # entry was signalled and dropped. A partial disclosing the drop — carrying that
+    # package's prior advisories forward, never resolving them — keeps the valid findings
+    # visible while refusing to read the unparseable signal as a clean scan. A legitimately
+    # empty `vulnerabilities: {}` has no malformed entries and stays `collected`.
+    if malformed_pkgs:
+        malformed_set = set(malformed_pkgs)
+        prev_section = _prev_part((ctx or {}).get("prevDigest"), "node", "vulns")
+        carried = _carry_prior_items(
+            prev_section, items, lambda pkg: pkg in malformed_set)
+        reason = (
+            "%s returned %d malformed vulnerability entr%s (package(s): %s) that did not "
+            "normalize to an advisory; their prior advisories are carried forward, never "
+            "resolved — a signalled-but-unparseable entry is not a clean scan"
+            % (tool, len(malformed_pkgs), "y" if len(malformed_pkgs) == 1 else "ies",
+               ", ".join(sorted(malformed_set))))
+        return _section(
+            "partial", reason, tool=tool, items=items, reportedTotal=reported,
+            transitiveOnly=transitive_only, malformedEntries=sorted(malformed_set),
+            carriedForward=bool(carried), seconds=seconds, argv=argv,
+            resolution="npm on PATH via the guardian seam (--prefix %s)" % repo)
+
     return _section(
         "collected", None, tool=tool, items=items, reportedTotal=reported,
         transitiveOnly=transitive_only, seconds=seconds, argv=argv,
@@ -566,6 +618,21 @@ PYTHON_VULN_RED_LINE_GAP = {
     "ecosystem": "python",
     "tool": "pip-audit",
     "missing": "severity ratings — critical-vuln red line cannot fire for Python",
+}
+
+PYTHON_VULN_NO_DEPS_SCOPE_REASON = (
+    "pip-audit ran with --no-deps: only the enumerated packages in requirements.txt were "
+    "audited; transitive dependencies were NOT resolved (a vulnerable transitive is "
+    "invisible to this scan), so prior advisories for packages this manifest does not "
+    "enumerate are carried forward, never resolved")
+
+PYTHON_VULN_NO_DEPS_COVERAGE_GAP = {
+    "ecosystem": "python",
+    "tool": "pip-audit",
+    "scope": "enumerated-manifest-only",
+    "missing": "transitive dependency resolution — --no-deps audits only the packages "
+               "requirements.txt enumerates; a vulnerable transitive dependency is not "
+               "surfaced and prior transitive advisories are not re-measured",
 }
 
 
@@ -633,11 +700,16 @@ def collect_python_vulns(ctx, repo):
 
     items = {}
     raw_entries = 0
+    audited_pkgs = set()
     for dep in deps:
         if not isinstance(dep, dict):
             continue
         name = dep.get("name")
         version = dep.get("version")
+        if isinstance(name, str) and name:
+            # The packages pip-audit actually enumerated under --no-deps — the audited
+            # scope. A prior advisory for a package NOT in this set was not re-measured.
+            audited_pkgs.add(name)
         for vuln in dep.get("vulns") or []:
             raw_entries += 1
             if not isinstance(vuln, dict):
@@ -689,12 +761,23 @@ def collect_python_vulns(ctx, repo):
     if contradiction is not None:
         return _section("not-collected", contradiction, tool=tool)
 
+    # H1: --no-deps narrows the audit to the enumerated packages only. Carry forward any
+    # prior advisory for a package this manifest does not enumerate — it was NOT
+    # re-measured, so it must never read as `resolved` (a false fixed). A fully-enumerated
+    # (lock / pip-compiled) manifest audits every package, so nothing is carried and prior
+    # advisories resolve normally. The coverage gap is disclosed either way, so the section
+    # is never read as a full-graph clean scan.
+    prev_section = _prev_part((ctx or {}).get("prevDigest"), "python", "vulns")
+    _carry_prior_items(prev_section, items, lambda pkg: pkg not in audited_pkgs)
+
     return _section(
-        "partial", PYTHON_VULN_RED_LINE_GAP_REASON, tool=tool, items=items,
-        seconds=seconds, argv=argv,
+        "partial",
+        "%s; %s" % (PYTHON_VULN_RED_LINE_GAP_REASON, PYTHON_VULN_NO_DEPS_SCOPE_REASON),
+        tool=tool, items=items, seconds=seconds, argv=argv,
         severityNote="pip-audit reports no severity field; every python advisory ranks "
                      "0 = unknown, which means unrated, NOT harmless",
-        redLineGap=dict(PYTHON_VULN_RED_LINE_GAP))
+        redLineGap=dict(PYTHON_VULN_RED_LINE_GAP),
+        coverageGap=dict(PYTHON_VULN_NO_DEPS_COVERAGE_GAP))
 
 
 # ------------------------------------------------------------------------ check-the-check

@@ -607,6 +607,66 @@ def test_all_docs_absent_carries_prior_ref_forward_no_false_resolved(tmp_path):
     assert broken_id not in d["new"]
 
 
+def test_absent_tracked_doc_degrades_to_partial_naming_it(tmp_path):
+    """H4(a): ONE previously-tracked doc goes absent while other docs read and the verify
+    subcheck still collects. Its prior broken reference is carried forward (never resolved)
+    AND the lens degrades to `partial` naming the unmeasured doc — a tracked doc going
+    unmeasured must not read as a clean `collected`.
+
+    Fail-before: the absent-doc carry added NO degradation, so with CLAUDE.md still read and
+    verify still collecting the lens returned `collected` (hiding the vanished doc) — the
+    `partial` + reason-names-the-doc assertions bite; the carry/no-resolve part already held."""
+    repo = init_calibrated_repo(tmp_path, verify_command="python3 scripts/check.py")
+    os.makedirs(os.path.join(repo, "lib"))
+    _write(repo, "lib/keep.py", "x = 1\n")
+    os.makedirs(os.path.join(repo, "scripts"))
+    _write(repo, "scripts/check.py", "print(1)\n")
+    _write(repo, "CLAUDE.md", "Read `lib/keep.py`.\n")   # readable, resolves clean
+    _write(repo, "README.md", "Read `lib/gone.py`.\n")   # readable, one broken ref
+    ctx, _run = _ctx(repo, tmp_path)
+    first = m.LENS.collect(ctx)
+    assert first["status"] == "collected"
+    broken_id = "docs:ref:README.md:lib/gone.py"
+    assert first["digest"]["references"][broken_id]["resolved"] is False
+
+    # README.md goes absent; CLAUDE.md still reads, verify still collects.
+    os.remove(os.path.join(repo, "README.md"))
+    ctx2, _run2 = _ctx(repo, tmp_path, prev=first["digest"])
+    second = m.LENS.collect(ctx2)
+
+    assert second["status"] == "partial"
+    assert "README.md" in second["reason"]
+    assert "README.md" in second["digest"]["docsAbsent"]
+    assert second["digest"]["verifyCommand"]["status"] == "collected"
+    carried = second["digest"]["references"][broken_id]
+    assert carried["resolved"] is False
+    assert carried.get("carriedForward") is True
+    d = m.LENS.diff(first["digest"], second["digest"])
+    assert broken_id not in d["resolved"], (
+        "an absent (unmeasured) doc's prior reference must never read as fixed")
+
+
+def test_directory_doc_is_reported_unreadable_not_absent(tmp_path):
+    """H4(b): a path that EXISTS but is not a regular file (a directory at README.md) is
+    reported UNREADABLE (degrading to partial), never silently treated as absent-clean.
+
+    Fail-before: `_read_doc` used `os.path.isfile` and read a directory as `absent`, so a
+    directory README.md with no prior refs left the lens `collected` — the docsUnreadable +
+    partial assertions bite."""
+    repo = init_calibrated_repo(tmp_path, verify_command="python3 scripts/check.py")
+    os.makedirs(os.path.join(repo, "scripts"))
+    _write(repo, "scripts/check.py", "print(1)\n")
+    _write(repo, "CLAUDE.md", "clean\n")
+    os.makedirs(os.path.join(repo, "README.md"))   # a DIRECTORY where a doc is expected
+    ctx, _run = _ctx(repo, tmp_path)
+    out = m.LENS.collect(ctx)
+
+    assert out["status"] == "partial"
+    assert "README.md" in out["digest"]["docsUnreadable"]
+    assert "README.md" not in out["digest"]["docsAbsent"]
+    assert "README.md" in out["reason"]
+
+
 def test_diff_resolved_then_broken_is_new():
     prev = _digest({"docs:ref:CLAUDE.md:a.md": {"resolved": True, "occurrences": 1}})
     cur = _digest({"docs:ref:CLAUDE.md:a.md": {"resolved": False, "occurrences": 1}})

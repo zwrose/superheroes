@@ -518,6 +518,67 @@ def test_knip_out_of_scope_exit1_stays_collected_empty(tmp_path):
     assert out["digest"]["ecosystems"]["node"]["status"] == "collected"
 
 
+def test_knip_present_but_malformed_inscope_field_degrades_not_collected_clean(tmp_path):
+    """H3: a PRESENT-BUT-MALFORMED in-scope field (`exports={"bad": "shape"}` — present key,
+    non-list) beside an out-of-scope dependency is an in-scope signal knip emitted that this
+    lens could not normalize. It must degrade (carry), never read collected-clean.
+
+    Fail-before: `_knip_inscope_signals` counts only well-formed nonempty lists, so the
+    malformed field counts as ZERO, the out-of-scope-only exemption fires, and the run reads
+    `collected` empty — silently dropping the malformed signal (and, with a prev finding,
+    resolving it). Removing the H3 malformed detector makes both assertions bite."""
+    repo = _node_repo(tmp_path)
+    prev_id = "deadcode:knip:src/x.ts:staleExport"
+    prev_digest = {
+        "schema": gld.DIGEST_SCHEMA,
+        "candidates": {prev_id: {"id": prev_id, "tool": "knip", "kind": "export",
+                                 "path": "src/x.ts", "export": "staleExport",
+                                 "metric": 1, "lines": [], "receipt": "..."}},
+    }
+    issues = json.dumps({"issues": [
+        {"file": "src/x.ts", "exports": {"bad": "shape"}},          # malformed in-scope
+        {"file": "package.json", "dependencies": [{"name": "left-pad"}]},  # out-of-scope
+    ]})
+    out = gld.LENS.collect(
+        _ctx(repo, FakeRun([("knip", (1, issues, ""))]), prev=prev_digest))
+    assert out["status"] != "collected"
+    node = out["digest"]["ecosystems"]["node"] if out.get("digest") else None
+    if node is not None:
+        assert node["status"] == "not-collected"
+    reason = out["reason"] or ""
+    assert "malformed" in reason.lower()
+    # the malformed in-scope signal is carried forward, never resolved
+    d = gld.LENS.diff(prev_digest, out.get("digest"))
+    assert d["resolved"] == []
+
+
+def test_knip_malformed_inscope_masked_by_valid_candidate_still_degrades(tmp_path):
+    """H3 masking case: a VALID unused-file candidate beside a malformed in-scope field.
+    The valid candidate keeps `candidates` truthy so the `not candidates` gate never fires;
+    the malformed detector must degrade anyway rather than let the sibling mask it."""
+    repo = _node_repo(tmp_path)
+    issues = json.dumps({"issues": [
+        {"file": "scripts/dead.js", "files": ["scripts/dead.js"]},  # valid candidate
+        {"file": "src/x.ts", "exports": {"bad": "shape"}},          # malformed in-scope
+    ]})
+    out = gld.LENS.collect(_ctx(repo, FakeRun([("knip", (1, issues, ""))])))
+    assert out["status"] != "collected"
+    assert "malformed" in (out["reason"] or "").lower()
+
+
+def test_knip_only_unused_dependencies_no_inscope_keys_stays_collected(tmp_path):
+    """H3 guardrail: exit 1 with ONLY unused-dependencies and NO files/exports keys at all
+    (genuinely absent in-scope fields) stays collected-empty — the malformed detector must
+    not fire on absent fields (the out-of-scope-only exemption is preserved)."""
+    repo = _node_repo(tmp_path)
+    issues = json.dumps({"issues": [
+        {"file": "package.json", "dependencies": [{"name": "left-pad"}]}]})
+    out = gld.LENS.collect(_ctx(repo, FakeRun([("knip", (1, issues, ""))])))
+    assert out["status"] == "collected"
+    assert out["candidates"] == []
+    assert out["digest"]["ecosystems"]["node"]["status"] == "collected"
+
+
 def test_knip_unparseable_output_not_collected_never_empty_clean(tmp_path):
     repo = _node_repo(tmp_path)
     out = gld.LENS.collect(_ctx(repo, FakeRun([("knip", (1, "not json at all", ""))])))
