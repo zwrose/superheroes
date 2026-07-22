@@ -1,0 +1,105 @@
+{
+  "plugins/superheroes/lib/guardian_report.py": [
+    {
+      "type": "function",
+      "rank": "F",
+      "complexity": 46,
+      "lineno": 34,
+      "endline": 176,
+      "name": "render",
+      "col_offset": 0,
+      "closures": []
+    }
+  ],
+  "plugins/superheroes/lib/core_md.py": [
+    {
+      "type": "function",
+      "rank": "F",
+      "complexity": 45,
+      "lineno": 491,
+      "endline": 656,
+      "name": "migrate_on_read",
+      "col_offset": 0,
+      "closures": []
+    },
+    {
+      "type": "function",
+      "rank": "C",
+      "complexity": 16,
+      "lineno": 851,
+      "endline": 909,
+      "name": "main",
+      "col_offset": 0,
+      "closures": []
+    },
+    {
+      "type": "function",
+      "rank": "C",
+      "complexity": 13,
+      "lineno": 745,
+      "endline": 790,
+      "name": "confirm",
+      "col_offset": 0,
+      "closures": []
+    },
+    {
+      "type": "function",
+      "rank": "B",
+      "complexity": 9,
+      "lineno": 65,
+      "endline": 101,
+      "name": "parse_core",
+      "col_offset": 0,
+      "closures": []
+    },
+    {
+      "type": "function",
+      "rank": "A",
+      "complexity": 5,
+      "lineno": 28,
+      "endline": 44,
+      "name": "render_core",
+      "col_offset": 0,
+      "closures": []
+    }
+  ],
+  "plugins/superheroes/lib/broken_fake.py": [
+    {
+      "error": "invalid syntax"
+    }
+  ],
+  "plugins/superheroes/lib/classy_hot.py": [
+    {
+      "type": "class",
+      "rank": "A",
+      "complexity": 3,
+      "lineno": 1,
+      "endline": 80,
+      "name": "HotClass",
+      "col_offset": 0,
+      "methods": [
+        {
+          "type": "method",
+          "rank": "F",
+          "complexity": 120,
+          "lineno": 10,
+          "endline": 70,
+          "name": "explosive",
+          "col_offset": 4,
+          "closures": []
+        },
+        {
+          "type": "method",
+          "rank": "A",
+          "complexity": 2,
+          "lineno": 72,
+          "endline": 78,
+          "name": "quiet",
+          "col_offset": 4,
+          "closures": []
+        }
+      ],
+      "closures": []
+    }
+  ]
+}
