@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -65,4 +66,27 @@ def test_cli_collect_subprocess_smoke(tmp_path):
     out = json.loads(r.stdout)
     assert "surfaced" in out
     assert "funnel" in out
-    assert out["funnel"]["degradedLenses"] == []
+
+    # The subprocess inherits env = os.environ.copy() (same PATH), so
+    # shutil.which("jscpd") in this process matches the subprocess's tool
+    # availability. duplication (jscpd) is the only tool-dependent lens in this
+    # smoke test — the calibrated fixture repo has no .py/.js files, so the
+    # hotspots lens collects-empty and never degrades here. Assert BOTH sides,
+    # keyed on jscpd availability, so this is green locally AND in CI.
+    degraded = out["funnel"]["degradedLenses"]
+    dup = [d for d in degraded if d.get("lens") == "duplication"]
+    if shutil.which("jscpd"):
+        # tool present ⇒ the lens must NOT degrade, and candidates are well-formed
+        assert dup == [], "jscpd present ⇒ duplication must not degrade; got %r" % (degraded,)
+        assert isinstance(out["surfaced"], list)
+        for c in out["surfaced"]:
+            assert isinstance(c, dict) and isinstance(c.get("id"), str) and c["id"], c
+    else:
+        # tool absent ⇒ EXACTLY the well-formed degrade entry, with install guidance
+        assert len(dup) == 1, "jscpd absent ⇒ exactly one duplication degrade entry; got %r" % (degraded,)
+        entry = dup[0]
+        assert entry.get("degraded") is True
+        assert entry.get("lens") == "duplication"
+        reason = entry.get("reason") or ""
+        assert "jscpd" in reason, reason
+        assert "npm install -g jscpd" in reason, reason
