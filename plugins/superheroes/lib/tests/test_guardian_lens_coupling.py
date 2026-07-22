@@ -106,9 +106,15 @@ class _Completed(object):
         self.stderr = stderr
 
 
-def make_run(handler):
-    """Injectable `run` — run_tool threads ctx['run']; tests never shell out."""
+def make_run(handler, tracked=None):
+    """Injectable `run` — run_tool threads ctx['run']; tests never shell out.
+
+    Post-#564 the lens co-fires ``git ls-files -z``. Pass ``tracked=[...]`` to pin the
+    census; ``None`` walks the repo cwd on disk (every on-disk file is "tracked").
+    """
     def _run(argv, **kwargs):
+        if argv and argv[0] == "git":
+            return _git_ls_files_result(kwargs, tracked=tracked)
         out = handler(list(argv), kwargs)
         if isinstance(out, BaseException):
             raise out
@@ -117,6 +123,21 @@ def make_run(handler):
         rc, stdout, stderr = out
         return _Completed(rc, stdout, stderr)
     return _run
+
+
+def _git_ls_files_result(kwargs, tracked=None):
+    cwd = kwargs.get("cwd") or "."
+    if tracked is not None:
+        names = list(tracked)
+    else:
+        names = []
+        for root, dirs, files in os.walk(cwd):
+            if ".git" in dirs:
+                dirs.remove(".git")
+            for fn in files:
+                names.append(os.path.relpath(os.path.join(root, fn), cwd))
+    text = "".join(n + "\0" for n in names)
+    return _Completed(0, text, "")
 
 
 def depcruise_run(report_json, returncode=0, side_effect=None):
@@ -192,7 +213,19 @@ def lens():
 
 def ctx(repo, tmp_path, run=None, prev=None):
     """Build a collect() ctx. `prev` is threaded as ctx['prevDigest'] (no store re-read)."""
+    if run is None:
+        run = make_run(lambda _argv, _kw: _Completed(127, "", "unexpected tool"))
     return {"cwd": repo, "root": store(tmp_path), "run": run, "prevDigest": prev}
+
+
+def census_ctx(repo, tracked=None):
+    return {"cwd": repo, "run": make_run(lambda _a, _k: _Completed(127, "", ""), tracked=tracked)}
+
+
+def census_at(repo, ecosystem, tracked=None):
+    got, err = glc.census(census_ctx(repo, tracked=tracked), repo, ecosystem)
+    assert err is None, err
+    return got
 
 
 def store(tmp_path):
@@ -233,6 +266,7 @@ def test_single_lens_passes_validate_lens():
     assert ok is True, (glc.LENS.name, reasons)
     assert reasons == []
     assert glc.LENS.name == glc.LENS_NAME == "coupling"
+    assert glc.LENS.collector_version == "1.1.0"
 
 
 def test_production_roster_registers_only_the_single_coupling_lens():
@@ -1451,7 +1485,7 @@ def test_census_is_recursive_and_finds_nested_workspaces(tmp_path):
     write(repo, "packages/web/src/a.ts")
     write(repo, "packages/api/package.json", "{}")
     write(repo, "packages/api/src/b.js")
-    got = glc.census(repo, "js")
+    got = census_at(repo, "js")
     assert set(got["workspaces"]) == {".", "packages/web", "packages/api"}
     assert got["sources"]["packages/web"] == {"ts": 1}
     assert got["sources"]["packages/api"] == {"js": 1}
@@ -1464,7 +1498,7 @@ def test_census_never_walks_into_vendored_trees(tmp_path):
     write(repo, "src/a.ts")
     write(repo, "node_modules/leftpad/index.js")
     write(repo, "dist/bundle.js")
-    got = glc.census(repo, "js")
+    got = census_at(repo, "js")
     assert got["total"] == 1
     assert "node_modules" in adapters.EXCLUDED_DIR_NAMES
 
@@ -1472,7 +1506,7 @@ def test_census_never_walks_into_vendored_trees(tmp_path):
 def test_declaration_files_are_censused_as_typescript(tmp_path):
     repo = init_calibrated_repo(tmp_path)
     write(repo, "src/types.d.ts")
-    assert glc.census(repo, "js")["sources"]["."] == {"ts": 1}
+    assert census_at(repo, "js")["sources"]["."] == {"ts": 1}
 
 
 # ======================================================================================
@@ -1489,7 +1523,7 @@ def test_python_src_layout_package_resolves_against_its_import_name(tmp_path):
     write(repo, "src/mypkg/__init__.py", "")
     write(repo, "src/mypkg/api.py", "from mypkg import db\n")
     write(repo, "src/mypkg/db.py", "x = 1\n")
-    edges = glc._python_edges(repo, glc.census(repo, "py"))
+    edges = glc._python_edges(repo, census_at(repo, "py"))
     pairs = {(e["from"], e["to"]) for e in edges["edges"]}
     assert ("src/mypkg/api.py", "src/mypkg/db.py") in pairs, pairs
     assert edges["parseFailures"] == []
@@ -1510,7 +1544,7 @@ def test_imported_symbols_do_not_inflate_the_edge_count(tmp_path):
     write(repo, "mypkg/__init__.py", "")
     write(repo, "mypkg/api.py", "alpha = 1\nbeta = 2\n")
     write(repo, "mypkg/consumer.py", "from mypkg.api import alpha, beta\n")
-    edges = glc._python_edges(repo, glc.census(repo, "py"))
+    edges = glc._python_edges(repo, census_at(repo, "py"))
     consumer_edges = [e for e in edges["edges"]
                       if e["from"] == "mypkg/consumer.py"]
     assert len(consumer_edges) == 1, consumer_edges
@@ -1528,7 +1562,7 @@ def test_census_preserves_on_disk_case_for_case_sensitive_filesystems(tmp_path):
     write(repo, "MyPkg/__init__.py", "")
     write(repo, "MyPkg/Api.py", "from MyPkg import Db\n")
     write(repo, "MyPkg/Db.py", "x = 1\n")
-    census = glc.census(repo, "py")
+    census = census_at(repo, "py")
     censused = {rel for _ws, rel, _lang in census["files"]}
     assert "MyPkg/Api.py" in censused  # original case preserved
     edges = glc._python_edges(repo, census)
@@ -2020,3 +2054,119 @@ def test_case_only_differing_parsed_paths_count_distinctly(tmp_path):
     census = glc._parsed_census(repo, parsed_paths, src_census, glc.JS_EXT_LANG)
     total = sum(sum(by_lang.values()) for by_lang in census.values())
     assert total == 4, census
+
+
+# ======================================================================================
+# #564: git-tracked census confinement + vitals()
+# ======================================================================================
+
+def _vitals_digest(edges=3, ecosystems=None, outcome="ok", matrix_truncated=False):
+    return {
+        "outcome": outcome,
+        "counters": {"edges": edges},
+        "ecosystems": ecosystems if ecosystems is not None else {
+            "js": {"status": "collected"},
+        },
+        "matrixTruncated": matrix_truncated,
+    }
+
+
+def test_untracked_js_edge_does_not_change_counters_or_vital(tmp_path):
+    """#564: depcruise output referencing an untracked file must not inflate edges."""
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", "{}")
+    write(repo, "src/tracked.ts", "import './tracked-b';\n")
+    write(repo, "src/tracked-b.ts", "export const x = 1;\n")
+    write(repo, "src/untracked.ts", "import './tracked-b';\n")
+    tracked = ["package.json", "src/tracked.ts", "src/tracked-b.ts"]
+    report = dc_report(edges=[("src/tracked.ts", "src/tracked-b.ts")])
+    baseline = lens().collect(ctx(
+        repo, tmp_path, run=make_run(
+            lambda argv, kw: (0, report, ""), tracked=tracked)))
+    report2 = dc_report(edges=[
+        ("src/tracked.ts", "src/tracked-b.ts"),
+        ("src/untracked.ts", "src/tracked-b.ts"),
+    ])
+    filtered = lens().collect(ctx(
+        repo, tmp_path, run=make_run(
+            lambda argv, kw: (0, report2, ""), tracked=tracked)))
+    assert st(baseline) == "collected", baseline.get("reason")
+    assert st(filtered) == "collected", filtered.get("reason")
+    assert baseline["digest"]["counters"]["edges"] == (
+        filtered["digest"]["counters"]["edges"])
+    assert filtered["digest"]["ecosystems"]["js"]["untrackedFiltered"] >= 1
+    val_b, _ = glc.LENS.vitals(baseline["digest"])["couplingEdges"]
+    val_f, _ = glc.LENS.vitals(filtered["digest"])["couplingEdges"]
+    assert val_b == val_f
+
+
+def test_tracked_symlink_to_untracked_target_excluded_from_py_census(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "mypkg/__init__.py", "")
+    write(repo, "mypkg/a.py", "x = 1\n")
+    (tmp_path / "untracked_target.py").write_text("y = 1\n")
+    os.symlink("untracked_target.py", str(tmp_path / "link.py"))
+    got, err = glc.census(
+        census_ctx(repo, tracked=["mypkg/__init__.py", "mypkg/a.py", "link.py"]),
+        repo, "py")
+    assert err is None
+    censused = {rel for _ws, rel, _lang in got["files"]}
+    assert "mypkg/a.py" in censused
+    assert "link.py" not in censused
+    assert "untracked_target.py" not in censused
+
+
+def test_git_census_failure_degrades_coupling_not_collected(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "src/a.ts")
+
+    def run(argv, **kwargs):
+        if argv and argv[0] == "git":
+            return _Completed(128, "", "fatal: not a git repository")
+        return _Completed(0, dc_report(edges=[("src/a.ts", "src/b.ts")]), "")
+
+    out = lens().collect(ctx(repo, tmp_path, run=run))
+    assert st(out) == "not-collected"
+    assert out["digest"] is None
+    assert "git ls-files failed" in (out.get("reason") or "")
+
+
+def test_coupling_vitals_complete_on_good_digest():
+    val, reason = glc.LENS.vitals(_vitals_digest(7))["couplingEdges"]
+    assert val == 7.0
+    assert reason is None
+
+
+def test_coupling_vitals_partial_when_ecosystem_incomplete():
+    digest = _vitals_digest(5, {"js": {"status": "collected"},
+                                  "py": {"status": "not-collected"}})
+    val, reason = glc.LENS.vitals(digest)["couplingEdges"]
+    assert val == 5.0
+    assert reason and "py" in reason
+
+
+def test_coupling_vitals_not_collected_on_bad_outcome():
+    digest = _vitals_digest(5)
+    digest["outcome"] = "degraded"
+    val, reason = glc.LENS.vitals(digest)["couplingEdges"]
+    assert val is None
+    assert reason
+
+
+def test_coupling_vitals_not_collected_on_malformed_digest():
+    val, reason = glc.LENS.vitals(None)["couplingEdges"]
+    assert val is None and reason
+
+
+def test_coupling_vitals_not_collected_on_non_numeric_edges():
+    digest = _vitals_digest(3)
+    digest["counters"]["edges"] = "many"
+    val, reason = glc.LENS.vitals(digest)["couplingEdges"]
+    assert val is None and "numeric" in reason
+
+
+def test_coupling_vitals_reports_edges_when_matrix_truncated():
+    digest = _vitals_digest(42, matrix_truncated=True)
+    val, reason = glc.LENS.vitals(digest)["couplingEdges"]
+    assert val == 42.0
+    assert reason is None

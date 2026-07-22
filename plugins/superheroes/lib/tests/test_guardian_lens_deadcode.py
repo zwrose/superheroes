@@ -24,7 +24,9 @@ neutral-cwd run can never false-clean by scanning the wrong tree.
 """
 import json
 import os
+import re
 
+import guardian_census
 import guardian_lens as gl
 import guardian_lens_deadcode as gld
 import pytest
@@ -81,15 +83,42 @@ class _R(object):
 
 
 class FakeRun(object):
-    """Dispatches on a substring of the joined argv. Unstubbed argv fails loudly."""
+    """Dispatches on argv[0]. Unstubbed argv fails loudly.
 
-    def __init__(self, table):
+    Post-#564 the lens co-fires ``git ls-files -z`` before vulture/knip. Pass
+    ``tracked=[...]`` to control the census (``None`` = walk cwd on disk).
+    """
+
+    def __init__(self, table, tracked=None):
         self.table = list(table)
+        self.tracked = tracked
         self.calls = []
 
+    def _git_result(self, kwargs):
+        if self.tracked is not None:
+            names = list(self.tracked)
+        else:
+            cwd = kwargs.get("cwd") or "."
+            names = []
+            for root, dirs, files in os.walk(cwd):
+                if ".git" in dirs:
+                    dirs.remove(".git")
+                for f in files:
+                    names.append(os.path.relpath(os.path.join(root, f), cwd))
+        text = "".join(n + "\0" for n in names)
+
+        class R:
+            returncode = 0
+            stdout = text
+            stderr = ""
+        return R()
+
     def __call__(self, argv, **kwargs):
+        argv = list(argv)
+        self.calls.append((argv, dict(kwargs)))
+        if argv and argv[0] == "git":
+            return self._git_result(kwargs)
         line = " ".join(argv)
-        self.calls.append(line)
         for key, val in self.table:
             if key in line:
                 if isinstance(val, BaseException):
@@ -98,7 +127,7 @@ class FakeRun(object):
         return _R(127, "", "TEST-STUB-MISSING for %s" % line)
 
     def ran(self, key):
-        return any(key in line for line in self.calls)
+        return any(c[0] and c[0][0] == key for c in self.calls)
 
 
 def _repo(tmp_path, files):
@@ -110,7 +139,42 @@ def _repo(tmp_path, files):
 
 
 def _py_repo(tmp_path, extra=None):
-    files = {"pyproject.toml": "[project]\nname = \"x\"\n"}
+    files = {"pyproject.toml": "[project]\nname = \"x\"\n", "lib/stub.py": "pass\n"}
+    files.update(extra or {})
+    return _repo(tmp_path, files)
+
+
+def _vulture_excerpt_files():
+    """On-disk paths matching VULTURE_EXCERPT so the tracked census admits vulture hits."""
+    paths = set()
+    for line in VULTURE_EXCERPT.strip().splitlines():
+        paths.add(line.split(":")[0])
+    return {p: "pass\n" for p in paths}
+
+
+def _py_repo_with_excerpt(tmp_path, extra=None):
+    files = _vulture_excerpt_files()
+    files["pyproject.toml"] = "[project]\nname = \"x\"\n"
+    files.update(extra or {})
+    return _repo(tmp_path, files)
+
+
+def _knip_tracked_files():
+    """Paths referenced by KNIP_JSON that must be in the tracked census."""
+    return [
+        "package.json",
+        "node_modules/.gitkeep",
+        "scripts/audit-store-invitations.cjs",
+        "scripts/docgen/lib.js",
+        "scripts/lib/households-backfill-core.mjs",
+    ]
+
+
+def _node_repo_with_knip_fixture(tmp_path, extra=None, with_node_modules=True):
+    files = {p: "export const x = 1;\n" for p in _knip_tracked_files() if p.endswith((".cjs", ".js", ".mjs"))}
+    files["package.json"] = "{}\n"
+    if with_node_modules:
+        files["node_modules/.gitkeep"] = ""
     files.update(extra or {})
     return _repo(tmp_path, files)
 
@@ -137,7 +201,7 @@ def test_lens_satisfies_the_contract():
     ok, reasons = gl.validate_lens(gld.LENS)
     assert ok, reasons
     assert gld.LENS.name == "deadcode"
-    assert gld.LENS.collector_version == "1.0.0"
+    assert gld.LENS.collector_version == "1.1.0"
     assert gld.LENS.required_facts == ()
     assert isinstance(gld.LENS.cost.get("collectorSeconds"), float)
     assert gld.LENS.cost.get("note")
@@ -226,7 +290,7 @@ def test_detect_ecosystems_both(tmp_path):
 # --------------------------------------------------------------------- vulture (python)
 
 def test_vulture_parse_real_output_kind_symbol_path(tmp_path):
-    repo = _py_repo(tmp_path)
+    repo = _py_repo_with_excerpt(tmp_path)
     run = FakeRun([("vulture", (3, VULTURE_EXCERPT, ""))])
     out = gld.LENS.collect(_ctx(repo, run))
     assert out["status"] == "collected", out.get("reason")
@@ -255,7 +319,7 @@ def test_duplicate_symbol_aggregates_not_dropped(tmp_path):
     """The real clean_registry case: same id at two lines in one file → one candidate,
     count 2, both lines in the receipt — never two colliding entries the sweep would
     drop as malformed."""
-    repo = _py_repo(tmp_path)
+    repo = _py_repo_with_excerpt(tmp_path)
     run = FakeRun([("vulture", (3, VULTURE_EXCERPT, ""))])
     out = gld.LENS.collect(_ctx(repo, run))
     cands = _by_id(out["candidates"])
@@ -273,7 +337,7 @@ def test_duplicate_symbol_aggregates_not_dropped(tmp_path):
 
 
 def test_id_independent_of_line_number(tmp_path):
-    repo = _py_repo(tmp_path)
+    repo = _py_repo(tmp_path, {"plugins/superheroes/lib/foo.py": "bar = 1\n"})
     cid = "deadcode:vulture:plugins/superheroes/lib/foo.py:variable:bar"
     line10 = "plugins/superheroes/lib/foo.py:10: unused variable 'bar' (60% confidence)\n"
     line99 = "plugins/superheroes/lib/foo.py:99: unused variable 'bar' (60% confidence)\n"
@@ -287,19 +351,20 @@ def test_id_independent_of_line_number(tmp_path):
     assert cid in _by_id(out1["candidates"]) and cid in _by_id(out2["candidates"])
 
 
-def test_vulture_argv_operands_are_absolute(tmp_path):
-    """R: neutral-cwd false-clean guard — the source operand must be the ABSOLUTE repo
-    root, never a bare `"."` that would resolve against the seam's neutral cwd."""
+def test_vulture_argv_operands_are_tracked_py_files(tmp_path):
+    """R: vulture receives tracked .py file operands via ``--``, never the repo dir."""
     repo = _py_repo(tmp_path)
     run = FakeRun([("vulture", (0, "", ""))])
     out = gld.LENS.collect(_ctx(repo, run))
-    argv = out["digest"]["ecosystems"]["python"]["argv"]
+    vulture_calls = [c[0] for c in run.calls if c[0] and c[0][0] == "vulture"]
+    assert len(vulture_calls) == 1
+    argv = vulture_calls[0]
     assert argv[0] == "vulture"
-    # The single source operand is argv[1]: absolute, and never ".".
-    assert argv[1] == os.path.realpath(repo)
-    assert os.path.isabs(argv[1]), argv
-    assert "." not in argv[1:2]
-    # PATH-only — no venv-bin / python-interpreter ladder in the resolution any more.
+    assert "--" in argv
+    operand_idx = argv.index("--") + 1
+    operands = argv[operand_idx:]
+    assert operands, argv
+    assert all(arg.endswith(".py") for arg in operands), argv
     assert "vulture on PATH" in out["digest"]["ecosystems"]["python"]["resolution"]
 
 
@@ -368,7 +433,7 @@ def test_vulture_unparseable_output_not_collected_never_empty_clean(tmp_path):
 # ------------------------------------------------------------------------- knip (node)
 
 def test_knip_parse_real_output_files_and_exports(tmp_path):
-    repo = _node_repo(tmp_path)
+    repo = _node_repo_with_knip_fixture(tmp_path)
     run = FakeRun([("knip", (1, KNIP_JSON, ""))])
     out = gld.LENS.collect(_ctx(repo, run))
     assert out["status"] == "collected", out.get("reason")
@@ -417,7 +482,7 @@ def test_node_modules_missing_not_collected_never_empty_clean(tmp_path):
     assert out["status"] == "not-collected"
     assert "node_modules" in out["reason"]
     assert out["candidates"] == []
-    assert run.calls == []
+    assert not run.ran("knip")
 
 
 def test_knip_clean_run_is_collected_zero_candidates(tmp_path):
@@ -490,6 +555,8 @@ def test_knip_inscope_signals_normalizing_to_zero_degrade(tmp_path):
     # exports present (in-scope signal) but the export has no name → normalizes to zero.
     issues = json.dumps({"issues": [
         {"file": "src/x.ts", "files": [], "exports": [{"line": 3, "col": 5}]}]})
+    (tmp_path / "src").mkdir(exist_ok=True)
+    (tmp_path / "src" / "x.ts").write_text("export const x = 1;\n")
     out = gld.LENS.collect(
         _ctx(repo, FakeRun([("knip", (1, issues, ""))]), prev=prev_digest))
     assert out["status"] == "not-collected"
@@ -614,7 +681,7 @@ def test_knip_executable_config_js_refused_knip_never_invoked(tmp_path):
     assert out["digest"] is None
     # knip must never have been invoked — a filesystem classification, not a spawn.
     assert not run.ran("knip")
-    assert run.calls == []
+    assert not any(c[0] and c[0][0] == "knip" for c in run.calls)
 
 
 def test_knip_executable_config_dotfile_ts_refused_knip_never_invoked(tmp_path):
@@ -661,7 +728,8 @@ def test_knip_executable_config_refused_before_node_modules_gate(tmp_path):
 def test_knip_declarative_json_config_runs(tmp_path):
     """A declarative `knip.json` (DATA — parsed, not executed) is safe: knip runs and the
     section collects/aggregates exactly as today."""
-    repo = _node_repo(tmp_path, extra={"knip.json": json.dumps({"entry": ["src/index.ts"]})})
+    repo = _node_repo_with_knip_fixture(
+        tmp_path, extra={"knip.json": json.dumps({"entry": ["src/index.ts"]})})
     run = FakeRun([("knip", (1, KNIP_JSON, ""))])
     out = gld.LENS.collect(_ctx(repo, run))
     assert out["status"] == "collected", out.get("reason")
@@ -746,13 +814,32 @@ def test_classify_knip_config_unit(tmp_path):
 def test_both_ecosystems_collected(tmp_path):
     repo = _repo(tmp_path, {
         "pyproject.toml": "[project]\nname = \"x\"\n",
+        "lib/stub.py": "pass\n",
         "package.json": "{}\n",
         "node_modules/.gitkeep": "",
+        "scripts/audit-store-invitations.cjs": "export const x = 1;\n",
+        "scripts/docgen/lib.js": "export const x = 1;\n",
+        "scripts/lib/households-backfill-core.mjs": "export const x = 1;\n",
     })
     run = FakeRun([
         ("vulture", (3, VULTURE_EXCERPT, "")),
         ("knip", (1, KNIP_JSON, "")),
+    ], tracked=_knip_tracked_files() + [
+        "pyproject.toml", "lib/stub.py",
+        "plugins/superheroes/lib/repo_doctor.py",
+        "plugins/superheroes/lib/control_plane.py",
+        "plugins/superheroes/lib/tests/test_engine_apply.py",
+        "plugins/superheroes/lib/tests/test_guardian_lens.py",
     ])
+    for p in [
+        "plugins/superheroes/lib/repo_doctor.py",
+        "plugins/superheroes/lib/control_plane.py",
+        "plugins/superheroes/lib/tests/test_engine_apply.py",
+        "plugins/superheroes/lib/tests/test_guardian_lens.py",
+    ]:
+        fp = tmp_path / p
+        fp.parent.mkdir(parents=True, exist_ok=True)
+        fp.write_text("pass\n")
     out = gld.LENS.collect(_ctx(repo, run))
     assert out["status"] == "collected"
     assert out["digest"]["ecosystems"]["python"]["status"] == "collected"
@@ -764,6 +851,7 @@ def test_both_ecosystems_collected(tmp_path):
 def test_one_ecosystem_partial_carries_prev_forward_no_false_resolved(tmp_path):
     repo = _repo(tmp_path, {
         "pyproject.toml": "[project]\nname = \"x\"\n",
+        "lib/stub.py": "pass\n",
         "package.json": "{}\n",
         "node_modules/.gitkeep": "",
     })
@@ -781,7 +869,22 @@ def test_one_ecosystem_partial_carries_prev_forward_no_false_resolved(tmp_path):
     run = FakeRun([
         ("vulture", (3, VULTURE_EXCERPT, "")),
         ("knip", (127, "", "TEST-STUB-MISSING")),
+    ], tracked=[
+        "pyproject.toml", "lib/stub.py", "package.json", "node_modules/.gitkeep",
+        "plugins/superheroes/lib/repo_doctor.py",
+        "plugins/superheroes/lib/control_plane.py",
+        "plugins/superheroes/lib/tests/test_engine_apply.py",
+        "plugins/superheroes/lib/tests/test_guardian_lens.py",
     ])
+    for p in [
+        "plugins/superheroes/lib/repo_doctor.py",
+        "plugins/superheroes/lib/control_plane.py",
+        "plugins/superheroes/lib/tests/test_engine_apply.py",
+        "plugins/superheroes/lib/tests/test_guardian_lens.py",
+    ]:
+        fp = tmp_path / p
+        fp.parent.mkdir(parents=True, exist_ok=True)
+        fp.write_text("pass\n")
     out = gld.LENS.collect(_ctx(repo, run, prev=prev_digest))
     assert out["status"] == "partial"
     assert "knip" in out["reason"]
@@ -911,3 +1014,126 @@ def test_conformance_case_declares_knip_dual_exits():
     case = gld.LENS.conformance_cases()["reported-nonzero-parsed-zero"]
     assert case["exit"] == 1        # knip findings exit
     assert case["clean_exit"] == 0  # knip clean exit
+    assert "git" in case["stdout_by_tool"]
+    assert "git" in case.get("clean_stdout_by_tool", {})
+
+
+# --- #564: git-tracked census confinement -----------------------------------------
+
+def test_untracked_twin_does_not_change_python_candidates(tmp_path):
+    """#564: an untracked near-duplicate must not alter vulture candidates."""
+    repo = _py_repo(tmp_path, {"lib/tracked.py": "def unused():\n    pass\n"})
+    untracked_body = "def unused():\n    pass\n"
+    (tmp_path / "lib" / "untracked_twin.py").write_text(untracked_body)
+    hit = "lib/tracked.py:1: unused function 'unused' (100% confidence)\n"
+    run = FakeRun([("vulture", (3, hit, ""))], tracked=["lib/tracked.py"])
+    baseline = gld.LENS.collect(_ctx(repo, run))
+    assert baseline["status"] == "collected", baseline.get("reason")
+    assert len(baseline["candidates"]) == 1
+    edges_before = baseline["digest"]["ecosystems"]["python"].get("untrackedFiltered", 0)
+
+    run2 = FakeRun([("vulture", (3, hit, ""))], tracked=["lib/tracked.py"])
+    with_twin = gld.LENS.collect(_ctx(repo, run2))
+    assert with_twin["status"] == "collected"
+    assert len(with_twin["candidates"]) == len(baseline["candidates"])
+    assert with_twin["digest"]["ecosystems"]["python"].get("untrackedFiltered", 0) == (
+        edges_before)
+
+
+def test_untracked_twin_does_not_change_knip_candidates(tmp_path):
+    """#564: knip in-scope signals on untracked files must not affect candidates."""
+    repo = _node_repo(tmp_path)
+    tracked_issue = json.dumps({"issues": [{
+        "file": "src/tracked.js",
+        "files": [{"name": "src/tracked.js"}],
+        "exports": [],
+    }]})
+    untracked_issue = json.dumps({"issues": [
+        {"file": "src/tracked.js", "files": [{"name": "src/tracked.js"}], "exports": []},
+        {"file": "src/untracked.js", "files": [{"name": "src/untracked.js"}], "exports": []},
+    ]})
+    (tmp_path / "src").mkdir(exist_ok=True)
+    (tmp_path / "src" / "tracked.js").write_text("export const x = 1;\n")
+    (tmp_path / "src" / "untracked.js").write_text("export const y = 1;\n")
+    tracked = ["package.json", "node_modules/.gitkeep", "src/tracked.js"]
+    baseline = gld.LENS.collect(_ctx(
+        repo, FakeRun([("knip", (1, tracked_issue, ""))], tracked=tracked)))
+    assert baseline["status"] == "collected", baseline.get("reason")
+    assert len(baseline["candidates"]) == 1
+
+    filtered = gld.LENS.collect(_ctx(
+        repo, FakeRun([("knip", (1, untracked_issue, ""))], tracked=tracked)))
+    assert filtered["status"] == "collected"
+    assert len(filtered["candidates"]) == len(baseline["candidates"])
+    assert filtered["digest"]["ecosystems"]["node"]["untrackedFiltered"] == 1
+
+
+def test_tracked_symlink_to_untracked_target_excluded_from_vulture_operands(tmp_path):
+    repo = _py_repo(tmp_path, {"a.py": "x = 1\n"})
+    (tmp_path / "untracked_target.py").write_text("y = 1\n")
+    os.symlink("untracked_target.py", str(tmp_path / "link.py"))
+    run = FakeRun([("vulture", (0, "", ""))], tracked=["a.py", "link.py"])
+    out = gld.LENS.collect(_ctx(repo, run))
+    assert out["status"] == "collected", out.get("reason")
+    vulture_calls = [c[0] for c in run.calls if c[0] and c[0][0] == "vulture"]
+    assert len(vulture_calls) == 1
+    argv = vulture_calls[0]
+    joined = " ".join(argv)
+    assert "link.py" not in joined
+    assert "untracked_target.py" not in joined
+    assert any("a.py" in arg for arg in argv)
+
+
+def test_git_census_failure_degrades_python_not_collected(tmp_path):
+    def run(argv, **kwargs):
+        if argv and argv[0] == "git":
+            class R:
+                returncode = 128
+                stdout = ""
+                stderr = "fatal: not a git repository"
+            return R()
+        return _R(0, "", "")
+
+    repo = _py_repo(tmp_path)
+    out = gld.LENS.collect(_ctx(repo, run))
+    assert out["status"] == "not-collected"
+    assert out["digest"] is None
+    assert "git ls-files failed" in (out["reason"] or "")
+
+
+def test_arg_max_guard_degrades_never_scans_repo_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(guardian_census, "MAX_TRACKED_OPERAND_BYTES", 5)
+    repo = _py_repo(tmp_path, {"a.py": "x\n", "b.py": "y\n"})
+    run = FakeRun([("vulture", (0, "", ""))], tracked=["a.py", "b.py"])
+    out = gld.LENS.collect(_ctx(repo, run))
+    assert out["status"] == "not-collected"
+    assert out["digest"] is None
+    assert "across 2 files" in (out["reason"] or "")
+    assert not any(c[0] and c[0][0] == "vulture" for c in run.calls)
+
+
+def test_vulture_exit3_all_untracked_hits_collected_not_contradiction(tmp_path):
+    """Exit 3 with hits that filter to zero (all untracked) is collected, not degraded."""
+    repo = _py_repo(tmp_path)
+    hit = "lib/untracked.py:1: unused function 'f' (100% confidence)\n"
+    run = FakeRun([("vulture", (3, hit, ""))], tracked=["lib/stub.py"])
+    out = gld.LENS.collect(_ctx(repo, run))
+    assert out["status"] == "collected", out.get("reason")
+    assert out["candidates"] == []
+    assert out["digest"]["ecosystems"]["python"]["status"] == "collected"
+    assert out["digest"]["ecosystems"]["python"]["untrackedFiltered"] == 1
+
+
+def test_knip_filtered_untracked_does_not_trip_contradiction_gate(tmp_path):
+    """Post-filter in-scope counting: untracked knip signals must not degrade."""
+    repo = _node_repo(tmp_path)
+    issues = json.dumps({"issues": [
+        {"file": "src/untracked.js", "files": [{"name": "src/untracked.js"}], "exports": []},
+    ]})
+    (tmp_path / "src").mkdir(exist_ok=True)
+    (tmp_path / "src" / "untracked.js").write_text("export const z = 1;\n")
+    run = FakeRun([("knip", (1, issues, ""))], tracked=["package.json", "node_modules/.gitkeep"])
+    out = gld.LENS.collect(_ctx(repo, run))
+    assert out["status"] == "collected", out.get("reason")
+    assert out["candidates"] == []
+    assert out["digest"]["ecosystems"]["node"]["untrackedFiltered"] == 1

@@ -83,10 +83,17 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import guardian_census  # noqa: E402
 import guardian_collect as gc  # noqa: E402
 
 LENS_NAME = "deadcode"
-COLLECTOR_VERSION = "1.0.0"
+# 1.1.0 (#564): the measured POPULATION changed — vulture now scans only git-tracked
+# .py operands (not the repo dir, which walked untracked trees); knip output is
+# post-filtered to the tracked census. The digest SCHEMA is unchanged, but a prior
+# baseline may hold now-excluded untracked hits; bump the version so guardian_sweep
+# (any version delta ⇒ lens_new) records a quiet re-baseline FOR DRIFT — excluded
+# junk candidates do not surface as false `resolved` drift.
+COLLECTOR_VERSION = "1.1.0"
 DIGEST_SCHEMA = 1
 
 VULTURE_TIMEOUT = 60
@@ -150,8 +157,28 @@ def _repo_root(ctx):
     return os.path.realpath(cwd)
 
 
-def _has_python_sources(repo):
-    """True when at least one `.py` file exists outside vendor/build directories."""
+def _norm_repo_path(repo, path):
+    """Repo-relative, forward-slash path for census membership checks."""
+    if not isinstance(path, str) or not path:
+        return ""
+    p = path.replace("\\", "/")
+    if os.path.isabs(p):
+        try:
+            p = os.path.relpath(p, os.path.realpath(repo)).replace("\\", "/")
+        except ValueError:
+            pass
+    while p.startswith("./"):
+        p = p[2:]
+    return p
+
+
+def _has_python_sources(repo, ctx=None):
+    """True when at least one tracked (or, if census unavailable, on-disk) `.py` exists."""
+    if ctx is not None:
+        tracked, _reason = guardian_census.tracked_existing_files(
+            ctx, repo, exclude_symlinks=True)
+        if tracked is not None:
+            return any(p.endswith(".py") for p in tracked)
     for root, dirs, files in os.walk(repo):
         dirs[:] = [d for d in dirs if d not in PY_SKIP_DIRS]
         for name in files:
@@ -160,7 +187,7 @@ def _has_python_sources(repo):
     return False
 
 
-def detect_ecosystems(repo):
+def detect_ecosystems(repo, ctx=None):
     """[(ecosystem, manifest-relpath|None)] in a stable order.
 
     Python: a root manifest is a positive signal; `.py` files alone are enough (vulture
@@ -174,7 +201,7 @@ def detect_ecosystems(repo):
             break
     if python_manifest is not None:
         found.append(("python", python_manifest))
-    elif _has_python_sources(repo):
+    elif _has_python_sources(repo, ctx):
         found.append(("python", None))
     for rel in NODE_MANIFESTS:
         if os.path.isfile(os.path.join(repo, rel)):
@@ -226,19 +253,64 @@ def _carry_forward_prefix(prev_candidates, prefix, merged):
 
 # ----------------------------------------------------------------------- python (vulture)
 
-def _vulture_argv(repo):
-    """``vulture`` resolved from PATH through the guardian seam, scanning an ABSOLUTE root.
+def _vulture_argv():
+    """``vulture`` resolved from PATH through the guardian seam over tracked ``.py`` operands.
 
-    PATH-only (the base seam rejects repo-local executables outright, so the old
-    venv-bin / project-interpreter ladder cannot resolve through it — it is gone). The
-    single source operand is the absolute repo root, never ``"."`` — a ``"."`` would
-    resolve against the seam's neutral cwd and scan the wrong tree (a false-clean). An
-    absent ``vulture`` degrades to not-collected quoting the install command, via the
-    seam's tool-absent outcome.
+    PATH-only (the base seam rejects repo-local executables outright). Tracked files are
+    passed via ``run_tool(..., targets=...)`` — never the repo directory (that re-opens
+    #564). An absent ``vulture`` degrades to not-collected via the seam's tool-absent
+    outcome.
     """
-    argv = ["vulture", repo, "--min-confidence", VULTURE_MIN_CONFIDENCE,
+    argv = ["vulture", "--min-confidence", VULTURE_MIN_CONFIDENCE,
             "--exclude", VULTURE_EXCLUDES]
-    return (argv, "vulture on PATH via the guardian seam (absolute source root %s)" % repo)
+    return (argv, "vulture on PATH via the guardian seam (tracked .py operands)")
+
+
+def _filter_vulture_hits(hits, tracked, repo):
+    """Drop hits whose path is not in the tracked census; return (kept, dropped_count)."""
+    if not hits:
+        return [], 0
+    tracked_norm = {_norm_repo_path(repo, p) for p in tracked}
+    kept = []
+    dropped = 0
+    for h in hits:
+        if _norm_repo_path(repo, h.get("path")) in tracked_norm:
+            kept.append(h)
+        else:
+            dropped += 1
+    return kept, dropped
+
+
+def _filter_knip_issues(issues, tracked, repo):
+    """Filter knip ``files`` / ``exports`` to the tracked census before normalization."""
+    if not issues:
+        return [], 0
+    tracked_norm = {_norm_repo_path(repo, p) for p in tracked}
+    out = []
+    dropped = 0
+    for entry in issues:
+        if not isinstance(entry, dict):
+            continue
+        path = entry.get("file")
+        path_norm = _norm_repo_path(repo, path) if isinstance(path, str) else ""
+        tracked_file = bool(path_norm and path_norm in tracked_norm)
+        new_entry = dict(entry)
+        files = entry.get("files")
+        if isinstance(files, list):
+            if tracked_file:
+                new_entry["files"] = files
+            else:
+                dropped += len(files)
+                new_entry["files"] = []
+        exports = entry.get("exports")
+        if isinstance(exports, list):
+            if tracked_file:
+                new_entry["exports"] = exports
+            else:
+                dropped += len(exports)
+                new_entry["exports"] = []
+        out.append(new_entry)
+    return out, dropped
 
 
 def parse_vulture(stdout):
@@ -318,23 +390,48 @@ def aggregate_vulture(hits):
 
 
 def collect_python(ctx, repo):
-    """(status, reason, {id: candidate}, argv, resolution) for the vulture collector."""
-    argv, tried = _vulture_argv(repo)
+    """(status, reason, {id: candidate}, argv, resolution, extras) for vulture."""
+    tracked, census_reason = guardian_census.tracked_existing_files(
+        ctx, repo, exclude_symlinks=True)
+    if tracked is None:
+        return ("not-collected", "git ls-files failed: %s" % census_reason, {},
+                None, None, {})
+    py_files = sorted(p for p in tracked if p.endswith(".py"))
+    if not py_files:
+        return ("not-collected",
+                "zero tracked .py files — no measurable python surface", {},
+                None, None, {})
+    operand_bytes = guardian_census.operand_payload_bytes(repo, py_files)
+    if operand_bytes > guardian_census.MAX_TRACKED_OPERAND_BYTES:
+        return ("not-collected",
+                "tracked-file operand payload is %d bytes across %d files, exceeding "
+                "the %d-byte cap (ARG_MAX headroom) — cannot scan without risking a "
+                "truncated argv" % (operand_bytes, len(py_files),
+                                    guardian_census.MAX_TRACKED_OPERAND_BYTES),
+                {}, None, None, {})
+    argv, tried = _vulture_argv()
     res = gc.run_tool(argv, ctx, timeout=VULTURE_TIMEOUT, cwd=repo,
-                      ok_exits=VULTURE_OK_EXIT)
+                      ok_exits=VULTURE_OK_EXIT, targets=py_files)
     if not res.get("ok"):
         return ("not-collected", _tool_failure_reason("vulture", tried, res), {},
-                argv, tried)
+                argv, tried, {})
     hits, err = parse_vulture(res.get("stdout"))
     if err is not None:
-        return ("not-collected", err, {}, argv, tried)
-    # Exit 3 means "dead code found" — empty/no-parsed output is a contradiction,
-    # never a clean scan (R11).
+        return ("not-collected", err, {}, argv, tried, {})
+    pre_filter = len(hits)
+    hits, untracked_filtered = _filter_vulture_hits(hits, tracked, repo)
+    extras = {}
+    if untracked_filtered:
+        extras["untrackedFiltered"] = untracked_filtered
+    # Exit 3 means "dead code found" — filter FIRST, then gate. Hits that were all
+    # untracked are a legitimate clean-for-tracked result, not a contradiction (R11).
     if res.get("exit") == 3 and not hits:
+        if pre_filter:
+            return ("collected", None, {}, argv, tried, extras)
         return ("not-collected",
                 "vulture exited 3 (dead code found) but stdout was empty / yielded no "
-                "parseable hits — refusing to report a clean scan", {}, argv, tried)
-    return ("collected", None, aggregate_vulture(hits), argv, tried)
+                "parseable hits — refusing to report a clean scan", {}, argv, tried, {})
+    return ("collected", None, aggregate_vulture(hits), argv, tried, extras)
 
 
 # --------------------------------------------------------------------------- node (knip)
@@ -534,7 +631,7 @@ def aggregate_knip(issues):
 
 
 def collect_node(ctx, repo):
-    """(status, reason, {id: candidate}, argv|None, resolution|None) for the knip collector.
+    """(status, reason, {id: candidate}, argv|None, resolution|None, extras) for knip.
 
     The ``node_modules`` gate is a pure ``os.path.isdir`` check on the ABSOLUTE repo path —
     never a spawn: knip's own dependency-less behavior must not be reported as a finding,
@@ -551,18 +648,29 @@ def collect_node(ctx, repo):
         return ("not-collected",
                 "knip config is executable (%s) — not executed during a read-only sweep; "
                 "declare vocabulary in knip.json or the package.json \"knip\" key to enable"
-                % cfg, {}, None, None)
+                % cfg, {}, None, None, {})
     if not os.path.isdir(os.path.join(repo, "node_modules")):
         return ("not-collected",
                 "no node_modules at repo root — knip requires the project's "
-                "dependencies to be installed", {}, None, None)
+                "dependencies to be installed", {}, None, None, {})
+    tracked, census_reason = guardian_census.tracked_existing_files(
+        ctx, repo, exclude_symlinks=True)
+    if tracked is None:
+        return ("not-collected", "git ls-files failed: %s" % census_reason, {},
+                None, None, {})
     argv, tried = _knip_argv(repo)
     res = gc.run_tool(argv, ctx, timeout=KNIP_TIMEOUT, cwd=repo, ok_exits=KNIP_OK_EXIT)
     if not res.get("ok"):
-        return ("not-collected", _tool_failure_reason("knip", tried, res), {}, argv, tried)
+        return ("not-collected", _tool_failure_reason("knip", tried, res), {}, argv, tried, {})
     issues, err = parse_knip(res.get("stdout"))
     if err is not None:
-        return ("not-collected", err, {}, argv, tried)
+        return ("not-collected", err, {}, argv, tried, {})
+    # Filter to tracked census BEFORE counting in-scope signals or normalizing (knip still
+    # walks the repo under --directory; post-filter is the safety net).
+    issues, untracked_filtered = _filter_knip_issues(issues, tracked, repo)
+    extras = {}
+    if untracked_filtered:
+        extras["untrackedFiltered"] = untracked_filtered
     candidates = aggregate_knip(issues)
     # H3: a present-but-malformed in-scope field (e.g. `exports={"bad": "shape"}`) is an
     # in-scope signal knip emitted that we could not normalize. It must degrade even when a
@@ -576,7 +684,7 @@ def collect_node(ctx, repo):
                     "knip exited 1 (issues found) with %d present-but-malformed in-scope "
                     "files/exports field(s) that did not normalize — refusing to drop a "
                     "signalled-but-unparseable in-scope signal as a clean scan"
-                    % malformed, {}, argv, tried)
+                    % malformed, {}, argv, tried, extras)
     # Exit 1 means "issues found". A parsed-but-empty CANDIDATE set (not just an empty
     # raw `issues` list — the gate must check the NORMALIZED candidates, since
     # aggregate_knip drops out-of-scope entries) is the R2/R11 "findings-exit reported as
@@ -591,15 +699,15 @@ def collect_node(ctx, repo):
             return ("not-collected",
                     "knip exited 1 (issues found) with %d in-scope file/export signal(s) "
                     "that normalized to zero candidates — refusing to report a clean scan"
-                    % inscope, {}, argv, tried)
+                    % inscope, {}, argv, tried, extras)
         if not issues:
             return ("not-collected",
                     "knip exited 1 (issues found) but parsed to zero candidates — "
-                    "refusing to report a clean scan", {}, argv, tried)
+                    "refusing to report a clean scan", {}, argv, tried, extras)
         # Exit 1 was entirely out-of-scope for the dead-code lens (e.g. unused
         # dependencies) — a genuine clean scan, not a contradiction.
-        return ("collected", None, {}, argv, tried)
-    return ("collected", None, candidates, argv, tried)
+        return ("collected", None, {}, argv, tried, extras)
+    return ("collected", None, candidates, argv, tried, extras)
 
 
 # ------------------------------------------------------------------------------- the lens
@@ -677,7 +785,7 @@ class DeadCodeLens(object):
         ctx = ctx or {}
         repo = _repo_root(ctx)
         prev_candidates = _candidates_of(ctx.get("prevDigest"))
-        detected = detect_ecosystems(repo)
+        detected = detect_ecosystems(repo, ctx)
         detected_names = [eco for eco, _rel in detected]
 
         if not detected:
@@ -698,10 +806,10 @@ class DeadCodeLens(object):
             argv = None
             resolution = None
             if ecosystem == "python":
-                status, reason, items, argv, resolution = collect_python(ctx, repo)
+                status, reason, items, argv, resolution, extras = collect_python(ctx, repo)
                 tool = "vulture"
             else:
-                status, reason, items, argv, resolution = collect_node(ctx, repo)
+                status, reason, items, argv, resolution, extras = collect_node(ctx, repo)
                 tool = "knip"
 
             if status == "collected":
@@ -721,6 +829,8 @@ class DeadCodeLens(object):
                 section["argv"] = argv
             if resolution is not None:
                 section["resolution"] = resolution
+            if extras.get("untrackedFiltered"):
+                section["untrackedFiltered"] = extras["untrackedFiltered"]
             ecosystems[ecosystem] = section
 
         merged = dict(fresh)
@@ -822,6 +932,9 @@ class DeadCodeLens(object):
           whole-lens degrades. It must never read as ``collected``.
         """
         clean = json.dumps({"issues": []})
+        # Post-#564 the lens co-fires ``git ls-files -z`` before knip. The harness must
+        # supply a NUL-separated payload naming files that exist in conformance_fixture.
+        git_ls = "package.json\0node_modules/.package-lock.json\0"
         return {
             "reported-nonzero-parsed-zero": {
                 "stdout": clean,
@@ -832,7 +945,8 @@ class DeadCodeLens(object):
                 # and the contradiction target. The per-tool map is declared for parity
                 # with the multi-collector lenses; deleting the exit-1 gate makes the sole
                 # knip run read clean → whole-lens collected → this case fails.
-                "stdout_by_tool": {"knip": clean},
+                "stdout_by_tool": {"git": git_ls, "knip": clean},
+                "clean_stdout_by_tool": {"git": git_ls, "knip": clean},
             },
         }
 
