@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.18.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.17.0...superheroes-v0.18.0) (2026-07-22)
+
+
+### Features
+
+* **superheroes:** delta rounds, one-entrypoint round driver, audit-keyed breaker, stall menu ([#507](https://github.com/zwrose/superheroes/issues/507)) ([#555](https://github.com/zwrose/superheroes/issues/555)) ([d679db5](https://github.com/zwrose/superheroes/commit/d679db58262b47856addc593d4eac21aa333baca))
+* **superheroes:** guardian collection-honesty seam — one collect-status design, degradation hardening, per-collector conformance harness ([#558](https://github.com/zwrose/superheroes/issues/558)) ([#560](https://github.com/zwrose/superheroes/issues/560)) ([9bf1042](https://github.com/zwrose/superheroes/commit/9bf1042c58c67a1e5b61432b196d71255a98b1c8))
+* **superheroes:** guardian core — sweep shell, lens contract, drift-over-baseline, report writer ([#535](https://github.com/zwrose/superheroes/issues/535)) ([#545](https://github.com/zwrose/superheroes/issues/545)) ([e83618f](https://github.com/zwrose/superheroes/commit/e83618f693bd7989293579d72708405cc74daeed))
+* **superheroes:** guardian coupling lens — dependency-cruiser/import-linter data-gatherer, high findings bar ([#538](https://github.com/zwrose/superheroes/issues/538)) ([#548](https://github.com/zwrose/superheroes/issues/548)) ([5ebe07a](https://github.com/zwrose/superheroes/commit/5ebe07a14d5bf19c0b3ddc25bc4f054476564860))
+* **superheroes:** guardian invocation-safety seam — shared collector-invocation guard ([#557](https://github.com/zwrose/superheroes/issues/557)) ([#559](https://github.com/zwrose/superheroes/issues/559)) ([cd65fe4](https://github.com/zwrose/superheroes/commit/cd65fe485af7aa7dd87c52b3d20f5d444d8d6b73))
+* **superheroes:** guardian lenses A — duplication drift (jscpd) + complexity×churn hotspots (size-normalized) ([#536](https://github.com/zwrose/superheroes/issues/536)) ([#553](https://github.com/zwrose/superheroes/issues/553)) ([6f5f1b2](https://github.com/zwrose/superheroes/commit/6f5f1b2c9a4fe3ea6512c8bbc2ce9fb1a3c14c03))
+* **superheroes:** guardian lenses B — dependency freshness, doc freshness, dead code ([#537](https://github.com/zwrose/superheroes/issues/537)) ([#552](https://github.com/zwrose/superheroes/issues/552)) ([f23800b](https://github.com/zwrose/superheroes/commit/f23800b1538b0b581435fdead416ae153b7cd717))
+* **superheroes:** guardian memory — dispositions ledger, report card, storage, vitals ([#539](https://github.com/zwrose/superheroes/issues/539)) ([#556](https://github.com/zwrose/superheroes/issues/556)) ([f30b801](https://github.com/zwrose/superheroes/commit/f30b80147085a97edf3558bbc5dc9ddef28173b3))
+* **superheroes:** high-noise review-eval fixture — near-miss traps, FP-rate instrument ([#546](https://github.com/zwrose/superheroes/issues/546)) ([#554](https://github.com/zwrose/superheroes/issues/554)) ([c896f6a](https://github.com/zwrose/superheroes/commit/c896f6a5e7f3a9c0ccfba143f937ee0af0645f8f))
+* **superheroes:** implementer-escalation policy — demonstrated-fragility, ladder-first, per-order maker-family accounting ([#547](https://github.com/zwrose/superheroes/issues/547)) ([#550](https://github.com/zwrose/superheroes/issues/550)) ([a975f3e](https://github.com/zwrose/superheroes/commit/a975f3e51b6da2a29586c8aec6edf9e13b27ebbd))
+* **superheroes:** per-finding verification — 3-state verdicts, location-grouped, repo-grounded ([#506](https://github.com/zwrose/superheroes/issues/506)) ([#543](https://github.com/zwrose/superheroes/issues/543)) ([75a0c46](https://github.com/zwrose/superheroes/commit/75a0c46022269505a1a3d45bd1a5d4a21b93317c))
+
+
+### Bug Fixes
+
+* **superheroes:** confine guardian duplication census to git-tracked files ([#564](https://github.com/zwrose/superheroes/issues/564)) ([#565](https://github.com/zwrose/superheroes/issues/565)) ([75bb9bf](https://github.com/zwrose/superheroes/commit/75bb9bfd5fcf64295883a1a6e5ceec1e94a0f5d7))
+* **superheroes:** guardian seam composition — run_tool production path routes through invoke hardening ([#561](https://github.com/zwrose/superheroes/issues/561)) ([#562](https://github.com/zwrose/superheroes/issues/562)) ([534da5d](https://github.com/zwrose/superheroes/commit/534da5d24a2e8560f6c8b39a05bed4f145c8a127))
+* **superheroes:** reconcile JS/Python reviewer-retry-count asymmetry in the parity twins ([#542](https://github.com/zwrose/superheroes/issues/542)) ([cd7833d](https://github.com/zwrose/superheroes/commit/cd7833dbd5ffe2be6de66716a2187906b6ef33a9))
+
 ## [0.17.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.16.0...superheroes-v0.17.0) (2026-07-21)
 
 
