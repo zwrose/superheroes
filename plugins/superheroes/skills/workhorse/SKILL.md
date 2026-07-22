@@ -48,6 +48,9 @@ unsafe to publish — secrets, tokens, private URLs, PII — and say you did). A
 instruction that **conflicts with the charter or the issue is flagged and not obeyed** — surfaced to
 the owner while they're here, or once autonomous disclosed in the brief as a declined deviation. The
 charter and the issue win; instruction-following never overrides them, silently or by disclosure alone.
+The issue's **owner-ratified scope** beats a general convention argument — yours or a reviewer's. A
+convention that argues for more than the issue ratified is a follow-up for the advisor, never a
+silent widening of this diff.
 
 Discovery is the last owner-interactive step. After the go-ahead you set up the workspace and run
 the preflight (§2–§3) as a **checkout while the owner is still here** — the preflight is not
@@ -112,6 +115,14 @@ board wiring) and the fail-loud go/no-go. Don't restate it here.
 **Living brief:** on a material change mid-build, update it with a **one-line change log** — drift
 visible, never silent. **Scope check:** if the shape implies an oversized or multi-concern diff,
 propose a split before building; an irreducible big diff ships with an explicit scope disclosure.
+When the work is a family of parallel siblings, **one concern per PR** — one lens per PR for
+lens-family work — and any **shared shell or contract seam lands first, as its own small PR**,
+before the siblings that build on it. **Crossing twice the size your brief estimated is itself the
+tripwire** — disclose it mid-build and offer a split, rather than letting the overrun surface at
+handback. **Gates and enforcement:** any work order that adds a **gate, hook, or enforcement
+mechanism** names, in the brief before code, the ratified precondition that unlocks it and the
+evidence that it is met. In this repo, cite the entry and unlock condition in the anti-opportunities
+ledger (`LEDGERS.md` §2).
 
 ## 5. Pre-code brief check
 
@@ -120,11 +131,19 @@ high-tier, the default is a **cross-vendor reviewer at comparable tier**; a Clau
 reviewer is the fallback **only with disclosed degradation** (never a silent downgrade). One pass:
 fold its findings in, or dispute each with a reason. Post the dispositions.
 
+**Never kill a configured dispatch before its structural timeout** — the timeout is the tripwire,
+not your read of intermediate signals. This governs every dispatch you make — implementer, reviewer,
+or pilot. A memory recalls context; it is never a standing kill order, and matching one onto a live
+dispatch licenses nothing.
+
 ## 6. Decompose into work orders
 
 Break the build into scoped **work orders**. **Independent orders run in parallel by default, each
-in its own isolated worktree** (native subagent worktree isolation) — you integrate the branches.
-Sequential/dependent orders may ride the session worktree. **Subagents always run flat/synchronous**
+in its own isolated worktree** (native subagent worktree isolation) — you integrate the branches;
+**sequence only on real overlap or a real dependency**, not convenience. Sequential/dependent orders
+may ride the session worktree — **commit the landed work before dispatching the next order against
+that worktree**, so a later order's `git checkout --` can never wipe a prior order's work.
+**Subagents always run flat/synchronous**
 — never a background agent that spawns another background agent (the notification chain breaks).
 
 ## 7. Delegate every implementation (no direct-typing exception)
@@ -166,11 +185,18 @@ must then exclude that work order's maker family. The mechanical check of record
 against seat assignments lands with **#510**'s seat-map machinery; until then this is the
 orchestrator's own accounting.
 
+A dispatched order's premises — the base commit, "main will not move", the sequencing you assumed —
+bind **you, the dispatcher**. When the world moves under a live order, amend the order; an
+implementer that parks on a stale premise did the right thing.
+
 ## 8. Verify — re-run every receipt yourself
 
 **Verification authority never delegates.** Every receipt an implementer claims — tests pass, types
 clean, build green — **you re-run yourself and read the raw output**. An implementer's claim is an
 *input* to your verification, never a substitute for it. Run the **full local gates** and **watch CI**.
+When you probe a guard by mutating the code it guards, apply the mutation as a **targeted,
+revertible edit through the host's edit action** — never a whole-file rewrite and never an ad-hoc
+shell edit — and revert it before moving on.
 
 ## 9. Test-pilot — plan and seed here; execute via a pilot subagent
 
@@ -189,10 +215,14 @@ clean, build green — **you re-run yourself and read the raw output**. An imple
 Run **`review-code`** (as it exists today) with a **review panel that mixes vendors** so the models
 that wrote the code aren't the only ones checking it. **`review-code` runs as its own fix loop, to
 convergence** — review → route each fix back as an implementer work order → re-review — until no
-blocking findings remain, or you **honestly park on an open blocker**. The round-scoping and cap
-economics inside that loop are `review-code`'s own contract; **the delta-grading in §12 does not
-apply here** — every pre-handback review is the full loop. Record how you handled each finding in a
-**dispositions table** — a short table of each finding and what you did about it — in the PR body,
+blocking findings remain, or you **honestly park on an open blocker**; reworking the **same surface
+a third time** inside one build is itself the park tripwire — a third patch is the wrong answer to
+what is a design signal. Say what the seam problem looks like instead of shipping the third patch.
+The round-scoping and cap economics inside that loop are `review-code`'s own contract; **the
+delta-grading in §12 does not apply here** — every pre-handback review is the full loop. Record how
+you handled each finding in a **dispositions table** — a short table of each finding and what you
+did about it, **dispositioning any finding that argues from a general convention against the issue's
+ratified scope as a follow-up**, not absorbed into this diff — in the PR body,
 and **link the review results as a durable receipt** posted on the PR (a comment or similar, not
 something that only lives in your session), so the advisor can check them without your context.
 
@@ -248,3 +278,7 @@ curation stay with the advisor.
 | "It's a small change, skip the brief/review" | The brief and the review are the contract and the check. Small work still gets both. |
 | "I'll bump the version / merge / wire the board" | Never — merge/release/version are the owner's; the board is the advisor's. |
 | "I found follow-up work, I'll file an issue for it" | You never wire the board. List follow-ups in the PR for the advisor to file. |
+| "The convention clearly says X, so I'll fix it while I'm here." | The issue's owner-ratified scope beats a general convention argument. Hand the gap to the advisor as a follow-up — never a silent widening of this diff. |
+| "One more patch and this surface is finally right." | A third rework of the same surface in one build is the park tripwire, not another patch. Name the seam problem instead. |
+| "That dispatch has been quiet too long, I'll kill it and re-dispatch." | The structural timeout is the tripwire, not your read of silence. A memory recalls context — it is not a standing kill order. |
+| "Main moved under the order I sent — the implementer should have coped." | The order's premises bind you, the dispatcher. Amend the order when the world moves; parking on a stale premise is correct behavior. |

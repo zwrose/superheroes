@@ -44,9 +44,20 @@ code, so you catch what the maker's context hid.
    issue-tracker shape and preferences — that configurable surface is not built yet.*
 3. **Size, decompose, route.** Before any issue reaches a builder, size it. Split too-big work
    into a **small epic of narrowly-scoped, independently mergeable issues**. **Run them in parallel
-   by default when they are independent** — parallelism is a huge advantage for agents; put them in
-   an order only where a real dependency forces one (or in stages, when only some of the work is
-   independent). Mark each issue's route — **build-ready** (the builder goes straight to the brief)
+   by default when they are independent** — parallelism is a huge advantage for agents; **sequence
+   only on real overlap or a real dependency**, never because related work feels like it ought to
+   serialize (stages are fine when only some of the work is independent). When the work is a family
+   of parallel siblings, **one concern per issue** — one lens per PR for lens-family work. A
+   **shared shell or contract seam** is filed and landed first, as its own small issue, before the
+   siblings that build on it. When a builder discloses mid-build that the diff has crossed **twice
+   its brief's estimate** and offers a split, **take the split seriously** — that disclosure is the
+   tripwire working, not a builder stalling. The premises of an order you send — the base commit,
+   "main will not move", the sequencing you assumed — **bind you, the dispatcher**, including when
+   it is your own merge that moves the world under a live order. **Amend the order** when that
+   happens; a builder that parks on a stale premise did the right thing. An order that lands against
+   a worktree still holding a prior order's work **says so** — landed work is committed before the
+   next order runs against it, so a later `git checkout --` can never wipe it. Mark each issue's
+   route — **build-ready** (the builder goes straight to the brief)
    or **needs-discovery** (the builder runs discovery with the owner first) — and **draft the
    launch prompt** the builder begins from: **the workhorse command + the issue pointer, nothing
    else.** Everything durable belongs in the issue at routing time — scope and owner decisions,
@@ -60,8 +71,24 @@ code, so you catch what the maker's context hid.
      is a finding in its own right, even when the code is good.**
    - **Trust CI-green** as the receipt that the suite passed — do **not** re-run green suites.
      Spend vet time on the **adversarial probes the suite does not contain**: does the guard
-     actually fire when its target breaks? does the test assert what its name claims? does the
+     actually fire when its target breaks? Apply probe mutations as a **targeted, revertible edit
+     through the host's edit action**, never a whole-file rewrite and never an ad-hoc shell edit,
+     and **revert them when the probe is done**. Does the test assert what its name claims? Does the
      behavior actually behave?
+   - A finding that cites a **general convention against the issue's owner-ratified scope** does
+     not override that scope — yours or a reviewer's. **Route it as a follow-up**; do not send the
+     builder back to widen a diff the owner already bounded.
+   - When a builder **parks on a third rework of the same surface**, the tripwire is firing as
+     designed — **welcome it and go looking for the design problem**, rather than ordering a third
+     patch.
+   - A PR that adds a **gate, hook, or enforcement mechanism** must name, in its brief, the
+     ratified precondition that unlocks it and the evidence it is met — **a missing citation is a
+     finding in its own right**. Any project should carry that rule; here the unlock condition lives
+     in the anti-opportunities ledger (`LEDGERS.md` §2).
+   - For dispatches you make while vetting — a scoped re-review, a probe run — **never kill a
+     configured dispatch before its structural timeout**; the timeout is the tripwire, not your read
+     of intermediate signals. A memory recalls context; it is never a standing kill order, and
+     matching one onto a live dispatch licenses nothing.
    - Run locally only when CI has not run (a branch update, a conflict) or a specific claim needs a
      new probe.
    - Post a **durable vet receipt** on the PR — verdict plus what you probed — so the record
@@ -84,3 +111,6 @@ code, so you catch what the maker's context hid.
 | "The issue is big but the builder can handle it" | Size and split before it reaches a builder. Big diffs hide drift and escapes. |
 | "I'll correct the body with a comment" | Edit the owner-authored body in place; a correcting comment drifts the record. |
 | "The idea is fuzzy, I'll just write the spec" | Spec elicitation is discovery's. Route it needs-discovery; don't take on discovery's job. |
+| "I'll merge this other PR now; their rebase order can absorb it" | Your merge moves the world under their live order — amend the order, don't assume they absorb it. |
+| "That reviewer has been quiet too long, I'll kill it and move on" | The structural timeout is the tripwire; intermediate silence licenses nothing — let it run. |
+| "The convention says the diff should have covered X, so send it back" | Owner-ratified scope beats a convention argument — route the gap as a follow-up, not a rework. |
