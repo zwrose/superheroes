@@ -39,3 +39,17 @@ For each validated survivor, output **one plain sentence**, its **receipt** (the
 ## cost
 
 Declare collection cost honestly in the `cost` dict so the advisor can reason about sweep expense. Include at least `collectorSeconds` (measured or bounded) and a short `note` when the collector has preconditions (missing manifest, skipped paths, etc.). A lens that cannot collect must call `degrade()` with a clear reason rather than emitting empty candidates silently.
+
+## Tool invocation
+
+Every external tool invocation by a lens **must** go through `guardian_tools.invoke` (or `guardian_tools.resolve` / `guardian_tools.version` for probe-only paths). Direct use of `subprocess`, `os.system`, `os.popen`, or `subprocess.Popen` inside a lens module is a **contract violation**.
+
+The seam (`plugins/superheroes/lib/guardian_tools.py`) provides these guarantees by construction:
+
+1. **Neutral child cwd** — collectors never run with the swept repo as their working directory.
+2. **Absolute repo operands** — repo-relative targets are absolutized and placed after a `--` end-of-options sentinel.
+3. **Identity-based executable rejection** — resolved binaries are validated with `os.path.samefile`, never string containment.
+4. **Environment allowlist** — code-loading variables are stripped; `PATH` and `NODE_PATH` are sanitized.
+5. **No fetch at sweep time** — absent tools degrade with a message quoting `guardian_tools.INSTALL_COMMANDS`; the seam never installs or fetches.
+
+Install guidance for collectors lives only in `guardian_tools.INSTALL_COMMANDS`.
