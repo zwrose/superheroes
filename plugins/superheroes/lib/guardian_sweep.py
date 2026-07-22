@@ -195,6 +195,12 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
 
     # 1. verify-command — only probe when a lens or vitals depends on it
     core = core_md.read(cwd, root)
+    # Resolve the calibrated verify command from the SAME core.md read (no second read).
+    # It is threaded onto each lens ctx below as ctx["verifyCommand"] so a tool-free lens
+    # (the docs lens) can resolve the paths the command names without re-reading core.md or
+    # spawning git. Whether a lens depends on the verify-command FACT (which RUNS the
+    # command) is a separate question; this value is READ-only calibration.
+    verify_command = (core or {}).get("verifyCommand")
     if "verify-command" not in needed:
         facts.append({
             "fact": "verify-command",
@@ -202,7 +208,7 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
             "receipt": "no lens depends on verify-command",
         })
     else:
-        vcmd = (core or {}).get("verifyCommand")
+        vcmd = verify_command
         if not vcmd:
             verify_result = {
                 "status": "absent",
@@ -315,7 +321,8 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
                 "receipt": {"checked": paths, "dangling": []},
             })
 
-    return {"facts": facts, "verifyResult": verify_result}
+    return {"facts": facts, "verifyResult": verify_result,
+            "verifyCommand": verify_command}
 
 
 _FACT_SATISFIED = {
@@ -462,6 +469,9 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
         needed_facts.add("verify-command")
     facts = verify_config(cwd, root, run=run, config=config, needed_facts=needed_facts)
     unsatisfied = _unsatisfied_facts(facts["facts"])
+    # Calibrated verify command, resolved once above — threaded onto each lens ctx so a
+    # tool-free lens (docs) resolves the paths it names without re-reading core.md.
+    verify_command = facts.get("verifyCommand")
 
     prev = guardian_store.read_snapshot(cwd, root)
     prev_identity = guardian_store.snapshot_identity(prev)
@@ -526,6 +536,7 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
             "config": config,
             "run": run,
             "prevDigest": None if lens_new else prev_entry.get("digest"),
+            "verifyCommand": verify_command,
         }
         try:
             out = lens.collect(ctx) or {}

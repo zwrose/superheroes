@@ -131,8 +131,13 @@ to raise and running collect() — that a tool-free lens invokes neither
   - collect(ctx) -> {"candidates": [{"id": str, ...}], "digest": <json>,
                      "status": <COLLECT_STATUSES member, default "collected">,
                      "reason": str | None}
-      ctx carries {"cwd", "root", "config", "run", "prevDigest"}. A lens that could not
-      collect returns status "not-collected" (never an empty candidate list).
+      ctx carries {"cwd", "root", "config", "run", "prevDigest", "verifyCommand"}. A lens
+      that could not collect returns status "not-collected" (never an empty candidate
+      list). ``verifyCommand`` is the calibrated core.md verify command already resolved by
+      the sweep (``guardian_sweep.collect`` reads it once alongside the verify-command
+      FACT) so a tool-free lens can resolve the paths it names without a second core.md read
+      or a git spawn; it is None when no calibration was resolved, and lenses that do not
+      need it ignore it.
   - diff(prev_digest, cur_digest) -> {"new": [ids], "worsened": [ids], "resolved": [ids]}
   - red_lines(candidates) -> [{"kind": <RED_LINE_KINDS>, "id": str, "detail": str}]
   - degrade(reason) -> {"lens": name, "degraded": True, "reason": reason}
@@ -147,7 +152,7 @@ REGISTRY = []
 
 PRODUCTION_LENS_MODULES = (
     "guardian_lens_duplication", "guardian_lens_hotspots", "guardian_lens_deps",
-    "guardian_lens_deadcode")
+    "guardian_lens_deadcode", "guardian_lens_docs")
 """Authoritative runtime roster of production lens module names (under lib/).
 
 Rebasing lens PRs populate this tuple; each module MUST expose a module-level LENSES
@@ -159,6 +164,7 @@ PRODUCTION_LENS_NAMES = {
     "guardian_lens_hotspots": ("hotspots",),
     "guardian_lens_deps": ("deps",),
     "guardian_lens_deadcode": ("deadcode",),
+    "guardian_lens_docs": ("docs",),
 }
 """Map module-name → tuple of lens names the module is expected to export.
 
