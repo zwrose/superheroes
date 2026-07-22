@@ -20,14 +20,14 @@ the same PR:
 - **README.md** — the hero sections + their command tables.
 - **CONVENTIONS.md** — the cross-plugin contracts (§1–§13).
 
-**ROADMAP.md carries the release train** (owner-ratified 2026-07-09, superseding the
-older pointer-only rule): the cut rules, the release bundles with what each must prove
-before it cuts, the build lane, and the tracking mechanics — grounded in
-[PHILOSOPHY.md](PHILOSOPHY.md). Update it **at train-level events only**: a release
-cuts or reorders, an epic opens/closes, a cut rule changes, the build lane reschedules.
-A PR that cuts or re-scopes a release updates ROADMAP.md in the same PR. Issue-level
-status stays in the [GitHub Project](https://github.com/users/zwrose/projects/1) and
-the release epics — never in ROADMAP.md.
+**ROADMAP.md carries the coarse train** (owner-ratified 2026-07-09; simplified to
+areas-of-focus 2026-07-22, owner call): the cut rules, the cut record, and the areas
+of focus with their close bars — grounded in [PHILOSOPHY.md](PHILOSOPHY.md). Update it
+**at train-level events only**: a release cuts, an area of focus opens/closes or its
+close bar changes, a cut rule changes. A PR that cuts a release updates ROADMAP.md in
+the same PR. Issue-level status stays in the
+[GitHub Project](https://github.com/users/zwrose/projects/1) and the **area epics** —
+never in ROADMAP.md, and no individual work item is ever named in an area entry.
 
 ## Versioning (SemVer)
 
