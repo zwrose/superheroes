@@ -1,5 +1,5 @@
 """CONVENTIONS §11 single-source-of-truth drift guards for cross-boundary facts that
-are re-typed across the surviving Python libs, their Workflow-JS twins, and schema literals.
+are re-typed across the surviving Python libs and schema literals.
 
 Each guard reads the authoritative home (or, where no single named home exists, pins
 the shared vocabulary across every enumerated copy-holder) and **fails closed** on an
@@ -124,9 +124,9 @@ def _rubric_blocking_tiers(text, tiers):
 
 def test_severity_vocabulary_is_single_sourced():
     """CONVENTIONS §11: the severity tiers, the blocking/non-blocking partition, and the
-    Critical<Important<Minor<Nit rank are re-typed across the surviving Python + JS
-    copy-holders. All must agree with the rubric home — the ordered tier vocabulary and
-    the blocking set are both READ from review-base.md (the enum + the verdict mapping)."""
+    Critical<Important<Minor<Nit rank are re-typed across the surviving Python copy-holders.
+    All must agree with the rubric home — the ordered tier vocabulary and the blocking set are
+    both READ from review-base.md (the enum + the verdict mapping)."""
     text = _read(os.path.join("rubric", "review-base.md"))
     tiers = _rubric_severity_tiers()          # ['Critical','Important','Minor','Nit']
     vocab = set(tiers)
@@ -173,38 +173,10 @@ def test_severity_vocabulary_is_single_sourced():
     assert not circuit_breaker.is_critical("Important") and not circuit_breaker.is_critical("blocker")
     assert not circuit_breaker.is_critical(None) and not circuit_breaker.is_critical("")
 
-    # JS copy-holders (regex-extracted, fail-closed) — the surviving review-panel twins.
-    cb = _read(os.path.join("lib", "circuit_breaker.js"))
-    assert _js_str_set(cb, "BLOCKING", "circuit_breaker.js") == blocking
-    assert {s.lower() for s in _js_str_set(cb, "_NON_BLOCKING", "circuit_breaker.js")} == non_blocking_lc, (
-        "circuit_breaker.js _NON_BLOCKING drifted from the rubric non-blocking tiers %r" % non_blocking)
-    rmjs = _read(os.path.join("lib", "review_memory.js"))
-    assert _js_str_set(rmjs, "BLOCKING", "review_memory.js") == blocking
-    lsjs = _read(os.path.join("lib", "loop_synthesis.js"))
-    assert _js_str_set(lsjs, "_TIERS", "loop_synthesis.js") == vocab
-    ptjs = _read(os.path.join("lib", "panel_tally.js"))
-    assert _js_str_set(ptjs, "BLOCKING", "panel_tally.js") == blocking
-    assert _js_rank_map(ptjs, "SEV_RANK", "panel_tally.js") == rank
-
     # The rubric's shared findings schema (the panel reviewers' single source) must forbid
     # the foreign scale, not just name the tiers — the live panel escape emitted high/medium/low.
     assert "closed enum" in text and "no `high`/`medium`/`low`" in text, (
         "review-base.md: findings schema must forbid off-scale severities (the panel-vocabulary fix)")
-
-
-# --- Cluster 3: terminal-state vocabulary ------------------------------------
-
-def test_terminal_vocabulary_single_sourced():
-    """CONVENTIONS §11: the action→terminal map is re-typed in panel_tally.js.
-    Home: panel_tally.py `_ACTION_TO_TERMINAL`."""
-    import panel_tally
-    home = dict(panel_tally._ACTION_TO_TERMINAL)
-    js = _read(os.path.join("lib", "panel_tally.js"))
-    m = re.findall(r"\bconst\s+_ACTION_TO_TERMINAL\s*=\s*\{([^}]+)\}", js)
-    assert len(m) == 1, "panel_tally.js: `_ACTION_TO_TERMINAL` literal not found uniquely"
-    js_map = {k: v for k, v in re.findall(r"(\w+)\s*:\s*'([^']+)'", m[0])}
-    assert js_map, "panel_tally.js: `_ACTION_TO_TERMINAL` parsed no `key: 'value'` pairs"
-    assert js_map == home, "panel_tally.js `_ACTION_TO_TERMINAL` drifted from panel_tally.py"
 
 
 # --- Cluster 3b: Codex translation/effort policy (docs + adapter default) -----

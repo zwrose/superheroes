@@ -12,7 +12,7 @@ It deliberately owns NO policy of its own:
   - the continue/exit/halt action comes from `loop_state.decide` (imported, same inputs);
   - the per-dimension run/skip/tier schedule comes from `review_round_policy.plan_round`,
     the parity-locked Python twin of the spine's scheduler — ONE policy implementation,
-    shared with `review_panel_shell.js`, so the prose path cannot drift from the spine
+    shared with `round_driver.py`, so the prose path cannot drift from the spine
     (#145 paid for that drift once already).
 
 What it adds is the evidence plumbing the prose path was missing:
@@ -277,14 +277,22 @@ def cmd_record(session_dir, round_no, dimensions):
         if sched.get("action") == "skip":
             dims[d] = _carry_forward(state, d, round_no, sched)
             continue
-        already = bool(escalations.get(d))
-        tier = DEEP if already else (sched.get("tier") or DEEP)
+        # Re-dispatch attempts are counted against the single-home REDISPATCH_BUDGET constant
+        # (#350/#525), not a local one-shot boolean: a dimension escalated `attempts` times has
+        # `attempts` recorded in its escalation entry; budget remains while attempts < budget.
+        # With the budget at 1 this is behaviour-preserving. A legacy entry with no `attempts`
+        # key reads as one attempt already spent (the old boolean encoding).
+        prior_esc = escalations.get(d)
+        attempts = (prior_esc.get("attempts", 1) if isinstance(prior_esc, dict)
+                    else (1 if prior_esc else 0))
+        budget_left = attempts < loop_plan_common.REDISPATCH_BUDGET
+        tier = DEEP if attempts else (sched.get("tier") or DEEP)
         result = _read_findings(session_dir, d, tier)
         needs_more = not result["valid"]
-        if needs_more and not already:
-            # one escalation/retry at reviewer-deep — archive the invalid result so
-            # only a freshly-written file can count as the deep answer
-            escalations[d] = {"from": tier}
+        if needs_more and budget_left:
+            # re-dispatch at reviewer-deep — archive the invalid result so only a freshly-written
+            # file can count as the deep answer
+            escalations[d] = {"from": tier, "attempts": attempts + 1}
             _archive_findings(session_dir, d, round_no, tag="retry")
             why = result.get("why")
             escalate.append({"dimension": d, "tier": DEEP,
@@ -300,7 +308,7 @@ def cmd_record(session_dir, round_no, dimensions):
                    "confidence": result["confidence"], "hasFindings": result["hasFindings"],
                    "blockingCount": result["blocking"], "criticalCount": result["critical"],
                    "subjects": _subjects(d, result["findings"]),
-                   "escalated": already, "round": round_no}
+                   "escalated": bool(attempts), "round": round_no}
     save_state(session_dir, state)
     return {"ok": True, "round": round_no, "escalate": escalate, "dimensions": dims}
 

@@ -165,6 +165,112 @@ def check_circuit_breaker(rounds, max_rounds):
     return {"halt": False, "reason": None, "detail": "progressing"}
 
 
+# --- audit-keyed stall detection (#507) --------------------------------------
+#
+# The code leg's delta rounds replace finding-COUNT comparison with per-finding fix audits: the
+# same finding failing audit twice is the stall signal, not a flat count. `check_audit_breaker`
+# consumes the effective (post-fail-closed) rulings from `audits.apply_audit_results`, keyed by
+# `finding_identity`, and never consults counts — a run that adds MORE discharged findings each
+# round is progressing, not stuck. Un-sensitive by design and fail-closed: a malformed round or
+# outcome counts toward the stall (a real not-discharged must never uncount into a silent pass).
+
+_MALFORMED_ROUND = "<malformed-audit-round>"
+_MALFORMED_OUTCOME = "<malformed-audit-outcome>"
+
+
+def _audit_outcome_aliases(outcome):
+    """Alias set for one audit outcome — the literal `identity` plus, ONLY when the outcome
+    carries dimension/taxonomy/classKey, the recurrence class-key aliases (so a retitled finding
+    that keeps its class can't dodge the stall signal, exactly like the recurring-finding check).
+    A dimension-less outcome contributes only its identity string — never the empty "::" key a
+    bare recurrence_aliases would synthesize."""
+    if not isinstance(outcome, dict):
+        return set()
+    aliases = set()
+    ident = outcome.get("identity")
+    if isinstance(ident, str) and ident:
+        aliases.add(ident)
+    if outcome.get("dimension") or outcome.get("taxonomy") or outcome.get("classKey"):
+        aliases |= recurrence_aliases(outcome)
+    return aliases
+
+
+def _round_not_discharged(round_rec):
+    """Alias-sets for every NOT-DISCHARGED outcome in one audit round. Fail-closed: a malformed
+    round (not a dict / no outcomes list) or a malformed outcome (not a dict / no identity /
+    unknown ruling) yields a synthetic not-discharged marker so it counts toward the stall rather
+    than silently passing. A `discharged` / `discharged-but-new-issue` outcome clears (drops out)."""
+    if not isinstance(round_rec, dict):
+        return [{_MALFORMED_ROUND}]
+    outcomes = round_rec.get("outcomes")
+    if not isinstance(outcomes, list):
+        return [{_MALFORMED_ROUND}]
+    out = []
+    for o in outcomes:
+        if not isinstance(o, dict):
+            out.append({_MALFORMED_OUTCOME})
+            continue
+        if o.get("ruling") in ("discharged", "discharged-but-new-issue"):
+            continue
+        aliases = _audit_outcome_aliases(o)
+        out.append(aliases or {_MALFORMED_OUTCOME})
+    return out
+
+
+def check_audit_breaker(audit_rounds, max_rounds):
+    """Audit-keyed stall detector for the code leg's delta rounds (#507).
+
+    `audit_rounds` — chronological list of {"round": N, "outcomes": [{identity, ruling}]}, the
+    effective rulings from `audits.apply_audit_results`. Halt conditions, checked in order:
+      1. `max-iterations` — round count >= max_rounds while any latest-round outcome is
+         not-discharged.
+      2. `audit-stall` — some identity is not-discharged in two CONSECUTIVE audit rounds
+         (alias-tolerant, so a retitled-but-same-class finding still stalls).
+
+    Never consults finding counts. Fail-closed on malformed input; empty history → no halt.
+    """
+    if not isinstance(audit_rounds, list) or not audit_rounds:
+        return {"halt": False, "reason": None, "detail": "no audit rounds yet",
+                "stalledIdentities": []}
+
+    per_round = [_round_not_discharged(r) for r in audit_rounds]
+    n = len(per_round)
+    latest = per_round[-1]
+
+    # Criterion 1: round cap reached with an open (not-discharged) finding this round.
+    if n >= max_rounds and latest:
+        open_ids = sorted({a for aliases in latest for a in aliases})
+        return {
+            "halt": True,
+            "reason": "max-iterations",
+            "detail": ("Reached audit round %d (cap %d) with %d finding(s) still not discharged."
+                       % (n, max_rounds, len(latest))),
+            "stalledIdentities": open_ids,
+        }
+
+    # Criterion 2: the same finding failing audit in two consecutive rounds.
+    stalled = set()
+    for i in range(1, n):
+        prev = per_round[i - 1]
+        cur = per_round[i]
+        for cur_aliases in cur:
+            for prev_aliases in prev:
+                shared = cur_aliases & prev_aliases
+                if shared:
+                    stalled |= shared
+    if stalled:
+        ids = sorted(stalled)
+        return {
+            "halt": True,
+            "reason": "audit-stall",
+            "detail": ("%d finding(s) failed audit in two consecutive rounds: %s"
+                       % (len(ids), "; ".join(ids))),
+            "stalledIdentities": ids,
+        }
+
+    return {"halt": False, "reason": None, "detail": "progressing", "stalledIdentities": []}
+
+
 def load_rounds(session_dir):
     """Read round-N/compiled.json for every round in numeric order; remove any
     finding identity that was skipped in ANY round's resolutions.json."""

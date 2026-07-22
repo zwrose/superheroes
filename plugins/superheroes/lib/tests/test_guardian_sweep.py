@@ -1735,3 +1735,193 @@ def test_issue_resolve_respects_aggregate_deadline(monkeypatch, tmp_path):
                                     deadline=gsw.time.monotonic() + 5,
                                     cache=cache) is None
     assert len(calls) == 1, "cached issue must not re-call gh"
+
+
+def test_not_collected_lens_degrades_preserves_snapshot(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    prior_entry = {"collectorVersion": "0.0.0-test", "digest": {"v": 1}}
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": prior_entry},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    lens = FixtureLens(
+        collect_status="not-collected",
+        collect_reason="tool missing",
+        emit_normal=True,
+        diff_new=["fixture:normal"],
+    )
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert bundle["surfaced"] == []
+    assert len(bundle["funnel"]["degradedLenses"]) == 1
+    assert bundle["funnel"]["degradedLenses"][0]["reason"] == "tool missing"
+    assert "fixture" not in bundle["funnel"]["raised"]
+    assert bundle["nextSnapshot"]["lenses"]["fixture"] == prior_entry
+
+
+def test_partial_lens_degrades_and_processes_candidates(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    prior_entry = {"collectorVersion": "0.0.0-test", "digest": {"v": 1}}
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": prior_entry},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    lens = FixtureLens(
+        collect_status="partial",
+        collect_reason="half the tree",
+        emit_normal=True,
+        digest={"v": 2, "merged": True},
+        diff_new=["fixture:normal"],
+    )
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert len(bundle["funnel"]["degradedLenses"]) == 1
+    assert bundle["funnel"]["degradedLenses"][0]["reason"] == "half the tree"
+    assert len(bundle["surfaced"]) == 1
+    assert bundle["surfaced"][0]["id"] == "fixture:normal"
+    assert bundle["nextSnapshot"]["lenses"]["fixture"]["digest"] == {"v": 2, "merged": True}
+
+
+def test_prev_digest_reset_on_version_change(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": {"collectorVersion": "1", "digest": {"v": 1}}},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    lens = FixtureLens(collector_version="2")
+    gsw.collect(repo, lenses=[lens], root=root)
+    assert lens.last_prev_digest is None
+
+
+def test_prev_digest_carried_on_unchanged_version(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    prior_digest = {"v": 1}
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": {"collectorVersion": "0.0.0-test", "digest": prior_digest}},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    lens = FixtureLens()
+    gsw.collect(repo, lenses=[lens], root=root)
+    assert lens.last_prev_digest == prior_digest
+
+
+def test_partial_version_change_withholds_baseline_write(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    prior_entry = {"collectorVersion": "1", "digest": {"v": 1, "prior": True}}
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": prior_entry},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    lens = FixtureLens(
+        collector_version="2",
+        collect_status="partial",
+        collect_reason="incomplete new baseline",
+        emit_red_line=True,
+        digest={"v": 2, "partial": True},
+    )
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert lens.last_prev_digest is None
+    assert len(bundle["surfaced"]) == 1
+    assert bundle["surfaced"][0]["id"] == "fixture:red-line"
+    assert bundle["funnel"]["raised"]["fixture"] == 1
+    assert bundle["nextSnapshot"]["lenses"]["fixture"] == prior_entry
+
+
+def test_collected_version_change_writes_fresh_baseline(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    prior_entry = {"collectorVersion": "1", "digest": {"v": 1, "prior": True}}
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": prior_entry},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    new_digest = {"v": 2, "fresh": True}
+    lens = FixtureLens(collector_version="2", digest=new_digest)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    entry = bundle["nextSnapshot"]["lenses"]["fixture"]
+    assert entry["collectorVersion"] == "2"
+    assert entry["digest"] == new_digest
+
+
+def test_collect_raises_degrades_without_crashing_siblings(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    bad = FixtureLens(name="bad", collect_raises=RuntimeError("boom"))
+    good = FixtureLens(name="good", emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[bad, good], root=root)
+    assert len(bundle["funnel"]["degradedLenses"]) == 1
+    assert bundle["funnel"]["degradedLenses"][0]["lens"] == "bad"
+    assert "collect raised" in bundle["funnel"]["degradedLenses"][0]["reason"]
+    assert any(s["id"] == "good:red-line" for s in bundle["surfaced"])
+
+
+def test_red_lines_raises_degrades_without_crashing_siblings(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+
+    class RedLinesRaisesLens(FixtureLens):
+        def red_lines(self, candidates):
+            raise RuntimeError("red_lines boom")
+
+    bad = RedLinesRaisesLens(name="bad-red", emit_normal=True)
+    good = FixtureLens(name="good-red", emit_red_line=True)
+    # Sweep must not raise even though a lens's red_lines() blows up.
+    bundle = gsw.collect(repo, lenses=[bad, good], root=root)
+    assert len(bundle["funnel"]["degradedLenses"]) == 1
+    assert bundle["funnel"]["degradedLenses"][0]["lens"] == "bad-red"
+    assert "diff/red_lines raised" in bundle["funnel"]["degradedLenses"][0]["reason"]
+    # The fix clears the funnel for the degraded lens: its key was popped so
+    # the degraded lens reads consistently. Without the pop, "bad-red" would
+    # still appear in raised (it collected one candidate before red_lines raised).
+    assert "bad-red" not in bundle["funnel"]["raised"]
+    # The healthy sibling is processed normally and still surfaces its red line.
+    assert bundle["funnel"]["raised"].get("good-red") == 1
+    assert any(s["id"] == "good-red:red-line" for s in bundle["surfaced"])
+
+
+def test_partial_digest_none_preserves_baseline(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    prior_entry = {"collectorVersion": "0.0.0-test", "digest": {"v": 1, "prior": True}}
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": prior_entry},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+
+    class PartialNoDigestLens(FixtureLens):
+        def collect(self, ctx):
+            return {
+                "candidates": [{"id": "fixture:normal", "complexity": 5, "metric": 1}],
+                "digest": None,
+                "status": "partial",
+                "reason": "incomplete digest",
+            }
+
+    lens = PartialNoDigestLens(emit_normal=True, diff_new=["fixture:normal"])
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert len(bundle["funnel"]["degradedLenses"]) == 1
+    assert bundle["nextSnapshot"]["lenses"]["fixture"] == prior_entry

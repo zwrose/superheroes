@@ -515,8 +515,33 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
             degraded_lenses.append(lens.degrade(reason))
             continue
 
-        ctx = {"cwd": cwd, "root": root, "config": config, "run": run}
-        out = lens.collect(ctx)
+        prev_entry = prev_lenses.get(lens.name)
+        lens_new = (
+            lens.name not in prev_lenses
+            or prev_entry.get("collectorVersion") != lens.collector_version
+        )
+        ctx = {
+            "cwd": cwd,
+            "root": root,
+            "config": config,
+            "run": run,
+            "prevDigest": None if lens_new else prev_entry.get("digest"),
+        }
+        try:
+            out = lens.collect(ctx) or {}
+            status, reason = guardian_lens.classify_collect(out)
+        except guardian_lens.MalformedCollect as exc:
+            out, status, reason = {}, "not-collected", "malformed collect: %s" % exc
+        except Exception as exc:
+            out, status, reason = {}, "not-collected", "collect raised: %s" % exc
+
+        if status == "not-collected":
+            degraded_lenses.append(lens.degrade(reason))
+            continue
+
+        if status == "partial":
+            degraded_lenses.append(lens.degrade(reason))
+
         candidates = out.get("candidates") or []
         cur_digest = out.get("digest")
         funnel_raised[lens.name] = len(candidates)
@@ -538,20 +563,21 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
                 malformed.append({"lens": lens.name, "index": i, "repr": repr(c)})
 
         valid_candidates = list(cand_by_id.values())
-        prev_entry = prev_lenses.get(lens.name)
-        lens_new = (
-            lens.name not in prev_lenses
-            or prev_entry.get("collectorVersion") != lens.collector_version
-        )
-        if lens_new:
-            d = {"new": [], "worsened": [], "resolved": []}
-            drift_ids = []
-        else:
-            prev_digest = prev_entry.get("digest")
-            d = lens.diff(prev_digest, cur_digest)
-            drift_ids = list(d.get("new", [])) + list(d.get("worsened", []))
+        try:
+            if lens_new:
+                d = {"new": [], "worsened": [], "resolved": []}
+                drift_ids = []
+            else:
+                d = lens.diff(ctx["prevDigest"], cur_digest)
+                drift_ids = list(d.get("new", [])) + list(d.get("worsened", []))
 
-        rl = _filter_red_lines(lens.red_lines(valid_candidates))
+            rl = _filter_red_lines(lens.red_lines(valid_candidates))
+        except Exception as exc:
+            funnel_raised.pop(lens.name, None)
+            malformed[:] = [m for m in malformed if m.get("lens") != lens.name]
+            degraded_lenses.append(lens.degrade("diff/red_lines raised: %s" % exc))
+            continue
+
         red_line_ids = {r["id"] for r in rl}
         red_lines.extend(rl)
 
@@ -675,10 +701,12 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
                 "cost": lens.cost,
             }
 
-        next_lenses[lens.name] = {
-            "collectorVersion": lens.collector_version,
-            "digest": cur_digest,
-        }
+        if status == "collected" or (
+                status == "partial" and not lens_new and cur_digest is not None):
+            next_lenses[lens.name] = {
+                "collectorVersion": lens.collector_version,
+                "digest": cur_digest,
+            }
 
     for lens in lenses:
         if lens.name not in next_lenses and lens.name in prev_lenses:

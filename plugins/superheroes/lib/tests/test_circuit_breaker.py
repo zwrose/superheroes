@@ -192,3 +192,116 @@ def test_halts_on_three_real_review_round_plateau():
     res = check_circuit_breaker(rounds, 7)
     assert res["halt"] is True
     assert res["reason"] == "no-net-progress"
+
+
+# --- check_audit_breaker (#507) ----------------------------------------------
+
+from circuit_breaker import check_audit_breaker
+
+
+def a_round(num, outcomes):
+    return {"round": num, "outcomes": outcomes}
+
+
+def nd(identity, **extra):
+    d = {"identity": identity, "ruling": "not-discharged"}
+    d.update(extra)
+    return d
+
+
+def dis(identity, **extra):
+    d = {"identity": identity, "ruling": "discharged"}
+    d.update(extra)
+    return d
+
+
+def test_audit_breaker_empty_history_no_halt():
+    res = check_audit_breaker([], 7)
+    assert res["halt"] is False
+    assert res["reason"] is None
+    assert res["stalledIdentities"] == []
+
+
+def test_audit_breaker_stalls_on_two_consecutive_not_discharged():
+    rounds = [a_round(1, [nd("src/a.py::leak")]),
+              a_round(2, [nd("src/a.py::leak")])]
+    res = check_audit_breaker(rounds, 7)
+    assert res["halt"] is True
+    assert res["reason"] == "audit-stall"
+    assert "src/a.py::leak" in res["stalledIdentities"]
+
+
+def test_audit_breaker_no_stall_when_audits_alternate():
+    rounds = [a_round(1, [nd("src/a.py::leak")]),
+              a_round(2, [dis("src/a.py::leak")]),
+              a_round(3, [nd("src/a.py::leak")])]
+    res = check_audit_breaker(rounds, 7)
+    assert res["halt"] is False
+
+
+def test_audit_breaker_alias_retitle_still_stalls():
+    # identity STRINGS differ (a retitle) but both share a stored classKey → alias-tolerant
+    # matching still detects the stall.
+    rounds = [
+        a_round(1, [nd("src/a.py::leaks memory", classKey="Security::CWE-401::orig")]),
+        a_round(2, [nd("src/a.py::memory not freed", classKey="Security::CWE-401::orig")]),
+    ]
+    res = check_audit_breaker(rounds, 7)
+    assert res["halt"] is True
+    assert res["reason"] == "audit-stall"
+
+
+def test_audit_breaker_max_iterations_with_open_finding():
+    rounds = [a_round(1, [nd("f::a")]),
+              a_round(2, [dis("f::a"), nd("f::b")])]
+    res = check_audit_breaker(rounds, 2)
+    assert res["halt"] is True
+    assert res["reason"] == "max-iterations"
+    assert res["stalledIdentities"] == ["f::b"]
+
+
+def test_audit_breaker_no_max_iterations_when_all_discharged():
+    rounds = [a_round(1, [dis("f::a")]),
+              a_round(2, [dis("f::a"), dis("f::b")])]
+    # at the cap, but nothing is open → no halt
+    res = check_audit_breaker(rounds, 2)
+    assert res["halt"] is False
+
+
+def test_audit_breaker_never_consults_counts():
+    # RISING discharged counts each round, zero not-discharged → progressing, never a halt,
+    # even though a count-based breaker would see the totals climb.
+    rounds = [
+        a_round(1, [dis("f::a")]),
+        a_round(2, [dis("f::a"), dis("f::b"), dis("f::c")]),
+        a_round(3, [dis("f::a"), dis("f::b"), dis("f::c"), dis("f::d"), dis("f::e")]),
+    ]
+    res = check_audit_breaker(rounds, 7)
+    assert res["halt"] is False
+    assert res["reason"] is None
+
+
+def test_audit_breaker_malformed_round_fails_closed():
+    # two consecutive malformed rounds (no outcomes list) → stall, never a silent pass
+    res = check_audit_breaker([{"round": 1}, {"round": 2}], 7)
+    assert res["halt"] is True
+    assert res["reason"] == "audit-stall"
+
+
+def test_audit_breaker_malformed_outcome_counts_as_not_discharged():
+    rounds = [a_round(1, ["junk"]), a_round(2, [{"identity": "f::x"}])]
+    # round 1 has a non-dict outcome (fail-closed not-discharged marker); round 2 has an
+    # outcome with a MISSING ruling (also fail-closed not-discharged). Different identities,
+    # so no consecutive stall here, but the malformed markers are counted, not dropped.
+    res = check_audit_breaker(rounds, 7)
+    assert res["halt"] is False  # different identities, single round each
+    # at the cap, the malformed latest round is still "open"
+    assert check_audit_breaker(rounds, 2)["halt"] is True
+    assert check_audit_breaker(rounds, 2)["reason"] == "max-iterations"
+
+
+def test_audit_breaker_two_consecutive_malformed_outcomes_stall():
+    rounds = [a_round(1, ["junk"]), a_round(2, [None])]
+    res = check_audit_breaker(rounds, 7)
+    assert res["halt"] is True
+    assert res["reason"] == "audit-stall"

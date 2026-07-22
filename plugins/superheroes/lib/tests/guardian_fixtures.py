@@ -26,6 +26,9 @@ class FixtureLens:
         required_facts=(),
         metric=1,
         candidate_fields=None,
+        collect_status=None,
+        collect_reason=None,
+        collect_raises=None,
     ):
         self.name = name
         self.collector_version = collector_version
@@ -41,8 +44,15 @@ class FixtureLens:
         self._diff_resolved = diff_resolved if diff_resolved is not None else []
         self._metric = metric
         self._candidate_fields = dict(candidate_fields or {})
+        self._collect_status = collect_status
+        self._collect_reason = collect_reason
+        self._collect_raises = collect_raises
+        self.last_prev_digest = object()
 
     def collect(self, ctx):
+        self.last_prev_digest = ctx.get("prevDigest")
+        if self._collect_raises is not None:
+            raise self._collect_raises
         candidates = []
         if self._emit_red_line:
             cand = {
@@ -60,7 +70,12 @@ class FixtureLens:
             }
             cand.update(self._candidate_fields)
             candidates.append(cand)
-        return {"candidates": candidates, "digest": self._digest}
+        out = {"candidates": candidates, "digest": self._digest}
+        if self._collect_status is not None:
+            out["status"] = self._collect_status
+            if self._collect_reason is not None:
+                out["reason"] = self._collect_reason
+        return out
 
     def diff(self, prev_digest, cur_digest):
         return {
