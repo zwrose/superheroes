@@ -1564,3 +1564,125 @@ def test_author_exclusive_does_not_clobber_existing_and_leaves_no_partial(tmp_pa
     # No leftover temp files in the destination directory.
     leftovers = [n for n in os.listdir(tmp_path) if n != "ledger.md"]
     assert leftovers == [], leftovers
+
+
+# --- WO-1e: fresh-block fail-closed complete + author perms / cleanup ---------
+
+
+def test_prepare_fails_closed_on_null_or_non_list_records(tmp_path):
+    """WO-1e Fix 1: fresh records null/non-list must fail closed — never coerce to []."""
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.ledger_path(repo)
+    assert gled.write(repo, [_rec("dup:t:ok", "filed", issue="#1", adjudicatedIn="s0")],
+                      now="2026-07-20")["ok"] is True
+    text = open(path, encoding="utf-8").read()
+    fence = gs.find_ledger_fences(text)[0]
+    block = json.loads(fence.group(1))
+
+    for bad_records in (None, "not-a-list", {"id": "x"}):
+        block["records"] = bad_records
+        open(path, "wb").write((
+            text[:fence.start()]
+            + "```json %s\n%s\n```" % (gs.LEDGER_FENCE, json.dumps(block, indent=2))
+            + text[fence.end()]
+        ).encode("utf-8"))
+        before = open(path, "rb").read()
+        prepared = gled._prepare_ledger_write(
+            path, [_rec("dup:t:incoming", "filed", issue="#2", adjudicatedIn="s1")],
+            now="2026-07-21")
+        assert prepared["kind"] == "fail", bad_records
+        assert prepared["result"]["ok"] is False
+        assert prepared["result"].get("skipped") == "ledger-malformed"
+        assert "on-disk bytes left untouched" in (prepared["result"].get("reason") or "")
+        assert open(path, "rb").read() == before, bad_records
+
+
+def test_prepare_fails_closed_on_future_schema_version(tmp_path):
+    """WO-1e Fix 1: fresh schemaVersion > LEDGER_SCHEMA_VERSION must not be overwritten."""
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.ledger_path(repo)
+    assert gled.write(repo, [_rec("dup:t:ok", "filed", issue="#1", adjudicatedIn="s0")],
+                      now="2026-07-20")["ok"] is True
+    text = open(path, encoding="utf-8").read()
+    fence = gs.find_ledger_fences(text)[0]
+    block = json.loads(fence.group(1))
+    future = gs.LEDGER_SCHEMA_VERSION + 1
+    block["schemaVersion"] = future
+    open(path, "wb").write((
+        text[:fence.start()]
+        + "```json %s\n%s\n```" % (gs.LEDGER_FENCE, json.dumps(block, indent=2))
+        + text[fence.end()]
+    ).encode("utf-8"))
+    before = open(path, "rb").read()
+    prepared = gled._prepare_ledger_write(
+        path, [_rec("dup:t:incoming", "filed", issue="#2", adjudicatedIn="s1")],
+        now="2026-07-21")
+    assert prepared["kind"] == "fail"
+    assert prepared["result"]["ok"] is False
+    assert prepared["result"].get("skipped") in ("ledger-newer", "ledger-malformed")
+    assert "on-disk bytes left untouched" in (prepared["result"].get("reason") or "")
+    assert open(path, "rb").read() == before
+
+
+def test_prepare_fails_closed_on_missing_schema_version(tmp_path):
+    """WO-1e Fix 1: missing fresh schemaVersion fails closed (same as _ledger_fully_readable)."""
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.ledger_path(repo)
+    assert gled.write(repo, [_rec("dup:t:ok", "filed", issue="#1", adjudicatedIn="s0")],
+                      now="2026-07-20")["ok"] is True
+    text = open(path, encoding="utf-8").read()
+    fence = gs.find_ledger_fences(text)[0]
+    block = json.loads(fence.group(1))
+    del block["schemaVersion"]
+    open(path, "wb").write((
+        text[:fence.start()]
+        + "```json %s\n%s\n```" % (gs.LEDGER_FENCE, json.dumps(block, indent=2))
+        + text[fence.end()]
+    ).encode("utf-8"))
+    before = open(path, "rb").read()
+    prepared = gled._prepare_ledger_write(
+        path, [_rec("dup:t:incoming", "filed", issue="#2", adjudicatedIn="s1")],
+        now="2026-07-21")
+    assert prepared["kind"] == "fail"
+    assert prepared["result"]["ok"] is False
+    assert prepared["result"].get("skipped") == "ledger-malformed"
+    assert "on-disk bytes left untouched" in (prepared["result"].get("reason") or "")
+    assert open(path, "rb").read() == before
+
+
+def test_author_exclusive_mode_matches_0644_umask(tmp_path):
+    """WO-1e Fix 2: published ledger must not stay at mkstemp 0600 — use 0644 & ~umask."""
+    dest = str(tmp_path / "ledger.md")
+    assert gled._author_exclusive(dest, b"payload\n") is True
+    mode = os.stat(dest).st_mode & 0o777
+    umask = os.umask(0)
+    os.umask(umask)
+    expected = 0o644 & ~umask
+    assert mode == expected, "authored mode %#o != expected %#o (umask %#o)" % (
+        mode, expected, umask)
+    # Not more restrictive than the pre-mkstemp story (must be group/other-readable
+    # when umask allows it).
+    assert mode & 0o400, "owner-read must remain"
+    if umask & 0o044 == 0:
+        assert mode & 0o044, "must not publish more restrictive than 0644&~umask"
+
+
+def test_author_exclusive_cleans_temp_on_interrupt(tmp_path, monkeypatch):
+    """WO-1e Fix 3: temp inode is removed even when BaseException fires mid-publish."""
+    dest = str(tmp_path / "ledger.md")
+    real_link = os.link
+
+    def boom_link(src, dst):
+        raise KeyboardInterrupt("simulated")
+
+    monkeypatch.setattr(os, "link", boom_link)
+    raised = False
+    try:
+        gled._author_exclusive(dest, b"payload\n")
+    except KeyboardInterrupt:
+        raised = True
+    assert raised
+    assert not os.path.exists(dest)
+    leftovers = [n for n in os.listdir(tmp_path) if n.startswith(".ledger-author-")]
+    assert leftovers == [], leftovers
+    monkeypatch.setattr(os, "link", real_link)

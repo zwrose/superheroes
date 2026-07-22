@@ -1197,14 +1197,51 @@ def _prepare_ledger_write(path, records, *, report_card=None, sweeps=None, now=N
             },
         }
 
-    # WO-1d Fix B: re-validate the FRESH on-disk block fail-closed. An owner edit
-    # between the earlier opaque-ledger guard and this splice read must not be
-    # merged and written. Mirror the checkable parts of `_ledger_fully_readable`:
-    # records must validate (incl. no duplicate ids); every sweeps[] entry must be
-    # a dict with a non-empty string sweepId.
+    # WO-1d Fix B / WO-1e Fix 1: re-validate the FRESH on-disk block fail-closed.
+    # An owner edit between the earlier opaque-ledger guard and this splice read
+    # must not be merged and written. Mirror `_ledger_fully_readable`: schemaVersion
+    # must be exactly LEDGER_SCHEMA_VERSION (a newer ledger is never overwritten);
+    # records must be a list (never coerce null/missing) and validate (incl. no
+    # duplicate ids); every sweeps[] entry must be a dict with a non-empty string
+    # sweepId.
+    ver = existing_block.get("schemaVersion")
+    if (isinstance(ver, int) and not isinstance(ver, bool)
+            and ver > guardian_store.LEDGER_SCHEMA_VERSION):
+        return {
+            "kind": "fail",
+            "result": {
+                "ok": False,
+                "skipped": "ledger-newer",
+                "reason": "ledger write skipped: fresh on-disk schemaVersion newer "
+                          "(on-disk bytes left untouched)",
+                "path": path,
+            },
+        }
+    if not (isinstance(ver, int) and not isinstance(ver, bool)
+            and ver == guardian_store.LEDGER_SCHEMA_VERSION):
+        return {
+            "kind": "fail",
+            "result": {
+                "ok": False,
+                "skipped": "ledger-malformed",
+                "reason": "ledger write skipped: fresh on-disk schemaVersion invalid "
+                          "(on-disk bytes left untouched)",
+                "path": path,
+            },
+        }
     fresh_records = existing_block.get("records")
-    ok_fresh, _fresh_reasons = validate_records(
-        fresh_records if fresh_records is not None else [])
+    if not isinstance(fresh_records, list):
+        return {
+            "kind": "fail",
+            "result": {
+                "ok": False,
+                "skipped": "ledger-malformed",
+                "reason": "ledger write skipped: fresh on-disk records invalid "
+                          "(on-disk bytes left untouched)",
+                "path": path,
+            },
+        }
+    ok_fresh, _fresh_reasons = validate_records(fresh_records)
     if not ok_fresh:
         return {
             "kind": "fail",
@@ -1312,36 +1349,44 @@ def _author_exclusive(path, payload_bytes):
     """Create `path` exclusively via temp + no-clobber link publish.
 
     Returns True on fresh create, False if `path` already exists. Writes the full
-    payload to a private temp in the same directory first (flush+fsync), then
-    publishes with ``os.link(tmp, path)`` which fails if the destination exists —
-    so concurrent authors fall through to the splice-retry path without clobbering
-    or exposing partial bytes at ``path``. Only the temp inode is cleaned up on
-    error / collision.
+    payload to a private temp in the same directory first (flush+fsync), chmods
+    to ``0o644 & ~umask`` so the published mode matches the pre-mkstemp guardian
+    artifact story, then publishes with ``os.link(tmp, path)`` which fails if the
+    destination exists — so concurrent authors fall through to the splice-retry
+    path without clobbering or exposing partial bytes at ``path``. The temp inode
+    is always unlinked in ``finally`` (after a successful link only the temp name
+    goes away; ``path`` keeps the inode).
     """
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     directory = os.path.dirname(os.path.abspath(path)) or "."
     fd, tmp = tempfile.mkstemp(prefix=".ledger-author-", dir=directory)
     try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(payload_bytes)
-            fh.flush()
-            os.fsync(fh.fileno())
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fd = -1  # ownership transferred to the file object
+                fh.write(payload_bytes)
+                fh.flush()
+                os.fsync(fh.fileno())
+        finally:
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        # mkstemp creates 0600; restore the intended public mode (0644 & ~umask).
+        umask = os.umask(0)
+        os.umask(umask)
+        os.chmod(tmp, 0o644 & ~umask)
         try:
             os.link(tmp, path)
         except FileExistsError:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
             return False
-        os.unlink(tmp)
         return True
-    except Exception:
+    finally:
         try:
             os.unlink(tmp)
         except OSError:
             pass
-        raise
 
 
 def _write_locked(cwd, records, *, root=None, report_card=None, sweeps=None, now=None):
