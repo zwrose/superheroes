@@ -1,10 +1,15 @@
+import json
 import os
 import subprocess
 
 import core_md
 import configure_view as cv
+import guardian_store as gs
 import mode_registry as mr
 import store_core as sc
+from guardian_fixtures import (
+    benched_fixture_ledger, init_calibrated_repo, write_guardian_layer, write_ledger,
+)
 
 
 def _init_repo(d, remote=None):
@@ -107,3 +112,145 @@ def test_collect_threads_root_into_model_tier_resolution(tmp_path, monkeypatch):
     monkeypatch.setattr(cv.model_tier_overrides, "resolve_profile_path", _spy)
     cv.collect(str(tmp_path), root=root)
     assert captured["root"] == root
+
+
+def _seed_guardian_view_repo(tmp_path, *, guardian_config=None, ledger_records=None,
+                             snapshot=None, vitals_trend=None):
+    repo = init_calibrated_repo(tmp_path)
+    root = str(tmp_path / "store")
+    mr.write_registry(repo, mr.IN_REPO, "rk", root=root)
+    if guardian_config is not None:
+        write_guardian_layer(tmp_path, guardian_config)
+    if ledger_records is not None:
+        write_ledger(tmp_path, ledger_records, root=root)
+    if snapshot is not None:
+        os.makedirs(gs.guardian_dir(repo, root), exist_ok=True)
+        sc.atomic_write(gs.snapshot_path(repo, root), json.dumps(snapshot, indent=2) + "\n")
+    if vitals_trend is not None:
+        os.makedirs(gs.guardian_dir(repo, root), exist_ok=True)
+        sc.atomic_write(gs.vitals_path(repo, root), vitals_trend)
+    return repo, root
+
+
+def test_render_guardian_row_with_ledger_and_config(tmp_path):
+    repo, root = _seed_guardian_view_repo(
+        tmp_path,
+        guardian_config={
+            "cadence": {"minMerges": 12, "minDays": 7},
+            "coverage": [{"path": "README.md", "tool": "renovate"}],
+        },
+        ledger_records=benched_fixture_ledger(),
+        snapshot={"schemaVersion": 1, "sweptSha": "abc1234", "vitals": {}, "lenses": {}},
+        vitals_trend=(
+            '{"schemaVersion": 1, "file": "guardian-vitals", "created": "2026-07-20"}\n'
+            '{"date": "2026-07-20", "sweepId": "s1", "sweptSha": "abc1234", "vitals": {}}\n'
+        ),
+    )
+    screen = cv.render(repo, root=root)
+    assert "## Guardian" in screen
+    assert "≥12 merges or ≥7 days (tuned)" in screen
+    assert "coverage: README.md (renovate)" in screen
+    assert "benched lenses:" in screen
+    assert "fixture is benched" in screen
+    assert "last sweep: abc1234 (2026-07-20)" in screen
+    assert "verify command: true" in screen
+
+
+def test_render_guardian_degrades_without_guardian_store(tmp_path):
+    root = _seed_core_and_layer(tmp_path)
+    screen = cv.render(str(tmp_path), root=root)
+    assert "## Guardian" in screen
+    assert "cadence: ≥10 merges or ≥14 days (defaults)" in screen
+    assert "coverage: none recorded" in screen
+    assert "no sweep history yet" in screen
+    assert "## Core" in screen
+    assert "verify command: pytest" in screen
+
+
+def test_render_guardian_degrades_with_empty_config(tmp_path):
+    repo, root = _seed_guardian_view_repo(tmp_path, guardian_config={})
+    screen = cv.render(repo, root=root)
+    assert "cadence: ≥10 merges or ≥14 days (defaults)" in screen
+    assert "coverage: none recorded" in screen
+    assert "no sweep history yet" in screen
+
+
+def test_render_guardian_degrades_with_malformed_ledger(tmp_path):
+    repo, root = _seed_guardian_view_repo(tmp_path)
+    os.makedirs(gs.guardian_dir(repo, root), exist_ok=True)
+    sc.atomic_write(gs.ledger_path(repo, root), "# broken\n```json guardian-ledger\n{not json\n```\n")
+    screen = cv.render(repo, root=root)
+    assert "## Guardian" in screen
+    assert "cadence:" in screen
+    assert "benched lenses: unknown — ledger unreadable" in screen
+    assert "ledger JSON block is malformed" in screen
+    assert "benched lenses: none" not in screen
+    assert "## Core" in screen
+    assert "verify command: true" in screen
+
+
+def test_render_guardian_partial_ledger_does_not_claim_benched_lenses(tmp_path):
+    records = benched_fixture_ledger()
+    records.append({
+        "id": "invalid-trade",
+        "disposition": "accepted",
+        "date": "2026-07-01",
+        "issue": None,
+        "metricAtDisposition": {"metric": 5},
+    })
+    repo, root = _seed_guardian_view_repo(tmp_path, ledger_records=records)
+    screen = cv.render(repo, root=root)
+    assert "## Guardian" in screen
+    assert "cadence:" in screen
+    assert "benched lenses: uncertain — ledger is partial" in screen
+    assert "fixture is benched" not in screen
+    assert "benched lenses:\n" not in screen
+
+
+def test_render_guardian_malformed_config_does_not_claim_benched_lenses(tmp_path):
+    repo, root = _seed_guardian_view_repo(
+        tmp_path,
+        ledger_records=benched_fixture_ledger(),
+        snapshot={"schemaVersion": 1, "sweptSha": "abc1234", "vitals": {}, "lenses": {}},
+    )
+    layer = tmp_path / ".claude" / "superheroes" / "guardian.md"
+    layer.write_text(
+        "<!-- guardian: schemaVersion=1 status=confirmed -->\n\n"
+        "```json guardian-config\n{ not json\n```\n")
+    screen = cv.render(repo, root=root)
+    assert "## Guardian" in screen
+    assert "benched lenses: uncertain — guardian-config is degraded" in screen
+    assert "fixture is benched" not in screen
+    assert "benched lenses:\n" not in screen
+    assert "malformed" in screen
+
+
+def test_render_guardian_surfaces_vitals_trend_failure(tmp_path):
+    repo, root = _seed_guardian_view_repo(
+        tmp_path,
+        snapshot={"schemaVersion": 1, "sweptSha": "abc1234", "vitals": {}, "lenses": {}},
+        vitals_trend='{"schemaVersion": 1, "file": "guardian-vitals", "created": "2026-07-20"}\n{bad\n',
+    )
+    screen = cv.render(repo, root=root)
+    assert "## Guardian" in screen
+    assert "vitals history: unreadable" in screen
+    assert "malformed line" in screen
+    assert "last sweep: abc1234" in screen
+    assert "(2026-07-20)" not in screen
+
+
+def test_render_guardian_lens_below_floor_not_passing(tmp_path):
+    records = [{
+        "id": "dup:tool:loc-%d" % i,
+        "disposition": "triaged-out",
+        "date": "2026-07-01",
+        "issue": None,
+        "metricAtDisposition": None,
+        "reason": None,
+        "reraiseWhen": None,
+        "adjudicatedIn": "s1",
+    } for i in range(3)]
+    repo, root = _seed_guardian_view_repo(tmp_path, ledger_records=records)
+    screen = cv.render(repo, root=root)
+    assert "dup — floor not met" in screen
+    assert "dup is active" not in screen

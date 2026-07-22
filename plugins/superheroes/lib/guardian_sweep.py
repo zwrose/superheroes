@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -17,15 +18,29 @@ if _LIB_DIR not in sys.path:
 
 import core_md          # noqa: E402
 import file_lock        # noqa: E402
+import guardian_ledger  # noqa: E402
 import guardian_lens    # noqa: E402
 import guardian_report  # noqa: E402
 import guardian_store   # noqa: E402
+import guardian_vitals  # noqa: E402
+import mode_registry    # noqa: E402
 import store_core       # noqa: E402
 
 _CONFIG_BLOCK = re.compile(
     r"```json\s+guardian-config\s*\n(.*?)\n```", re.DOTALL)
 
-_VERIFY_TIMEOUT = 30
+CADENCE_DEFAULTS = {"minMerges": 10, "minDays": 14}
+
+# Default verify / vitals time budget. This repo's lib suite measures ~125s and
+# §3.7's worked example is 62s; 30s (the prior hard cap) made suite vitals
+# permanently "not collected" on the repos the design cites. 300s clears both
+# with headroom while still bounding a runaway suite.
+_DEFAULT_VERIFY_BUDGET_SECONDS = 300
+_VERIFY_STDOUT_CAP = 8 * 1024
+# Aggregate budget across all filed-issue `gh issue view` lookups in one collect.
+# Per-call timeout is capped so one hung call cannot consume the whole budget alone.
+_ISSUE_RESOLVE_BUDGET_SECONDS = 30.0
+_ISSUE_RESOLVE_PER_CALL_TIMEOUT = 10.0
 
 
 def _repo_root(cwd):
@@ -33,33 +48,98 @@ def _repo_root(cwd):
     return os.path.realpath(out) if out else os.path.realpath(cwd)
 
 
+def _positive_cadence_int(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _resolve_cadence(raw):
+    """Merge owner cadence over CADENCE_DEFAULTS; record positively-tuned keys."""
+    cadence = dict(CADENCE_DEFAULTS)
+    cadence_tuned = {}
+    if not isinstance(raw, dict):
+        return cadence, cadence_tuned
+    for key in CADENCE_DEFAULTS:
+        val = raw.get(key)
+        if _positive_cadence_int(val):
+            cadence[key] = val
+            cadence_tuned[key] = True
+    return cadence, cadence_tuned
+
+
 def read_config(cwd, root=None):
-    """Read guardian.md layer → {thresholds, coverage}. Empty/absent → defaults."""
+    """Read guardian.md layer → thresholds, coverage, vitals knobs.
+
+    Empty/absent → defaults with `configStatus` healthy (defaults are authoritative).
+    Unreadable / malformed / non-object config → defaults with `configStatus` degraded
+    (benching authority revoked; the degradation is visible to report_card).
+    Vitals collection is on by default; a guardian-config `vitals: false` (or
+    `collectVitals: false`) disables it. `verifyBudgetSeconds` (alias
+    `vitalsBudgetSeconds`) tunes the shared verify/vitals time budget."""
     layer_p = guardian_store.guardian_layer_path(cwd, root)
     thresholds = dict(guardian_lens.RED_LINE_THRESHOLDS)
     coverage = []
+    vitals_enabled = True
+    verify_budget = _DEFAULT_VERIFY_BUDGET_SECONDS
+    report_card = None
+    cadence, cadence_tuned = _resolve_cadence(None)
+
+    def _result(status, *, report_card_value=None, notes=None):
+        return {
+            "thresholds": thresholds,
+            "coverage": coverage,
+            "vitalsEnabled": vitals_enabled,
+            "verifyBudgetSeconds": verify_budget,
+            "reportCard": report_card_value,
+            "cadence": cadence,
+            "cadenceTuned": cadence_tuned,
+            "configStatus": status,
+            "configNotes": list(notes or []),
+        }
+
     if core_md._layer_is_empty(layer_p):
-        return {"thresholds": thresholds, "coverage": coverage}
+        return _result("healthy")
     try:
         with open(layer_p, encoding="utf-8") as fh:
             text = fh.read()
-    except OSError:
-        return {"thresholds": thresholds, "coverage": coverage}
+    except OSError as exc:
+        return _result(
+            "degraded",
+            notes=["guardian-config unreadable (%s)" % type(exc).__name__])
     m = _CONFIG_BLOCK.search(text)
     if not m:
-        return {"thresholds": thresholds, "coverage": coverage}
+        # Layer present but no config fence — defaults authoritative (healthy).
+        return _result("healthy")
     try:
         block = json.loads(m.group(1))
     except ValueError:
-        return {"thresholds": thresholds, "coverage": coverage}
+        return _result(
+            "degraded",
+            notes=["guardian-config JSON is malformed"])
     if not isinstance(block, dict):
-        return {"thresholds": thresholds, "coverage": coverage}
+        return _result(
+            "degraded",
+            notes=["guardian-config block is not an object (got %s)"
+                   % type(block).__name__])
     if isinstance(block.get("thresholds"), dict):
         thresholds.update(block["thresholds"])
     cov = block.get("coverage")
     if isinstance(cov, list):
         coverage = cov
-    return {"thresholds": thresholds, "coverage": coverage}
+    if block.get("vitals") is False or block.get("collectVitals") is False:
+        vitals_enabled = False
+    budget = block.get("verifyBudgetSeconds")
+    if budget is None:
+        budget = block.get("vitalsBudgetSeconds")
+    if isinstance(budget, (int, float)) and not isinstance(budget, bool) and budget > 0:
+        verify_budget = float(budget)
+    notes = []
+    if "reportCard" in block and not isinstance(block.get("reportCard"), dict):
+        notes.append("guardian-config reportCard is not an object")
+        return _result("degraded", notes=notes)
+    if isinstance(block.get("reportCard"), dict):
+        report_card = block["reportCard"]
+    cadence, cadence_tuned = _resolve_cadence(block.get("cadence"))
+    return _result("healthy", report_card_value=report_card, notes=notes)
 
 
 def _manifest_tags(repo):
@@ -86,15 +166,34 @@ def _config_paths(config):
     return paths
 
 
+def _bound_stdout(text):
+    if not isinstance(text, str):
+        return ""
+    if len(text) <= _VERIFY_STDOUT_CAP:
+        return text
+    return text[-_VERIFY_STDOUT_CAP:]
+
+
 def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
-    """Trust-but-verify the four FACTS. `run` is injectable for tests."""
+    """Trust-but-verify the four FACTS. `run` is injectable for tests.
+
+    When `verify-command` is needed, runs it once and returns bounded stdout +
+    elapsed seconds alongside the fact verdict so vitals can share the same
+    execution (never a second run)."""
     run = run or subprocess.run
     config = config if config is not None else read_config(cwd, root)
+    budget = config.get("verifyBudgetSeconds", _DEFAULT_VERIFY_BUDGET_SECONDS)
     repo = _repo_root(cwd)
     facts = []
     needed = needed_facts if needed_facts is not None else set()
+    verify_result = {
+        "status": "not-run",
+        "receipt": "no requester depends on verify-command",
+        "stdout": "",
+        "durationSeconds": None,
+    }
 
-    # 1. verify-command — only probe when a lens actually depends on it
+    # 1. verify-command — only probe when a lens or vitals depends on it
     core = core_md.read(cwd, root)
     if "verify-command" not in needed:
         facts.append({
@@ -105,25 +204,54 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
     else:
         vcmd = (core or {}).get("verifyCommand")
         if not vcmd:
+            verify_result = {
+                "status": "absent",
+                "receipt": "no verifyCommand in core.md",
+                "stdout": "",
+                "durationSeconds": None,
+            }
             facts.append({
                 "fact": "verify-command",
                 "status": "absent",
                 "receipt": "no verifyCommand in core.md",
             })
         else:
+            stdout = ""
+            duration = None
             try:
+                t0 = time.monotonic()
                 r = run(vcmd, shell=True, cwd=cwd, capture_output=True, text=True,
-                        timeout=_VERIFY_TIMEOUT)
+                        timeout=budget)
+                duration = time.monotonic() - t0
+                stdout = _bound_stdout(getattr(r, "stdout", None) or "")
                 if r.returncode == 0:
                     status, receipt = "ok", "%s → exit 0" % vcmd
                 else:
                     status, receipt = "failed", "%s → exit %d" % (vcmd, r.returncode)
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as exc:
+                duration = budget
+                stdout = _bound_stdout(
+                    (getattr(exc, "stdout", None) or "")
+                    if isinstance(getattr(exc, "stdout", None), str)
+                    else "")
                 status, receipt = "not-collected", "%s → timeout" % vcmd
             except (OSError, subprocess.SubprocessError) as exc:
                 status, receipt = "not-collected", "%s → %s" % (vcmd, exc)
 
-            facts.append({"fact": "verify-command", "status": status, "receipt": receipt})
+            verify_result = {
+                "status": status,
+                "receipt": receipt,
+                "stdout": stdout,
+                "durationSeconds": duration,
+            }
+            # Trust boundary: raw verify stdout stays local to verify_result for the
+            # vitals parser. Never leak it into factVerdicts / the model-facing bundle.
+            facts.append({
+                "fact": "verify-command",
+                "status": status,
+                "receipt": receipt,
+                "durationSeconds": duration,
+            })
 
     # 2. recorded-coverage
     cov = config.get("coverage") or []
@@ -187,7 +315,7 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
                 "receipt": {"checked": paths, "dangling": []},
             })
 
-    return {"facts": facts}
+    return {"facts": facts, "verifyResult": verify_result}
 
 
 _FACT_SATISFIED = {
@@ -215,24 +343,112 @@ def _is_trade_disposition(rec):
     return rec.get("disposition") in ("accepted", "declined")
 
 
-def _materially_worsened(candidate, rec):
-    """Best-effort: compare candidate metric against ledger metricAtDisposition."""
-    metric_at = rec.get("metricAtDisposition")
-    if metric_at is None:
-        return False
-    cur = candidate.get("metric")
-    if cur is None:
-        return False
+def _is_settled_non_trade(rec):
+    """Terminal settled dispositions that are never re-derived (ordinary drift)."""
+    return rec.get("disposition") == "triaged-out"
+
+
+_ISSUE_NUM_RE = re.compile(r"#?(\d+)")
+_ISSUE_TERMINAL = frozenset(("closed", "merged"))
+
+
+def _resolve_issue_state(issue_ref, *, cwd, deadline=None, cache=None):
+    """Best-effort linked-issue state → 'open'|'closed'|'merged'|None.
+
+    None means unverifiable (no ref, unparseable, gh missing/failed, or aggregate
+    resolve budget exhausted). Callers must fail closed: do not run
+    verified-fixed/reopened until a terminal state is confirmed.
+    Uses subprocess.run directly — not the sweep's injectable `run`, which stubs the
+    verify shell command in tests. Distinct issue numbers are cached; the aggregate
+    `deadline` bounds total blocked time across all lookups in one collect."""
+    if not isinstance(issue_ref, str) or not issue_ref.strip():
+        return None
+    m = _ISSUE_NUM_RE.search(issue_ref.strip())
+    if not m:
+        return None
+    num = m.group(1)
+    if cache is not None and num in cache:
+        return cache[num]
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            if cache is not None:
+                cache[num] = None
+            return None
+        timeout = min(_ISSUE_RESOLVE_PER_CALL_TIMEOUT, remaining)
+    else:
+        timeout = _ISSUE_RESOLVE_PER_CALL_TIMEOUT
     try:
-        return float(cur) > float(metric_at)
-    except (TypeError, ValueError):
-        return False
+        r = subprocess.run(
+            ["gh", "issue", "view", num, "--json", "state"],
+            cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        if cache is not None:
+            cache[num] = None
+        return None
+    if r.returncode != 0:
+        if cache is not None:
+            cache[num] = None
+        return None
+    try:
+        data = json.loads(r.stdout)
+    except ValueError:
+        if cache is not None:
+            cache[num] = None
+        return None
+    if not isinstance(data, dict):
+        if cache is not None:
+            cache[num] = None
+        return None
+    state = data.get("state")
+    if not isinstance(state, str):
+        if cache is not None:
+            cache[num] = None
+        return None
+    state = state.strip().lower()
+    if state in ("open", "closed", "merged"):
+        if cache is not None:
+            cache[num] = state
+        return state
+    if cache is not None:
+        cache[num] = None
+    return None
+
+
+def _issue_ready_for_closure(issue_state):
+    """True only when the linked issue is confirmed merged or closed."""
+    return issue_state in _ISSUE_TERMINAL
 
 
 def _filter_red_lines(red_lines):
     """Drop red-line entries whose kind is not in RED_LINE_KINDS."""
     allowed = set(guardian_lens.RED_LINE_KINDS)
     return [r for r in red_lines if r.get("kind") in allowed]
+
+
+def _storage_mode(cwd, root=None):
+    try:
+        return mode_registry.resolve(cwd, root)["mode"]
+    except Exception:
+        return mode_registry.IN_REPO
+
+
+def _guardian_committed(cwd, root, storage_mode):
+    """Whether in-repo guardian artifacts are clean in the working tree."""
+    if storage_mode == mode_registry.GLOBAL:
+        return "machine-local"
+    gdir = guardian_store.guardian_dir(cwd, root)
+    rel = os.path.relpath(gdir, _repo_root(cwd))
+    porcelain = store_core.run_git(cwd, "status", "--porcelain", "--", rel)
+    if porcelain is None:
+        return "unknown"
+    if porcelain.strip():
+        return "uncommitted"
+    # Untracked-but-absent dir (no artifacts yet) is still "uncommitted" until a PR.
+    tracked = store_core.run_git(cwd, "ls-files", "--", rel)
+    if not (tracked or "").strip():
+        return "uncommitted"
+    return "committed"
 
 
 def collect(cwd, lenses=None, root=None, run=None, config=None):
@@ -242,6 +458,8 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
     needed_facts = set()
     for lens in lenses:
         needed_facts.update(lens.required_facts)
+    if config.get("vitalsEnabled", True):
+        needed_facts.add("verify-command")
     facts = verify_config(cwd, root, run=run, config=config, needed_facts=needed_facts)
     unsatisfied = _unsatisfied_facts(facts["facts"])
 
@@ -255,13 +473,40 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
     funnel_raised = {}
     killed_by_drift = []
     killed_by_ledger = []
+    killed_by_bench = []
+    match_notes = []
     degraded_lenses = []
     malformed = []
     lens_meta = {}
     next_lenses = {}
+    filed_observations = {}
 
     ledger = guardian_store.read_ledger(cwd, root)
+    # partial disables ledger suppression: read_ledger drops invalid bodies from
+    # byId, which would otherwise make a normalized collision look unique and
+    # defeat fail-open. unreadable/malformed/newer never suppress. Benching
+    # requires a fully ok ledger AND a healthy guardian-config.
     suppress_via_ledger = ledger["status"] in ("ok", "absent")
+    report_card_notes = []
+    config_status = config.get("configStatus") or "healthy"
+    if config_status == "degraded":
+        report_card_notes.extend(config.get("configNotes") or [])
+    card = guardian_ledger.report_card(
+        ledger["records"], overrides=config.get("reportCard"),
+        notes_out=report_card_notes, config_status=config_status)
+    if ledger["status"] not in ("ok", "absent"):
+        # Duplicate / invalid / partially-read ledger: no benching authority this sweep.
+        for name, entry in card.items():
+            if entry.get("benched"):
+                entry["benched"] = False
+                entry["reason"] = (
+                    "%s has no benching authority this sweep: ledger status is %s"
+                    % (name, ledger["status"]))
+        if ledger.get("note"):
+            report_card_notes.append(ledger["note"])
+    benched_lenses = {name for name, entry in card.items() if entry.get("benched")}
+    issue_deadline = time.monotonic() + _ISSUE_RESOLVE_BUDGET_SECONDS
+    issue_cache = {}
 
     for lens in lenses:
         if set(lens.required_facts) & unsatisfied:
@@ -338,6 +583,7 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
 
         would_surface = set(drift_ids) | red_line_ids
         lens_surfaced = False
+        lens_is_benched = lens.name in benched_lenses
 
         for cid, cand in cand_by_id.items():
             if cid not in would_surface:
@@ -359,8 +605,30 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
             else:
                 drift_reason = "worsened" if cid in drift_ids else "red-line"
 
-            if suppress_via_ledger and cid in ledger["byId"]:
-                rec = ledger["byId"][cid]
+            rec, match_note = (None, None)
+            ambiguous_match = False
+            if suppress_via_ledger:
+                rec, match_note = guardian_ledger.match(cid, ledger["byId"])
+                if match_note:
+                    match_notes.append({
+                        "id": cid,
+                        "lens": lens.name,
+                        "note": match_note,
+                    })
+                    if "ambiguous" in match_note:
+                        ambiguous_match = True
+                        # Ambiguity revokes benching for this lens — fail open end to end.
+                        if lens.name in benched_lenses:
+                            benched_lenses.discard(lens.name)
+                            lens_is_benched = False
+                            if lens.name in card:
+                                card[lens.name]["benched"] = False
+                                card[lens.name]["reason"] = (
+                                    "%s has no benching authority this sweep: "
+                                    "normalized-identity collision (matcher fail-open)"
+                                    % lens.name)
+
+            if rec is not None:
                 if _is_filed_open(rec) and not is_red:
                     issue = rec.get("issue", "")
                     ledger_status.append({
@@ -369,8 +637,15 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
                         "line": "filed as %s, verification pending" % issue,
                     })
                     continue
+                if _is_settled_non_trade(rec) and not is_red:
+                    killed_by_ledger.append({
+                        "id": cid,
+                        "lens": lens.name,
+                        "disposition": rec.get("disposition"),
+                    })
+                    continue
                 if _is_trade_disposition(rec) and not is_red:
-                    if _materially_worsened(cand, rec):
+                    if guardian_ledger.materially_worsened(cand, rec):
                         pass  # surface — materially worsened
                     else:
                         killed_by_ledger.append({
@@ -380,11 +655,44 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
                         })
                         continue
 
+            # Benching suppresses ordinary drift only — never a red line, and never
+            # after an ambiguous identity match (fail-open must reach the surface).
+            if lens_is_benched and not is_red and not ambiguous_match:
+                killed_by_bench.append({
+                    "id": cid,
+                    "lens": lens.name,
+                    "reason": card[lens.name].get("reason") or "benched",
+                })
+                continue
+
             entry = dict(cand)
             entry["lens"] = lens.name
             entry["driftReason"] = drift_reason
             surfaced.append(entry)
             lens_surfaced = True
+
+        # Filed-closure observations for every filed record of this lens.
+        for lrec in ledger["records"]:
+            if not isinstance(lrec, dict) or lrec.get("disposition") != "filed":
+                continue
+            rid = lrec.get("id")
+            if not isinstance(rid, str) or guardian_ledger.lens_of(rid) != lens.name:
+                continue
+            matched_cand = cand_by_id.get(rid)
+            if matched_cand is None:
+                for cid, c in cand_by_id.items():
+                    hit, _ = guardian_ledger.match(cid, {rid: lrec})
+                    if hit is not None:
+                        matched_cand = c
+                        break
+            filed_observations[rid] = {
+                "present": matched_cand is not None,
+                "candidate": matched_cand,
+                "issue": lrec.get("issue"),
+                "issueState": _resolve_issue_state(
+                    lrec.get("issue"), cwd=cwd,
+                    deadline=issue_deadline, cache=issue_cache),
+            }
 
         if lens_surfaced:
             lens_meta[lens.name] = {
@@ -405,13 +713,51 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
             next_lenses[lens.name] = prev_lenses[lens.name]
 
     swept_sha = store_core.run_git(cwd, "rev-parse", "HEAD")
+    sweep = guardian_ledger.make_sweep(swept_sha or "unknown")
+    sweep_id = sweep["sweepId"]
+
+    lens_digests = {
+        name: entry.get("digest")
+        for name, entry in next_lenses.items()
+        if isinstance(entry, dict)
+    }
+    verify_result = facts.get("verifyResult") or {"status": "not-run"}
+    budget = config.get("verifyBudgetSeconds", _DEFAULT_VERIFY_BUDGET_SECONDS)
+    vitals_collected = bool(config.get("vitalsEnabled", True))
+    if vitals_collected:
+        # Do not pass the sweep's injectable `run` into vitals: test doubles stub
+        # the verify shell command, while vitals uses `run` only for read-only git.
+        vitals_out = guardian_vitals.collect(
+            cwd, root=root, lens_digests=lens_digests,
+            verify_result=verify_result, budget_seconds=budget)
+        cur_vitals = vitals_out.get("vitals") or {}
+        prev_vitals = (prev or {}).get("vitals") or {}
+        threshold_notes = []
+        vitals_delta = {
+            "delta": guardian_vitals.delta(prev_vitals, cur_vitals),
+            "crossings": guardian_vitals.crossings(
+                prev_vitals, cur_vitals, thresholds=config.get("thresholds"),
+                notes_out=threshold_notes),
+            "notCollected": vitals_out.get("notCollected") or {},
+            "sources": vitals_out.get("sources") or {},
+            "thresholdNotes": threshold_notes,
+        }
+    else:
+        # Carry prior vitals in the snapshot so re-enabling has a baseline, but mark
+        # not-collected so finalize never appends stale numbers as this sweep's.
+        cur_vitals = (prev or {}).get("vitals", {})
+        vitals_delta = {}
+
     next_snapshot = {
         "schemaVersion": guardian_store.SNAPSHOT_SCHEMA_VERSION,
         "sweptSha": swept_sha,
-        "vitals": (prev or {}).get("vitals", {}),
+        "vitals": cur_vitals,
         "lenses": next_lenses,
     }
     assert set(next_snapshot) == set(guardian_store.SNAPSHOT_KEYS)
+
+    storage_mode = _storage_mode(cwd, root)
+    committed = _guardian_committed(cwd, root, storage_mode)
 
     return {
         "surfaced": surfaced,
@@ -420,6 +766,8 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
             "malformed": malformed,
             "killedByDrift": killed_by_drift,
             "killedByLedger": killed_by_ledger,
+            "killedByBench": killed_by_bench,
+            "matchNotes": match_notes,
             "trackedFiled": list(ledger_status),
             "degradedLenses": degraded_lenses,
         },
@@ -428,10 +776,17 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
         "factVerdicts": facts["facts"],
         "ledgerStatus": ledger_status,
         "ledgerState": ledger["status"],
-        "vitalsDelta": {},
+        "reportCard": card,
+        "reportCardNotes": report_card_notes,
+        "vitalsDelta": vitals_delta,
+        "vitalsCollected": vitals_collected,
         "nextSnapshot": next_snapshot,
         "prevIdentity": prev_identity,
         "sweptSha": swept_sha,
+        "sweepId": sweep_id,
+        "filedObservations": filed_observations,
+        "committed": committed,
+        "storageMode": storage_mode,
     }
 
 
@@ -467,8 +822,148 @@ def validate_dispositions(bundle, dispositions):
     return (len(errors) == 0, errors)
 
 
+def _close_filed_records(records, observations, sweep_id):
+    """Advance filed records from current metrics → (new_records, advances).
+
+    verified-fixed / reopened run only after the linked issue is confirmed merged or
+    closed (§4.7: reopened is merged-but-metric-unmoved). While the issue is still open,
+    or its state cannot be determined, the record stays `filed` — the quieter, truthful
+    state the collect path already renders as "filed as #N, verification pending"."""
+    new_records = list(records or [])
+    advances = []
+    for rec in list(new_records):
+        if not isinstance(rec, dict) or rec.get("disposition") != "filed":
+            continue
+        rid = rec.get("id")
+        if not isinstance(rid, str):
+            continue
+        obs = (observations or {}).get(rid)
+        if obs is None:
+            continue
+        if not _issue_ready_for_closure(obs.get("issueState")):
+            continue
+        if not obs.get("present"):
+            new_records, result = guardian_ledger.advance(
+                new_records, rid, "verified-fixed", sweepId=sweep_id)
+            advances.append(result)
+            continue
+        cand = obs.get("candidate") or {}
+        if guardian_ledger.metric_improved(cand, rec):
+            new_records, result = guardian_ledger.advance(
+                new_records, rid, "verified-fixed", sweepId=sweep_id)
+        else:
+            new_records, result = guardian_ledger.advance(
+                new_records, rid, "reopened", sweepId=sweep_id)
+        advances.append(result)
+    return new_records, advances
+
+
+# Allow-list only. A newly introduced reader status must NOT become writable by
+# omission — unreadable ledger content is opaque, not empty. `records: []` never
+# licenses a rewrite.
+_WRITABLE_LEDGER_STATUSES = frozenset(("ok", "absent"))
+
+
+def _ledger_fully_readable(cwd, root, ledger):
+    """May we mutate this ledger?
+
+    Governing rule: an unreadable ledger is opaque, not empty. `records: []` from
+    `read_ledger` means "I could not read this" on malformed/newer/unreadable/partial
+    — never "there is nothing here." Only an allow-listed status (`ok` / genuine
+    `absent`) with every on-disk record accepted by the shared validator (no
+    duplicates, no silently-skipped entries) and a schemaVersion exactly equal to
+    LEDGER_SCHEMA_VERSION is safe to rewrite."""
+    status = ledger.get("status")
+    if status not in _WRITABLE_LEDGER_STATUSES:
+        return False, "ledger-%s" % (status or "unknown")
+    if status == "absent":
+        return True, None
+    if ledger.get("note"):
+        return False, "ledger-duplicate-ids"
+
+    path = guardian_store.ledger_path(cwd, root)
+    try:
+        with open(path, "rb") as fh:
+            text = fh.read().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False, "ledger-unreadable"
+    block, err = guardian_store._parse_ledger_block(text)
+    if err == "ambiguous":
+        return False, "ledger-ambiguous"
+    if err or not isinstance(block, dict):
+        return False, "ledger-malformed"
+    ver = block.get("schemaVersion")
+    if isinstance(ver, int) and not isinstance(ver, bool) and ver > guardian_store.LEDGER_SCHEMA_VERSION:
+        return False, "ledger-newer"
+    if not (isinstance(ver, int) and not isinstance(ver, bool)
+            and ver == guardian_store.LEDGER_SCHEMA_VERSION):
+        return False, "ledger-malformed"
+    raw = block.get("records")
+    if not isinstance(raw, list):
+        return False, "ledger-malformed"
+    if "sweeps" in block and not isinstance(block.get("sweeps"), list):
+        return False, "ledger-malformed"
+
+    accepted = 0
+    for rec in raw:
+        if not isinstance(rec, dict):
+            return False, "ledger-partial-skip"
+        if not all(rec.get(f) is not None for f in guardian_store.LEDGER_MIN_FIELDS):
+            return False, "ledger-partial-skip"
+        if rec.get("disposition") not in guardian_lens.FINDING_STATES:
+            return False, "ledger-partial-skip"
+        rid = rec.get("id")
+        if not isinstance(rid, str) or not rid.strip():
+            return False, "ledger-partial-skip"
+        ok, _reasons = guardian_ledger.validate_record(rec)
+        if not ok:
+            return False, "ledger-partial-skip"
+        accepted += 1
+    if accepted != len(ledger.get("records") or []):
+        return False, "ledger-partial-skip"
+    raw_sweeps = block.get("sweeps")
+    if isinstance(raw_sweeps, list):
+        for entry in raw_sweeps:
+            if not isinstance(entry, dict):
+                return False, "ledger-partial-skip"
+    return True, None
+
+
+def _closure_status_lines(advances, observations):
+    """Human status lines for closure outcomes that land in this sweep's report."""
+    lines = []
+    for adv in advances or []:
+        if not isinstance(adv, dict) or not adv.get("ok"):
+            continue
+        rid = adv.get("id")
+        to = adv.get("to")
+        obs = (observations or {}).get(rid) or {}
+        issue = obs.get("issue") or ""
+        if to == "verified-fixed":
+            line = "filed as %s, verified fixed this sweep" % issue
+        elif to == "reopened":
+            line = "filed as %s, reopened — metric unmoved or worsened" % issue
+        else:
+            continue
+        lines.append({
+            "id": rid,
+            "lens": guardian_ledger.lens_of(rid) if isinstance(rid, str) else "",
+            "line": line,
+        })
+    return lines
+
+
 def finalize(cwd, bundle, dispositions, root=None):
-    """Transactional finalize: validate → report first → baseline last, under sweep lock."""
+    """Transactional finalize: validate → proposed closures → report → vitals → baseline.
+
+    Filed-item closure is computed BEFORE the report is rendered so the durable report
+    describes the ledger state this sweep *proposes* to advance to. The advisor's
+    `commit_ledger` is the sole writer of `guardian/ledger.md`; this step is read-only
+    on the ledger. Order inside the lock: report → vitals trend → snapshot last. The
+    snapshot is the commit marker: it is written only after the vitals write succeeds
+    (or is an intentional skip). An intentional skip (vitals not collected) does not
+    block the baseline; a failed attempted vitals write returns top-level failure and
+    leaves `latest.json` untouched so the same bundle can retry."""
     ok, errors = validate_dispositions(bundle, dispositions)
     if not ok:
         return {"ok": False, "reason": "invalid-dispositions", "errors": errors}
@@ -491,20 +986,199 @@ def finalize(cwd, bundle, dispositions, root=None):
             }
 
         ledger = guardian_store.read_ledger(cwd, root)
-        report_md = guardian_report.render(bundle, dispositions, ledger)
+        sweep_id = bundle.get("sweepId") or guardian_ledger.make_sweep(
+            bundle.get("sweptSha") or "unknown")["sweepId"]
+
+        new_records = list(ledger.get("records") or [])
+        advances = []
+        writable, skip_why = _ledger_fully_readable(cwd, root, ledger)
+        if writable:
+            new_records, advances = _close_filed_records(
+                ledger["records"], bundle.get("filedObservations"), sweep_id)
+
+        # Report sees proposed closure outcomes before anything is persisted.
+        report_bundle = dict(bundle)
+        if not writable:
+            # Opaque ledger: do not imply "no closures" as if readable-and-empty.
+            report_bundle["closuresUnavailable"] = skip_why
+            prior = list(bundle.get("ledgerStatus") or [])
+            prior.append({
+                "id": "(closures)",
+                "lens": "guardian",
+                "line": "closures deferred — ledger unreadable (%s)" % skip_why,
+            })
+            report_bundle["ledgerStatus"] = prior
+            report_bundle["closureAdvances"] = []
+        else:
+            report_bundle["closuresUnavailable"] = None
+            closure_lines = _closure_status_lines(
+                advances, bundle.get("filedObservations"))
+            if closure_lines:
+                prior = list(bundle.get("ledgerStatus") or [])
+                closed_ids = {c["id"] for c in closure_lines}
+                prior = [p for p in prior if p.get("id") not in closed_ids]
+                report_bundle["ledgerStatus"] = prior + closure_lines
+            report_bundle["closureAdvances"] = advances
+
+        report_ledger = {
+            "records": new_records,
+            "byId": {
+                r["id"]: r for r in new_records
+                if isinstance(r, dict) and isinstance(r.get("id"), str)
+            },
+            "status": ledger.get("status"),
+            "note": ledger.get("note"),
+        }
+        report_md = guardian_report.render(report_bundle, dispositions, report_ledger)
 
         rp = guardian_store.report_path(cwd, root)
         store_core.atomic_write(rp, report_md)
 
+        vitals_append = {"ok": True, "skipped": "no-vitals"}
+        try:
+            if not bundle.get("vitalsCollected", True):
+                vitals_append = {"ok": True, "skipped": "vitals-not-collected"}
+            else:
+                vitals = (bundle.get("nextSnapshot") or {}).get("vitals") or {}
+                vitals_append = guardian_vitals.append_unlocked(
+                    cwd, vitals, sweep_id=sweep_id,
+                    swept_sha=bundle.get("sweptSha"), root=root)
+        except Exception as exc:
+            vitals_append = {"ok": False, "reason": str(exc)}
+
+        # Intentional skips (vitals disabled) do not block the baseline.
+        # A failed attempted durable vitals write must not advance latest.json.
+        # Fail closed: only an explicit ok=True result is non-blocking. A result
+        # that happens to carry a `skipped` key with ok=False, or a truthy non-True
+        # ok (e.g. ok="failed"), must still block (Fix 6 / WO-1d Fix C) —
+        # intentional skips already return ok=True (e.g. vitals-not-collected).
+        def _blocks_commit(result):
+            return result.get("ok") is not True
+
+        if _blocks_commit(vitals_append):
+            return {
+                "ok": False,
+                "reason": "durable-write-failed",
+                "reportPath": rp,
+                "vitalsAppend": vitals_append,
+            }
+
         snap_path = guardian_store.snapshot_path(cwd, root)
+        # Persist sweepId beside the SNAPSHOT_KEYS baseline (non-identity field)
+        # so commit_ledger's additive freshness guard can detect concurrent
+        # same-SHA / byte-identical snapshots from a different sweep.
+        persisted = {**bundle["nextSnapshot"], "sweepId": bundle["sweepId"]}
         store_core.atomic_write(
-            snap_path, json.dumps(bundle["nextSnapshot"], indent=2) + "\n")
+            snap_path, json.dumps(persisted, indent=2) + "\n")
 
         return {
             "ok": True,
             "reportPath": rp,
             "snapshotPath": snap_path,
+            "vitalsAppend": vitals_append,
+            "closuresUnavailable": report_bundle.get("closuresUnavailable"),
+            "closureAdvances": advances if writable else [],
         }
+    finally:
+        file_lock.release(lock_path)
+
+
+def commit_ledger(cwd, bundle, dispositions, root=None):
+    """Advisor-only ledger commit — the sole writer of `guardian/ledger.md`.
+
+    Run inline at consult/triage AFTER `finalize`. The fenced JSON block and the
+    report-card region are **machine-owned** (the advisor is their sole writer); owner
+    hand-edits belong to the surrounding prose, which the never-clobber re-splice
+    preserves.
+
+    The whole transaction runs under the sweep lock against fresh reads: R1 freshness,
+    opaque-ledger check, closure computation, roster read+append, and the never-clobber
+    splice write. `finalize` releases its lock before this call, so there is no
+    cross-deadlock; this function must call `_write_locked` (not the lock-acquiring
+    `write`) because the lock is non-reentrant.
+
+    Fail-closed on opaque/unreadable ledgers, stale bundles (latest.json moved on), and
+    transient roster-read failures. Idempotent for a same-identity re-run: already-
+    advanced records are skipped by `_close_filed_records`, and `append_sweep` dedups
+    on sweep identity."""
+    ok, errors = validate_dispositions(bundle, dispositions)
+    if not ok:
+        return {"ok": False, "reason": "invalid-dispositions", "errors": errors}
+
+    lock_path = guardian_store.sweep_lock_path(cwd, root)
+    try:
+        file_lock.acquire(lock_path, ttl=guardian_store.SWEEP_LOCK_TTL)
+    except file_lock.LockHeld as exc:
+        return {"ok": False, "reason": "raced", "lockHeld": exc.holder}
+
+    try:
+        # R1 — intent-freshness against FRESH head (under the lock).
+        # snapshot_identity hashes only SNAPSHOT_KEYS, so two same-SHA sweeps that
+        # produce byte-identical baselines still collide on identity alone. The
+        # additive sweepId check is active: finalize persists sweepId beside the
+        # baseline (non-identity field), so a concurrent older bundle whose
+        # nextSnapshot matches but whose sweepId differs from the head fails closed
+        # as stale-bundle rather than landing the wrong closures.
+        current = guardian_store.read_snapshot(cwd, root)
+        on_disk = guardian_store.snapshot_identity(current)
+        expected = guardian_store.snapshot_identity(bundle.get("nextSnapshot") or {})
+        if on_disk != expected:
+            return {
+                "ok": False,
+                "reason": "stale-bundle",
+                "onDisk": on_disk,
+                "expected": expected,
+            }
+        head_sweep = (current or {}).get("sweepId") if isinstance(current, dict) else None
+        bundle_sweep = bundle.get("sweepId")
+        if (isinstance(head_sweep, str) and head_sweep.strip()
+                and isinstance(bundle_sweep, str) and bundle_sweep.strip()
+                and head_sweep.strip() != bundle_sweep.strip()):
+            return {
+                "ok": False,
+                "reason": "stale-bundle",
+                "onDisk": on_disk,
+                "expected": expected,
+                "onDiskSweepId": head_sweep,
+                "expectedSweepId": bundle_sweep,
+            }
+
+        ledger = guardian_store.read_ledger(cwd, root)
+        writable, skip_why = _ledger_fully_readable(cwd, root, ledger)
+        if not writable:
+            return {
+                "ok": False,
+                "skipped": skip_why,
+                "reason": "ledger write skipped: %s (on-disk bytes left untouched)"
+                          % skip_why,
+            }
+
+        sweep_id = bundle.get("sweepId") or guardian_ledger.make_sweep(
+            bundle.get("sweptSha") or "unknown")["sweepId"]
+        new_records, advances = _close_filed_records(
+            ledger["records"], bundle.get("filedObservations"), sweep_id)
+
+        # R2 — roster tri-state: read failure fails the commit closed (retryable).
+        path = guardian_store.ledger_path(cwd, root)
+        roster_status, roster = guardian_ledger._read_sweeps_result(path)
+        if roster_status == "read-failed":
+            return {
+                "ok": False,
+                "reason": "roster-read-failed",
+                "retryable": True,
+            }
+        # absent or ok (including genuinely empty): append this sweep normally.
+        sweep = guardian_ledger.make_sweep(
+            bundle.get("sweptSha") or "unknown", sweep_id=sweep_id)
+        sweeps = guardian_ledger.append_sweep(roster, sweep)
+
+        # Report card is derived inside _write_locked from the final merged records —
+        # do not reuse collect-time bundle.reportCard (Fix 4).
+        result = guardian_ledger._write_locked(
+            cwd, new_records, root=root, sweeps=sweeps)
+        out = dict(result)
+        out["advances"] = advances
+        return out
     finally:
         file_lock.release(lock_path)
 
@@ -523,6 +1197,12 @@ def main(argv=None):
     fp.add_argument("--bundle", required=True)
     fp.add_argument("--dispositions", required=True)
 
+    clp = sub.add_parser("commit-ledger")
+    clp.add_argument("--cwd", default=".")
+    clp.add_argument("--root", default=None)
+    clp.add_argument("--bundle", required=True)
+    clp.add_argument("--dispositions", required=True)
+
     vp = sub.add_parser("verify-config")
     vp.add_argument("--cwd", default=".")
     vp.add_argument("--root", default=None)
@@ -537,6 +1217,12 @@ def main(argv=None):
             with open(args.dispositions, encoding="utf-8") as fh:
                 dispositions = json.load(fh)
             out = finalize(args.cwd, bundle, dispositions, root=args.root)
+        elif args.cmd == "commit-ledger":
+            with open(args.bundle, encoding="utf-8") as fh:
+                bundle = json.load(fh)
+            with open(args.dispositions, encoding="utf-8") as fh:
+                dispositions = json.load(fh)
+            out = commit_ledger(args.cwd, bundle, dispositions, root=args.root)
         else:
             # Standalone CLI has no lenses — skip spawning the verify command.
             out = verify_config(args.cwd, root=args.root, needed_facts=set())

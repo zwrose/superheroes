@@ -51,13 +51,31 @@ def test_snapshot_round_trip(tmp_path):
     }
     sc.atomic_write(gs.snapshot_path(repo), json.dumps(snap, indent=2))
     assert gs.read_snapshot(repo) == snap
-    assert gs.snapshot_identity(snap) == sc.short_hash(json.dumps(snap, sort_keys=True))
+    projected = {k: snap.get(k) for k in gs.SNAPSHOT_KEYS}
+    assert gs.snapshot_identity(snap) == sc.short_hash(json.dumps(projected, sort_keys=True))
 
 
 def test_snapshot_identity_hash_when_no_sha(tmp_path):
     snap = {"schemaVersion": 1, "vitals": {}, "lenses": {}}
     ident = gs.snapshot_identity(snap)
-    assert ident == sc.short_hash(json.dumps(snap, sort_keys=True))
+    # Identity hashes the SNAPSHOT_KEYS projection (missing keys → null).
+    projected = {k: snap.get(k) for k in gs.SNAPSHOT_KEYS}
+    assert ident == sc.short_hash(json.dumps(projected, sort_keys=True))
+
+
+def test_snapshot_identity_ignores_extra_sweep_id():
+    """WO-1d Fix A: sweepId is a non-identity field — same hash with/without it."""
+    base = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc123",
+        "vitals": {},
+        "lenses": {"fixture": {"collectorVersion": "1", "digest": {"v": 1}}},
+    }
+    with_sweep = dict(base)
+    with_sweep["sweepId"] = "sweep-extra"
+    assert gs.snapshot_identity(base) == gs.snapshot_identity(with_sweep)
+    projected = {k: base.get(k) for k in gs.SNAPSHOT_KEYS}
+    assert gs.snapshot_identity(base) == sc.short_hash(json.dumps(projected, sort_keys=True))
 
 
 def test_read_snapshot_malformed_returns_none(tmp_path, capsys):
@@ -138,8 +156,8 @@ def test_read_ledger_newer_is_opaque(tmp_path):
 def test_read_ledger_drops_incomplete_records(tmp_path):
     repo = init_calibrated_repo(tmp_path)
     records = [
-        {"id": "good", "disposition": "accepted", "issue": "n/a"},
-        {"id": "trade", "disposition": "accepted"},
+        {"id": "good", "disposition": "filed", "issue": "n/a"},
+        {"id": "trade", "disposition": "accepted", "reason": "owner trade"},
         {"id": "bad"},
     ]
     text = (
@@ -151,6 +169,62 @@ def test_read_ledger_drops_incomplete_records(tmp_path):
     assert "good" in out["byId"]
     assert "trade" in out["byId"]
     assert "bad" not in out["byId"]
+    assert out["status"] == "partial"
+    assert "skipped" in (out["note"] or "")
+
+
+def test_read_ledger_excludes_wont_fix_without_reason(tmp_path):
+    """Shared validate_record: accepted/declined without reason must not enter byId."""
+    repo = init_calibrated_repo(tmp_path)
+    records = [
+        {"id": "valid-filed", "disposition": "filed", "issue": "#1"},
+        {"id": "mute-trade", "disposition": "accepted", "issue": None,
+         "metricAtDisposition": {"metric": 5}},
+    ]
+    text = (
+        "```json %s\n%s\n```\n"
+        % (gs.LEDGER_FENCE, json.dumps({"schemaVersion": 1, "records": records}))
+    )
+    sc.atomic_write(gs.ledger_path(repo), text)
+    out = gs.read_ledger(repo)
+    assert out["status"] == "partial"
+    assert "valid-filed" in out["byId"]
+    assert "mute-trade" not in out["byId"]
+    assert "mute-trade" not in [r.get("id") for r in out["records"]]
+
+
+def test_read_ledger_unreadable_existing_file(tmp_path):
+    """CRITICAL: existing-but-unreadable is unreadable, never absent."""
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.ledger_path(repo)
+    owner_text = (
+        "# Owner prose\n\n```json %s\n%s\n```\n"
+        % (gs.LEDGER_FENCE, json.dumps({
+            "schemaVersion": 1,
+            "records": [{
+                "id": "fixture:trade",
+                "disposition": "accepted",
+                "date": "2026-07-01",
+                "issue": None,
+                "metricAtDisposition": {"metric": 5},
+                "reason": "owner accepted this trade",
+                "reraiseWhen": None,
+            }],
+            "sweeps": [],
+        }, indent=2))
+    )
+    sc.atomic_write(path, owner_text)
+    os.chmod(path, 0)
+    try:
+        out = gs.read_ledger(repo)
+        if out["status"] == "ok":
+            pytest.skip("cannot make the ledger unreadable in this environment")
+        assert out["status"] == "unreadable"
+        assert out["records"] == []
+        assert out["byId"] == {}
+        assert out["note"]
+    finally:
+        os.chmod(path, 0o644)
 
 
 def test_read_ledger_drops_unknown_disposition(tmp_path):
@@ -165,6 +239,7 @@ def test_read_ledger_drops_unknown_disposition(tmp_path):
     )
     sc.atomic_write(gs.ledger_path(repo), text)
     out = gs.read_ledger(repo)
+    assert out["status"] == "partial"
     assert "known" in out["byId"]
     assert "unknown" not in out["byId"]
 
@@ -177,3 +252,63 @@ def test_snapshot_keys_match_ssot(tmp_path):
         "lenses": {},
     }
     assert set(snap) == set(gs.SNAPSHOT_KEYS)
+
+
+def _write_ledger_block(repo, payload):
+    text = (
+        "```json %s\n%s\n```\n"
+        % (gs.LEDGER_FENCE, json.dumps(payload, indent=2))
+    )
+    sc.atomic_write(gs.ledger_path(repo), text)
+
+
+def test_read_ledger_list_block_malformed_not_attribute_error(tmp_path):
+    """Regression: list block used to raise AttributeError on block.get."""
+    repo = init_calibrated_repo(tmp_path)
+    _write_ledger_block(repo, [{"id": "x", "disposition": "filed"}])
+    out = gs.read_ledger(repo)
+    assert out["status"] == "malformed"
+    assert out["records"] == []
+    assert out["byId"] == {}
+    assert "not an object" in (out["note"] or "")
+
+
+def test_read_ledger_string_block_malformed_not_attribute_error(tmp_path):
+    """Regression: string block used to raise AttributeError on block.get."""
+    repo = init_calibrated_repo(tmp_path)
+    _write_ledger_block(repo, "not-an-object")
+    out = gs.read_ledger(repo)
+    assert out["status"] == "malformed"
+    assert out["records"] == []
+    assert out["byId"] == {}
+    assert "not an object" in (out["note"] or "")
+
+
+def test_read_ledger_unhashable_id_skipped_not_type_error(tmp_path):
+    """Regression: list id used to raise TypeError: unhashable type: 'list'."""
+    repo = init_calibrated_repo(tmp_path)
+    records = [
+        {"id": ["unhashable"], "disposition": "filed", "issue": "#1"},
+        {"id": "good", "disposition": "filed", "issue": "#2"},
+    ]
+    _write_ledger_block(repo, {"schemaVersion": 1, "records": records})
+    out = gs.read_ledger(repo)
+    assert out["status"] == "partial"
+    assert "good" in out["byId"]
+    assert len(out["byId"]) == 1
+
+
+def test_read_ledger_duplicate_ids_do_not_suppress(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    records = [
+        {"id": "dup", "disposition": "accepted", "issue": None, "reason": "a"},
+        {"id": "dup", "disposition": "declined", "issue": None, "reason": "b"},
+        {"id": "unique", "disposition": "filed", "issue": "#1"},
+    ]
+    _write_ledger_block(repo, {"schemaVersion": 1, "records": records})
+    out = gs.read_ledger(repo)
+    assert out["status"] == "partial"
+    assert "dup" not in out["byId"]
+    assert "unique" in out["byId"]
+    assert out["note"] and "duplicate" in out["note"]
+    assert "dup" in out["note"]

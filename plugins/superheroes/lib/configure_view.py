@@ -19,6 +19,10 @@ if _LIB_DIR not in sys.path:
 
 import core_md         # noqa: E402
 import engine_pref     # noqa: E402
+import guardian_ledger  # noqa: E402
+import guardian_store  # noqa: E402
+import guardian_sweep  # noqa: E402
+import guardian_vitals  # noqa: E402
 import mode_reconcile  # noqa: E402
 import mode_registry   # noqa: E402
 import model_tier_overrides  # noqa: E402
@@ -33,6 +37,154 @@ def _read(path):
             return fh.read()
     except OSError:
         return None
+
+
+def _cadence_view(config):
+    """Cadence display from read_config output only (CONVENTIONS §11 — no second parser)."""
+    cadence = config.get("cadence")
+    if not isinstance(cadence, dict):
+        cadence = {}
+    cadence_tuned = config.get("cadenceTuned")
+    if not isinstance(cadence_tuned, dict):
+        cadence_tuned = {}
+    return cadence, cadence_tuned
+
+
+def _collect_guardian(cwd, root):
+    config = guardian_sweep.read_config(cwd, root)
+    cadence, cadence_tuned = _cadence_view(config)
+    ledger = guardian_store.read_ledger(cwd, root)
+    report_card_notes = []
+    card = guardian_ledger.report_card(
+        ledger.get("records"), config.get("reportCard"), notes_out=report_card_notes,
+        config_status=config.get("configStatus"))
+    if ledger.get("status") not in ("ok", "absent") and ledger.get("note"):
+        report_card_notes.append(ledger["note"])
+    for note in config.get("configNotes") or []:
+        report_card_notes.append(note)
+    snapshot = guardian_store.read_snapshot(cwd, root)
+    trend = guardian_vitals.read_trend(cwd, root=root, limit=1)
+    last_date = None
+    if trend.get("records"):
+        last_date = trend["records"][-1].get("date")
+    return {
+        "cadence": cadence,
+        "cadenceTuned": cadence_tuned,
+        "coverage": config.get("coverage") or [],
+        "card": card,
+        "reportCardNotes": report_card_notes,
+        "configStatus": config.get("configStatus"),
+        "ledgerStatus": ledger.get("status"),
+        "ledgerNote": ledger.get("note"),
+        "lastSweptSha": snapshot.get("sweptSha") if snapshot else None,
+        "lastSweepDate": last_date,
+        "trendStatus": trend.get("status"),
+        "trendNote": trend.get("note"),
+        "trendMalformed": trend.get("malformed"),
+    }
+
+
+def _guardian_lines(guardian):
+    """Plain-text guardian observability rows for the one-screen view."""
+    if guardian is None:
+        return ["(not available)"]
+    lines = []
+    cadence = guardian.get("cadence") or {}
+    min_merges = cadence.get("minMerges")
+    min_days = cadence.get("minDays")
+    if isinstance(min_merges, int) and isinstance(min_days, int):
+        note = "tuned" if guardian.get("cadenceTuned") else "defaults"
+        lines.append("cadence: ≥%d merges or ≥%d days (%s)" % (min_merges, min_days, note))
+    else:
+        lines.append("cadence: (not available)")
+
+    coverage = guardian.get("coverage") or []
+    if not coverage:
+        lines.append("coverage: none recorded")
+    else:
+        parts = []
+        for entry in coverage:
+            if not isinstance(entry, dict):
+                continue
+            path = entry.get("path")
+            tool = entry.get("tool")
+            if isinstance(path, str) and path.strip():
+                label = path.strip()
+                if isinstance(tool, str) and tool.strip():
+                    label = "%s (%s)" % (label, tool.strip())
+                parts.append(label)
+        lines.append("coverage: " + (", ".join(parts) if parts else "none recorded"))
+
+    card = guardian.get("card") or {}
+    benched = sorted(lens for lens, entry in card.items() if entry.get("benched"))
+    below_floor = []
+    for lens, entry in sorted(card.items()):
+        if entry.get("benched"):
+            continue
+        if not entry.get("adjudicated"):
+            continue
+        reason = entry.get("reason") or ""
+        if "is active:" in reason:
+            continue
+        below_floor.append(lens)
+
+    ledger_status = guardian.get("ledgerStatus")
+    config_status = guardian.get("configStatus")
+    bench_authoritative = (
+        ledger_status in ("ok", "absent")
+        and config_status in (None, "healthy"))
+
+    if not bench_authoritative:
+        if ledger_status == "partial":
+            note = guardian.get("ledgerNote") or "ledger partially parsed"
+            lines.append("benched lenses: uncertain — ledger is partial (%s)" % note)
+        elif ledger_status in ("malformed", "newer", "unreadable"):
+            note = guardian.get("ledgerNote") or ledger_status
+            if not card:
+                lines.append("benched lenses: unknown — ledger unreadable (%s)" % note)
+            else:
+                lines.append("benched lenses: uncertain — ledger unreadable (%s)" % note)
+        elif config_status == "degraded":
+            note = "; ".join(guardian.get("reportCardNotes") or []) or "guardian-config degraded"
+            lines.append("benched lenses: uncertain — guardian-config is degraded (%s)" % note)
+        else:
+            note = guardian.get("ledgerNote") or (ledger_status or "unknown")
+            lines.append("benched lenses: uncertain — ledger status %s (%s)"
+                         % (ledger_status, note))
+    elif ledger_status == "absent" and not card:
+        lines.append("benched lenses: no sweep history yet")
+    elif benched:
+        lines.append("benched lenses:")
+        for lens in benched:
+            lines.append("  %s — %s" % (lens, card[lens].get("reason") or "(no reason)"))
+    else:
+        lines.append("benched lenses: none")
+
+    for note in guardian.get("reportCardNotes") or []:
+        lines.append("report-card note: %s" % note)
+
+    for lens in below_floor:
+        lines.append("%s — floor not met" % lens)
+
+    trend_status = guardian.get("trendStatus")
+    trend_malformed = guardian.get("trendMalformed")
+    trend_not_clean = (
+        trend_status not in (None, "ok", "absent")
+        or (isinstance(trend_malformed, int) and trend_malformed > 0))
+    if trend_not_clean:
+        note = guardian.get("trendNote") or trend_status or "damaged"
+        if isinstance(trend_malformed, int) and trend_malformed > 0:
+            note = "%s (%d malformed line(s))" % (note, trend_malformed)
+        lines.append("vitals history: unreadable (%s)" % note)
+
+    sha = guardian.get("lastSweptSha")
+    if sha:
+        date = guardian.get("lastSweepDate")
+        if date:
+            lines.append("last sweep: %s (%s)" % (sha, date))
+        else:
+            lines.append("last sweep: %s" % sha)
+    return lines
 
 
 def collect(cwd, root=None):
@@ -74,10 +226,14 @@ def collect(cwd, root=None):
         engine_prefs = engine_pref.load_engine_prefs(cwd, root)
     except Exception:
         engine_prefs = {}
+    try:
+        guardian = _collect_guardian(cwd, root)
+    except Exception:
+        guardian = None
     return {"core": core, "layers": layers, "patterns": patterns, "mode": mode,
             "drift": drift, "storeHealth": health,
             "modelTiers": tiers, "modelTierOverrides": overrides, "modelTierProfile": profile,
-            "enginePrefs": engine_prefs}
+            "enginePrefs": engine_prefs, "guardian": guardian}
 
 
 def _health_line(counts):
@@ -165,6 +321,10 @@ def render(cwd, *, root=None):
         for role in model_tier_overrides.KNOWN_ROLES:
             out.append(f"{role}: {tiers.get(role)}")
     out.append("orchestrator: (session model — not owner-configurable)")
+    out.append("")
+    out.append("## Guardian")
+    for line in _guardian_lines(data.get("guardian")):
+        out.append(line)
     out.append("")
     out.append("## Pinned patterns")
     out.append((data["patterns"] or "(none)").strip())
