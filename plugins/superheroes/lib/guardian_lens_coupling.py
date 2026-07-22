@@ -185,8 +185,7 @@ REPO_TEXT_MAX = 200
 _REPO_TEXT_CTRL = re.compile(r"[\x00-\x1f\x7f-\x9f]+")
 # Markdown-structural characters. report.md is markdown — a bare `#` at line start is
 # a heading; `*`, backticks, brackets, and `|` similarly forge structure. Neutralised
-# here. Deliberately NOT `<>`: the lens's own EDGE_ARROW (`->`) and id grammar must
-# survive sanitization of cluster/matrix/id strings.
+# here. Angle brackets are handled separately below so EDGE_ARROW (`->`) survives.
 _REPO_TEXT_MD = str.maketrans({
     "#": "_",
     "*": "_",
@@ -195,6 +194,13 @@ _REPO_TEXT_MD = str.maketrans({
     "]": ")",
     "|": "_",
 })
+# Placeholder used while neutralizing HTML angle brackets so EDGE_ARROW is preserved.
+_ARROW_PLACEHOLDER = "\x00ARROW\x00"
+# Characters that must be percent-encoded in identity fragments so encoding is
+# reversible, collision-free, and carries no active markdown/HTML markup. `%` itself
+# is included so a literal `%23` cannot collide with an encoded `#`.
+_IDENTITY_ESCAPE_RE = re.compile(
+    r"[\x00-\x1f\x7f-\x9f#*`\[\]|<>%\\]")
 
 # --- Python AST census I/O bounds ---------------------------------------------------
 # `_python_edges` must not hang or OOM on committed content alone. A symlink to
@@ -214,9 +220,11 @@ def _safe_repo_text(text, max_len=REPO_TEXT_MAX):
 
     Defends against: a committed directory or file name containing newlines and
     markdown headings (e.g. ``\\n## forged``) forging structure in ``report.md``, or
-    smuggling instruction-shaped text toward the validating model. Call this at every
-    site where a repo-controlled string enters a reason, a digest field, or the report
-    — do not scatter ad-hoc escaping at call sites.
+    smuggling instruction-shaped text toward the validating model. Also neutralises
+    HTML angle-bracket tags (``<script>``, ``<img ...>``) while preserving the lens's
+    EDGE_ARROW (`->`) grammar. Call this at every site where a repo-controlled string
+    enters a reason, a digest free-text field, or the report — do not scatter ad-hoc
+    escaping at call sites. Identity/join keys use ``_encode_identity_*`` instead.
     """
     if text is None:
         return ""
@@ -225,9 +233,50 @@ def _safe_repo_text(text, max_len=REPO_TEXT_MAX):
     text = _REPO_TEXT_CTRL.sub(" ", text)
     text = " ".join(text.split())
     text = text.translate(_REPO_TEXT_MD)
+    # Neutralize HTML tags / angle brackets without destroying EDGE_ARROW (`->`).
+    text = text.replace(EDGE_ARROW, _ARROW_PLACEHOLDER)
+    text = text.replace("<", "(").replace(">", ")")
+    text = text.replace(_ARROW_PLACEHOLDER, EDGE_ARROW)
     if len(text) > max_len:
         text = text[: max_len - 3].rstrip() + "..."
     return text
+
+
+def _encode_identity_fragment(text, max_len=REPO_TEXT_MAX * 2):
+    """Lossless, injection-safe encoding for one identity fragment (cluster, rule, …).
+
+    Percent-escapes control / markdown / HTML-significant characters so distinct
+    inputs stay distinct (unlike lossy ``_safe_repo_text``) while carrying no active
+    markup. Reversible for the escaped alphabet; does not collapse whitespace.
+    """
+    if text is None:
+        return ""
+    if not isinstance(text, str):
+        text = str(text)
+
+    def _esc(match):
+        return "%%%02X" % ord(match.group(0))
+
+    encoded = _IDENTITY_ESCAPE_RE.sub(_esc, text)
+    if len(encoded) > max_len:
+        encoded = encoded[: max_len - 3] + "..."
+    return encoded
+
+
+def _encode_identity_key(text, max_len=REPO_TEXT_MAX * 2):
+    """Encode an identity key that may contain EDGE_ARROW separators.
+
+    Cluster segments are encoded; the ``->`` arrow grammar is preserved as the
+    separator (encode segments, not the arrow). Also safe for candidate ids /
+    wallKeys that embed a ``from->to`` location.
+    """
+    if text is None:
+        return ""
+    if not isinstance(text, str):
+        text = str(text)
+    parts = text.split(EDGE_ARROW)
+    return EDGE_ARROW.join(
+        _encode_identity_fragment(p, max_len=max_len) for p in parts)
 
 
 def _posix(path):
@@ -1019,8 +1068,10 @@ class CouplingLens(object):
     def _build_digest(self, ecosystems, rows, candidates, vocabulary, check, versions,
                       per_workspace, parsed_total, sources_total, js_census, py_census):
         full_matrix = build_matrix(rows)
+        # Identity keys (matrix / matrixHash) use lossless encoding — lossy
+        # _safe_repo_text would collapse a#->b and a*->b onto one cell and mask drift.
         safe_full = {
-            _safe_repo_text(k, max_len=REPO_TEXT_MAX * 2): v
+            _encode_identity_key(k, max_len=REPO_TEXT_MAX * 2): v
             for k, v in full_matrix.items()
         }
         matrix, truncated = _truncate_matrix(safe_full)
@@ -1081,13 +1132,21 @@ class CouplingLens(object):
         safe_candidates = []
         for c in candidates or []:
             sc = dict(c)
+            # Ledger-join / eligible keys: lossless identity encoding (not lossy clamp).
             if "id" in sc:
-                sc["id"] = _safe_repo_text(sc["id"], max_len=REPO_TEXT_MAX * 2)
+                sc["id"] = _encode_identity_key(
+                    sc["id"], max_len=REPO_TEXT_MAX * 2)
             for key in ("fromCluster", "toCluster", "wallKey", "rule"):
                 if key in sc and isinstance(sc[key], str):
-                    sc[key] = _safe_repo_text(
-                        sc[key], max_len=REPO_TEXT_MAX * 2 if key != "rule"
-                        else REPO_TEXT_MAX)
+                    max_len = (REPO_TEXT_MAX * 2 if key != "rule"
+                               else REPO_TEXT_MAX)
+                    if key in ("fromCluster", "toCluster", "rule"):
+                        sc[key] = _encode_identity_fragment(
+                            sc[key], max_len=max_len)
+                    else:
+                        sc[key] = _encode_identity_key(
+                            sc[key], max_len=max_len)
+            # Free-text path evidence stays on the lossy display clamp.
             if "paths" in sc:
                 sc["paths"] = [
                     {"from": _safe_repo_text(p.get("from") or ""),
