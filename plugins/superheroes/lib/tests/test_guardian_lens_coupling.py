@@ -1807,3 +1807,98 @@ def test_safe_repo_text_neutralizes_html_tags_but_preserves_edge_arrow():
     assert "<script>" not in reason
     assert "<" not in reason and ">" not in reason
     assert glc.EDGE_ARROW in glc._safe_repo_text("src/a->src/b")
+
+
+# ======================================================================================
+# 17. B6 identity-collapse regressions (F3 arrow-in-name, F4 lossy truncation, F2 dedup)
+# ======================================================================================
+
+def test_arrow_in_cluster_name_does_not_collapse_distinct_matrix_cells():
+    """F3: a literal ``->`` inside a cluster/dir name must not collapse two DISTINCT
+    edges into one matrix cell or hide matrixHash drift.
+
+    A directory named ``a->b`` is a legal POSIX filename in the adversarial-repo threat
+    model. ``x -> (a->b)`` and ``(x->a) -> b`` are different edges; building a raw
+    ``x->a->b`` key and splitting it later is ambiguous and merges them into one cell,
+    so a real cross-wall edge change leaves matrixHash unchanged (drift masked).
+    Driven through the real classification path (build_matrix + _build_digest).
+    """
+    the_lens = glc.LENS
+    e1 = {"fromCluster": "x", "toCluster": "a->b", "exclusion": None}
+    e2 = {"fromCluster": "x->a", "toCluster": "b", "exclusion": None}
+    vocab = glc.deferred_vocabulary()
+    check = glc.deferred_check_the_check()
+    census = {"workspaces": ["."]}
+
+    def _digest(edge_rows):
+        return the_lens._build_digest(
+            ecosystems={}, rows=edge_rows, candidates=[],
+            vocabulary=vocab, check=check, versions={},
+            per_workspace={}, parsed_total=0, sources_total=0,
+            js_census=census, py_census=None)
+
+    base = _digest([e1, e2])
+    # Expected keys computed from the encode-then-join contract (no raw pre-join split).
+    k1 = (glc._encode_identity_fragment("x") + glc.EDGE_ARROW
+          + glc._encode_identity_fragment("a->b"))
+    k2 = (glc._encode_identity_fragment("x->a") + glc.EDGE_ARROW
+          + glc._encode_identity_fragment("b"))
+    assert k1 != k2
+    # Two DISTINCT cells — the pre-fix split-on-arrow collapses them into one.
+    assert len(base["matrix"]) == 2, base["matrix"]
+    assert k1 in base["matrix"] and k2 in base["matrix"]
+    assert base["matrix"][k1] == 1 and base["matrix"][k2] == 1
+    # The `>` inside a cluster name is encoded to %3E, so the `->` separator is
+    # unambiguous: each key splits into exactly two cluster fragments (the pre-fix raw
+    # key `x->a->b` splits into three).
+    for key in base["matrix"]:
+        assert len(key.split(glc.EDGE_ARROW)) == 2, key
+        assert "%3E" in key  # a name-borne `>` survived only as its encoded form
+    # Drift: bumping ONLY the x->(a->b) edge must move matrixHash, and it must differ
+    # from bumping the other colliding edge instead — a collapse would mask one of them.
+    h0 = base["matrixHash"]
+    h1 = _digest([e1, e1, e2])["matrixHash"]
+    h2 = _digest([e1, e2, e2])["matrixHash"]
+    assert h1 != h0
+    assert h2 != h0
+    assert h1 != h2
+
+
+def test_encode_identity_fragment_truncation_stays_distinct_for_long_shared_prefixes():
+    """F4: two distinct fragments that both exceed the identity ``max_len`` and share a
+    long prefix must stay DISTINCT after ``_encode_identity_fragment``.
+
+    A plain ``prefix + "..."`` truncation is LOSSY on an identity — distinct long ids
+    with a shared prefix collapse to one key and mask coupling drift / candidate identity.
+    """
+    max_len = glc.REPO_TEXT_MAX * 2
+    prefix = "p" * (max_len + 1)  # already over the cap on its own
+    a = prefix + "AAAA"
+    b = prefix + "BBBB"
+    assert len(a) > max_len and len(b) > max_len
+    ea = glc._encode_identity_fragment(a)
+    eb = glc._encode_identity_fragment(b)
+    # Distinct despite the shared 501+ char prefix.
+    assert ea != eb
+    # Still bounded (identity fragments are capped).
+    assert len(ea) <= max_len and len(eb) <= max_len
+    # Deterministic: same input encodes the same way across calls.
+    assert glc._encode_identity_fragment(a) == ea
+
+
+def test_duplicate_parsed_paths_do_not_inflate_the_parsed_census(tmp_path):
+    """F2: a parsed-modules list that repeats the same module path must not inflate the
+    ``_parsed_census`` count / the cliff's parsed total.
+
+    A tool that lists a module twice must count once — a duplicate could weaken the
+    collapse/cliff tripwires by faking a higher parsed count than modules on disk.
+    """
+    repo = init_calibrated_repo(tmp_path)
+    src_census = {"workspaces": [glc.ROOT_WORKSPACE]}
+    # 3 listed entries, only 2 DISTINCT normalized paths.
+    parsed_paths = ["src/a/x.ts", "src/a/x.ts", "src/b/y.ts"]
+    census = glc._parsed_census(repo, parsed_paths, src_census, glc.JS_EXT_LANG)
+    total = sum(sum(by_lang.values()) for by_lang in census.values())
+    assert total == 2, census
+    # The dedup seam feeding len(parsed_paths) at the tripwire sites agrees.
+    assert len(glc._dedup_norm_paths(repo, parsed_paths)) == 2

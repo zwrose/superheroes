@@ -201,6 +201,9 @@ _ARROW_PLACEHOLDER = "\x00ARROW\x00"
 # is included so a literal `%23` cannot collide with an encoded `#`.
 _IDENTITY_ESCAPE_RE = re.compile(
     r"[\x00-\x1f\x7f-\x9f#*`\[\]|<>%\\]")
+# Single-char marker joining a truncated identity prefix to its full-value hash suffix
+# (defect F4). Not in the escape alphabet, not markdown-structural, never the EDGE_ARROW.
+_IDENTITY_TRUNC_MARKER = "~"
 
 # --- Python AST census I/O bounds ---------------------------------------------------
 # `_python_edges` must not hang or OOM on committed content alone. A symlink to
@@ -259,8 +262,30 @@ def _encode_identity_fragment(text, max_len=REPO_TEXT_MAX * 2):
 
     encoded = _IDENTITY_ESCAPE_RE.sub(_esc, text)
     if len(encoded) > max_len:
-        encoded = encoded[: max_len - 3] + "..."
+        # Distinctness-preserving truncation (defect F4): a plain ``prefix + "..."`` is
+        # LOSSY — two distinct fragments sharing a long prefix collapse to one identity
+        # and mask coupling drift / candidate identity. Append a short deterministic hash
+        # of the FULL encoded value so distinct inputs stay distinct while bounded.
+        digest = store_core.short_hash(encoded)
+        keep = max_len - len(_IDENTITY_TRUNC_MARKER) - len(digest)
+        if keep < 0:
+            keep = 0
+        encoded = encoded[:keep] + _IDENTITY_TRUNC_MARKER + digest
     return encoded
+
+
+def _edge_key(from_cluster, to_cluster, max_len=REPO_TEXT_MAX * 2):
+    """Mint an edge / matrix identity from ALREADY-ENCODED cluster fragments (defect F3).
+
+    Never build an edge key by joining two RAW clusters and splitting later: a literal
+    ``->`` inside a cluster/dir name (a legal POSIX filename in the adversarial-repo
+    threat model) makes the split ambiguous and collapses distinct cells. Encoding each
+    fragment first turns a ``>`` into ``%3E`` so the ``->`` separator is unambiguous.
+    The single seam for every from/to identity: matrix keys, candidate ids, wall keys.
+    """
+    return (_encode_identity_fragment(from_cluster, max_len=max_len)
+            + EDGE_ARROW
+            + _encode_identity_fragment(to_cluster, max_len=max_len))
 
 
 def _encode_identity_key(text, max_len=REPO_TEXT_MAX * 2):
@@ -573,10 +598,15 @@ def detect_cliff(prev_digest, parsed_total, sources_total):
 # ======================================================================================
 
 def build_matrix(edge_rows):
-    """Folder-level coupling matrix {"<from>-><to>": weight} over ALL edges (data)."""
+    """Folder-level coupling matrix {"<from>-><to>": weight} over ALL edges (data).
+
+    Keys are minted from already-encoded cluster fragments (``_edge_key``), never by
+    joining two raw clusters — a literal ``->`` inside a cluster name must not collapse
+    distinct cells and mask matrixHash drift (defect F3).
+    """
     matrix = {}
     for row in edge_rows:
-        key = row["fromCluster"] + EDGE_ARROW + row["toCluster"]
+        key = _edge_key(row["fromCluster"], row["toCluster"])
         matrix[key] = matrix.get(key, 0) + 1
     return matrix
 
@@ -593,10 +623,17 @@ def _truncate_matrix(matrix):
 
 
 def make_id(tool_token, from_cluster, to_cluster, rule=None):
-    """Mint a candidate id. `rule` is part of identity when present (see ID_GRAMMAR)."""
-    location = from_cluster + EDGE_ARROW + to_cluster
+    """Mint a candidate id. `rule` is part of identity when present (see ID_GRAMMAR).
+
+    Clusters and the rule are encoded as identity fragments before joining (``_edge_key``
+    / ``_encode_identity_fragment``) so a literal ``->`` or an injection char in a cluster
+    name cannot collapse two distinct ids (defect F3). The returned id is already
+    fully encoded — downstream (``_sanitize_candidates``) must NOT re-encode it.
+    """
+    location = _edge_key(from_cluster, to_cluster)
     if rule:
-        return ID_SEP.join((LENS_FAMILY, tool_token, rule, location))
+        return ID_SEP.join(
+            (LENS_FAMILY, tool_token, _encode_identity_fragment(rule), location))
     return ID_SEP.join((LENS_FAMILY, tool_token, location))
 
 
@@ -606,9 +643,14 @@ def make_wall_key(tool_token, rule, from_cluster, to_cluster):
     A SEAM ONLY. Recurrence tracking (repeated violation of the same wall) needs the
     dispositions ledger and belongs to #539 — building a recurrence store here would be a
     pipeline ahead of its consumer.
+
+    Built from encoded fragments (``_edge_key``) for the same reason as ``make_id``
+    (defect F3); the returned key is already encoded and must not be re-encoded.
     """
     return ID_SEP.join(
-        (tool_token, rule or "declared-wall", from_cluster + EDGE_ARROW + to_cluster))
+        (tool_token,
+         _encode_identity_fragment(rule) if rule else "declared-wall",
+         _edge_key(from_cluster, to_cluster)))
 
 # ======================================================================================
 # the lens
@@ -822,7 +864,9 @@ class CouplingLens(object):
 
         payload = parsed.get("payload") or {}
         versions = adapters.depcruise_versions(payload)
-        parsed_paths = adapters.depcruise_parsed_modules(payload)
+        # Dedup once (defect F2): a report listing the same module path twice must not
+        # inflate len(parsed_paths), which feeds the cliff tripwire and modulesParsed.
+        parsed_paths = _dedup_norm_paths(repo, adapters.depcruise_parsed_modules(payload))
         parsed_census = _parsed_census(repo, parsed_paths, src_census, JS_EXT_LANG)
         collapse = detect_collapse(src_census, parsed_census)
         if collapse:
@@ -1067,13 +1111,12 @@ class CouplingLens(object):
 
     def _build_digest(self, ecosystems, rows, candidates, vocabulary, check, versions,
                       per_workspace, parsed_total, sources_total, js_census, py_census):
-        full_matrix = build_matrix(rows)
-        # Identity keys (matrix / matrixHash) use lossless encoding — lossy
-        # _safe_repo_text would collapse a#->b and a*->b onto one cell and mask drift.
-        safe_full = {
-            _encode_identity_key(k, max_len=REPO_TEXT_MAX * 2): v
-            for k, v in full_matrix.items()
-        }
+        # Identity keys (matrix / matrixHash) are minted already-encoded by build_matrix
+        # (_edge_key encodes each cluster fragment before joining). Do NOT re-encode here:
+        # re-splitting on `->` would collapse a `->`-in-name cluster (defect F3) and
+        # re-escaping would double-encode `%`. Lossless encoding still keeps a#->b and
+        # a*->b distinct so drift is never masked.
+        safe_full = build_matrix(rows)
         matrix, truncated = _truncate_matrix(safe_full)
         excluded = {}
         eligible_rows = 0
@@ -1132,20 +1175,15 @@ class CouplingLens(object):
         safe_candidates = []
         for c in candidates or []:
             sc = dict(c)
-            # Ledger-join / eligible keys: lossless identity encoding (not lossy clamp).
-            if "id" in sc:
-                sc["id"] = _encode_identity_key(
-                    sc["id"], max_len=REPO_TEXT_MAX * 2)
-            for key in ("fromCluster", "toCluster", "wallKey", "rule"):
+            # `id` and `wallKey` are already fragment-encoded at mint time (make_id /
+            # make_wall_key build them from _edge_key). Re-encoding them here would
+            # double-escape `%` and re-split a `->` inside a cluster name (defect F3) —
+            # leave them as-is. Only the RAW display/identity fragments are encoded.
+            for key in ("fromCluster", "toCluster", "rule"):
                 if key in sc and isinstance(sc[key], str):
                     max_len = (REPO_TEXT_MAX * 2 if key != "rule"
                                else REPO_TEXT_MAX)
-                    if key in ("fromCluster", "toCluster", "rule"):
-                        sc[key] = _encode_identity_fragment(
-                            sc[key], max_len=max_len)
-                    else:
-                        sc[key] = _encode_identity_key(
-                            sc[key], max_len=max_len)
+                    sc[key] = _encode_identity_fragment(sc[key], max_len=max_len)
             # Free-text path evidence stays on the lossy display clamp.
             if "paths" in sc:
                 sc["paths"] = [
@@ -1349,12 +1387,36 @@ def _js_targets(repo, src_census):
     return real or ["."]
 
 
+def _dedup_norm_paths(repo, parsed_paths):
+    """Distinct parsed paths (first-seen order), keyed on the NORMALIZED path (defect F2).
+
+    A tool report that lists the same module path twice must not inflate the parsed
+    count — a duplicate could weaken the collapse/cliff tripwires. We dedup rather than
+    filesystem-verify every path: a report inventing *nonexistent* paths that still
+    matched the real source count would require a compromised collector, which is
+    outside the hostile-repo (committed-content-only) threat model this lens defends.
+    """
+    seen = set()
+    out = []
+    for path in parsed_paths or []:
+        rel = _norm_rel(repo, path)
+        if rel in seen:
+            continue
+        seen.add(rel)
+        out.append(path)
+    return out
+
+
 def _parsed_census(repo, parsed_paths, src_census, ext_lang):
-    """Attribute parsed module paths to (workspace, language), mirroring the source census."""
+    """Attribute parsed module paths to (workspace, language), mirroring the source census.
+
+    Duplicate parsed paths are collapsed (distinct normalized paths only) so a tool that
+    lists the same module twice cannot inflate the parsed count (defect F2).
+    """
     ws_sorted = sorted(src_census["workspaces"],
                        key=lambda w: (-len(_norm_rel("", w)), _norm_rel("", w)))
     out = {}
-    for path in parsed_paths:
+    for path in _dedup_norm_paths(repo, parsed_paths):
         rel = _norm_rel(repo, path)
         lang = ext_lang.get(_ext_of(rel))
         if not lang:
