@@ -2226,6 +2226,127 @@ def test_cli_commit_ledger_writes_ledger(tmp_path):
 # --- WO-1c: atomic commit_ledger + fail-closed vitals commit marker ----------
 
 
+def test_finalize_ok_string_failed_does_not_advance_snapshot(tmp_path, monkeypatch):
+    """WO-1d Fix C: only literal ok=True is non-blocking; ok='failed' still blocks."""
+    import guardian_vitals as gv
+
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": True})
+
+    def fake_run(cmd, **kwargs):
+        class R:
+            returncode = 0
+            stdout = "1 passed in 0.01s"
+            stderr = ""
+        return R()
+
+    lens = FixtureLens(emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[lens], root=root, run=fake_run)
+    prev_identity = bundle["prevIdentity"]
+    disp = [{
+        "id": bundle["surfaced"][0]["id"],
+        "verdict": "validated",
+        "consequence": "x",
+        "receipt": "y",
+        "effort": "z",
+        "ledgerJoin": bundle["surfaced"][0]["id"],
+    }]
+
+    def truthy_but_not_true(*args, **kwargs):
+        return {"ok": "failed", "skipped": "x"}
+
+    monkeypatch.setattr(gv, "append_unlocked", truthy_but_not_true)
+    result = gsw.finalize(repo, bundle, disp, root=root)
+    assert result["ok"] is False
+    assert result["reason"] == "durable-write-failed"
+    assert not os.path.isfile(gs.snapshot_path(repo, root=root))
+    assert gs.snapshot_identity(gs.read_snapshot(repo, root=root)) == prev_identity
+
+
+def test_finalize_persists_sweep_id_and_same_session_commit_succeeds(tmp_path):
+    """WO-1d Fix A: latest.json carries sweepId; same-session commit_ledger succeeds."""
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    lens = FixtureLens(emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    disp = [{
+        "id": bundle["surfaced"][0]["id"],
+        "verdict": "validated",
+        "consequence": "x",
+        "receipt": "y",
+        "effort": "z",
+        "ledgerJoin": bundle["surfaced"][0]["id"],
+    }]
+    fin = gsw.finalize(repo, bundle, disp, root=root)
+    assert fin["ok"] is True
+    head = gs.read_snapshot(repo, root=root)
+    assert head.get("sweepId") == bundle["sweepId"]
+    # Identity ignores the extra field.
+    assert gs.snapshot_identity(head) == gs.snapshot_identity(bundle["nextSnapshot"])
+    result = gsw.commit_ledger(repo, bundle, disp, root=root)
+    assert result["ok"] is True, result
+
+
+def test_commit_ledger_stale_bundle_when_sweep_id_differs(tmp_path):
+    """WO-1d Fix A: identical nextSnapshot but older sweepId → stale-bundle."""
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    lens = FixtureLens(emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    disp = [{
+        "id": bundle["surfaced"][0]["id"],
+        "verdict": "validated",
+        "consequence": "x",
+        "receipt": "y",
+        "effort": "z",
+        "ledgerJoin": bundle["surfaced"][0]["id"],
+    }]
+    fin = gsw.finalize(repo, bundle, disp, root=root)
+    assert fin["ok"] is True
+    assert gsw.commit_ledger(repo, bundle, disp, root=root)["ok"] is True
+
+    older = dict(bundle)
+    older["sweepId"] = "older-" + bundle["sweepId"]
+    older["filedObservations"] = {"different": True}  # would close wrong if landed
+    path = gs.ledger_path(repo, root)
+    before = open(path, "rb").read()
+    result = gsw.commit_ledger(repo, older, disp, root=root)
+    assert result["ok"] is False
+    assert result["reason"] == "stale-bundle"
+    assert result.get("onDiskSweepId") == bundle["sweepId"]
+    assert result.get("expectedSweepId") == older["sweepId"]
+    assert open(path, "rb").read() == before
+
+
+def test_collect_after_finalize_ignores_persisted_sweep_id(tmp_path):
+    """WO-1d Fix A: next collect still works when latest.json carries sweepId."""
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    lens = FixtureLens(emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    disp = [{
+        "id": bundle["surfaced"][0]["id"],
+        "verdict": "validated",
+        "consequence": "x",
+        "receipt": "y",
+        "effort": "z",
+        "ledgerJoin": bundle["surfaced"][0]["id"],
+    }]
+    assert gsw.finalize(repo, bundle, disp, root=root)["ok"] is True
+    head = gs.read_snapshot(repo, root=root)
+    assert "sweepId" in head
+    # Second collect must treat head as a valid prev (extra field ignored by identity/CAS).
+    bundle2 = gsw.collect(repo, lenses=[lens], root=root)
+    assert bundle2["prevIdentity"] == gs.snapshot_identity(head)
+    assert bundle2["prevIdentity"] == gs.snapshot_identity(bundle["nextSnapshot"])
+    assert bundle2["sweepId"]
+    assert set(bundle2["nextSnapshot"]) == set(gs.SNAPSHOT_KEYS)
+
+
 def test_finalize_ok_false_vitals_with_skipped_key_does_not_advance_snapshot(
         tmp_path, monkeypatch):
     """Fix 6: ok=False must block latest.json even when a skipped key is present."""

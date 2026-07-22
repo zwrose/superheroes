@@ -64,6 +64,7 @@ import os
 import re
 import secrets
 import sys
+import tempfile
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -1196,6 +1197,52 @@ def _prepare_ledger_write(path, records, *, report_card=None, sweeps=None, now=N
             },
         }
 
+    # WO-1d Fix B: re-validate the FRESH on-disk block fail-closed. An owner edit
+    # between the earlier opaque-ledger guard and this splice read must not be
+    # merged and written. Mirror the checkable parts of `_ledger_fully_readable`:
+    # records must validate (incl. no duplicate ids); every sweeps[] entry must be
+    # a dict with a non-empty string sweepId.
+    fresh_records = existing_block.get("records")
+    ok_fresh, _fresh_reasons = validate_records(
+        fresh_records if fresh_records is not None else [])
+    if not ok_fresh:
+        return {
+            "kind": "fail",
+            "result": {
+                "ok": False,
+                "skipped": "ledger-malformed",
+                "reason": "ledger write skipped: fresh on-disk records invalid "
+                          "(on-disk bytes left untouched)",
+                "path": path,
+            },
+        }
+    if "sweeps" in existing_block:
+        fresh_sweeps = existing_block.get("sweeps")
+        if not isinstance(fresh_sweeps, list):
+            return {
+                "kind": "fail",
+                "result": {
+                    "ok": False,
+                    "skipped": "ledger-malformed",
+                    "reason": "ledger write skipped: fresh on-disk sweeps malformed "
+                              "(on-disk bytes left untouched)",
+                    "path": path,
+                },
+            }
+        for entry in fresh_sweeps:
+            sid = entry.get("sweepId") if isinstance(entry, dict) else None
+            if not isinstance(entry, dict) or not isinstance(sid, str) or not sid.strip():
+                return {
+                    "kind": "fail",
+                    "result": {
+                        "ok": False,
+                        "skipped": "ledger-malformed",
+                        "reason": "ledger write skipped: fresh on-disk roster entry "
+                                  "malformed (on-disk bytes left untouched)",
+                        "path": path,
+                    },
+                }
+
     # Merge into the parsed object so unknown top-level keys survive.
     block = dict(existing_block)
     block["schemaVersion"] = guardian_store.LEDGER_SCHEMA_VERSION
@@ -1262,24 +1309,39 @@ def _prepare_ledger_write(path, records, *, report_card=None, sweeps=None, now=N
 
 
 def _author_exclusive(path, payload_bytes):
-    """Create `path` exclusively (O_EXCL). Returns True on success, False if it exists."""
+    """Create `path` exclusively via temp + no-clobber link publish.
+
+    Returns True on fresh create, False if `path` already exists. Writes the full
+    payload to a private temp in the same directory first (flush+fsync), then
+    publishes with ``os.link(tmp, path)`` which fails if the destination exists —
+    so concurrent authors fall through to the splice-retry path without clobbering
+    or exposing partial bytes at ``path``. Only the temp inode is cleaned up on
+    error / collision.
+    """
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    try:
-        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-    except FileExistsError:
-        return False
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(prefix=".ledger-author-", dir=directory)
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(payload_bytes)
             fh.flush()
             os.fsync(fh.fileno())
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            return False
+        os.unlink(tmp)
+        return True
     except Exception:
         try:
-            os.unlink(path)
+            os.unlink(tmp)
         except OSError:
             pass
         raise
-    return True
 
 
 def _write_locked(cwd, records, *, root=None, report_card=None, sweeps=None, now=None):

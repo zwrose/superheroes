@@ -1048,11 +1048,12 @@ def finalize(cwd, bundle, dispositions, root=None):
 
         # Intentional skips (vitals disabled) do not block the baseline.
         # A failed attempted durable vitals write must not advance latest.json.
-        # Fail closed: only an explicit ok=True result is non-blocking. A result that
-        # happens to carry a `skipped` key with ok=False must still block (Fix 6) —
+        # Fail closed: only an explicit ok=True result is non-blocking. A result
+        # that happens to carry a `skipped` key with ok=False, or a truthy non-True
+        # ok (e.g. ok="failed"), must still block (Fix 6 / WO-1d Fix C) —
         # intentional skips already return ok=True (e.g. vitals-not-collected).
         def _blocks_commit(result):
-            return not result.get("ok")
+            return result.get("ok") is not True
 
         if _blocks_commit(vitals_append):
             return {
@@ -1063,8 +1064,12 @@ def finalize(cwd, bundle, dispositions, root=None):
             }
 
         snap_path = guardian_store.snapshot_path(cwd, root)
+        # Persist sweepId beside the SNAPSHOT_KEYS baseline (non-identity field)
+        # so commit_ledger's additive freshness guard can detect concurrent
+        # same-SHA / byte-identical snapshots from a different sweep.
+        persisted = {**bundle["nextSnapshot"], "sweepId": bundle["sweepId"]}
         store_core.atomic_write(
-            snap_path, json.dumps(bundle["nextSnapshot"], indent=2) + "\n")
+            snap_path, json.dumps(persisted, indent=2) + "\n")
 
         return {
             "ok": True,
@@ -1108,12 +1113,12 @@ def commit_ledger(cwd, bundle, dispositions, root=None):
 
     try:
         # R1 — intent-freshness against FRESH head (under the lock).
-        # snapshot_identity alone cannot distinguish two same-SHA sweeps that produce
-        # byte-identical snapshots. Prefer an additive sweepId check when the on-disk
-        # head carries one. SNAPSHOT_KEYS does not yet include sweepId, so today's
-        # head never has it — the lock makes that residual a redundant-but-safe no-op:
-        # a stale bundle re-derives from fresh disk under the lock and cannot corrupt;
-        # it can only re-commit the same state.
+        # snapshot_identity hashes only SNAPSHOT_KEYS, so two same-SHA sweeps that
+        # produce byte-identical baselines still collide on identity alone. The
+        # additive sweepId check is active: finalize persists sweepId beside the
+        # baseline (non-identity field), so a concurrent older bundle whose
+        # nextSnapshot matches but whose sweepId differs from the head fails closed
+        # as stale-bundle rather than landing the wrong closures.
         current = guardian_store.read_snapshot(cwd, root)
         on_disk = guardian_store.snapshot_identity(current)
         expected = guardian_store.snapshot_identity(bundle.get("nextSnapshot") or {})

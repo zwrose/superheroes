@@ -1487,3 +1487,80 @@ def test_merge_record_never_clobbers_existing_adjudicated_in():
     stamped = gled._merge_record_preserving_unknown(
         bare, _rec("dup:t:b", "filed", issue="#2", adjudicatedIn="s-new"))
     assert stamped["adjudicatedIn"] == "s-new"
+
+
+# --- WO-1d: fresh-block re-validate / atomic author publish ------------------
+
+
+def test_prepare_fails_closed_on_owner_malformed_fresh_record(tmp_path):
+    """WO-1d Fix B: malformed on-disk record after earlier guard → fail, bytes untouched."""
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.ledger_path(repo)
+    good = [_rec("dup:t:ok", "filed", issue="#1", adjudicatedIn="s0")]
+    assert gled.write(repo, good, now="2026-07-20")["ok"] is True
+    text = open(path, encoding="utf-8").read()
+    fence = gs.find_ledger_fences(text)[0]
+    block = json.loads(fence.group(1))
+    # Owner-malformed: disposition not in FINDING_STATES.
+    block["records"] = [{
+        "id": "dup:t:bad",
+        "disposition": "not-a-real-state",
+        "date": "2026-07-20",
+    }]
+    open(path, "wb").write((
+        text[:fence.start()]
+        + "```json %s\n%s\n```" % (gs.LEDGER_FENCE, json.dumps(block, indent=2))
+        + text[fence.end()]
+    ).encode("utf-8"))
+    before = open(path, "rb").read()
+    prepared = gled._prepare_ledger_write(
+        path, [_rec("dup:t:incoming", "filed", issue="#2", adjudicatedIn="s1")],
+        now="2026-07-21")
+    assert prepared["kind"] == "fail"
+    assert prepared["result"]["ok"] is False
+    assert "on-disk bytes left untouched" in (prepared["result"].get("reason") or "")
+    assert open(path, "rb").read() == before
+
+
+def test_prepare_fails_closed_on_malformed_roster_entry(tmp_path):
+    """WO-1d Fix B: roster entry missing non-empty sweepId → fail closed."""
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.ledger_path(repo)
+    assert gled.write(repo, [], sweeps=[
+        {"sweepId": "s0", "sweptSha": "abc", "date": "2026-07-01"},
+    ], now="2026-07-01")["ok"] is True
+    text = open(path, encoding="utf-8").read()
+    fence = gs.find_ledger_fences(text)[0]
+    block = json.loads(fence.group(1))
+    block["sweeps"] = [
+        {"sweepId": "s0", "sweptSha": "abc", "date": "2026-07-01"},
+        {"sweptSha": "no-id", "date": "2026-07-02"},  # missing sweepId
+    ]
+    open(path, "wb").write((
+        text[:fence.start()]
+        + "```json %s\n%s\n```" % (gs.LEDGER_FENCE, json.dumps(block, indent=2))
+        + text[fence.end()]
+    ).encode("utf-8"))
+    before = open(path, "rb").read()
+    prepared = gled._prepare_ledger_write(
+        path, [],
+        sweeps=[{"sweepId": "s1", "sweptSha": "def", "date": "2026-07-21"}],
+        now="2026-07-21")
+    assert prepared["kind"] == "fail"
+    assert prepared["result"]["ok"] is False
+    assert "on-disk bytes left untouched" in (prepared["result"].get("reason") or "")
+    assert open(path, "rb").read() == before
+
+
+def test_author_exclusive_does_not_clobber_existing_and_leaves_no_partial(tmp_path):
+    """WO-1d Fix D: no-clobber publish; existing path → False; no orphan partial."""
+    dest = str(tmp_path / "ledger.md")
+    payload = b"full-payload-bytes\n"
+    assert gled._author_exclusive(dest, payload) is True
+    assert open(dest, "rb").read() == payload
+    # Second create must not clobber.
+    assert gled._author_exclusive(dest, b"clobber-attempt\n") is False
+    assert open(dest, "rb").read() == payload
+    # No leftover temp files in the destination directory.
+    leftovers = [n for n in os.listdir(tmp_path) if n != "ledger.md"]
+    assert leftovers == [], leftovers

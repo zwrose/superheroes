@@ -51,13 +51,31 @@ def test_snapshot_round_trip(tmp_path):
     }
     sc.atomic_write(gs.snapshot_path(repo), json.dumps(snap, indent=2))
     assert gs.read_snapshot(repo) == snap
-    assert gs.snapshot_identity(snap) == sc.short_hash(json.dumps(snap, sort_keys=True))
+    projected = {k: snap.get(k) for k in gs.SNAPSHOT_KEYS}
+    assert gs.snapshot_identity(snap) == sc.short_hash(json.dumps(projected, sort_keys=True))
 
 
 def test_snapshot_identity_hash_when_no_sha(tmp_path):
     snap = {"schemaVersion": 1, "vitals": {}, "lenses": {}}
     ident = gs.snapshot_identity(snap)
-    assert ident == sc.short_hash(json.dumps(snap, sort_keys=True))
+    # Identity hashes the SNAPSHOT_KEYS projection (missing keys → null).
+    projected = {k: snap.get(k) for k in gs.SNAPSHOT_KEYS}
+    assert ident == sc.short_hash(json.dumps(projected, sort_keys=True))
+
+
+def test_snapshot_identity_ignores_extra_sweep_id():
+    """WO-1d Fix A: sweepId is a non-identity field — same hash with/without it."""
+    base = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc123",
+        "vitals": {},
+        "lenses": {"fixture": {"collectorVersion": "1", "digest": {"v": 1}}},
+    }
+    with_sweep = dict(base)
+    with_sweep["sweepId"] = "sweep-extra"
+    assert gs.snapshot_identity(base) == gs.snapshot_identity(with_sweep)
+    projected = {k: base.get(k) for k in gs.SNAPSHOT_KEYS}
+    assert gs.snapshot_identity(base) == sc.short_hash(json.dumps(projected, sort_keys=True))
 
 
 def test_read_snapshot_malformed_returns_none(tmp_path, capsys):

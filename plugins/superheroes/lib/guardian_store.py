@@ -73,10 +73,17 @@ def sweep_lock_path(cwd, root=None):
 
 
 def snapshot_identity(snapshot):
-    """Content-hash identity for CAS. None for a None snapshot."""
+    """Content-hash identity for CAS. None for a None snapshot.
+
+    Hashes only the SNAPSHOT_KEYS projection so non-identity fields on disk
+    (e.g. sweepId persisted beside the baseline) do not change the identity.
+    Current snapshots contain exactly SNAPSHOT_KEYS, so existing identities
+    are unchanged.
+    """
     if snapshot is None:
         return None
-    return store_core.short_hash(json.dumps(snapshot, sort_keys=True))
+    projected = {k: snapshot.get(k) for k in SNAPSHOT_KEYS}
+    return store_core.short_hash(json.dumps(projected, sort_keys=True))
 
 
 def read_snapshot(cwd, root=None):
