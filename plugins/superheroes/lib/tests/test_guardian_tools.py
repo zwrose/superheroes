@@ -95,6 +95,26 @@ def test_install_commands_cover_the_collector_tools():
         "jscpd": "npm install -g jscpd",
         "radon": "pip install radon",
         "lizard": "pip install lizard",
+        "npm": "install Node.js, which bundles npm",
+        "npm-check-updates": "npm install -g npm-check-updates",
+        "knip": "npm install -g knip",
+        "vulture": "pip install vulture",
+        "pip-audit": "pip install pip-audit",
+    }
+
+
+def test_version_args_cover_every_install_command_tool():
+    """Every resolvable collector has a version-probe argv tail (keyed by argv[0])."""
+    assert set(gt.VERSION_ARGS) == set(gt.INSTALL_COMMANDS)
+    assert gt.VERSION_ARGS == {
+        "jscpd": ("--version",),
+        "radon": ("--version",),
+        "lizard": ("--version",),
+        "npm": ("--version",),
+        "npm-check-updates": ("--version",),
+        "knip": ("--version",),
+        "vulture": ("--version",),
+        "pip-audit": ("--version",),
     }
 
 
@@ -522,8 +542,11 @@ def test_no_package_manager_binary_is_named_in_any_call():
 
 
 def test_no_package_manager_binary_appears_in_executable_code():
-    """Belt and braces: package-manager names live only in INSTALL_COMMANDS guidance."""
-    allowed = set(gt.INSTALL_COMMANDS.values())
+    """Belt and braces: package-manager names live only in INSTALL_COMMANDS guidance
+    or as a resolvable-tool KEY (`npm` is the argv[0] the deps lens resolves for
+    `npm audit`). Tool-name keys are resolved-tool identities, never spawn literals —
+    version()'s argv head derives from resolve()['path'] (proven separately)."""
+    allowed = set(gt.INSTALL_COMMANDS.values()) | set(gt.INSTALL_COMMANDS)
     tree = ast.parse(_source_text())
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):

@@ -28,10 +28,22 @@ if _LIB_DIR not in sys.path:
 
 # AUTHORITATIVE home for collector install guidance (§11: one home per cross-boundary
 # fact). Every degrade message quotes this map; no other module restates a command.
+#
+# Keys are the ACTUAL argv[0] executable the lens resolves through PATH (never a
+# conceptual label): the deps lens invokes `npm audit` (bin `npm`) and the ncu freshness
+# tool by its explicit bin `npm-check-updates` (the `ncu` alias also ships, but the argv
+# names `npm-check-updates`); the deadcode lens invokes `knip` (JS) and `vulture` (Python);
+# `pip-audit` is the Python dependency-audit bin. npm ships with Node, so its guidance
+# points at the Node install rather than a package-manager verb.
 INSTALL_COMMANDS = {
     "jscpd": "npm install -g jscpd",
     "radon": "pip install radon",
     "lizard": "pip install lizard",
+    "npm": "install Node.js, which bundles npm",
+    "npm-check-updates": "npm install -g npm-check-updates",
+    "knip": "npm install -g knip",
+    "vulture": "pip install vulture",
+    "pip-audit": "pip install pip-audit",
 }
 
 # argv tail used to ask a resolved collector for its version.
@@ -39,6 +51,11 @@ VERSION_ARGS = {
     "jscpd": ("--version",),
     "radon": ("--version",),
     "lizard": ("--version",),
+    "npm": ("--version",),
+    "npm-check-updates": ("--version",),
+    "knip": ("--version",),
+    "vulture": ("--version",),
+    "pip-audit": ("--version",),
 }
 
 VERSION_TIMEOUT = 10

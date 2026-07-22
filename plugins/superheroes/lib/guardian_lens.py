@@ -10,7 +10,8 @@ Optional conformance hook (production lenses MUST implement; not checked by vali
   conformance_cases() -> {"reported-nonzero-parsed-zero": {
       "stdout": <raw tool output that reports findings but parses to zero>,
       "clean_stdout": <raw tool output with genuinely zero findings>,
-      "exit": <exit code on a successful tool run (may be non-zero)>,
+      "exit": <exit code on a findings run (may be non-zero)>,
+      "clean_exit": <optional exit code on a genuinely-clean run; defaults to "exit">,
       "config": <dict | None>,
       "prev_digest": <json | None>,
   }}
@@ -18,11 +19,23 @@ Optional conformance hook (production lenses MUST implement; not checked by vali
 The harness owns the five tool-agnostic scenarios (``missing-tool``, ``timeout``,
 ``nonzero-exit``, ``findings-empty-output``, ``unparseable``) and injects its own
 ``ctx["run"]`` stubs. For ``reported-nonzero-parsed-zero`` the lens supplies stdout,
-clean_stdout, and exit; the harness runs a clean probe and a findings probe, both at
-the declared exit. The
-per-lens conformance harness (test_guardian_conformance) drives every
-REQUIRED_CONFORMANCE_SCENARIOS name, classifies each collect() outcome, and fails
-registration when coverage or an honesty invariant is missing.
+clean_stdout, and exit; the harness runs a clean probe (at ``clean_exit`` when the case
+declares one, else ``exit``) and a findings probe (at ``exit``). The optional
+``clean_exit`` models dual-success-exit tools such as ``npm audit`` (0 = clean, 1 =
+findings): declare ``exit=1, clean_exit=0``. Omitting ``clean_exit`` is byte-for-byte the
+prior single-exit behavior.
+
+Tool-free lenses (stdlib-only collectors — no external tool, no indirect spawn) opt in by
+setting the class attribute ``uses_external_tools = False``. Such a lens supplies
+TOOL_FREE_CONFORMANCE_SCENARIOS via conformance_cases() instead of the tool-injection
+scenarios (see the tool-free case shape below); the harness skips the five tool-injection
+scenarios and the ``reported-nonzero-parsed-zero`` two-probe (all assume a ``ctx["run"]``
+call) and instead drives the tool-free honesty invariants AND proves — at runtime, not by
+trust — that collect() spawns nothing.
+
+The per-lens conformance harness (test_guardian_conformance) drives every scenario,
+classifies each collect() outcome, and fails registration when coverage or an honesty
+invariant is missing.
 """
 import importlib
 import os
@@ -65,10 +78,48 @@ REQUIRED_CONFORMANCE_SCENARIOS.
 """
 
 CONFORMANCE_CASE_FIELDS = ("stdout", "clean_stdout", "exit")
-"""Authoritative field schema for a lens-supplied ``conformance_cases()`` entry.
+"""Authoritative REQUIRED field schema for a lens-supplied ``conformance_cases()`` entry.
 
-Optional keys ``config`` and ``prev_digest`` are forwarded to ``collect()`` but
-are not part of this tuple.
+Every ``reported-nonzero-parsed-zero`` case MUST carry all three. Optional keys live in
+CONFORMANCE_CASE_OPTIONAL_FIELDS below.
+"""
+
+CONFORMANCE_CASE_OPTIONAL_FIELDS = ("clean_exit", "config", "prev_digest")
+"""Optional keys a ``reported-nonzero-parsed-zero`` case MAY carry.
+
+- ``clean_exit`` — the exit code the tool returns on a genuinely-clean run when it differs
+  from the findings exit (dual-success-exit tools like ``npm audit``: ``exit=1,
+  clean_exit=0``). Defaults to ``exit`` when absent.
+- ``config`` / ``prev_digest`` — forwarded to ``collect()`` (as ``ctx["config"]`` and
+  ``ctx["prevDigest"]``).
+
+None of these is required; the required set stays CONFORMANCE_CASE_FIELDS.
+"""
+
+TOOL_FREE_CONFORMANCE_SCENARIOS = (
+    "unreadable-input",
+    "all-inputs-unavailable",
+    "partial-carry-forward",
+)
+"""Honesty scenarios a tool-free lens (``uses_external_tools = False``) supplies via
+conformance_cases() in place of the tool-injection scenarios.
+
+Each maps to a tool-free case: ``{"fixture": {relpath: content}, "unreadable": [relpath,
+...], "prev_digest": <json>, "config": <dict | None>}``. The harness builds a fresh temp
+workspace per scenario, writes ``fixture``, makes any ``unreadable`` paths unreadable, runs
+collect() with cwd == root == that workspace and NO injected ``ctx["run"]``, and asserts:
+
+- ``unreadable-input`` — an unreadable input must degrade (``partial`` / ``not-collected``
+  with a reason) OR carry the prior digest forward; it must NEVER read as a false clean
+  (i.e. never resolve prior findings it did not re-measure).
+- ``all-inputs-unavailable`` — nothing to measure must degrade with a non-empty reason.
+- ``partial-carry-forward`` — a ``partial`` result must preserve the prior digest
+  (``diff()`` must not spuriously resolve prior ids).
+
+Across every tool-free scenario, when measurement stopped ``diff()`` must emit no
+``resolved`` ids. The harness additionally proves — by monkeypatching the spawn primitives
+to raise and running collect() — that a tool-free lens invokes neither
+``guardian_collect.run_tool`` nor any indirect spawn helper.
 """
 
 """A lens is any object providing:
@@ -87,6 +138,9 @@ are not part of this tuple.
   - degrade(reason) -> {"lens": name, "degraded": True, "reason": reason}
   - conformance_cases() -> dict (optional on the protocol; REQUIRED for production lenses)
       Maps each REQUIRED_CONFORMANCE_SCENARIOS name to a harness case (see module docstring).
+  - uses_external_tools: bool (optional class attribute, defaults True) — set False for a
+      stdlib-only lens that spawns nothing; the harness then drives the tool-free scenarios
+      (TOOL_FREE_CONFORMANCE_SCENARIOS) and proves no spawn happens (see module docstring).
 """
 
 REGISTRY = []

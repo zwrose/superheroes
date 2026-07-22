@@ -28,6 +28,12 @@ _LENS_CONTRACT = os.path.join(_PLUGIN, "skills", "guardian", "reference", "lens-
 _CONVENTIONS = os.path.join(_REPO, "CONVENTIONS.md")
 _LEDGER_MODULE = os.path.join(_PLUGIN, "lib", "guardian_ledger.py")
 
+_REGISTERED_LENSES_MARKER = re.compile(
+    r"<!--\s*guardian:registered-lenses:start\s*-->(.*?)<!--\s*guardian:registered-lenses:end\s*-->",
+    re.DOTALL,
+)
+_BACKTICKED = re.compile(r"`([^`]+)`")
+
 
 def _read(path):
     with open(path, encoding="utf-8") as fh:
@@ -69,6 +75,24 @@ def _parse_ledger_extension_field():
         re.findall(r"\*\*Schema extension — `([^`]+)`\.\*\*", text),
         "guardian_ledger.py", "schema-extension anchor")
     return documented
+
+
+def _skill_registered_lens_names():
+    """Backticked lens names between the SKILL rollout markers, in order (with dupes)."""
+    skill = _read(_SKILL)
+    m = _REGISTERED_LENSES_MARKER.search(skill)
+    assert m, (
+        "SKILL.md is missing the guardian:registered-lenses start/end markers — the "
+        "roster sync guard cannot locate the registered-lens enumeration")
+    return _BACKTICKED.findall(m.group(1))
+
+
+def _production_lens_names():
+    """Flatten guardian_lens.PRODUCTION_LENS_NAMES to the set of expected lens names."""
+    names = []
+    for exported in guardian_lens.PRODUCTION_LENS_NAMES.values():
+        names.extend(exported)
+    return names
 
 
 def test_skill_references_guardian_layout_paths():
@@ -276,3 +300,65 @@ def test_lens_contract_covers_conformance_case_fields():
         "CONFORMANCE_CASE_FIELDS membership changed — update this golden set "
         "AND lens-contract.md"
     )
+
+
+def test_lens_contract_covers_optional_conformance_case_fields():
+    """CONFORMANCE_CASE_OPTIONAL_FIELDS ↔ reference prose (§11 drift guard)."""
+    optional = guardian_lens.CONFORMANCE_CASE_OPTIONAL_FIELDS
+    assert optional, (
+        "guardian_lens.CONFORMANCE_CASE_OPTIONAL_FIELDS is empty — no authoritative home")
+    text = _read(_LENS_CONTRACT)
+    for field in optional:
+        assert field in text, (
+            "lens-contract.md missing optional conformance case field %r" % field)
+    assert set(optional) == {"clean_exit", "config", "prev_digest"}, (
+        "CONFORMANCE_CASE_OPTIONAL_FIELDS membership changed — update this golden set "
+        "AND lens-contract.md"
+    )
+
+
+def test_lens_contract_covers_tool_free_conformance_scenarios():
+    """TOOL_FREE_CONFORMANCE_SCENARIOS ↔ reference prose (§11 drift guard)."""
+    scenarios = guardian_lens.TOOL_FREE_CONFORMANCE_SCENARIOS
+    assert scenarios, (
+        "guardian_lens.TOOL_FREE_CONFORMANCE_SCENARIOS is empty — no authoritative home")
+    text = _read(_LENS_CONTRACT)
+    for scenario in scenarios:
+        assert scenario in text, (
+            "lens-contract.md missing tool-free conformance scenario %r" % scenario)
+    assert "uses_external_tools" in text, (
+        "lens-contract.md must document the uses_external_tools opt-in")
+    assert set(scenarios) == {
+        "unreadable-input", "all-inputs-unavailable", "partial-carry-forward",
+    }, (
+        "TOOL_FREE_CONFORMANCE_SCENARIOS membership changed — update this golden set "
+        "AND lens-contract.md"
+    )
+
+
+# --- production roster ↔ SKILL rollout sync (fail-closed, duplicate-sensitive) -----
+
+def test_skill_rollout_roster_matches_production_lens_names():
+    """Every PRODUCTION_LENS_NAMES entry is named in the SKILL rollout markers and vice
+    versa — no drift, no duplicates. Protects each later lens registration."""
+    skill_names = _skill_registered_lens_names()
+    prod_names = _production_lens_names()
+
+    assert skill_names, "no registered-lens names found between the SKILL rollout markers"
+    assert len(skill_names) == len(set(skill_names)), (
+        "duplicate lens name in the SKILL rollout markers: %s" % skill_names)
+    assert len(prod_names) == len(set(prod_names)), (
+        "duplicate lens name in PRODUCTION_LENS_NAMES: %s" % prod_names)
+    assert set(skill_names) == set(prod_names), (
+        "SKILL rollout roster %s drifted from PRODUCTION_LENS_NAMES %s — a lens registered "
+        "in one but not the other" % (sorted(skill_names), sorted(prod_names)))
+
+
+def test_skill_rollout_roster_guard_is_not_vacuous():
+    """The guard must fail closed when a name is present on only one side."""
+    prod_names = set(_production_lens_names())
+    skill_names = set(_skill_registered_lens_names())
+    # Baseline agreement (proven by the sibling test) — perturb each side and assert drift.
+    assert skill_names == prod_names
+    assert (skill_names | {"phantom-lens"}) != prod_names
+    assert skill_names != (prod_names | {"phantom-lens"})
