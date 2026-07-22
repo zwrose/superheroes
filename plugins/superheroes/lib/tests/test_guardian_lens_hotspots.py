@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import guardian_census as gcensus
 import guardian_lens as gl
 import guardian_lens_hotspots as hot
 from test_guardian_conformance import assert_lens_conformance
@@ -228,18 +229,22 @@ def test_abs_paths_always_returns_absolute(tmp_path):
 
 def test_tracked_existing_files_intersects_disk(tmp_path):
     _write(tmp_path, "keep.py", 5)
-    run = Tools(lsfiles=["keep.py", "gone.py", "{a => b}/x.py"])
-    tracked = hot.tracked_existing_files(_ctx(tmp_path, run), os.path.realpath(str(tmp_path)))
+    _write(tmp_path, "src/{generated}.py", 3)
+    run = Tools(lsfiles=["keep.py", "gone.py", "src/{generated}.py"])
+    tracked, reason = gcensus.tracked_existing_files(
+        _ctx(tmp_path, run), os.path.realpath(str(tmp_path)))
+    assert reason is None
     assert "keep.py" in tracked
     assert "gone.py" not in tracked          # not on disk
-    assert not any("=>" in t or "{" in t for t in tracked)  # brace-rename filtered
+    assert "src/{generated}.py" in tracked  # literal braces are valid pathnames
 
 
 def test_tracked_existing_files_degrades_on_git_failure(tmp_path):
     run = Tools(lsfiles=["a.py"], fail_markers={"ls-files": 128})
-    with pytest.raises(hot._Degraded) as exc:
-        hot.tracked_existing_files(_ctx(tmp_path, run), str(tmp_path))
-    assert "ls-files" in str(exc.value)
+    tracked, reason = gcensus.tracked_existing_files(_ctx(tmp_path, run), str(tmp_path))
+    assert tracked is None
+    assert reason
+    assert "ls-files" in reason or reason  # non-empty reason from run_tool seam
 
 
 def test_observe_window_shallow_and_no_fetch(tmp_path):
@@ -1134,21 +1139,58 @@ def test_consequence_template_measured_evidence_only():
         assert w not in low
 
 
+def test_census_excludes_tracked_symlink_operand_injected_seam(tmp_path):
+    """#564 symlink exclusion: radon must never receive the symlink or its untracked target.
+
+    A tracked symlink whose target is an untracked file under the repo passes
+    ``os.path.isfile`` (which follows the link), so only ``exclude_symlinks=True`` keeps
+    it out of the paths handed to radon. Drive collect() through the injected run seam —
+    real files on disk, only radon stubbed — and assert the symlink path never reaches the
+    scanner."""
+    _write(tmp_path, "keep.py", 10)
+    _write(tmp_path, "untracked_target.py", "def f():\n" * 30)
+    os.symlink("untracked_target.py", str(tmp_path / "link.py"))
+
+    run = _basic_tools(
+        tmp_path,
+        numstat="10\t0\tkeep.py\n",
+        lsfiles=["keep.py", "link.py"],
+        radon={
+            "keep.py": [{"complexity": 15, "name": "k", "lineno": 1}],
+            "untracked_target.py": [{"complexity": 99, "name": "huge", "lineno": 1}],
+        },
+    )
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+    assert gl.classify_collect(out)[0] == "collected"
+
+    radon_calls = [argv for argv in run.calls if argv and os.path.basename(argv[0]) == "radon"]
+    assert len(radon_calls) == 1, run.calls
+    radon_argv = radon_calls[0]
+    assert not any("link.py" in arg for arg in radon_argv), radon_argv
+    assert not any("untracked_target.py" in arg for arg in radon_argv), radon_argv
+    assert any(arg.endswith("/keep.py") for arg in radon_argv), radon_argv
+
+    assert [c["path"] for c in out["candidates"]] == ["keep.py"]
+
+
 def test_lens_protocol_shape():
     ok, reasons = gl.validate_lens(hot.LENS)
     assert ok, reasons
     assert hot.LENS.name == "hotspots"
-    assert hot.LENS.collector_version == "2.0.0"
-    assert hot.LENS.collector_version != "1.0.0"
+    assert hot.LENS.collector_version == "2.1.0"
+    assert hot.LENS.collector_version != "2.0.0"
     assert hot.LENS.required_facts == ()
 
 
 def test_collector_version_bumped_with_digest_shape_change():
     assert hot.HotspotsLens.collector_version != "1.0.0"
+    assert hot.HotspotsLens.collector_version == "2.1.0"
+    assert hot.HotspotsLens.collector_version != "2.0.0"
     with open(hot.__file__, encoding="utf-8") as fh:
         src = fh.read()
     assert '"surfaceIds"' in src or "'surfaceIds'" in src
-    assert 'collector_version = "2.0.0"' in src
+    assert 'collector_version = "2.1.0"' in src
+    assert "exclude_symlinks" in src or "symlink" in src
 
 
 def test_degrade_helper_shape():

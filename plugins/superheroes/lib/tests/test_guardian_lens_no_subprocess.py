@@ -36,7 +36,11 @@ _BANNED_SUBPROCESS_FROM_NAMES = _BANNED_SUBPROCESS_ATTRS
 
 def _lens_module_paths():
     pattern = os.path.join(_LIB, "guardian_lens*.py")
-    return sorted(glob.glob(pattern))
+    paths = sorted(glob.glob(pattern))
+    census = os.path.join(_LIB, "guardian_census.py")
+    if census not in paths:
+        paths.append(census)
+    return sorted(paths)
 
 
 def _os_attr_is_banned(attr):

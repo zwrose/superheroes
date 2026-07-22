@@ -25,21 +25,12 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import guardian_census  # noqa: E402
 import guardian_collect as gc  # noqa: E402
 import guardian_lens  # noqa: E402
 
 MIN_BLOCK_LINES = 5
 TOP_N = 25
-
-# jscpd is handed the tracked-file census as explicit operands (never the repo dir), so a
-# very large repo could push the argv past the kernel's ARG_MAX. macOS ARG_MAX is 262144
-# bytes and the sanitized child env consumes a share of that; cap the operand payload well
-# under it. The bound is measured on the ABSOLUTIZED payload (invoke prepends the repo
-# realpath + a path separator to every operand before execve), not the repo-relative bytes,
-# so the guard reflects the real argv the kernel sees. On overflow the lens degrades
-# HONESTLY (not-collected) rather than silently truncating the file list or falling back to
-# scanning cwd (which would re-open #564).
-MAX_TRACKED_OPERAND_BYTES = 100_000
 
 # difflib re-measure budgets — rank by jscpd proxy first, then measure within caps.
 MAX_PAIRS_MEASURED = 400
@@ -107,49 +98,6 @@ def _repo_rel(cwd, path):
         except ValueError:
             return path
     return path
-
-
-def _git(ctx, cwd, args, timeout=gc.DEFAULT_TIMEOUT):
-    """Run a git subcommand via run_tool with an absolute ``-C`` repo target.
-
-    ``git -C <abs repo>`` targets the repo even though invoke runs collectors from a
-    neutral cwd (git resolves via PATH; it is not a repo-local executable).
-    """
-    return gc.run_tool(["git", "-C", cwd, *args], ctx=ctx, cwd=cwd, timeout=timeout)
-
-
-def _tracked_existing_files(ctx, cwd):
-    """Repo-relative paths that are both ``git ls-files`` tracked and present on disk.
-
-    Shares its census shape with ``guardian_lens_hotspots.tracked_existing_files`` but now
-    DIVERGES from it: this lens excludes symlinks (see below) because it hands the census to
-    jscpd as content to scan, whereas hotspots only reads churn metadata. Unifying the two
-    into a shared param'd helper (symlink policy as a parameter) is a tracked follow-up — do
-    NOT extract here. Returns ``(files, None)`` on success or ``(None, reason)`` on a git
-    failure — a git failure must NEVER be read as an empty tracked set (that would erase the
-    baseline); collect() turns the reason into ``not-collected`` so the prior snapshot
-    survives.
-    """
-    res = _git(ctx, cwd, ["ls-files", "-z"])
-    if not res["ok"]:
-        return None, res["reason"]
-    out = set()
-    for raw in (res.get("stdout") or "").split("\0"):
-        if not raw:
-            continue
-        # Never accept brace-rename garbage into the tracked set.
-        if "=>" in raw or "{" in raw:
-            continue
-        full = os.path.join(cwd, raw)
-        # Census only regular, NON-symlink files. os.path.isfile follows symlinks, so a
-        # tracked symlink whose target is an UNTRACKED file under the repo would pass both
-        # this filter and invoke's under-repo check (realpath stays under-repo) — jscpd
-        # would then scan the untracked target's bytes, re-opening #564 for the symlink
-        # case. A tracked symlink's own "content" is the link, not source to dedup, so
-        # excluding it keeps the census faithful to tracked content only.
-        if os.path.isfile(full) and not os.path.islink(full):
-            out.add(raw)
-    return out, None
 
 
 def _read_normalized_lines(path):
@@ -706,7 +654,8 @@ class DuplicationLens:
         # never the repo dir. Scanning the dir walked untracked build worktrees
         # (checkouts/) and nested .git internals, pairing every file with its repo twin
         # (173 false-positive large-fresh-clone red lines in the inaugural sweep).
-        tracked, census_reason = _tracked_existing_files(ctx, cwd)
+        tracked, census_reason = guardian_census.tracked_existing_files(
+            ctx, cwd, exclude_symlinks=True)
         if tracked is None:
             # A git failure must degrade — NEVER become an empty digest that erases the
             # baseline. not-collected (digest None) hits diff()'s cur_digest-is-None guard.
@@ -737,10 +686,8 @@ class DuplicationLens:
         # the real argv and could pass a payload that then hits E2BIG. An absolutized
         # operand is at most `realpath(cwd)/` + the relative path, so this is a safe upper
         # bound.
-        abs_prefix_bytes = len(os.path.realpath(cwd).encode("utf-8")) + 1
-        operand_bytes = sum(
-            len(p.encode("utf-8")) + abs_prefix_bytes for p in operands)
-        if operand_bytes > MAX_TRACKED_OPERAND_BYTES:
+        operand_bytes = guardian_census.operand_payload_bytes(cwd, operands)
+        if operand_bytes > guardian_census.MAX_TRACKED_OPERAND_BYTES:
             return {
                 "candidates": [],
                 "digest": None,
@@ -748,7 +695,7 @@ class DuplicationLens:
                     "tracked-file operand payload is %d bytes across %d files, exceeding "
                     "the %d-byte cap (ARG_MAX headroom) — cannot scan without risking a "
                     "truncated argv" % (operand_bytes, len(operands),
-                                        MAX_TRACKED_OPERAND_BYTES)),
+                                        guardian_census.MAX_TRACKED_OPERAND_BYTES)),
             }
 
         # jscpd's json reporter writes a FILE, but run_tool captures stdout — aim the

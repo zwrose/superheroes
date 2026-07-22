@@ -15,6 +15,7 @@ import subprocess
 
 import pytest
 
+import guardian_census
 import guardian_lens as gl
 import guardian_lens_duplication as gld
 from test_guardian_conformance import assert_lens_conformance
@@ -714,7 +715,7 @@ def test_git_census_failure_degrades_not_collected(tmp_path):
 def test_arg_max_guard_degrades_never_scans_cwd(tmp_path, monkeypatch):
     """When the tracked-file operand payload exceeds the cap, degrade honestly — no silent
     cwd fallback, no truncation."""
-    monkeypatch.setattr(gld, "MAX_TRACKED_OPERAND_BYTES", 5)
+    monkeypatch.setattr(guardian_census, "MAX_TRACKED_OPERAND_BYTES", 5)
     _seed_tracked(tmp_path, "a.py", "b.py")  # 8 bytes of operands > 5-byte cap
     run = _FakeJscpd(_report([]))
     out = _collect(gld.DuplicationLens(), tmp_path, run)
@@ -738,7 +739,7 @@ def test_arg_max_guard_measures_absolutized_payload(tmp_path, monkeypatch):
     relative_bytes = sum(len(p.encode("utf-8")) for p in operands)  # 8 bytes
     # Cap == the relative payload: the OLD relative-only measure (8 > 8 is False) would NOT
     # trip and would go on to scan; the absolutized measure must trip.
-    monkeypatch.setattr(gld, "MAX_TRACKED_OPERAND_BYTES", relative_bytes)
+    monkeypatch.setattr(guardian_census, "MAX_TRACKED_OPERAND_BYTES", relative_bytes)
     run = _FakeJscpd(_report([]))
     out = _collect(gld.DuplicationLens(), tmp_path, run)
     status, reason = gl.classify_collect(out)

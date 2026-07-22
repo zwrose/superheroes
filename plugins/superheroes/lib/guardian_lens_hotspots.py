@@ -26,6 +26,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import guardian_census  # noqa: E402
 import guardian_collect as gc  # noqa: E402
 import guardian_lens  # noqa: E402
 
@@ -287,26 +288,6 @@ def _git(ctx, cwd, args, timeout=gc.DEFAULT_TIMEOUT):
     """
     return gc.run_tool(
         ["git", "-C", cwd, *args], ctx=ctx, cwd=cwd, timeout=timeout)
-
-
-def tracked_existing_files(ctx, cwd):
-    """Repo-relative paths that are both `git ls-files` tracked and present on disk.
-
-    Raises _Degraded on git failure — an empty set must never overwrite a baseline.
-    """
-    res = _git(ctx, cwd, ["ls-files", "-z"])
-    if not res["ok"]:
-        raise _Degraded("git ls-files failed: %s" % res["reason"])
-    out = set()
-    for raw in (res.get("stdout") or "").split("\0"):
-        if not raw:
-            continue
-        # Never accept brace-rename garbage into the tracked set
-        if "=>" in raw or "{" in raw:
-            continue
-        if os.path.isfile(os.path.join(cwd, raw)):
-            out.add(raw)
-    return out
 
 
 def _requested_since_iso(window_spec):
@@ -608,7 +589,19 @@ class HotspotsLens:
     # 2.0.0: digest persists the full measured set (+ explicit unmeasured/error markers)
     # and surfaceIds; incompatible with the 1.0.0 capped-only shape — bump so the shell
     # records a quiet baseline instead of mass false drift on upgrade.
-    collector_version = "2.0.0"
+    # 2.1.0 (#564): the census POPULATION changed — tracked symlinks are now excluded
+    # because radon/lizard read file content from the census paths. A tracked symlink
+    # whose target is an untracked file under the repo would otherwise pass os.path.isfile
+    # (which follows the link) and have its untracked bytes analyzed. The digest SCHEMA is
+    # unchanged, but a prior baseline may hold candidates from now-excluded symlinked paths;
+    # bump the version so guardian_sweep.py (any version delta ⇒ lens_new) records a quiet
+    # re-baseline FOR DRIFT — the new/worsened/resolved diff runs with _prev_digest treated
+    # as absent, so the excluded paths do not surface as false `resolved` drift. This
+    # "quiet" scope is DRIFT ONLY: red_lines() still runs unconditionally (with prev_files
+    # empty on a version-delta sweep), so a genuine hotspot at/above threshold re-fires as a
+    # `new-high-complexity` red line on the first post-fix sweep. That is by design — a red
+    # line must always surface, even across a re-baseline.
+    collector_version = "2.1.0"
     required_facts = ()
     cost = {
         "collectorSeconds": 0.5,
@@ -700,7 +693,10 @@ class HotspotsLens:
 
         window = observe_window(ctx, cwd, since=since)
         churn = _collect_churn(ctx, cwd, since)
-        tracked = tracked_existing_files(ctx, cwd)
+        tracked, census_reason = guardian_census.tracked_existing_files(
+            ctx, cwd, exclude_symlinks=True)
+        if tracked is None:
+            raise _Degraded("git ls-files failed: %s" % census_reason)
 
         # Honesty gate (git layer): churn reported on ≥1 path but ZERO tracked+existing
         # files means there is no measurable surface — an active repo cannot have churn
