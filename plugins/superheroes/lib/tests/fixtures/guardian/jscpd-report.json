@@ -1,0 +1,297 @@
+{
+  "statistics": {
+    "detectionDate": "2026-07-21T12:56:29.140Z",
+    "formats": {
+      "bash": {
+        "clones": 7,
+        "duplicatedLines": 317,
+        "duplicatedTokens": 766,
+        "lines": 3359,
+        "newClones": 0,
+        "newDuplicatedLines": 0,
+        "percentage": 9.437332539446263,
+        "percentageTokens": 16.038525963149077,
+        "sources": 19,
+        "tokens": 4776
+      },
+      "javascript": {
+        "clones": 2,
+        "duplicatedLines": 13,
+        "duplicatedTokens": 114,
+        "lines": 2328,
+        "newClones": 0,
+        "newDuplicatedLines": 0,
+        "percentage": 0.5584192439862543,
+        "percentageTokens": 0.6049670982806199,
+        "sources": 12,
+        "tokens": 18844
+      },
+      "json": {
+        "clones": 5,
+        "duplicatedLines": 53,
+        "duplicatedTokens": 490,
+        "lines": 4801,
+        "newClones": 0,
+        "newDuplicatedLines": 0,
+        "percentage": 1.1039366798583627,
+        "percentageTokens": 3.3408331628826615,
+        "sources": 36,
+        "tokens": 14667
+      },
+      "markdown": {
+        "clones": 28,
+        "duplicatedLines": 282,
+        "duplicatedTokens": 8595,
+        "lines": 4318,
+        "newClones": 0,
+        "newDuplicatedLines": 0,
+        "percentage": 6.530801296896711,
+        "percentageTokens": 66.0391855551287,
+        "sources": 26,
+        "tokens": 13015
+      },
+      "python": {
+        "clones": 162,
+        "duplicatedLines": 1217,
+        "duplicatedTokens": 11304,
+        "lines": 42943,
+        "newClones": 0,
+        "newDuplicatedLines": 0,
+        "percentage": 2.833989241552756,
+        "percentageTokens": 3.6157411405705733,
+        "sources": 210,
+        "tokens": 312633
+      },
+      "text": {
+        "clones": 0,
+        "duplicatedLines": 0,
+        "duplicatedTokens": 0,
+        "lines": 1302,
+        "newClones": 0,
+        "newDuplicatedLines": 0,
+        "percentage": 0.0,
+        "percentageTokens": 0.0,
+        "sources": 8,
+        "tokens": 5348
+      },
+      "txt": {
+        "clones": 0,
+        "duplicatedLines": 0,
+        "duplicatedTokens": 0,
+        "lines": 377,
+        "newClones": 0,
+        "newDuplicatedLines": 0,
+        "percentage": 0.0,
+        "percentageTokens": 0.0,
+        "sources": 4,
+        "tokens": 3476
+      },
+      "yaml": {
+        "clones": 0,
+        "duplicatedLines": 0,
+        "duplicatedTokens": 0,
+        "lines": 371,
+        "newClones": 0,
+        "newDuplicatedLines": 0,
+        "percentage": 0.0,
+        "percentageTokens": 0.0,
+        "sources": 6,
+        "tokens": 938
+      }
+    },
+    "total": {
+      "clones": 204,
+      "duplicatedLines": 1882,
+      "duplicatedTokens": 21269,
+      "lines": 59799,
+      "newClones": 0,
+      "newDuplicatedLines": 0,
+      "percentage": 3.1472098195622,
+      "percentageTokens": 5.691509431437769,
+      "sources": 321,
+      "tokens": 373697
+    }
+  },
+  "duplicates": [
+    {
+      "firstFile": {
+        "end": 395,
+        "endLoc": {
+          "column": 5,
+          "line": 395,
+          "position": 31534
+        },
+        "name": "plugins/superheroes/skills/audit-debt/SKILL.md:bash",
+        "start": 219,
+        "startLoc": {
+          "column": 0,
+          "line": 219,
+          "position": 15712
+        }
+      },
+      "format": "bash",
+      "fragment": "OV=$(python3 \"$ROOT_DIR/lib/model_tier_overrides.py\" --profile \"$PROFILE\")  # {role:model} or {}\nREVIEWER_MODEL=$(python\u2026",
+      "lines": 177,
+      "secondFile": {
+        "end": 126,
+        "endLoc": {
+          "column": 10,
+          "line": 126,
+          "position": 13170
+        },
+        "name": "plugins/superheroes/skills/review-code/SKILL.md:bash",
+        "start": 123,
+        "startLoc": {
+          "column": 0,
+          "line": 123,
+          "position": 12878
+        }
+      },
+      "tokens": 54
+    },
+    {
+      "firstFile": {
+        "end": 64,
+        "endLoc": {
+          "column": 42,
+          "line": 64,
+          "position": 3626
+        },
+        "name": "CONVENTIONS.md:markdown",
+        "start": 57,
+        "startLoc": {
+          "column": 44,
+          "line": 57,
+          "position": 3397
+        }
+      },
+      "format": "markdown",
+      "fragment": "`plan`/`tasks` definition-docs). The v2 loop:\n\n```\nissue \u2192 build brief \u2192 build \u2192 review \u2192 ready PR \u2192 advisor vet \u2192 owner\u2026",
+      "lines": 8,
+      "secondFile": {
+        "end": 162,
+        "endLoc": {
+          "column": 2,
+          "line": 162,
+          "position": 9558
+        },
+        "name": "CONVENTIONS.md:markdown",
+        "start": 155,
+        "startLoc": {
+          "column": 56,
+          "line": 155,
+          "position": 9331
+        }
+      },
+      "tokens": 220
+    },
+    {
+      "firstFile": {
+        "end": 65,
+        "endLoc": {
+          "column": 31,
+          "line": 65,
+          "position": 3704
+        },
+        "name": "CONVENTIONS.md:markdown",
+        "start": 57,
+        "startLoc": {
+          "column": 44,
+          "line": 57,
+          "position": 3397
+        }
+      },
+      "format": "markdown",
+      "fragment": "`plan`/`tasks` definition-docs). The v2 loop:\n\n```\nissue \u2192 build brief \u2192 build \u2192 review \u2192 ready PR \u2192 advisor vet \u2192 owner\u2026",
+      "lines": 9,
+      "secondFile": {
+        "end": 365,
+        "endLoc": {
+          "column": 3,
+          "line": 365,
+          "position": 28360
+        },
+        "name": "plugins/superheroes/skills/audit-debt/SKILL.md:markdown",
+        "start": 357,
+        "startLoc": {
+          "column": 34,
+          "line": 357,
+          "position": 28057
+        }
+      },
+      "tokens": 295
+    },
+    {
+      "firstFile": {
+        "end": 63,
+        "endLoc": {
+          "column": 82,
+          "line": 63,
+          "position": 3579
+        },
+        "name": "CONVENTIONS.md:markdown",
+        "start": 57,
+        "startLoc": {
+          "column": 44,
+          "line": 57,
+          "position": 3397
+        }
+      },
+      "format": "markdown",
+      "fragment": "`plan`/`tasks` definition-docs). The v2 loop:\n\n```\nissue \u2192 build brief \u2192 build \u2192 review \u2192 ready PR \u2192 advisor vet \u2192 owner\u2026",
+      "lines": 7,
+      "secondFile": {
+        "end": 429,
+        "endLoc": {
+          "column": 3,
+          "line": 429,
+          "position": 34027
+        },
+        "name": "plugins/superheroes/skills/audit-debt/SKILL.md:markdown",
+        "start": 423,
+        "startLoc": {
+          "column": 75,
+          "line": 423,
+          "position": 33847
+        }
+      },
+      "tokens": 174
+    },
+    {
+      "firstFile": {
+        "end": 64,
+        "endLoc": {
+          "column": 55,
+          "line": 64,
+          "position": 3639
+        },
+        "name": "CONVENTIONS.md:markdown",
+        "start": 57,
+        "startLoc": {
+          "column": 44,
+          "line": 57,
+          "position": 3397
+        }
+      },
+      "format": "markdown",
+      "fragment": "`plan`/`tasks` definition-docs). The v2 loop:\n\n```\nissue \u2192 build brief \u2192 build \u2192 review \u2192 ready PR \u2192 advisor vet \u2192 owner\u2026",
+      "lines": 8,
+      "secondFile": {
+        "end": 335,
+        "endLoc": {
+          "column": 3,
+          "line": 335,
+          "position": 24765
+        },
+        "name": "plugins/superheroes/skills/review-code/reference/auto-fix-loop.md:markdown",
+        "start": 327,
+        "startLoc": {
+          "column": 402,
+          "line": 327,
+          "position": 24524
+        }
+      },
+      "tokens": 233
+    }
+  ]
+}

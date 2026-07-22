@@ -58,10 +58,62 @@ def test_register_raises_on_invalid():
         gl.register(lens)
 
 
-def test_registry_empty():
-    assert gl.REGISTRY == []
-    assert gl.registered_lenses() == []
-    assert gl.production_lens_load_errors() == []
+def test_duplication_lens_registers_cleanly():
+    """The duplication lens is on the real roster — loads healthy, no stand-in, no errors."""
+    _reset_production_loader()
+    try:
+        lenses = gl.registered_lenses()
+        by_name = {l.name: l for l in lenses}
+        assert "duplication" in by_name, sorted(by_name)
+        dup = by_name["duplication"]
+        # A real lens, not an _UnavailableLens load-failure stand-in.
+        assert not isinstance(dup, gl._UnavailableLens)
+        assert dup.collector_version == "2.0.0"
+        assert not any(l.name == "module:guardian_lens_duplication" for l in lenses)
+        errors = gl.production_lens_load_errors()
+        assert not any(
+            e.get("lens") == "duplication"
+            or e.get("module") == "guardian_lens_duplication"
+            for e in errors), errors
+    finally:
+        _reset_production_loader()
+
+
+def test_hotspots_lens_registers_cleanly():
+    """The hotspots lens is on the real roster — loads healthy, no stand-in, no errors."""
+    _reset_production_loader()
+    try:
+        lenses = gl.registered_lenses()
+        by_name = {l.name: l for l in lenses}
+        assert "hotspots" in by_name, sorted(by_name)
+        hot = by_name["hotspots"]
+        # A real lens, not an _UnavailableLens load-failure stand-in.
+        assert not isinstance(hot, gl._UnavailableLens)
+        assert hot.collector_version == "2.0.0"
+        assert not any(l.name == "module:guardian_lens_hotspots" for l in lenses)
+        errors = gl.production_lens_load_errors()
+        assert not any(
+            e.get("lens") == "hotspots"
+            or e.get("module") == "guardian_lens_hotspots"
+            for e in errors), errors
+    finally:
+        _reset_production_loader()
+
+
+def test_both_production_lenses_load_together_no_errors():
+    """Both production lenses register cleanly side by side — no load errors at all."""
+    _reset_production_loader()
+    try:
+        lenses = gl.registered_lenses()
+        names = {l.name for l in lenses}
+        assert {"duplication", "hotspots"} <= names, sorted(names)
+        for name in ("duplication", "hotspots"):
+            lens = next(l for l in lenses if l.name == name)
+            assert not isinstance(lens, gl._UnavailableLens)
+        assert not any(l.name.startswith("module:") for l in lenses)
+        assert gl.production_lens_load_errors() == []
+    finally:
+        _reset_production_loader()
 
 
 def test_classify_collect_collected_happy():
