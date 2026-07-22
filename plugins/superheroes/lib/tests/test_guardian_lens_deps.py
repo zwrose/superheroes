@@ -13,6 +13,7 @@ import os
 import subprocess
 
 import guardian_collect as gc
+import guardian_ledger as gled
 import guardian_lens as gl
 import guardian_lens_deps as gld
 import guardian_sweep as gsw
@@ -1194,10 +1195,10 @@ def test_metric_is_numeric_for_the_ledger_reraise_rule(tmp_path):
     for cand in out["candidates"]:
         assert isinstance(cand["metric"], (int, float)), cand["id"]
     types_node = _by_id(out["candidates"])["deps:ncu:package.json:@types/node"]
-    assert gsw._materially_worsened(types_node, {"metricAtDisposition": 1}) is True
-    assert gsw._materially_worsened(types_node, {"metricAtDisposition": 2}) is False
+    assert gled.materially_worsened(types_node, {"metricAtDisposition": 1}) is True
+    assert gled.materially_worsened(types_node, {"metricAtDisposition": 2}) is False
     vuln = _by_id(out["candidates"])["deps:audit:node:js-yaml:GHSA-52CP-R559-CP3M"]
-    assert gsw._materially_worsened(vuln, {"metricAtDisposition": 3}) is True
+    assert gled.materially_worsened(vuln, {"metricAtDisposition": 3}) is True
 
 
 # ================================================================= check-the-check
