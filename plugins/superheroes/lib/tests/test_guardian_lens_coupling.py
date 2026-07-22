@@ -1200,8 +1200,11 @@ def test_ids_follow_the_documented_grammar_and_normalization():
     bare = glc.make_id(glc.TOOL_TOKEN_JS, "src/a", "src/b")
     assert bare == glc.ID_SEP.join(
         (glc.LENS_FAMILY, glc.TOOL_TOKEN_JS, "src/a" + glc.EDGE_ARROW + "src/b"))
-    # separator + case normalization are stated and applied
-    assert glc.cluster_key("SRC\\Features\\Checkout\\Pay.ts", glc.ROOT_WORKSPACE) == \
+    # separator + case normalization are stated and applied. NOTE: on the POSIX test
+    # host `/` is the only path separator; a literal backslash is DATA, preserved for
+    # identity (see test_backslash_dir_name_stays_distinct_from_nested_dir_on_posix),
+    # so the normalization case uses forward slashes.
+    assert glc.cluster_key("SRC/Features/Checkout/Pay.ts", glc.ROOT_WORKSPACE) == \
         "src/features/checkout"
     # workspace-qualified: the same inner path in two workspaces is two identities
     assert glc.cluster_key("packages/web/src/a/x.ts", "packages/web") != \
@@ -1902,3 +1905,118 @@ def test_duplicate_parsed_paths_do_not_inflate_the_parsed_census(tmp_path):
     assert total == 2, census
     # The dedup seam feeding len(parsed_paths) at the tripwire sites agrees.
     assert len(glc._dedup_norm_paths(repo, parsed_paths)) == 2
+
+
+# ======================================================================================
+# 18. Identity-collision CLASS closed by construction (#538 follow-up)
+#     Every STRUCTURAL char (`->`, `:`, `~`) escaped in the encoding; `_posix` preserves
+#     a POSIX backslash; parsed-path dedup preserves case. Each test below FAILS on the
+#     pre-fix code and PASSES after.
+# ======================================================================================
+
+def test_escape_set_covers_every_structural_identity_char():
+    """GUARD: every structural character used to BUILD identities must be in the escape
+    set, so no future separator/marker can silently reopen the collision class.
+
+    Structural chars: EDGE_ARROW (`->`, i.e. `>`), ID_SEP (`:`), and the truncation
+    marker (`~`). If any can appear literally inside an encoded fragment, two distinct
+    inputs can alias one identity.
+    """
+    structural_chars = ("-", ">", ":", "~")
+    for ch in structural_chars:
+        # A structural char that participates in a separator/marker (`>`,`:`,`~`) must be
+        # escaped away by _encode_identity_fragment; `-` alone is not a separator (only the
+        # two-char `->` is) so it need not be escaped.
+        encoded = glc._encode_identity_fragment("x" + ch + "y")
+        if ch in (">", ":", "~"):
+            assert ch not in encoded, (ch, encoded)
+    # Direct on the compiled alphabet: the separator/marker chars are all matched.
+    assert glc._IDENTITY_ESCAPE_RE.search(">")
+    assert glc._IDENTITY_ESCAPE_RE.search(":")
+    assert glc._IDENTITY_ESCAPE_RE.search("~")
+    # And ID_SEP / the truncation marker are exactly the chars we assert are covered.
+    assert glc.ID_SEP == ":"
+    assert glc._IDENTITY_TRUNC_MARKER == "~"
+
+
+def test_id_sep_char_in_a_fragment_cannot_alias_the_field_separator():
+    """`:` (ID_SEP) inside a cluster/rule must NOT alias the id field boundary.
+
+    Pre-fix `:` was not escaped, so make_id(tool,"b","c",rule="r:a") and
+    make_id(tool,"a:b","c",rule="r") both minted `coupling:depcruise:r:a:b->c`.
+    """
+    i1 = glc.make_id(glc.TOOL_TOKEN_JS, "b", "c", rule="r:a")
+    i2 = glc.make_id(glc.TOOL_TOKEN_JS, "a:b", "c", rule="r")
+    assert i1 != i2, (i1, i2)
+    # Same aliasing on the wall-key seam.
+    w1 = glc.make_wall_key(glc.TOOL_TOKEN_JS, "r:a", "b", "c")
+    w2 = glc.make_wall_key(glc.TOOL_TOKEN_JS, "r", "a:b", "c")
+    assert w1 != w2, (w1, w2)
+    # The literal `:` survives only as its encoded form inside a fragment.
+    assert "%3A" in i1 and "%3A" in i2
+
+
+def test_truncation_marker_char_in_a_fragment_cannot_alias_a_truncated_form():
+    """`~` (the truncation marker) inside a fragment must NOT alias the truncated form
+    of a different, longer fragment.
+
+    Pre-fix `~` was not escaped: A's distinctness-preserving truncation is
+    ``A[:keep] + "~" + short_hash(A)``; a DIFFERENT fragment B constructed to end with
+    that exact ``~<hash>`` tail encoded to the identical string — a collision. Escaping
+    `~` makes the marker unambiguous (any literal `~` becomes %7E).
+    """
+    max_len = glc.REPO_TEXT_MAX * 2
+    a = "a" * 200 + "/" + "b" * 200            # 401 chars > max_len (400) -> truncated
+    assert len(a) > max_len
+    # Reconstruct A's pre-fix truncated tail to craft the colliding B.
+    digest_a = glc.store_core.short_hash(a)    # a needs no escaping, so encoded == a
+    keep = max_len - len(glc._IDENTITY_TRUNC_MARKER) - len(digest_a)
+    b = a[:keep] + glc._IDENTITY_TRUNC_MARKER + digest_a  # a literal `~<hashA>` tail
+    assert a != b
+    ea = glc._encode_identity_fragment(a)
+    eb = glc._encode_identity_fragment(b)
+    assert ea != eb, (ea, eb)                  # pre-fix: eb == ea (collision)
+    # Both stay bounded; the only bare `~` in either is the marker the encoder inserted
+    # (B's literal `~` is escaped to %7E before truncation, so it cannot be that marker).
+    assert len(ea) <= max_len and len(eb) <= max_len
+    assert ea.count(glc._IDENTITY_TRUNC_MARKER) == 1
+    assert eb.count(glc._IDENTITY_TRUNC_MARKER) == 1
+
+
+def test_backslash_dir_name_stays_distinct_from_nested_dir_on_posix():
+    """`_posix` must preserve a POSIX literal backslash so `a\\b` (one dir) stays distinct
+    from `a/b` (nested) — distinct cluster keys, matrix keys, and matrixHash.
+
+    Pre-fix `_posix` folded `\\`->`/` unconditionally, collapsing a directory literally
+    named ``a\\b`` into nested ``a/b`` BEFORE identity encoding could escape it.
+    """
+    if os.sep != "/":
+        pytest.skip("backslash-is-literal only holds on a POSIX host")
+    fc_lit = glc.cluster_key("a\\b/mod.ts", glc.ROOT_WORKSPACE)    # literal-backslash dir
+    fc_nested = glc.cluster_key("a/b/mod.ts", glc.ROOT_WORKSPACE)  # nested a/b
+    assert fc_lit != fc_nested, (fc_lit, fc_nested)   # pre-fix: both "a/b"
+    k_lit = glc._edge_key(fc_lit, "z")
+    k_nested = glc._edge_key(fc_nested, "z")
+    assert k_lit != k_nested, (k_lit, k_nested)
+    m_lit = glc.build_matrix([{"fromCluster": fc_lit, "toCluster": "z"}])
+    m_nested = glc.build_matrix([{"fromCluster": fc_nested, "toCluster": "z"}])
+    assert glc.matrix_hash(m_lit) != glc.matrix_hash(m_nested)
+    # The literal backslash reached identity encoding and became %5C.
+    assert "%5C" in k_lit and "%5C" not in k_nested
+
+
+def test_case_only_differing_parsed_paths_count_distinctly(tmp_path):
+    """Parsed-path dedup must PRESERVE case so case-only-differing modules on a
+    case-sensitive FS are counted distinctly — else the parsed census undercounts vs the
+    source census and manufactures a FALSE cliff/collapse degrade.
+
+    Pre-fix the dedup keyed on the lower-cased `_norm_rel`, collapsing all four modules
+    to one.
+    """
+    repo = init_calibrated_repo(tmp_path)
+    parsed_paths = ["src/AA.ts", "src/Aa.ts", "src/aA.ts", "src/aa.ts"]
+    assert len(glc._dedup_norm_paths(repo, parsed_paths)) == 4
+    src_census = {"workspaces": [glc.ROOT_WORKSPACE]}
+    census = glc._parsed_census(repo, parsed_paths, src_census, glc.JS_EXT_LANG)
+    total = sum(sum(by_lang.values()) for by_lang in census.values())
+    assert total == 4, census

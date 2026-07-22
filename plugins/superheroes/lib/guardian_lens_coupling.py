@@ -199,10 +199,23 @@ _ARROW_PLACEHOLDER = "\x00ARROW\x00"
 # Characters that must be percent-encoded in identity fragments so encoding is
 # reversible, collision-free, and carries no active markdown/HTML markup. `%` itself
 # is included so a literal `%23` cannot collide with an encoded `#`.
+#
+# EVERY structural character in the identity grammar is escaped here so none can appear
+# LITERALLY inside an encoded fragment — closing the collision CLASS by construction:
+#   - `>`  → the EDGE_ARROW (`->`) cluster separator stays unambiguous (already escaped).
+#   - `:`  → the ID_SEP field separator (`make_id` / `make_wall_key`) — without this a
+#            name like `r:a` aliases the rule/cluster boundary (two distinct id inputs
+#            minting one id).
+#   - `~`  → the truncation marker (`_IDENTITY_TRUNC_MARKER`) — without this a fragment
+#            literally ending `...~<hex>` aliases the truncated form of a longer fragment.
+# So an encoded fragment can never contain `->`, `:`, or `~`; the ONLY such chars in a
+# built identity are the separators/marker the code itself inserts.
 _IDENTITY_ESCAPE_RE = re.compile(
-    r"[\x00-\x1f\x7f-\x9f#*`\[\]|<>%\\]")
+    r"[\x00-\x1f\x7f-\x9f#*`\[\]|<>%\\:~]")
 # Single-char marker joining a truncated identity prefix to its full-value hash suffix
-# (defect F4). Not in the escape alphabet, not markdown-structural, never the EDGE_ARROW.
+# (defect F4). It IS in the escape alphabet above, which is exactly what makes it an
+# unambiguous marker: a literal `~` in any input is escaped to `%7E`, so the only `~`
+# in an encoded fragment is this marker. Not markdown-structural, never the EDGE_ARROW.
 _IDENTITY_TRUNC_MARKER = "~"
 
 # --- Python AST census I/O bounds ---------------------------------------------------
@@ -305,7 +318,18 @@ def _encode_identity_key(text, max_len=REPO_TEXT_MAX * 2):
 
 
 def _posix(path):
-    return path.replace("\\", CLUSTER_SEP)
+    """Forward-slash a path — but only where a backslash is actually a separator.
+
+    On Windows (``os.sep == "\\"``) a backslash IS the path separator and folds to `/`.
+    On POSIX a backslash is a LITERAL filename character, not a separator: folding it
+    here would collapse a directory literally named ``a\\b`` into a nested ``a/b`` BEFORE
+    identity encoding can escape it, aliasing two distinct paths (identity collision).
+    Preserve it on POSIX so it reaches ``_encode_identity_fragment`` and is escaped to
+    ``%5C`` — keeping ``a\\b`` distinct from ``a/b``.
+    """
+    if os.sep == "\\":
+        return path.replace("\\", CLUSTER_SEP)
+    return path
 
 
 def _rel_posix(repo, path):
@@ -1388,21 +1412,28 @@ def _js_targets(repo, src_census):
 
 
 def _dedup_norm_paths(repo, parsed_paths):
-    """Distinct parsed paths (first-seen order), keyed on the NORMALIZED path (defect F2).
+    """Distinct parsed paths (first-seen order), keyed on a CASE-PRESERVING path (F2).
 
     A tool report that lists the same module path twice must not inflate the parsed
     count — a duplicate could weaken the collapse/cliff tripwires. We dedup rather than
     filesystem-verify every path: a report inventing *nonexistent* paths that still
     matched the real source count would require a compromised collector, which is
     outside the hostile-repo (committed-content-only) threat model this lens defends.
+
+    The dedup key is the case-PRESERVING relative path (``_rel_posix``), NOT the
+    lower-cased ``_norm_rel``: on a case-sensitive filesystem ``AA.ts`` / ``Aa.ts`` /
+    ``aa.ts`` are DISTINCT modules, and case-folding the dedup key would collapse them to
+    one — undercounting the parsed census vs the source census and manufacturing a FALSE
+    cliff/collapse degrade. (Cluster identity may still lower-case elsewhere; only this
+    dedup key must preserve case.)
     """
     seen = set()
     out = []
     for path in parsed_paths or []:
-        rel = _norm_rel(repo, path)
-        if rel in seen:
+        key = _rel_posix(repo, path)
+        if key in seen:
             continue
-        seen.add(rel)
+        seen.add(key)
         out.append(path)
     return out
 
