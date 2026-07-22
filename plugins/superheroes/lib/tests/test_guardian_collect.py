@@ -198,3 +198,123 @@ def test_translate_ok_outcome_gated_on_ok_exits():
     ok = gc._translate_invoke_result(res, _ARGV, ok_exits=(0,))
     assert ok["ok"] is True
     assert ok["reason"] is None
+
+
+# --- targets= (repo-file operands) ---------------------------------------------------
+#
+# run_tool grew an optional `targets=()` that threads repo-file operands to the tool
+# behind a `--` separator. Production hands them to invoke (which absolutizes + validates
+# under-repo + inserts `--`); the injected seam reproduces exactly the argv invoke would
+# build so a test observes the real operands.
+
+
+def test_run_tool_production_threads_targets_into_invoke(monkeypatch, tmp_path):
+    """Production path (no ctx['run']) passes `targets` straight through to invoke —
+    it does NOT append operands itself (invoke owns the `--` + absolutization)."""
+    repo = _make_repo(tmp_path / "repo")
+    captured = {}
+
+    def fake_invoke(tool, fixed_args, repo_arg, targets, *, run=None, timeout=None,
+                    **kwargs):
+        captured["tool"] = tool
+        captured["fixed_args"] = list(fixed_args)
+        captured["repo"] = repo_arg
+        captured["targets"] = list(targets)
+        return {"outcome": "ok", "returncode": 0, "stdout": "out", "stderr": ""}
+
+    monkeypatch.setattr(gc.gt, "invoke", fake_invoke)
+    out = gc.run_tool(["jscpd", "-o", "x"], cwd=repo, targets=["a.py", "b.py"])
+    assert out["ok"] is True
+    assert captured["tool"] == "jscpd"
+    assert captured["fixed_args"] == ["-o", "x"]
+    assert captured["targets"] == ["a.py", "b.py"]
+    assert os.path.realpath(captured["repo"]) == os.path.realpath(repo)
+
+
+def test_run_tool_injected_seam_appends_separator_and_absolutized_operands(tmp_path):
+    """Injected seam builds full_argv exactly as invoke would: argv + ['--'] + abs paths
+    (absolutized under the repo)."""
+    repo = _make_repo(tmp_path / "repo")
+    (tmp_path / "repo" / "a.py").write_text("x\n", encoding="utf-8")
+    (tmp_path / "repo" / "b.py").write_text("y\n", encoding="utf-8")
+    seen = {}
+
+    def run(argv, **kwargs):
+        seen["argv"] = list(argv)
+
+        class R:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+        return R()
+
+    out = gc.run_tool(["jscpd", "-o", "x"], ctx={"run": run}, cwd=repo,
+                      targets=["a.py", "b.py"])
+    assert out["ok"] is True
+    repo_real = os.path.realpath(repo)
+    assert seen["argv"] == [
+        "jscpd", "-o", "x", "--",
+        os.path.join(repo_real, "a.py"),
+        os.path.join(repo_real, "b.py"),
+    ]
+
+
+def test_run_tool_injected_seam_empty_targets_argv_unchanged(tmp_path):
+    """Empty targets ⇒ the argv the run stub sees is byte-for-byte the input argv."""
+    repo = _make_repo(tmp_path / "repo")
+    seen = {}
+
+    def run(argv, **kwargs):
+        seen["argv"] = list(argv)
+
+        class R:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+        return R()
+
+    gc.run_tool(["jscpd", "-o", "x"], ctx={"run": run}, cwd=repo)
+    assert seen["argv"] == ["jscpd", "-o", "x"]
+    assert "--" not in seen["argv"]
+
+
+def test_run_tool_injected_seam_escaping_symlink_target_degrades_never_raises(tmp_path):
+    """A tracked symlink whose realpath escapes the repo makes absolute_repo_operands raise
+    ValueError. run_tool must DEGRADE (not raise) on the injected seam, and must not call
+    the run stub with an unsafe operand."""
+    repo = _make_repo(tmp_path / "repo")
+    outside = tmp_path / "outside.py"
+    outside.write_text("secret\n", encoding="utf-8")
+    link = tmp_path / "repo" / "escape.py"
+    os.symlink(str(outside), str(link))
+    # os.path.isfile follows the symlink → True, so such a path can survive a census filter.
+    assert os.path.isfile(str(link))
+    called = {"n": 0}
+
+    def run(argv, **kwargs):
+        called["n"] += 1
+
+        class R:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+        return R()
+
+    out = gc.run_tool(["jscpd"], ctx={"run": run}, cwd=repo, targets=["escape.py"])
+    assert out["ok"] is False
+    assert "unsafe target operand" in out["reason"]
+    assert called["n"] == 0, "the run stub must not be called with an unsafe operand"
+
+
+def test_run_tool_empty_targets_matches_no_targets_arg(tmp_path):
+    """Regression-safety: passing targets=() is byte-for-byte identical to omitting it."""
+    def run(argv, **kwargs):
+        class R:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+        return R()
+
+    a = gc.run_tool(["tool", "-x"], ctx={"run": run})
+    b = gc.run_tool(["tool", "-x"], ctx={"run": run}, targets=())
+    assert a == b

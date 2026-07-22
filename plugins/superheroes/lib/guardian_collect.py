@@ -83,7 +83,8 @@ def _translate_invoke_result(res, argv, ok_exits):
                    "%s failed: unexpected invoke outcome %r" % (argv0, outcome))
 
 
-def run_tool(argv, ctx=None, timeout=DEFAULT_TIMEOUT, cwd=None, ok_exits=(0,)):
+def run_tool(argv, ctx=None, timeout=DEFAULT_TIMEOUT, cwd=None, ok_exits=(0,),
+             targets=()):
     """Run `argv` and normalize the outcome. Never raises.
 
     Returns {"ok": bool, "exit": int|None, "stdout": str, "stderr": str, "reason": str|None}.
@@ -92,13 +93,21 @@ def run_tool(argv, ctx=None, timeout=DEFAULT_TIMEOUT, cwd=None, ok_exits=(0,)):
 
     - **Injected** (`ctx["run"]` present) — the TEST / CONFORMANCE seam. Runs the
       injected callable directly and normalizes, so tests drive every scenario
-      (incl. missing-tool) without spawning anything. Behavior here is unchanged.
+      (incl. missing-tool) without spawning anything.
     - **Production** (`ctx["run"]` is None/absent) — routes the real spawn through
       `guardian_tools.invoke`, inheriting its hardening (repo-local-executable
       rejection, sanitized env, neutral child cwd, bounded output, process-group
       kill). `cwd` (defaulting to the process cwd) is the repo root used for
       resolution / rejection / env-sanitization; the collector still runs from
       invoke's neutral cwd.
+
+    ``targets`` is an optional sequence of repo-relative (or absolute-under-repo) file
+    operands to hand the tool AFTER a ``--`` separator. In production ``invoke`` does the
+    absolutization + under-repo validation + ``--`` insertion; on the injected seam this
+    function reproduces exactly the argv ``invoke`` would have built (via
+    ``append_repo_operands(absolute_repo_operands(...))``) so a test observes the real
+    operands. Empty ``targets`` ⇒ the argv is byte-for-byte unchanged from the no-targets
+    behavior.
 
     `ok_exits` is the set of exit codes that mean the tool succeeded (default `(0,)`).
     Many OSS analyzers exit non-zero when they *find* something — vulture exits 3,
@@ -112,9 +121,24 @@ def run_tool(argv, ctx=None, timeout=DEFAULT_TIMEOUT, cwd=None, ok_exits=(0,)):
     run = (ctx or {}).get("run")
 
     if run is not None:
-        # TEST / CONFORMANCE SEAM — unchanged direct-run behavior.
+        # TEST / CONFORMANCE SEAM — build the final argv exactly as invoke would so the
+        # observed argv is identical to production. absolute_repo_operands raises
+        # ValueError when a target escapes the repo (e.g. a tracked symlink — os.path.isfile
+        # follows symlinks, so an escaping path can survive a census filter); the production
+        # path is wrapped below, but THIS assembly is not, so wrap it here — run_tool must
+        # NEVER raise into a lens's collect().
+        if targets:
+            try:
+                full_argv = gt.append_repo_operands(
+                    argv, gt.absolute_repo_operands(
+                        os.path.realpath(cwd or "."), list(targets)))
+            except ValueError as exc:
+                return _result(False, None, "", "",
+                               "%s: unsafe target operand: %s" % (argv0, exc))
+        else:
+            full_argv = argv
         try:
-            r = run(argv, capture_output=True, text=True, timeout=timeout, cwd=cwd)
+            r = run(full_argv, capture_output=True, text=True, timeout=timeout, cwd=cwd)
         except subprocess.TimeoutExpired:
             return _result(False, None, "", "",
                            "%s timed out after %ss" % (argv0, timeout))
@@ -132,11 +156,13 @@ def run_tool(argv, ctx=None, timeout=DEFAULT_TIMEOUT, cwd=None, ok_exits=(0,)):
                        "%s exited %s" % (argv0, exit_code))
 
     # PRODUCTION — route the real spawn through invoke's hardening. Must never raise.
+    # invoke absolutizes ``targets`` under the repo, validates them, and inserts ``--`` —
+    # do NOT append operands here too (that would double them).
     if not argv:
         return _result(False, None, "", "", "%s: no command to run" % argv0)
     try:
         repo = os.path.realpath(cwd or os.getcwd())
-        res = gt.invoke(argv[0], list(argv[1:]), repo, targets=(),
+        res = gt.invoke(argv[0], list(argv[1:]), repo, targets=targets,
                         run=None, timeout=timeout)
         return _translate_invoke_result(res, argv, ok_exits)
     except Exception as exc:  # realpath/invoke ValueError etc. — fail closed, never raise

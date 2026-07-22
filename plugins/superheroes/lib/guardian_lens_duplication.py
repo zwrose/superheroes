@@ -31,6 +31,16 @@ import guardian_lens  # noqa: E402
 MIN_BLOCK_LINES = 5
 TOP_N = 25
 
+# jscpd is handed the tracked-file census as explicit operands (never the repo dir), so a
+# very large repo could push the argv past the kernel's ARG_MAX. macOS ARG_MAX is 262144
+# bytes and the sanitized child env consumes a share of that; cap the operand payload well
+# under it. The bound is measured on the ABSOLUTIZED payload (invoke prepends the repo
+# realpath + a path separator to every operand before execve), not the repo-relative bytes,
+# so the guard reflects the real argv the kernel sees. On overflow the lens degrades
+# HONESTLY (not-collected) rather than silently truncating the file list or falling back to
+# scanning cwd (which would re-open #564).
+MAX_TRACKED_OPERAND_BYTES = 100_000
+
 # difflib re-measure budgets — rank by jscpd proxy first, then measure within caps.
 MAX_PAIRS_MEASURED = 400
 MAX_MEASURE_FILE_BYTES = 2_000_000
@@ -97,6 +107,49 @@ def _repo_rel(cwd, path):
         except ValueError:
             return path
     return path
+
+
+def _git(ctx, cwd, args, timeout=gc.DEFAULT_TIMEOUT):
+    """Run a git subcommand via run_tool with an absolute ``-C`` repo target.
+
+    ``git -C <abs repo>`` targets the repo even though invoke runs collectors from a
+    neutral cwd (git resolves via PATH; it is not a repo-local executable).
+    """
+    return gc.run_tool(["git", "-C", cwd, *args], ctx=ctx, cwd=cwd, timeout=timeout)
+
+
+def _tracked_existing_files(ctx, cwd):
+    """Repo-relative paths that are both ``git ls-files`` tracked and present on disk.
+
+    Shares its census shape with ``guardian_lens_hotspots.tracked_existing_files`` but now
+    DIVERGES from it: this lens excludes symlinks (see below) because it hands the census to
+    jscpd as content to scan, whereas hotspots only reads churn metadata. Unifying the two
+    into a shared param'd helper (symlink policy as a parameter) is a tracked follow-up — do
+    NOT extract here. Returns ``(files, None)`` on success or ``(None, reason)`` on a git
+    failure — a git failure must NEVER be read as an empty tracked set (that would erase the
+    baseline); collect() turns the reason into ``not-collected`` so the prior snapshot
+    survives.
+    """
+    res = _git(ctx, cwd, ["ls-files", "-z"])
+    if not res["ok"]:
+        return None, res["reason"]
+    out = set()
+    for raw in (res.get("stdout") or "").split("\0"):
+        if not raw:
+            continue
+        # Never accept brace-rename garbage into the tracked set.
+        if "=>" in raw or "{" in raw:
+            continue
+        full = os.path.join(cwd, raw)
+        # Census only regular, NON-symlink files. os.path.isfile follows symlinks, so a
+        # tracked symlink whose target is an UNTRACKED file under the repo would pass both
+        # this filter and invoke's under-repo check (realpath stays under-repo) — jscpd
+        # would then scan the untracked target's bytes, re-opening #564 for the symlink
+        # case. A tracked symlink's own "content" is the link, not source to dedup, so
+        # excluding it keeps the census faithful to tracked content only.
+        if os.path.isfile(full) and not os.path.islink(full):
+            out.add(raw)
+    return out, None
 
 
 def _read_normalized_lines(path):
@@ -548,13 +601,23 @@ def apply_cap(candidates, top_n=TOP_N, always_include_clone_lines=None):
 class DuplicationLens:
     name = "duplication"
     # 2.0.0: digest persists the full measured set (+ explicit unmeasured markers) and
-    # surfaceIds; incompatible with the 1.0.0 capped-only shape — bump so the shell
-    # records a quiet baseline instead of mass false drift on upgrade.
-    collector_version = "2.0.0"
+    # surfaceIds; incompatible with the 1.0.0 capped-only shape.
+    # 2.1.0 (#564): the census POPULATION changed — jscpd now scans only git-tracked,
+    # on-disk files instead of the whole repo dir (which walked untracked checkouts/ and
+    # nested .git internals). The digest SCHEMA is unchanged, but a prior baseline may
+    # hold now-excluded junk pairs; bump the version so guardian_sweep.py (any version
+    # delta ⇒ lens_new) records a quiet re-baseline FOR DRIFT — the new/worsened/resolved
+    # diff runs with _prev_digest treated as absent, so the excluded junk pairs do not
+    # surface as false `resolved` drift. This "quiet" scope is DRIFT ONLY: red_lines()
+    # still runs unconditionally (with prev_pairs empty on a version-delta sweep), so a
+    # genuine tracked clone at/above threshold re-fires as a `large-fresh-clone` red line
+    # on the first post-fix sweep. That is by design — a red line must always surface,
+    # even across a re-baseline.
+    collector_version = "2.1.0"
     required_facts = ()
     cost = {
         "collectorSeconds": 0.9,
-        "note": "jscpd over the repo + difflib re-measure of deduped file pairs",
+        "note": "jscpd over git-tracked files + difflib re-measure of deduped file pairs",
     }
     consequence_template = CONSEQUENCE_TEMPLATE
     validation_guidance = VALIDATION_GUIDANCE
@@ -567,14 +630,38 @@ class DuplicationLens:
         self._clone_lines_threshold = None
         self._surface_ids = None
 
+    # A single tracked fixture file so the git census is non-empty and jscpd actually
+    # fires under the injected conformance seam — otherwise zero tracked files would
+    # short-circuit to not-collected and the honesty gate would never be exercised.
+    _CONFORMANCE_FIXTURE_FILE = "dup.py"
+
+    def conformance_fixture(self):
+        """Files the harness writes into the per-scenario workspace (see
+        test_guardian_conformance._scenario_workspace / _lens_fixture_files).
+
+        The census filters by ``os.path.isfile``; this file must exist on disk so it
+        survives the filter and becomes a jscpd operand. Its path must EXACTLY match the
+        name the ``git`` payload below reports.
+        """
+        return {self._CONFORMANCE_FIXTURE_FILE: "print('conformance fixture')\n"}
+
     def conformance_cases(self):
         """Lens-supplied `reported-nonzero-parsed-zero` payload (see lens-contract.md).
 
-        Both stdouts are shaped like the real jscpd json report this lens parses (JSON
-        object first). ``stdout`` reports clones in its summary but carries an EMPTY
-        ``duplicates`` array — the honesty gate degrades it (jscpd claimed clones yet
-        gave zero detail to normalize). ``clean_stdout`` reports zero clones with an
-        empty array — a genuine quiet collection.
+        The lens co-fires TWO tools: ``git ls-files`` (the #564 census) then ``jscpd``.
+        The harness dispatches stdout per-tool on argv[0] via ``stdout_by_tool`` /
+        ``clean_stdout_by_tool``:
+
+        - ``git`` → a NUL-separated ``ls-files -z`` payload naming the conformance_fixture
+          file, so the census is non-empty and jscpd runs. It MUST appear in BOTH maps and
+          its filename MUST match conformance_fixture exactly — if git is missing from
+          either map the harness falls back to the jscpd JSON payload for git, which parses
+          to no tracked file → zero tracked → the not-collected short-circuit fires and the
+          honesty-gate assertion fails confusingly.
+        - ``jscpd`` → the jscpd json reports this lens parses (JSON object first).
+          ``stdout`` reports clones in its summary but carries an EMPTY ``duplicates``
+          array — the honesty gate degrades it. ``clean_stdout`` reports zero clones — a
+          genuine quiet collection.
         """
         reported = json.dumps({
             "statistics": {"total": {"clones": 3, "duplicatedLines": 42}},
@@ -584,11 +671,14 @@ class DuplicationLens:
             "statistics": {"total": {"clones": 0, "duplicatedLines": 0}},
             "duplicates": [],
         }) + "\nreport saved to /dev/stdout\n"
+        git_ls = self._CONFORMANCE_FIXTURE_FILE + "\0"
         return {
             "reported-nonzero-parsed-zero": {
                 "stdout": reported,
                 "clean_stdout": clean,
                 "exit": 0,
+                "stdout_by_tool": {"git": git_ls, "jscpd": reported},
+                "clean_stdout_by_tool": {"git": git_ls, "jscpd": clean},
             },
         }
 
@@ -612,6 +702,55 @@ class DuplicationLens:
         if red_threshold is None:
             red_threshold = guardian_lens.RED_LINE_THRESHOLDS["cloneLines"]
 
+        # #564: census the GIT-TRACKED, on-disk files and hand jscpd those as operands —
+        # never the repo dir. Scanning the dir walked untracked build worktrees
+        # (checkouts/) and nested .git internals, pairing every file with its repo twin
+        # (173 false-positive large-fresh-clone red lines in the inaugural sweep).
+        tracked, census_reason = _tracked_existing_files(ctx, cwd)
+        if tracked is None:
+            # A git failure must degrade — NEVER become an empty digest that erases the
+            # baseline. not-collected (digest None) hits diff()'s cur_digest-is-None guard.
+            return {
+                "candidates": [],
+                "digest": None,
+                **gc.not_collected("git ls-files failed: %s" % census_reason),
+            }
+        if not tracked:
+            # Zero tracked files ⇒ short-circuit to not-collected. A `collected` empty
+            # digest (pairs: {}) would make diff()'s _diff_pairs_raw mark EVERY prior pair
+            # `resolved` (diff() only guards cur_digest is None), a false "all clones
+            # fixed." not-collected returns digest None → cur_digest-is-None guard →
+            # baseline preserved. And we must NEVER spawn jscpd with no operands: it would
+            # default-scan cwd and re-open #564.
+            return {
+                "candidates": [],
+                "digest": None,
+                **gc.not_collected(
+                    "zero tracked files (git ls-files) — no measurable surface"),
+            }
+
+        operands = sorted(tracked)
+        # ARG_MAX guard: the operand payload could push argv past the kernel limit on a
+        # huge repo. Degrade honestly (no silent cwd fallback, no truncation of the list).
+        # invoke absolutizes every operand before execve (prepends realpath(cwd) + a path
+        # sep), so measure the ABSOLUTIZED size — the repo-relative byte count undercounts
+        # the real argv and could pass a payload that then hits E2BIG. An absolutized
+        # operand is at most `realpath(cwd)/` + the relative path, so this is a safe upper
+        # bound.
+        abs_prefix_bytes = len(os.path.realpath(cwd).encode("utf-8")) + 1
+        operand_bytes = sum(
+            len(p.encode("utf-8")) + abs_prefix_bytes for p in operands)
+        if operand_bytes > MAX_TRACKED_OPERAND_BYTES:
+            return {
+                "candidates": [],
+                "digest": None,
+                **gc.not_collected(
+                    "tracked-file operand payload is %d bytes across %d files, exceeding "
+                    "the %d-byte cap (ARG_MAX headroom) — cannot scan without risking a "
+                    "truncated argv" % (operand_bytes, len(operands),
+                                        MAX_TRACKED_OPERAND_BYTES)),
+            }
+
         # jscpd's json reporter writes a FILE, but run_tool captures stdout — aim the
         # reporter at /dev/stdout (via a symlink in a throwaway temp dir OUTSIDE the
         # repo) and read the JSON object off stdout. The mkdtemp + symlink setup lives
@@ -621,15 +760,22 @@ class DuplicationLens:
         try:
             tmp = tempfile.mkdtemp(prefix="guardian-jscpd-")
             os.symlink("/dev/stdout", os.path.join(tmp, "jscpd-report.json"))
+            # No trailing scan target — the tracked-file census is passed as ``targets``,
+            # which invoke absolutizes + validates under-repo and separates with ``--``.
+            # --absolute (-a) is REQUIRED with file operands: jscpd 5.0.12 emits an EMPTY
+            # firstFile/secondFile `name` for operand scans (only a DIRECTORY scan
+            # populates the relative name), so without it every pair reads as a malformed
+            # entry and the lens degrades to not-collected. With --absolute the report
+            # carries the absolute path, which the existing _repo_rel(cwd, path) normalizes
+            # back to a repo-relative path.
             argv = [
-                "jscpd", "-o", tmp, "--no-tips",
+                "jscpd", "-o", tmp, "--no-tips", "--absolute",
                 "--reporters", "json",
                 "--mode", "strict",
                 "--min-lines", str(MIN_BLOCK_LINES),
                 "--min-tokens", "50",
-                cwd,  # ABSOLUTE scan target — run_tool does not absolutize operands
             ]
-            res = gc.run_tool(argv, ctx=ctx, cwd=cwd, ok_exits=(0,))
+            res = gc.run_tool(argv, ctx=ctx, cwd=cwd, ok_exits=(0,), targets=operands)
         except OSError as exc:
             return {
                 "candidates": [],
@@ -726,6 +872,8 @@ class DuplicationLens:
             "capApplied": cap_diag["capApplied"],
             "redLineUnionAdded": cap_diag["redLineUnionAdded"],
             "repoConfigPresent": repo_config_present,
+            "censusSource": "git ls-files",
+            "trackedFilesCensused": len(tracked),
         }
         return {
             "candidates": capped,
