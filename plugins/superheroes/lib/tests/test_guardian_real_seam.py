@@ -343,6 +343,9 @@ def test_cli_collect_subprocess_smoke(tmp_path):
             return True
         if lens == "docs" and "no instruction doc readable" in reason:
             return True
+        # coupling (#538): calibrated fixture has no JS/TS/Python sources
+        if lens == "coupling" and "no JS/TS or Python sources found" in reason:
+            return True
         return False
 
     unexpected_degraded = [d for d in degraded if not _expected_degrade(d)]
@@ -356,7 +359,8 @@ def test_cli_collect_subprocess_smoke(tmp_path):
     for lens_name, substr in (
             ("deps", "no supported dependency manifest"),
             ("deadcode", "needs a declared or discoverable ecosystem"),
-            ("docs", "no instruction doc readable")):
+            ("docs", "no instruction doc readable"),
+            ("coupling", "no JS/TS or Python sources found")):
         assert _degrade_present(lens_name, substr), (
             "expected %s degrade (%r) missing from degradedLenses: %s"
             % (lens_name, substr, degraded))
