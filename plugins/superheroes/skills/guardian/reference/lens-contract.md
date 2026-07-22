@@ -42,9 +42,9 @@ Declare collection cost honestly in the `cost` dict so the advisor can reason ab
 
 ## Tool invocation
 
-Every external tool invocation by a lens **must** go through `guardian_tools.invoke` (or `guardian_tools.resolve` / `guardian_tools.version` for probe-only paths). Direct use of `subprocess`, `os.system`, `os.popen`, or `subprocess.Popen` inside a lens module is a **contract violation**.
+Every external tool invocation by a lens **must** go through `guardian_collect.run_tool` (with `guardian_tools.resolve` / `guardian_tools.version` for probe-only paths). `run_tool` routes the production spawn through `guardian_tools.invoke`'s hardening; the injected `ctx["run"]` callable is the test/conformance seam that stands in for that spawn. Direct use of `subprocess`, `os.system`, `os.popen`, or `subprocess.Popen` inside a lens module is a **contract violation**.
 
-The seam (`plugins/superheroes/lib/guardian_tools.py`) provides these guarantees by construction:
+The invocation seam (`plugins/superheroes/lib/guardian_tools.py`, reached through `run_tool`) provides these guarantees by construction:
 
 1. **Neutral child cwd** — collectors never run with the swept repo as their working directory.
 2. **Absolute repo operands** — repo-relative targets are absolutized and placed after a `--` end-of-options sentinel.
