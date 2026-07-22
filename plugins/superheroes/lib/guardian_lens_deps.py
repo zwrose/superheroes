@@ -82,6 +82,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import guardian_collect as gc  # noqa: E402
+import guardian_lens as gl  # noqa: E402
 import guardian_tools as gt  # noqa: E402
 
 LENS_NAME = "deps"
@@ -619,13 +620,13 @@ PYTHON_VULN_RED_LINE_GAP_REASON = (
     "Python advisories carry no severity rating; the critical-vuln red line therefore "
     "cannot fire for those advisories")
 
-PYTHON_VULN_NO_DEPS_SCOPE_REASON = (
+PYTHON_VULN_NO_RESOLVE_SCOPE_REASON = (
     "osv-scanner ran with --no-resolve: only the enumerated packages in "
     "requirements.txt were audited; transitive dependencies were NOT resolved (a "
     "vulnerable transitive is invisible to this scan), so prior advisories for packages "
     "this manifest does not enumerate are carried forward, never resolved")
 
-PYTHON_VULN_NO_DEPS_COVERAGE_GAP = {
+PYTHON_VULN_NO_RESOLVE_COVERAGE_GAP = {
     "ecosystem": "python",
     "tool": "osv-scanner",
     "scope": "enumerated-manifest-only",
@@ -633,6 +634,12 @@ PYTHON_VULN_NO_DEPS_COVERAGE_GAP = {
                "requirements.txt enumerates; a vulnerable transitive dependency is not "
                "surfaced and prior transitive advisories are not re-measured",
 }
+
+PYTHON_VULN_UNPINNED_AUDIT_NOTE = (
+    "some requirements are not exactly pinned (==); osv-scanner --no-resolve audits the "
+    "lowest satisfying version for ranged requirements, which may not be the deployed "
+    "version — findings on those packages are reported but their prior advisories are "
+    "never resolved")
 
 PYTHON_VULN_PIP_AUDIT_RED_LINE_GAP_REASON = (
     "Python advisories carry no severity (pip-audit reports none); the "
@@ -709,9 +716,13 @@ def _osv_score_band(score):
     return None
 
 
-def _osv_parse_max_severity(value):
+def _osv_parse_max_severity(value, all_withdrawn=False):
     """Parse group.max_severity into a severity band, or None when unrecognized."""
+    if all_withdrawn:
+        return None
     if value is None or value == "":
+        return None
+    if isinstance(value, bool):
         return None
     if isinstance(value, (list, dict)):
         return None
@@ -719,9 +730,24 @@ def _osv_parse_max_severity(value):
         score = float(value)
     except (TypeError, ValueError):
         return None
-    if not math.isfinite(score) or score <= 0:
+    if not math.isfinite(score) or score < 0 or score > 10:
+        return None
+    if score == 0:
         return None
     return _osv_score_band(score)
+
+
+def _osv_group_all_withdrawn(group, byid):
+    ids = group.get("ids") or []
+    if not ids:
+        return False
+    for gid in ids:
+        if not isinstance(gid, str):
+            return False
+        rec = byid.get(gid)
+        if not isinstance(rec, dict) or not rec.get("withdrawn"):
+            return False
+    return True
 
 
 def _osv_group_severity(group, byid):
@@ -743,11 +769,14 @@ def _osv_group_severity(group, byid):
         if not isinstance(label, str) or not label.strip():
             continue
         sev = label.strip().lower()
+        if sev == "unknown":
+            continue
         rank = SEVERITY_RANK.get(sev)
         if rank is not None:
             ranks.append(rank)
             severities.append(sev)
-    band = _osv_parse_max_severity(group.get("max_severity"))
+    all_withdrawn = _osv_group_all_withdrawn(group, byid)
+    band = _osv_parse_max_severity(group.get("max_severity"), all_withdrawn=all_withdrawn)
     if band is not None:
         rank = SEVERITY_RANK.get(band)
         if rank is not None:
@@ -783,6 +812,113 @@ def _reconcile_python_vuln_id(package, alias_set, prev_section, base_id):
     return (base_id, None)
 
 
+def _classify_requirements_line(line):
+    """Classify one requirements.txt line. Returns ('pin', name, version) or a skip tag."""
+    raw = line.strip()
+    if not raw or raw.startswith("#"):
+        return ("skip", None, None)
+    if raw.startswith("-r") or raw.startswith("-c") or raw.startswith("--requirement"):
+        return ("include", None, None)
+    if raw.startswith("-e") or raw.startswith("--editable"):
+        return ("unpinned", raw, None)
+    if "://" in raw or raw.startswith(("git+", "hg+", "svn+", "bzr+")):
+        return ("unpinned", raw, None)
+    if ";" in raw:
+        return ("unpinned", raw, None)
+    if "==" not in raw:
+        return ("unpinned", raw, None)
+    parts = raw.split("==")
+    if len(parts) != 2:
+        return ("unpinned", raw, None)
+    name, version = parts[0].strip(), parts[1].strip()
+    if not name or not version:
+        return ("unpinned", raw, None)
+    if any(c in name for c in " <>,=") or any(c in version for c in " <>,;"):
+        return ("unpinned", raw, None)
+    return ("pin", name, version)
+
+
+def _parse_requirements_pins(req_abs):
+    """Parse requirements.txt into exactly-pinned vs unpinned requirement lines."""
+    pins = {}
+    unpinned = []
+    has_includes = False
+    try:
+        with open(req_abs, encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return {"pins": pins, "unpinned": unpinned, "hasIncludes": has_includes}
+    for line in lines:
+        kind, name_or_line, version = _classify_requirements_line(line)
+        if kind == "pin":
+            pins[name_or_line.lower()] = name_or_line
+        elif kind == "unpinned":
+            unpinned.append(name_or_line)
+        elif kind == "include":
+            has_includes = True
+    return {"pins": pins, "unpinned": unpinned, "hasIncludes": has_includes}
+
+
+def _finalize_osv_python_section(items, prev_section, audited_pkgs, pin_info,
+                                  seconds, argv, tool, boundary=True,
+                                  ambiguity_disclosures=None, carry_all_prior=False):
+    """Single finalization path for every osv-scanner partial section."""
+    if carry_all_prior:
+        _carry_prior_items(prev_section, items, lambda _pkg: True)
+    else:
+        _carry_prior_items(
+            prev_section, items,
+            lambda pkg: (pkg or "").lower() not in audited_pkgs)
+
+    unrated = [i for i in items.values()
+               if isinstance(i, dict) and not i.get("severityKnown")]
+    reason_parts = [PYTHON_VULN_NO_RESOLVE_SCOPE_REASON]
+    extra = {
+        "tool": tool,
+        "items": items,
+        "seconds": seconds,
+        "argv": argv,
+        "ratedBy": tool,
+        "boundary": boundary,
+        "coverageGap": dict(PYTHON_VULN_NO_RESOLVE_COVERAGE_GAP),
+    }
+    unpinned = pin_info.get("unpinned") or []
+    if unpinned or pin_info.get("hasIncludes"):
+        extra["pinScopeGap"] = {
+            "ecosystem": "python",
+            "tool": tool,
+            "unpinned": list(unpinned),
+            "count": len(unpinned),
+            "hasIncludes": bool(pin_info.get("hasIncludes")),
+        }
+        include_note = ""
+        if pin_info.get("hasIncludes"):
+            include_note = (
+                "; requirements.txt contains -r/-c includes — nested requirements the "
+                "scan never saw are not audited")
+        reason_parts.append("%s%s" % (PYTHON_VULN_UNPINNED_AUDIT_NOTE, include_note))
+    if ambiguity_disclosures:
+        reason_parts.append(
+            "ambiguous advisory identity (%s) — current findings are reported under fresh "
+            "ids, all prior advisories are carried forward and nothing resolves"
+            % "; ".join(ambiguity_disclosures))
+        extra["boundary"] = False
+    if unrated:
+        extra["redLineGap"] = {
+            "ecosystem": "python",
+            "tool": tool,
+            "missing": ("%d of %d advisories carry no severity rating; the critical-vuln "
+                        "red line cannot fire for those"
+                        % (len(unrated), len(items) or len(unrated))),
+        }
+        reason_parts.insert(0, PYTHON_VULN_RED_LINE_GAP_REASON)
+    carried = [cid for cid, rec in items.items()
+               if isinstance(rec, dict) and rec.get("carriedForward")]
+    if carried:
+        extra["carriedForward"] = True
+    return _section("partial", "; ".join(reason_parts), **extra)
+
+
 def collect_python_freshness(ctx, repo, manifest_rel):
     """Python freshness is not collected — honest degradation, disclosed.
 
@@ -802,7 +938,8 @@ def collect_python_vulns_osv(ctx, repo):
 
     Audits requirements.txt by ABSOLUTE path with a pinned neutral config so repo-local
     osv-scanner.toml cannot suppress findings. Successful collection is always `partial`:
-    --no-resolve audits only enumerated packages. A findings signal with zero normalized
+    --no-resolve audits only enumerated packages; --all-packages lists every audited package
+    so clean re-audits can resolve prior advisories. A findings signal with zero normalized
     candidates degrades via the contradiction gate.
     """
     tool = "osv-scanner"
@@ -816,12 +953,15 @@ def collect_python_vulns_osv(ctx, repo):
             "would require the project's installed environment, which the sweep will "
             "not build from inside the repo — supply-chain policy" % tool, tool=tool)
 
+    pin_info = _parse_requirements_pins(req_abs)
+    exact_pins = pin_info.get("pins") or {}
+
     config_path = gt.neutral_tool_config(repo, tool)
     # --config is mandatory: osv-scanner auto-discovers osv-scanner.toml in the scanned
     # tree and has no --no-config flag. A repo-local [[IgnoredVulns]] entry can make an
     # affected package vanish from JSON entirely — the red line would silently never fire.
     argv = [
-        tool, "scan", "source", "--format", "json", "--no-resolve",
+        tool, "scan", "source", "--format", "json", "--no-resolve", "--all-packages",
         "--config", config_path,
         "-L", "requirements.txt:%s" % req_abs,
     ]
@@ -844,6 +984,7 @@ def collect_python_vulns_osv(ctx, repo):
     audited_pkgs = set()
     prev_section = _prev_part((ctx or {}).get("prevDigest"), "python", "vulns")
     used_ids = {}
+    ambiguity_disclosures = []
 
     for result in results:
         if not isinstance(result, dict):
@@ -863,28 +1004,31 @@ def collect_python_vulns_osv(ctx, repo):
             if not isinstance(name, str) or not name:
                 malformed.append({"package": None, "why": "missing package name"})
                 continue
-            audited_pkgs.add(name)
+            groups = pkg_entry.get("groups")
+            if not isinstance(groups, list):
+                malformed.append({"package": name, "why": "missing or non-list groups"})
+                malformed_packages.add(name.lower())
+                continue
+            if name.lower() in exact_pins:
+                audited_pkgs.add(name.lower())
             byid = {}
             for rec in pkg_entry.get("vulnerabilities") or []:
                 if isinstance(rec, dict) and isinstance(rec.get("id"), str):
                     byid[rec["id"]] = rec
-            groups = pkg_entry.get("groups")
-            if not isinstance(groups, list):
-                continue
             for group in groups:
                 raw_groups += 1
                 if not isinstance(group, dict):
                     malformed.append({"package": name, "why": "group is not an object"})
-                    malformed_packages.add(name)
+                    malformed_packages.add(name.lower())
                     continue
                 ids = group.get("ids")
                 if not isinstance(ids, list) or not ids:
                     malformed.append({"package": name, "why": "group missing ids"})
-                    malformed_packages.add(name)
+                    malformed_packages.add(name.lower())
                     continue
                 if not all(isinstance(i, str) and i for i in ids):
                     malformed.append({"package": name, "why": "group ids are not strings"})
-                    malformed_packages.add(name)
+                    malformed_packages.add(name.lower())
                     continue
                 alias_set = _osv_alias_set(group)
                 preferred = _osv_preferred_id(alias_set)
@@ -892,14 +1036,14 @@ def collect_python_vulns_osv(ctx, repo):
                 cid, reconcile_err = _reconcile_python_vuln_id(
                     name, alias_set, prev_section, base_id)
                 if reconcile_err is not None:
-                    return _section("not-collected", "%s: %s" % (tool, reconcile_err),
-                                    tool=tool)
-                if cid in used_ids and used_ids[cid] != alias_set:
-                    return _section(
-                        "not-collected",
-                        "%s: ambiguous advisory identity: two groups reconciled to the same "
-                        "id %s" % (tool, cid),
-                        tool=tool)
+                    ambiguity_disclosures.append(reconcile_err)
+                    cid = base_id
+                elif cid in used_ids and used_ids[cid] != alias_set:
+                    ambiguity_disclosures.append(
+                        "two groups reconciled to the same id %s" % cid)
+                    cid = base_id
+                if cid in items and cid != base_id:
+                    cid = base_id
                 used_ids[cid] = alias_set
                 severity, rank, known = _osv_group_severity(group, byid)
                 if known:
@@ -908,6 +1052,8 @@ def collect_python_vulns_osv(ctx, repo):
                     receipt = (
                         "%s %s: %s [severity not recognized from osv-scanner evidence]"
                         % (name, version, preferred))
+                if name.lower() not in exact_pins:
+                    receipt += " [audited lowest satisfying version — requirement not exactly pinned]"
                 item = items.get(cid)
                 if item is None:
                     items[cid] = {
@@ -936,61 +1082,38 @@ def collect_python_vulns_osv(ctx, repo):
     if contradiction is not None:
         return _section("not-collected", contradiction, tool=tool)
 
+    carry_all_prior = bool(ambiguity_disclosures)
     if malformed:
         if any(m.get("package") is None for m in malformed):
-            carried = _carry_prior_items(prev_section, items, lambda _pkg: True)
-            reason = (
-                "%s returned %d malformed vulnerability group(s) including at least one "
-                "that could not be attributed to a package; the whole prior python-vulns "
-                "section is therefore carried forward and nothing resolves; advisories "
-                "measured this run are still reported"
-                % (tool, len(malformed)))
-            return _section(
-                "partial", reason, tool=tool, items=items,
-                carriedForward=bool(carried), seconds=seconds, argv=argv,
-                ratedBy=tool, boundary=False)
-        malformed_set = set(malformed_packages)
-        carried = _carry_prior_items(
-            prev_section, items, lambda pkg: pkg in malformed_set)
+            _carry_prior_items(prev_section, items, lambda _pkg: True)
+            carry_all_prior = True
+        else:
+            malformed_set = set(malformed_packages)
+            _carry_prior_items(
+                prev_section, items, lambda pkg: isinstance(pkg, str)
+                and pkg.lower() in malformed_set)
         reason = (
-            "%s returned %d malformed vulnerability group(s) (package(s): %s) that did "
-            "not normalize to an advisory; their prior advisories are carried forward, "
-            "never resolved — a signalled-but-unparseable entry is not a clean scan"
-            % (tool, len(malformed), ", ".join(sorted(malformed_set))))
-        partial = _section(
-            "partial", reason, tool=tool, items=items,
-            malformedEntries=sorted(malformed_set),
-            carriedForward=bool(carried), seconds=seconds, argv=argv,
-            ratedBy=tool, boundary=False)
-        _carry_prior_items(prev_section, items, lambda pkg: pkg not in audited_pkgs)
-        return partial
+            "%s returned %d malformed vulnerability group(s)%s; advisories measured this "
+            "run are still reported"
+            % (tool, len(malformed),
+               (" including at least one that could not be attributed to a package"
+                if any(m.get("package") is None for m in malformed) else
+                " (package(s): %s) that did not normalize to an advisory"
+                % ", ".join(sorted(malformed_packages)))))
+        section = _finalize_osv_python_section(
+            items, prev_section, audited_pkgs, pin_info, seconds, argv, tool,
+            boundary=False, ambiguity_disclosures=ambiguity_disclosures or None,
+            carry_all_prior=carry_all_prior)
+        section["reason"] = "%s; %s" % (reason, section["reason"])
+        if not any(m.get("package") is None for m in malformed):
+            section["malformedEntries"] = sorted(malformed_packages)
+        return section
 
-    _carry_prior_items(prev_section, items, lambda pkg: pkg not in audited_pkgs)
-
-    unrated = [i for i in items.values()
-               if isinstance(i, dict) and not i.get("severityKnown")]
-    extra = {
-        "tool": tool,
-        "items": items,
-        "seconds": seconds,
-        "argv": argv,
-        "ratedBy": tool,
-        "boundary": True,
-        "coverageGap": dict(PYTHON_VULN_NO_DEPS_COVERAGE_GAP),
-    }
-    if unrated:
-        extra["redLineGap"] = {
-            "ecosystem": "python",
-            "tool": tool,
-            "missing": ("%d of %d advisories carry no severity rating; the critical-vuln "
-                        "red line cannot fire for those"
-                        % (len(unrated), len(items) or len(unrated))),
-        }
-        reason = "%s; %s" % (
-            PYTHON_VULN_RED_LINE_GAP_REASON, PYTHON_VULN_NO_DEPS_SCOPE_REASON)
-    else:
-        reason = PYTHON_VULN_NO_DEPS_SCOPE_REASON
-    return _section("partial", reason, **extra)
+    return _finalize_osv_python_section(
+        items, prev_section, audited_pkgs, pin_info, seconds, argv, tool,
+        boundary=not ambiguity_disclosures,
+        ambiguity_disclosures=ambiguity_disclosures or None,
+        carry_all_prior=carry_all_prior)
 
 
 def collect_python_vulns_pip_audit(ctx, repo):
@@ -1155,13 +1278,16 @@ def collect_python_vulns(ctx, repo):
         pip["reason"] = (
             "rated source osv-scanner was unavailable (%s); %s"
             % (osv_reason, pip.get("reason") or "pip-audit fallback"))
-        pip["boundary"] = False
+        pip["boundary"] = True
         return pip
     pip_reason = pip.get("reason") or "pip-audit not collected"
+    req_abs = os.path.join(repo, "requirements.txt")
+    structural = not os.path.isfile(req_abs)
     return _section(
         "not-collected",
         "osv-scanner: %s; pip-audit: %s" % (osv_reason, pip_reason),
-        tool="osv-scanner")
+        tool="osv-scanner",
+        boundary=structural)
 
 
 # ------------------------------------------------------------------------ check-the-check
@@ -1800,7 +1926,7 @@ class DepsLens(object):
                         **gc.partial("; ".join(reasons)))
             if (out.get("status") == "partial" and boundary_contributors
                     and all(boundary_contributors)):
-                out["permanentBoundary"] = True
+                out[gl.PERMANENT_BOUNDARY_KEY] = True
             return out
         return dict(candidates=candidates, digest=digest, **gc.collected())
 

@@ -321,6 +321,29 @@ def test_lens_contract_covers_optional_conformance_case_fields():
     )
 
 
+def test_lens_contract_covers_permanent_boundary_key():
+    """PERMANENT_BOUNDARY_KEY ↔ reference prose (§11 drift guard)."""
+    key = guardian_lens.PERMANENT_BOUNDARY_KEY
+    assert key == "permanentBoundary"
+    text = _read(_LENS_CONTRACT)
+    assert key in text, "lens-contract.md missing permanentBoundary key"
+    assert "non-empty string `reason`" in text, (
+        "lens-contract.md must document the reason requirement for permanent-boundary partials")
+
+
+def test_permanent_boundary_rejects_partial_without_reason():
+    """Fail-before: a partial with permanentBoundary but no reason must not seed a baseline."""
+    assert guardian_lens.permanent_boundary({
+        "status": "partial",
+        guardian_lens.PERMANENT_BOUNDARY_KEY: True,
+    }) is False
+    assert guardian_lens.permanent_boundary({
+        "status": "partial",
+        guardian_lens.PERMANENT_BOUNDARY_KEY: True,
+        "reason": "",
+    }) is False
+
+
 def test_lens_contract_covers_tool_free_conformance_scenarios():
     """TOOL_FREE_CONFORMANCE_SCENARIOS ↔ reference prose (§11 drift guard)."""
     scenarios = guardian_lens.TOOL_FREE_CONFORMANCE_SCENARIOS

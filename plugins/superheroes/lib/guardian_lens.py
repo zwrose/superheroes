@@ -56,6 +56,7 @@ RED_LINE_THRESHOLDS = {"complexity": 100, "cloneLines": 100}
 RED_LINE_KINDS = ("critical-vuln", "new-high-complexity", "large-fresh-clone")
 FACTS = ("verify-command", "recorded-coverage", "stack-tags", "paths")
 COLLECT_STATUSES = ("collected", "partial", "not-collected")
+PERMANENT_BOUNDARY_KEY = "permanentBoundary"
 
 REQUIRED_CONFORMANCE_SCENARIOS = (
     "missing-tool",
@@ -143,7 +144,8 @@ to raise and running collect() — that a tool-free lens invokes neither
       When status is "partial", permanentBoundary may be set to True to declare that
       the un-measured remainder is a structural capability limit (see permanent_boundary()).
   - permanent_boundary(out) -> bool — fail-closed: True only when out is a dict with
-      status "partial" and permanentBoundary is exactly the boolean True.
+      status "partial", permanentBoundary is exactly the boolean True, and reason is a
+      non-empty string (a contract-valid partial).
       ctx carries {"cwd", "root", "config", "run", "prevDigest", "verifyCommand"}. A lens
       that could not collect returns status "not-collected" (never an empty candidate
       list). ``verifyCommand`` is the calibrated core.md verify command already resolved by
@@ -221,12 +223,21 @@ def classify_collect(out):
 
 
 def permanent_boundary(out):
-    """True only when a lens explicitly declares its partial a permanent capability boundary."""
+    """True only for a contract-valid partial that declares a permanent capability boundary.
+
+    Requires status exactly ``partial``, ``permanentBoundary`` exactly the boolean ``True``,
+    and a non-empty string ``reason`` on the raw collect() object — a partial with no
+    reason is synthesized as a contract violation by ``classify_collect`` and must not seed
+    a baseline.
+    """
     if not isinstance(out, dict):
         return False
     if out.get("status") != "partial":
         return False
-    return out.get("permanentBoundary") is True
+    if out.get(PERMANENT_BOUNDARY_KEY) is not True:
+        return False
+    reason = out.get("reason")
+    return isinstance(reason, str) and bool(reason)
 
 
 def validate_lens(lens):
