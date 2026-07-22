@@ -685,8 +685,42 @@ def _ledger_sweeps(repo, root=None):
     return block.get("sweeps") or []
 
 
-def test_finalize_appends_sweep_roster_across_cycles_and_retries(tmp_path):
-    """Seam guard: two real collect→finalize cycles grow the roster; a retry does not.
+def test_finalize_does_not_write_ledger(tmp_path):
+    """finalize is read-only on ledger.md; snapshot still commits when vitals succeed."""
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    write_ledger(tmp_path, [{
+        "id": "fixture:keep",
+        "disposition": "accepted",
+        "date": "2026-07-01",
+        "issue": None,
+        "metricAtDisposition": {"metric": 5},
+        "reason": "kept",
+        "reraiseWhen": None,
+    }], root=root)
+    path = gs.ledger_path(repo, root)
+    before = open(path, "rb").read()
+    lens = FixtureLens(emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    disp = [{
+        "id": bundle["surfaced"][0]["id"],
+        "verdict": "validated",
+        "consequence": "x",
+        "receipt": "y",
+        "effort": "z",
+        "ledgerJoin": bundle["surfaced"][0]["id"],
+    }]
+    result = gsw.finalize(repo, bundle, disp, root=root)
+    assert result["ok"] is True
+    assert "ledgerWrite" not in result
+    assert open(path, "rb").read() == before
+    assert os.path.isfile(gs.snapshot_path(repo, root=root))
+
+
+def test_commit_ledger_appends_sweep_roster_across_cycles_and_retries(tmp_path):
+    """Seam guard: two real collect→finalize→commit_ledger cycles grow the roster;
+    a retry does not.
 
     Would have caught the original defect where finalize hard-coded sweeps=None and
     write_unlocked treated None as erase."""
@@ -708,16 +742,15 @@ def test_finalize_appends_sweep_roster_across_cycles_and_retries(tmp_path):
     }]
     r1 = gsw.finalize(repo, b1, disp1, root=root)
     assert r1["ok"] is True
+    c1 = gsw.commit_ledger(repo, b1, disp1, root=root)
+    assert c1["ok"] is True, c1
     roster1 = _ledger_sweeps(repo, root)
     assert len(roster1) == 1
     assert roster1[0]["sweepId"] == b1["sweepId"]
 
-    # Retried finalize of the same sweepId must leave the roster at one entry.
-    b1_retry = dict(b1)
-    b1_retry["prevIdentity"] = gs.snapshot_identity(
-        gs.read_snapshot(repo, root=root))
-    r1_retry = gsw.finalize(repo, b1_retry, disp1, root=root)
-    assert r1_retry["ok"] is True
+    # Retried commit of the same sweepId must leave the roster at one entry.
+    c1_retry = gsw.commit_ledger(repo, b1, disp1, root=root)
+    assert c1_retry["ok"] is True, c1_retry
     assert len(_ledger_sweeps(repo, root)) == 1
 
     # Second cycle needs a distinct sweptSha so sweepId differs.
@@ -739,11 +772,13 @@ def test_finalize_appends_sweep_roster_across_cycles_and_retries(tmp_path):
     }]
     r2 = gsw.finalize(repo, b2, disp2, root=root)
     assert r2["ok"] is True
+    c2 = gsw.commit_ledger(repo, b2, disp2, root=root)
+    assert c2["ok"] is True, c2
     roster2 = _ledger_sweeps(repo, root)
     assert [s["sweepId"] for s in roster2] == [b1["sweepId"], b2["sweepId"]]
 
 
-def test_finalize_ledger_write_failure_does_not_advance_baseline(tmp_path, monkeypatch):
+def test_commit_ledger_write_failure_does_not_mutate_opaque_path(tmp_path, monkeypatch):
     import guardian_ledger as gled
 
     repo = init_calibrated_repo(tmp_path)
@@ -751,7 +786,6 @@ def test_finalize_ledger_write_failure_does_not_advance_baseline(tmp_path, monke
     write_guardian_layer(tmp_path, {"vitals": False})
     lens = FixtureLens(emit_red_line=True)
     bundle = gsw.collect(repo, lenses=[lens], root=root)
-    prev_identity = bundle["prevIdentity"]
     disp = [{
         "id": bundle["surfaced"][0]["id"],
         "verdict": "validated",
@@ -760,20 +794,23 @@ def test_finalize_ledger_write_failure_does_not_advance_baseline(tmp_path, monke
         "effort": "z",
         "ledgerJoin": bundle["surfaced"][0]["id"],
     }]
+    fin = gsw.finalize(repo, bundle, disp, root=root)
+    assert fin["ok"] is True
+    path = gs.ledger_path(repo, root)
+    # Ensure a ledger exists so write() takes the splice path.
+    if not os.path.isfile(path):
+        write_ledger(tmp_path, [], root=root)
+    before = open(path, "rb").read() if os.path.isfile(path) else None
 
     def boom(*args, **kwargs):
-        raise OSError("simulated ledger write failure")
+        return {"ok": False, "reason": "simulated ledger write failure", "path": path}
 
-    monkeypatch.setattr(gled, "write_unlocked", boom)
-    result = gsw.finalize(repo, bundle, disp, root=root)
+    monkeypatch.setattr(gled, "write", boom)
+    result = gsw.commit_ledger(repo, bundle, disp, root=root)
     assert result["ok"] is False
-    assert result["reason"] == "durable-write-failed"
-    assert os.path.isfile(gs.report_path(repo, root=root))
-    assert not os.path.isfile(gs.snapshot_path(repo, root=root))
-    assert result["ledgerWrite"]["ok"] is False
-    assert "simulated ledger write failure" in result["ledgerWrite"]["reason"]
-    # Baseline unchanged — same bundle remains retryable.
-    assert gs.snapshot_identity(gs.read_snapshot(repo, root=root)) == prev_identity
+    assert "simulated ledger write failure" in (result.get("reason") or "")
+    if before is not None:
+        assert open(path, "rb").read() == before
 
 
 def test_finalize_vitals_append_failure_does_not_advance_baseline(tmp_path, monkeypatch):
@@ -865,13 +902,17 @@ def test_finalize_leaves_newer_ledger_bytes_untouched(tmp_path):
     }]
     result = gsw.finalize(repo, bundle, disp, root=root)
     assert result["ok"] is True
-    assert result["ledgerWrite"]["ok"] is False
-    assert "newer" in (result["ledgerWrite"].get("skipped")
-                       or result["ledgerWrite"].get("reason") or "")
+    assert "ledgerWrite" not in result
+    assert result.get("closuresUnavailable") and "newer" in result["closuresUnavailable"]
     after = open(path, "rb").read()
     assert after == before, "newer-schema ledger bytes must be left untouched"
     assert b"owner accepted this trade" in after
     assert b"Owner ledger prose" in after
+    # Advisor commit also fails closed — never rewrites opaque content.
+    commit = gsw.commit_ledger(repo, bundle, disp, root=root)
+    assert commit["ok"] is False
+    assert "newer" in (commit.get("skipped") or commit.get("reason") or "")
+    assert open(path, "rb").read() == before
 
 
 def test_finalize_leaves_malformed_ledger_bytes_untouched(tmp_path):
@@ -896,7 +937,11 @@ def test_finalize_leaves_malformed_ledger_bytes_untouched(tmp_path):
     }]
     result = gsw.finalize(repo, bundle, disp, root=root)
     assert result["ok"] is True
-    assert result["ledgerWrite"]["ok"] is False
+    assert "ledgerWrite" not in result
+    assert result.get("closuresUnavailable")
+    assert open(path, "rb").read() == before
+    commit = gsw.commit_ledger(repo, bundle, disp, root=root)
+    assert commit["ok"] is False
     assert open(path, "rb").read() == before
 
 
@@ -932,8 +977,14 @@ def test_filed_open_issue_stays_filed_after_sweep(tmp_path, monkeypatch):
     assert obs["issueState"] == "open"
     result = gsw.finalize(repo, bundle, [], root=root)
     assert result["ok"] is True
-    advances = result["ledgerWrite"].get("advances") or []
-    assert advances == []
+    assert "ledgerWrite" not in result
+    assert (result.get("closureAdvances") or []) == []
+    # finalize does not persist — ledger stays filed until commit_ledger
+    read = gs.read_ledger(repo, root=root)
+    assert read["byId"]["fixture:normal"]["disposition"] == "filed"
+    commit = gsw.commit_ledger(repo, bundle, [], root=root)
+    assert commit["ok"] is True, commit
+    assert (commit.get("advances") or []) == []
     read = gs.read_ledger(repo, root=root)
     assert read["byId"]["fixture:normal"]["disposition"] == "filed"
 
@@ -966,8 +1017,16 @@ def test_filed_closed_issue_unmoved_metric_reopens(tmp_path, monkeypatch):
     bundle = gsw.collect(repo, lenses=[lens], root=root)
     result = gsw.finalize(repo, bundle, [], root=root)
     assert result["ok"] is True
-    advances = result["ledgerWrite"].get("advances") or []
+    assert "ledgerWrite" not in result
+    advances = result.get("closureAdvances") or []
     assert any(a.get("to") == "reopened" for a in advances)
+    # Proposed only — on-disk still filed until commit_ledger
+    assert gs.read_ledger(repo, root=root)["byId"]["fixture:normal"]["disposition"] == "filed"
+    report = open(gs.report_path(repo, root), encoding="utf-8").read()
+    assert "reopened" in report
+    commit = gsw.commit_ledger(repo, bundle, [], root=root)
+    assert commit["ok"] is True, commit
+    assert any(a.get("to") == "reopened" for a in (commit.get("advances") or []))
     read = gs.read_ledger(repo, root=root)
     assert read["byId"]["fixture:normal"]["disposition"] == "reopened"
 
@@ -1049,9 +1108,9 @@ def test_finalize_leaves_unreadable_ledger_bytes_untouched(tmp_path):
         }]
         result = gsw.finalize(repo, bundle, disp, root=root)
         assert result["ok"] is True
-        assert result["ledgerWrite"]["ok"] is False
-        skipped = (result["ledgerWrite"].get("skipped")
-                   or result["ledgerWrite"].get("reason") or "")
+        assert "ledgerWrite" not in result
+        assert result.get("closuresUnavailable")
+        skipped = result["closuresUnavailable"]
         assert "unreadable" in skipped
     finally:
         os.chmod(path, 0o644)
@@ -1110,14 +1169,16 @@ def test_finalize_leaves_partial_ledger_bytes_untouched(tmp_path):
     }]
     result = gsw.finalize(repo, bundle, disp, root=root)
     assert result["ok"] is True
-    assert result["ledgerWrite"]["ok"] is False
-    skipped = (result["ledgerWrite"].get("skipped")
-               or result["ledgerWrite"].get("reason") or "")
+    assert "ledgerWrite" not in result
+    skipped = result.get("closuresUnavailable") or ""
     assert "partial" in skipped or "partial-skip" in skipped
     after = open(path, "rb").read()
     assert after == before
     assert b"fixture:invalid-trade" in after
     assert b"Owner history" in after
+    commit = gsw.commit_ledger(repo, bundle, disp, root=root)
+    assert commit["ok"] is False
+    assert open(path, "rb").read() == before
 
 
 def test_benching_does_not_defeat_ambiguous_identity_fail_open(tmp_path):
@@ -1250,11 +1311,15 @@ def test_metric_improved_scoped_closure_does_not_verify_on_side_metric(tmp_path,
     bundle = gsw.collect(repo, lenses=[lens], root=root)
     result = gsw.finalize(repo, bundle, [], root=root)
     assert result["ok"] is True, result
-    advances = result["ledgerWrite"].get("advances") or []
+    advances = result.get("closureAdvances") or []
     assert any(a.get("to") == "reopened" for a in advances)
     assert not any(a.get("to") == "verified-fixed" for a in advances)
     report = open(gs.report_path(repo, root), encoding="utf-8").read()
     assert "reopened" in report
+    assert gs.read_ledger(repo, root=root)["byId"]["fixture:normal"]["disposition"] == "filed"
+    commit = gsw.commit_ledger(repo, bundle, [], root=root)
+    assert commit["ok"] is True, commit
+    assert any(a.get("to") == "reopened" for a in (commit.get("advances") or []))
 
 
 def test_resolve_issue_state_real_gh_shim_on_path(tmp_path, monkeypatch):
@@ -1309,10 +1374,12 @@ def test_resolve_issue_state_real_gh_shim_on_path(tmp_path, monkeypatch):
     assert bundle["filedObservations"]["fixture:normal"]["issueState"] == "closed"
     result = gsw.finalize(repo, bundle, [], root=root)
     assert result["ok"] is True
-    advances = result["ledgerWrite"].get("advances") or []
+    advances = result.get("closureAdvances") or []
     assert any(a.get("to") == "reopened" for a in advances)
     report = open(gs.report_path(repo, root), encoding="utf-8").read()
     assert "reopened" in report
+    commit = gsw.commit_ledger(repo, bundle, [], root=root)
+    assert commit["ok"] is True, commit
 
 
 # --- WO-13 batch E regressions -----------------------------------------------
@@ -1466,12 +1533,13 @@ def test_finalize_schema_version_matrix_skips_write_and_preserves_bytes(tmp_path
         }]
         result = gsw.finalize(repo, bundle, disp, root=root)
         assert result["ok"] is True
-        assert result["ledgerWrite"]["ok"] is False, label
-        skipped = (result["ledgerWrite"].get("skipped")
-                   or result["ledgerWrite"].get("reason") or "")
-        assert skipped, label
+        assert "ledgerWrite" not in result, label
+        assert result.get("closuresUnavailable"), label
         after = open(path, "rb").read()
         assert after == before, label
+        commit = gsw.commit_ledger(repo, bundle, disp, root=root)
+        assert commit["ok"] is False, label
+        assert open(path, "rb").read() == before, label
 
 
 def test_finalize_malformed_sweeps_skips_write(tmp_path):
@@ -1510,12 +1578,16 @@ def test_finalize_malformed_sweeps_skips_write(tmp_path):
         "ledgerJoin": bundle["surfaced"][0]["id"],
     }]
     result = gsw.finalize(repo, bundle, disp, root=root)
-    assert result["ledgerWrite"]["ok"] is False
+    assert "ledgerWrite" not in result
+    assert result.get("closuresUnavailable")
+    assert open(path, "rb").read() == before
+    commit = gsw.commit_ledger(repo, bundle, disp, root=root)
+    assert commit["ok"] is False
     assert open(path, "rb").read() == before
 
 
-def test_finalize_successful_sweep_preserves_bytes_outside_machine_regions(tmp_path):
-    """Successful writable sweep: bytes outside report-card + fence regions stay identical."""
+def test_commit_ledger_successful_sweep_preserves_bytes_outside_machine_regions(tmp_path):
+    """Successful writable commit: bytes outside report-card + fence regions stay identical."""
     repo = init_calibrated_repo(tmp_path)
     root = _store(tmp_path)
     write_guardian_layer(tmp_path, {"vitals": False})
@@ -1570,9 +1642,12 @@ def test_finalize_successful_sweep_preserves_bytes_outside_machine_regions(tmp_p
         "effort": "z",
         "ledgerJoin": bundle["surfaced"][0]["id"],
     }]
-    result = gsw.finalize(repo, bundle, disp, root=root)
-    assert result["ok"] is True
-    assert result["ledgerWrite"].get("ok") is True, result["ledgerWrite"]
+    fin = gsw.finalize(repo, bundle, disp, root=root)
+    assert fin["ok"] is True
+    assert "ledgerWrite" not in fin
+    assert open(path, encoding="utf-8").read() == before  # finalize untouched
+    result = gsw.commit_ledger(repo, bundle, disp, root=root)
+    assert result.get("ok") is True, result
     after = open(path, encoding="utf-8").read()
     fence_after = gs._LEDGER_BLOCK.search(after)
     card_after = gled._REPORT_CARD_REGION.search(after)
@@ -1660,11 +1735,14 @@ def test_ambiguous_duplicate_fences_fail_closed_collect_and_finalize(tmp_path):
         "ledgerJoin": bundle["surfaced"][0]["id"],
     }]
     result = gsw.finalize(repo, bundle, disp, root=root)
-    assert result["ok"] is True  # intentional skip of opaque ledger still commits baseline
-    assert result["ledgerWrite"]["ok"] is False
-    skipped = (result["ledgerWrite"].get("skipped")
-               or result["ledgerWrite"].get("reason") or "")
+    assert result["ok"] is True  # opaque ledger still commits baseline
+    assert "ledgerWrite" not in result
+    assert result.get("closuresUnavailable")
+    skipped = result["closuresUnavailable"]
     assert "ambiguous" in skipped or "malformed" in skipped
+    assert open(path, "rb").read() == before
+    commit = gsw.commit_ledger(repo, bundle, disp, root=root)
+    assert commit["ok"] is False
     assert open(path, "rb").read() == before
 
 
@@ -1925,3 +2003,172 @@ def test_partial_digest_none_preserves_baseline(tmp_path):
     bundle = gsw.collect(repo, lenses=[lens], root=root)
     assert len(bundle["funnel"]["degradedLenses"]) == 1
     assert bundle["nextSnapshot"]["lenses"]["fixture"] == prior_entry
+
+
+# --- WO-1 advisor commit_ledger / single-writer relocation -------------------
+
+
+def test_commit_ledger_idempotent_byte_identical(tmp_path):
+    """Two back-to-back commit_ledger runs with the same bundle leave bytes identical."""
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    write_ledger(tmp_path, [{
+        "id": "fixture:normal",
+        "disposition": "filed",
+        "date": "2026-07-01",
+        "issue": "#123",
+        "metricAtDisposition": {"metric": 5},
+        "reason": None,
+        "reraiseWhen": None,
+        "adjudicatedIn": "s0",
+    }], root=root)
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": {"collectorVersion": "0.0.0-test", "digest": {"v": 1}}},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+
+    lens = FixtureLens(
+        emit_normal=True, digest={"v": 2}, diff_new=["fixture:normal"], metric=5)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    # Force closed so a closure advance happens on the first commit.
+    bundle = dict(bundle)
+    fo = dict(bundle.get("filedObservations") or {})
+    obs = dict(fo.get("fixture:normal") or {})
+    obs["issueState"] = "closed"
+    obs["present"] = True
+    fo["fixture:normal"] = obs
+    bundle["filedObservations"] = fo
+
+    fin = gsw.finalize(repo, bundle, [], root=root)
+    assert fin["ok"] is True
+    c1 = gsw.commit_ledger(repo, bundle, [], root=root)
+    assert c1["ok"] is True, c1
+    after_first = open(gs.ledger_path(repo, root), "rb").read()
+    c2 = gsw.commit_ledger(repo, bundle, [], root=root)
+    assert c2["ok"] is True, c2
+    after_second = open(gs.ledger_path(repo, root), "rb").read()
+    assert after_second == after_first
+
+
+def test_commit_ledger_stale_bundle_refuses(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    lens = FixtureLens(emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    disp = [{
+        "id": bundle["surfaced"][0]["id"],
+        "verdict": "validated",
+        "consequence": "x",
+        "receipt": "y",
+        "effort": "z",
+        "ledgerJoin": bundle["surfaced"][0]["id"],
+    }]
+    fin = gsw.finalize(repo, bundle, disp, root=root)
+    assert fin["ok"] is True
+    # Advance latest.json as if another session finalized a newer sweep.
+    newer = dict(bundle["nextSnapshot"])
+    newer["sweptSha"] = (newer.get("sweptSha") or "x") + "-newer"
+    sc.atomic_write(
+        gs.snapshot_path(repo, root),
+        json.dumps(newer, indent=2) + "\n")
+    path = gs.ledger_path(repo, root)
+    before = open(path, "rb").read() if os.path.isfile(path) else None
+    result = gsw.commit_ledger(repo, bundle, disp, root=root)
+    assert result["ok"] is False
+    assert result["reason"] == "stale-bundle"
+    if before is not None:
+        assert open(path, "rb").read() == before
+
+
+def test_commit_ledger_roster_read_failed_refuses(tmp_path, monkeypatch):
+    import guardian_ledger as gled
+
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    write_ledger(tmp_path, [{
+        "id": "fixture:keep",
+        "disposition": "accepted",
+        "date": "2026-07-01",
+        "issue": None,
+        "metricAtDisposition": {"metric": 1},
+        "reason": "kept",
+        "reraiseWhen": None,
+    }], root=root)
+    # Seed a non-empty roster so a wipe would be observable.
+    path = gs.ledger_path(repo, root)
+    text = open(path, encoding="utf-8").read()
+    fence = gs.find_ledger_fences(text)[0]
+    block = json.loads(fence.group(1))
+    block["sweeps"] = [{"sweepId": "prior-s0", "sweptSha": "abc", "date": "2026-07-01"}]
+    mutated = (
+        text[:fence.start()]
+        + "```json %s\n%s\n```" % (gs.LEDGER_FENCE, json.dumps(block, indent=2))
+        + text[fence.end():]
+    )
+    open(path, "wb").write(mutated.encode("utf-8"))
+    before = open(path, "rb").read()
+
+    lens = FixtureLens(emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    disp = [{
+        "id": bundle["surfaced"][0]["id"],
+        "verdict": "validated",
+        "consequence": "x",
+        "receipt": "y",
+        "effort": "z",
+        "ledgerJoin": bundle["surfaced"][0]["id"],
+    }]
+    fin = gsw.finalize(repo, bundle, disp, root=root)
+    assert fin["ok"] is True
+
+    def boom(_path):
+        return "read-failed", []
+
+    monkeypatch.setattr(gled, "_read_sweeps_result", boom)
+    result = gsw.commit_ledger(repo, bundle, disp, root=root)
+    assert result["ok"] is False
+    assert result["reason"] == "roster-read-failed"
+    assert result.get("retryable") is True
+    assert open(path, "rb").read() == before
+    assert b"prior-s0" in open(path, "rb").read()
+
+
+def test_commit_ledger_genuinely_empty_roster_appends(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    write_ledger(tmp_path, [], root=root)
+    path = gs.ledger_path(repo, root)
+    text = open(path, encoding="utf-8").read()
+    fence = gs.find_ledger_fences(text)[0]
+    block = json.loads(fence.group(1))
+    block["sweeps"] = []
+    mutated = (
+        text[:fence.start()]
+        + "```json %s\n%s\n```" % (gs.LEDGER_FENCE, json.dumps(block, indent=2))
+        + text[fence.end():]
+    )
+    open(path, "wb").write(mutated.encode("utf-8"))
+
+    lens = FixtureLens(emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    disp = [{
+        "id": bundle["surfaced"][0]["id"],
+        "verdict": "validated",
+        "consequence": "x",
+        "receipt": "y",
+        "effort": "z",
+        "ledgerJoin": bundle["surfaced"][0]["id"],
+    }]
+    assert gsw.finalize(repo, bundle, disp, root=root)["ok"] is True
+    result = gsw.commit_ledger(repo, bundle, disp, root=root)
+    assert result["ok"] is True, result
+    roster = _ledger_sweeps(repo, root)
+    assert len(roster) == 1
+    assert roster[0]["sweepId"] == bundle["sweepId"]

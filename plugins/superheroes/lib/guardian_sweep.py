@@ -954,14 +954,15 @@ def _closure_status_lines(advances, observations):
 
 
 def finalize(cwd, bundle, dispositions, root=None):
-    """Transactional finalize: validate → closure compute → report → durable writes → baseline.
+    """Transactional finalize: validate → proposed closures → report → vitals → baseline.
 
     Filed-item closure is computed BEFORE the report is rendered so the durable report
-    describes the ledger state this sweep actually advances to. Order inside the lock:
-    report → ledger → vitals trend → snapshot last. The snapshot is the commit marker:
-    it is written only after required durable ledger/vitals writes succeed. An intentional
-    skip (opaque ledger, vitals not collected) does not block the baseline; a failed
-    attempted write (race, I/O error, invalid records) returns top-level failure and
+    describes the ledger state this sweep *proposes* to advance to. The advisor's
+    `commit_ledger` is the sole writer of `guardian/ledger.md`; this step is read-only
+    on the ledger. Order inside the lock: report → vitals trend → snapshot last. The
+    snapshot is the commit marker: it is written only after the vitals write succeeds
+    (or is an intentional skip). An intentional skip (vitals not collected) does not
+    block the baseline; a failed attempted vitals write returns top-level failure and
     leaves `latest.json` untouched so the same bundle can retry."""
     ok, errors = validate_dispositions(bundle, dispositions)
     if not ok:
@@ -997,13 +998,27 @@ def finalize(cwd, bundle, dispositions, root=None):
 
         # Report sees proposed closure outcomes before anything is persisted.
         report_bundle = dict(bundle)
-        closure_lines = _closure_status_lines(advances, bundle.get("filedObservations"))
-        if closure_lines:
+        if not writable:
+            # Opaque ledger: do not imply "no closures" as if readable-and-empty.
+            report_bundle["closuresUnavailable"] = skip_why
             prior = list(bundle.get("ledgerStatus") or [])
-            closed_ids = {c["id"] for c in closure_lines}
-            prior = [p for p in prior if p.get("id") not in closed_ids]
-            report_bundle["ledgerStatus"] = prior + closure_lines
-        report_bundle["closureAdvances"] = advances
+            prior.append({
+                "id": "(closures)",
+                "lens": "guardian",
+                "line": "closures deferred — ledger unreadable (%s)" % skip_why,
+            })
+            report_bundle["ledgerStatus"] = prior
+            report_bundle["closureAdvances"] = []
+        else:
+            report_bundle["closuresUnavailable"] = None
+            closure_lines = _closure_status_lines(
+                advances, bundle.get("filedObservations"))
+            if closure_lines:
+                prior = list(bundle.get("ledgerStatus") or [])
+                closed_ids = {c["id"] for c in closure_lines}
+                prior = [p for p in prior if p.get("id") not in closed_ids]
+                report_bundle["ledgerStatus"] = prior + closure_lines
+            report_bundle["closureAdvances"] = advances
 
         report_ledger = {
             "records": new_records,
@@ -1019,36 +1034,6 @@ def finalize(cwd, bundle, dispositions, root=None):
         rp = guardian_store.report_path(cwd, root)
         store_core.atomic_write(rp, report_md)
 
-        # Durable records BEFORE the snapshot commit marker so a crash cannot advance
-        # the baseline while silently omitting ledger/trend updates.
-        ledger_write = {"ok": True, "skipped": "no-change"}
-        try:
-            if not writable:
-                # Opaque/unread content must never be rewritten as an empty schema-1 ledger.
-                ledger_write = {
-                    "ok": False,
-                    "skipped": skip_why,
-                    "reason": "ledger write skipped: %s (on-disk bytes left untouched)"
-                              % skip_why,
-                    "advances": advances,
-                }
-            else:
-                card = bundle.get("reportCard")
-                if card is None:
-                    card = guardian_ledger.report_card(new_records)
-                sweep = guardian_ledger.make_sweep(
-                    bundle.get("sweptSha") or "unknown", sweep_id=sweep_id)
-                sweeps = guardian_ledger.append_sweep(
-                    guardian_ledger._read_sweeps(guardian_store.ledger_path(cwd, root)),
-                    sweep)
-                ledger_write = guardian_ledger.write_unlocked(
-                    cwd, new_records, root=root, report_card=card, sweeps=sweeps,
-                    expected_fence_identity=ledger.get("fenceIdentity"))
-                ledger_write = dict(ledger_write)
-                ledger_write["advances"] = advances
-        except Exception as exc:
-            ledger_write = {"ok": False, "reason": str(exc), "advances": advances}
-
         vitals_append = {"ok": True, "skipped": "no-vitals"}
         try:
             if not bundle.get("vitalsCollected", True):
@@ -1061,8 +1046,8 @@ def finalize(cwd, bundle, dispositions, root=None):
         except Exception as exc:
             vitals_append = {"ok": False, "reason": str(exc)}
 
-        # Intentional skips (opaque ledger, vitals disabled) do not block the baseline.
-        # A failed attempted durable write must not advance latest.json.
+        # Intentional skips (vitals disabled) do not block the baseline.
+        # A failed attempted durable vitals write must not advance latest.json.
         def _blocks_commit(result):
             if result.get("ok"):
                 return False
@@ -1070,12 +1055,11 @@ def finalize(cwd, bundle, dispositions, root=None):
                 return False
             return True
 
-        if _blocks_commit(ledger_write) or _blocks_commit(vitals_append):
+        if _blocks_commit(vitals_append):
             return {
                 "ok": False,
                 "reason": "durable-write-failed",
                 "reportPath": rp,
-                "ledgerWrite": ledger_write,
                 "vitalsAppend": vitals_append,
             }
 
@@ -1087,11 +1071,79 @@ def finalize(cwd, bundle, dispositions, root=None):
             "ok": True,
             "reportPath": rp,
             "snapshotPath": snap_path,
-            "ledgerWrite": ledger_write,
             "vitalsAppend": vitals_append,
+            "closuresUnavailable": report_bundle.get("closuresUnavailable"),
+            "closureAdvances": advances if writable else [],
         }
     finally:
         file_lock.release(lock_path)
+
+
+def commit_ledger(cwd, bundle, dispositions, root=None):
+    """Advisor-only ledger commit — the sole writer of `guardian/ledger.md`.
+
+    Run inline at consult/triage AFTER `finalize`. The fenced JSON block and the
+    report-card region are **machine-owned** (the advisor is their sole writer); owner
+    hand-edits belong to the surrounding prose, which the never-clobber re-splice
+    preserves.
+
+    Fail-closed on opaque/unreadable ledgers, stale bundles (latest.json moved on), and
+    transient roster-read failures. Idempotent for a same-identity re-run: already-
+    advanced records are skipped by `_close_filed_records`, and `append_sweep` dedups
+    on sweep identity."""
+    ok, errors = validate_dispositions(bundle, dispositions)
+    if not ok:
+        return {"ok": False, "reason": "invalid-dispositions", "errors": errors}
+
+    # R1 — intent-freshness: this bundle's nextSnapshot must still be the head.
+    current = guardian_store.read_snapshot(cwd, root)
+    on_disk = guardian_store.snapshot_identity(current)
+    expected = guardian_store.snapshot_identity(bundle.get("nextSnapshot") or {})
+    if on_disk != expected:
+        return {
+            "ok": False,
+            "reason": "stale-bundle",
+            "onDisk": on_disk,
+            "expected": expected,
+        }
+
+    ledger = guardian_store.read_ledger(cwd, root)
+    writable, skip_why = _ledger_fully_readable(cwd, root, ledger)
+    if not writable:
+        return {
+            "ok": False,
+            "skipped": skip_why,
+            "reason": "ledger write skipped: %s (on-disk bytes left untouched)" % skip_why,
+        }
+
+    sweep_id = bundle.get("sweepId") or guardian_ledger.make_sweep(
+        bundle.get("sweptSha") or "unknown")["sweepId"]
+    new_records, advances = _close_filed_records(
+        ledger["records"], bundle.get("filedObservations"), sweep_id)
+
+    card = bundle.get("reportCard")
+    if card is None:
+        card = guardian_ledger.report_card(new_records)
+
+    # R2 — roster tri-state: read failure fails the commit closed (retryable).
+    path = guardian_store.ledger_path(cwd, root)
+    roster_status, roster = guardian_ledger._read_sweeps_result(path)
+    if roster_status == "read-failed":
+        return {
+            "ok": False,
+            "reason": "roster-read-failed",
+            "retryable": True,
+        }
+    # absent or ok (including genuinely empty): append this sweep normally.
+    sweep = guardian_ledger.make_sweep(
+        bundle.get("sweptSha") or "unknown", sweep_id=sweep_id)
+    sweeps = guardian_ledger.append_sweep(roster, sweep)
+
+    result = guardian_ledger.write(
+        cwd, new_records, root=root, report_card=card, sweeps=sweeps)
+    out = dict(result)
+    out["advances"] = advances
+    return out
 
 
 def main(argv=None):

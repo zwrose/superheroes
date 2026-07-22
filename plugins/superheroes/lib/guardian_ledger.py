@@ -115,11 +115,16 @@ _LOCATION_JOIN = "<->"
 _CREATED_RE = re.compile(r"created=(\S+)")
 REPORT_CARD_BEGIN = "<!-- guardian-report-card:begin"
 REPORT_CARD_END = "<!-- guardian-report-card:end -->"
+_REPORT_CARD_BEGIN_RE = re.compile(
+    r"<!--\s*guardian-report-card:begin(?:\s+updated=\S+)?\s*-->")
+_REPORT_CARD_END_RE = re.compile(
+    r"<!--\s*guardian-report-card:end\s*-->")
 _REPORT_CARD_REGION = re.compile(
     r"<!--\s*guardian-report-card:begin(?:\s+updated=\S+)?\s*-->"
     r".*?"
     r"<!--\s*guardian-report-card:end\s*-->",
     re.DOTALL)
+_WRITE_ATTEMPTS = 5
 
 
 def _today():
@@ -906,24 +911,44 @@ def _read_created(path):
     return m.group(1) if m else None
 
 
+def _read_sweeps_result(path):
+    """Tri-state roster read → (status, sweeps).
+
+    status is one of:
+      - ``ok`` — authoritative list (may be empty)
+      - ``absent`` — file missing, or block/roster genuinely absent/empty-shaped
+      - ``read-failed`` — OSError / UnicodeDecodeError (indistinguishable from empty
+        only if collapsed; callers that must not erase history must fail closed)
+
+    Malformed fence/block without I/O failure is treated as ``absent`` (empty list) —
+    same as the historical `_read_sweeps` contract for non-I/O cases — so callers that
+    only need a best-effort roster keep working. The commit path uses ``read-failed``
+    to refuse a write rather than land closures while unable to append this sweep.
+    """
+    try:
+        with open(path, "rb") as fh:
+            text = fh.read().decode("utf-8")
+    except FileNotFoundError:
+        return "absent", []
+    except (OSError, UnicodeDecodeError):
+        return "read-failed", []
+    block, err = guardian_store._parse_ledger_block(text)
+    if err or not isinstance(block, dict):
+        return "absent", []
+    raw = block.get("sweeps")
+    if not isinstance(raw, list):
+        return "absent", []
+    return "ok", [dict(s) for s in raw if isinstance(s, dict)]
+
+
 def _read_sweeps(path):
     """The `sweeps[]` roster already on disk, so a rewrite with sweeps=None preserves it.
 
     `guardian_store.read_ledger` does not yet return the roster; this mirrors `_read_created`
-    and reads the fenced JSON block directly. Absent/malformed → empty list (nothing to
-    preserve)."""
-    try:
-        with open(path, "rb") as fh:
-            text = fh.read().decode("utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
-    block, err = guardian_store._parse_ledger_block(text)
-    if err or not isinstance(block, dict):
-        return []
-    raw = block.get("sweeps")
-    if not isinstance(raw, list):
-        return []
-    return [dict(s) for s in raw if isinstance(s, dict)]
+    and reads the fenced JSON block directly. Absent/malformed/read-failed → empty list
+    (legacy contract — prefer `_read_sweeps_result` when erasure must be avoided)."""
+    _status, sweeps = _read_sweeps_result(path)
+    return sweeps
 
 
 def _merge_record_preserving_unknown(old, new):
@@ -966,27 +991,52 @@ def _merge_records_preserving_unknown(existing_records, new_records):
     return out
 
 
+def _report_card_markers_status(text):
+    """Classify report-card marker balance → (status, match_or_none).
+
+    status:
+      - ``absent`` — no begin and no end markers
+      - ``ok`` — exactly one balanced begin…end region
+      - ``ambiguous`` — unbalanced, duplicated, or end-before-begin (fail closed)
+    """
+    begins = list(_REPORT_CARD_BEGIN_RE.finditer(text))
+    ends = list(_REPORT_CARD_END_RE.finditer(text))
+    if not begins and not ends:
+        return "absent", None
+    if len(begins) != 1 or len(ends) != 1:
+        return "ambiguous", None
+    if ends[0].start() < begins[0].start():
+        return "ambiguous", None
+    cards = list(_REPORT_CARD_REGION.finditer(text))
+    if len(cards) != 1:
+        return "ambiguous", None
+    # The sole balanced pair must be exactly the matched region (no stray span).
+    if cards[0].start() != begins[0].start() or cards[0].end() != ends[0].end():
+        return "ambiguous", None
+    return "ok", cards[0]
+
+
 def _splice_machine_regions(text, block_obj, card_region):
     """Replace the two machine-owned regions; preserve all other bytes.
 
     Returns (new_text, None) on success, or (None, reason) when the fence is missing,
-    ambiguous, or report-card markers are ambiguous. When the report-card region is
-    absent, it is inserted immediately before the sole fence."""
+    ambiguous, or report-card markers are ambiguous (including unbalanced begin/end).
+    When the report-card region is absent, it is inserted immediately before the sole
+    fence."""
     fences = guardian_store.find_ledger_fences(text)
     if not fences:
         return None, "no-fence"
     if len(fences) > 1:
         return None, "ambiguous"
-    cards = list(_REPORT_CARD_REGION.finditer(text))
-    if len(cards) > 1:
+    card_status, card = _report_card_markers_status(text)
+    if card_status == "ambiguous":
         return None, "ambiguous-report-card"
 
     fence = fences[0]
     body = json.dumps(block_obj, indent=2)
     fence_repl = "```json %s\n%s\n```" % (guardian_store.LEDGER_FENCE, body)
 
-    if len(cards) == 1:
-        card = cards[0]
+    if card_status == "ok":
         if card.end() <= fence.start():
             new_text = (
                 text[:card.start()] + card_region + text[card.end():fence.start()]
@@ -1012,11 +1062,9 @@ def write_unlocked(cwd, records, *, root=None, report_card=None, sweeps=None, no
                    expected_fence_identity=None):
     """Atomically update ledger.md, acquiring NO lock.
 
-    For callers that ALREADY HOLD the sweep lock — `guardian_sweep.finalize` is the one that
-    matters. `file_lock` is not reentrant (exclusive lock-file creation), so calling `write`
-    from inside `finalize` would self-deadlock against the lock finalize is holding: it would
-    see its own live lock file, raise LockHeld, and report `raced` against itself. Never runs
-    git; the sweep neither commits nor pushes.
+    Single-attempt splice helper. Prefer `write` (advisor never-clobber loop) for callers
+    that do not already hold the sweep lock. Kept for tests and as the internal primitive
+    `write`'s retry loop may reuse.
 
     **Structural preserve rule:** this writer never re-renders the whole file when the ledger
     already exists. It replaces only the two machine-owned regions (report-card markers +
@@ -1041,41 +1089,15 @@ def write_unlocked(cwd, records, *, root=None, report_card=None, sweeps=None, no
 
     Reads and writes are binary so CRLF ledgers round-trip outside the machine regions."""
     path = guardian_store.ledger_path(cwd, root)
-    ok, reasons = validate_records(records if records is not None else [])
-    if not ok:
-        return {"ok": False, "reason": "invalid-records", "errors": reasons, "path": path}
-
-    day = now or _today()
-    card = report_card if report_card is not None else _report_card(
-        records if records is not None else [])
-
-    if not os.path.isfile(path):
-        text = render(records, report_card=card, sweeps=sweeps or [], now=day,
-                      created=_read_created(path) if os.path.lexists(path) else None)
-        guardian_store.atomic_write_bytes(path, text.encode("utf-8"))
+    prepared = _prepare_ledger_write(
+        path, records, report_card=report_card, sweeps=sweeps, now=now)
+    if prepared["kind"] == "fail":
+        return prepared["result"]
+    if prepared["kind"] == "author":
+        guardian_store.atomic_write_bytes(path, prepared["bytes"])
         return {"ok": True, "path": path}
 
-    try:
-        with open(path, "rb") as fh:
-            raw = fh.read()
-    except OSError as exc:
-        return {
-            "ok": False,
-            "skipped": "ledger-unreadable",
-            "reason": "ledger write skipped: unreadable (%s)" % type(exc).__name__,
-            "path": path,
-        }
-    try:
-        existing_text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return {
-            "ok": False,
-            "skipped": "ledger-unreadable",
-            "reason": "ledger write skipped: not valid UTF-8",
-            "path": path,
-        }
-
-    on_disk_id = guardian_store.ledger_fence_identity(existing_text)
+    on_disk_id = prepared["on_disk_id"]
     if expected_fence_identity is not None and on_disk_id != expected_fence_identity:
         return {
             "ok": False,
@@ -1084,26 +1106,110 @@ def write_unlocked(cwd, records, *, root=None, report_card=None, sweeps=None, no
             "expected": expected_fence_identity,
             "path": path,
         }
+    # Final re-check immediately before write (single-attempt CAS residual window).
+    try:
+        with open(path, "rb") as fh:
+            recheck_raw = fh.read()
+        recheck_text = recheck_raw.decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return {
+            "ok": False,
+            "skipped": "ledger-unreadable",
+            "reason": "ledger write skipped: unreadable at final check (%s)"
+                      % type(exc).__name__,
+            "path": path,
+        }
+    if guardian_store.ledger_fence_identity(recheck_text) != on_disk_id:
+        return {
+            "ok": False,
+            "reason": "raced",
+            "onDisk": guardian_store.ledger_fence_identity(recheck_text),
+            "expected": on_disk_id,
+            "path": path,
+        }
+    guardian_store.atomic_write_bytes(path, prepared["spliced"].encode("utf-8"))
+    return {"ok": True, "path": path}
+
+
+def _prepare_ledger_write(path, records, *, report_card=None, sweeps=None, now=None):
+    """Build a ledger write without mutating disk.
+
+    Returns a dict:
+      - ``{"kind": "fail", "result": {...}}`` — fail-closed skip / invalid
+      - ``{"kind": "author", "bytes": b...}`` — file absent; full template ready
+      - ``{"kind": "splice", "spliced": str, "on_disk_id": ...}`` — ready to CAS-write
+    """
+    ok, reasons = validate_records(records if records is not None else [])
+    if not ok:
+        return {
+            "kind": "fail",
+            "result": {
+                "ok": False, "reason": "invalid-records", "errors": reasons, "path": path,
+            },
+        }
+
+    day = now or _today()
+    card = report_card if report_card is not None else _report_card(
+        records if records is not None else [])
+
+    if not os.path.isfile(path):
+        text = render(records, report_card=card, sweeps=sweeps or [], now=day,
+                      created=_read_created(path) if os.path.lexists(path) else None)
+        return {"kind": "author", "bytes": text.encode("utf-8")}
+
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+    except OSError as exc:
+        return {
+            "kind": "fail",
+            "result": {
+                "ok": False,
+                "skipped": "ledger-unreadable",
+                "reason": "ledger write skipped: unreadable (%s)" % type(exc).__name__,
+                "path": path,
+            },
+        }
+    try:
+        existing_text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return {
+            "kind": "fail",
+            "result": {
+                "ok": False,
+                "skipped": "ledger-unreadable",
+                "reason": "ledger write skipped: not valid UTF-8",
+                "path": path,
+            },
+        }
+
+    on_disk_id = guardian_store.ledger_fence_identity(existing_text)
 
     fences = guardian_store.find_ledger_fences(existing_text)
     if len(fences) > 1:
         return {
-            "ok": False,
-            "skipped": "ledger-ambiguous",
-            "reason": "ledger write skipped: multiple guardian-ledger fences "
-                      "(ambiguous; on-disk bytes left untouched)",
-            "path": path,
+            "kind": "fail",
+            "result": {
+                "ok": False,
+                "skipped": "ledger-ambiguous",
+                "reason": "ledger write skipped: multiple guardian-ledger fences "
+                          "(ambiguous; on-disk bytes left untouched)",
+                "path": path,
+            },
         }
 
     existing_block, err = guardian_store._parse_ledger_block(existing_text)
     if err or not isinstance(existing_block, dict):
         skipped = "ledger-ambiguous" if err == "ambiguous" else "ledger-no-fence"
         return {
-            "ok": False,
-            "skipped": skipped,
-            "reason": "ledger write skipped: fenced guardian-ledger block not found "
-                      "or ambiguous (on-disk bytes left untouched)",
-            "path": path,
+            "kind": "fail",
+            "result": {
+                "ok": False,
+                "skipped": skipped,
+                "reason": "ledger write skipped: fenced guardian-ledger block not found "
+                          "or ambiguous (on-disk bytes left untouched)",
+                "path": path,
+            },
         }
 
     # Merge into the parsed object so unknown top-level keys survive.
@@ -1126,38 +1232,91 @@ def write_unlocked(cwd, records, *, root=None, report_card=None, sweeps=None, no
             "no-fence": "ledger-no-fence",
         }.get(splice_err, "ledger-no-fence")
         return {
-            "ok": False,
-            "skipped": skipped,
-            "reason": "ledger write skipped: %s (on-disk bytes left untouched)"
-                      % (splice_err or "fence not found"),
-            "path": path,
+            "kind": "fail",
+            "result": {
+                "ok": False,
+                "skipped": skipped,
+                "reason": "ledger write skipped: %s (on-disk bytes left untouched)"
+                          % (splice_err or "fence not found"),
+                "path": path,
+            },
         }
-    guardian_store.atomic_write_bytes(path, spliced.encode("utf-8"))
-    return {"ok": True, "path": path}
+    return {"kind": "splice", "spliced": spliced, "on_disk_id": on_disk_id}
 
 
 def write(cwd, records, *, root=None, report_card=None, sweeps=None, now=None,
           expected_fence_identity=None):
-    """Write ledger.md under the sweep lock, then delegate to `write_unlocked`.
+    """Advisor sole writer for ledger.md — bounded never-clobber re-read/re-splice loop.
 
-    For STANDALONE callers that hold no lock — advisor triage, consult, the CLI. A caller
-    already inside `guardian_sweep.finalize` must use `write_unlocked` instead: the sweep
-    lock is not reentrant, so this entry point would deadlock against finalize's own lock.
-    On contention returns {"ok": False, "reason": "raced"} — never raises, never partially
-    writes (the write itself is atomic). Never runs git.
+    The fenced JSON block and the report-card region are **machine-owned** (the advisor is
+    their sole writer); owner hand-edits belong to the surrounding prose, which the
+    never-clobber re-splice preserves.
+
+    Under the sweep lock (against a concurrent *sweep*; the owner's editor honors no lock),
+    runs up to `_WRITE_ATTEMPTS` (5) attempts. Each attempt re-reads fresh bytes, re-merges
+    the caller's records onto that fresh content, re-splices from scratch, and re-checks
+    the fence identity **immediately before** `atomic_write_bytes`. A change at that final
+    check triggers another attempt — never a clobber with a stale splice. Exhaustion returns
+    ``reason: raced-out`` and writes nothing.
+
+    `expected_fence_identity` is accepted for API compatibility but ignored: the loop always
+    re-reads fresh and never refuses solely on a stale caller-held identity.
 
     `sweeps=None` preserves the on-disk roster (see `write_unlocked`); pass an explicit list
-    to set it."""
+    to set it. On contention for the sweep lock returns ``{"ok": False, "reason": "raced"}``.
+    Never runs git."""
+    del expected_fence_identity  # ignored — never-clobber loop re-reads fresh each attempt
+    path = guardian_store.ledger_path(cwd, root)
     lock_path = guardian_store.sweep_lock_path(cwd, root)
     try:
         file_lock.acquire(lock_path, ttl=guardian_store.SWEEP_LOCK_TTL)
     except file_lock.LockHeld as exc:
-        return {"ok": False, "reason": "raced", "lockHeld": exc.holder,
-                "path": guardian_store.ledger_path(cwd, root)}
+        return {"ok": False, "reason": "raced", "lockHeld": exc.holder, "path": path}
     try:
-        return write_unlocked(cwd, records, root=root, report_card=report_card,
-                              sweeps=sweeps, now=now,
-                              expected_fence_identity=expected_fence_identity)
+        last = None
+        for _attempt in range(1, _WRITE_ATTEMPTS + 1):
+            prepared = _prepare_ledger_write(
+                path, records, report_card=report_card, sweeps=sweeps, now=now)
+            if prepared["kind"] == "fail":
+                return prepared["result"]
+            if prepared["kind"] == "author":
+                guardian_store.atomic_write_bytes(path, prepared["bytes"])
+                return {"ok": True, "path": path}
+
+            on_disk_id = prepared["on_disk_id"]
+            # Final fence-identity check immediately before write.
+            try:
+                with open(path, "rb") as fh:
+                    recheck_raw = fh.read()
+                recheck_text = recheck_raw.decode("utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                return {
+                    "ok": False,
+                    "skipped": "ledger-unreadable",
+                    "reason": "ledger write skipped: unreadable at final check (%s)"
+                              % type(exc).__name__,
+                    "path": path,
+                }
+            if guardian_store.ledger_fence_identity(recheck_text) != on_disk_id:
+                last = {
+                    "ok": False,
+                    "reason": "raced-retry",
+                    "onDisk": guardian_store.ledger_fence_identity(recheck_text),
+                    "expected": on_disk_id,
+                    "path": path,
+                }
+                continue
+            guardian_store.atomic_write_bytes(path, prepared["spliced"].encode("utf-8"))
+            return {"ok": True, "path": path}
+
+        return {
+            "ok": False,
+            "reason": "raced-out",
+            "attempts": _WRITE_ATTEMPTS,
+            "onDisk": (last or {}).get("onDisk"),
+            "expected": (last or {}).get("expected"),
+            "path": path,
+        }
     finally:
         file_lock.release(lock_path)
 

@@ -1158,3 +1158,155 @@ def test_report_card_degraded_config_revokes_benching():
     card = gled.report_card(records, notes_out=notes, config_status="degraded")
     assert card["dup"]["benched"] is False
     assert any("degraded" in n for n in notes)
+
+
+# --- WO-1 never-clobber write + unbalanced report-card markers ---------------
+
+
+def test_write_never_clobber_retries_and_preserves_owner_prose(tmp_path, monkeypatch):
+    """Fence identity change at the final re-check triggers retry, not clobber."""
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.ledger_path(repo)
+    owner_note = "OWNER_PROSE_MUST_SURVIVE_NEVER_CLOBBER"
+    gled.write(repo, [_rec("dup:t:a", "filed", issue="#1", adjudicatedIn="s1")],
+               now="2026-07-01")
+    text = open(path, encoding="utf-8").read()
+    fence = gs.find_ledger_fences(text)[0]
+    seeded = text[:fence.start()] + owner_note + "\n\n" + text[fence.start():]
+    open(path, "wb").write(seeded.encode("utf-8"))
+
+    real_identity = gs.ledger_fence_identity
+    calls = {"n": 0}
+
+    def flaky_identity(t):
+        calls["n"] += 1
+        identity = real_identity(t)
+        # Attempt 1 final re-check (2nd call): mutate disk + force mismatch → retry.
+        if calls["n"] == 2:
+            cur = open(path, encoding="utf-8").read()
+            f = gs.find_ledger_fences(cur)[0]
+            block = json.loads(f.group(1))
+            block["ownerNotes"] = "concurrent"
+            new_text = (
+                cur[:f.start()] + "CONCURRENT_OWNER_EDIT\n\n"
+                + "```json %s\n%s\n```" % (gs.LEDGER_FENCE, json.dumps(block, indent=2))
+                + cur[f.end():]
+            )
+            open(path, "wb").write(new_text.encode("utf-8"))
+            return identity + "|stale"
+        return identity
+
+    monkeypatch.setattr(gs, "ledger_fence_identity", flaky_identity)
+    out = gled.write(
+        repo, [_rec("dup:t:a", "filed", issue="#1", adjudicatedIn="s1")],
+        now="2026-07-21")
+    assert out["ok"] is True, out
+    after = open(path, encoding="utf-8").read()
+    assert owner_note in after
+    assert "CONCURRENT_OWNER_EDIT" in after
+    assert calls["n"] >= 3  # at least one retry cycle
+
+
+def test_write_raced_out_after_five_attempts(tmp_path, monkeypatch):
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.ledger_path(repo)
+    gled.write(repo, [_rec("dup:t:a", "filed", issue="#1")], now="2026-07-01")
+    before = open(path, "rb").read()
+    real_identity = gs.ledger_fence_identity
+    state = {"n": 0}
+
+    def parity_flip(t):
+        state["n"] += 1
+        base = real_identity(t)
+        # Odd calls = prepare (agree); even calls = final re-check (disagree).
+        if state["n"] % 2 == 0:
+            return base + "|retry"
+        return base
+
+    monkeypatch.setattr(gs, "ledger_fence_identity", parity_flip)
+    out = gled.write(repo, [_rec("dup:t:a", "filed", issue="#1")], now="2026-07-21")
+    assert out["ok"] is False
+    assert out["reason"] == "raced-out"
+    assert out["attempts"] == 5
+    assert open(path, "rb").read() == before
+
+
+def test_splice_unbalanced_report_card_begin_does_not_eat_owner_prose(tmp_path):
+    """A stray begin marker must fail closed — never splice across owner prose."""
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.ledger_path(repo)
+    owner_prose = "OWNER_PROSE_BETWEEN_STRAY_AND_REAL"
+    card = (
+        "<!-- guardian-report-card:begin updated=2026-07-01 -->\n\n"
+        "## Report card\n\n_ok_\n\n"
+        "<!-- guardian-report-card:end -->\n\n"
+    )
+    block = {
+        "schemaVersion": 1,
+        "records": [{
+            "id": "dup:t:a",
+            "disposition": "accepted",
+            "date": "2026-07-01",
+            "issue": None,
+            "metricAtDisposition": None,
+            "reason": "r",
+            "reraiseWhen": None,
+        }],
+        "sweeps": [],
+    }
+    # Stray begin, then owner prose, then a balanced region — non-greedy match would
+    # otherwise span from the stray begin to the real end and eat the prose.
+    text = (
+        "# Ledger\n\n"
+        "<!-- guardian-report-card:begin -->\n\n"
+        + owner_prose + "\n\n"
+        + card
+        + "```json %s\n%s\n```\n" % (gs.LEDGER_FENCE, json.dumps(block, indent=2))
+    )
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "wb").write(text.encode("utf-8"))
+    before = open(path, "rb").read()
+
+    spliced, err = gled._splice_machine_regions(
+        text, block, "<!-- guardian-report-card:begin updated=2026-07-21 -->\n"
+                     "## Report card\n\n_new_\n\n"
+                     "<!-- guardian-report-card:end -->\n")
+    assert spliced is None
+    assert err == "ambiguous-report-card"
+
+    out = gled.write_unlocked(
+        repo, [_rec("dup:t:a", "accepted", date="2026-07-01", reason="r")],
+        now="2026-07-21")
+    assert out["ok"] is False
+    assert "ambiguous" in (out.get("skipped") or out.get("reason") or "")
+    after = open(path, "rb").read()
+    assert after == before
+    assert owner_prose.encode("utf-8") in after
+
+
+def test_read_sweeps_result_distinguishes_read_failed(tmp_path, monkeypatch):
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.ledger_path(repo)
+    gled.write(repo, [], now="2026-07-01")
+    status_ok, sweeps_ok = gled._read_sweeps_result(path)
+    assert status_ok == "ok"
+    assert sweeps_ok == []
+
+    missing = str(tmp_path / "no-such-ledger.md")
+    status_abs, sweeps_abs = gled._read_sweeps_result(missing)
+    assert status_abs == "absent"
+    assert sweeps_abs == []
+
+    real_open = open
+
+    def boom(name, *a, **k):
+        if os.path.abspath(str(name)) == os.path.abspath(path):
+            raise OSError("simulated")
+        return real_open(name, *a, **k)
+
+    monkeypatch.setattr("builtins.open", boom)
+    status_fail, sweeps_fail = gled._read_sweeps_result(path)
+    assert status_fail == "read-failed"
+    assert sweeps_fail == []
+    # Legacy helper still collapses to []
+    assert gled._read_sweeps(path) == []
