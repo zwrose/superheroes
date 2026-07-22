@@ -765,6 +765,51 @@ def test_diagnostics_report_census_provenance(tmp_path):
     assert out["diagnostics"]["trackedFilesCensused"] == 2
 
 
+def test_census_excludes_tracked_symlink_operand_injected_seam(tmp_path):
+    """#564 symlink exclusion WITHOUT real jscpd (this test runs in CI — no jscpd skipif).
+
+    A tracked symlink whose target is a real file under the repo passes ``os.path.isfile``
+    (which follows the link), so only the ``not os.path.islink(full)`` clause in the census
+    keeps it out of the operands handed to jscpd. Drive collect() through the injected run
+    seam — real files on disk, only jscpd stubbed — and assert the symlink never reaches the
+    scanner.
+
+    Regression guard (surviving-mutant coverage): deleting ``not os.path.islink(full)``
+    re-admits link.py to the census, so it appears as a jscpd operand and
+    trackedFilesCensused becomes 2 — this test then goes RED. The end-to-end sibling below
+    proves the same behavior but carries a jscpd skipif, so it SKIPS in CI and cannot catch
+    that mutant."""
+    # Real on-disk files: a regular tracked file, a real target, and a real symlink to it.
+    # The census filter runs os.path.isfile/os.path.islink against these real disk paths.
+    (tmp_path / "a.py").write_text("print('a')\n", encoding="utf-8")
+    (tmp_path / "target.py").write_text("print('target')\n", encoding="utf-8")
+    os.symlink("target.py", str(tmp_path / "link.py"))
+
+    # The injected git stub returns BOTH a.py AND link.py as tracked (git tracks the symlink
+    # but not its target) — simulating git tracking a symlink. Only jscpd is stubbed; the
+    # empty report collects cleanly once the census is reached.
+    run = _FakeJscpd(_report([]), tracked=["a.py", "link.py"])
+    out = _collect(gld.DuplicationLens(), tmp_path, run)
+    assert gl.classify_collect(out)[0] == "collected"
+
+    # Strongest signal: the operands actually handed to jscpd. run_tool absolutizes and
+    # appends the census as operands, exactly as invoke would, so the recorded jscpd argv
+    # carries the real operand list.
+    jscpd_calls = [argv for argv, _kw in run.calls if argv and argv[0] == "jscpd"]
+    assert len(jscpd_calls) == 1, run.calls
+    jscpd_argv = jscpd_calls[0]
+    # The tracked symlink NEVER reaches the scanner — neither by its own path nor by the
+    # untracked target it resolves to (invoke's absolute_repo_operands realpaths each
+    # operand, so an admitted symlink would surface as its target's realpath — the #564
+    # leak). The regular file does reach jscpd.
+    assert not any("link.py" in arg for arg in jscpd_argv), jscpd_argv
+    assert not any("target.py" in arg for arg in jscpd_argv), jscpd_argv
+    assert any(arg.endswith("/a.py") for arg in jscpd_argv), jscpd_argv
+
+    # Census counted only the one regular file — the symlink was excluded before jscpd.
+    assert out["diagnostics"]["trackedFilesCensused"] == 1
+
+
 _DUP_SNIPPET = "\n".join([
     "def compute_totals(items):",
     "    total = 0",
