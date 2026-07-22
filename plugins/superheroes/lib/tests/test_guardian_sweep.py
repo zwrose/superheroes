@@ -1965,6 +1965,103 @@ def test_partial_version_change_withholds_baseline_write(tmp_path):
     assert bundle["nextSnapshot"]["lenses"]["fixture"] == prior_entry
 
 
+# --- WO-1 permanent capability boundary --------------------------------------
+
+
+class _PermanentBoundaryLens(FixtureLens):
+    """Returns partial + permanentBoundary for version-change seeding tests."""
+
+    def collect(self, ctx):
+        out = super().collect(ctx)
+        out["status"] = "partial"
+        out["reason"] = "structural capability limit"
+        out["permanentBoundary"] = True
+        return out
+
+
+def test_permanent_boundary_partial_seeds_new_version_baseline(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    prior_entry = {"collectorVersion": "1", "digest": {"v": 1, "prior": True}}
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": prior_entry},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    new_digest = {"v": 2, "boundary": True}
+    lens = _PermanentBoundaryLens(
+        collector_version="2",
+        emit_normal=True,
+        digest=new_digest,
+        diff_new=["fixture:normal"],
+    )
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    entry = bundle["nextSnapshot"]["lenses"]["fixture"]
+    assert entry["collectorVersion"] == "2"
+    assert entry["digest"] == new_digest
+
+
+def test_permanent_boundary_partial_still_degrades(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    prior_entry = {"collectorVersion": "1", "digest": {"v": 1}}
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": prior_entry},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    lens = _PermanentBoundaryLens(
+        collector_version="2",
+        emit_normal=True,
+        digest={"v": 2},
+        diff_new=["fixture:normal"],
+    )
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    degraded = bundle["funnel"]["degradedLenses"]
+    assert len(degraded) == 1
+    assert degraded[0]["lens"] == "fixture"
+    assert degraded[0]["reason"] == "structural capability limit"
+
+
+def test_permanent_boundary_second_sweep_reports_drift(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    prior_entry = {"collectorVersion": "1", "digest": {"v": 1}}
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": prior_entry},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    seed_lens = _PermanentBoundaryLens(
+        collector_version="2",
+        emit_normal=True,
+        digest={"v": 2},
+        diff_new=["fixture:normal"],
+    )
+    first = gsw.collect(repo, lenses=[seed_lens], root=root)
+    assert first["surfaced"] == []
+    assert len(first["funnel"]["killedByDrift"]) == 1
+    assert first["funnel"]["killedByDrift"][0]["reason"] == "quiet-baseline"
+    gs.write_snapshot_cas(repo, first["nextSnapshot"], first["prevIdentity"], root=root)
+
+    drift_lens = _PermanentBoundaryLens(
+        collector_version="2",
+        emit_normal=True,
+        digest={"v": 3},
+        diff_new=["fixture:normal"],
+    )
+    second = gsw.collect(repo, lenses=[drift_lens], root=root)
+    ids = [s["id"] for s in second["surfaced"]]
+    assert "fixture:normal" in ids
+    assert second["surfaced"][0]["driftReason"] == "new"
+
+
 def test_collected_version_change_writes_fresh_baseline(tmp_path):
     repo = init_calibrated_repo(tmp_path)
     root = _store(tmp_path)

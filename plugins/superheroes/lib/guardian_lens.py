@@ -138,7 +138,12 @@ to raise and running collect() — that a tool-free lens invokes neither
   - consequence_template: str — non-empty text guiding plain-sentence consequences
   - collect(ctx) -> {"candidates": [{"id": str, ...}], "digest": <json>,
                      "status": <COLLECT_STATUSES member, default "collected">,
-                     "reason": str | None}
+                     "reason": str | None,
+                     "permanentBoundary": bool | omitted}
+      When status is "partial", permanentBoundary may be set to True to declare that
+      the un-measured remainder is a structural capability limit (see permanent_boundary()).
+  - permanent_boundary(out) -> bool — fail-closed: True only when out is a dict with
+      status "partial" and permanentBoundary is exactly the boolean True.
       ctx carries {"cwd", "root", "config", "run", "prevDigest", "verifyCommand"}. A lens
       that could not collect returns status "not-collected" (never an empty candidate
       list). ``verifyCommand`` is the calibrated core.md verify command already resolved by
@@ -213,6 +218,15 @@ def classify_collect(out):
         if "digest" not in out:
             raise MalformedCollect("collected outcome requires a 'digest' key")
     return ("collected", None)
+
+
+def permanent_boundary(out):
+    """True only when a lens explicitly declares its partial a permanent capability boundary."""
+    if not isinstance(out, dict):
+        return False
+    if out.get("status") != "partial":
+        return False
+    return out.get("permanentBoundary") is True
 
 
 def validate_lens(lens):
