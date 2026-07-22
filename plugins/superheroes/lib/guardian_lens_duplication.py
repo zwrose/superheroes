@@ -5,11 +5,18 @@
 Stdlib-only. jscpd's per-clone `lines` field is NOT a count of duplicated source lines
 for markdown-embedded code (asymmetric spans are common). This lens treats jscpd as a
 detector only and prices / thresholds off difflib.SequenceMatcher(autojunk=False).
+
+Tool invocation routes through ``guardian_collect.run_tool`` (never subprocess directly):
+in production it goes through ``guardian_tools.invoke``'s hardening; in tests / conformance
+it goes through the injected ``ctx["run"]`` seam. jscpd's json reporter writes a FILE, but
+``run_tool`` captures stdout — so the reporter is aimed at a ``/dev/stdout`` symlink inside a
+throwaway temp dir and the JSON object is parsed off stdout (a trailing "report saved"
+summary line is ignored).
 """
 import difflib
 import json
 import os
-import subprocess
+import shutil
 import sys
 import tempfile
 import time
@@ -18,8 +25,8 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import guardian_collect as gc  # noqa: E402
 import guardian_lens  # noqa: E402
-import guardian_tools  # noqa: E402
 
 MIN_BLOCK_LINES = 5
 TOP_N = 25
@@ -28,6 +35,15 @@ TOP_N = 25
 MAX_PAIRS_MEASURED = 400
 MAX_MEASURE_FILE_BYTES = 2_000_000
 MEASURE_TIME_BUDGET_SECONDS = 20
+# I2: pairs whose jscpd lines reach the clone threshold are measured even past the time
+# budget (a red line must not be hidden by the time cap) — but the must-measure set is
+# BOUNDED so it cannot itself defeat the declared time bound.
+MAX_MUST_MEASURE = 50
+
+# The one duplication red-line kind, sourced from the authoritative tuple (I3) — not a
+# bare literal. Fails closed at import if guardian_lens drops the kind.
+_RED_LINE_KIND = next(
+    k for k in guardian_lens.RED_LINE_KINDS if k == "large-fresh-clone")
 
 # Pricing rule (DoD): duplication consequences speak ONLY of change cost and
 # consistency risk — never bug/defect/fault risk.
@@ -45,6 +61,15 @@ VALIDATION_GUIDANCE = (
     "never as a claim that the copies are unsafe or that divergence proves a "
     "failure mode."
 )
+
+
+class _ReportContractError(Exception):
+    """A jscpd report that is structurally usable JSON but violates the report contract.
+
+    Local to this module (the old shared ``guardian_lens.LensDegraded`` type is gone).
+    ``collect()`` catches it and returns ``not-collected`` so a contract mismatch never
+    quietly erases the tracked baseline with an empty digest.
+    """
 
 
 def _strip_format_suffix(name):
@@ -115,25 +140,59 @@ def _file_size_bytes(path):
         return None
 
 
+def _decode_report(stdout):
+    """Read the jscpd JSON object off captured stdout.
+
+    jscpd's json reporter is aimed at /dev/stdout, so the JSON object appears first; a
+    trailing human summary ("report saved to …") is ignored via raw_decode. Returns
+    (report, None) on success or (None, reason) so collect() can degrade honestly.
+    """
+    so = stdout or ""
+    i = so.find("{")
+    if i < 0:
+        return None, "jscpd produced no JSON report"
+    try:
+        obj, _end = json.JSONDecoder().raw_decode(so[i:])
+    except ValueError:
+        return None, "unparseable jscpd report"
+    return obj, None
+
+
+def _reported_clone_count(report):
+    """jscpd's own summary count of clones (or duplicated lines/tokens) — 0 when absent."""
+    stats = report.get("statistics") if isinstance(report, dict) else None
+    total = stats.get("total") if isinstance(stats, dict) else None
+    if not isinstance(total, dict):
+        return 0
+    for key in ("clones", "duplicatedLines", "duplicatedTokens"):
+        try:
+            v = int(total.get(key) or 0)
+        except (TypeError, ValueError):
+            v = 0
+        if v > 0:
+            return v
+    return 0
+
+
 def _validate_report(report):
-    """Require a dict with a list-valued 'duplicates' field — else LensDegraded.
+    """Require a dict with a list-valued 'duplicates' field — else _ReportContractError.
 
     A jscpd upgrade that returns valid JSON without `duplicates` as a list must not
     quietly erase the tracked baseline with an empty digest.
     """
     if not isinstance(report, dict):
-        raise guardian_lens.LensDegraded(
+        raise _ReportContractError(
             "jscpd report contract mismatch: expected a JSON object")
     dups = report.get("duplicates")
     if not isinstance(dups, list):
-        raise guardian_lens.LensDegraded(
+        raise _ReportContractError(
             "jscpd report contract mismatch: missing list-valued 'duplicates' field")
 
 
 def _pairs_from_report(report):
     """Return [(path_a, path_b, jscpd_lines, is_self, tokens), ...] for each well-formed duplicate.
 
-    Raises LensDegraded when any entry is malformed (missing usable
+    Raises _ReportContractError when any entry is malformed (missing usable
     firstFile.name / secondFile.name) — a bad entry must not be silently skipped.
     Names the malformed count and the first offending index so the shell can
     preserve the prior baseline.
@@ -176,12 +235,92 @@ def _pairs_from_report(report):
             tokens = 0
         pairs.append((a, b, lines, a == b, tokens))
     if malformed:
-        raise guardian_lens.LensDegraded(
+        raise _ReportContractError(
             "jscpd report contract mismatch: %d malformed duplicate entr%s "
             "(first offending index %d; each needs usable firstFile.name and "
             "secondFile.name)"
             % (malformed, "y" if malformed == 1 else "ies", first_bad_index))
     return pairs
+
+
+def _dedupe_pairs(report, cwd):
+    """Normalize the report's duplicate entries into deduped cross-file pairs.
+
+    Returns (pair_jscpd, self_clones_deferred, jscpd_clones_reported), where pair_jscpd
+    maps pid -> (rel_a, rel_b, max_jscpd_lines, max_jscpd_tokens). Raises
+    _ReportContractError (via _pairs_from_report) on any malformed entry.
+    """
+    pair_jscpd = {}
+    self_clones_deferred = 0
+    jscpd_clones_reported = 0
+    for path_a, path_b, j_lines, is_self, j_tokens in _pairs_from_report(report):
+        jscpd_clones_reported += 1
+        rel_a = _repo_rel(cwd, path_a)
+        rel_b = _repo_rel(cwd, path_b)
+        if is_self or rel_a == rel_b:
+            self_clones_deferred += 1
+            continue
+        pid = _pair_id(rel_a, rel_b)
+        prev = pair_jscpd.get(pid)
+        if prev is None:
+            pair_jscpd[pid] = (rel_a, rel_b, j_lines, j_tokens)
+        else:
+            pair_jscpd[pid] = (
+                prev[0], prev[1],
+                max(prev[2], j_lines),
+                max(prev[3], j_tokens),
+            )
+    return pair_jscpd, self_clones_deferred, jscpd_clones_reported
+
+
+def _plan_measurement(pair_jscpd, red_threshold):
+    """Rank pairs by the cheap jscpd proxy and build the measurement order.
+
+    Honors MAX_PAIRS_MEASURED and unions in the bounded must-measure set (pairs whose
+    jscpd lines reach the clone threshold). Returns a dict of plan fields consumed by
+    _measure_pairs — collect() reads as orchestration, not a 230-line method.
+    """
+    # Rank BEFORE measuring — cheap jscpd proxy keeps the budget on promising pairs.
+    ranked = sorted(
+        pair_jscpd.items(),
+        key=lambda item: (-item[1][3], -item[1][2], item[0]),
+    )
+    pairs_considered = len(ranked)
+
+    # A2/I2: pairs whose jscpd-reported lines could reach the clone threshold must be
+    # measured even past MAX_PAIRS_MEASURED and past the time budget — token-proxy rank
+    # must not hide an absolute red line. BOUNDED by MAX_MUST_MEASURE (top by rank) so
+    # the must-measure set cannot itself defeat the declared time bound.
+    must_measure_ranked = []
+    for pid, (_ra, _rb, j_lines, _jt) in ranked:
+        try:
+            if int(j_lines) >= int(red_threshold):
+                must_measure_ranked.append(pid)
+        except (TypeError, ValueError):
+            continue
+    must_measure = set(must_measure_ranked[:MAX_MUST_MEASURE])
+
+    measure_order = []
+    seen_measure = set()
+    for pid, data in ranked[:MAX_PAIRS_MEASURED]:
+        measure_order.append((pid, data))
+        seen_measure.add(pid)
+    measurement_union_added = 0
+    for pid, data in ranked:
+        if pid in seen_measure:
+            continue
+        if pid in must_measure:
+            measure_order.append((pid, data))
+            seen_measure.add(pid)
+            measurement_union_added += 1
+    deferred = [(pid, data) for pid, data in ranked if pid not in seen_measure]
+    return {
+        "pairs_considered": pairs_considered,
+        "must_measure": must_measure,
+        "measure_order": measure_order,
+        "deferred": deferred,
+        "measurement_union_added": measurement_union_added,
+    }
 
 
 def _is_unmeasured(rec):
@@ -215,8 +354,107 @@ def _carry_or_unmeasured(pid, prev_pairs, digest_pairs):
     return False
 
 
+def _measure_pairs(measure_order, deferred, must_measure, cwd, prev_pairs):
+    """Run the difflib re-measurement loop within the size / pairs / time budgets.
+
+    Mandatory (must-measure) pairs are exempt from the TIME budget so an absolute red
+    line is never hidden by the time cap (I2). Still-present pairs skipped by any budget
+    carry the prior measured metric forward, or record an explicit unmeasured marker —
+    never omitted. Returns (candidates, digest_pairs, counts).
+    """
+    candidates = []
+    digest_pairs = {}
+    unreadable = 0
+    pairs_measured = 0
+    pairs_skipped_budget = 0
+    pairs_skipped_oversize = 0
+    pairs_carried_forward = 0
+    pairs_unmeasured = 0
+    budget_exhausted = None
+    t0 = time.monotonic()
+
+    def _skip_unmeasured(pid):
+        nonlocal pairs_carried_forward, pairs_unmeasured
+        if _carry_or_unmeasured(pid, prev_pairs, digest_pairs):
+            pairs_carried_forward += 1
+        else:
+            pairs_unmeasured += 1
+
+    for pid, (rel_a, rel_b, j_lines, _j_tokens) in measure_order:
+        mandatory = pid in must_measure
+        if budget_exhausted is None:
+            if (time.monotonic() - t0) >= MEASURE_TIME_BUDGET_SECONDS:
+                budget_exhausted = "time"
+
+        # Only NON-mandatory pairs are skipped by the time budget; a mandatory pair
+        # (jscpd lines >= clone threshold, bounded by MAX_MUST_MEASURE) is always
+        # measured. The time budget still trips budget_exhausted for accounting.
+        if budget_exhausted is not None and not mandatory:
+            pairs_skipped_budget += 1
+            _skip_unmeasured(pid)
+            continue
+
+        abs_a = os.path.join(cwd, rel_a)
+        abs_b = os.path.join(cwd, rel_b)
+        size_a = _file_size_bytes(abs_a)
+        size_b = _file_size_bytes(abs_b)
+        if (
+            size_a is None or size_b is None
+            or size_a > MAX_MEASURE_FILE_BYTES
+            or size_b > MAX_MEASURE_FILE_BYTES
+        ):
+            if size_a is None or size_b is None:
+                unreadable += 1
+            else:
+                pairs_skipped_oversize += 1
+            _skip_unmeasured(pid)
+            continue
+
+        measured = _measure_pair(abs_a, abs_b)
+        if measured is None:
+            unreadable += 1
+            _skip_unmeasured(pid)
+            continue
+        pairs_measured += 1
+        longest, shared = measured
+        if longest < MIN_BLOCK_LINES:
+            continue
+        files = sorted([rel_a, rel_b])
+        candidates.append({
+            "id": pid,
+            "files": files,
+            "longestBlockLines": longest,
+            "sharedLines": shared,
+            "jscpdReportedLines": j_lines,
+            "metric": shared,
+        })
+        digest_pairs[pid] = {"longest": longest, "shared": shared}
+
+    if deferred and budget_exhausted is None:
+        budget_exhausted = "pairs"
+    for pid, _data in deferred:
+        pairs_skipped_budget += 1
+        _skip_unmeasured(pid)
+
+    return candidates, digest_pairs, {
+        "pairsMeasured": pairs_measured,
+        "pairsSkippedBudget": pairs_skipped_budget,
+        "pairsSkippedOversize": pairs_skipped_oversize,
+        "pairsCarriedForward": pairs_carried_forward,
+        "pairsUnmeasured": pairs_unmeasured,
+        "budgetExhausted": budget_exhausted,
+        "unreadableFiles": unreadable,
+    }
+
+
 def _count_drift_suppressed_by_cap(prev_pairs, cur_pairs, surface_ids):
-    """How many new/worsened ids exist in the full digest but not the capped surface."""
+    """How many new/worsened ids exist in the full digest but not the capped surface.
+
+    M1: a first-ever baseline (``prev_pairs is None``) reports zero suppression — there is
+    no prior baseline to have suppressed drift against, so treat prev as None (not {}).
+    """
+    if prev_pairs is None:
+        return 0
     if not surface_ids:
         return 0
     raw = _diff_pairs_raw(prev_pairs, cur_pairs)
@@ -329,11 +567,38 @@ class DuplicationLens:
         self._clone_lines_threshold = None
         self._surface_ids = None
 
+    def conformance_cases(self):
+        """Lens-supplied `reported-nonzero-parsed-zero` payload (see lens-contract.md).
+
+        Both stdouts are shaped like the real jscpd json report this lens parses (JSON
+        object first). ``stdout`` reports clones in its summary but carries an EMPTY
+        ``duplicates`` array — the honesty gate degrades it (jscpd claimed clones yet
+        gave zero detail to normalize). ``clean_stdout`` reports zero clones with an
+        empty array — a genuine quiet collection.
+        """
+        reported = json.dumps({
+            "statistics": {"total": {"clones": 3, "duplicatedLines": 42}},
+            "duplicates": [],
+        }) + "\nreport saved to /dev/stdout\n"
+        clean = json.dumps({
+            "statistics": {"total": {"clones": 0, "duplicatedLines": 0}},
+            "duplicates": [],
+        }) + "\nreport saved to /dev/stdout\n"
+        return {
+            "reported-nonzero-parsed-zero": {
+                "stdout": reported,
+                "clean_stdout": clean,
+                "exit": 0,
+            },
+        }
+
     def collect(self, ctx):
         cwd = ctx.get("cwd") or "."
         cwd = os.path.realpath(cwd)
-        # Cache previous digest for red_lines() — see __init__ ordering comment.
-        self._prev_digest = ctx.get("prev_digest")
+        # Cache previous digest for red_lines() — see __init__ ordering comment. The
+        # shell supplies it as camelCase ctx["prevDigest"]; a snake_case read would
+        # silently lose the baseline.
+        self._prev_digest = ctx.get("prevDigest")
 
         config = ctx.get("config") or {}
         self._clone_lines_threshold = None
@@ -341,186 +606,73 @@ class DuplicationLens:
             if "cloneLines" in config["thresholds"]:
                 self._clone_lines_threshold = config["thresholds"]["cloneLines"]
 
-        res = guardian_tools.resolve("jscpd", cwd)
-        if not res.get("found"):
-            raise guardian_lens.LensDegraded(
-                guardian_tools.missing_tool_reason(
-                    "jscpd", rejection=res.get("rejection")))
-
-        runner = ctx.get("run") or subprocess.run
-        jscpd_version = guardian_tools.version("jscpd", cwd, run=runner)
         repo_config_present = os.path.isfile(os.path.join(cwd, ".jscpd.json"))
-
-        with tempfile.TemporaryDirectory(prefix="guardian-jscpd-") as tmp:
-            # OUR flags LAST so they win over any repo .jscpd.json (owner config is
-            # otherwise honored — we only record whether one was present).
-            # Force --output into the temp dir so the report cannot land in the repo.
-            argv = [
-                res["path"], cwd,
-                "--reporters", "json",
-                "--output", tmp,
-                "--silent",
-                "--min-lines", str(MIN_BLOCK_LINES),
-                "--min-tokens", "50",
-            ]
-            try:
-                proc = runner(
-                    argv, capture_output=True, text=True, cwd=cwd, timeout=600)
-            except Exception as exc:
-                raise guardian_lens.LensDegraded(
-                    "jscpd invocation failed: %s: %s" % (type(exc).__name__, exc))
-            if getattr(proc, "returncode", 1) != 0:
-                raise guardian_lens.LensDegraded(
-                    "jscpd exited non-zero (exit %s)" % getattr(proc, "returncode", "?"))
-
-            report_path = os.path.join(tmp, "jscpd-report.json")
-            if not os.path.isfile(report_path):
-                raise guardian_lens.LensDegraded(
-                    "jscpd produced no jscpd-report.json in output dir")
-            try:
-                with open(report_path, encoding="utf-8") as fh:
-                    report = json.load(fh)
-            except (OSError, ValueError, TypeError) as exc:
-                raise guardian_lens.LensDegraded(
-                    "jscpd report unparseable: %s" % exc)
-
-        _validate_report(report)
-
-        # Deduplicate unordered pairs; keep max jscpd lines + tokens as rank proxy.
-        # Shape: pid -> (rel_a, rel_b, j_lines, j_tokens)
-        pair_jscpd = {}
-        self_clones_deferred = 0
-        jscpd_clones_reported = 0
-        for path_a, path_b, j_lines, is_self, j_tokens in _pairs_from_report(report):
-            jscpd_clones_reported += 1
-            rel_a = _repo_rel(cwd, path_a)
-            rel_b = _repo_rel(cwd, path_b)
-            if is_self or rel_a == rel_b:
-                self_clones_deferred += 1
-                continue
-            pid = _pair_id(rel_a, rel_b)
-            prev = pair_jscpd.get(pid)
-            if prev is None:
-                pair_jscpd[pid] = (rel_a, rel_b, j_lines, j_tokens)
-            else:
-                pair_jscpd[pid] = (
-                    prev[0], prev[1],
-                    max(prev[2], j_lines),
-                    max(prev[3], j_tokens),
-                )
-
-        # Rank BEFORE measuring — cheap jscpd proxy keeps the budget on promising pairs.
-        ranked = sorted(
-            pair_jscpd.items(),
-            key=lambda item: (-item[1][3], -item[1][2], item[0]),
-        )
-        pairs_considered = len(ranked)
 
         red_threshold = self._clone_lines_threshold
         if red_threshold is None:
             red_threshold = guardian_lens.RED_LINE_THRESHOLDS["cloneLines"]
 
-        # A2: pairs whose jscpd-reported lines could reach the clone threshold must be
-        # measured even past MAX_PAIRS_MEASURED — token-proxy rank must not hide an
-        # absolute red line forever.
-        must_measure = set()
-        for pid, (_ra, _rb, j_lines, _jt) in ranked:
-            try:
-                if int(j_lines) >= int(red_threshold):
-                    must_measure.add(pid)
-            except (TypeError, ValueError):
-                continue
+        # jscpd's json reporter writes a FILE, but run_tool captures stdout — aim the
+        # reporter at /dev/stdout (via a symlink in a throwaway temp dir OUTSIDE the
+        # repo) and read the JSON object off stdout.
+        tmp = tempfile.mkdtemp(prefix="guardian-jscpd-")
+        try:
+            os.symlink("/dev/stdout", os.path.join(tmp, "jscpd-report.json"))
+            argv = [
+                "jscpd", "-o", tmp, "--no-tips",
+                "--reporters", "json",
+                "--mode", "strict",
+                "--min-lines", str(MIN_BLOCK_LINES),
+                "--min-tokens", "50",
+                cwd,  # ABSOLUTE scan target — run_tool does not absolutize operands
+            ]
+            res = gc.run_tool(argv, ctx=ctx, cwd=cwd, ok_exits=(0,))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
-        measure_order = []
-        seen_measure = set()
-        for pid, data in ranked[:MAX_PAIRS_MEASURED]:
-            measure_order.append((pid, data))
-            seen_measure.add(pid)
-        measurement_union_added = 0
-        for pid, data in ranked:
-            if pid in seen_measure:
-                continue
-            if pid in must_measure:
-                measure_order.append((pid, data))
-                seen_measure.add(pid)
-                measurement_union_added += 1
-        deferred = [(pid, data) for pid, data in ranked if pid not in seen_measure]
+        if not res["ok"]:
+            return {"candidates": [], "digest": None, **gc.not_collected(res["reason"])}
 
-        prev_pairs = {}
+        report, decode_reason = _decode_report(res.get("stdout") or "")
+        if report is None:
+            return {"candidates": [], "digest": None, **gc.not_collected(decode_reason)}
+
+        try:
+            _validate_report(report)
+        except _ReportContractError as exc:
+            return {"candidates": [], "digest": None, **gc.not_collected(str(exc))}
+
+        # Honesty gate: jscpd's summary reports clones but the duplicates detail array
+        # is empty — we cannot normalize anything and must NOT read as a clean baseline.
+        reported_clones = _reported_clone_count(report)
+        if reported_clones > 0 and not report.get("duplicates"):
+            return {
+                "candidates": [],
+                "digest": None,
+                **gc.not_collected(
+                    "jscpd reported duplicates but normalization yielded zero candidates"),
+            }
+
+        try:
+            pair_jscpd, self_clones_deferred, jscpd_clones_reported = _dedupe_pairs(
+                report, cwd)
+        except _ReportContractError as exc:
+            return {"candidates": [], "digest": None, **gc.not_collected(str(exc))}
+
+        plan = _plan_measurement(pair_jscpd, red_threshold)
+
+        # M1: no prior digest ⇒ prev_pairs is None (not {}), so drift-suppression
+        # diagnostics report zero on a first-ever baseline.
+        prev_pairs = None
         if isinstance(self._prev_digest, dict):
             raw_prev = self._prev_digest.get("pairs")
             if isinstance(raw_prev, dict):
                 prev_pairs = raw_prev
 
-        candidates = []
-        digest_pairs = {}
-        unreadable = 0
-        pairs_measured = 0
-        pairs_skipped_budget = 0
-        pairs_skipped_oversize = 0
-        pairs_carried_forward = 0
-        pairs_unmeasured = 0
-        budget_exhausted = None
-        t0 = time.monotonic()
-
-        def _skip_unmeasured(pid):
-            nonlocal pairs_carried_forward, pairs_unmeasured
-            if _carry_or_unmeasured(pid, prev_pairs, digest_pairs):
-                pairs_carried_forward += 1
-            else:
-                pairs_unmeasured += 1
-
-        for pid, (rel_a, rel_b, j_lines, _j_tokens) in measure_order:
-            if budget_exhausted is None:
-                if (time.monotonic() - t0) >= MEASURE_TIME_BUDGET_SECONDS:
-                    budget_exhausted = "time"
-
-            if budget_exhausted is not None:
-                pairs_skipped_budget += 1
-                _skip_unmeasured(pid)
-                continue
-
-            abs_a = os.path.join(cwd, rel_a)
-            abs_b = os.path.join(cwd, rel_b)
-            size_a = _file_size_bytes(abs_a)
-            size_b = _file_size_bytes(abs_b)
-            if (
-                size_a is None or size_b is None
-                or size_a > MAX_MEASURE_FILE_BYTES
-                or size_b > MAX_MEASURE_FILE_BYTES
-            ):
-                if size_a is None or size_b is None:
-                    unreadable += 1
-                else:
-                    pairs_skipped_oversize += 1
-                _skip_unmeasured(pid)
-                continue
-
-            measured = _measure_pair(abs_a, abs_b)
-            if measured is None:
-                unreadable += 1
-                _skip_unmeasured(pid)
-                continue
-            pairs_measured += 1
-            longest, shared = measured
-            if longest < MIN_BLOCK_LINES:
-                continue
-            files = sorted([rel_a, rel_b])
-            candidates.append({
-                "id": pid,
-                "files": files,
-                "longestBlockLines": longest,
-                "sharedLines": shared,
-                "jscpdReportedLines": j_lines,
-                "metric": shared,
-            })
-            digest_pairs[pid] = {"longest": longest, "shared": shared}
-
-        if deferred and budget_exhausted is None:
-            budget_exhausted = "pairs"
-        for pid, _data in deferred:
-            pairs_skipped_budget += 1
-            _skip_unmeasured(pid)
+        candidates, digest_pairs, measure_counts = _measure_pairs(
+            plan["measure_order"], plan["deferred"], plan["must_measure"],
+            cwd, prev_pairs,
+        )
 
         capped, cap_diag = apply_cap(
             candidates, top_n=TOP_N, always_include_clone_lines=red_threshold,
@@ -530,7 +682,10 @@ class DuplicationLens:
 
         digest = {
             "schemaVersion": 1,
-            "toolVersions": {"jscpd": jscpd_version},
+            # Version is not probed under the run_tool/stdout contract (a second
+            # --version spawn would confuse the single-invocation conformance seam);
+            # jscpd does not carry its version in the json report.
+            "toolVersions": {"jscpd": None},
             "pairs": digest_pairs,
             "surfaceIds": surface_ids,
         }
@@ -538,21 +693,22 @@ class DuplicationLens:
             prev_pairs, digest_pairs, self._surface_ids,
         )
         diagnostics = {
-            "toolVersions": {"jscpd": jscpd_version},
+            "toolVersions": {"jscpd": None},
             "jscpdClonesReported": jscpd_clones_reported,
-            "pairsConsidered": pairs_considered,
-            "pairsMeasured": pairs_measured,
-            "pairsSkippedBudget": pairs_skipped_budget,
-            "pairsSkippedOversize": pairs_skipped_oversize,
-            "pairsCarriedForward": pairs_carried_forward,
-            "pairsUnmeasured": pairs_unmeasured,
-            "budgetExhausted": budget_exhausted,
-            "measurementUnionAdded": measurement_union_added,
+            "pairsConsidered": plan["pairs_considered"],
+            "pairsMeasured": measure_counts["pairsMeasured"],
+            "pairsSkippedBudget": measure_counts["pairsSkippedBudget"],
+            "pairsSkippedOversize": measure_counts["pairsSkippedOversize"],
+            "pairsCarriedForward": measure_counts["pairsCarriedForward"],
+            "pairsUnmeasured": measure_counts["pairsUnmeasured"],
+            "budgetExhausted": measure_counts["budgetExhausted"],
+            "measurementUnionAdded": plan["measurement_union_added"],
             "driftSuppressedByCap": drift_suppressed,
             "selfClonesDeferred": self_clones_deferred,
-            "unreadableFiles": unreadable,
+            "unreadableFiles": measure_counts["unreadableFiles"],
             "minBlockLines": MIN_BLOCK_LINES,
             "maxPairsMeasured": MAX_PAIRS_MEASURED,
+            "maxMustMeasure": MAX_MUST_MEASURE,
             "maxMeasureFileBytes": MAX_MEASURE_FILE_BYTES,
             "measureTimeBudgetSeconds": MEASURE_TIME_BUDGET_SECONDS,
             "topN": TOP_N,
@@ -565,9 +721,13 @@ class DuplicationLens:
             "candidates": capped,
             "digest": digest,
             "diagnostics": diagnostics,
+            **gc.collected(),
         }
 
     def diff(self, prev_digest, cur_digest):
+        # Stopped-looking / no digest ⇒ no drift claims at all (never `resolved`).
+        if cur_digest is None:
+            return {"new": [], "worsened": [], "resolved": []}
         cur_pairs = {}
         surface = None
         if isinstance(cur_digest, dict):
@@ -580,20 +740,21 @@ class DuplicationLens:
         if isinstance(prev_digest, dict) and isinstance(prev_digest.get("pairs"), dict):
             prev_pairs = prev_digest["pairs"]
         raw = _diff_pairs_raw(prev_pairs, cur_pairs)
+        # M2: diff() returns ONLY {new, worsened, resolved}. The cap-suppression count is
+        # a diagnostics-channel concern (collect() reports driftSuppressedByCap) — it is
+        # not a diff field.
         if surface is None:
-            raw["driftSuppressedByCap"] = 0
-            return raw
+            return {
+                "new": raw["new"],
+                "worsened": raw["worsened"],
+                "resolved": raw["resolved"],
+            }
         filtered_new = [pid for pid in raw["new"] if pid in surface]
         filtered_worsened = [pid for pid in raw["worsened"] if pid in surface]
-        suppressed = (
-            len(raw["new"]) - len(filtered_new)
-            + len(raw["worsened"]) - len(filtered_worsened)
-        )
         return {
             "new": filtered_new,
             "worsened": filtered_worsened,
             "resolved": raw["resolved"],
-            "driftSuppressedByCap": suppressed,
         }
 
     def red_lines(self, candidates):
@@ -642,7 +803,7 @@ class DuplicationLens:
                 grew = longest > prev_longest
             if fresh or grew:
                 out.append({
-                    "kind": "large-fresh-clone",
+                    "kind": _RED_LINE_KIND,
                     "id": cid,
                     "detail": (
                         "re-measured longestBlockLines=%d (threshold=%d); "
@@ -657,3 +818,5 @@ class DuplicationLens:
 
 
 LENS = DuplicationLens()
+# Module-level roster the production loader registers (guardian_lens.PRODUCTION_LENS_MODULES).
+LENSES = (LENS,)
