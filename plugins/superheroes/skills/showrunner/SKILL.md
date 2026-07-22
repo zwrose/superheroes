@@ -86,10 +86,10 @@ code, so you catch what the maker's context hid.
      ledger (`LEDGERS.md` §2).
    - A build that ran sequential orders against one worktree should show a commit between them in
      its artifacts — uncommitted work a later order could have wiped is a finding.
-   - For dispatches you make while vetting — a scoped re-review, a probe run — **never kill a
-     configured dispatch before its structural timeout**; the timeout is the tripwire, not your read
-     of intermediate signals. A memory recalls context; it is never a standing kill order, and
-     matching one onto a live dispatch licenses nothing.
+   - For **a configured reviewer dispatch** you make while vetting — a scoped re-review — **never
+     kill it before its structural timeout**; the timeout is the tripwire, not your read of
+     intermediate signals. A memory recalls context; it is never a standing kill order, and matching
+     one onto a live dispatch licenses nothing.
    - Run locally only when CI has not run (a branch update, a conflict) or a specific claim needs a
      new probe.
    - Post a **durable vet receipt** on the PR — verdict plus what you probed — so the record
