@@ -26,7 +26,7 @@ This skill is **not** `/superheroes:review-code`. Review-code finds bugs in a ch
 
 **Drift-over-baseline.** The first sweep records a baseline and stays quiet except absolute red lines. Later sweeps surface only what changed.
 
-**Lens rollout.** The health lenses (duplication, complexity, coupling, dependency and doc freshness, dead code) land across the guardian arc. The registered lenses today are <!-- guardian:registered-lenses:start -->`duplication` and `hotspots`<!-- guardian:registered-lenses:end --> (complexity/hotspots); the remaining lenses land as their orders merge — a sweep today runs the registered lenses and stays quiet on a first baseline except absolute red lines. Each later registration adds its lens name between the markers above **and** to `guardian_lens.PRODUCTION_LENS_NAMES` in the same PR; the roster sync guard fails closed if they drift.
+**Lens rollout.** The health lenses (duplication, complexity, coupling, dependency and doc freshness, dead code) land across the guardian arc. The registered lenses today are <!-- guardian:registered-lenses:start -->`duplication`, `hotspots`, and `deps`<!-- guardian:registered-lenses:end --> (complexity/hotspots; `deps` covers dependency freshness + known vulnerabilities with check-the-check for a covering tool); the remaining lenses land as their orders merge — a sweep today runs the registered lenses and stays quiet on a first baseline except absolute red lines. Each later registration adds its lens name between the markers above **and** to `guardian_lens.PRODUCTION_LENS_NAMES` in the same PR; the roster sync guard fails closed if they drift.
 
 ## Run it
 

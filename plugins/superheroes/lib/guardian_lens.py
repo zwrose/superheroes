@@ -145,7 +145,8 @@ to raise and running collect() — that a tool-free lens invokes neither
 
 REGISTRY = []
 
-PRODUCTION_LENS_MODULES = ("guardian_lens_duplication", "guardian_lens_hotspots")
+PRODUCTION_LENS_MODULES = (
+    "guardian_lens_duplication", "guardian_lens_hotspots", "guardian_lens_deps")
 """Authoritative runtime roster of production lens module names (under lib/).
 
 Rebasing lens PRs populate this tuple; each module MUST expose a module-level LENSES
@@ -155,6 +156,7 @@ tuple of ready-to-register lens objects.
 PRODUCTION_LENS_NAMES = {
     "guardian_lens_duplication": ("duplication",),
     "guardian_lens_hotspots": ("hotspots",),
+    "guardian_lens_deps": ("deps",),
 }
 """Map module-name → tuple of lens names the module is expected to export.
 

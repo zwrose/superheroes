@@ -304,14 +304,12 @@ def test_cli_collect_subprocess_smoke(tmp_path):
     out = json.loads(r.stdout)
     assert "surfaced" in out
     assert "funnel" in out
-
-    # The subprocess inherits env = os.environ.copy() (same PATH), so
-    # shutil.which("jscpd") in this process matches the subprocess's tool
-    # availability. duplication (jscpd) is the only tool-dependent lens in this
-    # smoke test — the calibrated fixture repo has no .py/.js files, so the
-    # hotspots lens collects-empty and never degrades here. Assert BOTH sides,
-    # keyed on jscpd availability, so this is green locally AND in CI.
     degraded = out["funnel"]["degradedLenses"]
+
+    # duplication (jscpd) is the only tool-dependent lens whose availability varies
+    # locally vs CI (the subprocess inherits this process's PATH; the calibrated fixture
+    # repo has no .py/.js files, so hotspots collects-empty and never degrades here).
+    # Assert both sides keyed on jscpd presence (#536/#553 smoke fix).
     dup = [d for d in degraded if d.get("lens") == "duplication"]
     if shutil.which("jscpd"):
         # tool present ⇒ the lens must NOT degrade, and candidates are well-formed
@@ -328,3 +326,37 @@ def test_cli_collect_subprocess_smoke(tmp_path):
         reason = entry.get("reason") or ""
         assert "jscpd" in reason, reason
         assert "npm install -g jscpd" in reason, reason
+
+    # The deps/deadcode/docs lenses (this PR, #537) degrade on this calibrated fixture repo
+    # (no dependency manifest / no python+node ecosystem / no root instruction docs) — all
+    # correct honest degradation, not a sweep failure. Any OTHER degradation is unexpected;
+    # AND the expected ones must actually APPEAR (a lens silently regressing to
+    # collected-zero would vanish from degradedLenses and this smoke test would still pass).
+    def _expected_degrade(d):
+        lens = d.get("lens")
+        reason = d.get("reason", "")
+        if lens == "duplication":
+            return True  # handled by the jscpd-keyed block above
+        if lens == "deps" and "no supported dependency manifest" in reason:
+            return True
+        if lens == "deadcode" and "needs a declared or discoverable ecosystem" in reason:
+            return True
+        if lens == "docs" and "no instruction doc readable" in reason:
+            return True
+        return False
+
+    unexpected_degraded = [d for d in degraded if not _expected_degrade(d)]
+    assert unexpected_degraded == [], unexpected_degraded
+
+    def _degrade_present(lens, substr):
+        return any(
+            d.get("lens") == lens and substr in (d.get("reason") or "")
+            for d in degraded)
+
+    for lens_name, substr in (
+            ("deps", "no supported dependency manifest"),
+            ("deadcode", "needs a declared or discoverable ecosystem"),
+            ("docs", "no instruction doc readable")):
+        assert _degrade_present(lens_name, substr), (
+            "expected %s degrade (%r) missing from degradedLenses: %s"
+            % (lens_name, substr, degraded))
