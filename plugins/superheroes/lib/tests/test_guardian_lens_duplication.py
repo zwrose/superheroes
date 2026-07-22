@@ -543,6 +543,21 @@ def test_degrade_on_unparseable_stdout(tmp_path):
     assert "unparseable" in reason
 
 
+def test_reporter_setup_failure_returns_not_collected_never_raises(tmp_path, monkeypatch):
+    """F: a failure in the /dev/stdout reporter setup (mkdtemp / os.symlink) must convert
+    to not-collected — collect() must NEVER raise out of the never-raises contract."""
+    def boom(*a, **k):
+        raise OSError("symlink not permitted")
+
+    monkeypatch.setattr(gld.os, "symlink", boom)
+    run = _FakeJscpd(_report([]))  # would collect cleanly if setup had succeeded
+    out = _collect(gld.DuplicationLens(), tmp_path, run)  # must not raise
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"
+    assert out["digest"] is None
+    assert "reporter setup failed" in reason
+
+
 def test_degrade_on_report_missing_duplicates_list(tmp_path):
     """Valid JSON without list-valued duplicates must not erase the baseline."""
     out = _collect(gld.DuplicationLens(), tmp_path,

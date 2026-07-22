@@ -449,15 +449,42 @@ def test_churn_reported_zero_tracked_degrades(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_join_anomaly_per_language_not_masked(tmp_path):
-    """A JS join failure must degrade even though Python produced candidates."""
+    """A genuine JS path-join malfunction must degrade even though Python joined cleanly.
+
+    The JS malfunction is a real complexity key ORPHANED off every tracked js file
+    (``wrong.js`` — a path-normalization bug), not a merely function-less churn set (B).
+    Python joins cleanly on a.py, so the per-language evaluation must still flag js."""
     coverage = {"python": "collected", "javascript": "collected"}
     churn = {"a.py": {"added": 10, "deleted": 0}, "b.js": {"added": 10, "deleted": 0}}
-    complexity = {"a.py": {"maxFunctionCCN": 15, "worstFunction": {"name": "f", "line": 1}}}
+    complexity = {
+        "a.py": {"maxFunctionCCN": 15, "worstFunction": {"name": "f", "line": 1}},
+        # js key that matches NO tracked js file (js_paths is ["b.js"]) → orphaned.
+        "wrong.js": {"maxFunctionCCN": 20, "worstFunction": {"name": "g", "line": 1}},
+    }
     anomaly = hot._join_anomaly(
         coverage, py_paths=["a.py"], js_paths=["b.js"], churn=churn, complexity=complexity)
     assert anomaly is not None
-    assert "javascript" in anomaly  # JS join failed
+    assert "javascript" in anomaly  # JS join failed (orphaned key)
     assert "python" not in anomaly  # python joined cleanly
+
+
+def test_join_anomaly_skips_functionless_churn():
+    """B: a churned tracked file with no callables (radon emits no key for it) is a
+    legitimate collected-empty for that language, never a join anomaly."""
+    coverage = {"python": "collected", "javascript": "not-collected"}
+    churn = {"settings.py": {"added": 12, "deleted": 3}}
+    # radon returned {"settings.py": []} → parse_radon_json yields no key → empty map.
+    anomaly = hot._join_anomaly(
+        coverage, py_paths=["settings.py"], js_paths=[], churn=churn, complexity={})
+    assert anomaly is None
+
+    # Even when OTHER (non-churned) python files DO have functions, a function-less churn
+    # set is still clean — the real keys land on tracked files (not orphaned).
+    complexity = {"lib.py": {"maxFunctionCCN": 15, "worstFunction": {"name": "h", "line": 1}}}
+    anomaly2 = hot._join_anomaly(
+        coverage, py_paths=["settings.py", "lib.py"], js_paths=[],
+        churn=churn, complexity=complexity)
+    assert anomaly2 is None
 
 
 def test_join_anomaly_degrades_collect(tmp_path, monkeypatch):
@@ -474,6 +501,145 @@ def test_join_anomaly_degrades_collect(tmp_path, monkeypatch):
     status, reason = gl.classify_collect(out)
     assert status == "not-collected"
     assert "join anomaly" in reason
+
+
+def test_join_anomaly_per_language_radon_error_does_not_mask_js(tmp_path):
+    """A (global-suppression bug gone): a radon per-file error must NOT suppress a genuine
+    js path-join failure. Python collects (one per-file error recorded); lizard emits a
+    key orphaned off every tracked js file → the js anomaly still degrades the sweep."""
+    _write(tmp_path, "a.py", 20)   # measured python
+    _write(tmp_path, "c.py", 20)   # radon per-file error (1 < threshold, not all files)
+    _write(tmp_path, "b.js", 20)   # churned js, but lizard reports OTHER.js (orphan)
+    run = _basic_tools(
+        tmp_path,
+        numstat="20\t0\ta.py\n20\t0\tc.py\n20\t0\tb.js\n",
+        lsfiles=["a.py", "c.py", "b.js"],
+        radon={"a.py": [{"complexity": 15, "name": "f", "lineno": 1}],
+               "c.py": [{"error": "invalid syntax"}]},
+        lizard="20,30,10,0,20,x@1-20@OTHER.js,OTHER.js,x,sig,1,20\n")
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"          # OLD bug: read as collected (suppressed)
+    assert "join anomaly" in reason
+    assert "javascript" in reason
+
+
+def test_functionless_churned_file_collects_not_degraded(tmp_path):
+    """B: a churned tracked python file with no callables (radon {"settings.py": []})
+    yields zero complexity keys → a clean collected-empty, never a join-anomaly degrade."""
+    _write(tmp_path, "settings.py", 30)
+    run = _basic_tools(tmp_path, numstat="12\t3\tsettings.py\n", lsfiles=["settings.py"],
+                       radon={"settings.py": []})
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+    assert gl.classify_collect(out)[0] == "collected"
+    assert out["candidates"] == []
+    assert out["diagnostics"]["complexityCoverage"]["python"] == "collected"
+    assert out["diagnostics"].get("joinAnomaly") is None
+
+
+# ---------------------------------------------------------------------------
+# lizard parse honesty (C): malformed non-empty CSV degrades, never silent {}
+# ---------------------------------------------------------------------------
+
+def test_parse_lizard_short_row_no_index_error():
+    """A short/garbage row is skipped, never indexed past its length (no IndexError)."""
+    assert hot.parse_lizard_csv("1,2,3\n") == {}
+    assert hot.parse_lizard_csv("garbage,,,\n,,\n") == {}
+    # A well-formed row alongside short rows is still parsed.
+    text = "1,2,3\n30,82,10,0,30,fn@1-30@panel.js,panel.js,fn,sig,1,30\n,,\n"
+    parsed = hot.parse_lizard_csv(text)
+    assert parsed["panel.js"]["maxFunctionCCN"] == 82
+
+
+def test_run_lizard_nonempty_parsed_zero_degrades_js(tmp_path):
+    """Non-empty lizard output that parses to zero usable rows degrades js (mirrors
+    radon's honesty) — it must never fail open as a silent empty {} clean read."""
+    _write(tmp_path, "b.js", 10)
+    run = _basic_tools(tmp_path, numstat="10\t0\tb.js\n", lsfiles=["b.js"],
+                       lizard="1,2,3\ngarbage,,,\n")  # non-empty, zero usable rows
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"          # js is the only needed language
+    assert "reported-nonzero-parsed-zero" in reason or "zero usable rows" in reason
+
+
+def test_malformed_lizard_mixed_repo_is_partial_with_js_reason(tmp_path):
+    """Tracked js churn + malformed non-empty lizard, python collects → partial with a js
+    reason (baseline preserved for the js portion, never a false resolved)."""
+    _write(tmp_path, "a.py", 20)
+    _write(tmp_path, "b.js", 20)
+    prev = {"schemaVersion": 1, "files": {"hotspots:b.js": {"score": 9.0, "ccn": 80}}}
+    run = _basic_tools(
+        tmp_path, numstat="20\t0\ta.py\n20\t0\tb.js\n", lsfiles=["a.py", "b.js"],
+        radon={"a.py": [{"complexity": 15, "name": "f", "lineno": 1}]},
+        lizard="1,2,3\n,,\n")  # non-empty, zero usable rows → js malfunction
+    lens = hot.HotspotsLens()
+    out = lens.collect(_ctx(tmp_path, run, prev_digest=prev))
+    status, reason = gl.classify_collect(out)
+    assert status == "partial"
+    assert "javascript" in reason
+    assert out["digest"]["files"]["hotspots:b.js"] == {"score": 9.0, "ccn": 80}
+    assert "hotspots:b.js" not in lens.diff(prev, out["digest"])["resolved"]
+
+
+# ---------------------------------------------------------------------------
+# radon parse honesty (D): contract mismatch degrades PYTHON, not the whole lens
+# ---------------------------------------------------------------------------
+
+def test_radon_non_json_degrades_at_collect(tmp_path):
+    """Non-JSON radon stdout for the only needed language → the unparseable degrade."""
+    _write(tmp_path, "a.py", 10)
+    run = _basic_tools(tmp_path, numstat="10\t0\ta.py\n", lsfiles=["a.py"],
+                       radon="not json at all")
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"
+    assert "radon output unparseable" in reason
+
+
+def test_radon_contract_mismatch_mixed_repo_is_partial_not_whole_lens(tmp_path):
+    """D: a valid-JSON radon CONTRACT mismatch (a bare list) must degrade PYTHON only —
+    js still collects → partial, not a whole-lens not_collected before lizard runs."""
+    _write(tmp_path, "a.py", 20)
+    _write(tmp_path, "b.js", 20)
+    run = _basic_tools(
+        tmp_path, numstat="20\t0\ta.py\n20\t0\tb.js\n", lsfiles=["a.py", "b.js"],
+        radon="[]",  # valid JSON, wrong shape → parse_radon_json raises _Degraded
+        lizard="20,30,10,0,20,hot@1-20@b.js,b.js,hot,sig,1,20\n")
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+    status, reason = gl.classify_collect(out)
+    assert status == "partial"
+    assert "python" in reason
+    assert "contract mismatch" in reason
+    # js collected its candidate; the lens did not abort before lizard ran.
+    assert "hotspots:b.js" in {c["id"] for c in out["candidates"]}
+    assert out["diagnostics"]["complexityCoverage"]["javascript"] == "collected"
+
+
+# ---------------------------------------------------------------------------
+# M1 (E): first-baseline sweep reports zero cap-suppressed drift
+# ---------------------------------------------------------------------------
+
+def test_first_baseline_reports_zero_drift_suppressed(tmp_path, monkeypatch):
+    """On a first-ever sweep (no prevDigest) a repo with >TOP_N candidates must report
+    driftSuppressedByCap == 0 — there is no prior baseline to have suppressed against.
+    Mirrors duplication's M1 (prev is None, not {})."""
+    monkeypatch.setattr(hot, "TOP_N", 1)
+    radon = {}
+    numstat_lines = []
+    lsfiles = []
+    for i in range(4):  # > TOP_N candidates, all `new` relative to an absent baseline
+        name = "f%02d.py" % i
+        _write(tmp_path, name, 10)
+        numstat_lines.append("9\t0\t%s" % name)
+        radon[name] = [{"complexity": 12 + i, "name": "f", "lineno": 1}]
+        lsfiles.append(name)
+    run = _basic_tools(tmp_path, numstat="\n".join(numstat_lines) + "\n",
+                       lsfiles=lsfiles, radon=radon)
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))  # no prev_digest
+    assert gl.classify_collect(out)[0] == "collected"
+    assert out["diagnostics"]["candidatesBeforeCap"] > hot.TOP_N
+    assert out["diagnostics"]["driftSuppressedByCap"] == 0
 
 
 # ---------------------------------------------------------------------------

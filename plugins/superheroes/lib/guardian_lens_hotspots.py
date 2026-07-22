@@ -180,18 +180,19 @@ def parse_lizard_csv(text):
         return result
     reader = csv.reader(io.StringIO(text))
     for row in reader:
+        # A short/garbage row is SKIPPED, never indexed past its length — the guard must
+        # protect every row[...] access below so a malformed row can never raise an
+        # uncaught IndexError out of collect(). (_run_lizard turns an all-garbage,
+        # non-empty output into an honest js degrade rather than a silent empty dict.)
         if len(row) < 8:
             continue
         try:
             ccn = int(row[1])
-        except (TypeError, ValueError):
-            continue
-        path = row[6].strip()
-        name = row[7].strip() if len(row) > 7 else "?"
-        try:
+            path = row[6].strip()
+            name = row[7].strip() or "?"
             line = int(row[9]) if len(row) > 9 else 0
-        except (TypeError, ValueError):
-            line = 0
+        except (TypeError, ValueError, IndexError):
+            continue
         if not path:
             continue
         cur = result.get(path)
@@ -399,19 +400,35 @@ def _abs_paths(cwd, paths):
     return out
 
 
-def _join_anomaly(coverage, py_paths, js_paths, churn, complexity):
-    """Detect a PER-LANGUAGE churn×complexity join failure (I5).
+def _is_real_complexity(info):
+    """True when a complexity entry is a genuine fresh measurement (not carried / not
+    an explicit unmeasured marker). Carried-forward and unmeasured records must never
+    count as evidence that a tool joined its churn×tracked paths."""
+    info = info or {}
+    return not info.get("_carriedForward") and not info.get("_unmeasured")
 
-    For each collected language that has churn on its tracked files yet zero real (not
-    carried / not unmeasured) complexity keys landing on those tracked paths, the result
-    is an internal inconsistency — not a healthy quiet repo. Reported per-language so a JS
-    join failure is never masked by Python having produced candidates (or vice versa).
-    Returns a dict keyed by language, or None when every collected language joined cleanly.
+
+def _join_anomaly(coverage, py_paths, js_paths, churn, complexity):
+    """Detect a PER-LANGUAGE churn×complexity join MALFUNCTION (I5 / A / B).
+
+    For each collected language with churn on its tracked files but zero real (not
+    carried / not unmeasured) complexity landing on those tracked paths, this fires ONLY
+    when the tool nonetheless produced real complexity keys that match NO tracked file of
+    that language — i.e. keys ORPHANED by a path-join bug. A language whose tool ran
+    cleanly yet produced no usable key for a legitimately function-less churn set (no
+    orphaned keys) is a valid collected-empty, not an anomaly (B: a repo whose only churn
+    is function-less files — ``__init__.py``, ``settings.py`` — must not false-degrade).
+
+    Evaluated per language so a python-side radon per-file error can never suppress a
+    js-side join failure, and vice versa (A: the old global ``collector_errors`` gate is
+    gone — a carried/unmeasured radon entry is simply not a real key here). Returns a dict
+    keyed by language, or None when every collected language joined cleanly.
     """
     anomalies = {}
     for lang, paths in (("python", py_paths), ("javascript", js_paths)):
         if coverage.get(lang) != "collected" or not paths:
             continue
+        tracked_lang = set(paths)
         churn_paths = [
             p for p in paths
             if churn.get(p) and ((churn[p].get("added") or 0)
@@ -421,17 +438,24 @@ def _join_anomaly(coverage, py_paths, js_paths, churn, complexity):
             continue
         complexity_on_tracked = sum(
             1 for p in churn_paths
-            if p in complexity
-            and not (complexity[p] or {}).get("_carriedForward")
-            and not (complexity[p] or {}).get("_unmeasured")
+            if p in complexity and _is_real_complexity(complexity.get(p))
         )
         if complexity_on_tracked:
             # Keys matched this language's tracked files; zero candidates is MIN_CCN /
             # line filtering, not a join failure.
             continue
+        orphan_keys = [
+            p for p, info in complexity.items()
+            if _lang_of_path(p) == lang and _is_real_complexity(info)
+            and p not in tracked_lang
+        ]
+        if not orphan_keys:
+            # No real key produced for this language landed anywhere off its tracked set:
+            # a function-less churn set (legit collected-empty), never a malfunction.
+            continue
         anomalies[lang] = {
             "trackedChurnFiles": len(churn_paths),
-            "complexityKeys": len(complexity),
+            "orphanComplexityKeys": len(orphan_keys),
             "complexityOnTracked": complexity_on_tracked,
         }
     return anomalies or None
@@ -458,7 +482,9 @@ def _run_radon(ctx, cwd, paths):
     """Run radon over absolute input paths via run_tool.
 
     Returns (complexity_dict, error_paths, None) on success, or (None, None, reason) on
-    failure. Shape violations raise _Degraded (caught by collect()).
+    failure. A radon parse / contract failure is routed into the PYTHON-failed path (a
+    reason string), NOT re-raised — so it degrades python (→ partial when js still
+    collects) instead of aborting the whole lens before lizard runs (I4 / D).
     """
     if not paths:
         return {}, [], None
@@ -472,8 +498,8 @@ def _run_radon(ctx, cwd, paths):
         return None, None, "radon returned empty output"
     try:
         parsed, error_paths = parse_radon_json(text)
-    except _Degraded:
-        raise
+    except _Degraded as exc:
+        return None, None, str(exc)
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
         return None, None, "radon output unparseable: %s" % exc
     return (
@@ -503,8 +529,15 @@ def _run_lizard(ctx, cwd, paths):
         return None, "lizard returned empty output"
     try:
         parsed = parse_lizard_csv(text)
-    except (TypeError, ValueError, csv.Error) as exc:
+    except (TypeError, ValueError, csv.Error, IndexError) as exc:
         return None, "lizard output unparseable: %s" % exc
+    # Honesty mirror of radon's guard: lizard produced NON-EMPTY output but parsing
+    # yielded zero usable rows (short / garbage CSV). That is a tool malfunction, not a
+    # clean zero-complexity read — degrade js rather than fail open with a silent {}.
+    if not parsed:
+        return None, (
+            "lizard reported output but parsing yielded zero usable rows "
+            "(reported-nonzero-parsed-zero)")
     return _normalize_complexity_paths(cwd, parsed), None
 
 
@@ -554,6 +587,12 @@ def _diff_files_raw(prev_files, cur_files):
 
 
 def _count_hotspots_drift_suppressed(prev_files, cur_files, surface_ids):
+    # M1 (E): a first-ever baseline (``prev_files is None``) reports zero suppression —
+    # there is no prior baseline to have suppressed drift against, so a first sweep with
+    # more than TOP_N candidates must not report a false driftSuppressedByCap. Mirror
+    # duplication._count_drift_suppressed_by_cap exactly (prev is None, not {}).
+    if prev_files is None:
+        return 0
     if not surface_ids:
         return 0
     raw = _diff_files_raw(prev_files, cur_files)
@@ -648,10 +687,16 @@ class HotspotsLens:
         # ordering: collect then red_lines on the same instance.
         self._prev_digest = ctx.get("prevDigest")
         prev_files = {}
+        # M1 (E): distinguish "no prior baseline at all" from "a prior baseline that was
+        # empty". Only a usable prior digest counts as a baseline for drift suppression —
+        # a first-ever sweep passes None (never {}) so >TOP_N candidates do not read as
+        # cap-suppressed drift. Mirrors duplication's prev_pairs handling.
+        has_prev_baseline = False
         if isinstance(self._prev_digest, dict):
             raw_prev = self._prev_digest.get("files")
             if isinstance(raw_prev, dict):
                 prev_files = raw_prev
+                has_prev_baseline = True
 
         window = observe_window(ctx, cwd, since=since)
         churn = _collect_churn(ctx, cwd, since)
@@ -667,55 +712,21 @@ class HotspotsLens:
 
         py_paths = _paths_with_ext(tracked, PY_EXTS)
         js_paths = _paths_with_ext(tracked, JS_EXTS)
-        need_radon = bool(py_paths)
-        need_lizard = bool(js_paths)
 
-        complexity = {}
-        coverage = {}
-        coverage_gaps = []
-        collector_errors = []
-        failed_langs = []  # [(lang, reason)] — needed language that did not collect
-
-        # ---- radon (python) --------------------------------------------------------
-        if need_radon:
-            parsed, error_paths, err = _run_radon(ctx, cwd, py_paths)
-            if err is not None:
-                coverage["python"] = "failed"
-                coverage_gaps.append(err)
-                failed_langs.append(("python", err))
-            else:
-                complexity.update(parsed)
-                coverage["python"] = "collected"
-                error_paths = list(error_paths or [])
-                radon_lang_failed = self._absorb_radon_errors(
-                    error_paths, py_paths, prev_files, complexity, collector_errors)
-                if radon_lang_failed is not None:
-                    coverage["python"] = "failed"
-                    coverage_gaps.append(radon_lang_failed)
-                    failed_langs.append(("python", radon_lang_failed))
-        else:
-            coverage["python"] = "not-collected"
-
-        # ---- lizard (js/ts) --------------------------------------------------------
-        if need_lizard:
-            parsed, err = _run_lizard(ctx, cwd, js_paths)
-            if err is not None:
-                coverage["javascript"] = "failed"
-                coverage_gaps.append(err)
-                failed_langs.append(("javascript", err))
-            else:
-                complexity.update(parsed)
-                coverage["javascript"] = "collected"
-        else:
-            coverage["javascript"] = "not-collected"
+        # Each language collects INDEPENDENTLY: a tool malfunction degrades only that
+        # language; a clean run yielding zero complexity for function-less files is a
+        # legitimate collected-empty for that language.
+        (complexity, coverage, coverage_gaps, collector_errors,
+         failed_langs) = self._collect_complexity(
+            ctx, cwd, py_paths, js_paths, prev_files)
 
         # I4 fail-direction: if EVERY needed language failed (or the only needed one did),
         # nothing trustworthy remains → not-collected. If SOME needed language collected
         # while another failed → partial (baseline preserved for the failed portion).
         needed_langs = []
-        if need_radon:
+        if py_paths:
             needed_langs.append("python")
-        if need_lizard:
+        if js_paths:
             needed_langs.append("javascript")
         failed_names = {lang for lang, _ in failed_langs}
         if needed_langs and failed_names >= set(needed_langs):
@@ -724,8 +735,11 @@ class HotspotsLens:
 
         candidates = self._build_candidates(cwd, churn, tracked, complexity, window)
 
+        # A/B: the join anomaly is now evaluated per language and fires only on a genuine
+        # path-join malfunction (orphaned real keys) — not on radon per-file errors (A)
+        # and not on legitimately function-less churn (B). No global collector_errors gate.
         join_anomaly = _join_anomaly(coverage, py_paths, js_paths, churn, complexity)
-        if join_anomaly is not None and not collector_errors:
+        if join_anomaly is not None:
             raise _Degraded(
                 "hotspots join anomaly: complexity keys never landed on churn×tracked "
                 "paths for %s" % ", ".join(sorted(join_anomaly)))
@@ -741,22 +755,7 @@ class HotspotsLens:
 
         # Digest = FULL measured set (identity + metric). Cap applies only to the surfaced
         # candidate list — ranking churn must not invent `new` drift.
-        files_digest = {
-            c["id"]: {"score": c["hotspotScore"], "ccn": c["maxFunctionCCN"]}
-            for c in candidates
-        }
-        # Carry prior entries / explicit unmeasured markers for radon parse-error paths.
-        for info_path, info in complexity.items():
-            cid = "hotspots:%s" % info_path
-            if info.get("_unmeasured") or info.get("_error"):
-                files_digest[cid] = {"unmeasured": True, "error": True}
-                continue
-            if not info.get("_carriedForward"):
-                continue
-            files_digest[cid] = {
-                "score": info.get("_carriedScore", 0),
-                "ccn": info.get("maxFunctionCCN", 0),
-            }
+        files_digest = self._build_files_digest(candidates, complexity)
 
         # Partial: merge prevDigest for the language(s) that could not collect so a failed
         # collector never erases prior findings or emits false `resolved`.
@@ -782,7 +781,7 @@ class HotspotsLens:
             },
         }
         drift_suppressed = _count_hotspots_drift_suppressed(
-            prev_files, files_digest, self._surface_ids,
+            prev_files if has_prev_baseline else None, files_digest, self._surface_ids,
         )
         diagnostics = {
             "complexityCoverage": coverage,
@@ -811,6 +810,80 @@ class HotspotsLens:
         else:
             result.update(gc.collected())
         return result
+
+    def _collect_complexity(self, ctx, cwd, py_paths, js_paths, prev_files):
+        """Collect radon (python) + lizard (js/ts) INDEPENDENTLY (H / I1 extraction).
+
+        Each language collects on its own seam so ``_collect`` reads as orchestration.
+        A tool malfunction (radon/lizard failure, empty output, contract mismatch, or
+        non-empty-parsed-zero) degrades ONLY that language — appended to ``failed_langs``
+        as ``(lang, reason)`` and marked ``failed`` in coverage. A clean run yielding zero
+        complexity for function-less files is a legitimate ``collected``-empty for that
+        language. Returns
+        ``(complexity, coverage, coverage_gaps, collector_errors, failed_langs)``.
+        """
+        complexity = {}
+        coverage = {}
+        coverage_gaps = []
+        collector_errors = []
+        failed_langs = []  # [(lang, reason)] — needed language that did not collect
+
+        # ---- radon (python) --------------------------------------------------------
+        if py_paths:
+            parsed, error_paths, err = _run_radon(ctx, cwd, py_paths)
+            if err is not None:
+                coverage["python"] = "failed"
+                coverage_gaps.append(err)
+                failed_langs.append(("python", err))
+            else:
+                complexity.update(parsed)
+                coverage["python"] = "collected"
+                radon_lang_failed = self._absorb_radon_errors(
+                    list(error_paths or []), py_paths, prev_files, complexity,
+                    collector_errors)
+                if radon_lang_failed is not None:
+                    coverage["python"] = "failed"
+                    coverage_gaps.append(radon_lang_failed)
+                    failed_langs.append(("python", radon_lang_failed))
+        else:
+            coverage["python"] = "not-collected"
+
+        # ---- lizard (js/ts) --------------------------------------------------------
+        if js_paths:
+            parsed, err = _run_lizard(ctx, cwd, js_paths)
+            if err is not None:
+                coverage["javascript"] = "failed"
+                coverage_gaps.append(err)
+                failed_langs.append(("javascript", err))
+            else:
+                complexity.update(parsed)
+                coverage["javascript"] = "collected"
+        else:
+            coverage["javascript"] = "not-collected"
+
+        return complexity, coverage, coverage_gaps, collector_errors, failed_langs
+
+    @staticmethod
+    def _build_files_digest(candidates, complexity):
+        """Full measured digest (H / I1 extraction): every candidate's identity+metric,
+        plus carried-prior / explicit-unmeasured markers for radon parse-error paths so a
+        parse failure never reads as "this file is now clean" or invents `new` drift."""
+        files_digest = {
+            c["id"]: {"score": c["hotspotScore"], "ccn": c["maxFunctionCCN"]}
+            for c in candidates
+        }
+        for info_path, info in complexity.items():
+            cid = "hotspots:%s" % info_path
+            if info.get("_unmeasured") or info.get("_error"):
+                files_digest[cid] = {"unmeasured": True, "error": True}
+                continue
+            if not info.get("_carriedForward"):
+                continue
+            files_digest[cid] = {
+                "score": info.get("_carriedScore", 0),
+                "ccn": info.get("maxFunctionCCN", 0),
+            }
+        return files_digest
 
     def _absorb_radon_errors(self, error_paths, py_paths, prev_files, complexity,
                              collector_errors):

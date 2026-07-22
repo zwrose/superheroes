@@ -614,9 +614,12 @@ class DuplicationLens:
 
         # jscpd's json reporter writes a FILE, but run_tool captures stdout — aim the
         # reporter at /dev/stdout (via a symlink in a throwaway temp dir OUTSIDE the
-        # repo) and read the JSON object off stdout.
-        tmp = tempfile.mkdtemp(prefix="guardian-jscpd-")
+        # repo) and read the JSON object off stdout. The mkdtemp + symlink setup lives
+        # INSIDE the try so any failure there (F) converts to not-collected — collect()
+        # must never RAISE; the finally still cleans up whatever tmp dir was created.
+        tmp = None
         try:
+            tmp = tempfile.mkdtemp(prefix="guardian-jscpd-")
             os.symlink("/dev/stdout", os.path.join(tmp, "jscpd-report.json"))
             argv = [
                 "jscpd", "-o", tmp, "--no-tips",
@@ -627,8 +630,15 @@ class DuplicationLens:
                 cwd,  # ABSOLUTE scan target — run_tool does not absolutize operands
             ]
             res = gc.run_tool(argv, ctx=ctx, cwd=cwd, ok_exits=(0,))
+        except OSError as exc:
+            return {
+                "candidates": [],
+                "digest": None,
+                **gc.not_collected("jscpd reporter setup failed: %s" % exc),
+            }
         finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+            if tmp is not None:
+                shutil.rmtree(tmp, ignore_errors=True)
 
         if not res["ok"]:
             return {"candidates": [], "digest": None, **gc.not_collected(res["reason"])}
