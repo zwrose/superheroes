@@ -156,3 +156,45 @@ def test_run_tool_production_missing_tool_never_raises(tmp_path):
     assert out["ok"] is False
     assert tool in out["reason"]
     assert "not found on PATH" in out["reason"]
+
+
+# --- _translate_invoke_result: the fail-closed safety branches -----------------------
+#
+# These map invoke's result-dict directly, exercising the branches that a planted real
+# binary cannot reach (truncated-output / capture-incomplete / an unknown outcome, plus
+# the ok/ok_exits gate). Direct mapper unit tests are the right seam for those.
+
+_ARGV = ["some-tool", "--flag"]
+
+
+def test_translate_truncated_output_fails_even_when_returncode_in_ok_exits():
+    res = {"outcome": "truncated-output", "returncode": 3, "stdout": "x", "stderr": ""}
+    out = gc._translate_invoke_result(res, _ARGV, ok_exits=(0, 3))
+    assert out["ok"] is False
+    assert "some-tool" in out["reason"]
+
+
+def test_translate_capture_incomplete_fails_even_when_returncode_in_ok_exits():
+    res = {"outcome": "capture-incomplete", "returncode": 0, "stdout": "", "stderr": ""}
+    out = gc._translate_invoke_result(res, _ARGV, ok_exits=(0,))
+    assert out["ok"] is False
+    assert "some-tool" in out["reason"]
+
+
+def test_translate_unknown_outcome_fails_closed():
+    res = {"outcome": "weird-new-outcome", "returncode": 0, "stdout": "", "stderr": ""}
+    out = gc._translate_invoke_result(res, _ARGV, ok_exits=(0,))
+    assert out["ok"] is False
+    assert "unexpected invoke outcome" in out["reason"]
+
+
+def test_translate_ok_outcome_gated_on_ok_exits():
+    # rc=0 but 0 is NOT in ok_exits — the "ok" outcome must still read ok=False.
+    res = {"outcome": "ok", "returncode": 0, "stdout": "out", "stderr": ""}
+    out = gc._translate_invoke_result(res, _ARGV, ok_exits=(3,))
+    assert out["ok"] is False
+    assert "exited 0" in out["reason"]
+    # normal case: rc=0 with 0 in ok_exits reads ok=True.
+    ok = gc._translate_invoke_result(res, _ARGV, ok_exits=(0,))
+    assert ok["ok"] is True
+    assert ok["reason"] is None

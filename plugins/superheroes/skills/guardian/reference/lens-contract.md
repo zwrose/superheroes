@@ -44,13 +44,15 @@ Declare collection cost honestly in the `cost` dict so the advisor can reason ab
 
 Every external tool invocation by a lens **must** go through `guardian_collect.run_tool` (with `guardian_tools.resolve` / `guardian_tools.version` for probe-only paths). `run_tool` routes the production spawn through `guardian_tools.invoke`'s hardening; the injected `ctx["run"]` callable is the test/conformance seam that stands in for that spawn. Direct use of `subprocess`, `os.system`, `os.popen`, or `subprocess.Popen` inside a lens module is a **contract violation**.
 
-The invocation seam (`plugins/superheroes/lib/guardian_tools.py`, reached through `run_tool`) provides these guarantees by construction:
+**A lens MUST pass absolute paths in its `run_tool` argv.** Collectors run from a **neutral cwd** (never the swept repo), and `run_tool` calls `invoke(..., targets=())` — it does **not** thread or absolutize repo-relative operands. A repo-relative operand in a `run_tool` argv would run against the neutral cwd, match nothing, and read as a clean (empty) collection. The operand-absolutization channel exists on `guardian_tools.invoke` directly (its `targets=` parameter), **not** through `run_tool`.
 
-1. **Neutral child cwd** — collectors never run with the swept repo as their working directory.
-2. **Absolute repo operands** — repo-relative targets are absolutized and placed after a `--` end-of-options sentinel.
-3. **Identity-based executable rejection** — resolved binaries are validated with `os.path.samefile`, never string containment.
-4. **Environment allowlist** — code-loading variables are stripped; `PATH` and `NODE_PATH` are sanitized.
-5. **No fetch at sweep time** — absent tools degrade with a message quoting `guardian_tools.INSTALL_COMMANDS`; the seam never installs or fetches.
+The invocation seam (`plugins/superheroes/lib/guardian_tools.py`) provides these guarantees by construction. Guarantees #1, #3, #4, and #5 hold **through `run_tool`** (`invoke` applies them to the resolved `argv[0]` and the spawn). Guarantee #2 is a property of `invoke`'s `targets=` channel and does **not** hold through `run_tool` — see the absolute-argv rule above:
+
+1. **Neutral child cwd** — collectors never run with the swept repo as their working directory. *(Holds through `run_tool`.)*
+2. **Absolute repo operands** — repo-relative *targets* passed to `guardian_tools.invoke` directly (via its `targets=` parameter) are absolutized and placed after a `--` end-of-options sentinel. **This does NOT hold through `run_tool`, which passes `targets=()`** — a lens using `run_tool` must itself pass absolute paths in its argv.
+3. **Identity-based executable rejection** — resolved binaries are validated with `os.path.samefile`, never string containment. *(Holds through `run_tool`.)*
+4. **Environment allowlist** — code-loading variables are stripped; `PATH` and `NODE_PATH` are sanitized. *(Holds through `run_tool`.)*
+5. **No fetch at sweep time** — absent tools degrade with a message quoting `guardian_tools.INSTALL_COMMANDS`; the seam never installs or fetches. *(Holds through `run_tool`.)*
 
 Install guidance for collectors lives only in `guardian_tools.INSTALL_COMMANDS`.
 

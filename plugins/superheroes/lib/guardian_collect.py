@@ -2,10 +2,12 @@
 # plugins/superheroes/lib/guardian_collect.py
 """Shared collector helpers for Guardian lenses — one tool-running behavior, not three.
 
-Stdlib-only. Lens `collect()` implementations use these so "tool missing", "tool timed
-out", and "tool failed" degrade the same way in every lens (CONVENTIONS §11 — one home
-for the behavior). run_tool never raises: it normalizes every failure into a dict a lens
-can turn into a `not-collected` / `partial` status.
+Stdlib-only apart from the sibling `guardian_tools` import (itself stdlib-only, so this
+module stays stdlib-only transitively — just no longer self-contained). Lens `collect()`
+implementations use these so "tool missing", "tool timed out", and "tool failed" degrade
+the same way in every lens (CONVENTIONS §11 — one home for the behavior). run_tool never
+raises: it normalizes every failure into a dict a lens can turn into a `not-collected` /
+`partial` status.
 """
 import os
 import shutil
@@ -15,6 +17,13 @@ import sys
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
+
+# Import at module level (load time, before cwd is the swept repo), matching every other
+# guardian module — a lazy import inside run_tool's production branch would be the FIRST
+# import of guardian_tools during a sweep and resolve against sweep-time sys.path, opening
+# an import-path RCE window if the swept repo ships its own guardian_tools.py. No cycle:
+# guardian_tools imports nothing from guardian_collect.
+import guardian_tools as gt
 
 DEFAULT_TIMEOUT = 60
 
@@ -48,7 +57,13 @@ def _translate_invoke_result(res, argv, ok_exits):
     stderr = res.get("stderr", "")
 
     if outcome == "ok":
-        return _result(True, returncode, stdout, stderr, None)
+        # invoke emits "ok" only for returncode 0, but gate on ok_exits anyway so this
+        # composes with the injected seam (which returns ok only when exit ∈ ok_exits).
+        # A rc-0 run under an ok_exits that excludes 0 must read ok=False.
+        if returncode in ok_exits:
+            return _result(True, returncode, stdout, stderr, None)
+        return _result(False, returncode, stdout, stderr,
+                       "%s exited %s" % (argv0, returncode))
 
     if outcome in ("nonzero-exit", "empty-output"):
         if returncode in ok_exits:
@@ -120,13 +135,12 @@ def run_tool(argv, ctx=None, timeout=DEFAULT_TIMEOUT, cwd=None, ok_exits=(0,)):
     if not argv:
         return _result(False, None, "", "", "%s: no command to run" % argv0)
     try:
-        import guardian_tools as gt
         repo = os.path.realpath(cwd or os.getcwd())
         res = gt.invoke(argv[0], list(argv[1:]), repo, targets=(),
                         run=None, timeout=timeout)
+        return _translate_invoke_result(res, argv, ok_exits)
     except Exception as exc:  # realpath/invoke ValueError etc. — fail closed, never raise
         return _result(False, None, "", "", "%s failed: %s" % (argv0, exc))
-    return _translate_invoke_result(res, argv, ok_exits)
 
 
 def collected():
