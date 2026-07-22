@@ -159,6 +159,24 @@ def _decode_report(stdout):
     return obj, None
 
 
+def _reported_duplication_percent(report):
+    """jscpd's summary duplication percentage, or None when absent."""
+    stats = report.get("statistics") if isinstance(report, dict) else None
+    total = stats.get("total") if isinstance(stats, dict) else None
+    if not isinstance(total, dict):
+        return None
+    pct = total.get("percentage")
+    if isinstance(pct, bool) or not isinstance(pct, (int, float)):
+        return None
+    try:
+        pct = float(pct)
+    except (TypeError, ValueError):
+        return None
+    if pct != pct:  # NaN
+        return None
+    return pct
+
+
 def _reported_clone_count(report):
     """jscpd's own summary count of clones (or duplicated lines/tokens) — 0 when absent."""
     stats = report.get("statistics") if isinstance(report, dict) else None
@@ -792,6 +810,9 @@ class DuplicationLens:
             "pairs": digest_pairs,
             "surfaceIds": surface_ids,
         }
+        dup_pct = _reported_duplication_percent(report)
+        if dup_pct is not None:
+            digest["duplicationPercent"] = dup_pct
         drift_suppressed = _count_drift_suppressed_by_cap(
             prev_pairs, digest_pairs, self._surface_ids,
         )
@@ -861,6 +882,44 @@ class DuplicationLens:
             "worsened": filtered_worsened,
             "resolved": raw["resolved"],
         }
+
+    def vitals(self, digest):
+        """→ {vital_name: (value | None, reason | None)}
+
+        (value, None)    -> complete       — a full measurement
+        (value, reason)  -> partial        — a real number over the portion measured,
+                                             with `reason` naming exactly what is missing
+        (None,  reason)  -> not-collected  — nothing publishable; `reason` says why
+        """
+        if not isinstance(digest, dict):
+            return {"duplicationPercent": (None, "digest is not an object")}
+        if "duplicationPercent" not in digest:
+            return {
+                "duplicationPercent": (
+                    None,
+                    "digest has no duplicationPercent field (jscpd omitted the statistic "
+                    "or collection was degraded)",
+                ),
+            }
+        value = digest.get("duplicationPercent")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return {
+                "duplicationPercent": (
+                    None, "duplicationPercent is not a number"),
+            }
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return {
+                "duplicationPercent": (
+                    None, "duplicationPercent is not a number"),
+            }
+        if value != value:
+            return {
+                "duplicationPercent": (
+                    None, "duplicationPercent is not a number"),
+            }
+        return {"duplicationPercent": (value, None)}
 
     def red_lines(self, candidates):
         """Price red lines off the RE-MEASURED longest block, never jscpd's lines.

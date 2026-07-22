@@ -2776,3 +2776,45 @@ def test_unmeasurable_liveness_surfaces_through_sweep(tmp_path):
     assert cid in surfaced_ids, (
         "unmeasurable liveness must reach surfaced, not die in killedByDrift; "
         "surfaced=%r killed=%r" % (surfaced_ids, bundle["funnel"]["killedByDrift"]))
+
+
+def test_vitals_python_plus_npm_vuln_count_is_partial_citing_569():
+    digest = {
+        "ecosystems": {
+            "node": {
+                "vulns": {
+                    "status": "collected",
+                    "items": {"a": {"id": "a"}, "b": {"id": "b"}},
+                },
+            },
+            "python": {
+                "vulns": {
+                    "status": "partial",
+                    "items": {"c": {"id": "c"}},
+                    "reason": gld.PYTHON_VULN_RED_LINE_GAP_REASON,
+                },
+            },
+        },
+    }
+    value, reason = gld.LENS.vitals(digest)["vulnCount"]
+    assert value == 3
+    assert reason is not None
+    assert "#569" in reason
+    assert "python" in reason.lower() or "Python" in reason
+
+
+def test_vitals_majors_behind_sums_collected_ecosystems():
+    digest = {
+        "ecosystems": {
+            "node": {
+                "freshness": {
+                    "status": "collected",
+                    "majorsBehindTotal": 4,
+                    "items": {},
+                },
+            },
+        },
+    }
+    value, reason = gld.LENS.vitals(digest)["majorsBehind"]
+    assert value == 4
+    assert reason is None

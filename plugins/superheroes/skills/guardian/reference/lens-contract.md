@@ -19,6 +19,21 @@ Each lens object provides:
 | `diff(prev_digest, cur_digest)` | `{"new": [ids], "worsened": [ids], "resolved": [ids]}` |
 | `red_lines(candidates)` | `[{"kind": <RED_LINE_KINDS>, "id": str, "detail": str}]` |
 | `degrade(reason)` | `{"lens": name, "degraded": True, "reason": reason}` |
+| `vitals(digest)` (optional) | `{vital_name: (value \| None, reason \| None)}` — see below |
+
+### Optional vitals hook
+
+Lenses that own digest-sourced vitals MAY implement `vitals(digest)` returning a map of
+vital name to a 2-tuple:
+
+- `(value, None)` — **complete**: a full measurement for that vital.
+- `(value, reason)` — **partial**: a real number over the portion measured, with
+  `reason` naming exactly what is missing.
+- `(None, reason)` — **not-collected**: nothing publishable; `reason` says why.
+
+The lens owns its digest shape; `guardian_vitals` owns vital names, thresholds, and the
+completeness rule. Neither reaches into the other. A lens without `vitals()` contributes
+no vitals. Extractors must be total and non-raising on malformed digests.
 
 ## collector
 

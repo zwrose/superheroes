@@ -1266,6 +1266,43 @@ def test_benching_does_not_defeat_ambiguous_identity_fail_open(tmp_path):
     assert bundle["reportCard"].get("fixture", {}).get("benched") is not True
 
 
+def test_vitals_carried_forward_digest_not_published_as_fresh(tmp_path):
+    """§4 stale-digest bug: a lens that did not run must not publish last sweep's vitals."""
+    import guardian_lens_duplication as gld_mod
+
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": True})
+    prior_digest = {
+        "duplicationPercent": 42.0,
+        "pairs": {},
+        "surfaceIds": [],
+    }
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {"duplicationPercent": 42.0},
+        "lenses": {
+            "duplication": {
+                "collectorVersion": gld_mod.LENS.collector_version,
+                "digest": prior_digest,
+            },
+        },
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+
+    class SkipLens(FixtureLens):
+        name = "duplication"
+        collector_version = gld_mod.LENS.collector_version
+
+        def collect(self, ctx):
+            raise AssertionError("duplication lens must not run this sweep")
+
+    bundle = gsw.collect(repo, lenses=[SkipLens()], root=root)
+    assert bundle["nextSnapshot"]["vitals"].get("duplicationPercent") is None
+    assert "duplicationPercent" in bundle["vitalsDelta"]["notCollected"]
+
+
 def test_verify_stdout_sentinel_absent_from_collect_bundle(tmp_path):
     """Trust boundary: raw verify stdout must not enter the model-facing bundle."""
     repo = init_calibrated_repo(tmp_path, verify_command="true")

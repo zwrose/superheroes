@@ -7,6 +7,7 @@ import pytest
 import core_md as cm
 import guardian_store as gs
 import guardian_vitals as gv
+import guardian_lens_duplication as gld
 import mode_registry as mr
 import store_core as sc
 from guardian_fixtures import init_calibrated_repo
@@ -277,32 +278,81 @@ def test_wall_clock_fallback_when_summary_has_no_duration(tmp_path):
 
 def test_missing_lens_digest_is_not_collected_with_reason(tmp_path):
     repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
-    out = gv.collect(repo, lens_digests={})
+    out = gv.collect(repo, lens_results={})
     _assert_not_collected(out, ("duplicationPercent", "majorsBehind", "vulnCount"))
     assert "duplication" in out["notCollected"]["duplicationPercent"]
 
 
-def test_digest_present_but_key_missing_is_not_collected(tmp_path):
+def test_digest_missing_vital_field_is_not_collected(tmp_path):
     repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
-    out = gv.collect(repo, lens_digests={"duplication": {"clones": 3}})
+
+    class DupLens:
+        name = "duplication"
+
+        def vitals(self, digest):
+            return gld.LENS.vitals(digest)
+
+    out = gv.collect(repo, lens_results={
+        "duplication": {
+            "lens": DupLens(),
+            "status": "collected",
+            "digest": {"pairs": {}},
+            "reason": None,
+            "fresh": True,
+        },
+    })
     _assert_not_collected(out, ("duplicationPercent",), "duplicationPercent")
+    assert out["vitals"]["duplicationPercent"] is None
+    assert out["vitals"]["duplicationPercent"] != 0
 
 
-def test_digest_values_are_read_from_lens_digests(tmp_path):
+def test_digest_values_are_read_from_lens_vitals(tmp_path):
     repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
-    out = gv.collect(repo, lens_digests={
-        "duplication": {"duplicationPercent": 4.5},
-        "dependencies": {"majorsBehind": 7, "vulnCount": 2},
+
+    class DupLens:
+        name = "duplication"
+
+        def vitals(self, digest):
+            return {"duplicationPercent": (4.5, None)}
+
+    class DepsLens:
+        name = "deps"
+
+        def vitals(self, digest):
+            return {"majorsBehind": (7, None), "vulnCount": (2, None)}
+
+    out = gv.collect(repo, lens_results={
+        "duplication": {
+            "lens": DupLens(), "status": "collected", "digest": {},
+            "reason": None, "fresh": True,
+        },
+        "deps": {
+            "lens": DepsLens(), "status": "collected", "digest": {},
+            "reason": None, "fresh": True,
+        },
     })
     assert out["vitals"]["duplicationPercent"] == 4.5
     assert out["vitals"]["majorsBehind"] == 7
     assert out["vitals"]["vulnCount"] == 2
     assert "duplication" in out["sources"]["duplicationPercent"]
+    assert out["completeness"]["duplicationPercent"]["state"] == "complete"
 
 
-def test_non_numeric_digest_value_is_not_collected(tmp_path):
+def test_non_numeric_vital_tuple_is_not_collected(tmp_path):
     repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
-    out = gv.collect(repo, lens_digests={"duplication": {"duplicationPercent": "lots"}})
+
+    class DupLens:
+        name = "duplication"
+
+        def vitals(self, digest):
+            return {"duplicationPercent": ("lots", None)}
+
+    out = gv.collect(repo, lens_results={
+        "duplication": {
+            "lens": DupLens(), "status": "collected", "digest": {},
+            "reason": None, "fresh": True,
+        },
+    })
     _assert_not_collected(out, ("duplicationPercent",))
 
 
@@ -825,3 +875,224 @@ def test_incomplete_scan_marks_loc_and_todo_not_collected(tmp_path, monkeypatch)
     assert out["vitals"]["todoCount"] is None
     assert "incomplete" in out["notCollected"]["locTotal"]
     assert "incomplete" in out["notCollected"]["todoCount"]
+
+
+# --- 11. lens vitals completeness + stale-digest guards ---
+
+def _dup_lens_result(digest, status="collected", fresh=True):
+    return {
+        "duplication": {
+            "lens": gld.LENS,
+            "status": status,
+            "digest": digest,
+            "reason": None if status == "collected" else "partial reason",
+            "fresh": fresh,
+        },
+    }
+
+
+def test_stale_carried_forward_lens_result_is_not_collected(tmp_path):
+    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
+    out = gv.collect(repo, lens_results={
+        "duplication": {
+            "lens": gld.LENS,
+            "status": "collected",
+            "digest": {"duplicationPercent": 99.0},
+            "reason": None,
+            "fresh": False,
+        },
+    })
+    _assert_not_collected(out, ("duplicationPercent",))
+    assert "did not run" in out["notCollected"]["duplicationPercent"]
+
+
+def test_partial_lens_status_publishes_usable_digest_as_partial(tmp_path):
+    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
+    out = gv.collect(repo, lens_results=_dup_lens_result(
+        {"duplicationPercent": 3.0}, status="partial"))
+    assert out["vitals"]["duplicationPercent"] == 3.0
+    assert out["completeness"]["duplicationPercent"]["state"] == "partial"
+    assert out["completeness"]["duplicationPercent"]["reason"] == "partial reason"
+    assert "duplicationPercent" not in out["notCollected"]
+
+
+def test_partial_deps_lens_python_vulns_publishes_count_with_issue_569(tmp_path):
+    import guardian_lens_deps as deps_mod
+    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
+    vuln_id = "deps:audit:python:foo:PYSEC-2020-1"
+    digest = {
+        "ecosystems": {
+            "python": {
+                "vulns": {
+                    "status": "partial",
+                    "items": {vuln_id: {"id": vuln_id}},
+                },
+            },
+        },
+    }
+    out = gv.collect(repo, lens_results={
+        "deps": {
+            "lens": deps_mod.LENS,
+            "status": "partial",
+            "digest": digest,
+            "reason": "python ecosystem partially collected",
+            "fresh": True,
+        },
+    })
+    assert out["vitals"]["vulnCount"] == 1
+    assert out["completeness"]["vulnCount"]["state"] == "partial"
+    assert "#569" in out["completeness"]["vulnCount"]["reason"]
+    assert "vulnCount" not in out["notCollected"]
+
+
+def test_partial_lens_never_launders_complete_reading(tmp_path):
+    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
+    out = gv.collect(repo, lens_results={
+        "duplication": {
+            "lens": type("L", (), {
+                "name": "duplication",
+                "vitals": staticmethod(lambda digest: {
+                    "duplicationPercent": (3.0, None),
+                }),
+            })(),
+            "status": "partial",
+            "digest": {},
+            "reason": "lens collection was partial this sweep",
+            "fresh": True,
+        },
+    })
+    assert out["vitals"]["duplicationPercent"] == 3.0
+    assert out["completeness"]["duplicationPercent"]["state"] == "partial"
+    assert out["completeness"]["duplicationPercent"]["reason"] == (
+        "lens collection was partial this sweep")
+
+
+def test_unknown_vital_from_lens_is_rejected(tmp_path, capsys):
+    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
+
+    class BadLens:
+        name = "duplication"
+
+        def vitals(self, digest):
+            return {"bogusVital": (1, None), "duplicationPercent": (2.0, None)}
+
+    out = gv.collect(repo, lens_results={
+        "duplication": {
+            "lens": BadLens(), "status": "collected", "digest": {},
+            "reason": None, "fresh": True,
+        },
+    })
+    assert out["vitals"]["duplicationPercent"] == 2.0
+    assert "bogusVital" not in out["vitals"]
+    assert "unknown vital" in capsys.readouterr().err
+
+
+def test_extractor_raise_does_not_break_collect(tmp_path):
+    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
+
+    class BoomLens:
+        name = "duplication"
+
+        def vitals(self, digest):
+            raise RuntimeError("boom")
+
+    out = gv.collect(repo, lens_results={
+        "duplication": {
+            "lens": BoomLens(), "status": "collected", "digest": {},
+            "reason": None, "fresh": True,
+        },
+    })
+    _assert_not_collected(out, ("duplicationPercent",))
+    assert "raised" in out["notCollected"]["duplicationPercent"]
+
+
+def test_broken_digest_key_mutation_probe_duplication(tmp_path):
+    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
+    out = gv.collect(repo, lens_results=_dup_lens_result({"pairs": {}}))
+    _assert_not_collected(out, ("duplicationPercent",))
+    assert out["vitals"]["duplicationPercent"] is None
+    assert out["vitals"]["duplicationPercent"] != 0
+    prev = {"duplicationPercent": 0}
+    cur = {"duplicationPercent": out["vitals"]["duplicationPercent"]}
+    assert "duplicationPercent" not in gv.delta(prev, cur)
+    assert gv.crossings(prev, cur) == []
+
+
+def test_broken_digest_key_mutation_probe_deps_majors(tmp_path):
+    import guardian_lens_deps as deps_mod
+    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
+    digest = {
+        "ecosystems": {
+            "node": {
+                "freshness": {
+                    "status": "collected",
+                    "majorsBehindTotal": 3,
+                    "items": {},
+                },
+            },
+        },
+    }
+    broken = {"ecosystems": {"node": {"freshness": {"status": "collected"}}}}
+    out = gv.collect(repo, lens_results={
+        "deps": {
+            "lens": deps_mod.LENS,
+            "status": "collected",
+            "digest": broken,
+            "reason": None,
+            "fresh": True,
+        },
+    })
+    _assert_not_collected(out, ("majorsBehind",))
+    assert out["vitals"]["majorsBehind"] is None
+    prev = {"majorsBehind": 1}
+    cur = {"majorsBehind": out["vitals"]["majorsBehind"]}
+    assert "majorsBehind" not in gv.delta(prev, cur)
+    assert gv.crossings(prev, cur) == []
+
+
+def test_partial_vital_publishes_number_and_tags_completeness(tmp_path):
+    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
+    gap = "python gap for #569"
+    out = gv.collect(repo, lens_results={
+        "deps": {
+            "lens": type("L", (), {
+                "name": "deps",
+                "vitals": staticmethod(lambda digest: {
+                    "vulnCount": (4, gap),
+                }),
+            })(),
+            "status": "collected",
+            "digest": {},
+            "reason": None,
+            "fresh": True,
+        },
+    })
+    assert out["vitals"]["vulnCount"] == 4
+    assert out["completeness"]["vulnCount"]["state"] == "partial"
+    assert out["completeness"]["vulnCount"]["reason"] == gap
+
+
+def test_partial_crossing_requires_matching_gap_reason():
+    gap = "python ratings unavailable until issue #569"
+    comp = {"state": "partial", "reason": gap}
+    prev = {"vulnCount": 2}
+    cur = {"vulnCount": 5}
+    assert gv.crossings(prev, cur,
+                        prev_completeness={"vulnCount": comp},
+                        cur_completeness={"vulnCount": comp})
+    different = {"state": "partial", "reason": "other gap"}
+    assert gv.crossings(prev, cur,
+                        prev_completeness={"vulnCount": comp},
+                        cur_completeness={"vulnCount": different}) == []
+    assert gv.delta(prev, cur,
+                    prev_completeness={"vulnCount": comp},
+                    cur_completeness={"vulnCount": different})["_notComparable"]["vulnCount"]
+
+
+def test_completeness_persisted_in_trend_record(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    completeness = {"locTotal": {"state": "complete"}}
+    gv.append_unlocked(repo, {"locTotal": 10}, sweep_id="s1",
+                       completeness=completeness, now="2026-07-21")
+    rec = gv.read_trend(repo)["records"][0]
+    assert rec["completeness"]["locTotal"]["state"] == "complete"

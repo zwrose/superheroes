@@ -1391,6 +1391,23 @@ def test_degrade_helper_shape():
     assert out == {"lens": "duplication", "degraded": True, "reason": "missing tool"}
 
 
+def test_vitals_reads_duplication_percent_from_digest():
+    reading = gld.LENS.vitals({"duplicationPercent": 4.25})
+    assert reading["duplicationPercent"] == (4.25, None)
+    missing = gld.LENS.vitals({"pairs": {}})
+    assert missing["duplicationPercent"][0] is None
+    assert missing["duplicationPercent"][1]
+
+
+def test_prior_digest_without_duplication_percent_diffs_cleanly():
+    prev = {"schemaVersion": 1, "pairs": {"duplication:a|b": {"longest": 5, "shared": 5}},
+            "surfaceIds": ["duplication:a|b"]}
+    cur = dict(prev)
+    cur["duplicationPercent"] = 2.5
+    d = gld.LENS.diff(prev, cur)
+    assert d == {"new": [], "worsened": [], "resolved": []}
+
+
 # --- Relative cwd forms must agree (symmetry with hotspots) ------------------------
 
 @pytest.mark.parametrize("cwd_form", [".", "./", "ABS", "ABS/"])

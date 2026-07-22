@@ -29,6 +29,7 @@ The vital set, with units:
 | `todoCount` | TODO/FIXME *occurrences* (not files) in git-tracked text files |
 | `majorsBehind` | count of dependencies at least one major version behind |
 | `vulnCount` | count of reported vulnerabilities |
+| `couplingEdges` | count of cross-cluster dependency edges |
 | `suiteRuntimeSeconds` | seconds for the verify command — pytest summary duration when parseable, else wall clock |
 | `suiteTestCount` | tests that ran (passed+failed+errors+skipped+xfailed+xpassed) |
 | `suiteSkipped` | tests reported as skipped |
@@ -56,8 +57,8 @@ import guardian_store  # noqa: E402
 import store_core      # noqa: E402
 
 VITALS = ("locTotal", "fileCount", "duplicationPercent", "todoCount",
-          "majorsBehind", "vulnCount", "suiteRuntimeSeconds", "suiteTestCount",
-          "suiteSkipped")
+          "majorsBehind", "vulnCount", "couplingEdges", "suiteRuntimeSeconds",
+          "suiteTestCount", "suiteSkipped")
 
 THRESHOLD_KINDS = ("relative", "absolute", "any-increase", "none")
 
@@ -71,6 +72,7 @@ DRIFT_THRESHOLDS = {
     "todoCount":           {"kind": "relative", "limit": 0.25},
     "majorsBehind":        {"kind": "absolute", "limit": 5},
     "vulnCount":           {"kind": "any-increase"},
+    "couplingEdges":       {"kind": "relative", "limit": 0.25},
     "suiteRuntimeSeconds": {"kind": "relative", "limit": 0.40},
     "suiteTestCount":      {"kind": "none"},
     "suiteSkipped":        {"kind": "any-increase"},
@@ -84,25 +86,17 @@ DRIFT_THRESHOLDS = {
 TREND_SCHEMA_VERSION = 1
 TREND_FILE_ID = "guardian-vitals"
 
-# Vitals read from digests the lenses (#536–#538) already computed this sweep. Each entry
-# names the lens names accepted for that vital and the digest keys accepted inside it.
-DIGEST_SOURCES = {
-    "duplicationPercent": {
-        "lenses": ("duplication", "dup"),
-        "keys": ("duplicationPercent", "percentDuplicated"),
-        "label": "duplication",
-    },
-    "majorsBehind": {
-        "lenses": ("dependencies", "deps"),
-        "keys": ("majorsBehind",),
-        "label": "dependency",
-    },
-    "vulnCount": {
-        "lenses": ("dependencies", "deps"),
-        "keys": ("vulnCount", "vulnerabilityCount"),
-        "label": "dependency",
-    },
+# Lens-owned vitals: each vital names the lens(es) that may publish it via an optional
+# ``vitals(digest)`` hook. The lens returns ``{vital: (value|None, reason|None)}``;
+# guardian_vitals owns vital names, thresholds, and completeness semantics.
+VITAL_LENS_SOURCES = {
+    "duplicationPercent": ("duplication", "dup"),
+    "majorsBehind": ("deps", "dependencies"),
+    "vulnCount": ("deps", "dependencies"),
+    "couplingEdges": ("coupling",),
 }
+
+COMPLETENESS_STATES = ("complete", "partial", "not-collected")
 
 SUITE_VITALS = ("suiteRuntimeSeconds", "suiteTestCount", "suiteSkipped")
 
@@ -237,33 +231,162 @@ def _collect_repo_vitals(cwd, run=None):
     return (vitals, missing, sources)
 
 
-def _collect_digest_vitals(lens_digests):
-    """duplicationPercent / majorsBehind / vulnCount from THIS sweep's lens digests.
+def _completeness_entry(state, reason=None):
+    """Structured completeness marker for one vital this sweep."""
+    entry = {"state": state}
+    if reason:
+        entry["reason"] = reason
+    return entry
 
-    Never shells out — those tools belong to the lenses that own them."""
-    vitals, missing, sources = {}, {}, {}
-    digests = lens_digests if isinstance(lens_digests, dict) else {}
-    for name, spec in DIGEST_SOURCES.items():
-        lens_name = next((ln for ln in spec["lenses"] if ln in digests), None)
-        if lens_name is None:
-            missing[name] = "%s lens did not run this sweep" % spec["label"]
-            continue
-        digest = digests.get(lens_name)
-        if not isinstance(digest, dict):
-            missing[name] = "%s lens digest is not an object" % lens_name
-            continue
-        key = next((k for k in spec["keys"] if k in digest), None)
-        if key is None:
-            missing[name] = "%s lens digest has no %s key" % (
-                lens_name, "/".join(spec["keys"]))
-            continue
-        value = digest[key]
+
+def _completeness_state(entry):
+    if not isinstance(entry, dict):
+        return None
+    state = entry.get("state")
+    return state if state in COMPLETENESS_STATES else None
+
+
+def _comparable_completeness(prev_entry, cur_entry):
+    """True when two sweeps' completeness states may be drift-compared."""
+    if prev_entry is None and cur_entry is None:
+        return True
+    prev_state = _completeness_state(prev_entry)
+    cur_state = _completeness_state(cur_entry)
+    if prev_state is None or cur_state is None:
+        return False
+    if prev_state == "complete" and cur_state == "complete":
+        return True
+    if prev_state == "partial" and cur_state == "partial":
+        return (prev_entry or {}).get("reason") == (cur_entry or {}).get("reason")
+    return False
+
+
+def _compose_partial_reasons(extractor_reason, lens_reason):
+    """Keep both gap reasons when a partial lens and a partial extractor disagree."""
+    if not lens_reason or lens_reason == extractor_reason:
+        return extractor_reason
+    if not extractor_reason:
+        return lens_reason
+    return "%s; %s" % (extractor_reason, lens_reason)
+
+
+def _apply_partial_lens_completeness(status, entry, comp):
+    """When the lens itself reported partial collection, never publish ``complete``."""
+    if status != "partial":
+        return comp
+    state = _completeness_state(comp)
+    lens_reason = entry.get("reason") or "lens collection was partial this sweep"
+    if state == "complete":
+        return _completeness_entry("partial", lens_reason)
+    if state == "partial":
+        composed = _compose_partial_reasons(comp.get("reason"), entry.get("reason"))
+        if composed != comp.get("reason"):
+            return _completeness_entry("partial", composed)
+    return comp
+
+
+def _interpret_vital_tuple(value, reason):
+    """Map a lens ``vitals()`` 2-tuple to (published value, completeness entry)."""
+    if value is not None and reason is not None:
         if not _is_number(value):
-            missing[name] = "%s lens digest %s is not a number" % (lens_name, key)
+            return (None, _completeness_entry(
+                "not-collected", reason or "partial vital is not a number"))
+        return (value, _completeness_entry("partial", reason))
+    if value is not None and reason is None:
+        if not _is_number(value):
+            return (None, _completeness_entry(
+                "not-collected", "extractor returned a non-number"))
+        return (value, _completeness_entry("complete"))
+    return (None, _completeness_entry(
+        "not-collected", reason or "not collected this sweep"))
+
+
+def _fresh_lens_result(lens_results, lens_names):
+    """Return the fresh result dict for the first matching lens name, or None."""
+    results = lens_results if isinstance(lens_results, dict) else {}
+    for name in lens_names:
+        entry = results.get(name)
+        if isinstance(entry, dict) and entry.get("fresh"):
+            return entry
+    return None
+
+
+def _collect_lens_vitals(lens_results):
+    """Lens-owned vitals from THIS sweep's fresh lens results only."""
+    vitals, missing, sources, completeness = {}, {}, {}, {}
+    results = lens_results if isinstance(lens_results, dict) else {}
+    for vital_name, lens_names in VITAL_LENS_SOURCES.items():
+        entry = _fresh_lens_result(results, lens_names)
+        if entry is None:
+            label = lens_names[0]
+            reason = "%s lens did not run this sweep" % label
+            missing[vital_name] = reason
+            completeness[vital_name] = _completeness_entry("not-collected", reason)
             continue
-        vitals[name] = value
-        sources[name] = "%s lens digest (%s.%s)" % (spec["label"], lens_name, key)
-    return (vitals, missing, sources)
+        status = entry.get("status")
+        if status == "not-collected":
+            label = entry.get("lens")
+            lens_label = getattr(label, "name", None) or lens_names[0]
+            reason = "%s lens status is %s this sweep" % (lens_label, status)
+            missing[vital_name] = reason
+            completeness[vital_name] = _completeness_entry("not-collected", reason)
+            continue
+        if status not in ("collected", "partial"):
+            label = entry.get("lens")
+            lens_label = getattr(label, "name", None) or lens_names[0]
+            reason = "%s lens status is %s this sweep" % (lens_label, status)
+            missing[vital_name] = reason
+            completeness[vital_name] = _completeness_entry("not-collected", reason)
+            continue
+        lens = entry.get("lens")
+        digest = entry.get("digest")
+        extractor = getattr(lens, "vitals", None) if lens is not None else None
+        if not callable(extractor):
+            reason = "%s lens has no vitals() hook" % lens_names[0]
+            missing[vital_name] = reason
+            completeness[vital_name] = _completeness_entry("not-collected", reason)
+            continue
+        try:
+            offered = extractor(digest) or {}
+        except Exception as exc:
+            reason = "%s lens vitals() raised: %s" % (lens_names[0], exc)
+            missing[vital_name] = reason
+            completeness[vital_name] = _completeness_entry("not-collected", reason)
+            continue
+        if not isinstance(offered, dict):
+            reason = "%s lens vitals() did not return a dict" % lens_names[0]
+            missing[vital_name] = reason
+            completeness[vital_name] = _completeness_entry("not-collected", reason)
+            continue
+        for offered_name, reading in offered.items():
+            if offered_name not in VITALS:
+                sys.stderr.write(
+                    "guardian_vitals: lens %r offered unknown vital %r\n"
+                    % (getattr(lens, "name", lens_names[0]), offered_name))
+                continue
+        if vital_name not in offered:
+            reason = "%s lens vitals() omitted %s" % (lens_names[0], vital_name)
+            missing[vital_name] = reason
+            completeness[vital_name] = _completeness_entry("not-collected", reason)
+            continue
+        reading = offered.get(vital_name)
+        if (not isinstance(reading, (tuple, list)) or len(reading) != 2):
+            reason = "%s lens vitals()[%s] is not a (value, reason) pair" % (
+                lens_names[0], vital_name)
+            missing[vital_name] = reason
+            completeness[vital_name] = _completeness_entry("not-collected", reason)
+            continue
+        value, gap_reason = reading[0], reading[1]
+        published, comp = _interpret_vital_tuple(value, gap_reason)
+        comp = _apply_partial_lens_completeness(status, entry, comp)
+        completeness[vital_name] = comp
+        if published is None:
+            missing[vital_name] = comp.get("reason") or "not collected this sweep"
+        else:
+            vitals[vital_name] = published
+            lens_name = getattr(lens, "name", lens_names[0])
+            sources[vital_name] = "%s lens vitals() this sweep" % lens_name
+    return (vitals, missing, sources, completeness)
 
 
 def parse_verify_output(text):
@@ -355,41 +478,60 @@ def _collect_suite_vitals(verify_result, budget_seconds):
     return (vitals, missing, sources)
 
 
-def collect(cwd, *, root=None, run=None, lens_digests=None, verify_result=None,
+def collect(cwd, *, root=None, run=None, lens_results=None, verify_result=None,
             budget_seconds=None):
-    """Gather the vital set. Returns {"vitals", "notCollected", "sources"}.
+    """Gather the vital set. Returns {"vitals", "notCollected", "sources", "completeness"}.
 
     `run` is the sweep's injectable subprocess runner; it is used ONLY for read-only git.
     `verify_result` is the verify-command run the sweep already performed — this function
-    never spawns the suite. `lens_digests` is the lens-name → digest map the sweep built.
-    Every collector degrades honestly: a number it cannot get is `None` plus a reason, and
-    no collector failure fails the sweep."""
+    never spawns the suite. `lens_results` is the per-lens fresh-result map the sweep
+    built. Every collector degrades honestly: a number it cannot get is `None` plus a
+    reason, and no collector failure fails the sweep."""
     vitals = {name: None for name in VITALS}
     missing = {}
     sources = {}
+    completeness = {name: _completeness_entry("not-collected") for name in VITALS}
 
     for collector in (
         lambda: _collect_repo_vitals(cwd, run=run),
-        lambda: _collect_digest_vitals(lens_digests),
+        lambda: _collect_lens_vitals(lens_results),
         lambda: _collect_suite_vitals(verify_result, budget_seconds),
     ):
         try:
-            got, gone, src = collector()
+            got = collector()
+            if len(got) == 4:
+                got_vitals, gone, src, comp = got
+            else:
+                got_vitals, gone, src = got
+                comp = {}
         except Exception as exc:  # never fail the sweep over a vital
-            got, gone, src = {}, {}, {}
+            got_vitals, gone, src, comp = {}, {}, {}, {}
             sys.stderr.write("guardian_vitals: collector failed: %s\n" % exc)
-        vitals.update({k: v for k, v in got.items() if k in VITALS})
+        vitals.update({k: v for k, v in got_vitals.items() if k in VITALS})
         missing.update({k: v for k, v in gone.items() if k in VITALS})
         sources.update({k: v for k, v in src.items() if k in VITALS})
+        for name, entry in (comp or {}).items():
+            if name in VITALS:
+                completeness[name] = entry
 
     for name in VITALS:
         if vitals.get(name) is None:
             vitals[name] = None
             missing.setdefault(name, "not collected this sweep (no source available)")
+            if _completeness_state(completeness.get(name)) != "not-collected":
+                completeness[name] = _completeness_entry(
+                    "not-collected", missing[name])
             sources.pop(name, None)
         else:
             missing.pop(name, None)
-    return {"vitals": vitals, "notCollected": missing, "sources": sources}
+            if _completeness_state(completeness.get(name)) in (None, "not-collected"):
+                completeness[name] = _completeness_entry("complete")
+    return {
+        "vitals": vitals,
+        "notCollected": missing,
+        "sources": sources,
+        "completeness": completeness,
+    }
 
 
 # ------------------------------------------------------------------- delta + crossings
@@ -407,20 +549,35 @@ def _fmt_pct(pct):
     return "%d%%" % round(abs(pct) * 100)
 
 
-def delta(prev_vitals, cur_vitals):
+def delta(prev_vitals, cur_vitals, *, prev_completeness=None, cur_completeness=None):
     """Per-vital movement. A vital missing (or not collected) on either side is absent —
-    it never gets a fabricated prev/cur. `pct` is None when the base is zero."""
+    it never gets a fabricated prev/cur. `pct` is None when the base is zero.
+
+    When both sides carry a number but completeness states are not comparable, the vital
+    is recorded under ``_notComparable`` with a reason and omitted from numeric delta."""
     out = {}
+    not_comparable = {}
     prev_vitals = prev_vitals or {}
     cur_vitals = cur_vitals or {}
+    prev_comp = prev_completeness if isinstance(prev_completeness, dict) else {}
+    cur_comp = cur_completeness if isinstance(cur_completeness, dict) else {}
     for name in VITALS:
         prev = prev_vitals.get(name)
         cur = cur_vitals.get(name)
         if not _is_number(prev) or not _is_number(cur):
             continue
+        if not _comparable_completeness(prev_comp.get(name), cur_comp.get(name)):
+            not_comparable[name] = (
+                "completeness not comparable across sweeps "
+                "(%r → %r)"
+                % (_completeness_state(prev_comp.get(name)),
+                   _completeness_state(cur_comp.get(name))))
+            continue
         change = cur - prev
         pct = None if prev == 0 else round(change / prev, 6)
         out[name] = {"prev": prev, "cur": cur, "change": change, "pct": pct}
+    if not_comparable:
+        out["_notComparable"] = not_comparable
     return out
 
 
@@ -445,6 +602,9 @@ def _sentence(name, prev, cur, change, pct):
     if name == "vulnCount":
         noun = "vulnerability" if change == 1 else "vulnerabilities"
         return "%s new %s since the last sweep (%s → %s)" % (ch, noun, p, c)
+    if name == "couplingEdges":
+        noun = "cross-cluster edge" if change == 1 else "cross-cluster edges"
+        return "%s more %s since the last sweep (%s → %s)" % (ch, noun, p, c)
     if name == "suiteRuntimeSeconds":
         pct_part = ("%s slower" % _fmt_pct(pct)) if pct else "slower"
         return "your suite got %s since the last sweep (%ss → %ss)" % (pct_part, p, c)
@@ -490,13 +650,15 @@ def _valid_threshold_override(spec):
     return False
 
 
-def crossings(prev_vitals, cur_vitals, thresholds=None, *, notes_out=None):
+def crossings(prev_vitals, cur_vitals, thresholds=None, *, notes_out=None,
+              prev_completeness=None, cur_completeness=None):
     """Threshold crossings between two sweeps. Defaults come from DRIFT_THRESHOLDS;
     `thresholds` (the guardian.md config layer) overrides entry by entry.
 
     Only worsening movement crosses; an improvement lands in `delta` and nothing else. A
     vital missing from either side — first sweep, or not collected — never crosses, which
-    is what keeps the first sweep quiet.
+    is what keeps the first sweep quiet. Partial vitals cross only when the previous
+    sweep's partial state carried the same gap reason.
 
     Invalid overrides are ignored: the authoritative default is retained and a note is
     appended to `notes_out` when provided. A typo must never silently disable detection."""
@@ -514,7 +676,9 @@ def crossings(prev_vitals, cur_vitals, thresholds=None, *, notes_out=None):
             )
             if notes_out is not None:
                 notes_out.append(note)
-    moves = delta(prev_vitals, cur_vitals)
+    moves = delta(prev_vitals, cur_vitals,
+                  prev_completeness=prev_completeness,
+                  cur_completeness=cur_completeness)
     out = []
     for name in VITALS:
         move = moves.get(name)
@@ -593,7 +757,8 @@ def _parse_line(line):
     return obj if isinstance(obj, dict) else None
 
 
-def append_unlocked(cwd, vitals, *, sweep_id, swept_sha=None, root=None, now=None):
+def append_unlocked(cwd, vitals, *, sweep_id, swept_sha=None, root=None, now=None,
+                    completeness=None):
     """Append one sweep record to vitals.jsonl WITHOUT taking the sweep lock.
 
     **The two entry points are load-bearing.** The sweep lock is not reentrant
@@ -614,6 +779,9 @@ def append_unlocked(cwd, vitals, *, sweep_id, swept_sha=None, root=None, now=Non
     path = guardian_store.vitals_path(cwd, root)
     known = {k: v for k, v in (vitals or {}).items() if k in VITALS}
     dropped = sorted(k for k in (vitals or {}) if k not in VITALS)
+    comp_known = {}
+    if isinstance(completeness, dict):
+        comp_known = {k: v for k, v in completeness.items() if k in VITALS}
 
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
@@ -649,6 +817,8 @@ def append_unlocked(cwd, vitals, *, sweep_id, swept_sha=None, root=None, now=Non
     stamp = _today(now)
     record = {"date": stamp, "sweepId": sweep_id, "sweptSha": swept_sha,
               "vitals": known}
+    if comp_known:
+        record["completeness"] = comp_known
     payload = prefix
     if created:
         payload += json.dumps(_provenance(stamp)) + "\n"
@@ -672,7 +842,8 @@ def append_unlocked(cwd, vitals, *, sweep_id, swept_sha=None, root=None, now=Non
     return out
 
 
-def append(cwd, vitals, *, sweep_id, swept_sha=None, root=None, now=None):
+def append(cwd, vitals, *, sweep_id, swept_sha=None, root=None, now=None,
+           completeness=None):
     """Append one sweep record under the sweep lock, for standalone callers.
 
     **Do NOT call this from `finalize`** — it already holds the (non-reentrant) sweep lock,
@@ -687,7 +858,7 @@ def append(cwd, vitals, *, sweep_id, swept_sha=None, root=None, now=None):
         return {"ok": False, "reason": "lock failed: %s" % exc}
     try:
         return append_unlocked(cwd, vitals, sweep_id=sweep_id, swept_sha=swept_sha,
-                               root=root, now=now)
+                               root=root, now=now, completeness=completeness)
     finally:
         file_lock.release(lock_path)
 

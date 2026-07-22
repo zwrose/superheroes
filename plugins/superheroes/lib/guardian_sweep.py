@@ -490,6 +490,7 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
     lens_meta = {}
     next_lenses = {}
     filed_observations = {}
+    lens_results = {}
 
     ledger = guardian_store.read_ledger(cwd, root)
     # partial disables ledger suppression: read_ledger drops invalid bodies from
@@ -557,6 +558,13 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
         candidates = out.get("candidates") or []
         cur_digest = out.get("digest")
         funnel_raised[lens.name] = len(candidates)
+        lens_results[lens.name] = {
+            "lens": lens,
+            "status": status,
+            "digest": cur_digest,
+            "reason": reason,
+            "fresh": True,
+        }
 
         cand_by_id = {}
         for i, c in enumerate(candidates):
@@ -740,21 +748,32 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
     budget = config.get("verifyBudgetSeconds", _DEFAULT_VERIFY_BUDGET_SECONDS)
     vitals_collected = bool(config.get("vitalsEnabled", True))
     if vitals_collected:
+        prev_completeness = {}
+        trend = guardian_vitals.read_trend(cwd, root=root, limit=1)
+        if trend.get("records"):
+            prev_completeness = trend["records"][-1].get("completeness") or {}
         # Do not pass the sweep's injectable `run` into vitals: test doubles stub
         # the verify shell command, while vitals uses `run` only for read-only git.
         vitals_out = guardian_vitals.collect(
-            cwd, root=root, lens_digests=lens_digests,
+            cwd, root=root, lens_results=lens_results,
             verify_result=verify_result, budget_seconds=budget)
         cur_vitals = vitals_out.get("vitals") or {}
+        cur_completeness = vitals_out.get("completeness") or {}
         prev_vitals = (prev or {}).get("vitals") or {}
         threshold_notes = []
         vitals_delta = {
-            "delta": guardian_vitals.delta(prev_vitals, cur_vitals),
+            "delta": guardian_vitals.delta(
+                prev_vitals, cur_vitals,
+                prev_completeness=prev_completeness,
+                cur_completeness=cur_completeness),
             "crossings": guardian_vitals.crossings(
                 prev_vitals, cur_vitals, thresholds=config.get("thresholds"),
-                notes_out=threshold_notes),
+                notes_out=threshold_notes,
+                prev_completeness=prev_completeness,
+                cur_completeness=cur_completeness),
             "notCollected": vitals_out.get("notCollected") or {},
             "sources": vitals_out.get("sources") or {},
+            "completeness": cur_completeness,
             "thresholdNotes": threshold_notes,
         }
     else:
@@ -1055,9 +1074,11 @@ def finalize(cwd, bundle, dispositions, root=None):
                 vitals_append = {"ok": True, "skipped": "vitals-not-collected"}
             else:
                 vitals = (bundle.get("nextSnapshot") or {}).get("vitals") or {}
+                completeness = (bundle.get("vitalsDelta") or {}).get("completeness") or {}
                 vitals_append = guardian_vitals.append_unlocked(
                     cwd, vitals, sweep_id=sweep_id,
-                    swept_sha=bundle.get("sweptSha"), root=root)
+                    swept_sha=bundle.get("sweptSha"), root=root,
+                    completeness=completeness)
         except Exception as exc:
             vitals_append = {"ok": False, "reason": str(exc)}
 
