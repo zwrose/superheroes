@@ -111,6 +111,28 @@ NODE_MANIFESTS = ("package.json",)
 PY_SKIP_DIRS = frozenset(
     {"node_modules", ".venv", "venv", "dist", "build", "__pycache__", ".git"})
 
+# Knip auto-detects its config from the repo root (knip.dev). DECLARATIVE formats are
+# DATA — knip parses them, it does not execute repo code — so they are safe to run under.
+KNIP_DECLARATIVE_CONFIG_NAMES = (
+    "knip.json", "knip.jsonc", ".knip.json", ".knip.jsonc",
+)
+# EXECUTABLE formats are Node/TS modules: knip LOADS AND RUNS them, which is repo-owned
+# code execution during a read-only sweep. The first four are knip's own documented
+# executable configs; the rest are the fail-closed superset (advisor-named .cjs/.mjs and
+# dotfile variants knip may also pick up). Presence of ANY of these ⇒ refuse to run knip,
+# even if a declarative config also exists (knip may pick the executable one). This ports
+# the owner-ratified #548 dependency-cruiser ruling — declarative-only, no escape hatch.
+KNIP_EXECUTABLE_CONFIG_NAMES = (
+    "knip.js", "knip.ts", "knip.config.js", "knip.config.ts",
+    "knip.config.cjs", "knip.config.mjs",
+    ".knip.js", ".knip.ts", ".knip.cjs", ".knip.mjs",
+)
+# A repo-root file whose name is knip-config-shaped (``knip.<ext>`` / ``knip.config.<ext>``
+# / ``.knip.<ext>``) but whose extension is NOT one we recognize as declarative is
+# uncertain — fail-direction says treat it as executable and refuse. Matches a single
+# trailing extension segment so multi-dot names (``knip.d.ts``) don't false-trip.
+_KNIP_CONFIG_SHAPE = re.compile(r"^\.?knip(\.config)?\.[^.]+$")
+
 
 # --------------------------------------------------------------------------- helpers
 
@@ -317,6 +339,54 @@ def collect_python(ctx, repo):
 
 # --------------------------------------------------------------------------- node (knip)
 
+def _classify_knip_config(repo):
+    """Fail-closed classification of the repo-root knip config for a read-only sweep.
+
+    Returns ``(safe, refusal_name)``:
+      * ``(True, None)`` — the only knip config present is DECLARATIVE (``knip.json`` /
+        ``.knip.jsonc`` / … or a ``knip`` key in ``package.json``), OR there is no knip
+        config at all (knip's default scan parses source, executing nothing). Safe to run.
+      * ``(False, name)`` — an EXECUTABLE-format knip config is present (knip would LOAD
+        AND RUN it — repo-owned code execution), OR the config cannot be classified with
+        certainty (unreadable/unparseable ``package.json``, or a knip-config-shaped file
+        with an extension not recognized as declarative). Uncertain ⇒ refuse.
+
+    This ports the owner-ratified #548 dependency-cruiser ruling to knip: accept
+    declarative config only; executable formats are never run; refuse honestly; no opt-in
+    escape hatch. Detection is a pure ``os.path`` / directory listing at the ``--directory``
+    target — NEVER a spawn (this lens routes real tools through the seam; a plain filesystem
+    check is not a tool invocation).
+    """
+    # Any executable-format knip config present ⇒ refuse, even if a declarative one also
+    # exists (knip may pick the executable one; fail closed).
+    for name in KNIP_EXECUTABLE_CONFIG_NAMES:
+        if os.path.isfile(os.path.join(repo, name)):
+            return (False, name)
+    # A knip-config-shaped file with an unrecognized (non-declarative) extension is
+    # uncertain ⇒ treat as executable and refuse. Scan the repo root only.
+    try:
+        entries = sorted(os.listdir(repo))
+    except OSError:
+        return (False, "<repo root unreadable>")
+    for name in entries:
+        if name in KNIP_DECLARATIVE_CONFIG_NAMES:
+            continue
+        if _KNIP_CONFIG_SHAPE.match(name) and os.path.isfile(os.path.join(repo, name)):
+            # Not in the executable set (checked above) and not declarative → unknown
+            # extension on a knip-config-shaped file → fail closed.
+            return (False, name)
+    # The ``knip`` key in package.json is DATA (declarative), but an unreadable or
+    # unparseable package.json cannot be classified ⇒ fail closed.
+    pkg = os.path.join(repo, "package.json")
+    if os.path.isfile(pkg):
+        try:
+            with open(pkg, "r") as fh:
+                json.loads(fh.read())
+        except (OSError, ValueError):
+            return (False, "package.json")
+    return (True, None)
+
+
 def _knip_argv(repo):
     """``knip`` resolved from PATH through the guardian seam, run against an ABSOLUTE dir.
 
@@ -326,13 +396,17 @@ def _knip_argv(repo):
     carries the absolute repo root so a neutral-cwd run scans the right project. An absent
     ``knip`` degrades to not-collected via the seam's tool-absent outcome.
 
-    SECURITY / COST NOTE (D3, disclosed for owner/advisor ratification): knip LOADS AND
-    EXECUTES the project's own ``knip.config.{js,ts}`` (or the ``knip`` key in
-    ``package.json``) by design — it has no clean no-exec mode. On a repo whose knip config
-    is attacker-controlled this is repo-controlled code execution during a sweep. This lens
-    does NOT try to hack around it (a neutered config would silently mis-scan); the behavior
-    is left as-is and surfaced here so a sandboxing follow-up can be scoped. The seam's
-    other hardening (neutral cwd, sanitized env, no fetch, PATH-only) still applies.
+    SECURITY NOTE (#548 precedent APPLIED, no longer a disclosed residual): knip
+    auto-detects and would LOAD AND EXECUTE an executable-format config
+    (``knip.config.{js,ts,cjs,mjs}``, ``knip.{js,ts}``, ``.knip.{js,ts,cjs,mjs}``) as a
+    Node/TS module — repo-owned code execution during a read-only sweep. Per the
+    owner-ratified #548 dependency-cruiser ruling, ``collect_node`` classifies the repo's
+    knip config with ``_classify_knip_config`` BEFORE ever reaching this invocation and
+    REFUSES (degrades not-collected) when an executable config is present or the config
+    cannot be classified with certainty — only declarative config (``knip.json`` / the
+    ``knip`` key in ``package.json``) ever runs. There is no opt-in escape hatch. This
+    closes the risk by construction; the seam's other hardening (neutral cwd, sanitized
+    env, no fetch, PATH-only) still applies to the declarative-config run.
     """
     argv = ["knip", "--directory", repo, "--reporter", "json"]
     return (argv, "knip on PATH via the guardian seam (--directory %s)" % repo)
@@ -465,7 +539,19 @@ def collect_node(ctx, repo):
     The ``node_modules`` gate is a pure ``os.path.isdir`` check on the ABSOLUTE repo path —
     never a spawn: knip's own dependency-less behavior must not be reported as a finding,
     and an uninstalled project degrades honestly BEFORE any invocation.
+
+    ORDERING: the executable-config classification runs FIRST — before the ``node_modules``
+    gate — so that when an executable knip config is present the CODE-EXECUTION refusal is
+    the reason surfaced, even on a repo that also lacks ``node_modules`` (the execution risk
+    is the one worth reporting; #548 precedent applied). Both checks are pure filesystem
+    reads, no spawn, and both gate strictly before the knip invocation.
     """
+    safe, cfg = _classify_knip_config(repo)
+    if not safe:
+        return ("not-collected",
+                "knip config is executable (%s) — not executed during a read-only sweep; "
+                "declare vocabulary in knip.json or the package.json \"knip\" key to enable"
+                % cfg, {}, None, None)
     if not os.path.isdir(os.path.join(repo, "node_modules")):
         return ("not-collected",
                 "no node_modules at repo root — knip requires the project's "

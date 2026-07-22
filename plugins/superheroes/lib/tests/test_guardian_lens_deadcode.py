@@ -596,6 +596,151 @@ def test_knip_wrong_json_shape_not_collected(tmp_path):
     assert out["candidates"] == []
 
 
+# ------------------------------------------------------- knip executable-config gate (#548)
+
+def test_knip_executable_config_js_refused_knip_never_invoked(tmp_path):
+    """#548 precedent applied: an executable `knip.config.js` (a Node module knip would
+    LOAD AND RUN) is refused during the read-only sweep. The node section degrades with the
+    executable-config reason and knip is NEVER spawned — the spy records zero knip calls.
+    Revert the gate (always-run) and both the reason and the never-invoked assertion bite."""
+    repo = _node_repo(tmp_path, extra={"knip.config.js": "module.exports = {};\n"})
+    run = FakeRun([("knip", (1, KNIP_JSON, ""))])  # a spy: any knip spawn would be recorded
+    out = gld.LENS.collect(_ctx(repo, run))
+    assert out["status"] == "not-collected"
+    reason = out["reason"] or ""
+    assert "executable" in reason.lower()
+    assert "knip.config.js" in reason
+    assert out["candidates"] == []
+    assert out["digest"] is None
+    # knip must never have been invoked — a filesystem classification, not a spawn.
+    assert not run.ran("knip")
+    assert run.calls == []
+
+
+def test_knip_executable_config_dotfile_ts_refused_knip_never_invoked(tmp_path):
+    """Second executable variant — a `.knip.ts` dotfile (fail-closed superset). Same
+    refusal, knip never spawned."""
+    repo = _node_repo(tmp_path, extra={".knip.ts": "export default {};\n"})
+    run = FakeRun([("knip", (1, KNIP_JSON, ""))])
+    out = gld.LENS.collect(_ctx(repo, run))
+    assert out["status"] == "not-collected"
+    assert "executable" in (out["reason"] or "").lower()
+    assert ".knip.ts" in out["reason"]
+    assert not run.ran("knip")
+
+
+def test_knip_executable_config_refused_even_when_declarative_also_present(tmp_path):
+    """Presence of ANY executable config ⇒ refuse, even if a declarative one also exists
+    (knip may pick the executable one; fail closed)."""
+    repo = _node_repo(tmp_path, extra={
+        "knip.json": json.dumps({"entry": ["src/index.ts"]}),
+        "knip.config.ts": "export default {};\n",
+    })
+    run = FakeRun([("knip", (1, KNIP_JSON, ""))])
+    out = gld.LENS.collect(_ctx(repo, run))
+    assert out["status"] == "not-collected"
+    assert "executable" in (out["reason"] or "").lower()
+    assert "knip.config.ts" in out["reason"]
+    assert not run.ran("knip")
+
+
+def test_knip_executable_config_refused_before_node_modules_gate(tmp_path):
+    """ORDERING: with NO node_modules AND an executable config, the code-execution refusal
+    is the reason surfaced (not the node_modules-missing reason) — the execution risk is the
+    one worth reporting. knip still never runs."""
+    repo = _node_repo(tmp_path, with_node_modules=False,
+                      extra={"knip.config.js": "module.exports = {};\n"})
+    run = FakeRun([("knip", (1, KNIP_JSON, ""))])
+    out = gld.LENS.collect(_ctx(repo, run))
+    assert out["status"] == "not-collected"
+    assert "executable" in (out["reason"] or "").lower()
+    assert "node_modules" not in (out["reason"] or "")
+    assert not run.ran("knip")
+
+
+def test_knip_declarative_json_config_runs(tmp_path):
+    """A declarative `knip.json` (DATA — parsed, not executed) is safe: knip runs and the
+    section collects/aggregates exactly as today."""
+    repo = _node_repo(tmp_path, extra={"knip.json": json.dumps({"entry": ["src/index.ts"]})})
+    run = FakeRun([("knip", (1, KNIP_JSON, ""))])
+    out = gld.LENS.collect(_ctx(repo, run))
+    assert out["status"] == "collected", out.get("reason")
+    assert run.ran("knip")
+    cands = _by_id(out["candidates"])
+    assert "deadcode:knip:scripts/audit-store-invitations.cjs" in cands
+
+
+def test_knip_declarative_jsonc_dotfile_config_runs(tmp_path):
+    """A declarative `.knip.jsonc` dotfile is also DATA — knip runs."""
+    repo = _node_repo(tmp_path, extra={".knip.jsonc": "{\n  // comment\n  \"entry\": []\n}\n"})
+    run = FakeRun([("knip", (1, KNIP_JSON, ""))])
+    out = gld.LENS.collect(_ctx(repo, run))
+    assert out["status"] == "collected", out.get("reason")
+    assert run.ran("knip")
+
+
+def test_knip_package_json_knip_key_runs(tmp_path):
+    """A `knip` key in package.json is declarative (DATA) — knip runs as today."""
+    repo = _node_repo(tmp_path, extra={
+        "package.json": json.dumps({"name": "x", "knip": {"entry": ["src/index.ts"]}}) + "\n",
+    })
+    run = FakeRun([("knip", (1, KNIP_JSON, ""))])
+    out = gld.LENS.collect(_ctx(repo, run))
+    assert out["status"] == "collected", out.get("reason")
+    assert run.ran("knip")
+
+
+def test_knip_no_config_runs_default_scan(tmp_path):
+    """No knip config at all → knip's default scan (parses source, executes nothing) runs
+    as today."""
+    repo = _node_repo(tmp_path)  # package.json + node_modules, no knip config
+    run = FakeRun([("knip", (1, KNIP_JSON, ""))])
+    out = gld.LENS.collect(_ctx(repo, run))
+    assert out["status"] == "collected", out.get("reason")
+    assert run.ran("knip")
+
+
+def test_knip_unrecognized_extension_config_refused_fail_closed(tmp_path):
+    """Fail-direction: a knip-config-shaped file with an extension we do NOT recognize as
+    declarative (`knip.config.xyz`) is uncertain ⇒ treat as executable and refuse. knip
+    never runs."""
+    repo = _node_repo(tmp_path, extra={"knip.config.xyz": "whatever\n"})
+    run = FakeRun([("knip", (1, KNIP_JSON, ""))])
+    out = gld.LENS.collect(_ctx(repo, run))
+    assert out["status"] == "not-collected"
+    assert "executable" in (out["reason"] or "").lower()
+    assert "knip.config.xyz" in out["reason"]
+    assert not run.ran("knip")
+
+
+def test_knip_unparseable_package_json_refused_fail_closed(tmp_path):
+    """Fail-direction: a package.json that cannot be parsed cannot be classified (its
+    `knip` key is unreadable) ⇒ refuse. knip never runs."""
+    repo = _node_repo(tmp_path, extra={"package.json": "{ this is not json"})
+    run = FakeRun([("knip", (1, KNIP_JSON, ""))])
+    out = gld.LENS.collect(_ctx(repo, run))
+    assert out["status"] == "not-collected"
+    assert "executable" in (out["reason"] or "").lower()
+    assert "package.json" in out["reason"]
+    assert not run.ran("knip")
+
+
+def test_classify_knip_config_unit(tmp_path):
+    """Direct classification table — declarative/no-config safe; executable/unknown/
+    unparseable refused."""
+    # no config → safe
+    safe, name = gld._classify_knip_config(_node_repo(tmp_path / "a"))
+    assert safe and name is None
+    # declarative only → safe
+    safe, name = gld._classify_knip_config(
+        _node_repo(tmp_path / "b", extra={"knip.json": "{}"}))
+    assert safe and name is None
+    # executable → refuse, names the file
+    safe, name = gld._classify_knip_config(
+        _node_repo(tmp_path / "c", extra={"knip.config.mjs": "export default {}\n"}))
+    assert not safe and name == "knip.config.mjs"
+
+
 # ------------------------------------------------------------------- mixed / combining
 
 def test_both_ecosystems_collected(tmp_path):
