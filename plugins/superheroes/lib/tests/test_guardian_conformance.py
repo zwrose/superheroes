@@ -1,7 +1,10 @@
 """Per-lens conformance harness — honesty invariants every production lens must prove."""
 import errno
 import json
+import os
+import stat
 import subprocess
+import sys
 
 import guardian_collect as gc
 import guardian_lens as gl
@@ -502,3 +505,61 @@ def _conformance_lens_ids(lens):
 )
 def test_registered_lenses_conformance(lens):
     assert_lens_conformance(lens)
+
+
+_COMPOSE_MARKER = "GUARDIAN_COMPOSE_RCE_MARKER"
+
+
+def _make_repo(path):
+    path.mkdir(parents=True, exist_ok=True)
+    (path / ".git").mkdir()
+    return str(path)
+
+
+def _write_executable(path, body):
+    path = str(path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(body)
+    os.chmod(path, os.stat(path).st_mode | stat.S_IXUSR)
+    return path
+
+
+def test_run_tool_seam_composition_conformance_and_production_rejection(
+        tmp_path, monkeypatch):
+    """DoD composition probe — the mandated run_tool path is BOTH conformance-compatible
+    AND hardened in production, proven together in one test.
+
+    (i)  ctx["run"] injected → the same lens PASSES the full conformance harness.
+    (ii) ctx["run"] absent (production) → a repo-local binary named like the lens's
+         collector is REJECTED, not executed, and the lens degrades.
+    """
+    lens = CompliantFakeLens()
+
+    # (i) Conformance-compatible via the injected ctx["run"] seam.
+    assert_lens_conformance(lens)
+
+    # (ii) Production mode (no ctx["run"]) against a planted repo-local binary. The
+    # CompliantFakeLens collects with gc.run_tool(["conformance-tool"], ...), so plant
+    # a repo-local "conformance-tool" on PATH with a side-effect it would leave if run.
+    repo = _make_repo(tmp_path / "repo")
+    marker = os.path.join(repo, _COMPOSE_MARKER)
+    binp = _write_executable(
+        tmp_path / "repo" / "bin" / "conformance-tool",
+        "#!%s\nopen(%r, 'w').write('x')\n" % (sys.executable, marker))
+    monkeypatch.setenv("PATH", os.path.dirname(binp))
+
+    ctx = {  # deliberately NO "run" key — exercises the production spawn path.
+        "cwd": repo,
+        "root": repo,
+        "config": None,
+        "prevDigest": None,
+    }
+    out = lens.collect(ctx)
+    status, reason = gl.classify_collect(out)
+
+    assert status == "not-collected", (status, reason)
+    assert isinstance(reason, str) and reason.strip()
+    # The repo-local executable must NOT have run.
+    assert not os.path.exists(marker)
+    assert os.path.isfile(binp)
