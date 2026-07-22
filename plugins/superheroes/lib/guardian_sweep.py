@@ -1048,12 +1048,11 @@ def finalize(cwd, bundle, dispositions, root=None):
 
         # Intentional skips (vitals disabled) do not block the baseline.
         # A failed attempted durable vitals write must not advance latest.json.
+        # Fail closed: only an explicit ok=True result is non-blocking. A result that
+        # happens to carry a `skipped` key with ok=False must still block (Fix 6) —
+        # intentional skips already return ok=True (e.g. vitals-not-collected).
         def _blocks_commit(result):
-            if result.get("ok"):
-                return False
-            if result.get("skipped"):
-                return False
-            return True
+            return not result.get("ok")
 
         if _blocks_commit(vitals_append):
             return {
@@ -1087,6 +1086,12 @@ def commit_ledger(cwd, bundle, dispositions, root=None):
     hand-edits belong to the surrounding prose, which the never-clobber re-splice
     preserves.
 
+    The whole transaction runs under the sweep lock against fresh reads: R1 freshness,
+    opaque-ledger check, closure computation, roster read+append, and the never-clobber
+    splice write. `finalize` releases its lock before this call, so there is no
+    cross-deadlock; this function must call `_write_locked` (not the lock-acquiring
+    `write`) because the lock is non-reentrant.
+
     Fail-closed on opaque/unreadable ledgers, stale bundles (latest.json moved on), and
     transient roster-read failures. Idempotent for a same-identity re-run: already-
     advanced records are skipped by `_close_filed_records`, and `append_sweep` dedups
@@ -1095,55 +1100,82 @@ def commit_ledger(cwd, bundle, dispositions, root=None):
     if not ok:
         return {"ok": False, "reason": "invalid-dispositions", "errors": errors}
 
-    # R1 — intent-freshness: this bundle's nextSnapshot must still be the head.
-    current = guardian_store.read_snapshot(cwd, root)
-    on_disk = guardian_store.snapshot_identity(current)
-    expected = guardian_store.snapshot_identity(bundle.get("nextSnapshot") or {})
-    if on_disk != expected:
-        return {
-            "ok": False,
-            "reason": "stale-bundle",
-            "onDisk": on_disk,
-            "expected": expected,
-        }
+    lock_path = guardian_store.sweep_lock_path(cwd, root)
+    try:
+        file_lock.acquire(lock_path, ttl=guardian_store.SWEEP_LOCK_TTL)
+    except file_lock.LockHeld as exc:
+        return {"ok": False, "reason": "raced", "lockHeld": exc.holder}
 
-    ledger = guardian_store.read_ledger(cwd, root)
-    writable, skip_why = _ledger_fully_readable(cwd, root, ledger)
-    if not writable:
-        return {
-            "ok": False,
-            "skipped": skip_why,
-            "reason": "ledger write skipped: %s (on-disk bytes left untouched)" % skip_why,
-        }
+    try:
+        # R1 — intent-freshness against FRESH head (under the lock).
+        # snapshot_identity alone cannot distinguish two same-SHA sweeps that produce
+        # byte-identical snapshots. Prefer an additive sweepId check when the on-disk
+        # head carries one. SNAPSHOT_KEYS does not yet include sweepId, so today's
+        # head never has it — the lock makes that residual a redundant-but-safe no-op:
+        # a stale bundle re-derives from fresh disk under the lock and cannot corrupt;
+        # it can only re-commit the same state.
+        current = guardian_store.read_snapshot(cwd, root)
+        on_disk = guardian_store.snapshot_identity(current)
+        expected = guardian_store.snapshot_identity(bundle.get("nextSnapshot") or {})
+        if on_disk != expected:
+            return {
+                "ok": False,
+                "reason": "stale-bundle",
+                "onDisk": on_disk,
+                "expected": expected,
+            }
+        head_sweep = (current or {}).get("sweepId") if isinstance(current, dict) else None
+        bundle_sweep = bundle.get("sweepId")
+        if (isinstance(head_sweep, str) and head_sweep.strip()
+                and isinstance(bundle_sweep, str) and bundle_sweep.strip()
+                and head_sweep.strip() != bundle_sweep.strip()):
+            return {
+                "ok": False,
+                "reason": "stale-bundle",
+                "onDisk": on_disk,
+                "expected": expected,
+                "onDiskSweepId": head_sweep,
+                "expectedSweepId": bundle_sweep,
+            }
 
-    sweep_id = bundle.get("sweepId") or guardian_ledger.make_sweep(
-        bundle.get("sweptSha") or "unknown")["sweepId"]
-    new_records, advances = _close_filed_records(
-        ledger["records"], bundle.get("filedObservations"), sweep_id)
+        ledger = guardian_store.read_ledger(cwd, root)
+        writable, skip_why = _ledger_fully_readable(cwd, root, ledger)
+        if not writable:
+            return {
+                "ok": False,
+                "skipped": skip_why,
+                "reason": "ledger write skipped: %s (on-disk bytes left untouched)"
+                          % skip_why,
+            }
 
-    card = bundle.get("reportCard")
-    if card is None:
-        card = guardian_ledger.report_card(new_records)
+        sweep_id = bundle.get("sweepId") or guardian_ledger.make_sweep(
+            bundle.get("sweptSha") or "unknown")["sweepId"]
+        new_records, advances = _close_filed_records(
+            ledger["records"], bundle.get("filedObservations"), sweep_id)
 
-    # R2 — roster tri-state: read failure fails the commit closed (retryable).
-    path = guardian_store.ledger_path(cwd, root)
-    roster_status, roster = guardian_ledger._read_sweeps_result(path)
-    if roster_status == "read-failed":
-        return {
-            "ok": False,
-            "reason": "roster-read-failed",
-            "retryable": True,
-        }
-    # absent or ok (including genuinely empty): append this sweep normally.
-    sweep = guardian_ledger.make_sweep(
-        bundle.get("sweptSha") or "unknown", sweep_id=sweep_id)
-    sweeps = guardian_ledger.append_sweep(roster, sweep)
+        # R2 — roster tri-state: read failure fails the commit closed (retryable).
+        path = guardian_store.ledger_path(cwd, root)
+        roster_status, roster = guardian_ledger._read_sweeps_result(path)
+        if roster_status == "read-failed":
+            return {
+                "ok": False,
+                "reason": "roster-read-failed",
+                "retryable": True,
+            }
+        # absent or ok (including genuinely empty): append this sweep normally.
+        sweep = guardian_ledger.make_sweep(
+            bundle.get("sweptSha") or "unknown", sweep_id=sweep_id)
+        sweeps = guardian_ledger.append_sweep(roster, sweep)
 
-    result = guardian_ledger.write(
-        cwd, new_records, root=root, report_card=card, sweeps=sweeps)
-    out = dict(result)
-    out["advances"] = advances
-    return out
+        # Report card is derived inside _write_locked from the final merged records —
+        # do not reuse collect-time bundle.reportCard (Fix 4).
+        result = guardian_ledger._write_locked(
+            cwd, new_records, root=root, sweeps=sweeps)
+        out = dict(result)
+        out["advances"] = advances
+        return out
+    finally:
+        file_lock.release(lock_path)
 
 
 def main(argv=None):

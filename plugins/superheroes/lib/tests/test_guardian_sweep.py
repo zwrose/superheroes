@@ -723,7 +723,7 @@ def test_commit_ledger_appends_sweep_roster_across_cycles_and_retries(tmp_path):
     a retry does not.
 
     Would have caught the original defect where finalize hard-coded sweeps=None and
-    write_unlocked treated None as erase."""
+    treated None as erase."""
     import subprocess
 
     repo = init_calibrated_repo(tmp_path)
@@ -805,7 +805,7 @@ def test_commit_ledger_write_failure_does_not_mutate_opaque_path(tmp_path, monke
     def boom(*args, **kwargs):
         return {"ok": False, "reason": "simulated ledger write failure", "path": path}
 
-    monkeypatch.setattr(gled, "write", boom)
+    monkeypatch.setattr(gled, "_write_locked", boom)
     result = gsw.commit_ledger(repo, bundle, disp, root=root)
     assert result["ok"] is False
     assert "simulated ledger write failure" in (result.get("reason") or "")
@@ -2221,3 +2221,153 @@ def test_cli_commit_ledger_writes_ledger(tmp_path):
     text = open(path, encoding="utf-8").read()
     assert "guardian-report-card:begin" in text
     assert "```json %s" % gs.LEDGER_FENCE in text
+
+
+# --- WO-1c: atomic commit_ledger + fail-closed vitals commit marker ----------
+
+
+def test_finalize_ok_false_vitals_with_skipped_key_does_not_advance_snapshot(
+        tmp_path, monkeypatch):
+    """Fix 6: ok=False must block latest.json even when a skipped key is present."""
+    import guardian_vitals as gv
+
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": True})
+
+    def fake_run(cmd, **kwargs):
+        class R:
+            returncode = 0
+            stdout = "1 passed in 0.01s"
+            stderr = ""
+        return R()
+
+    lens = FixtureLens(emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[lens], root=root, run=fake_run)
+    prev_identity = bundle["prevIdentity"]
+    disp = [{
+        "id": bundle["surfaced"][0]["id"],
+        "verdict": "validated",
+        "consequence": "x",
+        "receipt": "y",
+        "effort": "z",
+        "ledgerJoin": bundle["surfaced"][0]["id"],
+    }]
+
+    def bad_skip(*args, **kwargs):
+        return {
+            "ok": False,
+            "skipped": "should-not-unblock",
+            "reason": "durable vitals write failed",
+        }
+
+    monkeypatch.setattr(gv, "append_unlocked", bad_skip)
+    result = gsw.finalize(repo, bundle, disp, root=root)
+    assert result["ok"] is False
+    assert result["reason"] == "durable-write-failed"
+    assert not os.path.isfile(gs.snapshot_path(repo, root=root))
+    assert gs.snapshot_identity(gs.read_snapshot(repo, root=root)) == prev_identity
+
+
+def test_commit_ledger_preserves_concurrent_roster_entry(tmp_path, monkeypatch):
+    """Fix 2 via commit_ledger: a sweep landed after the caller's roster read survives."""
+    import guardian_ledger as gled
+
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    write_ledger(tmp_path, [], root=root)
+    path = gs.ledger_path(repo, root)
+    text = open(path, encoding="utf-8").read()
+    fence = gs.find_ledger_fences(text)[0]
+    block = json.loads(fence.group(1))
+    block["sweeps"] = [{"sweepId": "prior-s0", "sweptSha": "abc", "date": "2026-07-01"}]
+    open(path, "wb").write((
+        text[:fence.start()]
+        + "```json %s\n%s\n```" % (gs.LEDGER_FENCE, json.dumps(block, indent=2))
+        + text[fence.end()]
+    ).encode("utf-8"))
+
+    lens = FixtureLens(emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    disp = [{
+        "id": bundle["surfaced"][0]["id"],
+        "verdict": "validated",
+        "consequence": "x",
+        "receipt": "y",
+        "effort": "z",
+        "ledgerJoin": bundle["surfaced"][0]["id"],
+    }]
+    assert gsw.finalize(repo, bundle, disp, root=root)["ok"] is True
+
+    real_read = gled._read_sweeps_result
+
+    def stale_then_concurrent(p):
+        status, roster = real_read(p)
+        # Simulate a concurrent commit appending between read and write.
+        cur = open(path, encoding="utf-8").read()
+        f = gs.find_ledger_fences(cur)[0]
+        b = json.loads(f.group(1))
+        b["sweeps"] = list(b.get("sweeps") or []) + [{
+            "sweepId": "concurrent-s1",
+            "sweptSha": "def",
+            "date": "2026-07-21",
+        }]
+        open(path, "wb").write((
+            cur[:f.start()]
+            + "```json %s\n%s\n```" % (gs.LEDGER_FENCE, json.dumps(b, indent=2))
+            + cur[f.end()]
+        ).encode("utf-8"))
+        return status, roster  # stale (missing concurrent-s1)
+
+    monkeypatch.setattr(gled, "_read_sweeps_result", stale_then_concurrent)
+    result = gsw.commit_ledger(repo, bundle, disp, root=root)
+    assert result["ok"] is True, result
+    ids = [s["sweepId"] for s in _ledger_sweeps(repo, root)]
+    assert "prior-s0" in ids
+    assert "concurrent-s1" in ids
+    assert bundle["sweepId"] in ids
+
+
+def test_commit_ledger_calls_write_locked_not_lock_acquiring_write(
+        tmp_path, monkeypatch):
+    """Fix 1: commit_ledger holds the sweep lock and must call _write_locked (no self-deadlock)."""
+    import guardian_ledger as gled
+
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    lens = FixtureLens(emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    disp = [{
+        "id": bundle["surfaced"][0]["id"],
+        "verdict": "validated",
+        "consequence": "x",
+        "receipt": "y",
+        "effort": "z",
+        "ledgerJoin": bundle["surfaced"][0]["id"],
+    }]
+    assert gsw.finalize(repo, bundle, disp, root=root)["ok"] is True
+
+    write_calls = []
+    locked_calls = []
+    real_write = gled.write
+    real_locked = gled._write_locked
+
+    def spy_write(*a, **k):
+        write_calls.append(1)
+        return real_write(*a, **k)
+
+    def spy_locked(*a, **k):
+        locked_calls.append(1)
+        # Sweep lock must already be held by commit_ledger.
+        lock_path = gs.sweep_lock_path(repo, root)
+        assert os.path.isdir(lock_path) or os.path.exists(lock_path)
+        return real_locked(*a, **k)
+
+    monkeypatch.setattr(gled, "write", spy_write)
+    monkeypatch.setattr(gled, "_write_locked", spy_locked)
+    result = gsw.commit_ledger(repo, bundle, disp, root=root)
+    assert result["ok"] is True, result
+    assert locked_calls, "commit_ledger must call _write_locked"
+    assert not write_calls, "commit_ledger must not call lock-acquiring write"

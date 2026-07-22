@@ -29,10 +29,11 @@ untouched. For roster-like fields (`sweeps[]` today), `None` means *preserve wha
 already on disk*; an explicit list is the roster to write. Passing `None` is never an
 erase.
 
-**Compare-and-swap.** Like `guardian_store.write_snapshot_cas`, the writer accepts an
-`expected_fence_identity` captured at the read that produced the records. Immediately
-before writing it re-reads the fence and refuses with `reason: raced` (writes nothing)
-when the on-disk fence no longer matches — so a concurrent owner edit is never deleted.
+**Compare-and-swap.** Like `guardian_store.write_snapshot_cas`, the never-clobber
+writer re-reads fresh bytes immediately before each attempt and refuses to land a
+stale splice — so a concurrent owner edit is never deleted. Under the sweep lock,
+`_write_locked` retries up to `_WRITE_ATTEMPTS` times; exhaustion returns
+`reason: raced-out` and writes nothing.
 
 **Schema extension — `adjudicatedIn`.** Beyond the ratified §5 record shape
 (`LEDGER_RECORD_FIELDS`), a record carries `adjudicatedIn`: the **sweep id** it was first
@@ -952,13 +953,19 @@ def _read_sweeps(path):
 
 
 def _merge_record_preserving_unknown(old, new):
-    """Merge `new` over `old`, keeping unknown keys the renderer does not model."""
+    """Merge `new` over `old`, keeping unknown keys the renderer does not model.
+
+    `adjudicatedIn` is write-once: a non-empty stamp already on disk is never replaced
+    by a different or empty value (the benching floor depends on the first adjudication)."""
     if not isinstance(old, dict):
         return _ordered(new, _RECORD_KEY_ORDER) if isinstance(new, dict) else new
     if not isinstance(new, dict):
         return old
     merged = dict(old)
     merged.update(new)
+    old_stamp = old.get(ADJUDICATED_IN)
+    if isinstance(old_stamp, str) and old_stamp.strip():
+        merged[ADJUDICATED_IN] = old_stamp
     return _ordered(merged, _RECORD_KEY_ORDER)
 
 
@@ -988,6 +995,32 @@ def _merge_records_preserving_unknown(existing_records, new_records):
             if isinstance(rid, str) and rid not in seen:
                 out.append(dict(rec))
                 seen.add(rid)
+    return out
+
+
+def _merge_sweeps_preserving(existing_sweeps, new_sweeps):
+    """Append-only roster merge by sweepId; never drop a disk-only entry.
+
+    Mirrors `_merge_records_preserving_unknown`: keep every on-disk sweep id, add new
+    ones, dedup by `sweepId`. First-write wins for a repeated id."""
+    out = []
+    seen = set()
+    if isinstance(existing_sweeps, list):
+        for sweep in existing_sweeps:
+            if not isinstance(sweep, dict):
+                continue
+            sid = sweep.get("sweepId")
+            if isinstance(sid, str) and sid and sid not in seen:
+                out.append(_ordered(dict(sweep), SWEEP_FIELDS))
+                seen.add(sid)
+    for sweep in new_sweeps or []:
+        if not isinstance(sweep, dict):
+            continue
+        sid = sweep.get("sweepId")
+        if not isinstance(sid, str) or not sid or sid in seen:
+            continue
+        out.append(_ordered(dict(sweep), SWEEP_FIELDS))
+        seen.add(sid)
     return out
 
 
@@ -1058,77 +1091,22 @@ def _splice_machine_regions(text, block_obj, card_region):
     return new_text, None
 
 
-def write_unlocked(cwd, records, *, root=None, report_card=None, sweeps=None, now=None,
-                   expected_fence_identity=None):
-    """Atomically update ledger.md, acquiring NO lock.
+def _existing_report_card_updated(text):
+    """The `updated=` date on an existing report-card begin marker, or None."""
+    m = _REPORT_CARD_BEGIN_RE.search(text or "")
+    if not m:
+        return None
+    marker = m.group(0)
+    um = re.search(r"updated=(\S+)", marker)
+    return um.group(1) if um else None
 
-    Single-attempt splice helper. Prefer `write` (advisor never-clobber loop) for callers
-    that do not already hold the sweep lock. Kept for tests and as the internal primitive
-    `write`'s retry loop may reuse.
 
-    **Structural preserve rule:** this writer never re-renders the whole file when the ledger
-    already exists. It replaces only the two machine-owned regions (report-card markers +
-    fenced JSON) and leaves every other byte untouched. Unknown top-level JSON keys and
-    unknown per-record fields are merged, not dropped. Disk-only record ids are retained.
-    When the file does not exist, the full template from `render` is authored once. When the
-    fenced block cannot be located or is ambiguous, this returns a visible skip and does not
-    write.
-
-    **Compare-and-swap:** when `expected_fence_identity` is provided (from the read that
-    produced `records`), the on-disk fence must still match immediately before write;
-    otherwise returns `reason: raced` and writes nothing — same pattern as
-    `guardian_store.write_snapshot_cas`.
-
-    **Preserve-don't-erase:** `sweeps=None` keeps the on-disk roster unchanged; pass an
-    explicit list (including `[]`) to set the roster. A rewrite must never lose durable
-    history the caller simply did not mention.
-
-    **Fail-closed schema gate:** `validate_records` runs before write. A record that
-    fails validation is not persisted; the on-disk file is left untouched and the return
-    carries ok=False with the validation reasons.
-
-    Reads and writes are binary so CRLF ledgers round-trip outside the machine regions."""
-    path = guardian_store.ledger_path(cwd, root)
-    prepared = _prepare_ledger_write(
-        path, records, report_card=report_card, sweeps=sweeps, now=now)
-    if prepared["kind"] == "fail":
-        return prepared["result"]
-    if prepared["kind"] == "author":
-        guardian_store.atomic_write_bytes(path, prepared["bytes"])
-        return {"ok": True, "path": path}
-
-    on_disk_id = prepared["on_disk_id"]
-    if expected_fence_identity is not None and on_disk_id != expected_fence_identity:
-        return {
-            "ok": False,
-            "reason": "raced",
-            "onDisk": on_disk_id,
-            "expected": expected_fence_identity,
-            "path": path,
-        }
-    # Final re-check immediately before write (single-attempt CAS residual window).
-    try:
-        with open(path, "rb") as fh:
-            recheck_raw = fh.read()
-        recheck_text = recheck_raw.decode("utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        return {
-            "ok": False,
-            "skipped": "ledger-unreadable",
-            "reason": "ledger write skipped: unreadable at final check (%s)"
-                      % type(exc).__name__,
-            "path": path,
-        }
-    if guardian_store.ledger_fence_identity(recheck_text) != on_disk_id:
-        return {
-            "ok": False,
-            "reason": "raced",
-            "onDisk": guardian_store.ledger_fence_identity(recheck_text),
-            "expected": on_disk_id,
-            "path": path,
-        }
-    guardian_store.atomic_write_bytes(path, prepared["spliced"].encode("utf-8"))
-    return {"ok": True, "path": path}
+def _card_body_sans_updated(card_region):
+    """Report-card region with the begin-marker date normalized away (for idempotence)."""
+    if not card_region:
+        return card_region
+    return _REPORT_CARD_BEGIN_RE.sub(
+        "<!-- guardian-report-card:begin updated=DATE -->", card_region, count=1)
 
 
 def _prepare_ledger_write(path, records, *, report_card=None, sweeps=None, now=None):
@@ -1139,7 +1117,13 @@ def _prepare_ledger_write(path, records, *, report_card=None, sweeps=None, now=N
       - ``{"kind": "author", "bytes": b...}`` — file absent; full template ready
       - ``{"kind": "splice", "spliced": str, "on_disk_id": ..., "existing_raw": b...}``
         — ready to CAS-write; ``existing_raw`` is the exact bytes the splice was built from
+
+    The persisted report card is always computed from the FINAL merged record set
+    (post disk-only-merge). A caller-supplied `report_card` is ignored for the written
+    card so a collect-time snapshot cannot describe a ledger that differs after merge.
+    `report_card` remains accepted for API compatibility.
     """
+    del report_card  # persisted card always derived from merged records (Fix 4)
     ok, reasons = validate_records(records if records is not None else [])
     if not ok:
         return {
@@ -1150,10 +1134,9 @@ def _prepare_ledger_write(path, records, *, report_card=None, sweeps=None, now=N
         }
 
     day = now or _today()
-    card = report_card if report_card is not None else _report_card(
-        records if records is not None else [])
 
     if not os.path.isfile(path):
+        card = _report_card(records if records is not None else [])
         text = render(records, report_card=card, sweeps=sweeps or [], now=day,
                       created=_read_created(path) if os.path.lexists(path) else None)
         return {"kind": "author", "bytes": text.encode("utf-8")}
@@ -1219,11 +1202,39 @@ def _prepare_ledger_write(path, records, *, report_card=None, sweeps=None, now=N
     block["records"] = _merge_records_preserving_unknown(
         existing_block.get("records"), records if records is not None else [])
     if sweeps is not None:
-        block["sweeps"] = [_ordered(s, SWEEP_FIELDS)
-                           for s in sweeps if isinstance(s, dict)]
+        # Append-only by sweepId — never blind-replace (concurrent append survives).
+        block["sweeps"] = _merge_sweeps_preserving(
+            existing_block.get("sweeps"), sweeps)
     # else: leave existing sweeps (or absence) untouched
 
-    card_region = _render_report_card_region(card, now=day)
+    # Persisted card describes the ledger actually written (post merge).
+    card = _report_card(block["records"])
+    card_day = day
+    # Fix 8: same effective ledger + card on a later date must not rewrite updated=.
+    # Freeze the marker only when merged records/sweeps are unchanged AND the card
+    # body (aside from updated=) matches — a real append/closure still refreshes it.
+    existing_card_status, existing_card_m = _report_card_markers_status(existing_text)
+    if existing_card_status == "ok" and existing_card_m is not None:
+        prior_updated = _existing_report_card_updated(existing_card_m.group(0))
+        records_same = (
+            json.dumps(block.get("records") or [], sort_keys=True, separators=(",", ":"))
+            == json.dumps(existing_block.get("records") or [], sort_keys=True,
+                          separators=(",", ":")))
+        if sweeps is None:
+            sweeps_same = True
+        else:
+            sweeps_same = (
+                json.dumps(block.get("sweeps") or [], sort_keys=True,
+                           separators=(",", ":"))
+                == json.dumps(existing_block.get("sweeps") or [], sort_keys=True,
+                              separators=(",", ":")))
+        if prior_updated and records_same and sweeps_same:
+            candidate = _render_report_card_region(card, now=prior_updated)
+            if _card_body_sans_updated(candidate) == _card_body_sans_updated(
+                    existing_card_m.group(0)):
+                card_day = prior_updated
+
+    card_region = _render_report_card_region(card, now=card_day)
     spliced, splice_err = _splice_machine_regions(existing_text, block, card_region)
     if spliced is None:
         skipped = {
@@ -1250,8 +1261,94 @@ def _prepare_ledger_write(path, records, *, report_card=None, sweeps=None, now=N
     }
 
 
-def write(cwd, records, *, root=None, report_card=None, sweeps=None, now=None,
-          expected_fence_identity=None):
+def _author_exclusive(path, payload_bytes):
+    """Create `path` exclusively (O_EXCL). Returns True on success, False if it exists."""
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        return False
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(payload_bytes)
+            fh.flush()
+            os.fsync(fh.fileno())
+    except Exception:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
+    return True
+
+
+def _write_locked(cwd, records, *, root=None, report_card=None, sweeps=None, now=None):
+    """Never-clobber ledger write assuming the caller already holds the sweep lock.
+
+    Mirrors the lock-assuming vitals/sweep writers: `write` acquires the lock then
+    calls this; `commit_ledger` holds the lock itself and must call this directly
+    (the lock is non-reentrant)."""
+    path = guardian_store.ledger_path(cwd, root)
+    last = None
+    for _attempt in range(1, _WRITE_ATTEMPTS + 1):
+        prepared = _prepare_ledger_write(
+            path, records, report_card=report_card, sweeps=sweeps, now=now)
+        if prepared["kind"] == "fail":
+            return prepared["result"]
+        if prepared["kind"] == "author":
+            # Fix 3: exclusive create — if a concurrent session authored between the
+            # absence check and this write, fall through to the splice path (retry).
+            if _author_exclusive(path, prepared["bytes"]):
+                return {"ok": True, "path": path}
+            last = {
+                "ok": False,
+                "reason": "raced-retry",
+                "path": path,
+            }
+            continue
+
+        on_disk_id = prepared["on_disk_id"]
+        existing_raw = prepared["existing_raw"]
+        # Final full-byte check immediately before write (prose + fence + card).
+        try:
+            with open(path, "rb") as fh:
+                recheck_raw = fh.read()
+        except OSError as exc:
+            return {
+                "ok": False,
+                "skipped": "ledger-unreadable",
+                "reason": "ledger write skipped: unreadable at final check (%s)"
+                          % type(exc).__name__,
+                "path": path,
+            }
+        if recheck_raw != existing_raw:
+            try:
+                recheck_text = recheck_raw.decode("utf-8")
+                recheck_id = guardian_store.ledger_fence_identity(recheck_text)
+            except UnicodeDecodeError:
+                recheck_id = None
+            last = {
+                "ok": False,
+                "reason": "raced-retry",
+                "onDisk": recheck_id,
+                "expected": on_disk_id,
+                "path": path,
+            }
+            continue
+        guardian_store.atomic_write_bytes(path, prepared["spliced"].encode("utf-8"))
+        return {"ok": True, "path": path}
+
+    return {
+        "ok": False,
+        "reason": "raced-out",
+        "attempts": _WRITE_ATTEMPTS,
+        "onDisk": (last or {}).get("onDisk"),
+        "expected": (last or {}).get("expected"),
+        "path": path,
+    }
+
+
+def write(cwd, records, *, root=None, report_card=None, sweeps=None, now=None):
     """Advisor sole writer for ledger.md — bounded never-clobber re-read/re-splice loop.
 
     The fenced JSON block and the report-card region are **machine-owned** (the advisor is
@@ -1266,13 +1363,9 @@ def write(cwd, records, *, root=None, report_card=None, sweeps=None, now=None,
     attempt — never a clobber with a stale splice. Exhaustion returns ``reason: raced-out``
     and writes nothing.
 
-    `expected_fence_identity` is accepted for API compatibility but ignored: the loop always
-    re-reads fresh and never refuses solely on a stale caller-held identity.
-
-    `sweeps=None` preserves the on-disk roster (see `write_unlocked`); pass an explicit list
-    to set it. On contention for the sweep lock returns ``{"ok": False, "reason": "raced"}``.
-    Never runs git."""
-    del expected_fence_identity  # ignored — never-clobber loop re-reads fresh each attempt
+    `sweeps=None` preserves the on-disk roster; pass an explicit list to append-merge by
+    `sweepId` (disk-only entries are never dropped). On contention for the sweep lock
+    returns ``{"ok": False, "reason": "raced"}``. Never runs git."""
     path = guardian_store.ledger_path(cwd, root)
     lock_path = guardian_store.sweep_lock_path(cwd, root)
     try:
@@ -1280,55 +1373,8 @@ def write(cwd, records, *, root=None, report_card=None, sweeps=None, now=None,
     except file_lock.LockHeld as exc:
         return {"ok": False, "reason": "raced", "lockHeld": exc.holder, "path": path}
     try:
-        last = None
-        for _attempt in range(1, _WRITE_ATTEMPTS + 1):
-            prepared = _prepare_ledger_write(
-                path, records, report_card=report_card, sweeps=sweeps, now=now)
-            if prepared["kind"] == "fail":
-                return prepared["result"]
-            if prepared["kind"] == "author":
-                guardian_store.atomic_write_bytes(path, prepared["bytes"])
-                return {"ok": True, "path": path}
-
-            on_disk_id = prepared["on_disk_id"]
-            existing_raw = prepared["existing_raw"]
-            # Final full-byte check immediately before write (prose + fence + card).
-            try:
-                with open(path, "rb") as fh:
-                    recheck_raw = fh.read()
-            except OSError as exc:
-                return {
-                    "ok": False,
-                    "skipped": "ledger-unreadable",
-                    "reason": "ledger write skipped: unreadable at final check (%s)"
-                              % type(exc).__name__,
-                    "path": path,
-                }
-            if recheck_raw != existing_raw:
-                try:
-                    recheck_text = recheck_raw.decode("utf-8")
-                    recheck_id = guardian_store.ledger_fence_identity(recheck_text)
-                except UnicodeDecodeError:
-                    recheck_id = None
-                last = {
-                    "ok": False,
-                    "reason": "raced-retry",
-                    "onDisk": recheck_id,
-                    "expected": on_disk_id,
-                    "path": path,
-                }
-                continue
-            guardian_store.atomic_write_bytes(path, prepared["spliced"].encode("utf-8"))
-            return {"ok": True, "path": path}
-
-        return {
-            "ok": False,
-            "reason": "raced-out",
-            "attempts": _WRITE_ATTEMPTS,
-            "onDisk": (last or {}).get("onDisk"),
-            "expected": (last or {}).get("expected"),
-            "path": path,
-        }
+        return _write_locked(
+            cwd, records, root=root, report_card=report_card, sweeps=sweeps, now=now)
     finally:
         file_lock.release(lock_path)
 

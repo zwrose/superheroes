@@ -72,15 +72,15 @@ def test_write_is_idempotent_byte_for_byte(tmp_path):
 
 
 def test_write_preserves_created_date_across_rewrites(tmp_path):
-    """Provenance created= is outside the machine regions and stays put; report card updates."""
+    """Provenance created= stays put; unchanged card keeps its updated= (Fix 8)."""
     repo = init_calibrated_repo(tmp_path)
     records = [_rec("dup:jscpd:a.md", "filed", issue="#1", adjudicatedIn="s1")]
     gled.write(repo, records, now="2026-07-01")
     gled.write(repo, records, now="2026-07-21")
     text = open(gs.ledger_path(repo), encoding="utf-8").read()
     assert "created=2026-07-01" in text
-    # Report-card machine region carries a fresh updated= stamp.
-    assert "guardian-report-card:begin updated=2026-07-21" in text
+    # Same effective ledger+card → updated= must not advance across a date boundary.
+    assert "guardian-report-card:begin updated=2026-07-01" in text
     assert "## Report card" in text
     assert "filed" in text or "dup" in text
 
@@ -147,14 +147,14 @@ def test_append_sweep_preserves_prior_order_and_is_idempotent_on_sweep_id():
     assert roster[1] == s2
 
 
-def test_write_unlocked_sweeps_none_preserves_on_disk_roster(tmp_path):
+def test_write_sweeps_none_preserves_on_disk_roster(tmp_path):
     """sweeps=None means preserve, not erase — the half of the finalize wipe defect."""
     repo = init_calibrated_repo(tmp_path)
     s1 = {"sweepId": "s1", "sweptSha": "aaa", "date": "2026-07-20"}
     s2 = {"sweepId": "s2", "sweptSha": "bbb", "date": "2026-07-21"}
     assert gled.write(repo, [], sweeps=[s1, s2], now="2026-07-21")["ok"] is True
 
-    out = gled.write_unlocked(
+    out = gled.write(
         repo, [_rec("dup:jscpd:a.md", "filed", issue="#1")],
         sweeps=None, now="2026-07-22")
     assert out["ok"] is True, out
@@ -618,11 +618,11 @@ def test_metric_improved_honors_reraise_when_scope():
         {"cloneLines": 177, "files": 1}, record) is False
 
 
-def test_write_unlocked_refuses_invalid_records_without_mutating(tmp_path):
+def test_write_refuses_invalid_records_without_mutating(tmp_path):
     repo = init_calibrated_repo(tmp_path)
     gled.write(repo, [_rec("dup:t:a", "filed", issue="#1")], now="2026-07-21")
     before = open(gs.ledger_path(repo), encoding="utf-8").read()
-    out = gled.write_unlocked(
+    out = gled.write(
         repo, [_rec("dup:t:a", "accepted")], now="2026-07-21")  # no reason
     assert out["ok"] is False
     assert out["reason"] == "invalid-records"
@@ -730,14 +730,14 @@ def test_write_returns_raced_and_leaves_the_file_untouched(tmp_path):
     assert open(gs.ledger_path(repo), "rb").read() == before
 
 
-def test_write_unlocked_writes_under_a_held_lock(tmp_path):
-    """finalize already holds the sweep lock; the unlocked entry point must not deadlock."""
+def test_write_locked_writes_under_a_held_lock(tmp_path):
+    """commit_ledger already holds the sweep lock; _write_locked must not deadlock."""
     repo = init_calibrated_repo(tmp_path)
     lock = gs.sweep_lock_path(repo)
     file_lock.acquire(lock, ttl=gs.SWEEP_LOCK_TTL)
     try:
-        out = gled.write_unlocked(repo, [_rec("dup:jscpd:a.md", "filed", issue="#1")],
-                                  now="2026-07-21")
+        out = gled._write_locked(repo, [_rec("dup:jscpd:a.md", "filed", issue="#1")],
+                                 now="2026-07-21")
         assert out["ok"] is True
     finally:
         file_lock.release(lock)
@@ -844,7 +844,7 @@ def test_cli_bad_input_reports_an_error_not_a_traceback(tmp_path):
 # --- WO-13: surgical fence preserve + metric validation ----------------------
 
 
-def test_write_unlocked_preserves_bytes_outside_machine_regions_and_unknown_keys(tmp_path):
+def test_write_preserves_bytes_outside_machine_regions_and_unknown_keys(tmp_path):
     """Strong preservation: owner prose outside both machine regions + unknown JSON keys."""
     repo = init_calibrated_repo(tmp_path)
     path = gs.ledger_path(repo)
@@ -897,7 +897,7 @@ def test_write_unlocked_preserves_bytes_outside_machine_regions_and_unknown_keys
         "reraiseWhen": None,
         "adjudicatedIn": "s0",
     }]
-    out = gled.write_unlocked(
+    out = gled.write(
         repo, new_records, now="2026-07-21",
         sweeps=[{"sweepId": "s0", "sweptSha": "abc", "date": "2026-07-01"},
                 {"sweepId": "s1", "sweptSha": "def", "date": "2026-07-21"}])
@@ -920,18 +920,18 @@ def test_write_unlocked_preserves_bytes_outside_machine_regions_and_unknown_keys
     assert len(parsed["sweeps"]) == 2
 
 
-def test_write_unlocked_skips_when_fence_missing(tmp_path):
+def test_write_skips_when_fence_missing(tmp_path):
     repo = init_calibrated_repo(tmp_path)
     path = gs.ledger_path(repo)
     sc.atomic_write(path, "# no fence here\nowner prose only\n")
     before = open(path, "rb").read()
-    out = gled.write_unlocked(repo, [_rec("a:b:c", "filed", issue="#1")])
+    out = gled.write(repo, [_rec("a:b:c", "filed", issue="#1")])
     assert out["ok"] is False
     assert "no-fence" in (out.get("skipped") or "")
     assert open(path, "rb").read() == before
 
 
-def test_write_unlocked_refuses_ambiguous_duplicate_fences(tmp_path):
+def test_write_refuses_ambiguous_duplicate_fences(tmp_path):
     repo = init_calibrated_repo(tmp_path)
     path = gs.ledger_path(repo)
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -948,7 +948,7 @@ def test_write_unlocked_refuses_ambiguous_duplicate_fences(tmp_path):
     )
     open(path, "wb").write(text.encode("utf-8"))
     before = open(path, "rb").read()
-    out = gled.write_unlocked(repo, [_rec("dup:t:a", "accepted", date="2026-07-01", reason="r")])
+    out = gled.write(repo, [_rec("dup:t:a", "accepted", date="2026-07-01", reason="r")])
     assert out["ok"] is False
     assert "ambiguous" in (out.get("skipped") or out.get("reason") or "")
     assert open(path, "rb").read() == before
@@ -957,16 +957,14 @@ def test_write_unlocked_refuses_ambiguous_duplicate_fences(tmp_path):
     assert "ambiguous" in (read.get("note") or "")
 
 
-def test_write_unlocked_cas_refuses_concurrent_owner_edit(tmp_path):
-    """Real concurrent edit: read identity, mutate disk, write must refuse and leave bytes."""
+def test_write_never_clobber_merges_concurrent_owner_edit(tmp_path):
+    """Concurrent owner edit between read and write is merged, not clobbered."""
     repo = init_calibrated_repo(tmp_path)
     path = gs.ledger_path(repo)
     gled.write(repo, [_rec("dup:t:a", "filed", issue="#1", adjudicatedIn="s1")],
                now="2026-07-01")
     ledger = gs.read_ledger(repo)
     assert ledger["status"] == "ok"
-    expected = ledger["fenceIdentity"]
-    assert expected
 
     # Owner adds a new record between finalize's read and write.
     on_disk = open(path, "rb").read().decode("utf-8")
@@ -987,19 +985,15 @@ def test_write_unlocked_cas_refuses_concurrent_owner_edit(tmp_path):
         + on_disk[fence.end():]
     )
     open(path, "wb").write(mutated.encode("utf-8"))
-    before = open(path, "rb").read()
 
-    out = gled.write_unlocked(
-        repo, ledger["records"],
-        expected_fence_identity=expected, now="2026-07-21")
-    assert out["ok"] is False
-    assert out["reason"] == "raced"
-    assert open(path, "rb").read() == before
-    assert any(r.get("id") == "dup:t:owner-added"
-               for r in gs.read_ledger(repo)["records"])
+    out = gled.write(repo, ledger["records"], now="2026-07-21")
+    assert out["ok"] is True, out
+    ids = {r.get("id") for r in gs.read_ledger(repo)["records"]}
+    assert "dup:t:owner-added" in ids
+    assert "dup:t:a" in ids
 
 
-def test_write_unlocked_preserves_disk_only_record_ids(tmp_path):
+def test_write_preserves_disk_only_record_ids(tmp_path):
     repo = init_calibrated_repo(tmp_path)
     path = gs.ledger_path(repo)
     gled.write(repo, [
@@ -1007,7 +1001,7 @@ def test_write_unlocked_preserves_disk_only_record_ids(tmp_path):
         _rec("dup:t:b", "filed", issue="#2", adjudicatedIn="s1"),
     ], now="2026-07-01")
     # Stale roster omits b — writer must retain it.
-    out = gled.write_unlocked(
+    out = gled.write(
         repo, [_rec("dup:t:a", "accepted", date="2026-07-01", reason="r",
                     adjudicatedIn="s1")],
         now="2026-07-21")
@@ -1016,7 +1010,7 @@ def test_write_unlocked_preserves_disk_only_record_ids(tmp_path):
     assert ids == {"dup:t:a", "dup:t:b"}
 
 
-def test_write_unlocked_crlf_byte_preservation_outside_machine_regions(tmp_path):
+def test_write_crlf_byte_preservation_outside_machine_regions(tmp_path):
     """Genuine CRLF bytes outside machine regions must survive a surgical write."""
     repo = init_calibrated_repo(tmp_path)
     path = gs.ledger_path(repo)
@@ -1078,7 +1072,7 @@ def test_write_unlocked_crlf_byte_preservation_outside_machine_regions(tmp_path)
         i3_end += 1
     prefix, mid, suffix = before[:i0], before[i1:i2], before[i3_end:]
 
-    out = gled.write_unlocked(
+    out = gled.write(
         repo, [{
             "id": "dup:t:a",
             "disposition": "accepted",
@@ -1244,7 +1238,8 @@ def test_write_never_clobber_retries_on_prose_only_edit(tmp_path, monkeypatch):
     assert owner_note in after
     assert prose_only in after
     assert calls["n"] >= 2  # retried after prose-only race
-    assert "guardian-report-card:begin updated=2026-07-21" in after
+    # Same effective ledger content → Fix 8 keeps the prior updated= date.
+    assert "guardian-report-card:begin updated=2026-07-01" in after
 
 
 def test_write_raced_out_after_five_attempts(tmp_path, monkeypatch):
@@ -1331,7 +1326,7 @@ def test_splice_unbalanced_report_card_begin_does_not_eat_owner_prose(tmp_path):
     assert spliced is None
     assert err == "ambiguous-report-card"
 
-    out = gled.write_unlocked(
+    out = gled.write(
         repo, [_rec("dup:t:a", "accepted", date="2026-07-01", reason="r")],
         now="2026-07-21")
     assert out["ok"] is False
@@ -1367,3 +1362,128 @@ def test_read_sweeps_result_distinguishes_read_failed(tmp_path, monkeypatch):
     assert sweeps_fail == []
     # Legacy helper still collapses to []
     assert gled._read_sweeps(path) == []
+
+
+# --- WO-1c: atomic commit under lock / append-only merge / never-clobber author ---
+
+
+def test_prepare_append_only_merge_preserves_concurrent_sweep_entry(tmp_path):
+    """A sweep appended between caller's roster read and write is not lost (Fix 2)."""
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.ledger_path(repo)
+    s1 = {"sweepId": "s1", "sweptSha": "aaa", "date": "2026-07-20"}
+    s_concurrent = {"sweepId": "s-concurrent", "sweptSha": "bbb", "date": "2026-07-21"}
+    s_caller = {"sweepId": "s-caller", "sweptSha": "ccc", "date": "2026-07-22"}
+    assert gled.write(repo, [], sweeps=[s1], now="2026-07-20")["ok"] is True
+
+    # Caller read roster as [s1], then concurrent writer appended s_concurrent.
+    text = open(path, encoding="utf-8").read()
+    fence = gs.find_ledger_fences(text)[0]
+    block = json.loads(fence.group(1))
+    block["sweeps"] = [s1, s_concurrent]
+    open(path, "wb").write((
+        text[:fence.start()]
+        + "```json %s\n%s\n```" % (gs.LEDGER_FENCE, json.dumps(block, indent=2))
+        + text[fence.end()]
+    ).encode("utf-8"))
+
+    # Stale caller passes only what it knew + its own append — must keep concurrent.
+    out = gled.write(repo, [], sweeps=[s1, s_caller], now="2026-07-22")
+    assert out["ok"] is True, out
+    after = json.loads(gs.find_ledger_fences(
+        open(path, encoding="utf-8").read())[0].group(1))
+    ids = [s["sweepId"] for s in after["sweeps"]]
+    assert ids == ["s1", "s-concurrent", "s-caller"]
+
+
+def test_write_author_path_does_not_clobber_concurrently_created_ledger(
+        tmp_path, monkeypatch):
+    """Exclusive create: a ledger born between absence check and author write survives (Fix 3)."""
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.ledger_path(repo)
+    assert not os.path.isfile(path)
+
+    concurrent_records = [
+        _rec("dup:t:concurrent", "accepted", date="2026-07-01", reason="r",
+             adjudicatedIn="s0"),
+    ]
+    concurrent_bytes = gled.render(
+        concurrent_records, sweeps=[], now="2026-07-01").encode("utf-8")
+    real_prepare = gled._prepare_ledger_write
+    calls = {"n": 0}
+
+    def prepare_then_create(path_, *a, **k):
+        prepared = real_prepare(path_, *a, **k)
+        calls["n"] += 1
+        if calls["n"] == 1 and prepared.get("kind") == "author":
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            open(path, "wb").write(concurrent_bytes)
+        return prepared
+
+    monkeypatch.setattr(gled, "_prepare_ledger_write", prepare_then_create)
+    out = gled.write(
+        repo, [_rec("dup:t:stale", "filed", issue="#1", adjudicatedIn="s1")],
+        now="2026-07-21")
+    assert out["ok"] is True, out
+    read = gs.read_ledger(repo)
+    ids = {r["id"] for r in read["records"]}
+    assert "dup:t:concurrent" in ids, "concurrent author must not be clobbered"
+    assert "dup:t:stale" in ids  # caller's record merges onto the concurrent ledger
+
+
+def test_write_persisted_report_card_reflects_disk_only_record(tmp_path):
+    """Card is computed from final merged records, not a stale collect-time card (Fix 4)."""
+    repo = init_calibrated_repo(tmp_path)
+    path = gs.ledger_path(repo)
+    gled.write(repo, [
+        _rec("dup:t:disk-only", "accepted", date="2026-07-01", reason="kept",
+             adjudicatedIn="s1"),
+        _rec("dup:t:shared", "filed", issue="#1", adjudicatedIn="s1"),
+    ], now="2026-07-01")
+    # Stale caller omits disk-only and passes a collect-time card that never saw it.
+    stale_card = gled.report_card([
+        _rec("dup:t:shared", "filed", issue="#1", adjudicatedIn="s1"),
+    ])
+    out = gled.write(
+        repo,
+        [_rec("dup:t:shared", "filed", issue="#1", adjudicatedIn="s1")],
+        report_card=stale_card,
+        now="2026-07-21")
+    assert out["ok"] is True, out
+    text = open(path, encoding="utf-8").read()
+    card_region = gled._REPORT_CARD_REGION.search(text).group(0)
+    assert "| dup |" in card_region
+    # Disk-only accepted record must count in the persisted card's for-bucket.
+    assert "| 2 |" in card_region or "adjudicated" in card_region.lower()
+    # Parse the table row for dup: adjudicated should be 1 (the accepted), for=1.
+    rows = [ln for ln in card_region.splitlines() if ln.startswith("| dup |")]
+    assert rows, card_region
+    cols = [c.strip() for c in rows[0].split("|")[1:-1]]
+    # lens | adjudicated | for | against | ...
+    # Merged: disk-only accepted + shared filed → adjudicated=2, for=2.
+    # Stale collect-time card would only see the filed → adjudicated=1, for=1.
+    assert int(cols[1]) == 2, "persisted card must count disk-only record: %s" % rows[0]
+    assert int(cols[2]) == 2, "disk-only accepted must appear in for-count: %s" % rows[0]
+
+
+def test_merge_record_never_clobbers_existing_adjudicated_in():
+    """Write-once adjudicatedIn on disk survives a merge that tries to clear/replace it (Fix 5)."""
+    old = _rec("dup:t:a", "filed", issue="#1", adjudicatedIn="sweep-original")
+    new = _rec("dup:t:a", "verified-fixed", adjudicatedIn="sweep-intruder")
+    merged = gled._merge_record_preserving_unknown(old, new)
+    assert merged["adjudicatedIn"] == "sweep-original"
+    assert merged["disposition"] == "verified-fixed"
+
+    cleared = gled._merge_record_preserving_unknown(
+        old, _rec("dup:t:a", "verified-fixed", adjudicatedIn=""))
+    assert cleared["adjudicatedIn"] == "sweep-original"
+
+    emptied = gled._merge_record_preserving_unknown(
+        old, _rec("dup:t:a", "verified-fixed", adjudicatedIn=None))
+    assert emptied["adjudicatedIn"] == "sweep-original"
+
+    # First stamp still lands when disk had none.
+    bare = _rec("dup:t:b", "filed", issue="#2")
+    stamped = gled._merge_record_preserving_unknown(
+        bare, _rec("dup:t:b", "filed", issue="#2", adjudicatedIn="s-new"))
+    assert stamped["adjudicatedIn"] == "s-new"
