@@ -84,7 +84,8 @@ Every ``reported-nonzero-parsed-zero`` case MUST carry all three. Optional keys 
 CONFORMANCE_CASE_OPTIONAL_FIELDS below.
 """
 
-CONFORMANCE_CASE_OPTIONAL_FIELDS = ("clean_exit", "config", "prev_digest")
+CONFORMANCE_CASE_OPTIONAL_FIELDS = (
+    "clean_exit", "config", "prev_digest", "stdout_by_tool", "clean_stdout_by_tool")
 """Optional keys a ``reported-nonzero-parsed-zero`` case MAY carry.
 
 - ``clean_exit`` — the exit code the tool returns on a genuinely-clean run when it differs
@@ -92,6 +93,13 @@ CONFORMANCE_CASE_OPTIONAL_FIELDS = ("clean_exit", "config", "prev_digest")
   clean_exit=0``). Defaults to ``exit`` when absent.
 - ``config`` / ``prev_digest`` — forwarded to ``collect()`` (as ``ctx["config"]`` and
   ``ctx["prevDigest"]``).
+- ``stdout_by_tool`` / ``clean_stdout_by_tool`` — per-``argv[0]`` stdout maps for a
+  MULTI-COLLECTOR lens. The harness dispatches the findings payload to ONLY the targeted
+  collector (``stdout_by_tool``) and hands every co-firing collector a clean payload
+  (``clean_stdout_by_tool``, else ``clean_stdout``), so the targeted honesty gate is the
+  only thing that can degrade the findings probe — a single shared stdout would degrade the
+  whole lens through a co-firing tool regardless of the gate, letting a deleted gate still
+  pass. Additive: a case with no ``stdout_by_tool`` keeps the single-stdout behavior.
 
 None of these is required; the required set stays CONFORMANCE_CASE_FIELDS.
 """

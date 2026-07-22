@@ -473,6 +473,51 @@ def test_knip_contradiction_with_prev_finding_degrades_no_false_resolved(tmp_pat
     assert d["resolved"] == []
 
 
+def test_knip_inscope_signals_normalizing_to_zero_degrade(tmp_path):
+    """A1(a): exit 1 whose `issues` carry IN-SCOPE file/export signals that normalize to
+    ZERO candidates (an export entry with no `name`) is a contradiction — degrade, never
+    collected-zero. The gate must check the NORMALIZED candidates, not the raw `issues`
+    list. Reverting A1 (gate on `not issues`) reads the nonempty raw list as findings-
+    present and returns `collected` with zero candidates → both assertions bite."""
+    repo = _node_repo(tmp_path)
+    prev_id = "deadcode:knip:scripts/old-file.js"
+    prev_digest = {
+        "schema": gld.DIGEST_SCHEMA,
+        "candidates": {prev_id: {"id": prev_id, "tool": "knip", "kind": "file",
+                                 "path": "scripts/old-file.js", "export": None,
+                                 "metric": 1, "lines": [], "receipt": "..."}},
+    }
+    # exports present (in-scope signal) but the export has no name → normalizes to zero.
+    issues = json.dumps({"issues": [
+        {"file": "src/x.ts", "files": [], "exports": [{"line": 3, "col": 5}]}]})
+    out = gld.LENS.collect(
+        _ctx(repo, FakeRun([("knip", (1, issues, ""))]), prev=prev_digest))
+    assert out["status"] == "not-collected"
+    assert out["digest"] is None
+    assert out["candidates"] == []
+    reason = out["reason"] or ""
+    assert "in-scope" in reason and "zero" in reason.lower()
+    d = gld.LENS.diff(prev_digest, out["digest"])
+    assert d["resolved"] == []
+
+
+def test_knip_out_of_scope_exit1_stays_collected_empty(tmp_path):
+    """A1(b) nuance — do NOT over-degrade: knip also exits 1 for OUT-OF-SCOPE categories
+    (unused dependencies / types / enumMembers). With no in-scope file/export signal that
+    is a genuine CLEAN dead-code scan and must stay `collected` (empty), never degrade. A
+    naive `not candidates` gate (no out-of-scope exemption) would over-degrade this — the
+    assertion bites against that mutation."""
+    repo = _node_repo(tmp_path)
+    issues = json.dumps({"issues": [
+        {"file": "package.json",
+         "dependencies": [{"name": "left-pad"}],
+         "files": [], "exports": []}]})
+    out = gld.LENS.collect(_ctx(repo, FakeRun([("knip", (1, issues, ""))])))
+    assert out["status"] == "collected"
+    assert out["candidates"] == []
+    assert out["digest"]["ecosystems"]["node"]["status"] == "collected"
+
+
 def test_knip_unparseable_output_not_collected_never_empty_clean(tmp_path):
     repo = _node_repo(tmp_path)
     out = gld.LENS.collect(_ctx(repo, FakeRun([("knip", (1, "not json at all", ""))])))

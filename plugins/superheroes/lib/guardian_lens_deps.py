@@ -415,7 +415,11 @@ def collect_node_vulns(ctx, repo):
     cwd). npm audit exits 1 whenever it finds a vulnerability — success-with-findings.
     """
     tool = "npm audit"
-    argv = ["npm", "audit", "--json", "--prefix", repo]
+    # --registry is pinned EXPLICITLY to the public npm registry so a repo-local `.npmrc`
+    # cannot redirect the audit POST (which sends the dependency set) to an attacker or
+    # internal endpoint. The audit still runs against the repo's own manifest via --prefix.
+    argv = ["npm", "audit", "--json", "--registry=https://registry.npmjs.org/",
+            "--prefix", repo]
     started = time.time()
     res = gc.run_tool(argv, ctx, timeout=NPM_AUDIT_TIMEOUT,
                       cwd=repo, ok_exits=(0, 1))
@@ -502,7 +506,12 @@ def collect_node_vulns(ctx, repo):
     # `and not transitive_only` guards): a tool that signalled findings — via a metadata
     # count, exit 1, OR non-empty raw vulnerability entries (INCLUDING transitive-only) —
     # but normalized zero candidates must NEVER read as a clean `collected`.
-    raw_entries = len([k for k in vulns if isinstance(vulns.get(k), dict)])
+    # Count EVERY key of a nonempty `vulnerabilities` map, not only the dict-valued ones:
+    # a malformed (non-dict) entry is skipped by normalization above, so counting only
+    # dict values would let a nonempty-but-unnormalizable map slip the gate at exit 0 /
+    # metadata 0 and read clean. Fail closed on schema drift — any nonempty raw map that
+    # normalized to zero items is a contradiction.
+    raw_entries = len(vulns)
     contradiction = _vuln_contradiction(
         tool, reported, res.get("exit") == 1, raw_entries, items, transitive_only)
     if contradiction is not None:
@@ -598,7 +607,12 @@ def collect_python_vulns(ctx, repo):
             "would require the project's installed environment, which the sweep will "
             "not build from inside the repo — supply-chain policy" % tool, tool=tool)
 
-    argv = [tool, "--format=json", "-r", req_abs]
+    # --no-deps audits ONLY the pinned manifest without resolving/fetching the dependency
+    # graph, so no build-backend hook runs during the sweep (supply-chain hardening). It
+    # requires a fully-pinned requirements.txt; when the manifest is not pinned, pip-audit
+    # exits non-zero and this degrades to not-collected honestly (via _payload) rather than
+    # silently resolving the graph.
+    argv = [tool, "--format=json", "--no-deps", "-r", req_abs]
     started = time.time()
     # pip-audit exits 1 when it finds vulnerabilities — that is success-with-findings.
     res = gc.run_tool(argv, ctx, timeout=PIP_AUDIT_TIMEOUT, cwd=repo, ok_exits=(0, 1))
@@ -1503,27 +1517,28 @@ class DepsLens(object):
         """Lens-supplied ``reported-nonzero-parsed-zero`` payload (see lens-contract.md).
 
         This lens runs TWO node collectors under the fixture — ``npm-check-updates``
-        (freshness) and ``npm audit`` (vulns) — and the harness feeds the SAME stubbed
-        stdout+exit to every ``ctx["run"]`` call (no per-argv dispatch). Both payloads are
-        shaped as ``npm audit`` JSON and the case declares npm-audit's dual success exits
-        (``exit=1`` findings, ``clean_exit=0`` clean):
+        (freshness) and ``npm audit`` (vulns). The case uses the harness's PER-argv[0]
+        stdout dispatch (``stdout_by_tool`` / ``clean_stdout_by_tool``) so ONLY ``npm
+        audit`` (argv[0] ``"npm"``) gets the findings payload; the co-firing ncu
+        (argv[0] ``"npm-check-updates"``) always gets a CLEAN upgrade map. That isolation
+        is what makes the vuln contradiction gate LOAD-BEARING in conformance: with a
+        single shared stdout the ncu run would degrade the whole lens on exit 1 regardless
+        of the vuln gate, so deleting ``_vuln_contradiction`` would still pass. With the
+        dispatch, ncu collects cleanly and the ONLY thing that can degrade the findings
+        probe is the vuln gate — delete it and the deps conformance case fails.
 
-        - ``clean_stdout`` = genuinely-zero npm-audit JSON (metadata total 0, empty
-          vulnerabilities). At ``clean_exit=0`` npm audit collects zero candidates
-          cleanly; freshness (ncu) reads the same object as an empty upgrade map's cousin
-          and still ``collected`` — whole-lens ``collected``.
-        - ``stdout`` = npm-audit JSON that REPORTS vulnerabilities (metadata total 3) but
-          normalizes to zero candidates (empty ``vulnerabilities`` object). At ``exit=1``
-          the vuln contradiction gate degrades ``npm audit`` to ``not-collected`` and the
-          co-firing ncu run fails on exit 1 — whole-lens degrades. It must never read as
+        npm-audit declares dual success exits (``exit=1`` findings, ``clean_exit=0`` clean):
+
+        - clean probe: npm audit gets zero-vuln JSON (metadata total 0) at exit 0 and ncu
+          gets ``{}`` (an empty upgrade map) at exit 0 → whole-lens ``collected``.
+        - findings probe: npm audit gets JSON that REPORTS vulnerabilities (metadata total
+          3) but normalizes to zero candidates (empty ``vulnerabilities`` object) at exit 1
+          → the vuln contradiction gate degrades ``npm audit`` to ``not-collected``; ncu
+          collects a clean empty map → whole-lens ``partial``. It must never read as
           ``collected``.
 
-        The freshness collector co-fires under the single injected stdout (it cannot parse
-        an audit payload as an upgrade map cleanly), so the whole-lens findings probe
-        degrades to ``not-collected`` rather than ``partial`` — either satisfies the
-        harness's "must degrade" invariant, and the vuln gate is what makes ``npm audit``
-        itself not-collected. See the module diff's findings note on this conformance-path
-        decision (single injected stdout — the harness was NOT extended).
+        ``stdout`` / ``clean_stdout`` remain as the single-stdout fallback (backward
+        compatible with lenses that declare no per-tool maps).
         """
         clean = json.dumps({
             "auditReportVersion": 2,
@@ -1539,13 +1554,63 @@ class DepsLens(object):
                 "info": 0, "low": 0, "moderate": 0, "high": 3, "critical": 0,
                 "total": 3}},
         })
+        empty_upgrades = json.dumps({})  # ncu --jsonUpgraded clean = no upgrades
         return {
             "reported-nonzero-parsed-zero": {
                 "stdout": reported,
                 "clean_stdout": clean,
                 "exit": 1,
                 "clean_exit": 0,
+                # npm audit (argv[0] "npm") is the target; ncu gets a clean upgrade map.
+                "stdout_by_tool": {"npm": reported},
+                "clean_stdout_by_tool": {"npm-check-updates": empty_upgrades},
             },
+        }
+
+    def conformance_prev_digest(self):
+        """A schema-valid prior digest carrying ONE recognizable node-vuln sentinel, plus
+        the same digest re-measured clean, for the conformance non-vacuity check.
+
+        The harness first asserts ``diff(prev, cleared)`` RESOLVES the sentinel (proving the
+        lens's diff actually tracks it — otherwise "resolved must be empty" on the findings
+        probe would be vacuous), then asserts the degraded findings probe resolves nothing.
+        """
+        sentinel_id = "deps:audit:node:sentinel-pkg:GHSA-sent-sent-sent"
+        vuln_item = {
+            "id": sentinel_id,
+            "package": "sentinel-pkg",
+            "advisory": "GHSA-sent-sent-sent",
+            "severity": "high",
+            "severityKnown": True,
+            "metric": SEVERITY_RANK["high"],
+            "occurrences": 1,
+            "receipt": "sentinel-pkg [high] conformance sentinel advisory",
+        }
+
+        def _digest(vuln_items):
+            return {
+                "schema": DIGEST_SCHEMA,
+                "collectorVersion": COLLECTOR_VERSION,
+                "detected": ["node"],
+                "ecosystems": {
+                    "node": {
+                        "manifest": "package.json",
+                        "status": "partial",
+                        "reason": None,
+                        "freshness": {"status": "collected",
+                                      "tool": "npm-check-updates", "items": {}},
+                        "vulns": {"status": "collected", "tool": "npm audit",
+                                  "items": vuln_items},
+                    },
+                },
+                "coverage": {},
+                "notes": [],
+            }
+
+        return {
+            "prev": _digest({sentinel_id: vuln_item}),
+            "cleared": _digest({}),
+            "sentinelIds": [sentinel_id],
         }
 
 

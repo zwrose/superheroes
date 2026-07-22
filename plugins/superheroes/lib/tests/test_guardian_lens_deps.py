@@ -626,6 +626,30 @@ def test_npm_audit_exit0_nonempty_vulns_zero_normalized_degrades(tmp_path):
     assert prev_id not in d["resolved"]
 
 
+def test_npm_audit_nondict_vuln_entry_at_exit0_degrades(tmp_path):
+    """A2: a nonempty ``vulnerabilities`` map whose VALUE is non-dict (schema drift) at
+    exit 0 / metadata 0 normalizes to zero advisories. The old ``raw_entries`` counted only
+    dict-valued entries → 0 → the contradiction gate saw no signal → the run read clean and
+    diff() would falsely `resolve` the prior finding. Counting EVERY key (len(vulns)) fails
+    closed. Reverting A2 (back to counting dict values only) makes this read ``collected``
+    with zero candidates and resolves the prior finding — both assertions bite."""
+    repo = _node_repo(tmp_path)
+    prev, prev_id = _prev_node_vuln_digest()
+    audit = json.dumps({
+        "vulnerabilities": {"left-pad": "garbage-not-a-dict"},
+        "metadata": {"vulnerabilities": {"total": 0}},
+    })
+    out = gld.LENS.collect(
+        _ctx(repo, _run(audit=audit, audit_exit=0, ncu="{}"), prev=prev))
+    vulns = out["digest"]["ecosystems"]["node"]["vulns"]
+    assert vulns["status"] == "not-collected"
+    assert "reportedTotal=0" in vulns["reason"]
+    assert "transitiveOnlyPackages=0" in vulns["reason"]
+    assert "parseable advisory candidate" in vulns["reason"]
+    d = gld.LENS.diff(prev, out["digest"])
+    assert prev_id not in d["resolved"]
+
+
 def test_npm_audit_findings_exit_with_empty_output_is_not_collected(tmp_path):
     """R11: exit 1 + genuinely-empty vulns must not clear prior findings via resolved."""
     repo = _node_repo(tmp_path)

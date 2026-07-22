@@ -85,6 +85,77 @@ def _lens_supplied_run_body(stdout_text, exit_code):
     return body
 
 
+def _dispatch_run_body(case, probe):
+    """Return a run stub that dispatches stdout/exit on argv[0] (PRE-AUTHORIZED per-tool
+    payloads).
+
+    ``probe`` is ``"clean"`` or ``"findings"``. A multi-collector lens can declare
+    ``stdout_by_tool`` / ``clean_stdout_by_tool`` (argv[0] → stdout) so ONLY its targeted
+    collector gets the findings payload and every co-firing collector gets a CLEAN one —
+    otherwise a single shared stdout degrades the whole lens through a co-firing tool
+    regardless of whether the targeted gate works (which would let a deleted gate still
+    pass conformance).
+
+    Backward-compatible: a case with NO ``stdout_by_tool`` behaves exactly as the legacy
+    single-stdout body — the findings probe hands ``case["stdout"]`` to every tool at the
+    findings exit; the clean probe hands ``case["clean_stdout"]`` to every tool at the
+    clean exit.
+    """
+    exit_code = case["exit"]
+    clean_exit = case.get("clean_exit", exit_code)
+    default_clean = case["clean_stdout"]
+    default_findings = case["stdout"]
+    findings_by_tool = case.get("stdout_by_tool") or {}
+    clean_by_tool = case.get("clean_stdout_by_tool") or {}
+
+    def body(argv, **kwargs):
+        argv0 = argv[0] if argv else ""
+        if probe == "clean":
+            out_text, code = clean_by_tool.get(argv0, default_clean), clean_exit
+        elif not findings_by_tool:
+            # Legacy single-stdout findings probe: every tool gets the findings payload.
+            out_text, code = default_findings, exit_code
+        elif argv0 in findings_by_tool:
+            out_text, code = findings_by_tool[argv0], exit_code
+        else:
+            # Co-firing collector under a dispatch case: a clean payload so ONLY the
+            # targeted collector exercises the findings path.
+            out_text, code = clean_by_tool.get(argv0, default_clean), clean_exit
+
+        class R(object):
+            returncode = code
+            stdout = out_text
+            stderr = ""
+        return R()
+    return body
+
+
+def _conformance_prev_spec(lens, case):
+    """Resolve the prior digest + non-vacuity sentinel for a lens-supplied case.
+
+    A lens may expose ``conformance_prev_digest() -> {"prev", "cleared", "sentinelIds"}``
+    to feed a SCHEMA-VALID prior digest whose sentinel finding its OWN ``diff()`` tracks.
+    The harness proves the sentinel is recognized (``diff(prev, cleared)`` resolves it)
+    before asserting the degraded findings probe resolves nothing — otherwise "resolved
+    must be empty" is vacuous (a generic ``_PREV_DIGEST`` carries no finding the real
+    lens's diff even reads). Falls back to the case's ``prev_digest`` (or the generic
+    ``_PREV_DIGEST``) with no sentinel when the lens does not provide the hook.
+    """
+    hook = getattr(lens, "conformance_prev_digest", None)
+    if callable(hook):
+        spec = hook() or {}
+        return {
+            "prev": spec.get("prev", case.get("prev_digest", dict(_PREV_DIGEST))),
+            "cleared": spec.get("cleared"),
+            "sentinelIds": list(spec.get("sentinelIds") or []),
+        }
+    return {
+        "prev": case.get("prev_digest", dict(_PREV_DIGEST)),
+        "cleared": None,
+        "sentinelIds": [],
+    }
+
+
 def _run_conformance_probe(lens, scenario, run_stub, call_counter, config, prev_digest,
                            cwd, root):
     ctx = {
@@ -150,7 +221,11 @@ _TOOL_FREE_SPAWN_TARGETS = (
 )
 _TOOL_FREE_MODULE_SPAWN_ATTRS = {
     subprocess: ("run", "Popen", "call", "check_call", "check_output"),
-    os: ("system", "popen"),
+    # fork / forkpty / posix_spawn(p) are guarded by hasattr in the patch loop (they do
+    # not exist on every platform), so a tool-free lens that reaches ANY spawn primitive —
+    # not just system/popen — surfaces its violation. The AST guard in
+    # test_guardian_lens_no_subprocess.py is the fail-closed static complement.
+    os: ("system", "popen", "fork", "forkpty", "posix_spawn", "posix_spawnp"),
 }
 
 
@@ -240,6 +315,21 @@ def _assert_tool_free_conformance(lens):
 
     _assert_no_indirect_spawn(lens)
 
+    # B2 non-vacuity: if the lens supplies a sentinel-carrying prior digest, prove its own
+    # diff() tracks that sentinel (resolves it against a clean re-measure) BEFORE the
+    # scenarios below assert "resolved must be empty" — otherwise those checks are vacuous.
+    _hook = getattr(lens, "conformance_prev_digest", None)
+    if callable(_hook):
+        _spec = _hook() or {}
+        _sentinels = list(_spec.get("sentinelIds") or [])
+        if _sentinels and _spec.get("cleared") is not None:
+            _recognized = set(lens.diff(
+                _spec["prev"], _spec["cleared"]).get("resolved", []))
+            assert set(_sentinels) <= _recognized, (
+                "tool-free lens %r: conformance_prev_digest sentinel(s) %s not resolved by "
+                "diff() against a clean re-measure — the scenarios' 'resolved must be "
+                "empty' checks would be vacuous" % (lens.name, sorted(_sentinels)))
+
     for scenario in gl.TOOL_FREE_CONFORMANCE_SCENARIOS:
         case = cases[scenario]
         config = case.get("config")
@@ -269,6 +359,13 @@ def _assert_tool_free_conformance(lens):
                 assert resolved == [], (
                     "tool-free lens %r unreadable-input: a carried collect must not "
                     "resolve prior findings it never re-measured (false clean)"
+                    % (lens.name,))
+                # B3(ii): a 'collected' carry must PRESERVE the prior digest — a dropped
+                # (None) snapshot would be a false clean the resolved==[] check alone
+                # cannot catch (diff(prev, None) is guarded to return no movement).
+                assert out.get("digest") is not None, (
+                    "tool-free lens %r unreadable-input: a 'collected' carry must preserve "
+                    "a digest snapshot (no false clean via a dropped digest)"
                     % (lens.name,))
             else:
                 assert status in ("not-collected", "partial"), (
@@ -340,6 +437,14 @@ def assert_lens_conformance(lens, cwd="/tmp", root="/tmp"):
                 assert isinstance(reason, str) and reason.strip(), (
                     "lens %r scenario %r: degraded collect requires non-empty reason"
                     % (lens.name, scenario))
+                # B3(iii): assert the lens ITSELF put a non-empty reason in out["reason"],
+                # not that classify_collect synthesized one downstream — the honest reason
+                # is the lens's own, and a lens returning a degraded status with no reason
+                # of its own must be caught here.
+                assert isinstance(out.get("reason"), str) and out["reason"].strip(), (
+                    "lens %r scenario %r: a degraded collect must itself carry a non-empty "
+                    "out['reason'] (not lean on classify_collect to synthesize one)"
+                    % (lens.name, scenario))
                 if status == "not-collected":
                     assert out.get("digest") is None, (
                         "lens %r scenario %r: not-collected must not overwrite digest"
@@ -353,14 +458,14 @@ def assert_lens_conformance(lens, cwd="/tmp", root="/tmp"):
 
             elif scenario in _LENS_SUPPLIED:
                 case = cases[scenario]
-                exit_code = case["exit"]
-                clean_exit = case.get("clean_exit", exit_code)
                 config = case.get("config")
-                prev_digest = case.get("prev_digest", dict(_PREV_DIGEST))
+                prev_spec = _conformance_prev_spec(lens, case)
+                prev_digest = prev_spec["prev"]
 
-                # Clean probe — the clean exit (clean_exit, else exit) must be an ok exit.
+                # Clean probe — per-argv[0] dispatch so co-firing collectors get clean
+                # payloads and the declared clean exit must be an ok exit.
                 run_stub, call_counter = _counting_run(
-                    _lens_supplied_run_body(case["clean_stdout"], clean_exit))
+                    _dispatch_run_body(case, "clean"))
                 out, status, reason = _run_conformance_probe(
                     lens, scenario, run_stub, call_counter, config, prev_digest,
                     scn_cwd, scn_root)
@@ -368,9 +473,23 @@ def assert_lens_conformance(lens, cwd="/tmp", root="/tmp"):
                     "lens %r scenario %r: clean probe must collect "
                     "(declared clean exit must be an ok exit)" % (lens.name, scenario))
 
-                # Findings probe — honesty invariant at the declared findings exit.
+                # Non-vacuity (B2): prove the prior digest's sentinel is a finding this
+                # lens's diff() actually tracks — it must RESOLVE against a clean
+                # re-measure — so the findings-probe "resolved must be empty" below is a
+                # real check, not trivially true.
+                if prev_spec["sentinelIds"]:
+                    recognized = set(lens.diff(
+                        prev_digest, prev_spec["cleared"]).get("resolved", []))
+                    assert set(prev_spec["sentinelIds"]) <= recognized, (
+                        "lens %r scenario %r: conformance_prev_digest sentinel(s) %s "
+                        "not resolved by diff() against a clean re-measure — the "
+                        "findings-probe honesty check would be vacuous"
+                        % (lens.name, scenario, sorted(prev_spec["sentinelIds"])))
+
+                # Findings probe — honesty invariant at the declared findings exit; ONLY
+                # the targeted collector gets the findings payload.
                 run_stub, call_counter = _counting_run(
-                    _lens_supplied_run_body(case["stdout"], exit_code))
+                    _dispatch_run_body(case, "findings"))
                 out, status, reason = _run_conformance_probe(
                     lens, scenario, run_stub, call_counter, config, prev_digest,
                     scn_cwd, scn_root)
@@ -382,7 +501,8 @@ def assert_lens_conformance(lens, cwd="/tmp", root="/tmp"):
                 if status != "collected":
                     diff_out = lens.diff(prev_digest, out.get("digest"))
                     assert diff_out.get("resolved", []) == [], (
-                        "lens %r scenario %r: stopped looking must not emit resolved ids"
+                        "lens %r scenario %r: stopped looking must not emit resolved ids "
+                        "(non-vacuous: the sentinel above IS resolvable by this diff)"
                         % (lens.name, scenario))
 
             else:

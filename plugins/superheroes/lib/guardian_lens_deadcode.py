@@ -325,6 +325,14 @@ def _knip_argv(repo):
     gone — an unattended sweep never fetches a package from the registry). ``--directory``
     carries the absolute repo root so a neutral-cwd run scans the right project. An absent
     ``knip`` degrades to not-collected via the seam's tool-absent outcome.
+
+    SECURITY / COST NOTE (D3, disclosed for owner/advisor ratification): knip LOADS AND
+    EXECUTES the project's own ``knip.config.{js,ts}`` (or the ``knip`` key in
+    ``package.json``) by design — it has no clean no-exec mode. On a repo whose knip config
+    is attacker-controlled this is repo-controlled code execution during a sweep. This lens
+    does NOT try to hack around it (a neutered config would silently mis-scan); the behavior
+    is left as-is and surfaced here so a sandboxing follow-up can be scoped. The seam's
+    other hardening (neutral cwd, sanitized env, no fetch, PATH-only) still applies.
     """
     argv = ["knip", "--directory", repo, "--reporter", "json"]
     return (argv, "knip on PATH via the guardian seam (--directory %s)" % repo)
@@ -362,6 +370,31 @@ def _knip_receipt(kind, path, export, occ):
         "knip: unused export '%s' in %s — %d occurrence%s at line%s %s"
         % (export, path, n, "" if n == 1 else "s", "" if n == 1 else "s", line_str)
     )
+
+
+def _knip_inscope_signals(issues):
+    """Count the IN-SCOPE (unused-file / unused-export) raw signals in knip's issues,
+    regardless of whether each normalizes to a candidate.
+
+    An entry contributes when it names a nonempty ``files`` list or a nonempty ``exports``
+    list — the two categories this lens scopes to. Out-of-scope categories
+    (types / dependencies / enumMembers / duplicates / unresolved / binaries / …) are NOT
+    counted: knip legitimately exits 1 for those alone, and that is a genuine CLEAN scan
+    *for the dead-code lens*. Counting the raw signal (not the normalized candidate) is
+    what distinguishes "knip found unused files/exports we failed to normalize" (a
+    contradiction — degrade) from "knip only flagged unused dependencies" (clean-collected).
+    """
+    n = 0
+    for entry in issues or []:
+        if not isinstance(entry, dict):
+            continue
+        files = entry.get("files")
+        if isinstance(files, list) and files:
+            n += len(files)
+        exports = entry.get("exports")
+        if isinstance(exports, list) and exports:
+            n += len(exports)
+    return n
 
 
 def aggregate_knip(issues):
@@ -424,15 +457,30 @@ def collect_node(ctx, repo):
     issues, err = parse_knip(res.get("stdout"))
     if err is not None:
         return ("not-collected", err, {}, argv, tried)
-    # Exit 1 means "issues found" — a parsed-but-empty issues list is a contradiction,
-    # never a clean scan (the R2/R11 "findings-exit with empty output reported as clean"
-    # defect). Empty stdout is already caught as unparseable in parse_knip above; this
-    # gate catches a well-formed {"issues": []} that co-fires with knip's findings exit.
-    if res.get("exit") == 1 and not issues:
-        return ("not-collected",
-                "knip exited 1 (issues found) but parsed to zero candidates — refusing "
-                "to report a clean scan", {}, argv, tried)
-    return ("collected", None, aggregate_knip(issues), argv, tried)
+    candidates = aggregate_knip(issues)
+    # Exit 1 means "issues found". A parsed-but-empty CANDIDATE set (not just an empty
+    # raw `issues` list — the gate must check the NORMALIZED candidates, since
+    # aggregate_knip drops out-of-scope entries) is the R2/R11 "findings-exit reported as
+    # clean" defect — UNLESS knip's exit-1 was entirely out-of-scope for this lens.
+    #   * empty `issues` list, OR in-scope file/export signals that normalized to zero
+    #     → contradiction → degrade (refuse a clean scan).
+    #   * nonempty `issues` carrying ONLY out-of-scope categories (unused dependencies /
+    #     types / enumMembers / …) → a genuine clean dead-code scan → collected (empty).
+    if res.get("exit") == 1 and not candidates:
+        inscope = _knip_inscope_signals(issues)
+        if inscope:
+            return ("not-collected",
+                    "knip exited 1 (issues found) with %d in-scope file/export signal(s) "
+                    "that normalized to zero candidates — refusing to report a clean scan"
+                    % inscope, {}, argv, tried)
+        if not issues:
+            return ("not-collected",
+                    "knip exited 1 (issues found) but parsed to zero candidates — "
+                    "refusing to report a clean scan", {}, argv, tried)
+        # Exit 1 was entirely out-of-scope for the dead-code lens (e.g. unused
+        # dependencies) — a genuine clean scan, not a contradiction.
+        return ("collected", None, {}, argv, tried)
+    return ("collected", None, candidates, argv, tried)
 
 
 # ------------------------------------------------------------------------------- the lens
@@ -661,7 +709,42 @@ class DeadCodeLens(object):
                 "clean_stdout": clean,
                 "exit": 1,
                 "clean_exit": 0,
+                # knip (argv[0] "knip") is the sole collector under the node-only fixture
+                # and the contradiction target. The per-tool map is declared for parity
+                # with the multi-collector lenses; deleting the exit-1 gate makes the sole
+                # knip run read clean → whole-lens collected → this case fails.
+                "stdout_by_tool": {"knip": clean},
             },
+        }
+
+    def conformance_prev_digest(self):
+        """A schema-valid prior digest carrying ONE recognizable knip sentinel, plus the
+        same digest re-measured clean, for the conformance non-vacuity check.
+
+        The harness first asserts ``diff(prev, cleared)`` RESOLVES the sentinel (so the
+        findings-probe "resolved must be empty" is not vacuous), then asserts the degraded
+        findings probe resolves nothing.
+        """
+        sentinel_id = "deadcode:knip:scripts/sentinel-unused.js"
+        sentinel = {
+            "id": sentinel_id, "tool": "knip", "kind": "file",
+            "path": "scripts/sentinel-unused.js", "export": None,
+            "metric": 1, "lines": [], "receipt": "knip: sentinel unused file",
+        }
+
+        def _digest(cands):
+            return {
+                "schema": DIGEST_SCHEMA,
+                "collectorVersion": COLLECTOR_VERSION,
+                "detected": ["node"],
+                "ecosystems": {},
+                "candidates": cands,
+            }
+
+        return {
+            "prev": _digest({sentinel_id: sentinel}),
+            "cleared": _digest({}),
+            "sentinelIds": [sentinel_id],
         }
 
 

@@ -557,6 +557,56 @@ def _digest(refs):
     return {"schemaVersion": m.DIGEST_SCHEMA_VERSION, "references": refs}
 
 
+def test_diff_none_cur_never_resolves_prior_refs():
+    """A3(i): a degraded sweep returns digest=None. diff(prev_with_refs, None) must claim
+    no movement (the sibling guard deps/deadcode already have). Without it, `_refs_of(None)`
+    is {} and every prior unresolved reference reads as `resolved` — a false clean for
+    findings this sweep never re-measured. A cur dict with no references map is treated the
+    same way. Reverting the guard makes both diffs resolve the prior ref → this bites."""
+    prev = _digest({"docs:ref:CLAUDE.md:lib/gone.py":
+                    {"resolved": False, "occurrences": 1}})
+    assert m.LENS.diff(prev, None) == {"new": [], "worsened": [], "resolved": []}
+    assert m.LENS.diff(prev, {"schemaVersion": m.DIGEST_SCHEMA_VERSION}) == {
+        "new": [], "worsened": [], "resolved": []}
+
+
+def test_all_docs_absent_carries_prior_ref_forward_no_false_resolved(tmp_path):
+    """A3(ii): a prior broken CLAUDE.md reference, then ALL root docs absent while the
+    verify subcheck still collects → `partial`; the CLAUDE.md reference is CARRIED FORWARD
+    (never `resolved`). A doc not read this sweep was not re-measured, so its references
+    must survive rather than read as fixed. Reverting the absent-doc carry-forward drops the
+    reference from the digest and diff() resolves it → both the carry and the no-resolve
+    assertions bite."""
+    repo = init_calibrated_repo(tmp_path, verify_command="python3 scripts/check.py")
+    os.makedirs(os.path.join(repo, "lib"))
+    _write(repo, "lib/keep.py", "x = 1\n")
+    os.makedirs(os.path.join(repo, "scripts"))
+    _write(repo, "scripts/check.py", "print(1)\n")
+    _write(repo, "CLAUDE.md", "Read `lib/gone.py`.\n")
+    ctx, _run = _ctx(repo, tmp_path)
+    first = m.LENS.collect(ctx)
+    broken_id = "docs:ref:CLAUDE.md:lib/gone.py"
+    assert first["digest"]["references"][broken_id]["resolved"] is False
+
+    # All root instruction docs vanish this sweep; verify command still collects.
+    for name in ("CLAUDE.md", "README.md", "CONVENTIONS.md"):
+        p = os.path.join(repo, name)
+        if os.path.isfile(p):
+            os.remove(p)
+    ctx2, _run2 = _ctx(repo, tmp_path, prev=first["digest"])
+    second = m.LENS.collect(ctx2)
+
+    assert second["status"] == "partial"
+    assert second["digest"]["docsRead"] == []
+    assert second["digest"]["verifyCommand"]["status"] == "collected"
+    carried = second["digest"]["references"][broken_id]
+    assert carried["resolved"] is False
+    assert carried.get("carriedForward") is True
+    d = m.LENS.diff(first["digest"], second["digest"])
+    assert broken_id not in d["resolved"]
+    assert broken_id not in d["new"]
+
+
 def test_diff_resolved_then_broken_is_new():
     prev = _digest({"docs:ref:CLAUDE.md:a.md": {"resolved": True, "occurrences": 1}})
     cur = _digest({"docs:ref:CLAUDE.md:a.md": {"resolved": False, "occurrences": 1}})
@@ -665,10 +715,12 @@ def test_already_broken_reference_survives_losing_its_anchor(tmp_path):
 
 
 def test_docstring_states_absent_vs_unreadable_carry_forward():
-    """Absent docs are real drift; unreadable docs are collection failures (doc only)."""
+    """A doc NOT READ this sweep — absent OR unreadable — carries its prior references
+    forward and is never `resolved`; only a re-measured reference may resolve."""
     doc = m.__doc__
     assert "absent" in doc.lower() and "unreadable" in doc.lower()
     assert "resolved" in doc.lower()
+    assert "carried forward" in doc.lower()
     assert "doc is gone" in doc.lower() or "instruction docs are absent" in doc.lower()
 
 

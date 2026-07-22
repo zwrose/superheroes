@@ -311,7 +311,10 @@ def test_lens_contract_covers_optional_conformance_case_fields():
     for field in optional:
         assert field in text, (
             "lens-contract.md missing optional conformance case field %r" % field)
-    assert set(optional) == {"clean_exit", "config", "prev_digest"}, (
+    assert set(optional) == {
+        "clean_exit", "config", "prev_digest",
+        "stdout_by_tool", "clean_stdout_by_tool",
+    }, (
         "CONFORMANCE_CASE_OPTIONAL_FIELDS membership changed — update this golden set "
         "AND lens-contract.md"
     )
@@ -362,3 +365,28 @@ def test_skill_rollout_roster_guard_is_not_vacuous():
     assert skill_names == prod_names
     assert (skill_names | {"phantom-lens"}) != prod_names
     assert skill_names != (prod_names | {"phantom-lens"})
+
+
+def test_production_lens_modules_and_names_are_in_sync():
+    """C2: the runtime module roster (PRODUCTION_LENS_MODULES) and the name map
+    (PRODUCTION_LENS_NAMES) must have IDENTICAL module-key sets — dropping a module from
+    the loaded tuple while keeping its name mapping (or vice versa) must fail closed. The
+    sibling roster test compares only PRODUCTION_LENS_NAMES against the SKILL prose, so it
+    would not notice a module silently missing from the loaded tuple."""
+    modules = guardian_lens.PRODUCTION_LENS_MODULES
+    names = guardian_lens.PRODUCTION_LENS_NAMES
+    assert len(modules) == len(set(modules)), (
+        "duplicate module in PRODUCTION_LENS_MODULES: %s" % (modules,))
+    assert set(modules) == set(names.keys()), (
+        "PRODUCTION_LENS_MODULES %s drifted from PRODUCTION_LENS_NAMES keys %s — a module "
+        "registered in one but not the other"
+        % (sorted(modules), sorted(names.keys())))
+
+
+def test_production_lens_modules_sync_guard_is_not_vacuous():
+    """The C2 guard must fail closed when a module is on only one side."""
+    modules = set(guardian_lens.PRODUCTION_LENS_MODULES)
+    name_keys = set(guardian_lens.PRODUCTION_LENS_NAMES.keys())
+    assert modules == name_keys
+    assert (modules | {"guardian_lens_phantom"}) != name_keys
+    assert modules != (name_keys | {"guardian_lens_phantom"})

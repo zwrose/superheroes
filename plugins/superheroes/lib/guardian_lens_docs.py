@@ -44,12 +44,17 @@ an absent calibration / `verifyCommand` alongside readable docs, also degrades t
 `partial` and carries the portion it could not measure forward from `ctx["prevDigest"]`,
 so the next sweep never reads a half-run as a fleet of fixed references.
 
-**Absent vs unreadable docs (load-bearing):** references are carried forward for an
-*unreadable* doc (collection failure — the doc may still exist; we could not read it).
-References are NOT carried forward for an *absent* doc: absence is real repo state and
-real drift. Consequence: if all instruction docs are absent, previously broken
-references under those docs are reported as `resolved`, which reads as "fixed" when the
-truth is "the doc is gone."
+**Absent vs unreadable docs (load-bearing):** a doc NOT READ this sweep — whether
+*unreadable* (collection failure — the doc may still exist; we could not read it) or
+*absent* (not on disk this sweep) — has its prior references CARRIED FORWARD, never
+`resolved`. Only a reference re-measured from a doc we actually READ, and now gone from
+it, may be `resolved`. This is the honesty rule the sibling lenses share: a sweep that
+stopped looking must not report the findings it did not re-measure as fixed. Consequence:
+if all instruction docs are absent, previously broken references under them are carried
+(the lens degrades to `partial`), NOT reported as `resolved` — reporting them fixed would
+read as "clean" when the truth is "the doc is gone." (The `docsRead` / `docsAbsent` /
+`docsUnreadable` digest lists still record exactly which docs were covered, so absence
+stays visible as its own state.)
 """
 import os
 import re
@@ -452,6 +457,14 @@ class DocsLens(object):
                            "docs:ref:%s:" % entry["doc"])
             degradations.append("%s %s" % (entry["doc"], entry["reason"]))
 
+        # A doc that was ABSENT this sweep was not read, so its references were not
+        # re-measured — carry them forward exactly as an unreadable doc's, never resolve
+        # them. Only a reference re-measured from a doc we actually READ (and now gone from
+        # it) may resolve. Without this, all-docs-absent would report every prior broken
+        # reference as `resolved` ("fixed") when the truth is the doc is gone.
+        for doc in docs_absent:
+            _carry_forward(ctx.get("prevDigest"), refs, "docs:ref:%s:" % doc)
+
         verify = self._collect_verify(ctx, repo, refs, candidates)
         if verify["reason"]:
             _carry_forward(ctx.get("prevDigest"), refs, "docs:verify-cmd:")
@@ -559,6 +572,14 @@ class DocsLens(object):
         resolved — unresolved before and (resolving now, or gone)
         worsened — unresolved in both, with more occurrences now
         """
+        # Sibling guard (mirrors deps/deadcode): a degraded sweep returns digest=None (or a
+        # digest with no references map). Nothing was measured this run, so there is nothing
+        # to compare — claim no movement in either direction. Without this, `_refs_of(None)`
+        # is {} and every prior unresolved reference reads as `resolved` (a false clean for
+        # findings this sweep never re-measured).
+        if not isinstance(cur_digest, dict) or not isinstance(
+                cur_digest.get("references"), dict):
+            return {"new": [], "worsened": [], "resolved": []}
         prev = _refs_of(prev_digest)
         cur = _refs_of(cur_digest)
         new, worsened, resolved = [], [], []
@@ -641,6 +662,24 @@ class DocsLens(object):
                 "prev_digest": _conformance_prev_with_verify_finding(),
                 "config": None,
             },
+        }
+
+    def conformance_prev_digest(self):
+        """A schema-valid prior digest carrying ONE recognizable verify-command sentinel,
+        plus the same digest re-measured clean, for the conformance non-vacuity check.
+
+        The harness first asserts ``diff(prev, cleared)`` RESOLVES the sentinel (so the
+        tool-free scenarios' "resolved must be empty" is not vacuous), then asserts each
+        degraded/carried scenario resolves nothing. The verify subcheck always degrades in
+        conformance (no ``ctx["verifyCommand"]``), so the sentinel is carried forward — the
+        exact carry-forward these cases exercise.
+        """
+        prev = _conformance_prev_with_verify_finding()
+        cleared = {"schemaVersion": DIGEST_SCHEMA_VERSION, "references": {}}
+        return {
+            "prev": prev,
+            "cleared": cleared,
+            "sentinelIds": ["docs:verify-cmd:scripts/verify.sh"],
         }
 
 

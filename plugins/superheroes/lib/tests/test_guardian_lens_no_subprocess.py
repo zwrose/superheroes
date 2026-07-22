@@ -212,28 +212,28 @@ def _tool_invocation_calls(tree):
             yield name, node
 
 
-def _list_str_elements(node):
-    """String-constant elements of a List/Tuple literal, in order (or None)."""
+def _list_element_nodes(node):
+    """The element AST nodes of a List/Tuple literal, in order (or None if not one)."""
     if not isinstance(node, (ast.List, ast.Tuple)):
         return None
-    return [
-        e.value for e in node.elts
-        if isinstance(e, ast.Constant) and isinstance(e.value, str)
-    ]
+    return list(node.elts)
 
 
-def _resolve_argv_list(node, func_node):
-    """Resolve an argv expr to its string-constant elements.
+def _resolve_argv_nodes(node, func_node):
+    """Resolve an argv expr to its element AST NODES (or None when unresolvable).
 
     Handles a direct list literal, the head of a ``[...] + rest`` concatenation, and a
-    bare Name bound to a list literal within the enclosing function.
+    bare Name bound to a list literal within the enclosing function. Returns the element
+    NODES (not just string constants) so argv[0] can be checked for being a statically
+    vetted literal — a Name-bound / f-string / call-result head must not be silently
+    dropped (that is the fail-open hole this closes).
     """
-    direct = _list_str_elements(node)
+    direct = _list_element_nodes(node)
     if direct is not None:
         return direct
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-        left = _list_str_elements(node.left)
-        if left:
+        left = _list_element_nodes(node.left)
+        if left is not None:
             return left
     if isinstance(node, ast.Name) and func_node is not None:
         for assign in ast.walk(func_node):
@@ -241,10 +241,31 @@ def _resolve_argv_list(node, func_node):
                 continue
             target = assign.targets[0]
             if isinstance(target, ast.Name) and target.id == node.id:
-                got = _resolve_argv_list(assign.value, func_node)
-                if got:
+                got = _resolve_argv_nodes(assign.value, func_node)
+                if got is not None:
                     return got
-    return []
+    return None
+
+
+def _const_str(node, func_node):
+    """Statically resolve one element node to its string value, or None.
+
+    A string ``Constant`` resolves directly; a ``Name`` bound to a string ``Constant`` in
+    the enclosing function resolves to that constant (the real lenses bind e.g.
+    ``tool = "pip-audit"`` then build ``argv = [tool, ...]``). Anything else — an f-string,
+    a call result, a starred expr, a Name with no constant binding — is unresolvable.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name) and func_node is not None:
+        for assign in ast.walk(func_node):
+            if (isinstance(assign, ast.Assign) and len(assign.targets) == 1
+                    and isinstance(assign.targets[0], ast.Name)
+                    and assign.targets[0].id == node.id
+                    and isinstance(assign.value, ast.Constant)
+                    and isinstance(assign.value.value, str)):
+                return assign.value.value
+    return None
 
 
 def _enclosing_functions(tree):
@@ -262,31 +283,53 @@ def _nearest_enclosing_function(call, funcs):
     return max(containing, key=lambda f: f.lineno)
 
 
-def _argv_elements_for_call(name, call, func_node):
+def _argv_nodes_for_call(name, call, func_node):
+    """(head_node, element_nodes) for a tool-invocation call, or (None, None) when the
+    argv is unresolvable (e.g. a helper-returned argv the real vulture/knip lenses use —
+    left uninspected here; their literal heads live one function away).
+
+    ``head_node`` is the argv[0] AST node whose literalness must be verified.
+    """
     if name == "run_tool":
         if not call.args:
-            return []
-        return _resolve_argv_list(call.args[0], func_node)
+            return (None, None)
+        nodes = _resolve_argv_nodes(call.args[0], func_node)
+        if not nodes:
+            return (None, None)
+        return (nodes[0], nodes)
     if name == "invoke":
-        # invoke(tool, fixed_args, repo, targets, ...): argv[0] is `tool`, rest is fixed_args.
-        elts = []
-        if call.args and isinstance(call.args[0], ast.Constant) \
-                and isinstance(call.args[0].value, str):
-            elts.append(call.args[0].value)
+        # invoke(tool, fixed_args, repo, targets, ...): argv[0] is `tool`, rest fixed_args.
+        if not call.args:
+            return (None, None)
+        head = call.args[0]
+        nodes = [head]
         if len(call.args) > 1:
-            elts += _resolve_argv_list(call.args[1], func_node)
-        return elts
-    return []
+            rest = _resolve_argv_nodes(call.args[1], func_node)
+            if rest:
+                nodes += rest
+        return (head, nodes)
+    return (None, None)
 
 
 def _inspect_tool_call(name, call, func_node):
-    elts = _argv_elements_for_call(name, call, func_node)
-    if not elts:
+    head_node, nodes = _argv_nodes_for_call(name, call, func_node)
+    if head_node is None:
         return []
     offenders = []
-    argv0 = elts[0]
-    if "/" in argv0 or argv0.startswith("."):
-        offenders.append("path-shaped argv[0] literal %r (repo-local/relative)" % argv0)
+    # FAIL CLOSED: argv[0] must statically resolve to a vetted string literal. A Name-bound
+    # non-constant, an f-string, a call result, or a starred head cannot be verified as a
+    # PATH-only tool identity — flag it rather than inspecting the wrong element (the prior
+    # guard dropped non-constant elements and silently checked argv[1] as if it were argv[0]).
+    head = _const_str(head_node, func_node)
+    if head is None:
+        offenders.append(
+            "non-literal argv[0] (%s) — cannot statically verify the tool identity is a "
+            "vetted PATH-only literal" % type(head_node).__name__)
+        return offenders
+    if "/" in head or head.startswith("."):
+        offenders.append("path-shaped argv[0] literal %r (repo-local/relative)" % head)
+    # Resolve every string element (incl. Name→const) for the npx / acquisition scan.
+    elts = [s for s in (_const_str(n, func_node) for n in nodes) if s is not None]
     if "npx" in elts:
         offenders.append("npx invocation in argv %r (fetch/acquisition)" % elts)
     joined = " ".join(elts)
@@ -332,6 +375,33 @@ def test_lens_argv_guard_flags_indirect_argv_binding():
         "    return gc.run_tool(argv, ctx=ctx)\n"
     )
     assert _find_lens_argv_offenders(src)
+
+
+def test_lens_argv_guard_flags_name_bound_head():
+    """C1 fail-closed: a tool NAME bound to a variable used as argv[0].
+
+    The prior guard dropped the non-constant head element and silently inspected argv[1]
+    as if it were the tool — so a Name-bound `npx` slipped through. Now the head resolves
+    (Name→const) and the npx scan catches it; a genuinely unresolvable head is flagged
+    directly (see the f-string case below)."""
+    src = (
+        "def collect(ctx):\n"
+        "    tool = 'npx'\n"
+        "    argv = [tool, '--yes', 'vulture']\n"
+        "    return gc.run_tool(argv, ctx=ctx)\n"
+    )
+    assert _find_lens_argv_offenders(src)
+
+
+def test_lens_argv_guard_fails_closed_on_fstring_head():
+    """C1 fail-closed: an f-string argv[0] cannot be statically vetted as a PATH-only
+    literal — flag it rather than inspecting a later element."""
+    src = (
+        "def collect(ctx, base):\n"
+        "    return gc.run_tool([f'{base}/knip', '--reporter', 'json'], ctx=ctx)\n"
+    )
+    offenders = _find_lens_argv_offenders(src)
+    assert offenders and any("non-literal argv[0]" in o for o in offenders)
 
 
 def test_lens_argv_guard_clears_a_clean_argv():
