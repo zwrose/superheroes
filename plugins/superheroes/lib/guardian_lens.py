@@ -91,14 +91,17 @@ are not part of this tuple.
 
 REGISTRY = []
 
-PRODUCTION_LENS_MODULES = ("guardian_lens_duplication",)
+PRODUCTION_LENS_MODULES = ("guardian_lens_duplication", "guardian_lens_hotspots")
 """Authoritative runtime roster of production lens module names (under lib/).
 
 Rebasing lens PRs populate this tuple; each module MUST expose a module-level LENSES
-tuple of ready-to-register lens objects. (hotspots is added by its own rebase order.)
+tuple of ready-to-register lens objects.
 """
 
-PRODUCTION_LENS_NAMES = {"guardian_lens_duplication": ("duplication",)}
+PRODUCTION_LENS_NAMES = {
+    "guardian_lens_duplication": ("duplication",),
+    "guardian_lens_hotspots": ("hotspots",),
+}
 """Map module-name → tuple of lens names the module is expected to export.
 
 Used to synthesize correctly-named stand-ins when a module fails to load and to
