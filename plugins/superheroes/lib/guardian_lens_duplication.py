@@ -34,8 +34,11 @@ TOP_N = 25
 # jscpd is handed the tracked-file census as explicit operands (never the repo dir), so a
 # very large repo could push the argv past the kernel's ARG_MAX. macOS ARG_MAX is 262144
 # bytes and the sanitized child env consumes a share of that; cap the operand payload well
-# under it. On overflow the lens degrades HONESTLY (not-collected) rather than silently
-# truncating the file list or falling back to scanning cwd (which would re-open #564).
+# under it. The bound is measured on the ABSOLUTIZED payload (invoke prepends the repo
+# realpath + a path separator to every operand before execve), not the repo-relative bytes,
+# so the guard reflects the real argv the kernel sees. On overflow the lens degrades
+# HONESTLY (not-collected) rather than silently truncating the file list or falling back to
+# scanning cwd (which would re-open #564).
 MAX_TRACKED_OPERAND_BYTES = 100_000
 
 # difflib re-measure budgets — rank by jscpd proxy first, then measure within caps.
@@ -118,10 +121,14 @@ def _git(ctx, cwd, args, timeout=gc.DEFAULT_TIMEOUT):
 def _tracked_existing_files(ctx, cwd):
     """Repo-relative paths that are both ``git ls-files`` tracked and present on disk.
 
-    Mirrors ``guardian_lens_hotspots.tracked_existing_files``. Returns ``(files, None)`` on
-    success or ``(None, reason)`` on a git failure — a git failure must NEVER be read as an
-    empty tracked set (that would erase the baseline); collect() turns the reason into
-    ``not-collected`` so the prior snapshot survives.
+    Shares its census shape with ``guardian_lens_hotspots.tracked_existing_files`` but now
+    DIVERGES from it: this lens excludes symlinks (see below) because it hands the census to
+    jscpd as content to scan, whereas hotspots only reads churn metadata. Unifying the two
+    into a shared param'd helper (symlink policy as a parameter) is a tracked follow-up — do
+    NOT extract here. Returns ``(files, None)`` on success or ``(None, reason)`` on a git
+    failure — a git failure must NEVER be read as an empty tracked set (that would erase the
+    baseline); collect() turns the reason into ``not-collected`` so the prior snapshot
+    survives.
     """
     res = _git(ctx, cwd, ["ls-files", "-z"])
     if not res["ok"]:
@@ -133,7 +140,14 @@ def _tracked_existing_files(ctx, cwd):
         # Never accept brace-rename garbage into the tracked set.
         if "=>" in raw or "{" in raw:
             continue
-        if os.path.isfile(os.path.join(cwd, raw)):
+        full = os.path.join(cwd, raw)
+        # Census only regular, NON-symlink files. os.path.isfile follows symlinks, so a
+        # tracked symlink whose target is an UNTRACKED file under the repo would pass both
+        # this filter and invoke's under-repo check (realpath stays under-repo) — jscpd
+        # would then scan the untracked target's bytes, re-opening #564 for the symlink
+        # case. A tracked symlink's own "content" is the link, not source to dedup, so
+        # excluding it keeps the census faithful to tracked content only.
+        if os.path.isfile(full) and not os.path.islink(full):
             out.add(raw)
     return out, None
 
@@ -592,8 +606,13 @@ class DuplicationLens:
     # on-disk files instead of the whole repo dir (which walked untracked checkouts/ and
     # nested .git internals). The digest SCHEMA is unchanged, but a prior baseline may
     # hold now-excluded junk pairs; bump the version so guardian_sweep.py (any version
-    # delta ⇒ lens_new) records a quiet re-baseline instead of surfacing those excluded
-    # pairs as false `resolved` drift.
+    # delta ⇒ lens_new) records a quiet re-baseline FOR DRIFT — the new/worsened/resolved
+    # diff runs with _prev_digest treated as absent, so the excluded junk pairs do not
+    # surface as false `resolved` drift. This "quiet" scope is DRIFT ONLY: red_lines()
+    # still runs unconditionally (with prev_pairs empty on a version-delta sweep), so a
+    # genuine tracked clone at/above threshold re-fires as a `large-fresh-clone` red line
+    # on the first post-fix sweep. That is by design — a red line must always surface,
+    # even across a re-baseline.
     collector_version = "2.1.0"
     required_facts = ()
     cost = {
@@ -713,7 +732,14 @@ class DuplicationLens:
         operands = sorted(tracked)
         # ARG_MAX guard: the operand payload could push argv past the kernel limit on a
         # huge repo. Degrade honestly (no silent cwd fallback, no truncation of the list).
-        operand_bytes = sum(len(p.encode("utf-8")) for p in operands)
+        # invoke absolutizes every operand before execve (prepends realpath(cwd) + a path
+        # sep), so measure the ABSOLUTIZED size — the repo-relative byte count undercounts
+        # the real argv and could pass a payload that then hits E2BIG. An absolutized
+        # operand is at most `realpath(cwd)/` + the relative path, so this is a safe upper
+        # bound.
+        abs_prefix_bytes = len(os.path.realpath(cwd).encode("utf-8")) + 1
+        operand_bytes = sum(
+            len(p.encode("utf-8")) + abs_prefix_bytes for p in operands)
         if operand_bytes > MAX_TRACKED_OPERAND_BYTES:
             return {
                 "candidates": [],

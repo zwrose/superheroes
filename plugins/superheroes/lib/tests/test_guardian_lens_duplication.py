@@ -9,6 +9,8 @@ previous digest is read as camelCase ``ctx["prevDigest"]``.
 import difflib
 import json
 import os
+import re
+import shutil
 import subprocess
 
 import pytest
@@ -725,6 +727,33 @@ def test_arg_max_guard_degrades_never_scans_cwd(tmp_path, monkeypatch):
     assert not any(call[0] and call[0][0] == "jscpd" for call in run.calls)
 
 
+def test_arg_max_guard_measures_absolutized_payload(tmp_path, monkeypatch):
+    """The ARG_MAX guard must measure the ABSOLUTIZED argv (invoke prepends realpath(cwd) +
+    a path sep to every operand before execve), not the repo-relative bytes. A cap set to
+    exactly the relative payload size must STILL degrade, because absolutization inflates
+    each operand — the relative measure would undercount and pass a payload that then hits
+    E2BIG."""
+    _seed_tracked(tmp_path, "a.py", "b.py")
+    operands = ["a.py", "b.py"]
+    relative_bytes = sum(len(p.encode("utf-8")) for p in operands)  # 8 bytes
+    # Cap == the relative payload: the OLD relative-only measure (8 > 8 is False) would NOT
+    # trip and would go on to scan; the absolutized measure must trip.
+    monkeypatch.setattr(gld, "MAX_TRACKED_OPERAND_BYTES", relative_bytes)
+    run = _FakeJscpd(_report([]))
+    out = _collect(gld.DuplicationLens(), tmp_path, run)
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"
+    assert out["digest"] is None
+    assert "across 2 files" in reason
+    assert "%d-byte cap" % relative_bytes in reason
+    # The reported operand byte count reflects the ABSOLUTIZED payload (strictly greater
+    # than the repo-relative bytes by realpath(cwd)/ per operand).
+    m = re.search(r"payload is (\d+) bytes", reason)
+    assert m and int(m.group(1)) > relative_bytes, reason
+    # jscpd must NOT have been spawned (no cwd fallback).
+    assert not any(call[0] and call[0][0] == "jscpd" for call in run.calls)
+
+
 def test_diagnostics_report_census_provenance(tmp_path):
     """collect() reports censusSource + trackedFilesCensused in diagnostics."""
     shared = ["CENSUS_%d" % i for i in range(12)]
@@ -749,6 +778,7 @@ _DUP_SNIPPET = "\n".join([
 ]) + "\n"
 
 
+@pytest.mark.skipif(not shutil.which("jscpd"), reason="jscpd not installed")
 def test_census_confines_jscpd_to_git_tracked_files_end_to_end(tmp_path):
     """End-to-end (#564): a real git repo with a genuine tracked clone PLUS an untracked
     checkouts/ dir holding byte-duplicates. Driving collect() with a run seam that shells
@@ -797,6 +827,66 @@ def test_census_confines_jscpd_to_git_tracked_files_end_to_end(tmp_path):
 
     # Census confined to the two tracked files.
     assert out["diagnostics"]["censusSource"] == "git ls-files"
+    assert out["diagnostics"]["trackedFilesCensused"] == 2
+
+
+@pytest.mark.skipif(not shutil.which("jscpd"), reason="jscpd not installed")
+def test_census_excludes_tracked_symlink_to_untracked_target_end_to_end(tmp_path):
+    """End-to-end (#564, symlink case): a TRACKED symlink whose target is an UNTRACKED file
+    UNDER the repo must NOT be censused. os.path.isfile follows the link, so without the
+    islink exclusion the symlink passes the census filter AND invoke's under-repo check
+    (realpath stays under-repo) — jscpd would then scan the untracked target's bytes,
+    re-importing untracked content. Real git + real jscpd.
+
+    A tracked symlink's own content is the link, not source to dedup, so the faithful
+    census counts only the real regular tracked files."""
+    repo = str(tmp_path)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+
+    # Two genuine tracked byte-duplicate real files (a real clone).
+    (tmp_path / "a.py").write_text(_DUP_SNIPPET, encoding="utf-8")
+    (tmp_path / "b.py").write_text(_DUP_SNIPPET, encoding="utf-8")
+    # An UNTRACKED file under the repo whose content byte-duplicates the tracked files.
+    (tmp_path / "untracked_target.py").write_text(_DUP_SNIPPET, encoding="utf-8")
+    # A TRACKED symlink pointing at the untracked target (committed into the repo).
+    os.symlink("untracked_target.py", str(tmp_path / "link.py"))
+
+    subprocess.run(["git", "add", "a.py", "b.py", "link.py"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+    # Sanity: git tracks the symlink but NOT its target — so the leak class is live.
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.split()
+    assert "link.py" in tracked
+    assert "untracked_target.py" not in tracked
+
+    def run(argv, **kwargs):
+        return subprocess.run(
+            argv, capture_output=True, text=True,
+            timeout=kwargs.get("timeout"), cwd=kwargs.get("cwd"))
+
+    ctx = {"cwd": repo, "run": run, "config": None, "prevDigest": None}
+    out = gld.DuplicationLens().collect(ctx)
+    status, reason = gl.classify_collect(out)
+    assert status == "collected", (status, reason, out.get("diagnostics"))
+
+    # The genuine tracked clone IS detected (not over-confined).
+    assert out["candidates"], out
+    ids = {c["id"] for c in out["candidates"]}
+    assert gld._pair_id("a.py", "b.py") in ids
+
+    # The symlink's path does NOT appear in any candidate, and the untracked target was
+    # never scanned (the #564 symlink leak — asserted BEFORE the census count so a pre-fix
+    # lens fails on the actual confinement defect).
+    for c in out["candidates"]:
+        for f in c["files"]:
+            assert "link.py" not in f, ("tracked symlink leaked into candidates: %r" % f)
+            assert "untracked_target" not in f, (
+                "untracked symlink target was scanned: %r" % f)
+
+    # Census counts only the two real regular tracked files (not the symlink).
     assert out["diagnostics"]["trackedFilesCensused"] == 2
 
 
