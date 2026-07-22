@@ -160,7 +160,7 @@ REGISTRY = []
 
 PRODUCTION_LENS_MODULES = (
     "guardian_lens_duplication", "guardian_lens_hotspots", "guardian_lens_deps",
-    "guardian_lens_deadcode", "guardian_lens_docs")
+    "guardian_lens_deadcode", "guardian_lens_docs", "guardian_lens_coupling")
 """Authoritative runtime roster of production lens module names (under lib/).
 
 Rebasing lens PRs populate this tuple; each module MUST expose a module-level LENSES
@@ -173,6 +173,7 @@ PRODUCTION_LENS_NAMES = {
     "guardian_lens_deps": ("deps",),
     "guardian_lens_deadcode": ("deadcode",),
     "guardian_lens_docs": ("docs",),
+    "guardian_lens_coupling": ("coupling",),
 }
 """Map module-name → tuple of lens names the module is expected to export.
 
