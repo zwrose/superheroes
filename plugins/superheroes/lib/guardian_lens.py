@@ -10,7 +10,8 @@ Optional conformance hook (production lenses MUST implement; not checked by vali
   conformance_cases() -> {"reported-nonzero-parsed-zero": {
       "stdout": <raw tool output that reports findings but parses to zero>,
       "clean_stdout": <raw tool output with genuinely zero findings>,
-      "exit": <exit code on a successful tool run (may be non-zero)>,
+      "exit": <exit code on a findings run (may be non-zero)>,
+      "clean_exit": <optional exit code on a genuinely-clean run; defaults to "exit">,
       "config": <dict | None>,
       "prev_digest": <json | None>,
   }}
@@ -18,11 +19,23 @@ Optional conformance hook (production lenses MUST implement; not checked by vali
 The harness owns the five tool-agnostic scenarios (``missing-tool``, ``timeout``,
 ``nonzero-exit``, ``findings-empty-output``, ``unparseable``) and injects its own
 ``ctx["run"]`` stubs. For ``reported-nonzero-parsed-zero`` the lens supplies stdout,
-clean_stdout, and exit; the harness runs a clean probe and a findings probe, both at
-the declared exit. The
-per-lens conformance harness (test_guardian_conformance) drives every
-REQUIRED_CONFORMANCE_SCENARIOS name, classifies each collect() outcome, and fails
-registration when coverage or an honesty invariant is missing.
+clean_stdout, and exit; the harness runs a clean probe (at ``clean_exit`` when the case
+declares one, else ``exit``) and a findings probe (at ``exit``). The optional
+``clean_exit`` models dual-success-exit tools such as ``npm audit`` (0 = clean, 1 =
+findings): declare ``exit=1, clean_exit=0``. Omitting ``clean_exit`` is byte-for-byte the
+prior single-exit behavior.
+
+Tool-free lenses (stdlib-only collectors — no external tool, no indirect spawn) opt in by
+setting the class attribute ``uses_external_tools = False``. Such a lens supplies
+TOOL_FREE_CONFORMANCE_SCENARIOS via conformance_cases() instead of the tool-injection
+scenarios (see the tool-free case shape below); the harness skips the five tool-injection
+scenarios and the ``reported-nonzero-parsed-zero`` two-probe (all assume a ``ctx["run"]``
+call) and instead drives the tool-free honesty invariants AND proves — at runtime, not by
+trust — that collect() spawns nothing.
+
+The per-lens conformance harness (test_guardian_conformance) drives every scenario,
+classifies each collect() outcome, and fails registration when coverage or an honesty
+invariant is missing.
 """
 import importlib
 import os
@@ -65,10 +78,56 @@ REQUIRED_CONFORMANCE_SCENARIOS.
 """
 
 CONFORMANCE_CASE_FIELDS = ("stdout", "clean_stdout", "exit")
-"""Authoritative field schema for a lens-supplied ``conformance_cases()`` entry.
+"""Authoritative REQUIRED field schema for a lens-supplied ``conformance_cases()`` entry.
 
-Optional keys ``config`` and ``prev_digest`` are forwarded to ``collect()`` but
-are not part of this tuple.
+Every ``reported-nonzero-parsed-zero`` case MUST carry all three. Optional keys live in
+CONFORMANCE_CASE_OPTIONAL_FIELDS below.
+"""
+
+CONFORMANCE_CASE_OPTIONAL_FIELDS = (
+    "clean_exit", "config", "prev_digest", "stdout_by_tool", "clean_stdout_by_tool")
+"""Optional keys a ``reported-nonzero-parsed-zero`` case MAY carry.
+
+- ``clean_exit`` — the exit code the tool returns on a genuinely-clean run when it differs
+  from the findings exit (dual-success-exit tools like ``npm audit``: ``exit=1,
+  clean_exit=0``). Defaults to ``exit`` when absent.
+- ``config`` / ``prev_digest`` — forwarded to ``collect()`` (as ``ctx["config"]`` and
+  ``ctx["prevDigest"]``).
+- ``stdout_by_tool`` / ``clean_stdout_by_tool`` — per-``argv[0]`` stdout maps for a
+  MULTI-COLLECTOR lens. The harness dispatches the findings payload to ONLY the targeted
+  collector (``stdout_by_tool``) and hands every co-firing collector a clean payload
+  (``clean_stdout_by_tool``, else ``clean_stdout``), so the targeted honesty gate is the
+  only thing that can degrade the findings probe — a single shared stdout would degrade the
+  whole lens through a co-firing tool regardless of the gate, letting a deleted gate still
+  pass. Additive: a case with no ``stdout_by_tool`` keeps the single-stdout behavior.
+
+None of these is required; the required set stays CONFORMANCE_CASE_FIELDS.
+"""
+
+TOOL_FREE_CONFORMANCE_SCENARIOS = (
+    "unreadable-input",
+    "all-inputs-unavailable",
+    "partial-carry-forward",
+)
+"""Honesty scenarios a tool-free lens (``uses_external_tools = False``) supplies via
+conformance_cases() in place of the tool-injection scenarios.
+
+Each maps to a tool-free case: ``{"fixture": {relpath: content}, "unreadable": [relpath,
+...], "prev_digest": <json>, "config": <dict | None>}``. The harness builds a fresh temp
+workspace per scenario, writes ``fixture``, makes any ``unreadable`` paths unreadable, runs
+collect() with cwd == root == that workspace and NO injected ``ctx["run"]``, and asserts:
+
+- ``unreadable-input`` — an unreadable input must degrade (``partial`` / ``not-collected``
+  with a reason) OR carry the prior digest forward; it must NEVER read as a false clean
+  (i.e. never resolve prior findings it did not re-measure).
+- ``all-inputs-unavailable`` — nothing to measure must degrade with a non-empty reason.
+- ``partial-carry-forward`` — a ``partial`` result must preserve the prior digest
+  (``diff()`` must not spuriously resolve prior ids).
+
+Across every tool-free scenario, when measurement stopped ``diff()`` must emit no
+``resolved`` ids. The harness additionally proves — by monkeypatching the spawn primitives
+to raise and running collect() — that a tool-free lens invokes neither
+``guardian_collect.run_tool`` nor any indirect spawn helper.
 """
 
 """A lens is any object providing:
@@ -80,18 +139,28 @@ are not part of this tuple.
   - collect(ctx) -> {"candidates": [{"id": str, ...}], "digest": <json>,
                      "status": <COLLECT_STATUSES member, default "collected">,
                      "reason": str | None}
-      ctx carries {"cwd", "root", "config", "run", "prevDigest"}. A lens that could not
-      collect returns status "not-collected" (never an empty candidate list).
+      ctx carries {"cwd", "root", "config", "run", "prevDigest", "verifyCommand"}. A lens
+      that could not collect returns status "not-collected" (never an empty candidate
+      list). ``verifyCommand`` is the calibrated core.md verify command already resolved by
+      the sweep (``guardian_sweep.collect`` reads it once alongside the verify-command
+      FACT) so a tool-free lens can resolve the paths it names without a second core.md read
+      or a git spawn; it is None when no calibration was resolved, and lenses that do not
+      need it ignore it.
   - diff(prev_digest, cur_digest) -> {"new": [ids], "worsened": [ids], "resolved": [ids]}
   - red_lines(candidates) -> [{"kind": <RED_LINE_KINDS>, "id": str, "detail": str}]
   - degrade(reason) -> {"lens": name, "degraded": True, "reason": reason}
   - conformance_cases() -> dict (optional on the protocol; REQUIRED for production lenses)
       Maps each REQUIRED_CONFORMANCE_SCENARIOS name to a harness case (see module docstring).
+  - uses_external_tools: bool (optional class attribute, defaults True) — set False for a
+      stdlib-only lens that spawns nothing; the harness then drives the tool-free scenarios
+      (TOOL_FREE_CONFORMANCE_SCENARIOS) and proves no spawn happens (see module docstring).
 """
 
 REGISTRY = []
 
-PRODUCTION_LENS_MODULES = ("guardian_lens_duplication", "guardian_lens_hotspots")
+PRODUCTION_LENS_MODULES = (
+    "guardian_lens_duplication", "guardian_lens_hotspots", "guardian_lens_deps",
+    "guardian_lens_deadcode", "guardian_lens_docs")
 """Authoritative runtime roster of production lens module names (under lib/).
 
 Rebasing lens PRs populate this tuple; each module MUST expose a module-level LENSES
@@ -101,6 +170,9 @@ tuple of ready-to-register lens objects.
 PRODUCTION_LENS_NAMES = {
     "guardian_lens_duplication": ("duplication",),
     "guardian_lens_hotspots": ("hotspots",),
+    "guardian_lens_deps": ("deps",),
+    "guardian_lens_deadcode": ("deadcode",),
+    "guardian_lens_docs": ("docs",),
 }
 """Map module-name → tuple of lens names the module is expected to export.
 

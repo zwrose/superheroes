@@ -13,6 +13,7 @@ Authoritative homes:
   - guardian_vitals.VITALS
   - guardian_vitals.DRIFT_THRESHOLDS
 """
+import importlib
 import os
 import re
 
@@ -27,6 +28,12 @@ _SKILL = os.path.join(_PLUGIN, "skills", "guardian", "SKILL.md")
 _LENS_CONTRACT = os.path.join(_PLUGIN, "skills", "guardian", "reference", "lens-contract.md")
 _CONVENTIONS = os.path.join(_REPO, "CONVENTIONS.md")
 _LEDGER_MODULE = os.path.join(_PLUGIN, "lib", "guardian_ledger.py")
+
+_REGISTERED_LENSES_MARKER = re.compile(
+    r"<!--\s*guardian:registered-lenses:start\s*-->(.*?)<!--\s*guardian:registered-lenses:end\s*-->",
+    re.DOTALL,
+)
+_BACKTICKED = re.compile(r"`([^`]+)`")
 
 
 def _read(path):
@@ -69,6 +76,24 @@ def _parse_ledger_extension_field():
         re.findall(r"\*\*Schema extension — `([^`]+)`\.\*\*", text),
         "guardian_ledger.py", "schema-extension anchor")
     return documented
+
+
+def _skill_registered_lens_names():
+    """Backticked lens names between the SKILL rollout markers, in order (with dupes)."""
+    skill = _read(_SKILL)
+    m = _REGISTERED_LENSES_MARKER.search(skill)
+    assert m, (
+        "SKILL.md is missing the guardian:registered-lenses start/end markers — the "
+        "roster sync guard cannot locate the registered-lens enumeration")
+    return _BACKTICKED.findall(m.group(1))
+
+
+def _production_lens_names():
+    """Flatten guardian_lens.PRODUCTION_LENS_NAMES to the set of expected lens names."""
+    names = []
+    for exported in guardian_lens.PRODUCTION_LENS_NAMES.values():
+        names.extend(exported)
+    return names
 
 
 def test_skill_references_guardian_layout_paths():
@@ -276,3 +301,127 @@ def test_lens_contract_covers_conformance_case_fields():
         "CONFORMANCE_CASE_FIELDS membership changed — update this golden set "
         "AND lens-contract.md"
     )
+
+
+def test_lens_contract_covers_optional_conformance_case_fields():
+    """CONFORMANCE_CASE_OPTIONAL_FIELDS ↔ reference prose (§11 drift guard)."""
+    optional = guardian_lens.CONFORMANCE_CASE_OPTIONAL_FIELDS
+    assert optional, (
+        "guardian_lens.CONFORMANCE_CASE_OPTIONAL_FIELDS is empty — no authoritative home")
+    text = _read(_LENS_CONTRACT)
+    for field in optional:
+        assert field in text, (
+            "lens-contract.md missing optional conformance case field %r" % field)
+    assert set(optional) == {
+        "clean_exit", "config", "prev_digest",
+        "stdout_by_tool", "clean_stdout_by_tool",
+    }, (
+        "CONFORMANCE_CASE_OPTIONAL_FIELDS membership changed — update this golden set "
+        "AND lens-contract.md"
+    )
+
+
+def test_lens_contract_covers_tool_free_conformance_scenarios():
+    """TOOL_FREE_CONFORMANCE_SCENARIOS ↔ reference prose (§11 drift guard)."""
+    scenarios = guardian_lens.TOOL_FREE_CONFORMANCE_SCENARIOS
+    assert scenarios, (
+        "guardian_lens.TOOL_FREE_CONFORMANCE_SCENARIOS is empty — no authoritative home")
+    text = _read(_LENS_CONTRACT)
+    for scenario in scenarios:
+        assert scenario in text, (
+            "lens-contract.md missing tool-free conformance scenario %r" % scenario)
+    assert "uses_external_tools" in text, (
+        "lens-contract.md must document the uses_external_tools opt-in")
+    assert set(scenarios) == {
+        "unreadable-input", "all-inputs-unavailable", "partial-carry-forward",
+    }, (
+        "TOOL_FREE_CONFORMANCE_SCENARIOS membership changed — update this golden set "
+        "AND lens-contract.md"
+    )
+
+
+# --- production roster ↔ SKILL rollout sync (fail-closed, duplicate-sensitive) -----
+
+def test_skill_rollout_roster_matches_production_lens_names():
+    """Every PRODUCTION_LENS_NAMES entry is named in the SKILL rollout markers and vice
+    versa — no drift, no duplicates. Protects each later lens registration."""
+    skill_names = _skill_registered_lens_names()
+    prod_names = _production_lens_names()
+
+    assert skill_names, "no registered-lens names found between the SKILL rollout markers"
+    assert len(skill_names) == len(set(skill_names)), (
+        "duplicate lens name in the SKILL rollout markers: %s" % skill_names)
+    assert len(prod_names) == len(set(prod_names)), (
+        "duplicate lens name in PRODUCTION_LENS_NAMES: %s" % prod_names)
+    assert set(skill_names) == set(prod_names), (
+        "SKILL rollout roster %s drifted from PRODUCTION_LENS_NAMES %s — a lens registered "
+        "in one but not the other" % (sorted(skill_names), sorted(prod_names)))
+
+
+def test_skill_rollout_roster_guard_is_not_vacuous():
+    """The guard must fail closed when a name is present on only one side."""
+    prod_names = set(_production_lens_names())
+    skill_names = set(_skill_registered_lens_names())
+    # Baseline agreement (proven by the sibling test) — perturb each side and assert drift.
+    assert skill_names == prod_names
+    assert (skill_names | {"phantom-lens"}) != prod_names
+    assert skill_names != (prod_names | {"phantom-lens"})
+
+
+def test_production_lens_modules_and_names_are_in_sync():
+    """C2: the runtime module roster (PRODUCTION_LENS_MODULES) and the name map
+    (PRODUCTION_LENS_NAMES) must have IDENTICAL module-key sets — dropping a module from
+    the loaded tuple while keeping its name mapping (or vice versa) must fail closed. The
+    sibling roster test compares only PRODUCTION_LENS_NAMES against the SKILL prose, so it
+    would not notice a module silently missing from the loaded tuple."""
+    modules = guardian_lens.PRODUCTION_LENS_MODULES
+    names = guardian_lens.PRODUCTION_LENS_NAMES
+    assert len(modules) == len(set(modules)), (
+        "duplicate module in PRODUCTION_LENS_MODULES: %s" % (modules,))
+    assert set(modules) == set(names.keys()), (
+        "PRODUCTION_LENS_MODULES %s drifted from PRODUCTION_LENS_NAMES keys %s — a module "
+        "registered in one but not the other"
+        % (sorted(modules), sorted(names.keys())))
+
+
+def test_production_lens_modules_sync_guard_is_not_vacuous():
+    """The C2 guard must fail closed when a module is on only one side."""
+    modules = set(guardian_lens.PRODUCTION_LENS_MODULES)
+    name_keys = set(guardian_lens.PRODUCTION_LENS_NAMES.keys())
+    assert modules == name_keys
+    assert (modules | {"guardian_lens_phantom"}) != name_keys
+    assert modules != (name_keys | {"guardian_lens_phantom"})
+
+
+def _module_exported_lens_names(module_name):
+    """The set of lens names a rostered module actually EXPORTS via its module-level
+    LENSES tuple."""
+    module = importlib.import_module(module_name)
+    exported = tuple(getattr(module, "LENSES", ()) or ())
+    return {getattr(lens, "name", None) for lens in exported}
+
+
+def test_module_exports_equal_declared_production_names():
+    """H7: each rostered module's EXPORTED lens-name set must EQUAL its declared
+    PRODUCTION_LENS_NAMES tuple — not merely be a superset. The loader fails closed on a
+    MISSING expected name; an EXTRA undeclared export (a module shipping a lens no roster
+    entry accounts for) would otherwise register silently. Set-equality rejects both."""
+    for module_name, declared in guardian_lens.PRODUCTION_LENS_NAMES.items():
+        exported = _module_exported_lens_names(module_name)
+        assert None not in exported, (
+            "module %r exports a lens object with no .name" % module_name)
+        assert exported == set(declared), (
+            "module %r exports lens names %s but PRODUCTION_LENS_NAMES declares %s — an "
+            "undeclared surplus or a missing export"
+            % (module_name, sorted(exported), sorted(declared)))
+
+
+def test_module_export_equality_guard_is_not_vacuous():
+    """The H7 guard must fail closed on an undeclared surplus export, not only a miss."""
+    module_name = guardian_lens.PRODUCTION_LENS_MODULES[0]
+    declared = set(guardian_lens.PRODUCTION_LENS_NAMES[module_name])
+    exported = _module_exported_lens_names(module_name)
+    assert exported == declared  # baseline agreement (proven by the sibling test)
+    # An extra undeclared export and a missing export must both break equality.
+    assert (exported | {"phantom-lens"}) != declared
+    assert exported != (declared | {"phantom-lens"})

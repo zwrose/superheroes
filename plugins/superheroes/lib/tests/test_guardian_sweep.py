@@ -157,6 +157,48 @@ def test_filed_open_candidate_tracked_in_funnel_conservation(tmp_path):
     assert funnel_conserved(bundle)
 
 
+class _CtxCaptureLens(FixtureLens):
+    """Records the ctx it was handed so a test can assert what the sweep threaded in."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.seen_ctx = None
+
+    def collect(self, ctx):
+        self.seen_ctx = dict(ctx)
+        return super().collect(ctx)
+
+
+def test_collect_threads_calibrated_verify_command_onto_ctx(tmp_path):
+    """The sweep resolves the calibrated verifyCommand once and hands it to every lens on
+    ctx['verifyCommand'] — the tool-free docs lens reads it instead of re-reading core.md.
+    A lens that declares NO verify-command fact still receives it (docs does not gate on
+    the fact, which would run the command)."""
+    repo = init_calibrated_repo(tmp_path, verify_command="python3 scripts/check.py")
+    lens = _CtxCaptureLens()
+    gsw.collect(repo, lenses=[lens])
+    assert lens.seen_ctx is not None
+    assert lens.seen_ctx["verifyCommand"] == "python3 scripts/check.py"
+
+
+def test_collect_threads_none_verify_command_when_calibration_absent(tmp_path):
+    """No calibrated verifyCommand → ctx['verifyCommand'] is None (never a false command),
+    which a tool-free lens treats as 'no calibration'."""
+    repo = init_calibrated_repo(tmp_path, verify_command="")
+    os.remove(os.path.join(repo, ".claude", "superheroes", "core.md"))
+    lens = _CtxCaptureLens()
+    gsw.collect(repo, lenses=[lens])
+    assert lens.seen_ctx is not None
+    assert lens.seen_ctx["verifyCommand"] is None
+
+
+def test_verify_config_returns_calibrated_verify_command(tmp_path):
+    """verify_config exposes the verifyCommand it read (reused, not a second core.md read)."""
+    repo = init_calibrated_repo(tmp_path, verify_command="make test")
+    out = gsw.verify_config(repo, root=_store(tmp_path), needed_facts=set())
+    assert out["verifyCommand"] == "make test"
+
+
 def test_collect_skips_verify_when_lens_does_not_require_it(tmp_path):
     """With vitals disabled, verify stays not-run when no lens requests it.
 

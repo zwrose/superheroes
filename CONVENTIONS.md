@@ -483,6 +483,9 @@ The plugin carries one set of thin per-host pieces:
 | `hosts/codex-tools.md` | Maps host-neutral actions → Codex tools (`shell`, `apply_patch`, `spawn_agent`, …) |
 | `hooks/hooks-codex.json` | Codex hook config (only where needed) |
 
+The Artifact paths in this table are relative to the **plugin root**
+(`plugins/superheroes/`), not the repo root.
+
 Both `plugin.json` versions must be kept in sync — `validate_hosts.py` fails on
 version drift between `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json`.
 
