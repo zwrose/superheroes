@@ -105,7 +105,7 @@ board wiring) and the fail-loud go/no-go. Don't restate it here.
 
 ~20–40 lines, **posted on the issue** and carried into the PR. Six items, in order:
 
-1. **Shape** — what gets built where; expected diff size (the input to the scope check below).
+1. **Shape** — what gets built where; expected diff size in total changed lines (additions plus deletions — the input to the scope check below).
 2. **Contracts & state** — new/changed interfaces and data shapes; where state lives and who mutates it.
 3. **Reuse plan** — what existing code you build on; what you checked for before writing new.
 4. **Hard seams** — the 2–3 riskiest spots and how each is handled; conscious deferrals stated.
@@ -117,12 +117,13 @@ visible, never silent. **Scope check:** if the shape implies an oversized or mul
 propose a split before building; an irreducible big diff ships with an explicit scope disclosure.
 When the work is a family of parallel siblings, **one concern per PR** — one lens per PR for
 lens-family work — and any **shared shell or contract seam lands first, as its own small PR**,
-before the siblings that build on it. **Crossing twice the size your brief estimated is itself the
-tripwire** — disclose it mid-build and offer a split, rather than letting the overrun surface at
-handback. **Gates and enforcement:** any work order that adds a **gate, hook, or enforcement
-mechanism** names, in the brief before code, the ratified precondition that unlocks it and the
-evidence that it is met. In this repo, cite the entry and unlock condition in the anti-opportunities
-ledger (`LEDGERS.md` §2).
+before the siblings that build on it. **Crossing twice the size your brief estimated in total changed
+lines (additions plus deletions) is itself the tripwire** — disclose it mid-build and offer a split,
+rather than letting the overrun surface at handback. **Gates and enforcement:** any work order that
+adds a **gate, hook, or enforcement mechanism** names, in the brief before code, the ratified
+precondition that unlocks it and the evidence that it is met — in every project. When the project
+being built is the superheroes source repository itself, cite the entry and unlock condition in the
+anti-opportunities ledger (`LEDGERS.md` §2).
 
 ## 5. Pre-code brief check
 
@@ -131,10 +132,9 @@ high-tier, the default is a **cross-vendor reviewer at comparable tier**; a Clau
 reviewer is the fallback **only with disclosed degradation** (never a silent downgrade). One pass:
 fold its findings in, or dispute each with a reason. Post the dispositions.
 
-**Never kill a configured dispatch before its structural timeout** — the timeout is the tripwire,
-not your read of intermediate signals. This governs every dispatch you make — implementer, reviewer,
-or pilot. A memory recalls context; it is never a standing kill order, and matching one onto a live
-dispatch licenses nothing.
+**Never kill a configured reviewer dispatch before its structural timeout** — the timeout is the
+tripwire, not your read of intermediate signals. A memory recalls context; it is never a standing
+kill order, and matching one onto a live dispatch licenses nothing.
 
 ## 6. Decompose into work orders
 
@@ -187,7 +187,9 @@ orchestrator's own accounting.
 
 A dispatched order's premises — the base commit, "main will not move", the sequencing you assumed —
 bind **you, the dispatcher**. When the world moves under a live order, amend the order; an
-implementer that parks on a stale premise did the right thing.
+implementer that parks on a stale premise did the right thing. When you are about to dispatch a
+**third** rework of the same surface in one build, park instead — a third patch is the wrong answer
+to a design signal. Say what the seam problem looks like.
 
 ## 8. Verify — re-run every receipt yourself
 
@@ -215,16 +217,16 @@ shell edit — and revert it before moving on.
 Run **`review-code`** (as it exists today) with a **review panel that mixes vendors** so the models
 that wrote the code aren't the only ones checking it. **`review-code` runs as its own fix loop, to
 convergence** — review → route each fix back as an implementer work order → re-review — until no
-blocking findings remain, or you **honestly park on an open blocker**; reworking the **same surface
-a third time** inside one build is itself the park tripwire — a third patch is the wrong answer to
-what is a design signal. Say what the seam problem looks like instead of shipping the third patch.
-The round-scoping and cap economics inside that loop are `review-code`'s own contract; **the
+blocking findings remain, or you **honestly park on an open blocker**. The round-scoping and cap
+economics inside that loop are `review-code`'s own contract; **the
 delta-grading in §12 does not apply here** — every pre-handback review is the full loop. Record how
 you handled each finding in a **dispositions table** — a short table of each finding and what you
 did about it — in the PR body, and **link the review results as a durable receipt** posted on the PR
 (a comment or similar, not something that only lives in your session), so the advisor can check
 them without your context. A finding that argues from a general convention against the issue's
-ratified scope is recorded as a follow-up for the advisor, not folded into this diff.
+ratified scope is recorded as a follow-up for the advisor, not folded into this diff. This applies
+to a proposal *unrelated* to the behavior the diff introduces or worsens; a blocking correctness or
+security finding on that behavior is fixed or honestly parked, never deferred as out of scope.
 
 ## 11. Hand back the ready PR
 
@@ -280,5 +282,5 @@ curation stay with the advisor.
 | "I found follow-up work, I'll file an issue for it" | You never wire the board. List follow-ups in the PR for the advisor to file. |
 | "The convention clearly says X, so I'll fix it while I'm here." | The issue's owner-ratified scope beats a general convention argument. Hand the gap to the advisor as a follow-up — never a silent widening of this diff. |
 | "One more patch and this surface is finally right." | A third rework of the same surface in one build is the park tripwire, not another patch. Name the seam problem instead. |
-| "That dispatch has been quiet too long, I'll kill it and re-dispatch." | The structural timeout is the tripwire, not your read of silence. A memory recalls context — it is not a standing kill order. |
+| "That reviewer dispatch has been quiet too long, I'll kill it and re-dispatch." | The structural timeout is the tripwire for a configured reviewer dispatch, not your read of silence. A memory recalls context — it is not a standing kill order. |
 | "Main moved under the order I sent — the implementer should have coped." | The order's premises bind you, the dispatcher. Amend the order when the world moves; parking on a stale premise is correct behavior. |
