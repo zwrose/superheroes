@@ -100,6 +100,21 @@ print(json.dumps(preflight_probe.gh_auth_probe()))
 "
 ```
 
+**And exercise one real write.** Auto-mode permission classification gates `gh` **writes** — issue/PR
+comments, edits, label changes — **separately from reads**, so a passing `gh auth status` (a read)
+does not prove a `gh issue comment` (a write) will clear mid-run. Exercise one real write **while the
+owner is present**:
+
+- The cheapest honest form is a **throwaway probe comment you immediately delete** — the deletion is
+  itself a second write, and it leaves no junk behind.
+- When the build has an intake **brief to post (workhorse §4)** and you post it while the owner is
+  still present, that post **doubles as the write probe** — a blocked post is a preflight failure the
+  owner clears on the spot, not a lost intake receipt discovered headless hours later (weekly-eats
+  we#498/we#499 both cleared preflight, then lost their intake receipt when the brief post was blocked
+  immediately after a green preflight; #526 permission-surface evidence).
+
+A blocked write here **fails the preflight loudly** — same fail-loud contract as every check above.
+
 ## B — Engine + model availability (the dispatch-calibration readout)
 
 Separate from "is the CLI authenticated" (A.2): this check is "are the configured engines +
