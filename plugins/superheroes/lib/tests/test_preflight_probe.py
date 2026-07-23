@@ -350,6 +350,10 @@ def test_model_no_op_argv_codex_includes_model_flag():
         "reply with the single word READY")
 
 
+def test_model_no_op_argv_codex_bogus_model_returns_none():
+    assert pp.model_no_op_argv("codex", "gpt-9-bogus") is None
+
+
 def test_needed_configs_for_review_tiers_omits_claude():
     configs = pp.needed_configs_for(("reviewer-deep", "reviewer"), ["codex", "cursor"])
     assert "claude" not in configs
@@ -431,6 +435,22 @@ def test_composition_liveness_unknown_cursor_model_not_live_without_run():
     assert result["cursor"]["models"]["bogus-model"]["ok"] is False
     assert result["cursor"]["models"]["bogus-model"]["detail"] == "unknown/unroutable model"
     assert calls == []
+
+
+def test_composition_liveness_unknown_codex_model_not_live_without_run():
+    calls = []
+
+    def _run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    needed = {"codex": [("gpt-5.6-terra", "high"), ("gpt-9-bogus", "xhigh")]}
+    result = pp.composition_liveness(needed, run=_run)
+    assert result["codex"]["live"] is False
+    assert result["codex"]["models"]["gpt-5.6-terra"]["ok"] is True
+    assert result["codex"]["models"]["gpt-9-bogus"]["ok"] is False
+    assert result["codex"]["models"]["gpt-9-bogus"]["detail"] == "unknown/unroutable model"
+    assert len(calls) == 1
 
 
 def test_composition_liveness_empty_config_list_not_live():

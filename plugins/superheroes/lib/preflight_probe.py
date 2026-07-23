@@ -148,6 +148,8 @@ def model_no_op_argv(engine, model, effort=None):
     """Per-model harmless no-op argv for composition preflight. Returns None when the model is
     unknown/unroutable (caller marks unavailable — never calls run)."""
     if engine == "codex":
+        if not model_registry.is_registered("codex", model):
+            return None
         return ("codex", "exec", "--sandbox", "read-only", "-m", model,
                 "reply with the single word READY")
     if engine == "cursor":
