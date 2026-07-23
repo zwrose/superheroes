@@ -461,3 +461,30 @@ def test_uncertified_reason_joins_multiple_uncertifiable_seats_and_skips_certifi
     assert "premortem-reviewer returned no verification receipt" in reason
     assert "test-reviewer did not return a usable result" in reason
     assert "; " in reason
+
+
+def test_normalize_dimension_list_string_and_empty():
+    assert PT.normalize_dimension(["security", "perf"]) == "security + perf"
+    assert PT.normalize_dimension("Code") == "Code"
+    assert PT.normalize_dimension([]) == ""
+    assert PT.normalize_dimension(None) == ""
+    assert PT.normalize_dimension([1, "security"]) == "1 + security"
+    assert PT.normalize_dimension(["", "  ", "a"]) == "a"
+    assert PT.normalize_dimension({"x": 1}) == ""
+    assert PT.normalize_dimension(42) == ""
+
+
+def test_compile_normalizes_per_finding_list_dimension():
+    results = {"security-reviewer": {"dimension": "security", "status": "run", "findings": [
+        {"title": "x", "severity": "Important", "file": "f.py", "line": 2,
+         "dimension": ["security", "perf"]}]}}
+    items = PT.compile_dimension_results(results)
+    assert items[0]["dimension"] == "security + perf"
+
+
+def test_compile_garbage_finding_dimension_falls_back_to_seat():
+    results = {"security-reviewer": {"dimension": "security", "status": "run", "findings": [
+        {"title": "x", "severity": "Important", "file": "f.py", "line": 2,
+         "dimension": {"bad": 1}}]}}
+    items = PT.compile_dimension_results(results)
+    assert items[0]["dimension"] == "security"

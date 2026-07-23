@@ -304,7 +304,14 @@ def mechanical_compile(findings, diff_text=None):
             drops.append({"file": f.get("file"), "line": f.get("line"),
                           "title": f.get("title"), "reason": "outside the round diff scope"})
             continue
-        kept.append(f)
+        fc = dict(f)
+        if "dimension" in fc:
+            norm = panel_tally.normalize_dimension(fc["dimension"])
+            if norm:
+                fc["dimension"] = norm
+            else:
+                fc.pop("dimension", None)
+        kept.append(fc)
     compiled = _compile_by_anchor(kept)
     compiled = _nit_cap(compiled)
     return compiled, drops
