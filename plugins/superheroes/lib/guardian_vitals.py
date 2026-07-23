@@ -236,10 +236,10 @@ def _completeness_entry(state, reason=None, identity=None):
     entry = {"state": state}
     if reason:
         entry["reason"] = reason
-    if identity:
-        tokens = sorted(set(
-            str(x) for x in identity
-            if isinstance(x, str) and x.strip()))
+    if isinstance(identity, (list, tuple)):
+        tokens = sorted({
+            str(x).strip() for x in identity
+            if isinstance(x, str) and x.strip()})
         if tokens:
             entry["identity"] = tokens
     return entry
@@ -408,7 +408,7 @@ def _collect_lens_vitals(lens_results):
             continue
         reading = offered.get(vital_name)
         if (not isinstance(reading, (tuple, list)) or len(reading) not in (2, 3)):
-            reason = "%s lens vitals()[%s] is not a (value, reason) pair" % (
+            reason = "%s lens vitals()[%s] is not a (value, reason[, identity]) tuple" % (
                 lens_names[0], vital_name)
             missing[vital_name] = reason
             completeness[vital_name] = _completeness_entry("not-collected", reason)

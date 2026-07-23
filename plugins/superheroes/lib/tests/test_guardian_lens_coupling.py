@@ -2257,17 +2257,6 @@ def test_coupling_vitals_reports_edges_when_matrix_truncated():
     assert reason is None
 
 
-def test_coupling_vitals_partial_emits_not_collected_identity():
-    digest = _vitals_digest(5, ecosystems={
-        "js": {"status": "collected"},
-        "py": {"status": "not-collected"},
-    })
-    val, reason, identity = glc.LENS.vitals(digest)["couplingEdges"]
-    assert val == 5.0
-    assert reason and "py" in reason
-    assert "py/coupling/not-collected" in identity
-
-
 def test_coupling_vitals_partial_malformed_section_emits_identity():
     digest = _vitals_digest(5, ecosystems={
         "js": {"status": "collected"},
@@ -2277,6 +2266,19 @@ def test_coupling_vitals_partial_malformed_section_emits_identity():
     assert val == 5.0
     assert reason and "malformed" in reason
     assert "py/coupling/malformed-section" in identity
+
+
+def test_coupling_vitals_partial_unknown_status_emits_identity():
+    digest = _vitals_digest(5, ecosystems={
+        "js": {"status": "collected"},
+        "py": {},
+    })
+    reading = glc.LENS.vitals(digest)["couplingEdges"]
+    assert len(reading) == 3
+    val, reason, identity = reading
+    assert val == 5.0
+    assert reason and "py" in reason
+    assert "py/coupling/unknown-status" in identity
 
 
 def test_coupling_vitals_partial_identity_stable_across_status_prose_reword():

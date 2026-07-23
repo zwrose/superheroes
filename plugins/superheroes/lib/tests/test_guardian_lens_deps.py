@@ -3008,37 +3008,133 @@ def test_vitals_vuln_count_structural_not_collected_emits_identity():
     assert "python/vulns/not-collected" in identity
 
 
-@pytest.mark.parametrize("eco,section", [
-    ("python", {
+def _fresh_mixed_digest(gap_eco, gap_freshness, *, measured_eco="node", measured_total=3):
+    """Build multi-eco digest: one collected freshness + one structural gap."""
+    return {
+        "ecosystems": {
+            measured_eco: {
+                "freshness": {
+                    "status": "collected",
+                    "majorsBehindTotal": measured_total,
+                    "items": {},
+                },
+            },
+            gap_eco: {"freshness": gap_freshness},
+        },
+    }
+
+
+def test_vitals_majors_behind_structural_not_collected_emits_identity():
+    digest = _fresh_mixed_digest("python", {
+        "status": "not-collected",
+        "reason": "registry query timed out",
+        "items": {},
+    })
+    value, reason, identity = gld.LENS.vitals(digest)["majorsBehind"]
+    assert value == 3
+    assert reason
+    assert "python/freshness/not-collected" in identity
+
+
+def test_vitals_majors_behind_structural_identity_stable_across_reason_reword():
+    gap_a = {
+        "status": "not-collected",
+        "reason": "original advisory prose",
+        "items": {},
+    }
+    gap_b = dict(gap_a, reason="reworded advisory prose for humans")
+    id_a = gld.LENS.vitals(_fresh_mixed_digest("python", gap_a))["majorsBehind"][2]
+    id_b = gld.LENS.vitals(_fresh_mixed_digest("python", gap_b))["majorsBehind"][2]
+    assert id_a == id_b
+    assert id_a == ["python/freshness/not-collected"]
+
+
+def test_deps_majors_behind_identity_different_basis_not_comparable():
+    not_collected = _fresh_mixed_digest("python", {
+        "status": "not-collected",
+        "reason": "gap",
+        "items": {},
+    })
+    suppressed = _fresh_mixed_digest("python", {
+        "status": "suppressed-by-coverage",
+        "items": {},
+    })
+    r_nc = gld.LENS.vitals(not_collected)["majorsBehind"]
+    r_sup = gld.LENS.vitals(suppressed)["majorsBehind"]
+    _, comp_nc = gv._interpret_vital_tuple(
+        r_nc[0], r_nc[1], identity=r_nc[2], lens_name="deps", vital_name="majorsBehind")
+    _, comp_sup = gv._interpret_vital_tuple(
+        r_sup[0], r_sup[1], identity=r_sup[2], lens_name="deps", vital_name="majorsBehind")
+    assert not gv._comparable_completeness(comp_nc, comp_sup)
+    assert gv.crossings(
+        {"majorsBehind": 1}, {"majorsBehind": 5},
+        prev_completeness={"majorsBehind": comp_nc},
+        cur_completeness={"majorsBehind": comp_sup}) == []
+
+
+_VITAL_IDENTITY_TRIPWIRE_CASES = [
+    pytest.param("vulnCount", _vuln_partial_digest("python", {
         "status": "partial",
         "items": {"x": {"id": "x"}},
         "coverageGap": {"scope": "enumerated-manifest-only"},
         "reason": "osv partial",
-    }),
-    ("node", {
+    }), id="vuln-partial-coverage"),
+    pytest.param("vulnCount", _vuln_partial_digest("node", {
         "status": "partial",
         "items": {"n": {"id": "n"}},
         "malformedEntries": ["left-pad"],
         "reason": "malformed advisory",
-    }),
-    ("python", {
+    }), id="vuln-partial-malformed"),
+    pytest.param("vulnCount", _vuln_partial_digest("python", {
         "status": "partial",
         "items": {"x": {"id": "x"}},
         "pinScopeGap": {"lines": ["pkg==1.0"]},
         "reason": "unpinned scope",
-    }),
-    ("python", {
+    }), id="vuln-partial-pin-scope"),
+    pytest.param("vulnCount", _vuln_partial_digest("python", {
         "status": "partial",
         "items": {"x": {"id": "x"}},
         "boundary": False,
         "coverageGap": {"scope": "enumerated-manifest-only"},
         "reason": "ambiguous with coverage gap",
-    }),
-])
-def test_vitals_partial_sections_always_emit_nonempty_identity(eco, section):
+    }), id="vuln-partial-boundary"),
+    pytest.param("vulnCount", {
+        "ecosystems": {
+            "node": {
+                "vulns": {
+                    "status": "collected",
+                    "items": {"a": {"id": "a"}},
+                },
+            },
+            "python": {
+                "vulns": {
+                    "status": "not-collected",
+                    "reason": "osv-scanner missing",
+                    "items": {},
+                },
+            },
+        },
+    }, id="vuln-structural-not-collected"),
+    pytest.param("majorsBehind", _fresh_mixed_digest("python", {
+        "status": "not-collected",
+        "reason": "registry query timed out",
+        "items": {},
+    }), id="freshness-not-collected"),
+    pytest.param("majorsBehind", _fresh_mixed_digest("python", {
+        "status": "suppressed-by-coverage",
+        "items": {},
+    }), id="freshness-suppressed-by-coverage"),
+    pytest.param("majorsBehind", _fresh_mixed_digest("python", {
+        "status": "collected",
+        "items": {},
+    }), id="freshness-missing-total"),
+]
+
+
+@pytest.mark.parametrize("vital_name,digest", _VITAL_IDENTITY_TRIPWIRE_CASES)
+def test_vitals_partial_sections_always_emit_nonempty_identity(vital_name, digest):
     """Tripwire: every production partial path must classify — never fail-closed silence."""
-    digest = _vuln_partial_digest(eco, section)
-    reading = gld.LENS.vitals(digest)["vulnCount"]
+    reading = gld.LENS.vitals(digest)[vital_name]
     assert len(reading) == 3, reading
     identity = reading[2]
     assert identity is not None
