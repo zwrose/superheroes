@@ -344,6 +344,7 @@ class DocsLens(object):
 
     name = "docs"
     collector_version = "1.0.0"
+    first_baseline_precision = "high"
     required_facts = ()
     # Genuinely tool-free: collect() spawns nothing (no git, no core_md.read, no
     # subprocess). The harness proves this at runtime (see conformance_cases /

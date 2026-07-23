@@ -485,6 +485,24 @@ def test_vital_lens_sources_match_production_lenses():
         % sorted(missing_owners))
 
 
+def test_every_production_lens_declares_explicit_first_baseline_precision():
+    """FIRST_BASELINE_PRECISIONS ↔ production lens declarations (§11 drift guard)."""
+    guardian_lens.load_production_lenses(force=True)
+    for lens in guardian_lens.REGISTRY:
+        name = getattr(lens, "name", None)
+        if isinstance(lens, guardian_lens._UnavailableLens):
+            continue
+        if isinstance(name, str) and name.startswith("module:"):
+            continue
+        assert "first_baseline_precision" in dir(lens), (
+            "production lens %r must declare first_baseline_precision explicitly"
+            % name)
+        val = getattr(lens, "first_baseline_precision", None)
+        assert val in guardian_lens.FIRST_BASELINE_PRECISIONS, (
+            "production lens %r first_baseline_precision=%r not in %s"
+            % (name, val, guardian_lens.FIRST_BASELINE_PRECISIONS))
+
+
 def test_vital_lens_sources_guard_is_not_vacuous():
     """The VITAL_LENS_SOURCES guard must fail closed when a side drifts."""
     registered = _registered_production_lens_names()
