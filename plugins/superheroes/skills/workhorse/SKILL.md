@@ -79,7 +79,8 @@ together, no one else does.
 
 With the app running and **before any autonomous work** (the brief itself is autonomous, and the
 pre-code check already uses the cross-vendor CLI), run the project preflight and **actually exercise
-every tool that will need the owner's approval to run** — you can't tell from a config file whether
+one real instance of every capability class the build will use** — writes as well as reads (a tool
+that clears a read probe can still be blocked on a write) — you can't tell from a config file whether
 approval is in place, only by using it:
 
 - **The browser test-pilot will use** — connect it and **drive the whole app, through whatever
@@ -87,7 +88,13 @@ approval is in place, only by using it:
   every approval and credential it needs to reach *all* the app before test-pilot depends on it — an
   auth wall it can't pass is exactly what would stall you mid-run.
 - **The cross-vendor CLI** — one harmless authenticated call.
-- **`gh`** — confirm sign-in.
+- **`gh`** — confirm sign-in **and exercise one real `gh` write**, not just a read. Auto-mode
+  permission classification gates `gh` **writes** (issue/PR comments, edits) **separately from
+  reads**, so a green `gh auth status` (a read) does not prove a `gh issue comment` (a write) will
+  clear mid-run — and a write blocked hours into a headless run is a lost intake receipt, not a
+  caught failure (weekly-eats we#498/we#499; #526 permission-surface evidence). The concrete write
+  probe and its mechanics live with the checklist in the preflight reference (§A.3) — don't restate
+  them here.
 
 **When the build has no running app** (a plugin/library/docs change with no browser-drivable
 surface), the browser/test-pilot live-exercise probe is **N/A** — there is nothing to drive. Run the
@@ -146,6 +153,14 @@ that worktree**, so a later order's `git checkout --` can never wipe a prior ord
 **Subagents always run flat/synchronous** — never a background agent that spawns another background
 agent (the notification chain breaks).
 
+**Author every order to the five work-order validity rules in `agents/implementer.md`** — measured-or-marked
+tool output, fail-closed edges enumerated (and echoed back), complete target enumeration keyed to the
+finding, no cosmetic reopen of a verified surface, and a stated shared contract for parallel siblings.
+Across the 0.18.0 wave, blocking review findings attributed to **order quality over implementer
+execution ~5:1**, so a well-authored order is your cheapest defect prevention. The rules live in one
+place (the implementer template); the implementer is the backstop that flags a violating order, and
+satisfying them is your obligation as the author.
+
 ## 7. Delegate every implementation (no direct-typing exception)
 
 **All implementation is delegated — no direct-typing exception of any size.** Every work order goes
@@ -190,6 +205,18 @@ bind **you, the dispatcher**. When the world moves under a live order, amend the
 implementer that parks on a stale premise did the right thing. When you are about to dispatch a
 **third** rework of the same surface in one build, park instead — a third patch is the wrong answer
 to a design signal. Say what the seam problem looks like.
+
+**Long dispatches you own get an explicit high ceiling and a monitor.** A subagent dispatch or an
+engine CLI run **you invoke directly** routinely runs longer than the effective command-timeout floor
+(the plugin-injected `bash_timeout` ten-minute ceiling; the bare host default is shorter). Set an
+**explicit high ceiling — 3600s or more** — and pair it with a **stuck/runaway monitor**; never a
+borderline limit you expect to just barely clear. Watch the process's **CPU-time column, not
+elapsed** — an engine CLI can sit at ~0% CPU for many minutes and still be live — and redirect a
+dispatch's output to a **file, never `| tail`**, so a stall is distinguishable from progress. A
+**skill-owned dispatch keeps its own structural-timeout contract** (e.g. `review-code`'s loop bounds
+each engine dispatch itself and forbids a per-dispatch watchdog) — don't override it with this rule.
+Four 0.18.0-wave sessions died on the ten-minute floor mid-dispatch — one mid-review-panel — losing
+the run (WE review session, WE-510, sh-566, WE-484).
 
 ## 8. Verify — re-run every receipt yourself
 
@@ -240,7 +267,18 @@ disposition table** (the `superheroes:dod-table` marker) against the issue/spec 
 Definition-of-Done bullet, each **done** (with an evidence pointer) or **deferred** (with a filed
 issue and a one-line reason). This is distinct from the review dispositions table above (that grades
 review findings; this grades every spec'd claim shipped/deferred/dropped) and is the honesty marker
-the review seat verifies (CONVENTIONS `§10.7`, `rubric/review-discipline.md`). **Keep the PR body current** — edit it
+the review seat verifies (CONVENTIONS `§10.7`, `rubric/review-discipline.md`). The dispatch-provenance
+section also records, per order, whether it was a **rework** and — for any blocking review finding —
+whether it was attributed to **order quality, implementer execution, or the orchestrator's own
+integration/assembly** (external or unknown where none fits), so the advisor can track the build
+against the ~5:1 order-vs-execution baseline (0.18.0 wave) — the advisor's standing accounting duty;
+the **showrunner** charter reads it. **Issue-linking discipline — never auto-close an issue that must
+stay open.** GitHub's closing-keyword parser is **negation-blind**: `Resolves #NNN` / `Closes #NNN` /
+`Fixes #NNN` closes the issue on merge **even inside a sentence that says it does not**. For an issue
+the PR must **not** close (a parent epic, a tracking issue, a "part of" link), use a **non-closing**
+verb — **"addresses," "part of," "relates to"** — and reserve the closing keywords for the issue this
+PR genuinely closes (weekly-eats we#518 wrote "Resolves the storage-mode decision in #505" while
+stating it did not close #505; GitHub closed it anyway). **Keep the PR body current** — edit it
 in place so it reads
 correct top to bottom. **You never merge** — hand back to the owner.
 
@@ -284,3 +322,5 @@ curation stay with the advisor.
 | "One more patch and this surface is finally right." | A third rework of the same surface in one build is the park tripwire, not another patch. Name the seam problem instead. |
 | "That reviewer dispatch has been quiet too long, I'll kill it and re-dispatch." | The structural timeout is the tripwire for a configured reviewer dispatch, not your read of silence. A memory recalls context — it is not a standing kill order. |
 | "Main moved under the order I sent — the implementer should have coped." | The order's premises bind you, the dispatcher. Amend the order when the world moves; parking on a stale premise is correct behavior. |
+| "This dispatch will finish quickly — the default timeout is fine." | A long dispatch **you own** gets an explicit high ceiling (3600s+) and a stuck/runaway monitor (a skill-owned dispatch keeps its own timeout contract). Four 0.18.0 sessions died on the ten-minute `bash_timeout` floor mid-dispatch. Never a borderline limit. |
+| "The implementer botched it — escalate to a stronger engine." | Attribution first. In the 0.18.0 wave, order quality outweighed execution ~5:1. A defect the order under-specified (a missing fail-closed edge, an unnamed target file) is an **order** defect — rewrite the order at the same rung, don't blame the engine. |

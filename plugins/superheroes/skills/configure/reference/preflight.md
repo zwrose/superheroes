@@ -100,6 +100,23 @@ print(json.dumps(preflight_probe.gh_auth_probe()))
 "
 ```
 
+**And exercise one real write.** Auto-mode permission classification gates `gh` **writes** — issue/PR
+comments, edits — **separately from reads**, so a passing `gh auth status` (a read) does not prove a
+`gh issue comment` (a write) will clear mid-run. Post a **throwaway probe comment on the issue being
+built, then delete it** — both the create and the delete are writes, so a probe that posts and
+deletes cleanly proves the write class end to end. Keep the probe to a **comment** — never a label or
+other board write (§E forbids the preflight touching the board). The create fires a watcher
+notification before the delete lands, so the probe is not entirely invisible; that is the cheap cost
+of proving the write, against a blocked write discovered headless hours later (weekly-eats
+we#498/we#499 both cleared preflight, then lost their intake receipt when a `gh` write was blocked
+immediately after a green preflight; #526 permission-surface evidence).
+
+A blocked write here **fails the preflight loudly** — fold its outcome into the go/no-go aggregation
+(§ "The gate — go/no-go") exactly as the browser outcome is folded in, so `go` can never stay true
+after a blocked write; same fail-loud contract as every check above. If the create succeeds but the
+**delete** is blocked or fails, the probe comment persists — remove it (or flag it to the owner) as
+part of the fail-loud outcome, so the probe leaves nothing behind.
+
 ## B — Engine + model availability (the dispatch-calibration readout)
 
 Separate from "is the CLI authenticated" (A.2): this check is "are the configured engines +
@@ -161,7 +178,10 @@ deciding:
 
 ```python
 import preflight_probe
-all_results = probes_from_run_json + [preflight_probe.browser_probe_result(browser_ok, detail)]
+all_results = probes_from_run_json + [
+    preflight_probe.browser_probe_result(browser_ok, detail),           # host action (§A.1): fold in only when the browser probe actually ran; OMIT on no-app runs (their browser N/A is recorded per §A.1, not through this helper — it can't emit N/A)
+    {"tool": "gh write", "ok": gh_write_ok, "detail": gh_write_detail},  # host action (§A.3): the throwaway-comment probe (always applicable)
+]
 verdict = preflight_probe.aggregate(all_results)
 ```
 
