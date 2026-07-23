@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.19.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.18.0...superheroes-v0.19.0) (2026-07-23)
+
+
+### Features
+
+* **superheroes:** rated Python advisory source (OSV) — critical-vuln red line fires for Python ([#581](https://github.com/zwrose/superheroes/issues/581)) ([7dd0ef0](https://github.com/zwrose/superheroes/commit/7dd0ef0d7248d950393836937e60f9f1b8c9d83f))
+
+
+### Bug Fixes
+
+* **superheroes:** canonical string dimension — list-valued dimension crashed _settle_delta ([#583](https://github.com/zwrose/superheroes/issues/583)) ([#586](https://github.com/zwrose/superheroes/issues/586)) ([702d9a1](https://github.com/zwrose/superheroes/commit/702d9a1a0229518b48eb8fa25c82f02dbffbc997))
+
+
+### Chores
+
+* **superheroes:** charter hygiene bundle — eight ratified conventions into workhorse + showrunner ([#573](https://github.com/zwrose/superheroes/issues/573)) ([8b2078b](https://github.com/zwrose/superheroes/commit/8b2078bd26c4ae10bda3baf32ec3a788f6f8e39e))
+
 ## [0.18.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.17.0...superheroes-v0.18.0) (2026-07-22)
 
 
