@@ -101,6 +101,7 @@ def test_install_commands_cover_the_collector_tools():
         "knip": "npm install -g knip",
         "vulture": "pip install vulture",
         "pip-audit": "pip install pip-audit",
+        "depcruise": "npm install -g dependency-cruiser typescript@5",
         "osv-scanner": (
             "brew install osv-scanner "
             "(or: go install github.com/google/osv-scanner/v2/cmd/osv-scanner@latest)"
@@ -120,6 +121,7 @@ def test_version_args_cover_every_install_command_tool():
         "knip": ("--version",),
         "vulture": ("--version",),
         "pip-audit": ("--version",),
+        "depcruise": ("--version",),
         "osv-scanner": ("--version",),
     }
 
@@ -384,6 +386,90 @@ def test_resolve_rejects_symlink_into_repo(tmp_path, monkeypatch):
     run = _FakeRun(stdout="9.9.9\n")
     assert gt.version("jscpd", str(repo), run=run) is None
     assert run.calls == []
+
+
+def _make_depcruise_fake_install(tmp_path, *, typescript_version=None, manifest_body=None):
+    """Fake global depcruise install: <tmp>/lib/node_modules/dependency-cruiser/bin/depcruise."""
+    bin_dir = tmp_path / "lib" / "node_modules" / "dependency-cruiser" / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    depcruise_bin = bin_dir / "depcruise"
+    depcruise_bin.write_text("#!/bin/sh\necho 0.0.0\n")
+    depcruise_bin.chmod(depcruise_bin.stat().st_mode | stat.S_IXUSR)
+    (bin_dir / "dependency-cruise.mjs").write_text("// stub\n")
+    nm = tmp_path / "lib" / "node_modules"
+    if typescript_version is not None or manifest_body is not None:
+        ts_pkg = nm / "typescript"
+        ts_pkg.mkdir(parents=True, exist_ok=True)
+        body = manifest_body if manifest_body is not None else json.dumps(
+            {"version": typescript_version})
+        (ts_pkg / "package.json").write_text(body)
+    return str(bin_dir), str(nm)
+
+
+# --- typescript_toolchain_node_path -----------------------------------------------
+
+def test_typescript_toolchain_node_path_returns_dir_with_supported_typescript(
+        tmp_path, monkeypatch):
+    install_root = tmp_path / "install"
+    repo = _make_repo(tmp_path / "repo")
+    bin_dir, expected_nm = _make_depcruise_fake_install(
+        install_root, typescript_version="5.9.3")
+    monkeypatch.setenv("PATH", bin_dir)
+    out = gt.typescript_toolchain_node_path(repo, supported_majors=("5",))
+    assert out == expected_nm
+
+
+def test_typescript_toolchain_node_path_none_when_typescript_absent(
+        tmp_path, monkeypatch):
+    install_root = tmp_path / "install"
+    repo = _make_repo(tmp_path / "repo")
+    bin_dir, _ = _make_depcruise_fake_install(install_root)
+    monkeypatch.setenv("PATH", bin_dir)
+    assert gt.typescript_toolchain_node_path(repo, supported_majors=("5",)) is None
+
+
+def test_typescript_toolchain_node_path_none_when_unsupported_major(
+        tmp_path, monkeypatch):
+    install_root = tmp_path / "install"
+    repo = _make_repo(tmp_path / "repo")
+    bin_dir, _ = _make_depcruise_fake_install(
+        install_root, typescript_version="6.0.3")
+    monkeypatch.setenv("PATH", bin_dir)
+    assert gt.typescript_toolchain_node_path(repo, supported_majors=("5",)) is None
+
+
+def test_typescript_toolchain_node_path_none_when_depcruise_unresolved(
+        tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path / "repo")
+    monkeypatch.setenv("PATH", "")
+    assert gt.typescript_toolchain_node_path(repo, supported_majors=("5",)) is None
+
+
+def test_typescript_toolchain_node_path_rejects_typescript_symlinked_into_repo(
+        tmp_path, monkeypatch):
+    install_root = tmp_path / "install"
+    repo = _make_repo(tmp_path / "repo")
+    bin_dir, nm = _make_depcruise_fake_install(install_root)
+    repo_ts = tmp_path / "repo" / "typescript"
+    repo_ts.mkdir(parents=True)
+    (repo_ts / "package.json").write_text(json.dumps({"version": "5.9.3"}))
+    ts_link = os.path.join(nm, "typescript")
+    try:
+        os.symlink(str(repo_ts), ts_link)
+    except OSError as exc:
+        pytest.skip("platform cannot create symlinks: %s" % exc)
+    monkeypatch.setenv("PATH", bin_dir)
+    assert gt.typescript_toolchain_node_path(repo, supported_majors=("5",)) is None
+
+
+def test_typescript_toolchain_node_path_none_when_manifest_unreadable(
+        tmp_path, monkeypatch):
+    install_root = tmp_path / "install"
+    repo = _make_repo(tmp_path / "repo")
+    bin_dir, _ = _make_depcruise_fake_install(
+        install_root, manifest_body="{not valid json")
+    monkeypatch.setenv("PATH", bin_dir)
+    assert gt.typescript_toolchain_node_path(repo, supported_majors=("5",)) is None
 
 
 def test_resolve_not_found(tmp_path, monkeypatch):

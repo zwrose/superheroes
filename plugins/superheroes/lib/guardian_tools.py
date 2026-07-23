@@ -13,6 +13,7 @@ Guarantees by construction:
   4. Environment allowlist (code-loading vars stripped; PATH/NODE_PATH sanitized).
   5. No fetch at sweep time (degrade messages only — see ``missing_tool_reason``).
 """
+import json
 import os
 import re
 import shutil
@@ -44,6 +45,8 @@ INSTALL_COMMANDS = {
     "knip": "npm install -g knip",
     "vulture": "pip install vulture",
     "pip-audit": "pip install pip-audit",
+    # Coupling lens collector — co-installs a supported-major TypeScript for .ts/.tsx parsing.
+    "depcruise": "npm install -g dependency-cruiser typescript@5",
     "osv-scanner": (
         "brew install osv-scanner "
         "(or: go install github.com/google/osv-scanner/v2/cmd/osv-scanner@latest)"
@@ -60,6 +63,7 @@ VERSION_ARGS = {
     "knip": ("--version",),
     "vulture": ("--version",),
     "pip-audit": ("--version",),
+    "depcruise": ("--version",),
     "osv-scanner": ("--version",),
 }
 
@@ -331,6 +335,62 @@ def resolve(tool, cwd, run=None):
             "rejection": REJECTION_REPO_LOCAL,
         }
     return {"tool": tool, "found": True, "path": resolved, "source": "path"}
+
+
+def typescript_toolchain_node_path(repo, supported_majors):
+    """Absolute path to a plugin-controlled NODE_PATH dir that holds a SUPPORTED-major
+    `typescript` package resolvable for dependency-cruiser, or None (fail-closed).
+
+    Derives candidate node_modules dirs from the RESOLVED `depcruise` bin's own install
+    (via resolve(), which already rejects repo-local/relative hits), so the returned dir
+    is never inside the swept repo. Returns None on ANY uncertainty: depcruise unresolved,
+    no co-located typescript, unsupported major, unreadable/invalid manifest, or a
+    typescript package/manifest/dir that realpath-resolves INSIDE the swept repo (symlink
+    guard — never hand depcruise a repo-controlled compiler).
+    """
+    res = resolve("depcruise", repo)
+    if not res["found"]:
+        return None
+
+    bin_real = res["path"]
+    candidates = []
+    seen = set()
+    cur = bin_real
+    while True:
+        parent = os.path.dirname(cur)
+        if os.path.basename(parent) == "node_modules":
+            nm = parent
+            nm_real = os.path.realpath(nm)
+            if nm_real not in seen:
+                seen.add(nm_real)
+                candidates.append(nm_real)
+        if parent == cur:
+            break
+        cur = parent
+
+    repo_real = os.path.realpath(repo)
+    for nm in candidates:
+        if _realpath_is_under(nm, repo_real):
+            continue
+        ts_pkg = os.path.join(nm, "typescript")
+        manifest = os.path.join(ts_pkg, "package.json")
+        if not os.path.isfile(manifest):
+            continue
+        if _realpath_is_under(ts_pkg, repo_real) or _realpath_is_under(manifest, repo_real):
+            continue
+        try:
+            with open(manifest, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        version = data.get("version")
+        if not isinstance(version, str) or not version:
+            continue
+        major = version.strip().split(".")[0]
+        if major not in supported_majors:
+            continue
+        return nm
+    return None
 
 
 def _parse_version(text):

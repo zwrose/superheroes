@@ -84,7 +84,7 @@ def _translate_invoke_result(res, argv, ok_exits):
 
 
 def run_tool(argv, ctx=None, timeout=DEFAULT_TIMEOUT, cwd=None, ok_exits=(0,),
-             targets=()):
+             targets=(), extra_node_path=None):
     """Run `argv` and normalize the outcome. Never raises.
 
     Returns {"ok": bool, "exit": int|None, "stdout": str, "stderr": str, "reason": str|None}.
@@ -163,7 +163,7 @@ def run_tool(argv, ctx=None, timeout=DEFAULT_TIMEOUT, cwd=None, ok_exits=(0,),
     try:
         repo = os.path.realpath(cwd or os.getcwd())
         res = gt.invoke(argv[0], list(argv[1:]), repo, targets=targets,
-                        run=None, timeout=timeout)
+                        run=None, timeout=timeout, extra_node_path=extra_node_path)
         return _translate_invoke_result(res, argv, ok_exits)
     except Exception as exc:  # realpath/invoke ValueError etc. — fail closed, never raise
         return _result(False, None, "", "", "%s failed: %s" % (argv0, exc))
