@@ -964,11 +964,9 @@ class CouplingLens(object):
                     else:
                         triples.append("%s/coupling/unknown-status" % eco)
             if incomplete:
-                if not triples:
-                    # Defensive: every incomplete branch above already emits a triple; never
-                    # publish a partial with an empty identity — an unrecognized shape falls to
-                    # the sentinel so the gap stays comparable (over-alert), never silence (#592).
-                    triples.append("coupling/*/unclassified-partial")
+                # Never-empty by classification: every incomplete section above appended a
+                # token (malformed-section / not-collected / unknown-status catch-all), so the
+                # partial identity is always a non-empty, comparable list (#592).
                 return {"couplingEdges": (
                     value, "; ".join(incomplete), sorted(set(triples)))}
             return {"couplingEdges": (value, None)}

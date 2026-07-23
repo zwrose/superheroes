@@ -2425,12 +2425,19 @@ def test_coupling_vitals_partial_identity_stable_across_status_prose_reword():
 
 
 def test_coupling_vitals_incomplete_sections_always_emit_nonempty_identity():
-    """Every incomplete coupling section emits a comparable identity — never empty/None (#592)."""
-    for bad in ("not-a-dict", {"status": "mystery"}, {}):
+    """Coupling is never-empty by classification: every incomplete section is keyed to a
+    specific cause token (malformed-section / unknown-status catch-all), so the partial
+    identity is always a non-empty, comparable list — no sentinel branch is needed (#592)."""
+    cases = [
+        ("not-a-dict", ["py/coupling/malformed-section"]),
+        ({"status": "mystery"}, ["py/coupling/unknown-status"]),
+        ({}, ["py/coupling/unknown-status"]),
+    ]
+    for bad, expected_identity in cases:
         digest = _vitals_digest(5, ecosystems={
             "js": {"status": "collected"},
             "py": bad,
         })
         reading = glc.LENS.vitals(digest)["couplingEdges"]
         assert len(reading) == 3, reading
-        assert reading[2]  # identity is a non-empty list
+        assert reading[2] == expected_identity

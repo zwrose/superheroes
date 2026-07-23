@@ -1718,6 +1718,10 @@ def _majors_behind_vital(digest):
     if not measured:
         return (None, "; ".join(gaps) or "no ecosystem freshness measured")
     if gaps:
+        # Lockstep invariant: every branch that appends a gap also appends ≥1 triple (and
+        # _section_cause_tokens never returns empty), so identity is never [] when gaps exist —
+        # a partial never silences (#592). The _VITAL_IDENTITY_TRIPWIRE_CASES test guards this
+        # across every production partial path.
         return (total, "; ".join(gaps), sorted(set(triples)))
     return (total, None)
 
@@ -1768,6 +1772,10 @@ def _vuln_count_vital(digest):
     if not measured:
         return (None, "; ".join(gaps) or "no ecosystem vulnerabilities measured")
     if gaps:
+        # Lockstep invariant: every branch that appends a gap also appends ≥1 triple (and
+        # _section_cause_tokens never returns empty), so identity is never [] when gaps exist —
+        # a partial never silences (#592). The _VITAL_IDENTITY_TRIPWIRE_CASES test guards this
+        # across every production partial path.
         return (total, "; ".join(gaps), sorted(set(triples)))
     return (total, None)
 
