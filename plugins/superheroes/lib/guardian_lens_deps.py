@@ -21,10 +21,14 @@ Two modes:
        tool degrades to not-collected quoting the install command).
      * node vulns      : ``npm audit --json --prefix <abs repo>``.
      * python vulns    : ``osv-scanner scan source --format json --no-resolve`` with a
-       pinned neutral ``--config`` and ``-L requirements.txt:<abs path>`` (PATH). Severity
-       is rated from OSV evidence when present; unrated advisories still disclose a
+       pinned neutral ``--config`` and ``-L <manifest>:<abs path>`` (PATH). A lockfile
+       (``poetry.lock`` / ``uv.lock`` / ``Pipfile.lock``) is preferred when present and
+       gives full transitive coverage (every locked entry is exactly pinned); otherwise
+       ``requirements.txt`` is audited top-level only (``--no-resolve``). Severity is
+       rated from OSV evidence when present; unrated advisories still disclose a
        ``redLineGap``. When osv-scanner is absent or degrades, falls back to
-       ``pip-audit --format=json --no-deps -r <abs requirements.txt>`` (PATH, unrated).
+       ``pip-audit --format=json --no-deps -r <abs requirements.txt>`` (PATH, unrated;
+       requirements.txt-only).
      * python freshness: NOT collected. ``pip list --outdated`` needs the project's
        installed environment, which the sweep will not execute from inside the
        repository (supply-chain policy). The degradation is disclosed, never faked.
@@ -112,7 +116,8 @@ SEVERITY_RANK = {
 # Ordered so digests and candidate lists are deterministic.
 ECOSYSTEM_MANIFESTS = (
     ("node", ("package.json",)),
-    ("python", ("pyproject.toml", "requirements.txt")),
+    ("python", ("pyproject.toml", "requirements.txt", "poetry.lock", "uv.lock",
+                "Pipfile.lock")),
     ("rust", ("Cargo.toml",)),
     ("go", ("go.mod",)),
 )
@@ -632,6 +637,10 @@ PYTHON_VULN_NO_RESOLVE_SCOPE_REASON = (
     "vulnerable transitive is invisible to this scan), so prior advisories for packages "
     "this manifest does not enumerate are carried forward, never resolved")
 
+PYTHON_VULN_LOCKFILE_SCOPE_REASON = (
+    "osv-scanner audited the full locked dependency graph (including transitive "
+    "dependencies) from %s; every locked entry is exactly pinned")
+
 PYTHON_VULN_NO_RESOLVE_COVERAGE_GAP = {
     "ecosystem": "python",
     "tool": "osv-scanner",
@@ -1009,9 +1018,75 @@ def _reconcile_python_vuln_id(package, alias_set, prev_section, base_id):
     return (base_id, None)
 
 
+def _select_python_audit_manifest(repo):
+    """Return (relpath, kind, transitive, osv_type) for the highest-precedence manifest."""
+    for rel in ("poetry.lock", "uv.lock", "Pipfile.lock", "requirements.txt"):
+        if os.path.isfile(os.path.join(repo, rel)):
+            if rel == "requirements.txt":
+                return (rel, "requirements", False, "requirements.txt")
+            return (rel, "lockfile", True, rel)
+    return None
+
+
+_OSV_SKIP_PKG_RE = re.compile(r"^\s*Skipping\s+([^\s:]+):", re.MULTILINE)
+_OSV_FILTERED_COUNT_RE = re.compile(r"Filtered\s+(\d+)\s+local/unscannable")
+
+
+def _osv_skipped_packages(stderr):
+    """Parse osv-scanner stderr for per-package skips and filtered counts."""
+    text = stderr or ""
+    names = [m.group(1).strip() for m in _OSV_SKIP_PKG_RE.finditer(text)]
+    filtered_count = sum(int(m.group(1)) for m in _OSV_FILTERED_COUNT_RE.finditer(text))
+    return names, filtered_count
+
+
+def _audited_scope(manifest, kind, transitive):
+    """Canonical auditedScope dict for python vuln sections."""
+    return {
+        "manifest": manifest,
+        "kind": kind,
+        "transitive": bool(transitive),
+    }
+
+
+def _is_queryable_version(version):
+    """True when a lockfile version string can be advisory-checked by osv-scanner."""
+    if not isinstance(version, str) or not version:
+        return False
+    if not version[0].isdigit():
+        return False
+    for bad in ("+", "://", "@", "git", "file:"):
+        if bad in version:
+            return False
+    return True
+
+
+def _prev_audited_scope(prev_section):
+    """Prior (kind, transitive, manifest) for scope-change degrade, or None."""
+    if not isinstance(prev_section, dict):
+        return None
+    if "auditedScope" in prev_section:
+        scope = prev_section.get("auditedScope")
+        if isinstance(scope, dict):
+            kind = scope.get("kind")
+            manifest = scope.get("manifest")
+            transitive = scope.get("transitive")
+            if (isinstance(kind, str) and kind and isinstance(manifest, str) and manifest
+                    and isinstance(transitive, bool)):
+                return (kind, transitive, manifest)
+        return ("__malformed__", False, "__malformed__")
+    items = prev_section.get("items")
+    if isinstance(items, dict) and items:
+        return ("requirements", False, "requirements.txt")
+    return None
+
+
 def _finalize_osv_python_section(items, prev_section, audited_pkgs, pin_info,
                                   seconds, argv, tool, boundary=True,
-                                  ambiguity_disclosures=None, carry_all_prior=False):
+                                  ambiguity_disclosures=None, carry_all_prior=False,
+                                  kind="requirements", transitive=False,
+                                  manifest_rel="requirements.txt", unqueryable=(),
+                                  scope_change_disclosure=None):
     """Single finalization path for every osv-scanner partial section."""
     if carry_all_prior:
         _carry_prior_items(prev_section, items, lambda _pkg: True)
@@ -1022,7 +1097,10 @@ def _finalize_osv_python_section(items, prev_section, audited_pkgs, pin_info,
 
     unrated = [i for i in items.values()
                if isinstance(i, dict) and not i.get("severityKnown")]
-    reason_parts = [PYTHON_VULN_NO_RESOLVE_SCOPE_REASON]
+    if kind == "lockfile":
+        reason_parts = [PYTHON_VULN_LOCKFILE_SCOPE_REASON % manifest_rel]
+    else:
+        reason_parts = [PYTHON_VULN_NO_RESOLVE_SCOPE_REASON]
     extra = {
         "tool": tool,
         "items": items,
@@ -1030,41 +1108,63 @@ def _finalize_osv_python_section(items, prev_section, audited_pkgs, pin_info,
         "argv": argv,
         "ratedBy": tool,
         "boundary": boundary,
-        "coverageGap": dict(PYTHON_VULN_NO_RESOLVE_COVERAGE_GAP),
-        "auditCoverage": {
+        "auditedScope": _audited_scope(manifest_rel, kind, transitive),
+    }
+    if kind == "requirements":
+        extra["coverageGap"] = dict(PYTHON_VULN_NO_RESOLVE_COVERAGE_GAP)
+        extra["auditCoverage"] = {
             "pinsClassified": len(pin_info.get("pins") or {}),
             "packagesAudited": len(audited_pkgs),
             "unpinnedCount": len(pin_info.get("unpinned") or []),
-        },
-    }
-    unpinned = pin_info.get("unpinned") or []
-    conditional = pin_info.get("conditional") or []
-    if unpinned or conditional or pin_info.get("hasIncludes"):
-        extra["pinScopeGap"] = {
-            "ecosystem": "python",
-            "tool": tool,
-            "unpinned": list(unpinned),
-            "count": len(unpinned),
-            "hasIncludes": bool(pin_info.get("hasIncludes")),
         }
-        if conditional:
-            extra["pinScopeGap"]["conditional"] = list(conditional)
-            extra["pinScopeGap"]["conditionalCount"] = len(conditional)
-        if pin_info.get("truncated"):
-            extra["pinScopeGap"]["truncated"] = True
-        note_parts = []
-        if unpinned:
-            note_parts.append(PYTHON_VULN_UNPINNED_AUDIT_NOTE)
-        if conditional:
-            note_parts.append(
-                "some requirements carry environment markers (conditional install) and "
-                "are not exactly pinned — their prior advisories are never resolved")
-        if pin_info.get("hasIncludes"):
-            note_parts.append(
-                "requirements.txt contains -r/-c includes — nested requirements the scan "
-                "never saw are not audited")
-        if note_parts:
-            reason_parts.append("; ".join(note_parts))
+    else:
+        extra["auditCoverage"] = {
+            "pinsClassified": 0,
+            "packagesAudited": len(audited_pkgs),
+            "unpinnedCount": 0,
+        }
+    if kind == "lockfile":
+        if unqueryable:
+            extra["pinScopeGap"] = {
+                "ecosystem": "python",
+                "tool": tool,
+                "unqueryable": sorted(unqueryable),
+                "count": len(unqueryable),
+            }
+            reason_parts.append(
+                "VCS/path/versionless lockfile entries are not advisory-checked and their "
+                "prior advisories are never resolved")
+    else:
+        unpinned = pin_info.get("unpinned") or []
+        conditional = pin_info.get("conditional") or []
+        if unpinned or conditional or pin_info.get("hasIncludes"):
+            extra["pinScopeGap"] = {
+                "ecosystem": "python",
+                "tool": tool,
+                "unpinned": list(unpinned),
+                "count": len(unpinned),
+                "hasIncludes": bool(pin_info.get("hasIncludes")),
+            }
+            if conditional:
+                extra["pinScopeGap"]["conditional"] = list(conditional)
+                extra["pinScopeGap"]["conditionalCount"] = len(conditional)
+            if pin_info.get("truncated"):
+                extra["pinScopeGap"]["truncated"] = True
+            note_parts = []
+            if unpinned:
+                note_parts.append(PYTHON_VULN_UNPINNED_AUDIT_NOTE)
+            if conditional:
+                note_parts.append(
+                    "some requirements carry environment markers (conditional install) and "
+                    "are not exactly pinned — their prior advisories are never resolved")
+            if pin_info.get("hasIncludes"):
+                note_parts.append(
+                    "requirements.txt contains -r/-c includes — nested requirements the scan "
+                    "never saw are not audited")
+            if note_parts:
+                reason_parts.append("; ".join(note_parts))
+    if scope_change_disclosure:
+        reason_parts.append(scope_change_disclosure)
     if ambiguity_disclosures:
         reason_parts.append(
             "ambiguous advisory identity (%s) — current findings are reported under fresh "
@@ -1104,31 +1204,34 @@ def collect_python_freshness(ctx, repo, manifest_rel):
 def collect_python_vulns_osv(ctx, repo):
     """osv-scanner scan source → {id: item}, one per vulnerability group (not per record).
 
-    Audits requirements.txt by ABSOLUTE path with a pinned neutral config so repo-local
-    osv-scanner.toml cannot suppress findings. Successful collection is always `partial`:
-    --no-resolve audits only enumerated packages; --all-packages lists every audited package
-    so clean re-audits can resolve prior advisories. A findings signal with zero normalized
+    Audits the highest-precedence Python manifest (lockfile preferred) by ABSOLUTE path
+    with a pinned neutral config so repo-local osv-scanner.toml cannot suppress findings.
+    Successful collection is always `partial`: requirements audits only enumerated packages;
+    lockfiles audit the full locked graph. A findings signal with zero normalized
     candidates degrades via the contradiction gate.
     """
     tool = "osv-scanner"
-    req_rel = "requirements.txt"
-    req_abs = os.path.join(repo, req_rel)
-    if not os.path.isfile(req_abs):
+    manifest = _select_python_audit_manifest(repo)
+    if manifest is None:
         return _section(
             "not-collected",
-            "%s: no requirements.txt at the repo root to audit by absolute path; "
-            "auditing a pyproject.toml statically is not supported and resolving it "
-            "would require the project's installed environment, which the sweep will "
-            "not build from inside the repo — supply-chain policy" % tool, tool=tool)
+            "%s: no auditable Python manifest at the repo root (poetry.lock, uv.lock, "
+            "Pipfile.lock, or requirements.txt)" % tool,
+            tool=tool, boundary=True)
 
-    pin_info = _parse_requirements_pins(req_abs)
-    if pin_info.get("readError"):
-        return _section(
-            "not-collected",
-            "%s: requirements.txt unreadable (%s)" % (tool, pin_info["readError"]),
-            tool=tool,
-            boundary=False)
-    exact_pins = pin_info.get("pins") or {}
+    manifest_rel, kind, transitive, osv_type = manifest
+    manifest_abs = os.path.join(repo, manifest_rel)
+    pin_info = {}
+    exact_pins = {}
+    if kind == "requirements":
+        pin_info = _parse_requirements_pins(manifest_abs)
+        if pin_info.get("readError"):
+            return _section(
+                "not-collected",
+                "%s: requirements.txt unreadable (%s)" % (tool, pin_info["readError"]),
+                tool=tool,
+                boundary=False)
+        exact_pins = pin_info.get("pins") or {}
 
     config_path = gt.neutral_tool_config(repo, tool)
     # --config is mandatory: osv-scanner auto-discovers osv-scanner.toml in the scanned
@@ -1137,7 +1240,7 @@ def collect_python_vulns_osv(ctx, repo):
     argv = [
         tool, "scan", "source", "--format", "json", "--no-resolve", "--all-packages",
         "--config", config_path,
-        "-L", "requirements.txt:%s" % req_abs,
+        "-L", "%s:%s" % (osv_type, manifest_abs),
     ]
     started = time.time()
     res = gc.run_tool(argv, ctx, timeout=OSV_TIMEOUT, cwd=repo, ok_exits=(0, 1))
@@ -1156,9 +1259,27 @@ def collect_python_vulns_osv(ctx, repo):
     malformed = []
     malformed_packages = set()
     audited_pkgs = set()
+    unqueryable = set()
     prev_section = _prev_part((ctx or {}).get("prevDigest"), "python", "vulns")
     used_ids = {}
     ambiguity_disclosures = []
+    unattributed_skips = False
+    if kind == "lockfile":
+        skip_names, filtered_count = _osv_skipped_packages(res.get("stderr") or "")
+        for skip_name in skip_names:
+            unqueryable.add(skip_name)
+        if filtered_count > len(skip_names):
+            unattributed_skips = True
+
+    def _mark_audited(name, version):
+        pkg_key = _pep503_canonical(name)
+        if kind == "lockfile":
+            if _is_queryable_version(version):
+                audited_pkgs.add(pkg_key)
+            else:
+                unqueryable.add(name)
+        elif pkg_key in exact_pins:
+            audited_pkgs.add(pkg_key)
 
     for result in results:
         if not isinstance(result, dict):
@@ -1182,8 +1303,7 @@ def collect_python_vulns_osv(ctx, repo):
             has_vulnerabilities = "vulnerabilities" in pkg_entry
             groups = pkg_entry.get("groups")
             if not has_groups and not has_vulnerabilities:
-                if _pep503_canonical(name) in exact_pins:
-                    audited_pkgs.add(_pep503_canonical(name))
+                _mark_audited(name, version)
                 continue
             if has_vulnerabilities and not has_groups:
                 malformed.append({
@@ -1196,8 +1316,7 @@ def collect_python_vulns_osv(ctx, repo):
                 malformed.append({"package": name, "why": "non-list groups"})
                 malformed_packages.add(_pep503_canonical(name))
                 continue
-            if _pep503_canonical(name) in exact_pins:
-                audited_pkgs.add(_pep503_canonical(name))
+            _mark_audited(name, version)
             byid = {}
             for rec in pkg_entry.get("vulnerabilities") or []:
                 if isinstance(rec, dict) and isinstance(rec.get("id"), str):
@@ -1239,7 +1358,7 @@ def collect_python_vulns_osv(ctx, repo):
                     receipt = (
                         "%s %s: %s [severity not recognized from osv-scanner evidence]"
                         % (name, version, preferred))
-                if _pep503_canonical(name) not in exact_pins:
+                if kind == "requirements" and _pep503_canonical(name) not in exact_pins:
                     receipt += " [audited lowest satisfying version — requirement not exactly pinned]"
                 item = items.get(cid)
                 if item is None:
@@ -1264,12 +1383,36 @@ def collect_python_vulns_osv(ctx, repo):
                         item["severityKnown"] = known
                     item["receipt"] += " | " + receipt
 
+    audited_pkgs -= {_pep503_canonical(n) for n in unqueryable}
+
     contradiction = _vuln_contradiction(
         tool, 0, res.get("exit") == 1, raw_groups, items, ())
     if contradiction is not None:
         return _section("not-collected", contradiction, tool=tool)
 
-    carry_all_prior = bool(ambiguity_disclosures)
+    cur_scope = (kind, transitive, osv_type)
+    prev_scope = _prev_audited_scope(prev_section)
+    scope_change_disclosure = None
+    scope_changed = False
+    if prev_scope is not None and prev_scope != cur_scope:
+        scope_changed = True
+        scope_change_disclosure = (
+            "audit scope changed (%s/%s → %s/%s); all prior advisories carried forward, "
+            "none resolved this sweep"
+            % (prev_scope[0], prev_scope[2], kind, osv_type))
+    if unattributed_skips:
+        unattributed_disclosure = (
+            "osv-scanner filtered %d unscannable package(s) it did not individually name; "
+            "carrying all prior advisories forward" % filtered_count)
+        scope_change_disclosure = (
+            "%s; %s" % (scope_change_disclosure, unattributed_disclosure)
+            if scope_change_disclosure else unattributed_disclosure)
+
+    carry_all_prior = bool(ambiguity_disclosures) or scope_changed or unattributed_skips
+    finalize_kw = dict(
+        kind=kind, transitive=transitive, manifest_rel=manifest_rel,
+        unqueryable=tuple(sorted(unqueryable)),
+        scope_change_disclosure=scope_change_disclosure)
     if malformed:
         if any(m.get("package") is None for m in malformed):
             _carry_prior_items(prev_section, items, lambda _pkg: True)
@@ -1290,7 +1433,7 @@ def collect_python_vulns_osv(ctx, repo):
         section = _finalize_osv_python_section(
             items, prev_section, audited_pkgs, pin_info, seconds, argv, tool,
             boundary=False, ambiguity_disclosures=ambiguity_disclosures or None,
-            carry_all_prior=carry_all_prior)
+            carry_all_prior=carry_all_prior, **finalize_kw)
         section["reason"] = "%s; %s" % (reason, section["reason"])
         if not any(m.get("package") is None for m in malformed):
             section["malformedEntries"] = sorted(malformed_packages)
@@ -1300,7 +1443,7 @@ def collect_python_vulns_osv(ctx, repo):
         items, prev_section, audited_pkgs, pin_info, seconds, argv, tool,
         boundary=not ambiguity_disclosures,
         ambiguity_disclosures=ambiguity_disclosures or None,
-        carry_all_prior=carry_all_prior)
+        carry_all_prior=carry_all_prior, **finalize_kw)
 
 
 def collect_python_vulns_pip_audit(ctx, repo):
@@ -1438,6 +1581,7 @@ def collect_python_vulns_pip_audit(ctx, repo):
                      "0 = unknown, which means unrated, NOT harmless",
         redLineGap=dict(PYTHON_VULN_PIP_AUDIT_RED_LINE_GAP),
         coverageGap=dict(PYTHON_VULN_PIP_AUDIT_NO_DEPS_COVERAGE_GAP),
+        auditedScope=_audited_scope("requirements.txt", "requirements", False),
         ratedBy=tool,
         boundary=False)
 
@@ -1501,6 +1645,9 @@ def _section_cause_tokens(section):
         tokens.append("malformed-advisory")
     if section.get("boundary") is False:
         tokens.append("ambiguous-identity")
+    scope = section.get("auditedScope")
+    if isinstance(scope, dict) and scope.get("kind") == "lockfile":
+        tokens.append("lockfile-audit")
     return sorted(set(tokens))
 
 
