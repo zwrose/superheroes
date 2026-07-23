@@ -57,6 +57,12 @@ RED_LINE_KINDS = ("critical-vuln", "new-high-complexity", "large-fresh-clone")
 FACTS = ("verify-command", "recorded-coverage", "stack-tags", "paths")
 COLLECT_STATUSES = ("collected", "partial", "not-collected")
 PERMANENT_BOUNDARY_KEY = "permanentBoundary"
+# "high" = high-precision / high-consequence lens: first-baseline candidates ALWAYS
+# routed through validation. "volume" = noisy volume lens: first-baseline candidates
+# validated only below a size threshold, otherwise quiet-baselined (skipped count
+# disclosed). Default "high" fails toward validation.
+FIRST_BASELINE_PRECISIONS = ("high", "volume")
+DEFAULT_FIRST_BASELINE_PRECISION = "high"
 
 REQUIRED_CONFORMANCE_SCENARIOS = (
     "missing-tool",
@@ -166,6 +172,10 @@ to raise and running collect() — that a tool-free lens invokes neither
   - uses_external_tools: bool (optional class attribute, defaults True) — set False for a
       stdlib-only lens that spawns nothing; the harness then drives the tool-free scenarios
       (TOOL_FREE_CONFORMANCE_SCENARIOS) and proves no spawn happens (see module docstring).
+  - first_baseline_precision: str (optional, defaults to "high") — "high" lenses always
+      route first-baseline candidates through validation; "volume" lenses validate only below
+      a size threshold and otherwise quiet-baseline (skipped count disclosed). Default "high"
+      fails toward validation.
 """
 
 REGISTRY = []
@@ -227,6 +237,12 @@ def classify_collect(out):
     return ("collected", None)
 
 
+def first_baseline_precision(lens):
+    """Return the lens's first-baseline precision tier, defaulting to high (validate)."""
+    val = getattr(lens, "first_baseline_precision", DEFAULT_FIRST_BASELINE_PRECISION)
+    return val if val in FIRST_BASELINE_PRECISIONS else DEFAULT_FIRST_BASELINE_PRECISION
+
+
 def permanent_boundary(out):
     """True only for a contract-valid partial that declares a permanent capability boundary.
 
@@ -271,6 +287,12 @@ def validate_lens(lens):
     for meth in ("collect", "diff", "red_lines", "degrade"):
         if not callable(getattr(lens, meth, None)):
             reasons.append("%s must be callable" % meth)
+    if hasattr(lens, "first_baseline_precision"):
+        fbp = getattr(lens, "first_baseline_precision", None)
+        if fbp not in FIRST_BASELINE_PRECISIONS:
+            reasons.append(
+                "first_baseline_precision, when set, must be one of %s"
+                % (FIRST_BASELINE_PRECISIONS,))
     return (len(reasons) == 0, reasons)
 
 
@@ -391,6 +413,7 @@ class _UnavailableLens(object):
             "This production lens failed to load; there is nothing to validate.")
         self.consequence_template = (
             "Production lens %s is unavailable." % name)
+        self.first_baseline_precision = "high"
         self._error = error
 
     def collect(self, ctx):

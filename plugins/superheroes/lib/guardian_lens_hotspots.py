@@ -586,6 +586,7 @@ def _count_hotspots_drift_suppressed(prev_files, cur_files, surface_ids):
 
 class HotspotsLens:
     name = "hotspots"
+    first_baseline_precision = "volume"
     # 2.0.0: digest persists the full measured set (+ explicit unmeasured/error markers)
     # and surfaceIds; incompatible with the 1.0.0 capped-only shape — bump so the shell
     # records a quiet baseline instead of mass false drift on upgrade.

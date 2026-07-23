@@ -566,6 +566,7 @@ def apply_cap(candidates, top_n=TOP_N, always_include_clone_lines=None):
 
 class DuplicationLens:
     name = "duplication"
+    first_baseline_precision = "volume"
     # 2.0.0: digest persists the full measured set (+ explicit unmeasured markers) and
     # surfaceIds; incompatible with the 1.0.0 capped-only shape.
     # 2.1.0 (#564): the census POPULATION changed — jscpd now scans only git-tracked,

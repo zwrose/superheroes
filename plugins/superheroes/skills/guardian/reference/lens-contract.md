@@ -20,6 +20,7 @@ Each lens object provides:
 | `red_lines(candidates)` | `[{"kind": <RED_LINE_KINDS>, "id": str, "detail": str}]` |
 | `degrade(reason)` | `{"lens": name, "degraded": True, "reason": reason}` |
 | `vitals(digest)` (optional) | `{vital_name: (value \| None, reason \| None)}` — see below |
+| `first_baseline_precision` (optional) | `"high"` (always validate first-baseline candidates) or `"volume"` (threshold-gated); default `"high"` |
 
 ### Optional vitals hook
 

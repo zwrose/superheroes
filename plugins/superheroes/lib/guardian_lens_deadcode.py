@@ -767,6 +767,7 @@ class DeadCodeLens(object):
 
     name = LENS_NAME
     collector_version = COLLECTOR_VERSION
+    first_baseline_precision = "volume"
     required_facts = ()
     validation_guidance = VALIDATION_GUIDANCE
     consequence_template = CONSEQUENCE_TEMPLATE
