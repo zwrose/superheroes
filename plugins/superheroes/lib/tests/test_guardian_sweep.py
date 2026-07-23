@@ -89,9 +89,10 @@ def test_late_seeding_new_lens_validated_existing_untouched(tmp_path):
 class _MultiCandidateLens(FixtureLens):
     """Emits N distinct normal candidates for first-baseline bound tests."""
 
-    def __init__(self, n, **kwargs):
+    def __init__(self, n, *, emit_red_line=False, **kwargs):
         super().__init__(**kwargs)
         self._n = n
+        self._emit_red_line = emit_red_line
 
     def collect(self, ctx):
         candidates = []
@@ -99,6 +100,12 @@ class _MultiCandidateLens(FixtureLens):
             candidates.append({
                 "id": "%s:normal-%d" % (self.name, i),
                 "complexity": 5,
+                "metric": self._metric,
+            })
+        if self._emit_red_line:
+            candidates.append({
+                "id": "%s:red-line" % self.name,
+                "complexity": gl.RED_LINE_THRESHOLDS["complexity"],
                 "metric": self._metric,
             })
         return {"candidates": candidates, "digest": self._digest}
@@ -114,7 +121,7 @@ def test_first_seed_volume_above_bound_quiet_and_disclosed(tmp_path):
     killed = bundle["funnel"]["killedByDrift"]
     assert len(killed) == 3
     assert all(
-        k["reason"] == gsw.FIRST_BASELINE_UNVALIDATED_REASON for k in killed)
+        k["reason"] == gr.FIRST_BASELINE_UNVALIDATED_REASON for k in killed)
     assert funnel_conserved(bundle)
     md = gr.render(bundle, [], {"byId": {}})
     assert gr.FUNNEL_FIRST_BASELINE_UNVALIDATED in md
@@ -132,16 +139,36 @@ def test_first_seed_volume_below_bound_surfaces(tmp_path):
     assert funnel_conserved(bundle)
 
 
-def test_first_seed_high_precision_above_bound_validates_prefix_and_discloses(tmp_path):
+def test_first_seed_volume_above_bound_red_line_still_surfaces(tmp_path):
     repo = init_calibrated_repo(tmp_path)
     write_guardian_layer(tmp_path, {"firstBaselineValidateMax": 2})
-    lens = _MultiCandidateLens(4, name="high-lens", first_baseline_precision="high")
+    lens = _MultiCandidateLens(
+        3, name="volume-lens", first_baseline_precision="volume", emit_red_line=True)
     bundle = gsw.collect(repo, lenses=[lens])
-    assert len(bundle["surfaced"]) == 2
+    surfaced = {s["id"]: s for s in bundle["surfaced"]}
+    assert "volume-lens:red-line" in surfaced
+    assert surfaced["volume-lens:red-line"]["driftReason"] == "red-line"
+    normal_ids = ["volume-lens:normal-%d" % i for i in range(3)]
+    assert not any(nid in surfaced for nid in normal_ids)
+    killed = {k["id"]: k for k in bundle["funnel"]["killedByDrift"]}
+    for nid in normal_ids:
+        assert killed[nid]["reason"] == gr.FIRST_BASELINE_UNVALIDATED_REASON
+    assert funnel_conserved(bundle)
+
+
+def test_first_seed_high_precision_above_bound_validates_prefix_and_discloses(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    max_n = 2
+    write_guardian_layer(tmp_path, {"firstBaselineValidateMax": max_n})
+    lens = _MultiCandidateLens(4, name="high-lens", first_baseline_precision="high")
+    all_ids = ["high-lens:normal-%d" % i for i in range(4)]
+    bundle = gsw.collect(repo, lenses=[lens])
+    surfaced_ids = [s["id"] for s in bundle["surfaced"]]
+    assert surfaced_ids == all_ids[:max_n]
     assert all(s["driftReason"] == "first-baseline" for s in bundle["surfaced"])
     killed = [k for k in bundle["funnel"]["killedByDrift"]
-              if k["reason"] == gsw.FIRST_BASELINE_UNVALIDATED_REASON]
-    assert len(killed) == 2
+              if k["reason"] == gr.FIRST_BASELINE_UNVALIDATED_REASON]
+    assert {k["id"] for k in killed} == set(all_ids[max_n:])
     assert funnel_conserved(bundle)
     md = gr.render(bundle, [], {"byId": {}})
     assert "high-lens: 2 candidate(s) baselined unreviewed (first baseline)" in md
@@ -244,7 +271,7 @@ def test_version_rebaseline_stays_quiet(tmp_path):
     assert len(bundle["funnel"]["killedByDrift"]) == 1
     assert bundle["funnel"]["killedByDrift"][0]["reason"] == "quiet-baseline"
     assert bundle["funnel"]["killedByDrift"][0]["reason"] != (
-        gsw.FIRST_BASELINE_UNVALIDATED_REASON)
+        gr.FIRST_BASELINE_UNVALIDATED_REASON)
     assert bundle["nextSnapshot"]["lenses"]["fixture"]["collectorVersion"] == "2"
 
 

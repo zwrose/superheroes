@@ -40,9 +40,6 @@ _DEFAULT_VERIFY_BUDGET_SECONDS = 300
 # validation cost (issue #574 DoD-5): total first-baseline validation ≤
 # (first-seed lens count × this).
 _DEFAULT_FIRST_BASELINE_VALIDATE_MAX = 10
-# Authoritative home for this killed-by-drift reason token (CONVENTIONS "one
-# home per cross-boundary fact"); the report renderer imports THIS constant.
-FIRST_BASELINE_UNVALIDATED_REASON = "first-baseline-unvalidated"
 _VERIFY_STDOUT_CAP = 8 * 1024
 # Aggregate budget across all filed-issue `gh issue view` lookups in one collect.
 # Per-call timeout is capped so one hung call cannot consume the whole budget alone.
@@ -738,7 +735,7 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
             if cid not in would_surface:
                 if lens_new:
                     reason = (
-                        FIRST_BASELINE_UNVALIDATED_REASON
+                        guardian_report.FIRST_BASELINE_UNVALIDATED_REASON
                         if first_seed else "quiet-baseline")
                 else:
                     reason = "no-drift"

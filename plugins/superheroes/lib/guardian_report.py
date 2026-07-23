@@ -33,6 +33,7 @@ FUNNEL_DEGRADED = "degraded-lenses"
 FUNNEL_REJECTED = "model-rejected"
 FUNNEL_VALIDATED = "surfaced-and-validated"
 FUNNEL_FIRST_BASELINE_UNVALIDATED = "first-baseline baselined unreviewed"
+FIRST_BASELINE_UNVALIDATED_REASON = "first-baseline-unvalidated"
 
 
 def _storage_header(bundle):
@@ -316,9 +317,7 @@ def render(bundle, dispositions, ledger):
         lines.append("_None._")
     lines.append("")
 
-    # Lazy import: guardian_sweep imports guardian_report at module load.
-    import guardian_sweep as guardian_sweep_mod
-    fb_reason = guardian_sweep_mod.FIRST_BASELINE_UNVALIDATED_REASON
+    fb_reason = FIRST_BASELINE_UNVALIDATED_REASON
     fb_counts = {}
     for item in drift:
         if item.get("reason") == fb_reason:
