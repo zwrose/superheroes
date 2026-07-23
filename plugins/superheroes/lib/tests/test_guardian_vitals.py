@@ -1094,6 +1094,106 @@ def test_partial_crossing_requires_matching_gap_reason():
                     cur_completeness={"vulnCount": different})["_notComparable"]["vulnCount"]
 
 
+def _deps_partial_lens_result(digest, lens_reason):
+    import guardian_lens_deps as deps_mod
+    return {
+        "deps": {
+            "lens": deps_mod.LENS,
+            "status": "partial",
+            "digest": digest,
+            "reason": lens_reason,
+            "fresh": True,
+        },
+    }
+
+
+def _python_partial_vuln_digest(vuln_count, *, vuln_reason, freshness_reason):
+    items = {
+        "deps:audit:python:foo:PYSEC-%d" % i: {"id": "deps:audit:python:foo:PYSEC-%d" % i}
+        for i in range(vuln_count)
+    }
+    return {
+        "ecosystems": {
+            "python": {
+                "vulns": {
+                    "status": "partial",
+                    "items": items,
+                    "reason": vuln_reason,
+                },
+                "freshness": {
+                    "status": "partial",
+                    "reason": freshness_reason,
+                    "items": {},
+                },
+            },
+        },
+    }
+
+
+def test_unrelated_partial_part_reason_change_does_not_suppress_crossing(tmp_path):
+    """vulnCount 2→5 with only an unrelated freshness gap reworded must still cross."""
+    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
+    vuln_reason = "severity source offline this sweep"
+    freshness_a = "policy gap A"
+    freshness_b = "policy gap B"
+    lens_reason_s1 = "python vulns: %s; python freshness: %s" % (vuln_reason, freshness_a)
+    lens_reason_s2 = "python vulns: %s; python freshness: %s" % (vuln_reason, freshness_b)
+
+    out1 = gv.collect(repo, lens_results=_deps_partial_lens_result(
+        _python_partial_vuln_digest(2, vuln_reason=vuln_reason, freshness_reason=freshness_a),
+        lens_reason_s1))
+    out2 = gv.collect(repo, lens_results=_deps_partial_lens_result(
+        _python_partial_vuln_digest(5, vuln_reason=vuln_reason, freshness_reason=freshness_b),
+        lens_reason_s2))
+
+    assert out1["vitals"]["vulnCount"] == 2
+    assert out2["vitals"]["vulnCount"] == 5
+    comp1 = out1["completeness"]["vulnCount"]
+    comp2 = out2["completeness"]["vulnCount"]
+    assert comp1["state"] == "partial"
+    assert comp2["state"] == "partial"
+    vital_gap = "python vulns: %s" % vuln_reason
+    assert comp1["reason"] == vital_gap
+    assert comp2["reason"] == vital_gap
+    assert comp1["reason"] == comp2["reason"]
+    assert comp1["reason"].count("python vulns:") == 1
+    assert freshness_a not in comp1["reason"]
+    assert freshness_b not in comp2["reason"]
+    assert lens_reason_s1 not in comp1["reason"]
+    assert lens_reason_s2 not in comp2["reason"]
+
+    crossings = gv.crossings(
+        {"vulnCount": out1["vitals"]["vulnCount"]},
+        {"vulnCount": out2["vitals"]["vulnCount"]},
+        prev_completeness={"vulnCount": comp1},
+        cur_completeness={"vulnCount": comp2},
+    )
+    assert [c["vital"] for c in crossings] == ["vulnCount"]
+
+
+def test_vital_own_gap_reason_change_still_fences_crossing(tmp_path):
+    """A change in the vital's own gap reason must keep sweeps non-comparable."""
+    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
+    gap_a = "severity source offline this sweep"
+    gap_b = "ratings unavailable this sweep"
+    out1 = gv.collect(repo, lens_results=_deps_partial_lens_result(
+        _python_partial_vuln_digest(2, vuln_reason=gap_a, freshness_reason="policy gap"),
+        "python vulns: %s; python freshness: policy gap" % gap_a))
+    out2 = gv.collect(repo, lens_results=_deps_partial_lens_result(
+        _python_partial_vuln_digest(5, vuln_reason=gap_b, freshness_reason="policy gap"),
+        "python vulns: %s; python freshness: policy gap" % gap_b))
+
+    comp1 = out1["completeness"]["vulnCount"]
+    comp2 = out2["completeness"]["vulnCount"]
+    assert comp1["reason"] != comp2["reason"]
+    assert gv.crossings(
+        {"vulnCount": out1["vitals"]["vulnCount"]},
+        {"vulnCount": out2["vitals"]["vulnCount"]},
+        prev_completeness={"vulnCount": comp1},
+        cur_completeness={"vulnCount": comp2},
+    ) == []
+
+
 def test_completeness_persisted_in_trend_record(tmp_path):
     repo = init_calibrated_repo(tmp_path)
     completeness = {"locTotal": {"state": "complete"}}

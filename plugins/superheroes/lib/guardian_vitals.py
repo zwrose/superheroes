@@ -261,15 +261,6 @@ def _comparable_completeness(prev_entry, cur_entry):
     return False
 
 
-def _compose_partial_reasons(extractor_reason, lens_reason):
-    """Keep both gap reasons when a partial lens and a partial extractor disagree."""
-    if not lens_reason or lens_reason == extractor_reason:
-        return extractor_reason
-    if not extractor_reason:
-        return lens_reason
-    return "%s; %s" % (extractor_reason, lens_reason)
-
-
 def _apply_partial_lens_completeness(status, entry, comp):
     """When the lens itself reported partial collection, never publish ``complete``."""
     if status != "partial":
@@ -278,10 +269,6 @@ def _apply_partial_lens_completeness(status, entry, comp):
     lens_reason = entry.get("reason") or "lens collection was partial this sweep"
     if state == "complete":
         return _completeness_entry("partial", lens_reason)
-    if state == "partial":
-        composed = _compose_partial_reasons(comp.get("reason"), entry.get("reason"))
-        if composed != comp.get("reason"):
-            return _completeness_entry("partial", composed)
     return comp
 
 
