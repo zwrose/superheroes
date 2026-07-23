@@ -90,7 +90,8 @@ def run_tool(argv, ctx=None, timeout=DEFAULT_TIMEOUT, cwd=None, ok_exits=(0,),
              targets=(), extra_node_path=None):
     """Run `argv` and normalize the outcome. Never raises.
 
-    Returns {"ok": bool, "exit": int|None, "stdout": str, "stderr": str, "reason": str|None}.
+    Returns {"ok": bool, "exit": int|None, "stdout": str, "stderr": str, "reason": str|None,
+    "collectorCwd": str|None}.
 
     Two paths, split on whether a `run` was injected via `ctx["run"]`:
 

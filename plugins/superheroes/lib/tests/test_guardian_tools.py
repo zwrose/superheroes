@@ -406,6 +406,21 @@ def _make_depcruise_fake_install(tmp_path, *, typescript_version=None, manifest_
     return str(bin_dir), str(nm)
 
 
+def _make_depcruise_nested_install(tmp_path, *, typescript_version="5.9.3"):
+    """depcruise in an inner node_modules; supported typescript only in the outer one."""
+    outer_nm = tmp_path / "lib" / "node_modules"
+    inner_nm = outer_nm / "nested-pkg" / "node_modules"
+    bin_dir = inner_nm / "dependency-cruiser" / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    depcruise_bin = bin_dir / "depcruise"
+    depcruise_bin.write_text("#!/bin/sh\necho 0.0.0\n")
+    depcruise_bin.chmod(depcruise_bin.stat().st_mode | stat.S_IXUSR)
+    ts_pkg = outer_nm / "typescript"
+    ts_pkg.mkdir(parents=True, exist_ok=True)
+    (ts_pkg / "package.json").write_text(json.dumps({"version": typescript_version}))
+    return str(bin_dir), str(outer_nm)
+
+
 # --- typescript_toolchain_node_path -----------------------------------------------
 
 def test_typescript_toolchain_node_path_returns_dir_with_supported_typescript(
@@ -470,6 +485,40 @@ def test_typescript_toolchain_node_path_none_when_manifest_unreadable(
         install_root, manifest_body="{not valid json")
     monkeypatch.setenv("PATH", bin_dir)
     assert gt.typescript_toolchain_node_path(repo, supported_majors=("5",)) is None
+
+
+@pytest.mark.parametrize("manifest_body", [
+    json.dumps({"name": "typescript"}),
+    json.dumps({"version": 5}),
+])
+def test_typescript_toolchain_node_path_none_when_version_missing_or_nonstring(
+        tmp_path, monkeypatch, manifest_body):
+    install_root = tmp_path / "install"
+    repo = _make_repo(tmp_path / "repo")
+    bin_dir, _ = _make_depcruise_fake_install(
+        install_root, manifest_body=manifest_body)
+    monkeypatch.setenv("PATH", bin_dir)
+    assert gt.typescript_toolchain_node_path(repo, supported_majors=("5",)) is None
+
+
+def test_typescript_toolchain_node_path_rejects_node_modules_symlinked_into_repo(
+        tmp_path, monkeypatch):
+    """nm-level guard: an inner node_modules under the repo is skipped; outer nm wins.
+
+    A whole-node_modules symlink into the repo would also place depcruise under the
+    repo and fail resolve() first — so this exercises the multi-candidate ancestor walk:
+    inner nm (no typescript) is visited, then the outer nm that holds a supported one.
+    """
+    install_root = tmp_path / "install"
+    repo = _make_repo(tmp_path / "repo")
+    bin_dir, expected_nm = _make_depcruise_nested_install(install_root)
+    monkeypatch.setenv("PATH", bin_dir)
+    assert gt.typescript_toolchain_node_path(repo, supported_majors=("5",)) == expected_nm
+
+
+def test_depcruise_install_hint_pins_supported_typescript_major():
+    import guardian_coupling_adapters as adapters
+    assert adapters.TYPESCRIPT_PIN in gt.INSTALL_COMMANDS["depcruise"]
 
 
 def test_resolve_not_found(tmp_path, monkeypatch):

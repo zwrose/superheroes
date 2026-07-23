@@ -1101,12 +1101,12 @@ def test_measure_js_normalizes_collector_cwd_relative_paths(tmp_path, monkeypatc
     """Cwd-relative depcruise module paths must normalize via collectorCwd, not collapse."""
     repo = init_calibrated_repo(tmp_path)
     write(repo, "package.json", '{"name":"cwd-relative-depcruise"}\n')
-    write(repo, "src/a.ts", "export const a = 1;\n")
-    write(repo, "src/b.ts", "export const b = 2;\n")
+    write(repo, "src/cluster-a/foo.ts", "export const a = 1;\n")
+    write(repo, "src/cluster-b/bar.ts", "export const b = 2;\n")
     neutral = tmp_path / "neutral"
     neutral.mkdir()
-    a_abs = os.path.join(repo, "src", "a.ts")
-    b_abs = os.path.join(repo, "src", "b.ts")
+    a_abs = os.path.join(repo, "src", "cluster-a", "foo.ts")
+    b_abs = os.path.join(repo, "src", "cluster-b", "bar.ts")
     a_rel = os.path.relpath(a_abs, str(neutral))
     b_rel = os.path.relpath(b_abs, str(neutral))
     report = dc_report(
@@ -1130,6 +1130,11 @@ def test_measure_js_normalizes_collector_cwd_relative_paths(tmp_path, monkeypatc
     js = out["digest"]["ecosystems"]["js"]
     assert js["status"] == "collected"
     assert js["modulesParsed"] == 2
+    fc_a = glc.cluster_key("src/cluster-a/foo.ts", glc.ROOT_WORKSPACE)
+    fc_b = glc.cluster_key("src/cluster-b/bar.ts", glc.ROOT_WORKSPACE)
+    cross_key = glc._edge_key(fc_a, fc_b)
+    assert out["digest"]["counters"]["crossClusterEdges"] == 1
+    assert cross_key in out["digest"]["matrix"]
 
     def spy_missing_cwd(argv, ctx=None, **kwargs):
         if argv and argv[0] == adapters.DEPCRUISE_BIN:
@@ -1144,6 +1149,23 @@ def test_measure_js_normalizes_collector_cwd_relative_paths(tmp_path, monkeypatc
     assert st(collapsed) == "not-collected"
     assert adapters.OUTCOMES["module-count-collapse"][1] in collapsed["reason"]
     assert collapsed["digest"] is None
+
+
+def test_filter_does_not_count_case_colliding_untracked_path(tmp_path):
+    """Case-preserving tracked filter must not treat tool-reported src/foo.ts as src/Foo.ts."""
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", "{}")
+    write(repo, "src/Foo.ts", "export const foo = 1;\n")
+    tracked = ["package.json", "src/Foo.ts"]
+    report = dc_report(extra_sources=["src/foo.ts"])
+    out = lens().collect(ctx(
+        repo, tmp_path, run=make_run(
+            lambda argv, kw: (0, report, ""), tracked=tracked)))
+    assert st(out) == "not-collected"
+    assert "collapse" in out["reason"]
+    assert "0 parsed of 1 sources" in out["reason"]
+    assert out["digest"] is None
+
 
 # ======================================================================================
 # 8. ecosystem presence / partial / Python honesty

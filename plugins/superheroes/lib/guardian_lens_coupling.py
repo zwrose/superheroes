@@ -1566,7 +1566,7 @@ def _js_targets(repo, src_census):
 
 def _filter_depcruise_to_tracked(repo, payload, tracked_set, collector_cwd=None):
     """Keep only depcruise modules/edges whose paths are in the tracked census."""
-    tracked_norm = {_norm_rel(repo, p) for p in (tracked_set or set())}
+    tracked_rel = {_rel_posix(repo, p) for p in (tracked_set or set())}
     modules_in = adapters.depcruise_parsed_modules(payload)
     edges_in = adapters.depcruise_edges(payload)
     modules_out = []
@@ -1574,15 +1574,15 @@ def _filter_depcruise_to_tracked(repo, payload, tracked_set, collector_cwd=None)
     dropped = 0
     for path in modules_in:
         abs_path = _absolutize(collector_cwd, path)
-        if _norm_rel(repo, abs_path) in tracked_norm:
+        if _rel_posix(repo, abs_path) in tracked_rel:
             modules_out.append(abs_path)
         else:
             dropped += 1
     for edge in edges_in:
         f_abs = _absolutize(collector_cwd, edge.get("from", ""))
         t_abs = _absolutize(collector_cwd, edge.get("to", ""))
-        if (_norm_rel(repo, f_abs) in tracked_norm
-                and _norm_rel(repo, t_abs) in tracked_norm):
+        if (_rel_posix(repo, f_abs) in tracked_rel
+                and _rel_posix(repo, t_abs) in tracked_rel):
             kept = dict(edge)
             kept["from"] = f_abs
             kept["to"] = t_abs
