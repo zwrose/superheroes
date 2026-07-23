@@ -364,10 +364,12 @@ carries `{vendor, model, effort, tier, family, source}`:
   `engine_adapter.py` (read-only sandbox), threading `<seat>.model` as `engine_model` so a cursor
   seat runs its assigned model (composer or grok) — never the hard-coded default. The persona and
   `$RUBRIC` are identical across engines; the only per-seat difference is the dispatch target.
-- **The grounding seat** (`$SEAT_MAP.seats["grounding-seat"]`) is dispatched on its assigned vendor
-  — chosen to be independent of both the author (code) and narrative (PR text) families — running
-  `agents/grounding-seat.md`. It performs the PR self-claims / DoD-table check (SKILL step 8) and
-  returns an Important finding when a claim is unsupported, exactly as the prior inline check did.
+- **The grounding seat** (`$SEAT_MAP.seats["grounding-seat"]`) is *assigned* a vendor by the seat map
+  — chosen to be independent of both the author (code) and narrative (PR text) families — and that
+  assignment is recorded in the receipt. The code-leg self-claims / DoD-table check (SKILL step 8)
+  currently runs **inline in the orchestrator** (which can read the PR body); dispatching it as a
+  standalone `agents/grounding-seat.md` seat on its assigned vendor is a follow-up that must first
+  stage the PR body as an input the seat can Read.
 - **Independence keys on model family, not the dispatch CLI** (CONVENTIONS §7.5): a `cursor` review
   seat runs grok (xai family), never composer (cursor family) — so it is a genuine cross-family
   check even when the implementer was cursor/composer. The `verify()` result (the #547c
