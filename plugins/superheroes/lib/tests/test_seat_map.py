@@ -180,6 +180,236 @@ def test_to_receipt_json_roundtrip():
     assert "violations" in parsed
 
 
+# --- LOGIC-1 biting maker-family (openai author) ----------------------------------------------
+
+
+def test_biting_maker_family_openai_author():
+    seed = SM.seed_from(510, None)
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "openai", "anthropic", seed)
+    strong_critical = SM.STRONG_TIER_SEATS | SM.CRITICAL_SEATS
+    for seat in strong_critical:
+        assert m["seats"][seat]["family"] != "openai"
+    assert SM.verify(m, "openai") == []
+
+
+def test_isolate_strong_seat_exclusion_with_pins():
+    pins = {
+        "code-reviewer": {"vendor": "claude"},
+        "test-reviewer": {"vendor": "claude"},
+        "premortem-reviewer": {"vendor": "claude"},
+    }
+    m = SM.build(
+        SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0, pins=pins
+    )
+    for seat in SM.STRONG_TIER_SEATS:
+        assert m["seats"][seat]["family"] != "anthropic"
+
+
+def test_middle_relaxation_author_minority_without_critical_diversity():
+    pins = {
+        "code-reviewer": {"vendor": "claude"},
+        "test-reviewer": {"vendor": "claude"},
+        "premortem-reviewer": {"vendor": "claude"},
+        "grounding-seat": {"vendor": "claude"},
+    }
+    m = SM.build(
+        SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0, pins=pins
+    )
+    assert any(d["constraint"] == "author-minority" for d in m["degradations"])
+    violations = SM.verify(m, "anthropic")
+    assert not any(v.get("constraint") == "critical-diversity" for v in violations)
+
+
+# --- verify direction (hand-built maps) -------------------------------------------------------
+
+
+def _full_seats_template(**overrides):
+    """Minimal valid seat configs for all PANEL_ROSTER seats."""
+    base = {
+        "architecture-reviewer": {
+            "vendor": "codex",
+            "model": "gpt-5.6-sol",
+            "effort": "xhigh",
+            "tier": "reviewer-deep",
+            "family": "openai",
+            "source": "rotated",
+        },
+        "code-reviewer": {
+            "vendor": "cursor",
+            "model": "cursor-grok-4.5",
+            "effort": "high",
+            "tier": "reviewer-deep",
+            "family": "xai",
+            "source": "rotated",
+        },
+        "security-reviewer": {
+            "vendor": "claude",
+            "model": "opus-4.8",
+            "effort": "xhigh",
+            "tier": "reviewer-deep",
+            "family": "anthropic",
+            "source": "rotated",
+        },
+        "test-reviewer": {
+            "vendor": "cursor",
+            "model": "cursor-grok-4.5",
+            "effort": "high",
+            "tier": "reviewer-deep",
+            "family": "xai",
+            "source": "rotated",
+        },
+        "premortem-reviewer": {
+            "vendor": "cursor",
+            "model": "cursor-grok-4.5",
+            "effort": "high",
+            "tier": "reviewer-deep",
+            "family": "xai",
+            "source": "rotated",
+        },
+        "grounding-seat": {
+            "vendor": "cursor",
+            "model": "cursor-grok-4.5",
+            "effort": "high",
+            "tier": "reviewer",
+            "family": "xai",
+            "source": "rotated",
+        },
+    }
+    base.update(overrides)
+    return base
+
+
+def test_verify_critical_maker_family_violation():
+    seats = _full_seats_template()
+    seats["premortem-reviewer"] = {
+        "vendor": "codex",
+        "model": "gpt-5.6-sol",
+        "effort": "xhigh",
+        "tier": "reviewer-deep",
+        "family": "openai",
+        "source": "rotated",
+    }
+    violations = SM.verify({"seats": seats}, "openai")
+    assert any(
+        v.get("constraint") == "maker-family" and v.get("seat") == "premortem-reviewer"
+        for v in violations
+    )
+
+
+def test_verify_grounding_maker_family_violation():
+    seats = _full_seats_template()
+    seats["grounding-seat"] = {
+        "vendor": "claude",
+        "model": "sonnet-5",
+        "effort": "high",
+        "tier": "reviewer",
+        "family": "anthropic",
+        "source": "rotated",
+    }
+    violations = SM.verify({"seats": seats}, "anthropic")
+    assert any(
+        v.get("constraint") == "maker-family" and v.get("seat") == "grounding-seat"
+        for v in violations
+    )
+
+
+def test_verify_strong_tier_violation():
+    seats = _full_seats_template()
+    seats["security-reviewer"] = {
+        "vendor": "claude",
+        "model": "sonnet-5",
+        "effort": "high",
+        "tier": "reviewer",
+        "family": "anthropic",
+        "source": "rotated",
+    }
+    violations = SM.verify({"seats": seats}, "cursor")
+    assert any(
+        v.get("constraint") == "strong-tier" and v.get("seat") == "security-reviewer"
+        for v in violations
+    )
+
+
+def test_verify_critical_diversity_violation():
+    seats = _full_seats_template()
+    seats["security-reviewer"] = {
+        "vendor": "claude",
+        "model": "opus-4.8",
+        "effort": "xhigh",
+        "tier": "reviewer-deep",
+        "family": "anthropic",
+        "source": "rotated",
+    }
+    seats["premortem-reviewer"] = {
+        "vendor": "claude",
+        "model": "opus-4.8",
+        "effort": "xhigh",
+        "tier": "reviewer-deep",
+        "family": "anthropic",
+        "source": "rotated",
+    }
+    seats["code-reviewer"] = {
+        "vendor": "claude",
+        "model": "opus-4.8",
+        "effort": "xhigh",
+        "tier": "reviewer-deep",
+        "family": "anthropic",
+        "source": "rotated",
+    }
+    violations = SM.verify({"seats": seats}, "cursor")
+    assert any(v.get("constraint") == "critical-diversity" for v in violations)
+
+
+def test_verify_missing_seat():
+    seats = _full_seats_template()
+    del seats["test-reviewer"]
+    violations = SM.verify({"seats": seats}, "cursor")
+    assert any(
+        v.get("constraint") == "missing-seat" and v.get("seat") == "test-reviewer"
+        for v in violations
+    )
+
+
+# --- grounding-independence degradation -------------------------------------------------------
+
+
+def test_grounding_independence_degradation_two_vendor():
+    m = SM.build(SM.PANEL_ROSTER, ["claude", "codex"], "anthropic", "openai", 0)
+    assert any(
+        d["constraint"] == "grounding-independence" for d in m["degradations"]
+    )
+
+
+def test_grounding_independence_degradation_single_vendor():
+    m = SM.build(SM.PANEL_ROSTER, ["claude"], "anthropic", "openai", 0)
+    assert any(
+        d["constraint"] == "grounding-independence" for d in m["degradations"]
+    )
+
+
+# --- LOGIC-2 pin-breaks-constraint -------------------------------------------------------------
+
+
+def test_pin_breaks_grounding_constraint_still_honored():
+    pins = {"grounding-seat": {"vendor": "codex"}}
+    m = SM.build(
+        SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0, pins=pins
+    )
+    assert any(d["constraint"] == "pin-breaks-constraint" for d in m["degradations"])
+    assert m["seats"]["grounding-seat"]["source"] == "pinned"
+    assert m["seats"]["grounding-seat"]["vendor"] == "codex"
+
+
+# --- LOGIC-3 backfill non-empty family ---------------------------------------------------------
+
+
+def test_backfill_never_empty_family():
+    for live in (THREE_VENDORS, ["claude"], ["claude", "codex"], []):
+        m = SM.build(SM.PANEL_ROSTER, live, "anthropic", "openai", 0)
+        for seat, cfg in m["seats"].items():
+            assert cfg["family"] != "", f"seat {seat} has empty family with live={live}"
+
+
 # --- CLI --------------------------------------------------------------------------------------
 
 
@@ -233,3 +463,41 @@ def test_cli_compose_deterministic(capsys):
     out2 = capsys.readouterr().out
     assert rc1 == rc2 == 0
     assert out1 == out2
+
+
+def test_cli_compose_with_pins(capsys):
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--live-vendors",
+            "claude,codex,cursor",
+            "--author-family",
+            "openai",
+            "--narrative-family",
+            "anthropic",
+            "--pins",
+            '{"security-reviewer":{"vendor":"claude"}}',
+            "--pr-number",
+            "510",
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["seats"]["security-reviewer"]["vendor"] == "claude"
+    assert receipt["seats"]["security-reviewer"]["source"] == "pinned"
+
+
+def test_cli_compose_pins_json_error(capsys):
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--live-vendors",
+            "claude",
+            "--pins",
+            "not-valid-json",
+        ]
+    )
+    assert rc != 0
+    assert capsys.readouterr().err

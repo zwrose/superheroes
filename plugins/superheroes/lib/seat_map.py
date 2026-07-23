@@ -118,12 +118,20 @@ def build(
                     cfg["source"] = "backfill"
                     cfg["tier"] = try_tier
                     return cfg
+        for try_tier in ("reviewer-deep", "reviewer"):
+            cfg = _resolve_at_tier(seat, "claude", try_tier)
+            if cfg is not None:
+                cfg = dict(cfg)
+                cfg["source"] = "backfill"
+                cfg["tier"] = try_tier
+                return cfg
+        fallback_family = family_for("reviewer", "claude") or "anthropic"
         return {
             "vendor": live[0],
             "model": "",
             "effort": None,
             "tier": tier,
-            "family": "",
+            "family": fallback_family,
             "source": "backfill",
         }
 
@@ -211,6 +219,22 @@ def build(
         effort = pin.get("effort", default_effort)
         if pin_vendor in live and is_allowed(tier, pin_vendor, model, effort):
             fam = family_for(tier, pin_vendor)
+            if pin_seat == GROUNDING_SEAT:
+                excl = {f for f in (author_family, narrative_family) if f}
+                if fam and fam in excl:
+                    degradations.append(
+                        {
+                            "constraint": "pin-breaks-constraint",
+                            "reason": f"pinned grounding seat family {fam} is not independent of author/narrative",
+                        }
+                    )
+            if pin_seat in STRONG_TIER_SEATS and tier != "reviewer-deep":
+                degradations.append(
+                    {
+                        "constraint": "pin-breaks-constraint",
+                        "reason": f"pinned strong seat {pin_seat} is below reviewer-deep",
+                    }
+                )
             eligible_by_seat[pin_seat] = [
                 {
                     "vendor": pin_vendor,
@@ -257,10 +281,6 @@ def build(
                         sorted_cfgs.append(cfg)
             options[seat] = sorted_cfgs if sorted_cfgs else cfgs
 
-    rotatable = [s for s in roster if s not in fixed_seats or len(options[s]) > 1]
-    if not rotatable:
-        rotatable = list(roster)
-
     def _assignment_key(assignment: dict[str, dict]) -> tuple:
         author_count = sum(
             1 for s in roster if assignment[s]["family"] == author_family
@@ -284,7 +304,7 @@ def build(
             if author_count >= math.ceil(len(roster) / 2):
                 return False
             for s in roster:
-                if s in STRONG_TIER_SEATS and assignment[s]["family"] == author_family:
+                if s in (STRONG_TIER_SEATS | CRITICAL_SEATS) and assignment[s]["family"] == author_family:
                     return False
         return True
 
@@ -363,7 +383,11 @@ def verify(seat_map: dict, author_family: str | None) -> list[dict]:
 
     violations: list[dict] = []
 
-    for seat in STRONG_TIER_SEATS | CRITICAL_SEATS:
+    for seat in PANEL_ROSTER:
+        if seat not in seats:
+            violations.append({"seat": seat, "constraint": "missing-seat"})
+
+    for seat in sorted(STRONG_TIER_SEATS | CRITICAL_SEATS):
         if seat not in seats:
             continue
         cfg = seats[seat]
@@ -388,6 +412,7 @@ def verify(seat_map: dict, author_family: str | None) -> list[dict]:
     if len(critical_families) < 2:
         violations.append({"constraint": "critical-diversity"})
 
+    violations.sort(key=lambda v: (v.get("constraint", ""), v.get("seat", "")))
     return violations
 
 
@@ -426,6 +451,11 @@ def main(argv):
         default="",
         help="comma list of non-claude engines; used to run preflight when --live-vendors omitted",
     )
+    c.add_argument(
+        "--pins",
+        default=None,
+        help="JSON dict of seat pins passed to build()",
+    )
     args = ap.parse_args(argv[1:])
     if args.cmd == "compose":
         if args.live_vendors is not None:
@@ -436,7 +466,21 @@ def main(argv):
             configured = [e for e in args.configured_engines.split(",") if e]
             live, _liveness = preflight_probe.live_vendors_for_composition(configured)
         seed = seed_from(args.pr_number, args.head_sha)
-        sm = build(PANEL_ROSTER, live, args.author_family, args.narrative_family, seed)
+        pins = None
+        if args.pins is not None:
+            try:
+                pins = json.loads(args.pins)
+            except json.JSONDecodeError as e:
+                print(str(e), file=sys.stderr)
+                return 1
+        sm = build(
+            PANEL_ROSTER,
+            live,
+            args.author_family,
+            args.narrative_family,
+            seed,
+            pins=pins,
+        )
         json.dump(to_receipt(sm), sys.stdout)
         sys.stdout.write("\n")
         return 0
