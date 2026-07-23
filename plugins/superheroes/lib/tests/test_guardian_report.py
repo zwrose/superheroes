@@ -69,6 +69,7 @@ def test_render_funnel_buckets_use_constants():
     assert gr.FUNNEL_DEGRADED in md
     assert gr.FUNNEL_REJECTED in md
     assert gr.FUNNEL_VALIDATED in md
+    assert gr.FUNNEL_FIRST_BASELINE_UNVALIDATED in md
     assert "fixture: 2" in md
     assert "no-drift" in md
     assert "accepted" in md

@@ -29,9 +29,11 @@ class FixtureLens:
         collect_status=None,
         collect_reason=None,
         collect_raises=None,
+        first_baseline_precision="high",
     ):
         self.name = name
         self.collector_version = collector_version
+        self.first_baseline_precision = first_baseline_precision
         self.cost = {"collectorSeconds": 0.01, "note": "test fixture"}
         self.required_facts = tuple(required_facts)
         self.validation_guidance = "Validate fixture candidates against repo conventions."

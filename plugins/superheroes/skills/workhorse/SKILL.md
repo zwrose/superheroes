@@ -79,7 +79,8 @@ together, no one else does.
 
 With the app running and **before any autonomous work** (the brief itself is autonomous, and the
 pre-code check already uses the cross-vendor CLI), run the project preflight and **actually exercise
-every tool that will need the owner's approval to run** — you can't tell from a config file whether
+one real instance of every capability class the build will use** — writes as well as reads (a tool
+that clears a read probe can still be blocked on a write) — you can't tell from a config file whether
 approval is in place, only by using it:
 
 - **The browser test-pilot will use** — connect it and **drive the whole app, through whatever
@@ -87,7 +88,13 @@ approval is in place, only by using it:
   every approval and credential it needs to reach *all* the app before test-pilot depends on it — an
   auth wall it can't pass is exactly what would stall you mid-run.
 - **The cross-vendor CLI** — one harmless authenticated call.
-- **`gh`** — confirm sign-in.
+- **`gh`** — confirm sign-in **and exercise one real `gh` write**, not just a read. Auto-mode
+  permission classification gates `gh` **writes** (issue/PR comments, edits) **separately from
+  reads**, so a green `gh auth status` (a read) does not prove a `gh issue comment` (a write) will
+  clear mid-run — and a write blocked hours into a headless run is a lost intake receipt, not a
+  caught failure (weekly-eats we#498/we#499; #526 permission-surface evidence). The concrete write
+  probe and its mechanics live with the checklist in the preflight reference (§A.3) — don't restate
+  them here.
 
 **When the build has no running app** (a plugin/library/docs change with no browser-drivable
 surface), the browser/test-pilot live-exercise probe is **N/A** — there is nothing to drive. Run the
@@ -132,6 +139,17 @@ high-tier, the default is a **cross-vendor reviewer at comparable tier**; a Clau
 reviewer is the fallback **only with disclosed degradation** (never a silent downgrade). One pass:
 fold its findings in, or dispute each with a reason. Post the dispositions.
 
+**Only a terminal forfeit licenses that Claude fallback.** The substitution is earned when the
+cross-vendor dispatch **terminally forfeits** — its structural timeout fired, or it returned no final
+output at all — and **not before**: a *risk* of forfeit (a tight step budget, an engine you expect to run
+slow) is **not** a forfeit. Anything short of the terminal condition **parks or runs the retry
+ladder** (re-dispatch per the #563 retry sequence), never a pre-emptive swap — a quiet substitute-on-risk erodes the cross-vendor guarantee if
+sessions learn it. This is distinct from the engine-*unavailability* fallback of CONVENTIONS `§7.5` (an
+engine not configured or available at all — a selection event recorded there); here a *configured*
+reviewer must actually forfeit before Claude stands in. (weekly-eats we#520 swapped the configured
+codex reviewer for Claude citing step-budget *risk* — disclosed and independence-preserving, but a
+preemptive swap the terminal-forfeit rule forbids.)
+
 **Never kill a configured reviewer dispatch before its structural timeout** — the timeout is the
 tripwire, not your read of intermediate signals. A memory recalls context; it is never a standing
 kill order, and matching one onto a live dispatch licenses nothing.
@@ -145,6 +163,14 @@ may ride the session worktree — **commit the landed work before dispatching th
 that worktree**, so a later order's `git checkout --` can never wipe a prior order's work.
 **Subagents always run flat/synchronous** — never a background agent that spawns another background
 agent (the notification chain breaks).
+
+**Author every order to the five work-order validity rules in `agents/implementer.md`** — measured-or-marked
+tool output, fail-closed edges enumerated (and echoed back), complete target enumeration keyed to the
+finding, no cosmetic reopen of a verified surface, and a stated shared contract for parallel siblings.
+Across the 0.18.0 wave, blocking review findings attributed to **order quality over implementer
+execution ~5:1**, so a well-authored order is your cheapest defect prevention. The rules live in one
+place (the implementer template); the implementer is the backstop that flags a violating order, and
+satisfying them is your obligation as the author.
 
 ## 7. Delegate every implementation (no direct-typing exception)
 
@@ -191,6 +217,37 @@ implementer that parks on a stale premise did the right thing. When you are abou
 **third** rework of the same surface in one build, park instead — a third patch is the wrong answer
 to a design signal. Say what the seam problem looks like.
 
+**Await every dispatch in-turn — never end a turn with an engine in flight.** A headless build session
+(`claude -p`) cannot be re-woken, so background-dispatching an implementer or engine CLI and then
+ending your turn **orphans the build mid-flight** with the engine still running — a park dressed as a
+handoff, and a lost run if nothing resumes it. Independent dispatches may run **concurrently** (§6),
+but every one is **awaited in-turn** — you stay engaged until it returns (block on it, or background it
+and poll the monitor below), and you **await them all before the turn ends**; if you cannot wait them
+out, **park honestly** rather than hand off to a turn that will never come. (The #574
+build background-dispatched its composer implementer and ended its turn; the run orphaned mid-flight,
+recovered only via `--resume`.)
+
+**Long dispatches you own get room to finish and a stuck/runaway monitor** — this **core holds for both**
+a native subagent dispatch and an engine CLI run you invoke directly: **never a borderline limit you
+expect to just barely clear**, and never end the turn while the work runs. The **concrete mechanics
+differ by dispatch kind**:
+
+- **A shell/CLI run** (an engine CLI invoked through the host's run action) is bounded by the effective
+  command-timeout floor — the plugin-injected `bash_timeout` ten-minute ceiling on the Claude host
+  (other hosts defer to their own default, which is shorter) — so set an **explicit high ceiling —
+  3600s or more** on the run, watch the process's **CPU-time column, not
+  elapsed** (an engine CLI can sit at ~0% CPU for minutes and still be live), and redirect output to a
+  **file, never `| tail`** so a stall is distinguishable from progress. Four 0.18.0-wave sessions died
+  on the ten-minute floor mid-dispatch — one mid-review-panel — losing the run (WE review session,
+  WE-510, sh-566, WE-484).
+- **A native subagent dispatch** has a **harness-managed lifecycle** — no `bash_timeout` floor and no
+  CPU column of your own to watch — so those shell mechanics don't apply and there is **no caller-set
+  ceiling to invent** — the harness manages the lifecycle and returns when the subagent completes; the
+  core reduces to awaiting that completion in-turn and not imposing a borderline limit.
+
+A **skill-owned dispatch keeps its own structural-timeout contract** (e.g. `review-code`'s loop bounds
+each engine dispatch itself and forbids a per-dispatch watchdog) — don't override it with this rule.
+
 ## 8. Verify — re-run every receipt yourself
 
 **Verification authority never delegates.** Every receipt an implementer claims — tests pass, types
@@ -233,14 +290,32 @@ security finding on that behavior is fixed or honestly parked, never deferred as
 Open a **ready** (not draft) PR: the **build brief + dispositions table + receipts + disclosures**,
 a **dispatch provenance** section — each dispatch (the brief-check reviewer, every implementer, the
 pilot, the review-code seats) with the **engine + model** it ran on, so the advisor can vet what ran
-without your context — plus **any follow-ups the advisor should file**: out-of-scope discoveries,
+without your context — plus a **Follow-ups for the advisor** section — out-of-scope discoveries,
 deferred work, or issues you noticed but cannot file yourself (you never wire the board). List them
-plainly in the PR so the advisor can turn them into issues. The PR body also carries a **DoD
+plainly under that exact heading (write **None** when there are none) so the advisor can turn them
+into issues and the advisor's triage backstop can grep the section. The PR body also carries a **DoD
 disposition table** (the `superheroes:dod-table` marker) against the issue/spec — one row per
 Definition-of-Done bullet, each **done** (with an evidence pointer) or **deferred** (with a filed
 issue and a one-line reason). This is distinct from the review dispositions table above (that grades
 review findings; this grades every spec'd claim shipped/deferred/dropped) and is the honesty marker
-the review seat verifies (CONVENTIONS `§10.7`, `rubric/review-discipline.md`). **Keep the PR body current** — edit it
+the review seat verifies (CONVENTIONS `§10.7`, `rubric/review-discipline.md`). The dispatch-provenance
+section also records, per order, whether it was a **rework** and — for any blocking review finding —
+whether it was attributed to **order quality, implementer execution, or the orchestrator's own
+integration/assembly** (external or unknown where none fits), so the advisor can track the build
+against the ~5:1 order-vs-execution baseline (0.18.0 wave) — the advisor's standing accounting duty;
+the **showrunner** charter reads it. **Issue-linking discipline — never auto-close an issue that must
+stay open.** GitHub's closing-keyword parser is **negation-blind**: `Resolves #NNN` / `Closes #NNN` /
+`Fixes #NNN` closes the issue on merge **even inside a sentence that says it does not**. For an issue
+the PR must **not** close (a parent epic, a tracking issue, a "part of" link), use a **non-closing**
+verb — **"addresses," "part of," "relates to"** — and reserve the closing keywords for the issue this
+PR genuinely closes (weekly-eats we#518 wrote "Resolves the storage-mode decision in #505" while
+stating it did not close #505; GitHub closed it anyway). **Verify the remote head before you declare
+ready.** A commit that lives only in your local worktree is not a receipt the advisor can see —
+**"PR ready" requires confirming the REMOTE branch head contains every commit your receipts claim**
+(after your final `git push`: `git fetch`, then `git merge-base --is-ancestor HEAD origin/<branch>`; the
+review-fix commit is the usual straggler). A PR that claims a fix its pushed branch does not contain is a claim without a receipt.
+(The #585 build committed its final review-fix locally but never pushed it; the advisor had to complete
+the push at vet.) **Keep the PR body current** — edit it
 in place so it reads
 correct top to bottom. **You never merge** — hand back to the owner.
 
@@ -284,3 +359,7 @@ curation stay with the advisor.
 | "One more patch and this surface is finally right." | A third rework of the same surface in one build is the park tripwire, not another patch. Name the seam problem instead. |
 | "That reviewer dispatch has been quiet too long, I'll kill it and re-dispatch." | The structural timeout is the tripwire for a configured reviewer dispatch, not your read of silence. A memory recalls context — it is not a standing kill order. |
 | "Main moved under the order I sent — the implementer should have coped." | The order's premises bind you, the dispatcher. Amend the order when the world moves; parking on a stale premise is correct behavior. |
+| "This dispatch will finish quickly — the default timeout is fine." | A long dispatch **you own** gets an explicit high ceiling (3600s+) and a stuck/runaway monitor (a skill-owned dispatch keeps its own timeout contract). Four 0.18.0 sessions died on the ten-minute `bash_timeout` floor mid-dispatch. Never a borderline limit. |
+| "The implementer botched it — escalate to a stronger engine." | Attribution first. In the 0.18.0 wave, order quality outweighed execution ~5:1. A defect the order under-specified (a missing fail-closed edge, an unnamed target file) is an **order** defect — rewrite the order at the same rung, don't blame the engine. |
+| "I'll kick off the implementer and wrap up my turn." | Await every dispatch in-turn. A headless session can't be re-woken — ending a turn with an engine in flight orphans the build (a park dressed as a handoff). If you can't wait it out, park honestly. |
+| "It's committed locally — the PR is ready." | "Ready" requires the **remote** head containing every commit your receipts claim (`git rev-parse origin/<branch>` vs local HEAD). A local-only fix is a claim without a receipt. |

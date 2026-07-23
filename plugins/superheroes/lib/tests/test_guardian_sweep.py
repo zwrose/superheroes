@@ -2,6 +2,7 @@ import json
 import os
 
 import guardian_lens as gl
+import guardian_report as gr
 import guardian_store as gs
 import guardian_sweep as gsw
 import store_core as sc
@@ -47,12 +48,248 @@ def test_first_sweep_red_line_surfaces(tmp_path):
     assert bundle["surfaced"][0]["driftReason"] == "red-line"
 
 
-def test_first_sweep_normal_candidate_quiet(tmp_path):
+def test_first_seed_high_precision_surfaces(tmp_path):
     repo = init_calibrated_repo(tmp_path)
     lens = FixtureLens(emit_normal=True)
     bundle = gsw.collect(repo, lenses=[lens])
+    ids = [s["id"] for s in bundle["surfaced"]]
+    assert "fixture:normal" in ids
+    by_id = {s["id"]: s for s in bundle["surfaced"]}
+    assert by_id["fixture:normal"]["driftReason"] == "first-baseline"
+    assert funnel_conserved(bundle)
+
+
+def test_late_seeding_new_lens_validated_existing_untouched(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    lens_a = FixtureLens(
+        name="lens-a", emit_normal=True, digest={"v": 1}, diff_new=[])
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"lens-a": {"collectorVersion": "0.0.0-test", "digest": {"v": 1}}},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+
+    lens_b = FixtureLens(
+        name="lens-b", emit_normal=True, emit_red_line=True, digest={"v": 1})
+    bundle = gsw.collect(repo, lenses=[lens_a, lens_b], root=root)
+    surfaced = {s["id"]: s for s in bundle["surfaced"]}
+    assert "lens-b:normal" in surfaced
+    assert surfaced["lens-b:normal"]["driftReason"] == "first-baseline"
+    assert "lens-b:red-line" in surfaced
+    assert surfaced["lens-b:red-line"]["driftReason"] == "red-line"
+    assert "lens-a:normal" not in surfaced
+    killed = {k["id"]: k for k in bundle["funnel"]["killedByDrift"]}
+    assert killed["lens-a:normal"]["reason"] == "no-drift"
+    assert funnel_conserved(bundle)
+
+
+class _MultiCandidateLens(FixtureLens):
+    """Emits N distinct normal candidates for first-baseline bound tests."""
+
+    def __init__(self, n, *, emit_red_line=False, **kwargs):
+        super().__init__(**kwargs)
+        self._n = n
+        self._emit_red_line = emit_red_line
+
+    def collect(self, ctx):
+        candidates = []
+        for i in range(self._n):
+            candidates.append({
+                "id": "%s:normal-%d" % (self.name, i),
+                "complexity": 5,
+                "metric": self._metric,
+            })
+        if self._emit_red_line:
+            candidates.append({
+                "id": "%s:red-line" % self.name,
+                "complexity": gl.RED_LINE_THRESHOLDS["complexity"],
+                "metric": self._metric,
+            })
+        return {"candidates": candidates, "digest": self._digest}
+
+
+def test_first_seed_volume_above_bound_quiet_and_disclosed(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    write_guardian_layer(tmp_path, {"firstBaselineValidateMax": 2})
+    lens = _MultiCandidateLens(
+        3, name="volume-lens", first_baseline_precision="volume")
+    bundle = gsw.collect(repo, lenses=[lens])
+    assert bundle["surfaced"] == []
+    killed = bundle["funnel"]["killedByDrift"]
+    assert len(killed) == 3
+    assert all(
+        k["reason"] == gr.FIRST_BASELINE_UNVALIDATED_REASON for k in killed)
+    assert funnel_conserved(bundle)
+    md = gr.render(bundle, [], {"byId": {}})
+    assert gr.FUNNEL_FIRST_BASELINE_UNVALIDATED in md
+    assert "volume-lens: 3 candidate(s) baselined unreviewed (first baseline)" in md
+
+
+def test_first_seed_volume_below_bound_surfaces(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    write_guardian_layer(tmp_path, {"firstBaselineValidateMax": 2})
+    lens = _MultiCandidateLens(
+        2, name="volume-lens", first_baseline_precision="volume")
+    bundle = gsw.collect(repo, lenses=[lens])
+    assert len(bundle["surfaced"]) == 2
+    assert all(s["driftReason"] == "first-baseline" for s in bundle["surfaced"])
+    assert funnel_conserved(bundle)
+
+
+def test_first_seed_volume_above_bound_red_line_still_surfaces(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    write_guardian_layer(tmp_path, {"firstBaselineValidateMax": 2})
+    lens = _MultiCandidateLens(
+        3, name="volume-lens", first_baseline_precision="volume", emit_red_line=True)
+    bundle = gsw.collect(repo, lenses=[lens])
+    surfaced = {s["id"]: s for s in bundle["surfaced"]}
+    assert "volume-lens:red-line" in surfaced
+    assert surfaced["volume-lens:red-line"]["driftReason"] == "red-line"
+    normal_ids = ["volume-lens:normal-%d" % i for i in range(3)]
+    assert not any(nid in surfaced for nid in normal_ids)
+    killed = {k["id"]: k for k in bundle["funnel"]["killedByDrift"]}
+    for nid in normal_ids:
+        assert killed[nid]["reason"] == gr.FIRST_BASELINE_UNVALIDATED_REASON
+    assert funnel_conserved(bundle)
+
+
+def test_first_seed_high_precision_above_bound_validates_prefix_and_discloses(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    max_n = 2
+    write_guardian_layer(tmp_path, {"firstBaselineValidateMax": max_n})
+    lens = _MultiCandidateLens(4, name="high-lens", first_baseline_precision="high")
+    all_ids = ["high-lens:normal-%d" % i for i in range(4)]
+    bundle = gsw.collect(repo, lenses=[lens])
+    surfaced_ids = [s["id"] for s in bundle["surfaced"]]
+    assert surfaced_ids == all_ids[:max_n]
+    assert all(s["driftReason"] == "first-baseline" for s in bundle["surfaced"])
+    killed = [k for k in bundle["funnel"]["killedByDrift"]
+              if k["reason"] == gr.FIRST_BASELINE_UNVALIDATED_REASON]
+    assert {k["id"] for k in killed} == set(all_ids[max_n:])
+    assert funnel_conserved(bundle)
+    md = gr.render(bundle, [], {"byId": {}})
+    assert "high-lens: 2 candidate(s) baselined unreviewed (first baseline)" in md
+
+
+def test_first_seed_permanent_partial_composes(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"other-lens": {"collectorVersion": "1", "digest": {"v": 1}}},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+
+    class _FirstSeedBoundaryLens(FixtureLens):
+        def collect(self, ctx):
+            out = super().collect(ctx)
+            out["status"] = "partial"
+            out["reason"] = "structural capability limit"
+            out["permanentBoundary"] = True
+            return out
+
+    new_digest = {"v": 1, "boundary": True}
+    lens = _FirstSeedBoundaryLens(
+        name="new-boundary",
+        emit_normal=True,
+        digest=new_digest,
+    )
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert len(bundle["surfaced"]) == 1
+    assert bundle["surfaced"][0]["driftReason"] == "first-baseline"
+    entry = bundle["nextSnapshot"]["lenses"]["new-boundary"]
+    assert entry["collectorVersion"] == "0.0.0-test"
+    assert entry["digest"] == new_digest
+
+
+def test_first_baseline_validation_end_to_end(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    lens = FixtureLens(emit_normal=True)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert len(bundle["surfaced"]) == 1
+    cid = bundle["surfaced"][0]["id"]
+    disp = [{
+        "id": cid,
+        "verdict": "validated",
+        "consequence": "Refactor the fixture module.",
+        "receipt": "complexity=5",
+        "effort": "small",
+        "ledgerJoin": cid,
+    }]
+    result = gsw.finalize(repo, bundle, disp, root=root)
+    assert result["ok"] is True
+    with open(gs.report_path(repo, root=root), encoding="utf-8") as fh:
+        md = fh.read()
+    assert gr.HEADER_VALIDATED in md
+    assert "Refactor the fixture module." in md
+
+
+def test_first_baseline_config_default_and_override(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    cfg = gsw.read_config(repo, root=_store(tmp_path))
+    assert cfg["firstBaselineValidateMax"] == 10
+
+    write_guardian_layer(tmp_path, {"firstBaselineValidateMax": 5})
+    cfg = gsw.read_config(repo, root=_store(tmp_path))
+    assert cfg["firstBaselineValidateMax"] == 5
+
+    write_guardian_layer(tmp_path, {"firstBaselineValidateMax": -1})
+    cfg = gsw.read_config(repo, root=_store(tmp_path))
+    assert cfg["firstBaselineValidateMax"] == 10
+
+    write_guardian_layer(tmp_path, {"firstBaselineValidateMax": True})
+    cfg = gsw.read_config(repo, root=_store(tmp_path))
+    assert cfg["firstBaselineValidateMax"] == 10
+
+    write_guardian_layer(tmp_path, {"firstBaselineValidateMax": "ten"})
+    cfg = gsw.read_config(repo, root=_store(tmp_path))
+    assert cfg["firstBaselineValidateMax"] == 10
+
+
+def test_version_rebaseline_stays_quiet(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": {"collectorVersion": "1", "digest": {"v": 1}}},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    lens = FixtureLens(
+        collector_version="2", emit_normal=True, digest={"v": 2},
+        diff_new=["fixture:normal"])
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
     assert bundle["surfaced"] == []
     assert len(bundle["funnel"]["killedByDrift"]) == 1
+    assert bundle["funnel"]["killedByDrift"][0]["reason"] == "quiet-baseline"
+    assert bundle["funnel"]["killedByDrift"][0]["reason"] != (
+        gr.FIRST_BASELINE_UNVALIDATED_REASON)
+    assert bundle["nextSnapshot"]["lenses"]["fixture"]["collectorVersion"] == "2"
+
+
+def test_later_sweep_no_drift_stays_quiet(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": {"collectorVersion": "0.0.0-test", "digest": {"v": 1}}},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    lens = FixtureLens(emit_normal=True, digest={"v": 1}, diff_new=[])
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert bundle["surfaced"] == []
+    assert len(bundle["funnel"]["killedByDrift"]) == 1
+    assert bundle["funnel"]["killedByDrift"][0]["reason"] == "no-drift"
 
 
 def test_second_sweep_new_candidate_surfaces(tmp_path):
@@ -71,27 +308,6 @@ def test_second_sweep_new_candidate_surfaces(tmp_path):
     ids = [s["id"] for s in bundle["surfaced"]]
     assert "fixture:normal" in ids
     assert bundle["surfaced"][0]["driftReason"] == "new"
-
-
-def test_per_lens_baseline_new_lens_quiet_except_red_lines(tmp_path):
-    repo = init_calibrated_repo(tmp_path)
-    root = _store(tmp_path)
-    lens_a = FixtureLens(name="lens-a", emit_normal=True, digest={"v": 1},
-                         diff_new=["lens-a:normal"])
-    snap = {
-        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
-        "sweptSha": "abc",
-        "vitals": {},
-        "lenses": {"lens-a": {"collectorVersion": "0.0.0-test", "digest": {"v": 1}}},
-    }
-    gs.write_snapshot_cas(repo, snap, None, root=root)
-
-    lens_b = FixtureLens(name="lens-b", emit_normal=True, emit_red_line=True, digest={"v": 1})
-    bundle = gsw.collect(repo, lenses=[lens_a, lens_b], root=root)
-    surfaced_ids = [s["id"] for s in bundle["surfaced"]]
-    assert "lens-a:normal" in surfaced_ids
-    assert "lens-b:normal" not in surfaced_ids
-    assert "lens-b:red-line" in surfaced_ids
 
 
 def test_verify_command_failed_degrades_lens(tmp_path):
@@ -530,9 +746,10 @@ def test_duplicate_candidate_id_lands_in_malformed_and_conserves_funnel(tmp_path
     assert len(malformed) == 1
     assert malformed[0]["reason"] == "duplicate-id"
     assert malformed[0]["index"] == 1
-    assert bundle["surfaced"] == []
-    assert len(bundle["funnel"]["killedByDrift"]) == 1
-    assert bundle["funnel"]["killedByDrift"][0]["id"] == "fixture:dup"
+    assert len(bundle["surfaced"]) == 1
+    assert bundle["surfaced"][0]["id"] == "fixture:dup"
+    assert bundle["surfaced"][0]["driftReason"] == "first-baseline"
+    assert bundle["funnel"]["killedByDrift"] == []
 
     raised = sum(bundle["funnel"]["raised"].values())
     killed_drift = len(bundle["funnel"]["killedByDrift"])
