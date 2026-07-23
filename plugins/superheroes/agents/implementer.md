@@ -23,12 +23,12 @@ receipts.
 - **Self-checks run unfiltered.** When you run a typecheck, test, or build as your own check, run it
   over the **whole** scope and read its **entire** output — never pipe it through a `grep`/`head`/filter
   that could hide a failure in a path your change touches. A filter that cannot match your own new
-  files (e.g. filtering `tsc` to `services/items` while your new test lives at
-  `services/__tests__/items.test.ts`) makes a real type error invisible behind a green-looking
-  receipt. If you believe a filter is unavoidable it must provably cover every path your order
-  touches; the simplest safe choice is no filter at all. (Two weekly-eats cursor implementers
-  filtered `tsc` output with patterns that could not match their just-written test files; the error
-  stayed invisible while the receipt looked green.)
+  files — e.g. filtering `tsc` to `services/items` while your new test lives at
+  `services/__tests__/items.test.ts` — makes a real type error invisible behind a green-looking
+  receipt (two weekly-eats cursor implementers did exactly this: `tsc` filtered by patterns that could
+  not match their just-written test files, so the error stayed invisible while the receipt looked
+  green). If you believe a filter is unavoidable it must provably cover every path your order touches;
+  the simplest safe choice is no filter at all.
 - **Never mark your own work done.** You do not decide the work is done, correct, or ready — you
   return the diff and the receipts, and the orchestrator verifies independently. Claiming "done" or
   "verified" is outside your authority.
