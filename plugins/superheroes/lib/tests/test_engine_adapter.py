@@ -375,10 +375,9 @@ def test_build_argv_cursor_engine_model_absent_defaults_composer():
     assert argv[argv.index("--model") + 1] == "composer-2.5"
 
 
-def test_build_argv_cursor_unregistered_engine_model_falls_through_to_composer():
-    # unregistered ⇒ default: gpt-5.6-sol is codex-only, not registered on cursor
-    argv = EA.build_argv("cursor", "review", "high", {"engine_model": "gpt-5.6-sol"})
-    assert argv[argv.index("--model") + 1] == "composer-2.5"
+def test_build_argv_cursor_unregistered_engine_model_returns_empty_argv():
+    # present-but-unregistered ⇒ fail loud: gpt-5.6-sol is codex-only, not registered on cursor
+    assert EA.build_argv("cursor", "review", "high", {"engine_model": "gpt-5.6-sol"}) == []
 
 
 def test_build_argv_cursor_registered_engine_model_invalid_effort_returns_empty_argv():
