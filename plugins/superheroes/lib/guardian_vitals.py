@@ -231,12 +231,29 @@ def _collect_repo_vitals(cwd, run=None):
     return (vitals, missing, sources)
 
 
-def _completeness_entry(state, reason=None):
+def _completeness_entry(state, reason=None, identity=None):
     """Structured completeness marker for one vital this sweep."""
     entry = {"state": state}
     if reason:
         entry["reason"] = reason
+    if isinstance(identity, (list, tuple)):
+        tokens = sorted({
+            str(x).strip() for x in identity
+            if isinstance(x, str) and x.strip()})
+        if tokens:
+            entry["identity"] = tokens
     return entry
+
+
+def _completeness_identity(entry):
+    """Canonical identity tokens for a completeness entry, or None when unusable."""
+    if not isinstance(entry, dict):
+        return None
+    raw = entry.get("identity")
+    if not isinstance(raw, (list, tuple)):
+        return None
+    tokens = {str(x).strip() for x in raw if isinstance(x, str) and str(x).strip()}
+    return frozenset(tokens) if tokens else None
 
 
 def _completeness_state(entry):
@@ -247,7 +264,10 @@ def _completeness_state(entry):
 
 
 def _comparable_completeness(prev_entry, cur_entry):
-    """True when two sweeps' completeness states may be drift-compared."""
+    """True when two sweeps' completeness states may be drift-compared.
+
+    Partial/partial compares stable identity tokens, not reason prose — reworded
+    gaps must stay comparable; different gaps with identical prose must not."""
     if prev_entry is None and cur_entry is None:
         return True
     prev_state = _completeness_state(prev_entry)
@@ -257,18 +277,33 @@ def _comparable_completeness(prev_entry, cur_entry):
     if prev_state == "complete" and cur_state == "complete":
         return True
     if prev_state == "partial" and cur_state == "partial":
-        return (prev_entry or {}).get("reason") == (cur_entry or {}).get("reason")
+        pi = _completeness_identity(prev_entry)
+        ci = _completeness_identity(cur_entry)
+        if pi is None or ci is None:
+            return False
+        return pi == ci
     return False
 
 
+def _lens_label(entry):
+    lens = entry.get("lens") if isinstance(entry, dict) else None
+    return getattr(lens, "name", None) or "lens"
+
+
 def _apply_partial_lens_completeness(status, entry, comp):
-    """When the lens itself reported partial collection, never publish ``complete``."""
+    """When the lens itself reported partial collection, never publish ``complete``.
+
+    A fully-measured vital coerced to partial gets a stable lens-scoped identity so
+    sibling partials elsewhere do not chronically silence its crossings."""
     if status != "partial":
         return comp
     state = _completeness_state(comp)
     lens_reason = entry.get("reason") or "lens collection was partial this sweep"
     if state == "complete":
-        return _completeness_entry("partial", lens_reason)
+        label = _lens_label(entry)
+        return _completeness_entry(
+            "partial", lens_reason,
+            identity=["%s/*/lens-partial" % label])
     return comp
 
 
@@ -277,7 +312,8 @@ def _usable_partial_reason(reason):
     return isinstance(reason, str) and bool(reason.strip())
 
 
-def _interpret_vital_tuple(value, reason, *, lens_name=None, vital_name=None):
+def _interpret_vital_tuple(value, reason, identity=None, *, lens_name=None,
+                           vital_name=None):
     """Map a lens ``vitals()`` 2-tuple to (published value, completeness entry)."""
     if value is not None and reason is not None:
         if not _usable_partial_reason(reason):
@@ -290,7 +326,7 @@ def _interpret_vital_tuple(value, reason, *, lens_name=None, vital_name=None):
         if not _is_number(value):
             return (None, _completeness_entry(
                 "not-collected", reason or "partial vital is not a number"))
-        return (value, _completeness_entry("partial", reason))
+        return (value, _completeness_entry("partial", reason, identity=identity))
     if value is not None and reason is None:
         if not _is_number(value):
             return (None, _completeness_entry(
@@ -371,16 +407,18 @@ def _collect_lens_vitals(lens_results):
             completeness[vital_name] = _completeness_entry("not-collected", reason)
             continue
         reading = offered.get(vital_name)
-        if (not isinstance(reading, (tuple, list)) or len(reading) != 2):
-            reason = "%s lens vitals()[%s] is not a (value, reason) pair" % (
+        if (not isinstance(reading, (tuple, list)) or len(reading) not in (2, 3)):
+            reason = "%s lens vitals()[%s] is not a (value, reason[, identity]) tuple" % (
                 lens_names[0], vital_name)
             missing[vital_name] = reason
             completeness[vital_name] = _completeness_entry("not-collected", reason)
             continue
-        value, gap_reason = reading[0], reading[1]
+        value = reading[0]
+        gap_reason = reading[1]
+        identity = reading[2] if len(reading) == 3 else None
         lens_name = getattr(lens, "name", lens_names[0])
         published, comp = _interpret_vital_tuple(
-            value, gap_reason, lens_name=lens_name, vital_name=vital_name)
+            value, gap_reason, identity, lens_name=lens_name, vital_name=vital_name)
         comp = _apply_partial_lens_completeness(status, entry, comp)
         completeness[vital_name] = comp
         if published is None:

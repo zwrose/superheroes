@@ -1487,51 +1487,85 @@ def _partial_part_gap(ecosystem, part, section):
     return "%s: partial" % label
 
 
+def _section_cause_tokens(section):
+    """Stable measurement-basis cause tokens for a partial ecosystem-part section."""
+    if not isinstance(section, dict):
+        return []
+    tokens = []
+    if section.get("coverageGap"):
+        tokens.append("no-transitive-resolution")
+    if section.get("pinScopeGap"):
+        tokens.append("unpinned-scope")
+    malformed = section.get("malformedEntries")
+    if isinstance(malformed, list) and malformed:
+        tokens.append("malformed-advisory")
+    if section.get("boundary") is False:
+        tokens.append("ambiguous-identity")
+    return sorted(set(tokens))
+
+
 def _majors_behind_vital(digest):
     ecosystems = digest.get("ecosystems") if isinstance(digest, dict) else None
     if not isinstance(ecosystems, dict) or not ecosystems:
         return (None, "digest has no ecosystems to measure")
     measured = []
     gaps = []
+    triples = []
+    unclassifiable = False
     total = 0
     for eco in sorted(ecosystems):
         section = ecosystems.get(eco)
         if not isinstance(section, dict):
             gaps.append("%s: missing ecosystem section" % eco)
+            triples.append("%s/freshness/section-missing" % eco)
             continue
         fresh = section.get("freshness")
         if not isinstance(fresh, dict):
             gaps.append("%s freshness: missing" % eco)
+            triples.append("%s/freshness/part-missing" % eco)
             continue
         status = fresh.get("status")
         if status == "suppressed-by-coverage":
             gaps.append("%s freshness: suppressed-by-coverage" % eco)
+            triples.append("%s/freshness/suppressed-by-coverage" % eco)
             continue
         if status == "not-collected":
             gaps.append("%s freshness: %s" % (eco, fresh.get("reason") or status))
+            triples.append("%s/freshness/not-collected" % eco)
             continue
         if status == "partial":
             gaps.append(_partial_part_gap(eco, "freshness", fresh))
+            tokens = _section_cause_tokens(fresh)
+            if tokens:
+                for cause in tokens:
+                    triples.append("%s/freshness/%s" % (eco, cause))
+            else:
+                unclassifiable = True
             continue
         if status != "collected":
             gaps.append("%s freshness: %s" % (eco, status))
+            triples.append("%s/freshness/unknown-status" % eco)
             continue
         if fresh.get("carriedForward"):
             gaps.append("%s freshness: carried forward from prior sweep" % eco)
+            triples.append("%s/freshness/carried-forward" % eco)
             continue
         if "majorsBehindTotal" not in fresh:
             gaps.append("%s freshness: missing majorsBehindTotal" % eco)
+            triples.append("%s/freshness/missing-total" % eco)
             continue
         try:
             total += int(fresh.get("majorsBehindTotal") or 0)
         except (TypeError, ValueError):
             gaps.append("%s freshness: majorsBehindTotal is not a number" % eco)
+            triples.append("%s/freshness/total-nonnumeric" % eco)
             continue
         measured.append(eco)
     if not measured:
         return (None, "; ".join(gaps) or "no ecosystem freshness measured")
     if gaps:
-        return (total, "; ".join(gaps))
+        identity = None if unclassifiable else sorted(set(triples))
+        return (total, "; ".join(gaps), identity)
     return (total, None)
 
 
@@ -1541,38 +1575,53 @@ def _vuln_count_vital(digest):
         return (None, "digest has no ecosystems to measure")
     measured = []
     gaps = []
+    triples = []
+    unclassifiable = False
     total = 0
     for eco in sorted(ecosystems):
         section = ecosystems.get(eco)
         if not isinstance(section, dict):
             gaps.append("%s: missing ecosystem section" % eco)
+            triples.append("%s/vulns/section-missing" % eco)
             continue
         vulns = section.get("vulns")
         if not isinstance(vulns, dict):
             gaps.append("%s vulns: missing" % eco)
+            triples.append("%s/vulns/part-missing" % eco)
             continue
         status = vulns.get("status")
         if status == "not-collected":
             gaps.append("%s vulns: %s" % (eco, vulns.get("reason") or status))
+            triples.append("%s/vulns/not-collected" % eco)
             continue
         if status not in ("collected", "partial"):
             gaps.append("%s vulns: %s" % (eco, status))
+            triples.append("%s/vulns/unknown-status" % eco)
             continue
         if vulns.get("carriedForward"):
             gaps.append("%s vulns: carried forward from prior sweep" % eco)
+            triples.append("%s/vulns/carried-forward" % eco)
             continue
         items = vulns.get("items")
         if not isinstance(items, dict):
             gaps.append("%s vulns: items is not an object" % eco)
+            triples.append("%s/vulns/items-malformed" % eco)
             continue
         total += len(items)
         measured.append(eco)
         if status == "partial":
             gaps.append(_partial_part_gap(eco, "vulns", vulns))
+            tokens = _section_cause_tokens(vulns)
+            if tokens:
+                for cause in tokens:
+                    triples.append("%s/vulns/%s" % (eco, cause))
+            else:
+                unclassifiable = True
     if not measured:
         return (None, "; ".join(gaps) or "no ecosystem vulnerabilities measured")
     if gaps:
-        return (total, "; ".join(gaps))
+        identity = None if unclassifiable else sorted(set(triples))
+        return (total, "; ".join(gaps), identity)
     return (total, None)
 
 

@@ -1164,21 +1164,103 @@ def test_contract_violating_partial_readings_do_not_cross(tmp_path):
     ) == []
 
 
-def test_partial_crossing_requires_matching_gap_reason():
-    gap = "python ratings unavailable until issue #569"
-    comp = {"state": "partial", "reason": gap}
+def test_partial_crossing_requires_matching_identity():
+    """Same partial identity (even with different prose) stays comparable and crosses."""
+    ident = ["python/vulns/no-transitive-resolution"]
+    comp_same = gv._completeness_entry(
+        "partial", "python ratings unavailable until issue #569", identity=ident)
+    comp_reword = gv._completeness_entry(
+        "partial", "ratings source offline this sweep", identity=ident)
     prev = {"vulnCount": 2}
     cur = {"vulnCount": 5}
     assert gv.crossings(prev, cur,
-                        prev_completeness={"vulnCount": comp},
-                        cur_completeness={"vulnCount": comp})
-    different = {"state": "partial", "reason": "other gap"}
+                        prev_completeness={"vulnCount": comp_same},
+                        cur_completeness={"vulnCount": comp_reword})
+    different = gv._completeness_entry(
+        "partial", "other gap", identity=["python/vulns/other-gap"])
     assert gv.crossings(prev, cur,
-                        prev_completeness={"vulnCount": comp},
+                        prev_completeness={"vulnCount": comp_same},
                         cur_completeness={"vulnCount": different}) == []
     assert gv.delta(prev, cur,
-                    prev_completeness={"vulnCount": comp},
+                    prev_completeness={"vulnCount": comp_same},
                     cur_completeness={"vulnCount": different})["_notComparable"]["vulnCount"]
+
+
+def test_two_different_gaps_identical_prose_do_not_compare_equal():
+    """Identical reason prose with different identity must not compare equal (#580)."""
+    prose = "severity source offline this sweep"
+    comp_a = gv._completeness_entry(
+        "partial", prose, identity=["python/vulns/gap-a"])
+    comp_b = gv._completeness_entry(
+        "partial", prose, identity=["python/vulns/gap-b"])
+    assert not gv._comparable_completeness(comp_a, comp_b)
+    assert gv.crossings(
+        {"vulnCount": 2}, {"vulnCount": 5},
+        prev_completeness={"vulnCount": comp_a},
+        cur_completeness={"vulnCount": comp_b},
+    ) == []
+
+
+def test_missing_identity_partial_fails_closed():
+    """Partials without usable identity are non-comparable (migration fail-closed)."""
+    with_id = gv._completeness_entry(
+        "partial", "some prose", identity=["python/vulns/gap"])
+    no_id = gv._completeness_entry("partial", "some prose")
+    empty_id = gv._completeness_entry("partial", "some prose", identity=[])
+    whitespace_id = gv._completeness_entry("partial", "some prose", identity=["  "])
+    assert not gv._comparable_completeness(no_id, with_id)
+    assert not gv._comparable_completeness(with_id, no_id)
+    assert not gv._comparable_completeness(no_id, no_id)
+    assert not gv._comparable_completeness(empty_id, with_id)
+    assert not gv._comparable_completeness(whitespace_id, with_id)
+
+
+def test_mutation_probe_rekeying_on_prose_refails():
+    """Comparability is driven by identity, not reason prose."""
+    ident = ["python/vulns/no-transitive-resolution"]
+    same_id_a = gv._completeness_entry("partial", "prose A", identity=ident)
+    same_id_b = gv._completeness_entry("partial", "prose B", identity=ident)
+    assert gv._comparable_completeness(same_id_a, same_id_b)
+
+    prose = "identical prose"
+    diff_id_a = gv._completeness_entry("partial", prose, identity=["gap/a"])
+    diff_id_b = gv._completeness_entry("partial", prose, identity=["gap/b"])
+    assert not gv._comparable_completeness(diff_id_a, diff_id_b)
+
+
+def test_completeness_identity_canonicalization():
+    entry = gv._completeness_entry("partial", "r", identity=["b", "a", "a"])
+    assert entry["identity"] == ["a", "b"]
+    assert gv._completeness_identity(entry) == frozenset({"a", "b"})
+    reordered = gv._completeness_entry("partial", "r", identity=["a", "b"])
+    assert gv._completeness_identity(reordered) == gv._completeness_identity(entry)
+
+
+def test_forced_partial_stays_comparable_across_sweeps():
+    """Lens-partial coercion keeps a stable identity so crossings are not silenced."""
+    lens_entry_a = {
+        "lens": type("L", (), {"name": "duplication"})(),
+        "reason": "lens collection was partial this sweep",
+    }
+    lens_entry_b = {
+        "lens": type("L", (), {"name": "duplication"})(),
+        "reason": "different lens prose this sweep",
+    }
+    complete_comp = gv._completeness_entry("complete")
+    coerced_a = gv._apply_partial_lens_completeness("partial", lens_entry_a, complete_comp)
+    coerced_b = gv._apply_partial_lens_completeness("partial", lens_entry_b, complete_comp)
+    assert coerced_a["state"] == "partial"
+    assert coerced_b["state"] == "partial"
+    assert coerced_a["reason"] != coerced_b["reason"]
+    assert gv._comparable_completeness(coerced_a, coerced_b)
+    assert gv._completeness_identity(coerced_a) == frozenset(
+        {"duplication/*/lens-partial"})
+    assert gv.crossings(
+        {"duplicationPercent": 3.0},
+        {"duplicationPercent": 6.0},
+        prev_completeness={"duplicationPercent": coerced_a},
+        cur_completeness={"duplicationPercent": coerced_b},
+    )
 
 
 def _deps_partial_lens_result(digest, lens_reason):
@@ -1217,67 +1299,47 @@ def _python_partial_vuln_digest(vuln_count, *, vuln_reason, freshness_reason):
     }
 
 
-def test_unrelated_partial_part_reason_change_does_not_suppress_crossing(tmp_path):
-    """vulnCount 2→5 with only an unrelated freshness gap reworded must still cross."""
-    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
-    vuln_reason = "severity source offline this sweep"
-    freshness_a = "policy gap A"
-    freshness_b = "policy gap B"
-    lens_reason_s1 = "python vulns: %s; python freshness: %s" % (vuln_reason, freshness_a)
-    lens_reason_s2 = "python vulns: %s; python freshness: %s" % (vuln_reason, freshness_b)
-
-    out1 = gv.collect(repo, lens_results=_deps_partial_lens_result(
-        _python_partial_vuln_digest(2, vuln_reason=vuln_reason, freshness_reason=freshness_a),
-        lens_reason_s1))
-    out2 = gv.collect(repo, lens_results=_deps_partial_lens_result(
-        _python_partial_vuln_digest(5, vuln_reason=vuln_reason, freshness_reason=freshness_b),
-        lens_reason_s2))
-
-    assert out1["vitals"]["vulnCount"] == 2
-    assert out2["vitals"]["vulnCount"] == 5
-    comp1 = out1["completeness"]["vulnCount"]
-    comp2 = out2["completeness"]["vulnCount"]
-    assert comp1["state"] == "partial"
-    assert comp2["state"] == "partial"
-    vital_gap = "python vulns: %s" % vuln_reason
-    assert comp1["reason"] == vital_gap
-    assert comp2["reason"] == vital_gap
-    assert comp1["reason"] == comp2["reason"]
-    assert comp1["reason"].count("python vulns:") == 1
-    assert freshness_a not in comp1["reason"]
-    assert freshness_b not in comp2["reason"]
-    assert lens_reason_s1 not in comp1["reason"]
-    assert lens_reason_s2 not in comp2["reason"]
-
+def test_unrelated_partial_part_reason_change_does_not_suppress_crossing():
+    """Same vulnCount identity with differing prose stays comparable at the gv layer."""
+    ident = ["python/vulns/no-transitive-resolution"]
+    comp1 = gv._completeness_entry(
+        "partial", "severity source offline this sweep", identity=ident)
+    comp2 = gv._completeness_entry(
+        "partial", "ratings unavailable this sweep", identity=ident)
+    assert comp1["reason"] != comp2["reason"]
+    assert gv._comparable_completeness(comp1, comp2)
     crossings = gv.crossings(
-        {"vulnCount": out1["vitals"]["vulnCount"]},
-        {"vulnCount": out2["vitals"]["vulnCount"]},
+        {"vulnCount": 2},
+        {"vulnCount": 5},
         prev_completeness={"vulnCount": comp1},
         cur_completeness={"vulnCount": comp2},
     )
     assert [c["vital"] for c in crossings] == ["vulnCount"]
 
 
-def test_vital_own_gap_reason_change_still_fences_crossing(tmp_path):
-    """A change in the vital's own gap reason must keep sweeps non-comparable."""
-    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
-    gap_a = "severity source offline this sweep"
-    gap_b = "ratings unavailable this sweep"
-    out1 = gv.collect(repo, lens_results=_deps_partial_lens_result(
-        _python_partial_vuln_digest(2, vuln_reason=gap_a, freshness_reason="policy gap"),
-        "python vulns: %s; python freshness: policy gap" % gap_a))
-    out2 = gv.collect(repo, lens_results=_deps_partial_lens_result(
-        _python_partial_vuln_digest(5, vuln_reason=gap_b, freshness_reason="policy gap"),
-        "python vulns: %s; python freshness: policy gap" % gap_b))
-
-    comp1 = out1["completeness"]["vulnCount"]
-    comp2 = out2["completeness"]["vulnCount"]
-    assert comp1["reason"] != comp2["reason"]
+def test_same_identity_reworded_prose_stays_comparable_and_crosses():
+    """Same gap reworded stays comparable; distinct identity fences the crossing."""
+    ident = ["python/vulns/no-transitive-resolution"]
+    comp_a = gv._completeness_entry(
+        "partial", "severity source offline this sweep", identity=ident)
+    comp_b = gv._completeness_entry(
+        "partial", "ratings unavailable this sweep", identity=ident)
+    assert comp_a["reason"] != comp_b["reason"]
     assert gv.crossings(
-        {"vulnCount": out1["vitals"]["vulnCount"]},
-        {"vulnCount": out2["vitals"]["vulnCount"]},
-        prev_completeness={"vulnCount": comp1},
-        cur_completeness={"vulnCount": comp2},
+        {"vulnCount": 2},
+        {"vulnCount": 5},
+        prev_completeness={"vulnCount": comp_a},
+        cur_completeness={"vulnCount": comp_b},
+    )
+
+    comp_other = gv._completeness_entry(
+        "partial", "ratings unavailable this sweep",
+        identity=["python/vulns/other-gap"])
+    assert gv.crossings(
+        {"vulnCount": 2},
+        {"vulnCount": 5},
+        prev_completeness={"vulnCount": comp_a},
+        cur_completeness={"vulnCount": comp_other},
     ) == []
 
 
@@ -1288,6 +1350,20 @@ def test_completeness_persisted_in_trend_record(tmp_path):
                        completeness=completeness, now="2026-07-21")
     rec = gv.read_trend(repo)["records"][0]
     assert rec["completeness"]["locTotal"]["state"] == "complete"
+
+
+def test_completeness_identity_persists_through_trend_round_trip(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    ident = ["python/vulns/no-transitive-resolution"]
+    completeness = {
+        "vulnCount": gv._completeness_entry(
+            "partial", "gap prose", identity=ident),
+    }
+    gv.append_unlocked(repo, {"vulnCount": 2}, sweep_id="s1",
+                       completeness=completeness, now="2026-07-21")
+    read_back = gv.completeness_for_sweep(repo, "s1")
+    assert read_back["vulnCount"]["identity"] == ident
+    assert gv._completeness_identity(read_back["vulnCount"]) == frozenset(ident)
 
 
 def test_not_collected_lens_result_uses_real_reason_not_did_not_run(tmp_path):
