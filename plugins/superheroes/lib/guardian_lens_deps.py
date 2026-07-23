@@ -1036,8 +1036,7 @@ def _osv_skipped_packages(stderr):
     """Parse osv-scanner stderr for per-package skips and filtered counts."""
     text = stderr or ""
     names = [m.group(1).strip() for m in _OSV_SKIP_PKG_RE.finditer(text)]
-    match = _OSV_FILTERED_COUNT_RE.search(text)
-    filtered_count = int(match.group(1)) if match else 0
+    filtered_count = sum(int(m.group(1)) for m in _OSV_FILTERED_COUNT_RE.finditer(text))
     return names, filtered_count
 
 
@@ -1066,14 +1065,15 @@ def _prev_audited_scope(prev_section):
     """Prior (kind, transitive, manifest) for scope-change degrade, or None."""
     if not isinstance(prev_section, dict):
         return None
-    scope = prev_section.get("auditedScope")
-    if isinstance(scope, dict):
-        kind = scope.get("kind")
-        manifest = scope.get("manifest")
-        transitive = scope.get("transitive")
-        if (isinstance(kind, str) and kind and isinstance(manifest, str) and manifest
-                and isinstance(transitive, bool)):
-            return (kind, transitive, manifest)
+    if "auditedScope" in prev_section:
+        scope = prev_section.get("auditedScope")
+        if isinstance(scope, dict):
+            kind = scope.get("kind")
+            manifest = scope.get("manifest")
+            transitive = scope.get("transitive")
+            if (isinstance(kind, str) and kind and isinstance(manifest, str) and manifest
+                    and isinstance(transitive, bool)):
+                return (kind, transitive, manifest)
         return ("__malformed__", False, "__malformed__")
     items = prev_section.get("items")
     if isinstance(items, dict) and items:

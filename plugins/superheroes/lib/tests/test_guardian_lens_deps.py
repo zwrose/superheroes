@@ -1525,6 +1525,38 @@ def test_lockfile_osv_stderr_unattributed_filter_carries_all_prior(tmp_path):
     assert "did not individually name" in vulns["reason"]
 
 
+def test_osv_multiple_filtered_lines_summed(tmp_path):
+    """Count guard must sum every Filtered N line, not only the first."""
+    repo = _lockfile_repo(tmp_path, "poetry.lock")
+    prev_id_a = "deps:audit:python:pkg-a:PYSEC-A"
+    prev_id_b = "deps:audit:python:pkg-b:PYSEC-B"
+    prev = {
+        "detected": ["python"],
+        "ecosystems": {"python": {
+            "freshness": {"status": "not-collected", "reason": "policy", "items": {}},
+            "vulns": {"status": "partial", "items": {
+                prev_id_a: {"id": prev_id_a, "package": "pkg-a", "metric": 5},
+                prev_id_b: {"id": prev_id_b, "package": "pkg-b", "metric": 5},
+            }, "auditedScope": {
+                "manifest": "poetry.lock", "kind": "lockfile", "transitive": True,
+            }},
+        }},
+    }
+    payload = _osv_lockfile_clean_package("poetry.lock", "pkg-a", "1.0.0")
+    osv_stderr = (
+        'Skipping pkg-a: short commit hash "abc123" cannot be queried\n'
+        'Filtered 1 local/unscannable package/s from the scan.\n'
+        'Filtered 2 local/unscannable package/s from the scan.\n'
+    )
+    out = gld.LENS.collect(_ctx(
+        repo, _run(osv_scanner=payload, osv_stderr=osv_stderr), prev=prev))
+    vulns = out["digest"]["ecosystems"]["python"]["vulns"]
+    assert vulns["items"][prev_id_a].get("carriedForward") is True
+    assert vulns["items"][prev_id_b].get("carriedForward") is True
+    assert gld.LENS.diff(prev, out["digest"])["resolved"] == []
+    assert "did not individually name" in vulns["reason"]
+
+
 def test_lockfile_mixed_entries_same_package_not_audited_carried(tmp_path):
     """One queryable + one unqueryable entry for the same name must not audit it."""
     repo = _lockfile_repo(tmp_path, "poetry.lock")
@@ -1576,6 +1608,27 @@ def test_malformed_prev_audited_scope_carries_all(tmp_path):
     repo = _lockfile_repo(tmp_path, "poetry.lock")
     payload = _osv_lockfile_clean_package("poetry.lock", "pkg-a", "1.0.0")
     out = gld.LENS.collect(_ctx(repo, _run(osv_scanner=payload), prev=prev))
+    vulns = out["digest"]["ecosystems"]["python"]["vulns"]
+    assert "audit scope changed" in vulns["reason"]
+    assert vulns["items"][prev_id].get("carriedForward") is True
+    assert prev_id not in gld.LENS.diff(prev, out["digest"])["resolved"]
+
+
+def test_prev_scope_present_but_non_dict_carries_all(tmp_path):
+    """Present-but-non-dict auditedScope must fail closed, not infer requirements."""
+    repo = _python_repo(tmp_path, "six==1.16.0\n")
+    prev_id = "deps:audit:python:six:PYSEC-OLD-1"
+    prev = {
+        "detected": ["python"],
+        "ecosystems": {"python": {
+            "freshness": {"status": "not-collected", "reason": "policy", "items": {}},
+            "vulns": {"status": "partial", "items": {
+                prev_id: {"id": prev_id, "package": "six", "metric": 5},
+            }, "auditedScope": "lockfile"},
+        }},
+    }
+    out = gld.LENS.collect(
+        _ctx(repo, _run(osv_scanner=OSV_ALLCLEAN_ALLPACKAGES_JSON), prev=prev))
     vulns = out["digest"]["ecosystems"]["python"]["vulns"]
     assert "audit scope changed" in vulns["reason"]
     assert vulns["items"][prev_id].get("carriedForward") is True
