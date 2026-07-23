@@ -1028,6 +1028,64 @@ def test_collapse_needs_a_meaningful_source_count():
     assert glc.detect_collapse(at, {".": {"ts": 0}})
 
 
+def test_measure_js_forwards_resolved_toolchain_to_run_tool(tmp_path, monkeypatch):
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", '{"name":"toolchain-forward"}\n')
+    sources = ["src/a.ts", "src/b.ts"]
+    for rel in sources:
+        write(repo, rel)
+    report = dc_report(extra_sources=sources)
+    captured = {}
+    real_run_tool = glc.gc.run_tool
+
+    def spy_run_tool(argv, ctx=None, **kwargs):
+        captured["extra_node_path"] = kwargs.get("extra_node_path")
+        if argv and argv[0] == adapters.DEPCRUISE_BIN:
+            return {"ok": True, "exit": 0, "stdout": report, "stderr": "", "reason": None}
+        return real_run_tool(argv, ctx, **kwargs)
+
+    monkeypatch.setattr(
+        glc.gt, "typescript_toolchain_node_path",
+        lambda _repo, _majors: "/abs/outside/node_modules")
+    monkeypatch.setattr(glc.gc, "run_tool", spy_run_tool)
+    out = lens().collect(ctx(repo, tmp_path))
+    assert captured["extra_node_path"] == "/abs/outside/node_modules"
+    assert out["digest"]["ecosystems"]["js"]["typescriptToolchainProvided"] is True
+
+
+def test_measure_js_toolchain_absent_records_not_provided_and_passes_none(
+        tmp_path, monkeypatch):
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", '{"name":"toolchain-absent"}\n')
+    sources = ["src/a.ts", "src/b.ts"]
+    for rel in sources:
+        write(repo, rel)
+    monkeypatch.setattr(
+        glc.gt, "typescript_toolchain_node_path", lambda _repo, _majors: None)
+    out = lens().collect(ctx(
+        repo, tmp_path, run=depcruise_run(dc_report(extra_sources=sources))))
+    js = out["digest"]["ecosystems"]["js"]
+    assert js["typescriptToolchainProvided"] is False
+
+
+def test_measure_js_toolchain_absent_then_collapse_degrades_honestly_with_provenance(
+        tmp_path, monkeypatch):
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "mypkg/__init__.py", "")
+    write(repo, "mypkg/api.py", "x = 1\n")
+    for i in range(20):
+        write(repo, "src/app/mod%d.ts" % i)
+    monkeypatch.setattr(
+        glc.gt, "typescript_toolchain_node_path", lambda _repo, _majors: None)
+    run = depcruise_run(dc_report(extra_sources=["src/app/mod0.ts"], ts_available=False))
+    out = lens().collect(ctx(repo, tmp_path, run=run))
+    assert st(out) == "partial"
+    js = out["digest"]["ecosystems"]["js"]
+    assert js["status"] == "not-collected"
+    assert adapters.OUTCOMES["module-count-collapse"][1] in js["reason"]
+    assert js["typescriptToolchainProvided"] is False
+
+
 def test_healthy_parse_does_not_degrade(tmp_path):
     repo = init_calibrated_repo(tmp_path)
     sources = ["src/app/mod%d.ts" % i for i in range(20)]

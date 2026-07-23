@@ -50,6 +50,7 @@ if _LIB_DIR not in sys.path:
 import guardian_census  # noqa: E402
 import guardian_collect as gc                  # noqa: E402
 import guardian_coupling_adapters as adapters  # noqa: E402
+import guardian_tools as gt                    # noqa: E402
 import store_core                              # noqa: E402
 
 # --- identity + normalization (SSOT for the ids this lens mints) ---------------------
@@ -966,16 +967,20 @@ class CouplingLens(object):
             reason = "%s js: bad cruise targets (%s)" % (self.name, exc)
             return self._eco_fail("js", reason)
 
+        toolchain = gt.typescript_toolchain_node_path(
+            repo, adapters.TYPESCRIPT_SUPPORTED_MAJORS)
+        ts_toolchain_provided = toolchain is not None
+
         argv = adapters.depcruise_argv(abs_targets)
         res = gc.run_tool(argv, ctx, timeout=adapters.COLLECT_TIMEOUT, cwd=repo,
-                          ok_exits=(0,))
+                          ok_exits=(0,), extra_node_path=toolchain)
         after_cache = adapters.cache_paths_present(repo)
         wrote = set(after_cache) - set(before_cache)
         if wrote:
             reason = "%s js: %s (%s)" % (
                 self.name, adapters.OUTCOMES["repo-write"][1],
                 ", ".join(sorted(wrote)))
-            return self._eco_fail("js", reason)
+            return self._eco_fail("js", reason, ts_toolchain_provided)
 
         if not res.get("ok"):
             why = res.get("reason") or "dependency-cruiser failed"
@@ -988,7 +993,7 @@ class CouplingLens(object):
             if adapters.is_ok(parsed.get("outcome")):
                 evidence = " (stdout was parseable but the run failed — not promoted)"
             reason = "%s js: %s%s%s" % (self.name, why, tail, evidence)
-            return self._eco_fail("js", reason)
+            return self._eco_fail("js", reason, ts_toolchain_provided)
 
         parsed = adapters.parse_depcruise_json(
             res.get("stdout") or "", returncode=res.get("exit") or 0)
@@ -998,7 +1003,7 @@ class CouplingLens(object):
             reason = "%s js: %s%s" % (
                 self.name, default_reason or outcome,
                 (" — " + parsed["detail"]) if parsed.get("detail") else "")
-            return self._eco_fail("js", reason)
+            return self._eco_fail("js", reason, ts_toolchain_provided)
 
         payload = parsed.get("payload") or {}
         versions = adapters.depcruise_versions(payload)
@@ -1013,7 +1018,7 @@ class CouplingLens(object):
         if collapse:
             reason = _collapse_reason(
                 self.name + " js", src_census, collapse, versions)
-            return self._eco_fail("js", reason)
+            return self._eco_fail("js", reason, ts_toolchain_provided)
 
         cliff = detect_cliff(_eco_prev_digest(prev, "js"), len(parsed_paths),
                              src_census["total"])
@@ -1023,7 +1028,7 @@ class CouplingLens(object):
                 "source census held at %d (a genuine shrink drops sources too)"
                 % (self.name, adapters.OUTCOMES["module-count-cliff"][1],
                    cliff["modules"], cliff["priorModules"], cliff["sources"]))
-            return self._eco_fail("js", reason)
+            return self._eco_fail("js", reason, ts_toolchain_provided)
 
         rows = _classify_edges(repo, dep_edges, src_census["workspaces"])
         # Tag rows with tool token for candidate minting later.
@@ -1046,6 +1051,7 @@ class CouplingLens(object):
             "sourcesCensused": src_census["total"],
             "modulesParsed": len(parsed_paths),
             "argv": argv,
+            "typescriptToolchainProvided": ts_toolchain_provided,
         }
         if untracked_filtered:
             section["untrackedFiltered"] = untracked_filtered
@@ -1180,7 +1186,15 @@ class CouplingLens(object):
         }
 
     @staticmethod
-    def _eco_fail(ecosystem, reason):
+    def _eco_fail(ecosystem, reason, typescript_toolchain_provided=None):
+        section = {
+            "status": "not-collected",
+            "reason": _safe_repo_text(reason, max_len=max(REPO_TEXT_MAX * 4, 800)),
+            "tool": (adapters.DEPCRUISE_TOOL if ecosystem == "js"
+                     else adapters.IMPORT_LINTER_TOOL),
+        }
+        if ecosystem == "js" and typescript_toolchain_provided is not None:
+            section["typescriptToolchainProvided"] = typescript_toolchain_provided
         return {
             "status": "not-collected",
             "reason": _safe_repo_text(reason, max_len=max(REPO_TEXT_MAX * 4, 800)),
@@ -1188,12 +1202,7 @@ class CouplingLens(object):
             "versions": {},
             "parsed_total": 0,
             "per_workspace": {},
-            "section": {
-                "status": "not-collected",
-                "reason": _safe_repo_text(reason, max_len=max(REPO_TEXT_MAX * 4, 800)),
-                "tool": (adapters.DEPCRUISE_TOOL if ecosystem == "js"
-                         else adapters.IMPORT_LINTER_TOOL),
-            },
+            "section": section,
         }
 
     # --------------------------------------------------------------- candidates/digest
