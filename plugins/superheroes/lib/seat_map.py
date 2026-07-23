@@ -402,3 +402,48 @@ def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
         "narrativeFamily": seat_map.get("narrativeFamily"),
         "violations": verify(seat_map, af),
     }
+
+
+def main(argv):
+    import argparse
+    import json
+    import sys
+
+    ap = argparse.ArgumentParser(prog="seat_map")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    c = sub.add_parser("compose", help="compute the panel seat map for a run")
+    c.add_argument("--author-family", default=None)
+    c.add_argument("--narrative-family", default=None)
+    c.add_argument("--pr-number", default=None)
+    c.add_argument("--head-sha", default=None)
+    c.add_argument(
+        "--live-vendors",
+        default=None,
+        help="comma list; overrides preflight (test/precomputed seam)",
+    )
+    c.add_argument(
+        "--configured-engines",
+        default="",
+        help="comma list of non-claude engines; used to run preflight when --live-vendors omitted",
+    )
+    args = ap.parse_args(argv[1:])
+    if args.cmd == "compose":
+        if args.live_vendors is not None:
+            live = [v for v in args.live_vendors.split(",") if v]
+        else:
+            import preflight_probe
+
+            configured = [e for e in args.configured_engines.split(",") if e]
+            live, _liveness = preflight_probe.live_vendors_for_composition(configured)
+        seed = seed_from(args.pr_number, args.head_sha)
+        sm = build(PANEL_ROSTER, live, args.author_family, args.narrative_family, seed)
+        json.dump(to_receipt(sm), sys.stdout)
+        sys.stdout.write("\n")
+        return 0
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(main(sys.argv))

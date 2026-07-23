@@ -178,3 +178,58 @@ def test_to_receipt_json_roundtrip():
     parsed = json.loads(serialized)
     assert parsed["seats"] == receipt["seats"]
     assert "violations" in parsed
+
+
+# --- CLI --------------------------------------------------------------------------------------
+
+
+def test_pure_functions_still_importable():
+    assert callable(SM.build)
+    assert callable(SM.verify)
+    assert callable(SM.to_receipt)
+    assert callable(SM.seed_from)
+    assert callable(SM.main)
+
+
+def test_cli_compose_with_live_vendors_override(capsys):
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--live-vendors",
+            "claude,codex,cursor",
+            "--author-family",
+            "cursor",
+            "--narrative-family",
+            "anthropic",
+            "--pr-number",
+            "510",
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert len(receipt["seats"]) == 6
+    assert "degradations" in receipt
+    assert "seed" in receipt
+    assert receipt["violations"] == []
+
+
+def test_cli_compose_deterministic(capsys):
+    argv = [
+        "x",
+        "compose",
+        "--live-vendors",
+        "claude,codex,cursor",
+        "--author-family",
+        "cursor",
+        "--narrative-family",
+        "anthropic",
+        "--pr-number",
+        "510",
+    ]
+    rc1 = SM.main(argv)
+    out1 = capsys.readouterr().out
+    rc2 = SM.main(argv)
+    out2 = capsys.readouterr().out
+    assert rc1 == rc2 == 0
+    assert out1 == out2
