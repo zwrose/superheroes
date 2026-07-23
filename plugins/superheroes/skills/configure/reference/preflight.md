@@ -113,7 +113,9 @@ immediately after a green preflight; #526 permission-surface evidence).
 
 A blocked write here **fails the preflight loudly** — fold its outcome into the go/no-go aggregation
 (§ "The gate — go/no-go") exactly as the browser outcome is folded in, so `go` can never stay true
-after a blocked write; same fail-loud contract as every check above.
+after a blocked write; same fail-loud contract as every check above. If the create succeeds but the
+**delete** is blocked or fails, the probe comment persists — remove it (or flag it to the owner) as
+part of the fail-loud outcome, so the probe leaves nothing behind.
 
 ## B — Engine + model availability (the dispatch-calibration readout)
 
@@ -177,8 +179,8 @@ deciding:
 ```python
 import preflight_probe
 all_results = probes_from_run_json + [
-    preflight_probe.browser_probe_result(browser_ok, detail),           # host action (§A.1), N/A on no-app runs
-    {"tool": "gh write", "ok": gh_write_ok, "detail": gh_write_detail},  # host action (§A.3): the throwaway-comment probe
+    preflight_probe.browser_probe_result(browser_ok, detail),           # host action (§A.1): fold in only when the browser probe actually ran; OMIT on no-app runs (their browser N/A is recorded per §A.1, not through this helper — it can't emit N/A)
+    {"tool": "gh write", "ok": gh_write_ok, "detail": gh_write_detail},  # host action (§A.3): the throwaway-comment probe (always applicable)
 ]
 verdict = preflight_probe.aggregate(all_results)
 ```

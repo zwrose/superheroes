@@ -80,10 +80,12 @@ code, so you catch what the maker's context hid.
      designed — **welcome it and go looking for the design problem**, rather than ordering a third
      patch.
    - **Record the order-quality accounting.** From the PR's dispatch-provenance, record **orders
-     dispatched, rework orders, and each blocking review finding attributed order-vs-implementer**,
-     and track it against the **~5:1 order-vs-execution baseline** from the 0.18.0 wave. Standing
-     accounting, no machinery — it makes the work-order authoring rules' effect measurable over time,
-     and tells you when a build's defects point at order quality rather than the engine.
+     dispatched, rework orders, and each blocking review finding's attribution** — order quality,
+     implementer execution, or the orchestrator's own integration/assembly (external or unknown where
+     none fits). Track the **order-vs-implementer subset** against the **~5:1 baseline** from the
+     0.18.0 wave. Standing accounting, no machinery — it makes the work-order authoring rules' effect
+     measurable over time, and tells you when a build's defects point at order quality rather than the
+     engine.
    - A PR that adds a **gate, hook, or enforcement mechanism** must name, in its brief, the
      ratified precondition that unlocks it and the evidence it is met — **a missing citation is a
      finding in its own right**; any project must carry that rule. When the project being vetted is
