@@ -198,6 +198,19 @@ def test_classify_collect_partial_happy_no_stderr(capsys):
     assert captured.err == ""
 
 
+def test_classify_collect_warn_contract_never_raises(monkeypatch):
+    # _warn_contract must swallow a failing stderr.write and still return the
+    # fail-closed tuple — a broken stderr must never crash a lens's classify path.
+    class _Boom:
+        def write(self, *a, **k):
+            raise IOError("stderr closed")
+        def flush(self, *a, **k):
+            pass
+    monkeypatch.setattr(gl.sys, "stderr", _Boom())
+    result = gl.classify_collect({"status": "partial"})
+    assert result == ("partial", "partial reported without a reason (contract violation)")
+
+
 def test_collect_statuses_single_home():
     import guardian_collect
     assert gl.COLLECT_STATUSES is guardian_collect.COLLECT_STATUSES
