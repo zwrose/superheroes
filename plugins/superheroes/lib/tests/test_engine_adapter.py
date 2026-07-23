@@ -597,6 +597,27 @@ def test_parse_result_stdout_multibyte_split_at_tail_boundary(tmp_path, capsys):
     assert rc == 0 and out["ok"] is True and out["findings"][0]["title"] == "t"
 
 
+def test_parse_result_truncated_tail_never_trusts_echoed_findings(tmp_path, capsys):
+    # #563 tripwire: a >512KB final review object whose 700KB body pad pushes an echoed nested
+    # {"findings":[...]} (title "WRONG") into the last MAX_STDOUT_TAIL_BYTES, while the true outer
+    # findings (title "RIGHT") sit BEFORE the tail boundary. The old gate
+    # (`if _truncated and not res.get("ok")`) trusted the tail and returned ok:true+WRONG; the fix
+    # always re-reads the full file and returns RIGHT. Asserting "RIGHT" fails on a regression to the
+    # old gate. Measured 2026-07-23: file ~717KB, outer '{' at pos 23 (outside the 512KB tail).
+    pad = "P" * (700 * 1024)
+    blob = ('codex: starting review\n'
+            '{"findings":[{"severity":"Blocker","title":"RIGHT","body":"' + pad + '"}],'
+            '"echo":{"findings":[{"severity":"Minor","title":"WRONG","body":"x"}]}}')
+    p = tmp_path / "s.txt"
+    p.write_text(blob, encoding="utf-8")
+    rc = EA.main(["parse-result", "--engine", "codex", "--role", "review",
+                  "--stdout-path", str(p)])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0 and out["ok"] is True
+    assert len(out["findings"]) == 1
+    assert out["findings"][0]["title"] == "RIGHT"   # full-read wins; NOT the tail's echoed "WRONG"
+
+
 # ---------------------------------------------------------------------------
 # #563 DoD 3: empty-prompt guard on build-argv --prompt-path
 
