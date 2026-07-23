@@ -88,15 +88,13 @@ approval is in place, only by using it:
   every approval and credential it needs to reach *all* the app before test-pilot depends on it — an
   auth wall it can't pass is exactly what would stall you mid-run.
 - **The cross-vendor CLI** — one harmless authenticated call.
-- **`gh`** — confirm sign-in **and exercise one real write**. Auto-mode permission classification
-  gates `gh` **writes** (issue/PR comments, edits, labels) **separately from reads**, so a green
-  `gh auth status` (a read) does not prove a `gh issue comment` (a write) will pass. Exercise one
-  real write now, while the owner is reachable — the cheapest form is a throwaway probe comment you
-  immediately delete (the deletion is itself a second write, and leaves no junk); when you post the
-  intake brief (§4) while the owner is still present, that post doubles as the probe. A blocked write
-  is a preflight failure caught now, not a lost intake receipt from a headless post hours later
-  (weekly-eats we#498/we#499: both cleared preflight, then lost their intake receipt when the brief
-  post was blocked by the classifier; #526 permission-surface evidence).
+- **`gh`** — confirm sign-in **and exercise one real `gh` write**, not just a read. Auto-mode
+  permission classification gates `gh` **writes** (issue/PR comments, edits) **separately from
+  reads**, so a green `gh auth status` (a read) does not prove a `gh issue comment` (a write) will
+  clear mid-run — and a write blocked hours into a headless run is a lost intake receipt, not a
+  caught failure (weekly-eats we#498/we#499; #526 permission-surface evidence). The concrete write
+  probe and its mechanics live with the checklist in the preflight reference (§A.3) — don't restate
+  them here.
 
 **When the build has no running app** (a plugin/library/docs change with no browser-drivable
 surface), the browser/test-pilot live-exercise probe is **N/A** — there is nothing to drive. Run the
@@ -208,14 +206,17 @@ implementer that parks on a stale premise did the right thing. When you are abou
 **third** rework of the same surface in one build, park instead — a third patch is the wrong answer
 to a design signal. Say what the seam problem looks like.
 
-**Long dispatches get an explicit high ceiling and a monitor.** A subagent dispatch, an engine CLI
-run, or a review panel routinely runs longer than a host's **default** command timeout (ten minutes
-on this host). Set an **explicit high ceiling — 3600s or more** — and pair it with a **stuck/runaway
-monitor**; never a borderline limit you expect to just barely clear. Watch the process's **CPU-time
-column, not elapsed** — an engine CLI can sit at ~0% CPU for many minutes and still be live — and
-redirect a dispatch's output to a **file, never `| tail`**, so a stall is distinguishable from
-progress. Four 0.18.0-wave sessions died on the ten-minute default mid-dispatch — one
-mid-review-panel — losing the run (WE review session, WE-510, sh-566, WE-484).
+**Long dispatches you own get an explicit high ceiling and a monitor.** A subagent dispatch or an
+engine CLI run **you invoke directly** routinely runs longer than the effective command-timeout floor
+(the plugin-injected `bash_timeout` ten-minute ceiling; the bare host default is shorter). Set an
+**explicit high ceiling — 3600s or more** — and pair it with a **stuck/runaway monitor**; never a
+borderline limit you expect to just barely clear. Watch the process's **CPU-time column, not
+elapsed** — an engine CLI can sit at ~0% CPU for many minutes and still be live — and redirect a
+dispatch's output to a **file, never `| tail`**, so a stall is distinguishable from progress. A
+**skill-owned dispatch keeps its own structural-timeout contract** (e.g. `review-code`'s loop bounds
+each engine dispatch itself and forbids a per-dispatch watchdog) — don't override it with this rule.
+Four 0.18.0-wave sessions died on the ten-minute floor mid-dispatch — one mid-review-panel — losing
+the run (WE review session, WE-510, sh-566, WE-484).
 
 ## 8. Verify — re-run every receipt yourself
 
@@ -268,9 +269,10 @@ issue and a one-line reason). This is distinct from the review dispositions tabl
 review findings; this grades every spec'd claim shipped/deferred/dropped) and is the honesty marker
 the review seat verifies (CONVENTIONS `§10.7`, `rubric/review-discipline.md`). The dispatch-provenance
 section also records, per order, whether it was a **rework** and — for any blocking review finding —
-whether it was attributed to **order quality or implementer execution**, so the advisor can track the
-build against the ~5:1 order-vs-execution baseline (the advisor's standing accounting duty; the
-**showrunner** charter reads it). **Issue-linking discipline — never auto-close an issue that must
+whether it was attributed to **order quality, implementer execution, or the orchestrator's own
+integration/assembly** (external or unknown where none fits), so the advisor can track the build
+against the ~5:1 order-vs-execution baseline (0.18.0 wave) — the advisor's standing accounting duty;
+the **showrunner** charter reads it. **Issue-linking discipline — never auto-close an issue that must
 stay open.** GitHub's closing-keyword parser is **negation-blind**: `Resolves #NNN` / `Closes #NNN` /
 `Fixes #NNN` closes the issue on merge **even inside a sentence that says it does not**. For an issue
 the PR must **not** close (a parent epic, a tracking issue, a "part of" link), use a **non-closing**
