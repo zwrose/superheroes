@@ -267,7 +267,7 @@ def _comparable_completeness(prev_entry, cur_entry):
     """True when two sweeps' completeness states may be drift-compared.
 
     Partial/partial compares stable identity tokens, not reason prose — reworded
-  gaps must stay comparable; different gaps with identical prose must not."""
+    gaps must stay comparable; different gaps with identical prose must not."""
     if prev_entry is None and cur_entry is None:
         return True
     prev_state = _completeness_state(prev_entry)

@@ -31,6 +31,12 @@ vital name to a 2-tuple:
   `reason` naming exactly what is missing.
 - `(None, reason)` — **not-collected**: nothing publishable; `reason` says why.
 
+A **partial** reading MAY be a 3-tuple `(value, reason, identity)` where `identity` is a
+list of stable `"<ecosystem>/<part>/<cause>"` tokens used for cross-sweep
+drift-comparability. The `reason` prose is human-only and may be reworded freely without
+affecting comparability. A 2-tuple partial (no identity) is treated as non-comparable
+(fail-closed).
+
 The lens owns its digest shape; `guardian_vitals` owns vital names, thresholds, and the
 completeness rule. Neither reaches into the other. A lens without `vitals()` contributes
 no vitals. Extractors must be total and non-raising on malformed digests.

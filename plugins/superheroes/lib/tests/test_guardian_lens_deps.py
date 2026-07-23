@@ -17,6 +17,7 @@ import guardian_ledger as gled
 import guardian_lens as gl
 import guardian_lens_deps as gld
 import guardian_sweep as gsw
+import guardian_vitals as gv
 import pytest
 
 # --------------------------------------------------------------------------- fixtures
@@ -2798,13 +2799,14 @@ def test_vitals_vuln_count_partial_python_derives_reason_from_section():
             },
         },
     }
-    value, reason = gld.LENS.vitals(digest)["vulnCount"]
+    value, reason, identity = gld.LENS.vitals(digest)["vulnCount"]
     assert value == 3
     assert reason is not None
     assert section_reason in reason
     assert "python vulns:" in reason
     assert "pip-audit" not in reason
     assert "#569" not in reason
+    assert identity is None
 
 
 def test_vitals_vuln_count_partial_uses_section_reason_not_template():
@@ -2821,9 +2823,10 @@ def test_vitals_vuln_count_partial_uses_section_reason_not_template():
             },
         },
     }
-    value, reason = gld.LENS.vitals(digest)["vulnCount"]
+    value, reason, identity = gld.LENS.vitals(digest)["vulnCount"]
     assert value == 1
     assert reason == "python vulns: %s" % custom_reason
+    assert identity is None
 
 
 def test_vitals_vuln_count_partial_without_reason_falls_back_generic():
@@ -2838,11 +2841,12 @@ def test_vitals_vuln_count_partial_without_reason_falls_back_generic():
             },
         },
     }
-    value, reason = gld.LENS.vitals(digest)["vulnCount"]
+    value, reason, identity = gld.LENS.vitals(digest)["vulnCount"]
     assert value == 1
     assert reason == "python vulns: partial"
     assert "pip-audit" not in reason
     assert "#569" not in reason
+    assert identity is None
 
 
 def test_vitals_majors_behind_partial_freshness_derives_reason_from_section():
@@ -2895,3 +2899,195 @@ def test_vitals_majors_behind_sums_collected_ecosystems():
     value, reason = gld.LENS.vitals(digest)["majorsBehind"]
     assert value == 4
     assert reason is None
+
+
+# ======================================================================================
+# Vital identity tokens (#585)
+# ======================================================================================
+
+def _vuln_partial_digest(eco, section, *, anchor_eco="node"):
+    """Build a digest with one partial vulns section plus an optional anchor eco."""
+    ecosystems = {eco: {"vulns": section}}
+    if anchor_eco and anchor_eco != eco:
+        ecosystems[anchor_eco] = {
+            "vulns": {"status": "collected", "items": {"a": {"id": "a"}}},
+        }
+    return {"ecosystems": ecosystems}
+
+
+def test_vitals_vuln_count_partial_coverage_gap_emits_identity():
+    section = {
+        "status": "partial",
+        "items": {"c": {"id": "c"}},
+        "coverageGap": {"scope": "enumerated-manifest-only"},
+        "reason": "no transitive resolution",
+    }
+    digest = _vuln_partial_digest("python", section)
+    value, reason, identity = gld.LENS.vitals(digest)["vulnCount"]
+    assert value == 2
+    assert reason
+    assert "python/vulns/no-transitive-resolution" in identity
+
+
+def test_vitals_vuln_count_partial_identity_stable_across_reason_reword():
+    section_a = {
+        "status": "partial",
+        "items": {"c": {"id": "c"}},
+        "coverageGap": {"scope": "enumerated-manifest-only"},
+        "reason": "original advisory prose",
+    }
+    section_b = dict(section_a, reason="reworded advisory prose for humans")
+    id_a = gld.LENS.vitals(_vuln_partial_digest("python", section_a))["vulnCount"][2]
+    id_b = gld.LENS.vitals(_vuln_partial_digest("python", section_b))["vulnCount"][2]
+    assert id_a == id_b
+    assert id_a == ["python/vulns/no-transitive-resolution"]
+
+
+def test_vitals_vuln_count_partial_malformed_entries_emits_identity():
+    section = {
+        "status": "partial",
+        "items": {"n": {"id": "n"}},
+        "malformedEntries": ["left-pad"],
+        "reason": "malformed advisory rows",
+    }
+    digest = _vuln_partial_digest("node", section, anchor_eco="python")
+    _, _, identity = gld.LENS.vitals(digest)["vulnCount"]
+    assert "node/vulns/malformed-advisory" in identity
+
+
+def test_vitals_vuln_count_partial_pin_scope_and_boundary_identity():
+    pin_section = {
+        "status": "partial",
+        "items": {"x": {"id": "x"}},
+        "pinScopeGap": {"lines": ["pkg==1.0"]},
+        "reason": "unpinned conditional",
+    }
+    _, _, pin_id = gld.LENS.vitals(
+        _vuln_partial_digest("python", pin_section))["vulnCount"]
+    assert "python/vulns/unpinned-scope" in pin_id
+
+    boundary_section = {
+        "status": "partial",
+        "items": {"x": {"id": "x"}},
+        "boundary": False,
+        "reason": "ambiguous reconciliation",
+    }
+    _, _, boundary_id = gld.LENS.vitals(
+        _vuln_partial_digest("python", boundary_section))["vulnCount"]
+    assert "python/vulns/ambiguous-identity" in boundary_id
+
+
+def test_section_cause_tokens_excludes_findings_state_markers():
+    section = {
+        "coverageGap": {"scope": "enumerated-manifest-only"},
+        "redLineGap": {"kind": "severity-unrated"},
+        "carriedForward": True,
+    }
+    assert gld._section_cause_tokens(section) == ["no-transitive-resolution"]
+
+
+def test_vitals_vuln_count_structural_not_collected_emits_identity():
+    digest = {
+        "ecosystems": {
+            "node": {
+                "vulns": {
+                    "status": "collected",
+                    "items": {"a": {"id": "a"}},
+                },
+            },
+            "python": {
+                "vulns": {
+                    "status": "not-collected",
+                    "reason": "osv-scanner missing",
+                    "items": {},
+                },
+            },
+        },
+    }
+    _, _, identity = gld.LENS.vitals(digest)["vulnCount"]
+    assert "python/vulns/not-collected" in identity
+
+
+@pytest.mark.parametrize("eco,section", [
+    ("python", {
+        "status": "partial",
+        "items": {"x": {"id": "x"}},
+        "coverageGap": {"scope": "enumerated-manifest-only"},
+        "reason": "osv partial",
+    }),
+    ("node", {
+        "status": "partial",
+        "items": {"n": {"id": "n"}},
+        "malformedEntries": ["left-pad"],
+        "reason": "malformed advisory",
+    }),
+    ("python", {
+        "status": "partial",
+        "items": {"x": {"id": "x"}},
+        "pinScopeGap": {"lines": ["pkg==1.0"]},
+        "reason": "unpinned scope",
+    }),
+    ("python", {
+        "status": "partial",
+        "items": {"x": {"id": "x"}},
+        "boundary": False,
+        "coverageGap": {"scope": "enumerated-manifest-only"},
+        "reason": "ambiguous with coverage gap",
+    }),
+])
+def test_vitals_partial_sections_always_emit_nonempty_identity(eco, section):
+    """Tripwire: every production partial path must classify — never fail-closed silence."""
+    digest = _vuln_partial_digest(eco, section)
+    reading = gld.LENS.vitals(digest)["vulnCount"]
+    assert len(reading) == 3, reading
+    identity = reading[2]
+    assert identity is not None
+    assert identity != []
+
+
+def test_deps_vital_identity_reaches_comparability_reworded_prose():
+    base = {
+        "status": "partial",
+        "items": {"c": {"id": "c"}},
+        "coverageGap": {"scope": "enumerated-manifest-only"},
+    }
+    r1 = gld.LENS.vitals(_vuln_partial_digest(
+        "python", dict(base, reason="severity source offline")))["vulnCount"]
+    r2 = gld.LENS.vitals(_vuln_partial_digest(
+        "python", dict(base, reason="ratings unavailable this sweep")))["vulnCount"]
+    assert r1[2] == r2[2]
+    _, comp1 = gv._interpret_vital_tuple(
+        r1[0], r1[1], identity=r1[2], lens_name="deps", vital_name="vulnCount")
+    _, comp2 = gv._interpret_vital_tuple(
+        r2[0], r2[1], identity=r2[2], lens_name="deps", vital_name="vulnCount")
+    assert gv._comparable_completeness(comp1, comp2)
+    assert gv.crossings(
+        {"vulnCount": 1}, {"vulnCount": 5},
+        prev_completeness={"vulnCount": comp1},
+        cur_completeness={"vulnCount": comp2})
+
+
+def test_deps_vital_identity_different_basis_not_comparable():
+    cov = {
+        "status": "partial",
+        "items": {"x": {"id": "x"}},
+        "coverageGap": {"scope": "enumerated-manifest-only"},
+        "reason": "gap",
+    }
+    pin = {
+        "status": "partial",
+        "items": {"x": {"id": "x"}},
+        "pinScopeGap": {"lines": ["pkg==1.0"]},
+        "reason": "gap",
+    }
+    r_cov = gld.LENS.vitals(_vuln_partial_digest("python", cov))["vulnCount"]
+    r_pin = gld.LENS.vitals(_vuln_partial_digest("python", pin))["vulnCount"]
+    _, comp_cov = gv._interpret_vital_tuple(
+        r_cov[0], r_cov[1], identity=r_cov[2], lens_name="deps", vital_name="vulnCount")
+    _, comp_pin = gv._interpret_vital_tuple(
+        r_pin[0], r_pin[1], identity=r_pin[2], lens_name="deps", vital_name="vulnCount")
+    assert not gv._comparable_completeness(comp_cov, comp_pin)
+    assert gv.crossings(
+        {"vulnCount": 1}, {"vulnCount": 5},
+        prev_completeness={"vulnCount": comp_cov},
+        cur_completeness={"vulnCount": comp_pin}) == []
