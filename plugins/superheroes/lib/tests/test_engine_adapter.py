@@ -365,6 +365,27 @@ def test_build_argv_cursor_fable_tier_returns_empty_argv():
     assert EA.build_argv("cursor", "build", "composer", {"cwd": "/wt", "model": "fable"}) == []
 
 
+def test_build_argv_cursor_engine_model_grok_high():
+    argv = EA.build_argv("cursor", "review", "high", {"engine_model": "cursor-grok-4.5"})
+    assert argv[argv.index("--model") + 1] == "cursor-grok-4.5-high"
+
+
+def test_build_argv_cursor_engine_model_absent_defaults_composer():
+    argv = EA.build_argv("cursor", "review", None, {})
+    assert argv[argv.index("--model") + 1] == "composer-2.5"
+
+
+def test_build_argv_cursor_unregistered_engine_model_falls_through_to_composer():
+    # unregistered ⇒ default: gpt-5.6-sol is codex-only, not registered on cursor
+    argv = EA.build_argv("cursor", "review", "high", {"engine_model": "gpt-5.6-sol"})
+    assert argv[argv.index("--model") + 1] == "composer-2.5"
+
+
+def test_build_argv_cursor_registered_engine_model_invalid_effort_returns_empty_argv():
+    assert EA.build_argv("cursor", "review", "banana",
+                         {"engine_model": "cursor-grok-4.5"}) == []
+
+
 def test_engine_reviewer_stdout_contract_is_stated_in_dispatch_reference():
     # #196: the stdout shape contract must live where orchestrators read it when composing the
     # engine-dispatch prompt — not only in this parser's source. Structural pin so the prose
