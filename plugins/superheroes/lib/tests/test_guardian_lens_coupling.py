@@ -1490,7 +1490,7 @@ def test_census_is_recursive_and_finds_nested_workspaces(tmp_path):
     assert got["sources"]["packages/web"] == {"ts": 1}
     assert got["sources"]["packages/api"] == {"js": 1}
     # the sweep's root-only manifest detection would have found nothing here
-    assert gsw._manifest_tags(repo) == set()
+    assert gsw._present_root_manifests(repo) == set()
 
 
 def test_census_never_walks_into_vendored_trees(tmp_path):
@@ -2146,9 +2146,10 @@ def test_coupling_vitals_complete_on_good_digest():
 def test_coupling_vitals_partial_when_ecosystem_incomplete():
     digest = _vitals_digest(5, ecosystems={"js": {"status": "collected"},
                                               "py": {"status": "not-collected"}})
-    val, reason = glc.LENS.vitals(digest)["couplingEdges"]
+    val, reason, identity = glc.LENS.vitals(digest)["couplingEdges"]
     assert val == 5.0
     assert reason and "py" in reason
+    assert "py/coupling/not-collected" in identity
 
 
 def test_coupling_vitals_not_collected_on_bad_outcome():
@@ -2254,3 +2255,42 @@ def test_coupling_vitals_reports_edges_when_matrix_truncated():
     val, reason = glc.LENS.vitals(digest)["couplingEdges"]
     assert val == 42.0
     assert reason is None
+
+
+def test_coupling_vitals_partial_malformed_section_emits_identity():
+    digest = _vitals_digest(5, ecosystems={
+        "js": {"status": "collected"},
+        "py": "not-a-dict",
+    })
+    val, reason, identity = glc.LENS.vitals(digest)["couplingEdges"]
+    assert val == 5.0
+    assert reason and "malformed" in reason
+    assert "py/coupling/malformed-section" in identity
+
+
+def test_coupling_vitals_partial_unknown_status_emits_identity():
+    digest = _vitals_digest(5, ecosystems={
+        "js": {"status": "collected"},
+        "py": {},
+    })
+    reading = glc.LENS.vitals(digest)["couplingEdges"]
+    assert len(reading) == 3
+    val, reason, identity = reading
+    assert val == 5.0
+    assert reason and "py" in reason
+    assert "py/coupling/unknown-status" in identity
+
+
+def test_coupling_vitals_partial_identity_stable_across_status_prose_reword():
+    digest_a = _vitals_digest(5, ecosystems={
+        "js": {"status": "collected"},
+        "py": {"status": "not-collected", "reason": "tool missing this sweep"},
+    })
+    digest_b = _vitals_digest(5, ecosystems={
+        "js": {"status": "collected"},
+        "py": {"status": "not-collected", "reason": "collector offline"},
+    })
+    id_a = glc.LENS.vitals(digest_a)["couplingEdges"][2]
+    id_b = glc.LENS.vitals(digest_b)["couplingEdges"][2]
+    assert id_a == id_b
+    assert id_a == ["py/coupling/not-collected"]

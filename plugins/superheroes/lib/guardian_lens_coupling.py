@@ -35,7 +35,7 @@ TypeScript ≥6 and silently drops to ~2 modules.
 sweep *before* `collect()` runs (guardian_sweep.collect → `_unsatisfied_facts`), and
 `verify_config` on this very repo returns `stack-tags → absent`. Ecosystem detection is
 therefore lens-owned: a recursive source/manifest census, because the sweep's
-`_manifest_tags` looks only at the repo root and misses nested workspaces.
+root-manifest stack-tags check looks only at the repo root and misses nested workspaces.
 """
 import json
 import os
@@ -933,15 +933,23 @@ class CouplingLens(object):
             if not isinstance(ecosystems, dict):
                 return {"couplingEdges": (None, "ecosystems missing")}
             incomplete = []
+            triples = []
             for eco, section in ecosystems.items():
                 if not isinstance(section, dict):
                     incomplete.append("%s: malformed ecosystem section" % eco)
+                    triples.append("%s/coupling/malformed-section" % eco)
                     continue
                 if section.get("status") != "collected":
                     incomplete.append("%s: %s" % (
                         eco, section.get("status") or "unknown status"))
+                    status = section.get("status")
+                    if status == "not-collected":
+                        triples.append("%s/coupling/not-collected" % eco)
+                    else:
+                        triples.append("%s/coupling/unknown-status" % eco)
             if incomplete:
-                return {"couplingEdges": (value, "; ".join(incomplete))}
+                return {"couplingEdges": (
+                    value, "; ".join(incomplete), sorted(set(triples)))}
             return {"couplingEdges": (value, None)}
         except Exception as exc:
             return {"couplingEdges": (None, "vitals extraction failed: %s" % exc)}
