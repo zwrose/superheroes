@@ -964,6 +964,9 @@ class CouplingLens(object):
                     else:
                         triples.append("%s/coupling/unknown-status" % eco)
             if incomplete:
+                # Never-empty by classification: every incomplete section above appended a
+                # token (malformed-section / not-collected / unknown-status catch-all), so the
+                # partial identity is always a non-empty, comparable list (#592).
                 return {"couplingEdges": (
                     value, "; ".join(incomplete), sorted(set(triples)))}
             return {"couplingEdges": (value, None)}

@@ -2422,3 +2422,22 @@ def test_coupling_vitals_partial_identity_stable_across_status_prose_reword():
     id_b = glc.LENS.vitals(digest_b)["couplingEdges"][2]
     assert id_a == id_b
     assert id_a == ["py/coupling/not-collected"]
+
+
+def test_coupling_vitals_incomplete_sections_always_emit_nonempty_identity():
+    """Coupling is never-empty by classification: every incomplete section is keyed to a
+    specific cause token (malformed-section / unknown-status catch-all), so the partial
+    identity is always a non-empty, comparable list — no sentinel branch is needed (#592)."""
+    cases = [
+        ("not-a-dict", ["py/coupling/malformed-section"]),
+        ({"status": "mystery"}, ["py/coupling/unknown-status"]),
+        ({}, ["py/coupling/unknown-status"]),
+    ]
+    for bad, expected_identity in cases:
+        digest = _vitals_digest(5, ecosystems={
+            "js": {"status": "collected"},
+            "py": bad,
+        })
+        reading = glc.LENS.vitals(digest)["couplingEdges"]
+        assert len(reading) == 3, reading
+        assert reading[2] == expected_identity
