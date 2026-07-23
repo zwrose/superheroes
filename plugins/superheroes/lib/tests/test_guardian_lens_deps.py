@@ -405,7 +405,7 @@ def _covered_repo(tmp_path, extra=None):
 
 def _run(ncu=NCU_JSON, audit=NPM_AUDIT_JSON, ncu_exit=0, audit_exit=1,
          pip_audit=None, pip_audit_exit=1, osv_scanner=None, osv_scanner_exit=0,
-         git_log=None, extra=None):
+         osv_stderr="", git_log=None, extra=None):
     """Build a FakeRun for the node (and optional python) collectors + git liveness.
 
     `git_log` is a list of (argv-substring, epoch): a matching git log returns that epoch
@@ -414,9 +414,9 @@ def _run(ncu=NCU_JSON, audit=NPM_AUDIT_JSON, ncu_exit=0, audit_exit=1,
     osv-scanner defaults to absent (FileNotFoundError) so existing pip-audit stubs still
     exercise the fallback path unless a test supplies osv_scanner output explicitly.
     """
-    def _val(payload, exit_code):
+    def _val(payload, exit_code, stderr=""):
         # A BaseException is raised by FakeRun; otherwise it is (exit, stdout, stderr).
-        return payload if isinstance(payload, BaseException) else (exit_code, payload, "")
+        return payload if isinstance(payload, BaseException) else (exit_code, payload, stderr)
 
     table = [
         ("npm-check-updates", _val(ncu, ncu_exit)),
@@ -424,7 +424,7 @@ def _run(ncu=NCU_JSON, audit=NPM_AUDIT_JSON, ncu_exit=0, audit_exit=1,
     ]
     if osv_scanner is None:
         osv_scanner = FileNotFoundError("osv-scanner")
-    table.append(("osv-scanner", _val(osv_scanner, osv_scanner_exit)))
+    table.append(("osv-scanner", _val(osv_scanner, osv_scanner_exit, osv_stderr)))
     if pip_audit is not None:
         table.append(("pip-audit", _val(pip_audit, pip_audit_exit)))
     for key, epoch in (git_log or []):
@@ -1415,7 +1415,9 @@ def test_lockfile_no_coverage_gap_requirements_still_has_it(tmp_path):
     assert out_req["digest"]["ecosystems"]["python"]["vulns"].get("coverageGap") is not None
 
 
-@pytest.mark.parametrize("bad_version", ["", "git+https://example.com/pkg.git"])
+@pytest.mark.parametrize("bad_version", [
+    "", "git+https://example.com/pkg.git", "1.0.0+abc1234", "2.0.0@deadbeef",
+])
 def test_lockfile_unqueryable_not_audited_disclosed_carried(tmp_path, bad_version):
     repo = _lockfile_repo(tmp_path, "poetry.lock")
     prev_id = "deps:audit:python:vcspkg:PYSEC-PRIOR"
@@ -1457,6 +1459,140 @@ def test_lockfile_unqueryable_not_audited_disclosed_carried(tmp_path, bad_versio
     assert gap is not None
     assert "vcspkg" in gap["unqueryable"]
     assert prev_id not in gld.LENS.diff(prev, out["digest"])["resolved"]
+
+
+def test_lockfile_osv_stderr_skipped_git_sourced_not_audited_carried(tmp_path):
+    """Git-sourced lockfile entry: osv stderr skip must block false resolve."""
+    repo = _lockfile_repo(tmp_path, "poetry.lock")
+    prev_id = "deps:audit:python:jinja2:PYSEC-PRIOR"
+    prev = {
+        "detected": ["python"],
+        "ecosystems": {"python": {
+            "freshness": {"status": "not-collected", "reason": "policy", "items": {}},
+            "vulns": {"status": "partial", "items": {
+                prev_id: {"id": prev_id, "package": "jinja2", "metric": 5},
+            }, "auditedScope": {
+                "manifest": "poetry.lock", "kind": "lockfile", "transitive": True,
+            }},
+        }},
+    }
+    payload = _osv_lockfile_clean_package("poetry.lock", "jinja2", "2.11.1")
+    osv_stderr = (
+        'Scanned x found 1 package\n'
+        'Skipping jinja2: short commit hash "abc123" cannot be queried\n'
+        'Filtered 1 local/unscannable package/s from the scan.\n'
+    )
+    out = gld.LENS.collect(_ctx(
+        repo, _run(osv_scanner=payload, osv_stderr=osv_stderr), prev=prev))
+    vulns = out["digest"]["ecosystems"]["python"]["vulns"]
+    assert vulns["items"][prev_id].get("carriedForward") is True
+    assert vulns.get("carriedForward") is True
+    assert prev_id not in gld.LENS.diff(prev, out["digest"])["resolved"]
+    gap = vulns.get("pinScopeGap")
+    assert gap is not None
+    assert "jinja2" in gap["unqueryable"]
+    assert vulns["auditCoverage"]["packagesAudited"] == 0
+
+
+def test_lockfile_osv_stderr_unattributed_filter_carries_all_prior(tmp_path):
+    """Count guard: more filtered than named skips must carry every prior advisory."""
+    repo = _lockfile_repo(tmp_path, "poetry.lock")
+    prev_id_a = "deps:audit:python:pkg-a:PYSEC-A"
+    prev_id_b = "deps:audit:python:pkg-b:PYSEC-B"
+    prev = {
+        "detected": ["python"],
+        "ecosystems": {"python": {
+            "freshness": {"status": "not-collected", "reason": "policy", "items": {}},
+            "vulns": {"status": "partial", "items": {
+                prev_id_a: {"id": prev_id_a, "package": "pkg-a", "metric": 5},
+                prev_id_b: {"id": prev_id_b, "package": "pkg-b", "metric": 5},
+            }, "auditedScope": {
+                "manifest": "poetry.lock", "kind": "lockfile", "transitive": True,
+            }},
+        }},
+    }
+    payload = _osv_lockfile_clean_package("poetry.lock", "pkg-a", "1.0.0")
+    osv_stderr = (
+        'Skipping pkg-a: short commit hash "abc123" cannot be queried\n'
+        'Filtered 2 local/unscannable package/s from the scan.\n'
+    )
+    out = gld.LENS.collect(_ctx(
+        repo, _run(osv_scanner=payload, osv_stderr=osv_stderr), prev=prev))
+    vulns = out["digest"]["ecosystems"]["python"]["vulns"]
+    assert vulns["items"][prev_id_a].get("carriedForward") is True
+    assert vulns["items"][prev_id_b].get("carriedForward") is True
+    assert gld.LENS.diff(prev, out["digest"])["resolved"] == []
+    assert "did not individually name" in vulns["reason"]
+
+
+def test_lockfile_mixed_entries_same_package_not_audited_carried(tmp_path):
+    """One queryable + one unqueryable entry for the same name must not audit it."""
+    repo = _lockfile_repo(tmp_path, "poetry.lock")
+    prev_id = "deps:audit:python:duppkg:PYSEC-PRIOR"
+    prev = {
+        "detected": ["python"],
+        "ecosystems": {"python": {
+            "freshness": {"status": "not-collected", "reason": "policy", "items": {}},
+            "vulns": {"status": "partial", "items": {
+                prev_id: {"id": prev_id, "package": "duppkg", "metric": 5},
+            }, "auditedScope": {
+                "manifest": "poetry.lock", "kind": "lockfile", "transitive": True,
+            }},
+        }},
+    }
+    payload = json.dumps({
+        "results": [{
+            "source": {"path": "/abs/poetry.lock", "type": "lockfile"},
+            "packages": [
+                {"package": {"name": "duppkg", "version": "1.0.0", "ecosystem": "PyPI"}},
+                {"package": {"name": "duppkg", "version": "", "ecosystem": "PyPI"}},
+            ],
+        }],
+    })
+    out = gld.LENS.collect(_ctx(repo, _run(osv_scanner=payload), prev=prev))
+    vulns = out["digest"]["ecosystems"]["python"]["vulns"]
+    assert vulns["items"][prev_id].get("carriedForward") is True
+    assert prev_id not in gld.LENS.diff(prev, out["digest"])["resolved"]
+    gap = vulns.get("pinScopeGap")
+    assert gap is not None
+    assert "duppkg" in gap["unqueryable"]
+    assert vulns["auditCoverage"]["packagesAudited"] == 0
+
+
+def test_malformed_prev_audited_scope_carries_all(tmp_path):
+    """Malformed prior auditedScope.transitive must fail closed (carry-all)."""
+    prev_id = "deps:audit:python:pkg-a:PYSEC-A"
+    prev = {
+        "detected": ["python"],
+        "ecosystems": {"python": {
+            "freshness": {"status": "not-collected", "reason": "policy", "items": {}},
+            "vulns": {"status": "partial", "items": {
+                prev_id: {"id": prev_id, "package": "pkg-a", "metric": 5},
+            }, "auditedScope": {
+                "manifest": "poetry.lock", "kind": "lockfile", "transitive": "false",
+            }},
+        }},
+    }
+    repo = _lockfile_repo(tmp_path, "poetry.lock")
+    payload = _osv_lockfile_clean_package("poetry.lock", "pkg-a", "1.0.0")
+    out = gld.LENS.collect(_ctx(repo, _run(osv_scanner=payload), prev=prev))
+    vulns = out["digest"]["ecosystems"]["python"]["vulns"]
+    assert "audit scope changed" in vulns["reason"]
+    assert vulns["items"][prev_id].get("carriedForward") is True
+    assert prev_id not in gld.LENS.diff(prev, out["digest"])["resolved"]
+
+
+def test_audited_scope_helper_used_by_osv_and_pip_audit_producers(tmp_path):
+    repo_lock = _lockfile_repo(tmp_path, "poetry.lock")
+    out_lock = gld.LENS.collect(
+        _ctx(repo_lock, _run(osv_scanner=OSV_ALLCLEAN_ALLPACKAGES_JSON)))
+    assert out_lock["digest"]["ecosystems"]["python"]["vulns"]["auditedScope"] == (
+        gld._audited_scope("poetry.lock", "lockfile", True))
+
+    repo_req = _python_repo(tmp_path / "req", "filelock==3.19.1\n")
+    out_req = gld.LENS.collect(_ctx(repo_req, _run(pip_audit=PIP_AUDIT_JSON, pip_audit_exit=1)))
+    assert out_req["digest"]["ecosystems"]["python"]["vulns"]["auditedScope"] == (
+        gld._audited_scope("requirements.txt", "requirements", False))
 
 
 def test_manifest_switch_requirements_to_lockfile_carries_all(tmp_path):

@@ -1028,6 +1028,28 @@ def _select_python_audit_manifest(repo):
     return None
 
 
+_OSV_SKIP_PKG_RE = re.compile(r"^\s*Skipping\s+([^\s:]+):", re.MULTILINE)
+_OSV_FILTERED_COUNT_RE = re.compile(r"Filtered\s+(\d+)\s+local/unscannable")
+
+
+def _osv_skipped_packages(stderr):
+    """Parse osv-scanner stderr for per-package skips and filtered counts."""
+    text = stderr or ""
+    names = [m.group(1).strip() for m in _OSV_SKIP_PKG_RE.finditer(text)]
+    match = _OSV_FILTERED_COUNT_RE.search(text)
+    filtered_count = int(match.group(1)) if match else 0
+    return names, filtered_count
+
+
+def _audited_scope(manifest, kind, transitive):
+    """Canonical auditedScope dict for python vuln sections."""
+    return {
+        "manifest": manifest,
+        "kind": kind,
+        "transitive": bool(transitive),
+    }
+
+
 def _is_queryable_version(version):
     """True when a lockfile version string can be advisory-checked by osv-scanner."""
     if not isinstance(version, str) or not version:
@@ -1048,8 +1070,11 @@ def _prev_audited_scope(prev_section):
     if isinstance(scope, dict):
         kind = scope.get("kind")
         manifest = scope.get("manifest")
-        if isinstance(kind, str) and isinstance(manifest, str):
-            return (kind, bool(scope.get("transitive")), manifest)
+        transitive = scope.get("transitive")
+        if (isinstance(kind, str) and kind and isinstance(manifest, str) and manifest
+                and isinstance(transitive, bool)):
+            return (kind, transitive, manifest)
+        return ("__malformed__", False, "__malformed__")
     items = prev_section.get("items")
     if isinstance(items, dict) and items:
         return ("requirements", False, "requirements.txt")
@@ -1083,11 +1108,7 @@ def _finalize_osv_python_section(items, prev_section, audited_pkgs, pin_info,
         "argv": argv,
         "ratedBy": tool,
         "boundary": boundary,
-        "auditedScope": {
-            "manifest": manifest_rel,
-            "kind": kind,
-            "transitive": bool(transitive),
-        },
+        "auditedScope": _audited_scope(manifest_rel, kind, transitive),
     }
     if kind == "requirements":
         extra["coverageGap"] = dict(PYTHON_VULN_NO_RESOLVE_COVERAGE_GAP)
@@ -1242,6 +1263,13 @@ def collect_python_vulns_osv(ctx, repo):
     prev_section = _prev_part((ctx or {}).get("prevDigest"), "python", "vulns")
     used_ids = {}
     ambiguity_disclosures = []
+    unattributed_skips = False
+    if kind == "lockfile":
+        skip_names, filtered_count = _osv_skipped_packages(res.get("stderr") or "")
+        for skip_name in skip_names:
+            unqueryable.add(skip_name)
+        if filtered_count > len(skip_names):
+            unattributed_skips = True
 
     def _mark_audited(name, version):
         pkg_key = _pep503_canonical(name)
@@ -1355,6 +1383,8 @@ def collect_python_vulns_osv(ctx, repo):
                         item["severityKnown"] = known
                     item["receipt"] += " | " + receipt
 
+    audited_pkgs -= {_pep503_canonical(n) for n in unqueryable}
+
     contradiction = _vuln_contradiction(
         tool, 0, res.get("exit") == 1, raw_groups, items, ())
     if contradiction is not None:
@@ -1370,8 +1400,15 @@ def collect_python_vulns_osv(ctx, repo):
             "audit scope changed (%s/%s → %s/%s); all prior advisories carried forward, "
             "none resolved this sweep"
             % (prev_scope[0], prev_scope[2], kind, osv_type))
+    if unattributed_skips:
+        unattributed_disclosure = (
+            "osv-scanner filtered %d unscannable package(s) it did not individually name; "
+            "carrying all prior advisories forward" % filtered_count)
+        scope_change_disclosure = (
+            "%s; %s" % (scope_change_disclosure, unattributed_disclosure)
+            if scope_change_disclosure else unattributed_disclosure)
 
-    carry_all_prior = bool(ambiguity_disclosures) or scope_changed
+    carry_all_prior = bool(ambiguity_disclosures) or scope_changed or unattributed_skips
     finalize_kw = dict(
         kind=kind, transitive=transitive, manifest_rel=manifest_rel,
         unqueryable=tuple(sorted(unqueryable)),
@@ -1544,11 +1581,7 @@ def collect_python_vulns_pip_audit(ctx, repo):
                      "0 = unknown, which means unrated, NOT harmless",
         redLineGap=dict(PYTHON_VULN_PIP_AUDIT_RED_LINE_GAP),
         coverageGap=dict(PYTHON_VULN_PIP_AUDIT_NO_DEPS_COVERAGE_GAP),
-        auditedScope={
-            "manifest": "requirements.txt",
-            "kind": "requirements",
-            "transitive": False,
-        },
+        auditedScope=_audited_scope("requirements.txt", "requirements", False),
         ratedBy=tool,
         boundary=False)
 
