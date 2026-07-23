@@ -33,13 +33,14 @@ def tool_available(name):
     return shutil.which(name) is not None
 
 
-def _result(ok, exit_code, stdout, stderr, reason):
+def _result(ok, exit_code, stdout, stderr, reason, collector_cwd=None):
     return {
         "ok": ok,
         "exit": exit_code,
         "stdout": stdout or "",
         "stderr": stderr or "",
         "reason": reason,
+        "collectorCwd": collector_cwd,
     }
 
 
@@ -55,32 +56,34 @@ def _translate_invoke_result(res, argv, ok_exits):
     returncode = res.get("returncode")
     stdout = res.get("stdout", "")
     stderr = res.get("stderr", "")
+    collector_cwd = res.get("cwd")
 
     if outcome == "ok":
         # invoke emits "ok" only for returncode 0, but gate on ok_exits anyway so this
         # composes with the injected seam (which returns ok only when exit ∈ ok_exits).
         # A rc-0 run under an ok_exits that excludes 0 must read ok=False.
         if returncode in ok_exits:
-            return _result(True, returncode, stdout, stderr, None)
+            return _result(True, returncode, stdout, stderr, None, collector_cwd)
         return _result(False, returncode, stdout, stderr,
-                       "%s exited %s" % (argv0, returncode))
+                       "%s exited %s" % (argv0, returncode), collector_cwd)
 
     if outcome in ("nonzero-exit", "empty-output"):
         if returncode in ok_exits:
-            return _result(True, returncode, stdout, stderr, None)
+            return _result(True, returncode, stdout, stderr, None, collector_cwd)
         reason = res.get("reason") or "%s exited %s" % (argv0, returncode)
-        return _result(False, returncode, stdout, stderr, reason)
+        return _result(False, returncode, stdout, stderr, reason, collector_cwd)
 
     # truncated-output / capture-incomplete are FAILURES even when returncode is an
     # ok exit — an ok_exits match must never override a bounded-output tripwire.
     if outcome in ("tool-absent", "timeout", "spawn-failed",
                    "truncated-output", "capture-incomplete"):
         reason = res.get("reason") or "%s failed (%s)" % (argv0, outcome)
-        return _result(False, returncode, stdout, stderr, reason)
+        return _result(False, returncode, stdout, stderr, reason, collector_cwd)
 
     # Unknown / unexpected outcome — fail closed with a clear reason.
     return _result(False, returncode, stdout, stderr,
-                   "%s failed: unexpected invoke outcome %r" % (argv0, outcome))
+                   "%s failed: unexpected invoke outcome %r" % (argv0, outcome),
+                   collector_cwd)
 
 
 def run_tool(argv, ctx=None, timeout=DEFAULT_TIMEOUT, cwd=None, ok_exits=(0,),
@@ -150,10 +153,11 @@ def run_tool(argv, ctx=None, timeout=DEFAULT_TIMEOUT, cwd=None, ok_exits=(0,),
         exit_code = getattr(r, "returncode", None)
         stdout = getattr(r, "stdout", "")
         stderr = getattr(r, "stderr", "")
+        collector_cwd = os.path.realpath(cwd) if cwd else None
         if exit_code in ok_exits:
-            return _result(True, exit_code, stdout, stderr, None)
+            return _result(True, exit_code, stdout, stderr, None, collector_cwd)
         return _result(False, exit_code, stdout, stderr,
-                       "%s exited %s" % (argv0, exit_code))
+                       "%s exited %s" % (argv0, exit_code), collector_cwd)
 
     # PRODUCTION — route the real spawn through invoke's hardening. Must never raise.
     # invoke absolutizes ``targets`` under the repo, validates them, and inserts ``--`` —

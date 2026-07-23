@@ -360,6 +360,20 @@ def _norm_rel(repo, path):
     return _rel_posix(repo, path).lower()
 
 
+def _absolutize(collector_cwd, path):
+    """Resolve a collector-reported path (possibly cwd-relative) to an absolute
+    realpath, so downstream _rel_posix (which relpaths absolutes) yields a correct
+    repo-relative path even when the collector ran from a neutral cwd. Absolute
+    inputs and a missing collector_cwd are returned normalized/unchanged."""
+    if not path:
+        return path
+    if os.path.isabs(path):
+        return os.path.realpath(path)
+    if not collector_cwd:
+        return path
+    return os.path.realpath(os.path.join(collector_cwd, path))
+
+
 def _segments(rel_path):
     return [s for s in rel_path.split(CLUSTER_SEP) if s and s != "."]
 
@@ -1008,8 +1022,9 @@ class CouplingLens(object):
         payload = parsed.get("payload") or {}
         versions = adapters.depcruise_versions(payload)
         tracked_set = src_census.get("trackedSet") or set()
+        collector_cwd = res.get("collectorCwd")
         parsed_paths, dep_edges, untracked_filtered = _filter_depcruise_to_tracked(
-            repo, payload, tracked_set)
+            repo, payload, tracked_set, collector_cwd)
         # Dedup once (defect F2): a report listing the same module path twice must not
         # inflate len(parsed_paths), which feeds the cliff tripwire and modulesParsed.
         parsed_paths = _dedup_norm_paths(repo, parsed_paths)
@@ -1549,7 +1564,7 @@ def _js_targets(repo, src_census):
     return real or ["."]
 
 
-def _filter_depcruise_to_tracked(repo, payload, tracked_set):
+def _filter_depcruise_to_tracked(repo, payload, tracked_set, collector_cwd=None):
     """Keep only depcruise modules/edges whose paths are in the tracked census."""
     tracked_norm = {_norm_rel(repo, p) for p in (tracked_set or set())}
     modules_in = adapters.depcruise_parsed_modules(payload)
@@ -1558,15 +1573,20 @@ def _filter_depcruise_to_tracked(repo, payload, tracked_set):
     edges_out = []
     dropped = 0
     for path in modules_in:
-        if _norm_rel(repo, path) in tracked_norm:
-            modules_out.append(path)
+        abs_path = _absolutize(collector_cwd, path)
+        if _norm_rel(repo, abs_path) in tracked_norm:
+            modules_out.append(abs_path)
         else:
             dropped += 1
     for edge in edges_in:
-        f = _norm_rel(repo, edge.get("from", ""))
-        t = _norm_rel(repo, edge.get("to", ""))
-        if f in tracked_norm and t in tracked_norm:
-            edges_out.append(edge)
+        f_abs = _absolutize(collector_cwd, edge.get("from", ""))
+        t_abs = _absolutize(collector_cwd, edge.get("to", ""))
+        if (_norm_rel(repo, f_abs) in tracked_norm
+                and _norm_rel(repo, t_abs) in tracked_norm):
+            kept = dict(edge)
+            kept["from"] = f_abs
+            kept["to"] = t_abs
+            edges_out.append(kept)
         else:
             dropped += 1
     return modules_out, edges_out, dropped

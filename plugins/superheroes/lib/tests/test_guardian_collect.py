@@ -377,3 +377,32 @@ def test_run_tool_empty_targets_matches_no_targets_arg(tmp_path):
     a = gc.run_tool(["tool", "-x"], ctx={"run": run})
     b = gc.run_tool(["tool", "-x"], ctx={"run": run}, targets=())
     assert a == b
+
+
+def test_run_tool_production_surfaces_collector_cwd(monkeypatch, tmp_path):
+    repo = _make_repo(tmp_path / "repo")
+
+    def fake_invoke(tool, fixed_args, repo_arg, targets, *, run=None, timeout=None,
+                    **kwargs):
+        return {
+            "outcome": "ok", "returncode": 0, "stdout": "x", "stderr": "",
+            "cwd": "/neutral/collector",
+        }
+
+    monkeypatch.setattr(gc.gt, "invoke", fake_invoke)
+    out = gc.run_tool(["depcruise"], cwd=repo)
+    assert out["collectorCwd"] == "/neutral/collector"
+
+
+def test_run_tool_injected_surfaces_realpath_cwd(tmp_path):
+    repo = _make_repo(tmp_path / "repo")
+
+    def run(argv, **kwargs):
+        class R:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+        return R()
+
+    out = gc.run_tool(["tool"], ctx={"run": run}, cwd=repo)
+    assert out["collectorCwd"] == os.path.realpath(repo)

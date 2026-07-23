@@ -1097,6 +1097,54 @@ def test_healthy_parse_does_not_degrade(tmp_path):
     assert out["digest"]["counters"]["modulesParsed"] == 20
 
 
+def test_measure_js_normalizes_collector_cwd_relative_paths(tmp_path, monkeypatch):
+    """Cwd-relative depcruise module paths must normalize via collectorCwd, not collapse."""
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", '{"name":"cwd-relative-depcruise"}\n')
+    write(repo, "src/a.ts", "export const a = 1;\n")
+    write(repo, "src/b.ts", "export const b = 2;\n")
+    neutral = tmp_path / "neutral"
+    neutral.mkdir()
+    a_abs = os.path.join(repo, "src", "a.ts")
+    b_abs = os.path.join(repo, "src", "b.ts")
+    a_rel = os.path.relpath(a_abs, str(neutral))
+    b_rel = os.path.relpath(b_abs, str(neutral))
+    report = dc_report(
+        edges=[(a_rel, b_rel)],
+        extra_sources=[a_rel, b_rel],
+    )
+    real_run_tool = glc.gc.run_tool
+
+    def spy_run_tool(argv, ctx=None, **kwargs):
+        if argv and argv[0] == adapters.DEPCRUISE_BIN:
+            return {
+                "ok": True, "exit": 0, "stdout": report, "stderr": "",
+                "reason": None, "collectorCwd": str(neutral),
+            }
+        return real_run_tool(argv, ctx, **kwargs)
+
+    monkeypatch.setattr(glc.gt, "typescript_toolchain_node_path", lambda _repo, _majors: None)
+    monkeypatch.setattr(glc.gc, "run_tool", spy_run_tool)
+    out = lens().collect(ctx(repo, tmp_path))
+    assert st(out) in ("collected", "partial")
+    js = out["digest"]["ecosystems"]["js"]
+    assert js["status"] == "collected"
+    assert js["modulesParsed"] == 2
+
+    def spy_missing_cwd(argv, ctx=None, **kwargs):
+        if argv and argv[0] == adapters.DEPCRUISE_BIN:
+            return {
+                "ok": True, "exit": 0, "stdout": report, "stderr": "",
+                "reason": None, "collectorCwd": None,
+            }
+        return real_run_tool(argv, ctx, **kwargs)
+
+    monkeypatch.setattr(glc.gc, "run_tool", spy_missing_cwd)
+    collapsed = lens().collect(ctx(repo, tmp_path))
+    assert st(collapsed) == "not-collected"
+    assert adapters.OUTCOMES["module-count-collapse"][1] in collapsed["reason"]
+    assert collapsed["digest"] is None
+
 # ======================================================================================
 # 8. ecosystem presence / partial / Python honesty
 # ======================================================================================
