@@ -584,6 +584,19 @@ def test_parse_result_tail_read_garbled_large_file_is_unreadable(tmp_path, capsy
     assert rc == 0 and out == {"ok": False, "reason": "unreadable"}
 
 
+def test_parse_result_stdout_multibyte_split_at_tail_boundary(tmp_path, capsys):
+    # A multibyte char (é = 2 bytes) positioned so the 512KB tail window begins mid-char; the file is
+    # > MAX_STDOUT_TAIL_BYTES so the read truncates and is re-read in full — the trailing result JSON
+    # must survive intact.
+    p = tmp_path / "s.txt"
+    filler = "é" * 300000  # ~600KB of 2-byte chars -> forces truncation mid-char
+    p.write_text(filler + '{"findings":[{"severity":"Minor","title":"t","body":"b"}]}', encoding="utf-8")
+    rc = EA.main(["parse-result", "--engine", "codex", "--role", "review",
+                  "--stdout-path", str(p)])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0 and out["ok"] is True and out["findings"][0]["title"] == "t"
+
+
 # ---------------------------------------------------------------------------
 # #563 DoD 3: empty-prompt guard on build-argv --prompt-path
 

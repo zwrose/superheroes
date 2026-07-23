@@ -40,11 +40,12 @@ HISTORY_SHAPE_UNREPRESENTABLE = "history-shape-fix-unrepresentable"
 # Cursor dispatches a single composer model; codex model selection is resolved inline via model_registry.
 _CURSOR_MODEL = model_registry.dispatch_token("cursor", "composer-2.5")
 
-# #563 DoD5: the engine's result value always sits at the TAIL of its stdout, so bound the read to
-# the last MAX_STDOUT_TAIL_BYTES to keep a multi-GB stdout from OOMing and to cap scan work. Belt-
-# and-braces: 512 KB comfortably exceeds any real findings payload. If the bounded tail yields no
-# usable value (the value began before the boundary), we re-read the FULL file — the plausible-start
-# scan makes that affordable — so semantics are preserved, never traded for the bound.
+# #563 DoD5: a large engine stdout must not WEDGE the parse (the field incident: a >10-min scan on
+# ~1 MB of stdout). The plausible-start scan (see `_last_top_level_json`) is the real fix. This
+# bounded tail is a fast PATH for the common small case: read only the last MAX_STDOUT_TAIL_BYTES and
+# parse that. A read that had to truncate is NEVER trusted (see the parse-result branch): it is
+# re-read in FULL, so the bound never changes the result — it only avoids loading a small file's
+# worth extra in the common case. 512 KB comfortably exceeds any real findings payload.
 MAX_STDOUT_TAIL_BYTES = 512 * 1024
 
 
@@ -126,8 +127,12 @@ def _last_top_level_json(stdout, want_type):
     # exception storm (#563: the old scan threw one ValueError per stream-noise char and wedged on
     # large stdout). Record only the wanted type, but ALWAYS advance past a successfully decoded value
     # (i = end) so a whole value — including a top-level array — is consumed as a unit and its inner
-    # objects are NOT re-seen as top-level (preserving the pre-#563 semantics the #196 bare-array
-    # rescue depends on: a bare `[{...}]` must leave `_last_json_object` == None).
+    # objects are NOT re-seen as top-level (a top-level array is thereby consumed whole and its inner
+    # objects are NOT re-seen as top-level, so the #196 bare-array rescue still holds: a bare
+    # `[{...}]` leaves `_last_json_object` == None). This matches the pre-#563 result for every real
+    # engine payload; the one accepted divergence is a top-level *scalar/string* whose text embeds an
+    # empty-object array like `[{},{}]` — near-nil in practice, and restoring strict scalar-
+    # consumption parity would reopen the per-char exception storm this scan exists to close).
     dec = json.JSONDecoder()
     last = None
     i, n = 0, len(s)
@@ -461,10 +466,13 @@ def main(argv):
         else:
             _raw, _truncated = sys.stdin.read(), False
         res = parse_result(args.engine, args.role, _raw)
-        # If we only read a bounded tail and it produced no usable result, the real value may begin
-        # before the window — fall back to the full file (fail direction preserved: a genuinely
-        # garbled full read still parses `unreadable`).
-        if _truncated and not res.get("ok"):
+        # A truncated tail can only be TRUSTED when it is the whole stream; once the read was
+        # truncated the bounded window may have cut off the true final value's start (or contain an
+        # earlier ok-parsing object that is NOT the final leaf), so re-read the full file and use
+        # that — a truncated tail is never authoritative. The bounded read stays a fast path for the
+        # common (<= MAX_STDOUT_TAIL_BYTES) case; a larger stdout degrades to a full read (kept
+        # affordable by the plausible-start scan), never a wedge (#563 DoD5).
+        if _truncated:
             with open(args.stdout_path, encoding="utf-8", errors="ignore") as _fh:
                 res = parse_result(args.engine, args.role, _fh.read())
         sys.stdout.write(json.dumps(res) + "\n")
