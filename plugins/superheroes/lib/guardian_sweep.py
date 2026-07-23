@@ -541,10 +541,11 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
         try:
             out = lens.collect(ctx) or {}
             status, reason = guardian_lens.classify_collect(out)
+            boundary = guardian_lens.permanent_boundary(out)
         except guardian_lens.MalformedCollect as exc:
-            out, status, reason = {}, "not-collected", "malformed collect: %s" % exc
+            out, status, reason, boundary = {}, "not-collected", "malformed collect: %s" % exc, False
         except Exception as exc:
-            out, status, reason = {}, "not-collected", "collect raised: %s" % exc
+            out, status, reason, boundary = {}, "not-collected", "collect raised: %s" % exc, False
 
         if status == "not-collected":
             degraded_lenses.append(lens.degrade(reason))
@@ -712,8 +713,11 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
                 "cost": lens.cost,
             }
 
+        # Transient partials still withhold baseline on version change; permanent-boundary
+        # partials may seed a new collector version (structural limit, not transient failure).
         if status == "collected" or (
-                status == "partial" and not lens_new and cur_digest is not None):
+                status == "partial" and cur_digest is not None
+                and (not lens_new or boundary)):
             next_lenses[lens.name] = {
                 "collectorVersion": lens.collector_version,
                 "digest": cur_digest,

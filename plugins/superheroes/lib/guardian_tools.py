@@ -44,6 +44,10 @@ INSTALL_COMMANDS = {
     "knip": "npm install -g knip",
     "vulture": "pip install vulture",
     "pip-audit": "pip install pip-audit",
+    "osv-scanner": (
+        "brew install osv-scanner "
+        "(or: go install github.com/google/osv-scanner/v2/cmd/osv-scanner@latest)"
+    ),
 }
 
 # argv tail used to ask a resolved collector for its version.
@@ -56,6 +60,7 @@ VERSION_ARGS = {
     "knip": ("--version",),
     "vulture": ("--version",),
     "pip-audit": ("--version",),
+    "osv-scanner": ("--version",),
 }
 
 VERSION_TIMEOUT = 10
@@ -103,6 +108,9 @@ COLLECTOR_ENV_CODE_LOADING = frozenset({
 
 _NEUTRAL_COLLECTOR_CWD = None
 _NEUTRAL_COLLECTOR_CWD_LOCK = threading.Lock()
+
+_NEUTRAL_TOOL_CONFIGS = {}
+_NEUTRAL_TOOL_CONFIG_LOCK = threading.Lock()
 
 
 def _git_toplevel(cwd):
@@ -525,6 +533,48 @@ def neutral_collector_cwd(repo):
     if _realpath_is_under(result, repo_real):
         raise RuntimeError(
             "neutral collector cwd %r resolves inside the swept repo %r"
+            % (result, repo_real))
+    return result
+
+
+def _sanitize_tool_config_name(name):
+    """Reduce a tool label to a single safe filename component."""
+    if not isinstance(name, str) or name == "":
+        raise ValueError("tool config name must be a non-empty str, got %r" % (name,))
+    if "\0" in name:
+        raise ValueError("tool config name must not contain null bytes, got %r" % (name,))
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", name)
+    if safe in ("", ".", ".."):
+        safe = "_"
+    return safe
+
+
+def neutral_tool_config(repo, name):
+    """Absolute path to an empty, process-lifetime config file that is NOT in the swept repo."""
+    global _NEUTRAL_TOOL_CONFIGS
+    repo_real = os.path.realpath(repo)
+    tmp_base = tempfile.gettempdir()
+    if _realpath_is_under(tmp_base, repo_real):
+        raise RuntimeError(
+            "temp base %r resolves inside the swept repo %r — cannot create a "
+            "neutral tool config" % (tmp_base, repo_real))
+    safe_name = _sanitize_tool_config_name(name)
+    with _NEUTRAL_TOOL_CONFIG_LOCK:
+        path = _NEUTRAL_TOOL_CONFIGS.get(safe_name)
+        if path is None:
+            fd, path = tempfile.mkstemp(
+                prefix="superheroes-guardian-tool-config-%s-" % safe_name,
+                suffix=".toml",
+                dir=tmp_base)
+            os.close(fd)
+            _NEUTRAL_TOOL_CONFIGS[safe_name] = path
+        elif not os.path.isfile(path):
+            with open(path, "wb"):
+                pass
+        result = _NEUTRAL_TOOL_CONFIGS[safe_name]
+    if _realpath_is_under(result, repo_real):
+        raise RuntimeError(
+            "neutral tool config %r resolves inside the swept repo %r"
             % (result, repo_real))
     return result
 

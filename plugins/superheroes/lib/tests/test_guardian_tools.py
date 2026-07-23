@@ -9,6 +9,7 @@ import ast
 import json
 import os
 import shutil
+import tempfile
 import signal
 import stat
 import subprocess
@@ -100,6 +101,10 @@ def test_install_commands_cover_the_collector_tools():
         "knip": "npm install -g knip",
         "vulture": "pip install vulture",
         "pip-audit": "pip install pip-audit",
+        "osv-scanner": (
+            "brew install osv-scanner "
+            "(or: go install github.com/google/osv-scanner/v2/cmd/osv-scanner@latest)"
+        ),
     }
 
 
@@ -115,6 +120,7 @@ def test_version_args_cover_every_install_command_tool():
         "knip": ("--version",),
         "vulture": ("--version",),
         "pip-audit": ("--version",),
+        "osv-scanner": ("--version",),
     }
 
 
@@ -1191,6 +1197,54 @@ def test_neutral_collector_cwd_raises_when_temp_base_inside_repo(tmp_path, monke
     gt._NEUTRAL_COLLECTOR_CWD = None
     with pytest.raises(RuntimeError, match="temp base"):
         gt.neutral_collector_cwd(repo)
+
+
+# --- neutral_tool_config --------------------------------------------------------
+
+def test_neutral_tool_config_returns_absolute_empty_file(tmp_path):
+    repo = _init_repo(tmp_path)
+    path = gt.neutral_tool_config(repo, "osv-scanner")
+    assert os.path.isabs(path)
+    assert os.path.isfile(path)
+    assert os.path.getsize(path) == 0
+
+
+def test_neutral_tool_config_caches_per_name(tmp_path):
+    repo = _init_repo(tmp_path)
+    a1 = gt.neutral_tool_config(repo, "osv-scanner")
+    a2 = gt.neutral_tool_config(repo, "osv-scanner")
+    assert a1 == a2
+    other = gt.neutral_tool_config(repo, "other-tool")
+    assert other != a1
+
+
+def test_neutral_tool_config_recreates_deleted_file(tmp_path):
+    repo = _init_repo(tmp_path)
+    path = gt.neutral_tool_config(repo, "osv-scanner")
+    os.remove(path)
+    path2 = gt.neutral_tool_config(repo, "osv-scanner")
+    assert path2 == path
+    assert os.path.isfile(path2)
+    assert os.path.getsize(path2) == 0
+
+
+def test_neutral_tool_config_raises_when_temp_base_inside_repo(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    fake_tmp = os.path.join(repo, "tmpdir")
+    os.makedirs(fake_tmp)
+    monkeypatch.setattr(gt.tempfile, "gettempdir", lambda: fake_tmp)
+    gt._NEUTRAL_TOOL_CONFIGS.clear()
+    with pytest.raises(RuntimeError, match="temp base"):
+        gt.neutral_tool_config(repo, "osv-scanner")
+
+
+@pytest.mark.parametrize("evil_name", ["../../evil", "a/b", "..%2F"])
+def test_neutral_tool_config_traversal_name_stays_under_temp(tmp_path, evil_name):
+    repo = _init_repo(tmp_path)
+    tmp_base = tempfile.gettempdir()
+    path = gt.neutral_tool_config(repo, evil_name)
+    assert gt._realpath_is_under(path, tmp_base)
+    assert not gt._realpath_is_under(path, os.path.realpath(repo))
 
 
 def test_invoke_subprocess_bounded_truncates_oversized_stdout(tmp_path, monkeypatch):

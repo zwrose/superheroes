@@ -164,6 +164,28 @@ def test_classify_collect_collected_missing_digest_raises():
         gl.classify_collect({"candidates": []})
 
 
+@pytest.mark.parametrize("out", [
+    {"status": "partial", "permanentBoundary": 1, "reason": "x"},
+    {"status": "partial", "permanentBoundary": "yes", "reason": "x"},
+    {"status": "partial", "permanentBoundary": "True", "reason": "x"},
+    {"status": "partial", "permanentBoundary": [], "reason": "x"},
+    {"status": "collected", "permanentBoundary": True, "candidates": [], "digest": {}},
+    None,
+    "not-a-dict",
+])
+def test_permanent_boundary_fail_closed(out):
+    assert gl.permanent_boundary(out) is False
+
+
+def test_permanent_boundary_true_only_on_partial_with_bool_true():
+    out = {
+        "status": "partial",
+        "permanentBoundary": True,
+        "reason": "structural limit",
+    }
+    assert gl.permanent_boundary(out) is True
+
+
 def test_register_rejects_duplicate_name():
     lens_a = FixtureLens(name="dup")
     lens_b = FixtureLens(name="dup")
