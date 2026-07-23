@@ -142,19 +142,78 @@ def read_config(cwd, root=None):
     return _result("healthy", report_card_value=report_card, notes=notes)
 
 
-def _manifest_tags(repo):
-    """Map repo-root manifests to stack tags they back."""
-    tags = set()
-    if os.path.isfile(os.path.join(repo, "package.json")):
-        tags.update(("node", "js", "ts"))
-    if os.path.isfile(os.path.join(repo, "pyproject.toml")) or os.path.isfile(
-            os.path.join(repo, "requirements.txt")):
-        tags.add("python")
-    if os.path.isfile(os.path.join(repo, "Cargo.toml")):
-        tags.add("rust")
-    if os.path.isfile(os.path.join(repo, "go.mod")):
-        tags.add("go")
-    return tags
+_ECOSYSTEM_TAGS = {
+    "node": ("package.json",),
+    "js": ("package.json",),
+    "javascript": ("package.json",),
+    "ts": ("package.json", "tsconfig.json"),
+    "typescript": ("package.json", "tsconfig.json"),
+    "python": ("pyproject.toml", "requirements.txt", "setup.py", "setup.cfg"),
+    "py": ("pyproject.toml", "requirements.txt", "setup.py", "setup.cfg"),
+    "rust": ("Cargo.toml",),
+    "go": ("go.mod",),
+}
+
+_FRAMEWORK_TAGS = {
+    "nextjs": ("next",),
+    "next": ("next",),
+    "react": ("react",),
+    "mongodb": ("mongodb", "mongoose"),
+    "mongoose": ("mongodb", "mongoose"),
+}
+
+_ALL_ECOSYSTEM_MANIFESTS = tuple(sorted({
+    manifest for manifests in _ECOSYSTEM_TAGS.values() for manifest in manifests
+}))
+
+
+def _present_root_manifests(repo):
+    """Root manifest filenames from the ecosystem vocabulary that exist at repo root."""
+    present = set()
+    for name in _ALL_ECOSYSTEM_MANIFESTS:
+        if os.path.isfile(os.path.join(repo, name)):
+            present.add(name)
+    return present
+
+
+def _package_json_deps(repo):
+    """Dependency names from package.json, or None if indeterminate."""
+    path = os.path.join(repo, "package.json")
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.loads(fh.read())
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    deps = set()
+    for section in (
+            "dependencies", "devDependencies", "peerDependencies",
+            "optionalDependencies"):
+        block = data.get(section)
+        if isinstance(block, dict):
+            deps.update(block.keys())
+    return deps
+
+
+def _classify_stack_tag(tag, present_manifests, deps):
+    """Classify one stack tag → matched | mismatched | unverifiable."""
+    key = tag.strip().casefold()
+    if key in _ECOSYSTEM_TAGS:
+        if any(m in present_manifests for m in _ECOSYSTEM_TAGS[key]):
+            return "matched"
+        if present_manifests:
+            return "mismatched"
+        return "unverifiable"
+    if key in _FRAMEWORK_TAGS:
+        if deps is None:
+            return "unverifiable"
+        if any(d in deps for d in _FRAMEWORK_TAGS[key]):
+            return "matched"
+        return "unverifiable"
+    return "unverifiable"
 
 
 def _config_paths(config):
@@ -283,19 +342,28 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
             "receipt": "no stackTags in core.md",
         })
     else:
-        backed = _manifest_tags(repo)
-        matched, mismatched = [], []
+        present_manifests = _present_root_manifests(repo)
+        deps = _package_json_deps(repo)
+        matched, mismatched, unverifiable = [], [], []
         for t in tags:
-            if t in backed:
+            verdict = _classify_stack_tag(t, present_manifests, deps)
+            if verdict == "matched":
                 matched.append(t)
-            else:
+            elif verdict == "mismatched":
                 mismatched.append(t)
+            else:
+                unverifiable.append(t)
         if mismatched:
             status = "mismatch"
-            receipt = {"matched": matched, "mismatched": mismatched}
+        elif unverifiable:
+            status = "unverifiable"
         else:
             status = "match"
-            receipt = {"matched": matched, "mismatched": []}
+        receipt = {
+            "matched": matched,
+            "mismatched": mismatched,
+            "unverifiable": unverifiable,
+        }
         facts.append({"fact": "stack-tags", "status": status, "receipt": receipt})
 
     # 4. paths
