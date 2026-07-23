@@ -132,6 +132,42 @@ never drop a finding or a lens.
 > returns `unreadable`. A timed-out **reviewer** then takes the existing UFR-7 re-run-on-Claude path;
 > a timed-out **fixer** commits no external write and the fix falls open to Claude. A hang becomes a
 > bounded cost, never a stuck loop.
+>
+> **Hand-rolled engine dispatch — stdin form, empty-prompt guard, portable timeout (#563).** When a
+> builder hand-rolls an engine CLI dispatch (exactly when the adapter path fails), three verified
+> rules keep it from wedging:
+> 1. **Always feed the prompt from a real file over redirected stdin — `codex exec … - < promptfile`
+>    — never an inherited/open stdin.** codex `exec` reads its prompt from stdin when given `-`, no
+>    positional prompt, or even an empty-string positional; if that stdin is an open source that
+>    never delivers data or EOF (the inherited stdin of a headless dispatch with no `< file`
+>    redirect), codex **hangs forever**. An EOF-closed empty stdin (`< /dev/null`) does not hang — it
+>    errors fast. Repro'd 2026-07-23 against codex 0.144.1.
+> 2. **Reject an empty/missing prompt before dispatch.** `engine_adapter.py build-argv --prompt-path
+>    PATH` fails closed (emitting `{"ok":false,"reason":"empty-prompt",…}` instead of argv) unless
+>    PATH is a readable regular file with non-whitespace content. The caller MUST redirect **that same
+>    validated file** into the engine's stdin — validating one file and redirecting another (or none)
+>    reopens the hang. (The reviewer-scoped dispatch runner of the follow-up work couples validate +
+>    redirect in one step, closing the check/use window; a hand-rolled dispatch must couple them by
+>    hand.)
+> 3. **Bound the run with a portable timeout — macOS has no `timeout(1)`.** Use a perl fork+kill
+>    wrapper and a HIGH ceiling (≥900 s for a real engine run; never a borderline limit), redirecting
+>    engine output to a **file** (never `| tail`, which buffers a stall to look identical to progress):
+>    ```bash
+>    perl -e 'my $t=shift; my $to=0; my $p=fork; die unless defined $p; if(!$p){exec @ARGV or die $!}
+>      local $SIG{ALRM}=sub{$to=1; kill "KILL",$p}; alarm $t; waitpid $p,0; my $s=$?; alarm 0;
+>      exit 124 if $to; exit($s>>8) if ($s&127)==0; exit(128+($s&127))' \
+>      900 codex exec … - < promptfile > out.json 2> err.log
+>    ```
+>    (exit 124 = timed out.) Watch the process's **CPU-time column, not elapsed** — an engine CLI can
+>    sit at ~0% CPU for minutes and still be live.
+>
+> **Dispatch-runner scope boundary (#563).** A follow-up productizes an adapter-owned dispatch runner
+> for the **read-only reviewer role only** (auto-retry + liveness as machinery, not builder
+> discipline). The **fix/write path stays model-driven and host-gated**: its authorization depends on
+> the host permission-classifier gating the literal Bash `codex exec`/`cursor-agent` call, and a
+> Python-spawned subprocess would bypass that classification (CONVENTIONS `§7.5` — a completed
+> external result fails closed; engine *selection* fails open). Do not fold the write path into a
+> Python runner without a fresh authz design.
 
 After dispatch, wait for all five agents to return. Each writes its findings file to `$SESSION_DIR/round-<round>/`. The orchestrator does not read agent transcripts — only the JSON files.
 

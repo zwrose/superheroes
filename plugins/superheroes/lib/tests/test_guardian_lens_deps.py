@@ -3294,7 +3294,7 @@ def test_vitals_vuln_count_partial_python_derives_reason_from_section():
     assert "python vulns:" in reason
     assert "pip-audit" not in reason
     assert "#569" not in reason
-    assert identity is None
+    assert identity == ["python/vulns/unclassified-partial"]
 
 
 def test_vitals_vuln_count_partial_uses_section_reason_not_template():
@@ -3314,7 +3314,7 @@ def test_vitals_vuln_count_partial_uses_section_reason_not_template():
     value, reason, identity = gld.LENS.vitals(digest)["vulnCount"]
     assert value == 1
     assert reason == "python vulns: %s" % custom_reason
-    assert identity is None
+    assert identity == ["python/vulns/unclassified-partial"]
 
 
 def test_vitals_vuln_count_partial_without_reason_falls_back_generic():
@@ -3334,7 +3334,7 @@ def test_vitals_vuln_count_partial_without_reason_falls_back_generic():
     assert reason == "python vulns: partial"
     assert "pip-audit" not in reason
     assert "#569" not in reason
-    assert identity is None
+    assert identity == ["python/vulns/unclassified-partial"]
 
 
 def test_vitals_majors_behind_partial_freshness_derives_reason_from_section():
@@ -3463,6 +3463,16 @@ def test_vitals_vuln_count_partial_pin_scope_and_boundary_identity():
     _, _, boundary_id = gld.LENS.vitals(
         _vuln_partial_digest("python", boundary_section))["vulnCount"]
     assert "python/vulns/ambiguous-identity" in boundary_id
+
+
+def test_section_cause_tokens_unrecognized_shape_falls_to_sentinel():
+    """A partial section matching no known marker falls to the sentinel, never empty (#592)."""
+    assert gld._section_cause_tokens(
+        {"status": "partial", "reason": "mystery gap"}) == ["unclassified-partial"]
+    assert gld._section_cause_tokens("not a dict") == ["unclassified-partial"]
+    # A recognized marker is unaffected — the sentinel fires ONLY when otherwise empty.
+    assert gld._section_cause_tokens(
+        {"coverageGap": {"scope": "x"}}) == ["no-transitive-resolution"]
 
 
 def test_section_cause_tokens_excludes_findings_state_markers():
@@ -3681,6 +3691,16 @@ _VITAL_IDENTITY_TRIPWIRE_CASES = [
         "status": "collected",
         "items": {},
     }), id="freshness-missing-total"),
+    pytest.param("vulnCount", _vuln_partial_digest("python", {
+        "status": "partial",
+        "items": {"x": {"id": "x"}},
+        "reason": "unrecognized marker shape",
+    }), id="vuln-partial-unclassified-sentinel"),
+    pytest.param("majorsBehind", _fresh_mixed_digest("python", {
+        "status": "partial",
+        "reason": "unrecognized marker shape",
+        "items": {},
+    }), id="freshness-partial-unclassified-sentinel"),
 ]
 
 
@@ -3704,6 +3724,27 @@ def test_deps_vital_identity_reaches_comparability_reworded_prose():
         "python", dict(base, reason="severity source offline")))["vulnCount"]
     r2 = gld.LENS.vitals(_vuln_partial_digest(
         "python", dict(base, reason="ratings unavailable this sweep")))["vulnCount"]
+    assert r1[2] == r2[2]
+    _, comp1 = gv._interpret_vital_tuple(
+        r1[0], r1[1], identity=r1[2], lens_name="deps", vital_name="vulnCount")
+    _, comp2 = gv._interpret_vital_tuple(
+        r2[0], r2[1], identity=r2[2], lens_name="deps", vital_name="vulnCount")
+    assert gv._comparable_completeness(comp1, comp2)
+    assert gv.crossings(
+        {"vulnCount": 1}, {"vulnCount": 5},
+        prev_completeness={"vulnCount": comp1},
+        cur_completeness={"vulnCount": comp2})
+
+
+def test_deps_unclassified_sentinel_stays_comparable_and_crosses():
+    """DoD #592: an unrecognized-marker partial keys on the sentinel, so reworded prose stays
+    comparable across sweeps and a real drift crossing fires (over-alert, never silence)."""
+    base = {"status": "partial", "items": {"x": {"id": "x"}}}
+    r1 = gld.LENS.vitals(_vuln_partial_digest(
+        "python", dict(base, reason="mystery gap A")))["vulnCount"]
+    r2 = gld.LENS.vitals(_vuln_partial_digest(
+        "python", dict(base, reason="totally reworded mystery gap B")))["vulnCount"]
+    assert r1[2] == ["python/vulns/unclassified-partial"]
     assert r1[2] == r2[2]
     _, comp1 = gv._interpret_vital_tuple(
         r1[0], r1[1], identity=r1[2], lens_name="deps", vital_name="vulnCount")
