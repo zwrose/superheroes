@@ -164,6 +164,46 @@ def test_classify_collect_collected_missing_digest_raises():
         gl.classify_collect({"candidates": []})
 
 
+def test_classify_collect_partial_missing_reason_warns_stderr(capsys):
+    out = {"status": "partial"}
+    assert gl.classify_collect(out) == (
+        "partial", "partial reported without a reason (contract violation)")
+    captured = capsys.readouterr()
+    assert "guardian_lens:" in captured.err
+    assert "contract violation" in captured.err
+
+
+def test_classify_collect_not_collected_missing_reason_warns_stderr(capsys):
+    out = {"status": "not-collected"}
+    assert gl.classify_collect(out) == (
+        "not-collected", "not-collected reported without a reason (contract violation)")
+    captured = capsys.readouterr()
+    assert "guardian_lens:" in captured.err
+    assert "contract violation" in captured.err
+
+
+def test_classify_collect_unknown_status_warns_stderr(capsys):
+    out = {"status": "bogus"}
+    assert gl.classify_collect(out) == (
+        "not-collected", "invalid collect status: 'bogus'")
+    captured = capsys.readouterr()
+    assert "guardian_lens:" in captured.err
+    assert "contract violation" in captured.err
+
+
+def test_classify_collect_partial_happy_no_stderr(capsys):
+    out = {"status": "partial", "reason": "half"}
+    assert gl.classify_collect(out) == ("partial", "half")
+    captured = capsys.readouterr()
+    assert captured.err == ""
+
+
+def test_collect_statuses_single_home():
+    import guardian_collect
+    assert gl.COLLECT_STATUSES is guardian_collect.COLLECT_STATUSES
+    assert gl.COLLECT_STATUSES == ("collected", "partial", "not-collected")
+
+
 @pytest.mark.parametrize("out", [
     {"status": "partial", "permanentBoundary": 1, "reason": "x"},
     {"status": "partial", "permanentBoundary": "yes", "reason": "x"},
