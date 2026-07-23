@@ -50,6 +50,7 @@ if _LIB_DIR not in sys.path:
 import guardian_census  # noqa: E402
 import guardian_collect as gc                  # noqa: E402
 import guardian_coupling_adapters as adapters  # noqa: E402
+import guardian_tools as gt                    # noqa: E402
 import store_core                              # noqa: E402
 
 # --- identity + normalization (SSOT for the ids this lens mints) ---------------------
@@ -357,6 +358,20 @@ def _rel_posix(repo, path):
 def _norm_rel(repo, path):
     """Repo-relative, forward-slash, lower-cased path. Identity / cluster normalization."""
     return _rel_posix(repo, path).lower()
+
+
+def _absolutize(collector_cwd, path):
+    """Resolve a collector-reported path (possibly cwd-relative) to an absolute
+    realpath, so downstream _rel_posix (which relpaths absolutes) yields a correct
+    repo-relative path even when the collector ran from a neutral cwd. Absolute
+    inputs and a missing collector_cwd are returned normalized/unchanged."""
+    if not path:
+        return path
+    if os.path.isabs(path):
+        return os.path.realpath(path)
+    if not collector_cwd:
+        return path
+    return os.path.realpath(os.path.join(collector_cwd, path))
 
 
 def _segments(rel_path):
@@ -967,16 +982,20 @@ class CouplingLens(object):
             reason = "%s js: bad cruise targets (%s)" % (self.name, exc)
             return self._eco_fail("js", reason)
 
+        toolchain = gt.typescript_toolchain_node_path(
+            repo, adapters.TYPESCRIPT_SUPPORTED_MAJORS)
+        ts_toolchain_provided = toolchain is not None
+
         argv = adapters.depcruise_argv(abs_targets)
         res = gc.run_tool(argv, ctx, timeout=adapters.COLLECT_TIMEOUT, cwd=repo,
-                          ok_exits=(0,))
+                          ok_exits=(0,), extra_node_path=toolchain)
         after_cache = adapters.cache_paths_present(repo)
         wrote = set(after_cache) - set(before_cache)
         if wrote:
             reason = "%s js: %s (%s)" % (
                 self.name, adapters.OUTCOMES["repo-write"][1],
                 ", ".join(sorted(wrote)))
-            return self._eco_fail("js", reason)
+            return self._eco_fail("js", reason, ts_toolchain_provided)
 
         if not res.get("ok"):
             why = res.get("reason") or "dependency-cruiser failed"
@@ -989,7 +1008,7 @@ class CouplingLens(object):
             if adapters.is_ok(parsed.get("outcome")):
                 evidence = " (stdout was parseable but the run failed — not promoted)"
             reason = "%s js: %s%s%s" % (self.name, why, tail, evidence)
-            return self._eco_fail("js", reason)
+            return self._eco_fail("js", reason, ts_toolchain_provided)
 
         parsed = adapters.parse_depcruise_json(
             res.get("stdout") or "", returncode=res.get("exit") or 0)
@@ -999,13 +1018,14 @@ class CouplingLens(object):
             reason = "%s js: %s%s" % (
                 self.name, default_reason or outcome,
                 (" — " + parsed["detail"]) if parsed.get("detail") else "")
-            return self._eco_fail("js", reason)
+            return self._eco_fail("js", reason, ts_toolchain_provided)
 
         payload = parsed.get("payload") or {}
         versions = adapters.depcruise_versions(payload)
         tracked_set = src_census.get("trackedSet") or set()
+        collector_cwd = res.get("collectorCwd")
         parsed_paths, dep_edges, untracked_filtered = _filter_depcruise_to_tracked(
-            repo, payload, tracked_set)
+            repo, payload, tracked_set, collector_cwd)
         # Dedup once (defect F2): a report listing the same module path twice must not
         # inflate len(parsed_paths), which feeds the cliff tripwire and modulesParsed.
         parsed_paths = _dedup_norm_paths(repo, parsed_paths)
@@ -1014,7 +1034,7 @@ class CouplingLens(object):
         if collapse:
             reason = _collapse_reason(
                 self.name + " js", src_census, collapse, versions)
-            return self._eco_fail("js", reason)
+            return self._eco_fail("js", reason, ts_toolchain_provided)
 
         cliff = detect_cliff(_eco_prev_digest(prev, "js"), len(parsed_paths),
                              src_census["total"])
@@ -1024,7 +1044,7 @@ class CouplingLens(object):
                 "source census held at %d (a genuine shrink drops sources too)"
                 % (self.name, adapters.OUTCOMES["module-count-cliff"][1],
                    cliff["modules"], cliff["priorModules"], cliff["sources"]))
-            return self._eco_fail("js", reason)
+            return self._eco_fail("js", reason, ts_toolchain_provided)
 
         rows = _classify_edges(repo, dep_edges, src_census["workspaces"])
         # Tag rows with tool token for candidate minting later.
@@ -1047,6 +1067,7 @@ class CouplingLens(object):
             "sourcesCensused": src_census["total"],
             "modulesParsed": len(parsed_paths),
             "argv": argv,
+            "typescriptToolchainProvided": ts_toolchain_provided,
         }
         if untracked_filtered:
             section["untrackedFiltered"] = untracked_filtered
@@ -1181,7 +1202,15 @@ class CouplingLens(object):
         }
 
     @staticmethod
-    def _eco_fail(ecosystem, reason):
+    def _eco_fail(ecosystem, reason, typescript_toolchain_provided=None):
+        section = {
+            "status": "not-collected",
+            "reason": _safe_repo_text(reason, max_len=max(REPO_TEXT_MAX * 4, 800)),
+            "tool": (adapters.DEPCRUISE_TOOL if ecosystem == "js"
+                     else adapters.IMPORT_LINTER_TOOL),
+        }
+        if ecosystem == "js" and typescript_toolchain_provided is not None:
+            section["typescriptToolchainProvided"] = typescript_toolchain_provided
         return {
             "status": "not-collected",
             "reason": _safe_repo_text(reason, max_len=max(REPO_TEXT_MAX * 4, 800)),
@@ -1189,12 +1218,7 @@ class CouplingLens(object):
             "versions": {},
             "parsed_total": 0,
             "per_workspace": {},
-            "section": {
-                "status": "not-collected",
-                "reason": _safe_repo_text(reason, max_len=max(REPO_TEXT_MAX * 4, 800)),
-                "tool": (adapters.DEPCRUISE_TOOL if ecosystem == "js"
-                         else adapters.IMPORT_LINTER_TOOL),
-            },
+            "section": section,
         }
 
     # --------------------------------------------------------------- candidates/digest
@@ -1541,24 +1565,29 @@ def _js_targets(repo, src_census):
     return real or ["."]
 
 
-def _filter_depcruise_to_tracked(repo, payload, tracked_set):
+def _filter_depcruise_to_tracked(repo, payload, tracked_set, collector_cwd=None):
     """Keep only depcruise modules/edges whose paths are in the tracked census."""
-    tracked_norm = {_norm_rel(repo, p) for p in (tracked_set or set())}
+    tracked_rel = {_rel_posix(repo, p) for p in (tracked_set or set())}
     modules_in = adapters.depcruise_parsed_modules(payload)
     edges_in = adapters.depcruise_edges(payload)
     modules_out = []
     edges_out = []
     dropped = 0
     for path in modules_in:
-        if _norm_rel(repo, path) in tracked_norm:
-            modules_out.append(path)
+        abs_path = _absolutize(collector_cwd, path)
+        if _rel_posix(repo, abs_path) in tracked_rel:
+            modules_out.append(abs_path)
         else:
             dropped += 1
     for edge in edges_in:
-        f = _norm_rel(repo, edge.get("from", ""))
-        t = _norm_rel(repo, edge.get("to", ""))
-        if f in tracked_norm and t in tracked_norm:
-            edges_out.append(edge)
+        f_abs = _absolutize(collector_cwd, edge.get("from", ""))
+        t_abs = _absolutize(collector_cwd, edge.get("to", ""))
+        if (_rel_posix(repo, f_abs) in tracked_rel
+                and _rel_posix(repo, t_abs) in tracked_rel):
+            kept = dict(edge)
+            kept["from"] = f_abs
+            kept["to"] = t_abs
+            edges_out.append(kept)
         else:
             dropped += 1
     return modules_out, edges_out, dropped
