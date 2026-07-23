@@ -502,3 +502,166 @@ def test_build_argv_verify_missing_file(tmp_path, capsys):
              "--effort", "high", "--verify", "%s:%s" % (p, h)])
     out = json.loads(capsys.readouterr().out)
     assert out == {"ok": False, "reason": "staged-input-mismatch", "path": str(p)}
+
+
+# ---------------------------------------------------------------------------
+# #563 DoD 5a: plausible-start scan bounds raw_decode work (no per-char exception storm)
+
+
+def _counting_raw_decode(monkeypatch):
+    """Monkeypatch json.JSONDecoder.raw_decode with a call counter; return (count_getter, restore)."""
+    import json as _json
+    _orig = _json.JSONDecoder.raw_decode
+    calls = [0]
+
+    def _wrapped(self, s, idx=0):
+        calls[0] += 1
+        return _orig(self, s, idx)
+
+    monkeypatch.setattr(_json.JSONDecoder, "raw_decode", _wrapped)
+    return calls
+
+
+def test_last_json_object_noise_without_braces_bounded_raw_decode(monkeypatch):
+    calls = _counting_raw_decode(monkeypatch)
+    noise = ("plain noise line with no json chars\n" * 50000)  # ~1.5 MB
+    blob = noise + '{"findings": []}'
+    result = EA._last_json_object(blob)
+    assert result == {"findings": []}
+    assert calls[0] <= 5, "raw_decode should run only at trailing '{' (got %d)" % calls[0]
+
+
+def test_last_json_object_stray_braces_bounded_raw_decode(monkeypatch):
+    calls = _counting_raw_decode(monkeypatch)
+    noise_line = "log {debug} {trace}\n"
+    n_lines = 20000
+    blob = noise_line * n_lines + '{"findings": [{"severity":"Minor","title":"t","body":"b"}]}'
+    brace_count = blob.count("{") - 1  # exclude the final real object opener from rough bound
+    import time
+    t0 = time.monotonic()
+    result = EA._last_json_object(blob)
+    elapsed = time.monotonic() - t0
+    assert result is not None and result.get("findings")
+    assert calls[0] <= brace_count + 5, (
+        "raw_decode count %d should track '{' count (~%d), not chars" % (calls[0], brace_count))
+    assert elapsed < 20.0
+
+
+# ---------------------------------------------------------------------------
+# #563 DoD 5b: tail-read with full-file fallback
+
+
+def test_parse_result_tail_read_recovers_trailing_object(tmp_path, capsys):
+    finding = '{"findings":[{"severity":"Minor","title":"t","body":"b"}]}'
+    big = ("x" * (600 * 1024)) + finding
+    p = tmp_path / "stdout.txt"
+    p.write_text(big, encoding="utf-8")
+    rc = EA.main(["parse-result", "--engine", "codex", "--role", "review",
+                  "--stdout-path", str(p)])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0 and out["ok"] is True
+    assert out["findings"][0]["title"] == "t"
+
+
+def test_parse_result_tail_read_falls_back_when_object_before_window(tmp_path, capsys):
+    finding = '{"findings":[{"severity":"Minor","title":"early","body":"b"}]}'
+    big = finding + ("y" * (600 * 1024))
+    p = tmp_path / "stdout_early.json"
+    p.write_text(big, encoding="utf-8")
+    rc = EA.main(["parse-result", "--engine", "codex", "--role", "review",
+                  "--stdout-path", str(p)])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0 and out["ok"] is True
+    assert out["findings"][0]["title"] == "early"
+
+
+def test_parse_result_tail_read_garbled_large_file_is_unreadable(tmp_path, capsys):
+    p = tmp_path / "garbled.txt"
+    p.write_text(("not json at all\n" * 40000) + "{ not valid json", encoding="utf-8")
+    rc = EA.main(["parse-result", "--engine", "codex", "--role", "review",
+                  "--stdout-path", str(p)])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0 and out == {"ok": False, "reason": "unreadable"}
+
+
+def test_parse_result_stdout_multibyte_split_at_tail_boundary(tmp_path, capsys):
+    # A multibyte char (é = 2 bytes) positioned so the 512KB tail window begins mid-char; the file is
+    # > MAX_STDOUT_TAIL_BYTES so the read truncates and is re-read in full — the trailing result JSON
+    # must survive intact.
+    p = tmp_path / "s.txt"
+    filler = "é" * 300000  # ~600KB of 2-byte chars -> forces truncation mid-char
+    p.write_text(filler + '{"findings":[{"severity":"Minor","title":"t","body":"b"}]}', encoding="utf-8")
+    rc = EA.main(["parse-result", "--engine", "codex", "--role", "review",
+                  "--stdout-path", str(p)])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0 and out["ok"] is True and out["findings"][0]["title"] == "t"
+
+
+def test_parse_result_truncated_tail_never_trusts_echoed_findings(tmp_path, capsys):
+    # #563 tripwire: a >512KB final review object whose 700KB body pad pushes an echoed nested
+    # {"findings":[...]} (title "WRONG") into the last MAX_STDOUT_TAIL_BYTES, while the true outer
+    # findings (title "RIGHT") sit BEFORE the tail boundary. The old gate
+    # (`if _truncated and not res.get("ok")`) trusted the tail and returned ok:true+WRONG; the fix
+    # always re-reads the full file and returns RIGHT. Asserting "RIGHT" fails on a regression to the
+    # old gate. Measured 2026-07-23: file ~717KB, outer '{' at pos 23 (outside the 512KB tail).
+    pad = "P" * (700 * 1024)
+    blob = ('codex: starting review\n'
+            '{"findings":[{"severity":"Blocker","title":"RIGHT","body":"' + pad + '"}],'
+            '"echo":{"findings":[{"severity":"Minor","title":"WRONG","body":"x"}]}}')
+    p = tmp_path / "s.txt"
+    p.write_text(blob, encoding="utf-8")
+    rc = EA.main(["parse-result", "--engine", "codex", "--role", "review",
+                  "--stdout-path", str(p)])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0 and out["ok"] is True
+    assert len(out["findings"]) == 1
+    assert out["findings"][0]["title"] == "RIGHT"   # full-read wins; NOT the tail's echoed "WRONG"
+
+
+# ---------------------------------------------------------------------------
+# #563 DoD 3: empty-prompt guard on build-argv --prompt-path
+
+
+def _build_argv_with_prompt(tmp_path, capsys, prompt_path=None, extra_args=None):
+    args = ["build-argv", "--engine", "codex", "--role", "review",
+            "--effort", "low", "--model", "sonnet"]
+    if prompt_path is not None:
+        args += ["--prompt-path", str(prompt_path)]
+    if extra_args:
+        args += extra_args
+    rc = EA.main(args)
+    return rc, json.loads(capsys.readouterr().out)
+
+
+def test_build_argv_prompt_path_nonempty_file_emits_argv(tmp_path, capsys):
+    p = tmp_path / "prompt.txt"
+    p.write_text("review this diff\n", encoding="utf-8")
+    rc, out = _build_argv_with_prompt(tmp_path, capsys, p)
+    assert rc == 0 and isinstance(out, list) and out[0] == "codex"
+
+
+def test_build_argv_prompt_path_whitespace_only_fails_closed(tmp_path, capsys):
+    p = tmp_path / "empty.prompt"
+    p.write_text("   \n\t  ", encoding="utf-8")
+    rc, out = _build_argv_with_prompt(tmp_path, capsys, p)
+    assert rc == 0
+    assert out == {"ok": False, "reason": "empty-prompt", "detail": "empty", "path": str(p)}
+
+
+def test_build_argv_prompt_path_missing_fails_closed(tmp_path, capsys):
+    p = tmp_path / "no_such.prompt"
+    rc, out = _build_argv_with_prompt(tmp_path, capsys, p)
+    assert rc == 0
+    assert out == {"ok": False, "reason": "empty-prompt", "detail": "missing", "path": str(p)}
+
+
+def test_build_argv_prompt_path_directory_fails_closed(tmp_path, capsys):
+    rc, out = _build_argv_with_prompt(tmp_path, capsys, tmp_path)
+    assert rc == 0
+    assert out == {"ok": False, "reason": "empty-prompt", "detail": "not-regular-file",
+                  "path": str(tmp_path)}
+
+
+def test_build_argv_without_prompt_path_unchanged(capsys):
+    rc, out = _build_argv_with_prompt(None, capsys, prompt_path=None)
+    assert rc == 0 and isinstance(out, list) and out[0] == "codex"
