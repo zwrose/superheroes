@@ -352,3 +352,24 @@ gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" \
 ```
 
 If the post returns 422 despite running `resolve_diff_lines.py`, the script's stderr will have logged which comments were moved or dropped — re-check those, fix manually in `review-resolved.json`, and retry the `gh api ... reviews` call. Do **not** test line validity by posting real reviews iteratively; submitted reviews cannot be deleted via API.
+
+## Per-seat dispatch + the seat map (#510)
+
+The round-1 panel composes over live vendors via a per-seat **seat map** (`lib/seat_map.py`,
+computed once in the SKILL as `$SEAT_MAP`). Each of the five lens seats plus the grounding seat
+carries `{vendor, model, effort, tier, family, source}`:
+
+- **Read the seat's assignment** from `$SEAT_MAP.seats[<reviewer-name>]`. Dispatch a `claude`
+  seat as the named subagent with `model: <seat>.model`; dispatch a `codex`/`cursor` seat through
+  `engine_adapter.py` (read-only sandbox), threading `<seat>.model` as `engine_model` so a cursor
+  seat runs its assigned model (composer or grok) — never the hard-coded default. The persona and
+  `$RUBRIC` are identical across engines; the only per-seat difference is the dispatch target.
+- **The grounding seat** (`$SEAT_MAP.seats["grounding-seat"]`) is dispatched on its assigned vendor
+  — chosen to be independent of both the author (code) and narrative (PR text) families — running
+  `agents/grounding-seat.md`. It performs the PR self-claims / DoD-table check (SKILL step 8) and
+  returns an Important finding when a claim is unsupported, exactly as the prior inline check did.
+- **Independence keys on model family, not the dispatch CLI** (CONVENTIONS §7.5): a `cursor` review
+  seat runs grok (xai family), never composer (cursor family) — so it is a genuine cross-family
+  check even when the implementer was cursor/composer. The `verify()` result (the #547c
+  maker-family-vs-seat check) and every degradation / unhonorable-pin fallback are recorded in the
+  seat-map receipt, so a downgraded composition is visible at vet time, never silent.

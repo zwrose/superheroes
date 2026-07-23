@@ -597,7 +597,7 @@ charter's "dispatch provenance" section), not a separate journal.
 models from different families (the token-efficient `composer-2.5` is the cursor
 family; `cursor-grok-4.5` is the xAI family; it can also reach Anthropic/OpenAI
 models). Because of that, **panel independence keys on a model's family, not on
-the dispatch CLI** (consumed by the review-composition work, #510). The default
+the dispatch CLI** (consumed by the seat map, `lib/seat_map.py`, #510). The default
 cursor dispatch stays `composer-2.5`; premium/Anthropic models are never routed
 through cursor by default. Each dispatch carries a role-appropriate timeout
 ceiling and idle-stall watchdog (`engine_pref.resolve_timeout` / `resolve_idle`)

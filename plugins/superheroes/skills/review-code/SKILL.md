@@ -129,6 +129,7 @@ DEEP_MODEL=$(python3 "$MT" --role reviewer-deep --overrides "$OV" | jq -r '.mode
 MECH_MODEL=$(python3 "$MT" --role mechanical --overrides "$OV" | jq -r '.model // empty')
 SYNTH_MODEL=$(python3 "$MT" --role synthesis --overrides "$OV" | jq -r '.model // empty')  # fail-closed synthesis judge
 VERIFIER_MODEL=$(python3 "$MT" --role verifier --overrides "$OV" | jq -r '.model // empty')  # per-finding verification tier
+FIXER_MODEL=$(python3 "$MT" --role code-fixer --overrides "$OV" | jq -r '.model // empty')  # auto-fix loop fixer tier (#510)
 ```
 
 **Resolve per-role engine (FR-15).** Default `claude` when unset.
@@ -140,7 +141,15 @@ REVIEWER_ENGINE=$(echo "$EP" | jq -r '.reviewer // "claude"')
 IMPL_ENGINE=$(echo "$EP" | jq -r '.implementation // "claude"')
 ```
 
-When dispatching specialists, map each panel seat's **tier** to a model — `reviewer-deep` → `model: $DEEP_MODEL`, `reviewer` → `model: $REVIEWER_MODEL` (the auto-fix loop's per-round schedule is driver-owned; see `round-driver.md`). Triage and fixer subagents use `model: $MECH_MODEL`. An empty value means "inherit the session model" — omit the `model` arg in that case.
+**Compose the panel seat map (#510).** Per-seat engine+model over the live vendors — this replaces the single `$REVIEWER_ENGINE`-for-all-seats knob. `$AUTHOR_FAMILY` is the implementation engine's maker family; the narrative family is this orchestrator (`anthropic`). The map (per-seat tiers + resolved models, any pin/degradation disclosures) rides into the receipt; per-seat consumption is in `reference/auto-fix-loop.md`.
+
+```bash
+CONFIGURED=$(python3 -c "import sys;sys.path.insert(0,'$ROOT_DIR/lib');import preflight_probe,core_md;p=(core_md.read('.') or {}).get('enginePreferences') or {};print(','.join(preflight_probe.configured_cross_vendor_engines(p)))")
+AUTHOR_FAMILY=$(python3 -c "import sys;sys.path.insert(0,'$ROOT_DIR/lib');import model_registry as m;print(m.family_for('code-fixer','$IMPL_ENGINE') or '')")
+SEAT_MAP=$(python3 "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "$CONFIGURED" --author-family "$AUTHOR_FAMILY" --narrative-family anthropic --pr-number "${PR_NUMBER:-}" --head-sha "$(git rev-parse HEAD 2>/dev/null)")
+```
+
+When dispatching specialists, map each panel seat's **tier** to a model — `reviewer-deep` → `model: $DEEP_MODEL`, `reviewer` → `model: $REVIEWER_MODEL` (the auto-fix loop's per-round schedule is driver-owned; see `round-driver.md`). Triage subagents use `model: $MECH_MODEL`; the fixer uses `model: $FIXER_MODEL` (the `code-fixer` tier, #510). An empty value means "inherit the session model" — omit the `model` arg in that case.
 
 **Staleness self-check (first action).** Before the profile bootstrap and before dispatching anything, run the deterministic staleness/degraded self-check. It soft-fails (always exit 0) and **must never block the review** on drift — it only produces a non-blocking nudge surfaced at end of run. The root depends on the path: `--post` reads the PR-head worktree (`--root "$SESSION_DIR/repo"`), while branch/default paths read the working tree (default root, `.`). Run it only when a profile already resolved (`$EXISTS` is `true`) — a MISSING profile (`$LOCATION` is `none`) routes to the profile bootstrap below (which runs review-init/bootstrap), not to staleness:
 
@@ -305,7 +314,7 @@ Per-round dispatch is **driver-owned** — round 1 is the full `reviewer-deep` b
 
 ### 3. Dispatch Specialists in Parallel
 
-Launch the round's scheduled specialists (round 1: all five) in a **single message with parallel reviewer dispatches** so they run in parallel, each dispatched by its reviewer name (resolve dispatch via the host tool map). The specialist dispatch prompt template and dispatch instructions are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/auto-fix-loop.md` — read it when building each subagent prompt. When `$REVIEWER_ENGINE` is `codex` or `cursor`, dispatch each of the five specialists through `engine_adapter.py` (read-only sandbox) instead of the named subagent — the persona and `$RUBRIC` are unchanged, and each still returns its dimension's findings JSON; an unreadable or missing specialist slot is the same `cannot-certify` signal, re-run on Claude (UFR-7). When `$REVIEWER_ENGINE` is `claude`, dispatch the named subagents exactly as below.
+Launch the round's scheduled specialists (round 1: all five) in a **single message with parallel reviewer dispatches** so they run in parallel, each dispatched by its reviewer name (resolve dispatch via the host tool map). The specialist dispatch prompt template and dispatch instructions are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/auto-fix-loop.md` — read it when building each subagent prompt. Dispatch each seat through **its seat-map-assigned engine+model** (`$SEAT_MAP.seats[<reviewer>]` → `.vendor`/`.model`): a `claude` seat runs the named subagent at its tier model; a `codex`/`cursor` seat dispatches through `engine_adapter.py` (read-only sandbox) with that seat's resolved `.model` — persona and `$RUBRIC` unchanged, each returns its dimension's findings JSON. An unreadable or missing slot is the same `cannot-certify` signal, re-run on Claude (UFR-7). Per-seat dispatch + grounding-seat detail: `reference/auto-fix-loop.md`.
 
 **Per-agent substitutions** (reviewer name → findings filename stem → dimension label):
 
@@ -332,7 +341,7 @@ Read the five `$SESSION_DIR/round-<round>/findings-*.json` files (read-only path
 5. **Nit cap.** After dedupe, keep at most 5 Nits; overflow collapses to one summary entry.
 6. **Per-finding verification + synthesis merge** (never the session model). Stage ids, cluster, dispatch one verifier per cluster (`model: $VERIFIER_MODEL`, reviewer engine; #230 immunity), apply `verification.apply_verdicts`, then one synthesis judge (`model: $SYNTH_MODEL`) groups root causes and `verification.merge_and_rank` merges under a coverage guarantee — synthesis drops nothing. Full contract: `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/verification-pass.md`.
 7. **Author-justification post-filter (PR mode only, after verification).** Cross-reference `prior-comments.json`. May drop **only** a finding whose verifier `verdict` is present and not **CONFIRMED**, recording the prior justification quoted. A **CONFIRMED** finding with a prior justification **survives**, stamped `challenge: "author-justified"` (ledger-visible). A finding with no verdict is never dropped here. Rules: `round-driver.md`.
-8. **PR-body honesty check (PR mode only).** The review seat also verifies the PR body carries a valid **DoD disposition table** (the `superheroes:dod-table` marker) against the issue/spec — one row per Definition-of-Done bullet, each `done` (with an evidence pointer) or `deferred` (with a filed issue `#NNN` and a one-line reason). Append an **Important** finding (cited at the PR body, `tradeoff: true`, author-resolved — it is a judgment call the author closes by writing the table, not a mechanical fix) when the table is missing, or a row's evidence or deferral is empty or hollow. Branch mode has no PR body — skip. Contract: CONVENTIONS `§10.7`, `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md`.
+8. **PR-body honesty check (PR mode only).** This is the **grounding seat** (#510) — dispatched on its seat-map vendor (`$SEAT_MAP.seats["grounding-seat"].vendor`, the vendor that wrote neither the code nor the PR text) running `agents/grounding-seat.md`; it verifies the PR body carries a valid **DoD disposition table** (the `superheroes:dod-table` marker) against the issue/spec — one row per Definition-of-Done bullet, each `done` (with an evidence pointer) or `deferred` (with a filed issue `#NNN` and a one-line reason). Append an **Important** finding (cited at the PR body, `tradeoff: true`, author-resolved — it is a judgment call the author closes by writing the table, not a mechanical fix) when the table is missing, or a row's evidence or deferral is empty or hollow. Branch mode has no PR body — skip. Contract: CONVENTIONS `§10.7`, `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md`.
 
 Determine the verdict per the base rubric's "Verdict labels & mapping" (count post-dedupe, post-synthesis findings). For `/superheroes:review-code` the labels are **READY FOR PR** / **FIX BEFORE PR** / **MAJOR FIXES NEEDED**:
 
@@ -368,9 +377,9 @@ Runs when neither `--post` nor `--review-only` is set, and the profile's verify 
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-# Live vendors from the resolved reviewer + fixer engines (unique set). ["claude","codex"] → the
-# fix's auditor is codex when claude fixed it; ["claude"] alone → the loud degraded stamp.
-VENDORS=$(python3 -c 'import json,sys; print(json.dumps(sorted({v for v in sys.argv[1:] if v})))' "$REVIEWER_ENGINE" "$IMPL_ENGINE")
+# Live vendors from the seat map (family-aware; #510) — the pool the driver seats independent
+# fix-auditors from; falls back to the reviewer+impl engines if the seat map is unreadable.
+VENDORS=$(echo "$SEAT_MAP" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps(sorted(d.get("liveVendors") or [])))' 2>/dev/null || python3 -c 'import json,sys; print(json.dumps(sorted({v for v in sys.argv[1:] if v})))' "$REVIEWER_ENGINE" "$IMPL_ENGINE")
 python3 "$ROOT_DIR/lib/round_driver.py" next \
   --session-dir "$SESSION_DIR" \
   --diff-path "$SESSION_DIR/round-1/diff.txt" \
@@ -420,7 +429,7 @@ python3 "$ROOT_DIR/lib/review_result.py" write \
 
 (`$ACTION`, `$ROUND`, and `$REASON` are set on **every** terminal exit from the driver (`converged` → `exit_clean`; other terminal verdicts → `halt` with the receipt reason). `$RESULT_FILE` is the path supplied via `--result-file`. When absent, skip this step.)
 
-Print: final verdict, rounds run, commits created, findings fixed by severity, **the driver receipt's `certification` block** (shape, `fullPanel`, `independence`, any `note` — scoped certifying finish vs full-panel-confirmed, degraded disclosures), **`scriptRan` from the journal** (`round-receipt.json` → `scriptRan.invocations` and `byPhase` — the vet that the driver actually ran), **findings verification dropped (REFUTED)** as unsubstantiated, `was_blocking_tagged` drops, **findings downgraded from blocking to non-blocking** (`downgrades`; show `from → to`), **PLAUSIBLE-Critical `advisory: true` skips** (disclosed unproven blockers), auto-handled Minor/Nit, `unmatched`/`unverified`/`ambiguous`, and fixer `newIssuesNoticed`. If verify was `unverified`, state fixes were committed without a verify gate. Offer to push locally; do not push without confirmation.
+Print: final verdict, rounds run, commits created, findings fixed by severity, **the driver receipt's `certification` block** (shape, `fullPanel`, `independence`, any `note` — scoped certifying finish vs full-panel-confirmed, degraded disclosures), **the seat map** (`$SEAT_MAP` — per-seat tiers + resolved models + any pin/degradation disclosures), **`scriptRan` from the journal** (`round-receipt.json` → `scriptRan.invocations` and `byPhase` — the vet that the driver actually ran), **findings verification dropped (REFUTED)** as unsubstantiated, `was_blocking_tagged` drops, **findings downgraded from blocking to non-blocking** (`downgrades`; show `from → to`), **PLAUSIBLE-Critical `advisory: true` skips** (disclosed unproven blockers), auto-handled Minor/Nit, `unmatched`/`unverified`/`ambiguous`, and fixer `newIssuesNoticed`. If verify was `unverified`, state fixes were committed without a verify gate. Offer to push locally; do not push without confirmation.
 
 **Then, after the summary**, run the three non-blocking end-of-run steps from `## Learning Loop & Staleness Nudge`, in order: (1) the **staleness nudge** (print the doctor `message` only when non-null and `nudge_acked` is false), (2) the **learning-loop proposal** (`decisions.py analyze` → at most one user-gated `AskUserQuestion`, never auto-applied), then (3) the **provisional-profile confirmation** (interactive only — offer to confirm a `status: provisional` profile; skipped when headless, already stable, or already acked). All three are placed after the review output and none blocks.
 

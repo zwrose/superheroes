@@ -386,8 +386,10 @@ def _live_vendors(config):
 
 
 def _auditor_vendor(config, fixer_vendor):
-    """The auditor of a fix is NEVER the fixer's vendor. When only one vendor is live (cloud
-    sandbox) the audit still RUNS but is stamped degraded — never silently counted as independent."""
+    """The auditor of a fix is never the fixer's model FAMILY (CONVENTIONS §7.5 — independence keys
+    on family, not the dispatch CLI; a cursor-grok auditor IS independent of a cursor-composer fix).
+    When no family-independent vendor is live the audit still RUNS but is stamped degraded — never
+    silently counted as independent."""
     live = _live_vendors(config)
     fixer_fam = model_registry.family_for("code-fixer", fixer_vendor)
     if fixer_fam is None:
