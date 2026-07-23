@@ -1478,10 +1478,13 @@ def collect_python_vulns(ctx, repo):
         boundary=structural)
 
 
-PYTHON_VULN_PARTIAL_ISSUE_569 = (
-    "python vulnerability ratings are unavailable (pip-audit reports no severity) until "
-    "issue #569 lands a rated source"
-)
+def _partial_part_gap(ecosystem, part, section):
+    """Gap text for a partial ecosystem part — derived from the section's own reason."""
+    reason = section.get("reason") if isinstance(section, dict) else None
+    label = "%s %s" % (ecosystem, part)
+    if reason:
+        return "%s: %s" % (label, reason)
+    return "%s: partial" % label
 
 
 def _majors_behind_vital(digest):
@@ -1508,7 +1511,7 @@ def _majors_behind_vital(digest):
             gaps.append("%s freshness: %s" % (eco, fresh.get("reason") or status))
             continue
         if status == "partial":
-            gaps.append("%s freshness: partial (%s)" % (eco, fresh.get("reason") or ""))
+            gaps.append(_partial_part_gap(eco, "freshness", fresh))
             continue
         if status != "collected":
             gaps.append("%s freshness: %s" % (eco, status))
@@ -1538,7 +1541,6 @@ def _vuln_count_vital(digest):
         return (None, "digest has no ecosystems to measure")
     measured = []
     gaps = []
-    python_gap = False
     total = 0
     for eco in sorted(ecosystems):
         section = ecosystems.get(eco)
@@ -1565,17 +1567,10 @@ def _vuln_count_vital(digest):
             continue
         total += len(items)
         measured.append(eco)
-        if eco == "python" and status == "partial":
-            python_gap = True
+        if status == "partial":
+            gaps.append(_partial_part_gap(eco, "vulns", vulns))
     if not measured:
         return (None, "; ".join(gaps) or "no ecosystem vulnerabilities measured")
-    if python_gap:
-        # pip-audit is permanently partial until #569 — even a python-only repo publishes
-        # the count over what was measured with the gap named.
-        reason = PYTHON_VULN_PARTIAL_ISSUE_569
-        if gaps:
-            reason = "%s; %s" % (reason, "; ".join(gaps))
-        return (total, reason)
     if gaps:
         return (total, "; ".join(gaps))
     return (total, None)

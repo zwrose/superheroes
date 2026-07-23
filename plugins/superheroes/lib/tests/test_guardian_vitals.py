@@ -916,16 +916,18 @@ def test_partial_lens_status_publishes_usable_digest_as_partial(tmp_path):
     assert "duplicationPercent" not in out["notCollected"]
 
 
-def test_partial_deps_lens_python_vulns_publishes_count_with_issue_569(tmp_path):
+def test_partial_deps_lens_python_vulns_publishes_count_with_derived_gap(tmp_path):
     import guardian_lens_deps as deps_mod
     repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
     vuln_id = "deps:audit:python:foo:PYSEC-2020-1"
+    section_reason = "some advisories unrated"
     digest = {
         "ecosystems": {
             "python": {
                 "vulns": {
                     "status": "partial",
                     "items": {vuln_id: {"id": vuln_id}},
+                    "reason": section_reason,
                 },
             },
         },
@@ -941,7 +943,10 @@ def test_partial_deps_lens_python_vulns_publishes_count_with_issue_569(tmp_path)
     })
     assert out["vitals"]["vulnCount"] == 1
     assert out["completeness"]["vulnCount"]["state"] == "partial"
-    assert "#569" in out["completeness"]["vulnCount"]["reason"]
+    assert section_reason in out["completeness"]["vulnCount"]["reason"]
+    assert "python vulns:" in out["completeness"]["vulnCount"]["reason"]
+    assert "pip-audit" not in out["completeness"]["vulnCount"]["reason"]
+    assert "#569" not in out["completeness"]["vulnCount"]["reason"]
     assert "vulnCount" not in out["notCollected"]
 
 
