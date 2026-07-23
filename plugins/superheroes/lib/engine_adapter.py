@@ -177,7 +177,7 @@ def _read_stdout_tail(path, max_bytes):
         return fh.read().decode("utf-8", errors="ignore"), True
 
 
-def _prompt_path_ok(path):
+def prompt_path_ok(path):
     """(ok, reason). A dispatch prompt must be a readable REGULAR file with non-whitespace content.
     Everything else fails closed so an empty/absent prompt never reaches an engine that then blocks
     reading stdin (#563 stdin-hang repro: codex `exec` told to read stdin + an open/empty stdin =
@@ -416,7 +416,7 @@ def _cmd_build_argv(args):
             return 0
 
     if args.prompt_path is not None:
-        ok, why = _prompt_path_ok(args.prompt_path)
+        ok, why = prompt_path_ok(args.prompt_path)
         if not ok:
             sys.stdout.write(json.dumps(
                 {"ok": False, "reason": "empty-prompt", "detail": why,

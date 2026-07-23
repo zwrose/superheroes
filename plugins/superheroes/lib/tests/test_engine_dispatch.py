@@ -87,6 +87,7 @@ def test_double_forfeit_no_third_attempt(tmp_path):
     assert res["reason"] == "forfeited"
     assert res["forfeited"] is True
     assert res["attempts"] == 2
+    assert res.get("disclosure")
     assert len(fake.calls) == 2
 
 
@@ -101,12 +102,12 @@ def test_unreadable_both_attempts_forfeits(tmp_path):
     )
     assert res["forfeited"] is True
     assert res["attempts"] == 2
+    assert res.get("disclosure")
 
 
 def test_invalid_empty_prompt_zero_attempts_no_spawn(tmp_path):
     prompt_path = tmp_path / "empty.txt"
     prompt_path.write_text("   \n\t  ", encoding="utf-8")
-    fake = FakeRunner([])
     res = ED.dispatch_review(
         "codex", model="sonnet", effort="high",
         prompt_path=str(prompt_path), run_engine=_never_call,
@@ -115,11 +116,9 @@ def test_invalid_empty_prompt_zero_attempts_no_spawn(tmp_path):
     assert res["reason"] == "unrunnable"
     assert res["detail"].startswith("prompt-")
     assert res["attempts"] == 0
-    assert len(fake.calls) == 0
 
 
 def test_unrunnable_engine_config_zero_attempts(tmp_path):
-    fake = FakeRunner([])
     res = ED.dispatch_review(
         "cursor", model="fable", effort="composer",
         prompt_path=_valid_prompt(tmp_path), run_engine=_never_call,
@@ -127,7 +126,6 @@ def test_unrunnable_engine_config_zero_attempts(tmp_path):
     assert res["reason"] == "unrunnable"
     assert res["detail"] == "engine-config"
     assert res["attempts"] == 0
-    assert len(fake.calls) == 0
 
 
 def test_timeout_mid_stream_partial_output_rejected(tmp_path):
@@ -197,13 +195,51 @@ def test_liveness_heartbeats(tmp_path, monkeypatch):
     assert "stdout_bytes" in record
 
 
-def test_process_group_cleanup_on_timeout(tmp_path):
-    argv = ["python3", "-c", "import time; time.sleep(30)"]
+def test_insert_skip_git_check_passthrough_and_codex():
+    cursor_argv = ["cursor-agent", "-p"]
+    assert ED._insert_skip_git_check(cursor_argv) == cursor_argv
+    codex_argv = ["codex", "exec", "--sandbox", "read-only", "-"]
+    out = ED._insert_skip_git_check(codex_argv)
+    assert out[-1] == "-"
+    assert out[-2] == "--skip-git-repo-check"
+
+
+def test_run_engine_spawn_failure_nonexistent_binary(tmp_path):
     stdout, timed_out, rc, _err = ED._run_engine(
-        argv, b"", 1, lambda _e, _n: None, str(tmp_path),
+        ["this-binary-does-not-exist-563"], b"", 5, lambda _e, _n: None, str(tmp_path),
+    )
+    assert timed_out is False
+    assert rc == 127
+
+
+def test_run_engine_timeout_kills_descendants(tmp_path):
+    # child creates a grandchild (same session) that ignores SIGTERM and sleeps; on timeout the
+    # whole group must die (Fix 1 escalates to SIGKILL for the group, not just the leader).
+    marker = tmp_path / "gc.pid"
+    code = (
+        "import os,signal,time,sys\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "pid=os.fork()\n"
+        "if pid==0:\n"
+        "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "    open(%r,'w').write(str(os.getpid()))\n"
+        "    time.sleep(60)\n"
+        "else:\n"
+        "    time.sleep(60)\n" % str(marker)
+    )
+    out, timed_out, rc, err = ED._run_engine(
+        ["python3", "-c", code], b"", 2, lambda e, n: None, str(tmp_path),
     )
     assert timed_out is True
-    assert rc is not None
+    import time as _t
+    _t.sleep(1)
+    gc = int(marker.read_text())
+    dead = False
+    try:
+        os.kill(gc, 0)
+    except OSError:
+        dead = True
+    assert dead, "descendant survived the group kill"
 
 
 def test_reviewer_only_no_write_dispatch_reachable(tmp_path):

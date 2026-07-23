@@ -5,7 +5,7 @@ READ-ONLY REVIEWER ROLE ONLY. The fix/write path stays model-driven and host-gat
 Python-spawned subprocess bypasses the host permission-classifier the write-path authz depends on
 (CONVENTIONS §7.5: engine *selection* fails open; a completed external *result* fails closed). This
 module is the effectful counterpart to engine_adapter's pure core: it composes build_argv +
-parse_result + _prompt_path_ok, spawns the engine in its own process group with a bounded timeout,
+parse_result + prompt_path_ok, spawns the engine in its own process group with a bounded timeout,
 emits liveness heartbeats, detects terminal forfeit (timeout OR unreadable parse), and retries ONCE
 tight-inline before forfeiting to the caller (which falls open to Claude). Never raises to its caller.
 """
@@ -24,7 +24,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
-import engine_adapter  # noqa: E402  build_argv, parse_result, _prompt_path_ok — the pure core
+import engine_adapter  # noqa: E402  build_argv, parse_result, prompt_path_ok — the pure core
 
 # The adopted mode-7 hardening (#563): a dispatched one-shot reviewer must ignore the CLI's
 # SessionStart/skill-selection bootstrap that otherwise hijacks codex into skill-selection. Verified
@@ -39,6 +39,10 @@ ANTIHIJACK_PREAMBLE = (
 RETRY_MIN_TIMEOUT = 900     # DoD 2: the tight-inline retry gets a generous ceiling (never borderline)
 HEARTBEAT_INTERVAL = 10     # DoD 4: seconds between liveness heartbeats (time-based, not output-based)
 _STDERR_TAIL = 4096
+MAX_STDOUT_CAPTURE = 8 * 1024 * 1024   # keep only the last 8 MB of engine stdout — the result JSON
+# is at the TAIL (parse_result reads the tail), and an unbounded read would let a runaway engine OOM
+# the runner before it can return the structured forfeit that triggers the Claude fall-open (#563).
+MAX_STDERR_CAPTURE = 64 * 1024
 
 
 def _insert_skip_git_check(argv):
@@ -49,18 +53,21 @@ def _insert_skip_git_check(argv):
     return argv
 
 
-def _kill_group(proc):
-    """Kill the process's whole group (TERM, escalate to KILL), then close its pipes. Never raises."""
+def _cleanup(proc, pgid):
+    """Terminate any lingering members of the child's process group (TERM then KILL), reap the
+    leader, and close the pipes. Safe whether the leader already exited (this sweeps surviving
+    descendants — codex spawns MCP-worker children) or is still running (a timeout kill). Always
+    escalates to SIGKILL regardless of the leader's status, so a SIGTERM-ignoring descendant cannot
+    linger. Never raises."""
     for sig in (signal.SIGTERM, signal.SIGKILL):
         try:
-            os.killpg(os.getpgid(proc.pid), sig)
+            os.killpg(pgid, sig)
         except Exception:
             pass
         try:
-            proc.wait(timeout=3)
-            break
+            proc.wait(timeout=2)
         except Exception:
-            continue
+            pass
     for p in (proc.stdin, proc.stdout, proc.stderr):
         try:
             p.close()
@@ -80,6 +87,8 @@ def _run_engine(argv, prompt_bytes, timeout, progress_cb, cwd):
     except Exception as exc:
         return "", False, 127, ("spawn-failed: %s" % exc)[:_STDERR_TAIL]
 
+    pgid = proc.pid  # start_new_session makes the child its own process-group leader (pgid == pid)
+
     def _feed():
         try:
             proc.stdin.write(prompt_bytes)
@@ -94,16 +103,18 @@ def _run_engine(argv, prompt_bytes, timeout, progress_cb, cwd):
     out = bytearray()
     err = bytearray()
 
-    def _drain(stream, sink):
+    def _drain(stream, sink, cap):
         try:
             for chunk in iter(lambda: stream.read(4096), b""):
                 sink.extend(chunk)
+                if len(sink) > cap:
+                    del sink[:len(sink) - cap]   # keep the last `cap` bytes (result is at the tail)
         except Exception:
             pass
 
     wt = threading.Thread(target=_feed, daemon=True)
-    ot = threading.Thread(target=_drain, args=(proc.stdout, out), daemon=True)
-    et = threading.Thread(target=_drain, args=(proc.stderr, err), daemon=True)
+    ot = threading.Thread(target=_drain, args=(proc.stdout, out, MAX_STDOUT_CAPTURE), daemon=True)
+    et = threading.Thread(target=_drain, args=(proc.stderr, err, MAX_STDERR_CAPTURE), daemon=True)
     for t in (wt, ot, et):
         t.start()
 
@@ -123,14 +134,9 @@ def _run_engine(argv, prompt_bytes, timeout, progress_cb, cwd):
             break
         if now - start >= timeout:
             timed_out = True
-            _kill_group(proc)
             break
         time.sleep(0.2)
-
-    try:
-        proc.wait(timeout=5)
-    except Exception:
-        _kill_group(proc)
+    _cleanup(proc, pgid)              # always: sweep the group (TERM->KILL), reap, close pipes
     for t in (ot, et, wt):
         t.join(timeout=2)
     returncode = proc.returncode
@@ -158,6 +164,22 @@ def _progress_writer(progress_path):
 def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
                     schema_path=None, timeout=RETRY_MIN_TIMEOUT, retry_timeout=RETRY_MIN_TIMEOUT,
                     progress_path=None, run_engine=_run_engine):
+    """Reviewer-scoped dispatch. Never raises: any unexpected internal failure (build_argv,
+    mkdtemp, the injected run_engine, parse_result) is converted to a structured fall-open result so
+    the caller always sees JSON and can fall open to Claude."""
+    try:
+        return _dispatch_review_impl(
+            engine, model=model, effort=effort, engine_model=engine_model, prompt_path=prompt_path,
+            schema_path=schema_path, timeout=timeout, retry_timeout=retry_timeout,
+            progress_path=progress_path, run_engine=run_engine)
+    except Exception as exc:
+        return {"ok": False, "reason": "unrunnable", "detail": "internal-%s" % type(exc).__name__,
+                "attempts": 0, "forfeited": False}
+
+
+def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_path,
+                          schema_path=None, timeout=RETRY_MIN_TIMEOUT, retry_timeout=RETRY_MIN_TIMEOUT,
+                          progress_path=None, run_engine=_run_engine):
     """Reviewer-scoped dispatch. The role is HARD-CODED 'review' (read-only sandbox) — this API
     cannot emit a workspace-write dispatch. Returns exactly one of:
       {ok:True,  findings:[...], attempts:N}
@@ -167,7 +189,7 @@ def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
     forfeits the attempt WITHOUT parsing partial stdout. Never raises."""
     role_kind = "review"  # hard-coded; not caller-controllable — the reviewer-only guarantee
 
-    ok, why = engine_adapter._prompt_path_ok(prompt_path)
+    ok, why = engine_adapter.prompt_path_ok(prompt_path)
     if not ok:
         return {"ok": False, "reason": "unrunnable", "detail": "prompt-%s" % why,
                 "attempts": 0, "forfeited": False}
