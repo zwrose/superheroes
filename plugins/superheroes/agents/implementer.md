@@ -85,5 +85,7 @@ order is the likeliest defect source, so catching one early is high-value.
 
 - Work **test-first** where the order calls for it.
 - Run the commands the order names and **capture their raw output** as your receipts.
-- Return exactly three things: the **diff** you produced, the **raw receipts**, and any **findings**
-  (needs outside your scope, failures, ambiguities). Nothing more — no verdict, no "ready."
+- Return the **diff** you produced, the **raw receipts**, any **findings** (needs outside your scope,
+  failures, ambiguities), and any **echo your order's rules require** — the per-edge disposition of an
+  enumerated fail-closed surface (validity rule 2) and the echo of an order-authorized test change.
+  Nothing beyond these — no verdict, no "ready."
