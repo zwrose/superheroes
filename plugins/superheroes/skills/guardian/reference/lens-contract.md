@@ -35,8 +35,8 @@ vital name to a 2-tuple:
 A **partial** reading MAY be a 3-tuple `(value, reason, identity)` where `identity` is a
 list of stable `"<ecosystem>/<part>/<cause>"` tokens used for cross-sweep
 drift-comparability. The `reason` prose is human-only and may be reworded freely without
-affecting comparability. A 2-tuple partial (no identity) is treated as non-comparable
-(fail-closed).
+affecting comparability. When a partial basis matches no recognized cause marker, the lens
+emits the stable `"<ecosystem-or-lens>/<part>/unclassified-partial"` **sentinel** rather than poisoning `identity` to a non-comparable state — an unclassifiable partial over-alerts (stays comparable), it never silences the drift comparison (#592, fail-direction ruling). A 2-tuple partial (no identity) is treated as non-comparable (fail-closed) at the `guardian_vitals` layer, reserved for malformed completeness *entries* — a contract violation, not an unclassified basis.
 
 The lens owns its digest shape; `guardian_vitals` owns vital names, thresholds, and the
 completeness rule. Neither reaches into the other. A lens without `vitals()` contributes

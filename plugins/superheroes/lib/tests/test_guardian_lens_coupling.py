@@ -2422,3 +2422,15 @@ def test_coupling_vitals_partial_identity_stable_across_status_prose_reword():
     id_b = glc.LENS.vitals(digest_b)["couplingEdges"][2]
     assert id_a == id_b
     assert id_a == ["py/coupling/not-collected"]
+
+
+def test_coupling_vitals_incomplete_sections_always_emit_nonempty_identity():
+    """Every incomplete coupling section emits a comparable identity — never empty/None (#592)."""
+    for bad in ("not-a-dict", {"status": "mystery"}, {}):
+        digest = _vitals_digest(5, ecosystems={
+            "js": {"status": "collected"},
+            "py": bad,
+        })
+        reading = glc.LENS.vitals(digest)["couplingEdges"]
+        assert len(reading) == 3, reading
+        assert reading[2]  # identity is a non-empty list
