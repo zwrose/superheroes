@@ -948,6 +948,17 @@ def _parse_requirements_pins(req_abs):
         if raw_bytes.startswith(b"\xef\xbb\xbf"):
             raw_bytes = raw_bytes[3:]
         text = raw_bytes.decode("utf-8")
+        if truncated:
+            # Truncation can preserve a physical line ending in "\" while cutting its
+            # continuation payload. Drop that incomplete final logical line.
+            physical = text.splitlines()
+            if physical and physical[-1].rstrip().endswith("\\"):
+                cut = len(physical)
+                while cut > 0 and physical[cut - 1].rstrip().endswith("\\"):
+                    cut -= 1
+                text = "\n".join(physical[:cut])
+                if text:
+                    text += "\n"
     except (OSError, ValueError) as exc:
         return {
             "pins": pins,
@@ -1041,11 +1052,6 @@ def _finalize_osv_python_section(items, prev_section, audited_pkgs, pin_info,
             extra["pinScopeGap"]["conditionalCount"] = len(conditional)
         if pin_info.get("truncated"):
             extra["pinScopeGap"]["truncated"] = True
-        include_note = ""
-        if pin_info.get("hasIncludes"):
-            include_note = (
-                "; requirements.txt contains -r/-c includes — nested requirements the "
-                "scan never saw are not audited")
         note_parts = []
         if unpinned:
             note_parts.append(PYTHON_VULN_UNPINNED_AUDIT_NOTE)
@@ -1053,7 +1059,12 @@ def _finalize_osv_python_section(items, prev_section, audited_pkgs, pin_info,
             note_parts.append(
                 "some requirements carry environment markers (conditional install) and "
                 "are not exactly pinned — their prior advisories are never resolved")
-        reason_parts.append("%s%s" % ("; ".join(note_parts), include_note))
+        if pin_info.get("hasIncludes"):
+            note_parts.append(
+                "requirements.txt contains -r/-c includes — nested requirements the scan "
+                "never saw are not audited")
+        if note_parts:
+            reason_parts.append("; ".join(note_parts))
     if ambiguity_disclosures:
         reason_parts.append(
             "ambiguous advisory identity (%s) — current findings are reported under fresh "

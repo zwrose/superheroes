@@ -747,6 +747,51 @@ def test_truncated_requirements_discards_partial_final_line(tmp_path, monkeypatc
     assert "truncpkg" not in pin_info["pins"]
 
 
+def test_truncated_continuation_payload_does_not_false_resolve_prior(tmp_path, monkeypatch):
+    """Fail-before: truncation inside continuation payload could fabricate a false `resolved`."""
+    monkeypatch.setattr(gld, "_REQUIREMENTS_MAX_BYTES", 24)
+    repo = _python_repo(tmp_path, "safe==1.0\ndanger==1.0\\\n.*\n")
+    prev_id = "deps:audit:python:danger:PYSEC-PRIOR-ONLY"
+    prev = {
+        "detected": ["python"],
+        "ecosystems": {"python": {
+            "freshness": {"status": "not-collected", "reason": "policy", "items": {}},
+            "vulns": {"status": "partial", "items": {
+                prev_id: {
+                    "id": prev_id,
+                    "package": "danger",
+                    "advisory": "PYSEC-PRIOR-ONLY",
+                    "metric": 5,
+                },
+            }},
+        }},
+    }
+    payload = json.dumps({
+        "results": [{
+            "source": {"path": "/abs/requirements.txt", "type": "lockfile"},
+            "packages": [{
+                "package": {"name": "danger", "version": "1.0", "ecosystem": "PyPI"},
+            }],
+        }],
+    })
+    out = gld.LENS.collect(_ctx(repo, _run(osv_scanner=payload), prev=prev))
+    pin_info = gld._parse_requirements_pins(os.path.join(repo, "requirements.txt"))
+    assert pin_info["truncated"] is True
+    assert "danger" not in pin_info["pins"]
+    vulns = out["digest"]["ecosystems"]["python"]["vulns"]
+    assert prev_id in vulns["items"]
+    assert vulns["items"][prev_id].get("carriedForward") is True
+    assert prev_id not in gld.LENS.diff(prev, out["digest"])["resolved"]
+
+
+def test_unterminated_continuation_at_eof_without_truncation_still_pins(tmp_path):
+    req_path = tmp_path / "requirements.txt"
+    req_path.write_text("danger==1.0\\", encoding="utf-8")
+    pin_info = gld._parse_requirements_pins(str(req_path))
+    assert pin_info["truncated"] is False
+    assert list(pin_info["pins"].keys()) == ["danger"]
+
+
 def test_pin_gate_blocks_false_resolve_on_ranged_requirement(tmp_path):
     """Killing test: without the exact_pins gate, a clean osv audit false-resolves priors."""
     repo = _python_repo(tmp_path, "pyyaml>=5.0\n")
@@ -895,6 +940,25 @@ def test_unpinned_and_conditional_notes_both_disclosed(tmp_path):
     reason = out["digest"]["ecosystems"]["python"]["vulns"]["reason"]
     assert gld.PYTHON_VULN_UNPINNED_AUDIT_NOTE in reason
     assert "environment markers" in reason
+
+
+def test_includes_only_disclosure_note_has_clean_separator(tmp_path):
+    repo = _python_repo(tmp_path, "-r base.txt\n-c constraints.txt\n")
+    out = gld.LENS.collect(
+        _ctx(repo, _run(osv_scanner=OSV_ALLCLEAN_ALLPACKAGES_JSON)))
+    reason = out["digest"]["ecosystems"]["python"]["vulns"]["reason"]
+    assert "requirements.txt contains -r/-c includes" in reason
+    assert "; ;" not in reason
+
+
+def test_unpinned_and_includes_disclosure_note_has_clean_separator(tmp_path):
+    repo = _python_repo(tmp_path, "pyyaml>=5.0\n-r base.txt\n")
+    out = gld.LENS.collect(
+        _ctx(repo, _run(osv_scanner=OSV_PYYAML_CLEAN_ALLPACKAGES_JSON)))
+    reason = out["digest"]["ecosystems"]["python"]["vulns"]["reason"]
+    assert gld.PYTHON_VULN_UNPINNED_AUDIT_NOTE in reason
+    assert "requirements.txt contains -r/-c includes" in reason
+    assert "; ;" not in reason
 
 
 # ===================================================================================
