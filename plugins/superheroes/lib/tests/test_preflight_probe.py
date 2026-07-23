@@ -330,3 +330,130 @@ def test_cli_run_without_engine_all_claude_probes_none(monkeypatch, capsys):
     payload = json.loads(out)
     assert payload["crossVendorEngines"] == []
     assert len(payload["probes"]) == 1   # gh auth only — no cross-vendor probe when all-Claude
+
+
+# --- composition preflight (#510 WO-3) -------------------------------------------------------
+
+def test_model_no_op_argv_cursor_grok_dispatch_token():
+    argv = pp.model_no_op_argv("cursor", "cursor-grok-4.5", "high")
+    assert argv == (
+        "cursor-agent", "--model", "cursor-grok-4.5-high", "-p", "--trust", "reply READY")
+
+
+def test_model_no_op_argv_cursor_bogus_model_returns_none():
+    assert pp.model_no_op_argv("cursor", "bogus-model", "high") is None
+
+
+def test_model_no_op_argv_codex_includes_model_flag():
+    assert pp.model_no_op_argv("codex", "gpt-5.6-sol") == (
+        "codex", "exec", "--sandbox", "read-only", "-m", "gpt-5.6-sol",
+        "reply with the single word READY")
+
+
+def test_needed_configs_for_review_tiers_omits_claude():
+    configs = pp.needed_configs_for(("reviewer-deep", "reviewer"), ["codex", "cursor"])
+    assert "claude" not in configs
+    assert configs["codex"] == [("gpt-5.6-sol", "xhigh"), ("gpt-5.6-terra", "high")]
+    assert configs["cursor"] == [("cursor-grok-4.5", "high")]
+
+
+def test_composition_liveness_cursor_both_models_ok_is_live():
+    calls = []
+
+    def _run(argv, **kwargs):
+        calls.append(list(argv))
+        return SimpleNamespace(returncode=0, stdout="READY", stderr="")
+
+    needed = {"cursor": [("composer-2.5", None), ("cursor-grok-4.5", "high")]}
+    result = pp.composition_liveness(needed, run=_run)
+    assert result["cursor"]["live"] is True
+    assert all(m["ok"] for m in result["cursor"]["models"].values())
+    assert len(calls) == 2
+
+
+def test_composition_liveness_cursor_grok_fails_not_live():
+    def _run(argv, **kwargs):
+        model_flag = argv[argv.index("--model") + 1] if "--model" in argv else ""
+        if "grok" in model_flag:
+            return SimpleNamespace(returncode=1, stdout="", stderr="grok unavailable")
+        return SimpleNamespace(returncode=0, stdout="READY", stderr="")
+
+    needed = {"cursor": [("composer-2.5", None), ("cursor-grok-4.5", "high")]}
+    result = pp.composition_liveness(needed, run=_run)
+    assert result["cursor"]["live"] is False
+    assert result["cursor"]["models"]["composer-2.5"]["ok"] is True
+    assert result["cursor"]["models"]["cursor-grok-4.5"]["ok"] is False
+
+
+def test_composition_liveness_codex_both_ok_is_live():
+    needed = pp.needed_configs_for(("reviewer-deep", "reviewer"), ["codex"])
+    result = pp.composition_liveness(needed, run=fake0)
+    assert result["codex"]["live"] is True
+
+
+def test_composition_liveness_codex_one_fails_not_live():
+    def _run(argv, **kwargs):
+        model = argv[argv.index("-m") + 1] if "-m" in argv else ""
+        if model == "gpt-5.6-sol":
+            return SimpleNamespace(returncode=1, stdout="", stderr="fail")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    needed = pp.needed_configs_for(("reviewer-deep", "reviewer"), ["codex"])
+    result = pp.composition_liveness(needed, run=_run)
+    assert result["codex"]["live"] is False
+    assert result["codex"]["models"]["gpt-5.6-sol"]["ok"] is False
+    assert result["codex"]["models"]["gpt-5.6-terra"]["ok"] is True
+
+
+def test_composition_liveness_claude_always_live():
+    result = pp.composition_liveness({"claude": []}, run=fake1)
+    assert result["claude"] == {"live": True, "models": {}}
+
+
+def test_composition_liveness_probe_exception_not_live():
+    needed = {"codex": [("gpt-5.6-terra", "high")]}
+    result = pp.composition_liveness(needed, run=_raising_run(OSError("boom")))
+    assert result["codex"]["live"] is False
+    assert result["codex"]["models"]["gpt-5.6-terra"]["ok"] is False
+    assert "boom" in result["codex"]["models"]["gpt-5.6-terra"]["detail"]
+
+
+def test_composition_liveness_unknown_cursor_model_not_live_without_run():
+    calls = []
+
+    def _run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    needed = {"cursor": [("bogus-model", "high")]}
+    result = pp.composition_liveness(needed, run=_run)
+    assert result["cursor"]["live"] is False
+    assert result["cursor"]["models"]["bogus-model"]["ok"] is False
+    assert result["cursor"]["models"]["bogus-model"]["detail"] == "unknown/unroutable model"
+    assert calls == []
+
+
+def test_composition_liveness_empty_config_list_not_live():
+    result = pp.composition_liveness({"codex": []}, run=fake0)
+    assert result["codex"]["live"] is False
+
+
+def test_composition_liveness_non_dict_returns_empty():
+    assert pp.composition_liveness(None) == {}
+    assert pp.composition_liveness("not-a-dict") == {}
+
+
+def test_live_vendors_for_composition_claude_always_in_live_list():
+    live, liveness = pp.live_vendors_for_composition(["codex", "cursor"], run=fake1)
+    assert "claude" in live
+    assert liveness["claude"]["live"] is True
+
+
+def test_live_vendors_for_composition_all_ok_includes_external():
+    live, _ = pp.live_vendors_for_composition(["codex", "cursor"], run=fake0)
+    assert live == ["claude", "codex", "cursor"]
+
+
+def test_live_vendors_for_composition_external_failure_excludes_vendor():
+    live, _ = pp.live_vendors_for_composition(["codex", "cursor"], run=fake1)
+    assert live == ["claude"]
