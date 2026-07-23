@@ -166,6 +166,25 @@ _ALL_ECOSYSTEM_MANIFESTS = tuple(sorted({
     manifest for manifests in _ECOSYSTEM_TAGS.values() for manifest in manifests
 }))
 
+# Ecosystem FAMILIES: a family is a set of tags that share a manifest surface.
+# Used only for the cross-ecosystem contradiction (mismatch) check — a manifest
+# from the SAME family (e.g. tsconfig.json for a `node` tag) is never a
+# contradiction. The per-tag matched-manifest map (`_ECOSYSTEM_TAGS`) still drives
+# `matched`.
+_ECOSYSTEM_FAMILIES = (
+    (("node", "js", "javascript", "ts", "typescript"),
+     ("package.json", "tsconfig.json")),
+    (("python", "py"),
+     ("pyproject.toml", "requirements.txt", "setup.py", "setup.cfg")),
+    (("rust",), ("Cargo.toml",)),
+    (("go",), ("go.mod",)),
+)
+_TAG_FAMILY_MANIFESTS = {
+    tag: set(manifests)
+    for tags, manifests in _ECOSYSTEM_FAMILIES
+    for tag in tags
+}
+
 
 def _present_root_manifests(repo):
     """Root manifest filenames from the ecosystem vocabulary that exist at repo root."""
@@ -184,7 +203,10 @@ def _package_json_deps(repo):
     try:
         with open(path, encoding="utf-8") as fh:
             data = json.loads(fh.read())
-    except (OSError, ValueError, UnicodeDecodeError):
+    except (OSError, ValueError, UnicodeDecodeError, RecursionError):
+        # A valid-but-deeply-nested package.json makes json.loads raise
+        # RecursionError (a RuntimeError subclass); treat as indeterminate → None
+        # so framework tags fail to honest-unknown rather than crashing the sweep.
         return None
     if not isinstance(data, dict):
         return None
@@ -200,11 +222,18 @@ def _package_json_deps(repo):
 
 def _classify_stack_tag(tag, present_manifests, deps):
     """Classify one stack tag → matched | mismatched | unverifiable."""
+    # A non-string tag (a malformed core.md could carry `stackTags: [123]` or
+    # `[null]`) cannot be verified — never crash the read-only sweep.
+    if not isinstance(tag, str):
+        return "unverifiable"
     key = tag.strip().casefold()
     if key in _ECOSYSTEM_TAGS:
         if any(m in present_manifests for m in _ECOSYSTEM_TAGS[key]):
             return "matched"
-        if present_manifests:
+        # Mismatch only on a DIFFERENT-family manifest (a real cross-ecosystem
+        # contradiction). A same-family manifest (e.g. tsconfig.json for a `node`
+        # tag) is not a contradiction — fail to honest-unknown.
+        if present_manifests - _TAG_FAMILY_MANIFESTS[key]:
             return "mismatched"
         return "unverifiable"
     if key in _FRAMEWORK_TAGS:

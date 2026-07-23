@@ -2789,3 +2789,41 @@ def test_stack_tags_mixed_precedence_mismatch_over_unverifiable(tmp_path):
     assert fact["status"] == "mismatch"
     assert "python" in fact["receipt"]["mismatched"]
     assert "cobol" in fact["receipt"]["unverifiable"]
+
+
+def test_stack_tags_non_string_tag_unverifiable_unit():
+    assert gsw._classify_stack_tag(123, set(), None) == "unverifiable"
+    assert gsw._classify_stack_tag(None, set(), None) == "unverifiable"
+
+
+def test_stack_tags_non_string_tag_does_not_crash_sweep(tmp_path):
+    repo = init_calibrated_repo(tmp_path, stack_tags=[123, "python"])
+    (tmp_path / "package.json").write_text("{}")
+    fact = _stack_tags_fact(tmp_path, repo)
+    assert 123 in fact["receipt"]["unverifiable"]
+    assert "python" in fact["receipt"]["mismatched"]
+
+
+def test_stack_tags_same_family_manifest_not_mismatch(tmp_path):
+    repo = init_calibrated_repo(tmp_path, stack_tags=["node"])
+    (tmp_path / "tsconfig.json").write_text("{}")
+    fact = _stack_tags_fact(tmp_path, repo)
+    assert "node" not in fact["receipt"]["mismatched"]
+    assert "node" in fact["receipt"]["unverifiable"]
+
+
+def test_stack_tags_casefold_matches_and_preserves_original(tmp_path):
+    repo = init_calibrated_repo(tmp_path, stack_tags=["TypeScript", "NextJS"])
+    (tmp_path / "package.json").write_text(
+        json.dumps({"dependencies": {"next": "14"}}))
+    fact = _stack_tags_fact(tmp_path, repo)
+    assert "TypeScript" in fact["receipt"]["matched"]
+    assert "NextJS" in fact["receipt"]["matched"]
+    assert fact["receipt"]["mismatched"] == []
+
+
+def test_stack_tags_deeply_nested_package_json_no_crash(tmp_path):
+    repo = init_calibrated_repo(tmp_path, stack_tags=["react"])
+    (tmp_path / "package.json").write_text('{"x":' * 1100 + '0' + '}' * 1100)
+    fact = _stack_tags_fact(tmp_path, repo)
+    assert "react" in fact["receipt"]["unverifiable"]
