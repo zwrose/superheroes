@@ -468,3 +468,23 @@ def test_coverage_property_mixed_with_and_without_grouping():
         out = V.merge_and_rank(survivors, grouping)
         assert set(_output_ids(out)) == input_ids
         assert len(_output_ids(out)) == len(input_ids)
+
+
+def test_union_dimensions_joins_strings_and_flattens_lists():
+    assert V._union_dimensions([
+        {"dimension": "a"},
+        {"dimension": "b"},
+    ]) == "a + b"
+    assert V._union_dimensions([
+        {"dimension": "a"},
+        {"dimension": ["b", "c"]},
+    ]) == "a + b + c"
+    assert V._union_dimensions([
+        {"dimension": ["b", "c"]},
+        {"dimension": ["b", "d"]},
+    ]) == "b + c + d"
+
+
+def test_union_dimensions_no_dims_leaves_merge_without_dimension_key():
+    merged = V._merge_group([{"severity": "Minor"}, {"severity": "Minor"}])
+    assert "dimension" not in merged

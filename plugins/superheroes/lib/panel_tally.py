@@ -100,6 +100,22 @@ def _identity(f):
     return circuit_breaker.finding_identity(f)
 
 
+def normalize_dimension(value):
+    """Canonical finding dimension: a non-empty string, or multiple parts joined with ' + '."""
+    if isinstance(value, list):
+        parts = []
+        seen = set()
+        for d in value:
+            p = str(d).strip()
+            if p and p not in seen:
+                seen.add(p)
+                parts.append(p)
+        return " + ".join(parts)
+    if isinstance(value, str) and value:
+        return value
+    return ""
+
+
 def _merge_dims(a, b):
     parts = []
     for src in (a.get("dimension"), b.get("dimension")):
@@ -193,8 +209,9 @@ def compile_dimension_results(results):
             if not isinstance(f, dict):
                 continue
             item = dict(f)
-            if "dimension" not in item:
-                item["dimension"] = result.get("dimension") or name
+            # normalize the finding's own dimension too — artifact JSON may carry a list
+            item["dimension"] = (normalize_dimension(item.get("dimension"))
+                                 or normalize_dimension(result.get("dimension")) or name)
             if result.get("status") == "skipped":
                 item["carried"] = True
                 item["sourceRound"] = result.get("carriedFromRound")

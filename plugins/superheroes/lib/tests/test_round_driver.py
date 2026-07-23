@@ -1410,6 +1410,31 @@ def test_mechanical_compile_nit_cap():
     assert any(f.get("summaryEntry") for f in nits)
 
 
+def test_mechanical_compile_normalizes_list_dimension():
+    findings = [
+        {"title": "hole", "severity": "Important", "file": "f.py", "line": 2,
+         "dimension": ["security", "perf"]},
+    ]
+    compiled, drops = RD.mechanical_compile(findings, DIFF)
+    assert drops == []
+    assert len(compiled) == 1
+    assert compiled[0]["dimension"] == "security + perf"
+
+
+def test_settle_delta_list_dimension_via_mechanical_compile(tmp_path):
+    """#583: list-valued dimension must not crash _settle_delta's dim_map grouping."""
+    raw = [{"title": "hole", "severity": "Important", "file": "f.py", "line": 2,
+            "dimension": ["security", "perf"]}]
+    compiled, _ = RD.mechanical_compile(raw, DIFF)
+    state = _delta_state_ready(confirmations=0, surfaced=[], findings=compiled)
+    RD._settle_delta(state, state["config"])
+    record = (state.get("_records") or [])[-1]
+    dim_map = record.get("dimensions") or {}
+    assert dim_map
+    assert all(isinstance(k, str) for k in dim_map)
+    assert "security + perf" in dim_map
+
+
 # =============================================================================
 # the REDISPATCH_BUDGET single home (code-leg re-dispatch bound)
 # =============================================================================

@@ -7,6 +7,7 @@ though a model made the judgments. stdlib only; never raises on bad input; fail-
 a model's silence or malformed verdict never drops a finding.
 """
 import circuit_breaker
+import panel_tally
 
 VERDICTS = ("CONFIRMED", "PLAUSIBLE", "REFUTED")
 _TIERS = ("Critical", "Important", "Minor", "Nit")
@@ -192,19 +193,22 @@ def _rank_key(f):
 
 
 def _union_dimensions(members):
-    dims = []
+    parts = []
     seen = set()
     for m in members:
         dim = m.get("dimension")
         if isinstance(dim, list):
-            for d in dim:
-                if d not in seen:
-                    seen.add(d)
-                    dims.append(d)
+            normalized = panel_tally.normalize_dimension(dim)
+            if not normalized:
+                continue
+            for p in normalized.split(" + "):
+                if p and p not in seen:
+                    seen.add(p)
+                    parts.append(p)
         elif isinstance(dim, str) and dim and dim not in seen:
             seen.add(dim)
-            dims.append(dim)
-    return dims
+            parts.append(dim)
+    return " + ".join(parts)
 
 
 def _eff_sev(severity):
