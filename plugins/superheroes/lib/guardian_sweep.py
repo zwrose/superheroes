@@ -36,6 +36,13 @@ CADENCE_DEFAULTS = {"minMerges": 10, "minDays": 14}
 # permanently "not collected" on the repos the design cites. 300s clears both
 # with headroom while still bounding a runaway suite.
 _DEFAULT_VERIFY_BUDGET_SECONDS = 300
+# Per-lens cap on first-baseline candidates routed through validation. Bounds
+# validation cost (issue #574 DoD-5): total first-baseline validation ≤
+# (first-seed lens count × this).
+_DEFAULT_FIRST_BASELINE_VALIDATE_MAX = 10
+# Authoritative home for this killed-by-drift reason token (CONVENTIONS "one
+# home per cross-boundary fact"); the report renderer imports THIS constant.
+FIRST_BASELINE_UNVALIDATED_REASON = "first-baseline-unvalidated"
 _VERIFY_STDOUT_CAP = 8 * 1024
 # Aggregate budget across all filed-issue `gh issue view` lookups in one collect.
 # Per-call timeout is capped so one hung call cannot consume the whole budget alone.
@@ -80,6 +87,7 @@ def read_config(cwd, root=None):
     coverage = []
     vitals_enabled = True
     verify_budget = _DEFAULT_VERIFY_BUDGET_SECONDS
+    first_baseline_validate_max = _DEFAULT_FIRST_BASELINE_VALIDATE_MAX
     report_card = None
     cadence, cadence_tuned = _resolve_cadence(None)
 
@@ -89,6 +97,7 @@ def read_config(cwd, root=None):
             "coverage": coverage,
             "vitalsEnabled": vitals_enabled,
             "verifyBudgetSeconds": verify_budget,
+            "firstBaselineValidateMax": first_baseline_validate_max,
             "reportCard": report_card_value,
             "cadence": cadence,
             "cadenceTuned": cadence_tuned,
@@ -132,6 +141,9 @@ def read_config(cwd, root=None):
         budget = block.get("vitalsBudgetSeconds")
     if isinstance(budget, (int, float)) and not isinstance(budget, bool) and budget > 0:
         verify_budget = float(budget)
+    fb_max = block.get("firstBaselineValidateMax")
+    if isinstance(fb_max, int) and not isinstance(fb_max, bool) and fb_max >= 0:
+        first_baseline_validate_max = fb_max
     notes = []
     if "reportCard" in block and not isinstance(block.get("reportCard"), dict):
         notes.append("guardian-config reportCard is not an object")
@@ -615,6 +627,8 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
     benched_lenses = {name for name, entry in card.items() if entry.get("benched")}
     issue_deadline = time.monotonic() + _ISSUE_RESOLVE_BUDGET_SECONDS
     issue_cache = {}
+    first_baseline_max = config.get(
+        "firstBaselineValidateMax", _DEFAULT_FIRST_BASELINE_VALIDATE_MAX)
 
     for lens in lenses:
         if set(lens.required_facts) & unsatisfied:
@@ -624,8 +638,9 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
             continue
 
         prev_entry = prev_lenses.get(lens.name)
+        first_seed = lens.name not in prev_lenses
         lens_new = (
-            lens.name not in prev_lenses
+            first_seed
             or prev_entry.get("collectorVersion") != lens.collector_version
         )
         ctx = {
@@ -690,7 +705,17 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
         try:
             if lens_new:
                 d = {"new": [], "worsened": [], "resolved": []}
-                drift_ids = []
+                if first_seed:
+                    precision = guardian_lens.first_baseline_precision(lens)
+                    all_ids = [c["id"] for c in valid_candidates]
+                    if len(all_ids) <= first_baseline_max:
+                        drift_ids = all_ids
+                    elif precision == "high":
+                        drift_ids = all_ids[:first_baseline_max]
+                    else:
+                        drift_ids = []
+                else:
+                    drift_ids = []
             else:
                 d = lens.diff(ctx["prevDigest"], cur_digest)
                 drift_ids = list(d.get("new", [])) + list(d.get("worsened", []))
@@ -711,10 +736,16 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
 
         for cid, cand in cand_by_id.items():
             if cid not in would_surface:
+                if lens_new:
+                    reason = (
+                        FIRST_BASELINE_UNVALIDATED_REASON
+                        if first_seed else "quiet-baseline")
+                else:
+                    reason = "no-drift"
                 killed_by_drift.append({
                     "id": cid,
                     "lens": lens.name,
-                    "reason": "quiet-baseline" if lens_new else "no-drift",
+                    "reason": reason,
                 })
 
         for cid in sorted(would_surface):
@@ -724,7 +755,9 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
                 drift_reason = "red-line"
             elif is_red:
                 drift_reason = "red-line"
-            elif cid in (d.get("new", []) if not lens_new else []):
+            elif first_seed:
+                drift_reason = "first-baseline"
+            elif cid in d.get("new", []):
                 drift_reason = "new"
             else:
                 drift_reason = "worsened" if cid in drift_ids else "red-line"

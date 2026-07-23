@@ -32,6 +32,7 @@ FUNNEL_TRACKED_FILED = "tracked-filed"
 FUNNEL_DEGRADED = "degraded-lenses"
 FUNNEL_REJECTED = "model-rejected"
 FUNNEL_VALIDATED = "surfaced-and-validated"
+FUNNEL_FIRST_BASELINE_UNVALIDATED = "first-baseline baselined unreviewed"
 
 
 def _storage_header(bundle):
@@ -311,6 +312,25 @@ def render(bundle, dispositions, ledger):
         for item in drift:
             lines.append("- %s (%s): %s" % (
                 item.get("id"), item.get("lens"), item.get("reason")))
+    else:
+        lines.append("_None._")
+    lines.append("")
+
+    # Lazy import: guardian_sweep imports guardian_report at module load.
+    import guardian_sweep as guardian_sweep_mod
+    fb_reason = guardian_sweep_mod.FIRST_BASELINE_UNVALIDATED_REASON
+    fb_counts = {}
+    for item in drift:
+        if item.get("reason") == fb_reason:
+            lens_name = item.get("lens")
+            fb_counts[lens_name] = fb_counts.get(lens_name, 0) + 1
+    lines.append("### %s" % FUNNEL_FIRST_BASELINE_UNVALIDATED)
+    if fb_counts:
+        for lens_name in sorted(fb_counts):
+            n = fb_counts[lens_name]
+            lines.append(
+                "- %s: %d candidate(s) baselined unreviewed (first baseline)"
+                % (lens_name, n))
     else:
         lines.append("_None._")
     lines.append("")
