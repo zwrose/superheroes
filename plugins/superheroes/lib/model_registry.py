@@ -423,3 +423,55 @@ def cursor_dispatch_id(role: str) -> str | None:
         return None
     model_id, effort = cell
     return dispatch_token("cursor", model_id, effort)
+
+
+def _is_str(value: object) -> bool:
+    return isinstance(value, str)
+
+
+def family_for(role: str, vendor: str) -> str | None:
+    if not _is_str(role) or not _is_str(vendor):
+        return None
+    cell = matrix_config(role, vendor)
+    if cell is None:
+        return None
+    model_id, _effort = cell
+    return model_family(vendor, model_id)
+
+
+def allowlist(role: str, vendor: str) -> tuple[tuple[str, str | None], ...]:
+    if not _is_str(role) or not _is_str(vendor):
+        return ()
+    cell = matrix_config(role, vendor)
+    if cell is None:
+        return ()
+    rungs = ladder(vendor)
+    index = None
+    for i, rung in enumerate(rungs):
+        if rung == cell:
+            index = i
+            break
+    if index is None:
+        model_id, effort = cell
+        if not is_registered(vendor, model_id):
+            return ()
+        ok, _ = validate_config(vendor, model_id, effort, allow_override_only=True)
+        return (cell,) if ok else ()
+    out: list[tuple[str, str | None]] = []
+    for model_id, effort in rungs[index:]:
+        if not is_registered(vendor, model_id):
+            continue
+        ok, _ = validate_config(vendor, model_id, effort, allow_override_only=True)
+        if ok:
+            out.append((model_id, effort))
+    return tuple(out)
+
+
+def is_allowed(
+    role: str, vendor: str, model: str, effort: str | None
+) -> bool:
+    if not _is_str(role) or not _is_str(vendor) or not _is_str(model):
+        return False
+    if effort is not None and not _is_str(effort):
+        return False
+    return (model, effort) in allowlist(role, vendor)
