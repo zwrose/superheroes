@@ -1631,10 +1631,20 @@ def _partial_part_gap(ecosystem, part, section):
     return "%s: partial" % label
 
 
+UNCLASSIFIED_PARTIAL_CAUSE = "unclassified-partial"
+
+
 def _section_cause_tokens(section):
-    """Stable measurement-basis cause tokens for a partial ecosystem-part section."""
+    """Stable measurement-basis cause tokens for a partial ecosystem-part section.
+
+    Never returns empty for a partial section: a non-dict, or a dict whose partial basis
+    matches no recognized cause marker, falls to the ``unclassified-partial`` sentinel so the
+    gap stays a *comparable* identity basis rather than poisoning the aggregate vital identity
+    to None. Fail-direction ruling (#592, #580): an unclassifiable partial over-alerts (stays
+    comparable), it never silences the drift comparison. None-identity remains reserved at the
+    guardian_vitals layer for malformed completeness *entries* (a contract violation)."""
     if not isinstance(section, dict):
-        return []
+        return [UNCLASSIFIED_PARTIAL_CAUSE]
     tokens = []
     if section.get("coverageGap"):
         tokens.append("no-transitive-resolution")
@@ -1648,6 +1658,8 @@ def _section_cause_tokens(section):
     scope = section.get("auditedScope")
     if isinstance(scope, dict) and scope.get("kind") == "lockfile":
         tokens.append("lockfile-audit")
+    if not tokens:
+        return [UNCLASSIFIED_PARTIAL_CAUSE]
     return sorted(set(tokens))
 
 
@@ -1658,7 +1670,6 @@ def _majors_behind_vital(digest):
     measured = []
     gaps = []
     triples = []
-    unclassifiable = False
     total = 0
     for eco in sorted(ecosystems):
         section = ecosystems.get(eco)
@@ -1682,12 +1693,8 @@ def _majors_behind_vital(digest):
             continue
         if status == "partial":
             gaps.append(_partial_part_gap(eco, "freshness", fresh))
-            tokens = _section_cause_tokens(fresh)
-            if tokens:
-                for cause in tokens:
-                    triples.append("%s/freshness/%s" % (eco, cause))
-            else:
-                unclassifiable = True
+            for cause in _section_cause_tokens(fresh):
+                triples.append("%s/freshness/%s" % (eco, cause))
             continue
         if status != "collected":
             gaps.append("%s freshness: %s" % (eco, status))
@@ -1711,8 +1718,11 @@ def _majors_behind_vital(digest):
     if not measured:
         return (None, "; ".join(gaps) or "no ecosystem freshness measured")
     if gaps:
-        identity = None if unclassifiable else sorted(set(triples))
-        return (total, "; ".join(gaps), identity)
+        # Lockstep invariant: every branch that appends a gap also appends ≥1 triple (and
+        # _section_cause_tokens never returns empty), so identity is never [] when gaps exist —
+        # a partial never silences (#592). The _VITAL_IDENTITY_TRIPWIRE_CASES test guards this
+        # across every production partial path.
+        return (total, "; ".join(gaps), sorted(set(triples)))
     return (total, None)
 
 
@@ -1723,7 +1733,6 @@ def _vuln_count_vital(digest):
     measured = []
     gaps = []
     triples = []
-    unclassifiable = False
     total = 0
     for eco in sorted(ecosystems):
         section = ecosystems.get(eco)
@@ -1758,17 +1767,16 @@ def _vuln_count_vital(digest):
         measured.append(eco)
         if status == "partial":
             gaps.append(_partial_part_gap(eco, "vulns", vulns))
-            tokens = _section_cause_tokens(vulns)
-            if tokens:
-                for cause in tokens:
-                    triples.append("%s/vulns/%s" % (eco, cause))
-            else:
-                unclassifiable = True
+            for cause in _section_cause_tokens(vulns):
+                triples.append("%s/vulns/%s" % (eco, cause))
     if not measured:
         return (None, "; ".join(gaps) or "no ecosystem vulnerabilities measured")
     if gaps:
-        identity = None if unclassifiable else sorted(set(triples))
-        return (total, "; ".join(gaps), identity)
+        # Lockstep invariant: every branch that appends a gap also appends ≥1 triple (and
+        # _section_cause_tokens never returns empty), so identity is never [] when gaps exist —
+        # a partial never silences (#592). The _VITAL_IDENTITY_TRIPWIRE_CASES test guards this
+        # across every production partial path.
+        return (total, "; ".join(gaps), sorted(set(triples)))
     return (total, None)
 
 
