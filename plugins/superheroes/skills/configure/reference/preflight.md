@@ -11,7 +11,7 @@
 
 # configure — preflight (the v2 run preflight)
 
-This is the checklist the **workhorse** and **showrunner** charters point to for their §3
+This is the checklist the **workhorse** charter points to for its §3
 preflight step (#472). It runs once, **at session start, while the owner is still present** —
 before the session goes autonomous. Follow it top to bottom; every check below ends in
 **pass**, **fail**, or **N/A with the reason** — a check is never silently skipped.
