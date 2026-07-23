@@ -1490,7 +1490,7 @@ def test_census_is_recursive_and_finds_nested_workspaces(tmp_path):
     assert got["sources"]["packages/web"] == {"ts": 1}
     assert got["sources"]["packages/api"] == {"js": 1}
     # the sweep's root-only manifest detection would have found nothing here
-    assert gsw._manifest_tags(repo) == set()
+    assert gsw._present_root_manifests(repo) == set()
 
 
 def test_census_never_walks_into_vendored_trees(tmp_path):
