@@ -699,14 +699,17 @@ def test_freshness_candidates_are_never_red_lines(tmp_path):
     ("Under_Score_Pkg==2.0", "pin", "under-score-pkg"),
     ("Mixed.Case_Pkg==1.0", "pin", "mixed-case-pkg"),
     ("pkg==1.0  # inline comment", "pin", "pkg"),
+    ("foo==1.2.3  # see https://example.com/advisory", "pin", "foo"),
     ("pkg==1.0 --hash=sha256:abcdef", "pin", "pkg"),
     ("pkg==1.0; python_version < \"3.9\"", "conditional", None),
+    ("epochpkg==1!2.0", "pin", "epochpkg"),
     ("-e git+https://example.com/pkg.git", "unpinned", None),
     ("pkg @ https://example.com/pkg-1.0.tar.gz", "unpinned", None),
     ("pkg", "unpinned", None),
     ("-r other.txt", "include", None),
     ("-c constraints.txt", "include", None),
     ("wildcardpkg==1.*", "unpinned", None),
+    ("pkg===1.*", "unpinned", None),
 ])
 def test_requirements_pin_classification_table(line, expected_kind, expected_key):
     kind, name_or_echo, _version = gld._classify_requirements_line(line)
@@ -731,6 +734,17 @@ def test_requirements_hash_continuation_line_is_pin(tmp_path):
     pin_info = gld._parse_requirements_pins(os.path.join(repo, "requirements.txt"))
     assert list(pin_info["pins"].keys()) == ["pkg"]
     assert pin_info["unpinned"] == []
+
+
+def test_truncated_requirements_discards_partial_final_line(tmp_path, monkeypatch):
+    """Killing test: without last-newline discard, a truncated range becomes a false pin."""
+    monkeypatch.setattr(gld, "_REQUIREMENTS_MAX_BYTES", 26)
+    req_path = tmp_path / "requirements.txt"
+    req_path.write_text("goodpkg==1.0\ntruncpkg==1.0.*\n", encoding="utf-8")
+    pin_info = gld._parse_requirements_pins(str(req_path))
+    assert pin_info["truncated"] is True
+    assert list(pin_info["pins"].keys()) == ["goodpkg"]
+    assert "truncpkg" not in pin_info["pins"]
 
 
 def test_pin_gate_blocks_false_resolve_on_ranged_requirement(tmp_path):
@@ -761,7 +775,7 @@ def test_pin_gate_blocks_false_resolve_on_ranged_requirement(tmp_path):
 
 
 def test_extraspkg_extras_canonical_name_audited_and_resolves_prior(tmp_path):
-    """extras in requirements must key pins on PEP 503 canonical name osv-scanner emits."""
+    """extras in requirements must key pins on PEP 503 canonical name (assumed osv emission)."""
     repo = _python_repo(tmp_path, "extraspkg[extra]==1.0\n")
     prev_id = "deps:audit:python:extraspkg:PYSEC-OLD-1"
     prev = {
@@ -772,6 +786,7 @@ def test_extraspkg_extras_canonical_name_audited_and_resolves_prior(tmp_path):
                       "items": {prev_id: {"id": prev_id, "package": "extraspkg", "metric": 0}}},
         }},
     }
+    # Synthetic (not captured): clean audited package shape matching OSV_ALLCLEAN_ALLPACKAGES_JSON.
     payload = json.dumps({
         "results": [{
             "source": {"path": "/abs/requirements.txt", "type": "lockfile"},
@@ -788,7 +803,7 @@ def test_extraspkg_extras_canonical_name_audited_and_resolves_prior(tmp_path):
 
 
 def test_under_score_pkg_canonical_name_audited_and_resolves_prior(tmp_path):
-    """PEP 503 canonical name must match osv-scanner's under-score-pkg emission."""
+    """PEP 503 canonical name must match osv-scanner emission (assumed under-score-pkg)."""
     repo = _python_repo(tmp_path, "Under_Score_Pkg==2.0\n")
     prev_id = "deps:audit:python:under-score-pkg:PYSEC-OLD-1"
     prev = {
@@ -800,6 +815,7 @@ def test_under_score_pkg_canonical_name_audited_and_resolves_prior(tmp_path):
             }},
         }},
     }
+    # Synthetic (not captured): clean audited package shape matching OSV_ALLCLEAN_ALLPACKAGES_JSON.
     payload = json.dumps({
         "results": [{
             "source": {"path": "/abs/requirements.txt", "type": "lockfile"},
@@ -832,6 +848,7 @@ def test_requirements_decode_error_degrades_python_only(tmp_path):
             pip_audit=FileNotFoundError("pip-audit"),
         )))
     assert out["digest"]["ecosystems"]["node"]["freshness"]["status"] == "collected"
+    assert out["digest"]["ecosystems"]["node"]["vulns"]["status"] == "collected"
     py_vulns = out["digest"]["ecosystems"]["python"]["vulns"]
     assert py_vulns["status"] == "not-collected"
     assert "unreadable" in py_vulns["reason"].lower()
@@ -846,6 +863,38 @@ def test_audit_coverage_evidence_in_digest(tmp_path):
     assert cov["pinsClassified"] == 2
     assert cov["packagesAudited"] == 2
     assert cov["unpinnedCount"] == 0
+
+
+# Synthetic (not captured): osv reports only one of two classified pins.
+OSV_SIX_ONLY_ALLPACKAGES_JSON = json.dumps({
+    "results": [{
+        "source": {"path": "/abs/requirements.txt", "type": "lockfile"},
+        "packages": [{
+            "package": {"name": "six", "version": "1.16.0", "ecosystem": "PyPI"},
+        }],
+    }],
+})
+
+
+def test_audit_coverage_packages_audited_reflects_measurement_not_intent(tmp_path):
+    """Killing test: packagesAudited must come from osv output, not len(exact_pins)."""
+    repo = _repo(tmp_path, {"pyproject.toml": "[project]\n",
+                            "requirements.txt": "pyyaml==5.3.1\nsix==1.16.0\n"})
+    out = gld.LENS.collect(
+        _ctx(repo, _run(osv_scanner=OSV_SIX_ONLY_ALLPACKAGES_JSON, osv_scanner_exit=0)))
+    cov = out["digest"]["ecosystems"]["python"]["vulns"]["auditCoverage"]
+    assert cov["pinsClassified"] == 2
+    assert cov["packagesAudited"] == 1
+
+
+def test_unpinned_and_conditional_notes_both_disclosed(tmp_path):
+    repo = _python_repo(
+        tmp_path, "pyyaml>=5.0\npkg==1.0; python_version < \"3.9\"\n")
+    out = gld.LENS.collect(
+        _ctx(repo, _run(osv_scanner=OSV_PYYAML_CLEAN_ALLPACKAGES_JSON)))
+    reason = out["digest"]["ecosystems"]["python"]["vulns"]["reason"]
+    assert gld.PYTHON_VULN_UNPINNED_AUDIT_NOTE in reason
+    assert "environment markers" in reason
 
 
 # ===================================================================================
@@ -1236,15 +1285,15 @@ def test_permanent_boundary_on_osv_success(tmp_path):
     assert out.get(gl.PERMANENT_BOUNDARY_KEY) is True
 
 
-def test_osv_fallback_sets_transient_boundary(tmp_path):
-    """pip-audit fallback after osv absence is transient — not a structural boundary."""
+def test_osv_fallback_sets_permanent_boundary(tmp_path):
+    """pip-audit fallback after osv absence is a structural boundary — seeds permanentBoundary."""
     repo = _python_repo(tmp_path, "requests==2.0\n")
     payload = json.dumps({"dependencies": [
         {"name": "requests", "version": "2.0", "vulns": []}]})
     out = gld.LENS.collect(_ctx(repo, _run(pip_audit=payload, pip_audit_exit=0)))
     vulns = out["digest"]["ecosystems"]["python"]["vulns"]
-    assert vulns.get("boundary") is not True
-    assert "permanentBoundary" not in out
+    assert vulns.get("boundary") is True
+    assert out.get(gl.PERMANENT_BOUNDARY_KEY) is True
 
 
 def test_both_fail_no_requirements_is_structural_boundary(tmp_path):

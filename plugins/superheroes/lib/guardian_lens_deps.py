@@ -833,17 +833,26 @@ def _split_requirement_marker(body):
     return (spec_part.strip(), marker.strip() or None)
 
 
-def _is_exact_pin_specifier(operator, version):
-    """True only when a single concrete version is positively provable."""
-    if operator == "===":
-        return bool(version)
-    if operator != "==":
-        return False
+def _is_exact_pin_version_tail(version):
+    """True when *version* (after any PEP 440 epoch prefix) is a concrete pin."""
     if not version or "*" in version:
         return False
-    if any(op in version for op in (">", "<", "!", "=", "~")):
+    tail = version
+    epoch = re.match(r"^\d+!", tail)
+    if epoch:
+        tail = tail[epoch.end():]
+    if not tail:
+        return False
+    if any(op in tail for op in (">", "<", "!", "=", "~")):
         return False
     return True
+
+
+def _is_exact_pin_specifier(operator, version):
+    """True only when a single concrete version is positively provable."""
+    if operator not in ("==", "==="):
+        return False
+    return _is_exact_pin_version_tail(version)
 
 
 def _parse_requirement_specifiers(spec_part):
@@ -867,17 +876,18 @@ def _classify_requirements_line(line):
     raw = (line or "").strip()
     if not raw or raw.startswith("#"):
         return ("skip", None, None)
-    if raw.startswith(("-r", "-c", "--requirement", "--constraint")):
-        return ("include", None, None)
-    if raw.startswith(("-e", "--editable")):
-        return ("unpinned", _pin_scope_line_echo(raw), None)
-    if "://" in raw or raw.startswith(("git+", "hg+", "svn+", "bzr+")):
-        return ("unpinned", _pin_scope_line_echo(raw), None)
 
     body = raw
     hash_idx = body.find(" #")
     if hash_idx >= 0:
         body = body[:hash_idx].rstrip()
+
+    if body.startswith(("-r", "-c", "--requirement", "--constraint")):
+        return ("include", None, None)
+    if body.startswith(("-e", "--editable")):
+        return ("unpinned", _pin_scope_line_echo(raw), None)
+    if "://" in body or body.startswith(("git+", "hg+", "svn+", "bzr+")):
+        return ("unpinned", _pin_scope_line_echo(raw), None)
 
     name_match = _REQ_NAME_EXTRAS.match(body)
     if not name_match:
@@ -933,6 +943,8 @@ def _parse_requirements_pins(req_abs):
         if len(raw_bytes) > _REQUIREMENTS_MAX_BYTES:
             truncated = True
             raw_bytes = raw_bytes[:_REQUIREMENTS_MAX_BYTES]
+            last_nl = raw_bytes.rfind(b"\n")
+            raw_bytes = raw_bytes[:last_nl + 1] if last_nl >= 0 else b""
         if raw_bytes.startswith(b"\xef\xbb\xbf"):
             raw_bytes = raw_bytes[3:]
         text = raw_bytes.decode("utf-8")
@@ -1034,12 +1046,14 @@ def _finalize_osv_python_section(items, prev_section, audited_pkgs, pin_info,
             include_note = (
                 "; requirements.txt contains -r/-c includes — nested requirements the "
                 "scan never saw are not audited")
-        unpinned_note = PYTHON_VULN_UNPINNED_AUDIT_NOTE
+        note_parts = []
+        if unpinned:
+            note_parts.append(PYTHON_VULN_UNPINNED_AUDIT_NOTE)
         if conditional:
-            unpinned_note = (
+            note_parts.append(
                 "some requirements carry environment markers (conditional install) and "
                 "are not exactly pinned — their prior advisories are never resolved")
-        reason_parts.append("%s%s" % (unpinned_note, include_note))
+        reason_parts.append("%s%s" % ("; ".join(note_parts), include_note))
     if ambiguity_disclosures:
         reason_parts.append(
             "ambiguous advisory identity (%s) — current findings are reported under fresh "
@@ -1443,7 +1457,7 @@ def collect_python_vulns(ctx, repo):
         pip["reason"] = (
             "rated source osv-scanner was unavailable (%s); %s"
             % (osv_reason, pip.get("reason") or "pip-audit fallback"))
-        pip["boundary"] = structural
+        pip["boundary"] = True
         return pip
     pip_reason = pip.get("reason") or "pip-audit not collected"
     return _section(
