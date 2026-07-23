@@ -68,7 +68,7 @@ def test_duplication_lens_registers_cleanly():
         dup = by_name["duplication"]
         # A real lens, not an _UnavailableLens load-failure stand-in.
         assert not isinstance(dup, gl._UnavailableLens)
-        assert dup.collector_version == "2.1.0"
+        assert dup.collector_version == "2.2.0"
         assert not any(l.name == "module:guardian_lens_duplication" for l in lenses)
         errors = gl.production_lens_load_errors()
         assert not any(
@@ -89,7 +89,7 @@ def test_hotspots_lens_registers_cleanly():
         hot = by_name["hotspots"]
         # A real lens, not an _UnavailableLens load-failure stand-in.
         assert not isinstance(hot, gl._UnavailableLens)
-        assert hot.collector_version == "2.0.0"
+        assert hot.collector_version == "2.1.0"
         assert not any(l.name == "module:guardian_lens_hotspots" for l in lenses)
         errors = gl.production_lens_load_errors()
         assert not any(

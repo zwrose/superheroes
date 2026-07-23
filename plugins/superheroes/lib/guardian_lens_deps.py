@@ -1478,7 +1478,104 @@ def collect_python_vulns(ctx, repo):
         boundary=structural)
 
 
-# ------------------------------------------------------------------------ check-the-check
+def _partial_part_gap(ecosystem, part, section):
+    """Gap text for a partial ecosystem part — derived from the section's own reason."""
+    reason = section.get("reason") if isinstance(section, dict) else None
+    label = "%s %s" % (ecosystem, part)
+    if reason:
+        return "%s: %s" % (label, reason)
+    return "%s: partial" % label
+
+
+def _majors_behind_vital(digest):
+    ecosystems = digest.get("ecosystems") if isinstance(digest, dict) else None
+    if not isinstance(ecosystems, dict) or not ecosystems:
+        return (None, "digest has no ecosystems to measure")
+    measured = []
+    gaps = []
+    total = 0
+    for eco in sorted(ecosystems):
+        section = ecosystems.get(eco)
+        if not isinstance(section, dict):
+            gaps.append("%s: missing ecosystem section" % eco)
+            continue
+        fresh = section.get("freshness")
+        if not isinstance(fresh, dict):
+            gaps.append("%s freshness: missing" % eco)
+            continue
+        status = fresh.get("status")
+        if status == "suppressed-by-coverage":
+            gaps.append("%s freshness: suppressed-by-coverage" % eco)
+            continue
+        if status == "not-collected":
+            gaps.append("%s freshness: %s" % (eco, fresh.get("reason") or status))
+            continue
+        if status == "partial":
+            gaps.append(_partial_part_gap(eco, "freshness", fresh))
+            continue
+        if status != "collected":
+            gaps.append("%s freshness: %s" % (eco, status))
+            continue
+        if fresh.get("carriedForward"):
+            gaps.append("%s freshness: carried forward from prior sweep" % eco)
+            continue
+        if "majorsBehindTotal" not in fresh:
+            gaps.append("%s freshness: missing majorsBehindTotal" % eco)
+            continue
+        try:
+            total += int(fresh.get("majorsBehindTotal") or 0)
+        except (TypeError, ValueError):
+            gaps.append("%s freshness: majorsBehindTotal is not a number" % eco)
+            continue
+        measured.append(eco)
+    if not measured:
+        return (None, "; ".join(gaps) or "no ecosystem freshness measured")
+    if gaps:
+        return (total, "; ".join(gaps))
+    return (total, None)
+
+
+def _vuln_count_vital(digest):
+    ecosystems = digest.get("ecosystems") if isinstance(digest, dict) else None
+    if not isinstance(ecosystems, dict) or not ecosystems:
+        return (None, "digest has no ecosystems to measure")
+    measured = []
+    gaps = []
+    total = 0
+    for eco in sorted(ecosystems):
+        section = ecosystems.get(eco)
+        if not isinstance(section, dict):
+            gaps.append("%s: missing ecosystem section" % eco)
+            continue
+        vulns = section.get("vulns")
+        if not isinstance(vulns, dict):
+            gaps.append("%s vulns: missing" % eco)
+            continue
+        status = vulns.get("status")
+        if status == "not-collected":
+            gaps.append("%s vulns: %s" % (eco, vulns.get("reason") or status))
+            continue
+        if status not in ("collected", "partial"):
+            gaps.append("%s vulns: %s" % (eco, status))
+            continue
+        if vulns.get("carriedForward"):
+            gaps.append("%s vulns: carried forward from prior sweep" % eco)
+            continue
+        items = vulns.get("items")
+        if not isinstance(items, dict):
+            gaps.append("%s vulns: items is not an object" % eco)
+            continue
+        total += len(items)
+        measured.append(eco)
+        if status == "partial":
+            gaps.append(_partial_part_gap(eco, "vulns", vulns))
+    if not measured:
+        return (None, "; ".join(gaps) or "no ecosystem vulnerabilities measured")
+    if gaps:
+        return (total, "; ".join(gaps))
+    return (total, None)
+
+
 
 def _binding_entries(ctx):
     """(entries, malformed) — coverage entries for this lens with lens/tool/path present."""
@@ -2266,6 +2363,24 @@ class DepsLens(object):
             if prev_entry.get("status") == "collected" and prev_entry.get("stale"):
                 resolved.append(_stale_cid(prev_entry, key))
         return (new, worsened, resolved)
+
+    # -------------------------------------------------------------------------- vitals
+
+    def vitals(self, digest):
+        """→ {vital_name: (value | None, reason | None)}
+
+        (value, None)    -> complete       — a full measurement
+        (value, reason)  -> partial        — a real number over the portion measured,
+                                             with `reason` naming exactly what is missing
+        (None,  reason)  -> not-collected  — nothing publishable; `reason` says why
+        """
+        if not isinstance(digest, dict):
+            reason = "digest is not an object"
+            return {"majorsBehind": (None, reason), "vulnCount": (None, reason)}
+        return {
+            "majorsBehind": _majors_behind_vital(digest),
+            "vulnCount": _vuln_count_vital(digest),
+        }
 
     # ------------------------------------------------------------------------ red lines
 

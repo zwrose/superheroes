@@ -15,6 +15,7 @@ import subprocess
 
 import pytest
 
+import guardian_census
 import guardian_lens as gl
 import guardian_lens_duplication as gld
 from test_guardian_conformance import assert_lens_conformance
@@ -714,7 +715,7 @@ def test_git_census_failure_degrades_not_collected(tmp_path):
 def test_arg_max_guard_degrades_never_scans_cwd(tmp_path, monkeypatch):
     """When the tracked-file operand payload exceeds the cap, degrade honestly — no silent
     cwd fallback, no truncation."""
-    monkeypatch.setattr(gld, "MAX_TRACKED_OPERAND_BYTES", 5)
+    monkeypatch.setattr(guardian_census, "MAX_TRACKED_OPERAND_BYTES", 5)
     _seed_tracked(tmp_path, "a.py", "b.py")  # 8 bytes of operands > 5-byte cap
     run = _FakeJscpd(_report([]))
     out = _collect(gld.DuplicationLens(), tmp_path, run)
@@ -738,7 +739,7 @@ def test_arg_max_guard_measures_absolutized_payload(tmp_path, monkeypatch):
     relative_bytes = sum(len(p.encode("utf-8")) for p in operands)  # 8 bytes
     # Cap == the relative payload: the OLD relative-only measure (8 > 8 is False) would NOT
     # trip and would go on to scan; the absolutized measure must trip.
-    monkeypatch.setattr(gld, "MAX_TRACKED_OPERAND_BYTES", relative_bytes)
+    monkeypatch.setattr(guardian_census, "MAX_TRACKED_OPERAND_BYTES", relative_bytes)
     run = _FakeJscpd(_report([]))
     out = _collect(gld.DuplicationLens(), tmp_path, run)
     status, reason = gl.classify_collect(out)
@@ -1366,7 +1367,8 @@ def test_lens_contract_shape():
     ok, reasons = gl.validate_lens(gld.LENS)
     assert ok, reasons
     assert gld.LENS.name == "duplication"
-    assert gld.LENS.collector_version == "2.1.0"
+    assert gld.LENS.collector_version == "2.2.0"
+    assert gld.LENS.collector_version != "2.1.0"
     assert gld.LENS.collector_version != "1.0.0"
     assert gld.LENS.required_facts == ()
     assert gld.LENS.consequence_template is gld.CONSEQUENCE_TEMPLATE
@@ -1382,12 +1384,80 @@ def test_collector_version_bumped_with_digest_shape_change():
         src = fh.read()
     assert '"surfaceIds"' in src or "'surfaceIds'" in src
     assert '"unmeasured"' in src or "'unmeasured'" in src
-    assert 'collector_version = "2.1.0"' in src
+    assert 'collector_version = "2.2.0"' in src
+
+
+def test_collector_version_change_quietly_rebaselines_broadened_census(tmp_path):
+    """2.2.0: brace/arrow pathnames broaden the census — version delta must quiet-rebaseline."""
+    import guardian_store as gs
+    import guardian_sweep as gsw
+    from guardian_fixtures import init_calibrated_repo
+
+    brace_a = "src/{generated}.py"
+    brace_b = "weird=>name.py"
+    shared = ["SHARED_%d" % i for i in range(12)]
+    _write_pair(tmp_path, brace_a, brace_b, ["ONLY_A"] + shared, ["ONLY_B"] + shared)
+    pair_id = gld._pair_id(brace_a, brace_b)
+
+    report = _report([
+        _clone_entry(brace_a, brace_b, lines=12, fmt="python",
+                     start_a=2, end_a=13, start_b=2, end_b=13),
+    ])
+    run = _FakeJscpd(report, tracked=[brace_a, brace_b])
+
+    repo = init_calibrated_repo(tmp_path)
+    root = str(tmp_path / "store")
+    prior_digest = {
+        "schemaVersion": 1,
+        "pairs": {},
+        "surfaceIds": [],
+    }
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {
+            "duplication": {
+                "collectorVersion": "2.1.0",
+                "digest": prior_digest,
+            },
+        },
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+
+    bundle = gsw.collect(repo, lenses=[gld.LENS], root=root, run=run)
+
+    drift_reasons = [s.get("driftReason") for s in bundle["surfaced"]]
+    assert "new" not in drift_reasons
+    assert "resolved" not in drift_reasons
+    assert "worsened" not in drift_reasons
+    assert bundle["nextSnapshot"]["lenses"]["duplication"]["collectorVersion"] == "2.2.0"
+    new_digest = bundle["nextSnapshot"]["lenses"]["duplication"]["digest"]
+    assert pair_id in new_digest["pairs"]
+    # Non-vacuity: same-version diff would read the broadened population as false `new` drift.
+    assert pair_id in gld.LENS.diff(prior_digest, new_digest)["new"]
 
 
 def test_degrade_helper_shape():
     out = gld.LENS.degrade("missing tool")
     assert out == {"lens": "duplication", "degraded": True, "reason": "missing tool"}
+
+
+def test_vitals_reads_duplication_percent_from_digest():
+    reading = gld.LENS.vitals({"duplicationPercent": 4.25})
+    assert reading["duplicationPercent"] == (4.25, None)
+    missing = gld.LENS.vitals({"pairs": {}})
+    assert missing["duplicationPercent"][0] is None
+    assert missing["duplicationPercent"][1]
+
+
+def test_prior_digest_without_duplication_percent_diffs_cleanly():
+    prev = {"schemaVersion": 1, "pairs": {"duplication:a|b": {"longest": 5, "shared": 5}},
+            "surfaceIds": ["duplication:a|b"]}
+    cur = dict(prev)
+    cur["duplicationPercent"] = 2.5
+    d = gld.LENS.diff(prev, cur)
+    assert d == {"new": [], "worsened": [], "resolved": []}
 
 
 # --- Relative cwd forms must agree (symmetry with hotspots) ------------------------

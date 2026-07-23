@@ -1266,6 +1266,43 @@ def test_benching_does_not_defeat_ambiguous_identity_fail_open(tmp_path):
     assert bundle["reportCard"].get("fixture", {}).get("benched") is not True
 
 
+def test_vitals_carried_forward_digest_not_published_as_fresh(tmp_path):
+    """§4 stale-digest bug: a lens that did not run must not publish last sweep's vitals."""
+    import guardian_lens_duplication as gld_mod
+
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": True})
+    prior_digest = {
+        "duplicationPercent": 42.0,
+        "pairs": {},
+        "surfaceIds": [],
+    }
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {"duplicationPercent": 42.0},
+        "lenses": {
+            "duplication": {
+                "collectorVersion": gld_mod.LENS.collector_version,
+                "digest": prior_digest,
+            },
+        },
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+
+    class SkipLens(FixtureLens):
+        name = "duplication"
+        collector_version = gld_mod.LENS.collector_version
+
+        def collect(self, ctx):
+            raise AssertionError("duplication lens must not run this sweep")
+
+    bundle = gsw.collect(repo, lenses=[SkipLens()], root=root)
+    assert bundle["nextSnapshot"]["vitals"].get("duplicationPercent") is None
+    assert "duplicationPercent" in bundle["vitalsDelta"]["notCollected"]
+
+
 def test_verify_stdout_sentinel_absent_from_collect_bundle(tmp_path):
     """Trust boundary: raw verify stdout must not enter the model-facing bundle."""
     repo = init_calibrated_repo(tmp_path, verify_command="true")
@@ -1880,6 +1917,52 @@ def test_not_collected_lens_degrades_preserves_snapshot(tmp_path):
     assert bundle["funnel"]["degradedLenses"][0]["reason"] == "tool missing"
     assert "fixture" not in bundle["funnel"]["raised"]
     assert bundle["nextSnapshot"]["lenses"]["fixture"] == prior_entry
+
+
+def test_trend_ahead_of_snapshot_no_false_vitals_crossing(tmp_path):
+    """Snapshot stuck on s1 while trend has s2 — completeness join must use s1, not s2."""
+    import guardian_vitals as gv
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "sweepId": "s1",
+        "vitals": {"vulnCount": 2},
+        "lenses": {},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    gv.append_unlocked(repo, {"vulnCount": 2}, sweep_id="s1",
+                       completeness={"vulnCount": {"state": "complete"}},
+                       root=root, now="2026-07-21")
+    gap = "orphan trend row from failed snapshot write"
+    gv.append_unlocked(repo, {"vulnCount": 2}, sweep_id="s2",
+                       completeness={"vulnCount": {"state": "partial",
+                                                   "reason": gap}},
+                       root=root, now="2026-07-22")
+
+    class DepsLens:
+        name = "deps"
+
+        def vitals(self, digest):
+            return {"vulnCount": (2, gap)}
+
+        def collect(self, ctx):
+            return {"candidates": [], "digest": {}}
+
+        required_facts = ()
+        collector_version = "0"
+        red_lines = lambda self, c: []
+        diff = lambda self, p, c: {"new": [], "worsened": [], "resolved": []}
+        degrade = lambda self, r: {"lens": self.name, "reason": r}
+
+    bundle = gsw.collect(repo, lenses=[DepsLens()], root=root)
+    # Wrong join (s2 partial) would compare partial→partial with matching gap and
+    # fabricate a quiet delta; s1 complete vs cur partial must surface non-comparable.
+    assert bundle["vitalsDelta"].get("crossings") == []
+    not_comp = bundle["vitalsDelta"].get("delta", {}).get("_notComparable", {})
+    assert "vulnCount" in not_comp
+    assert gv.completeness_for_sweep(repo, "s1", root=root)["vulnCount"]["state"] == "complete"
 
 
 def test_partial_lens_degrades_and_processes_candidates(tmp_path):

@@ -47,6 +47,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import guardian_census  # noqa: E402
 import guardian_collect as gc                  # noqa: E402
 import guardian_coupling_adapters as adapters  # noqa: E402
 import store_core                              # noqa: E402
@@ -64,7 +65,13 @@ ID_SEP = ":"
 EDGE_ARROW = "->"
 TOOL_TOKEN_JS = "depcruise"
 TOOL_TOKEN_PY = "import-linter"
-COLLECTOR_VERSION = "1.0.0"
+# 1.1.0 (#564): the measured POPULATION changed — the source census and depcruise
+# output are confined to git-tracked files (never a repo-dir walk that admitted
+# untracked twins). The digest SCHEMA is unchanged, but a prior baseline may hold
+# now-excluded untracked edges; bump the version so guardian_sweep (any version delta
+# ⇒ lens_new) records a quiet re-baseline FOR DRIFT — excluded junk does not surface
+# as false `resolved` drift.
+COLLECTOR_VERSION = "1.1.0"
 
 # Cluster normalization, stated once so identity is auditable:
 #   - separator: forward slash, always (Windows backslashes are folded)
@@ -397,16 +404,35 @@ def _is_regular_file(path):
 # census — lens-owned ecosystem detection (recursive; the sweep's is root-only)
 # ======================================================================================
 
-def census(repo, ecosystem):
-    """Walk the repo → {"workspaces": [...], "sources": {ws: {lang: n}}, "files": {...}}.
+def census(ctx, repo, ecosystem):
+    """Walk the repo → ({"workspaces": [...], ...}, None) or (None, git-reason).
 
     Workspaces are manifest-rooted (nested `package.json` / `pyproject.toml` etc.), with
     the repo root always present, and each file is attributed to its NEAREST enclosing
     workspace so one collapsed workspace cannot hide inside a healthy repo-wide total.
 
-    For the Python ecosystem, only regular non-symlink files are censused — a committed
-    symlink or FIFO must never reach `_python_edges` open().
+    The returned file set is the intersection with the git-tracked census; workspace
+    discovery only admits manifests that are themselves tracked. A git census failure
+    returns ``(None, reason)`` — never an empty set that would read as a clean repo.
+
+    For the Python ecosystem, only regular non-symlink tracked files are censused — a
+    committed symlink or FIFO must never reach `_python_edges` open().
     """
+    res = guardian_census._git(ctx, repo, ["ls-files", "-z"])
+    if not res.get("ok"):
+        return None, res.get("reason")
+    git_tracked_names = set()
+    tracked_set = set()
+    for raw in (res.get("stdout") or "").split("\0"):
+        if not raw:
+            continue
+        git_tracked_names.add(raw)
+        full = os.path.join(repo, raw)
+        if not os.path.isfile(full):
+            continue
+        if os.path.islink(full):
+            continue
+        tracked_set.add(raw)
     ext_lang = JS_EXT_LANG if ecosystem == "js" else PY_EXT_LANG
     manifests = (JS_MANIFEST,) if ecosystem == "js" else PY_MANIFESTS
     workspaces = {ROOT_WORKSPACE}
@@ -417,13 +443,26 @@ def census(repo, ecosystem):
         # Preserve on-disk case for filesystem access; normalize only at identity sites.
         rel_dir = _rel_posix(repo, os.path.relpath(dirpath, repo))
         rel_dir = "" if rel_dir in (".", "") else rel_dir
-        if rel_dir and any(m in filenames for m in manifests):
-            workspaces.add(rel_dir)
+        for m in manifests:
+            if m in filenames:
+                manifest_rel = (rel_dir + CLUSTER_SEP + m) if rel_dir else m
+                if manifest_rel in tracked_set:
+                    workspaces.add(rel_dir if rel_dir else ROOT_WORKSPACE)
+                    break
         for fn in sorted(filenames):
             lang = ext_lang.get(_ext_of(fn))
             if not lang:
                 continue
             rel_file = rel_dir + CLUSTER_SEP + fn if rel_dir else fn
+            if rel_file not in tracked_set:
+                # Tracked non-regular paths (symlinks/FIFOs) excluded from tracked_set
+                # by exclude_symlinks still degrade Python measurement; untracked paths
+                # are simply outside the population and must not degrade.
+                if ecosystem == "py" and rel_file in git_tracked_names:
+                    abs_path = os.path.join(dirpath, fn)
+                    if not _is_regular_file(abs_path):
+                        skipped_non_regular.append(rel_file)
+                continue
             abs_path = os.path.join(dirpath, fn)
             # Python census: skip non-regular/symlinks (JS collector has its own walk).
             if ecosystem == "py" and not _is_regular_file(abs_path):
@@ -438,13 +477,14 @@ def census(repo, ecosystem):
         sources.setdefault(ws, {}).setdefault(lang, 0)
         sources[ws][lang] += 1
         attributed.append((ws, rel_file, lang))
-    return {
+    return ({
         "workspaces": sorted(workspaces, key=lambda w: _norm_rel("", w)),
         "sources": sources,
         "files": attributed,
         "total": len(files),
         "skippedNonRegular": skipped_non_regular,
-    }
+        "trackedSet": tracked_set,
+    }, None)
 
 
 def _ext_of(filename):
@@ -725,10 +765,22 @@ class CouplingLens(object):
         repo = _repo_root(ctx)
         prev = ctx.get("prevDigest") if isinstance(ctx.get("prevDigest"), dict) else None
 
-        js_census = census(repo, "js")
-        py_census = census(repo, "py")
+        js_census, js_census_err = census(ctx, repo, "js")
+        py_census, py_census_err = census(ctx, repo, "py")
 
-        if js_census["total"] == 0 and py_census["total"] == 0:
+        js_total = js_census["total"] if js_census else 0
+        py_total = py_census["total"] if py_census else 0
+
+        if js_total == 0 and py_total == 0:
+            reasons = []
+            if js_census_err:
+                reasons.append("js: git ls-files failed: %s" % js_census_err)
+            if py_census_err:
+                reasons.append("py: git ls-files failed: %s" % py_census_err)
+            if reasons:
+                return dict(
+                    candidates=[], digest=None,
+                    **gc.not_collected("; ".join(reasons)))
             return dict(
                 candidates=[], digest=None,
                 **gc.not_collected(
@@ -746,7 +798,12 @@ class CouplingLens(object):
         total_parsed = 0
         total_sources = 0
 
-        if js_census["total"] > 0:
+        if js_census_err:
+            js_fail = self._eco_fail(
+                "js", "%s js: git ls-files failed: %s" % (self.name, js_census_err))
+            ecosystems["js"] = js_fail["section"]
+            reasons.append(js_fail["reason"])
+        elif js_total > 0:
             js = self._measure_js(ctx, repo, js_census, prev)
             ecosystems["js"] = js["section"]
             if js["status"] in ("collected", "partial"):
@@ -760,7 +817,12 @@ class CouplingLens(object):
                 reasons.append(js["reason"])
         # else: ecosystem absent — not a degradation
 
-        if py_census["total"] > 0:
+        if py_census_err:
+            py_fail = self._eco_fail(
+                "py", "%s py: git ls-files failed: %s" % (self.name, py_census_err))
+            ecosystems["py"] = py_fail["section"]
+            reasons.append(py_fail["reason"])
+        elif py_total > 0:
             py = self._measure_py(ctx, repo, py_census, prev)
             ecosystems["py"] = py["section"]
             if py["status"] in ("collected", "partial"):
@@ -785,8 +847,8 @@ class CouplingLens(object):
         digest = self._build_digest(
             ecosystems, all_rows, candidates, vocabulary, check, versions,
             per_workspace, total_parsed, total_sources,
-            js_census if js_census["total"] else None,
-            py_census if py_census["total"] else None)
+            js_census if js_census and js_census["total"] else None,
+            py_census if py_census and py_census["total"] else None)
 
         size = len(json.dumps(digest, sort_keys=True).encode("utf-8"))
         if size > DIGEST_MAX_BYTES:
@@ -840,6 +902,50 @@ class CouplingLens(object):
     def degrade(self, reason):
         return {"lens": self.name, "degraded": True, "reason": reason}
 
+    def vitals(self, digest):
+        """→ {vital_name: (value | None, reason | None)}
+
+        (value, None)    -> complete       — a full measurement
+        (value, reason)  -> partial        — a real number over the portion measured,
+                                             with `reason` naming exactly what is missing
+        (None,  reason)  -> not-collected  — nothing publishable; `reason` says why
+        """
+        try:
+            if not isinstance(digest, dict):
+                return {"couplingEdges": (None, "digest is not a dict")}
+            if digest.get("outcome") != "ok":
+                return {"couplingEdges": (None, "digest outcome is not ok")}
+            counters = digest.get("counters")
+            if not isinstance(counters, dict):
+                return {"couplingEdges": (None, "counters missing")}
+            edges = counters.get("crossClusterEdges")
+            if edges is None:
+                return {"couplingEdges": (None, "counters.crossClusterEdges missing")}
+            if isinstance(edges, bool) or not isinstance(edges, (int, float)):
+                return {"couplingEdges": (None, "counters.crossClusterEdges is not numeric")}
+            try:
+                value = float(edges)
+            except (TypeError, ValueError):
+                return {"couplingEdges": (None, "counters.crossClusterEdges is not numeric")}
+            if value != value:  # NaN
+                return {"couplingEdges": (None, "counters.crossClusterEdges is not finite")}
+            ecosystems = digest.get("ecosystems")
+            if not isinstance(ecosystems, dict):
+                return {"couplingEdges": (None, "ecosystems missing")}
+            incomplete = []
+            for eco, section in ecosystems.items():
+                if not isinstance(section, dict):
+                    incomplete.append("%s: malformed ecosystem section" % eco)
+                    continue
+                if section.get("status") != "collected":
+                    incomplete.append("%s: %s" % (
+                        eco, section.get("status") or "unknown status"))
+            if incomplete:
+                return {"couplingEdges": (value, "; ".join(incomplete))}
+            return {"couplingEdges": (value, None)}
+        except Exception as exc:
+            return {"couplingEdges": (None, "vitals extraction failed: %s" % exc)}
+
     # ------------------------------------------------------------------ JS measure
 
     def _measure_js(self, ctx, repo, src_census, prev):
@@ -888,9 +994,12 @@ class CouplingLens(object):
 
         payload = parsed.get("payload") or {}
         versions = adapters.depcruise_versions(payload)
+        tracked_set = src_census.get("trackedSet") or set()
+        parsed_paths, dep_edges, untracked_filtered = _filter_depcruise_to_tracked(
+            repo, payload, tracked_set)
         # Dedup once (defect F2): a report listing the same module path twice must not
         # inflate len(parsed_paths), which feeds the cliff tripwire and modulesParsed.
-        parsed_paths = _dedup_norm_paths(repo, adapters.depcruise_parsed_modules(payload))
+        parsed_paths = _dedup_norm_paths(repo, parsed_paths)
         parsed_census = _parsed_census(repo, parsed_paths, src_census, JS_EXT_LANG)
         collapse = detect_collapse(src_census, parsed_census)
         if collapse:
@@ -908,8 +1017,7 @@ class CouplingLens(object):
                    cliff["modules"], cliff["priorModules"], cliff["sources"]))
             return self._eco_fail("js", reason)
 
-        rows = _classify_edges(
-            repo, adapters.depcruise_edges(payload), src_census["workspaces"])
+        rows = _classify_edges(repo, dep_edges, src_census["workspaces"])
         # Tag rows with tool token for candidate minting later.
         for row in rows:
             row["toolToken"] = TOOL_TOKEN_JS
@@ -922,6 +1030,17 @@ class CouplingLens(object):
             }
             for ws in src_census["workspaces"]
         }
+        section = {
+            "status": "collected",
+            "reason": None,
+            "tool": adapters.DEPCRUISE_TOOL,
+            "outcome": outcome,
+            "sourcesCensused": src_census["total"],
+            "modulesParsed": len(parsed_paths),
+            "argv": argv,
+        }
+        if untracked_filtered:
+            section["untrackedFiltered"] = untracked_filtered
         return {
             "status": "collected",
             "reason": None,
@@ -929,15 +1048,7 @@ class CouplingLens(object):
             "versions": versions,
             "parsed_total": len(parsed_paths),
             "per_workspace": per_ws,
-            "section": {
-                "status": "collected",
-                "reason": None,
-                "tool": adapters.DEPCRUISE_TOOL,
-                "outcome": outcome,
-                "sourcesCensused": src_census["total"],
-                "modulesParsed": len(parsed_paths),
-                "argv": argv,
-            },
+            "section": section,
         }
 
     # ----------------------------------------------------------------- Python measure
@@ -1144,7 +1255,10 @@ class CouplingLens(object):
         matrix, truncated = _truncate_matrix(safe_full)
         excluded = {}
         eligible_rows = 0
+        cross_cluster_edges = 0
         for row in rows:
+            if row["fromCluster"] != row["toCluster"]:
+                cross_cluster_edges += 1
             if row["exclusion"] is None:
                 eligible_rows += 1
             else:
@@ -1174,6 +1288,7 @@ class CouplingLens(object):
             "eligible": {c["id"]: c["metric"] for c in safe_candidates},
             "counters": {
                 "edges": len(rows),
+                "crossClusterEdges": cross_cluster_edges,
                 "eligible": eligible_rows,
                 "surfaced": len(safe_candidates),
                 "excludedByBar": len(rows) - eligible_rows,
@@ -1294,8 +1409,14 @@ class CouplingLens(object):
                 "clean_stdout": clean,
                 "exit": 1,
                 "clean_exit": 0,
-                "stdout_by_tool": {"depcruise": reported},
-                "clean_stdout_by_tool": {"depcruise": clean},
+                "stdout_by_tool": {
+                    "git": "package.json\0src/app.ts\0",
+                    "depcruise": reported,
+                },
+                "clean_stdout_by_tool": {
+                    "git": "package.json\0src/app.ts\0",
+                    "depcruise": clean,
+                },
             },
         }
 
@@ -1409,6 +1530,29 @@ def _js_targets(repo, src_census):
         return ["."]  # sources sit at the repo root; --exclude keeps vendored trees out
     real = sorted(t for t in tops if os.path.isdir(os.path.join(repo, t)))
     return real or ["."]
+
+
+def _filter_depcruise_to_tracked(repo, payload, tracked_set):
+    """Keep only depcruise modules/edges whose paths are in the tracked census."""
+    tracked_norm = {_norm_rel(repo, p) for p in (tracked_set or set())}
+    modules_in = adapters.depcruise_parsed_modules(payload)
+    edges_in = adapters.depcruise_edges(payload)
+    modules_out = []
+    edges_out = []
+    dropped = 0
+    for path in modules_in:
+        if _norm_rel(repo, path) in tracked_norm:
+            modules_out.append(path)
+        else:
+            dropped += 1
+    for edge in edges_in:
+        f = _norm_rel(repo, edge.get("from", ""))
+        t = _norm_rel(repo, edge.get("to", ""))
+        if f in tracked_norm and t in tracked_norm:
+            edges_out.append(edge)
+        else:
+            dropped += 1
+    return modules_out, edges_out, dropped
 
 
 def _dedup_norm_paths(repo, parsed_paths):

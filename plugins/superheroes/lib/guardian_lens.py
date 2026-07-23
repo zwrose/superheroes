@@ -158,6 +158,11 @@ to raise and running collect() — that a tool-free lens invokes neither
   - degrade(reason) -> {"lens": name, "degraded": True, "reason": reason}
   - conformance_cases() -> dict (optional on the protocol; REQUIRED for production lenses)
       Maps each REQUIRED_CONFORMANCE_SCENARIOS name to a harness case (see module docstring).
+  - vitals(digest) -> {vital_name: (value | None, reason | None)} (optional)
+      Optional hook for lens-owned vitals the sweep reads via guardian_vitals. A lens
+      without this method contributes no vitals. Each 2-tuple encodes completeness:
+      (value, None) is complete; (value, reason) is partial over the measured portion;
+      (None, reason) is not-collected. Extractors must be total and non-raising.
   - uses_external_tools: bool (optional class attribute, defaults True) — set False for a
       stdlib-only lens that spawns nothing; the harness then drives the tool-free scenarios
       (TOOL_FREE_CONFORMANCE_SCENARIOS) and proves no spawn happens (see module docstring).

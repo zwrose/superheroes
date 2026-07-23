@@ -160,7 +160,7 @@ carries `id`, `disposition`, `date`, `issue`, `metricAtDisposition`, `reason`, a
 `verified-fixed`, `accepted`, and `reopened` count for; `triaged-out` and `declined` count
 against (authoritative home: `guardian_ledger.OUTCOMES_FOR` / `OUTCOMES_AGAINST`). Vitals
 tracked each sweep (`locTotal`, `fileCount`, `duplicationPercent`, `todoCount`, `majorsBehind`,
-`vulnCount`, `suiteRuntimeSeconds`, `suiteTestCount`, `suiteSkipped`; authoritative home:
+`vulnCount`, `couplingEdges`, `suiteRuntimeSeconds`, `suiteTestCount`, `suiteSkipped`; authoritative home:
 `guardian_vitals.VITALS`) each carry a drift threshold (authoritative home:
 `guardian_vitals.DRIFT_THRESHOLDS`).
 

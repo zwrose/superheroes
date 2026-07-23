@@ -143,10 +143,8 @@ def _real_seam_both_modes(tmp_path, *, mode):
     }
     gs.write_snapshot_cas(repo, snap, None, root=root)
 
-    # Production vital keys on the digest — fixture lens name won't feed DIGEST_SOURCES
-    # (those look for duplication/deps lenses), so also attach a companion digest via a
-    # second lens-shaped entry is out of FixtureLens scope; suite + repo vitals are the
-    # seam under test here. Provide a digests map by using a named lens that matches.
+    # Named companion lenses publish lens-owned vitals via vitals(digest); a lens
+    # without that hook must stay not-collected (never a measured zero).
     class DupDigestLens(FixtureLens):
         name = "duplication"
         collector_version = "0.0.0-test"
@@ -159,17 +157,38 @@ def _real_seam_both_modes(tmp_path, *, mode):
                     "percentDuplicated": 12.5,
                 })
 
+        def vitals(self, digest):
+            return {"duplicationPercent": (digest.get("duplicationPercent"), None)}
+
     class DepsDigestLens(FixtureLens):
+        name = "dependencies"
+
         def __init__(self):
             super().__init__(
                 name="dependencies", emit_red_line=False, emit_normal=False,
                 digest={"majorsBehind": 2, "vulnCount": 1})
 
+        def vitals(self, digest):
+            return {
+                "majorsBehind": (digest.get("majorsBehind"), None),
+                "vulnCount": (digest.get("vulnCount"), None),
+            }
+
+    class CouplingNoVitalsLens(FixtureLens):
+        name = "coupling"
+
+        def __init__(self):
+            super().__init__(
+                name="coupling", emit_red_line=False, emit_normal=False,
+                digest={"couplingEdges": 99})
+
     lens = FixtureLens(
         emit_red_line=True, emit_normal=True, digest=digest,
         diff_new=["fixture:normal"], metric=5)
     bundle = gsw.collect(
-        cwd=repo, lenses=[lens, DupDigestLens(), DepsDigestLens()], root=root)
+        cwd=repo,
+        lenses=[lens, DupDigestLens(), DepsDigestLens(), CouplingNoVitalsLens()],
+        root=root)
     assert funnel_conserved(bundle)
     assert bundle["storageMode"] == mode
     assert bundle["reportCard"]["fixture"]["benched"] is True
@@ -187,6 +206,11 @@ def _real_seam_both_modes(tmp_path, *, mode):
     assert snap_vitals.get("duplicationPercent") == 12.5
     assert snap_vitals.get("majorsBehind") == 2
     assert snap_vitals.get("vulnCount") == 1
+    assert snap_vitals.get("couplingEdges") is None
+    assert snap_vitals.get("couplingEdges") != 0
+    coupling_reason = (
+        (bundle.get("vitalsDelta") or {}).get("notCollected") or {}).get("couplingEdges")
+    assert isinstance(coupling_reason, str) and "no vitals() hook" in coupling_reason
     assert isinstance(snap_vitals.get("locTotal"), int)
     assert isinstance(snap_vitals.get("fileCount"), int)
 
@@ -267,7 +291,9 @@ def _real_seam_both_modes(tmp_path, *, mode):
         emit_red_line=True, emit_normal=True, digest={"v": 3, "duplicationPercent": 12.5},
         diff_new=["fixture:normal"], metric=5)
     bundle3 = gsw.collect(
-        cwd=repo, lenses=[lens2, DupDigestLens(), DepsDigestLens()], root=root)
+        cwd=repo,
+        lenses=[lens2, DupDigestLens(), DepsDigestLens(), CouplingNoVitalsLens()],
+        root=root)
     assert funnel_conserved(bundle3)
     assert bundle3["sweepId"] != bundle["sweepId"]
     result2 = gsw.finalize(repo, bundle3, _dispositions_for(bundle3), root=root)

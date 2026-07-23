@@ -25,21 +25,12 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import guardian_census  # noqa: E402
 import guardian_collect as gc  # noqa: E402
 import guardian_lens  # noqa: E402
 
 MIN_BLOCK_LINES = 5
 TOP_N = 25
-
-# jscpd is handed the tracked-file census as explicit operands (never the repo dir), so a
-# very large repo could push the argv past the kernel's ARG_MAX. macOS ARG_MAX is 262144
-# bytes and the sanitized child env consumes a share of that; cap the operand payload well
-# under it. The bound is measured on the ABSOLUTIZED payload (invoke prepends the repo
-# realpath + a path separator to every operand before execve), not the repo-relative bytes,
-# so the guard reflects the real argv the kernel sees. On overflow the lens degrades
-# HONESTLY (not-collected) rather than silently truncating the file list or falling back to
-# scanning cwd (which would re-open #564).
-MAX_TRACKED_OPERAND_BYTES = 100_000
 
 # difflib re-measure budgets — rank by jscpd proxy first, then measure within caps.
 MAX_PAIRS_MEASURED = 400
@@ -109,49 +100,6 @@ def _repo_rel(cwd, path):
     return path
 
 
-def _git(ctx, cwd, args, timeout=gc.DEFAULT_TIMEOUT):
-    """Run a git subcommand via run_tool with an absolute ``-C`` repo target.
-
-    ``git -C <abs repo>`` targets the repo even though invoke runs collectors from a
-    neutral cwd (git resolves via PATH; it is not a repo-local executable).
-    """
-    return gc.run_tool(["git", "-C", cwd, *args], ctx=ctx, cwd=cwd, timeout=timeout)
-
-
-def _tracked_existing_files(ctx, cwd):
-    """Repo-relative paths that are both ``git ls-files`` tracked and present on disk.
-
-    Shares its census shape with ``guardian_lens_hotspots.tracked_existing_files`` but now
-    DIVERGES from it: this lens excludes symlinks (see below) because it hands the census to
-    jscpd as content to scan, whereas hotspots only reads churn metadata. Unifying the two
-    into a shared param'd helper (symlink policy as a parameter) is a tracked follow-up — do
-    NOT extract here. Returns ``(files, None)`` on success or ``(None, reason)`` on a git
-    failure — a git failure must NEVER be read as an empty tracked set (that would erase the
-    baseline); collect() turns the reason into ``not-collected`` so the prior snapshot
-    survives.
-    """
-    res = _git(ctx, cwd, ["ls-files", "-z"])
-    if not res["ok"]:
-        return None, res["reason"]
-    out = set()
-    for raw in (res.get("stdout") or "").split("\0"):
-        if not raw:
-            continue
-        # Never accept brace-rename garbage into the tracked set.
-        if "=>" in raw or "{" in raw:
-            continue
-        full = os.path.join(cwd, raw)
-        # Census only regular, NON-symlink files. os.path.isfile follows symlinks, so a
-        # tracked symlink whose target is an UNTRACKED file under the repo would pass both
-        # this filter and invoke's under-repo check (realpath stays under-repo) — jscpd
-        # would then scan the untracked target's bytes, re-opening #564 for the symlink
-        # case. A tracked symlink's own "content" is the link, not source to dedup, so
-        # excluding it keeps the census faithful to tracked content only.
-        if os.path.isfile(full) and not os.path.islink(full):
-            out.add(raw)
-    return out, None
-
-
 def _read_normalized_lines(path):
     """Return rstrip'd lines, or None if unreadable/binary."""
     try:
@@ -209,6 +157,24 @@ def _decode_report(stdout):
     except ValueError:
         return None, "unparseable jscpd report"
     return obj, None
+
+
+def _reported_duplication_percent(report):
+    """jscpd's summary duplication percentage, or None when absent."""
+    stats = report.get("statistics") if isinstance(report, dict) else None
+    total = stats.get("total") if isinstance(stats, dict) else None
+    if not isinstance(total, dict):
+        return None
+    pct = total.get("percentage")
+    if isinstance(pct, bool) or not isinstance(pct, (int, float)):
+        return None
+    try:
+        pct = float(pct)
+    except (TypeError, ValueError):
+        return None
+    if pct != pct:  # NaN
+        return None
+    return pct
 
 
 def _reported_clone_count(report):
@@ -613,7 +579,19 @@ class DuplicationLens:
     # genuine tracked clone at/above threshold re-fires as a `large-fresh-clone` red line
     # on the first post-fix sweep. That is by design — a red line must always surface,
     # even across a re-baseline.
-    collector_version = "2.1.0"
+    # 2.2.0 (#566): the census POPULATION broadened again — guardian_census.tracked_existing_files
+    # deliberately retains legitimate tracked pathnames containing `{` or `=>` (e.g.
+    # `src/{generated}.py`). The old private census dropped them. The digest SCHEMA is
+    # unchanged, but a prior baseline may omit pairs that only the broadened population
+    # admits; bump the version so guardian_sweep.py (any version delta ⇒ lens_new) records
+    # a quiet re-baseline FOR DRIFT — the new/worsened/resolved diff runs with _prev_digest
+    # treated as absent, so the newly-admitted files do not surface as false `new` drift and
+    # excluded pairs do not surface as false `resolved` drift. This "quiet" scope is DRIFT
+    # ONLY: red_lines() still runs unconditionally (with prev_pairs empty on a version-delta
+    # sweep), so a genuine tracked clone at/above threshold re-fires as a `large-fresh-clone`
+    # red line on the first post-fix sweep. That is by design — a red line must always surface,
+    # even across a re-baseline.
+    collector_version = "2.2.0"
     required_facts = ()
     cost = {
         "collectorSeconds": 0.9,
@@ -706,7 +684,8 @@ class DuplicationLens:
         # never the repo dir. Scanning the dir walked untracked build worktrees
         # (checkouts/) and nested .git internals, pairing every file with its repo twin
         # (173 false-positive large-fresh-clone red lines in the inaugural sweep).
-        tracked, census_reason = _tracked_existing_files(ctx, cwd)
+        tracked, census_reason = guardian_census.tracked_existing_files(
+            ctx, cwd, exclude_symlinks=True)
         if tracked is None:
             # A git failure must degrade — NEVER become an empty digest that erases the
             # baseline. not-collected (digest None) hits diff()'s cur_digest-is-None guard.
@@ -737,10 +716,8 @@ class DuplicationLens:
         # the real argv and could pass a payload that then hits E2BIG. An absolutized
         # operand is at most `realpath(cwd)/` + the relative path, so this is a safe upper
         # bound.
-        abs_prefix_bytes = len(os.path.realpath(cwd).encode("utf-8")) + 1
-        operand_bytes = sum(
-            len(p.encode("utf-8")) + abs_prefix_bytes for p in operands)
-        if operand_bytes > MAX_TRACKED_OPERAND_BYTES:
+        operand_bytes = guardian_census.operand_payload_bytes(cwd, operands)
+        if operand_bytes > guardian_census.MAX_TRACKED_OPERAND_BYTES:
             return {
                 "candidates": [],
                 "digest": None,
@@ -748,7 +725,7 @@ class DuplicationLens:
                     "tracked-file operand payload is %d bytes across %d files, exceeding "
                     "the %d-byte cap (ARG_MAX headroom) — cannot scan without risking a "
                     "truncated argv" % (operand_bytes, len(operands),
-                                        MAX_TRACKED_OPERAND_BYTES)),
+                                        guardian_census.MAX_TRACKED_OPERAND_BYTES)),
             }
 
         # jscpd's json reporter writes a FILE, but run_tool captures stdout — aim the
@@ -845,6 +822,9 @@ class DuplicationLens:
             "pairs": digest_pairs,
             "surfaceIds": surface_ids,
         }
+        dup_pct = _reported_duplication_percent(report)
+        if dup_pct is not None:
+            digest["duplicationPercent"] = dup_pct
         drift_suppressed = _count_drift_suppressed_by_cap(
             prev_pairs, digest_pairs, self._surface_ids,
         )
@@ -914,6 +894,44 @@ class DuplicationLens:
             "worsened": filtered_worsened,
             "resolved": raw["resolved"],
         }
+
+    def vitals(self, digest):
+        """→ {vital_name: (value | None, reason | None)}
+
+        (value, None)    -> complete       — a full measurement
+        (value, reason)  -> partial        — a real number over the portion measured,
+                                             with `reason` naming exactly what is missing
+        (None,  reason)  -> not-collected  — nothing publishable; `reason` says why
+        """
+        if not isinstance(digest, dict):
+            return {"duplicationPercent": (None, "digest is not an object")}
+        if "duplicationPercent" not in digest:
+            return {
+                "duplicationPercent": (
+                    None,
+                    "digest has no duplicationPercent field (jscpd omitted the statistic "
+                    "or collection was degraded)",
+                ),
+            }
+        value = digest.get("duplicationPercent")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return {
+                "duplicationPercent": (
+                    None, "duplicationPercent is not a number"),
+            }
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return {
+                "duplicationPercent": (
+                    None, "duplicationPercent is not a number"),
+            }
+        if value != value:
+            return {
+                "duplicationPercent": (
+                    None, "duplicationPercent is not a number"),
+            }
+        return {"duplicationPercent": (value, None)}
 
     def red_lines(self, candidates):
         """Price red lines off the RE-MEASURED longest block, never jscpd's lines.

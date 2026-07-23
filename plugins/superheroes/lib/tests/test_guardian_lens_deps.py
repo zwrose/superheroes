@@ -2776,3 +2776,122 @@ def test_unmeasurable_liveness_surfaces_through_sweep(tmp_path):
     assert cid in surfaced_ids, (
         "unmeasurable liveness must reach surfaced, not die in killedByDrift; "
         "surfaced=%r killed=%r" % (surfaced_ids, bundle["funnel"]["killedByDrift"]))
+
+
+def test_vitals_vuln_count_partial_python_derives_reason_from_section():
+    """Partial python vulns gap reason comes from the section's own reason field."""
+    section_reason = "some advisories unrated"
+    digest = {
+        "ecosystems": {
+            "node": {
+                "vulns": {
+                    "status": "collected",
+                    "items": {"a": {"id": "a"}, "b": {"id": "b"}},
+                },
+            },
+            "python": {
+                "vulns": {
+                    "status": "partial",
+                    "items": {"c": {"id": "c"}},
+                    "reason": section_reason,
+                },
+            },
+        },
+    }
+    value, reason = gld.LENS.vitals(digest)["vulnCount"]
+    assert value == 3
+    assert reason is not None
+    assert section_reason in reason
+    assert "python vulns:" in reason
+    assert "pip-audit" not in reason
+    assert "#569" not in reason
+
+
+def test_vitals_vuln_count_partial_uses_section_reason_not_template():
+    """A different partial reason is reported as-is — not substituted from a constant."""
+    custom_reason = "severity source offline this sweep"
+    digest = {
+        "ecosystems": {
+            "python": {
+                "vulns": {
+                    "status": "partial",
+                    "items": {"x": {"id": "x"}},
+                    "reason": custom_reason,
+                },
+            },
+        },
+    }
+    value, reason = gld.LENS.vitals(digest)["vulnCount"]
+    assert value == 1
+    assert reason == "python vulns: %s" % custom_reason
+
+
+def test_vitals_vuln_count_partial_without_reason_falls_back_generic():
+    """Partial section with no reason gets a generic gap naming ecosystem and part."""
+    digest = {
+        "ecosystems": {
+            "python": {
+                "vulns": {
+                    "status": "partial",
+                    "items": {"x": {"id": "x"}},
+                },
+            },
+        },
+    }
+    value, reason = gld.LENS.vitals(digest)["vulnCount"]
+    assert value == 1
+    assert reason == "python vulns: partial"
+    assert "pip-audit" not in reason
+    assert "#569" not in reason
+
+
+def test_vitals_majors_behind_partial_freshness_derives_reason_from_section():
+    """Partial freshness gap reason comes from the section's own reason field."""
+    section_reason = "registry query timed out"
+    digest = {
+        "ecosystems": {
+            "node": {
+                "freshness": {
+                    "status": "partial",
+                    "reason": section_reason,
+                    "items": {},
+                },
+            },
+        },
+    }
+    value, reason = gld.LENS.vitals(digest)["majorsBehind"]
+    assert value is None
+    assert reason == "node freshness: %s" % section_reason
+
+
+def test_vitals_majors_behind_partial_freshness_without_reason_falls_back_generic():
+    digest = {
+        "ecosystems": {
+            "node": {
+                "freshness": {
+                    "status": "partial",
+                    "items": {},
+                },
+            },
+        },
+    }
+    value, reason = gld.LENS.vitals(digest)["majorsBehind"]
+    assert value is None
+    assert reason == "node freshness: partial"
+
+
+def test_vitals_majors_behind_sums_collected_ecosystems():
+    digest = {
+        "ecosystems": {
+            "node": {
+                "freshness": {
+                    "status": "collected",
+                    "majorsBehindTotal": 4,
+                    "items": {},
+                },
+            },
+        },
+    }
+    value, reason = gld.LENS.vitals(digest)["majorsBehind"]
+    assert value == 4
+    assert reason is None

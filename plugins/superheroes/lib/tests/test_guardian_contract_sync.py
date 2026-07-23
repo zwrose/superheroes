@@ -448,3 +448,50 @@ def test_module_export_equality_guard_is_not_vacuous():
     # An extra undeclared export and a missing export must both break equality.
     assert (exported | {"phantom-lens"}) != declared
     assert exported != (declared | {"phantom-lens"})
+
+
+def _registered_production_lens_names():
+    guardian_lens.load_production_lenses()
+    return {lens.name for lens in guardian_lens.REGISTRY}
+
+
+def _vitals_owning_lens_names():
+    guardian_lens.load_production_lenses()
+    return {
+        lens.name for lens in guardian_lens.REGISTRY
+        if callable(getattr(lens, "vitals", None))
+    }
+
+
+def test_vital_lens_sources_match_production_lenses():
+    """VITAL_LENS_SOURCES ↔ registered production lenses (§11 drift guard, both directions).
+
+    Every declared owner must resolve to a real registered lens name; every production lens
+    that publishes vitals must be declared as an owner — a rename or orphan mapping fails."""
+    registered = _registered_production_lens_names()
+    assert registered, "no production lenses registered — guard is vacuous"
+    vitals_owners = _vitals_owning_lens_names()
+    covered_owners = set()
+    for lens_names in guardian_vitals.VITAL_LENS_SOURCES.values():
+        hits = [name for name in lens_names if name in registered]
+        assert hits, (
+            "VITAL_LENS_SOURCES declares owner(s) %s but none resolve to a registered "
+            "production lens (registered: %s)"
+            % (lens_names, sorted(registered)))
+        covered_owners.update(hits)
+    missing_owners = vitals_owners - covered_owners
+    assert not missing_owners, (
+        "production lens(es) with vitals() are not declared in VITAL_LENS_SOURCES: %s"
+        % sorted(missing_owners))
+
+
+def test_vital_lens_sources_guard_is_not_vacuous():
+    """The VITAL_LENS_SOURCES guard must fail closed when a side drifts."""
+    registered = _registered_production_lens_names()
+    vitals_owners = _vitals_owning_lens_names()
+    covered = set()
+    for names in guardian_vitals.VITAL_LENS_SOURCES.values():
+        covered.update(n for n in names if n in registered)
+    assert vitals_owners <= covered
+    assert covered == vitals_owners
+    assert (vitals_owners | {"phantom-lens"}) != covered

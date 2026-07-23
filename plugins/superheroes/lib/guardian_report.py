@@ -47,15 +47,20 @@ def _storage_header(bundle):
             "durability requires a PR")
 
 
-def _fmt_delta_entry(name, move):
+def _fmt_delta_entry(name, move, *, completeness=None):
     if not isinstance(move, dict):
         return "%s: %s" % (name, move)
     prev, cur = move.get("prev"), move.get("cur")
     change = move.get("change")
-    return "%s: %s → %s (%s)" % (name, prev, cur, change)
+    text = "%s: %s → %s (%s)" % (name, prev, cur, change)
+    entry = (completeness or {}).get(name) if isinstance(completeness, dict) else None
+    if isinstance(entry, dict) and entry.get("state") == "partial":
+        reason = entry.get("reason") or "incomplete measurement"
+        text = "%s (partial: %s)" % (text, reason)
+    return text
 
 
-def _render_vitals(lines, vd):
+def _render_vitals(lines, vd, snapshot=None):
     lines.append(HEADER_VITALS)
     lines.append("")
     if not vd:
@@ -79,22 +84,48 @@ def _render_vitals(lines, vd):
     sources = vd.get("sources") if isinstance(vd, dict) else None
     if not isinstance(sources, dict):
         sources = {}
+    completeness = vd.get("completeness") if isinstance(vd, dict) else None
+    if not isinstance(completeness, dict):
+        completeness = {}
+    snapshot_vitals = {}
+    if isinstance(snapshot, dict):
+        raw = snapshot.get("vitals")
+        if isinstance(raw, dict):
+            snapshot_vitals = raw
+
+    partial_vitals = {
+        name for name, entry in completeness.items()
+        if isinstance(entry, dict) and entry.get("state") == "partial"
+    }
+
+    not_comparable = {}
+    if isinstance(delta, dict):
+        raw_nc = delta.get("_notComparable")
+        if isinstance(raw_nc, dict):
+            not_comparable = raw_nc
+    skipped_comparisons = bool(not_comparable)
 
     crossing_vitals = set()
     if crossings:
         for c in crossings:
             if not isinstance(c, dict):
                 continue
-            crossing_vitals.add(c.get("vital"))
+            vital = c.get("vital")
+            crossing_vitals.add(vital)
             sentence = c.get("sentence") or _fmt_delta_entry(
-                c.get("vital"), c)
+                vital, c, completeness=completeness)
+            if vital in partial_vitals:
+                reason = (completeness.get(vital) or {}).get("reason")
+                if reason:
+                    sentence = "%s (partial: %s)" % (sentence, reason)
             lines.append("- %s" % sentence)
     non_crossing = []
     if delta:
         for name in sorted(delta):
-            if name in crossing_vitals:
+            if name in crossing_vitals or name == "_notComparable":
                 continue
-            non_crossing.append(_fmt_delta_entry(name, delta[name]))
+            non_crossing.append(
+                _fmt_delta_entry(name, delta[name], completeness=completeness))
         if non_crossing:
             if crossings:
                 lines.append("")
@@ -103,6 +134,13 @@ def _render_vitals(lines, vd):
                 lines.append("- %s" % item)
 
     measured_movement = bool(crossings) or bool(non_crossing)
+    if not_comparable:
+        if measured_movement:
+            lines.append("")
+        lines.append("Comparison skipped:")
+        for name in sorted(not_comparable):
+            lines.append("- %s: %s" % (name, not_comparable[name]))
+
     if not_collected:
         if measured_movement:
             lines.append("")
@@ -111,7 +149,26 @@ def _render_vitals(lines, vd):
             reason = not_collected[name]
             lines.append("- %s: %s" % (name, reason))
 
-    if not measured_movement:
+    shown_in_movement = crossing_vitals | {
+        name for name in (delta or {}) if name != "_notComparable"
+    }
+    partial_only = partial_vitals - shown_in_movement - set(not_collected.keys())
+    if partial_only:
+        if measured_movement or not_collected or skipped_comparisons:
+            lines.append("")
+        lines.append("Partial measurements:")
+        for name in sorted(partial_only):
+            reason = (completeness.get(name) or {}).get("reason") or (
+                "incomplete measurement")
+            value = None
+            move = (delta or {}).get(name)
+            if isinstance(move, dict):
+                value = move.get("cur")
+            if value is None:
+                value = snapshot_vitals.get(name)
+            lines.append("- %s: %s (partial: %s)" % (name, value, reason))
+
+    if not measured_movement and not skipped_comparisons:
         if not_collected and not sources:
             lines.append(
                 "_No vitals movement — nothing was collected this sweep._")
@@ -212,7 +269,8 @@ def render(bundle, dispositions, ledger):
     lines.append("")
 
     # Vitals delta
-    _render_vitals(lines, bundle.get("vitalsDelta") or {})
+    _render_vitals(lines, bundle.get("vitalsDelta") or {},
+                   bundle.get("nextSnapshot"))
 
     # Report card
     _render_report_card(lines, bundle.get("reportCard") or {})
