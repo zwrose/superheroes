@@ -140,10 +140,10 @@ reviewer is the fallback **only with disclosed degradation** (never a silent dow
 fold its findings in, or dispute each with a reason. Post the dispositions.
 
 **Only a terminal forfeit licenses that Claude fallback.** The substitution is earned when the
-cross-vendor dispatch **terminally forfeits** — its structural timeout fired, or it returned no usable
-output — and **not before**: a *risk* of forfeit (a tight step budget, an engine you expect to run
+cross-vendor dispatch **terminally forfeits** — its structural timeout fired, or it returned no final
+output at all — and **not before**: a *risk* of forfeit (a tight step budget, an engine you expect to run
 slow) is **not** a forfeit. Anything short of the terminal condition **parks or runs the retry
-ladder**, never a pre-emptive swap — a quiet substitute-on-risk erodes the cross-vendor guarantee if
+ladder** (re-dispatch per the #563 retry sequence), never a pre-emptive swap — a quiet substitute-on-risk erodes the cross-vendor guarantee if
 sessions learn it. This is distinct from the engine-*unavailability* fallback of CONVENTIONS `§7.5` (an
 engine not configured or available at all — a selection event recorded there); here a *configured*
 reviewer must actually forfeit before Claude stands in. (weekly-eats we#520 swapped the configured
@@ -220,27 +220,30 @@ to a design signal. Say what the seam problem looks like.
 **Await every dispatch in-turn — never end a turn with an engine in flight.** A headless build session
 (`claude -p`) cannot be re-woken, so background-dispatching an implementer or engine CLI and then
 ending your turn **orphans the build mid-flight** with the engine still running — a park dressed as a
-handoff, and a lost run if nothing resumes it. Every dispatch is **awaited synchronously**; if you
-cannot wait it out, **park honestly** rather than hand off to a turn that will never come. (The #574
+handoff, and a lost run if nothing resumes it. Independent dispatches may run **concurrently** (§6),
+but every one is **awaited in-turn** — you stay engaged until it returns (block on it, or background it
+and poll the monitor below), and you **await them all before the turn ends**; if you cannot wait them
+out, **park honestly** rather than hand off to a turn that will never come. (The #574
 build background-dispatched its composer implementer and ended its turn; the run orphaned mid-flight,
 recovered only via `--resume`.)
 
-**Long dispatches you own get an explicit high ceiling and a monitor** — this **core rule holds for
-both** a native subagent dispatch and an engine CLI run you invoke directly: set a deliberately **high
-ceiling — 3600s or more** — and pair it with a **stuck/runaway monitor**; never a borderline limit you
-expect to just barely clear. The **mechanics differ by dispatch kind**:
+**Long dispatches you own get room to finish and a stuck/runaway monitor** — this **core holds for both**
+a native subagent dispatch and an engine CLI run you invoke directly: **never a borderline limit you
+expect to just barely clear**, and never end the turn while the work runs. The **concrete mechanics
+differ by dispatch kind**:
 
 - **A shell/CLI run** (an engine CLI invoked through the host's run action) is bounded by the effective
-  command-timeout floor — the plugin-injected `bash_timeout` ten-minute ceiling; the bare host default
-  is shorter — so set the explicit high ceiling on the run, watch the process's **CPU-time column, not
+  command-timeout floor — the plugin-injected `bash_timeout` ten-minute ceiling on the Claude host
+  (other hosts defer to their own default, which is shorter) — so set an **explicit high ceiling —
+  3600s or more** on the run, watch the process's **CPU-time column, not
   elapsed** (an engine CLI can sit at ~0% CPU for minutes and still be live), and redirect output to a
   **file, never `| tail`** so a stall is distinguishable from progress. Four 0.18.0-wave sessions died
   on the ten-minute floor mid-dispatch — one mid-review-panel — losing the run (WE review session,
   WE-510, sh-566, WE-484).
 - **A native subagent dispatch** has a **harness-managed lifecycle** — no `bash_timeout` floor and no
-  CPU column of your own to watch — so those shell mechanics don't apply; the monitor is the harness's
-  own completion/stuck signal, and the core rule reduces to not imposing a borderline limit the harness
-  would trip.
+  CPU column of your own to watch — so those shell mechanics don't apply and there is **no caller-set
+  ceiling to invent** — the harness manages the lifecycle and returns when the subagent completes; the
+  core reduces to awaiting that completion in-turn and not imposing a borderline limit.
 
 A **skill-owned dispatch keeps its own structural-timeout contract** (e.g. `review-code`'s loop bounds
 each engine dispatch itself and forbids a per-dispatch watchdog) — don't override it with this rule.
@@ -287,9 +290,10 @@ security finding on that behavior is fixed or honestly parked, never deferred as
 Open a **ready** (not draft) PR: the **build brief + dispositions table + receipts + disclosures**,
 a **dispatch provenance** section — each dispatch (the brief-check reviewer, every implementer, the
 pilot, the review-code seats) with the **engine + model** it ran on, so the advisor can vet what ran
-without your context — plus **any follow-ups the advisor should file**: out-of-scope discoveries,
+without your context — plus a **Follow-ups for the advisor** section — out-of-scope discoveries,
 deferred work, or issues you noticed but cannot file yourself (you never wire the board). List them
-plainly in the PR so the advisor can turn them into issues. The PR body also carries a **DoD
+plainly under that exact heading (write **None** when there are none) so the advisor can turn them
+into issues and the advisor's triage backstop can grep the section. The PR body also carries a **DoD
 disposition table** (the `superheroes:dod-table` marker) against the issue/spec — one row per
 Definition-of-Done bullet, each **done** (with an evidence pointer) or **deferred** (with a filed
 issue and a one-line reason). This is distinct from the review dispositions table above (that grades
@@ -308,8 +312,8 @@ PR genuinely closes (weekly-eats we#518 wrote "Resolves the storage-mode decisio
 stating it did not close #505; GitHub closed it anyway). **Verify the remote head before you declare
 ready.** A commit that lives only in your local worktree is not a receipt the advisor can see —
 **"PR ready" requires confirming the REMOTE branch head contains every commit your receipts claim**
-(`git rev-parse origin/<branch>` against your local `HEAD`; the review-fix commit is the usual
-straggler). A PR that claims a fix its pushed branch does not contain is a claim without a receipt.
+(after your final `git push`: `git fetch`, then `git merge-base --is-ancestor HEAD origin/<branch>`; the
+review-fix commit is the usual straggler). A PR that claims a fix its pushed branch does not contain is a claim without a receipt.
 (The #585 build committed its final review-fix locally but never pushed it; the advisor had to complete
 the push at vet.) **Keep the PR body current** — edit it
 in place so it reads

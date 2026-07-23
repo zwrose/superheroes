@@ -94,9 +94,10 @@ code, so you catch what the maker's context hid.
      board decisions** (new issues, scope changes) — are **proposed to the owner in the vet-delivery
      message** and captured durably as **proposed-unfiled**, filed only after discussion (auto-filing
      was rejected as overcorrection). A vet receipt states only **completed dispositions and live
-     proposals — never the future tense** ("I'll file X" is not a disposition). **Backstop:** your
-     periodic triage greps merged-PR bodies for the *Follow-ups* section and reconciles it against the
-     board, so anything that slipped still surfaces. Standing duty, no machinery. (weekly-eats: across
+     proposals — never the future tense** ("I'll file X" is not a disposition). **Backstop:** as part of
+     keeping the board truthful, periodically grep merged-PR bodies for the **Follow-ups for the
+     advisor** heading (the workhorse charter standardizes it) and reconcile against the board, so
+     anything that slipped still surfaces. Standing duty, no machinery. (weekly-eats: across
      four rapid vets in one day ~8 routings recorded as intent evaporated until an owner-forced sweep
      found 2 genuinely dropped items, filed late as we#526/we#527.)
    - A PR that adds a **gate, hook, or enforcement mechanism** must name, in its brief, the
