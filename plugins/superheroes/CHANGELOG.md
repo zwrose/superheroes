@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.20.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.19.0...superheroes-v0.20.0) (2026-07-23)
+
+
+### Features
+
+* **superheroes:** guardian inaugural-baseline validation — validate the quiet before it fossilizes ([#574](https://github.com/zwrose/superheroes/issues/574)) ([#593](https://github.com/zwrose/superheroes/issues/593)) ([c1ceb49](https://github.com/zwrose/superheroes/commit/c1ceb49ce4f6c303c3ffc5eb31e9ef51967283d3))
+* **superheroes:** rated Python audit — lockfile + transitive coverage (poetry/uv/Pipfile) ([#582](https://github.com/zwrose/superheroes/issues/582)) ([#596](https://github.com/zwrose/superheroes/issues/596)) ([3c8595e](https://github.com/zwrose/superheroes/commit/3c8595eeb5ed7e18f917b2a8c14b020b781129a8))
+* **superheroes:** vitals gap identity — key comparability on ecosystem+part+cause code ([#585](https://github.com/zwrose/superheroes/issues/585)) ([#590](https://github.com/zwrose/superheroes/issues/590)) ([01d71e3](https://github.com/zwrose/superheroes/commit/01d71e32e434c9ffceeb3076ec127668cd36a26a))
+
+
+### Bug Fixes
+
+* **superheroes:** coupling lens — plugin-pinned TypeScript for dependency-cruiser + real-module path normalization ([#575](https://github.com/zwrose/superheroes/issues/575)) ([#595](https://github.com/zwrose/superheroes/issues/595)) ([e4a76ab](https://github.com/zwrose/superheroes/commit/e4a76ab4758d042e3208a3e80aef662cc9dbb289))
+* **superheroes:** guardian stack-tags — unknown vocabulary is unverifiable, never mismatched; learn framework tags ([#588](https://github.com/zwrose/superheroes/issues/588)) ([dd0b2aa](https://github.com/zwrose/superheroes/commit/dd0b2aac5087ce62973faab5252df9e8fb5531b1))
+
+
+### Chores
+
+* **superheroes:** charter hygiene 2 — advisor follow-up-disposition duty; terminal-forfeit-only reviewer fallback; headless-dispatch discipline; [#591](https://github.com/zwrose/superheroes/issues/591) hygiene bundle ([#594](https://github.com/zwrose/superheroes/issues/594)) ([9bd89a5](https://github.com/zwrose/superheroes/commit/9bd89a5c177497edb11847535820d8859218c3c4))
+* **superheroes:** workhorse field hardening — preflight write probe, work-order authoring rules, receipt-integrity contract lines ([#591](https://github.com/zwrose/superheroes/issues/591)) ([c4a2054](https://github.com/zwrose/superheroes/commit/c4a2054fb7b23c283c689845e3194d1a5852c3d1))
+
 ## [0.19.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.18.0...superheroes-v0.19.0) (2026-07-23)
 
 
