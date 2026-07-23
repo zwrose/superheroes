@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import json
 import os
+import stat as _stat
 import subprocess
 import sys
 
@@ -38,6 +39,13 @@ HISTORY_SHAPE_UNREPRESENTABLE = "history-shape-fix-unrepresentable"
 
 # Cursor dispatches a single composer model; codex model selection is resolved inline via model_registry.
 _CURSOR_MODEL = model_registry.dispatch_token("cursor", "composer-2.5")
+
+# #563 DoD5: the engine's result value always sits at the TAIL of its stdout, so bound the read to
+# the last MAX_STDOUT_TAIL_BYTES to keep a multi-GB stdout from OOMing and to cap scan work. Belt-
+# and-braces: 512 KB comfortably exceeds any real findings payload. If the bounded tail yields no
+# usable value (the value began before the boundary), we re-read the FULL file — the plausible-start
+# scan makes that affordable — so semantics are preserved, never traded for the bound.
+MAX_STDOUT_TAIL_BYTES = 512 * 1024
 
 
 def build_argv(engine, role_kind, effort, opts):
@@ -113,21 +121,27 @@ def _last_top_level_json(stdout, want_type):
             return val
     except ValueError:
         pass
+    # A top-level JSON object starts with '{' and an array with '['. Attempt a decode ONLY at one of
+    # those two container-start chars — a cheap char test in place of the old raw_decode-per-char
+    # exception storm (#563: the old scan threw one ValueError per stream-noise char and wedged on
+    # large stdout). Record only the wanted type, but ALWAYS advance past a successfully decoded value
+    # (i = end) so a whole value — including a top-level array — is consumed as a unit and its inner
+    # objects are NOT re-seen as top-level (preserving the pre-#563 semantics the #196 bare-array
+    # rescue depends on: a bare `[{...}]` must leave `_last_json_object` == None).
     dec = json.JSONDecoder()
     last = None
     i, n = 0, len(s)
     while i < n:
-        while i < n and s[i] in " \t\r\n":
+        if s[i] != "{" and s[i] != "[":
             i += 1
-        if i >= n:
-            break
+            continue
         try:
             val, end = dec.raw_decode(s, i)
             if isinstance(val, want_type):
                 last = val
             i = end
         except ValueError:
-            i += 1  # skip a non-JSON char (stream noise) and keep scanning
+            i += 1
     return last
 
 
@@ -142,6 +156,41 @@ def _last_json_array(stdout):
     or None — the tolerated bare-array reviewer shape (an engine emits `[...]` directly
     instead of `{"findings": [...]}`, #196)."""
     return _last_top_level_json(stdout, list)
+
+
+def _read_stdout_tail(path, max_bytes):
+    """Return (text, truncated). Read the last <=max_bytes of `path` as BINARY and decode utf-8 with
+    errors='ignore' so a partial leading multibyte char at the window edge is dropped harmlessly (the
+    trailing result JSON is intact). `truncated` is True iff the file was larger than the window."""
+    with open(path, "rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        size = fh.tell()
+        if size <= max_bytes:
+            fh.seek(0)
+            return fh.read().decode("utf-8", errors="ignore"), False
+        fh.seek(size - max_bytes)
+        return fh.read().decode("utf-8", errors="ignore"), True
+
+
+def _prompt_path_ok(path):
+    """(ok, reason). A dispatch prompt must be a readable REGULAR file with non-whitespace content.
+    Everything else fails closed so an empty/absent prompt never reaches an engine that then blocks
+    reading stdin (#563 stdin-hang repro: codex `exec` told to read stdin + an open/empty stdin =
+    hang). We stat BEFORE reading so a FIFO/device/dir never blocks or is read."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False, "missing"
+    if not _stat.S_ISREG(st.st_mode):
+        return False, "not-regular-file"
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+            content = fh.read()
+    except OSError:
+        return False, "unreadable"
+    if not content.strip():
+        return False, "empty"
+    return True, ""
 
 
 def _unwrap_stream_envelope(stdout):
@@ -361,6 +410,14 @@ def _cmd_build_argv(args):
                 {"ok": False, "reason": "staged-input-mismatch", "path": path}) + "\n")
             return 0
 
+    if args.prompt_path is not None:
+        ok, why = _prompt_path_ok(args.prompt_path)
+        if not ok:
+            sys.stdout.write(json.dumps(
+                {"ok": False, "reason": "empty-prompt", "detail": why,
+                 "path": args.prompt_path}) + "\n")
+            return 0
+
     opts = {"cwd": args.cwd, "schema_path": args.schema_path, "model": args.model,
             "engine_model": args.engine_model}
     sys.stdout.write(json.dumps(build_argv(args.engine, args.role, args.effort, opts)) + "\n")
@@ -382,6 +439,10 @@ def main(argv):
                    help="provider-specific concrete model id; currently used by codex pins")
     b.add_argument("--verify", action="append", default=None,
                    help="PATH:SHA256 staged-input check; any mismatch/unreadable file fails build-argv closed")
+    b.add_argument("--prompt-path", default=None,
+                   help="if set, fail build-argv closed unless PATH is a readable regular file with "
+                        "non-whitespace content (prevents dispatching an empty prompt that would hang "
+                        "codex on stdin — #563)")
     pr = sub.add_parser("parse-result")
     pr.add_argument("--engine", required=True, choices=("codex", "cursor"))
     pr.add_argument("--role", required=True, choices=("review", "build", "fix"))
@@ -396,11 +457,16 @@ def main(argv):
         return _cmd_build_argv(args)
     if args.cmd == "parse-result":
         if args.stdout_path:
-            with open(args.stdout_path, encoding="utf-8") as _fh:
-                _raw = _fh.read()
+            _raw, _truncated = _read_stdout_tail(args.stdout_path, MAX_STDOUT_TAIL_BYTES)
         else:
-            _raw = sys.stdin.read()
+            _raw, _truncated = sys.stdin.read(), False
         res = parse_result(args.engine, args.role, _raw)
+        # If we only read a bounded tail and it produced no usable result, the real value may begin
+        # before the window — fall back to the full file (fail direction preserved: a genuinely
+        # garbled full read still parses `unreadable`).
+        if _truncated and not res.get("ok"):
+            with open(args.stdout_path, encoding="utf-8", errors="ignore") as _fh:
+                res = parse_result(args.engine, args.role, _fh.read())
         sys.stdout.write(json.dumps(res) + "\n")
         return 0
     if args.cmd == "commit":
