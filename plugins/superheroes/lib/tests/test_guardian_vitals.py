@@ -1077,6 +1077,93 @@ def test_partial_vital_publishes_number_and_tags_completeness(tmp_path):
     assert out["completeness"]["vulnCount"]["reason"] == gap
 
 
+def _dup_lens_with_vitals(reading):
+    return {
+        "duplication": {
+            "lens": type("L", (), {
+                "name": "duplication",
+                "vitals": staticmethod(lambda digest: {
+                    "duplicationPercent": reading,
+                }),
+            })(),
+            "status": "collected",
+            "digest": {},
+            "reason": None,
+            "fresh": True,
+        },
+    }
+
+
+def test_partial_reading_with_empty_reason_fails_closed(tmp_path):
+    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
+    out = gv.collect(repo, lens_results=_dup_lens_with_vitals((3.0, "")))
+    assert out["vitals"]["duplicationPercent"] is None
+    assert out["completeness"]["duplicationPercent"]["state"] == "not-collected"
+    reason = out["completeness"]["duplicationPercent"]["reason"]
+    assert "contract violation" in reason
+    assert "duplication" in reason
+    assert "duplicationPercent" in reason
+    assert out["notCollected"]["duplicationPercent"] == reason
+
+
+def test_partial_reading_with_whitespace_reason_fails_closed(tmp_path):
+    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
+    out = gv.collect(repo, lens_results=_dup_lens_with_vitals((3.0, "   ")))
+    assert out["vitals"]["duplicationPercent"] is None
+    assert out["completeness"]["duplicationPercent"]["state"] == "not-collected"
+    assert "contract violation" in out["completeness"]["duplicationPercent"]["reason"]
+
+
+def test_partial_reading_with_non_string_reason_fails_closed(tmp_path):
+    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
+    out = gv.collect(repo, lens_results=_dup_lens_with_vitals((3.0, 123)))
+    assert out["vitals"]["duplicationPercent"] is None
+    assert out["completeness"]["duplicationPercent"]["state"] == "not-collected"
+    assert "contract violation" in out["completeness"]["duplicationPercent"]["reason"]
+
+
+def test_partial_reading_with_real_gap_still_publishes(tmp_path):
+    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
+    gap = "a real gap"
+    out = gv.collect(repo, lens_results=_dup_lens_with_vitals((3.0, gap)))
+    assert out["vitals"]["duplicationPercent"] == 3.0
+    assert out["completeness"]["duplicationPercent"]["state"] == "partial"
+    assert out["completeness"]["duplicationPercent"]["reason"] == gap
+
+
+def test_complete_reading_with_none_reason_unchanged(tmp_path):
+    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
+    out = gv.collect(repo, lens_results=_dup_lens_with_vitals((3.0, None)))
+    assert out["vitals"]["duplicationPercent"] == 3.0
+    assert out["completeness"]["duplicationPercent"]["state"] == "complete"
+
+
+def test_not_collected_reading_with_reason_unchanged(tmp_path):
+    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
+    out = gv.collect(repo, lens_results=_dup_lens_with_vitals((None, "reason")))
+    assert out["vitals"]["duplicationPercent"] is None
+    assert out["completeness"]["duplicationPercent"]["state"] == "not-collected"
+    assert out["completeness"]["duplicationPercent"]["reason"] == "reason"
+
+
+def test_contract_violating_partial_readings_do_not_cross(tmp_path):
+    """Two invalid partial tuples must not compare as equal partials and cross."""
+    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
+    out1 = gv.collect(repo, lens_results=_dup_lens_with_vitals((3.0, "")))
+    out2 = gv.collect(repo, lens_results=_dup_lens_with_vitals((5.0, "   ")))
+    comp1 = out1["completeness"]["duplicationPercent"]
+    comp2 = out2["completeness"]["duplicationPercent"]
+    assert comp1["state"] == "not-collected"
+    assert comp2["state"] == "not-collected"
+    assert not gv._comparable_completeness(comp1, comp2)
+    assert gv.crossings(
+        {"duplicationPercent": 3.0},
+        {"duplicationPercent": 5.0},
+        prev_completeness={"duplicationPercent": comp1},
+        cur_completeness={"duplicationPercent": comp2},
+    ) == []
+
+
 def test_partial_crossing_requires_matching_gap_reason():
     gap = "python ratings unavailable until issue #569"
     comp = {"state": "partial", "reason": gap}

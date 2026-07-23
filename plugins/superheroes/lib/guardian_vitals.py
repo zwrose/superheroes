@@ -272,9 +272,21 @@ def _apply_partial_lens_completeness(status, entry, comp):
     return comp
 
 
-def _interpret_vital_tuple(value, reason):
+def _usable_partial_reason(reason):
+    """True when ``reason`` names the gap for a partial vital reading."""
+    return isinstance(reason, str) and bool(reason.strip())
+
+
+def _interpret_vital_tuple(value, reason, *, lens_name=None, vital_name=None):
     """Map a lens ``vitals()`` 2-tuple to (published value, completeness entry)."""
     if value is not None and reason is not None:
+        if not _usable_partial_reason(reason):
+            label = lens_name or "lens"
+            vital = vital_name or "vital"
+            violation = (
+                "%s lens vitals()[%s] partial reading without a usable reason "
+                "(contract violation)" % (label, vital))
+            return (None, _completeness_entry("not-collected", violation))
         if not _is_number(value):
             return (None, _completeness_entry(
                 "not-collected", reason or "partial vital is not a number"))
@@ -366,14 +378,15 @@ def _collect_lens_vitals(lens_results):
             completeness[vital_name] = _completeness_entry("not-collected", reason)
             continue
         value, gap_reason = reading[0], reading[1]
-        published, comp = _interpret_vital_tuple(value, gap_reason)
+        lens_name = getattr(lens, "name", lens_names[0])
+        published, comp = _interpret_vital_tuple(
+            value, gap_reason, lens_name=lens_name, vital_name=vital_name)
         comp = _apply_partial_lens_completeness(status, entry, comp)
         completeness[vital_name] = comp
         if published is None:
             missing[vital_name] = comp.get("reason") or "not collected this sweep"
         else:
             vitals[vital_name] = published
-            lens_name = getattr(lens, "name", lens_names[0])
             sources[vital_name] = "%s lens vitals() this sweep" % lens_name
     return (vitals, missing, sources, completeness)
 
