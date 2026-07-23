@@ -3285,6 +3285,61 @@ def test_section_cause_tokens_excludes_findings_state_markers():
     assert gld._section_cause_tokens(section) == ["no-transitive-resolution"]
 
 
+def test_section_cause_tokens_lockfile_emits_basis_token():
+    lockfile_clean = {
+        "status": "partial",
+        "items": {},
+        "auditedScope": {
+            "manifest": "poetry.lock",
+            "kind": "lockfile",
+            "transitive": True,
+        },
+        "reason": "lockfile clean",
+    }
+    assert gld._section_cause_tokens(lockfile_clean) == ["lockfile-audit"]
+
+    lockfile_with_pin_gap = dict(
+        lockfile_clean,
+        pinScopeGap={"lines": ["pkg==1.0"]},
+    )
+    pin_tokens = gld._section_cause_tokens(lockfile_with_pin_gap)
+    assert "lockfile-audit" in pin_tokens
+    assert "unpinned-scope" in pin_tokens
+
+    requirements_section = {
+        "status": "partial",
+        "items": {"x": {"id": "x"}},
+        "coverageGap": {"scope": "enumerated-manifest-only"},
+        "auditedScope": {
+            "manifest": "requirements.txt",
+            "kind": "requirements",
+            "transitive": False,
+        },
+        "reason": "no transitive resolution",
+    }
+    req_tokens = gld._section_cause_tokens(requirements_section)
+    assert req_tokens == ["no-transitive-resolution"]
+    assert "lockfile-audit" not in req_tokens
+
+
+def test_lockfile_clean_partial_vulncount_identity_not_none():
+    section = {
+        "status": "partial",
+        "items": {},
+        "boundary": True,
+        "auditedScope": {
+            "manifest": "poetry.lock",
+            "kind": "lockfile",
+            "transitive": True,
+        },
+        "reason": "lockfile clean",
+    }
+    digest = _vuln_partial_digest("python", section)
+    identity = gld.LENS.vitals(digest)["vulnCount"][2]
+    assert identity is not None
+    assert identity != []
+
+
 def test_vitals_vuln_count_structural_not_collected_emits_identity():
     digest = {
         "ecosystems": {
@@ -3397,6 +3452,16 @@ _VITAL_IDENTITY_TRIPWIRE_CASES = [
         "coverageGap": {"scope": "enumerated-manifest-only"},
         "reason": "ambiguous with coverage gap",
     }), id="vuln-partial-boundary"),
+    pytest.param("vulnCount", _vuln_partial_digest("python", {
+        "status": "partial",
+        "items": {},
+        "auditedScope": {
+            "manifest": "poetry.lock",
+            "kind": "lockfile",
+            "transitive": True,
+        },
+        "reason": "lockfile clean",
+    }), id="vuln-partial-lockfile-clean"),
     pytest.param("vulnCount", {
         "ecosystems": {
             "node": {

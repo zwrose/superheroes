@@ -1612,6 +1612,9 @@ def _section_cause_tokens(section):
         tokens.append("malformed-advisory")
     if section.get("boundary") is False:
         tokens.append("ambiguous-identity")
+    scope = section.get("auditedScope")
+    if isinstance(scope, dict) and scope.get("kind") == "lockfile":
+        tokens.append("lockfile-audit")
     return sorted(set(tokens))
 
 
