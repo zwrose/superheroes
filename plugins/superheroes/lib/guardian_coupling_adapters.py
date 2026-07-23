@@ -31,12 +31,13 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
-# --- tool identity + pins (digest metadata; no env/NODE_PATH pin plumbing) -----------
+# --- tool identity + pins (digest metadata; NODE_PATH via guardian_tools) ------------
 # dependency-cruiser 18 silently degrades to JS-only parsing when the TypeScript it
 # resolves is a major it does not support (`>=2.0.0 <7.0.0`): measured on a real repo,
 # TypeScript 6.0.3 → 2 modules parsed against 590 TS sources, exit 0, empty stderr.
-# TypeScript pin provisioning is a named follow-up; the lens's module-count-collapse
-# tripwire is the compensating control that must degrade honestly on that signature.
+# A plugin-controlled, supported-major TypeScript is provided to depcruise via
+# guardian_tools.typescript_toolchain_node_path (outside-repo NODE_PATH); the lens's
+# module-count-collapse tripwire remains the backstop when no supported TS is available.
 DEPCRUISE_TOOL = "dependency-cruiser"
 DEPCRUISE_BIN = "depcruise"
 DEPCRUISE_PIN = "18"
@@ -317,8 +318,9 @@ def depcruise_versions(payload):
     The report's own `summary.environment` is the ground truth: `transpilersFound`
     carries whether the TypeScript transpiler was *available to this run* and at which
     version. `available: false` is the collapse signature — the run silently parsed
-    JavaScript only. Pin provisioning is deferred; `pinHeld` remains informational for
-    the digest / collapse reason text.
+    JavaScript only. A plugin-controlled TypeScript is supplied via the guardian_tools
+    toolchain NODE_PATH seam; `pinHeld` remains informational for the digest / collapse
+    reason text when the report carries it.
     """
     env = ((payload or {}).get("summary") or {}).get("environment") or {}
     tool_version = env.get("version")

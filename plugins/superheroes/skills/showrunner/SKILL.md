@@ -86,6 +86,20 @@ code, so you catch what the maker's context hid.
      0.18.0 wave. Standing accounting, no machinery — it makes the work-order authoring rules' effect
      measurable over time, and tells you when a build's defects point at order quality rather than the
      engine.
+   - **Disposition the PR's follow-ups before the vet receipt posts.** Every PR ends with a *Follow-ups
+     for the advisor* section; you own what becomes of it, and a routing you only *intend* is a claim
+     without a receipt — it evaporates in working context. Complete a **two-tier disposition before you
+     post the vet receipt**: **Tier 1 — record-keeping writes** (append to an owning issue, an
+     owner-owed or relay memory entry, a declined-with-reason) — happen **immediately**; **Tier 2 —
+     board decisions** (new issues, scope changes) — are **proposed to the owner in the vet-delivery
+     message** and captured durably as **proposed-unfiled**, filed only after discussion (auto-filing
+     was rejected as overcorrection). A vet receipt states only **completed dispositions and live
+     proposals — never the future tense** ("I'll file X" is not a disposition). **Backstop:** as part of
+     keeping the board truthful, periodically grep merged-PR bodies for the **Follow-ups for the
+     advisor** heading (the workhorse charter standardizes it) and reconcile against the board, so
+     anything that slipped still surfaces. Standing duty, no machinery. (weekly-eats: across
+     four rapid vets in one day ~8 routings recorded as intent evaporated until an owner-forced sweep
+     found 2 genuinely dropped items, filed late as we#526/we#527.)
    - A PR that adds a **gate, hook, or enforcement mechanism** must name, in its brief, the
      ratified precondition that unlocks it and the evidence it is met — **a missing citation is a
      finding in its own right**; any project must carry that rule. When the project being vetted is
@@ -122,3 +136,4 @@ code, so you catch what the maker's context hid.
 | "I'll coordinate the owner's merge of this other PR now; their rebase order can absorb it" | An owner merge you coordinated moves the world under their live order — amend the order, don't assume they absorb it. |
 | "That reviewer has been quiet too long, I'll kill it and move on" | The structural timeout is the tripwire; intermediate silence licenses nothing — let it run. |
 | "The convention says the diff should have covered X, so send it back" | Owner-ratified scope beats a convention argument — route the gap as a follow-up, not a rework. |
+| "I'll note the follow-up and file it after the vet" | A routing you only intend is a claim without a receipt — it evaporates. Disposition the PR's follow-ups **before** the vet receipt posts (Tier-1 writes now; Tier-2 proposed to the owner); receipts never use the future tense. |

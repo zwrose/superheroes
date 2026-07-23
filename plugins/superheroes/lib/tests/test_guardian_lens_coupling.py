@@ -1028,6 +1028,64 @@ def test_collapse_needs_a_meaningful_source_count():
     assert glc.detect_collapse(at, {".": {"ts": 0}})
 
 
+def test_measure_js_forwards_resolved_toolchain_to_run_tool(tmp_path, monkeypatch):
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", '{"name":"toolchain-forward"}\n')
+    sources = ["src/a.ts", "src/b.ts"]
+    for rel in sources:
+        write(repo, rel)
+    report = dc_report(extra_sources=sources)
+    captured = {}
+    real_run_tool = glc.gc.run_tool
+
+    def spy_run_tool(argv, ctx=None, **kwargs):
+        captured["extra_node_path"] = kwargs.get("extra_node_path")
+        if argv and argv[0] == adapters.DEPCRUISE_BIN:
+            return {"ok": True, "exit": 0, "stdout": report, "stderr": "", "reason": None}
+        return real_run_tool(argv, ctx, **kwargs)
+
+    monkeypatch.setattr(
+        glc.gt, "typescript_toolchain_node_path",
+        lambda _repo, _majors: "/abs/outside/node_modules")
+    monkeypatch.setattr(glc.gc, "run_tool", spy_run_tool)
+    out = lens().collect(ctx(repo, tmp_path))
+    assert captured["extra_node_path"] == "/abs/outside/node_modules"
+    assert out["digest"]["ecosystems"]["js"]["typescriptToolchainProvided"] is True
+
+
+def test_measure_js_toolchain_absent_records_not_provided_and_passes_none(
+        tmp_path, monkeypatch):
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", '{"name":"toolchain-absent"}\n')
+    sources = ["src/a.ts", "src/b.ts"]
+    for rel in sources:
+        write(repo, rel)
+    monkeypatch.setattr(
+        glc.gt, "typescript_toolchain_node_path", lambda _repo, _majors: None)
+    out = lens().collect(ctx(
+        repo, tmp_path, run=depcruise_run(dc_report(extra_sources=sources))))
+    js = out["digest"]["ecosystems"]["js"]
+    assert js["typescriptToolchainProvided"] is False
+
+
+def test_measure_js_toolchain_absent_then_collapse_degrades_honestly_with_provenance(
+        tmp_path, monkeypatch):
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "mypkg/__init__.py", "")
+    write(repo, "mypkg/api.py", "x = 1\n")
+    for i in range(20):
+        write(repo, "src/app/mod%d.ts" % i)
+    monkeypatch.setattr(
+        glc.gt, "typescript_toolchain_node_path", lambda _repo, _majors: None)
+    run = depcruise_run(dc_report(extra_sources=["src/app/mod0.ts"], ts_available=False))
+    out = lens().collect(ctx(repo, tmp_path, run=run))
+    assert st(out) == "partial"
+    js = out["digest"]["ecosystems"]["js"]
+    assert js["status"] == "not-collected"
+    assert adapters.OUTCOMES["module-count-collapse"][1] in js["reason"]
+    assert js["typescriptToolchainProvided"] is False
+
+
 def test_healthy_parse_does_not_degrade(tmp_path):
     repo = init_calibrated_repo(tmp_path)
     sources = ["src/app/mod%d.ts" % i for i in range(20)]
@@ -1037,6 +1095,76 @@ def test_healthy_parse_does_not_degrade(tmp_path):
     out = lens().collect(ctx(repo, tmp_path, run=run))
     assert st(out) == "collected"
     assert out["digest"]["counters"]["modulesParsed"] == 20
+
+
+def test_measure_js_normalizes_collector_cwd_relative_paths(tmp_path, monkeypatch):
+    """Cwd-relative depcruise module paths must normalize via collectorCwd, not collapse."""
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", '{"name":"cwd-relative-depcruise"}\n')
+    write(repo, "src/cluster-a/foo.ts", "export const a = 1;\n")
+    write(repo, "src/cluster-b/bar.ts", "export const b = 2;\n")
+    neutral = tmp_path / "neutral"
+    neutral.mkdir()
+    a_abs = os.path.join(repo, "src", "cluster-a", "foo.ts")
+    b_abs = os.path.join(repo, "src", "cluster-b", "bar.ts")
+    a_rel = os.path.relpath(a_abs, str(neutral))
+    b_rel = os.path.relpath(b_abs, str(neutral))
+    report = dc_report(
+        edges=[(a_rel, b_rel)],
+        extra_sources=[a_rel, b_rel],
+    )
+    real_run_tool = glc.gc.run_tool
+
+    def spy_run_tool(argv, ctx=None, **kwargs):
+        if argv and argv[0] == adapters.DEPCRUISE_BIN:
+            return {
+                "ok": True, "exit": 0, "stdout": report, "stderr": "",
+                "reason": None, "collectorCwd": str(neutral),
+            }
+        return real_run_tool(argv, ctx, **kwargs)
+
+    monkeypatch.setattr(glc.gt, "typescript_toolchain_node_path", lambda _repo, _majors: None)
+    monkeypatch.setattr(glc.gc, "run_tool", spy_run_tool)
+    out = lens().collect(ctx(repo, tmp_path))
+    assert st(out) in ("collected", "partial")
+    js = out["digest"]["ecosystems"]["js"]
+    assert js["status"] == "collected"
+    assert js["modulesParsed"] == 2
+    fc_a = glc.cluster_key("src/cluster-a/foo.ts", glc.ROOT_WORKSPACE)
+    fc_b = glc.cluster_key("src/cluster-b/bar.ts", glc.ROOT_WORKSPACE)
+    cross_key = glc._edge_key(fc_a, fc_b)
+    assert out["digest"]["counters"]["crossClusterEdges"] == 1
+    assert cross_key in out["digest"]["matrix"]
+
+    def spy_missing_cwd(argv, ctx=None, **kwargs):
+        if argv and argv[0] == adapters.DEPCRUISE_BIN:
+            return {
+                "ok": True, "exit": 0, "stdout": report, "stderr": "",
+                "reason": None, "collectorCwd": None,
+            }
+        return real_run_tool(argv, ctx, **kwargs)
+
+    monkeypatch.setattr(glc.gc, "run_tool", spy_missing_cwd)
+    collapsed = lens().collect(ctx(repo, tmp_path))
+    assert st(collapsed) == "not-collected"
+    assert adapters.OUTCOMES["module-count-collapse"][1] in collapsed["reason"]
+    assert collapsed["digest"] is None
+
+
+def test_filter_does_not_count_case_colliding_untracked_path(tmp_path):
+    """Case-preserving tracked filter must not treat tool-reported src/foo.ts as src/Foo.ts."""
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", "{}")
+    write(repo, "src/Foo.ts", "export const foo = 1;\n")
+    tracked = ["package.json", "src/Foo.ts"]
+    report = dc_report(extra_sources=["src/foo.ts"])
+    out = lens().collect(ctx(
+        repo, tmp_path, run=make_run(
+            lambda argv, kw: (0, report, ""), tracked=tracked)))
+    assert st(out) == "not-collected"
+    assert "collapse" in out["reason"]
+    assert "0 parsed of 1 sources" in out["reason"]
+    assert out["digest"] is None
 
 
 # ======================================================================================

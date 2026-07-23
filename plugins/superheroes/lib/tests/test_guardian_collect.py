@@ -306,6 +306,65 @@ def test_run_tool_injected_seam_escaping_symlink_target_degrades_never_raises(tm
     assert called["n"] == 0, "the run stub must not be called with an unsafe operand"
 
 
+def test_run_tool_forwards_extra_node_path_to_invoke(monkeypatch, tmp_path):
+    repo = _make_repo(tmp_path / "repo")
+    captured = {}
+
+    def fake_invoke(tool, fixed_args, repo_arg, targets, *, run=None, timeout=None,
+                    extra_node_path=None, **kwargs):
+        captured["extra_node_path"] = extra_node_path
+        return {"outcome": "ok", "returncode": 0, "stdout": "out", "stderr": ""}
+
+    monkeypatch.setattr(gc.gt, "invoke", fake_invoke)
+    out = gc.run_tool(
+        ["depcruise"], ctx=None, cwd=repo,
+        extra_node_path="/abs/outside/node_modules")
+    assert out["ok"] is True
+    assert captured["extra_node_path"] == "/abs/outside/node_modules"
+
+
+def test_run_tool_default_extra_node_path_is_none_and_argv_unchanged(
+        monkeypatch, tmp_path):
+    repo = _make_repo(tmp_path / "repo")
+    captured = {}
+
+    def fake_invoke(tool, fixed_args, repo_arg, targets, *, run=None, timeout=None,
+                    extra_node_path=None, **kwargs):
+        captured["tool"] = tool
+        captured["fixed_args"] = list(fixed_args)
+        captured["extra_node_path"] = extra_node_path
+        return {"outcome": "ok", "returncode": 0, "stdout": "out", "stderr": ""}
+
+    monkeypatch.setattr(gc.gt, "invoke", fake_invoke)
+    out = gc.run_tool(["depcruise", "--output-type", "json"], cwd=repo)
+    assert out["ok"] is True
+    assert captured["extra_node_path"] is None
+    assert captured["tool"] == "depcruise"
+    assert captured["fixed_args"] == ["--output-type", "json"]
+
+
+def test_run_tool_injected_seam_ignores_extra_node_path(tmp_path):
+    repo = _make_repo(tmp_path / "repo")
+    seen = {}
+
+    def run(argv, **kwargs):
+        seen["argv"] = list(argv)
+
+        class R:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+        return R()
+
+    gc.run_tool(["depcruise"], ctx={"run": run}, cwd=repo,
+                extra_node_path="/abs/outside")
+    with_extra = list(seen["argv"])
+    seen.clear()
+    gc.run_tool(["depcruise"], ctx={"run": run}, cwd=repo)
+    without_extra = list(seen["argv"])
+    assert with_extra == without_extra == ["depcruise"]
+
+
 def test_run_tool_empty_targets_matches_no_targets_arg(tmp_path):
     """Regression-safety: passing targets=() is byte-for-byte identical to omitting it."""
     def run(argv, **kwargs):
@@ -318,3 +377,32 @@ def test_run_tool_empty_targets_matches_no_targets_arg(tmp_path):
     a = gc.run_tool(["tool", "-x"], ctx={"run": run})
     b = gc.run_tool(["tool", "-x"], ctx={"run": run}, targets=())
     assert a == b
+
+
+def test_run_tool_production_surfaces_collector_cwd(monkeypatch, tmp_path):
+    repo = _make_repo(tmp_path / "repo")
+
+    def fake_invoke(tool, fixed_args, repo_arg, targets, *, run=None, timeout=None,
+                    **kwargs):
+        return {
+            "outcome": "ok", "returncode": 0, "stdout": "x", "stderr": "",
+            "cwd": "/neutral/collector",
+        }
+
+    monkeypatch.setattr(gc.gt, "invoke", fake_invoke)
+    out = gc.run_tool(["depcruise"], cwd=repo)
+    assert out["collectorCwd"] == "/neutral/collector"
+
+
+def test_run_tool_injected_surfaces_realpath_cwd(tmp_path):
+    repo = _make_repo(tmp_path / "repo")
+
+    def run(argv, **kwargs):
+        class R:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+        return R()
+
+    out = gc.run_tool(["tool"], ctx={"run": run}, cwd=repo)
+    assert out["collectorCwd"] == os.path.realpath(repo)
