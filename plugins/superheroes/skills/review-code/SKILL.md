@@ -144,8 +144,8 @@ IMPL_ENGINE=$(echo "$EP" | jq -r '.implementation // "claude"')
 **Compose the panel seat map (#510).** Per-seat engine+model over the live vendors — this replaces the single `$REVIEWER_ENGINE`-for-all-seats knob. `$AUTHOR_FAMILY` is the implementation engine's maker family; the narrative family is this orchestrator (`anthropic`). The map (per-seat tiers + resolved models, any pin/degradation disclosures) rides into the receipt; per-seat consumption is in `reference/auto-fix-loop.md`.
 
 ```bash
-CONFIGURED=$(python3 -c "import sys;sys.path.insert(0,'$ROOT_DIR/lib');import preflight_probe,core_md;p=(core_md.read('.') or {}).get('enginePreferences') or {};print(','.join(preflight_probe.configured_cross_vendor_engines(p)))")
-AUTHOR_FAMILY=$(python3 -c "import sys;sys.path.insert(0,'$ROOT_DIR/lib');import model_registry as m;print(m.family_for('code-fixer','$IMPL_ENGINE') or '')")
+CONFIGURED=$(python3 -c "import sys;sys.path.insert(0,sys.argv[1]+'/lib');import preflight_probe,core_md;p=(core_md.read('.') or {}).get('enginePreferences') or {};print(','.join(preflight_probe.configured_cross_vendor_engines(p)))" "$ROOT_DIR")
+AUTHOR_FAMILY=$(python3 -c "import sys;sys.path.insert(0,sys.argv[1]+'/lib');import model_registry as m;print(m.family_for('code-fixer',sys.argv[2]) or '')" "$ROOT_DIR" "$IMPL_ENGINE")
 SEAT_MAP=$(python3 "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "$CONFIGURED" --author-family "$AUTHOR_FAMILY" --narrative-family anthropic --pr-number "${PR_NUMBER:-}" --head-sha "$(git rev-parse HEAD 2>/dev/null)" || echo '{"seats":{},"degradations":[{"constraint":"compose-failed","reason":"seat_map compose failed — every seat falls open to Claude"}]}')
 ```
 
