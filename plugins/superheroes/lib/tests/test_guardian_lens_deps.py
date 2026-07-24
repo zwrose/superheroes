@@ -3431,7 +3431,9 @@ def test_vitals_vuln_count_partial_identity_stable_across_reason_reword():
     assert id_a == ["python/vulns/no-transitive-resolution"]
 
 
-def test_vitals_vuln_count_partial_malformed_entries_emits_identity():
+def test_vitals_vuln_count_partial_malformed_entries_transient_folded_out():
+    """#613: malformed-advisory is transient — folded OUT of the identity KEY (stays in the
+    reason). A malformed-only partial keys on the sentinel so it stays comparable."""
     section = {
         "status": "partial",
         "items": {"n": {"id": "n"}},
@@ -3439,8 +3441,10 @@ def test_vitals_vuln_count_partial_malformed_entries_emits_identity():
         "reason": "malformed advisory rows",
     }
     digest = _vuln_partial_digest("node", section, anchor_eco="python")
-    _, _, identity = gld.LENS.vitals(digest)["vulnCount"]
-    assert "node/vulns/malformed-advisory" in identity
+    value, reason, identity = gld.LENS.vitals(digest)["vulnCount"]
+    assert "node/vulns/malformed-advisory" not in identity
+    assert identity == ["node/vulns/unclassified-partial"]
+    assert "malformed-advisory" in reason
 
 
 def test_vitals_vuln_count_partial_pin_scope_and_boundary_identity():
@@ -3460,9 +3464,42 @@ def test_vitals_vuln_count_partial_pin_scope_and_boundary_identity():
         "boundary": False,
         "reason": "ambiguous reconciliation",
     }
-    _, _, boundary_id = gld.LENS.vitals(
+    _, boundary_reason, boundary_id = gld.LENS.vitals(
         _vuln_partial_digest("python", boundary_section))["vulnCount"]
-    assert "python/vulns/ambiguous-identity" in boundary_id
+    assert "python/vulns/ambiguous-identity" not in boundary_id
+    assert boundary_id == ["python/vulns/unclassified-partial"]
+    assert "ambiguous-identity" in boundary_reason
+
+
+def test_section_cause_tokens_transient_only_falls_to_sentinel():
+    """#613: a section whose only causes are transient keys on the sentinel, never empty,
+    never on a transient token."""
+    assert gld._section_cause_tokens(
+        {"malformedEntries": ["left-pad"]}) == ["unclassified-partial"]
+    assert gld._section_cause_tokens({"boundary": False}) == ["unclassified-partial"]
+    assert gld._section_cause_tokens(
+        {"malformedEntries": ["x"], "boundary": False}) == ["unclassified-partial"]
+
+
+def test_section_cause_tokens_mixed_keeps_stable_drops_transient():
+    """#613: with a stable marker present, transient tokens are folded out of the KEY."""
+    section = {
+        "coverageGap": {"scope": "x"},
+        "malformedEntries": ["left-pad"],
+        "boundary": False,
+    }
+    assert gld._section_cause_tokens(section) == ["no-transitive-resolution"]
+
+
+def test_section_transient_causes_returns_transient_tokens():
+    """#613: the transient-cause helper surfaces exactly the transient tokens present."""
+    assert gld._section_transient_causes({"malformedEntries": ["x"]}) == ["malformed-advisory"]
+    assert gld._section_transient_causes({"boundary": False}) == ["ambiguous-identity"]
+    assert gld._section_transient_causes(
+        {"malformedEntries": ["x"], "boundary": False}) == ["ambiguous-identity", "malformed-advisory"]
+    # stable-only section has no transient causes; non-dict is empty
+    assert gld._section_transient_causes({"coverageGap": {"scope": "x"}}) == []
+    assert gld._section_transient_causes("not a dict") == []
 
 
 def test_section_cause_tokens_unrecognized_shape_falls_to_sentinel():
@@ -3575,6 +3612,24 @@ def _fresh_mixed_digest(gap_eco, gap_freshness, *, measured_eco="node", measured
             gap_eco: {"freshness": gap_freshness},
         },
     }
+
+
+def test_vitals_majors_behind_partial_transient_folded_out_stays_in_reason():
+    """#613: the freshness consumer (majorsBehind) keeps transient markers in the reason while
+    folding them out of the identity KEY — symmetric with the vulns path (kills the
+    delete-the-freshness-annotation mutant)."""
+    section = {
+        "status": "partial",
+        "malformedEntries": ["left-pad"],
+        "coverageGap": {"scope": "enumerated-manifest-only"},
+        "reason": "registry partial + malformed advisory",
+        "items": {},
+    }
+    digest = _fresh_mixed_digest("python", section)
+    value, reason, identity = gld.LENS.vitals(digest)["majorsBehind"]
+    assert "malformed-advisory" in reason
+    assert "python/freshness/malformed-advisory" not in identity
+    assert identity == ["python/freshness/no-transitive-resolution"]
 
 
 def test_vitals_majors_behind_structural_not_collected_emits_identity():
@@ -3734,6 +3789,48 @@ def test_deps_vital_identity_reaches_comparability_reworded_prose():
         {"vulnCount": 1}, {"vulnCount": 5},
         prev_completeness={"vulnCount": comp1},
         cur_completeness={"vulnCount": comp2})
+
+
+def test_deps_transient_flip_stays_comparable_and_crosses():
+    """#613 fail-direction fixture — the precision trade made visible.
+
+    Two sweeps share a stable cause (coverageGap) and differ ONLY by a transient marker
+    (malformedEntries present in the earlier sweep, absent in the later). Before #613 the
+    transient token entered the identity KEY, so the two bases read NON-comparable and a real
+    vulnCount crossing between them was silenced. After #613 the transient token is folded out
+    of the key: both bases key identically on the stable cause, the sweeps stay comparable, and
+    the crossing fires.
+
+    Precision trade (accepted, over-alert never silence — #592/#580): two sweeps whose partial
+    basis genuinely differs ONLY in the transient dimension are now treated as comparable. We
+    accept this over-alert deliberately; the alternative (keying on the transient) silences the
+    far more consequential real drift on the co-present stable marker."""
+    stable = {"coverageGap": {"scope": "enumerated-manifest-only"}}
+    prev_section = dict(stable, **{
+        "status": "partial", "items": {"a": {"id": "a"}},
+        "malformedEntries": ["left-pad"], "reason": "osv partial + malformed advisory",
+    })
+    cur_section = dict(stable, **{
+        "status": "partial", "items": {"a": {"id": "a"}, "b": {"id": "b"}, "c": {"id": "c"}},
+        "reason": "osv partial, malformed advisory cleared",
+    })
+    r_prev = gld.LENS.vitals(_vuln_partial_digest("python", prev_section))["vulnCount"]
+    r_cur = gld.LENS.vitals(_vuln_partial_digest("python", cur_section))["vulnCount"]
+    # identities are equal despite the transient flip — comparability keys on the stable cause
+    assert r_prev[2] == r_cur[2] == ["python/vulns/no-transitive-resolution"]
+    # the transient marker still reaches the human-readable reason on the sweep that had it
+    assert "malformed-advisory" in r_prev[1]
+    assert "malformed-advisory" not in r_cur[1]
+    _, comp_prev = gv._interpret_vital_tuple(
+        r_prev[0], r_prev[1], identity=r_prev[2], lens_name="deps", vital_name="vulnCount")
+    _, comp_cur = gv._interpret_vital_tuple(
+        r_cur[0], r_cur[1], identity=r_cur[2], lens_name="deps", vital_name="vulnCount")
+    assert gv._comparable_completeness(comp_prev, comp_cur)
+    crossings = gv.crossings(
+        {"vulnCount": r_prev[0]}, {"vulnCount": r_cur[0]},
+        prev_completeness={"vulnCount": comp_prev},
+        cur_completeness={"vulnCount": comp_cur})
+    assert crossings  # the real drift is surfaced, not silenced
 
 
 def test_deps_unclassified_sentinel_stays_comparable_and_crosses():
