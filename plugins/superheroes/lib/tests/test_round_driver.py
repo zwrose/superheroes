@@ -756,6 +756,52 @@ def test_independent_auditor_selection_two_vendor(tmp_path):
     assert receipt["certificationShape"] == "audited-chain"  # NOT -degraded
 
 
+def test_unknown_fixer_vendor_degraded_end_to_end_two_vendor(tmp_path):
+    """#608: omitting fixerVendor must not assume claude — unknown fixer degrades, never false independent."""
+    captured = {"targets": None}
+
+    def auditor(targets, rnd):
+        captured["targets"] = [dict(t) for t in (targets or [])]
+        return [{"id": t["id"], "ruling": "discharged", "reason": "ok", "evidence": "e",
+                 "auditorVendor": t.get("auditorVendor")} for t in (targets or [])]
+
+    cfg = {"leg": "code", "vendors": ["claude", "codex"], "diff": DIFF}
+    receipt = RD.run_loop(_seams(
+        reviewer=lambda dim, tier, rnd, ctx:
+            ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+             if rnd == 1 and dim == "code-reviewer" else []),
+        auditor=auditor), cfg)
+    assert receipt["verdict"] == "converged"
+    assert captured["targets"]
+    t = captured["targets"][0]
+    assert t["fixerVendor"] is None
+    assert t["independence"] == "degraded"
+    assert t["auditorVendor"] == "claude"
+    assert receipt["certificationShape"] == "audited-chain-degraded"
+    assert receipt["degraded"], "the lost independence must be named in the receipt"
+
+
+def test_explicit_cross_family_fixer_still_independent_two_vendor(tmp_path):
+    """#608 contrast: known codex fixer with two vendors still yields independent audit."""
+    captured = {"targets": None}
+
+    def auditor(targets, rnd):
+        captured["targets"] = [dict(t) for t in (targets or [])]
+        return [{"id": t["id"], "ruling": "discharged", "reason": "ok", "evidence": "e",
+                 "auditorVendor": t.get("auditorVendor")} for t in (targets or [])]
+
+    cfg = {"leg": "code", "vendors": ["claude", "codex"], "diff": DIFF, "fixerVendor": "codex"}
+    receipt = RD.run_loop(_seams(
+        reviewer=lambda dim, tier, rnd, ctx:
+            ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+             if rnd == 1 and dim == "code-reviewer" else []),
+        auditor=auditor), cfg)
+    assert receipt["verdict"] == "converged"
+    t = captured["targets"][0]
+    assert t["independence"] == "independent"
+    assert receipt["certificationShape"] == "audited-chain"
+
+
 def test_audit_result_from_wrong_vendor_is_not_discharged(tmp_path):
     """#507 WO-FIX-RECOVERY (audits): a clearing ruling that the ORCHESTRATOR's dispatch manifest
     does not authenticate is rejected as not-discharged + unauthenticated, so it can never certify a
@@ -1741,6 +1787,17 @@ def test_auditor_vendor_family_keyed_single_vendor_same_family_degraded():
 def test_auditor_vendor_family_keyed_single_vendor_cross_family_independent():
     """#510: cursor-only env — composer fixer (cursor family) vs grok verifier (xai family) → independent."""
     assert RD._auditor_vendor({"vendors": ["cursor"]}, "cursor") == ("cursor", "independent")
+
+
+def test_auditor_vendor_unknown_fixer_degraded():
+    """#608: genuinely-unknown fixer vendor never yields a false-independent auditor stamp."""
+    auditor, independence = RD._auditor_vendor({"vendors": ["claude", "codex"]}, None)
+    assert auditor == "claude" and independence == "degraded"
+
+
+def test_auditor_vendor_empty_string_fixer_degraded():
+    """#608: empty-string fixer is unknown — same degraded path as None."""
+    assert RD._auditor_vendor({"vendors": ["claude", "codex"]}, "")[1] == "degraded"
 
 
 def test_auditor_vendor_family_keyed_pass1_prefers_different_cli():

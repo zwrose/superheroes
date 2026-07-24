@@ -425,7 +425,7 @@ def _default_config(overrides=None):
         "code": True,
         "docMode": False,
         "vendors": ["claude"],
-        "fixerVendor": "claude",
+        "fixerVendor": None,  # UNKNOWN by default — auditor independence must DEGRADE, not assume claude (#608)
         "verifyCommand": "none",
         "maxRounds": 7,
         "dimensions": list(DIMENSIONS),
@@ -1394,7 +1394,7 @@ def _audit_targets(state, config, audit_targets_map):
     """Location-grouped audit targets, each carrying the fixer's vendor so the orchestrator seats a
     DIFFERENT auditor vendor. Grounded in the fix batch (the fixed findings), attributed to the
     hunks that sit over their lines."""
-    fixer_vendor = config.get("fixerVendor", "claude")
+    fixer_vendor = config.get("fixerVendor")
     auditor_vendor, independence = _auditor_vendor(config, fixer_vendor)
     if independence == "degraded":
         state["independenceDegraded"] = True
@@ -1657,7 +1657,7 @@ def _handle_stall(state, config, breaker):
     menu."""
     if not state.get("selfRecovered"):
         state["selfRecovered"] = True
-        fixer_vendor = config.get("fixerVendor", "claude")
+        fixer_vendor = config.get("fixerVendor")
         rung = model_registry.escalate(
             fixer_vendor, config.get("fixerModel", "sonnet-5"), config.get("fixerEffort", "high"))
         state["_escalatedRung"] = {"rung": rung, "vendor": fixer_vendor}
