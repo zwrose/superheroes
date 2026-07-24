@@ -121,6 +121,35 @@ never drop a finding or a lens.
 > as `unreadable`, which forfeits the slot to a Claude re-run (UFR-7) and silently doubles the round's
 > cost. State this shape verbatim in the dispatch prompt so orchestrators stop re-guessing it per run.
 
+> **Reviewer-seat dispatch runs through the dispatch RUNNER (#563 DoD 2/4) — reviewer role ONLY.**
+> When `$REVIEWER_ENGINE` is `codex` or `cursor`, dispatch each read-only reviewer seat through
+> `lib/engine_dispatch.py dispatch-review` (not a hand-rolled `codex exec` / `cursor-agent` shell
+> line). The runner owns the previously per-session dispatch mechanics as **machinery**: it prepends
+> the anti-hijack preamble (the mode-7 hardening that stops the codex SessionStart/skill-selection
+> derail), feeds the prompt via the `- < realfile` stdin form behind the `_prompt_path_ok`
+> empty-prompt guard, runs codex from a non-repo cwd with `--skip-git-repo-check`, bounds the attempt
+> and streams liveness heartbeats to `--progress-file`, and on a **terminal forfeit** (timeout OR
+> `unreadable` — never intermediate bootstrap noise that still yields a final answer) auto-retries
+> ONCE tight-inline with a ≥900 s ceiling before returning
+> `{"ok": false, "forfeited": true, "disclosure": …}`. A forfeit → the seat falls open to a Claude
+> re-run (UFR-7) and the orchestrator **discloses** the degraded vendor mix (the `disclosure` string);
+> making that fall-open loud by machinery in the receipt is #563 PR C.
+>
+> ```bash
+> ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+> python3 "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
+>   --engine "$REVIEWER_ENGINE" --engine-model "$SEAT_ENGINE_MODEL" --effort "$SEAT_EFFORT" \
+>   --prompt-path "$SEAT_PROMPT" --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
+> ```
+>
+> Read-only sandbox is **hard-coded inside the runner API** — it cannot emit a write dispatch. Because
+> the runner runs codex from a non-repo cwd under "do not read files", the seat prompt MUST be
+> **self-contained** — inline the diff and any context the lens needs. This makes the codex/cursor
+> seat a **diff-scoped cross-vendor lens**; lenses that need repo inspection (grep-before-flag, caller
+> reachability) stay with the Claude seats, which keep full working-tree access. The **fixer / write
+> path is unchanged** — it stays model-driven and host-gated (a Python-spawned subprocess would bypass
+> the host permission-classifier the write authz depends on; CONVENTIONS `§7.5`).
+
 > **External-engine dispatches — timeout is structural, an expired slot is `unreadable` (#202, #204).**
 > Every engine dispatch — the reviewer (read-only, above) AND the **fixer** (cursor, workspace-write) —
 > runs as a Bash tool call, so its timeout is already **structural, not prompted**: the plugin's
