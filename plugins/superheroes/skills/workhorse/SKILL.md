@@ -190,6 +190,22 @@ in the work order** where not. Never let a subagent silently inherit your (high)
 dispatch's provenance is explicit and never implicit; the preflight's dispatch-calibration readout
 gives you this per role.
 
+**The registry is the model authority — run the gate before every dispatch.** For **each** of the
+three dispatch kinds this charter sanctions — an **implementer order**, a **fix-batch order**, and a
+**hand-rolled fallback dispatch** — you **run the model gate** on the effective `--model` you will
+pass (explicit or defaulted) *before dispatching*:
+`python3 ${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/dispatch_guard.py check --role <role> --vendor <engine> --model <model> [--effort <effort>]`.
+It validates that model against the seat's **registry allowlist** (`lib/model_registry.py`, the single
+model/vendor taxonomy; #510). **Exit 1 = an unlisted model = a park, not a pick:** the gate prints the
+allowlist, and you **park before any work runs** — never treat a model-within-engine choice as "just a
+preference." On exit 0 the gate resolves the validated model; **record that resolved model** (not the
+raw input — for a defaulted dispatch it resolves the concrete token) in the dispatch-provenance table.
+**Running the gate is your discipline, not an automatic trigger** — the workhorse is prose-driven, so
+the gate is the mechanical *check* and you are the one who must run it; a skipped gate leaves the
+dispatch's provenance row without a validated model, which is how the advisor spots it. It
+**supersedes the interim memory rule** that pinned engines but let model-within-engine slide — the
+WE#511 escape, a codex-family model dispatched through `cursor-agent`. The registry, not a session's judgment, decides what may run.
+
 **Escalation is receipts-driven, not anticipation.** Implementation starts on the calibrated
 implementation engine. Leaving it requires **demonstrated fragility** — receipts from a failed round
 on the work at hand, never a pre-emptive hunch, never a precedent from a previous build, never a
@@ -289,7 +305,7 @@ security finding on that behavior is fixed or honestly parked, never deferred as
 
 Open a **ready** (not draft) PR: the **build brief + dispositions table + receipts + disclosures**,
 a **dispatch provenance** section — each dispatch (the brief-check reviewer, every implementer, the
-pilot, the review-code seats) with the **engine + model** it ran on, so the advisor can vet what ran
+pilot, the review-code seats) with the **engine + model** it ran on — each validated against the registry allowlist (#600), so the advisor can vet what ran
 without your context — plus a **Follow-ups for the advisor** section — out-of-scope discoveries,
 deferred work, or issues you noticed but cannot file yourself (you never wire the board). List them
 plainly under that exact heading (write **None** when there are none) so the advisor can turn them
