@@ -25,6 +25,56 @@ DEFAULT_TIER_BY_SEAT = {s: "reviewer-deep" for s in LENS_SEATS}
 DEFAULT_TIER_BY_SEAT[GROUNDING_SEAT] = "reviewer"
 
 
+def reachable_configs(configured_vendors, pins, roster=None, tier_by_seat=None):
+    """Pin-constrained needed set: {vendor: [[model, effort], ...]}. Claude is never probed."""
+    roster = tuple(roster) if roster else PANEL_ROSTER
+    tiers_map = dict(DEFAULT_TIER_BY_SEAT)
+    if tier_by_seat:
+        tiers_map.update(tier_by_seat)
+
+    reachable: dict[str, set[tuple]] = {v: set() for v in configured_vendors}
+
+    def _tier_for(seat: str) -> str:
+        return (
+            (tier_by_seat or {}).get(seat)
+            or tiers_map.get(seat)
+            or DEFAULT_TIER_BY_SEAT.get(seat)
+            or "reviewer"
+        )
+
+    def _add_cell(vendor: str, tier: str) -> None:
+        cell = matrix_config(tier, vendor)
+        if cell is not None:
+            reachable[vendor].add(cell)
+
+    def _rotate_all(tier: str) -> None:
+        for cv in configured_vendors:
+            _add_cell(cv, tier)
+
+    for seat in roster:
+        tier = _tier_for(seat)
+        pin = (pins or {}).get(seat) if isinstance(pins, dict) else None
+        if isinstance(pin, dict) and isinstance(pin.get("vendor"), str) and pin["vendor"].strip():
+            v = pin["vendor"].strip()
+            if v == "claude":
+                continue
+            if v in configured_vendors:
+                cell = matrix_config(tier, v)
+                if cell is not None:
+                    model = pin.get("model") or cell[0]
+                    effort = pin.get("effort") if pin.get("effort") is not None else cell[1]
+                    reachable[v].add((model, effort))
+            else:
+                _rotate_all(tier)
+        else:
+            _rotate_all(tier)
+
+    out: dict[str, list] = {}
+    for v in configured_vendors:
+        out[v] = [[m, e] for m, e in sorted(reachable[v])]
+    return out
+
+
 def seed_from(pr_number: int | str | None, head_sha: str | None) -> int:
     if pr_number:
         raw = str(pr_number)
@@ -456,16 +506,20 @@ def main(argv):
         default=None,
         help="JSON dict of seat pins passed to build()",
     )
+    c.add_argument(
+        "--probe-mode",
+        default="probe",
+        choices=("probe", "cache-only"),
+        help="probe live vendors or reuse cache only",
+    )
     args = ap.parse_args(argv[1:])
     if args.cmd == "compose":
-        if args.live_vendors is not None:
-            live = [v for v in args.live_vendors.split(",") if v]
-        else:
-            import preflight_probe
+        import time
 
-            configured = [e for e in args.configured_engines.split(",") if e]
-            live, _liveness = preflight_probe.live_vendors_for_composition(configured)
-        seed = seed_from(args.pr_number, args.head_sha)
+        import liveness_cache
+
+        notes: list[dict[str, str]] = []
+
         pins = None
         if args.pins is not None:
             try:
@@ -473,6 +527,24 @@ def main(argv):
             except json.JSONDecodeError as e:
                 print(str(e), file=sys.stderr)
                 return 1
+
+        if args.live_vendors is not None:
+            live = [v for v in args.live_vendors.split(",") if v]
+        else:
+            now = time.time()
+            cache_path = liveness_cache.receipt_path(".")
+            import preflight_probe
+
+            configured = [e for e in args.configured_engines.split(",") if e]
+            needed_override = reachable_configs(configured, pins) if pins else None
+            live, _liveness, notes = preflight_probe.live_vendors_for_composition(
+                configured,
+                needed_override=needed_override,
+                probe_mode=args.probe_mode,
+                cache_path=cache_path,
+                now=now,
+            )
+        seed = seed_from(args.pr_number, args.head_sha)
         sm = build(
             PANEL_ROSTER,
             live,
@@ -481,7 +553,10 @@ def main(argv):
             seed,
             pins=pins,
         )
-        json.dump(to_receipt(sm), sys.stdout)
+        receipt = to_receipt(sm)
+        if notes:
+            receipt["degradations"] = list(receipt.get("degradations", [])) + notes
+        json.dump(receipt, sys.stdout)
         sys.stdout.write("\n")
         return 0
     return 0

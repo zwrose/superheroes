@@ -26,6 +26,7 @@ if _LIB_DIR not in sys.path:
 import core_md                 # noqa: E402
 import engine_adapter          # noqa: E402
 import engine_pref            # noqa: E402
+import liveness_cache          # noqa: E402
 import model_registry          # noqa: E402
 import model_tier_overrides    # noqa: E402
 
@@ -202,12 +203,46 @@ def composition_liveness(needed_configs, run=None):
     return result
 
 
-def live_vendors_for_composition(configured_vendors, tiers=("reviewer-deep", "reviewer"), run=None):
+def live_vendors_for_composition(
+    configured_vendors,
+    tiers=("reviewer-deep", "reviewer"),
+    run=None,
+    *,
+    needed_override=None,
+    probe_mode="probe",
+    cache_path=None,
+    now=None,
+):
     """Derive live vendors for seat_map.build from composition preflight. Claude is always live."""
-    needed = needed_configs_for(tiers, configured_vendors)
+    needed = needed_override if needed_override is not None else needed_configs_for(tiers, configured_vendors)
+    notes = []
+
+    if cache_path is not None and now is not None:
+        rec = liveness_cache.read(cache_path, now=now)
+        if rec is not None and liveness_cache.covers(rec.get("needed", {}), needed):
+            live, dead_notes = liveness_cache.live_vendors_from(rec["liveness"], needed)
+            notes.append({
+                "constraint": "preflight-cache",
+                "reason": "reused liveness receipt (age %ds)" % int(now - rec["probedAt"]),
+            })
+            notes.extend(dead_notes)
+            return (live, rec["liveness"], notes)
+
+    if probe_mode == "cache-only":
+        notes.append({
+            "constraint": "preflight-cache-only",
+            "reason": (
+                "receipt-only path (e.g. --post): no fresh liveness cache within TTL — "
+                "vendors not probed; panel falls open to Claude"
+            ),
+        })
+        return (["claude"], {"claude": {"live": True, "models": {}}}, notes)
+
     liveness = composition_liveness({**needed, "claude": []}, run)
-    live = sorted(v for v, info in liveness.items() if info["live"])
-    return (live, liveness)
+    if cache_path is not None and now is not None:
+        liveness_cache.write(liveness, needed, path=cache_path, now=now)
+    live = sorted(v for v, info in liveness.items() if info.get("live"))
+    return (live, liveness, notes)
 
 
 def configured_cross_vendor_engines(prefs):
@@ -227,7 +262,43 @@ def main(argv):
     r.add_argument("--engine", default=None,
                     help="probe exactly this engine (back-compat); omit to derive every "
                          "configured non-Claude engine from the project's enginePreferences")
+    cl = sub.add_parser("compose-liveness", help="probe composition liveness and cache receipt")
+    cl.add_argument("--cwd", default=".")
+    cl.add_argument("--pins", default=None, help="JSON dict of seat pins for pin-reachability")
     args = ap.parse_args(argv[1:])
+
+    if args.cmd == "compose-liveness":
+        import time
+
+        prefs = (core_md.read(args.cwd) or {}).get("enginePreferences") or {}
+        prefs = prefs if isinstance(prefs, dict) else {}
+        configured = configured_cross_vendor_engines(prefs)
+        needed_override = None
+        if args.pins:
+            import seat_map  # noqa: E402 — lazy: breaks import cycle with seat_map
+
+            try:
+                pins = json.loads(args.pins)
+            except json.JSONDecodeError as e:
+                print(str(e), file=sys.stderr)
+                return 1
+            needed_override = seat_map.reachable_configs(configured, pins)
+        now = time.time()
+        cache_path = liveness_cache.receipt_path(args.cwd)
+        live, liveness, notes = live_vendors_for_composition(
+            configured,
+            needed_override=needed_override,
+            probe_mode="probe",
+            cache_path=cache_path,
+            now=now,
+        )
+        sys.stdout.write(json.dumps({
+            "live": live,
+            "cachePath": cache_path,
+            "crossVendorEngines": configured,
+            "notes": notes,
+        }) + "\n")
+        return 0
 
     if args.cmd == "run":
         probes = [gh_auth_probe()]
