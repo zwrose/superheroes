@@ -25,9 +25,9 @@ ENGINES = ("claude", "codex", "cursor")
 ENGINE_ROLE_KEYS = ("reviewer", "implementation", "briefCheck", "pilot")
 
 # The FULL valid enginePreferences key set (role keys + the non-role tuning keys) — the schema home
-# the §11 drift guard reads so no test re-types the list. `codexModels`/`effort`/`timeout`/
-# `idleTimeout` are the non-role keys load_engine_prefs already honors.
-ENGINE_PREF_KEYS = ENGINE_ROLE_KEYS + ("codexModels", "effort", "timeout", "idleTimeout")
+# the §11 drift guard reads so no test re-types the list. `codexModels`/`seatPins`/`effort`/
+# `timeout`/`idleTimeout` are the non-role keys load_engine_prefs already honors.
+ENGINE_PREF_KEYS = ENGINE_ROLE_KEYS + ("codexModels", "seatPins", "effort", "timeout", "idleTimeout")
 
 # Retired enginePreferences keys that must never be cited as a live config knob again (plan authoring
 # was retired in #479). The §11 drift guard asserts these never re-appear in the calibration prose.
@@ -276,7 +276,8 @@ def load_engine_prefs(cwd, root=None):
     """Read core.md's enginePreferences via core_md.read; normalize each role to a valid engine
     (else 'claude'); surface the optional FR-9 `effort` sub-map (a dict, else {}) and the optional
     #309 `timeout` owner override (a positive int, else omitted — resolve_timeout then falls to the
-    role ceiling); absent block / None / any error → both 'claude' + empty effort. Never raises."""
+    role ceiling); validated `codexModels` / `invalidCodexModels` and `seatPins` / `invalidSeatPins`
+    when present; absent block / None / any error → both 'claude' + empty effort. Never raises."""
     degenerate = {"reviewer": "claude", "implementation": "claude",
                   "briefCheck": "claude", "pilot": "claude", "effort": {}}
     try:
@@ -319,6 +320,35 @@ def load_engine_prefs(cwd, root=None):
             out["codexModels"] = pins
         if invalid:
             out["invalidCodexModels"] = invalid
+    seat_pins = prefs.get("seatPins")
+    if isinstance(seat_pins, dict):
+        spins = {}
+        sinvalid = {}
+        for seat, pin in seat_pins.items():
+            if not isinstance(pin, dict):
+                sinvalid[seat] = "pin must be an object with a vendor"
+                continue
+            vendor = pin.get("vendor")
+            if not isinstance(vendor, str) or not vendor.strip():
+                sinvalid[seat] = "missing or invalid vendor"
+                continue
+            cleaned = {"vendor": vendor.strip()}
+            bad_opt = None
+            for opt in ("model", "effort"):
+                if opt in pin:
+                    val = pin.get(opt)
+                    if not isinstance(val, str) or not val.strip():
+                        bad_opt = opt
+                        break
+                    cleaned[opt] = val.strip()
+            if bad_opt is not None:
+                sinvalid[seat] = "invalid %s (must be a non-empty string)" % bad_opt
+                continue
+            spins[seat] = cleaned
+        if spins:
+            out["seatPins"] = spins
+        if sinvalid:
+            out["invalidSeatPins"] = sinvalid
     # #309 owner override channel: a positive-int `timeout` rides the same enginePreferences block so
     # resolve_timeout(prefs, role) can honor it at real dispatch. A bool (an int subclass) or any
     # non-positive/non-int value is dropped, leaving the role ceiling in force.
