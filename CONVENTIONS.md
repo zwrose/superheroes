@@ -605,6 +605,14 @@ so a stalled external CLI is killed well before the ceiling; an owner may
 override either limit via `enginePreferences`, and an override never disables the
 ceiling.
 
+**Seat-map preflight economics** (#610): the composition preflight that decides which vendors are
+live for the panel is **gated, cached, and pin-scoped**. It runs only on panel-dispatching entries —
+`--post` and any receipt-only path reuse a fresh **short-TTL machine-readable liveness receipt** or
+fall open to Claude, never re-probing; a compose within the TTL rides the receipt (the workhorse
+intake preflight can seed it); and only **pin-reachable** models are probed. The **fail-direction is
+unchanged**: a probe failure still drops the vendor loudly (disclosed degradation); the cache only
+ever skips re-proving recent liveness, and never converts a failure into a pass.
+
 **Confinement + hygiene.** External reviewers run read-only; external implementers run
 workspace-write, confined to the builder's own worktree, with **no remote authority** —
 the band owns every push / PR / merge, mechanically backstopped by the owner-authority

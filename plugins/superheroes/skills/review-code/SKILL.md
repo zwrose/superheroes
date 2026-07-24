@@ -141,12 +141,15 @@ REVIEWER_ENGINE=$(echo "$EP" | jq -r '.reviewer // "claude"')
 IMPL_ENGINE=$(echo "$EP" | jq -r '.implementation // "claude"')
 ```
 
-**Compose the panel seat map (#510).** Per-seat engine+model over the live vendors — this replaces the single `$REVIEWER_ENGINE`-for-all-seats knob. `$AUTHOR_FAMILY` is the implementation engine's maker family; the narrative family is this orchestrator (`anthropic`). The map (per-seat tiers + resolved models, any pin/degradation disclosures) rides into the receipt; per-seat consumption is in `reference/auto-fix-loop.md`.
+**Compose the panel seat map (#510).** Per-seat engine+model over the live vendors — this replaces the single `$REVIEWER_ENGINE`-for-all-seats knob. `$AUTHOR_FAMILY` is the implementation engine's maker family; the narrative family is this orchestrator (`anthropic`). The map (per-seat tiers + resolved models, any pin/degradation disclosures) rides into the receipt; per-seat consumption is in `reference/auto-fix-loop.md`. On the `--post` path set `PROBE_MODE=cache-only` (#610 leg 1) — `--post` never pays the vendor liveness preflight; it reuses a fresh receipt within the short TTL or falls open to Claude with a disclosed `preflight-cache-only` degradation. Only `--post` is cache-only; the auto-fix loop and `--review-only` still probe.
 
 ```bash
 CONFIGURED=$(python3 -c "import sys;sys.path.insert(0,'$ROOT_DIR/lib');import preflight_probe,core_md;p=(core_md.read('.') or {}).get('enginePreferences') or {};print(','.join(preflight_probe.configured_cross_vendor_engines(p)))")
 AUTHOR_FAMILY=$(python3 -c "import sys;sys.path.insert(0,'$ROOT_DIR/lib');import model_registry as m;print(m.family_for('code-fixer','$IMPL_ENGINE') or '')")
-SEAT_MAP=$(python3 "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "$CONFIGURED" --author-family "$AUTHOR_FAMILY" --narrative-family anthropic --pr-number "${PR_NUMBER:-}" --head-sha "$(git rev-parse HEAD 2>/dev/null)" || echo '{"seats":{},"degradations":[{"constraint":"compose-failed","reason":"seat_map compose failed — every seat falls open to Claude"}]}')
+# Leg 1 (#610): panel-dispatching paths probe live vendors on a cache miss; the --post path never
+# re-probes — it reuses a fresh short-TTL liveness receipt or falls open to Claude (disclosed).
+PROBE_MODE=probe   # on the --post path ONLY, set PROBE_MODE=cache-only
+SEAT_MAP=$(python3 "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "$CONFIGURED" --author-family "$AUTHOR_FAMILY" --narrative-family anthropic --pr-number "${PR_NUMBER:-}" --head-sha "$(git rev-parse HEAD 2>/dev/null)" --probe-mode "$PROBE_MODE" || echo '{"seats":{},"degradations":[{"constraint":"compose-failed","reason":"seat_map compose failed — every seat falls open to Claude"}]}')
 ```
 
 When dispatching specialists, map each panel seat's **tier** to a model — `reviewer-deep` → `model: $DEEP_MODEL`, `reviewer` → `model: $REVIEWER_MODEL` (the auto-fix loop's per-round schedule is driver-owned; see `round-driver.md`). Triage subagents use `model: $MECH_MODEL`; the fixer uses `model: $FIXER_MODEL` (the `code-fixer` tier, #510). An empty value means "inherit the session model" — omit the `model` arg in that case.
