@@ -249,18 +249,20 @@ expect to just barely clear**, and never end the turn while the work runs. The *
 differ by dispatch kind**:
 
 - **A shell/CLI run** (an engine CLI invoked through the host's run action) is bounded by the host's
-  Bash timeout. On the Claude host that number is **ten minutes (600s) — a *default*, not a ceiling you
-  raise by asking for more**: the plugin's `bash_timeout` hook injects 600s **only when a call omits
-  its own `timeout`** (an explicit one is never touched), and a **foreground** Bash call is itself
-  **capped at ten minutes** — so you **cannot** set the 3600s+ room a long dispatch needs on a
-  foreground call (other hosts defer to their own, shorter default). Give the dispatch that room by
-  **backgrounding the run and polling it** — a backgrounded run is not bound by the foreground cap —
-  never by trying to raise a foreground timeout. Redirect its output to a **file, never `| tail`**, and
-  watch that **output/transcript file growing as your primary stall signal**: a growing file is live;
-  use the process's **CPU-time column only as corroboration** (an engine CLI can sit at ~0% CPU for
-  minutes and still be live, so CPU alone can't separate idle-but-live from stuck), and treat **elapsed
-  time alone as no signal**. Four 0.18.0-wave sessions died on the ten-minute floor mid-dispatch — one
-  mid-review-panel — losing the run (WE review session, WE-510, sh-566, WE-484).
+  Bash timeout. On the Claude host that is **ten minutes (600s) — a hard cap on a foreground call, not
+  a ceiling you lift by passing a bigger `timeout`**: the plugin's `bash_timeout` hook injects 600s
+  **only when a call omits its own `timeout`** (an explicit one is never touched), and the host **caps
+  any foreground `timeout` at ten minutes** regardless (a larger value is clamped) — so you **cannot**
+  get the 3600s+ room a long dispatch needs on a foreground call (other hosts defer to their own,
+  shorter default). Give the dispatch that room by **backgrounding the run and polling it** — a
+  backgrounded run is not bound by the foreground cap — never by trying to raise a foreground timeout.
+  Redirect its output to a **file, never `| tail`**, and watch that **output/transcript file growing as
+  your primary stall signal**: a growing file is live; use the process's **CPU-time column only as
+  corroboration** (an engine CLI can sit at ~0% CPU for minutes and still be live, so CPU alone can't
+  separate idle-but-live from stuck). Treat **elapsed time as your *runaway* bound, not a liveness
+  signal** — a quiet run may still be live, but one that has far outrun any plausible dispatch time is a
+  runaway to kill even while its file grows. Four 0.18.0-wave sessions died at the ten-minute cap
+  mid-dispatch — one mid-review-panel — losing the run (WE review session, WE-510, sh-566, WE-484).
 - **A native subagent dispatch** has a **harness-managed lifecycle** — no `bash_timeout` floor and no
   CPU column of your own to watch — so those shell mechanics don't apply and there is **no caller-set
   ceiling to invent** — the harness manages the lifecycle and returns when the subagent completes; the
@@ -380,7 +382,7 @@ curation stay with the advisor.
 | "One more patch and this surface is finally right." | A third rework of the same surface in one build is the park tripwire, not another patch. Name the seam problem instead. |
 | "That reviewer dispatch has been quiet too long, I'll kill it and re-dispatch." | The structural timeout is the tripwire for a configured reviewer dispatch, not your read of silence. A memory recalls context — it is not a standing kill order. |
 | "Main moved under the order I sent — the implementer should have coped." | The order's premises bind you, the dispatcher. Amend the order when the world moves; parking on a stale premise is correct behavior. |
-| "This dispatch will finish quickly — the default timeout is fine." | A long dispatch **you own** gets room to finish — **backgrounded and polled**, never squeezed under the ten-minute foreground Bash cap — and a stuck/runaway monitor (a skill-owned dispatch keeps its own timeout contract). Four 0.18.0 sessions died on the ten-minute `bash_timeout` floor mid-dispatch. Never a borderline limit. |
+| "This dispatch will finish quickly — the default timeout is fine." | A long dispatch **you own** gets room to finish — **backgrounded and polled**, never squeezed under the ten-minute foreground Bash cap — and a stuck/runaway monitor (a skill-owned dispatch keeps its own timeout contract). Four 0.18.0 sessions died at the ten-minute `bash_timeout` cap mid-dispatch. Never a borderline limit. |
 | "The implementer botched it — escalate to a stronger engine." | Attribution first. In the 0.18.0 wave, order quality outweighed execution ~5:1. A defect the order under-specified (a missing fail-closed edge, an unnamed target file) is an **order** defect — rewrite the order at the same rung, don't blame the engine. |
 | "I'll kick off the implementer and wrap up my turn." | Await every dispatch in-turn. A headless session can't be re-woken — ending a turn with an engine in flight orphans the build (a park dressed as a handoff). If you can't wait it out, park honestly. |
 | "It's committed locally — the PR is ready." | "Ready" requires the **remote** head containing every commit your receipts claim (`git rev-parse origin/<branch>` vs local HEAD). A local-only fix is a claim without a receipt. |
