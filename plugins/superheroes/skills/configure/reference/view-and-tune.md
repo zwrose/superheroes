@@ -132,6 +132,29 @@ action that owns it, leaving the rest of the calibration untouched:
   model strings warn but do not fail, so newly available model names can be deliberately configured
   before the plugin ships a new allowlist.
 
+- **Pin a review-panel seat to a vendor/model** → write the pin under `core.md`'s
+  `enginePreferences.seatPins`. Valid seat keys are `architecture-reviewer`, `code-reviewer`,
+  `security-reviewer`, `test-reviewer`, `premortem-reviewer`, and `grounding-seat`; each pin is
+  `{vendor, model?, effort?}`. It feeds the review-code panel's `seat_map compose --pins`; a pin the
+  account/registry **cannot honor** (unknown seat, offline vendor, disallowed model, or a
+  grounding/strong-seat independence break) **stays loud** — the shipped seat-map machinery
+  (#510/#603) emits a `pin` / `pin-not-honorable` / `pin-breaks-constraint` degradation into the
+  review receipt and the seat falls back to rotation. The loader does structural validation only; a
+  structurally-broken entry is surfaced as `invalidSeatPins` in `configure view`. Show the current
+  engine preferences and effective seat map context first, merge only the requested seat into the
+  existing `seatPins` object, and preserve every sibling key.
+
+  ```json
+  {
+    "enginePreferences": {
+      "seatPins": {
+        "security-reviewer": {"vendor": "claude"},
+        "code-reviewer": {"vendor": "codex", "model": "gpt-5.6-sol"}
+      }
+    }
+  }
+  ```
+
 ## 3 — Switch the storage mode (FR-10), always showing what will move
 
 The switch is the only destructive action — always show **exactly what will move** and require an

@@ -25,9 +25,9 @@ ENGINES = ("claude", "codex", "cursor")
 ENGINE_ROLE_KEYS = ("reviewer", "implementation", "briefCheck", "pilot")
 
 # The FULL valid enginePreferences key set (role keys + the non-role tuning keys) — the schema home
-# the §11 drift guard reads so no test re-types the list. `codexModels`/`effort`/`timeout`/
-# `idleTimeout` are the non-role keys load_engine_prefs already honors.
-ENGINE_PREF_KEYS = ENGINE_ROLE_KEYS + ("codexModels", "effort", "timeout", "idleTimeout")
+# the §11 drift guard reads so no test re-types the list. `codexModels`/`seatPins`/`effort`/
+# `timeout`/`idleTimeout` are the non-role keys load_engine_prefs already honors.
+ENGINE_PREF_KEYS = ENGINE_ROLE_KEYS + ("codexModels", "seatPins", "effort", "timeout", "idleTimeout")
 
 # Retired enginePreferences keys that must never be cited as a live config knob again (plan authoring
 # was retired in #479). The §11 drift guard asserts these never re-appear in the calibration prose.
@@ -319,6 +319,30 @@ def load_engine_prefs(cwd, root=None):
             out["codexModels"] = pins
         if invalid:
             out["invalidCodexModels"] = invalid
+    seat_pins = prefs.get("seatPins")
+    if isinstance(seat_pins, dict):
+        spins = {}
+        sinvalid = {}
+        for seat, pin in seat_pins.items():
+            if not isinstance(pin, dict):
+                sinvalid[seat] = "pin must be an object with a vendor"
+                continue
+            vendor = pin.get("vendor")
+            if not isinstance(vendor, str) or not vendor.strip():
+                sinvalid[seat] = "missing or invalid vendor"
+                continue
+            cleaned = {"vendor": vendor.strip()}
+            model = pin.get("model")
+            if isinstance(model, str) and model.strip():
+                cleaned["model"] = model.strip()
+            effort = pin.get("effort")
+            if isinstance(effort, str) and effort.strip():
+                cleaned["effort"] = effort.strip()
+            spins[seat] = cleaned
+        if spins:
+            out["seatPins"] = spins
+        if sinvalid:
+            out["invalidSeatPins"] = sinvalid
     # #309 owner override channel: a positive-int `timeout` rides the same enginePreferences block so
     # resolve_timeout(prefs, role) can honor it at real dispatch. A bool (an int subclass) or any
     # non-positive/non-int value is dropped, leaving the role ceiling in force.

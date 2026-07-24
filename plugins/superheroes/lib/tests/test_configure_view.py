@@ -254,3 +254,18 @@ def test_render_guardian_lens_below_floor_not_passing(tmp_path):
     screen = cv.render(repo, root=root)
     assert "dup — floor not met" in screen
     assert "dup is active" not in screen
+
+
+def test_render_shows_review_panel_seat_pins(tmp_path):
+    root = _seed_core_and_layer(tmp_path, engine_preferences={
+        "seatPins": {
+            "code-reviewer": {"vendor": "codex", "model": "gpt-5.6-sol"},
+            "bad-seat": "nope",
+        },
+    })
+    screen = cv.render(str(tmp_path), root=root)
+    assert "Review-panel seat pins:" in screen
+    assert "code-reviewer: codex (model=gpt-5.6-sol)" in screen
+    assert "Rejected seat pins (not applied — seat falls back to rotation):" in screen
+    assert "bad-seat: pin must be an object with a vendor" in screen
+    assert "⚠" in screen

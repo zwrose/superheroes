@@ -500,6 +500,59 @@ def test_load_engine_prefs_effort_non_dict_normalizes_to_empty(tmp_path):
     assert EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))["effort"] == {}
 
 
+def test_seat_pins_in_engine_pref_keys_schema():
+    assert "seatPins" in EP.ENGINE_PREF_KEYS
+    assert "seatPins" not in EP.ENGINE_ROLE_KEYS
+
+
+def test_load_engine_prefs_surfaces_valid_seat_pins(tmp_path):
+    repo = str(tmp_path)
+    _write_core_with_prefs(repo, {
+        "seatPins": {
+            "code-reviewer": {"vendor": " codex ", "model": " gpt-5.6-sol ", "effort": " high "},
+            "security-reviewer": {"vendor": "claude", "extra": "ignored"},
+        },
+    })
+    got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
+    assert got["seatPins"] == {
+        "code-reviewer": {"vendor": "codex", "model": "gpt-5.6-sol", "effort": "high"},
+        "security-reviewer": {"vendor": "claude"},
+    }
+
+
+def test_load_engine_prefs_invalid_seat_pins_structural(tmp_path):
+    repo = str(tmp_path)
+    _write_core_with_prefs(repo, {
+        "seatPins": {
+            "code-reviewer": "not-a-dict",
+            "security-reviewer": {"model": "gpt-5.6-sol"},
+            "test-reviewer": {"vendor": "  "},
+        },
+    })
+    got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
+    assert "seatPins" not in got
+    assert got["invalidSeatPins"]["code-reviewer"] == "pin must be an object with a vendor"
+    assert got["invalidSeatPins"]["security-reviewer"] == "missing or invalid vendor"
+    assert got["invalidSeatPins"]["test-reviewer"] == "missing or invalid vendor"
+
+
+def test_load_engine_prefs_passes_through_unknown_seat_name(tmp_path):
+    repo = str(tmp_path)
+    _write_core_with_prefs(repo, {"seatPins": {"not-a-real-seat": {"vendor": "claude"}}})
+    got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
+    assert got["seatPins"] == {"not-a-real-seat": {"vendor": "claude"}}
+
+
+def test_load_engine_prefs_absent_seat_pins_omitted(tmp_path):
+    repo = str(tmp_path)
+    _write_core_with_prefs(repo, {"reviewer": "codex"})
+    got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
+    assert "seatPins" not in got
+    _write_core_with_prefs(repo, {"seatPins": None})
+    got_none = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
+    assert "seatPins" not in got_none
+
+
 def test_cli_engine_pref_load_emits_json(tmp_path):
     repo = str(tmp_path)
     _write_core_with_prefs(repo, {"reviewer": "codex", "implementation": "claude",
