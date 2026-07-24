@@ -607,6 +607,31 @@ def test_accept_the_risk_gated_on_confirmed(tmp_path):
     assert "accept-the-disclosed-risk" not in state2["_stallChoices"]
 
 
+_STALL_BREAKER = {"reason": "audit-stall", "detail": "stalled", "stalledIdentities": ["v0"]}
+
+
+def test_stall_self_recovery_unknown_fixer_does_not_stamp_escalated_rung():
+    """#608 review: unknown fixer → escalate returns None — must not set a truthy _escalatedRung."""
+    state = RD.new_state({"leg": "code", "vendors": ["claude"]})
+    assert state["config"]["fixerVendor"] is None
+    RD._handle_stall(state, state["config"], _STALL_BREAKER)
+    assert state["selfRecovered"] is True
+    assert state["step"] == RD.P_FIXER
+    assert state.get("_escalatedRung") is None
+
+
+def test_stall_self_recovery_known_fixer_stamps_escalated_rung():
+    """#608 review contrast: known claude fixer at default sonnet-5/high has a next ladder rung."""
+    state = RD.new_state({"leg": "code", "vendors": ["claude"], "fixerVendor": "claude"})
+    RD._handle_stall(state, state["config"], _STALL_BREAKER)
+    assert state["selfRecovered"] is True
+    assert state["step"] == RD.P_FIXER
+    escalated = state.get("_escalatedRung")
+    assert escalated is not None
+    assert escalated["rung"] is not None
+    assert escalated["vendor"] == "claude"
+
+
 def test_eligible_owner_acceptance_converges_end_to_end(tmp_path):
     """#507 v9: exercise the eligible owner-acceptance stall path to its terminal — an eligible
     CONFIRMED-with-receipt stall, the owner submits `accept-the-disclosed-risk`, and the run
@@ -754,6 +779,52 @@ def test_independent_auditor_selection_two_vendor(tmp_path):
     assert t["auditorVendor"] == "codex"
     assert t["independence"] == "independent"
     assert receipt["certificationShape"] == "audited-chain"  # NOT -degraded
+
+
+def test_unknown_fixer_vendor_degraded_end_to_end_two_vendor(tmp_path):
+    """#608: omitting fixerVendor must not assume claude — unknown fixer degrades, never false independent."""
+    captured = {"targets": None}
+
+    def auditor(targets, rnd):
+        captured["targets"] = [dict(t) for t in (targets or [])]
+        return [{"id": t["id"], "ruling": "discharged", "reason": "ok", "evidence": "e",
+                 "auditorVendor": t.get("auditorVendor")} for t in (targets or [])]
+
+    cfg = {"leg": "code", "vendors": ["claude", "codex"], "diff": DIFF}
+    receipt = RD.run_loop(_seams(
+        reviewer=lambda dim, tier, rnd, ctx:
+            ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+             if rnd == 1 and dim == "code-reviewer" else []),
+        auditor=auditor), cfg)
+    assert receipt["verdict"] == "converged"
+    assert captured["targets"]
+    t = captured["targets"][0]
+    assert t["fixerVendor"] is None
+    assert t["independence"] == "degraded"
+    assert t["auditorVendor"] == "claude"
+    assert receipt["certificationShape"] == "audited-chain-degraded"
+    assert receipt["degraded"], "the lost independence must be named in the receipt"
+
+
+def test_explicit_cross_family_fixer_still_independent_two_vendor(tmp_path):
+    """#608 contrast: known codex fixer with two vendors still yields independent audit."""
+    captured = {"targets": None}
+
+    def auditor(targets, rnd):
+        captured["targets"] = [dict(t) for t in (targets or [])]
+        return [{"id": t["id"], "ruling": "discharged", "reason": "ok", "evidence": "e",
+                 "auditorVendor": t.get("auditorVendor")} for t in (targets or [])]
+
+    cfg = {"leg": "code", "vendors": ["claude", "codex"], "diff": DIFF, "fixerVendor": "codex"}
+    receipt = RD.run_loop(_seams(
+        reviewer=lambda dim, tier, rnd, ctx:
+            ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+             if rnd == 1 and dim == "code-reviewer" else []),
+        auditor=auditor), cfg)
+    assert receipt["verdict"] == "converged"
+    t = captured["targets"][0]
+    assert t["independence"] == "independent"
+    assert receipt["certificationShape"] == "audited-chain"
 
 
 def test_audit_result_from_wrong_vendor_is_not_discharged(tmp_path):
@@ -1741,6 +1812,17 @@ def test_auditor_vendor_family_keyed_single_vendor_same_family_degraded():
 def test_auditor_vendor_family_keyed_single_vendor_cross_family_independent():
     """#510: cursor-only env — composer fixer (cursor family) vs grok verifier (xai family) → independent."""
     assert RD._auditor_vendor({"vendors": ["cursor"]}, "cursor") == ("cursor", "independent")
+
+
+def test_auditor_vendor_unknown_fixer_degraded():
+    """#608: genuinely-unknown fixer vendor never yields a false-independent auditor stamp."""
+    auditor, independence = RD._auditor_vendor({"vendors": ["claude", "codex"]}, None)
+    assert auditor == "claude" and independence == "degraded"
+
+
+def test_auditor_vendor_empty_string_fixer_degraded():
+    """#608: empty-string fixer is unknown — same degraded path as None."""
+    assert RD._auditor_vendor({"vendors": ["claude", "codex"]}, "")[1] == "degraded"
 
 
 def test_auditor_vendor_family_keyed_pass1_prefers_different_cli():
