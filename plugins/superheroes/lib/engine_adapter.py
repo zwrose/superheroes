@@ -95,7 +95,20 @@ def build_argv(engine, role_kind, effort, opts):
         # read/--mode-plan role — the write role's -f also trusts, but --trust covers both).
         if opts.get("model") == "fable":
             return []  # fable is anthropic-only; the cursor fable channel is retired — fall open to claude
-        model = _CURSOR_MODEL  # composer-2.5 (per-role grok selection is issue #510's composition layer)
+        engine_model = opts.get("engine_model")
+        if isinstance(engine_model, str) and engine_model:
+            # a per-seat model was explicitly requested — it MUST be valid; never silently normalize.
+            if not model_registry.is_registered("cursor", engine_model):
+                return []
+            ok, _reason = model_registry.validate_config("cursor", engine_model, effort)
+            if not ok:
+                return []
+            tok = model_registry.dispatch_token("cursor", engine_model, effort)
+            if not tok:
+                return []
+            model = tok
+        else:
+            model = _CURSOR_MODEL  # no per-seat model requested → composer default (back-compat)
         argv = ["cursor-agent", "--model", model, "-p", "--trust"]
         if is_read:
             argv += ["--mode", "plan"]     # read-only planning mode

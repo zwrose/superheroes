@@ -45,6 +45,8 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import guardian_collect as _gc  # noqa: E402
+
 LENS_CONTRACT_PARTS = (
     "collector", "baseline-diff", "validation", "consequence", "cost",
 )
@@ -55,7 +57,7 @@ FINDING_STATES = (
 RED_LINE_THRESHOLDS = {"complexity": 100, "cloneLines": 100}
 RED_LINE_KINDS = ("critical-vuln", "new-high-complexity", "large-fresh-clone")
 FACTS = ("verify-command", "recorded-coverage", "stack-tags", "paths")
-COLLECT_STATUSES = ("collected", "partial", "not-collected")
+COLLECT_STATUSES = _gc.COLLECT_STATUSES  # single home: guardian_collect
 PERMANENT_BOUNDARY_KEY = "permanentBoundary"
 # "high" = high-precision / high-consequence lens: first-baseline candidates ALWAYS
 # routed through validation. "volume" = noisy volume lens: first-baseline candidates
@@ -214,6 +216,15 @@ class MalformedCollect(ValueError):
     """A collect() outcome that is structurally unusable."""
 
 
+def _warn_contract(msg):
+    """Best-effort loud diagnostic for a classify_collect contract violation.
+    Never raises into a lens's classify path (stderr may be closed/replaced)."""
+    try:
+        sys.stderr.write("guardian_lens: %s\n" % msg)
+    except Exception:
+        pass
+
+
 def classify_collect(out):
     """Return (status, reason) for a collect() outcome. Fail-closed."""
     if not isinstance(out, dict):
@@ -222,9 +233,11 @@ def classify_collect(out):
     status = out.get("status", "collected")
     reason = out.get("reason")
     if status not in COLLECT_STATUSES:
+        _warn_contract("invalid collect status %r (contract violation)" % (status,))
         return ("not-collected", "invalid collect status: %r" % (status,))
     if status in ("partial", "not-collected"):
         if not isinstance(reason, str) or not reason:
+            _warn_contract("%s reported without a reason (contract violation)" % status)
             return (status, "%s reported without a reason (contract violation)" % status)
         return (status, reason)
     if status == "collected":

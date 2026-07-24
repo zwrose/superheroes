@@ -27,6 +27,8 @@
     {"path": "plugins/superheroes/lib/escalation_resolve.py", "allow": false},
     {"path": "plugins/superheroes/rubric/review-base.md", "allow": false},
     {"path": "plugins/superheroes/lib/escalation.py", "allow": false},
+    {"path": "plugins/superheroes/lib/engine_pref.py", "allow": false},
+    {"path": "plugins/superheroes/lib/seat_map.py", "allow": false},
     {"path": "plugins/superheroes/lib/definition_doc.py", "allow": false},
     {"path": "plugins/superheroes/rubric/escalation-base.md", "allow": false},
     {"path": "plugins/superheroes/lib/enforcer.py", "allow": false},

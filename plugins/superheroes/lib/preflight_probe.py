@@ -26,6 +26,7 @@ if _LIB_DIR not in sys.path:
 import core_md                 # noqa: E402
 import engine_adapter          # noqa: E402
 import engine_pref            # noqa: E402
+import model_registry          # noqa: E402
 import model_tier_overrides    # noqa: E402
 
 DEFAULT_GH_ARGV = ("gh", "auth", "status")
@@ -141,6 +142,72 @@ def dispatch_calibration(cwd=None, root=None, prefs=None, tiers=None):
 
 _BROWSER_NOTE = ("browser live-exercise is a host action — run it per reference/preflight.md "
                   "and fold the result in with browser_probe_result()")
+
+
+def model_no_op_argv(engine, model, effort=None):
+    """Per-model harmless no-op argv for composition preflight. Returns None when the model is
+    unknown/unroutable (caller marks unavailable — never calls run)."""
+    if engine == "codex":
+        if not model_registry.is_registered("codex", model):
+            return None
+        return ("codex", "exec", "--sandbox", "read-only", "-m", model,
+                "reply with the single word READY")
+    if engine == "cursor":
+        tok = model_registry.dispatch_token("cursor", model, effort)
+        if tok is None:
+            return None
+        return ("cursor-agent", "--model", tok, "-p", "--trust", "reply READY")
+    return (engine, "--version")
+
+
+def needed_configs_for(tiers, vendors):
+    """Distinct matrix configs per external vendor for the given tiers. Skips claude (always live)."""
+    out = {}
+    for vendor in vendors:
+        if vendor == "claude":
+            continue
+        configs = []
+        seen = set()
+        for tier in tiers:
+            cell = model_registry.matrix_config(tier, vendor)
+            if cell is None:
+                continue
+            if cell not in seen:
+                seen.add(cell)
+                configs.append(cell)
+        out[vendor] = configs
+    return out
+
+
+def composition_liveness(needed_configs, run=None):
+    """Per-vendor composition liveness: auth is all-or-nothing per vendor, layered with per-model
+    adequacy. Returns {vendor: {"live": bool, "models": {model: {"ok", "detail"}}}}."""
+    if not isinstance(needed_configs, dict):
+        return {}
+    result = {}
+    for vendor, configs in needed_configs.items():
+        if vendor == "claude":
+            result[vendor] = {"live": True, "models": {}}
+            continue
+        models = {}
+        for model, effort in configs:
+            argv = model_no_op_argv(vendor, model, effort)
+            if argv is None:
+                models[model] = {"ok": False, "detail": "unknown/unroutable model"}
+            else:
+                r = probe_command("composition:%s:%s" % (vendor, model), argv, run)
+                models[model] = {"ok": r["ok"], "detail": r["detail"]}
+        live = bool(configs) and all(m["ok"] for m in models.values())
+        result[vendor] = {"live": live, "models": models}
+    return result
+
+
+def live_vendors_for_composition(configured_vendors, tiers=("reviewer-deep", "reviewer"), run=None):
+    """Derive live vendors for seat_map.build from composition preflight. Claude is always live."""
+    needed = needed_configs_for(tiers, configured_vendors)
+    liveness = composition_liveness({**needed, "claude": []}, run)
+    live = sorted(v for v, info in liveness.items() if info["live"])
+    return (live, liveness)
 
 
 def configured_cross_vendor_engines(prefs):
