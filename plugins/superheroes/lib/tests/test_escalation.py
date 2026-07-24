@@ -105,7 +105,7 @@ def test_safety_machinery_set_members_are_pinned():
         "escalation.py", "escalation_resolve.py", "loop_state.py", "circuit_breaker.py",
         "gate_write.py", "definition_doc.py",
         "enforcer.py", "allowance.py", "model_tier.py", "model_registry.py",
-        "engine_pref.py", "seat_map.py", "dispatch_guard.py", "hooks.json",
+        "engine_pref.py", "seat_map.py", "dispatch_guard.py", "engine_dispatch.py", "hooks.json",
         "precompact.py", "session_start.py",
         "escalation-base.md", "review-base.md",
         # shared review-and-fix loop (#104): deciders, durable record, and the orchestration shell
