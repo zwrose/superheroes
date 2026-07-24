@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The deterministic engine argv/parse/commit core (kept out of the model-driven JS layer so
+"""The deterministic engine argv/parse/commit core (kept out of the effectful dispatch layer so
 it is unit-testable). Named engine_adapter (NOT engine_cli — that is test-pilot's). Every
 external free-text surface is scrubbed at THIS trust boundary (parse_result). Flags verified
 live 2026-07-12 against codex 0.144.1 (GPT-5.6; 0.141.0 is rejected by the API as too old)
@@ -57,7 +57,7 @@ def build_argv(engine, role_kind, effort, opts):
     a `fable` tier is anthropic-only and unrunnable on cursor. Codex uses a valid engine_model pin
     or maps the shared tier. The PROMPT is NOT
     encoded here — codex reads it from stdin (trailing `-`) and cursor-agent reads it from stdin
-    when given no positional prompt; the write-path dispatch caller feeds the staged prompt file to the
+    when given no positional prompt; the dispatch runner feeds the staged prompt file to the
     process stdin. Deterministic; fully unit-testable."""
     opts = opts or {}
     cwd = opts.get("cwd")
@@ -69,7 +69,7 @@ def build_argv(engine, role_kind, effort, opts):
             try:
                 engine_model = model_registry.codex_peer_for_claude_tier(opts.get("model"))
             except ValueError:
-                return []  # fable/anthropic-only on codex — unrunnable → JS falls open to claude
+                return []  # fable/anthropic-only on codex — unrunnable → the dispatch runner falls open to claude
         ok, _reason = model_registry.validate_config(
             "codex", engine_model, effort, allow_override_only=True)
         if not ok:
@@ -116,7 +116,7 @@ def build_argv(engine, role_kind, effort, opts):
             argv += ["-f"]                 # force / workspace-write
         argv += ["--output-format", "stream-json"]
         return argv
-    # Unknown engine: return an empty argv; the JS caller treats an empty argv as unrunnable
+    # Unknown engine: return an empty argv; the dispatch runner treats an empty argv as unrunnable
     # → fall open to claude (never raises here).
     return []
 
