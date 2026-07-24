@@ -309,6 +309,29 @@ def render(cwd, *, root=None):
             out.append("Rejected Codex model pins (not applied — dispatch falls to the tier default):")
             for role, reason in sorted(rejected.items()):
                 out.append(f"  {role}: {reason} ⚠")
+        seat_pins = eng.get("seatPins") if isinstance(eng.get("seatPins"), dict) else {}
+        out.append("Review-panel seat pins:")
+        if seat_pins:
+            for seat, pin in sorted(seat_pins.items()):
+                if not isinstance(pin, dict):
+                    continue
+                vendor = pin.get("vendor") or ""
+                extras = []
+                if isinstance(pin.get("model"), str) and pin.get("model").strip():
+                    extras.append("model=%s" % pin["model"].strip())
+                if isinstance(pin.get("effort"), str) and pin.get("effort").strip():
+                    extras.append("effort=%s" % pin["effort"].strip())
+                line = "  %s: %s" % (seat, vendor)
+                if extras:
+                    line += " (%s)" % ", ".join(extras)
+                out.append(line)
+        else:
+            out.append("  (none; seats rotate over live vendors)")
+        rejected_seats = eng.get("invalidSeatPins") if isinstance(eng.get("invalidSeatPins"), dict) else {}
+        if rejected_seats:
+            out.append("Rejected seat pins (not applied — seat falls back to rotation):")
+            for seat, reason in sorted(rejected_seats.items()):
+                out.append(f"  {seat}: {reason} ⚠")
     for hero, text in data["layers"]:
         out.append("")
         out.append(f"## Layer: {hero}")
