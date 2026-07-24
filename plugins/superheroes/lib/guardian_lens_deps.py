@@ -1633,18 +1633,24 @@ def _partial_part_gap(ecosystem, part, section):
 
 UNCLASSIFIED_PARTIAL_CAUSE = "unclassified-partial"
 
+# Transient CAUSE tokens (#613): partial-basis markers that ecosystem noise can flip between
+# sweeps with ZERO repo change — a malformed advisory row that normalizes next run, an
+# ambiguity that reconciles. This is NOT the collector-version "transient partial" sense used
+# elsewhere in lens-contract.md; these are noise-flippable *cause* markers. They are folded OUT
+# of the drift identity KEY so a flip cannot make two otherwise-identical partial bases read
+# non-comparable and silence a real crossing on a co-present stable marker (#601/#590
+# churn-silence risk). They STAY in the human-readable gap reason. Comparability keys on stable
+# causes only.
+_TRANSIENT_CAUSE_TOKENS = frozenset({"malformed-advisory", "ambiguous-identity"})
 
-def _section_cause_tokens(section):
-    """Stable measurement-basis cause tokens for a partial ecosystem-part section.
 
-    Never returns empty for a partial section: a non-dict, or a dict whose partial basis
-    matches no recognized cause marker, falls to the ``unclassified-partial`` sentinel so the
-    gap stays a *comparable* identity basis rather than poisoning the aggregate vital identity
-    to None. Fail-direction ruling (#592, #580): an unclassifiable partial over-alerts (stays
-    comparable), it never silences the drift comparison. None-identity remains reserved at the
-    guardian_vitals layer for malformed completeness *entries* (a contract violation)."""
+def _all_section_cause_tokens(section):
+    """Every recognized cause token for a partial section (stable + transient), unsorted.
+
+    Single source of the deps-lens cause vocabulary; ``_section_cause_tokens`` (identity KEY)
+    and ``_section_transient_causes`` (human-readable) partition its output."""
     if not isinstance(section, dict):
-        return [UNCLASSIFIED_PARTIAL_CAUSE]
+        return []
     tokens = []
     if section.get("coverageGap"):
         tokens.append("no-transitive-resolution")
@@ -1658,9 +1664,36 @@ def _section_cause_tokens(section):
     scope = section.get("auditedScope")
     if isinstance(scope, dict) and scope.get("kind") == "lockfile":
         tokens.append("lockfile-audit")
-    if not tokens:
+    return tokens
+
+
+def _section_cause_tokens(section):
+    """STABLE identity cause tokens for a partial section — the drift-comparability KEY.
+
+    Returns only stable cause tokens: the transient tokens in ``_TRANSIENT_CAUSE_TOKENS``
+    (#613) are folded out of the key so ecosystem noise flipping one cannot make two
+    otherwise-identical partial bases read non-comparable and silence a real crossing on a
+    co-present stable marker. Never returns empty for a partial section: a non-dict, a dict
+    whose partial basis matches no stable marker, or a dict whose ONLY causes are transient
+    falls to the ``unclassified-partial`` sentinel so the gap stays a *comparable* identity
+    basis rather than poisoning the aggregate vital identity to None. Fail-direction ruling
+    (#592, #580): an unclassifiable or transient-only partial over-alerts (stays comparable),
+    it never silences the drift comparison. None-identity remains reserved at the
+    guardian_vitals layer for malformed completeness *entries* (a contract violation)."""
+    stable = [t for t in _all_section_cause_tokens(section)
+              if t not in _TRANSIENT_CAUSE_TOKENS]
+    if not stable:
         return [UNCLASSIFIED_PARTIAL_CAUSE]
-    return sorted(set(tokens))
+    return sorted(set(stable))
+
+
+def _section_transient_causes(section):
+    """Transient cause tokens present on a partial section (#613) — human-readable only.
+
+    Surfaced in the gap reason text so the signal survives, but never enters the drift
+    identity KEY (see ``_section_cause_tokens``)."""
+    return sorted({t for t in _all_section_cause_tokens(section)
+                   if t in _TRANSIENT_CAUSE_TOKENS})
 
 
 def _majors_behind_vital(digest):
@@ -1692,7 +1725,11 @@ def _majors_behind_vital(digest):
             triples.append("%s/freshness/not-collected" % eco)
             continue
         if status == "partial":
-            gaps.append(_partial_part_gap(eco, "freshness", fresh))
+            gap = _partial_part_gap(eco, "freshness", fresh)
+            transient = _section_transient_causes(fresh)
+            if transient:
+                gap += " [transient cause(s): %s]" % ", ".join(transient)
+            gaps.append(gap)
             for cause in _section_cause_tokens(fresh):
                 triples.append("%s/freshness/%s" % (eco, cause))
             continue
@@ -1766,7 +1803,11 @@ def _vuln_count_vital(digest):
         total += len(items)
         measured.append(eco)
         if status == "partial":
-            gaps.append(_partial_part_gap(eco, "vulns", vulns))
+            gap = _partial_part_gap(eco, "vulns", vulns)
+            transient = _section_transient_causes(vulns)
+            if transient:
+                gap += " [transient cause(s): %s]" % ", ".join(transient)
+            gaps.append(gap)
             for cause in _section_cause_tokens(vulns):
                 triples.append("%s/vulns/%s" % (eco, cause))
     if not measured:
