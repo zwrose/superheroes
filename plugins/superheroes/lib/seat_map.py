@@ -1,6 +1,9 @@
 """Deterministic panel seat-map composition engine (issue #510).
 
 Pure, stdlib-only. Derives all model/vendor data from model_registry — no parallel literals.
+
+Needed-set shape: {vendor: [[model, effort], ...]} — positional [model, effort]; produced by
+preflight_probe.needed_configs_for and seat_map.reachable_configs, consumed by liveness_cache.
 """
 from __future__ import annotations
 
@@ -60,10 +63,21 @@ def reachable_configs(configured_vendors, pins, roster=None, tier_by_seat=None):
                 continue
             if v in configured_vendors:
                 cell = matrix_config(tier, v)
-                if cell is not None:
-                    model = pin.get("model") or cell[0]
-                    effort = pin.get("effort") if pin.get("effort") is not None else cell[1]
+                default_model, default_effort = cell if cell is not None else (None, None)
+                model = pin.get("model", default_model)
+                effort = pin.get("effort", default_effort)
+                pin_model_bad = "model" in pin and not isinstance(pin.get("model"), (str, type(None)))
+                pin_effort_bad = "effort" in pin and not isinstance(pin.get("effort"), (str, type(None)))
+                well_typed = not pin_model_bad and not pin_effort_bad
+                honorable = (
+                    cell is not None
+                    and well_typed
+                    and is_allowed(tier, v, model, effort)
+                )
+                if honorable:
                     reachable[v].add((model, effort))
+                else:
+                    _rotate_all(tier)
             else:
                 _rotate_all(tier)
         else:
@@ -528,7 +542,7 @@ def main(argv):
                 print(str(e), file=sys.stderr)
                 return 1
 
-        if args.live_vendors is not None:
+        if args.live_vendors is not None and args.probe_mode != "cache-only":
             live = [v for v in args.live_vendors.split(",") if v]
         else:
             now = time.time()

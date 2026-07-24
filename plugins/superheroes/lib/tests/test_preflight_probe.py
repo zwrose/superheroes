@@ -484,9 +484,10 @@ def test_live_vendors_for_composition_returns_three_tuple():
     assert len(result) == 3
 
 
-def test_live_vendors_for_composition_cache_hit_skips_probe(tmp_path):
+def test_live_vendors_for_composition_cache_hit_skips_probe(tmp_path, monkeypatch):
     import liveness_cache
 
+    monkeypatch.delenv(liveness_cache._ENV_TTL, raising=False)
     needed = pp.needed_configs_for(("reviewer-deep", "reviewer"), ["codex"])
     liveness = {
         "codex": {
@@ -515,16 +516,24 @@ def test_live_vendors_for_composition_cache_hit_skips_probe(tmp_path):
     assert any(n.get("constraint") == "preflight-cache" for n in notes)
 
 
-def test_live_vendors_for_composition_cache_miss_stale_probes_and_writes(tmp_path):
+def test_live_vendors_for_composition_cache_miss_stale_probes_and_writes(tmp_path, monkeypatch):
     import liveness_cache
 
+    monkeypatch.delenv(liveness_cache._ENV_TTL, raising=False)
     needed = pp.needed_configs_for(("reviewer-deep", "reviewer"), ["codex"])
     cache_path = str(tmp_path / "composition-liveness.json")
     old_liveness = {
-        "codex": {"live": True, "models": {"gpt-5.6-sol": {"ok": True, "detail": ""}}},
+        "codex": {
+            "live": True,
+            "models": {
+                m: {"ok": True, "detail": ""}
+                for m, _ in needed["codex"]
+            },
+        },
         "claude": {"live": True, "models": {}},
     }
-    liveness_cache.write(old_liveness, {"codex": [["gpt-5.6-sol", "xhigh"]]}, path=cache_path, now=100.0)
+    needed_for_write = {v: [[m, e] for m, e in entries] for v, entries in needed.items()}
+    liveness_cache.write(old_liveness, needed_for_write, path=cache_path, now=100.0)
 
     calls = []
 
@@ -560,9 +569,10 @@ def test_live_vendors_for_composition_cache_only_miss_no_probe():
     assert any(n.get("constraint") == "preflight-cache-only" for n in notes)
 
 
-def test_live_vendors_for_composition_cache_only_hit_reuses(tmp_path):
+def test_live_vendors_for_composition_cache_only_hit_reuses(tmp_path, monkeypatch):
     import liveness_cache
 
+    monkeypatch.delenv(liveness_cache._ENV_TTL, raising=False)
     needed = pp.needed_configs_for(("reviewer-deep", "reviewer"), ["codex"])
     liveness = {
         "codex": {
@@ -587,6 +597,22 @@ def test_live_vendors_for_composition_cache_only_hit_reuses(tmp_path):
     )
     assert "codex" in live
     assert any(n.get("constraint") == "preflight-cache" for n in notes)
+
+
+def test_live_vendors_for_composition_cache_write_failure_disclosed(tmp_path):
+    import liveness_cache
+
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("blocks mkdir")
+    cache_path = str(blocker / "composition-liveness.json")
+    live, _liv, notes = pp.live_vendors_for_composition(
+        ["codex"],
+        run=fake0,
+        cache_path=cache_path,
+        now=1000.0,
+    )
+    assert "codex" in live
+    assert any(n.get("constraint") == "preflight-cache-write-failed" for n in notes)
 
 
 def test_cli_compose_liveness_writes_receipt(tmp_path, monkeypatch, capsys):

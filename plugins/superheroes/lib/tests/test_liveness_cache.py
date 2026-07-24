@@ -81,8 +81,7 @@ def test_write_atomic_single_receipt_file(tmp_path):
     now = 500.0
     assert lc.write(_good_liveness(), _good_needed(), path=path, now=now) is True
     assert os.path.isfile(path)
-    siblings = [f for f in os.listdir(os.path.dirname(path)) if not f.startswith(".")]
-    assert siblings == ["composition-liveness.json"]
+    assert sorted(os.listdir(os.path.dirname(path))) == ["composition-liveness.json"]
     data = json.load(open(path))
     assert data["schemaVersion"] == lc.SCHEMA_VERSION
     assert "liveness" in data
@@ -120,6 +119,58 @@ def test_read_miss_stale(tmp_path, monkeypatch):
     now = 10_000.0
     lc.write(_good_liveness(), _good_needed(), path=path, now=now - 601)
     assert lc.read(path, now=now) is None
+
+
+def test_read_uses_reader_ttl_not_stored_ttl(tmp_path, monkeypatch):
+    monkeypatch.delenv(lc._ENV_TTL, raising=False)
+    path = str(tmp_path / "r.json")
+    now = 20_000.0
+    lc.write(_good_liveness(), _good_needed(), path=path, now=now - 601, ttl=100_000)
+    assert lc.read(path, now=now) is None
+
+
+def test_read_env_ttl_extends_stale_receipt(tmp_path, monkeypatch):
+    monkeypatch.setenv(lc._ENV_TTL, "100000")
+    path = str(tmp_path / "r.json")
+    now = 30_000.0
+    lc.write(_good_liveness(), _good_needed(), path=path, now=now - 601)
+    assert lc.read(path, now=now) is not None
+
+
+def test_read_miss_json_nan_probed_at(tmp_path, monkeypatch):
+    monkeypatch.delenv(lc._ENV_TTL, raising=False)
+    path = str(tmp_path / "r.json")
+    now = 4000.0
+    with open(path, "wb") as fh:
+        fh.write(
+            b'{"schemaVersion": 1, "probedAt": NaN, "ttl": 600, '
+            b'"needed": {}, "liveness": {}}\n'
+        )
+    assert lc.read(path, now=now) is None
+
+
+def test_is_timestamp_rejects_non_finite():
+    assert lc._is_timestamp(float("nan")) is False
+    assert lc._is_timestamp(float("inf")) is False
+
+
+def test_write_skips_when_existing_receipt_is_newer(tmp_path, monkeypatch):
+    monkeypatch.delenv(lc._ENV_TTL, raising=False)
+    path = str(tmp_path / "r.json")
+    newer_liv = _good_liveness()
+    older_liv = _good_liveness()
+    older_liv["codex"]["models"]["gpt-5.6-sol"]["ok"] = False
+    assert lc.write(newer_liv, _good_needed(), path=path, now=2000.0) is True
+    assert lc.write(older_liv, _good_needed(), path=path, now=1000.0) is True
+    got = lc.read(path, now=2001.0)
+    assert got is not None
+    assert got["liveness"]["codex"]["models"]["gpt-5.6-sol"]["ok"] is True
+    newest_liv = _good_liveness()
+    newest_liv["codex"]["models"]["gpt-5.6-sol"]["ok"] = False
+    assert lc.write(newest_liv, _good_needed(), path=path, now=3000.0) is True
+    got2 = lc.read(path, now=3001.0)
+    assert got2 is not None
+    assert got2["liveness"]["codex"]["models"]["gpt-5.6-sol"]["ok"] is False
 
 
 def test_read_miss_model_ok_string(tmp_path):
@@ -263,3 +314,45 @@ def test_write_returns_false_when_dir_blocked(tmp_path):
     blocker.write_text("x")
     path = str(blocker / "state" / "composition-liveness.json")
     assert lc.write(_good_liveness(), _good_needed(), path=path, now=1.0) is False
+
+
+def test_live_vendors_from_quorum_matches_composition_liveness_live_flags():
+    needed = {
+        "codex": [["gpt-5.6-sol", "medium"], ["gpt-5.6-terra", None]],
+        "cursor": [["cursor-grok-4.5", "high"]],
+    }
+    liveness = {
+        "codex": {
+            "live": True,
+            "models": {
+                "gpt-5.6-sol": {"ok": True, "detail": ""},
+                "gpt-5.6-terra": {"ok": True, "detail": ""},
+            },
+        },
+        "cursor": {
+            "live": False,
+            "models": {"cursor-grok-4.5": {"ok": False, "detail": "down"}},
+        },
+        "claude": {"live": True, "models": {}},
+    }
+    live, notes = lc.live_vendors_from(liveness, needed)
+
+    def _composition_style_live(vendor, entries):
+        if not entries:
+            return False
+        info = liveness.get(vendor, {})
+        models = info.get("models") if isinstance(info, dict) else None
+        if not isinstance(models, dict):
+            return False
+        return all(
+            isinstance(models.get(m), dict) and models[m].get("ok") is True
+            for m, _ in entries
+        )
+
+    for vendor, entries in needed.items():
+        if vendor == "claude":
+            continue
+        assert (vendor in live) == _composition_style_live(vendor, entries)
+    assert "codex" in live
+    assert "cursor" not in live
+    assert any("cursor" in n["reason"] for n in notes)

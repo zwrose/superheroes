@@ -240,7 +240,15 @@ def live_vendors_for_composition(
 
     liveness = composition_liveness({**needed, "claude": []}, run)
     if cache_path is not None and now is not None:
-        liveness_cache.write(liveness, needed, path=cache_path, now=now)
+        wrote = liveness_cache.write(liveness, needed, path=cache_path, now=now)
+        if not wrote:
+            notes.append({
+                "constraint": "preflight-cache-write-failed",
+                "reason": (
+                    "liveness receipt could not be written — every compose will re-probe "
+                    "until the store is writable"
+                ),
+            })
     live = sorted(v for v, info in liveness.items() if info.get("live"))
     return (live, liveness, notes)
 

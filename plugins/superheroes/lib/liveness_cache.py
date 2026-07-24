@@ -5,6 +5,7 @@ absence, failure, or corruption into a false \"live\". `write` stores `now` as t
 START time (caller responsibility).
 """
 import json
+import math
 import os
 import tempfile
 
@@ -53,8 +54,12 @@ def _normalize_needed(needed):
     return out
 
 
+def _reject_constant(_tok):
+    raise ValueError("non-finite JSON constant")
+
+
 def _is_timestamp(x):
-    return isinstance(x, (int, float)) and not isinstance(x, bool)
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
 
 
 def _liveness_structure_valid(liveness):
@@ -74,9 +79,35 @@ def _liveness_structure_valid(liveness):
     return True
 
 
-def write(liveness, needed, *, path, now, ttl=None):
-    """Atomically write a liveness receipt. Returns True on success, False on any failure."""
+def _read_newest_wins_existing(path, now):
+    """Load a fresh receipt for newest-wins compare; None if missing/invalid/stale."""
     try:
+        with open(path, encoding="utf-8") as fh:
+            raw = json.load(fh, parse_constant=_reject_constant)
+        if not isinstance(raw, dict):
+            return None
+        probed_at = raw.get("probedAt")
+        if not _is_timestamp(probed_at):
+            return None
+        return read(path, now=max(float(now), float(probed_at)))
+    except Exception:
+        return None
+
+
+def write(liveness, needed, *, path, now, ttl=None):
+    """Atomically write a liveness receipt. Returns True on success, False on any failure.
+
+    Best-effort newest-probedAt-wins: if a fresh receipt already exists with probedAt at least
+    as new as this probe's start (``now``), the write is skipped and True is returned so an
+    older probe cannot clobber a newer one. A residual TOCTOU window remains; it is bounded by
+    the short TTL and downstream dispatch fall-open behavior.
+    """
+    try:
+        existing = _read_newest_wins_existing(path, now)
+        if existing is not None:
+            existing_at = existing.get("probedAt")
+            if _is_timestamp(existing_at) and float(existing_at) >= float(now):
+                return True
         payload = {
             "schemaVersion": SCHEMA_VERSION,
             "probedAt": float(now),
@@ -110,7 +141,7 @@ def read(path, *, now):
     """Return a validated receipt dict, or None on any problem. Never raises."""
     try:
         with open(path, encoding="utf-8") as fh:
-            raw = json.load(fh)
+            raw = json.load(fh, parse_constant=_reject_constant)
     except Exception:
         return None
     if not isinstance(raw, dict):
