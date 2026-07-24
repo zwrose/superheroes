@@ -276,7 +276,8 @@ def load_engine_prefs(cwd, root=None):
     """Read core.md's enginePreferences via core_md.read; normalize each role to a valid engine
     (else 'claude'); surface the optional FR-9 `effort` sub-map (a dict, else {}) and the optional
     #309 `timeout` owner override (a positive int, else omitted — resolve_timeout then falls to the
-    role ceiling); absent block / None / any error → both 'claude' + empty effort. Never raises."""
+    role ceiling); validated `codexModels` / `invalidCodexModels` and `seatPins` / `invalidSeatPins`
+    when present; absent block / None / any error → both 'claude' + empty effort. Never raises."""
     degenerate = {"reviewer": "claude", "implementation": "claude",
                   "briefCheck": "claude", "pilot": "claude", "effort": {}}
     try:
@@ -332,12 +333,17 @@ def load_engine_prefs(cwd, root=None):
                 sinvalid[seat] = "missing or invalid vendor"
                 continue
             cleaned = {"vendor": vendor.strip()}
-            model = pin.get("model")
-            if isinstance(model, str) and model.strip():
-                cleaned["model"] = model.strip()
-            effort = pin.get("effort")
-            if isinstance(effort, str) and effort.strip():
-                cleaned["effort"] = effort.strip()
+            bad_opt = None
+            for opt in ("model", "effort"):
+                if opt in pin:
+                    val = pin.get(opt)
+                    if not isinstance(val, str) or not val.strip():
+                        bad_opt = opt
+                        break
+                    cleaned[opt] = val.strip()
+            if bad_opt is not None:
+                sinvalid[seat] = "invalid %s (must be a non-empty string)" % bad_opt
+                continue
             spins[seat] = cleaned
         if spins:
             out["seatPins"] = spins

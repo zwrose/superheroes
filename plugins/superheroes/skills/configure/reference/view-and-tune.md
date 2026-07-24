@@ -135,7 +135,9 @@ action that owns it, leaving the rest of the calibration untouched:
 - **Pin a review-panel seat to a vendor/model** → write the pin under `core.md`'s
   `enginePreferences.seatPins`. Valid seat keys are `architecture-reviewer`, `code-reviewer`,
   `security-reviewer`, `test-reviewer`, `premortem-reviewer`, and `grounding-seat`; each pin is
-  `{vendor, model?, effort?}`. It feeds the review-code panel's `seat_map compose --pins`; a pin the
+  `{vendor, model?, effort?}` — a present `model` or `effort` must be a non-empty string or the whole
+  pin is rejected into `invalidSeatPins` (an absent optional field is fine; a vendor-only pin uses the
+  seat's default model). It feeds the review-code panel's `seat_map compose --pins`; a pin the
   account/registry **cannot honor** (unknown seat, offline vendor, disallowed model, or a
   grounding/strong-seat independence break) **stays loud** — the shipped seat-map machinery
   (#510/#603) emits a `pin` / `pin-not-honorable` / `pin-breaks-constraint` degradation into the

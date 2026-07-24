@@ -494,6 +494,8 @@ def test_review_code_skill_wires_seat_pins_from_ep_to_compose():
     with open(skill_path, encoding="utf-8") as fh:
         text = fh.read()
     assert ".seatPins" in text
+    assert "(.seatPins // {}) == {} then empty" in text
+    assert '[ -n "$SEAT_PINS" ]' in text
     assert "PINS_ARGS" in text
     assert "--pins" in text
     assert '"${PINS_ARGS[@]}"' in text

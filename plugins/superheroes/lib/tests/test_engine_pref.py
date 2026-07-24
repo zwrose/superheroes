@@ -520,6 +520,21 @@ def test_load_engine_prefs_surfaces_valid_seat_pins(tmp_path):
     }
 
 
+def test_load_engine_prefs_rejects_present_but_malformed_optional_fields(tmp_path):
+    repo = str(tmp_path)
+    _write_core_with_prefs(repo, {
+        "seatPins": {
+            "code-reviewer": {"vendor": "codex", "model": []},
+            "security-reviewer": {"vendor": "claude", "effort": "  "},
+            "test-reviewer": {"vendor": "codex", "model": "gpt-5.6-sol"},
+        },
+    })
+    got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
+    assert got["seatPins"] == {"test-reviewer": {"vendor": "codex", "model": "gpt-5.6-sol"}}
+    assert got["invalidSeatPins"]["code-reviewer"] == "invalid model (must be a non-empty string)"
+    assert got["invalidSeatPins"]["security-reviewer"] == "invalid effort (must be a non-empty string)"
+
+
 def test_load_engine_prefs_invalid_seat_pins_structural(tmp_path):
     repo = str(tmp_path)
     _write_core_with_prefs(repo, {
