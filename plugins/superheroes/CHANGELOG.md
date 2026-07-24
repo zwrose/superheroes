@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.21.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.20.0...superheroes-v0.21.0) (2026-07-24)
+
+
+### Features
+
+* **superheroes:** loud fall-open by machinery — fell-open dispatch provenance ([#563](https://github.com/zwrose/superheroes/issues/563) PR C) ([#612](https://github.com/zwrose/superheroes/issues/612)) ([78aea6a](https://github.com/zwrose/superheroes/commit/78aea6af5cb2022961e737b0403e29e8f4746b79))
+* **superheroes:** panel composition v2 — per-seat engines, seat map, vendor preflight, loud pins ([#510](https://github.com/zwrose/superheroes/issues/510)) ([#603](https://github.com/zwrose/superheroes/issues/603)) ([ed20551](https://github.com/zwrose/superheroes/commit/ed205514d04919b6fb69051c96fff4643991f5bb))
+* **superheroes:** reviewer-scoped engine dispatch runner — auto-retry + liveness ([#563](https://github.com/zwrose/superheroes/issues/563) PR B) ([#606](https://github.com/zwrose/superheroes/issues/606)) ([6b2bd5b](https://github.com/zwrose/superheroes/commit/6b2bd5b27adcf097817bbeb7bf0c90598f1b5d4a))
+* **superheroes:** workhorse dispatch-path model validation — consume the [#510](https://github.com/zwrose/superheroes/issues/510) registry allowlists ([#600](https://github.com/zwrose/superheroes/issues/600)) ([#611](https://github.com/zwrose/superheroes/issues/611)) ([02a0fcc](https://github.com/zwrose/superheroes/commit/02a0fcc8840e170bc079b04bb2923936b936f4d7))
+
+
+### Bug Fixes
+
+* **superheroes:** codex reviewer-seat reliability PR A — parse-result bounds, empty-prompt guard, dispatch docs ([#563](https://github.com/zwrose/superheroes/issues/563)) ([#602](https://github.com/zwrose/superheroes/issues/602)) ([c859d82](https://github.com/zwrose/superheroes/commit/c859d826a569555a55c1c1694fd9e191d6d2de13))
+
+
+### Chores
+
+* **superheroes:** guardian collect/classify status-seam cleanup ([#567](https://github.com/zwrose/superheroes/issues/567) items 4, 10) ([#605](https://github.com/zwrose/superheroes/issues/605)) ([c734fbc](https://github.com/zwrose/superheroes/commit/c734fbcc8d89c6afb42237d60b8f95fd3e713514))
+
 ## [0.20.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.19.0...superheroes-v0.20.0) (2026-07-23)
 
 

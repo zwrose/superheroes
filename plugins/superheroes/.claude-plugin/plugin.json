@@ -1,6 +1,6 @@
 {
   "name": "superheroes",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "description": "The discipline layer around AI build sessions: Showrunner (advisor), Workhorse (builder), The Architect (spec), Review Crew (cross-vendor review), Test-Pilot (browser evidence), Guardian (repo-health sweeps) — one plugin.",
   "author": {
     "name": "zwrose"
