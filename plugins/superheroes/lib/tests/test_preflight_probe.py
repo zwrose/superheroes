@@ -464,16 +464,173 @@ def test_composition_liveness_non_dict_returns_empty():
 
 
 def test_live_vendors_for_composition_claude_always_in_live_list():
-    live, liveness = pp.live_vendors_for_composition(["codex", "cursor"], run=fake1)
+    live, liveness, _notes = pp.live_vendors_for_composition(["codex", "cursor"], run=fake1)
     assert "claude" in live
     assert liveness["claude"]["live"] is True
 
 
 def test_live_vendors_for_composition_all_ok_includes_external():
-    live, _ = pp.live_vendors_for_composition(["codex", "cursor"], run=fake0)
+    live, _, _ = pp.live_vendors_for_composition(["codex", "cursor"], run=fake0)
     assert live == ["claude", "codex", "cursor"]
 
 
 def test_live_vendors_for_composition_external_failure_excludes_vendor():
-    live, _ = pp.live_vendors_for_composition(["codex", "cursor"], run=fake1)
+    live, _, _ = pp.live_vendors_for_composition(["codex", "cursor"], run=fake1)
     assert live == ["claude"]
+
+
+def test_live_vendors_for_composition_returns_three_tuple():
+    result = pp.live_vendors_for_composition(["codex"], run=fake0)
+    assert len(result) == 3
+
+
+def test_live_vendors_for_composition_cache_hit_skips_probe(tmp_path, monkeypatch):
+    import liveness_cache
+
+    monkeypatch.delenv(liveness_cache._ENV_TTL, raising=False)
+    needed = pp.needed_configs_for(("reviewer-deep", "reviewer"), ["codex"])
+    liveness = {
+        "codex": {
+            "live": True,
+            "models": {
+                m: {"ok": True, "detail": ""}
+                for m, _ in needed["codex"]
+            },
+        },
+        "claude": {"live": True, "models": {}},
+    }
+    cache_path = str(tmp_path / "composition-liveness.json")
+    now = 1000.0
+    assert liveness_cache.write(liveness, needed, path=cache_path, now=now)
+
+    def _boom(argv, **kwargs):
+        raise AssertionError("run must not be called on cache hit")
+
+    live, _liv, notes = pp.live_vendors_for_composition(
+        ["codex"],
+        run=_boom,
+        cache_path=cache_path,
+        now=now + 1,
+    )
+    assert "codex" in live
+    assert any(n.get("constraint") == "preflight-cache" for n in notes)
+
+
+def test_live_vendors_for_composition_cache_miss_stale_probes_and_writes(tmp_path, monkeypatch):
+    import liveness_cache
+
+    monkeypatch.delenv(liveness_cache._ENV_TTL, raising=False)
+    needed = pp.needed_configs_for(("reviewer-deep", "reviewer"), ["codex"])
+    cache_path = str(tmp_path / "composition-liveness.json")
+    old_liveness = {
+        "codex": {
+            "live": True,
+            "models": {
+                m: {"ok": True, "detail": ""}
+                for m, _ in needed["codex"]
+            },
+        },
+        "claude": {"live": True, "models": {}},
+    }
+    needed_for_write = {v: [[m, e] for m, e in entries] for v, entries in needed.items()}
+    liveness_cache.write(old_liveness, needed_for_write, path=cache_path, now=100.0)
+
+    calls = []
+
+    def _run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    now = 1000.0
+    live, _liv, _notes = pp.live_vendors_for_composition(
+        ["codex"],
+        run=_run,
+        cache_path=cache_path,
+        now=now,
+    )
+    assert calls
+    assert "codex" in live
+    rec = liveness_cache.read(cache_path, now=now)
+    assert rec is not None
+
+
+def test_live_vendors_for_composition_cache_only_miss_no_probe():
+    def _boom(argv, **kwargs):
+        raise AssertionError("run must not be called in cache-only miss")
+
+    live, _liv, notes = pp.live_vendors_for_composition(
+        ["codex", "cursor"],
+        run=_boom,
+        probe_mode="cache-only",
+        cache_path="/nonexistent/path.json",
+        now=1000.0,
+    )
+    assert live == ["claude"]
+    assert any(n.get("constraint") == "preflight-cache-only" for n in notes)
+
+
+def test_live_vendors_for_composition_cache_only_hit_reuses(tmp_path, monkeypatch):
+    import liveness_cache
+
+    monkeypatch.delenv(liveness_cache._ENV_TTL, raising=False)
+    needed = pp.needed_configs_for(("reviewer-deep", "reviewer"), ["codex"])
+    liveness = {
+        "codex": {
+            "live": True,
+            "models": {m: {"ok": True, "detail": ""} for m, _ in needed["codex"]},
+        },
+        "claude": {"live": True, "models": {}},
+    }
+    cache_path = str(tmp_path / "composition-liveness.json")
+    now = 2000.0
+    liveness_cache.write(liveness, needed, path=cache_path, now=now)
+
+    def _boom(argv, **kwargs):
+        raise AssertionError("run must not be called on cache-only hit")
+
+    live, _liv, notes = pp.live_vendors_for_composition(
+        ["codex"],
+        run=_boom,
+        probe_mode="cache-only",
+        cache_path=cache_path,
+        now=now + 5,
+    )
+    assert "codex" in live
+    assert any(n.get("constraint") == "preflight-cache" for n in notes)
+
+
+def test_live_vendors_for_composition_cache_write_failure_disclosed(tmp_path):
+    import liveness_cache
+
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("blocks mkdir")
+    cache_path = str(blocker / "composition-liveness.json")
+    live, _liv, notes = pp.live_vendors_for_composition(
+        ["codex"],
+        run=fake0,
+        cache_path=cache_path,
+        now=1000.0,
+    )
+    assert "codex" in live
+    assert any(n.get("constraint") == "preflight-cache-write-failed" for n in notes)
+
+
+def test_cli_compose_liveness_writes_receipt(tmp_path, monkeypatch, capsys):
+    import liveness_cache
+
+    cache_file = tmp_path / "state" / "composition-liveness.json"
+    monkeypatch.setattr(liveness_cache, "receipt_path", lambda cwd=None, root=None: str(cache_file))
+    monkeypatch.setattr(pp, "composition_liveness", lambda needed, run=None: {
+        "codex": {"live": True, "models": {}},
+        "claude": {"live": True, "models": {}},
+    })
+    monkeypatch.setattr(pp.core_md, "read", lambda *a, **k: {"enginePreferences": {}})
+
+    rc = pp.main(["preflight_probe.py", "compose-liveness", "--cwd", str(tmp_path)])
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert "live" in payload
+    assert "cachePath" in payload
+    assert payload["cachePath"] == str(cache_file)
+    assert cache_file.is_file()

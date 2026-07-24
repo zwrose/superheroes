@@ -501,3 +501,112 @@ def test_cli_compose_pins_json_error(capsys):
     )
     assert rc != 0
     assert capsys.readouterr().err
+
+
+# --- reachable_configs + liveness cache (#610) ------------------------------------------------
+
+
+def test_reachable_configs_equivalent_to_needed_configs_without_pins():
+    import preflight_probe as pp
+
+    vs = ["codex", "cursor"]
+    rc = SM.reachable_configs(vs, None)
+    full = pp.needed_configs_for(("reviewer-deep", "reviewer"), vs)
+    for v in vs:
+        assert {tuple(x) for x in rc[v]} == set(full[v])
+
+
+def test_reachable_configs_narrows_when_all_seats_pinned_codex():
+    pins = {seat: {"vendor": "codex"} for seat in SM.PANEL_ROSTER}
+    rc = SM.reachable_configs(["codex", "cursor"], pins)
+    assert rc["cursor"] == []
+    assert rc["codex"]
+
+
+def test_reachable_configs_conservative_unknown_vendor_pin():
+    pins = {"code-reviewer": {"vendor": "unknown-vendor"}}
+    rc = SM.reachable_configs(["codex", "cursor"], pins)
+    assert {tuple(x) for x in rc["cursor"]}
+    assert {tuple(x) for x in rc["codex"]}
+
+
+def test_reachable_configs_malformed_pin_model_rotates():
+    pins = {"code-reviewer": {"vendor": "codex", "model": 123}}
+    rc = SM.reachable_configs(["codex", "cursor"], pins)
+    assert rc["cursor"]
+    assert rc["codex"]
+
+
+def test_reachable_configs_pin_not_allowed_rotates(monkeypatch):
+    real_is_allowed = SM.is_allowed
+
+    def _fake_allowed(tier, vendor, model, effort):
+        if vendor == "codex" and model == "custom-blocked":
+            return False
+        return real_is_allowed(tier, vendor, model, effort)
+
+    monkeypatch.setattr(SM, "is_allowed", _fake_allowed)
+    pins = {"code-reviewer": {"vendor": "codex", "model": "custom-blocked", "effort": "medium"}}
+    rc = SM.reachable_configs(["codex", "cursor"], pins)
+    default_cell = list(SM.matrix_config("reviewer-deep", "codex"))
+    assert default_cell in rc["codex"]
+
+
+def test_cli_compose_cache_only_ignores_live_vendors(monkeypatch, tmp_path, capsys):
+    import liveness_cache
+
+    cache_file = tmp_path / "empty-cache-dir" / "composition-liveness.json"
+    monkeypatch.setattr(liveness_cache, "receipt_path", lambda cwd=None, root=None: str(cache_file))
+
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--probe-mode",
+            "cache-only",
+            "--live-vendors",
+            "claude,codex,cursor",
+            "--configured-engines",
+            "codex,cursor",
+            "--author-family",
+            "cursor",
+            "--narrative-family",
+            "anthropic",
+            "--pr-number",
+            "610",
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert any(d.get("constraint") == "preflight-cache-only" for d in receipt["degradations"])
+    assert receipt["liveVendors"] == ["claude"]
+
+
+def test_cli_compose_cache_only_no_live_vendors(monkeypatch, tmp_path, capsys):
+    import liveness_cache
+
+    cache_file = tmp_path / "composition-liveness.json"
+    monkeypatch.setattr(liveness_cache, "receipt_path", lambda cwd=None, root=None: str(cache_file))
+
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--probe-mode",
+            "cache-only",
+            "--configured-engines",
+            "codex,cursor",
+            "--author-family",
+            "cursor",
+            "--narrative-family",
+            "anthropic",
+            "--pr-number",
+            "610",
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert any(d.get("constraint") == "preflight-cache-only" for d in receipt["degradations"])
+    assert receipt["liveVendors"] == ["claude"]
+    for seat_cfg in receipt["seats"].values():
+        assert seat_cfg["vendor"] == "claude"

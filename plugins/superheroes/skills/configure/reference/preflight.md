@@ -140,6 +140,24 @@ print(json.dumps(preflight_probe.dispatch_calibration(cwd='.'), indent=2))
 This prints one row per role — `implementer`, `brief-check`, `review-code`, `pilot` — each with
 the resolved `engine` and `model`. Fold it, verbatim or summarized, into the brief and the PR.
 
+### B.1 — Seed the composition-liveness receipt (write side, #610 leg 2)
+
+When this build will run `review-code` (it always does at handback), seed the short-TTL vendor
+**liveness receipt** now, so the build's review loop rides it instead of re-probing every round:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 "$ROOT_DIR/lib/preflight_probe.py" compose-liveness --cwd .
+```
+
+This probes each configured reviewer vendor's models **once** and writes a machine-readable receipt
+(`vendor/model/ok/timestamp`) to the project store; a `review-code` compose within the TTL reuses it.
+When per-seat review pins are configured (the `--pins` supply the compose accepts, added by #607),
+pass them through so only pin-reachable models are probed. This is the **write side** — the read side lives in the `review-code`
+compose. **Fail-direction unchanged:** a probe failure drops the vendor loudly; the cache only skips
+re-proving recent liveness, never turns a failure into a pass. Empty `crossVendorEngines` (all-Claude
+project) → nothing to probe, mark **N/A**.
+
 ## C — Test-pilot readiness
 
 Applicable only when this run will use test-pilot. Beyond the bare browser connection (A.1),
