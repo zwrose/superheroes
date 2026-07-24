@@ -2065,8 +2065,9 @@ def test_fell_open_rows_malformed_manifest_skipped_no_crash():
     assert rows == [] and miss == []
 
 
-def test_fell_open_rows_in_seat_ran_vendor_echo_ignored():
-    """Only ranManifest is consulted — a disagreeing in-seat ranVendor echo never suppresses a row."""
+def test_fell_open_rows_manifest_governs():
+    """ranManifest alone decides fell-open rows — varying manifest entries changes the outcome."""
+    # Fold-level in-seat ranVendor echo coverage: test_fell_open_in_seat_ran_vendor_echo_ignored_at_fold
     seat_map = _seat_map_vendors({"code-reviewer": "codex"})
     status = {"code-reviewer": "run"}
     rows, miss = RD._fell_open_rows(seat_map, {"code-reviewer": "claude"}, status)
@@ -2094,9 +2095,42 @@ def test_fell_open_panel_fold_receipt_disclosure():
     assert state["rounds"]["1"]["fellOpen"] == [
         {"seat": "code-reviewer", "configured": "codex", "ran": "claude", "reason": "forfeit-fell-open"}]
     receipt = RD.build_receipt(state)
-    assert any("reviewer-fell-open (round 1):" in d and "code-reviewer" in d
-               for d in receipt["degraded"])
+    fo_lines = [d for d in receipt["degraded"] if "reviewer-fell-open (round 1):" in d]
+    assert len(fo_lines) == 1
+    assert "code-reviewer" in fo_lines[0]
+    assert "codex" in fo_lines[0]
+    assert "claude" in fo_lines[0]
     assert receipt["rounds"][0]["fellOpen"]
+
+
+def test_fell_open_fold_receipt_provenance_unavailable_end_to_end():
+    state = RD.new_state(_cfg(leg="panel"))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    RD._fold_panel(state, state["config"], {
+        "seats": seats,
+        "seatMap": seat_map,
+        "ranManifest": {},
+    })
+    assert state["rounds"]["1"]["fellOpenProvenanceMissing"] == ["code-reviewer"]
+    receipt = RD.build_receipt(state)
+    prov_lines = [d for d in receipt["degraded"]
+                  if d.startswith("reviewer-fell-open-provenance-unavailable")]
+    assert len(prov_lines) == 1
+    assert "code-reviewer" in prov_lines[0]
+
+
+def test_fell_open_fold_receipt_seatmap_unavailable():
+    state = RD.new_state(_cfg(leg="panel", vendors=["claude", "codex"]))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    RD._fold_panel(state, state["config"], {"seats": seats})
+    assert state["rounds"]["1"]["seatMapUnavailable"] == ["codex"]
+    receipt = RD.build_receipt(state)
+    smu_lines = [d for d in receipt["degraded"]
+                 if d.startswith("reviewer-fell-open-seatmap-unavailable")]
+    assert len(smu_lines) == 1
+    assert "codex" in smu_lines[0]
 
 
 def test_fell_open_in_seat_ran_vendor_echo_ignored_at_fold():
@@ -2119,6 +2153,43 @@ def test_fell_open_clean_claude_panel_no_manifest_degraded_unchanged(tmp_path):
     assert not any(d.startswith("reviewer-fell-open") for d in receipt["degraded"])
     ok, reason = RD.validate_receipt(receipt)
     assert ok, reason
+
+
+def test_fell_open_multi_seat_deterministic_disclosure_order():
+    state = RD.new_state(_cfg(leg="panel"))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seat_map = _seat_map_vendors({
+        "architecture-reviewer": "claude",
+        "code-reviewer": "codex",
+        "security-reviewer": "cursor",
+        "test-reviewer": "codex",
+        "premortem-reviewer": "cursor",
+    })
+    RD._fold_panel(state, state["config"], {
+        "seats": seats,
+        "seatMap": seat_map,
+        "ranManifest": {
+            "code-reviewer": "claude",
+            "security-reviewer": "claude",
+        },
+    })
+    assert state["rounds"]["1"]["fellOpen"] == [
+        {"seat": "code-reviewer", "configured": "codex", "ran": "claude",
+         "reason": "forfeit-fell-open"},
+        {"seat": "security-reviewer", "configured": "cursor", "ran": "claude",
+         "reason": "forfeit-fell-open"},
+    ]
+    assert state["rounds"]["1"]["fellOpenProvenanceMissing"] == [
+        "premortem-reviewer", "test-reviewer"]
+    receipt = RD.build_receipt(state)
+    fo_lines = [d for d in receipt["degraded"] if d.startswith("reviewer-fell-open (round")]
+    assert len(fo_lines) == 2
+    assert "code-reviewer" in fo_lines[0] and "codex" in fo_lines[0] and "claude" in fo_lines[0]
+    assert "security-reviewer" in fo_lines[1] and "cursor" in fo_lines[1] and "claude" in fo_lines[1]
+    prov_lines = [d for d in receipt["degraded"]
+                  if d.startswith("reviewer-fell-open-provenance-unavailable")]
+    assert len(prov_lines) == 1
+    assert "premortem-reviewer, test-reviewer" in prov_lines[0]
 
 
 def test_fell_open_two_rounds_deterministic_disclosure_order():

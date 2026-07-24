@@ -790,7 +790,7 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None):
 
 # ---- round-1 / full-panel legs --------------------------------------------------------------
 
-_PANEL_VENDORS = ("claude", "codex", "cursor")
+_PANEL_VENDORS = tuple(model_registry.VENDORS)  # SSOT — never a hand-maintained copy (#563/§11)
 
 
 def _fell_open_rows(seat_map, ran_manifest, seat_status):
@@ -903,6 +903,16 @@ def _fold_panel(state, config, artifact):
         _record_round(state, "fellOpen", fell_open)
     if prov_missing:
         _record_round(state, "fellOpenProvenanceMissing", prov_missing)
+    # #563 DoD1 v7: an ABSENT seat-map baseline would silently disable all fall-open detection (both
+    # outputs anchor on the configured seat map). If the driver's live vendor pool has a cross-vendor
+    # engine but no seat map was submitted, disclose provenance-unavailable for the whole panel — so an
+    # absent seat map is loud, not silent (the exact class this feature prevents).
+    _sm = state.get("seatMap")
+    _seat_map_empty = not (isinstance(_sm, dict) and isinstance(_sm.get("seats"), dict) and _sm.get("seats"))
+    _live_cross = sorted(v for v in (config.get("vendors") or [])
+                         if isinstance(v, str) and v in _PANEL_VENDORS and v != "claude")
+    if _seat_map_empty and _live_cross:
+        _record_round(state, "seatMapUnavailable", _live_cross)
     _record_round(state, "compileDrops", drops)
     if unverified:
         _record_round(state, "unverified", unverified)
@@ -1749,25 +1759,30 @@ def build_receipt(state, session_dir=None):
     rounds = []
     for key in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
         rec = state["rounds"][key]
-        rounds.append({"round": int(key) if str(key).isdigit() else key,
-                       "kind": rec.get("roundKind"),
-                       "seatStatus": rec.get("seatStatus"),
-                       "blockingCount": rec.get("blockingCount"),
-                       "verifyResult": rec.get("verifyResult"),
-                       "audits": rec.get("audits"),
-                       # The manifest-keyed audit-provenance boundary (LEDGERS §3): a round that ran
-                       # fix audits records `collection-manifest` here so the boundary — attestation,
-                       # not cryptographic executor identity — is visible at vet, matching the ledger.
-                       "auditProvenance": rec.get("auditProvenance"),
-                       "fellOpen": rec.get("fellOpen"),
-                       "fellOpenProvenanceMissing": rec.get("fellOpenProvenanceMissing"),
-                       "scopedFinder": rec.get("scopedFinder"),
-                       "headDiffSource": rec.get("headDiffSource"),
-                       "unverified": rec.get("unverified"),
-                       "authorJustifiedDrops": rec.get("authorJustifiedDrops"),
-                       "compileDrops": rec.get("compileDrops"),
-                       "selfRecovery": rec.get("selfRecovery"),
-                       "stallChoice": rec.get("stallChoice")})
+        rd = {"round": int(key) if str(key).isdigit() else key,
+              "kind": rec.get("roundKind"),
+              "seatStatus": rec.get("seatStatus"),
+              "blockingCount": rec.get("blockingCount"),
+              "verifyResult": rec.get("verifyResult"),
+              "audits": rec.get("audits"),
+              # The manifest-keyed audit-provenance boundary (LEDGERS §3): a round that ran
+              # fix audits records `collection-manifest` here so the boundary — attestation,
+              # not cryptographic executor identity — is visible at vet, matching the ledger.
+              "auditProvenance": rec.get("auditProvenance"),
+              "scopedFinder": rec.get("scopedFinder"),
+              "headDiffSource": rec.get("headDiffSource"),
+              "unverified": rec.get("unverified"),
+              "authorJustifiedDrops": rec.get("authorJustifiedDrops"),
+              "compileDrops": rec.get("compileDrops"),
+              "selfRecovery": rec.get("selfRecovery"),
+              "stallChoice": rec.get("stallChoice")}
+        if rec.get("fellOpen"):
+            rd["fellOpen"] = rec.get("fellOpen")
+        if rec.get("fellOpenProvenanceMissing"):
+            rd["fellOpenProvenanceMissing"] = rec.get("fellOpenProvenanceMissing")
+        if rec.get("seatMapUnavailable"):
+            rd["seatMapUnavailable"] = rec.get("seatMapUnavailable")
+        rounds.append(rd)
     findings = [{"id": f.get("id"), "file": f.get("file"), "line": f.get("line"),
                  "title": f.get("title"), "severity": f.get("severity"),
                  "verdict": f.get("verdict"), "challenge": f.get("challenge"),
@@ -1802,6 +1817,12 @@ def build_receipt(state, session_dir=None):
                 "reviewer-fell-open-provenance-unavailable (round %s): cross-vendor seat(s) %s ran "
                 "without a trusted ranManifest entry — fall-open provenance unverified" % (
                     rkey, ", ".join(miss)))
+        smu = rrec.get("seatMapUnavailable")
+        if smu:
+            degraded.append(
+                "reviewer-fell-open-seatmap-unavailable (round %s): live cross-vendor vendor(s) %s "
+                "but no seat map submitted — fall-open provenance unverified for the panel" % (
+                    rkey, ", ".join(smu)))
     scriptran = _scriptran_summary(session_dir) if session_dir else state.get("_scriptRan") or \
         {"invocations": 0, "byPhase": {}}
     return {
