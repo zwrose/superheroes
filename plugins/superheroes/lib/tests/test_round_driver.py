@@ -2002,3 +2002,139 @@ def test_tradeoff_finding_reaches_audited_chain_end_to_end(tmp_path):
     ok, _ = RD.validate_receipt(receipt)
     assert ok
     assert receipt["certificationShape"] == "audited-chain"  # NOT -degraded
+
+
+# =============================================================================
+# #563 DoD1 — loud fall-open dispatch provenance (machinery)
+# =============================================================================
+
+def _seat_map_vendors(vendors):
+    return {"seats": {d: {"vendor": v} for d, v in vendors.items()}}
+
+
+def _all_run_status(dims=None):
+    dims = dims or RD.DIMENSIONS
+    return {d: "run" for d in dims}
+
+
+def test_fell_open_rows_codex_configured_claude_ran():
+    seat_map = _seat_map_vendors({"code-reviewer": "codex"})
+    rows, miss = RD._fell_open_rows(
+        seat_map, {"code-reviewer": "claude"}, {"code-reviewer": "run"})
+    assert rows == [{"seat": "code-reviewer", "configured": "codex", "ran": "claude",
+                     "reason": "forfeit-fell-open"}]
+    assert miss == []
+
+
+def test_fell_open_rows_claude_configured_claude_ran_no_row():
+    seat_map = _seat_map_vendors({"code-reviewer": "claude"})
+    rows, miss = RD._fell_open_rows(
+        seat_map, {"code-reviewer": "claude"}, {"code-reviewer": "run"})
+    assert rows == [] and miss == []
+
+
+def test_fell_open_rows_missing_seat_no_row_not_provenance_missing():
+    seat_map = _seat_map_vendors({"code-reviewer": "codex"})
+    rows, miss = RD._fell_open_rows(
+        seat_map, {"code-reviewer": "claude"}, {"code-reviewer": "missing"})
+    assert rows == [] and miss == []
+
+
+def test_fell_open_rows_cross_vendor_no_manifest_provenance_missing():
+    seat_map = _seat_map_vendors({"code-reviewer": "codex"})
+    rows, miss = RD._fell_open_rows(seat_map, None, {"code-reviewer": "run"})
+    assert rows == [] and miss == ["code-reviewer"]
+
+
+def test_fell_open_rows_partial_manifest_missing_seat():
+    seat_map = _seat_map_vendors({"code-reviewer": "codex", "security-reviewer": "cursor"})
+    status = {"code-reviewer": "run", "security-reviewer": "run"}
+    rows, miss = RD._fell_open_rows(seat_map, {"code-reviewer": "codex"}, status)
+    assert rows == [] and miss == ["security-reviewer"]
+
+
+def test_fell_open_rows_malformed_manifest_skipped_no_crash():
+    seat_map = _seat_map_vendors({"code-reviewer": "codex"})
+    status = {"code-reviewer": "run"}
+    rows, miss = RD._fell_open_rows(seat_map, {"code-reviewer": 123}, status)
+    assert rows == [] and miss == ["code-reviewer"]
+    rows, miss = RD._fell_open_rows(seat_map, {"code-reviewer": "bogus-vendor"}, status)
+    assert rows == [] and miss == ["code-reviewer"]
+    rows, miss = RD._fell_open_rows(
+        seat_map, {"unknown-dimension": "claude", "code-reviewer": "codex"}, status)
+    assert rows == [] and miss == []
+
+
+def test_fell_open_rows_in_seat_ran_vendor_echo_ignored():
+    """Only ranManifest is consulted — a disagreeing in-seat ranVendor echo never suppresses a row."""
+    seat_map = _seat_map_vendors({"code-reviewer": "codex"})
+    status = {"code-reviewer": "run"}
+    rows, miss = RD._fell_open_rows(seat_map, {"code-reviewer": "claude"}, status)
+    assert rows and miss == []
+    rows, miss = RD._fell_open_rows(seat_map, {"code-reviewer": "codex"}, status)
+    assert rows == [] and miss == []
+
+
+def test_fell_open_rows_absent_manifest_claude_only_no_disclosure_inputs():
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    rows, miss = RD._fell_open_rows(seat_map, None, _all_run_status())
+    assert rows == [] and miss == []
+
+
+def test_fell_open_panel_fold_receipt_disclosure():
+    state = RD.new_state(_cfg(leg="panel"))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    RD._fold_panel(state, state["config"], {
+        "seats": seats,
+        "seatMap": seat_map,
+        "ranManifest": {"code-reviewer": "claude"},
+    })
+    assert state["rounds"]["1"]["fellOpen"] == [
+        {"seat": "code-reviewer", "configured": "codex", "ran": "claude", "reason": "forfeit-fell-open"}]
+    receipt = RD.build_receipt(state)
+    assert any("reviewer-fell-open (round 1):" in d and "code-reviewer" in d
+               for d in receipt["degraded"])
+    assert receipt["rounds"][0]["fellOpen"]
+
+
+def test_fell_open_in_seat_ran_vendor_echo_ignored_at_fold():
+    state = RD.new_state(_cfg(leg="panel"))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seats["code-reviewer"] = {"findings": [], "ranVendor": "claude"}
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    RD._fold_panel(state, state["config"], {
+        "seats": seats,
+        "seatMap": seat_map,
+        "ranManifest": {"code-reviewer": "codex"},
+    })
+    assert "fellOpen" not in state["rounds"]["1"]
+
+
+def test_fell_open_clean_claude_panel_no_manifest_degraded_unchanged(tmp_path):
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    receipt = RD.run_loop(_seams(io={"seatMap": seat_map}), _cfg(leg="panel"))
+    assert not any(d.startswith("reviewer-fell-open") for d in receipt["degraded"])
+    ok, reason = RD.validate_receipt(receipt)
+    assert ok, reason
+
+
+def test_fell_open_two_rounds_deterministic_disclosure_order():
+    state = RD.new_state(_cfg(leg="panel"))
+    for rnd, dim in [(1, "code-reviewer"), (2, "security-reviewer")]:
+        state["round"] = rnd
+        seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+        seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+        seat_map["seats"][dim] = {"vendor": "codex"}
+        RD._fold_panel(state, state["config"], {
+            "seats": seats,
+            "seatMap": seat_map,
+            "ranManifest": {dim: "claude"},
+        })
+    receipt = RD.build_receipt(state)
+    fo_lines = [d for d in receipt["degraded"] if d.startswith("reviewer-fell-open (round")]
+    assert len(fo_lines) == 2
+    assert "round 1" in fo_lines[0] and "code-reviewer" in fo_lines[0]
+    assert "round 2" in fo_lines[1] and "security-reviewer" in fo_lines[1]

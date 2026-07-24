@@ -790,6 +790,55 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None):
 
 # ---- round-1 / full-panel legs --------------------------------------------------------------
 
+_PANEL_VENDORS = ("claude", "codex", "cursor")
+
+
+def _fell_open_rows(seat_map, ran_manifest, seat_status):
+    """(rows, provenance_missing) for #563 DoD1 (loud fall-open by machinery).
+
+    `rows` = one dispatch-provenance row per `run` seat whose TRUSTED ran vendor (`ran_manifest`, the
+    orchestrator's own record of which vendor produced each seat's folded findings — mirrors
+    dispatch-audits' `collectionManifest`; an in-seat `ranVendor` echo is advisory only and is NEVER
+    consulted here) differs from its CONFIGURED vendor (`seat_map.seats[dim].vendor`, the #510 seat
+    map). Each row snapshots {seat, configured, ran, reason} AT FOLD TIME so a later seat-map mutation
+    cannot rewrite provenance on receipt rebuild. Only `run` seats produce a row — a `missing` seat
+    rides the existing unverified coverage-gap path. Malformed manifest entries (unknown dim,
+    non-string, unknown vendor) are skipped — never a false fall-open.
+
+    `provenance_missing` = the sorted cross-vendor (non-claude) CONFIGURED `run` seats that have NO
+    trusted ran vendor reported (no manifest at all, or a manifest missing/malformed for that seat),
+    so an omitted manifest is itself disclosed — the machinery is never silently lost."""
+    seats_cfg = {}
+    if isinstance(seat_map, dict) and isinstance(seat_map.get("seats"), dict):
+        seats_cfg = seat_map["seats"]
+    manifest = ran_manifest if isinstance(ran_manifest, dict) else {}
+    status = seat_status if isinstance(seat_status, dict) else {}
+
+    def _cfg_vendor(dim):
+        c = seats_cfg.get(dim)
+        v = c.get("vendor") if isinstance(c, dict) else None
+        return v if isinstance(v, str) and v in _PANEL_VENDORS else None
+
+    def _ran_vendor(dim):
+        v = manifest.get(dim)
+        return v if isinstance(v, str) and v in _PANEL_VENDORS else None
+
+    rows = []
+    for dim in sorted(status):
+        if status.get(dim) != "run":
+            continue
+        configured, ran = _cfg_vendor(dim), _ran_vendor(dim)
+        if configured and ran and configured != ran:
+            rows.append({"seat": dim, "configured": configured, "ran": ran,
+                         "reason": "forfeit-fell-open"})
+    provenance_missing = sorted(
+        dim for dim in status
+        if status.get(dim) == "run"
+        and _cfg_vendor(dim) not in (None, "claude")
+        and _ran_vendor(dim) is None)
+    return rows, provenance_missing
+
+
 def _fold_panel(state, config, artifact):
     """Fold a full reviewer-deep panel. `artifact` maps dimension → {findings, receiptMissing?,
     receiptStale?}. A persistently receipt-missing/stale seat is terminal `missing` (shell
@@ -845,6 +894,15 @@ def _fold_panel(state, config, artifact):
             "Critical" if circuit_breaker.is_critical(f.get("severity")) else "Important"
             for f in _blocking(compiled)]
     _record_round(state, "seatStatus", seat_status)
+    # #563 DoD1 — loud fall-open by MACHINERY, not builder discipline: compare the trusted ranManifest
+    # against the #510 seat map's configured vendors and record a per-round dispatch-provenance row for
+    # any `run` seat that fell open to a different vendor; disclose an omitted manifest too (below).
+    ran_manifest = artifact.get("ranManifest") if isinstance(artifact.get("ranManifest"), dict) else None
+    fell_open, prov_missing = _fell_open_rows(state.get("seatMap"), ran_manifest, seat_status)
+    if fell_open:
+        _record_round(state, "fellOpen", fell_open)
+    if prov_missing:
+        _record_round(state, "fellOpenProvenanceMissing", prov_missing)
     _record_round(state, "compileDrops", drops)
     if unverified:
         _record_round(state, "unverified", unverified)
@@ -1701,6 +1759,8 @@ def build_receipt(state, session_dir=None):
                        # fix audits records `collection-manifest` here so the boundary — attestation,
                        # not cryptographic executor identity — is visible at vet, matching the ledger.
                        "auditProvenance": rec.get("auditProvenance"),
+                       "fellOpen": rec.get("fellOpen"),
+                       "fellOpenProvenanceMissing": rec.get("fellOpenProvenanceMissing"),
                        "scopedFinder": rec.get("scopedFinder"),
                        "headDiffSource": rec.get("headDiffSource"),
                        "unverified": rec.get("unverified"),
@@ -1729,6 +1789,19 @@ def build_receipt(state, session_dir=None):
                                  "severity": s.get("severity"), "reason": s.get("reason")})
         degraded.append("skipped-blocker: %r (%s:%s) owner-skipped as a product-choice tradeoff — "
                         "reason: %s" % (s.get("title"), s.get("file"), s.get("line"), s.get("reason")))
+    for rkey in sorted((state.get("rounds") or {}), key=lambda k: int(k) if str(k).isdigit() else 0):
+        rrec = state["rounds"][rkey]
+        for row in (rrec.get("fellOpen") or []):
+            degraded.append(
+                "reviewer-fell-open (round %s): seat %s configured %s forfeited (%s) → re-ran on %s; "
+                "that seat's cross-vendor mix degraded" % (
+                    rkey, row.get("seat"), row.get("configured"), row.get("reason"), row.get("ran")))
+        miss = rrec.get("fellOpenProvenanceMissing")
+        if miss:
+            degraded.append(
+                "reviewer-fell-open-provenance-unavailable (round %s): cross-vendor seat(s) %s ran "
+                "without a trusted ranManifest entry — fall-open provenance unverified" % (
+                    rkey, ", ".join(miss)))
     scriptran = _scriptran_summary(session_dir) if session_dir else state.get("_scriptRan") or \
         {"invocations": 0, "byPhase": {}}
     return {
