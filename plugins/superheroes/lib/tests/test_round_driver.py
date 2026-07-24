@@ -607,6 +607,31 @@ def test_accept_the_risk_gated_on_confirmed(tmp_path):
     assert "accept-the-disclosed-risk" not in state2["_stallChoices"]
 
 
+_STALL_BREAKER = {"reason": "audit-stall", "detail": "stalled", "stalledIdentities": ["v0"]}
+
+
+def test_stall_self_recovery_unknown_fixer_does_not_stamp_escalated_rung():
+    """#608 review: unknown fixer → escalate returns None — must not set a truthy _escalatedRung."""
+    state = RD.new_state({"leg": "code", "vendors": ["claude"]})
+    assert state["config"]["fixerVendor"] is None
+    RD._handle_stall(state, state["config"], _STALL_BREAKER)
+    assert state["selfRecovered"] is True
+    assert state["step"] == RD.P_FIXER
+    assert state.get("_escalatedRung") is None
+
+
+def test_stall_self_recovery_known_fixer_stamps_escalated_rung():
+    """#608 review contrast: known claude fixer at default sonnet-5/high has a next ladder rung."""
+    state = RD.new_state({"leg": "code", "vendors": ["claude"], "fixerVendor": "claude"})
+    RD._handle_stall(state, state["config"], _STALL_BREAKER)
+    assert state["selfRecovered"] is True
+    assert state["step"] == RD.P_FIXER
+    escalated = state.get("_escalatedRung")
+    assert escalated is not None
+    assert escalated["rung"] is not None
+    assert escalated["vendor"] == "claude"
+
+
 def test_eligible_owner_acceptance_converges_end_to_end(tmp_path):
     """#507 v9: exercise the eligible owner-acceptance stall path to its terminal — an eligible
     CONFIRMED-with-receipt stall, the owner submits `accept-the-disclosed-risk`, and the run

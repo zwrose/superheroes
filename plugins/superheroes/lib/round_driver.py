@@ -1660,7 +1660,11 @@ def _handle_stall(state, config, breaker):
         fixer_vendor = config.get("fixerVendor")
         rung = model_registry.escalate(
             fixer_vendor, config.get("fixerModel", "sonnet-5"), config.get("fixerEffort", "high"))
-        state["_escalatedRung"] = {"rung": rung, "vendor": fixer_vendor}
+        if rung is not None:
+            # A null escalation (unknown fixer vendor, or already top-of-ladder) is NOT recorded as an
+            # escalation — leaving _escalatedRung unset keeps the P_FIXER payload and the fix record
+            # honest (escalated:false), never a null-rung mislabeled escalated:true (#608 review).
+            state["_escalatedRung"] = {"rung": rung, "vendor": fixer_vendor}
         _decision(state, "self-recovery",
                   "audit-stall — one invisible self-recovery (fixer escalated to %r)" % (rung,))
         _record_round(state, "selfRecovery", {"rung": rung, "reason": breaker.get("detail")})
