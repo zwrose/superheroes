@@ -345,7 +345,7 @@ def build(
                 degradations.append(
                     {
                         "constraint": "author-minority",
-                        "reason": "relaxed author-minority cap — no assignment satisfied it",
+                        "reason": "relaxed author-minority cap — critical-diversity forcing left no assignment that also kept the author family in the minority",
                     }
                 )
                 survivors.sort(key=_assignment_key)
