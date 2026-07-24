@@ -278,7 +278,10 @@ clean, build green — **you re-run yourself and read the raw output**. An imple
 *input* to your verification, never a substitute for it. Run the **full local gates** and **watch CI**.
 When you probe a guard by mutating the code it guards, apply the mutation as a **targeted,
 revertible edit through the host's edit action** — never a whole-file rewrite and never an ad-hoc
-shell edit — and revert it before moving on.
+shell edit — and revert it before moving on. **Before you run any mutation probe, commit the landed
+implementer work** — a probe's revert (a subagent's `git checkout --`) has wiped a prior order's
+uncommitted work five times across recent waves despite the memory of it, so the commit itself is the
+mechanical tripwire, not the memory of it (the mutation-probe sibling of §7's commit-between-orders rule).
 
 ## 9. Test-pilot — plan and seed here; execute via a pilot subagent
 
