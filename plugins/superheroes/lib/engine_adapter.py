@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The deterministic engine argv/parse/commit core (kept out of the model-driven JS layer so
+"""The deterministic engine argv/parse/commit core (kept out of the effectful dispatch layer so
 it is unit-testable). Named engine_adapter (NOT engine_cli — that is test-pilot's). Every
 external free-text surface is scrubbed at THIS trust boundary (parse_result). Flags verified
 live 2026-07-12 against codex 0.144.1 (GPT-5.6; 0.141.0 is rejected by the API as too old)
@@ -29,7 +29,7 @@ TASK_ID_TRAILER = "Task-Id"
 # it to a no-op — the engine did exactly what was asked, but the adapter structurally cannot LAND a
 # pure history rewrite. Reporting THIS token (not a bare/blank commit-failed) lets the caller fall
 # open to the native fixer — which CAN rewrite history — deliberately, and the journal names WHY.
-# engine_dispatch.js reads this `reason` off the adapter's JSON result DYNAMICALLY (it does not
+# The write-path dispatch caller reads this `reason` off the adapter's JSON result DYNAMICALLY (it does not
 # hardcode the literal), passing it through verbatim as both the fall-open reason and the journal
 # outcome. Downstream acceptance_verdict.tally_external_dispatches counts it as a genuine (non-"ok")
 # dispatch FAILURE — the deliberate, conservative choice (#392): the engine authentically ran, but the
@@ -57,7 +57,7 @@ def build_argv(engine, role_kind, effort, opts):
     a `fable` tier is anthropic-only and unrunnable on cursor. Codex uses a valid engine_model pin
     or maps the shared tier. The PROMPT is NOT
     encoded here — codex reads it from stdin (trailing `-`) and cursor-agent reads it from stdin
-    when given no positional prompt; the JS runner (Task 10) feeds the staged prompt file to the
+    when given no positional prompt; the dispatch runner feeds the staged prompt file to the
     process stdin. Deterministic; fully unit-testable."""
     opts = opts or {}
     cwd = opts.get("cwd")
@@ -69,7 +69,7 @@ def build_argv(engine, role_kind, effort, opts):
             try:
                 engine_model = model_registry.codex_peer_for_claude_tier(opts.get("model"))
             except ValueError:
-                return []  # fable/anthropic-only on codex — unrunnable → JS falls open to claude
+                return []  # fable/anthropic-only on codex — unrunnable → the dispatch runner falls open to claude
         ok, _reason = model_registry.validate_config(
             "codex", engine_model, effort, allow_override_only=True)
         if not ok:
@@ -82,13 +82,13 @@ def build_argv(engine, role_kind, effort, opts):
             argv += ["-C", cwd]           # confine writes to the managed worktree
         if is_read and schema_path:
             argv += ["--output-schema", schema_path]  # enforced structured review output
-        # trailing `-`: read the prompt from stdin. The Task-10 JS runner redirects the staged
+        # trailing `-`: read the prompt from stdin. The dispatch runner redirects the staged
         # prompt file into stdin (`<argv> < promptPath`) — the prompt is ALWAYS fed here.
         argv += ["-"]
         return argv
     if engine == "cursor":
         # No positional prompt argument: cursor-agent reads the prompt from stdin, which the
-        # Task-10 JS runner redirects from the staged prompt file (`<argv> < promptPath`).
+        # dispatch runner redirects from the staged prompt file (`<argv> < promptPath`).
         # cursor-agent 2026.06.26: model flag is --model (not -m); -p/--print is REQUIRED for a
         # headless run (without it it goes interactive and --output-format is a no-op); --trust
         # clears the workspace-trust gate that otherwise HANGS a headless run (needed for the
@@ -116,7 +116,7 @@ def build_argv(engine, role_kind, effort, opts):
             argv += ["-f"]                 # force / workspace-write
         argv += ["--output-format", "stream-json"]
         return argv
-    # Unknown engine: return an empty argv; the JS caller treats an empty argv as unrunnable
+    # Unknown engine: return an empty argv; the dispatch runner treats an empty argv as unrunnable
     # → fall open to claude (never raises here).
     return []
 
@@ -311,7 +311,7 @@ def parse_result(engine, role_kind, stdout):
             # Normalize the refusal signal to the known worker-recovery vocabulary — NEVER pass the
             # engine's raw `signal` string through. This is a scrub boundary (Secret-hygiene): every
             # other branch scrubs external free-text, and `signal` here becomes `reason`, which flows
-            # into the durable journal outcome AND owner-facing narrator logs (engine_dispatch.js).
+            # into the durable journal outcome AND owner-facing narrator logs (the write-path dispatch caller).
             # `plan_wrong` is the ONLY value the native worker-recovery twin treats specially
             # (worker_recovery.decide); every other value — off-contract, empty, or non-string —
             # collapses to `needs_context`, exactly as native's `worker.signal || 'needs_context'` plus
