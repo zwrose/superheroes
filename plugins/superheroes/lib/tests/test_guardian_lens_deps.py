@@ -3614,6 +3614,24 @@ def _fresh_mixed_digest(gap_eco, gap_freshness, *, measured_eco="node", measured
     }
 
 
+def test_vitals_majors_behind_partial_transient_folded_out_stays_in_reason():
+    """#613: the freshness consumer (majorsBehind) keeps transient markers in the reason while
+    folding them out of the identity KEY — symmetric with the vulns path (kills the
+    delete-the-freshness-annotation mutant)."""
+    section = {
+        "status": "partial",
+        "malformedEntries": ["left-pad"],
+        "coverageGap": {"scope": "enumerated-manifest-only"},
+        "reason": "registry partial + malformed advisory",
+        "items": {},
+    }
+    digest = _fresh_mixed_digest("python", section)
+    value, reason, identity = gld.LENS.vitals(digest)["majorsBehind"]
+    assert "malformed-advisory" in reason
+    assert "python/freshness/malformed-advisory" not in identity
+    assert identity == ["python/freshness/no-transitive-resolution"]
+
+
 def test_vitals_majors_behind_structural_not_collected_emits_identity():
     digest = _fresh_mixed_digest("python", {
         "status": "not-collected",

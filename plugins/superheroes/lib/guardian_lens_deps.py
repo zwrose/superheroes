@@ -1623,12 +1623,19 @@ def collect_python_vulns(ctx, repo):
 
 
 def _partial_part_gap(ecosystem, part, section):
-    """Gap text for a partial ecosystem part — derived from the section's own reason."""
+    """Gap text for a partial ecosystem part — derived from the section's own reason.
+
+    Transient cause markers (#613) are appended here so they stay in the human-readable gap
+    reason (they are folded OUT of the drift identity KEY — see ``_section_cause_tokens``).
+    This is the one site that builds partial gap text, so the annotation lives here rather
+    than duplicated at each caller."""
     reason = section.get("reason") if isinstance(section, dict) else None
     label = "%s %s" % (ecosystem, part)
-    if reason:
-        return "%s: %s" % (label, reason)
-    return "%s: partial" % label
+    gap = "%s: %s" % (label, reason) if reason else "%s: partial" % label
+    transient = _section_transient_causes(section)
+    if transient:
+        gap += " [transient cause(s): %s]" % ", ".join(transient)
+    return gap
 
 
 UNCLASSIFIED_PARTIAL_CAUSE = "unclassified-partial"
@@ -1725,11 +1732,7 @@ def _majors_behind_vital(digest):
             triples.append("%s/freshness/not-collected" % eco)
             continue
         if status == "partial":
-            gap = _partial_part_gap(eco, "freshness", fresh)
-            transient = _section_transient_causes(fresh)
-            if transient:
-                gap += " [transient cause(s): %s]" % ", ".join(transient)
-            gaps.append(gap)
+            gaps.append(_partial_part_gap(eco, "freshness", fresh))
             for cause in _section_cause_tokens(fresh):
                 triples.append("%s/freshness/%s" % (eco, cause))
             continue
@@ -1803,11 +1806,7 @@ def _vuln_count_vital(digest):
         total += len(items)
         measured.append(eco)
         if status == "partial":
-            gap = _partial_part_gap(eco, "vulns", vulns)
-            transient = _section_transient_causes(vulns)
-            if transient:
-                gap += " [transient cause(s): %s]" % ", ".join(transient)
-            gaps.append(gap)
+            gaps.append(_partial_part_gap(eco, "vulns", vulns))
             for cause in _section_cause_tokens(vulns):
                 triples.append("%s/vulns/%s" % (eco, cause))
     if not measured:
