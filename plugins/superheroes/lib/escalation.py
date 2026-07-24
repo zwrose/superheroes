@@ -110,6 +110,7 @@ SAFETY_MACHINERY = (
     "model_registry.py",      # band model/vendor registry — the single taxonomy data home; protect from auto-edits
     "engine_pref.py",         # band engine-selection policy (per-seat engine, loud pins, stall watchdog timeouts); a fixer editing it could disable a loud pin or a watchdog
     "seat_map.py",            # panel seat-map composition decider (constraints, maker-family check, loud degradation) — same protected class as panel_tally.py
+    "dispatch_guard.py",     # workhorse dispatch-path model-allowlist gate (#600); a fixer editing it could re-allow an off-allowlist/cross-vendor model dispatch (the WE#511 escape)
     "hooks.json",             # workhorse PreToolUse hook registration (F3)
     "precompact.py",          # workhorse resume hooks (resilience)
     "session_start.py",       # workhorse resume hooks (resilience)
