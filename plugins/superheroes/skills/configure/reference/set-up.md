@@ -95,6 +95,7 @@ disclosed degradation. A decline leaves every role on its default and set-up sti
    the implementer role, the brief-check reviewer role, and the pilot role (only ready engines are
    selectable). Record the pick into `core.md`'s machine block
    `enginePreferences: {reviewer, implementation, briefCheck, pilot}` via `core_md` (schemaVersion 2).
+   Optionally, `enginePreferences.seatPins` holds a per-review-panel-seat pin map (vendor required; model and effort optional per seat).
    An absent block reads as `claude` for every role **except `briefCheck`, which falls open to
    `codex`** (the cross-vendor default — a Claude brief-check is a disclosed degradation).
    When Codex is selected and no concrete model pin exists, explain the effective GPT-5.6 defaults.
