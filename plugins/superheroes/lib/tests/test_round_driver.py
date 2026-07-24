@@ -1728,6 +1728,26 @@ def test_auditor_vendor_fixer_outside_pool_is_independent():
     assert auditor == "codex" and auditor != "claude" and independence == "independent"
 
 
+def test_auditor_vendor_family_keyed_two_vendor_cross_family():
+    """Family-keyed independence: openai != anthropic preserves cross-vendor selection."""
+    assert RD._auditor_vendor({"vendors": ["claude", "codex"]}, "claude") == ("codex", "independent")
+
+
+def test_auditor_vendor_family_keyed_single_vendor_same_family_degraded():
+    """Single live vendor with same fixer/verifier family → degraded, never false independent."""
+    assert RD._auditor_vendor({"vendors": ["claude"]}, "claude") == ("claude", "degraded")
+
+
+def test_auditor_vendor_family_keyed_single_vendor_cross_family_independent():
+    """#510: cursor-only env — composer fixer (cursor family) vs grok verifier (xai family) → independent."""
+    assert RD._auditor_vendor({"vendors": ["cursor"]}, "cursor") == ("cursor", "independent")
+
+
+def test_auditor_vendor_family_keyed_pass1_prefers_different_cli():
+    """Pass 1 prefers a different CLI vendor over same-CLI family-independent grok."""
+    assert RD._auditor_vendor({"vendors": ["cursor", "codex"]}, "cursor") == ("codex", "independent")
+
+
 def test_fixer_outside_pool_audits_independent_end_to_end(tmp_path):
     """The outside-pool independence threads through the whole loop to a non-degraded audited chain."""
     captured = {"targets": None}

@@ -209,3 +209,46 @@ def test_fable_never_default():
     for vendor in MR.vendors():
         for model_id, _ in MR.ladder(vendor):
             assert model_id != "fable-5"
+
+
+_REVIEW_ROLES = ("reviewer", "reviewer-deep", "verifier")
+
+
+def test_family_for_review_roles():
+    assert MR.family_for("reviewer-deep", "claude") == "anthropic"
+    assert MR.family_for("reviewer-deep", "codex") == "openai"
+    assert MR.family_for("reviewer-deep", "cursor") == "xai"
+    assert MR.family_for("implementer", "cursor") == "cursor"
+    assert MR.family_for("synthesis", "codex") is None
+    for role in _REVIEW_ROLES:
+        for vendor in MR.vendors():
+            cell = MR.matrix_config(role, vendor)
+            if cell is None:
+                assert MR.family_for(role, vendor) is None
+                continue
+            model_id, _ = cell
+            assert MR.family_for(role, vendor) == MR.model_family(vendor, model_id)
+
+
+def test_allowlist():
+    assert MR.allowlist("reviewer-deep", "cursor") == (("cursor-grok-4.5", "high"),)
+    assert MR.allowlist("implementer", "cursor") == (
+        ("composer-2.5", None),
+        ("cursor-grok-4.5", "high"),
+    )
+    impl_claude = MR.allowlist("implementer", "claude")
+    assert impl_claude[0] == ("sonnet-5", "high")
+    assert ("haiku-4.5", "medium") not in impl_claude
+    assert MR.allowlist("synthesis", "codex") == ()
+
+
+def test_is_allowed():
+    assert MR.is_allowed("reviewer-deep", "cursor", "cursor-grok-4.5", "high") is True
+    assert MR.is_allowed("reviewer-deep", "cursor", "composer-2.5", None) is False
+    assert MR.is_allowed("implementer", "cursor", "composer-2.5", None) is True
+    assert MR.is_allowed("reviewer-deep", "cursor", "gpt-5.3-codex", "high") is False
+    assert MR.is_allowed("reviewer-deep", "cursor", "cursor-grok-4.5", "low") is False
+    assert MR.is_allowed(None, "cursor", "cursor-grok-4.5", "high") is False
+    assert MR.is_allowed("reviewer-deep", None, "cursor-grok-4.5", "high") is False
+    assert MR.is_allowed("reviewer-deep", "cursor", None, "high") is False
+    assert MR.is_allowed("reviewer-deep", "cursor", "cursor-grok-4.5", None) is False

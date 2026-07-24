@@ -108,6 +108,8 @@ SAFETY_MACHINERY = (
     "allowance.py",           # workhorse Codex approval-allowance store (gate; #14)
     "model_tier.py",          # band model-tier core — policy, protect from auto-edits
     "model_registry.py",      # band model/vendor registry — the single taxonomy data home; protect from auto-edits
+    "engine_pref.py",         # band engine-selection policy (per-seat engine, loud pins, stall watchdog timeouts); a fixer editing it could disable a loud pin or a watchdog
+    "seat_map.py",            # panel seat-map composition decider (constraints, maker-family check, loud degradation) — same protected class as panel_tally.py
     "hooks.json",             # workhorse PreToolUse hook registration (F3)
     "precompact.py",          # workhorse resume hooks (resilience)
     "session_start.py",       # workhorse resume hooks (resilience)
