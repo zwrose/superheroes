@@ -488,6 +488,24 @@ def test_cli_compose_with_pins(capsys):
     assert receipt["seats"]["security-reviewer"]["source"] == "pinned"
 
 
+def test_review_code_skill_wires_seat_pins_from_ep_to_compose():
+    skill_path = os.path.normpath(os.path.join(
+        _HERE, "..", "..", "skills", "review-code", "SKILL.md"))
+    with open(skill_path, encoding="utf-8") as fh:
+        text = fh.read()
+    assert ".seatPins" in text
+    assert "(.seatPins // {}) == {} then empty" in text
+    assert '[ -n "$SEAT_PINS" ]' in text
+    assert "PINS_ARGS" in text
+    assert "--pins" in text
+    assert '"${PINS_ARGS[@]}"' in text
+    seat_pins_idx = text.index("SEAT_PINS")
+    assert 'echo "$EP"' in text[seat_pins_idx - 120:seat_pins_idx + 80]
+    compose_line = text[text.index("SEAT_MAP=$(python3"):text.index("SEAT_MAP=$(python3") + 500]
+    assert "SEAT_PINS" in compose_line or "PINS_ARGS" in compose_line
+    assert "seat_map.py" in compose_line and '"${PINS_ARGS[@]}"' in compose_line
+
+
 def test_cli_compose_pins_json_error(capsys):
     rc = SM.main(
         [
