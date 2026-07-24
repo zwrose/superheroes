@@ -27,6 +27,13 @@ import guardian_tools as gt
 
 DEFAULT_TIMEOUT = 60
 
+# One home for the collect-status vocabulary. guardian_lens imports COLLECT_STATUSES
+# from here so the set of valid statuses and the constructor strings cannot drift apart.
+STATUS_COLLECTED = "collected"
+STATUS_PARTIAL = "partial"
+STATUS_NOT_COLLECTED = "not-collected"
+COLLECT_STATUSES = (STATUS_COLLECTED, STATUS_PARTIAL, STATUS_NOT_COLLECTED)
+
 
 def tool_available(name):
     """True when `name` resolves on PATH. Probe only — never spawns a subprocess."""
@@ -176,14 +183,14 @@ def run_tool(argv, ctx=None, timeout=DEFAULT_TIMEOUT, cwd=None, ok_exits=(0,),
 
 def collected():
     """Status fragment for a complete collection — carries no reason."""
-    return {"status": "collected"}
+    return {"status": STATUS_COLLECTED}
 
 
 def partial(reason):
     """Status fragment: some of the collection succeeded; `reason` names what did not."""
-    return {"status": "partial", "reason": reason}
+    return {"status": STATUS_PARTIAL, "reason": reason}
 
 
 def not_collected(reason):
     """Status fragment: nothing was collected. NEVER return empty candidates instead."""
-    return {"status": "not-collected", "reason": reason}
+    return {"status": STATUS_NOT_COLLECTED, "reason": reason}
