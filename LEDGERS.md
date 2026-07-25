@@ -123,6 +123,18 @@ stated unlock condition is met — cite this ledger instead of re-arguing.
   cite #526 instead of re-proposing the pair.
 - **Nothing already shipped gets rebuilt** because a session forgot it exists — check
   the store, the CHANGELOG, and the Project first.
+- **No superpowers-vs-charter reconciliation machinery.** *(Owner-ratified 2026-07-24, spike #627
+  F3.)* The textual tension between the superpowers SessionStart injection and the charters is **real
+  in text but nil in behavior** across a 543-session corpus (#627 F3). Cite this instead of proposing
+  machinery to reconcile the two layers.
+- **No charter/skill description prune for context economy.** *(Owner-ratified 2026-07-24,
+  #626/#627.)* Measurable but **unmotivated**: routing is not degrading, the combined-description
+  ratchet already forbids growth, and a wrong prune carries asymmetric misroute risk. Declined.
+- **No prune of the charter redundancy devices without a behavioral instrument.** *(Owner-ratified
+  2026-07-24, #626 leg 3.)* The "When you're tempted" tables and the covenant's hard-lines are pure
+  restatement, but their purpose is redundancy under pressure; deleting them without measuring whether
+  a Claude-5 orchestrator still obeys is the accretion mistake run in reverse. The instrument is
+  **parked as #628** with unlock conditions; an advisor observational watch is adopted meanwhile.
 
 **Unlock rhythm:** the stability gate (two consecutive releases whose first real runs
 diagnose clean) re-opens the growth posture; #131's checkpoint re-opens
