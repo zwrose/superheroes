@@ -635,10 +635,10 @@ def test_stall_self_recovery_known_fixer_stamps_escalated_rung():
     assert escalated is not None
     assert escalated["rung"] is not None
     assert escalated["vendor"] == "claude"
-    # #620 R3a contrast: on the real-rung path the detail names the escalation target.
+    # #620 R3a contrast: on the real-rung path the detail names the actual escalation target.
     sr = [d for d in state["decisions"] if d["kind"] == "self-recovery"]
     assert len(sr) == 1
-    assert "fixer escalated to" in sr[0]["detail"]
+    assert ("fixer escalated to %r" % (escalated["rung"],)) in sr[0]["detail"]
 
 
 def test_eligible_owner_acceptance_converges_end_to_end(tmp_path):
