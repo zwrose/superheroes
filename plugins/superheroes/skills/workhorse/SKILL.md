@@ -243,6 +243,13 @@ out, **park honestly** rather than hand off to a turn that will never come. (The
 build background-dispatched its composer implementer and ended its turn; the run orphaned mid-flight,
 recovered only via `--resume`.)
 
+**This generalizes beyond dispatches — a headless session (`claude -p`) never ends a turn on ANY
+pending external outcome.** The same trap catches a background waiter (#600 — a wait-trap that fired
+despite dual warnings), a post-handback CI watch (#608 — the case a dispatch-only rule leaves
+uncovered), and any outcome that resolves outside your turn (#526 evidence trail): **poll it
+synchronously in-turn** with tool calls until it resolves, or **park durably** — never end a turn to
+"wait" on something no session will re-wake you for.
+
 **Long dispatches you own get room to finish and a stuck/runaway monitor** — for both a native
 subagent dispatch and an engine CLI run you invoke directly: **never a borderline limit you expect to
 just barely clear**, and never end the turn while the work runs. The **concrete mechanics differ by
