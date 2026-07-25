@@ -618,6 +618,11 @@ def test_stall_self_recovery_unknown_fixer_does_not_stamp_escalated_rung():
     assert state["selfRecovered"] is True
     assert state["step"] == RD.P_FIXER
     assert state.get("_escalatedRung") is None
+    # #620 R3a: the null-rung self-recovery decision detail must be honest — never "escalated to None".
+    sr = [d for d in state["decisions"] if d["kind"] == "self-recovery"]
+    assert len(sr) == 1
+    assert "escalated to None" not in sr[0]["detail"]
+    assert "no escalation rung available" in sr[0]["detail"]
 
 
 def test_stall_self_recovery_known_fixer_stamps_escalated_rung():
@@ -630,6 +635,10 @@ def test_stall_self_recovery_known_fixer_stamps_escalated_rung():
     assert escalated is not None
     assert escalated["rung"] is not None
     assert escalated["vendor"] == "claude"
+    # #620 R3a contrast: on the real-rung path the detail names the escalation target.
+    sr = [d for d in state["decisions"] if d["kind"] == "self-recovery"]
+    assert len(sr) == 1
+    assert "fixer escalated to" in sr[0]["detail"]
 
 
 def test_eligible_owner_acceptance_converges_end_to_end(tmp_path):
