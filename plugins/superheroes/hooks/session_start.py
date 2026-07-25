@@ -3,11 +3,13 @@
 via `additionalContext`:
 
 **Bootstrap (ALWAYS — all four sources `startup|resume|clear|compact`).** Inject
-the project-context layer a plain chat start auto-loads but a slash-command spawn
-drops: project/user CLAUDE.md, the env block, the MEMORY.md head, plus the
-resolved ABSOLUTE plugin + host-tool-map roots (so a skill's
+the two records only this bootstrap uniquely supplies — the resolved ABSOLUTE
+plugin + host-tool-map roots (so a skill's
 `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<host>-tools.md` Read lands on the
-real file). Assembled by `session_context` — best-effort, never raises. This runs
+real file) and the distilled covenant — plus nothing the harness already loads.
+Current Claude Code natively supplies project/user CLAUDE.md, the env block, and
+the MEMORY.md head on all spawn paths (probe-verified #627 F1, Claude Code
+2.1.219). Assembled by `session_context` — best-effort, never raises. This runs
 FIRST and UNCONDITIONALLY; it must NOT be gated behind a work-item lookup, or it
 would be suppressed on exactly the compacted-discovery path it exists for.
 
