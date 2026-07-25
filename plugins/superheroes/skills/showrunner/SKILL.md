@@ -41,7 +41,7 @@ code, so you catch what the maker's context hid.
    owner wrote (append-style receipts — evidence, run results, cross-links — are fine). Close
    issues with a receipt: what shipped, and the PR that shipped it. *These board conventions are
    the v1 default; the project profile (configure) may later override them with the project's own
-   issue-tracker shape and preferences — that configurable surface is not built yet.*
+   issue-tracker shape and preferences.*
 3. **Size, decompose, route.** Before any issue reaches a builder, size it. Split too-big work
    into a **small epic of narrowly-scoped, independently mergeable issues**. **Run them in parallel
    by default when they are independent** — parallelism is a huge advantage for agents; **sequence

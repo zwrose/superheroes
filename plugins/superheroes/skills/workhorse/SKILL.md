@@ -180,7 +180,7 @@ to an implementer under the one **implementer template**
 work-order protocol:
 
 - **Claude subagent** → dispatch the template as-is.
-- **External engine** (codex / cursor CLI, per the engine settings #472 adds) → **inline
+- **External engine** (codex / cursor CLI) → **inline
   `agents/implementer.md`, minus its frontmatter, verbatim** into the dispatch prompt.
 
 Both paths carry identical instructions by construction. Choose each implementer's **model tier
@@ -288,8 +288,6 @@ mechanical tripwire, not the memory of it (the mutation-probe sibling of §6's c
 - **You** do test-pilot **planning and seeding** (invoke `test-pilot-plan`).
 - **Execution is a pilot subagent** (`agents/pilot.md`) that **observes and reports structured
   results only — it never fixes.** A bug it reports becomes an **implementer work order** you dispatch.
-- The skill-side change — `test-pilot-execute` becoming observe-and-report, dropping its own fix loop
-  — is tracked in **issue #483**, not this PR; this charter states the observe-only contract now.
 - **Test-pilot applies only to a build with an app surface.** A plugin, library, or docs build has
   nothing to pilot — record test-pilot as **N/A (no running app)** in the PR, with the positive
   evidence that stands in for it (the receipts you re-ran, the review). Do not fabricate a browser
@@ -306,9 +304,8 @@ delta-grading in §12 does not apply here** — every pre-handback review is the
 you handled each finding in a **dispositions table** — a short table of each finding and what you
 did about it — in the PR body, and **link the review results as a durable receipt** posted on the PR
 (a comment or similar, not something that only lives in your session), so the advisor can check
-them without your context. A finding that argues from a general convention against the issue's
-ratified scope is recorded as a follow-up for the advisor, not folded into this diff. This applies
-to a proposal *unrelated* to the behavior the diff introduces or worsens; a blocking correctness or
+them without your context. The scope-beats-convention rule (§1 intake) governs review findings too, but only
+for a proposal *unrelated* to the behavior the diff introduces or worsens; a blocking correctness or
 security finding on that behavior is fixed or honestly parked, never deferred as out of scope.
 
 ## 11. Hand back the ready PR
