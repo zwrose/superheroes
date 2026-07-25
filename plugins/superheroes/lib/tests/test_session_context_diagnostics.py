@@ -49,7 +49,7 @@ def test_budget_drop_surfaces_in_the_block(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(session_context, "covenant", lambda cwd, plugin_root: "c" * 5000)
     block = session_context.assemble(str(tmp_path), None, "/p", "claude", char_budget=400)
     assert "Bootstrap diagnostics" in block, "a budget-dropped source must leave an in-block breadcrumb"
-    assert "omitted for space" in block
+    assert "source(s) omitted for space" in block
     assert "Covenant" in block
     assert "Covenant" in capsys.readouterr().err
 
