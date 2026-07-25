@@ -21,6 +21,8 @@ Every superheroes session carries the covenant — read and obey
 `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/covenant.md`. **This charter specializes those
 standing orders for the build; it does not repeat them.**
 
+**Host-injected session guidance varies by host surface and version** — e.g. a Claude Code desktop autonomy directive (2.1.217) or a "do not call the AgentTool unless the user requested it" directive (2.1.219) — and does not override this charter's delegation model for superheroes work; a user's invocation of this skill *is* the request such guidance refers to.
+
 ## The loop
 
 `routed issue → you build it (brief → delegate → verify → review) → ready PR (brief + dispositions + receipts) → the advisor vets → owner merges`
@@ -180,7 +182,7 @@ to an implementer under the one **implementer template**
 work-order protocol:
 
 - **Claude subagent** → dispatch the template as-is.
-- **External engine** (codex / cursor CLI, per the engine settings #472 adds) → **inline
+- **External engine** (codex / cursor CLI) → **inline
   `agents/implementer.md`, minus its frontmatter, verbatim** into the dispatch prompt.
 
 Both paths carry identical instructions by construction. Choose each implementer's **model tier
@@ -243,30 +245,20 @@ out, **park honestly** rather than hand off to a turn that will never come. (The
 build background-dispatched its composer implementer and ended its turn; the run orphaned mid-flight,
 recovered only via `--resume`.)
 
-**Long dispatches you own get room to finish and a stuck/runaway monitor** — this **core holds for both**
-a native subagent dispatch and an engine CLI run you invoke directly: **never a borderline limit you
-expect to just barely clear**, and never end the turn while the work runs. The **concrete mechanics
-differ by dispatch kind**:
+**This generalizes beyond dispatches — a headless session (`claude -p`) never ends a turn on ANY
+pending external outcome.** The same trap catches a background waiter (#600 — a wait-trap that fired
+despite dual warnings), a post-handback CI watch (#608 — the case a dispatch-only rule leaves
+uncovered), and any outcome that resolves outside your turn (#526 evidence trail): **poll it
+synchronously in-turn** with tool calls until it resolves, or **park durably** when it will not — an
+outcome that outruns any plausible resolution time is itself a park, not an unbounded in-turn poll;
+never end a turn to "wait" on something no session will re-wake you for.
 
-- **A shell/CLI run** (an engine CLI invoked through the host's run action) is bounded by the host's
-  Bash timeout. On the Claude host that is **ten minutes (600s) — a hard cap on a foreground call, not
-  a ceiling you lift by passing a bigger `timeout`**: the plugin's `bash_timeout` hook injects 600s
-  **only when a call omits its own `timeout`** (an explicit one is never touched), and the host **caps
-  any foreground `timeout` at ten minutes** regardless (a larger value is clamped) — so you **cannot**
-  get the 3600s+ room a long dispatch needs on a foreground call (other hosts defer to their own,
-  shorter default). Give the dispatch that room by **backgrounding the run and polling it** — a
-  backgrounded run is not bound by the foreground cap — never by trying to raise a foreground timeout.
-  Redirect its output to a **file, never `| tail`**, and watch that **output/transcript file growing as
-  your primary stall signal**: a growing file is live; use the process's **CPU-time column only as
-  corroboration** (an engine CLI can sit at ~0% CPU for minutes and still be live, so CPU alone can't
-  separate idle-but-live from stuck). Treat **elapsed time as your *runaway* bound, not a liveness
-  signal** — a quiet run may still be live, but one that has far outrun any plausible dispatch time is a
-  runaway to kill even while its file grows. Four 0.18.0-wave sessions died at the ten-minute cap
-  mid-dispatch — one mid-review-panel — losing the run (WE review session, WE-510, sh-566, WE-484).
-- **A native subagent dispatch** has a **harness-managed lifecycle** — no `bash_timeout` floor and no
-  CPU column of your own to watch — so those shell mechanics don't apply and there is **no caller-set
-  ceiling to invent** — the harness manages the lifecycle and returns when the subagent completes; the
-  core reduces to awaiting that completion in-turn and not imposing a borderline limit.
+**Long dispatches you own get room to finish and a stuck/runaway monitor** — for both a native
+subagent dispatch and an engine CLI run you invoke directly: **never a borderline limit you expect to
+just barely clear**, and never end the turn while the work runs. The **concrete mechanics differ by
+dispatch kind** — the foreground Bash cap and why you background-and-poll instead of raising a
+timeout, the output-file-not-`| tail` stall signal, the CPU-vs-elapsed liveness read, and the
+native-subagent lifecycle — so **read `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/workhorse/reference/dispatch-mechanics.md` at dispatch time**, before you invoke a long dispatch.
 
 A **skill-owned dispatch keeps its own structural-timeout contract** (e.g. `review-code`'s loop bounds
 each engine dispatch itself and forbids a per-dispatch watchdog) — don't override it with this rule.
@@ -288,8 +280,6 @@ mechanical tripwire, not the memory of it (the mutation-probe sibling of §6's c
 - **You** do test-pilot **planning and seeding** (invoke `test-pilot-plan`).
 - **Execution is a pilot subagent** (`agents/pilot.md`) that **observes and reports structured
   results only — it never fixes.** A bug it reports becomes an **implementer work order** you dispatch.
-- The skill-side change — `test-pilot-execute` becoming observe-and-report, dropping its own fix loop
-  — is tracked in **issue #483**, not this PR; this charter states the observe-only contract now.
 - **Test-pilot applies only to a build with an app surface.** A plugin, library, or docs build has
   nothing to pilot — record test-pilot as **N/A (no running app)** in the PR, with the positive
   evidence that stands in for it (the receipts you re-ran, the review). Do not fabricate a browser
@@ -306,9 +296,8 @@ delta-grading in §12 does not apply here** — every pre-handback review is the
 you handled each finding in a **dispositions table** — a short table of each finding and what you
 did about it — in the PR body, and **link the review results as a durable receipt** posted on the PR
 (a comment or similar, not something that only lives in your session), so the advisor can check
-them without your context. A finding that argues from a general convention against the issue's
-ratified scope is recorded as a follow-up for the advisor, not folded into this diff. This applies
-to a proposal *unrelated* to the behavior the diff introduces or worsens; a blocking correctness or
+them without your context. The scope-beats-convention rule (§1 intake) governs review findings too, but only
+for a proposal *unrelated* to the behavior the diff introduces or worsens; a blocking correctness or
 security finding on that behavior is fixed or honestly parked, never deferred as out of scope.
 
 ## 11. Hand back the ready PR
