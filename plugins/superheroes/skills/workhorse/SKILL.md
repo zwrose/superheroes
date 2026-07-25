@@ -249,13 +249,14 @@ recovered only via `--resume`.)
 pending external outcome.** The same trap catches a background waiter (#600 — a wait-trap that fired
 despite dual warnings), a post-handback CI watch (#608 — the case a dispatch-only rule leaves
 uncovered), and any outcome that resolves outside your turn (#526 evidence trail): **poll it
-synchronously in-turn** with tool calls until it resolves, or **park durably** — never end a turn to
-"wait" on something no session will re-wake you for.
+synchronously in-turn** with tool calls until it resolves, or **park durably** when it will not — an
+outcome that outruns any plausible resolution time is itself a park, not an unbounded in-turn poll;
+never end a turn to "wait" on something no session will re-wake you for.
 
 **Long dispatches you own get room to finish and a stuck/runaway monitor** — for both a native
 subagent dispatch and an engine CLI run you invoke directly: **never a borderline limit you expect to
 just barely clear**, and never end the turn while the work runs. The **concrete mechanics differ by
-dispatch kind** — the foreground Bash 600s cap and why you background-and-poll instead of raising a
+dispatch kind** — the foreground Bash cap and why you background-and-poll instead of raising a
 timeout, the output-file-not-`| tail` stall signal, the CPU-vs-elapsed liveness read, and the
 native-subagent lifecycle — so **read `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/workhorse/reference/dispatch-mechanics.md` at dispatch time**, before you invoke a long dispatch.
 
