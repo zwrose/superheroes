@@ -42,13 +42,16 @@ def test_unreadable_covenant_surfaces_in_the_block(tmp_path, monkeypatch):
     assert "read error" in block
 
 
-def test_budget_drop_surfaces_in_the_block(tmp_path, monkeypatch):
+def test_budget_drop_surfaces_in_the_block(tmp_path, monkeypatch, capsys):
     import mode_registry
     monkeypatch.setattr(mode_registry, "read_registry",
                         lambda cwd, root=None: {"storageMode": "in-repo"})
     monkeypatch.setattr(session_context, "covenant", lambda cwd, plugin_root: "c" * 5000)
     block = session_context.assemble(str(tmp_path), None, "/p", "claude", char_budget=400)
     assert "Bootstrap diagnostics" in block, "a budget-dropped source must leave an in-block breadcrumb"
+    assert "omitted for space" in block
+    assert "Covenant" in block
+    assert "Covenant" in capsys.readouterr().err
 
 
 def test_clean_bootstrap_has_no_diagnostics_line(tmp_path, monkeypatch):

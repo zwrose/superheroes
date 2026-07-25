@@ -9,7 +9,8 @@ F1 on Claude Code 2.1.219). That native auto-load is load-bearing: if a future h
 stops injecting the project layer on any spawn path, the slim bootstrap would silently lose it.
 This probe converts that residual dependency into a named, re-runnable, watched risk.
 
-When to run: on every Claude Code / harness upgrade (~30 seconds).
+When to run: on every Claude Code / harness upgrade (~30 seconds), and after updating the
+superheroes plugin (especially on a harness older than the validated version).
 
 Live-session procedure (evidence is only observable inside a running session's context; it is
 not persisted to session transcripts). For **each** of the three spawn paths — plain chat,
@@ -43,17 +44,17 @@ _VALIDATED_VERSION = "2.1.219"
 
 
 def native_layer_present(context_text) -> bool:
-    """True iff the harness native project-context marker appears in ``context_text``."""
+    """True iff ``context_text`` contains a standalone heading line equal to the marker."""
     if not isinstance(context_text, str):
         return False
-    return NATIVE_LAYER_MARKER in context_text
+    return any(line.strip() == NATIVE_LAYER_MARKER for line in context_text.splitlines())
 
 
 def _procedure_text() -> str:
     paths = ", ".join(SPAWN_PATHS)
     return f"""Harness native project-context tripwire (Claude Code {_VALIDATED_VERSION})
 
-WHEN: Run on every Claude Code / harness upgrade (~30s).
+WHEN: Run on every Claude Code / harness upgrade (~30s), and after updating the superheroes plugin (especially on a harness older than the validated version).
 
 PROCEDURE — for each spawn path ({paths}):
   1. Start that kind of session in a superheroes-calibrated project.
@@ -85,7 +86,7 @@ def main(argv=None) -> int:
         if args.check == "-":
             context_text = sys.stdin.read()
         else:
-            with open(args.check, encoding="utf-8") as fh:
+            with open(args.check, encoding="utf-8", errors="replace") as fh:
                 context_text = fh.read()
     except OSError as exc:
         print(f"FAIL: cannot read evidence file {args.check!r}: {exc}")

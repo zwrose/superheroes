@@ -1,4 +1,5 @@
 """Unit tests for harness native project-context tripwire (lib/harness_probe.py)."""
+import io
 import os
 import sys
 
@@ -27,6 +28,18 @@ def test_native_layer_present_false_for_non_str_without_raise():
     assert hp.native_layer_present([]) is False
 
 
+def test_native_layer_present_false_when_marker_embedded_mid_line():
+    assert hp.native_layer_present("see the marker # claudeMd inline") is False
+
+
+def test_native_layer_present_false_when_marker_is_prefix_token():
+    assert hp.native_layer_present("x# claudeMd") is False
+
+
+def test_native_layer_present_false_when_marker_is_suffix_token():
+    assert hp.native_layer_present("# claudeMd-not-native") is False
+
+
 def test_main_check_returns_0_when_file_contains_marker(tmp_path):
     path = tmp_path / "context.txt"
     path.write_text("foo\n# claudeMd\nbar\n", encoding="utf-8")
@@ -41,6 +54,16 @@ def test_main_check_returns_1_when_file_lacks_marker(tmp_path):
 
 def test_main_check_returns_1_for_nonexistent_path():
     assert hp.main(["--check", "/nonexistent/harness_probe_evidence.txt"]) == 1
+
+
+def test_main_check_stdin_returns_0_when_marker_present(monkeypatch):
+    monkeypatch.setattr("sys.stdin", io.StringIO("# claudeMd\n"))
+    assert hp.main(["--check", "-"]) == 0
+
+
+def test_main_check_stdin_returns_1_when_marker_absent(monkeypatch):
+    monkeypatch.setattr("sys.stdin", io.StringIO("no marker\n"))
+    assert hp.main(["--check", "-"]) == 1
 
 
 def test_main_procedure_print_returns_0_and_names_paths_version_fallback(capsys):
