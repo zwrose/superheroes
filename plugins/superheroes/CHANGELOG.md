@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.21.1](https://github.com/zwrose/superheroes/compare/superheroes-v0.21.0...superheroes-v0.21.1) (2026-07-25)
+
+
+### Bug Fixes
+
+* **superheroes:** slim the SessionStart bootstrap to its unique payload + harness-dependency tripwire ([#631](https://github.com/zwrose/superheroes/issues/631)) ([c9c5f97](https://github.com/zwrose/superheroes/commit/c9c5f974488402b24bb2a9858b49c5bb8d516b4f))
+
+
+### Chores
+
+* **superheroes:** charter context-fit pass ([#630](https://github.com/zwrose/superheroes/issues/630)) — prune, mechanics relocation, await-widening, host-precedence note, LEDGERS records ([#633](https://github.com/zwrose/superheroes/issues/633)) ([47becd3](https://github.com/zwrose/superheroes/commit/47becd3c946be22a707035e8a29eaa03d6a0e538))
+* **superheroes:** charter hygiene 4 — riders 1,3,4,5,6 ([#620](https://github.com/zwrose/superheroes/issues/620)) ([#634](https://github.com/zwrose/superheroes/issues/634)) ([3958c7f](https://github.com/zwrose/superheroes/commit/3958c7f201fd435ce638432cb26bc41737e4d6c5))
+
 ## [0.21.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.20.0...superheroes-v0.21.0) (2026-07-24)
 
 
