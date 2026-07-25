@@ -243,30 +243,12 @@ out, **park honestly** rather than hand off to a turn that will never come. (The
 build background-dispatched its composer implementer and ended its turn; the run orphaned mid-flight,
 recovered only via `--resume`.)
 
-**Long dispatches you own get room to finish and a stuck/runaway monitor** — this **core holds for both**
-a native subagent dispatch and an engine CLI run you invoke directly: **never a borderline limit you
-expect to just barely clear**, and never end the turn while the work runs. The **concrete mechanics
-differ by dispatch kind**:
-
-- **A shell/CLI run** (an engine CLI invoked through the host's run action) is bounded by the host's
-  Bash timeout. On the Claude host that is **ten minutes (600s) — a hard cap on a foreground call, not
-  a ceiling you lift by passing a bigger `timeout`**: the plugin's `bash_timeout` hook injects 600s
-  **only when a call omits its own `timeout`** (an explicit one is never touched), and the host **caps
-  any foreground `timeout` at ten minutes** regardless (a larger value is clamped) — so you **cannot**
-  get the 3600s+ room a long dispatch needs on a foreground call (other hosts defer to their own,
-  shorter default). Give the dispatch that room by **backgrounding the run and polling it** — a
-  backgrounded run is not bound by the foreground cap — never by trying to raise a foreground timeout.
-  Redirect its output to a **file, never `| tail`**, and watch that **output/transcript file growing as
-  your primary stall signal**: a growing file is live; use the process's **CPU-time column only as
-  corroboration** (an engine CLI can sit at ~0% CPU for minutes and still be live, so CPU alone can't
-  separate idle-but-live from stuck). Treat **elapsed time as your *runaway* bound, not a liveness
-  signal** — a quiet run may still be live, but one that has far outrun any plausible dispatch time is a
-  runaway to kill even while its file grows. Four 0.18.0-wave sessions died at the ten-minute cap
-  mid-dispatch — one mid-review-panel — losing the run (WE review session, WE-510, sh-566, WE-484).
-- **A native subagent dispatch** has a **harness-managed lifecycle** — no `bash_timeout` floor and no
-  CPU column of your own to watch — so those shell mechanics don't apply and there is **no caller-set
-  ceiling to invent** — the harness manages the lifecycle and returns when the subagent completes; the
-  core reduces to awaiting that completion in-turn and not imposing a borderline limit.
+**Long dispatches you own get room to finish and a stuck/runaway monitor** — for both a native
+subagent dispatch and an engine CLI run you invoke directly: **never a borderline limit you expect to
+just barely clear**, and never end the turn while the work runs. The **concrete mechanics differ by
+dispatch kind** — the foreground Bash 600s cap and why you background-and-poll instead of raising a
+timeout, the output-file-not-`| tail` stall signal, the CPU-vs-elapsed liveness read, and the
+native-subagent lifecycle — so **read `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/workhorse/reference/dispatch-mechanics.md` at dispatch time**, before you invoke a long dispatch.
 
 A **skill-owned dispatch keeps its own structural-timeout contract** (e.g. `review-code`'s loop bounds
 each engine dispatch itself and forbids a per-dispatch watchdog) — don't override it with this rule.
