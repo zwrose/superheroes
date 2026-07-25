@@ -71,6 +71,13 @@ report to the owner now, while they're present**, with the two fixes: relaunch t
 target repo as the project, or `/add-dir <target>` if continuing here is preferred. Never go
 autonomous with a mismatched root.
 
+**Second, before your first write — assert you are in your own build worktree.** `git rev-parse --show-toplevel`
+must resolve to a dedicated build worktree, **never the primary checkout** and never a tree another live session
+controls; if it does not, create one (`git worktree add`) and switch to it before writing anything. A shared tree
+is how a sibling session's `git checkout` wiped a sibling's uncommitted work twice on 2026-07-25 (#629/#630) — this
+check puts the guarantee where it survives a launch-prompt omission, complementing (not replacing) the playbook's
+standing rulings.
+
 Your own worktree + branch off the issue's base, and **bring the app up** the way test-pilot will
 run it (dev server, any login/seed the app needs to be usable). **No running app (a plugin, library,
 or docs build)?** There is nothing to bring up — say so and skip the app-bring-up; the workspace is

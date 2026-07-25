@@ -1666,7 +1666,9 @@ def _handle_stall(state, config, breaker):
             # honest (escalated:false), never a null-rung mislabeled escalated:true (#608 review).
             state["_escalatedRung"] = {"rung": rung, "vendor": fixer_vendor}
         _decision(state, "self-recovery",
-                  "audit-stall — one invisible self-recovery (fixer escalated to %r)" % (rung,))
+                  "audit-stall — one invisible self-recovery (%s)"
+                  % ("fixer escalated to %r" % (rung,) if rung is not None
+                     else "no escalation rung available — fixer unchanged, escalated:false"))
         _record_round(state, "selfRecovery", {"rung": rung, "reason": breaker.get("detail")})
         stalled = set(breaker.get("stalledIdentities") or [])
         batch = [dict(t) for t in (state.get("_auditTargets") or []) if t.get("id") in stalled]

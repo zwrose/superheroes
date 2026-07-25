@@ -17,6 +17,12 @@ One plugin, one install:
 /plugin install superheroes@superheroes
 ```
 
+**Compatibility.** superheroes is validated on **Claude Code ≥ 2.1.219**. Its SessionStart bootstrap relies on the
+harness natively loading project context (project/user `CLAUDE.md`, memory) on every spawn path — plain chat,
+headless `-p`, and slash-command spawn; on an older harness a slash-command-spawned session may silently miss that
+layer. If you update the plugin on an older harness, run the plugin's `lib/harness_probe.py` tripwire to confirm the
+dependency still holds.
+
 **Why it exists and where it's going:** [PHILOSOPHY.md](PHILOSOPHY.md) — who superheroes
 is for, what its owner may trust, and the bets behind it — and [ROADMAP.md](ROADMAP.md) —
 the release train delivering those promises.
