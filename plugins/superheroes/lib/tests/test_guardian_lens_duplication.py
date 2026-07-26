@@ -207,6 +207,15 @@ def test_fixture_pairs_deduped_format_stripped_self_deferred(tmp_path):
     a.write_text("\n".join(["A_ONLY"] + shared + ["A_END"]) + "\n")
     b.write_text("\n".join(["B_ONLY"] + shared + ["B_END"]) + "\n")
 
+    # Fixture JSON is from a full-repo sweep; align sources with this test's census (F3).
+    report = json.loads(json.dumps(report))
+    tracked_count = 0
+    for root, dirs, files in os.walk(tmp_path):
+        if ".git" in dirs:
+            dirs.remove(".git")
+        tracked_count += len(files)
+    report["statistics"]["total"]["sources"] = tracked_count
+
     lens = gld.DuplicationLens()
     out = _collect(lens, tmp_path, _FakeJscpd(report))
     assert gl.classify_collect(out) == ("collected", None)
@@ -954,7 +963,12 @@ def test_scan_ratio_09_of_prior_still_collects(tmp_path):
         "statistics": {"total": {"clones": 0, "sources": 9}},
         "duplicates": [],
     }
-    prev = {"schemaVersion": 1, "pairs": {}, "scanRatio": 1.0}
+    pid = gld._pair_id("f0.py", "f1.py")
+    prev = {
+        "schemaVersion": 1,
+        "pairs": {pid: {"longest": 40, "shared": 40}},
+        "scanRatio": 1.0,
+    }
     out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report, tracked=names),
                    prev_digest=prev)
     assert gl.classify_collect(out)[0] == "collected"
@@ -966,9 +980,55 @@ def test_scan_ratio_near_prior_still_collects(tmp_path):
         "statistics": {"total": {"clones": 0, "sources": 2}},
         "duplicates": [],
     }
-    prev = {"schemaVersion": 1, "pairs": {}, "scanRatio": 1.0, "filesScanned": 2}
+    pid = gld._pair_id("a.py", "b.py")
+    prev = {
+        "schemaVersion": 1,
+        "pairs": {pid: {"longest": 40, "shared": 40}},
+        "scanRatio": 1.0,
+        "filesScanned": 2,
+    }
     out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report), prev_digest=prev)
     assert gl.classify_collect(out)[0] == "collected"
+
+
+def test_scan_ratio_half_of_prior_still_collects(tmp_path):
+    """0.5 is not < prior_ratio * 0.5 when prior scanRatio is 1.0."""
+    names = ["f%d.py" % i for i in range(10)]
+    _seed_tracked(tmp_path, *names)
+    report = {
+        "statistics": {"total": {"clones": 0, "sources": 5}},
+        "duplicates": [],
+    }
+    pid = gld._pair_id("f0.py", "f1.py")
+    prev = {
+        "schemaVersion": 1,
+        "pairs": {pid: {"longest": 40, "shared": 40}},
+        "scanRatio": 1.0,
+    }
+    out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report, tracked=names),
+                   prev_digest=prev)
+    assert gl.classify_collect(out)[0] == "collected"
+
+
+def test_scan_ratio_below_half_of_prior_degrades(tmp_path):
+    names = ["f%d.py" % i for i in range(10)]
+    _seed_tracked(tmp_path, *names)
+    report = {
+        "statistics": {"total": {"clones": 0, "sources": 4}},
+        "duplicates": [],
+    }
+    pid = gld._pair_id("f0.py", "f1.py")
+    prev = {
+        "schemaVersion": 1,
+        "pairs": {pid: {"longest": 40, "shared": 40}},
+        "scanRatio": 1.0,
+    }
+    out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report, tracked=names),
+                   prev_digest=prev)
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"
+    assert out["digest"] is None
+    assert "scan ratio collapsed" in reason
 
 
 def test_prior_digest_without_scan_ratio_still_collects(tmp_path):
@@ -996,6 +1056,22 @@ def test_temp_dir_inside_repo_degrades_without_jscpd(tmp_path, monkeypatch):
     assert status == "not-collected"
     assert out["digest"] is None
     assert "resolves inside repo" in reason
+    assert not any(call[0] and call[0][0] == "jscpd" for call in run.calls)
+
+
+def test_operand_escapes_repo_degrades_without_jscpd(tmp_path, monkeypatch):
+    _seed_tracked(tmp_path, "a.py")
+
+    def _bad_operands(cwd, operands):
+        raise ValueError("path escapes repository root")
+
+    monkeypatch.setattr(gld.gt, "absolute_repo_operands", _bad_operands)
+    run = _FakeJscpd(_report([]))
+    out = _collect(gld.DuplicationLens(), tmp_path, run)
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"
+    assert out["digest"] is None
+    assert "escapes repo" in reason
     assert not any(call[0] and call[0][0] == "jscpd" for call in run.calls)
 
 

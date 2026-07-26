@@ -258,6 +258,11 @@ def _realpath_is_under(path, root):
             walk = parent
 
 
+def path_is_under_repo(path, repo):
+    """True when ``path`` resolves under ``repo`` (symlinks, casing, normalization)."""
+    return _realpath_is_under(path, repo)
+
+
 def _path_entry_is_relative(entry):
     """Empty, '.', or any non-absolute PATH entry — cwd-relative, not machine PATH."""
     if entry == "" or entry == ".":

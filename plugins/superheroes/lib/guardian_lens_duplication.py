@@ -32,6 +32,11 @@ import guardian_tools as gt  # noqa: E402
 
 MIN_BLOCK_LINES = 5
 TOP_N = 25
+# When a prior digest has clone pairs but no scanRatio (pre-migration baselines), compare
+# only a gross under-scan: degrade when scanned < tracked_count / 10. A 50% floor would
+# strand repos whose legit jscpd-recognizable share is under half (measured healthy sweep:
+# 381 of 416 tracked files, ratio 0.9159) because degrade preserves the old digest forever.
+GROSS_UNDER_SCAN_FACTOR = 10
 
 # difflib re-measure budgets — rank by jscpd proxy first, then measure within caps.
 MAX_PAIRS_MEASURED = 400
@@ -210,9 +215,9 @@ def _validate_report(report):
     stats = report.get("statistics")
     total = stats.get("total") if isinstance(stats, dict) else None
     sources = total.get("sources") if isinstance(total, dict) else None
-    if isinstance(sources, bool) or not isinstance(sources, int):
+    if isinstance(sources, bool) or not isinstance(sources, int) or sources < 0:
         raise _ReportContractError(
-            "jscpd report contract mismatch: missing int-valued "
+            "jscpd report contract mismatch: missing non-negative int-valued "
             "'statistics.total.sources' field")
 
 
@@ -731,7 +736,7 @@ class DuplicationLens:
             tmp = tempfile.mkdtemp(prefix="guardian-jscpd-")
             tmp_real = os.path.realpath(tmp)
             repo_real = os.path.realpath(cwd)
-            if tmp_real == repo_real or tmp_real.startswith(repo_real + os.sep):
+            if gt.path_is_under_repo(tmp, cwd):
                 return {
                     "candidates": [],
                     "digest": None,
@@ -798,6 +803,15 @@ class DuplicationLens:
         # would mark every prior pair `resolved`. With no prior pairs there is nothing to
         # protect; degrading here would strand the lens permanently on repos jscpd cannot
         # read (honest sources==0 on a first sweep).
+        if scanned > tracked_count:
+            return {
+                "candidates": [],
+                "digest": None,
+                **gc.not_collected(
+                    "jscpd scanned %d files but only %d were in the tracked-file "
+                    "config path list — the census file list was not honored"
+                    % (scanned, tracked_count)),
+            }
         if prior_pairs and scanned == 0 and tracked_count > 0:
             return {
                 "candidates": [],
@@ -810,8 +824,6 @@ class DuplicationLens:
         if prior_pairs:
             prior_ratio = self._prev_digest.get("scanRatio")
             if isinstance(prior_ratio, (int, float)) and not isinstance(prior_ratio, bool):
-                # Ratio collapse is meaningful only when a prior sweep recorded scanRatio;
-                # old-shaped baselines without it cannot be compared.
                 if scan_ratio < prior_ratio * 0.5:
                     return {
                         "candidates": [],
@@ -821,6 +833,15 @@ class DuplicationLens:
                             "(scanned %d of %d tracked files)" % (
                                 prior_ratio, scan_ratio, scanned, tracked_count)),
                     }
+            elif scanned * GROSS_UNDER_SCAN_FACTOR < tracked_count:
+                return {
+                    "candidates": [],
+                    "digest": None,
+                    **gc.not_collected(
+                        "jscpd scanned %d of %d tracked files — gross under-scan with "
+                        "prior clone pairs and no prior scanRatio to compare against"
+                        % (scanned, tracked_count)),
+                }
 
         # Honesty gate: jscpd's summary reports clones but the duplicates detail array
         # is empty — we cannot normalize anything and must NOT read as a clean baseline.

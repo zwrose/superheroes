@@ -178,41 +178,44 @@ def test_argv_operand_budget_bytes_sysconf_unavailable_uses_fallback(
         tmp_path, monkeypatch, sysconf_side):
     repo = os.path.realpath(str(tmp_path))
     fixed = ["vulture"]
+    monkeypatch.setattr(
+        os, "sysconf", lambda name: gcensus.FALLBACK_ARG_MAX_BYTES)
+    expected = gcensus.argv_operand_budget_bytes(repo, fixed)
     monkeypatch.setattr(os, "sysconf", sysconf_side)
     budget = gcensus.argv_operand_budget_bytes(repo, fixed)
-    assert isinstance(budget, int)
-    assert budget >= 0
-    # With fallback platform max and typical env, budget should be positive
-    assert budget > 0
+    assert budget == expected
 
 
 def test_argv_operand_budget_bytes_sysconf_attribute_error(tmp_path, monkeypatch):
     repo = os.path.realpath(str(tmp_path))
+    fixed = ["vulture"]
 
     def missing_sysconf(name):
         raise AttributeError("no sysconf")
 
+    monkeypatch.setattr(
+        os, "sysconf", lambda name: gcensus.FALLBACK_ARG_MAX_BYTES)
+    expected = gcensus.argv_operand_budget_bytes(repo, fixed)
     monkeypatch.setattr(os, "sysconf", missing_sysconf)
-    budget = gcensus.argv_operand_budget_bytes(repo, ["vulture"])
-    assert isinstance(budget, int)
+    budget = gcensus.argv_operand_budget_bytes(repo, fixed)
+    assert budget == expected
 
 
 def test_argv_operand_budget_bytes_sanitized_env_raises(tmp_path, monkeypatch):
     repo = os.path.realpath(str(tmp_path))
 
-    def boom(**kwargs):
+    def boom(*args, **kwargs):
         raise RuntimeError("env failed")
 
     monkeypatch.setattr(gt, "sanitized_env", boom)
     budget = gcensus.argv_operand_budget_bytes(repo, ["vulture"])
-    assert isinstance(budget, int)
-    assert budget >= 0
+    assert budget == 0
 
 
 def test_argv_operand_budget_bytes_oversized_env_yields_zero(tmp_path, monkeypatch):
     repo = os.path.realpath(str(tmp_path))
     platform = gcensus.FALLBACK_ARG_MAX_BYTES
-    monkeypatch.setattr(gcensus, "_platform_arg_max_bytes", lambda: platform)
+    monkeypatch.setattr(gcensus, "platform_arg_max_bytes", lambda: platform)
 
     def huge_env(base_env=None, repo=None, **kwargs):
         return {"BIG": "x" * (platform + 1)}
@@ -225,7 +228,7 @@ def test_argv_operand_budget_bytes_oversized_env_yields_zero(tmp_path, monkeypat
 def test_argv_operand_budget_bytes_empty_fixed_argv_and_non_ascii(tmp_path):
     repo = os.path.realpath(str(tmp_path))
     budget_empty = gcensus.argv_operand_budget_bytes(repo, [])
-    budget_unicode = gcensus.argv_operand_budget_bytes(repo, ["vulturé"])
-    assert isinstance(budget_empty, int)
-    assert isinstance(budget_unicode, int)
+    budget_ascii = gcensus.argv_operand_budget_bytes(repo, ["a" * 64])
+    budget_unicode = gcensus.argv_operand_budget_bytes(repo, ["é" * 64])
+    assert budget_unicode < budget_ascii
     assert budget_unicode < budget_empty

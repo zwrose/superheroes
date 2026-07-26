@@ -1121,13 +1121,8 @@ def test_git_census_failure_degrades_python_not_collected(tmp_path):
 
 
 def test_arg_max_guard_degrades_never_scans_repo_dir(tmp_path, monkeypatch):
-    budget_calls = []
-
-    def tiny_budget(repo, fixed_argv):
-        budget_calls.append((repo, list(fixed_argv)))
-        return 5
-
-    monkeypatch.setattr(guardian_census, "argv_operand_budget_bytes", tiny_budget)
+    monkeypatch.setattr(
+        guardian_census, "argv_operand_budget_detail", lambda repo, fa: (5, False))
     repo = _py_repo(tmp_path, {"a.py": "x\n", "b.py": "y\n"})
     run = FakeRun([("vulture", (0, "", ""))], tracked=["a.py", "b.py"])
     out = gld.LENS.collect(_ctx(repo, run))
@@ -1138,7 +1133,8 @@ def test_arg_max_guard_degrades_never_scans_repo_dir(tmp_path, monkeypatch):
 
 
 def test_arg_max_guard_reason_names_operand_budget_and_counts(tmp_path, monkeypatch):
-    monkeypatch.setattr(guardian_census, "argv_operand_budget_bytes", lambda repo, fa: 1)
+    monkeypatch.setattr(
+        guardian_census, "argv_operand_budget_detail", lambda repo, fa: (1, False))
     repo = _py_repo(tmp_path, {"a.py": "x\n"})
     run = FakeRun([("vulture", (0, "", ""))], tracked=["a.py"])
     out = gld.LENS.collect(_ctx(repo, run))
@@ -1155,9 +1151,9 @@ def test_arg_max_guard_passes_real_vulture_argv_to_budget(tmp_path, monkeypatch)
 
     def capture_budget(repo, fixed_argv):
         captured.append(list(fixed_argv))
-        return 0
+        return 0, False
 
-    monkeypatch.setattr(guardian_census, "argv_operand_budget_bytes", capture_budget)
+    monkeypatch.setattr(guardian_census, "argv_operand_budget_detail", capture_budget)
     repo = _py_repo(tmp_path, {"a.py": "x\n"})
     run = FakeRun([("vulture", (0, "", ""))], tracked=["a.py"])
     gld.LENS.collect(_ctx(repo, run))

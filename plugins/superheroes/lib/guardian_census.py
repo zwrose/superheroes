@@ -33,7 +33,7 @@ ARGV_FIXED_RESERVE_BYTES = 4096  # argv/envp pointer arrays, argv[0], and the "-
 FALLBACK_ARG_MAX_BYTES = 262_144  # conservative floor when SC_ARG_MAX cannot be read
 
 
-def _platform_arg_max_bytes():
+def platform_arg_max_bytes():
     """Read SC_ARG_MAX; never raises."""
     try:
         raw = os.sysconf("SC_ARG_MAX")
@@ -45,18 +45,23 @@ def _platform_arg_max_bytes():
 
 
 def _child_env_bytes(repo):
-    """Byte size of the sanitized child env for execve; never raises."""
+    """Byte size of the sanitized child env for execve; never raises.
+
+    Returns ``(bytes, measurement_failed)`` — when ``measurement_failed`` is true the
+    byte count is ``platform_arg_max_bytes()`` so the operand budget collapses to zero
+    without mis-attributing the failure to operand size.
+    """
     try:
         env = gt.sanitized_env(None, repo=repo)
     except Exception:
-        return _platform_arg_max_bytes()
+        return platform_arg_max_bytes(), True
     return sum(
         len(k.encode("utf-8")) + len(str(v).encode("utf-8")) + 2
         for k, v in env.items()
-    )
+    ), False
 
 
-def argv_operand_budget_bytes(repo, fixed_argv):
+def _argv_operand_budget(repo, fixed_argv):
     """Bytes of operand payload one execve can carry for this repo.
 
     Subtracts the sanitized child env and ``fixed_argv`` from the platform ARG_MAX, then
@@ -67,12 +72,25 @@ def argv_operand_budget_bytes(repo, fixed_argv):
     operands); callers must not omit real flags by passing an empty tuple.
 
     Never raises; a return of ``0`` is legitimate and callers must degrade.
+
+    ``argv_operand_budget_detail`` also reports whether child-env measurement failed.
     """
-    platform_max = _platform_arg_max_bytes()
-    env_bytes = _child_env_bytes(repo)
+    platform_max = platform_arg_max_bytes()
+    env_bytes, env_failed = _child_env_bytes(repo)
     fixed_bytes = sum(len(a.encode("utf-8")) + 1 for a in fixed_argv)
     usable = platform_max - env_bytes - fixed_bytes - ARGV_FIXED_RESERVE_BYTES
-    return max(0, int(usable * ARGV_HEADROOM_FRACTION))
+    return max(0, int(usable * ARGV_HEADROOM_FRACTION)), env_failed
+
+
+def argv_operand_budget_bytes(repo, fixed_argv):
+    """Operand payload budget in bytes; see ``_argv_operand_budget``."""
+    budget, _env_failed = _argv_operand_budget(repo, fixed_argv)
+    return budget
+
+
+def argv_operand_budget_detail(repo, fixed_argv):
+    """``(budget_bytes, child_env_measurement_failed)`` — never raises."""
+    return _argv_operand_budget(repo, fixed_argv)
 
 
 def _git(ctx, cwd, args, timeout=gc.DEFAULT_TIMEOUT):
