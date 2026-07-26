@@ -339,6 +339,7 @@ def test_fail_closed_edge_8_effort_not_on_pair():
     result = DG.validate("implementer", "cursor", "cursor-grok-4.5", "low")
     assert result["ok"] is False
     assert _PARK_TAIL in result["reason"]
+    assert "at effort 'low'" in result["reason"]
 
 
 def test_fail_closed_edge_9_token_effort_conflict():

@@ -393,6 +393,46 @@ def test_build_argv_cursor_registered_engine_model_invalid_effort_returns_empty_
 # ---------------------------------------------------------------------------
 
 
+def test_build_argv_result_composed_grok_token_effort_adoption():
+    """Composed dispatch token supplies effort when orchestrator omits --effort (#636 G1)."""
+    model_flag = lambda r: r["argv"][r["argv"].index("--model") + 1]
+    r = EA.build_argv_result(
+        "cursor", "review", None, {"engine_model": "cursor-grok-4.5-high"}
+    )
+    assert r["reason"] is None
+    assert model_flag(r) == "cursor-grok-4.5-high"
+    r_match = EA.build_argv_result(
+        "cursor", "review", "high", {"engine_model": "cursor-grok-4.5-high"}
+    )
+    assert r_match["reason"] is None
+    assert model_flag(r_match) == "cursor-grok-4.5-high"
+    r_conflict = EA.build_argv_result(
+        "cursor", "review", "low", {"engine_model": "cursor-grok-4.5-high"}
+    )
+    assert r_conflict == {"argv": [], "reason": "engine-model-effort-conflict"}
+    r_bare = EA.build_argv_result(
+        "cursor", "review", None, {"engine_model": "cursor-grok-4.5"}
+    )
+    assert r_bare == {"argv": [], "reason": "invalid-model-effort"}
+
+
+def test_build_argv_cli_composed_grok_token_without_effort_flag(capsys):
+    rc = EA.main(
+        [
+            "build-argv",
+            "--engine",
+            "cursor",
+            "--role",
+            "review",
+            "--engine-model",
+            "cursor-grok-4.5-high",
+        ]
+    )
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert out[out.index("--model") + 1] == "cursor-grok-4.5-high"
+
+
 def test_build_argv_result_seven_named_tokens():
     cases = [
         ("bogus", "review", "high", {}, "unknown-engine"),

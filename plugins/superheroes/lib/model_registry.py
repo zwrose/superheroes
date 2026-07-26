@@ -523,6 +523,35 @@ def _resolve_dispatch_fail(
     }
 
 
+def _resolve_dispatch_success(
+    vendor: str,
+    model_id: str,
+    eff: str,
+    effort_source: str,
+    pairs: list[tuple[str, str | None]],
+) -> dict:
+    tok = dispatch_token(vendor, model_id, eff)
+    if tok is None:
+        return _resolve_dispatch_fail(
+            f"({model_id!r}, {eff!r}) has no dispatch token for vendor {vendor!r}",
+            pairs,
+        )
+    ok_cfg, why = validate_config(
+        vendor, model_id, eff, allow_override_only=True
+    )
+    if not ok_cfg:
+        return _resolve_dispatch_fail(why or "invalid config", pairs)
+    return {
+        "ok": True,
+        "model_id": model_id,
+        "effort": eff,
+        "dispatch_token": tok,
+        "effort_source": effort_source,
+        "candidates": pairs,
+        "reason": None,
+    }
+
+
 def resolve_dispatch(
     role: str,
     vendor: str,
@@ -577,26 +606,9 @@ def resolve_dispatch(
                 )
             model_id, eff = cell
             effort_source = "seat-default"
-            tok = dispatch_token(vendor, model_id, eff)
-            if tok is None:
-                return _resolve_dispatch_fail(
-                    f"({model_id!r}, {eff!r}) has no dispatch token for vendor {vendor!r}",
-                    pairs,
-                )
-            ok_cfg, why = validate_config(
-                vendor, model_id, eff, allow_override_only=True
+            return _resolve_dispatch_success(
+                vendor, model_id, eff, effort_source, pairs
             )
-            if not ok_cfg:
-                return _resolve_dispatch_fail(why or "invalid config", pairs)
-            return {
-                "ok": True,
-                "model_id": model_id,
-                "effort": eff,
-                "dispatch_token": tok,
-                "effort_source": effort_source,
-                "candidates": pairs,
-                "reason": None,
-            }
         model = cell[0]
 
     by_id = [p for p in pairs if p[0] == model]
@@ -650,22 +662,6 @@ def resolve_dispatch(
     else:
         effort_source = "resolved-lowest-rung"
 
-    tok = dispatch_token(vendor, model_id, eff)
-    if tok is None:
-        return _resolve_dispatch_fail(
-            f"({model_id!r}, {eff!r}) has no dispatch token for vendor {vendor!r}",
-            pairs,
-        )
-    ok_cfg, why = validate_config(vendor, model_id, eff, allow_override_only=True)
-    if not ok_cfg:
-        return _resolve_dispatch_fail(why or "invalid config", pairs)
-
-    return {
-        "ok": True,
-        "model_id": model_id,
-        "effort": eff,
-        "dispatch_token": tok,
-        "effort_source": effort_source,
-        "candidates": pairs,
-        "reason": None,
-    }
+    return _resolve_dispatch_success(
+        vendor, model_id, eff, effort_source, pairs
+    )

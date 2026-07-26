@@ -107,7 +107,7 @@ def build_argv_result(engine, role_kind, effort, opts):
                 "-m", engine_model,
                 "-c", "model_reasoning_effort=%s" % effort]
         if not is_read and cwd:
-            argv += ["-C", cwd]
+            argv += ["-C", cwd]           # confine writes to the managed worktree
         if is_read and schema_path:
             argv += ["--output-schema", schema_path]
         argv += ["-"]
@@ -122,17 +122,24 @@ def build_argv_result(engine, role_kind, effort, opts):
                 if parsed is None:
                     return _refuse("unregistered-engine-model")
                 model_id, tok_effort = parsed
-                if tok_effort is not None and tok_effort != effort:
+                if tok_effort is not None and effort is not None and tok_effort != effort:
                     return _refuse("engine-model-effort-conflict")
+                if effort is None and tok_effort is not None:
+                    effort = tok_effort
             ok, _reason = model_registry.validate_config("cursor", model_id, effort)
             if not ok:
                 return _refuse("invalid-model-effort")
             tok = model_registry.dispatch_token("cursor", model_id, effort)
             if not tok:
+                # defensive: unreachable once validate_config passes for cursor models
                 return _refuse("untokenizable")
             model = tok
         else:
             model = _CURSOR_MODEL
+        # cursor-agent 2026.06.26: model flag is --model (not -m); -p/--print is REQUIRED for a
+        # headless run (without it it goes interactive and --output-format is a no-op); --trust
+        # clears the workspace-trust gate that otherwise HANGS a headless run (needed for the
+        # read/--mode-plan role — the write role's -f also trusts, but --trust covers both).
         argv = ["cursor-agent", "--model", model, "-p", "--trust"]
         if is_read:
             argv += ["--mode", "plan"]

@@ -372,10 +372,15 @@ def test_dispatch_vocab_probe_blocks_aggregate_on_failure(monkeypatch):
 def test_preflight_run_includes_dispatch_vocab_probe(monkeypatch, capsys):
     monkeypatch.setattr(pp, "gh_auth_probe", lambda run=None: {
         "tool": "gh auth", "ok": True, "exit": 0, "detail": ""})
+    monkeypatch.setattr(pp, "cross_vendor_cli_probe", lambda engine, run=None, argv=None: {
+        "tool": "cross-vendor-cli:" + engine, "ok": True, "exit": 0, "detail": ""})
     import dispatch_selftest
 
-    real_probe = dispatch_selftest.probe_result
-    monkeypatch.setattr(dispatch_selftest, "probe_result", real_probe)
+    monkeypatch.setattr(
+        dispatch_selftest,
+        "probe_result",
+        lambda: {"tool": "dispatch-vocab", "ok": True, "detail": "ok (1 checks)"},
+    )
 
     rc = pp.main(["preflight_probe.py", "run", "--engine", "codex"])
     assert rc == 0

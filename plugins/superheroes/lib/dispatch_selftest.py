@@ -22,15 +22,8 @@ import seat_map  # noqa: E402
 
 _EXTERNAL_ENGINES = ("codex", "cursor")
 _ROLE_KINDS = ("review", "build", "fix")
-_NAMED_REFUSALS = frozenset({
-    "unknown-engine",
-    "unknown-claude-tier",
-    "fable-unrunnable",
-    "unregistered-engine-model",
-    "engine-model-effort-conflict",
-    "invalid-model-effort",
-    "untokenizable",
-})
+# Roster home: engine_adapter._BUILD_ARGV_REFUSAL_TOKENS (issue #636).
+_NAMED_REFUSALS = engine_adapter._BUILD_ARGV_REFUSAL_TOKENS
 _DETAIL_CAP = 5
 
 
@@ -359,8 +352,16 @@ def _leg_engine_adapter(failures, checked):
 
 def _cli_build_argv(args_tail):
     buf = io.StringIO()
-    with redirect_stdout(buf):
-        rc = engine_adapter.main(["build-argv"] + args_tail)
+    try:
+        with redirect_stdout(buf):
+            rc = engine_adapter.main(["build-argv"] + args_tail)
+    except SystemExit as exc:
+        code = exc.code
+        if code is None:
+            code = 0
+        elif not isinstance(code, int):
+            code = 1
+        return code, buf.getvalue().strip()
     return rc, buf.getvalue().strip()
 
 

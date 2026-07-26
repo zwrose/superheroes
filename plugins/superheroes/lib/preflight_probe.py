@@ -309,7 +309,7 @@ def main(argv):
         return 0
 
     if args.cmd == "run":
-        import dispatch_selftest  # noqa: E402 — lazy: pure config probe
+        import dispatch_selftest  # noqa: E402 — lazy: breaks seat_map → preflight_probe → dispatch_selftest → seat_map
 
         probes = [gh_auth_probe(), dispatch_selftest.probe_result()]
         if args.engine:
