@@ -623,6 +623,25 @@ free-text is secret-scrubbed at the adapter boundary (`engine_adapter.parse_resu
 every downstream surface — including a `/review-code --post` PR comment — is clean. The
 merge authorization is the owner's to grant; the band shows it and never applies it.
 
+**Dispatch vocabulary contract.** Three token shapes stay distinct:
+
+1. **Registry ids + a separate effort** — what the registry APIs and `engine_model` accept
+   (e.g. `cursor-grok-4.5` with `high`).
+2. **Composed dispatch tokens** — what `dispatch_token` emits and the engine CLI argv carries
+   (e.g. `cursor-grok-4.5-high`).
+3. **Family keys** — independence accounting only (`anthropic` / `openai` / `cursor` / `xai`);
+   not a dispatch input.
+
+`model_registry.resolve_dispatch` is the single seam that converts a registry id, a composed
+token, or the seat default into a concrete `(model_id, effort, dispatch_token)` triple;
+`parse_dispatch_token` is the inverse of `dispatch_token`. A dispatch token only encodes
+effort where the vendor's CLI does — cursor's grok token does; claude and codex tokens do
+not — so effort travels alongside the token, never inferred from a token that does not
+encode it. Every refusal at the dispatch boundary is **named**
+(`engine_adapter.build_argv_result` → `engine_dispatch` `detail: "engine-config:<reason>"`);
+a nameless fall-open is a defect. The round-trip self-test (`lib/dispatch_selftest.py`
+`run()` / its preflight probe) keeps the three shapes honest.
+
 ---
 
 ## 10. Ship-phase honesty gates

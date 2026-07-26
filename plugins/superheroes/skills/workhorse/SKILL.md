@@ -207,13 +207,19 @@ pass (explicit or defaulted) *before dispatching*:
 It validates that model against the seat's **registry allowlist** (`lib/model_registry.py`, the single
 model/vendor taxonomy; #510). **Exit 1 = an unlisted model = a park, not a pick:** the gate prints the
 allowlist, and you **park before any work runs** — never treat a model-within-engine choice as "just a
-preference." On exit 0 the gate resolves the validated model; **record that resolved model** (not the
-raw input — for a defaulted dispatch it resolves the concrete token) in the dispatch-provenance table.
-**Running the gate is your discipline, not an automatic trigger** — the workhorse is prose-driven, so
-the gate is the mechanical *check* and you are the one who must run it; a skipped gate leaves the
-dispatch's provenance row without a validated model, which is how the advisor spots it. It
-**supersedes the interim memory rule** that pinned engines but let model-within-engine slide — the
-WE#511 escape, a codex-family model dispatched through `cursor-agent`. The registry, not a session's judgment, decides what may run.
+preference." On exit 0 the gate returns a structured triple — thread `model_id` as an engine
+dispatch's `engine_model`, `effort` as `--effort`, and `dispatch_token` as the CLI argv model;
+putting the composed token where a registry id belongs is the trap that seats a cursor role on
+Claude and loses the model family. Omitting `--effort` **resolves** when the allowlist makes the
+model unambiguous (and picks the lowest ladder rung when it does not), reporting the choice in
+`effort_source` — never a silent guess. **Record the resolved `model_id` and `effort`** (or the
+`dispatch_token`, which encodes both where the vendor supports it) in the dispatch-provenance
+table — not a bare model string that drops the effort. **Running the gate is your discipline, not
+an automatic trigger** — the workhorse is prose-driven, so the gate is the mechanical *check* and
+you are the one who must run it; a skipped gate leaves the dispatch's provenance row without a
+validated model, which is how the advisor spots it. It **supersedes the interim memory rule** that
+pinned engines but let model-within-engine slide — the WE#511 escape, a codex-family model
+dispatched through `cursor-agent`. The registry, not a session's judgment, decides what may run.
 
 **Escalation is receipts-driven, not anticipation.** Implementation starts on the calibrated
 implementation engine. Leaving it requires **demonstrated fragility** — receipts from a failed round
