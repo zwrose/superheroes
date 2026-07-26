@@ -53,6 +53,7 @@ import loop_plan_common  # noqa: E402
 import model_registry  # noqa: E402
 import panel_tally  # noqa: E402
 import resolve_diff_lines  # noqa: E402
+import review_base_guard  # noqa: E402
 import review_loop_plan  # noqa: E402
 import review_memory  # noqa: E402
 import review_round_policy  # noqa: E402
@@ -1831,7 +1832,11 @@ def build_receipt(state, session_dir=None):
                     rkey, ", ".join(smu)))
     scriptran = _scriptran_summary(session_dir) if session_dir else state.get("_scriptRan") or \
         {"invocations": 0, "byPhase": {}}
-    return {
+    cfg = state.get("config") or {}
+    base = {k: cfg.get(k) for k in ("baseRef", "baseBranch", "baseFetch", "mode", "baseRepo",
+                                    "baseRepoCheck", "repoRoot")
+            if cfg.get(k) is not None}
+    receipt = {
         "schemaVersion": SCHEMA_VERSION,
         "verdict": state.get("terminal"),
         "certificationShape": (state.get("certification") or {}).get("shape"),
@@ -1843,7 +1848,11 @@ def build_receipt(state, session_dir=None):
         "scriptRan": scriptran,
         "degraded": degraded,
         "skippedBlockers": skipped_blockers,
+        "baseGuard": "checked" if base else "not-checked",
     }
+    if base:
+        receipt["base"] = base
+    return receipt
 
 
 _RECEIPT_REQUIRED = ("schemaVersion", "verdict", "certificationShape", "rounds", "findings",
@@ -1857,7 +1866,10 @@ def validate_receipt(receipt):
     skippedBlockers, is rejected with a reason. `skippedBlockers` is REQUIRED (possibly empty) so a
     receipt can never omit the skipped-blocking channel (the exit_skipped invariant). Per-round entries
     may carry an `auditProvenance` field (`collection-manifest` when the round ran fix audits) — it is
-    ACCEPTED, not required. Returns (ok, reason)."""
+    ACCEPTED, not required. The optional top-level `base` block (pinned diff-base metadata from a CLI
+    `next` that ran the base guard) is likewise ACCEPTED, not required — library/eval runs omit it. The
+    always-present `baseGuard` field labels which path produced the receipt (`checked` vs `not-checked`);
+    it is not part of `_RECEIPT_REQUIRED` so older receipts remain valid. Returns (ok, reason)."""
     if not isinstance(receipt, dict):
         return False, "receipt is not an object"
     for key in _RECEIPT_REQUIRED:
@@ -2058,6 +2070,22 @@ def _receipt_fault_response(detail):
     `journal-fault-unrecordable`). Answered on the terminal `next` (first emission or a replay) and
     the terminating `submit`; the CLI surfaces it NONZERO and it is NEVER a `terminal`-with-ok."""
     return {"ok": False, "reason": "receipt-fault", "detail": detail}
+
+
+def _refuse_base_guard(session_dir, reason, detail=None, value=None):
+    """#648: a base-guard refusal — journalled first (so the refusal is durable evidence, not just a
+    console line), then surfaced on stdout, nonzero. Journal-first matters: when the journal AND its
+    fault marker are both unwritable the append raises JournalFaultUnrecordable, which `main` reports
+    as the last-resort fail-loud — the existing contract, preserved."""
+    _journal_append(session_dir, {"cmd": "next", "phase": None, "round": None, "attempt": None,
+                                  "outcome": "refused-base-guard", "reason": reason})
+    body = {"ok": False, "reason": reason}
+    if detail is not None:
+        body["detail"] = detail
+    if value is not None:
+        body["value"] = value
+    sys.stdout.write(json.dumps(body) + "\n")
+    return 1
 
 
 def _next_response(pending, expected_hash):
@@ -2296,6 +2324,8 @@ def main(argv=None):
     pn.add_argument("--verify-command", default=None)
     pn.add_argument("--max-rounds", type=int, default=None)
     pn.add_argument("--diff-path", default=None, help="round-1 reviewed diff (fresh state only)")
+    pn.add_argument("--repo-root", default=None,
+                    help="repo root the base guard resolves the pinned base against (default: cwd)")
     pn.add_argument("--prior-comments", default=None,
                     help="PR-mode prior review comments JSON (a list) for the author-justification "
                          "post-filter (fresh state only)")
@@ -2360,12 +2390,28 @@ def _dispatch(args):
             overrides["verifyCommand"] = args.verify_command
         if args.max_rounds is not None:
             overrides["maxRounds"] = args.max_rounds
-        if args.diff_path:
-            try:
-                with open(args.diff_path, encoding="utf-8") as fh:
-                    overrides["diff"] = fh.read()
-            except OSError:
-                pass
+        st_ok, st = load_state(args.session_dir)
+        if st_ok:
+            fresh = st is None
+            prior_pin = (st.get("config") or {}).get("baseRef") if isinstance(st, dict) else None
+            repo_root = args.repo_root or os.getcwd()
+            guard = review_base_guard.check_base(args.session_dir, repo_root, prior_pin=prior_pin)
+            if not guard["ok"]:
+                return _refuse_base_guard(args.session_dir, guard["reason"], guard.get("detail"))
+            if fresh:
+                res = review_base_guard.check_round_diff(args.diff_path)
+                if not res["ok"]:
+                    return _refuse_base_guard(args.session_dir, res["reason"], res.get("detail"),
+                                              value=args.diff_path if args.diff_path else None)
+                overrides["diff"] = res["text"]
+                for key in ("baseRef", "baseBranch", "baseFetch", "mode", "baseRepo", "baseRepoCheck",
+                            "repoRoot"):
+                    if guard.get(key) is not None:
+                        overrides[key] = guard[key]
+            elif args.diff_path:
+                return _refuse_base_guard(args.session_dir, "diff-path-not-fresh-state",
+                                          value=args.diff_path)
+        # A v1 state file must surface refused-v1 from cmd_next — do not mask it with a base refusal.
         if args.prior_comments:
             # Load + validate the PR-mode prior comments into `priorComments` so the
             # author-justification post-filter is actually reachable (#507 v7). A missing / unreadable

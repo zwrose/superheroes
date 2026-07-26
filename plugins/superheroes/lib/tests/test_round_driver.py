@@ -17,6 +17,7 @@ the driver receipt + its validator.
 import importlib.util
 import json
 import os
+import subprocess
 
 import pytest
 
@@ -989,6 +990,36 @@ def test_journal_fault_makes_finalize_park(tmp_path):
     assert fail and "journal" in fail and "park" in fail
 
 
+def _guard_argv(session_dir, *, fresh=True, mode="branch"):
+    """#648: the extra argv that satisfies the base guard for a CLI `next` on `session_dir`.
+
+    Builds a real one-commit git repo under the session dir, writes the meta.json the guard reads
+    (pinned to that repo's HEAD), and — on fresh state — a non-empty round-1 diff. Idempotent.
+    """
+    repo = os.path.join(session_dir, "_gitrepo")
+    if not os.path.isdir(os.path.join(repo, ".git")):
+        os.makedirs(repo, exist_ok=True)
+        subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=repo)
+        subprocess.check_call(["git", "config", "user.email", "t@t"], cwd=repo)
+        subprocess.check_call(["git", "config", "user.name", "t"], cwd=repo)
+        subprocess.check_call(["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd=repo)
+    sha = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
+    toplevel = subprocess.check_output(
+        ["git", "-C", repo, "rev-parse", "--show-toplevel"], text=True).strip()
+    meta = {"mode": mode, "baseRef": sha, "baseBranch": "main", "baseFetch": "fetched",
+            "repoRoot": toplevel}
+    with open(os.path.join(session_dir, "meta.json"), "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+    diffpath = os.path.join(session_dir, "round-1", "diff.txt")
+    os.makedirs(os.path.dirname(diffpath), exist_ok=True)
+    with open(diffpath, "w", encoding="utf-8") as fh:
+        fh.write(DIFF)
+    out = ["--repo-root", repo]
+    if fresh:
+        out += ["--diff-path", diffpath]
+    return out
+
+
 def test_journal_and_marker_both_unwritable_raises_unrecordable(tmp_path):
     """#507 WO-FIX-RECOVERY: when the journal AND its fault marker are BOTH unwritable there is no
     silent tier below the marker — `_journal_append` raises JournalFaultUnrecordable rather than
@@ -1063,7 +1094,7 @@ def test_terminal_replay_with_intact_receipt_is_idempotent_ok(tmp_path):
     assert replay["ok"] is True
     assert replay["action"] == RD.P_TERMINAL
     assert replay["payload"]["verdict"] == "converged"
-    assert RD.main(["next", "--session-dir", d]) == 0  # CLI exit stays clean on a healthy replay
+    assert RD.main(["next", "--session-dir", d] + _guard_argv(d, fresh=False)) == 0
 
 
 def test_terminal_replay_after_receipt_corrupted_on_disk_is_receipt_fault(tmp_path):
@@ -1077,7 +1108,7 @@ def test_terminal_replay_after_receipt_corrupted_on_disk_is_receipt_fault(tmp_pa
     assert replay["ok"] is False
     assert replay["reason"] == "receipt-fault"
     assert "unreadable" in replay["detail"]
-    assert RD.main(["next", "--session-dir", d]) == 1  # CLI fails LOUD (nonzero)
+    assert RD.main(["next", "--session-dir", d] + _guard_argv(d, fresh=False)) == 1
 
 
 def test_terminal_replay_with_fault_marker_is_receipt_fault(tmp_path):
@@ -1086,7 +1117,7 @@ def test_terminal_replay_with_fault_marker_is_receipt_fault(tmp_path):
     d = str(tmp_path)
     _drive_cli(d, _cfg(), _responder(round1_findings=None))
     RD._mark_journal_fault(d, {"cmd": "submit", "phase": "run-verify"}, OSError("disk full"))
-    rc = RD.main(["next", "--session-dir", d])
+    rc = RD.main(["next", "--session-dir", d] + _guard_argv(d, fresh=False))
     assert rc == 1
     out = RD.cmd_next(d)
     assert out["ok"] is False
@@ -1101,7 +1132,7 @@ def test_first_terminal_emission_with_preexisting_fault_marker_is_receipt_fault(
     d = str(tmp_path)
     _drive_to_terminating_submit(d, _cfg(), _responder(round1_findings=None))
     RD._mark_journal_fault(d, {"cmd": "submit", "phase": "run-verify"}, OSError("disk full"))
-    rc = RD.main(["next", "--session-dir", d])
+    rc = RD.main(["next", "--session-dir", d] + _guard_argv(d, fresh=False))
     assert rc == 1
     out = RD.cmd_next(d)
     assert out["ok"] is False
@@ -1138,7 +1169,7 @@ def test_replay_next_after_failed_terminating_submit_stays_receipt_fault(tmp_pat
     replay = RD.cmd_next(d)
     assert replay["ok"] is False
     assert replay["reason"] == "receipt-fault"
-    assert RD.main(["next", "--session-dir", d]) == 1  # durable + nonzero across invocations
+    assert RD.main(["next", "--session-dir", d] + _guard_argv(d, fresh=False)) == 1
     assert RD.cmd_next(d)["reason"] == "receipt-fault"  # and again
 
 
@@ -1334,7 +1365,7 @@ def test_fixer_vendor_flag_rejects_unknown_and_wires_fresh(tmp_path):
     d = str(tmp_path)
     assert RD.main(["next", "--session-dir", d, "--fixer-vendor", "nope"]) == 1
     assert RD.main(["next", "--session-dir", d, "--fixer-vendor", "codex",
-                    "--vendors", "codex,cursor"]) == 0
+                    "--vendors", "codex,cursor"] + _guard_argv(d)) == 0
     ok, state = RD.load_state(d)
     assert ok and state["config"]["fixerVendor"] == "codex"
     # non-fresh: a later --fixer-vendor cannot take effect → rejected loud
@@ -1723,6 +1754,248 @@ def test_run_loop_uses_injected_changed_subjects_seam(tmp_path):
 
 
 # =============================================================================
+# #648 — CLI base guard (`next` only)
+# =============================================================================
+
+def _guard_repo_sha(session_dir):
+    repo = os.path.join(session_dir, "_gitrepo")
+    return subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
+
+
+def _cli_next_json(session_dir, extra_argv, capsys):
+    rc = RD.main(["next", "--session-dir", session_dir] + list(extra_argv))
+    cap = capsys.readouterr()
+    lines = [ln for ln in cap.out.strip().splitlines() if ln.strip()]
+    out = json.loads(lines[-1]) if lines else {}
+    return rc, out
+
+
+def test_base_guard_fresh_next_threads_pin(tmp_path, capsys):
+    d = str(tmp_path)
+    ga = _guard_argv(d)
+    rc, out = _cli_next_json(d, ga, capsys)
+    assert rc == 0 and out["ok"]
+    ok, state = RD.load_state(d)
+    assert ok and state["config"]["baseRef"] == _guard_repo_sha(d)
+
+
+def test_base_guard_no_meta_refuses_no_state(tmp_path, capsys):
+    d = str(tmp_path)
+    repo = os.path.join(d, "_gitrepo")
+    os.makedirs(repo, exist_ok=True)
+    subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=repo)
+    diffpath = os.path.join(d, "round-1", "diff.txt")
+    os.makedirs(os.path.dirname(diffpath), exist_ok=True)
+    with open(diffpath, "w", encoding="utf-8") as fh:
+        fh.write(DIFF)
+    rc, out = _cli_next_json(d, ["--repo-root", repo, "--diff-path", diffpath], capsys)
+    assert rc == 1 and out["reason"] == "base-meta-unreadable"
+    ok, state = RD.load_state(d)
+    assert ok and state is None
+
+
+@pytest.mark.parametrize("base_ref", ["", "null", "main"])
+def test_base_guard_unpinned_refuses(tmp_path, capsys, base_ref):
+    d = str(tmp_path)
+    ga = _guard_argv(d)
+    meta = json.load(open(os.path.join(d, "meta.json"), encoding="utf-8"))
+    meta["baseRef"] = base_ref
+    with open(os.path.join(d, "meta.json"), "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+    rc, out = _cli_next_json(d, ga, capsys)
+    assert rc == 1 and out["reason"] == "base-not-pinned"
+
+
+def test_base_guard_unresolved_sha_refuses(tmp_path, capsys):
+    d = str(tmp_path)
+    ga = _guard_argv(d)
+    meta = json.load(open(os.path.join(d, "meta.json"), encoding="utf-8"))
+    meta["baseRef"] = "0" * 40
+    with open(os.path.join(d, "meta.json"), "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+    rc, out = _cli_next_json(d, ga, capsys)
+    assert rc == 1 and out["reason"] == "base-unresolved"
+
+
+def test_base_guard_round_diff_required(tmp_path, capsys):
+    d = str(tmp_path)
+    ga = _guard_argv(d)
+    ga = [x for x in ga if x != "--diff-path" and not x.endswith("diff.txt")]
+    rc, out = _cli_next_json(d, ga, capsys)
+    assert rc == 1 and out["reason"] == "round-diff-required"
+
+
+def test_base_guard_round_diff_missing_file(tmp_path, capsys):
+    d = str(tmp_path)
+    ga = _guard_argv(d)
+    ga[-1] = os.path.join(d, "no-such-diff.txt")
+    rc, out = _cli_next_json(d, ga, capsys)
+    assert rc == 1 and out["reason"] == "round-diff-unreadable"
+
+
+def test_base_guard_round_diff_empty(tmp_path, capsys):
+    d = str(tmp_path)
+    ga = _guard_argv(d)
+    empty = os.path.join(d, "empty.txt")
+    with open(empty, "w", encoding="utf-8") as fh:
+        pass
+    ga[-1] = empty
+    rc, out = _cli_next_json(d, ga, capsys)
+    assert rc == 1 and out["reason"] == "round-diff-empty"
+
+
+def test_base_guard_round_diff_whitespace_only(tmp_path, capsys):
+    d = str(tmp_path)
+    ga = _guard_argv(d)
+    ws = os.path.join(d, "ws.txt")
+    with open(ws, "w", encoding="utf-8") as fh:
+        fh.write("   \n\t\n")
+    ga[-1] = ws
+    rc, out = _cli_next_json(d, ga, capsys)
+    assert rc == 1 and out["reason"] == "round-diff-empty"
+
+
+def test_base_guard_pin_moved_refuses(tmp_path, capsys):
+    d = str(tmp_path)
+    ga = _guard_argv(d)
+    rc, out = _cli_next_json(d, ga, capsys)
+    assert rc == 0 and out["ok"]
+    ok, state = RD.load_state(d)
+    stored = state["config"]["baseRef"]
+    repo = os.path.join(d, "_gitrepo")
+    subprocess.check_call(["git", "commit", "-q", "--allow-empty", "-m", "two"], cwd=repo)
+    sha2 = _guard_repo_sha(d)
+    meta = json.load(open(os.path.join(d, "meta.json"), encoding="utf-8"))
+    meta["baseRef"] = sha2
+    with open(os.path.join(d, "meta.json"), "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+    rc2, out2 = _cli_next_json(d, _guard_argv(d, fresh=False), capsys)
+    assert rc2 == 1 and out2["reason"] == "base-pin-moved"
+    ok2, state2 = RD.load_state(d)
+    assert state2["config"]["baseRef"] == stored
+
+
+def test_base_guard_diff_path_on_non_fresh_refuses(tmp_path, capsys):
+    d = str(tmp_path)
+    ga = _guard_argv(d)
+    rc, _ = _cli_next_json(d, ga, capsys)
+    assert rc == 0
+    rc2, out2 = _cli_next_json(d, ga, capsys)
+    assert rc2 == 1 and out2["reason"] == "diff-path-not-fresh-state"
+
+
+def test_base_guard_pr_repo_mismatch(tmp_path, capsys):
+    d = str(tmp_path)
+    ga = _guard_argv(d, mode="pr")
+    repo = os.path.join(d, "_gitrepo")
+    subprocess.check_call(["git", "remote", "add", "origin", "git@github.com:acme/widget.git"],
+                          cwd=repo)
+    with open(os.path.join(d, "pr.json"), "w", encoding="utf-8") as fh:
+        json.dump({"url": "https://github.com/otherorg/widget/pull/7"}, fh)
+    rc, out = _cli_next_json(d, ga, capsys)
+    assert rc == 1 and out["reason"] == "base-repo-mismatch"
+
+
+def test_base_guard_pr_repo_match(tmp_path, capsys):
+    d = str(tmp_path)
+    ga = _guard_argv(d, mode="pr")
+    repo = os.path.join(d, "_gitrepo")
+    subprocess.check_call(["git", "remote", "add", "origin", "git@github.com:acme/widget.git"],
+                          cwd=repo)
+    with open(os.path.join(d, "pr.json"), "w", encoding="utf-8") as fh:
+        json.dump({"url": "https://github.com/acme/widget/pull/7"}, fh)
+    rc, out = _cli_next_json(d, ga, capsys)
+    assert rc == 0 and out["ok"]
+    ok, state = RD.load_state(d)
+    assert state["config"]["baseRepoCheck"] == "matched"
+
+
+def test_base_guard_refusal_is_journalled(tmp_path, capsys):
+    d = str(tmp_path)
+    ga = _guard_argv(d)
+    meta = json.load(open(os.path.join(d, "meta.json"), encoding="utf-8"))
+    meta["baseRef"] = ""
+    with open(os.path.join(d, "meta.json"), "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+    _cli_next_json(d, ga, capsys)
+    journal = RD.read_journal(d)
+    assert any(e.get("outcome") == "refused-base-guard" and e.get("reason") == "base-not-pinned"
+               for e in journal)
+
+
+def test_base_guard_receipt_carries_base_block(tmp_path, capsys):
+    d = str(tmp_path)
+    ga = _guard_argv(d)
+    rc, out = _cli_next_json(d, ga, capsys)
+    assert rc == 0 and out["ok"]
+    pin = _guard_repo_sha(d)
+    for _ in range(80):
+        n = RD.cmd_next(d)
+        assert n["ok"], n
+        if n["action"] == RD.P_TERMINAL:
+            break
+        art = _responder(round1_findings=None)(n["phase"], n["payload"], n["round"])
+        s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], art)
+        assert s["ok"], s
+    with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
+        receipt = json.load(fh)
+    assert receipt["base"]["baseRef"] == pin
+    assert receipt["baseGuard"] == "checked"
+    ok, reason = RD.validate_receipt(receipt)
+    assert ok, reason
+
+
+def test_library_receipt_omits_base_not_checked(tmp_path):
+    receipt = RD.run_loop(_seams(), _cfg())
+    assert "base" not in receipt
+    assert receipt["baseGuard"] == "not-checked"
+    ok, reason = RD.validate_receipt(receipt)
+    assert ok, reason
+
+
+def test_base_guard_round_diff_malformed(tmp_path, capsys):
+    d = str(tmp_path)
+    ga = _guard_argv(d)
+    bad = os.path.join(d, "bad.txt")
+    with open(bad, "w", encoding="utf-8") as fh:
+        fh.write("fatal: bad revision 'null'\n")
+    ga[-1] = bad
+    rc, out = _cli_next_json(d, ga, capsys)
+    assert rc == 1 and out["reason"] == "round-diff-malformed"
+
+
+def test_base_guard_repo_root_mismatch(tmp_path, capsys):
+    d = str(tmp_path)
+    other = os.path.join(d, "other-checkout")
+    os.makedirs(other, exist_ok=True)
+    subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=other)
+    ga = _guard_argv(d)
+    meta = json.load(open(os.path.join(d, "meta.json"), encoding="utf-8"))
+    meta["repoRoot"] = subprocess.check_output(
+        ["git", "-C", other, "rev-parse", "--show-toplevel"], text=True).strip()
+    with open(os.path.join(d, "meta.json"), "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+    rc, out = _cli_next_json(d, ga, capsys)
+    assert rc == 1 and out["reason"] == "base-repo-root-mismatch"
+
+
+def test_base_guard_terminal_replay_still_ok(tmp_path, capsys):
+    """Lifecycle: a satisfied guard on replay must not disturb terminal replay."""
+    d = str(tmp_path)
+    _drive_cli(d, _cfg(), _responder(round1_findings=None))
+    rc, out = _cli_next_json(d, _guard_argv(d, fresh=False), capsys)
+    assert rc == 0 and out["ok"] and out["action"] == RD.P_TERMINAL
+
+
+def test_v1_state_wins_over_base_guard(tmp_path, capsys):
+    d = str(tmp_path)
+    with open(os.path.join(d, RD.STATE_FILE), "w", encoding="utf-8") as fh:
+        json.dump({"schemaVersion": 1, "rounds": {}}, fh)
+    rc, out = _cli_next_json(d, [], capsys)
+    assert rc == 0 and out["ok"] is False and "fresh session dir" in out["reason"]
+
+
+# =============================================================================
 # #507 R1c — `--vendors` must fail LOUD, never fall through to the ["claude"] default
 #
 # A non-JSON `--vendors` (e.g. `codex,cursor`) used to hit json.loads's ValueError → `pass` → the
@@ -1738,7 +2011,8 @@ def _run_main(argv, capsys):
 
 def test_vendors_comma_form_accepted(tmp_path, capsys):
     d = str(tmp_path)
-    rc, out = _run_main(["next", "--session-dir", d, "--vendors", " codex , cursor "], capsys)
+    rc, out = _run_main(["next", "--session-dir", d, "--vendors", " codex , cursor "]
+                        + _guard_argv(d), capsys)
     assert rc == 0 and out["ok"]
     ok, state = RD.load_state(d)
     assert ok and state["config"]["vendors"] == ["codex", "cursor"]
@@ -1748,7 +2022,8 @@ def test_vendors_comma_form_accepted(tmp_path, capsys):
 
 def test_vendors_json_form_accepted(tmp_path, capsys):
     d = str(tmp_path)
-    rc, out = _run_main(["next", "--session-dir", d, "--vendors", '["codex","cursor"]'], capsys)
+    rc, out = _run_main(["next", "--session-dir", d, "--vendors", '["codex","cursor"]']
+                        + _guard_argv(d), capsys)
     assert rc == 0 and out["ok"]
     ok, state = RD.load_state(d)
     assert ok and state["config"]["vendors"] == ["codex", "cursor"]
@@ -1786,7 +2061,8 @@ def test_vendors_on_existing_state_rejected(tmp_path, capsys):
     """`--vendors` on non-fresh state cannot take effect (config is read once at new_state) — reject
     loudly rather than silently ignore the flag."""
     d = str(tmp_path)
-    rc0, _ = _run_main(["next", "--session-dir", d, "--vendors", "codex,cursor"], capsys)
+    rc0, _ = _run_main(["next", "--session-dir", d, "--vendors", "codex,cursor"]
+                        + _guard_argv(d), capsys)
     assert rc0 == 0
     rc, out = _run_main(["next", "--session-dir", d, "--vendors", "claude,codex"], capsys)
     assert rc == 1 and out["reason"] == "vendors-not-fresh-state"
