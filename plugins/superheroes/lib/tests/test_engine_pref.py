@@ -464,9 +464,9 @@ def _all_dispatch_tokens():
     return tokens
 
 
-def _vendor_dispatch_tokens(role, vendor):
+def _vendor_ladder_dispatch_tokens(vendor):
     tokens = set()
-    for model_id, effort in MR.allowlist(role, vendor):
+    for model_id, effort in MR.ladder(vendor):
         tok = MR.dispatch_token(vendor, model_id, effort)
         if tok is not None:
             tokens.add(tok)
@@ -480,24 +480,36 @@ def _all_registered_model_ids():
     return ids
 
 
+def _cell_valid_for_seated_role(cell, vendor):
+    if cell in _vendor_ladder_dispatch_tokens(vendor):
+        return True
+    if vendor == "codex" and MR.is_registered("codex", cell):
+        return True
+    return False
+
+
 def _assert_model_cell_category(cell, role, vendor):
     tokens_all = _all_dispatch_tokens()
     registered_ids = _all_registered_model_ids()
 
     seat = MR.matrix_config(role, vendor)
     if seat is not None:
-        vendor_tokens = _vendor_dispatch_tokens(role, vendor)
-        assert cell in vendor_tokens, (
-            f"role {role!r} has a matrix seat on {vendor!r}; cell must be a bare dispatch token "
-            f"for that seat, not {cell!r}"
+        assert _cell_valid_for_seated_role(cell, vendor), (
+            f"role {role!r} has a matrix seat on {vendor!r}; cell must be a dispatch token from "
+            f"that vendor's ladder or a registered codex model id, not {cell!r}"
         )
         return
 
-    if cell in tokens_all:
-        return
-
-    assert " " in cell
-    assert cell not in registered_ids
+    assert cell.startswith("(unsupported on "), (
+        f"role {role!r} has no matrix seat on {vendor!r}; cell must be an unsupported marker, "
+        f"not {cell!r}"
+    )
+    assert cell not in tokens_all, (
+        f"unsupported marker {cell!r} must not be a dispatch token for any vendor"
+    )
+    assert cell not in registered_ids, (
+        f"unsupported marker {cell!r} must not be a registered model id"
+    )
 
 
 def test_dispatch_calibration_rows_cursor_model_cells_pass_dispatch_guard_or_marker():
@@ -560,11 +572,20 @@ def test_dispatch_calibration_rows_codex_implementer_pin_unchanged_after_pilot_s
     assert by_role["implementer"]["model"] == "gpt-5.6-sol"
 
 
-def test_dispatch_calibration_rows_cursor_fable_tier_shows_unsupported_marker():
-    tiers = dict(_CALIBRATION_TIERS, **{"implementer": "fable"})
-    rows = EP.dispatch_calibration_rows({"implementation": "cursor"}, tiers)
-    by_role = {r["role"]: r for r in rows}
-    assert by_role["implementer"]["model"] == "(unsupported on cursor: fable)"
+def test_assert_model_cell_category_rejects_token_on_seatless_role():
+    with pytest.raises(AssertionError):
+        _assert_model_cell_category("composer-2.5", "pilot", "codex")
+
+
+def test_dispatch_calibration_rows_codex_below_seat_pin_passes_sweep_oracle():
+    rows = EP.dispatch_calibration_rows(
+        {"reviewer": "codex", "codexModels": {"reviewer-deep": "gpt-5.6-terra"}},
+        _CALIBRATION_TIERS,
+    )
+    review_code = {r["role"]: r for r in rows}["review-code"]["model"]
+    parts = _parse_review_code_model_cell(review_code)
+    _assert_model_cell_category(parts["reviewer-deep"], "reviewer-deep", "codex")
+    assert parts["reviewer-deep"] == "gpt-5.6-terra"
 
 
 def test_dispatch_calibration_rows_model_cells_are_token_composite_or_marker():
