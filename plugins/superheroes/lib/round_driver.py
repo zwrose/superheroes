@@ -415,6 +415,16 @@ def _base_degraded(state):
     return bool((state.get("config") or {}).get("baseDegraded"))
 
 
+def _certification_base(state):
+    """Tri-state base provenance for certification — never infer fetched from absence."""
+    if _base_degraded(state):
+        return "degraded"
+    cfg = state.get("config") or {}
+    if cfg.get("baseGuard") is not None:
+        return "fetched"
+    return "not-checked"
+
+
 def _cert_shape(state, base):
     if _degraded(state) or _base_degraded(state):
         return base + "-degraded"
@@ -1750,7 +1760,7 @@ def _terminal_converged(state, config, full_panel, note=None):
     state["terminal"] = "converged"
     cert = {"shape": shape, "fullPanel": bool(full_panel),
             "independence": "degraded" if _degraded(state) else "independent",
-            "base": "degraded" if _base_degraded(state) else "fetched"}
+            "base": _certification_base(state)}
     if note:
         cert["note"] = note
     skipped = state.get("_skippedBlockers") or []
@@ -1810,7 +1820,8 @@ def build_receipt(state, session_dir=None):
     if _base_degraded(state):
         degraded.append(
             "base: reviewed against a base whose fetch degraded (%s) — the pin may be stale; "
-            "named in the certification shape" % (cfg.get("baseFetch") or ""))
+            "named in the certification shape"
+            % (cfg.get("baseFetch") or "baseFetch absent"))
     # The skipped-blocking channel (#507 R2a): an owner-skipped judgment blocker rides the exit
     # disclosure — a product-choice tradeoff shipped un-fixed, cited by its owner reason. It appears
     # BOTH in the degraded disclosure prose AND as the dedicated top-level `skippedBlockers` list
@@ -1879,9 +1890,9 @@ def validate_receipt(receipt):
     may carry an `auditProvenance` field (`collection-manifest` when the round ran fix audits) — it is
     ACCEPTED, not required. The optional top-level `base` block (pinned diff-base metadata from a CLI
     `next` that ran the base guard) is likewise ACCEPTED, not required — library/eval runs omit it. The
-    always-present `baseGuard` field records whether the CLI base guard ran (`checked`, set explicitly
-    on a fresh CLI `next` after the guard passes) or not (`not-checked`, including library/eval
-    paths and any run that never received that flag); it is not inferred from guard-shaped config
+    always-present `baseGuard` field records whether the CLI base guard ran (`checked-stat-bound`,
+    set explicitly on a fresh CLI `next` after the guard passes) or not (`not-checked`, including
+    library/eval paths and any run that never received that flag); it is not inferred from guard-shaped config
     keys. It is not part of `_RECEIPT_REQUIRED` so older receipts remain valid. Returns (ok, reason)."""
     if not isinstance(receipt, dict):
         return False, "receipt is not an object"

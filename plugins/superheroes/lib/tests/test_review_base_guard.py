@@ -666,6 +666,11 @@ def _range_diff(repo_root, pin):
     ).stdout
 
 
+def _global_counts_from_stats(diff_text):
+    stats, _, added, deleted = rbg._artifact_diff_stats(diff_text)
+    return stats, added, deleted
+
+
 def test_check_diff_binding_real_diff_ok(git_repo, tmp_path):
     root, _ = git_repo
     pin = _second_commit(root, tmp_path)
@@ -713,7 +718,7 @@ def test_check_diff_binding_path_set_mismatch_totals_match(git_repo, tmp_path):
     root, _ = git_repo
     pin = _second_commit(root, tmp_path)
     text = _range_diff(root, pin)
-    _, plus_before, minus_before, _ = rbg._artifact_diff_stats(text)
+    plus_before, minus_before = _global_counts_from_stats(text)[1:]
     lines = text.splitlines()
     for i, line in enumerate(lines):
         if line.startswith("diff --git "):
@@ -722,7 +727,7 @@ def test_check_diff_binding_path_set_mismatch_totals_match(git_repo, tmp_path):
     else:
         pytest.fail("expected at least one diff --git header")
     tampered = "\n".join(lines) + ("\n" if text.endswith("\n") else "")
-    _, plus_after, minus_after, _ = rbg._artifact_diff_stats(tampered)
+    plus_after, minus_after = _global_counts_from_stats(tampered)[1:]
     assert plus_after == plus_before and minus_after == minus_before
     r = rbg.check_diff_binding(tampered, pin, root)
     assert not r["ok"] and r["reason"] == REASON.REASON_DIFF_BASE_MISMATCH
@@ -770,13 +775,210 @@ def test_check_diff_binding_git_none_fail_closed(git_repo, tmp_path):
     text = _range_diff(root, pin)
 
     def stub(cwd, *args):
-        if args and args[0] == "diff" and "--name-only" in args:
+        if args and args[0] == "diff" and "--numstat" in args:
             return None
         return store_core.run_git(cwd, *args)
 
     r = rbg.check_diff_binding(text, pin, root, run=stub)
-    assert not r["ok"] and r["reason"] == REASON.REASON_DIFF_BASE_MISMATCH
+    assert not r["ok"] and r["reason"] == REASON.REASON_DIFF_BASE_UNVERIFIABLE
     assert "recomputed" in r["detail"]
+
+
+def _second_commit_plus_plus_lines(repo_root, tmp_path):
+    """Second commit adds lines whose content starts with ++ / --- (false-refusal class)."""
+    pin = subprocess.run(
+        ["git", "-C", repo_root, "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    path = os.path.join(repo_root, "f.txt")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("keep\n+++ b/some/path\n--- a/other/path\n")
+    subprocess.run(["git", "-C", repo_root, "add", "f.txt"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", repo_root, "commit", "-q", "-m", "plus"], check=True, capture_output=True)
+    return pin
+
+
+def test_check_diff_binding_added_plus_plus_content_ok(git_repo, tmp_path):
+    root, _ = git_repo
+    pin = _second_commit_plus_plus_lines(root, tmp_path)
+    text = _range_diff(root, pin)
+    numstat = subprocess.run(
+        ["git", "-C", root, "diff", "--numstat", "%s...HEAD" % pin],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    assert numstat.split("\t")[0] == "3"
+    r = rbg.check_diff_binding(text, pin, root)
+    assert r["ok"] and r["binding"] == "file-set+line-counts"
+
+
+def _second_commit_deleted_dash_dash(repo_root):
+    path = os.path.join(repo_root, "g.txt")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("--leading\n")
+    subprocess.run(["git", "-C", repo_root, "add", "g.txt"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", repo_root, "commit", "-q", "-m", "add"], check=True, capture_output=True)
+    pin = subprocess.run(
+        ["git", "-C", repo_root, "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("replaced\n")
+    subprocess.run(["git", "-C", repo_root, "add", "g.txt"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", repo_root, "commit", "-q", "-m", "del"], check=True, capture_output=True)
+    return pin
+
+
+def test_check_diff_binding_deleted_dash_dash_content_ok(git_repo, tmp_path):
+    root, _ = git_repo
+    pin = _second_commit_deleted_dash_dash(root)
+    text = _range_diff(root, pin)
+    r = rbg.check_diff_binding(text, pin, root)
+    assert r["ok"]
+
+
+def test_check_diff_binding_file_headers_not_counted(git_repo, tmp_path):
+    root, _ = git_repo
+    path = os.path.join(root, "one.txt")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("old\n")
+    subprocess.run(["git", "-C", root, "add", "one.txt"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", root, "commit", "-q", "-m", "add"], check=True, capture_output=True)
+    pin = subprocess.run(
+        ["git", "-C", root, "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("new\n")
+    subprocess.run(["git", "-C", root, "add", "one.txt"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", root, "commit", "-q", "-m", "chg"], check=True, capture_output=True)
+    text = _range_diff(root, pin)
+    _, added, deleted = _global_counts_from_stats(text)
+    assert added == 1 and deleted == 1
+
+
+def test_check_diff_binding_no_newline_marker_not_deletion(git_repo, tmp_path):
+    root, _ = git_repo
+    pin = _second_commit(root, tmp_path)
+    lines = _range_diff(root, pin).splitlines()
+    out = []
+    for i, line in enumerate(lines):
+        out.append(line)
+        if line.startswith("+") and not line.startswith("+++"):
+            out.append("\\ No newline at end of file")
+            break
+    text = "\n".join(out) + "\n"
+    r = rbg.check_diff_binding(text, pin, root)
+    assert r["ok"]
+
+
+def _two_file_commit(repo_root):
+    pin = subprocess.run(
+        ["git", "-C", repo_root, "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    a_path = os.path.join(repo_root, "A.txt")
+    b_path = os.path.join(repo_root, "B.txt")
+    with open(a_path, "w", encoding="utf-8") as fh:
+        fh.write("a1\na2\n")
+    with open(b_path, "w", encoding="utf-8") as fh:
+        fh.write("b1\nb2\n")
+    subprocess.run(["git", "-C", repo_root, "add", "A.txt", "B.txt"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", repo_root, "commit", "-q", "-m", "base"], check=True, capture_output=True)
+    with open(a_path, "w", encoding="utf-8") as fh:
+        fh.write("a1\na2\nx\ny\n")
+    with open(b_path, "w", encoding="utf-8") as fh:
+        fh.write("")
+    subprocess.run(["git", "-C", repo_root, "add", "A.txt", "B.txt"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", repo_root, "commit", "-q", "-m", "twofile"], check=True, capture_output=True)
+    return pin
+
+
+def test_check_diff_binding_per_file_swap_refuses(git_repo, tmp_path):
+    # Refusal here is decided by the global totals leg; per-file leg is covered by
+    # test_check_diff_binding_per_file_distribution_isolates_leg.
+    root, _ = git_repo
+    pin = _two_file_commit(root)
+    good = _range_diff(root, pin)
+
+    def stub(cwd, *args):
+        if args and args[0] == "diff" and "--numstat" in args:
+            return "2\t0\tA.txt\n0\t2\tB.txt\n"
+        return store_core.run_git(cwd, *args)
+
+    sections = []
+    cur = []
+    for line in good.splitlines():
+        if line.startswith("diff --git ") and cur:
+            sections.append(cur)
+            cur = [line]
+        else:
+            cur.append(line)
+    if cur:
+        sections.append(cur)
+    assert len(sections) == 2
+    swapped = "\n".join(
+        ["\n".join(sections[1]), "\n".join(sections[0])]
+    ) + ("\n" if good.endswith("\n") else "")
+    ga, gd = _global_counts_from_stats(good)[1:]
+    sa, sd = _global_counts_from_stats(swapped)[1:]
+    assert (ga, gd) == (sa, sd)
+    r = rbg.check_diff_binding(swapped, pin, root, run=stub)
+    assert not r["ok"] and r["reason"] == REASON.REASON_DIFF_BASE_MISMATCH
+
+
+def test_check_diff_binding_per_file_distribution_isolates_leg(git_repo, tmp_path):
+    root, _ = git_repo
+    pin = _two_file_commit(root)
+    good = _range_diff(root, pin)
+    sections = []
+    cur = []
+    for line in good.splitlines():
+        if line.startswith("diff --git ") and cur:
+            sections.append(cur)
+            cur = [line]
+        else:
+            cur.append(line)
+    if cur:
+        sections.append(cur)
+    assert len(sections) == 2
+    a_sec, b_sec = sections[0], sections[1]
+    plus_idx = None
+    for i, line in enumerate(a_sec):
+        if line.startswith("+") and not line.startswith("+++"):
+            plus_idx = i
+            break
+    assert plus_idx is not None, "expected at least one added line in A.txt hunk"
+    moved_line = a_sec.pop(plus_idx)
+    inserted = False
+    for i, line in enumerate(b_sec):
+        if line.startswith("@@"):
+            b_sec.insert(i + 1, moved_line)
+            inserted = True
+            break
+    if not inserted:
+        b_sec.extend(["@@ -0,0 +1,1 @@", moved_line])
+    mutated = "\n".join(["\n".join(a_sec), "\n".join(b_sec)]) + (
+        "\n" if good.endswith("\n") else ""
+    )
+    pin_added, pin_deleted = _global_counts_from_stats(good)[1:]
+    art_added, art_deleted = _global_counts_from_stats(mutated)[1:]
+    assert (art_added, art_deleted) == (pin_added, pin_deleted), (
+        "global leg must not be what fires: artifact +%d/-%d vs pin +%d/-%d"
+        % (art_added, art_deleted, pin_added, pin_deleted)
+    )
+    r = rbg.check_diff_binding(mutated, pin, root)
+    assert not r["ok"] and r["reason"] == REASON.REASON_DIFF_BASE_MISMATCH
+    detail = r["detail"]
+    assert "A.txt" in detail and "exp=" in detail and "act=" in detail
+    assert "B.txt" in detail and detail.count("exp=") >= 2 and detail.count("act=") >= 2
+
+
+def test_check_diff_binding_spaced_path_still_ok(git_repo, tmp_path):
+    root, _ = git_repo
+    pin = _second_commit(root, tmp_path, spaced_name=True)
+    text = _range_diff(root, pin)
+    r = rbg.check_diff_binding(text, pin, root)
+    assert r["ok"]
 
 
 # --- #648 — baseDegraded on check_base ----------------------------------------

@@ -2062,6 +2062,7 @@ def test_base_degraded_absent_base_fetch(tmp_path, capsys):
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
     assert receipt["certification"]["base"] == "degraded"
+    assert any("baseFetch absent" in line for line in receipt["degraded"])
 
 
 def test_base_and_independence_both_degraded_one_suffix(tmp_path, capsys):
@@ -2090,6 +2091,7 @@ def test_library_receipt_omits_base_not_checked(tmp_path):
     receipt = RD.run_loop(_seams(), _cfg())
     assert "base" not in receipt
     assert receipt["baseGuard"] == "not-checked"
+    assert receipt["certification"]["base"] == "not-checked"
     ok, reason = RD.validate_receipt(receipt)
     assert ok, reason
 

@@ -80,8 +80,10 @@ line with `outcome: "refused-base-guard"`.
 live incident put ~6,600 already-merged lines into a review of 2,931 real ones (#637), and an unset
 base produced a zero-line diff at exit 0 that the loop certified clean. #641 fixed the text; #648
 moved the invariant into the driver so a future text edit cannot reintroduce it. On fresh state the
-guard also stamps `baseGuard` on the receipt path — `"checked"` on this CLI path, `"not-checked"` on
-the library/eval path — so a receipt can never silently *look* guarded when it was not.
+guard also stamps `baseGuard` on the receipt path — `"checked-stat-bound"` on this CLI path,
+`"not-checked"` on the library/eval path — so a receipt can never silently *look* guarded when it
+was not. The stat binding applies to the **round-1** diff artifact the driver receives on fresh
+state; rounds 2+ rely on the skill's per-round shell halt for diff integrity.
 
 **Inputs (no new required CLI flag).** The guard reads the session's own records: `$SESSION_DIR/meta.json`
 (`mode`, `baseRef`, `baseBranch`, `baseFetch`, `repoRoot`) and, in PR mode, `$SESSION_DIR/pr.json`
@@ -89,9 +91,13 @@ the library/eval path — so a receipt can never silently *look* guarded when it
 `--repo-root` (default: the process cwd), for tests.
 
 On fresh state, resolved values ride into config and may appear in the terminal receipt as an
-optional **`base` block** — `baseRef`, `baseFetch`, `mode`, `baseRepo`, `baseRepoCheck`
-(`"matched"` in PR mode, `"not-applicable-branch-mode"` otherwise). `validate_receipt` **accepts but
-does not require** it, like the existing per-round `auditProvenance` field.
+optional **`base` block** — `baseRef`, `baseFetch`, `mode`, `baseRepo`, `baseRepoCheck`,
+`diffBinding` (`file-set+line-counts` when per-file stat binding succeeded, or `line-counts-only`
+when git-quoted paths forced a global-totals fallback). Terminal `certification.base` is tri-state:
+`fetched` (CLI guard ran with a healthy `baseFetch`), `degraded` (fetch provenance unknown or
+failed), or `not-checked` (library/eval `run_loop` — guard did not run). `validate_receipt`
+**accepts but does not require** the `base` block, like the existing per-round `auditProvenance`
+field.
 
 **Refusal reasons.**
 
@@ -109,6 +115,9 @@ does not require** it, like the existing per-round `auditProvenance` field.
 | `round-diff-unreadable` | `--diff-path` absent, unreadable, a directory, or not valid UTF-8 — **the failed-diff case**, given the atomic publish below |
 | `round-diff-empty` | `--diff-path` is empty or whitespace-only — **an empty review surface is never certifiable-clean** |
 | `round-diff-malformed` | `--diff-path` is non-empty but carries no `diff --git ` header — not `git diff` output |
+| `round-diff-base-mismatch` | round-1 diff artifact's file set or per-file +/- counts disagree with `git diff <pin>...HEAD` |
+| `round-diff-base-unverifiable` | `git diff --numstat` could not be run (git failure/timeout/unavailable) — expectation not computed |
+| `base-mode-unrecognized` | `meta.mode` is not `pr` or `branch` |
 | `diff-path-not-fresh-state` | `--diff-path` passed on non-fresh state (the same discipline as `--vendors` / `--fixer-vendor`) |
 
 **What to do on refusal (by family).**
@@ -118,8 +127,12 @@ does not require** it, like the existing per-round `auditProvenance` field.
   re-run Setup's resolve block and check `origin`; confirm `meta.json` has a full commit pin and
   `repoRoot` matches this checkout.
 - **Diff artifact** (`round-diff-required`, `round-diff-unreadable`, `round-diff-empty`,
-  `round-diff-malformed`, `diff-path-not-fresh-state`): fix the diff step and do not proceed with
-  review if the diff command failed, produced nothing, or produced output that is not a valid diff.
+  `round-diff-malformed`, `round-diff-base-mismatch`, `round-diff-base-unverifiable`,
+  `diff-path-not-fresh-state`): fix the diff step and do not proceed with review if the diff
+  command failed, produced nothing, or produced output that is not a valid diff; for
+  `round-diff-base-mismatch`, re-derive the round-1 artifact from the pinned base; for
+  `round-diff-base-unverifiable`, fix git availability/timeouts before re-running `next`.
+- **`base-mode-unrecognized`:** re-run Setup so `meta.mode` is `pr` or `branch`.
 - **`base-repo-mismatch`:** this checkout's `origin` is not the PR's base repository — re-run from
   a clone of the base repo (full fork support is deliberately not built).
 
@@ -173,7 +186,8 @@ copy). Any fault → the CLI answers `{"ok": false, "reason": "receipt-fault", "
 - `schemaVersion` (2)
 - `verdict` — `converged`, `halted`, `held`, `stalled`, `capped-with-open-critical`, …
 - `certificationShape` — e.g. `full-panel-confirmed`, `audited-chain`, or `*-degraded` variants
-- `certification` — full block (`shape`, `fullPanel`, `independence`, optional `note`/`reason`)
+- `certification` — full block (`shape`, `fullPanel`, `independence`, `base` — `fetched` |
+  `degraded` | `not-checked`, optional `note`/`reason`)
 - `rounds` — per-round `kind`, `seatStatus`, `blockingCount`, `verifyResult`, `audits`, `auditProvenance` (`collection-manifest` when the round ran fix audits — the manifest-keyed provenance boundary, visible at vet), `fellOpen`, `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice`
 - `findings`, `decisions`, `seatMap`, `scriptRan`, `degraded` (disclosure list)
 - `skippedBlockers` — the dedicated skipped-blocking channel (`{id, title, severity, reason}` per owner-skipped judgment blocker; possibly empty). **Required** (possibly empty) so a receipt can never omit the channel — a converge over any skip is CLEAN EXCEPT FOR SKIPPED, never a plain success, and its certification `reason` leads with `clean-except-skipped: N blocker(s) skipped with citable reasons`.

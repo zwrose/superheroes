@@ -32,6 +32,7 @@ REASON_DIFF_UNREADABLE = "round-diff-unreadable"
 REASON_DIFF_EMPTY = "round-diff-empty"
 REASON_DIFF_MALFORMED = "round-diff-malformed"
 REASON_DIFF_BASE_MISMATCH = "round-diff-base-mismatch"
+REASON_DIFF_BASE_UNVERIFIABLE = "round-diff-base-unverifiable"
 REASON_REPO_ROOT_MISMATCH = "base-repo-root-mismatch"
 REASON_MODE_UNRECOGNIZED = "base-mode-unrecognized"
 
@@ -180,52 +181,161 @@ def check_round_diff(path):
 
 _DIFF_GIT_HEADER = re.compile(r"^diff --git a/(?P<a>.*) b/(?P<b>.*)$")
 _PATH_SAMPLE_CAP = 8
+_NUMSTAT_BRACE = re.compile(r"\{([^}]+)\}")
+
+
+def _global_line_counts(file_stats):
+    added = deleted = 0
+    for val in file_stats.values():
+        if val is None:
+            continue
+        a, d = val
+        added += a
+        deleted += d
+    return added, deleted
 
 
 def _artifact_diff_stats(diff_text):
-    """Line counts and b-side paths from a unified diff artifact."""
-    b_paths = set()
+    """Per-file line counts from a unified diff artifact (b-side paths).
+
+    Counts only inside hunk bodies (after ``@@``), classifying by the first character — the same
+    shape as ``delta_surface.parse_hunks``. File headers ``--- a/x`` / ``+++ b/x`` sit outside
+    hunks and are excluded structurally, not by ``+++``/``---`` prefix guessing on every line.
+
+    Split on ``\\n`` rather than ``splitlines()``: splitlines() also breaks on ``\\f``, ``\\x0b``,
+    ``\\x85``, and U+2028, which git treats as ordinary in-line bytes; a fragment beginning with
+    ``+``/``-`` would then double-count.
+
+    Returns ``(file_stats, headers_parsed, global_added, global_deleted)``. Global totals count
+    every in-hunk ``+``/``-`` even when a ``diff --git`` header could not be parsed (quoted paths),
+    so ``line-counts-only`` fallback still compares totals.
+    """
+    file_stats = {}
     headers_parsed = True
-    added = 0
-    deleted = 0
-    for line in diff_text.splitlines():
+    current_b = None
+    cur_added = 0
+    cur_deleted = 0
+    global_added = 0
+    global_deleted = 0
+    in_hunk = False
+
+    def _flush_file():
+        nonlocal cur_added, cur_deleted
+        if current_b is None:
+            cur_added = cur_deleted = 0
+            return
+        if current_b in file_stats and file_stats[current_b] is None:
+            cur_added = cur_deleted = 0
+            return
+        prev = file_stats.get(current_b, (0, 0))
+        file_stats[current_b] = (prev[0] + cur_added, prev[1] + cur_deleted)
+        cur_added = cur_deleted = 0
+
+    for line in (diff_text or "").split("\n"):
         if line.startswith("diff --git "):
+            _flush_file()
+            in_hunk = False
             m = _DIFF_GIT_HEADER.match(line)
             if m:
-                b_paths.add(m.group("b"))
+                current_b = m.group("b")
             else:
                 headers_parsed = False
-        elif line.startswith("+") and not line.startswith("+++"):
-            added += 1
-        elif line.startswith("-") and not line.startswith("---"):
-            deleted += 1
-    return b_paths, added, deleted, headers_parsed
+                current_b = None
+            continue
+        if line.startswith("@@"):
+            in_hunk = True
+            continue
+        if line.startswith("Binary files ") or line.startswith("GIT binary patch"):
+            _flush_file()
+            if current_b is not None:
+                file_stats[current_b] = None
+            in_hunk = False
+            continue
+        if in_hunk and line:
+            kind = line[0]
+            if kind == "+":
+                global_added += 1
+                if current_b is not None:
+                    cur_added += 1
+            elif kind == "-":
+                global_deleted += 1
+                if current_b is not None:
+                    cur_deleted += 1
+            elif kind == "\\":
+                pass
+    _flush_file()
+    return file_stats, headers_parsed, global_added, global_deleted
 
 
-def _expected_diff_stats(pin, repo_root, run):
-    """File set and line totals git would emit for pin...HEAD."""
-    name_out = run(repo_root, "diff", "--name-only", "-z", "%s...HEAD" % pin)
-    numstat_out = run(repo_root, "diff", "--numstat", "%s...HEAD" % pin)
-    if name_out is None or numstat_out is None:
+def _resolve_numstat_path(path_field):
+    """Map a ``--numstat`` path column to the new-side path, or None if unresolvable."""
+    if not path_field:
         return None
-    paths = {p for p in name_out.split("\0") if p}
-    exp_added = 0
-    exp_deleted = 0
+    if " => " in path_field:
+        return path_field.rsplit(" => ", 1)[-1].strip()
+    m = _NUMSTAT_BRACE.search(path_field)
+    if m:
+        inner = m.group(1)
+        if " => " not in inner:
+            return None
+        old, new = inner.split(" => ", 1)
+        return path_field[: m.start()] + new.strip() + path_field[m.end() :]
+    return path_field
+
+
+def _parse_numstat(numstat_out):
+    """Build per-file stats from ``git diff --numstat`` output.
+
+    Values are ``(added, deleted)`` tuples or ``None`` for binary rows (``-\\t-\\tpath``).
+    Returns ``(file_stats, per_file_ok)``; ``per_file_ok`` is False when any path could not be
+    resolved (caller falls back to global totals only).
+    """
+    file_stats = {}
+    per_file_ok = True
     for row in numstat_out.splitlines():
         if not row.strip():
             continue
         parts = row.split("\t")
         if len(parts) < 3:
             continue
-        a, d = parts[0], parts[1]
+        a, d, path_field = parts[0], parts[1], parts[2]
+        resolved = _resolve_numstat_path(path_field)
+        if resolved is None:
+            per_file_ok = False
+            continue
         if a == "-" or d == "-":
+            file_stats[resolved] = None
             continue
         try:
-            exp_added += int(a)
-            exp_deleted += int(d)
+            file_stats[resolved] = (int(a), int(d))
         except ValueError:
-            continue
-    return paths, exp_added, exp_deleted
+            per_file_ok = False
+    return file_stats, per_file_ok
+
+
+def _expected_diff_stats(pin, repo_root, run):
+    """Per-file stats git would emit for pin...HEAD (one ``--numstat`` subprocess)."""
+    numstat_out = run(repo_root, "diff", "--numstat", "%s...HEAD" % pin)
+    if numstat_out is None:
+        return None
+    return _parse_numstat(numstat_out)
+
+
+def _per_file_mismatch_detail(expected, actual):
+    sym = sorted(set(expected) ^ set(actual))
+    mismatched = []
+    for path in sorted(set(expected) | set(actual)):
+        if expected.get(path) != actual.get(path):
+            mismatched.append(path)
+    sample_paths = mismatched[:_PATH_SAMPLE_CAP]
+    bits = []
+    for path in sample_paths:
+        bits.append("%s exp=%r act=%r" % (path, expected.get(path), actual.get(path)))
+    extra = len(mismatched) - len(sample_paths)
+    tail = (" (+%d more)" % extra) if extra > 0 else ""
+    if sym and not bits:
+        bits = ["path set mismatch (sample): %s" % ", ".join(sym[:_PATH_SAMPLE_CAP])]
+    return "; ".join(bits) + tail
 
 
 def check_diff_binding(diff_text, pin, repo_root, run=None):
@@ -238,15 +348,16 @@ def check_diff_binding(diff_text, pin, repo_root, run=None):
     """
     if run is None:
         run = store_core.run_git
-    expected = _expected_diff_stats(pin, repo_root, run)
-    if expected is None:
+    parsed = _expected_diff_stats(pin, repo_root, run)
+    if parsed is None:
         return {
             "ok": False,
-            "reason": REASON_DIFF_BASE_MISMATCH,
+            "reason": REASON_DIFF_BASE_UNVERIFIABLE,
             "detail": "expected diff could not be recomputed from pin",
         }
-    exp_paths, exp_added, exp_deleted = expected
-    act_paths, act_added, act_deleted, headers_ok = _artifact_diff_stats(diff_text)
+    exp_stats, exp_per_file_ok = parsed
+    act_stats, headers_ok, act_added, act_deleted = _artifact_diff_stats(diff_text)
+    exp_added, exp_deleted = _global_line_counts(exp_stats)
     if act_added != exp_added or act_deleted != exp_deleted:
         return {
             "ok": False,
@@ -254,18 +365,15 @@ def check_diff_binding(diff_text, pin, repo_root, run=None):
             "detail": "artifact +%d/-%d vs pin +%d/-%d"
             % (act_added, act_deleted, exp_added, exp_deleted),
         }
+    per_file = headers_ok and exp_per_file_ok
     binding = "line-counts-only"
-    if headers_ok:
+    if per_file:
         binding = "file-set+line-counts"
-        if act_paths != exp_paths:
-            sym = sorted(act_paths ^ exp_paths)
-            sample = sym[:_PATH_SAMPLE_CAP]
-            extra = len(sym) - len(sample)
-            tail = (" (+%d more)" % extra) if extra > 0 else ""
+        if act_stats != exp_stats:
             return {
                 "ok": False,
                 "reason": REASON_DIFF_BASE_MISMATCH,
-                "detail": "path set mismatch (sample): %s%s" % (", ".join(sample), tail),
+                "detail": _per_file_mismatch_detail(exp_stats, act_stats),
             }
     return {"ok": True, "binding": binding}
 
