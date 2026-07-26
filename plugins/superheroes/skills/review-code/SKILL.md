@@ -285,7 +285,7 @@ The read-only paths run a single pass and compute the same local diff into `roun
 Then write `meta.json` in both modes:
 
 ```bash
-FOCUS_ARG=$(printf '%s' "${FOCUS_JSON:-null}" | jq -c . 2>/dev/null) || FOCUS_ARG=$(jq -Rn --arg s "${FOCUS_JSON:-}" '$s')   # free-form --focus notes become a JSON string rather than failing the write
+FOCUS_ARG=$(printf '%s' "${FOCUS_JSON:-}" | jq -ce 'if type == "object" or type == "array" then . else empty end' 2>/dev/null); [ -n "$FOCUS_ARG" ] || FOCUS_ARG=$(jq -Rn --arg s "${FOCUS_JSON:-}" '$s')   # only a single structured JSON document rides through as JSON; everything else (free text, a bare scalar, a multi-document stream) becomes a JSON string, so --focus can never fail the write
 PR_ARG=$(printf '%s' "${PR_NUMBER:-null}" | jq -c 'if type == "number" then . else null end' 2>/dev/null) || PR_ARG=null
 jq -n --arg mode "$MODE" --arg path "$REVIEW_PATH" --arg repo "$REPO" --arg branch "$BRANCH" \
   --arg headSha "$HEAD_SHA" --arg baseRef "$BASE_REF" --arg baseBranch "$BASE_BRANCH" \
@@ -294,7 +294,7 @@ jq -n --arg mode "$MODE" --arg path "$REVIEW_PATH" --arg repo "$REPO" --arg bran
   '{mode:$mode,path:$path,pr:$pr,repo:$repo,branch:$branch,headSha:$headSha,baseRef:$baseRef,baseBranch:$baseBranch,baseFetch:$baseFetch,sessionDir:$sessionDir,verify:$verify,focusNotes:$focusNotes}' \
   > "$SESSION_DIR/meta.json.tmp" \
   && mv "$SESSION_DIR/meta.json.tmp" "$SESSION_DIR/meta.json" \
-  || { echo "review-code: could not write meta.json — halting rather than continuing without the session record (#637)" >&2; exit 1; }
+  || { rm -f "$SESSION_DIR/meta.json.tmp"; echo "review-code: could not write meta.json — halting rather than continuing without the session record (#637)" >&2; exit 1; }
 ```
 
 `REVIEW_PATH` is `loop` (default), `review-only`, or `post`, decided from the flags at invocation. It is written to `meta.json` so a cold-resumed orchestrator (after compaction) knows which top-level flow to continue. The `verify` field records the verify command string, or `"unverified"` / `"review-only"`, so a cold-resumed orchestrator recovers the verify story.
