@@ -17,6 +17,7 @@ if _LIB_DIR not in sys.path:
 
 import dispatch_guard  # noqa: E402
 import engine_adapter  # noqa: E402
+import engine_pref  # noqa: E402
 import model_registry  # noqa: E402
 import seat_map  # noqa: E402
 
@@ -507,7 +508,27 @@ def _leg_seat_map(failures, checked):
                         _fail(failures, w, "dispatch_token is None")
 
 
-def run():
+def _leg_configured(config, failures, checked):
+    prefs = config.get("prefs") if isinstance(config, dict) else {}
+    tiers = config.get("tiers") if isinstance(config, dict) else {}
+    try:
+        violations = engine_pref.configured_dispatch_violations(prefs, tiers)
+    except Exception as exc:
+        _fail(failures, "configured-dispatch", "configured_dispatch_violations raised: %s" % exc)
+        return
+    for v in violations:
+        checked[0] += 1
+        role = v.get("role", "?")
+        engine = v.get("engine", "?")
+        reason = v.get("reason", "?")
+        _fail(
+            failures,
+            "configured %s/%s" % (role, engine),
+            reason,
+        )
+
+
+def run(config=None):
     failures = []
     checked = [0]
     try:
@@ -515,6 +536,8 @@ def run():
         _leg_engine_adapter(failures, checked)
         _leg_cli(failures, checked)
         _leg_seat_map(failures, checked)
+        if config is not None:
+            _leg_configured(config, failures, checked)
     except Exception as exc:
         _fail(failures, "run()", "top-level: %s: %s" % (type(exc).__name__, exc))
     n_checked = checked[0]
@@ -536,8 +559,8 @@ def _format_probe_detail(result):
     return "; ".join(parts)
 
 
-def probe_result():
-    result = run()
+def probe_result(config=None):
+    result = run(config)
     ok = result["ok"] and result["checked"] > 0
     return {
         "tool": "dispatch-vocab",

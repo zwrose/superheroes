@@ -289,7 +289,7 @@ def test_cli_run_prints_json_with_expected_keys(monkeypatch, capsys):
     monkeypatch.setattr(
         dispatch_selftest,
         "probe_result",
-        lambda: {"tool": "dispatch-vocab", "ok": True, "detail": "ok (1 checks)"},
+        lambda config=None: {"tool": "dispatch-vocab", "ok": True, "detail": "ok (1 checks)"},
     )
 
     rc = pp.main(["preflight_probe.py", "run", "--engine", "codex"])
@@ -318,7 +318,7 @@ def test_cli_run_without_engine_derives_configured_engines(tmp_path, monkeypatch
     monkeypatch.setattr(
         dispatch_selftest,
         "probe_result",
-        lambda: {"tool": "dispatch-vocab", "ok": True, "detail": "ok (1 checks)"},
+        lambda config=None: {"tool": "dispatch-vocab", "ok": True, "detail": "ok (1 checks)"},
     )
     monkeypatch.setattr(pp.core_md, "read", lambda *a, **k: {
         "enginePreferences": {"implementation": "cursor", "briefCheck": "claude"}})
@@ -341,7 +341,7 @@ def test_cli_run_without_engine_all_claude_probes_none(monkeypatch, capsys):
     monkeypatch.setattr(
         dispatch_selftest,
         "probe_result",
-        lambda: {"tool": "dispatch-vocab", "ok": True, "detail": "ok (1 checks)"},
+        lambda config=None: {"tool": "dispatch-vocab", "ok": True, "detail": "ok (1 checks)"},
     )
     monkeypatch.setattr(pp.core_md, "read", lambda *a, **k: {
         "enginePreferences": {"briefCheck": "claude"}})
@@ -361,7 +361,7 @@ def test_dispatch_vocab_probe_blocks_aggregate_on_failure(monkeypatch):
     monkeypatch.setattr(
         dispatch_selftest,
         "probe_result",
-        lambda: {"tool": "dispatch-vocab", "ok": False, "detail": "broken"},
+        lambda config=None: {"tool": "dispatch-vocab", "ok": False, "detail": "broken"},
     )
     probes = [pp.gh_auth_probe(run=fake0), dispatch_selftest.probe_result()]
     agg = pp.aggregate(probes)
@@ -379,7 +379,7 @@ def test_preflight_run_includes_dispatch_vocab_probe(monkeypatch, capsys):
     monkeypatch.setattr(
         dispatch_selftest,
         "probe_result",
-        lambda: {"tool": "dispatch-vocab", "ok": True, "detail": "ok (1 checks)"},
+        lambda config=None: {"tool": "dispatch-vocab", "ok": True, "detail": "ok (1 checks)"},
     )
 
     rc = pp.main(["preflight_probe.py", "run", "--engine", "codex"])

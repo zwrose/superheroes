@@ -33,7 +33,7 @@ def test_probe_result_shape_when_ok():
 
 
 def test_probe_result_not_ok_when_checked_zero(monkeypatch):
-    monkeypatch.setattr(DST, "run", lambda: {"ok": True, "checked": 0, "failures": []})
+    monkeypatch.setattr(DST, "run", lambda config=None: {"ok": True, "checked": 0, "failures": []})
     pr = DST.probe_result()
     assert pr["ok"] is False
     assert "zero checks" in pr["detail"]
@@ -56,7 +56,7 @@ def test_main_run_exits_one_on_failure(monkeypatch):
     monkeypatch.setattr(
         DST,
         "run",
-        lambda: {"ok": False, "checked": 1, "failures": [{"where": "t", "detail": "d"}]},
+        lambda config=None: {"ok": False, "checked": 1, "failures": [{"where": "t", "detail": "d"}]},
     )
     rc = DST.main(["run"])
     assert rc == 1
@@ -66,11 +66,34 @@ def test_run_never_raises():
     DST.run()
 
 
+def test_run_with_config_violations_fails_leg_five():
+    config = {
+        "prefs": {"implementation": "codex"},
+        "tiers": {"implementer": "fable"},
+    }
+    result = DST.run(config)
+    assert result["ok"] is False
+    assert any("configured implementer/codex" in f["where"] for f in result["failures"])
+    assert any(
+        f["detail"] == "fable-on-external-engine"
+        for f in result["failures"]
+    )
+
+
+def test_run_with_clean_config_still_ok():
+    config = {
+        "prefs": {"implementation": "claude"},
+        "tiers": {"implementer": "sonnet"},
+    }
+    result = DST.run(config)
+    assert result["ok"] is True
+
+
 def test_format_probe_detail_caps_failures(monkeypatch):
     monkeypatch.setattr(
         DST,
         "run",
-        lambda: {
+        lambda config=None: {
             "ok": False,
             "checked": 1,
             "failures": [{"where": "w%d" % i, "detail": "d"} for i in range(10)],

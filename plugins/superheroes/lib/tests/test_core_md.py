@@ -179,6 +179,30 @@ def test_write_new_is_written(tmp_path):
     assert got["verifyCommand"] == "npm test" and got["status"] == "confirmed"
 
 
+def test_write_refused_on_fable_external_engine_at_create(tmp_path, monkeypatch):
+    import model_tier_overrides as mto
+
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    monkeypatch.setattr(
+        mto,
+        "effective_tiers",
+        lambda profile_path: {"implementer": "fable", "reviewer": "sonnet"},
+    )
+    monkeypatch.setattr(mto, "resolve_profile_path", lambda cwd, root=None: "/fake/profile.md")
+    facts = {
+        "verifyCommand": "npm test",
+        "stackTags": ["node"],
+        "threatModel": "single-user",
+        "patterns": "",
+        "enginePreferences": {"implementation": "codex"},
+    }
+    res = CM.write(repo, facts, "confirmed", root=store, now="2026-06-26")
+    assert res["action"] == "refused"
+    assert res["violations"][0]["reason"] == "fable-on-external-engine"
+    assert CM.read(repo, root=store) is None
+
+
 def test_write_reuses_when_detected_equal_or_absent(tmp_path):
     repo = str(tmp_path)
     store = str(tmp_path / "store")

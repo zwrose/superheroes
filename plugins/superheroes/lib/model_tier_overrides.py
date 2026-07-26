@@ -145,6 +145,30 @@ def replace_model_tiers_block(text, overrides):
     return "".join(lines[:start]) + block + "".join(lines[end:])
 
 
+def _candidate_effective_tiers(profile_path, set_overrides=None, clear_roles=None):
+    import model_tier
+
+    current = load_overrides(profile_path)
+    for role in clear_roles or []:
+        role = _LEGACY_ROLE_ALIAS.get(role, role)
+        if role in KNOWN_ROLES:
+            current.pop(role, None)
+    normalized, _warnings = _normalize_updates(set_overrides or {})
+    current.update(normalized)
+    return {role: model_tier.resolve_model(role, current) for role in KNOWN_ROLES}
+
+
+def _read_engine_preferences_for_gate():
+    try:
+        import core_md
+
+        rec = core_md.read(os.getcwd())
+        prefs = (rec or {}).get("enginePreferences")
+        return prefs if isinstance(prefs, dict) else {}
+    except Exception:
+        return {}
+
+
 def update_overrides(profile_path, set_overrides=None, clear_roles=None):
     """Mutate the resolved profile's model-tier block and return the new effective state.
 
@@ -226,7 +250,20 @@ def main(argv):
                 continue
             role, model = item.split("=", 1)
             updates[role.strip()] = model.strip()
-        result = update_overrides(profile, updates, [r.strip() for r in args.clear])
+        clear_roles = [r.strip() for r in args.clear]
+        import engine_pref
+
+        candidate_tiers = _candidate_effective_tiers(profile, updates, clear_roles)
+        violations = engine_pref.configured_dispatch_violations(
+            _read_engine_preferences_for_gate(), candidate_tiers)
+        if violations:
+            sys.stdout.write(json.dumps({
+                "ok": False,
+                "reason": "fable-on-external-engine",
+                "violations": violations,
+            }) + "\n")
+            return 1
+        result = update_overrides(profile, updates, clear_roles)
         result["warnings"] = warnings + result["warnings"]
         sys.stdout.write(json.dumps(result) + "\n")
         return 0

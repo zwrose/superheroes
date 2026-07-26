@@ -269,3 +269,41 @@ def test_resolve_profile_path_threads_root_to_calibration_resolve(monkeypatch):
     monkeypatch.setattr(calibration_resolve, "resolve_profile_path", _fake)
     assert MTO.resolve_profile_path("/proj", root="/store") == "/resolved/layer.md"
     assert captured == {"cwd": "/proj", "root": "/store"}
+
+
+def test_write_cli_refuses_fable_tier_on_external_engine(tmp_path, monkeypatch, capsys):
+    import core_md
+
+    p = tmp_path / "profile.md"
+    p.write_text("## Model tiers\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        core_md,
+        "read",
+        lambda cwd, root=None: {"enginePreferences": {"implementation": "codex"}},
+    )
+    rc = MTO.main(["model_tier_overrides.py", "write", "--profile", str(p), "--set", "implementer=fable"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert out["ok"] is False
+    assert out["reason"] == "fable-on-external-engine"
+    assert out["violations"][0]["reason"] == "fable-on-external-engine"
+    assert MTO.load_overrides(str(p)) == {}
+
+
+def test_write_cli_clear_removes_fable_violation(tmp_path, monkeypatch, capsys):
+    import core_md
+
+    p = tmp_path / "profile.md"
+    p.write_text("## Model tiers\nimplementer: fable\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        core_md,
+        "read",
+        lambda cwd, root=None: {"enginePreferences": {"implementation": "codex"}},
+    )
+    rc = MTO.main(["model_tier_overrides.py", "write", "--profile", str(p), "--clear", "implementer"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert out["ok"] is True
+    assert "implementer" not in MTO.load_overrides(str(p))

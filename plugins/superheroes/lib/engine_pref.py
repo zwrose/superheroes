@@ -94,6 +94,8 @@ def _effective_model(role, engine, pin_role, tier, prefs):
         if model_registry.matrix_config(role, "codex") is None:
             return _unsupported_model_marker("codex", role)
         m = resolve_engine_model("codex", pin_role, tier, prefs)
+        # Unreachable from valid configuration once configured_dispatch_violations gates fable×external;
+        # kept for callers that bypass configuration (hand-rolled dispatch, direct model threading).
         return m if m is not None else _unsupported_model_marker("codex", tier)
     if engine == "cursor":
         # Seat column only: registry-sanctioned cursor dispatch token for the role, or a no-seat
@@ -105,6 +107,43 @@ def _effective_model(role, engine, pin_role, tier, prefs):
     # Unreachable from dispatch_calibration_rows for non-claude engines: resolve_engine only
     # returns members of ENGINES (see test_resolve_engine_always_returns_member_of_engines).
     return tier
+
+
+def configured_dispatch_violations(prefs, tiers):
+    """Config-time refusal for fable tier on an external engine (codex/cursor).
+
+    Returns a list of violation dicts; empty means the configuration is fine. Pure; never touches
+    disk; never raises; non-dict ``prefs``/``tiers`` are treated as ``{}``. Roles that can never be
+    dispatched on an external engine (no codex and no cursor matrix seat) are skipped."""
+    prefs = prefs if isinstance(prefs, dict) else {}
+    tiers = tiers if isinstance(tiers, dict) else {}
+    violations = []
+    for role in sorted(model_registry.known_roles()):
+        if (
+            model_registry.matrix_config(role, "codex") is None
+            and model_registry.matrix_config(role, "cursor") is None
+        ):
+            continue
+        engine_key = model_registry.engine_pref_key(role)
+        if engine_key is None:
+            continue
+        role_kind = model_registry.engine_pref_role_kind(role)
+        if role_kind is None:
+            continue
+        engine = resolve_engine(role_kind, prefs)
+        if engine not in ("codex", "cursor"):
+            continue
+        tier = tiers.get(role)
+        if not isinstance(tier, str) or tier != "fable":
+            continue
+        violations.append({
+            "role": role,
+            "engineKey": engine_key,
+            "engine": engine,
+            "tier": "fable",
+            "reason": "fable-on-external-engine",
+        })
+    return violations
 
 
 def dispatch_calibration_rows(prefs, tiers):

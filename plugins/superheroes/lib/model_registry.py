@@ -440,6 +440,19 @@ def engine_pref_key(role: str) -> str | None:
     return meta["engine_pref_key"] if meta else None
 
 
+def engine_pref_role_kind(role: str) -> str | None:
+    """``engine_pref.resolve_engine`` role_kind for a model-tier dispatch role."""
+    meta = _ROLE_META.get(role)
+    if not meta:
+        return None
+    codex_kind = meta.get("codex_kind")
+    if isinstance(codex_kind, str) and codex_kind:
+        return codex_kind
+    if meta.get("engine_pref_key") == "reviewer":
+        return "review"
+    return None
+
+
 def cursor_dispatch_id(role: str) -> str | None:
     cell = matrix_config(role, "cursor")
     if cell is None:

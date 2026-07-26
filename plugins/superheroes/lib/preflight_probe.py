@@ -141,6 +141,19 @@ def dispatch_calibration(cwd=None, root=None, prefs=None, tiers=None):
         return []
 
 
+def _dispatch_selftest_config(cwd=None, root=None):
+    """prefs/tiers bundle for dispatch_selftest leg 5 — mirrors dispatch_calibration reads."""
+    try:
+        raw = core_md.read(cwd, root)
+        prefs = (raw or {}).get("enginePreferences")
+        prefs = prefs if isinstance(prefs, dict) else {}
+        tiers = model_tier_overrides.effective_tiers(
+            model_tier_overrides.resolve_profile_path(cwd, root))
+        return {"prefs": prefs, "tiers": tiers}
+    except Exception:
+        return {"prefs": {}, "tiers": {}}
+
+
 _BROWSER_NOTE = ("browser live-exercise is a host action — run it per reference/preflight.md "
                   "and fold the result in with browser_probe_result()")
 
@@ -311,7 +324,10 @@ def main(argv):
     if args.cmd == "run":
         import dispatch_selftest  # noqa: E402 — lazy: breaks seat_map → preflight_probe → dispatch_selftest → seat_map
 
-        probes = [gh_auth_probe(), dispatch_selftest.probe_result()]
+        probes = [
+            gh_auth_probe(),
+            dispatch_selftest.probe_result(config=_dispatch_selftest_config(args.cwd)),
+        ]
         if args.engine:
             cross_vendor_engines = [args.engine]
         else:

@@ -207,6 +207,7 @@ def write(cwd, facts, status, *, root=None, now=None):
       - existing, all detected facts equal/absent → {action: "reused"}
       - existing, a detected fact DIFFERS         → {action: "proposed"} (NOT applied;
                                                      the differing fields are in `proposals`)
+      - fable tier on external engine with current tiers → {action: "refused"} (NOT applied)
       - lock contended / store unwritable         → {action: "deferred"} (UFR-4)
     Reuse-not-clobber (FR-6) is enforced HERE under the same lock that serializes a concurrent
     second-hero setup (FR-7). A `deferred` return drops a best-effort pending marker; a
@@ -225,6 +226,24 @@ def write(cwd, facts, status, *, root=None, now=None):
             if proposals:
                 return {"action": "proposed", "record": existing, "proposals": proposals}
             return {"action": "reused", "record": existing, "proposals": []}
+        try:
+            import engine_pref
+            import model_tier_overrides
+
+            incoming_prefs = facts.get("enginePreferences") if isinstance(facts, dict) else None
+            prefs = incoming_prefs if isinstance(incoming_prefs, dict) else {}
+            tiers = model_tier_overrides.effective_tiers(
+                model_tier_overrides.resolve_profile_path(cwd, root))
+            violations = engine_pref.configured_dispatch_violations(prefs, tiers)
+            if violations:
+                return {
+                    "action": "refused",
+                    "record": None,
+                    "proposals": [],
+                    "violations": violations,
+                }
+        except Exception:
+            pass
         created = facts.get("created") or stamp
         text = render_core(facts, status, created, stamp)
         try:
