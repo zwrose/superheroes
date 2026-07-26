@@ -28,6 +28,7 @@ if _LIB_DIR not in sys.path:
 import guardian_census  # noqa: E402
 import guardian_collect as gc  # noqa: E402
 import guardian_lens  # noqa: E402
+import guardian_tools as gt  # noqa: E402
 
 MIN_BLOCK_LINES = 5
 TOP_N = 25
@@ -206,6 +207,13 @@ def _validate_report(report):
     if not isinstance(dups, list):
         raise _ReportContractError(
             "jscpd report contract mismatch: missing list-valued 'duplicates' field")
+    stats = report.get("statistics")
+    total = stats.get("total") if isinstance(stats, dict) else None
+    sources = total.get("sources") if isinstance(total, dict) else None
+    if isinstance(sources, bool) or not isinstance(sources, int) or sources < 0:
+        raise _ReportContractError(
+            "jscpd report contract mismatch: missing non-negative int-valued "
+            "'statistics.total.sources' field")
 
 
 def _pairs_from_report(report):
@@ -619,7 +627,7 @@ class DuplicationLens:
         test_guardian_conformance._scenario_workspace / _lens_fixture_files).
 
         The census filters by ``os.path.isfile``; this file must exist on disk so it
-        survives the filter and becomes a jscpd operand. Its path must EXACTLY match the
+        survives the filter and becomes a jscpd config-file path entry. Its path must EXACTLY match the
         name the ``git`` payload below reports.
         """
         return {self._CONFORMANCE_FIXTURE_FILE: "print('conformance fixture')\n"}
@@ -643,11 +651,11 @@ class DuplicationLens:
           genuine quiet collection.
         """
         reported = json.dumps({
-            "statistics": {"total": {"clones": 3, "duplicatedLines": 42}},
+            "statistics": {"total": {"clones": 3, "duplicatedLines": 42, "sources": 1}},
             "duplicates": [],
         }) + "\nreport saved to /dev/stdout\n"
         clean = json.dumps({
-            "statistics": {"total": {"clones": 0, "duplicatedLines": 0}},
+            "statistics": {"total": {"clones": 0, "duplicatedLines": 0, "sources": 1}},
             "duplicates": [],
         }) + "\nreport saved to /dev/stdout\n"
         git_ls = self._CONFORMANCE_FIXTURE_FILE + "\0"
@@ -700,8 +708,8 @@ class DuplicationLens:
             # digest (pairs: {}) would make diff()'s _diff_pairs_raw mark EVERY prior pair
             # `resolved` (diff() only guards cur_digest is None), a false "all clones
             # fixed." not-collected returns digest None → cur_digest-is-None guard →
-            # baseline preserved. And we must NEVER spawn jscpd with no operands: it would
-            # default-scan cwd and re-open #564.
+            # baseline preserved. And we must NEVER spawn jscpd with an empty path list: it
+            # panics; omitting path makes jscpd cwd-scan and re-open #564.
             return {
                 "candidates": [],
                 "digest": None,
@@ -710,50 +718,54 @@ class DuplicationLens:
             }
 
         operands = sorted(tracked)
-        # ARG_MAX guard: the operand payload could push argv past the kernel limit on a
-        # huge repo. Degrade honestly (no silent cwd fallback, no truncation of the list).
-        # invoke absolutizes every operand before execve (prepends realpath(cwd) + a path
-        # sep), so measure the ABSOLUTIZED size — the repo-relative byte count undercounts
-        # the real argv and could pass a payload that then hits E2BIG. An absolutized
-        # operand is at most `realpath(cwd)/` + the relative path, so this is a safe upper
-        # bound.
-        operand_bytes = guardian_census.operand_payload_bytes(cwd, operands)
-        if operand_bytes > guardian_census.MAX_TRACKED_OPERAND_BYTES:
-            return {
-                "candidates": [],
-                "digest": None,
-                **gc.not_collected(
-                    "tracked-file operand payload is %d bytes across %d files, exceeding "
-                    "the %d-byte cap (ARG_MAX headroom) — cannot scan without risking a "
-                    "truncated argv" % (operand_bytes, len(operands),
-                                        guardian_census.MAX_TRACKED_OPERAND_BYTES)),
-            }
 
         # jscpd's json reporter writes a FILE, but run_tool captures stdout — aim the
         # reporter at /dev/stdout (via a symlink in a throwaway temp dir OUTSIDE the
-        # repo) and read the JSON object off stdout. The mkdtemp + symlink setup lives
-        # INSIDE the try so any failure there (F) converts to not-collected — collect()
-        # must never RAISE; the finally still cleans up whatever tmp dir was created.
+        # repo) and read the JSON object off stdout. The tracked-file census is written
+        # to a config file (not argv) so large repos are not capped by ARG_MAX. The
+        # mkdtemp + symlink + config write lives INSIDE the try so any failure there (F)
+        # converts to not-collected — collect() must never RAISE; the finally still cleans
+        # up whatever tmp dir was created.
         tmp = None
         try:
             tmp = tempfile.mkdtemp(prefix="guardian-jscpd-")
+            tmp_real = os.path.realpath(tmp)
+            repo_real = os.path.realpath(cwd)
+            if gt.path_is_under_repo(tmp, cwd):
+                return {
+                    "candidates": [],
+                    "digest": None,
+                    **gc.not_collected(
+                        "jscpd temp dir %s resolves inside repo %s — refusing to write "
+                        "scanner input under the scan surface" % (tmp_real, repo_real)),
+                }
+            try:
+                abs_paths = gt.absolute_repo_operands(cwd, operands)
+            except ValueError as exc:
+                return {
+                    "candidates": [],
+                    "digest": None,
+                    **gc.not_collected(
+                        "tracked-file operand escapes repo: %s" % exc),
+                }
             os.symlink("/dev/stdout", os.path.join(tmp, "jscpd-report.json"))
-            # No trailing scan target — the tracked-file census is passed as ``targets``,
-            # which invoke absolutizes + validates under-repo and separates with ``--``.
-            # --absolute (-a) is REQUIRED with file operands: jscpd 5.0.12 emits an EMPTY
-            # firstFile/secondFile `name` for operand scans (only a DIRECTORY scan
-            # populates the relative name), so without it every pair reads as a malformed
-            # entry and the lens degrades to not-collected. With --absolute the report
-            # carries the absolute path, which the existing _repo_rel(cwd, path) normalizes
-            # back to a repo-relative path.
+            config_path = os.path.join(tmp, "jscpd-input.json")
+            with open(config_path, "w", encoding="utf-8") as cfg_fh:
+                json.dump({"path": abs_paths}, cfg_fh)
+            # --absolute (-a) is REQUIRED: jscpd 5.0.12 emits an EMPTY
+            # firstFile/secondFile `name` for file scans without it (only a DIRECTORY scan
+            # populates the relative name), so without --absolute every pair reads as a
+            # malformed entry and the lens degrades to not-collected. With --absolute the
+            # report carries the absolute path, which the existing _repo_rel(cwd, path)
+            # normalizes back to a repo-relative path.
             argv = [
-                "jscpd", "-o", tmp, "--no-tips", "--absolute",
+                "jscpd", "-c", config_path, "-o", tmp, "--no-tips", "--absolute",
                 "--reporters", "json",
                 "--mode", "strict",
                 "--min-lines", str(MIN_BLOCK_LINES),
                 "--min-tokens", "50",
             ]
-            res = gc.run_tool(argv, ctx=ctx, cwd=cwd, ok_exits=(0,), targets=operands)
+            res = gc.run_tool(argv, ctx=ctx, cwd=cwd, ok_exits=(0,))
         except OSError as exc:
             return {
                 "candidates": [],
@@ -775,6 +787,34 @@ class DuplicationLens:
             _validate_report(report)
         except _ReportContractError as exc:
             return {"candidates": [], "digest": None, **gc.not_collected(str(exc))}
+
+        scanned = report["statistics"]["total"]["sources"]
+        tracked_count = len(tracked)
+        prior_pairs = {}
+        if isinstance(self._prev_digest, dict) and isinstance(
+                self._prev_digest.get("pairs"), dict):
+            prior_pairs = self._prev_digest["pairs"]
+        # Zero-scan and over-scan tripwires are stateless (current sweep only). With no prior
+        # pairs, honest sources==0 on a first sweep still collects so scan metadata can
+        # baseline; with prior pairs, zero-scan must not erase them via an empty digest.
+        if scanned > tracked_count:
+            return {
+                "candidates": [],
+                "digest": None,
+                **gc.not_collected(
+                    "jscpd scanned %d files but only %d were in the tracked-file "
+                    "config path list — the census file list was not honored"
+                    % (scanned, tracked_count)),
+            }
+        if prior_pairs and scanned == 0 and tracked_count > 0:
+            return {
+                "candidates": [],
+                "digest": None,
+                **gc.not_collected(
+                    "jscpd scanned 0 of %d tracked files — file list was not consumed "
+                    "or no tracked file is a format jscpd recognizes" % tracked_count),
+            }
+        scan_ratio = scanned / tracked_count
 
         # Honesty gate: jscpd's summary reports clones but the duplicates detail array
         # is empty — we cannot normalize anything and must NOT read as a clean baseline.
@@ -822,6 +862,10 @@ class DuplicationLens:
             "toolVersions": {"jscpd": None},
             "pairs": digest_pairs,
             "surfaceIds": surface_ids,
+            "filesScanned": scanned,
+            # Recorded for telemetry only — never compared against a prior digest; a future
+            # under-scan guard needs this history, but no code may branch on it.
+            "scanRatio": scan_ratio,
         }
         dup_pct = _reported_duplication_percent(report)
         if dup_pct is not None:
@@ -855,6 +899,8 @@ class DuplicationLens:
             "repoConfigPresent": repo_config_present,
             "censusSource": "git ls-files",
             "trackedFilesCensused": len(tracked),
+            "jscpdInputMode": "config-file",
+            "jscpdFilesScanned": scanned,
         }
         return {
             "candidates": capped,

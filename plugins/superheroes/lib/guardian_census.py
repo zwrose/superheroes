@@ -22,14 +22,75 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import guardian_collect as gc  # noqa: E402
+import guardian_tools as gt  # noqa: E402
 
-# A lens handing the tracked-file census as explicit operands to a content scanner could
-# push argv past the kernel's ARG_MAX on a very large repo. macOS ARG_MAX is 262144 bytes
-# and the sanitized child env consumes a share of that; cap the operand payload well under
-# it. The bound is measured on the ABSOLUTIZED payload (invoke prepends the repo realpath
-# + a path separator to every operand before execve), not the repo-relative bytes, so the
-# guard reflects the real argv the kernel sees.
-MAX_TRACKED_OPERAND_BYTES = 100_000
+# Operand argv budget is derived from os.sysconf("SC_ARG_MAX") minus the sanitized child
+# env, fixed argv flags, and kernel argv/envp overhead — not a hardcoded guess. Compare
+# against operand_payload_bytes, which measures the ABSOLUTIZED payload (invoke prepends
+# the repo realpath + a path separator to every operand before execve).
+ARGV_HEADROOM_FRACTION = 0.5  # use only half of what remains after measured subtractions
+ARGV_FIXED_RESERVE_BYTES = 4096  # argv/envp pointer arrays, argv[0], and the "--" separator
+FALLBACK_ARG_MAX_BYTES = 262_144  # conservative floor when SC_ARG_MAX cannot be read
+
+
+def platform_arg_max_bytes():
+    """Read SC_ARG_MAX; never raises."""
+    try:
+        raw = os.sysconf("SC_ARG_MAX")
+    except (ValueError, OSError, AttributeError):
+        return FALLBACK_ARG_MAX_BYTES
+    if not isinstance(raw, int) or raw <= 0:
+        return FALLBACK_ARG_MAX_BYTES
+    return raw
+
+
+def _child_env_bytes(repo):
+    """Byte size of the sanitized child env for execve; never raises.
+
+    Returns ``(bytes, measurement_failed)`` — when ``measurement_failed`` is true the
+    byte count is ``platform_arg_max_bytes()`` so the operand budget collapses to zero
+    without mis-attributing the failure to operand size.
+    """
+    try:
+        env = gt.sanitized_env(None, repo=repo)
+    except Exception:
+        return platform_arg_max_bytes(), True
+    return sum(
+        len(k.encode("utf-8")) + len(str(v).encode("utf-8")) + 2
+        for k, v in env.items()
+    ), False
+
+
+def _argv_operand_budget(repo, fixed_argv):
+    """Bytes of operand payload one execve can carry for this repo.
+
+    Subtracts the sanitized child env and ``fixed_argv`` from the platform ARG_MAX, then
+    applies headroom. On a constrained platform or with a large environment the budget
+    can be smaller than legacy hardcoded caps — that reflects the real limit.
+
+    ``fixed_argv`` must be the actual argv prefix passed to execve (before ``--`` and
+    operands); callers must not omit real flags by passing an empty tuple.
+
+    Never raises; a return of ``0`` is legitimate and callers must degrade.
+
+    ``argv_operand_budget_detail`` also reports whether child-env measurement failed.
+    """
+    platform_max = platform_arg_max_bytes()
+    env_bytes, env_failed = _child_env_bytes(repo)
+    fixed_bytes = sum(len(a.encode("utf-8")) + 1 for a in fixed_argv)
+    usable = platform_max - env_bytes - fixed_bytes - ARGV_FIXED_RESERVE_BYTES
+    return max(0, int(usable * ARGV_HEADROOM_FRACTION)), env_failed
+
+
+def argv_operand_budget_bytes(repo, fixed_argv):
+    """Operand payload budget in bytes; see ``_argv_operand_budget``."""
+    budget, _env_failed = _argv_operand_budget(repo, fixed_argv)
+    return budget
+
+
+def argv_operand_budget_detail(repo, fixed_argv):
+    """``(budget_bytes, child_env_measurement_failed)`` — never raises."""
+    return _argv_operand_budget(repo, fixed_argv)
 
 
 def _git(ctx, cwd, args, timeout=gc.DEFAULT_TIMEOUT):

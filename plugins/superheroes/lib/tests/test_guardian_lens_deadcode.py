@@ -1121,7 +1121,8 @@ def test_git_census_failure_degrades_python_not_collected(tmp_path):
 
 
 def test_arg_max_guard_degrades_never_scans_repo_dir(tmp_path, monkeypatch):
-    monkeypatch.setattr(guardian_census, "MAX_TRACKED_OPERAND_BYTES", 5)
+    monkeypatch.setattr(
+        guardian_census, "argv_operand_budget_detail", lambda repo, fa: (5, False))
     repo = _py_repo(tmp_path, {"a.py": "x\n", "b.py": "y\n"})
     run = FakeRun([("vulture", (0, "", ""))], tracked=["a.py", "b.py"])
     out = gld.LENS.collect(_ctx(repo, run))
@@ -1129,6 +1130,50 @@ def test_arg_max_guard_degrades_never_scans_repo_dir(tmp_path, monkeypatch):
     assert out["digest"] is None
     assert "across 2 files" in (out["reason"] or "")
     assert not any(c[0] and c[0][0] == "vulture" for c in run.calls)
+
+
+def test_arg_max_guard_reason_names_operand_budget_and_counts(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        guardian_census, "argv_operand_budget_detail", lambda repo, fa: (1, False))
+    repo = _py_repo(tmp_path, {"a.py": "x\n"})
+    run = FakeRun([("vulture", (0, "", ""))], tracked=["a.py"])
+    out = gld.LENS.collect(_ctx(repo, run))
+    reason = out["reason"] or ""
+    assert out["status"] == "not-collected"
+    assert "operand payload is" in reason
+    assert "across 1 files" in reason
+    assert "derived 1-byte operand budget" in reason
+    assert "platform ARG_MAX %d" % guardian_census.platform_arg_max_bytes() in reason
+
+
+def test_arg_max_guard_child_env_measurement_failed_reason(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        guardian_census, "argv_operand_budget_detail", lambda repo, fa: (0, True))
+    repo = _py_repo(tmp_path, {"a.py": "x\n"})
+    run = FakeRun([("vulture", (0, "", ""))], tracked=["a.py"])
+    out = gld.LENS.collect(_ctx(repo, run))
+    reason = out["reason"] or ""
+    assert out["status"] == "not-collected"
+    assert out["digest"] is None
+    assert "child-env measurement failed" in reason
+    assert "operand payload is" not in reason
+    assert not any(c[0] and c[0][0] == "vulture" for c in run.calls)
+
+
+def test_arg_max_guard_passes_real_vulture_argv_to_budget(tmp_path, monkeypatch):
+    captured = []
+
+    def capture_budget(repo, fixed_argv):
+        captured.append(list(fixed_argv))
+        return 0, False
+
+    monkeypatch.setattr(guardian_census, "argv_operand_budget_detail", capture_budget)
+    repo = _py_repo(tmp_path, {"a.py": "x\n"})
+    run = FakeRun([("vulture", (0, "", ""))], tracked=["a.py"])
+    gld.LENS.collect(_ctx(repo, run))
+    assert len(captured) == 1
+    expected_argv, _ = gld._vulture_argv()
+    assert captured[0] == expected_argv
 
 
 def test_vulture_exit3_all_untracked_hits_collected_not_contradiction(tmp_path):
