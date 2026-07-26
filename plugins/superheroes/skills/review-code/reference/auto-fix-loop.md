@@ -454,7 +454,15 @@ carries `{vendor, model, effort, tier, family, source}`:
   first-party models are ONE family**: composer and grok both carry the `xai` family (#651,
   owner-ratified 2026-07-26). A `cursor` review seat is therefore NOT independent of a
   cursor/composer implementer — a composer-made diff stamps `authorFamily = xai`, so the seat map
-  excludes cursor from the grounding seat and from every strong-tier and critical seat, and such a
-  panel buys its independence from anthropic/openai instead. The `verify()` result (the #547c
-  maker-family-vs-seat check) and every degradation / unhonorable-pin fallback are recorded in the
+  excludes the maker family from **every** panel seat — all five lens seats
+  (`architecture-reviewer`, `code-reviewer`, `security-reviewer`, `test-reviewer`,
+  `premortem-reviewer`) **and** the `grounding-seat` (#670, owner-ratified 2026-07-26), not
+  merely from strong-tier, critical, and grounding. Where an alternative family is live, the maker
+  family never seats and such a panel buys its independence from anthropic/openai instead; where
+  none is live, the seat still fills with the maker family and the map records a disclosed
+  `same-family` degradation, which rides the certification shape (`-degraded`) alongside
+  `independenceDegraded` and `baseDegraded`. The `verify()` result (the #547c
+  maker-family-vs-seat check) now separates a **violation** (maker family seated when an
+  alternative was reachable) from that unavoidable **degradation**; unusable liveness evidence
+  fails closed to violation. Every degradation / unhonorable-pin fallback is recorded in the
   seat-map receipt, so a downgraded composition is visible at vet time, never silent.

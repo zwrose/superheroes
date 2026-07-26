@@ -2087,6 +2087,70 @@ def test_base_degraded_does_not_false_claim_independence(tmp_path, capsys):
     assert receipt["certification"]["base"] == "degraded"
 
 
+def _panel_seat_map_with_same_family(seat="code-reviewer"):
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seat_map["degradations"] = [{
+        "constraint": "same-family",
+        "seat": seat,
+        "reason": "seat %s seated the maker family claude — no alternative family is live" % seat,
+    }]
+    return seat_map
+
+
+def test_same_family_seat_map_degrades_cert_shape():
+    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
+    seat_map_clean = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    receipt_clean = RD.run_loop(_seams(io={"seatMap": seat_map_clean}), cfg)
+    assert receipt_clean["verdict"] == "converged"
+    assert "-degraded" not in receipt_clean["certificationShape"]
+    seat_map_deg = _panel_seat_map_with_same_family()
+    receipt_deg = RD.run_loop(_seams(io={"seatMap": seat_map_deg}), cfg)
+    assert receipt_deg["verdict"] == "converged"
+    assert receipt_deg["certificationShape"] == receipt_clean["certificationShape"] + "-degraded"
+    assert receipt_deg["certificationShape"].count("-degraded") == 1
+
+
+def test_same_family_disclosed_in_receipt_degraded_list():
+    state = RD.new_state(_cfg(leg="panel", vendors=["codex", "cursor"]))
+    state["seatMap"] = _panel_seat_map_with_same_family("security-reviewer")
+    state["terminal"] = "converged"
+    state["certification"] = {"shape": "full-panel-confirmed-degraded", "independence": "independent",
+                              "base": "not-checked"}
+    receipt = RD.build_receipt(state)
+    sf_lines = [d for d in receipt["degraded"] if d.startswith("panel independence:")]
+    assert len(sf_lines) == 1
+    assert "security-reviewer" in sf_lines[0]
+
+
+def test_same_family_malformed_seat_map_is_safe():
+    for sm in (None, {}, {"degradations": "not-a-list"},
+               {"degradations": [None, 42, {"constraint": "other"}]}):
+        state = {"seatMap": sm}
+        assert RD._same_family_degraded(state) is False
+        assert RD._same_family_seats(state) == []
+    state_missing_seat = {"seatMap": {"degradations": [{"constraint": "same-family"}]}}
+    assert RD._same_family_degraded(state_missing_seat) is True
+    assert RD._same_family_seats(state_missing_seat) == ["unnamed-seat"]
+    state_missing_seat["terminal"] = "converged"
+    state_missing_seat["config"] = {}
+    receipt = RD.build_receipt(state_missing_seat)
+    assert any("unnamed-seat" in line for line in receipt["degraded"])
+
+
+def test_same_family_does_not_clear_other_degradations():
+    state = RD.new_state(_cfg(vendors=["claude"]))
+    state["independenceDegraded"] = True
+    state["seatMap"] = _panel_seat_map_with_same_family()
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    assert state["certification"]["shape"].endswith("-degraded")
+    assert state["certification"]["independence"] == "degraded"
+    receipt = RD.build_receipt(state)
+    indep_lines = [d for d in receipt["degraded"] if d.startswith("independence:")]
+    sf_lines = [d for d in receipt["degraded"] if d.startswith("panel independence:")]
+    assert len(indep_lines) == 1
+    assert len(sf_lines) == 1
+
+
 def test_library_receipt_omits_base_not_checked(tmp_path):
     receipt = RD.run_loop(_seams(), _cfg())
     assert "base" not in receipt
