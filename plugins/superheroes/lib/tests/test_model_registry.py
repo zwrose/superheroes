@@ -416,3 +416,20 @@ def test_cursor_first_party_models_are_one_family():
     assert MR.family_for("code-fixer", "cursor") == "xai"
     assert MR.family_for("verifier", "cursor") == "xai"
     assert MR.family_for("implementer", "cursor") == MR.family_for("reviewer-deep", "cursor")
+
+
+def test_every_ladder_is_family_uniform():
+    """The workhorse charter's maker-family rule states that a rung-up inside ONE engine's ladder no
+    longer changes the maker family (#651 merged cursor's two first-party rungs; claude and codex
+    were already single-family). That is a property of `_LADDERS` + `_MODELS`, restated in prose —
+    so pin it here: the moment a ladder spans two families, this fails and both prose copies
+    (skills/workhorse/SKILL.md, CONVENTIONS §7.5) must be revisited."""
+    for vendor in MR.vendors():
+        rungs = MR.ladder(vendor)
+        assert rungs, vendor
+        families = {MR.model_family(vendor, model_id) for model_id, _effort in rungs}
+        assert None not in families, (vendor, rungs)
+        assert len(families) == 1, (
+            "ladder for %r spans families %r — the maker-family prose in "
+            "skills/workhorse/SKILL.md and CONVENTIONS §7.5 assumes it does not"
+            % (vendor, sorted(families)))
