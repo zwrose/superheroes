@@ -135,6 +135,14 @@ stated unlock condition is met — cite this ledger instead of re-arguing.
   restatement, but their purpose is redundancy under pressure; deleting them without measuring whether
   a Claude-5 orchestrator still obeys is the accretion mistake run in reverse. The instrument is
   **parked as #628** with unlock conditions; an advisor observational watch is adopted meanwhile.
+- **No mid-range partial under-scan detection for the guardian duplication lens until a real
+  specimen exists.** *(Owner-ratified 2026-07-26, PR #644, three-seat flag.)* The failure mode is
+  **hypothetical**: every observed jscpd failure is all-or-nothing (cap refusal, tool missing, nonzero
+  exit), never a silent partial scan. Both candidate designs rest on **unverified premises** — that
+  jscpd's set of recognizable formats is enumerable, and the semantics of degrade-records telemetry.
+  The removed `scanRatio` guard was proven broken **in both directions** (PR #644 round-2 stranding
+  proof); any future design must answer that proof. **Unlock / tripwire:** persisted `filesScanned` /
+  `scanRatio` telemetry — a **vitals trend showing a real partial under-scan** is the filing trigger.
 
 **Unlock rhythm:** the stability gate (two consecutive releases whose first real runs
 diagnose clean) re-opens the growth posture; #131's checkpoint re-opens

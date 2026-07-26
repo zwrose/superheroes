@@ -766,8 +766,8 @@ def test_census_excludes_tracked_symlink_operand_injected_seam(tmp_path):
     Regression guard (surviving-mutant coverage): deleting ``not os.path.islink(full)``
     re-admits link.py to the census, so it appears in the jscpd config path list and
     trackedFilesCensused becomes 2 — this test then goes RED. The end-to-end sibling below
-    proves the same behavior but carries a jscpd skipif, so it SKIPS in CI and cannot catch
-    that mutant."""
+    proves the same behavior but carries a jscpd skipif; CI now installs jscpd so it runs
+    there, while this test remains the mutant guard that does not depend on the tool."""
     # Real on-disk files: a regular tracked file, a real target, and a real symlink to it.
     # The census filter runs os.path.isfile/os.path.islink against these real disk paths.
     (tmp_path / "a.py").write_text("print('a')\n", encoding="utf-8")

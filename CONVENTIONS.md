@@ -710,6 +710,10 @@ so that the two can silently disagree. When in doubt, ask: *if I renamed the aut
 copy, would anything else keep the old value and still pass CI?* If yes, it needs one of the
 two patterns below.
 
+**Concrete model ids — roles in authored prose.** Charters, agents, rubric, and skills
+reference **roles**, never concrete model ids; only `skills/configure/` may name them.
+Enforced by `lib/tests/test_ssot_drift.py::test_no_concrete_model_id_in_charters_or_skills`.
+
 ### 11.1 Pattern 1 — shared data file (read the one home at runtime)
 
 The fact lives in a **checked-in data file** that every consumer reads; no consumer
