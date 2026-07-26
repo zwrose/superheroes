@@ -406,6 +406,15 @@ def test_claude_alias_resolution_record_matches_registry_ids():
     assert MR.SMART_CLAUDE_FALLBACK[0] in claude_models, MR.SMART_CLAUDE_FALLBACK
 
 
+_CURSOR_FIRST_PARTY_REGISTRY_IDS = frozenset({"composer-2.5", "cursor-grok-4.5"})
+
+
+def test_cursor_registered_models_are_exactly_first_party_pair():
+    """#650: cursor CLI billing is first-party only; the registry is the enforcing surface."""
+    registered = frozenset(MR._MODELS["cursor"])
+    assert registered == _CURSOR_FIRST_PARTY_REGISTRY_IDS
+
+
 def test_cursor_first_party_models_are_one_family():
     """#651 (owner-ratified 2026-07-26): independence is never satisfied between two cursor
     first-party models. Both carry `xai`, so no role pairing can present one as independent of the

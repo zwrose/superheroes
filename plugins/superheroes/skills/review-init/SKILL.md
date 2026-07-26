@@ -167,8 +167,11 @@ printf '%s' "$REVIEW_LAYER_BODY" \
   | python3 "$ROOT_DIR/lib/core_md.py" write-layer --hero review-crew --status "$STATUS" --rubric-version "$RUBRIC_VERSION"
 ```
 
-`write` above is the **create** path: on an existing core it returns `reused`/`proposed` and
-cannot flip status. Confirming a pre-existing **provisional** core/layer is a separate path —
+`write` above is the **create** path: on an existing core it returns `reused`/`proposed`/`refused`/`deferred`.
+A `refused` result (including `fable-on-external-engine` or `dispatch-gate-evaluation-failed`) means
+the write did not apply — surface the `violations` to the owner and **stop**; never proceed to write
+the layer as if the write had succeeded. On a successful create path without refusal, `reused`/`proposed`
+apply as before. Confirming a pre-existing **provisional** core/layer is a separate path —
 `core_md.py confirm` (reached from `superheroes:configure`'s fix flow), which re-renders the core
 and surgically flips each layer, preserving `created`/`nudge-ack` and bumping `updated` (FR-18).
 

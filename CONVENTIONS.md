@@ -562,6 +562,10 @@ Two postures are held strictly separate, mirroring `model_tier`:
   verify stops; an unauditable run stops; an unreadable or incomplete review is re-run
   on Claude, never accepted as green. This reuses the existing gates — no new safety logic.
 
+A **configuration gate** is a third, distinct control: an invalid engine×tier combination
+is refused at configure/calibration time and cannot be saved — not an engine-selection
+degrade and not a post-hoc result check.
+
 **Build-engine contract.** A builder's implementer subagents (the Workhorse charter,
 `agents/implementer.md`) may run on an external engine instead of a Claude subagent: the
 same implementer template is inlined verbatim (minus its frontmatter) into the external
@@ -582,11 +586,18 @@ tier so a failed Codex dispatch falls directly open to Claude with a valid nativ
 model — never automatically downgrading to another GPT model. Effort stays
 orthogonal: existing role defaults remain, and `max` is owner-opt-in only. The
 registry validates a codex `(model, effort)` before dispatch (the CLI does no
-client-side effort validation), rejecting an unknown effort fail-loud. A tier or
-pin the target engine **cannot honor** — e.g. an anthropic-only `fable` tier
-routed to codex or cursor — **fails loud** (the role falls open to Claude, where
-that model lives); there is **no cross-family substitution** (this replaces the
-old silent `fable→gpt-5.6-sol` remap). The GPT-5.6 tier requires a sufficiently
+client-side effort validation), rejecting an unknown effort fail-loud. An
+anthropic-only `fable` tier configured onto a role whose engine preference routes
+external (codex or cursor) is **refused at configuration time** — a loud validation
+error at configure/calibration time, named `fable-on-external-engine`, raised by the preflight's
+`dispatch-vocab` probe (which reads the project's configuration), by `dispatch_selftest.run` when
+a caller supplies that configuration, and by both configure-facing write paths (the tier writer
+and the engine-preference writer), so an invalid combination cannot be saved in the first place; there is **no cross-family
+substitution** (this replaces the old silent `fable→gpt-5.6-sol` remap). Fable's
+long-term availability on Max plans removes the reason a graceful degrade ever existed.
+The dispatch-time named refusal (`fable-unrunnable`) **remains as defensive depth** for
+callers that bypass configuration, but is unreachable from a valid configuration. The
+GPT-5.6 tier requires a sufficiently
 new Codex CLI; an unavailable model follows the observable fall-open path to
 Claude, never a guessed version gate. Dispatch provenance — the concrete engine,
 model, and effort actually used — is recorded in the PR body (the Workhorse
@@ -603,9 +614,15 @@ first-party models** — a cursor-grok reviewer is NOT independent of a cursor-c
 fix, and the composer→grok audit lane is closed. Because a gateway CLI still spans
 families, **panel independence keys on a model's family, not on
 the dispatch CLI** (consumed by the seat map, `lib/seat_map.py`, #510; owners supply
-per-seat pins via `enginePreferences.seatPins`, which the seat map reads). The default
-cursor dispatch stays `composer-2.5`; premium/Anthropic models are never routed
-through cursor by default. Each dispatch carries a role-appropriate timeout
+per-seat pins via `enginePreferences.seatPins`, which the seat map reads). The cursor
+CLI's only sanctioned use is the models Cursor bills as **first-party** — today
+`composer-2.5` and `cursor-grok-4.5`, and nothing else, ever. Claude, GPT, or any
+other third-party model is **never** routed through cursor. The registry
+(`lib/model_registry.py`) is the **enforcing surface**: it admits only those two cursor
+models, so this is doctrine backed by a gate rather than a convention on trust. This
+codifies standing owner policy — the cursor fable channel is retired in code and
+fable-via-cursor is dead. The default cursor dispatch stays `composer-2.5`. Each
+dispatch carries a role-appropriate timeout
 ceiling and idle-stall watchdog (`engine_pref.resolve_timeout` / `resolve_idle`)
 so a stalled external CLI is killed well before the ceiling; an owner may
 override either limit via `enginePreferences`, and an override never disables the

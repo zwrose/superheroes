@@ -82,6 +82,7 @@ def build_argv_result(engine, role_kind, effort, opts):
         if not isinstance(claude_tier, str) or claude_tier not in model_registry.known_claude_models():
             return _refuse("unknown-claude-tier")
         if claude_tier == "fable":
+            # Config-time gate configured_dispatch_violations is primary; depth for bypass callers.
             return _refuse("fable-unrunnable")
     if engine == "codex":
         engine_model = opts.get("engine_model")
@@ -97,6 +98,7 @@ def build_argv_result(engine, role_kind, effort, opts):
             try:
                 engine_model = model_registry.codex_peer_for_claude_tier(claude_tier)
             except ValueError:
+                # Config-time gate configured_dispatch_violations is primary; depth for bypass callers.
                 return _refuse("fable-unrunnable")
         ok, _reason = model_registry.validate_config(
             "codex", engine_model, effort, allow_override_only=True)

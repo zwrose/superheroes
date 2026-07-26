@@ -220,6 +220,13 @@ you are the one who must run it; a skipped gate leaves the dispatch's provenance
 validated model, which is how the advisor spots it. It **supersedes the interim memory rule** that
 pinned engines but let model-within-engine slide — the WE#511 escape, a codex-family model
 dispatched through `cursor-agent`. The registry, not a session's judgment, decides what may run.
+**Cursor is first-party-only** (CONVENTIONS `§7.5`): when a work order routes to the cursor
+CLI, only cursor's registry-listed first-party models may run — never Claude, never GPT, never
+any third-party model through cursor; the registry allowlist enforces it and `dispatch_guard` is
+where a violation surfaces, so a builder tempted to reach a premium model "through cursor" is
+parking, not picking. **A fable tier never rides an external engine** — refused at configuration
+time (`fable-on-external-engine`), so you should never see one; if a dispatch ever refuses with
+`fable-unrunnable`, that is a configuration defect to park on, not a fall-open to route around.
 
 **Escalation is receipts-driven, not anticipation.** Implementation starts on the calibrated
 implementation engine. Leaving it requires **demonstrated fragility** — receipts from a failed round

@@ -33,7 +33,7 @@ def test_probe_result_shape_when_ok():
 
 
 def test_probe_result_not_ok_when_checked_zero(monkeypatch):
-    monkeypatch.setattr(DST, "run", lambda: {"ok": True, "checked": 0, "failures": []})
+    monkeypatch.setattr(DST, "run", lambda config=None: {"ok": True, "checked": 0, "failures": []})
     pr = DST.probe_result()
     assert pr["ok"] is False
     assert "zero checks" in pr["detail"]
@@ -56,7 +56,7 @@ def test_main_run_exits_one_on_failure(monkeypatch):
     monkeypatch.setattr(
         DST,
         "run",
-        lambda: {"ok": False, "checked": 1, "failures": [{"where": "t", "detail": "d"}]},
+        lambda config=None: {"ok": False, "checked": 1, "failures": [{"where": "t", "detail": "d"}]},
     )
     rc = DST.main(["run"])
     assert rc == 1
@@ -66,11 +66,44 @@ def test_run_never_raises():
     DST.run()
 
 
+def test_run_with_config_violations_fails_leg_five():
+    config = {
+        "prefs": {"implementation": "codex"},
+        "tiers": {"implementer": "fable"},
+    }
+    result = DST.run(config)
+    assert result["ok"] is False
+    assert any("configured implementer/codex" in f["where"] for f in result["failures"])
+    assert any(
+        f["detail"] == "fable-on-external-engine"
+        for f in result["failures"]
+    )
+
+
+def test_run_with_clean_config_still_ok():
+    config = {
+        "prefs": {"implementation": "claude"},
+        "tiers": {"implementer": "sonnet"},
+    }
+    result = DST.run(config)
+    assert result["ok"] is True
+
+
+def test_run_with_clean_config_increments_checked_above_baseline():
+    baseline = DST.run()["checked"]
+    config = {
+        "prefs": {"implementation": "claude", "reviewer": "claude"},
+        "tiers": {"implementer": "sonnet", "reviewer": "sonnet"},
+    }
+    with_config = DST.run(config)["checked"]
+    assert with_config > baseline
+
+
 def test_format_probe_detail_caps_failures(monkeypatch):
     monkeypatch.setattr(
         DST,
         "run",
-        lambda: {
+        lambda config=None: {
             "ok": False,
             "checked": 1,
             "failures": [{"where": "w%d" % i, "detail": "d"} for i in range(10)],
@@ -80,3 +113,26 @@ def test_format_probe_detail_caps_failures(monkeypatch):
     assert pr["ok"] is False
     assert "w0" in pr["detail"]
     assert "more failure" in pr["detail"]
+
+
+def _cursor_model_ids_from_registry():
+    import model_registry as mr
+
+    ids = set()
+    for role in mr.roles():
+        for mid, _ in mr.allowlist(role, "cursor"):
+            if mr.is_registered("cursor", mid):
+                ids.add(mid)
+    return ids
+
+
+def test_cursor_sanctioned_model_ids_exactly():
+    assert _cursor_model_ids_from_registry() == {"composer-2.5", "cursor-grok-4.5"}
+
+
+def test_cursor_build_argv_refuses_third_party_model_ids():
+    import engine_adapter as ea
+
+    for model_id in ("opus-5", "gpt-5.6-sol"):
+        res = ea.build_argv_result("cursor", "build", "high", {"engine_model": model_id})
+        assert res == {"argv": [], "reason": "unregistered-engine-model"}, model_id
