@@ -790,7 +790,15 @@ class DuplicationLens:
 
         scanned = report["statistics"]["total"]["sources"]
         tracked_count = len(tracked)
-        if scanned == 0 and tracked_count > 0:
+        prior_pairs = {}
+        if isinstance(self._prev_digest, dict) and isinstance(
+                self._prev_digest.get("pairs"), dict):
+            prior_pairs = self._prev_digest["pairs"]
+        # Under-scan tripwires protect an existing clone baseline: a collected empty digest
+        # would mark every prior pair `resolved`. With no prior pairs there is nothing to
+        # protect; degrading here would strand the lens permanently on repos jscpd cannot
+        # read (honest sources==0 on a first sweep).
+        if prior_pairs and scanned == 0 and tracked_count > 0:
             return {
                 "candidates": [],
                 "digest": None,
@@ -799,9 +807,11 @@ class DuplicationLens:
                     "or no tracked file is a format jscpd recognizes" % tracked_count),
             }
         scan_ratio = scanned / tracked_count
-        if isinstance(self._prev_digest, dict):
+        if prior_pairs:
             prior_ratio = self._prev_digest.get("scanRatio")
             if isinstance(prior_ratio, (int, float)) and not isinstance(prior_ratio, bool):
+                # Ratio collapse is meaningful only when a prior sweep recorded scanRatio;
+                # old-shaped baselines without it cannot be compared.
                 if scan_ratio < prior_ratio * 0.5:
                     return {
                         "candidates": [],

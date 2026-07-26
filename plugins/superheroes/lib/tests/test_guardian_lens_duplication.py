@@ -837,13 +837,44 @@ def test_degrade_on_report_non_int_sources(tmp_path):
         assert "sources" in reason
 
 
-def test_degrade_on_zero_sources_with_tracked_files(tmp_path):
+def test_zero_sources_with_tracked_files_first_sweep_collects(tmp_path):
+    """Edge 1 — no prior digest: honest zero-scan still collects so scan metadata baselines."""
     _seed_tracked(tmp_path, "a.py", "b.py")
     report = {
         "statistics": {"total": {"clones": 0, "duplicatedLines": 0, "sources": 0}},
         "duplicates": [],
     }
     out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report))
+    status, _ = gl.classify_collect(out)
+    assert status == "collected"
+    assert out["digest"] is not None
+    assert out["digest"]["filesScanned"] == 0
+    assert out["digest"]["scanRatio"] == 0.0
+
+
+def test_zero_sources_with_empty_prior_pairs_collects(tmp_path):
+    """Edge 5 — explicit empty pairs baseline: nothing to protect from a false resolved."""
+    _seed_tracked(tmp_path, "a.py", "b.py")
+    report = {
+        "statistics": {"total": {"clones": 0, "duplicatedLines": 0, "sources": 0}},
+        "duplicates": [],
+    }
+    prev = {"schemaVersion": 1, "pairs": {}}
+    out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report), prev_digest=prev)
+    assert gl.classify_collect(out)[0] == "collected"
+    assert out["digest"] is not None
+
+
+def test_degrade_on_zero_sources_with_tracked_files(tmp_path):
+    """Edge 6 — prior clone pairs exist: zero-scan must not erase them via empty digest."""
+    _seed_tracked(tmp_path, "a.py", "b.py")
+    report = {
+        "statistics": {"total": {"clones": 0, "duplicatedLines": 0, "sources": 0}},
+        "duplicates": [],
+    }
+    pid = gld._pair_id("a.py", "b.py")
+    prev = {"schemaVersion": 1, "pairs": {pid: {"longest": 40, "shared": 40}}}
+    out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report), prev_digest=prev)
     status, reason = gl.classify_collect(out)
     assert status == "not-collected"
     assert out["digest"] is None
@@ -851,6 +882,30 @@ def test_degrade_on_zero_sources_with_tracked_files(tmp_path):
 
 
 def test_degrade_on_scan_ratio_collapse(tmp_path):
+    """Edge 7 — ratio collapse with prior pairs and scanRatio."""
+    names = ["f%d.py" % i for i in range(1000)]
+    _seed_tracked(tmp_path, *names)
+    report = {
+        "statistics": {"total": {"clones": 0, "sources": 3}},
+        "duplicates": [],
+    }
+    pid = gld._pair_id("f0.py", "f1.py")
+    prev = {
+        "schemaVersion": 1,
+        "pairs": {pid: {"longest": 40, "shared": 40}},
+        "scanRatio": 1.0,
+        "filesScanned": 1000,
+    }
+    run = _FakeJscpd(report, tracked=names)
+    out = _collect(gld.DuplicationLens(), tmp_path, run, prev_digest=prev)
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"
+    assert out["digest"] is None
+    assert "scan ratio collapsed" in reason
+
+
+def test_scan_ratio_collapse_with_empty_prior_pairs_still_collects(tmp_path):
+    """Edge 7 counterpart — scanRatio present but no prior pairs to protect."""
     names = ["f%d.py" % i for i in range(1000)]
     _seed_tracked(tmp_path, *names)
     report = {
@@ -860,10 +915,36 @@ def test_degrade_on_scan_ratio_collapse(tmp_path):
     prev = {"schemaVersion": 1, "pairs": {}, "scanRatio": 1.0, "filesScanned": 1000}
     run = _FakeJscpd(report, tracked=names)
     out = _collect(gld.DuplicationLens(), tmp_path, run, prev_digest=prev)
+    assert gl.classify_collect(out)[0] == "collected"
+    assert out["digest"] is not None
+
+
+def test_under_scan_tripwires_ignore_malformed_prior_digest(tmp_path):
+    """Edges 2 and 4 — bad prevDigest shapes must not raise and must not tripwire-degrade."""
+    _seed_tracked(tmp_path, "a.py", "b.py")
+    report = {
+        "statistics": {"total": {"clones": 0, "sources": 0}},
+        "duplicates": [],
+    }
+    for bad_prev in ("not-a-dict", {"schemaVersion": 1, "pairs": []}):
+        out = _collect(
+            gld.DuplicationLens(), tmp_path, _FakeJscpd(report), prev_digest=bad_prev)
+        assert gl.classify_collect(out)[0] == "collected"
+        assert out["digest"] is not None
+
+
+def test_degrade_on_report_missing_sources_with_prior_pairs(tmp_path):
+    """Edge 9 — report-contract sources failure is independent of the prior-pairs gate."""
+    _seed_tracked(tmp_path)
+    report = {"statistics": {"total": {"clones": 0}}, "duplicates": []}
+    pid = gld._pair_id("a.py", "b.py")
+    prev = {"schemaVersion": 1, "pairs": {pid: {"longest": 40, "shared": 40}}}
+    run = _FakeJscpd(None, stdout=json.dumps(report) + "\n", trailer=False)
+    out = _collect(gld.DuplicationLens(), tmp_path, run, prev_digest=prev)
     status, reason = gl.classify_collect(out)
     assert status == "not-collected"
     assert out["digest"] is None
-    assert "scan ratio collapsed" in reason
+    assert "sources" in reason
 
 
 def test_scan_ratio_09_of_prior_still_collects(tmp_path):
