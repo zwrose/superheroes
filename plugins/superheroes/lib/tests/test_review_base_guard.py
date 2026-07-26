@@ -1,6 +1,8 @@
 """Tests for review_base_guard (#648)."""
 import json
 import os
+import re
+import shutil
 import subprocess
 
 import pytest
@@ -526,3 +528,39 @@ def test_ordering_repo_root_before_unpinned(git_repo, tmp_path):
     _write_meta(session, str(other), sha, baseRef="main")
     r = rbg.check_base(session, root)
     assert r["reason"] == REASON.REASON_REPO_ROOT_MISMATCH
+
+
+# --- #648 / #637 — shipped SKILL.md base-fetch refspec (zsh :r) ---------------
+
+def _review_code_skill_md_path():
+    lib_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(os.path.dirname(lib_dir), "skills", "review-code", "SKILL.md")
+
+
+def test_skill_base_fetch_refspec_braced_against_zsh_modifier():
+    skill_path = _review_code_skill_md_path()
+    with open(skill_path, encoding="utf-8") as fh:
+        lines = [ln for ln in fh if ln.startswith("BASE_FETCH=fetched;")]
+    assert len(lines) == 1, f"expected exactly one BASE_FETCH=fetched line in {skill_path}, got {len(lines)}"
+    line = lines[0]
+    m_refspec = re.search(r'origin "(\+refs/heads/[^"]+)"', line)
+    assert m_refspec, f"could not extract refspec from shipped line: {line!r}"
+    refspec_tpl = m_refspec.group(1)
+    bad = re.search(r"\$[A-Za-z_][A-Za-z0-9_]*:", refspec_tpl)
+    assert bad is None, (
+        f"unbraced $VAR: before colon — zsh treats : as history modifier (:r), "
+        f"corrupting refspec and stale base pin (#637): {bad.group()!r} in refspec {refspec_tpl!r}"
+    )
+    zsh = shutil.which("zsh")
+    if not zsh:
+        pytest.skip("zsh not available")
+    script = f'BASE_BRANCH=main; echo "{refspec_tpl}"'
+    out = subprocess.run(
+        [zsh, "-c", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert out == "+refs/heads/main:refs/remotes/origin/main", (
+        f"zsh expanded refspec incorrectly (zsh :r / #637 class): got {out!r}"
+    )
