@@ -589,10 +589,10 @@ registry validates a codex `(model, effort)` before dispatch (the CLI does no
 client-side effort validation), rejecting an unknown effort fail-loud. An
 anthropic-only `fable` tier configured onto a role whose engine preference routes
 external (codex or cursor) is **refused at configuration time** — a loud validation
-error at configure/calibration time, named `fable-on-external-engine`, raised by the
-config-time self-test and the preflight's `dispatch-vocab` probe, and by both
-configure-facing write paths (the tier writer and the engine-preference writer), so an
-invalid combination cannot be saved in the first place; there is **no cross-family
+error at configure/calibration time, named `fable-on-external-engine`, raised by the preflight's
+`dispatch-vocab` probe (which reads the project's configuration), by `dispatch_selftest.run` when
+a caller supplies that configuration, and by both configure-facing write paths (the tier writer
+and the engine-preference writer), so an invalid combination cannot be saved in the first place; there is **no cross-family
 substitution** (this replaces the old silent `fable→gpt-5.6-sol` remap). Fable's
 long-term availability on Max plans removes the reason a graceful degrade ever existed.
 The dispatch-time named refusal (`fable-unrunnable`) **remains as defensive depth** for

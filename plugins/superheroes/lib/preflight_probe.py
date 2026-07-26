@@ -143,15 +143,25 @@ def dispatch_calibration(cwd=None, root=None, prefs=None, tiers=None):
 
 def _dispatch_selftest_config(cwd=None, root=None):
     """prefs/tiers bundle for dispatch_selftest leg 5 — mirrors dispatch_calibration reads."""
+    cwd = cwd or os.getcwd()
+    path = core_md.core_path(cwd, root)
+    if not os.path.isfile(path):
+        return {"prefs": {}, "tiers": {}}
     try:
         raw = core_md.read(cwd, root)
+        if raw is None:
+            raise ValueError("core.md is corrupt or unreadable")
         prefs = (raw or {}).get("enginePreferences")
         prefs = prefs if isinstance(prefs, dict) else {}
         tiers = model_tier_overrides.effective_tiers(
             model_tier_overrides.resolve_profile_path(cwd, root))
         return {"prefs": prefs, "tiers": tiers}
-    except Exception:
-        return {"prefs": {}, "tiers": {}}
+    except Exception as exc:
+        return {
+            "prefs": {},
+            "tiers": {},
+            "read_error": "%s: %s" % (type(exc).__name__, exc),
+        }
 
 
 _BROWSER_NOTE = ("browser live-exercise is a host action — run it per reference/preflight.md "

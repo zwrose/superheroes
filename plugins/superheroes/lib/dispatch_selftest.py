@@ -508,10 +508,8 @@ def _leg_seat_map(failures, checked):
                         _fail(failures, w, "dispatch_token is None")
 
 
-def _configured_dispatch_roles_examined(prefs, tiers):
+def _configured_dispatch_roles_examined():
     """Roles ``configured_dispatch_violations`` inspects (one check each)."""
-    prefs = prefs if isinstance(prefs, dict) else {}
-    tiers = tiers if isinstance(tiers, dict) else {}
     n = 0
     for role in sorted(model_registry.known_roles()):
         if (
@@ -529,7 +527,7 @@ def _configured_dispatch_roles_examined(prefs, tiers):
 def _leg_configured(config, failures, checked):
     prefs = config.get("prefs") if isinstance(config, dict) else {}
     tiers = config.get("tiers") if isinstance(config, dict) else {}
-    checked[0] += _configured_dispatch_roles_examined(prefs, tiers)
+    checked[0] += _configured_dispatch_roles_examined()
     try:
         violations = engine_pref.configured_dispatch_violations(prefs, tiers)
     except Exception as exc:
@@ -578,6 +576,12 @@ def _format_probe_detail(result):
 
 
 def probe_result(config=None):
+    if isinstance(config, dict) and config.get("read_error"):
+        return {
+            "tool": "dispatch-vocab",
+            "ok": False,
+            "detail": "configuration read failed: %s" % config["read_error"],
+        }
     result = run(config)
     ok = result["ok"] and result["checked"] > 0
     return {

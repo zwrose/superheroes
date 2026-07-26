@@ -158,8 +158,18 @@ def _candidate_effective_tiers(profile_path, set_overrides=None, clear_roles=Non
     return {role: model_tier.resolve_model(role, current) for role in KNOWN_ROLES}
 
 
+def _prefs_from_core_facts(facts):
+    if not isinstance(facts, dict):
+        return None
+    prefs = facts.get("enginePreferences")
+    return prefs if isinstance(prefs, dict) else {}
+
+
 def _read_engine_preferences_for_gate(profile_path=None, cwd=None, root=None):
-    """Engine preferences for the project whose profile is being written."""
+    """Engine preferences for the gate. Returns ``(prefs, evaluation_error)``.
+
+    ``prefs`` is ``{}`` on confirmed absence (no core.md). ``evaluation_error`` is a non-empty
+    string when configuration exists but cannot be evaluated (mirrors ``core_md``'s gate)."""
     try:
         import core_md
 
@@ -167,16 +177,46 @@ def _read_engine_preferences_for_gate(profile_path=None, cwd=None, root=None):
             layer = os.path.realpath(profile_path)
             core_beside = os.path.join(os.path.dirname(layer), "core.md")
             if os.path.isfile(core_beside):
-                with open(core_beside, encoding="utf-8") as fh:
-                    facts = core_md.parse_core(fh.read())
-                if isinstance(facts, dict):
-                    prefs = facts.get("enginePreferences")
-                    return prefs if isinstance(prefs, dict) else {}
+                try:
+                    with open(core_beside, encoding="utf-8") as fh:
+                        text = fh.read()
+                except OSError as exc:
+                    return {}, "%s: %s" % (type(exc).__name__, exc)
+                facts = core_md.parse_core(text)
+                if facts is None:
+                    return {}, "core.md beside profile is corrupt or unreadable"
+                prefs = _prefs_from_core_facts(facts)
+                if prefs is None:
+                    return {}, "core.md beside profile is corrupt or unreadable"
+                return prefs, None
+            return {}, None
+
+        path = core_md.core_path(cwd or os.getcwd(), root)
+        if not os.path.isfile(path):
+            return {}, None
         rec = core_md.read(cwd or os.getcwd(), root)
-        prefs = (rec or {}).get("enginePreferences")
-        return prefs if isinstance(prefs, dict) else {}
-    except Exception:
-        return {}
+        if rec is None:
+            return {}, "core.md is corrupt or unreadable"
+        prefs = _prefs_from_core_facts(rec)
+        if prefs is None:
+            return {}, "core.md is corrupt or unreadable"
+        return prefs, None
+    except Exception as exc:
+        return {}, "%s: %s" % (type(exc).__name__, exc)
+
+
+def _evaluate_tier_writer_dispatch_gate(profile_path, set_overrides=None, clear_roles=None):
+    """Returns ``(violations, evaluation_error)`` — same posture as ``core_md``'s configured gate."""
+    import engine_pref
+
+    prefs, gate_err = _read_engine_preferences_for_gate(profile_path=profile_path)
+    if gate_err is not None:
+        return None, gate_err
+    try:
+        candidate_tiers = _candidate_effective_tiers(profile_path, set_overrides, clear_roles)
+    except Exception as exc:
+        return None, "%s: %s" % (type(exc).__name__, exc)
+    return engine_pref.configured_dispatch_violations(prefs, candidate_tiers), None
 
 
 def update_overrides(profile_path, set_overrides=None, clear_roles=None):
@@ -261,11 +301,18 @@ def main(argv):
             role, model = item.split("=", 1)
             updates[role.strip()] = model.strip()
         clear_roles = [r.strip() for r in args.clear]
-        import engine_pref
 
-        candidate_tiers = _candidate_effective_tiers(profile, updates, clear_roles)
-        violations = engine_pref.configured_dispatch_violations(
-            _read_engine_preferences_for_gate(profile_path=profile), candidate_tiers)
+        violations, gate_err = _evaluate_tier_writer_dispatch_gate(profile, updates, clear_roles)
+        if gate_err is not None:
+            sys.stdout.write(json.dumps({
+                "ok": False,
+                "reason": "dispatch-gate-evaluation-failed",
+                "violations": [{
+                    "reason": "dispatch-gate-evaluation-failed",
+                    "detail": gate_err,
+                }],
+            }) + "\n")
+            return 1
         if violations:
             sys.stdout.write(json.dumps({
                 "ok": False,

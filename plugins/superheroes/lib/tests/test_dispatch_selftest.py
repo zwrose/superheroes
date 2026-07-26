@@ -113,3 +113,26 @@ def test_format_probe_detail_caps_failures(monkeypatch):
     assert pr["ok"] is False
     assert "w0" in pr["detail"]
     assert "more failure" in pr["detail"]
+
+
+def _cursor_model_ids_from_registry():
+    import model_registry as mr
+
+    ids = set()
+    for role in mr.roles():
+        for mid, _ in mr.allowlist(role, "cursor"):
+            if mr.is_registered("cursor", mid):
+                ids.add(mid)
+    return ids
+
+
+def test_cursor_sanctioned_model_ids_exactly():
+    assert _cursor_model_ids_from_registry() == {"composer-2.5", "cursor-grok-4.5"}
+
+
+def test_cursor_build_argv_refuses_third_party_model_ids():
+    import engine_adapter as ea
+
+    for model_id in ("opus-5", "gpt-5.6-sol"):
+        res = ea.build_argv_result("cursor", "build", "high", {"engine_model": model_id})
+        assert res == {"argv": [], "reason": "unregistered-engine-model"}, model_id

@@ -71,9 +71,13 @@ _ROLE_KEY = {"review": "reviewer", "build": "implementation", "fix": "implementa
 # claude+opus fallback), never here — this resolver is pure and never probes.
 _ROLE_DEFAULT_ENGINE = {"brief-check": "codex"}
 
-# enginePreferences key → default engine when the key is absent or invalid (mirrors
-# resolve_engine's role-kind indirection for each ENGINE_ROLE_KEYS entry).
-_PREF_KEY_DEFAULT_ENGINE = {"briefCheck": "codex"}
+# enginePreferences key → default engine when the key is absent or invalid — derived from
+# ``_ROLE_DEFAULT_ENGINE`` via ``_ROLE_KEY`` so validation and dispatch cannot drift.
+_PREF_KEY_DEFAULT_ENGINE = {
+    pref_key: _ROLE_DEFAULT_ENGINE.get(role_kind, "claude")
+    for role_kind, pref_key in _ROLE_KEY.items()
+    if pref_key in ENGINE_ROLE_KEYS
+}
 
 # When the brief-check reviewer must fall back to a Claude reviewer (codex unavailable), it runs at
 # this tier — a tier UP from the sonnet implementer, never session-inherited. Disclosed at dispatch.

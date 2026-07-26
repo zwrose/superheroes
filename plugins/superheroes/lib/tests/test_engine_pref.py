@@ -94,6 +94,18 @@ def test_engine_role_keys_are_all_surfaced_by_loader():
     assert set(EP.ENGINE_ROLE_KEYS) <= set(degenerate.keys())
 
 
+def test_pref_key_defaults_match_resolve_engine_drift_guard():
+    pref_key_to_role_kind = {}
+    for role_kind, pref_key in EP._ROLE_KEY.items():
+        pref_key_to_role_kind.setdefault(pref_key, role_kind)
+    for pref_key in EP.ENGINE_ROLE_KEYS:
+        role_kind = pref_key_to_role_kind[pref_key]
+        assert EP.resolve_engine_pref_key(pref_key, {}) == EP.resolve_engine(role_kind, {}), (
+            pref_key,
+            role_kind,
+        )
+
+
 def test_implementer_and_pilot_are_codex_pin_roles():
     assert "implementer" in EP.CODEX_PIN_ROLES
     assert "pilot" in EP.CODEX_PIN_ROLES

@@ -355,6 +355,40 @@ def test_cli_run_without_engine_all_claude_probes_none(monkeypatch, capsys):
     assert len(payload["probes"]) == 2   # gh auth + dispatch-vocab — no cross-vendor when all-Claude
 
 
+def test_dispatch_selftest_config_fails_closed_on_corrupt_core(tmp_path):
+    import importlib.util
+
+    cm_path = os.path.join(os.path.dirname(__file__), "..", "core_md.py")
+    spec = importlib.util.spec_from_file_location("core_md_gate", cm_path)
+    cm = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cm)
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    cm.write(repo, {"verifyCommand": "npm test", "stackTags": [], "threatModel": "x",
+                    "patterns": ""}, "confirmed", root=store, now="2026-06-30")
+    core_path = cm.core_path(repo, store)
+    with open(core_path, "w", encoding="utf-8") as fh:
+        fh.write("corrupt core\n")
+    import dispatch_selftest
+
+    cfg = pp._dispatch_selftest_config(cwd=repo, root=store)
+    assert "read_error" in cfg
+    pr = dispatch_selftest.probe_result(config=cfg)
+    assert pr["ok"] is False
+    assert "configuration read failed" in pr["detail"]
+    agg = pp.aggregate([{"tool": "dispatch-vocab", "ok": pr["ok"], "detail": pr["detail"]}])
+    assert agg["go"] is False
+
+
+def test_dispatch_selftest_config_clean_when_no_core(tmp_path):
+    cfg = pp._dispatch_selftest_config(cwd=str(tmp_path))
+    assert cfg == {"prefs": {}, "tiers": {}}
+    import dispatch_selftest
+
+    pr = dispatch_selftest.probe_result(config=cfg)
+    assert pr["ok"] is True
+
+
 def test_dispatch_vocab_probe_blocks_aggregate_on_failure(monkeypatch):
     import dispatch_selftest
 
