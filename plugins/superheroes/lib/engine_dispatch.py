@@ -227,26 +227,52 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 "attempts": 0, "forfeited": False}
 
     prompt_bytes = (ANTIHIJACK_PREAMBLE + base_prompt).encode("utf-8")
+    fed_prompt = ANTIHIJACK_PREAMBLE + base_prompt
     write_progress = _progress_writer(progress_path)
+    last_engagement = None
     for attempt in (1, 2):
         t = timeout if attempt == 1 else max(retry_timeout, RETRY_MIN_TIMEOUT)
 
         def cb(elapsed, nbytes, _a=attempt):
             write_progress(_a, elapsed, nbytes)
 
-        stdout, timed_out, rc, _err = run_engine(argv, prompt_bytes, t, cb, cwd)
+        t0 = time.monotonic()
+        stdout, timed_out, rc, stderr_tail = run_engine(argv, prompt_bytes, t, cb, cwd)
+        elapsed = time.monotonic() - t0
+        if engine == "codex":
+            tokens = engine_adapter.codex_tokens_used(stderr_tail)
+            tool_calls = None
+            source = "codex-stderr" if tokens is not None else "none"
+        elif engine == "cursor":
+            tokens = None
+            tool_calls = engine_adapter.cursor_tool_calls(stdout)
+            source = "cursor-stream" if tool_calls is not None else "none"
+        else:
+            tokens = None
+            tool_calls = None
+            source = "none"
+        last_engagement = {
+            "tokens": tokens,
+            "toolCalls": tool_calls,
+            "stdoutBytes": len(stdout or ""),
+            "wallSeconds": round(elapsed, 1),
+            "source": source,
+        }
         if timed_out:
             continue  # timeout forfeits WITHOUT parsing partial stdout
         if rc not in (0, None):
             continue  # nonzero exit forfeits even if stdout parses (crashed engine)
-        res = engine_adapter.parse_result(engine, role_kind, stdout)
+        stripped = engine_adapter.strip_echoed_prompt(stdout, fed_prompt)
+        res = engine_adapter.parse_result(engine, role_kind, stripped)
         if res.get("ok"):
-            return {"ok": True, "findings": res.get("findings", []), "attempts": attempt}
+            return {"ok": True, "findings": res.get("findings", []), "attempts": attempt,
+                    "engagement": last_engagement}
         # unreadable -> forfeit this attempt, fall through to retry / double-forfeit
     return {"ok": False, "reason": "forfeited", "attempts": 2, "forfeited": True,
             "disclosure": ("%s reviewer forfeited twice (timeout or unreadable); "
                            "fall open to a Claude reviewer and disclose the degraded vendor mix"
-                           % engine)}
+                           % engine),
+            "engagement": last_engagement}
 
 
 def main(argv):

@@ -878,3 +878,102 @@ def test_build_argv_prompt_path_directory_fails_closed(tmp_path, capsys):
 def test_build_argv_without_prompt_path_unchanged(capsys):
     rc, out = _build_argv_with_prompt(None, capsys, prompt_path=None)
     assert rc == 0 and isinstance(out, list) and out[0] == "codex"
+
+
+# ---------------------------------------------------------------------------
+# #668: strip echoed prompt before parse; engagement extractors
+
+
+def _review_prompt_with_shape_contract():
+    return (
+        "You are reviewing a pull request.\n"
+        "Respond with JSON only in this shape:\n"
+        '{"findings": [...]}\n'
+        "Example empty review:\n"
+        '{"findings": []}\n'
+        "Each finding must include severity, title, body, suggestion.\n"
+    )
+
+
+def _parse_review_after_strip(stdout, prompt_text):
+    stripped = EA.strip_echoed_prompt(stdout, prompt_text)
+    return EA.parse_result("codex", "review", stripped)
+
+
+def test_echo_only_prompt_after_strip_is_unreadable():
+    prompt = _review_prompt_with_shape_contract()
+    stdout = prompt  # engine echoed the prompt and answered nothing
+    assert _parse_review_after_strip(stdout, prompt) == {"ok": False, "reason": "unreadable"}
+
+
+def test_real_answer_after_echo_survives_strip_and_parse():
+    prompt = _review_prompt_with_shape_contract()
+    answer = json.dumps({"findings": [
+        {"severity": "Important", "title": "t", "body": "b", "suggestion": "s"}]})
+    stdout = prompt + "\n" + answer
+    res = _parse_review_after_strip(stdout, prompt)
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+    assert res["findings"][0]["title"] == "t"
+
+
+def test_json_escaped_echo_in_stream_envelope_stripped_to_unreadable():
+    prompt = _review_prompt_with_shape_contract()
+    escaped = json.dumps(prompt)[1:-1]
+    stdout = '{"type":"progress","text":"' + escaped + '"}\n'
+    assert _parse_review_after_strip(stdout, prompt) == {"ok": False, "reason": "unreadable"}
+
+
+def test_truncated_echo_tail_still_stripped_to_unreadable():
+    head = "x" * 2500
+    prompt = head + _review_prompt_with_shape_contract()
+    stdout = prompt[-1500:]
+    assert _parse_review_after_strip(stdout, prompt) == {"ok": False, "reason": "unreadable"}
+
+
+def test_strip_echoed_prompt_empty_or_non_string_inputs_unchanged_no_raise():
+    prompt = _review_prompt_with_shape_contract()
+    for stdout in (None, "", 123, []):
+        assert EA.strip_echoed_prompt(stdout, prompt) == stdout
+    for bad_prompt in (None, "", 7):
+        assert EA.strip_echoed_prompt("keep", bad_prompt) == "keep"
+
+
+def test_codex_tokens_used_parses_trailing_block():
+    assert EA.codex_tokens_used("noise\ntokens used\n17,417\n") == 17417
+
+
+def test_codex_tokens_used_takes_last_block():
+    tail = "tokens used\n1\nmore\ntokens used\n9,876\n"
+    assert EA.codex_tokens_used(tail) == 9876
+
+
+def test_codex_tokens_used_absent_garbage_empty_returns_none():
+    assert EA.codex_tokens_used("") is None
+    assert EA.codex_tokens_used("no token line here") is None
+    assert EA.codex_tokens_used("tokens used\n") is None
+    assert EA.codex_tokens_used("tokens used\nnot-a-number\n") is None
+
+
+def test_cursor_tool_calls_counts_distinct_call_ids():
+    lines = [
+        '{"type":"tool_call","call_id":"a","subtype":"started"}',
+        '{"type":"tool_call","call_id":"b","subtype":"started"}',
+        '{"type":"tool_call","call_id":"a","subtype":"completed"}',
+    ]
+    assert EA.cursor_tool_calls("\n".join(lines)) == 2
+
+
+def test_cursor_tool_calls_zero_when_no_tool_calls():
+    stream = '{"type":"result","subtype":"success","duration_ms":1}\n'
+    assert EA.cursor_tool_calls(stream) == 0
+
+
+def test_cursor_tool_calls_skips_garbage_no_raise():
+    stream = "not json\n" + '{"type":"tool_call","call_id":"z"}\n' + "{broken"
+    assert EA.cursor_tool_calls(stream) == 1
+
+
+def test_cursor_tool_calls_empty_returns_none():
+    assert EA.cursor_tool_calls("") is None
+    assert EA.cursor_tool_calls(None) is None

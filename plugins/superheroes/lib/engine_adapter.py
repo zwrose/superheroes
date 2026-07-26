@@ -48,6 +48,10 @@ _CURSOR_MODEL = model_registry.dispatch_token("cursor", "composer-2.5")
 # worth extra in the common case. 512 KB comfortably exceeds any real findings payload.
 MAX_STDOUT_TAIL_BYTES = 512 * 1024
 
+# #668: runner stdout capture keeps only the tail (MAX_STDOUT_CAPTURE in engine_dispatch); a large
+# echoed prompt can arrive truncated while the trailing shape-contract example survives.
+ECHO_TAIL_CHARS = 2000
+
 
 # Named refusal tokens from build_argv_result (issue #636). The dispatch runner surfaces them as
 # detail=engine-config:<token>; the build-argv CLI prints detail=<token> directly.
@@ -224,6 +228,76 @@ def _last_json_array(stdout):
     or None — the tolerated bare-array reviewer shape (an engine emits `[...]` directly
     instead of `{"findings": [...]}`, #196)."""
     return _last_top_level_json(stdout, list)
+
+
+def strip_echoed_prompt(stdout, prompt_text):
+    """Remove verbatim echoes of the dispatched prompt from engine stdout before parse.
+
+    Strips the full prompt (raw and JSON-escaped), then the last ECHO_TAIL_CHARS of the prompt
+    (raw and JSON-escaped) for capture-truncated echoes. Never raises."""
+    if not isinstance(stdout, str) or not stdout:
+        return stdout
+    if not isinstance(prompt_text, str) or not prompt_text:
+        return stdout
+    out = stdout
+    escaped_full = json.dumps(prompt_text)[1:-1]
+    tail = prompt_text[-ECHO_TAIL_CHARS:]
+    tail_escaped = json.dumps(tail)[1:-1]
+    for fragment in (prompt_text, escaped_full, tail, tail_escaped):
+        out = out.replace(fragment, "")
+    if out and tail.endswith(out):
+        out = ""
+    return out
+
+
+def codex_tokens_used(stderr_tail):
+    """Parse codex stderr tail for the last 'tokens used' block; return int or None. Never raises."""
+    try:
+        if not isinstance(stderr_tail, str) or not stderr_tail:
+            return None
+        lines = stderr_tail.splitlines()
+        last_idx = None
+        for i, line in enumerate(lines):
+            if line.strip() == "tokens used":
+                last_idx = i
+        if last_idx is None or last_idx + 1 >= len(lines):
+            return None
+        count_line = lines[last_idx + 1].strip()
+        if not count_line:
+            return None
+        return int(count_line.replace(",", "").strip())
+    except Exception:
+        return None
+
+
+def cursor_tool_calls(stdout):
+    """Count distinct tool_call call_ids in a cursor stream-json stdout; int or None. Never raises."""
+    try:
+        if not isinstance(stdout, str) or not stdout:
+            return None
+        call_ids = set()
+        object_count = 0
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(obj, dict) or obj.get("type") != "tool_call":
+                continue
+            object_count += 1
+            cid = obj.get("call_id")
+            if isinstance(cid, str) and cid:
+                call_ids.add(cid)
+        if object_count == 0:
+            return 0
+        if call_ids:
+            return len(call_ids)
+        return object_count
+    except Exception:
+        return None
 
 
 def _read_stdout_tail(path, max_bytes):

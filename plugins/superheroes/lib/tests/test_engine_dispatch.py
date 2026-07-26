@@ -533,3 +533,89 @@ def test_antihijack_preamble_and_codex_c_flag(tmp_path):
     assert "-C" in argv
     assert argv[argv.index("-C") + 1] == repo_root
     assert "--skip-git-repo-check" not in argv
+
+
+def _prompt_with_shape_contract(tmp_path):
+    content = (
+        "Review the diff.\nRespond with JSON only:\n"
+        '{"findings": [...]}\n'
+        '{"findings": []}\n'
+    )
+    return _valid_prompt(tmp_path, content)
+
+
+def test_dispatch_echo_only_stdout_forfeits_not_clean_review(tmp_path):
+    """#668 regression: echoed prompt must not certify empty findings."""
+    repo_root = _repo(tmp_path)
+    prompt_path = _prompt_with_shape_contract(tmp_path)
+    with open(prompt_path, encoding="utf-8") as fh:
+        base = fh.read()
+    fed = ED.ANTIHIJACK_PREAMBLE + base
+    fake = FakeRunner([(fed, False, 0, ""), (fed, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=prompt_path, repo_root=repo_root, run_engine=fake,
+    )
+    assert res["ok"] is False
+    assert res["reason"] == "forfeited"
+    assert res["attempts"] == 2
+    assert len(fake.calls) == 2
+
+
+def test_dispatch_success_includes_engagement_fields(tmp_path):
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    eng = res["engagement"]
+    assert "stdoutBytes" in eng and "wallSeconds" in eng and "source" in eng
+    assert eng["stdoutBytes"] == len(_VALID_FINDINGS_STDOUT)
+
+
+def test_dispatch_codex_engagement_tokens_from_stderr(tmp_path):
+    repo_root = _repo(tmp_path)
+    stderr_tail = "log line\ntokens used\n1,234\n"
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, stderr_tail)])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    assert res["ok"] is True
+    assert res["engagement"]["tokens"] == 1234
+    assert res["engagement"]["source"] == "codex-stderr"
+
+
+def test_dispatch_cursor_engagement_tool_calls(tmp_path):
+    repo_root = _repo(tmp_path)
+    stream = "\n".join([
+        '{"type":"tool_call","call_id":"c1","subtype":"started"}',
+        '{"type":"tool_call","call_id":"c2","subtype":"started"}',
+        '{"type":"tool_call","call_id":"c1","subtype":"completed"}',
+        '{"type":"result","findings":[{"id":"f1","message":"ok"}]}',
+    ])
+    fake = FakeRunner([(stream, False, 0, "")])
+    res = ED.dispatch_review(
+        "cursor", model=None, effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    assert res["ok"] is True
+    assert res["engagement"]["toolCalls"] == 2
+    assert res["engagement"]["source"] == "cursor-stream"
+
+
+def test_double_forfeit_has_engagement_unrunnable_does_not(tmp_path):
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([("not json", False, 0, ""), ("not json", False, 0, "")])
+    forfeited = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    assert "engagement" in forfeited
+    unrunnable = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=None, run_engine=fake,
+    )
+    assert "engagement" not in unrunnable
+    assert unrunnable["attempts"] == 0
