@@ -142,6 +142,10 @@ never drop a finding or a lens.
 >   --prompt-path "$SEAT_PROMPT" --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
 > ```
 >
+> `$SEAT_ENGINE_MODEL` is the seat's **registry id** and `$SEAT_EFFORT` its effort — **both are
+> required by this runner**; `engine_dispatch` takes `--effort` as a required flag. Every review
+> seat the seat map assigns on cursor carries a real effort, so this is not a limitation in practice.
+>
 > Read-only sandbox is **hard-coded inside the runner API** — it cannot emit a write dispatch. Because
 > the runner runs codex from a non-repo cwd under "do not read files", the seat prompt MUST be
 > **self-contained** — inline the diff and any context the lens needs. This makes the codex/cursor
@@ -354,7 +358,9 @@ These are the base rubric's binding verification rules; they are restated in eve
 | Skipping `--post` verification when GH returns success  | `gh api` can return 200 on a malformed body that GitHub silently treats as a no-op. Always run the post-submit verify call.                                        |
 | Trying to delete a bad review via API                   | Submitted reviews cannot be deleted via the GitHub API. Never iterate by re-posting — fix `review-resolved.json` and retry only after the resolve script is clean. |
 | Tiering or skipping specialists based on "what changed" | Round 1 is always the full panel; later rounds follow `round_driver.py` `next` (delta audits + scoped finder, or a full panel on #174/unknown). Never skip by eye. |
-| Using `gh pr diff` inside the loop                      | Rounds 2+ have local fix commits not on the remote. Always recompute `git diff <baseRef>...HEAD` locally each round.                                               |
+| **Continuing when `$BASE_REF` is not a commit**         | An empty `$BASE_REF` makes `git diff "$BASE_REF"...HEAD` argv `...HEAD` — git reads it as `HEAD...HEAD` and emits a **zero-line diff at exit 0**, so the panel reviews nothing and the loop certifies clean. The literal string `null` (what `jq -r` prints for an absent key) is non-empty, so a `[ -n … ]` test passes it while `git diff null...HEAD` exits 128 and still leaves an empty artifact. Setup validates with `git rev-parse --verify --quiet "$BASE_REF^{commit}"` — which rejects empty, `null`, a deleted branch, and a non-commit tag — and every consumer uses the guarded diff command that halts on a failed OR empty diff. Never substitute a branch name to "recover" (#637). |
+| **Diffing against the worktree's local base branch**    | A long-lived worktree's local `main` goes stale as a matter of course; three-dot diff then walks back to a stale merge-base and drags already-merged work into the review (#637 — ~6,600 contaminated lines against 2,931 real). The bootstrap fetches the base and pins it to a commit; never re-resolve the base from a branch name mid-run. |
+| Using `gh pr diff` inside the loop                      | Rounds 2+ have local fix commits not on the remote. Always recompute the diff locally each round **with the guarded per-round command from the SKILL's Setup** — `git diff "$BASE_REF"...HEAD` against the **pinned remote base commit**, including its failed-diff and empty-diff halts — never a branch name and never a bare copy.                                               |
 | Auto-fixing a PR you don't have checked out             | Auto-fix needs the PR's branch as the current branch. If it isn't, stop and direct the user to `--post` or `--review-only`.                                        |
 | Re-reviewing on a broken tree                           | If `VERIFY_CMD` fails after a fix, HALT. Never run the next review round on code that doesn't pass verification. (No gate when the profile is `mode: unverified`.) |
 | Re-raising a finding the user skipped                   | Skipped identities go in the skip-set and are excluded from every later round's effective findings AND the circuit breaker.                                        |
@@ -426,9 +432,18 @@ carries `{vendor, model, effort, tier, family, source}`:
 
 - **Read the seat's assignment** from `$SEAT_MAP.seats[<reviewer-name>]`. Dispatch a `claude`
   seat as the named subagent with `model: <seat>.model`; dispatch a `codex`/`cursor` seat through
-  `engine_adapter.py` (read-only sandbox), threading `<seat>.model` as `engine_model` so a cursor
-  seat runs its assigned model (composer or grok) — never the hard-coded default. The persona and
-  `$RUBRIC` are identical across engines; the only per-seat difference is the dispatch target.
+  `engine_adapter.py` (read-only sandbox), threading the seat's **registry id** as `engine_model`
+  and its **effort** as `--effort` — never the hard-coded composer default. `build-argv` also
+  accepts the **composed dispatch token** that joins registry id and effort, and resolves it
+  identically, but an effort that **contradicts** a composed token is refused rather than
+  silently resolved either way. A `--model` value that is not a native Claude tier short name
+  (`haiku`/`sonnet`/`opus`/`fable`) is **refused by name** (`unknown-claude-tier`) instead of
+  silently falling back to composer. A refused dispatch surfaces
+  `detail: "engine-config:<reason>"` with one of `unknown-engine`, `unknown-claude-tier`,
+  `fable-unrunnable`, `unregistered-engine-model`, `engine-model-effort-conflict`,
+  `invalid-model-effort`, `untokenizable` — so the panel's degradation disclosure names **what**
+  died. The persona and `$RUBRIC` are identical across engines; the only per-seat difference is
+  the dispatch target.
 - **The grounding seat** (`$SEAT_MAP.seats["grounding-seat"]`) is *assigned* a vendor by the seat map
   — chosen to be independent of both the author (code) and narrative (PR text) families — and that
   assignment is recorded in the receipt. The code-leg self-claims / DoD-table check (SKILL step 8)
