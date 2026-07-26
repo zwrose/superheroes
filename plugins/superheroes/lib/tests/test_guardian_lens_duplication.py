@@ -15,7 +15,6 @@ import subprocess
 
 import pytest
 
-import guardian_census
 import guardian_lens as gl
 import guardian_lens_duplication as gld
 from test_guardian_conformance import assert_lens_conformance
@@ -55,6 +54,7 @@ class _FakeJscpd:
         self.trailer = trailer
         self.tracked = tracked
         self.calls = []
+        self.configs = []
 
     def _git_result(self, kwargs):
         if self.tracked is not None:
@@ -80,12 +80,26 @@ class _FakeJscpd:
         argv0 = argv[0] if argv else ""
         if argv0 == "git":
             return self._git_result(kwargs)
+        config_paths = []
+        for i, arg in enumerate(argv):
+            if arg == "-c" and i + 1 < len(argv):
+                with open(argv[i + 1], encoding="utf-8") as fh:
+                    cfg = json.load(fh)
+                self.configs.append(cfg)
+                raw = cfg.get("path")
+                if isinstance(raw, list):
+                    config_paths = raw
         if self.raise_exc is not None:
             raise self.raise_exc
         if self.stdout is not None:
             text = self.stdout
         else:
-            text = json.dumps(self.report)
+            report = json.loads(json.dumps(self.report))
+            stats = report.setdefault("statistics", {})
+            total = stats.setdefault("total", {})
+            if "sources" not in total:
+                total["sources"] = len(config_paths) if config_paths else 1
+            text = json.dumps(report)
             if self.trailer:
                 text += "\nreport saved to /dev/stdout\n"
         rc = self.returncode
@@ -144,11 +158,20 @@ def _clone_entry(path_a, path_b, *, lines=177, start_a=219, end_a=395,
     }
 
 
-def _report(dups):
+def _report(dups, *, sources=None):
+    total = {}
+    if sources is not None:
+        total["sources"] = sources
     return {
-        "statistics": {"total": {}, "formats": {}, "detectionDate": "test"},
+        "statistics": {"total": total, "formats": {}, "detectionDate": "test"},
         "duplicates": dups,
     }
+
+
+def _jscpd_argv(run):
+    calls = [argv for argv, _kw in run.calls if argv and argv[0] == "jscpd"]
+    assert len(calls) == 1, run.calls
+    return calls[0]
 
 
 # --- conformance ------------------------------------------------------------------
@@ -628,7 +651,7 @@ def test_degrade_on_reported_nonzero_parsed_zero(tmp_path):
     """jscpd summary reports clones but the duplicates array is empty → not-collected."""
     _seed_tracked(tmp_path)
     report = {
-        "statistics": {"total": {"clones": 3, "duplicatedLines": 42}},
+        "statistics": {"total": {"clones": 3, "duplicatedLines": 42, "sources": 1}},
         "duplicates": [],
     }
     out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report))
@@ -642,7 +665,7 @@ def test_clean_zero_clone_report_collects_empty(tmp_path):
     """A genuine zero-clone report (summary 0, empty array) collects with no candidates."""
     _seed_tracked(tmp_path)
     report = {
-        "statistics": {"total": {"clones": 0, "duplicatedLines": 0}},
+        "statistics": {"total": {"clones": 0, "duplicatedLines": 0, "sources": 1}},
         "duplicates": [],
     }
     out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report))
@@ -712,49 +735,6 @@ def test_git_census_failure_degrades_not_collected(tmp_path):
     assert "git ls-files failed" in reason
 
 
-def test_arg_max_guard_degrades_never_scans_cwd(tmp_path, monkeypatch):
-    """When the tracked-file operand payload exceeds the cap, degrade honestly — no silent
-    cwd fallback, no truncation."""
-    monkeypatch.setattr(guardian_census, "MAX_TRACKED_OPERAND_BYTES", 5)
-    _seed_tracked(tmp_path, "a.py", "b.py")  # 8 bytes of operands > 5-byte cap
-    run = _FakeJscpd(_report([]))
-    out = _collect(gld.DuplicationLens(), tmp_path, run)
-    status, reason = gl.classify_collect(out)
-    assert status == "not-collected"
-    assert out["digest"] is None
-    assert "across 2 files" in reason
-    assert "5-byte cap" in reason
-    # jscpd must NOT have been spawned (no cwd fallback).
-    assert not any(call[0] and call[0][0] == "jscpd" for call in run.calls)
-
-
-def test_arg_max_guard_measures_absolutized_payload(tmp_path, monkeypatch):
-    """The ARG_MAX guard must measure the ABSOLUTIZED argv (invoke prepends realpath(cwd) +
-    a path sep to every operand before execve), not the repo-relative bytes. A cap set to
-    exactly the relative payload size must STILL degrade, because absolutization inflates
-    each operand — the relative measure would undercount and pass a payload that then hits
-    E2BIG."""
-    _seed_tracked(tmp_path, "a.py", "b.py")
-    operands = ["a.py", "b.py"]
-    relative_bytes = sum(len(p.encode("utf-8")) for p in operands)  # 8 bytes
-    # Cap == the relative payload: the OLD relative-only measure (8 > 8 is False) would NOT
-    # trip and would go on to scan; the absolutized measure must trip.
-    monkeypatch.setattr(guardian_census, "MAX_TRACKED_OPERAND_BYTES", relative_bytes)
-    run = _FakeJscpd(_report([]))
-    out = _collect(gld.DuplicationLens(), tmp_path, run)
-    status, reason = gl.classify_collect(out)
-    assert status == "not-collected"
-    assert out["digest"] is None
-    assert "across 2 files" in reason
-    assert "%d-byte cap" % relative_bytes in reason
-    # The reported operand byte count reflects the ABSOLUTIZED payload (strictly greater
-    # than the repo-relative bytes by realpath(cwd)/ per operand).
-    m = re.search(r"payload is (\d+) bytes", reason)
-    assert m and int(m.group(1)) > relative_bytes, reason
-    # jscpd must NOT have been spawned (no cwd fallback).
-    assert not any(call[0] and call[0][0] == "jscpd" for call in run.calls)
-
-
 def test_diagnostics_report_census_provenance(tmp_path):
     """collect() reports censusSource + trackedFilesCensused in diagnostics."""
     shared = ["CENSUS_%d" % i for i in range(12)]
@@ -773,10 +753,10 @@ def test_census_excludes_tracked_symlink_operand_injected_seam(tmp_path):
     (which follows the link), so only the ``not os.path.islink(full)`` clause in the census
     keeps it out of the operands handed to jscpd. Drive collect() through the injected run
     seam — real files on disk, only jscpd stubbed — and assert the symlink never reaches the
-    scanner.
+    scanner config file.
 
     Regression guard (surviving-mutant coverage): deleting ``not os.path.islink(full)``
-    re-admits link.py to the census, so it appears as a jscpd operand and
+    re-admits link.py to the census, so it appears in the jscpd config path list and
     trackedFilesCensused becomes 2 — this test then goes RED. The end-to-end sibling below
     proves the same behavior but carries a jscpd skipif, so it SKIPS in CI and cannot catch
     that mutant."""
@@ -793,22 +773,161 @@ def test_census_excludes_tracked_symlink_operand_injected_seam(tmp_path):
     out = _collect(gld.DuplicationLens(), tmp_path, run)
     assert gl.classify_collect(out)[0] == "collected"
 
-    # Strongest signal: the operands actually handed to jscpd. run_tool absolutizes and
-    # appends the census as operands, exactly as invoke would, so the recorded jscpd argv
-    # carries the real operand list.
-    jscpd_calls = [argv for argv, _kw in run.calls if argv and argv[0] == "jscpd"]
-    assert len(jscpd_calls) == 1, run.calls
-    jscpd_argv = jscpd_calls[0]
+    assert len(run.configs) == 1, run.calls
+    config_paths = run.configs[0]["path"]
     # The tracked symlink NEVER reaches the scanner — neither by its own path nor by the
-    # untracked target it resolves to (invoke's absolute_repo_operands realpaths each
-    # operand, so an admitted symlink would surface as its target's realpath — the #564
-    # leak). The regular file does reach jscpd.
-    assert not any("link.py" in arg for arg in jscpd_argv), jscpd_argv
-    assert not any("target.py" in arg for arg in jscpd_argv), jscpd_argv
-    assert any(arg.endswith("/a.py") for arg in jscpd_argv), jscpd_argv
+    # untracked target it resolves to (absolute_repo_operands realpaths each path, so an
+    # admitted symlink would surface as its target's realpath — the #564 leak). The
+    # regular file does reach jscpd.
+    assert not any("link.py" in p for p in config_paths), config_paths
+    assert not any("target.py" in p for p in config_paths), config_paths
+    assert any(p.endswith("/a.py") for p in config_paths), config_paths
 
     # Census counted only the one regular file — the symlink was excluded before jscpd.
     assert out["diagnostics"]["trackedFilesCensused"] == 1
+
+
+def test_jscpd_config_lists_censused_files_absolutized(tmp_path):
+    _seed_tracked(tmp_path, "a.py", "b.py")
+    repo = os.path.realpath(str(tmp_path))
+    run = _FakeJscpd(_report([]))
+    out = _collect(gld.DuplicationLens(), tmp_path, run)
+    assert gl.classify_collect(out)[0] == "collected"
+    assert run.configs[0]["path"] == [
+        os.path.join(repo, "a.py"),
+        os.path.join(repo, "b.py"),
+    ]
+
+
+def test_jscpd_argv_uses_config_not_trailing_operands(tmp_path):
+    _seed_tracked(tmp_path, "a.py")
+    run = _FakeJscpd(_report([]))
+    _collect(gld.DuplicationLens(), tmp_path, run)
+    argv = _jscpd_argv(run)
+    assert "-c" in argv
+    cfg_idx = argv.index("-c")
+    assert cfg_idx + 1 < len(argv)
+    assert argv[cfg_idx + 1].endswith("jscpd-input.json")
+    assert "--" not in argv
+    assert not any(arg.endswith(".py") for arg in argv)
+
+
+def test_degrade_on_report_missing_sources(tmp_path):
+    _seed_tracked(tmp_path)
+    report = {"statistics": {"total": {"clones": 0}}, "duplicates": []}
+    run = _FakeJscpd(None, stdout=json.dumps(report) + "\n", trailer=False)
+    out = _collect(gld.DuplicationLens(), tmp_path, run)
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"
+    assert out["digest"] is None
+    assert "sources" in reason
+
+
+def test_degrade_on_report_non_int_sources(tmp_path):
+    _seed_tracked(tmp_path)
+    for bad in (True, 1.5, "2"):
+        report = {
+            "statistics": {"total": {"sources": bad, "clones": 0}},
+            "duplicates": [],
+        }
+        out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report))
+        status, reason = gl.classify_collect(out)
+        assert status == "not-collected"
+        assert out["digest"] is None
+        assert "sources" in reason
+
+
+def test_degrade_on_zero_sources_with_tracked_files(tmp_path):
+    _seed_tracked(tmp_path, "a.py", "b.py")
+    report = {
+        "statistics": {"total": {"clones": 0, "duplicatedLines": 0, "sources": 0}},
+        "duplicates": [],
+    }
+    out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report))
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"
+    assert out["digest"] is None
+    assert "scanned 0 of 2" in reason
+
+
+def test_degrade_on_scan_ratio_collapse(tmp_path):
+    names = ["f%d.py" % i for i in range(1000)]
+    _seed_tracked(tmp_path, *names)
+    report = {
+        "statistics": {"total": {"clones": 0, "sources": 3}},
+        "duplicates": [],
+    }
+    prev = {"schemaVersion": 1, "pairs": {}, "scanRatio": 1.0, "filesScanned": 1000}
+    run = _FakeJscpd(report, tracked=names)
+    out = _collect(gld.DuplicationLens(), tmp_path, run, prev_digest=prev)
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"
+    assert out["digest"] is None
+    assert "scan ratio collapsed" in reason
+
+
+def test_scan_ratio_09_of_prior_still_collects(tmp_path):
+    names = ["f%d.py" % i for i in range(10)]
+    _seed_tracked(tmp_path, *names)
+    report = {
+        "statistics": {"total": {"clones": 0, "sources": 9}},
+        "duplicates": [],
+    }
+    prev = {"schemaVersion": 1, "pairs": {}, "scanRatio": 1.0}
+    out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report, tracked=names),
+                   prev_digest=prev)
+    assert gl.classify_collect(out)[0] == "collected"
+
+
+def test_scan_ratio_near_prior_still_collects(tmp_path):
+    _seed_tracked(tmp_path, "a.py", "b.py")
+    report = {
+        "statistics": {"total": {"clones": 0, "sources": 2}},
+        "duplicates": [],
+    }
+    prev = {"schemaVersion": 1, "pairs": {}, "scanRatio": 1.0, "filesScanned": 2}
+    out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report), prev_digest=prev)
+    assert gl.classify_collect(out)[0] == "collected"
+
+
+def test_prior_digest_without_scan_ratio_still_collects(tmp_path):
+    _seed_tracked(tmp_path)
+    report = _report([])
+    prev_old = {"schemaVersion": 1, "pairs": {}}
+    out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report), prev_digest=prev_old)
+    assert gl.classify_collect(out)[0] == "collected"
+    out_none = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report), prev_digest=None)
+    assert gl.classify_collect(out_none)[0] == "collected"
+
+
+def test_temp_dir_inside_repo_degrades_without_jscpd(tmp_path, monkeypatch):
+    _seed_tracked(tmp_path, "a.py")
+    inner = tmp_path / "inner-tmp"
+    inner.mkdir()
+
+    def _mkdtemp_inside_repo(*_a, **_k):
+        return str(inner)
+
+    monkeypatch.setattr(gld.tempfile, "mkdtemp", _mkdtemp_inside_repo)
+    run = _FakeJscpd(_report([]))
+    out = _collect(gld.DuplicationLens(), tmp_path, run)
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"
+    assert out["digest"] is None
+    assert "resolves inside repo" in reason
+    assert not any(call[0] and call[0][0] == "jscpd" for call in run.calls)
+
+
+def test_digest_and_diagnostics_carry_scan_metadata(tmp_path):
+    shared = ["META_%d" % i for i in range(12)]
+    _write_pair(tmp_path, "a.py", "b.py", shared, shared)
+    report = _report([_clone_entry("a.py", "b.py", lines=12, fmt="python")], sources=2)
+    out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report))
+    assert gl.classify_collect(out)[0] == "collected"
+    assert out["digest"]["filesScanned"] == 2
+    assert out["digest"]["scanRatio"] == 1.0
+    assert out["diagnostics"]["jscpdInputMode"] == "config-file"
+    assert out["diagnostics"]["jscpdFilesScanned"] == 2
 
 
 _DUP_SNIPPET = "\n".join([

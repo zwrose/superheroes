@@ -1121,7 +1121,13 @@ def test_git_census_failure_degrades_python_not_collected(tmp_path):
 
 
 def test_arg_max_guard_degrades_never_scans_repo_dir(tmp_path, monkeypatch):
-    monkeypatch.setattr(guardian_census, "MAX_TRACKED_OPERAND_BYTES", 5)
+    budget_calls = []
+
+    def tiny_budget(repo, fixed_argv):
+        budget_calls.append((repo, list(fixed_argv)))
+        return 5
+
+    monkeypatch.setattr(guardian_census, "argv_operand_budget_bytes", tiny_budget)
     repo = _py_repo(tmp_path, {"a.py": "x\n", "b.py": "y\n"})
     run = FakeRun([("vulture", (0, "", ""))], tracked=["a.py", "b.py"])
     out = gld.LENS.collect(_ctx(repo, run))
@@ -1129,6 +1135,35 @@ def test_arg_max_guard_degrades_never_scans_repo_dir(tmp_path, monkeypatch):
     assert out["digest"] is None
     assert "across 2 files" in (out["reason"] or "")
     assert not any(c[0] and c[0][0] == "vulture" for c in run.calls)
+
+
+def test_arg_max_guard_reason_names_operand_budget_and_counts(tmp_path, monkeypatch):
+    monkeypatch.setattr(guardian_census, "argv_operand_budget_bytes", lambda repo, fa: 1)
+    repo = _py_repo(tmp_path, {"a.py": "x\n"})
+    run = FakeRun([("vulture", (0, "", ""))], tracked=["a.py"])
+    out = gld.LENS.collect(_ctx(repo, run))
+    reason = out["reason"] or ""
+    assert out["status"] == "not-collected"
+    assert "operand payload is" in reason
+    assert "across 1 files" in reason
+    assert "derived 1-byte operand budget" in reason
+    assert "platform ARG_MAX" in reason
+
+
+def test_arg_max_guard_passes_real_vulture_argv_to_budget(tmp_path, monkeypatch):
+    captured = []
+
+    def capture_budget(repo, fixed_argv):
+        captured.append(list(fixed_argv))
+        return 0
+
+    monkeypatch.setattr(guardian_census, "argv_operand_budget_bytes", capture_budget)
+    repo = _py_repo(tmp_path, {"a.py": "x\n"})
+    run = FakeRun([("vulture", (0, "", ""))], tracked=["a.py"])
+    gld.LENS.collect(_ctx(repo, run))
+    assert len(captured) == 1
+    expected_argv, _ = gld._vulture_argv()
+    assert captured[0] == expected_argv
 
 
 def test_vulture_exit3_all_untracked_hits_collected_not_contradiction(tmp_path):

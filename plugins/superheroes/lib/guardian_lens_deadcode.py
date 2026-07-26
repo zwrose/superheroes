@@ -407,15 +407,17 @@ def collect_python(ctx, repo):
         return ("not-collected",
                 "zero tracked .py files — no measurable python surface", {},
                 None, None, {})
+    argv, tried = _vulture_argv()
+    platform_max = guardian_census._platform_arg_max_bytes()
+    budget = guardian_census.argv_operand_budget_bytes(repo, argv)
     operand_bytes = guardian_census.operand_payload_bytes(repo, py_files)
-    if operand_bytes > guardian_census.MAX_TRACKED_OPERAND_BYTES:
+    if operand_bytes > budget:
         return ("not-collected",
                 "tracked-file operand payload is %d bytes across %d files, exceeding "
-                "the %d-byte cap (ARG_MAX headroom) — cannot scan without risking a "
-                "truncated argv" % (operand_bytes, len(py_files),
-                                    guardian_census.MAX_TRACKED_OPERAND_BYTES),
-                {}, None, None, {})
-    argv, tried = _vulture_argv()
+                "the derived %d-byte operand budget (platform ARG_MAX %d after child "
+                "env and fixed argv) — cannot scan without risking a truncated argv"
+                % (operand_bytes, len(py_files), budget, platform_max),
+                {}, argv, tried, {})
     res = gc.run_tool(argv, ctx, timeout=VULTURE_TIMEOUT, cwd=repo,
                       ok_exits=VULTURE_OK_EXIT, targets=py_files)
     if not res.get("ok"):
