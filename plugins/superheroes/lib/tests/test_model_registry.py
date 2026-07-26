@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import re
 
 import pytest
 
@@ -399,8 +400,10 @@ def test_claude_alias_resolution_record_matches_registry_ids():
     for model_id, rec in claude_models.items():
         resolved = record[rec["dispatch"]]
         expected_prefix = "claude-" + model_id.replace(".", "-")
-        assert resolved.startswith(expected_prefix), (model_id, resolved, expected_prefix)
+        assert re.fullmatch(re.escape(expected_prefix) + r"(-\d{8})?", resolved), (
+            model_id, resolved, expected_prefix)
     assert MR.CLAUDE_ALIAS_RESOLUTION["harness"].startswith("claude-code/")
+    assert MR.SMART_CLAUDE_FALLBACK[0] in claude_models, MR.SMART_CLAUDE_FALLBACK
 
 
 def test_cursor_first_party_models_are_one_family():

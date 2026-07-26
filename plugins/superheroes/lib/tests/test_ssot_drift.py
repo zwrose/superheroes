@@ -255,6 +255,42 @@ def test_no_concrete_model_id_in_charters_or_skills():
     assert not hits, "concrete model id in charter/skill (use roles, not models): %r" % hits
 
 
+def test_concrete_model_tokens_cover_every_registered_model():
+    """§11: `_CONCRETE_MODEL_TOKENS` is a hand-maintained copy of the registry's ids — the leak scan
+    it drives silently stops covering a model the moment someone registers one without adding it
+    here. Read the home and assert coverage (retired ids may stay in the tuple; the check is
+    one-directional)."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "model_registry", os.path.join(PLUGIN, "lib", "model_registry.py"))
+    mr = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mr)
+    registered = {m for v in mr.vendors() for m in mr._MODELS[v]}
+    missing = registered - set(_CONCRETE_MODEL_TOKENS)
+    assert not missing, "registered model id absent from _CONCRETE_MODEL_TOKENS: %r" % sorted(missing)
+
+
+def test_conventions_family_keys_match_the_registry():
+    """§11: CONVENTIONS' family-key enumeration is a doc copy of the registry's family vocabulary.
+    The `cursor` key outlived the family itself until a review caught it (#651) — read the home."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "model_registry", os.path.join(PLUGIN, "lib", "model_registry.py"))
+    mr = importlib.util.module_from_spec(spec)
+    mr_mod = mr
+    spec.loader.exec_module(mr_mod)
+    home = {rec["family"] for v in mr_mod.vendors() for rec in mr_mod._MODELS[v].values()}
+    text = _read("../../CONVENTIONS.md")
+    m = re.search(r"\*\*Family keys\*\*[^(]*\(([^)]*)\)", text)
+    assert m, "CONVENTIONS: family-key enumeration not found"
+    documented = set(re.findall(r"`([a-z0-9-]+)`", m.group(1)))
+    assert documented == home, (
+        "CONVENTIONS family-key list %r drifted from model_registry families %r"
+        % (sorted(documented), sorted(home)))
+
+
 def _scan_retired_tokens(rel_paths):
     hits = []
     for rel in rel_paths:

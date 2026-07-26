@@ -1823,7 +1823,11 @@ def test_auditor_vendor_family_keyed_single_vendor_same_family_degraded():
 # independent. #651 (owner-ratified 2026-07-26) merged both cursor first-party models into the `xai`
 # family, so that env is now same-family and DEGRADED. Its replacement —
 # `test_cursor_fix_never_gets_an_independent_cursor_auditor`, at the end of this file — asserts the
-# new expectation AND the cross-family branches the old test did not cover, so no coverage is lost.
+# new expectation AND the cross-family branches the old test did not cover. One thing did go with
+# it: that test was the only one reaching `_auditor_vendor`'s SECOND (same-vendor) loop on its
+# `independent` return, and post-#651 no vendor can satisfy that branch — every vendor's
+# `code-fixer` and `verifier` roles now resolve to the same family — so it is unreachable, not
+# merely untested. Flagged for the advisor rather than deleted here.
 
 
 def test_auditor_vendor_unknown_fixer_degraded():

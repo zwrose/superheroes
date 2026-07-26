@@ -429,7 +429,7 @@ def test_cli_compose_with_live_vendors_override(capsys):
             "--live-vendors",
             "claude,codex,cursor",
             "--author-family",
-            "cursor",
+            "xai",
             "--narrative-family",
             "anthropic",
             "--pr-number",
@@ -451,7 +451,7 @@ def test_cli_compose_deterministic(capsys):
         "--live-vendors",
         "claude,codex,cursor",
         "--author-family",
-        "cursor",
+        "xai",
         "--narrative-family",
         "anthropic",
         "--pr-number",
@@ -644,3 +644,13 @@ def test_composer_authored_diff_excludes_cursor_from_strong_critical_and_groundi
         assert m["seats"][seat]["family"] != "xai", seat
     assert m["seats"][SM.GROUNDING_SEAT]["family"] != "xai"
     assert SM.verify(m, author) == []
+
+
+def test_cursor_only_panel_on_composer_diff_is_visibly_degraded():
+    """#651: the configuration whose safety actually changed. Pre-merge, a cursor-only panel on a
+    composer-made diff (author family 'cursor', every seat's family 'xai') recorded NO grounding
+    degradation and NO maker-family violation — a whole panel of the author's own family read as
+    clean. Post-merge both fire, so the self-review is visible instead of silent."""
+    m = SM.build(SM.PANEL_ROSTER, ["cursor"], "xai", "anthropic", SM.seed_from(651, None))
+    assert "grounding-independence" in {d["constraint"] for d in m["degradations"]}
+    assert "maker-family" in {v["constraint"] for v in SM.verify(m, "xai")}

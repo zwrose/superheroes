@@ -634,7 +634,7 @@ merge authorization is the owner's to grant; the band shows it and never applies
    (e.g. `cursor-grok-4.5` with `high`).
 2. **Composed dispatch tokens** — what `dispatch_token` emits and the engine CLI argv carries
    (e.g. `cursor-grok-4.5-high`).
-3. **Family keys** — independence accounting only (`anthropic` / `openai` / `cursor` / `xai`);
+3. **Family keys** — independence accounting only (`anthropic` / `openai` / `xai`);
    not a dispatch input.
 
 `model_registry.resolve_dispatch` is the single seam that converts a registry id, a composed
