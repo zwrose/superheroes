@@ -1953,6 +1953,14 @@ def test_library_receipt_omits_base_not_checked(tmp_path):
     assert ok, reason
 
 
+def test_library_receipt_mode_without_cli_guard_stays_not_checked(tmp_path):
+    """Guard-shaped config keys must not infer baseGuard=checked without the CLI guard."""
+    receipt = RD.run_loop(_seams(), _cfg(mode="pr"))
+    assert receipt["baseGuard"] == "not-checked"
+    if "base" in receipt:
+        assert receipt["baseGuard"] == "not-checked"
+
+
 def test_base_guard_round_diff_malformed(tmp_path, capsys):
     d = str(tmp_path)
     ga = _guard_argv(d)

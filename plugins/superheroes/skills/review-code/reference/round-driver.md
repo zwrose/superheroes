@@ -118,8 +118,8 @@ does not require** it, like the existing per-round `auditProvenance` field.
   re-run Setup's resolve block and check `origin`; confirm `meta.json` has a full commit pin and
   `repoRoot` matches this checkout.
 - **Diff artifact** (`round-diff-required`, `round-diff-unreadable`, `round-diff-empty`,
-  `round-diff-malformed`, `diff-path-not-fresh-state`): the diff command failed or produced nothing
-  invalid — fix the diff step and do not proceed with review.
+  `round-diff-malformed`, `diff-path-not-fresh-state`): fix the diff step and do not proceed with
+  review if the diff command failed, produced nothing, or produced output that is not a valid diff.
 - **`base-repo-mismatch`:** this checkout's `origin` is not the PR's base repository — re-run from
   a clone of the base repo (full fork support is deliberately not built).
 

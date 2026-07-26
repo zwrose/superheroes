@@ -1848,7 +1848,7 @@ def build_receipt(state, session_dir=None):
         "scriptRan": scriptran,
         "degraded": degraded,
         "skippedBlockers": skipped_blockers,
-        "baseGuard": "checked" if base else "not-checked",
+        "baseGuard": cfg.get("baseGuard") or "not-checked",
     }
     if base:
         receipt["base"] = base
@@ -1868,8 +1868,10 @@ def validate_receipt(receipt):
     may carry an `auditProvenance` field (`collection-manifest` when the round ran fix audits) — it is
     ACCEPTED, not required. The optional top-level `base` block (pinned diff-base metadata from a CLI
     `next` that ran the base guard) is likewise ACCEPTED, not required — library/eval runs omit it. The
-    always-present `baseGuard` field labels which path produced the receipt (`checked` vs `not-checked`);
-    it is not part of `_RECEIPT_REQUIRED` so older receipts remain valid. Returns (ok, reason)."""
+    always-present `baseGuard` field records whether the CLI base guard ran (`checked`, set explicitly
+    on a fresh CLI `next` after the guard passes) or not (`not-checked`, including library/eval
+    paths and any run that never received that flag); it is not inferred from guard-shaped config
+    keys. It is not part of `_RECEIPT_REQUIRED` so older receipts remain valid. Returns (ok, reason)."""
     if not isinstance(receipt, dict):
         return False, "receipt is not an object"
     for key in _RECEIPT_REQUIRED:
@@ -2408,6 +2410,7 @@ def _dispatch(args):
                             "repoRoot"):
                     if guard.get(key) is not None:
                         overrides[key] = guard[key]
+                overrides["baseGuard"] = "checked"
             elif args.diff_path:
                 return _refuse_base_guard(args.session_dir, "diff-path-not-fresh-state",
                                           value=args.diff_path)

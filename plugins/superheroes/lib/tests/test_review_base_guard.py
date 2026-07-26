@@ -82,6 +82,33 @@ def test_resolve_commit_branch_name_rejected(git_repo):
     assert rbg.resolve_commit("main", root) is None
 
 
+def test_check_base_branch_name_reason_not_unresolved(git_repo, tmp_path):
+    root, sha = git_repo
+    session = str(tmp_path / "sess")
+    _write_meta(session, root, sha, baseRef="main")
+    r = rbg.check_base(session, root)
+    assert r["reason"] == REASON.REASON_NOT_PINNED
+    assert r["reason"] != REASON.REASON_UNRESOLVED
+
+
+def test_check_base_abbreviated_sha_reason_not_unresolved(git_repo, tmp_path):
+    root, sha = git_repo
+    session = str(tmp_path / "sess")
+    _write_meta(session, root, sha, baseRef=sha[:7])
+    r = rbg.check_base(session, root)
+    assert r["reason"] == REASON.REASON_NOT_PINNED
+    assert r["reason"] != REASON.REASON_UNRESOLVED
+
+
+def test_check_base_literal_null_reason_not_unresolved(git_repo, tmp_path):
+    root, sha = git_repo
+    session = str(tmp_path / "sess")
+    _write_meta(session, root, sha, baseRef="null")
+    r = rbg.check_base(session, root)
+    assert r["reason"] == REASON.REASON_NOT_PINNED
+    assert r["reason"] != REASON.REASON_UNRESOLVED
+
+
 def test_resolve_commit_abbreviated_sha(git_repo):
     root, sha = git_repo
     assert rbg.resolve_commit(sha[:7], root) is None
