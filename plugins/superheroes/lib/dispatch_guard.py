@@ -7,6 +7,10 @@ fail-loud at the real dispatch boundary (``engine_adapter.build_argv`` →
 ``model_registry.validate_config``) before dispatch; ``--effort`` here is used to resolve
 effort-qualified dispatch tokens and the registry-model-id ``is_allowed`` path, and this gate does not
 re-police codex effort.
+
+On success the JSON payload exposes the structured triple (``model_id``, ``effort``,
+``dispatch_token``) plus ``effort_source``; ``resolved_model`` remains the composed dispatch
+token for back-compat.
 """
 from __future__ import annotations
 
@@ -37,30 +41,51 @@ def _tokens_for(role: str, vendor: str) -> list[str]:
     return sorted(out)
 
 
+def _pairs_json(candidates: list[tuple[str, str | None]]) -> list[list[str | None]]:
+    return [[m, e] for m, e in candidates]
+
+
 def _park(
     role: object,
     vendor: object,
     reason: str,
     *,
     allowlist: list[str] | None = None,
+    allowlist_pairs: list[list[str | None]] | None = None,
 ) -> dict:
     return {
         "ok": False,
         "role": role,
         "vendor": vendor,
+        "model_id": None,
+        "effort": None,
+        "dispatch_token": None,
+        "effort_source": None,
         "resolved_model": None,
         "allowlist": [] if allowlist is None else allowlist,
+        "allowlist_pairs": [] if allowlist_pairs is None else allowlist_pairs,
         "reason": reason,
     }
 
 
-def _ok(role: str, vendor: str, resolved_model: str, allowlist: list[str]) -> dict:
+def _ok(
+    role: str,
+    vendor: str,
+    tokens: list[str],
+    resolved: dict,
+) -> dict:
+    dispatch_token = resolved["dispatch_token"]
     return {
         "ok": True,
         "role": role,
         "vendor": vendor,
-        "resolved_model": resolved_model,
-        "allowlist": allowlist,
+        "model_id": resolved["model_id"],
+        "effort": resolved["effort"],
+        "dispatch_token": dispatch_token,
+        "effort_source": resolved["effort_source"],
+        "resolved_model": dispatch_token,
+        "allowlist": tokens,
+        "allowlist_pairs": _pairs_json(resolved["candidates"]),
         "reason": None,
     }
 
@@ -92,31 +117,7 @@ def validate(
 
     tokens = _tokens_for(role, vendor)
 
-    if model is None:
-        cell = model_registry.matrix_config(role, vendor)
-        # defensive: unreachable while matrix_config(role,vendor) is None <=> allowlist()==() (registry invariant); kept as belt-and-suspenders against future divergence.
-        if cell is None:
-            return _park(
-                role,
-                vendor,
-                f"no seat default for role {role!r} on vendor {vendor!r}",
-                allowlist=tokens,
-            )
-        resolved = model_registry.dispatch_token(vendor, *cell)
-        if resolved is None or resolved not in tokens:
-            joined = ", ".join(tokens)
-            return _park(
-                role,
-                vendor,
-                (
-                    f"default for role {role!r} on vendor {vendor!r} is not on the "
-                    f"{role}/{vendor} allowlist [{joined}]"
-                ),
-                allowlist=tokens,
-            )
-        return _ok(role, vendor, resolved, tokens)
-
-    if not isinstance(model, str):
+    if model is not None and not isinstance(model, str):
         joined = ", ".join(tokens)
         return _park(
             role,
@@ -124,21 +125,24 @@ def validate(
             f"model {model!r} is not on the {role}/{vendor} allowlist [{joined}] — "
             + _PARK_TAIL,
             allowlist=tokens,
+            allowlist_pairs=_pairs_json(list(pairs)),
         )
 
-    if model in tokens:
-        return _ok(role, vendor, model, tokens)
+    resolved = model_registry.resolve_dispatch(role, vendor, model, effort)
 
-    if model_registry.is_allowed(role, vendor, model, effort):
-        resolved = model_registry.dispatch_token(vendor, model, effort) or model
-        return _ok(role, vendor, resolved, tokens)
+    if resolved["ok"]:
+        return _ok(role, vendor, tokens, resolved)
 
-    joined = ", ".join(tokens)
+    reason = resolved["reason"]
+    if resolved["candidates"]:
+        reason = f"{reason} — {_PARK_TAIL}"
+
     return _park(
         role,
         vendor,
-        f"model {model!r} is not on the {role}/{vendor} allowlist [{joined}] — " + _PARK_TAIL,
+        reason,
         allowlist=tokens,
+        allowlist_pairs=_pairs_json(resolved["candidates"]),
     )
 
 

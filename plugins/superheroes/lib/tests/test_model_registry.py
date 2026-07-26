@@ -252,3 +252,137 @@ def test_is_allowed():
     assert MR.is_allowed("reviewer-deep", None, "cursor-grok-4.5", "high") is False
     assert MR.is_allowed("reviewer-deep", "cursor", None, "high") is False
     assert MR.is_allowed("reviewer-deep", "cursor", "cursor-grok-4.5", None) is False
+
+
+def test_parse_dispatch_token_vendors():
+    assert MR.parse_dispatch_token("claude", "opus") == ("opus-4.8", None)
+    assert MR.parse_dispatch_token("claude", "fable") == ("fable-5", None)
+    assert MR.parse_dispatch_token("codex", "gpt-5.6-sol") == ("gpt-5.6-sol", None)
+    assert MR.parse_dispatch_token("cursor", "composer-2.5") == ("composer-2.5", None)
+    assert MR.parse_dispatch_token("cursor", "cursor-grok-4.5-high") == (
+        "cursor-grok-4.5",
+        "high",
+    )
+    assert MR.parse_dispatch_token("cursor", "cursor-grok-4.5") is None
+    assert MR.parse_dispatch_token("cursor", "cursor-grok-4.5-max") is None
+    assert MR.parse_dispatch_token("nope", "opus") is None
+    assert MR.parse_dispatch_token("claude", 42) is None
+    assert MR.parse_dispatch_token(None, "opus") is None
+    assert MR.parse_dispatch_token("claude", "garbage-token") is None
+
+
+def test_dispatch_vocabulary_round_trip():
+    for role in MR.roles():
+        for vendor in MR.vendors():
+            for m, e in MR.allowlist(role, vendor):
+                tok = MR.dispatch_token(vendor, m, e)
+                assert tok is not None
+                parsed = MR.parse_dispatch_token(vendor, tok)
+                assert parsed is not None
+                m2, e2 = parsed
+                assert m2 == m
+                assert e2 in (None, e)
+                if e2 is not None:
+                    assert e2 == e
+                r_id = MR.resolve_dispatch(role, vendor, m, e)
+                assert r_id["ok"] is True
+                assert (r_id["model_id"], r_id["effort"], r_id["dispatch_token"]) == (
+                    m,
+                    e,
+                    tok,
+                )
+                r_tok = MR.resolve_dispatch(role, vendor, tok, e)
+                assert r_tok["ok"] is True
+                assert (r_tok["model_id"], r_tok["effort"], r_tok["dispatch_token"]) == (
+                    m,
+                    e,
+                    tok,
+                )
+                r_tok_none = MR.resolve_dispatch(role, vendor, tok, None)
+                assert r_tok_none["ok"] is True
+                assert (r_tok_none["model_id"], r_tok_none["effort"]) in MR.allowlist(
+                    role, vendor
+                )
+
+
+def test_resolve_dispatch_seat_default():
+    for role in MR.roles():
+        for vendor in MR.vendors():
+            pairs = MR.allowlist(role, vendor)
+            if not pairs:
+                continue
+            cell = MR.matrix_config(role, vendor)
+            assert cell is not None
+            r = MR.resolve_dispatch(role, vendor)
+            assert r["ok"] is True
+            assert r["effort_source"] == "seat-default"
+            assert (r["model_id"], r["effort"]) == cell
+
+
+def test_resolve_dispatch_reviewer_deep_cursor_registry_id():
+    r = MR.resolve_dispatch("reviewer-deep", "cursor", "cursor-grok-4.5")
+    assert r["ok"] is True
+    assert (r["model_id"], r["effort"], r["dispatch_token"]) == (
+        "cursor-grok-4.5",
+        "high",
+        "cursor-grok-4.5-high",
+    )
+
+
+def test_resolve_dispatch_codex_lowest_rung():
+    r = MR.resolve_dispatch("reviewer", "codex", "gpt-5.6-sol")
+    assert r["ok"] is True
+    assert r["effort"] == "high"
+    assert r["effort_source"] == "resolved-lowest-rung"
+
+
+def test_resolve_dispatch_fail_closed_edges():
+    r = MR.resolve_dispatch(42, "cursor")
+    assert r["ok"] is False and r["reason"] and r["candidates"] == []
+
+    r = MR.resolve_dispatch("reviewer", 99)
+    assert r["ok"] is False and r["reason"] and r["candidates"] == []
+
+    r = MR.resolve_dispatch("reviewer", "nope")
+    assert r["ok"] is False and "unknown vendor" in r["reason"]
+    assert r["candidates"] == []
+
+    r = MR.resolve_dispatch("not-a-role", "cursor")
+    assert r["ok"] is False and "unknown role" in r["reason"]
+    assert r["candidates"] == []
+
+    r = MR.resolve_dispatch("synthesis", "codex")
+    assert r["ok"] is False and "no sanctioned model" in r["reason"]
+    assert r["candidates"] == []
+
+    r = MR.resolve_dispatch("mechanical", "codex")
+    assert r["ok"] is False and r["reason"]
+
+    r = MR.resolve_dispatch("reviewer-deep", "cursor", "not-a-model")
+    assert r["ok"] is False and "allowlist" in r["reason"]
+
+    r = MR.resolve_dispatch("reviewer-deep", "cursor", "composer-2.5")
+    assert r["ok"] is False and "allowlist" in r["reason"]
+
+    r = MR.resolve_dispatch(
+        "reviewer-deep", "cursor", "cursor-grok-4.5", "low"
+    )
+    assert r["ok"] is False and "allowlist" in r["reason"]
+
+    r = MR.resolve_dispatch(
+        "reviewer-deep", "cursor", "cursor-grok-4.5-high", "low"
+    )
+    assert r["ok"] is False and "conflicts" in r["reason"]
+
+    r = MR.resolve_dispatch("reviewer", "claude", "fable-5", "high")
+    assert r["ok"] is False and r["reason"]
+
+    r = MR.resolve_dispatch("reviewer", "claude", "fable", "high")
+    assert r["ok"] is False and r["reason"]
+
+    r = MR.resolve_dispatch("reviewer", "cursor", [], None)
+    assert r["ok"] is False and r["reason"]
+    assert r["candidates"] == list(MR.allowlist("reviewer", "cursor"))
+
+    r = MR.resolve_dispatch("reviewer", "cursor", "cursor-grok-4.5", 99)
+    assert r["ok"] is False and r["reason"]
