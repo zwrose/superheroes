@@ -677,10 +677,10 @@ def test_cursor_only_panel_on_composer_diff_is_visibly_degraded():
 
 
 def test_maker_family_barred_from_test_seat():
-    seed = SM.seed_from(670, None)
-    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "openai", "anthropic", seed)
-    assert m["seats"]["test-reviewer"]["family"] != "openai"
-    assert SM.verify(m, "openai") == []
+    for seed in range(40):
+        m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "openai", "anthropic", seed)
+        assert m["seats"]["test-reviewer"]["family"] != "openai", seed
+        assert SM.verify(m, "openai") == [], seed
 
 
 def test_maker_family_barred_from_every_roster_seat():
@@ -691,11 +691,11 @@ def test_maker_family_barred_from_every_roster_seat():
         MRG.family_for("code-fixer", "codex"),
         MRG.family_for("code-fixer", "cursor"),
     )
-    seed = SM.seed_from(670, None)
     for author in families:
-        m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, author, "anthropic", seed)
-        for seat in SM.PANEL_ROSTER:
-            assert m["seats"][seat]["family"] != author, (author, seat)
+        for seed in range(40):
+            m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, author, "anthropic", seed)
+            for seat in SM.PANEL_ROSTER:
+                assert m["seats"][seat]["family"] != author, (seed, author, seat)
 
 
 def test_single_vendor_collapse_is_same_family_degradation_not_violation():
@@ -809,6 +809,38 @@ def test_verify_malformed_liveness_is_a_violation():
             v.get("constraint") == "maker-family" and v.get("seat") == "code-reviewer"
             for v in violations
         ), live
+
+
+def test_to_receipt_carries_liveness_pin_scoped_provenance():
+    import model_registry as MRG
+
+    author = MRG.family_for("code-fixer", "cursor")
+    seat_cfg = {
+        "vendor": "cursor",
+        "model": "cursor-grok-4.5",
+        "effort": "high",
+        "tier": "reviewer-deep",
+        "family": author,
+        "source": "rotated",
+    }
+    sm = {
+        "seats": {**_full_seats_template(), "test-reviewer": seat_cfg},
+        "liveVendors": ["cursor"],
+        "livenessPinScoped": True,
+    }
+    receipt = SM.to_receipt(sm, author)
+    assert receipt["livenessPinScoped"] is True
+    round_trip = SM.to_receipt(receipt, author)
+    assert any(
+        v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
+        for v in round_trip["violations"]
+    )
+
+    bare = {"seats": _full_seats_template(), "liveVendors": THREE_VENDORS}
+    bare_receipt = SM.to_receipt(bare, "xai")
+    assert bare_receipt["livenessPinScoped"] is False
+    assert bare_receipt["seats"] == bare["seats"]
+    assert bare_receipt["liveVendors"] == bare["liveVendors"]
 
 
 def test_to_receipt_same_family_derivation_is_idempotent():

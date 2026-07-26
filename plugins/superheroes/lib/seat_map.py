@@ -587,6 +587,7 @@ def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
         "liveVendors": seat_map.get("liveVendors", []),
         "narrativeFamily": seat_map.get("narrativeFamily"),
         "authorFamily": seat_map.get("authorFamily"),
+        "livenessPinScoped": bool(seat_map.get("livenessPinScoped")),
         "violations": verify(seat_map, af),
     }
 
