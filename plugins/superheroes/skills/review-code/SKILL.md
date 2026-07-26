@@ -31,6 +31,8 @@ The five specialist agents are bundled plugin agents (`architecture-reviewer`, `
 | `/superheroes:review-code --focus <notes>` | Pass focus notes to every specialist. Combinable with any form.                                                                                                       |
 | `/superheroes:review-code --result-file <path>` | Write the terminal decision (`action`, `round`, `reason`) to `<path>` as JSON on **every** terminal exit (step-5 clean, step-10 all-skipped, step-11/12 HALT, step-14 gate), for a programmatic caller (e.g. Workhorse step 2). Combinable with any form; absent → no file written (backward-compatible). |
 
+The three top-level paths: `--post` → read-only GitHub posting; `--review-only` → read-only terminal presentation; otherwise → auto-fix loop.
+
 **Auto-detection rule.** Run `gh pr list --head "$(git rev-parse --abbrev-ref HEAD)" --json number,headRefOid,headRefName --limit 1`. If the result is non-empty, default to PR mode. Otherwise default to branch mode. If the user passed `branch` explicitly, skip the lookup. If the user passed `pr <N>` explicitly, use `<N>` and don't auto-detect.
 
 **`--post` only applies to PR mode.** If the user passes `--post` without a PR (and auto-detection finds none), stop and tell them — branch mode has nothing to post against.
@@ -265,7 +267,7 @@ BASE_REF=$(git rev-parse --verify --quiet "refs/remotes/origin/$BASE_BRANCH^{com
 BASE_REF=$(git rev-parse --verify --quiet "$BASE_REF^{commit}") || { echo "review-code: base '${BASE_BRANCH:-<empty>}' did not resolve to a commit (BASE_FETCH=${BASE_FETCH}) — refusing to review (#637)" >&2; exit 1; }
 ```
 
-**The base must RESOLVE TO A COMMIT — checked once, at the single point of consumption.** This is the only validation, and it is deliberately not a non-emptiness test: `$BASE_REF` reaching `git diff` as an empty string makes argv `...HEAD`, which git reads as `HEAD...HEAD` — a **zero-line diff at exit 0** the loop would certify clean — and reaching it as the literal string `null` (what `jq -r` prints for an absent key) passes any `[ -n … ]` check while `git diff null...HEAD` exits 128 and *still* leaves an empty `diff.txt`. `git rev-parse --verify --quiet "$BASE_REF^{commit}"` rejects both, plus a deleted branch and a non-commit tag. **Every** producer of `$BASE_REF` — the fetch/pin above, the local fallback, the `meta.json` restore below — routes through it; never add a second, weaker guard beside it, and never let a caller "recover" by substituting a branch name.
+**The base must RESOLVE TO A COMMIT — validated once at Setup, and every consumer uses the guarded command.** This is the only validation, and it is deliberately not a non-emptiness test: `$BASE_REF` reaching `git diff` as an empty string makes argv `...HEAD`, which git reads as `HEAD...HEAD` — a **zero-line diff at exit 0** the loop would certify clean — and reaching it as the literal string `null` (what `jq -r` prints for an absent key) passes any `[ -n … ]` check while `git diff null...HEAD` exits 128 and *still* leaves an empty `diff.txt`. `git rev-parse --verify --quiet "$BASE_REF^{commit}"` rejects both, plus a deleted branch and a non-commit tag. **Every** producer of `$BASE_REF` — the fetch/pin above, the local fallback, the `meta.json` restore below — routes through it; never add a second, weaker guard beside it, and never let a caller "recover" by substituting a branch name.
 
 **Never diff a stale base silently.** Any `$BASE_FETCH` other than `fetched` is a **degradation** — name it in the dispatch summary, record it in `meta.json`, and surface it in the `--post` review body and the `--review-only` presentation *before* any finding is shown. Both modes assume `origin` is the base branch's repository — the same assumption the `git fetch origin "$PR_BRANCH"` above already makes; a PR whose base lives in a *different* upstream repo than `origin` is out of scope here.
 
@@ -283,12 +285,16 @@ The read-only paths run a single pass and compute the same local diff into `roun
 Then write `meta.json` in both modes:
 
 ```bash
+FOCUS_ARG=$(printf '%s' "${FOCUS_JSON:-null}" | jq -c . 2>/dev/null) || FOCUS_ARG=$(jq -Rn --arg s "${FOCUS_JSON:-}" '$s')   # free-form --focus notes become a JSON string rather than failing the write
+PR_ARG=$(printf '%s' "${PR_NUMBER:-null}" | jq -c 'if type == "number" then . else null end' 2>/dev/null) || PR_ARG=null
 jq -n --arg mode "$MODE" --arg path "$REVIEW_PATH" --arg repo "$REPO" --arg branch "$BRANCH" \
   --arg headSha "$HEAD_SHA" --arg baseRef "$BASE_REF" --arg baseBranch "$BASE_BRANCH" \
   --arg baseFetch "$BASE_FETCH" --arg sessionDir "$SESSION_DIR" --arg verify "${VERIFY_CMD:-unverified}" \
-  --argjson pr "${PR_NUMBER:-null}" --argjson focusNotes "${FOCUS_JSON:-null}" \
+  --argjson pr "$PR_ARG" --argjson focusNotes "$FOCUS_ARG" \
   '{mode:$mode,path:$path,pr:$pr,repo:$repo,branch:$branch,headSha:$headSha,baseRef:$baseRef,baseBranch:$baseBranch,baseFetch:$baseFetch,sessionDir:$sessionDir,verify:$verify,focusNotes:$focusNotes}' \
-  > "$SESSION_DIR/meta.json"
+  > "$SESSION_DIR/meta.json.tmp" \
+  && mv "$SESSION_DIR/meta.json.tmp" "$SESSION_DIR/meta.json" \
+  || { echo "review-code: could not write meta.json — halting rather than continuing without the session record (#637)" >&2; exit 1; }
 ```
 
 `REVIEW_PATH` is `loop` (default), `review-only`, or `post`, decided from the flags at invocation. It is written to `meta.json` so a cold-resumed orchestrator (after compaction) knows which top-level flow to continue. The `verify` field records the verify command string, or `"unverified"` / `"review-only"`, so a cold-resumed orchestrator recovers the verify story.
@@ -386,7 +392,7 @@ Runs when neither `--post` nor `--review-only` is set, and the profile's verify 
 
 **If context was compacted mid-loop**, re-read `$SESSION_DIR/meta.json`, `$SESSION_DIR/loop-state.json`, and `$SESSION_DIR/driver-journal.jsonl`. Resume by calling `next` — a pending step re-emits idempotently.
 
-**Bootstrap.** `mkdir -p $SESSION_DIR/round-1`. Regenerate the diff: `git diff "$BASE_REF"...HEAD > $SESSION_DIR/round-1/diff.txt` (`$BASE_REF` is the pinned base commit) (size with `wc -l` only). First `next` seeds state. Pass **`--vendors`** — the live reviewer/fixer vendors, either a JSON list (`["codex","cursor"]`) or a comma-separated string (`codex,cursor`) — so the driver can seat a **different** auditor vendor for each fix (independent audit). Also pass **`--fixer-vendor`** — the **actual** fix-implementer vendor (`$IMPL_ENGINE` from the calibration / engine resolution) — so the auditor is seated as a **different** vendor than the one that fixed; omitting it leaves the fixer identity **unknown**, which now fails toward a disclosed **degraded** audit (never silently mislabeled independent) — so always pass it when a real fixer vendor is known. An unparseable value, an unknown vendor, or either flag on non-fresh state **fails loud** (nonzero exit + `{"ok": false, "reason": ...}`) — never a silent default. **Omitting `--vendors` degrades every run to the single vendor `["claude"]`:** the audit still runs but independence is **lost** and every terminal is stamped `-degraded` (e.g. `audited-chain-degraded`) — reserve that only for an environment that genuinely has one usable vendor. In PR mode also pass **`--prior-comments`** (the author-justification post-filter reads it; ignored when the file is absent):
+**Bootstrap.** `mkdir -p $SESSION_DIR/round-1`. Regenerate the diff **with the guarded per-round command from Setup** — the same `git diff "$BASE_REF"...HEAD` plus its failed-diff and empty-diff halts, never a bare copy; if `$BASE_REF` is not in this shell, restore and re-validate it first (Setup, "If `$BASE_REF` is not in scope"). Size it with `wc -l` only. First `next` seeds state. Pass **`--vendors`** — the live reviewer/fixer vendors, either a JSON list (`["codex","cursor"]`) or a comma-separated string (`codex,cursor`) — so the driver can seat a **different** auditor vendor for each fix (independent audit). Also pass **`--fixer-vendor`** — the **actual** fix-implementer vendor (`$IMPL_ENGINE` from the calibration / engine resolution) — so the auditor is seated as a **different** vendor than the one that fixed; omitting it leaves the fixer identity **unknown**, which now fails toward a disclosed **degraded** audit (never silently mislabeled independent) — so always pass it when a real fixer vendor is known. An unparseable value, an unknown vendor, or either flag on non-fresh state **fails loud** (nonzero exit + `{"ok": false, "reason": ...}`) — never a silent default. **Omitting `--vendors` degrades every run to the single vendor `["claude"]`:** the audit still runs but independence is **lost** and every terminal is stamped `-degraded` (e.g. `audited-chain-degraded`) — reserve that only for an environment that genuinely has one usable vendor. In PR mode also pass **`--prior-comments`** (the author-justification post-filter reads it; ignored when the file is absent):
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -425,7 +431,7 @@ python3 "$ROOT_DIR/lib/round_driver.py" submit \
 
 ### Fixer subagent prompt
 
-The fixer subagent prompt template (including the escalation-guard context) is in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/auto-fix-loop.md`. Embed `ESC_WRAPPER` and `REPO_ROOT` (absolute) into the fixer prompt's `## Input` block. On `dispatch-fixer`, submit `headDiff` and `changedSubjects` derived from git (`git diff "$BASE_REF"...HEAD`, against the pinned base commit), never the fixer's self-report.
+The fixer subagent prompt template (including the escalation-guard context) is in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/auto-fix-loop.md`. Embed `ESC_WRAPPER` and `REPO_ROOT` (absolute) into the fixer prompt's `## Input` block. On `dispatch-fixer`, submit `headDiff` and `changedSubjects` derived from git via the **guarded** per-round command in Setup (`git diff "$BASE_REF"...HEAD` against the pinned base commit, with its failed-diff and empty-diff halts), never the fixer's self-report.
 
 ### End-of-Loop Summary
 
