@@ -259,7 +259,7 @@ REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo
 
 ```bash
 BASE_FETCH=fetched; git fetch --quiet origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH" \
-  || BASE_FETCH="fetch-failed ($(git remote get-url origin >/dev/null 2>&1 && echo unreachable || echo 'no origin remote')); local-vs-last-fetched base divergence behind/ahead $(git rev-list --left-right --count "$BASE_BRANCH...refs/remotes/origin/$BASE_BRANCH" 2>/dev/null | tr '\t' '/' || echo unknown)"
+  || BASE_FETCH="fetch-failed ($(git remote get-url origin >/dev/null 2>&1 && echo unreachable || echo 'no origin remote')); local-vs-last-fetched base divergence behind/ahead $(git rev-list --left-right --count "$BASE_BRANCH...refs/remotes/origin/$BASE_BRANCH" 2>/dev/null | tr '\t' '/' | grep . || echo unknown)"
 BASE_REF=$(git rev-parse --verify --quiet "refs/remotes/origin/$BASE_BRANCH^{commit}") \
   || { BASE_REF=$(git rev-parse --verify --quiet "$BASE_BRANCH^{commit}"); BASE_FETCH="$BASE_FETCH; no-remote-ref — diffing the LOCAL base"; }
 [ -n "$BASE_REF" ] || { echo "review-code: cannot resolve a diff base for '${BASE_BRANCH:-<empty>}' — refusing to review, because an empty base makes 'git diff ...HEAD' an EMPTY diff that would certify clean (#637)"; exit 1; }
