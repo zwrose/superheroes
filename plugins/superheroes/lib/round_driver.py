@@ -53,6 +53,7 @@ import loop_plan_common  # noqa: E402
 import model_registry  # noqa: E402
 import panel_tally  # noqa: E402
 import resolve_diff_lines  # noqa: E402
+import review_base_guard  # noqa: E402
 import review_loop_plan  # noqa: E402
 import review_memory  # noqa: E402
 import review_round_policy  # noqa: E402
@@ -108,6 +109,8 @@ STALL_CHOICES = ("ship-smaller", "spend-more", "accept-the-disclosed-risk", "hol
 # channel). The judgment gate is an INTERVENTION that folds back into the fix leg, NOT a terminal
 # (#507 R2a) — the stall menu is the ONLY terminal, reachable solely from the audit-stall path.
 JUDGMENT_DISPOSITIONS = ("fix-as-suggested", "fix-with-guidance", "skip")
+
+BASE_GUARD_CHECKED = "checked-stat-bound"
 
 
 # =============================================================================================
@@ -412,8 +415,24 @@ def _degraded(state):
     return bool(state.get("independenceDegraded"))
 
 
+def _base_degraded(state):
+    return bool((state.get("config") or {}).get("baseDegraded"))
+
+
+def _certification_base(state):
+    """Tri-state base provenance for certification — never infer fetched from absence."""
+    if _base_degraded(state):
+        return "degraded"
+    cfg = state.get("config") or {}
+    if cfg.get("baseGuard") == BASE_GUARD_CHECKED:
+        return "fetched"
+    return "not-checked"
+
+
 def _cert_shape(state, base):
-    return base + "-degraded" if _degraded(state) else base
+    if _degraded(state) or _base_degraded(state):
+        return base + "-degraded"
+    return base
 
 
 # =============================================================================================
@@ -1744,7 +1763,8 @@ def _terminal_converged(state, config, full_panel, note=None):
     shape = _cert_shape(state, base)
     state["terminal"] = "converged"
     cert = {"shape": shape, "fullPanel": bool(full_panel),
-            "independence": "degraded" if _degraded(state) else "independent"}
+            "independence": "degraded" if _degraded(state) else "independent",
+            "base": _certification_base(state)}
     if note:
         cert["note"] = note
     skipped = state.get("_skippedBlockers") or []
@@ -1796,10 +1816,16 @@ def build_receipt(state, session_dir=None):
                  "verdict": f.get("verdict"), "challenge": f.get("challenge"),
                  "unverified": f.get("unverified")}
                 for f in (state.get("findings") or []) if isinstance(f, dict)]
+    cfg = state.get("config") or {}
     degraded = []
     if _degraded(state):
         degraded.append("independence: a single live vendor — the fix's auditor is the fixer's "
                         "vendor; independence degraded and named in the certification shape")
+    if _base_degraded(state):
+        degraded.append(
+            "base: reviewed against a base whose fetch degraded (%s) — the pin may be stale; "
+            "named in the certification shape"
+            % (cfg.get("baseFetch") or "baseFetch absent"))
     # The skipped-blocking channel (#507 R2a): an owner-skipped judgment blocker rides the exit
     # disclosure — a product-choice tradeoff shipped un-fixed, cited by its owner reason. It appears
     # BOTH in the degraded disclosure prose AND as the dedicated top-level `skippedBlockers` list
@@ -1833,7 +1859,10 @@ def build_receipt(state, session_dir=None):
                     rkey, ", ".join(smu)))
     scriptran = _scriptran_summary(session_dir) if session_dir else state.get("_scriptRan") or \
         {"invocations": 0, "byPhase": {}}
-    return {
+    base = {k: cfg.get(k) for k in ("baseRef", "baseBranch", "baseFetch", "mode", "baseRepo",
+                                    "baseRepoCheck", "repoRoot", "diffBinding")
+            if cfg.get(k) is not None}
+    receipt = {
         "schemaVersion": SCHEMA_VERSION,
         "verdict": state.get("terminal"),
         "certificationShape": (state.get("certification") or {}).get("shape"),
@@ -1845,7 +1874,13 @@ def build_receipt(state, session_dir=None):
         "scriptRan": scriptran,
         "degraded": degraded,
         "skippedBlockers": skipped_blockers,
+        "baseGuard": cfg.get("baseGuard")
+        if cfg.get("baseGuard") == BASE_GUARD_CHECKED
+        else "not-checked",
     }
+    if base:
+        receipt["base"] = base
+    return receipt
 
 
 _RECEIPT_REQUIRED = ("schemaVersion", "verdict", "certificationShape", "rounds", "findings",
@@ -1859,7 +1894,12 @@ def validate_receipt(receipt):
     skippedBlockers, is rejected with a reason. `skippedBlockers` is REQUIRED (possibly empty) so a
     receipt can never omit the skipped-blocking channel (the exit_skipped invariant). Per-round entries
     may carry an `auditProvenance` field (`collection-manifest` when the round ran fix audits) — it is
-    ACCEPTED, not required. Returns (ok, reason)."""
+    ACCEPTED, not required. The optional top-level `base` block (pinned diff-base metadata from a CLI
+    `next` that ran the base guard) is likewise ACCEPTED, not required — library/eval runs omit it. The
+    always-present `baseGuard` field records whether the CLI base guard ran (``BASE_GUARD_CHECKED``,
+    set explicitly on a fresh CLI `next` after the guard passes) or not (`not-checked`, including
+    library/eval paths and any run that never received that flag); it is not inferred from guard-shaped config
+    keys. It is not part of `_RECEIPT_REQUIRED` so older receipts remain valid. Returns (ok, reason)."""
     if not isinstance(receipt, dict):
         return False, "receipt is not an object"
     for key in _RECEIPT_REQUIRED:
@@ -2060,6 +2100,22 @@ def _receipt_fault_response(detail):
     `journal-fault-unrecordable`). Answered on the terminal `next` (first emission or a replay) and
     the terminating `submit`; the CLI surfaces it NONZERO and it is NEVER a `terminal`-with-ok."""
     return {"ok": False, "reason": "receipt-fault", "detail": detail}
+
+
+def _refuse_base_guard(session_dir, reason, detail=None, value=None):
+    """#648: a base-guard refusal — journalled first (so the refusal is durable evidence, not just a
+    console line), then surfaced on stdout, nonzero. Journal-first matters: when the journal AND its
+    fault marker are both unwritable the append raises JournalFaultUnrecordable, which `main` reports
+    as the last-resort fail-loud — the existing contract, preserved."""
+    _journal_append(session_dir, {"cmd": "next", "phase": None, "round": None, "attempt": None,
+                                  "outcome": "refused-base-guard", "reason": reason})
+    body = {"ok": False, "reason": reason}
+    if detail is not None:
+        body["detail"] = detail
+    if value is not None:
+        body["value"] = value
+    sys.stdout.write(json.dumps(body) + "\n")
+    return 1
 
 
 def _next_response(pending, expected_hash):
@@ -2298,6 +2354,8 @@ def main(argv=None):
     pn.add_argument("--verify-command", default=None)
     pn.add_argument("--max-rounds", type=int, default=None)
     pn.add_argument("--diff-path", default=None, help="round-1 reviewed diff (fresh state only)")
+    pn.add_argument("--repo-root", default=None,
+                    help="repo root the base guard resolves the pinned base against (default: cwd)")
     pn.add_argument("--prior-comments", default=None,
                     help="PR-mode prior review comments JSON (a list) for the author-justification "
                          "post-filter (fresh state only)")
@@ -2362,12 +2420,35 @@ def _dispatch(args):
             overrides["verifyCommand"] = args.verify_command
         if args.max_rounds is not None:
             overrides["maxRounds"] = args.max_rounds
-        if args.diff_path:
-            try:
-                with open(args.diff_path, encoding="utf-8") as fh:
-                    overrides["diff"] = fh.read()
-            except OSError:
-                pass
+        st_ok, st = load_state(args.session_dir)
+        if st_ok:
+            fresh = st is None
+            prior_pin = (st.get("config") or {}).get("baseRef") if isinstance(st, dict) else None
+            repo_root = args.repo_root or os.getcwd()
+            guard = review_base_guard.check_base(args.session_dir, repo_root, prior_pin=prior_pin)
+            if not guard["ok"]:
+                return _refuse_base_guard(args.session_dir, guard["reason"], guard.get("detail"))
+            if fresh:
+                res = review_base_guard.check_round_diff(args.diff_path)
+                if not res["ok"]:
+                    return _refuse_base_guard(args.session_dir, res["reason"], res.get("detail"),
+                                              value=args.diff_path if args.diff_path else None)
+                overrides["diff"] = res["text"]
+                bind = review_base_guard.check_diff_binding(
+                    res["text"], guard["baseRef"], repo_root)
+                if not bind["ok"]:
+                    return _refuse_base_guard(
+                        args.session_dir, bind["reason"], bind.get("detail"))
+                for key in ("baseRef", "baseBranch", "baseFetch", "baseDegraded", "mode", "baseRepo",
+                            "baseRepoCheck", "repoRoot"):
+                    if guard.get(key) is not None:
+                        overrides[key] = guard[key]
+                overrides["baseGuard"] = BASE_GUARD_CHECKED
+                overrides["diffBinding"] = bind["binding"]
+            elif args.diff_path:
+                return _refuse_base_guard(args.session_dir, "diff-path-not-fresh-state",
+                                          value=args.diff_path)
+        # A v1 state file must surface refused-v1 from cmd_next — do not mask it with a base refusal.
         if args.prior_comments:
             # Load + validate the PR-mode prior comments into `priorComments` so the
             # author-justification post-filter is actually reachable (#507 v7). A missing / unreadable
