@@ -1818,9 +1818,12 @@ def test_auditor_vendor_family_keyed_single_vendor_same_family_degraded():
     assert RD._auditor_vendor({"vendors": ["claude"]}, "claude") == ("claude", "degraded")
 
 
-def test_auditor_vendor_family_keyed_single_vendor_cross_family_independent():
-    """#510: cursor-only env — composer fixer (cursor family) vs grok verifier (xai family) → independent."""
-    assert RD._auditor_vendor({"vendors": ["cursor"]}, "cursor") == ("cursor", "independent")
+# The #510-era `test_auditor_vendor_family_keyed_single_vendor_cross_family_independent` lived here.
+# It asserted that a cursor-only env is cross-family (composer='cursor' vs grok='xai') and therefore
+# independent. #651 (owner-ratified 2026-07-26) merged both cursor first-party models into the `xai`
+# family, so that env is now same-family and DEGRADED. Its replacement —
+# `test_cursor_fix_never_gets_an_independent_cursor_auditor`, at the end of this file — asserts the
+# new expectation AND the cross-family branches the old test did not cover, so no coverage is lost.
 
 
 def test_auditor_vendor_unknown_fixer_degraded():
@@ -1835,7 +1838,8 @@ def test_auditor_vendor_empty_string_fixer_degraded():
 
 
 def test_auditor_vendor_family_keyed_pass1_prefers_different_cli():
-    """Pass 1 prefers a different CLI vendor over same-CLI family-independent grok."""
+    """Pass 1 picks a different CLI vendor for a cursor fix. Post-#651 the same-CLI candidate (grok)
+    is same-family too, so codex is the only independent choice — pass 1 and pass 2 now agree here."""
     assert RD._auditor_vendor({"vendors": ["cursor", "codex"]}, "cursor") == ("codex", "independent")
 
 
