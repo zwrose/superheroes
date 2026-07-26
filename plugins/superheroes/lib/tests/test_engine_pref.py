@@ -2,6 +2,8 @@ import importlib.util
 import json
 import os
 
+import pytest
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -451,11 +453,12 @@ _CURSOR_ALL_ROLES_PREFS = {
 
 
 def _parse_review_code_model_cell(model_cell):
-    parts = {}
-    for piece in model_cell.split():
-        label, _, value = piece.partition("=")
-        parts[label] = value
-    return parts
+    reviewer_part, reviewer_deep_value = model_cell.split(" reviewer-deep=", 1)
+    assert reviewer_part.startswith("reviewer=")
+    return {
+        "reviewer": reviewer_part[len("reviewer="):],
+        "reviewer-deep": reviewer_deep_value,
+    }
 
 
 def _all_dispatch_tokens():
@@ -475,21 +478,28 @@ def _all_registered_model_ids():
     return ids
 
 
-def _assert_model_cell_category(cell):
+def _assert_model_cell_category(cell, role, vendor):
     tokens = _all_dispatch_tokens()
     registered_ids = _all_registered_model_ids()
 
-    if "=" in cell:
-        for piece in cell.split():
-            _, _, value = piece.partition("=")
-            assert value in tokens
+    if " reviewer-deep=" in cell:
+        parts = _parse_review_code_model_cell(cell)
+        _assert_model_cell_category(parts["reviewer"], "reviewer", vendor)
+        _assert_model_cell_category(parts["reviewer-deep"], "reviewer-deep", vendor)
+        return
+
+    seat = MR.matrix_config(role, vendor)
+    if seat is not None:
+        assert cell in tokens, (
+            f"role {role!r} has a matrix seat on {vendor!r}; cell must be a bare dispatch token, "
+            f"not {cell!r}"
+        )
         return
 
     if cell in tokens:
         return
 
     assert " " in cell
-    assert cell not in tokens
     assert cell not in registered_ids
 
 
@@ -553,12 +563,29 @@ def test_dispatch_calibration_rows_model_cells_are_token_composite_or_marker():
     for _engine_name, prefs in engine_prefs.items():
         rows = EP.dispatch_calibration_rows(prefs, _CALIBRATION_TIERS)
         for row in rows:
+            vendor = row["engine"]
             if row["role"] == "review-code":
                 parts = _parse_review_code_model_cell(row["model"])
-                _assert_model_cell_category(parts["reviewer"])
-                _assert_model_cell_category(parts["reviewer-deep"])
+                _assert_model_cell_category(parts["reviewer"], "reviewer", vendor)
+                _assert_model_cell_category(parts["reviewer-deep"], "reviewer-deep", vendor)
             else:
-                _assert_model_cell_category(row["model"])
+                _assert_model_cell_category(row["model"], row["role"], vendor)
+
+
+def test_assert_model_cell_category_rejects_marker_when_matrix_seat_exists():
+    marker = "(unsupported on cursor: implementer)"
+    with pytest.raises(AssertionError):
+        _assert_model_cell_category(marker, "implementer", "cursor")
+    _assert_model_cell_category("(unsupported on cursor: pilot)", "pilot", "cursor")
+
+
+def test_parse_review_code_model_cell_round_trips_spaced_marker_in_reviewer_deep():
+    tiers = dict(_CALIBRATION_TIERS, **{"reviewer-deep": "fable"})
+    rows = EP.dispatch_calibration_rows({"reviewer": "codex"}, tiers)
+    review_code = {r["role"]: r for r in rows}["review-code"]["model"]
+    parts = _parse_review_code_model_cell(review_code)
+    assert parts["reviewer"] == "gpt-5.6-terra"
+    assert parts["reviewer-deep"] == "(unsupported on codex: fable)"
 
 
 def test_dispatch_calibration_rows_cursor_implementer_matches_adapter_default():
