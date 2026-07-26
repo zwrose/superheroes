@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.21.2](https://github.com/zwrose/superheroes/compare/superheroes-v0.21.1...superheroes-v0.21.2) (2026-07-26)
+
+
+### Bug Fixes
+
+* **superheroes:** guardian duplication lens — jscpd input via config file, replacing the 100KB argv ceiling ([#644](https://github.com/zwrose/superheroes/issues/644)) ([b0290fd](https://github.com/zwrose/superheroes/commit/b0290fd7b396e4dbb406ea78e0547d1d03effb10))
+* **superheroes:** pin review-code's diff base to a fetched remote commit ([#637](https://github.com/zwrose/superheroes/issues/637)) ([#641](https://github.com/zwrose/superheroes/issues/641)) ([5faab2f](https://github.com/zwrose/superheroes/commit/5faab2f71c137c3371b189b88cddf7d328093573))
+* **superheroes:** source dispatch-calibration model columns from the registry ([#642](https://github.com/zwrose/superheroes/issues/642)) ([0dccb4f](https://github.com/zwrose/superheroes/commit/0dccb4f464c169d7efd52d0745ffaa0d0a5590bd))
+* **superheroes:** unify the dispatch model vocabulary — round-tripping tokens, honored pins, named refusals ([#636](https://github.com/zwrose/superheroes/issues/636)) ([#643](https://github.com/zwrose/superheroes/issues/643)) ([bf8c194](https://github.com/zwrose/superheroes/commit/bf8c194581ca795d5cd923178a178667abd4c9bf))
+
 ## [0.21.1](https://github.com/zwrose/superheroes/compare/superheroes-v0.21.0...superheroes-v0.21.1) (2026-07-25)
 
 
