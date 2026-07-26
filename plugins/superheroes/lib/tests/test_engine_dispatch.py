@@ -124,8 +124,34 @@ def test_unrunnable_engine_config_zero_attempts(tmp_path):
         prompt_path=_valid_prompt(tmp_path), run_engine=_never_call,
     )
     assert res["reason"] == "unrunnable"
-    assert res["detail"] == "engine-config"
+    assert res["detail"] == "engine-config:fable-unrunnable"
     assert res["attempts"] == 0
+    assert res["forfeited"] is False
+
+
+def test_unrunnable_engine_config_unknown_claude_tier_no_spawn(tmp_path):
+    res = ED.dispatch_review(
+        "cursor", model="cursor-grok-4.5-high", effort="high",
+        prompt_path=_valid_prompt(tmp_path), run_engine=_never_call,
+    )
+    assert res["ok"] is False
+    assert res["reason"] == "unrunnable"
+    assert res["detail"] == "engine-config:unknown-claude-tier"
+    assert res["attempts"] == 0
+    assert res["forfeited"] is False
+
+
+def test_unrunnable_engine_config_effort_conflict_no_spawn(tmp_path):
+    res = ED.dispatch_review(
+        "cursor", model=None, effort="low",
+        engine_model="cursor-grok-4.5-high",
+        prompt_path=_valid_prompt(tmp_path), run_engine=_never_call,
+    )
+    assert res["ok"] is False
+    assert res["reason"] == "unrunnable"
+    assert res["detail"] == "engine-config:engine-model-effort-conflict"
+    assert res["attempts"] == 0
+    assert res["forfeited"] is False
 
 
 def test_timeout_mid_stream_partial_output_rejected(tmp_path):

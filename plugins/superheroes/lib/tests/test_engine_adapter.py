@@ -61,15 +61,17 @@ def test_build_argv_codex_explicit_engine_model_pin_wins():
 
 
 def test_build_argv_codex_invalid_engine_model_fails_capable():
-    argv = EA.build_argv("codex", "review", "high",
-                         {"model": "sonnet", "engine_model": "bogus"})
-    assert argv[argv.index("-m") + 1] == "gpt-5.6-terra"
+    res = EA.build_argv_result("codex", "review", "high",
+                               {"model": "sonnet", "engine_model": "bogus"})
+    assert res == {"argv": [], "reason": "unregistered-engine-model"}
+    assert EA.build_argv("codex", "review", "high",
+                         {"model": "sonnet", "engine_model": "bogus"}) == []
 
 
-def test_build_argv_codex_invalid_engine_model_pin_falls_back_to_tier():
-    argv = EA.build_argv("codex", "review", "high",
-                         {"model": "opus", "engine_model": "gpt-5.5"})
-    assert argv[argv.index("-m") + 1] == "gpt-5.6-sol"
+def test_build_argv_codex_invalid_engine_model_pin_refuses_unregistered():
+    res = EA.build_argv_result("codex", "review", "high",
+                               {"model": "opus", "engine_model": "gpt-5.5"})
+    assert res == {"argv": [], "reason": "unregistered-engine-model"}
 
 
 def test_build_argv_cursor_review_plan_mode():
@@ -344,11 +346,12 @@ def test_build_argv_cursor_work_roles_stay_on_composer_for_every_premium_tier():
             assert argv[argv.index("--model") + 1] == "composer-2.5", (role, tier)
 
 
-def test_build_argv_cursor_unmapped_model_keeps_composer_default():
-    # opus included: every tier stays on composer per the owner policy.
-    for model in (None, "", "bogus-tier", "opus"):
-        argv = EA.build_argv("cursor", "build", "composer", {"model": model})
-        assert argv[argv.index("--model") + 1] == "composer-2.5"
+def test_build_argv_cursor_unmapped_model_refuses_non_tier():
+    for model in ("", "bogus-tier", "cursor-grok-4.5-high"):
+        res = EA.build_argv_result("cursor", "build", "composer", {"model": model})
+        assert res["reason"] == "unknown-claude-tier", model
+    argv = EA.build_argv("cursor", "build", "composer", {"model": "opus"})
+    assert argv[argv.index("--model") + 1] == "composer-2.5"
     argv = EA.build_argv("cursor", "review", "composer", {})
     assert argv[argv.index("--model") + 1] == "composer-2.5"
 
@@ -383,6 +386,179 @@ def test_build_argv_cursor_unregistered_engine_model_returns_empty_argv():
 def test_build_argv_cursor_registered_engine_model_invalid_effort_returns_empty_argv():
     assert EA.build_argv("cursor", "review", "banana",
                          {"engine_model": "cursor-grok-4.5"}) == []
+
+
+# ---------------------------------------------------------------------------
+# build_argv_result named causes + fail-closed edges (#636)
+# ---------------------------------------------------------------------------
+
+
+def test_build_argv_result_composed_grok_token_effort_adoption():
+    """Composed dispatch token supplies effort when orchestrator omits --effort (#636 G1)."""
+    model_flag = lambda r: r["argv"][r["argv"].index("--model") + 1]
+    r = EA.build_argv_result(
+        "cursor", "review", None, {"engine_model": "cursor-grok-4.5-high"}
+    )
+    assert r["reason"] is None
+    assert model_flag(r) == "cursor-grok-4.5-high"
+    r_match = EA.build_argv_result(
+        "cursor", "review", "high", {"engine_model": "cursor-grok-4.5-high"}
+    )
+    assert r_match["reason"] is None
+    assert model_flag(r_match) == "cursor-grok-4.5-high"
+    r_conflict = EA.build_argv_result(
+        "cursor", "review", "low", {"engine_model": "cursor-grok-4.5-high"}
+    )
+    assert r_conflict == {"argv": [], "reason": "engine-model-effort-conflict"}
+    r_bare = EA.build_argv_result(
+        "cursor", "review", None, {"engine_model": "cursor-grok-4.5"}
+    )
+    assert r_bare == {"argv": [], "reason": "invalid-model-effort"}
+
+
+def test_build_argv_cli_composed_grok_token_without_effort_flag(capsys):
+    rc = EA.main(
+        [
+            "build-argv",
+            "--engine",
+            "cursor",
+            "--role",
+            "review",
+            "--engine-model",
+            "cursor-grok-4.5-high",
+        ]
+    )
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert out[out.index("--model") + 1] == "cursor-grok-4.5-high"
+
+
+def test_build_argv_result_seven_named_tokens():
+    cases = [
+        ("bogus", "review", "high", {}, "unknown-engine"),
+        ("codex", "review", "high", {"model": "cursor-grok-4.5-high"}, "unknown-claude-tier"),
+        ("cursor", "review", "high", {"model": "cursor-grok-4.5-high"}, "unknown-claude-tier"),
+        ("codex", "build", "high", {"model": "fable"}, "fable-unrunnable"),
+        ("cursor", "build", "composer", {"model": "fable"}, "fable-unrunnable"),
+        ("codex", "review", "high", {"engine_model": "gpt-9"}, "unregistered-engine-model"),
+        ("cursor", "review", "low", {"engine_model": "cursor-grok-4.5-high"},
+         "engine-model-effort-conflict"),
+        ("cursor", "review", "max", {"engine_model": "cursor-grok-4.5"}, "invalid-model-effort"),
+        ("cursor", "review", "high", {"engine_model": "composer-2.5"}, "invalid-model-effort"),
+    ]
+    for engine, role, effort, opts, want in cases:
+        got = EA.build_argv_result(engine, role, effort, opts)
+        assert got["argv"] == [] and got["reason"] == want, (engine, opts, got)
+
+
+def test_build_argv_result_untokenizable(monkeypatch):
+    real = EA.model_registry.dispatch_token
+
+    def _fake(vendor, model_id, effort):
+        if vendor == "cursor" and model_id == "cursor-grok-4.5" and effort == "high":
+            return None
+        return real(vendor, model_id, effort)
+
+    monkeypatch.setattr(EA.model_registry, "dispatch_token", _fake)
+    got = EA.build_argv_result("cursor", "review", "high", {"engine_model": "cursor-grok-4.5"})
+    assert got == {"argv": [], "reason": "untokenizable"}
+
+
+def test_build_argv_result_fail_closed_edges():
+    # 1 unknown engine
+    assert EA.build_argv_result("openai", "review", "high", {})["reason"] == "unknown-engine"
+    # 2 empty opts — codex derives sol
+    argv = EA.build_argv_result("codex", "review", "high", None)
+    assert argv["reason"] is None and argv["argv"][argv["argv"].index("-m") + 1] == "gpt-5.6-sol"
+    argv = EA.build_argv_result("codex", "review", "high", {})
+    assert argv["reason"] is None
+    # 3 fable — covered in seven tokens
+    # 4–6 unknown-claude-tier — covered
+    assert EA.build_argv_result("cursor", "review", "high",
+                                {"model": 123})["reason"] == "unknown-claude-tier"
+    # 7 empty engine_model → composer
+    r = EA.build_argv_result("cursor", "review", "high", {"engine_model": ""})
+    assert r["reason"] is None and "composer-2.5" in r["argv"]
+    r = EA.build_argv_result("cursor", "review", "high", {"engine_model": None})
+    assert r["reason"] is None
+    # 8 grok base + high effort
+    r = EA.build_argv_result("cursor", "review", "high", {"engine_model": "cursor-grok-4.5"})
+    assert r["argv"][r["argv"].index("--model") + 1] == "cursor-grok-4.5-high"
+    # 9 full composed token
+    r = EA.build_argv_result("cursor", "review", "high",
+                             {"engine_model": "cursor-grok-4.5-high"})
+    assert r["argv"][r["argv"].index("--model") + 1] == "cursor-grok-4.5-high"
+    # 10 effort conflict — covered
+    # 11 invalid effort max on grok base
+    assert EA.build_argv_result("cursor", "review", "max",
+                                {"engine_model": "cursor-grok-4.5"})["reason"] == "invalid-model-effort"
+    # 12 composer + high
+    assert EA.build_argv_result("cursor", "review", "high",
+                                {"engine_model": "composer-2.5"})["reason"] == "invalid-model-effort"
+    # 13 composer + None effort
+    r = EA.build_argv_result("cursor", "review", None, {"engine_model": "composer-2.5"})
+    assert r["reason"] is None and r["argv"][r["argv"].index("--model") + 1] == "composer-2.5"
+    # 14 codex garbage pin
+    assert EA.build_argv_result("codex", "review", "high",
+                                {"engine_model": "gpt-9"})["reason"] == "unregistered-engine-model"
+    # 15 codex sol + max passes
+    r = EA.build_argv_result("codex", "review", "max", {"engine_model": "gpt-5.6-sol"})
+    assert r["reason"] is None and "model_reasoning_effort=max" in r["argv"]
+    # 16 read vs write roles unchanged
+    rev = EA.build_argv_result("cursor", "review", "high", {})
+    bld = EA.build_argv_result("cursor", "build", "high", {})
+    assert "--mode" in rev["argv"] and rev["argv"][rev["argv"].index("--mode") + 1] == "plan"
+    assert "-f" in bld["argv"] and "--mode" not in bld["argv"]
+
+
+def test_build_argv_matches_build_argv_result_argv():
+    samples = [
+        ("codex", "review", "high", {"cwd": "/wt"}),
+        ("codex", "review", "xhigh", {"engine_model": "gpt-5.6-sol"}),
+        ("cursor", "build", "high", {}),
+        ("cursor", "review", "high", {"engine_model": "cursor-grok-4.5"}),
+        ("cursor", "review", "high", {"model": "opus"}),
+        ("bogus", "review", "high", {}),
+    ]
+    for engine, role, effort, opts in samples:
+        assert EA.build_argv(engine, role, effort, opts) == EA.build_argv_result(
+            engine, role, effort, opts)["argv"]
+
+
+def test_build_argv_cli_refusal_object_shape(capsys):
+    rc = EA.main(["build-argv", "--engine", "cursor", "--role", "review",
+                  "--model", "cursor-grok-4.5-high", "--effort", "high"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert out == {
+        "ok": False, "reason": "engine-config", "detail": "unknown-claude-tier", "argv": [],
+    }
+
+
+def test_build_argv_cli_empty_effort_normalizes_to_none_for_composer_pin(capsys):
+    rc = EA.main(["build-argv", "--engine", "cursor", "--role", "review",
+                  "--engine-model", "composer-2.5", "--effort", ""])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert out[out.index("--model") + 1] == "composer-2.5"
+
+
+def test_build_argv_must_not_regress_measured_invariants():
+    argv = EA.build_argv("cursor", "review", "high", {"engine_model": "cursor-grok-4.5"})
+    assert argv == [
+        "cursor-agent", "--model", "cursor-grok-4.5-high", "-p", "--trust",
+        "--mode", "plan", "--output-format", "stream-json",
+    ]
+    argv = EA.build_argv("codex", "review", "xhigh", {"engine_model": "gpt-5.6-sol"})
+    assert argv == [
+        "codex", "exec", "--sandbox", "read-only", "-m", "gpt-5.6-sol",
+        "-c", "model_reasoning_effort=xhigh", "-",
+    ]
+    argv = EA.build_argv("cursor", "build", "high", {})
+    assert argv == [
+        "cursor-agent", "--model", "composer-2.5", "-p", "--trust", "-f",
+        "--output-format", "stream-json",
+    ]
 
 
 def test_engine_reviewer_stdout_contract_is_stated_in_dispatch_reference():
