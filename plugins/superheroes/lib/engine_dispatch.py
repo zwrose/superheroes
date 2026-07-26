@@ -194,10 +194,12 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
         return {"ok": False, "reason": "unrunnable", "detail": "prompt-%s" % why,
                 "attempts": 0, "forfeited": False}
     opts = {"model": model, "engine_model": engine_model, "schema_path": schema_path}
-    argv = engine_adapter.build_argv(engine, role_kind, effort, opts)
-    if not argv:
-        return {"ok": False, "reason": "unrunnable", "detail": "engine-config",
+    built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
+    if built["reason"] is not None:
+        return {"ok": False, "reason": "unrunnable",
+                "detail": "engine-config:%s" % built["reason"],
                 "attempts": 0, "forfeited": False}
+    argv = built["argv"]
     if engine == "codex":
         argv = _insert_skip_git_check(argv)
 

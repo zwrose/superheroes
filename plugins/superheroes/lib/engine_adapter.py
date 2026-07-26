@@ -49,76 +49,111 @@ _CURSOR_MODEL = model_registry.dispatch_token("cursor", "composer-2.5")
 MAX_STDOUT_TAIL_BYTES = 512 * 1024
 
 
-def build_argv(engine, role_kind, effort, opts):
-    """Return the argv list to dispatch `engine` for `role_kind` at `effort`. READ (review) →
-    read-only sandbox; WRITE (build|fix) → workspace-write. Always explicit
-    model+effort. opts keys: cwd, schema_path, model (native tier short name), engine_model
-    (provider-specific concrete model pin). Cursor dispatches the composer default (`_CURSOR_MODEL`);
-    a `fable` tier is anthropic-only and unrunnable on cursor. Codex uses a valid engine_model pin
-    or maps the shared tier. The PROMPT is NOT
-    encoded here — codex reads it from stdin (trailing `-`) and cursor-agent reads it from stdin
-    when given no positional prompt; the dispatch runner feeds the staged prompt file to the
-    process stdin. Deterministic; fully unit-testable."""
+# Named refusal tokens from build_argv_result (issue #636). The dispatch runner surfaces them as
+# detail=engine-config:<token>; the build-argv CLI prints detail=<token> directly.
+_BUILD_ARGV_REFUSAL_TOKENS = frozenset({
+    "unknown-engine",
+    "unknown-claude-tier",
+    "fable-unrunnable",
+    "unregistered-engine-model",
+    "engine-model-effort-conflict",
+    "invalid-model-effort",
+    "untokenizable",
+})
+
+
+def _refuse(reason):
+    assert reason in _BUILD_ARGV_REFUSAL_TOKENS
+    return {"argv": [], "reason": reason}
+
+
+def _ok(argv):
+    return {"argv": argv, "reason": None}
+
+
+def build_argv_result(engine, role_kind, effort, opts):
+    """Like build_argv but returns {argv, reason} with a named refusal token when unrunnable."""
     opts = opts or {}
     cwd = opts.get("cwd")
     schema_path = opts.get("schema_path")
     is_read = role_kind == "review"
+    claude_tier = opts.get("model")
+    if claude_tier is not None:
+        if not isinstance(claude_tier, str) or claude_tier not in model_registry.known_claude_models():
+            return _refuse("unknown-claude-tier")
+        if claude_tier == "fable":
+            return _refuse("fable-unrunnable")
     if engine == "codex":
         engine_model = opts.get("engine_model")
-        if not isinstance(engine_model, str) or not model_registry.is_registered("codex", engine_model):
+        if isinstance(engine_model, str) and engine_model:
+            if model_registry.is_registered("codex", engine_model):
+                pass
+            else:
+                parsed = model_registry.parse_dispatch_token("codex", engine_model)
+                if parsed is None:
+                    return _refuse("unregistered-engine-model")
+                engine_model, _tok_effort = parsed
+        else:
             try:
-                engine_model = model_registry.codex_peer_for_claude_tier(opts.get("model"))
+                engine_model = model_registry.codex_peer_for_claude_tier(claude_tier)
             except ValueError:
-                return []  # fable/anthropic-only on codex — unrunnable → the dispatch runner falls open to claude
+                return _refuse("fable-unrunnable")
         ok, _reason = model_registry.validate_config(
             "codex", engine_model, effort, allow_override_only=True)
         if not ok:
-            return []  # invalid (model,effort) — fail loud: do not dispatch a silently-misconfigured codex
+            return _refuse("invalid-model-effort")
         sandbox = "read-only" if is_read else "workspace-write"
         argv = ["codex", "exec", "--sandbox", sandbox,
                 "-m", engine_model,
                 "-c", "model_reasoning_effort=%s" % effort]
         if not is_read and cwd:
-            argv += ["-C", cwd]           # confine writes to the managed worktree
+            argv += ["-C", cwd]
         if is_read and schema_path:
-            argv += ["--output-schema", schema_path]  # enforced structured review output
-        # trailing `-`: read the prompt from stdin. The dispatch runner redirects the staged
-        # prompt file into stdin (`<argv> < promptPath`) — the prompt is ALWAYS fed here.
+            argv += ["--output-schema", schema_path]
         argv += ["-"]
-        return argv
+        return _ok(argv)
     if engine == "cursor":
-        # No positional prompt argument: cursor-agent reads the prompt from stdin, which the
-        # dispatch runner redirects from the staged prompt file (`<argv> < promptPath`).
-        # cursor-agent 2026.06.26: model flag is --model (not -m); -p/--print is REQUIRED for a
-        # headless run (without it it goes interactive and --output-format is a no-op); --trust
-        # clears the workspace-trust gate that otherwise HANGS a headless run (needed for the
-        # read/--mode-plan role — the write role's -f also trusts, but --trust covers both).
-        if opts.get("model") == "fable":
-            return []  # fable is anthropic-only; the cursor fable channel is retired — fall open to claude
         engine_model = opts.get("engine_model")
         if isinstance(engine_model, str) and engine_model:
-            # a per-seat model was explicitly requested — it MUST be valid; never silently normalize.
-            if not model_registry.is_registered("cursor", engine_model):
-                return []
-            ok, _reason = model_registry.validate_config("cursor", engine_model, effort)
+            if model_registry.is_registered("cursor", engine_model):
+                model_id = engine_model
+            else:
+                parsed = model_registry.parse_dispatch_token("cursor", engine_model)
+                if parsed is None:
+                    return _refuse("unregistered-engine-model")
+                model_id, tok_effort = parsed
+                if tok_effort is not None and tok_effort != effort:
+                    return _refuse("engine-model-effort-conflict")
+            ok, _reason = model_registry.validate_config("cursor", model_id, effort)
             if not ok:
-                return []
-            tok = model_registry.dispatch_token("cursor", engine_model, effort)
+                return _refuse("invalid-model-effort")
+            tok = model_registry.dispatch_token("cursor", model_id, effort)
             if not tok:
-                return []
+                return _refuse("untokenizable")
             model = tok
         else:
-            model = _CURSOR_MODEL  # no per-seat model requested → composer default (back-compat)
+            model = _CURSOR_MODEL
         argv = ["cursor-agent", "--model", model, "-p", "--trust"]
         if is_read:
-            argv += ["--mode", "plan"]     # read-only planning mode
+            argv += ["--mode", "plan"]
         else:
-            argv += ["-f"]                 # force / workspace-write
+            argv += ["-f"]
         argv += ["--output-format", "stream-json"]
-        return argv
-    # Unknown engine: return an empty argv; the dispatch runner treats an empty argv as unrunnable
-    # → fall open to claude (never raises here).
-    return []
+        return _ok(argv)
+    return _refuse("unknown-engine")
+
+
+def build_argv(engine, role_kind, effort, opts):
+    """Return the argv list to dispatch `engine` for `role_kind` at `effort`. READ (review) →
+    read-only sandbox; WRITE (build|fix) → workspace-write. Always explicit
+    model+effort. opts keys: cwd, schema_path, model (native Claude tier short name from
+    model_registry.known_claude_models()), engine_model (registry id or composed dispatch token).
+    Cursor uses composer by default or an explicit engine_model pin; a non-tier `model` value is
+    refused (never silently substituted). Codex uses a valid engine_model pin or maps the shared
+    tier. The PROMPT is NOT encoded here — codex reads it from stdin (trailing `-`) and
+    cursor-agent reads it from stdin when given no positional prompt; the dispatch runner feeds
+    the staged prompt file to the process stdin. Deterministic; fully unit-testable."""
+    return build_argv_result(engine, role_kind, effort, opts)["argv"]
 
 
 def _last_top_level_json(stdout, want_type):
@@ -436,9 +471,17 @@ def _cmd_build_argv(args):
                  "path": args.prompt_path}) + "\n")
             return 0
 
+    effort = args.effort
+    if isinstance(effort, str) and not effort.strip():
+        effort = None
     opts = {"cwd": args.cwd, "schema_path": args.schema_path, "model": args.model,
             "engine_model": args.engine_model}
-    sys.stdout.write(json.dumps(build_argv(args.engine, args.role, args.effort, opts)) + "\n")
+    res = build_argv_result(args.engine, args.role, effort, opts)
+    if res["reason"] is not None:
+        sys.stdout.write(json.dumps(
+            {"ok": False, "reason": "engine-config", "detail": res["reason"], "argv": []}) + "\n")
+    else:
+        sys.stdout.write(json.dumps(res["argv"]) + "\n")
     return 0
 
 
@@ -448,13 +491,13 @@ def main(argv):
     b = sub.add_parser("build-argv")
     b.add_argument("--engine", required=True, choices=("codex", "cursor"))
     b.add_argument("--role", required=True, choices=("review", "build", "fix"))
-    b.add_argument("--effort", required=True)
+    b.add_argument("--effort", default=None)
     b.add_argument("--cwd", default=None)
     b.add_argument("--schema-path", default=None)
     b.add_argument("--model", default=None,
-                   help="native tier short name; cursor dispatches composer (fable is anthropic-only, unrunnable on cursor)")
+                   help="native Claude tier short name (haiku/sonnet/opus/fable); non-tier values refuse")
     b.add_argument("--engine-model", default=None,
-                   help="provider-specific concrete model id; currently used by codex pins")
+                   help="registry model id or composed dispatch token for the selected engine")
     b.add_argument("--verify", action="append", default=None,
                    help="PATH:SHA256 staged-input check; any mismatch/unreadable file fails build-argv closed")
     b.add_argument("--prompt-path", default=None,
