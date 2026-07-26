@@ -259,7 +259,14 @@ def _realpath_is_under(path, root):
 
 
 def path_is_under_repo(path, repo):
-    """True when ``path`` resolves under ``repo`` (symlinks, casing, normalization)."""
+    """True when ``path`` resolves under ``repo`` (symlinks, casing, normalization).
+
+    Delegates to ``_realpath_is_under``, which returns **True** on any ``OSError``
+    (in ``realpath(root)``, ``realpath(path)``, or any ``samefile`` in the ancestor
+    walk). That bias is appropriate for **reject-when-under** checks (e.g. refusing
+    to write scanner input under the repo) and **unsafe for authorizing** a path as
+    under-repo — use ``_is_confidently_under`` when a definite positive match is required.
+    """
     return _realpath_is_under(path, repo)
 
 
