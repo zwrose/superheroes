@@ -33,11 +33,28 @@ def test_build_argv_codex_review_read_only():
     assert argv[-1] == "-"  # codex reads the prompt from stdin (fed by the Task-10 JS runner)
 
 
+def test_build_argv_codex_review_with_cwd_pins_repo():
+    argv = EA.build_argv("codex", "review", "high", {"cwd": "/repo", "schema_path": "/s.json"})
+    i = argv.index("-C")
+    assert argv[i + 1] == "/repo"
+
+
 def test_build_argv_codex_build_workspace_write():
     argv = EA.build_argv("codex", "build", "high", {"cwd": "/wt"})
     assert argv[argv.index("--sandbox") + 1] == "workspace-write"
     assert "-C" in argv and argv[argv.index("-C") + 1] == "/wt"
     assert "model_reasoning_effort=high" in argv
+
+
+def test_build_argv_codex_build_with_cwd_still_has_c_flag():
+    argv = EA.build_argv("codex", "build", "high", {"cwd": "/repo"})
+    i = argv.index("-C")
+    assert argv[i + 1] == "/repo"
+
+
+def test_build_argv_codex_review_without_cwd_has_no_c_flag():
+    argv = EA.build_argv("codex", "review", "high", {})
+    assert "-C" not in argv
 
 
 def test_build_argv_codex_fix_low_effort():

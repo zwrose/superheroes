@@ -108,8 +108,10 @@ def build_argv_result(engine, role_kind, effort, opts):
         argv = ["codex", "exec", "--sandbox", sandbox,
                 "-m", engine_model,
                 "-c", "model_reasoning_effort=%s" % effort]
-        if not is_read and cwd:
-            argv += ["-C", cwd]           # confine writes to the managed worktree
+        if cwd:
+            argv += ["-C", cwd]           # write: confine writes to the managed worktree.
+                                          # read (#665): pin the seat to the repo so it can trace
+                                          # into files instead of inheriting the dispatcher's cwd.
         if is_read and schema_path:
             argv += ["--output-schema", schema_path]  # enforced structured review output
         # trailing `-`: read the prompt from stdin. The dispatch runner redirects the staged
@@ -140,6 +142,8 @@ def build_argv_result(engine, role_kind, effort, opts):
             model = tok
         else:
             model = _CURSOR_MODEL
+        # cursor-agent has no cwd flag; a cursor read dispatch is pinned by the runner's subprocess
+        # cwd (#665), not by argv.
         # cursor-agent 2026.06.26: model flag is --model (not -m); -p/--print is REQUIRED for a
         # headless run (without it it goes interactive and --output-format is a no-op); --trust
         # clears the workspace-trust gate that otherwise HANGS a headless run (needed for the
