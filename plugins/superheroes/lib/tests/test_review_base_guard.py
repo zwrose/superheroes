@@ -8,6 +8,7 @@ import subprocess
 import pytest
 
 import review_base_guard as rbg
+import store_core
 
 REASON = rbg
 
@@ -266,6 +267,21 @@ def test_pr_mode_matched_origin(git_repo, tmp_path):
     assert r["baseRepoCheck"] == "matched"
 
 
+def test_pr_mode_matched_origin_case_insensitive_path(git_repo, tmp_path):
+    root, sha = git_repo
+    subprocess.run(
+        ["git", "-C", root, "remote", "add", "origin", "git@github.com:Acme/Widget.git"],
+        check=True,
+        capture_output=True,
+    )
+    session = str(tmp_path / "sess")
+    _write_meta(session, root, sha, mode="pr")
+    _write_pr(session, "https://github.com/acme/widget/pull/7")
+    r = rbg.check_base(session, root)
+    assert r["ok"] is True
+    assert r["baseRepoCheck"] == "matched"
+
+
 def test_pr_mode_repo_mismatch(git_repo, tmp_path):
     root, sha = git_repo
     subprocess.run(
@@ -280,6 +296,52 @@ def test_pr_mode_repo_mismatch(git_repo, tmp_path):
     assert r["reason"] == REASON.REASON_REPO_MISMATCH
     assert "otherorg" in r["detail"]
     assert "acme" in r["detail"]
+
+
+def test_mode_unrecognized_empty(git_repo, tmp_path):
+    root, sha = git_repo
+    session = str(tmp_path / "sess")
+    _write_meta(session, root, sha, mode="")
+    r = rbg.check_base(session, root)
+    assert r["reason"] == REASON.REASON_MODE_UNRECOGNIZED
+
+
+def test_mode_unrecognized_absent(git_repo, tmp_path):
+    root, sha = git_repo
+    session = str(tmp_path / "sess")
+    _write_meta(session, root, sha)
+    path = os.path.join(session, "meta.json")
+    meta = json.load(open(path))
+    del meta["mode"]
+    with open(path, "w") as fh:
+        json.dump(meta, fh)
+    r = rbg.check_base(session, root)
+    assert r["reason"] == REASON.REASON_MODE_UNRECOGNIZED
+
+
+@pytest.mark.parametrize("bad_mode", ["PR", "loop"])
+def test_mode_unrecognized_values(git_repo, tmp_path, bad_mode):
+    root, sha = git_repo
+    session = str(tmp_path / "sess")
+    _write_meta(session, root, sha, mode=bad_mode)
+    r = rbg.check_base(session, root)
+    assert r["reason"] == REASON.REASON_MODE_UNRECOGNIZED
+
+
+def test_prior_pin_non_string_int(git_repo, tmp_path):
+    root, sha = git_repo
+    session = str(tmp_path / "sess")
+    _write_meta(session, root, sha)
+    r = rbg.check_base(session, root, prior_pin=5)
+    assert r["reason"] == REASON.REASON_PIN_MOVED
+
+
+def test_prior_pin_non_string_dict(git_repo, tmp_path):
+    root, sha = git_repo
+    session = str(tmp_path / "sess")
+    _write_meta(session, root, sha)
+    r = rbg.check_base(session, root, prior_pin={"a": 1})
+    assert r["reason"] == REASON.REASON_PIN_MOVED
 
 
 def test_pr_mode_pr_json_absent(git_repo, tmp_path):
@@ -507,6 +569,39 @@ def test_repo_root_trailing_slash(git_repo, tmp_path):
     assert r["ok"] is True
 
 
+def test_repo_root_empty_string(git_repo, tmp_path, monkeypatch):
+    root, sha = git_repo
+    session = str(tmp_path / "sess")
+    _write_meta(session, root, sha, repoRoot="")
+    monkeypatch.chdir(root)
+    r = rbg.check_base(session, root)
+    assert r["reason"] == REASON.REASON_REPO_ROOT_MISMATCH
+
+
+def test_repo_root_relative_path(git_repo, tmp_path, monkeypatch):
+    root, sha = git_repo
+    session = str(tmp_path / "sess")
+    _write_meta(session, root, sha, repoRoot=".")
+    monkeypatch.chdir(root)
+    r = rbg.check_base(session, root)
+    assert r["reason"] == REASON.REASON_REPO_ROOT_MISMATCH
+
+
+def test_repo_root_empty_toplevel(git_repo, tmp_path, monkeypatch):
+    root, sha = git_repo
+    session = str(tmp_path / "sess")
+    _write_meta(session, root, sha)
+    monkeypatch.chdir(root)
+
+    def empty_toplevel(_cwd, *args):
+        if len(args) >= 2 and args[0] == "rev-parse" and args[1] == "--show-toplevel":
+            return ""
+        return store_core.run_git(_cwd, *args)
+
+    r = rbg.check_base(session, root, run=empty_toplevel)
+    assert r["reason"] == REASON.REASON_REPO_ROOT_MISMATCH
+
+
 # --- ordering -------------------------------------------------------------------
 
 def test_ordering_meta_before_pr(git_repo, tmp_path):
@@ -564,3 +659,11 @@ def test_skill_base_fetch_refspec_braced_against_zsh_modifier():
     assert out == "+refs/heads/main:refs/remotes/origin/main", (
         f"zsh expanded refspec incorrectly (zsh :r / #637 class): got {out!r}"
     )
+
+
+def test_skill_mode_assigned_in_setup_fences():
+    skill_path = _review_code_skill_md_path()
+    with open(skill_path, encoding="utf-8") as fh:
+        text = fh.read()
+    assert "MODE=pr" in text, f"MODE=pr not found in shipped {skill_path}"
+    assert "MODE=branch" in text, f"MODE=branch not found in shipped {skill_path}"

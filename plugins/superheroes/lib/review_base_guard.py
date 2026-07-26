@@ -32,6 +32,7 @@ REASON_DIFF_UNREADABLE = "round-diff-unreadable"
 REASON_DIFF_EMPTY = "round-diff-empty"
 REASON_DIFF_MALFORMED = "round-diff-malformed"
 REASON_REPO_ROOT_MISMATCH = "base-repo-root-mismatch"
+REASON_MODE_UNRECOGNIZED = "base-mode-unrecognized"
 
 _PIN_SHA1 = re.compile(r"^[0-9a-fA-F]{40}$")
 _PIN_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -202,12 +203,26 @@ def check_base(session_dir, repo_root, prior_pin=None, run=None):
             "reason": REASON_REPO_ROOT_MISMATCH,
             "detail": "meta.repoRoot is missing or not a string",
         }
+    # Empty string is not a path: realpath("") silently resolves to cwd, so binding would
+    # always pass when meta.repoRoot is blank — the same failure mode as an unset $REPO_ROOT.
+    if not meta_root.strip() or not os.path.isabs(meta_root):
+        return {
+            "ok": False,
+            "reason": REASON_REPO_ROOT_MISMATCH,
+            "detail": "meta.repoRoot must be a non-empty absolute path, got %r" % meta_root,
+        }
     toplevel = run(repo_root, "rev-parse", "--show-toplevel")
     if toplevel is None:
         return {
             "ok": False,
             "reason": REASON_REPO_ROOT_MISMATCH,
             "detail": "repo_root is not a git repository (cannot resolve toplevel)",
+        }
+    if not toplevel:
+        return {
+            "ok": False,
+            "reason": REASON_REPO_ROOT_MISMATCH,
+            "detail": "git rev-parse --show-toplevel returned empty output",
         }
     meta_rp = os.path.realpath(meta_root)
     checkout_rp = os.path.realpath(toplevel)
@@ -228,14 +243,29 @@ def check_base(session_dir, repo_root, prior_pin=None, run=None):
             detail = "baseRef does not resolve in this repository: %s" % ref_repr
         return {"ok": False, "reason": pin_reason, "detail": detail}
 
-    if prior_pin is not None and pin != prior_pin.lower():
-        return {
-            "ok": False,
-            "reason": REASON_PIN_MOVED,
-            "detail": "base pin moved from %s to %s" % (prior_pin, pin),
-        }
+    if prior_pin is not None:
+        if not isinstance(prior_pin, str):
+            return {
+                "ok": False,
+                "reason": REASON_PIN_MOVED,
+                "detail": "stored base pin is not a string: %r" % prior_pin,
+            }
+        if pin != prior_pin.lower():
+            return {
+                "ok": False,
+                "reason": REASON_PIN_MOVED,
+                "detail": "base pin moved from %s to %s" % (prior_pin, pin),
+            }
 
     mode = meta.get("mode")
+    # Fail closed: defaulting unrecognized mode to branch mode made the fork check inert when
+    # mode was unset; the guard cannot know whether fork comparison applies without a known mode.
+    if mode not in ("pr", "branch"):
+        return {
+            "ok": False,
+            "reason": REASON_MODE_UNRECOGNIZED,
+            "detail": "meta.mode must be 'pr' or 'branch', got %s" % repr(mode),
+        }
     base_repo = origin_repo(repo_root, run=run)
     base_repo_check = "not-applicable-branch-mode"
     # Branch mode's base is origin/HEAD, i.e. origin by construction — nothing to compare.
@@ -253,7 +283,7 @@ def check_base(session_dir, repo_root, prior_pin=None, run=None):
                 "reason": REASON_ORIGIN_UNRESOLVED,
                 "detail": "origin remote URL could not be resolved",
             }
-        if pr_repo != base_repo:
+        if pr_repo.casefold() != base_repo.casefold():
             return {
                 "ok": False,
                 "reason": REASON_REPO_MISMATCH,

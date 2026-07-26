@@ -209,7 +209,7 @@ When `VERIFY_MODE` is `unverified`, skip the verify gate. When `VERIFY_MODE` is 
 
 ```bash
 # Resolve PR number — either provided or auto-detected from current branch
-BRANCH=$(git rev-parse --abbrev-ref HEAD)
+BRANCH=$(git rev-parse --abbrev-ref HEAD); MODE=pr
 if [ -z "$PR_NUMBER" ]; then
   PR_NUMBER=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number')
 fi
@@ -249,7 +249,7 @@ If the guard fails (detached HEAD, or you're reviewing someone else's PR), STOP 
 **Branch mode:**
 
 ```bash
-BRANCH=$(git rev-parse --abbrev-ref HEAD)
+BRANCH=$(git rev-parse --abbrev-ref HEAD); MODE=branch
 HEAD_SHA=$(git rev-parse HEAD)
 BASE_BRANCH=$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@'); BASE_BRANCH=${BASE_BRANCH:-main}   # branch mode: default branch NAME; the pipeline exits 0 even when symbolic-ref fails, so `|| echo main` inside it would be DEAD
 REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo "local")
@@ -271,7 +271,7 @@ BASE_REF=$(git rev-parse --verify --quiet "$BASE_REF^{commit}") || { echo "revie
 
 **Never diff a stale base silently.** Any `$BASE_FETCH` other than `fetched` is a **degradation** — name it in the dispatch summary, record it in `meta.json`, and surface it in the `--post` review body and the `--review-only` presentation *before* any finding is shown. Both modes assume `origin` is the base branch's repository — the same assumption the `git fetch origin "$PR_BRANCH"` above already makes; in PR mode the driver now refuses a fork whose PR base repository differs from `origin` with `base-repo-mismatch` (full fork *support* — resolving or fetching the base by URL — is still deliberately not built).
 
-**Per-round diff — every round, against the pin.** This is the ONLY command that runs per round. Do NOT use `gh pr diff` (rounds 2+ have local fix commits that are not on the remote), and do NOT re-run the setup block above. A failed, empty, or non-`git diff` round artifact is also refused by the driver (`round-diff-unreadable`, `round-diff-empty`, `round-diff-malformed`, `round-diff-required`), so the shell halt and the driver refusal enforce the same invariant twice.
+**Per-round diff — every round, against the pin.** This is the ONLY command that runs per round. Do NOT use `gh pr diff` (rounds 2+ have local fix commits that are not on the remote), and do NOT re-run the setup block above. On fresh state the round-1 artifact passed to the driver is refused in code (`round-diff-unreadable`, `round-diff-empty`, `round-diff-malformed`, `round-diff-required`); rounds 2+ rely on the shell halt above.
 
 ```bash
 git diff "$BASE_REF"...HEAD > "$SESSION_DIR/round-<round>/diff.txt.tmp" && mv "$SESSION_DIR/round-<round>/diff.txt.tmp" "$SESSION_DIR/round-<round>/diff.txt" || { rm -f "$SESSION_DIR/round-<round>/diff.txt.tmp"; echo "review-code: git diff against $BASE_REF FAILED — refusing to review the artifact it left behind (#637)" >&2; exit 1; }
