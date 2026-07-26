@@ -285,8 +285,8 @@ The read-only paths run a single pass and compute the same local diff into `roun
 Then write `meta.json` in both modes:
 
 ```bash
-FOCUS_ARG=$(printf '%s' "${FOCUS_JSON:-}" | jq -ce 'if type == "object" or type == "array" then . else empty end' 2>/dev/null); [ -n "$FOCUS_ARG" ] || FOCUS_ARG=$(jq -Rn --arg s "${FOCUS_JSON:-}" '$s')   # only a single structured JSON document rides through as JSON; everything else (free text, a bare scalar, a multi-document stream) becomes a JSON string, so --focus can never fail the write
-PR_ARG=$(printf '%s' "${PR_NUMBER:-null}" | jq -c 'if type == "number" then . else null end' 2>/dev/null) || PR_ARG=null
+FOCUS_ARG=$(printf '%s' "${FOCUS_JSON:-}" | jq -cs 'if length == 1 and ((.[0]|type) == "object" or (.[0]|type) == "array") then .[0] else empty end' 2>/dev/null); [ -n "$FOCUS_ARG" ] || FOCUS_ARG=$(printf '%s' "${FOCUS_JSON:-}" | jq -Rs .)   # -s SLURPS, so the encoder can only ever emit ONE document: a lone JSON object/array rides through as JSON, and everything else (free text, a bare scalar, several documents, malformed JSON) becomes one JSON string via stdin — never a multi-document value --argjson would reject, and never a silently truncated note
+PR_ARG=$(printf '%s' "${PR_NUMBER:-null}" | jq -cs 'if length == 1 and (.[0]|type) == "number" then .[0] else null end' 2>/dev/null); [ -n "$PR_ARG" ] || PR_ARG=null
 jq -n --arg mode "$MODE" --arg path "$REVIEW_PATH" --arg repo "$REPO" --arg branch "$BRANCH" \
   --arg headSha "$HEAD_SHA" --arg baseRef "$BASE_REF" --arg baseBranch "$BASE_BRANCH" \
   --arg baseFetch "$BASE_FETCH" --arg sessionDir "$SESSION_DIR" --arg verify "${VERIFY_CMD:-unverified}" \
