@@ -161,7 +161,9 @@ def test_parse_result_review_bare_array_is_tolerated_and_scrubbed():
 def test_parse_result_review_bare_empty_array_is_clean_zero_findings():
     # An empty bare array is a clean review with nothing to flag — it must NOT be unreadable
     # (that would forfeit the slot to a needless UFR-7 re-run), it is ok:true with no findings.
-    assert EA.parse_result("codex", "review", "[]") == {"ok": True, "findings": []}
+    assert EA.parse_result("codex", "review", "[]") == {
+        "ok": True, "findings": [], "investigated": [],
+    }
 
 
 def test_parse_result_review_canonical_object_unchanged_by_tolerance():
@@ -977,3 +979,140 @@ def test_cursor_tool_calls_skips_garbage_no_raise():
 def test_cursor_tool_calls_empty_returns_none():
     assert EA.cursor_tool_calls("") is None
     assert EA.cursor_tool_calls(None) is None
+
+
+# ---------------------------------------------------------------------------
+# #666: investigated propagation + spot_check_investigated floor
+
+
+def test_parse_result_review_propagates_investigated_scrubbed():
+    stdout = json.dumps({
+        "findings": [],
+        "investigated": [
+            "a.py",
+            42,
+            "log shows Authorization: Bearer sk-EXAMPLEfakenotarealsecret0",
+        ],
+    })
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert len(res["investigated"]) == 2
+    assert res["investigated"][0] == "a.py"
+    assert "sk-EXAMPLE" not in res["investigated"][1]
+    assert "[REDACTED]" in res["investigated"][1]
+
+
+def test_parse_result_review_missing_investigated_key_yields_empty_list():
+    stdout = json.dumps({"findings": [{"severity": "Minor", "title": "t", "body": "b"}]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["investigated"] == []
+
+
+def test_parse_result_review_bare_array_shape_yields_empty_investigated():
+    stdout = json.dumps([{"severity": "Minor", "title": "t", "body": "b"}])
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert res["investigated"] == []
+
+
+def _spot_reject_only(repo_root, entry, want_reason):
+    ok, accepted, rejected = EA.spot_check_investigated([entry], repo_root)
+    assert ok is False and accepted == []
+    assert len(rejected) == 1 and rejected[0]["reason"] == want_reason
+
+
+def test_spot_check_investigated_rejects_not_a_path(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    ok, accepted, rejected = EA.spot_check_investigated([""], str(root))
+    assert ok is False and accepted == []
+    assert rejected[0]["reason"] == "not-a-path"
+    ok, _, rejected = EA.spot_check_investigated([None], str(root))
+    assert rejected[0]["reason"] == "not-a-path"
+
+
+def test_spot_check_investigated_rejects_absolute(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    f = tmp_path / "abs.py"
+    f.write_text("x", encoding="utf-8")
+    _spot_reject_only(str(root), str(f), "absolute")
+
+
+def test_spot_check_investigated_rejects_escapes_repo_via_dotdot(tmp_path):
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    (outer / "secret.txt").write_text("x", encoding="utf-8")
+    root = tmp_path / "repo"
+    root.mkdir()
+    _spot_reject_only(str(root), "../outer/secret.txt", "escapes-repo")
+
+
+def test_spot_check_investigated_rejects_escapes_repo_via_symlink(tmp_path):
+    outer = tmp_path / "outside"
+    outer.mkdir()
+    (outer / "leak.txt").write_text("x", encoding="utf-8")
+    root = tmp_path / "repo"
+    root.mkdir()
+    link = root / "escape"
+    link.symlink_to(outer)
+    _spot_reject_only(str(root), "escape/leak.txt", "escapes-repo")
+
+
+def test_spot_check_investigated_rejects_sibling_prefix_path(tmp_path):
+    base = tmp_path / "x"
+    base.mkdir()
+    root = base / "repo"
+    root.mkdir()
+    evil = base / "repo-evil"
+    evil.mkdir()
+    (evil / "f").write_text("x", encoding="utf-8")
+    _spot_reject_only(str(root), "../repo-evil/f", "escapes-repo")
+
+
+def test_spot_check_investigated_rejects_missing(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _spot_reject_only(str(root), "no-such-file.py", "missing")
+
+
+def test_spot_check_investigated_mixed_one_valid_three_rejects(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    good = root / "ok.py"
+    good.write_text("x", encoding="utf-8")
+    ok, accepted, rejected = EA.spot_check_investigated(
+        ["ok.py", "/abs", "../x", ""], str(root))
+    assert ok is True
+    assert accepted == ["ok.py"]
+    assert len(rejected) == 3
+
+
+def test_spot_check_investigated_fail_closed_edges_no_raise(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    f = tmp_path / "notadir"
+    f.write_text("x", encoding="utf-8")
+    for inv in (None, "a.py"):
+        ok, accepted, rejected = EA.spot_check_investigated(inv, str(root))
+        assert ok is False and accepted == [] and not rejected
+    ok, accepted, rejected = EA.spot_check_investigated(["a.py"], None)
+    assert ok is False and rejected[0]["reason"] == "no-repo"
+    ok, accepted, rejected = EA.spot_check_investigated(["a.py"], str(f))
+    assert ok is False and all(r["reason"] == "no-repo" for r in rejected)
+
+
+def test_finding_body_quoting_prompt_tail_survives_conditional_strip():
+    """Genuine finding quoting the last 2k of the prompt must not be stripped away (#668)."""
+    head = "H" * 5000
+    prompt = head + _review_prompt_with_shape_contract()
+    tail = prompt[-EA.ECHO_TAIL_CHARS:]
+    answer = json.dumps({"findings": [
+        {"severity": "Important", "title": "quoted prompt in body",
+         "body": "context:\n" + tail,
+         "suggestion": "s"}]})
+    stdout = prompt + "\n" + answer
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+    assert tail[:80] in res["findings"][0]["body"]

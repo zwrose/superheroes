@@ -385,6 +385,59 @@ def _scrub_findings(findings):
     return out
 
 
+def _scrub_investigated(investigated):
+    if not isinstance(investigated, list):
+        return []
+    out = []
+    for entry in investigated:
+        if not isinstance(entry, str) or not entry.strip():
+            continue
+        out.append(_scrub(entry))
+    return out
+
+
+def spot_check_investigated(investigated, repo_root):
+    """(ok, accepted, rejected) — does this seat's investigation record survive a reality check?
+
+    A spot check, not an audit: at least one claimed path must resolve inside the repo and exist.
+    One verifiable path is enough to distinguish a seat that read the repo from one that read
+    nothing; requiring every entry would fail an honest seat that cited a path deleted by the diff.
+    Never raises."""
+    accepted = []
+    rejected = []
+
+    def _reject(entry, reason):
+        rejected.append({"path": entry, "reason": reason})
+
+    if not isinstance(investigated, list) or not investigated:
+        return False, [], rejected
+    if not repo_root or not isinstance(repo_root, str) or not os.path.isdir(repo_root):
+        for entry in investigated:
+            _reject(entry, "no-repo")
+        return False, [], rejected
+
+    root_real = os.path.realpath(repo_root)
+    root_prefix = root_real + os.sep
+
+    for entry in investigated:
+        if not isinstance(entry, str) or not entry.strip():
+            _reject(entry, "not-a-path")
+            continue
+        if os.path.isabs(entry):
+            _reject(entry, "absolute")
+            continue
+        real = os.path.realpath(os.path.join(repo_root, entry))
+        if real != root_real and not real.startswith(root_prefix):
+            _reject(entry, "escapes-repo")
+            continue
+        if not os.path.exists(real):
+            _reject(entry, "missing")
+            continue
+        accepted.append(entry)
+
+    return len(accepted) >= 1, accepted, rejected
+
+
 def parse_result(engine, role_kind, stdout):
     """Parse an external engine's stdout into the native result shape. review → scrubbed
     findings (from the canonical {"findings": [...]} object OR, tolerated, a bare top-level
@@ -415,7 +468,11 @@ def parse_result(engine, role_kind, stdout):
                     findings = arr
             if not isinstance(findings, list):
                 return {"ok": False, "reason": "unreadable"}
-            return {"ok": True, "findings": _scrub_findings(findings)}
+            investigated = []
+            if isinstance(obj, dict):
+                investigated = _scrub_investigated(obj.get("investigated"))
+            return {"ok": True, "findings": _scrub_findings(findings),
+                    "investigated": investigated}
         if obj is None:
             return {"ok": False, "reason": "unreadable"}
         # build | fix

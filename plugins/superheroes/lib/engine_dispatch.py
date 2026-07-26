@@ -230,6 +230,8 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
     fed_prompt = ANTIHIJACK_PREAMBLE + base_prompt
     write_progress = _progress_writer(progress_path)
     last_engagement = None
+    last_terminal = None
+    last_investigated_rejected = None
     for attempt in (1, 2):
         t = timeout if attempt == 1 else max(retry_timeout, RETRY_MIN_TIMEOUT)
 
@@ -259,15 +261,40 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
             "source": source,
         }
         if timed_out:
+            last_terminal = "forfeited"
             continue  # timeout forfeits WITHOUT parsing partial stdout
         if rc not in (0, None):
+            last_terminal = "forfeited"
             continue  # nonzero exit forfeits even if stdout parses (crashed engine)
-        stripped = engine_adapter.strip_echoed_prompt(stdout, fed_prompt)
-        res = engine_adapter.parse_result(engine, role_kind, stripped)
-        if res.get("ok"):
-            return {"ok": True, "findings": res.get("findings", []), "attempts": attempt,
+        res = engine_adapter.parse_result(engine, role_kind, stdout)
+        if not (res.get("ok") and res.get("findings")):
+            stripped = engine_adapter.strip_echoed_prompt(stdout, fed_prompt)
+            res = engine_adapter.parse_result(engine, role_kind, stripped)
+        if not res.get("ok"):
+            last_terminal = "forfeited"
+            continue
+        findings = res.get("findings") or []
+        if findings:
+            return {"ok": True, "findings": findings, "attempts": attempt,
                     "engagement": last_engagement}
-        # unreadable -> forfeit this attempt, fall through to retry / double-forfeit
+        ok_inv, accepted, rejected = engine_adapter.spot_check_investigated(
+            res.get("investigated"), repo_root)
+        if ok_inv:
+            return {"ok": True, "findings": [], "attempts": attempt,
+                    "engagement": last_engagement, "investigated": accepted}
+        last_terminal = "vacuous"
+        last_investigated_rejected = rejected
+        # vacuous forfeit — retry like unreadable
+    if last_terminal == "vacuous":
+        return {
+            "ok": False, "reason": "vacuous", "attempts": 2, "forfeited": True,
+            "engagement": last_engagement,
+            "investigatedRejected": [r["reason"] for r in (last_investigated_rejected or [])],
+            "disclosure": ("%s reviewer returned no findings and no verifiable investigation "
+                           "record twice (vacuous forfeit — a seat that proved nothing is a seat "
+                           "that never ran); fall open to a Claude reviewer and disclose the "
+                           "degraded vendor mix" % engine),
+        }
     return {"ok": False, "reason": "forfeited", "attempts": 2, "forfeited": True,
             "disclosure": ("%s reviewer forfeited twice (timeout or unreadable); "
                            "fall open to a Claude reviewer and disclose the degraded vendor mix"
