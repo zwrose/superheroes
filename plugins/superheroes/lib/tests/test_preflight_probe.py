@@ -284,6 +284,13 @@ def test_cli_run_prints_json_with_expected_keys(monkeypatch, capsys):
         "tool": "gh auth", "ok": True, "exit": 0, "detail": ""})
     monkeypatch.setattr(pp, "cross_vendor_cli_probe", lambda engine, run=None, argv=None: {
         "tool": "cross-vendor-cli:" + engine, "ok": True, "exit": 0, "detail": ""})
+    import dispatch_selftest
+
+    monkeypatch.setattr(
+        dispatch_selftest,
+        "probe_result",
+        lambda: {"tool": "dispatch-vocab", "ok": True, "detail": "ok (1 checks)"},
+    )
 
     rc = pp.main(["preflight_probe.py", "run", "--engine", "codex"])
 
@@ -293,7 +300,9 @@ def test_cli_run_prints_json_with_expected_keys(monkeypatch, capsys):
     assert set(payload.keys()) == {
         "probes", "dispatchCalibration", "aggregate", "browserNote", "crossVendorEngines"}
     assert payload["aggregate"]["go"] is True
-    assert len(payload["probes"]) == 2
+    assert len(payload["probes"]) == 3
+    tools = {p["tool"] for p in payload["probes"]}
+    assert tools == {"gh auth", "dispatch-vocab", "cross-vendor-cli:codex"}
     assert payload["crossVendorEngines"] == ["codex"]
 
 
@@ -304,6 +313,13 @@ def test_cli_run_without_engine_derives_configured_engines(tmp_path, monkeypatch
         "tool": "gh auth", "ok": True, "exit": 0, "detail": ""})
     monkeypatch.setattr(pp, "cross_vendor_cli_probe", lambda engine, run=None, argv=None: {
         "tool": "cross-vendor-cli:" + engine, "ok": True, "exit": 0, "detail": ""})
+    import dispatch_selftest
+
+    monkeypatch.setattr(
+        dispatch_selftest,
+        "probe_result",
+        lambda: {"tool": "dispatch-vocab", "ok": True, "detail": "ok (1 checks)"},
+    )
     monkeypatch.setattr(pp.core_md, "read", lambda *a, **k: {
         "enginePreferences": {"implementation": "cursor", "briefCheck": "claude"}})
 
@@ -314,12 +330,19 @@ def test_cli_run_without_engine_derives_configured_engines(tmp_path, monkeypatch
     payload = json.loads(out)
     assert payload["crossVendorEngines"] == ["cursor"]
     tools = {p["tool"] for p in payload["probes"]}
-    assert tools == {"gh auth", "cross-vendor-cli:cursor"}
+    assert tools == {"gh auth", "dispatch-vocab", "cross-vendor-cli:cursor"}
 
 
 def test_cli_run_without_engine_all_claude_probes_none(monkeypatch, capsys):
     monkeypatch.setattr(pp, "gh_auth_probe", lambda run=None: {
         "tool": "gh auth", "ok": True, "exit": 0, "detail": ""})
+    import dispatch_selftest
+
+    monkeypatch.setattr(
+        dispatch_selftest,
+        "probe_result",
+        lambda: {"tool": "dispatch-vocab", "ok": True, "detail": "ok (1 checks)"},
+    )
     monkeypatch.setattr(pp.core_md, "read", lambda *a, **k: {
         "enginePreferences": {"briefCheck": "claude"}})
 
@@ -329,7 +352,38 @@ def test_cli_run_without_engine_all_claude_probes_none(monkeypatch, capsys):
     out = capsys.readouterr().out
     payload = json.loads(out)
     assert payload["crossVendorEngines"] == []
-    assert len(payload["probes"]) == 1   # gh auth only — no cross-vendor probe when all-Claude
+    assert len(payload["probes"]) == 2   # gh auth + dispatch-vocab — no cross-vendor when all-Claude
+
+
+def test_dispatch_vocab_probe_blocks_aggregate_on_failure(monkeypatch):
+    import dispatch_selftest
+
+    monkeypatch.setattr(
+        dispatch_selftest,
+        "probe_result",
+        lambda: {"tool": "dispatch-vocab", "ok": False, "detail": "broken"},
+    )
+    probes = [pp.gh_auth_probe(run=fake0), dispatch_selftest.probe_result()]
+    agg = pp.aggregate(probes)
+    assert agg["go"] is False
+    assert "dispatch-vocab" in agg["blocking"]
+
+
+def test_preflight_run_includes_dispatch_vocab_probe(monkeypatch, capsys):
+    monkeypatch.setattr(pp, "gh_auth_probe", lambda run=None: {
+        "tool": "gh auth", "ok": True, "exit": 0, "detail": ""})
+    import dispatch_selftest
+
+    real_probe = dispatch_selftest.probe_result
+    monkeypatch.setattr(dispatch_selftest, "probe_result", real_probe)
+
+    rc = pp.main(["preflight_probe.py", "run", "--engine", "codex"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    vocab = [p for p in payload["probes"] if p["tool"] == "dispatch-vocab"]
+    assert len(vocab) == 1
+    assert vocab[0]["ok"] is True
+    assert payload["aggregate"]["go"] is True
 
 
 # --- composition preflight (#510 WO-3) -------------------------------------------------------

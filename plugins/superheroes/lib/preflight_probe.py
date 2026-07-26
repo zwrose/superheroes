@@ -309,7 +309,9 @@ def main(argv):
         return 0
 
     if args.cmd == "run":
-        probes = [gh_auth_probe()]
+        import dispatch_selftest  # noqa: E402 — lazy: pure config probe
+
+        probes = [gh_auth_probe(), dispatch_selftest.probe_result()]
         if args.engine:
             cross_vendor_engines = [args.engine]
         else:
