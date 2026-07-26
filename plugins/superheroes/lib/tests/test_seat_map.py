@@ -42,29 +42,29 @@ def test_seed_from_stable():
 
 def test_determinism_same_seed():
     seed = SM.seed_from(510, None)
-    m1 = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "cursor", "anthropic", seed)
-    m2 = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "cursor", "anthropic", seed)
+    m1 = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", seed)
+    m2 = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", seed)
     assert m1["seats"] == m2["seats"]
 
 
 def test_rotation_different_seeds():
     maps = []
     for seed in (0, 1, 2, 3, 4, 5):
-        m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "cursor", "anthropic", seed)
+        m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", seed)
         maps.append(tuple(m["seats"][s]["vendor"] for s in SM.PANEL_ROSTER))
     assert len(set(maps)) > 1
 
 
 def test_three_vendor_happy_path():
     seed = SM.seed_from(510, None)
-    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "cursor", "anthropic", seed)
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", seed)
     grounding = m["seats"][SM.GROUNDING_SEAT]
-    assert grounding["family"] not in {"cursor", "anthropic"}
+    assert grounding["family"] not in {"xai", "anthropic"}
     critical_families = {
         m["seats"][s]["family"] for s in SM.CRITICAL_SEATS if s in m["seats"]
     }
     assert len(critical_families) >= 2
-    assert SM.verify(m, "cursor") == []
+    assert SM.verify(m, "xai") == []
 
 
 def test_claude_implemented_build():
@@ -77,7 +77,7 @@ def test_claude_implemented_build():
 
 
 def test_single_vendor_floor():
-    m = SM.build(SM.PANEL_ROSTER, ["claude"], "cursor", "anthropic", 0)
+    m = SM.build(SM.PANEL_ROSTER, ["claude"], "xai", "anthropic", 0)
     assert len(m["seats"]) == len(SM.PANEL_ROSTER)
     constraints = {d["constraint"] for d in m["degradations"]}
     assert "critical-diversity" in constraints
@@ -91,7 +91,7 @@ def test_pin_honored():
         },
     }
     m = SM.build(
-        SM.PANEL_ROSTER, THREE_VENDORS, "cursor", "anthropic", seed, pins=pins
+        SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", seed, pins=pins
     )
     assert m["seats"]["code-reviewer"]["source"] == "pinned"
     assert m["seats"]["code-reviewer"]["vendor"] == "claude"
@@ -106,7 +106,7 @@ def test_pin_unhonorable_model():
         },
     }
     m = SM.build(
-        SM.PANEL_ROSTER, THREE_VENDORS, "cursor", "anthropic", 0, pins=pins
+        SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0, pins=pins
     )
     pin_degs = [d for d in m["degradations"] if d["constraint"] == "pin"]
     assert any("not honorable" in d["reason"] for d in pin_degs)
@@ -116,14 +116,14 @@ def test_pin_unhonorable_model():
 def test_pin_unknown_seat():
     pins = {"nonexistent-seat": {"vendor": "claude"}}
     m = SM.build(
-        SM.PANEL_ROSTER, THREE_VENDORS, "cursor", "anthropic", 0, pins=pins
+        SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0, pins=pins
     )
     pin_degs = [d for d in m["degradations"] if d["constraint"] == "pin"]
     assert any("unknown seat" in d["reason"] for d in pin_degs)
 
 
 def test_fail_closed_empty_live_vendors():
-    m = SM.build(SM.PANEL_ROSTER, [], "cursor", "anthropic", 0)
+    m = SM.build(SM.PANEL_ROSTER, [], "xai", "anthropic", 0)
     assert m["liveVendors"] == ["claude"]
     assert any(d["constraint"] == "live-vendors" for d in m["degradations"])
 
@@ -135,14 +135,14 @@ def test_fail_closed_grounding_provenance():
 
 def test_fail_closed_missing_tier():
     custom_roster = ("custom-seat",)
-    m = SM.build(custom_roster, THREE_VENDORS, "cursor", "anthropic", 0)
+    m = SM.build(custom_roster, THREE_VENDORS, "xai", "anthropic", 0)
     assert any(d["constraint"] == "tier" for d in m["degradations"])
     assert m["seats"]["custom-seat"]["tier"] == "reviewer"
 
 
 def test_fail_closed_malformed_verify():
-    assert SM.verify({}, "cursor") == [{"constraint": "malformed"}]
-    assert SM.verify({"not_seats": {}}, "cursor") == [{"constraint": "malformed"}]
+    assert SM.verify({}, "xai") == [{"constraint": "malformed"}]
+    assert SM.verify({"not_seats": {}}, "xai") == [{"constraint": "malformed"}]
 
 
 def test_verify_maker_family_violation():
@@ -169,7 +169,7 @@ def test_to_receipt_json_roundtrip():
     m = SM.build(
         SM.PANEL_ROSTER,
         THREE_VENDORS,
-        "cursor",
+        "xai",
         "anthropic",
         SM.seed_from(510, None),
     )
@@ -323,7 +323,7 @@ def test_verify_strong_tier_violation():
         "family": "anthropic",
         "source": "rotated",
     }
-    violations = SM.verify({"seats": seats}, "cursor")
+    violations = SM.verify({"seats": seats}, "xai")
     assert any(
         v.get("constraint") == "strong-tier" and v.get("seat") == "security-reviewer"
         for v in violations
@@ -356,14 +356,14 @@ def test_verify_critical_diversity_violation():
         "family": "anthropic",
         "source": "rotated",
     }
-    violations = SM.verify({"seats": seats}, "cursor")
+    violations = SM.verify({"seats": seats}, "xai")
     assert any(v.get("constraint") == "critical-diversity" for v in violations)
 
 
 def test_verify_missing_seat():
     seats = _full_seats_template()
     del seats["test-reviewer"]
-    violations = SM.verify({"seats": seats}, "cursor")
+    violations = SM.verify({"seats": seats}, "xai")
     assert any(
         v.get("constraint") == "missing-seat" and v.get("seat") == "test-reviewer"
         for v in violations
@@ -628,3 +628,19 @@ def test_cli_compose_cache_only_no_live_vendors(monkeypatch, tmp_path, capsys):
     assert receipt["liveVendors"] == ["claude"]
     for seat_cfg in receipt["seats"].values():
         assert seat_cfg["vendor"] == "claude"
+
+
+def test_composer_authored_diff_excludes_cursor_from_strong_critical_and_grounding():
+    """#651: a composer-made diff derives authorFamily 'xai' straight from the registry, so grok —
+    now the same family — is excluded from every strong-tier and critical seat and from grounding.
+    Before the family merge this exclusion was vacuous: composer's family ('cursor') was one no
+    reviewer cell ever produced, so grok could seat anywhere on a composer-made diff."""
+    import model_registry as MRG
+
+    author = MRG.family_for("code-fixer", "cursor")
+    assert author == "xai"
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, author, "anthropic", SM.seed_from(651, None))
+    for seat in sorted(SM.STRONG_TIER_SEATS | SM.CRITICAL_SEATS):
+        assert m["seats"][seat]["family"] != "xai", seat
+    assert m["seats"][SM.GROUNDING_SEAT]["family"] != "xai"
+    assert SM.verify(m, author) == []

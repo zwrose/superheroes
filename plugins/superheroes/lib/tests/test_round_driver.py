@@ -2300,3 +2300,17 @@ def test_fell_open_two_rounds_deterministic_disclosure_order():
     assert len(fo_lines) == 2
     assert "round 1" in fo_lines[0] and "code-reviewer" in fo_lines[0]
     assert "round 2" in fo_lines[1] and "security-reviewer" in fo_lines[1]
+
+
+def test_cursor_fix_never_gets_an_independent_cursor_auditor():
+    """#651: composer and grok are ONE family, so a cursor-only panel auditing a cursor fix is
+    DEGRADED, never independent. Under the old registry (composer='cursor', grok='xai') the
+    same-vendor fallback loop returned ('cursor', 'independent') — a self-audit labelled
+    independent. This pins that lane closed while leaving the real cross-family path intact."""
+    vendor, independence = RD._auditor_vendor({"vendors": ["cursor"]}, "cursor")
+    assert independence == "degraded"
+    assert vendor == "cursor"
+    for other in ("claude", "codex"):
+        v, ind = RD._auditor_vendor({"vendors": [other, "cursor"]}, "cursor")
+        assert ind == "independent", (other, v, ind)
+        assert v == other

@@ -22,7 +22,7 @@ _MODELS: dict[str, dict[str, dict]] = {
         "gpt-5.6-sol": {"family": "openai", "dispatch": "gpt-5.6-sol", "override_only": False},
     },
     "cursor": {
-        "composer-2.5": {"family": "cursor", "dispatch": "composer-2.5", "override_only": False},
+        "composer-2.5": {"family": "xai", "dispatch": "composer-2.5", "override_only": False},
         "cursor-grok-4.5": {"family": "xai", "dispatch": "cursor-grok-4.5", "override_only": False},
     },
 }

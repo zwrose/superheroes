@@ -113,7 +113,7 @@ def test_codex_effort_for_kind_matches_matrix_and_pilot_floor():
 def test_model_family():
     assert MR.model_family("claude", "opus-5") == "anthropic"
     assert MR.model_family("codex", "gpt-5.6-sol") == "openai"
-    assert MR.model_family("cursor", "composer-2.5") == "cursor"
+    assert MR.model_family("cursor", "composer-2.5") == "xai"
     assert MR.model_family("cursor", "cursor-grok-4.5") == "xai"
     assert MR.model_family("cursor", "nope") is None
 
@@ -218,7 +218,7 @@ def test_family_for_review_roles():
     assert MR.family_for("reviewer-deep", "claude") == "anthropic"
     assert MR.family_for("reviewer-deep", "codex") == "openai"
     assert MR.family_for("reviewer-deep", "cursor") == "xai"
-    assert MR.family_for("implementer", "cursor") == "cursor"
+    assert MR.family_for("implementer", "cursor") == "xai"
     assert MR.family_for("synthesis", "codex") is None
     for role in _REVIEW_ROLES:
         for vendor in MR.vendors():
@@ -401,3 +401,15 @@ def test_claude_alias_resolution_record_matches_registry_ids():
         expected_prefix = "claude-" + model_id.replace(".", "-")
         assert resolved.startswith(expected_prefix), (model_id, resolved, expected_prefix)
     assert MR.CLAUDE_ALIAS_RESOLUTION["harness"].startswith("claude-code/")
+
+
+def test_cursor_first_party_models_are_one_family():
+    """#651 (owner-ratified 2026-07-26): independence is never satisfied between two cursor
+    first-party models. Both carry `xai`, so no role pairing can present one as independent of the
+    other — this is exactly the condition round_driver._auditor_vendor keys on."""
+    assert MR.model_family("cursor", "composer-2.5") == "xai"
+    assert MR.model_family("cursor", "cursor-grok-4.5") == "xai"
+    assert len({MR.model_family("cursor", m) for m in MR._MODELS["cursor"]}) == 1
+    assert MR.family_for("code-fixer", "cursor") == "xai"
+    assert MR.family_for("verifier", "cursor") == "xai"
+    assert MR.family_for("implementer", "cursor") == MR.family_for("reviewer-deep", "cursor")
