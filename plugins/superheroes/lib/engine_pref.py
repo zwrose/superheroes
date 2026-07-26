@@ -156,14 +156,15 @@ DEFAULT_STALL_LIMIT_SECONDS = 300
 # #309 role-appropriate dispatch ceilings (owner policy: HIGH ceilings + monitors, never borderline
 # limits). WRITE roles (build/fix) get a high ceiling; READ roles (review) a moderate one.
 # These are CEILINGS, not expected durations, and are PAIRED with the byte-activity stall monitor
-# (resolve_idle below). Twin of engine_pref.js's constants.
+# (resolve_idle below). Home for these ceilings is this module (the execution-spine JS twin
+# was retired in #468).
 WRITE_TIMEOUT_SECONDS = 2400
 READ_TIMEOUT_SECONDS = 900
 _ROLE_TIMEOUT = {"build": WRITE_TIMEOUT_SECONDS, "fix": WRITE_TIMEOUT_SECONDS,
                  "review": READ_TIMEOUT_SECONDS, "review-deep": READ_TIMEOUT_SECONDS}
 
-# #309 byte-activity stall thresholds — the monitor half of the ceiling+monitor pair (twin of
-# engine_pref.js). A dispatch emitting NO output bytes for this many seconds is wedged and is killed
+# #309 byte-activity stall thresholds — the monitor half of the ceiling+monitor pair (same home as
+# the role ceilings above). A dispatch emitting NO output bytes for this many seconds is wedged and is killed
 # well before the ceiling. Set far above a working engine's inter-chunk gaps (2026-07-09 receipts:
 # codex ≤ ~8s, cursor ≤ ~4s), so a working CLI is never false-killed. WRITE roles get the longer idle
 # window; READ roles the shorter. Both are under their role ceiling (monitor ≤ ceiling).

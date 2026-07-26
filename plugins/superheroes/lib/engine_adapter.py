@@ -109,7 +109,9 @@ def build_argv_result(engine, role_kind, effort, opts):
         if not is_read and cwd:
             argv += ["-C", cwd]           # confine writes to the managed worktree
         if is_read and schema_path:
-            argv += ["--output-schema", schema_path]
+            argv += ["--output-schema", schema_path]  # enforced structured review output
+        # trailing `-`: read the prompt from stdin. The dispatch runner redirects the staged
+        # prompt file into stdin (`<argv> < promptPath`) — the prompt is ALWAYS fed here.
         argv += ["-"]
         return _ok(argv)
     if engine == "cursor":
