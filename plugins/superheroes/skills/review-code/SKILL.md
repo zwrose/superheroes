@@ -249,23 +249,35 @@ If the guard fails (detached HEAD, or you're reviewing someone else's PR), STOP 
 ```bash
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 HEAD_SHA=$(git rev-parse HEAD)
-BASE_BRANCH=$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo main)   # branch mode: the default branch NAME
+BASE_BRANCH=$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@'); BASE_BRANCH=${BASE_BRANCH:-main}   # branch mode: default branch NAME; the pipeline exits 0 even when symbolic-ref fails, so `|| echo main` inside it would be DEAD
 REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo "local")
 
 # No worktree, no prior comments — subagents verify against the current working tree
 ```
 
-**Resolve the diff base to a PINNED REMOTE commit, then diff locally — both modes.** `$BASE_BRANCH` is only a branch *name*, and a worktree's local copy of that branch goes stale as a matter of course in multi-agent setups: three-dot diff walks back to `merge-base($BASE_BRANCH, HEAD)`, so a stale local base drags everyone else's already-merged work into the review as if this branch added it (#637 — observed live: ~6,600 contaminated lines against 2,931 real ones). Fetch through a **fully qualified refspec** (never the DWIM short name — a local branch or tag called `origin/<base>` would shadow it, and a nonstandard remote refspec can leave the fresh object only at `FETCH_HEAD`) and **pin the result to an immutable commit**, because remote-tracking refs are shared by every worktree of the repo and another agent can move `origin/<base>` between rounds. Do NOT use `gh pr diff` for the diff itself — rounds 2+ have local fix commits that are not on the remote, so every round recomputes the diff locally from the pinned `$BASE_REF`:
+**Resolve the diff base to a PINNED REMOTE commit — ONCE, at session setup.** `$BASE_BRANCH` is only a branch *name*, and a worktree's local copy of that branch goes stale as a matter of course in multi-agent setups: three-dot diff walks back to `merge-base($BASE_BRANCH, HEAD)`, so a stale local base drags everyone else's already-merged work into the review as if this branch added it (#637 — observed live: ~6,600 contaminated lines against 2,931 real ones). Fetch through a **fully qualified refspec** (never the DWIM short name — a local branch or tag called `origin/<base>` would shadow it, and a nonstandard remote refspec can leave the fresh object only at `FETCH_HEAD`) and **pin the result to an immutable commit**. Run this block **exactly once per session**, never per round: remote-tracking refs are shared by every worktree of the repo, so re-running it mid-session would re-pin to whatever another agent has since pushed — the very drift the pin exists to prevent.
 
 ```bash
 BASE_FETCH=fetched; git fetch --quiet origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH" \
-  || BASE_FETCH="offline — local-vs-last-fetched base divergence (behind/ahead): $(git rev-list --left-right --count "$BASE_BRANCH...refs/remotes/origin/$BASE_BRANCH" 2>/dev/null || echo unknown)"
+  || BASE_FETCH="fetch-failed ($(git remote get-url origin >/dev/null 2>&1 && echo unreachable || echo 'no origin remote')); local-vs-last-fetched base divergence behind/ahead $(git rev-list --left-right --count "$BASE_BRANCH...refs/remotes/origin/$BASE_BRANCH" 2>/dev/null | tr '\t' '/' || echo unknown)"
 BASE_REF=$(git rev-parse --verify --quiet "refs/remotes/origin/$BASE_BRANCH^{commit}") \
-  || { BASE_REF=$(git rev-parse --verify "$BASE_BRANCH^{commit}"); BASE_FETCH="$BASE_FETCH; no-remote-ref — diffing the LOCAL base"; }
+  || { BASE_REF=$(git rev-parse --verify --quiet "$BASE_BRANCH^{commit}"); BASE_FETCH="$BASE_FETCH; no-remote-ref — diffing the LOCAL base"; }
+[ -n "$BASE_REF" ] || { echo "review-code: cannot resolve a diff base for '${BASE_BRANCH:-<empty>}' — refusing to review, because an empty base makes 'git diff ...HEAD' an EMPTY diff that would certify clean (#637)"; exit 1; }
+```
+
+**An unresolvable base is a HALT, never a fallback.** With `$BASE_REF` empty, `git diff "$BASE_REF"...HEAD` expands to argv `...HEAD`, which git resolves as `HEAD...HEAD` — a **zero-line diff that exits 0**, so the panel would review nothing and the loop would certify clean. The guard above is the only thing standing between that and a green review of an empty surface; never remove it, and never let a caller "recover" by substituting a branch name.
+
+**Never diff a stale base silently.** Any `$BASE_FETCH` other than `fetched` is a **degradation** — name it in the dispatch summary, record it in `meta.json`, and surface it in the `--post` review body and the `--review-only` presentation *before* any finding is shown. Both modes assume `origin` is the base branch's repository — the same assumption the `git fetch origin "$PR_BRANCH"` above already makes; a PR whose base lives in a *different* upstream repo than `origin` is out of scope here.
+
+**Per-round diff — every round, against the pin.** This is the ONLY command that runs per round. Do NOT use `gh pr diff` (rounds 2+ have local fix commits that are not on the remote), and do NOT re-run the setup block above:
+
+```bash
 git diff "$BASE_REF"...HEAD > "$SESSION_DIR/round-<round>/diff.txt"
 ```
 
-The read-only paths run a single pass and compute the same local diff into `round-1/diff.txt`. **Never diff a stale base silently:** any `$BASE_FETCH` other than `fetched` is a **degradation** — name it in the dispatch summary, record it in `meta.json`, and surface it in the `--post` review body and the `--review-only` presentation *before* any finding is shown. Both modes assume `origin` is the base branch's repository — the same assumption the `git fetch origin "$PR_BRANCH"` above already makes; a PR whose base lives in a *different* upstream repo than `origin` is out of scope here.
+**If `$BASE_REF` is not in scope** — a resumed or compacted orchestrator, or a fresh shell — restore the pin from the session record rather than re-deriving it: `BASE_REF=$(jq -r .baseRef "$SESSION_DIR/meta.json")`, then re-apply the non-empty guard above. Re-running the setup block instead would silently re-pin to a moved `origin/<base>`.
+
+The read-only paths run a single pass and compute the same local diff into `round-1/diff.txt`.
 
 Then write `meta.json` in both modes:
 
