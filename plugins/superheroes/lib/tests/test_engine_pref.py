@@ -7,15 +7,16 @@ import pytest
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def _load():
+def _load_module(basename, mod_name=None):
+    mod_name = mod_name or basename.replace(".py", "")
     spec = importlib.util.spec_from_file_location(
-        "engine_pref", os.path.join(_HERE, "..", "engine_pref.py"))
+        mod_name, os.path.join(_HERE, "..", basename))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
 
 
-EP = _load()
+EP = _load_module("engine_pref.py", "engine_pref")
 
 
 def test_resolve_engine_maps_role_to_key():
@@ -425,17 +426,9 @@ def test_dispatch_calibration_rows_fable_tier_on_codex_shows_unsupported_marker(
     assert by_role["implementer"]["model"] != "fable"
 
 
-def _load_sibling_module(name, filename):
-    lib = os.path.join(_HERE, "..")
-    spec = importlib.util.spec_from_file_location(name, os.path.join(lib, filename))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-MR = _load_sibling_module("model_registry", "model_registry.py")
-DG = _load_sibling_module("dispatch_guard", "dispatch_guard.py")
-EA = _load_sibling_module("engine_adapter", "engine_adapter.py")
+MR = _load_module("model_registry.py", "model_registry")
+DG = _load_module("dispatch_guard.py", "dispatch_guard")
+EA = _load_module("engine_adapter.py", "engine_adapter")
 
 _CALIBRATION_TIERS = {
     "implementer": "sonnet",
@@ -471,6 +464,15 @@ def _all_dispatch_tokens():
     return tokens
 
 
+def _vendor_dispatch_tokens(role, vendor):
+    tokens = set()
+    for model_id, effort in MR.allowlist(role, vendor):
+        tok = MR.dispatch_token(vendor, model_id, effort)
+        if tok is not None:
+            tokens.add(tok)
+    return tokens
+
+
 def _all_registered_model_ids():
     ids = set()
     for vendor in MR.vendors():
@@ -479,24 +481,19 @@ def _all_registered_model_ids():
 
 
 def _assert_model_cell_category(cell, role, vendor):
-    tokens = _all_dispatch_tokens()
+    tokens_all = _all_dispatch_tokens()
     registered_ids = _all_registered_model_ids()
-
-    if " reviewer-deep=" in cell:
-        parts = _parse_review_code_model_cell(cell)
-        _assert_model_cell_category(parts["reviewer"], "reviewer", vendor)
-        _assert_model_cell_category(parts["reviewer-deep"], "reviewer-deep", vendor)
-        return
 
     seat = MR.matrix_config(role, vendor)
     if seat is not None:
-        assert cell in tokens, (
-            f"role {role!r} has a matrix seat on {vendor!r}; cell must be a bare dispatch token, "
-            f"not {cell!r}"
+        vendor_tokens = _vendor_dispatch_tokens(role, vendor)
+        assert cell in vendor_tokens, (
+            f"role {role!r} has a matrix seat on {vendor!r}; cell must be a bare dispatch token "
+            f"for that seat, not {cell!r}"
         )
         return
 
-    if cell in tokens:
+    if cell in tokens_all:
         return
 
     assert " " in cell
@@ -535,13 +532,39 @@ def test_dispatch_calibration_rows_cursor_models_differ_per_role():
 def test_dispatch_calibration_rows_cursor_pilot_unsupported_marker():
     rows = EP.dispatch_calibration_rows(_CURSOR_ALL_ROLES_PREFS, _CALIBRATION_TIERS)
     pilot_model = {r["role"]: r for r in rows}["pilot"]["model"]
-    assert pilot_model.startswith("(unsupported on cursor:")
-    cursor_only = set()
-    for model_id, effort in MR.ladder("cursor"):
-        tok = MR.dispatch_token("cursor", model_id, effort)
-        if tok:
-            cursor_only.add(tok)
-    assert pilot_model not in cursor_only
+    assert pilot_model == "(unsupported on cursor: pilot)"
+
+
+def test_assert_model_cell_category_rejects_cross_vendor_claude_token_on_cursor_row():
+    with pytest.raises(AssertionError):
+        _assert_model_cell_category("sonnet", "implementer", "cursor")
+    _assert_model_cell_category("sonnet", "implementer", "claude")
+
+
+def test_dispatch_calibration_rows_codex_pilot_unsupported_marker():
+    rows = EP.dispatch_calibration_rows(
+        {"pilot": "codex"},
+        _CALIBRATION_TIERS,
+    )
+    by_role = {r["role"]: r for r in rows}
+    assert by_role["pilot"]["engine"] == "codex"
+    assert by_role["pilot"]["model"] == "(unsupported on codex: pilot)"
+
+
+def test_dispatch_calibration_rows_codex_implementer_pin_unchanged_after_pilot_seat_guard():
+    rows = EP.dispatch_calibration_rows(
+        {"implementation": "codex", "codexModels": {"implementer": "gpt-5.6-sol"}},
+        _CALIBRATION_TIERS,
+    )
+    by_role = {r["role"]: r for r in rows}
+    assert by_role["implementer"]["model"] == "gpt-5.6-sol"
+
+
+def test_dispatch_calibration_rows_cursor_fable_tier_shows_unsupported_marker():
+    tiers = dict(_CALIBRATION_TIERS, **{"implementer": "fable"})
+    rows = EP.dispatch_calibration_rows({"implementation": "cursor"}, tiers)
+    by_role = {r["role"]: r for r in rows}
+    assert by_role["implementer"]["model"] == "(unsupported on cursor: fable)"
 
 
 def test_dispatch_calibration_rows_model_cells_are_token_composite_or_marker():

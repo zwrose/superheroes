@@ -91,9 +91,18 @@ def _effective_model(role, engine, pin_role, tier, prefs):
     resolved engine (Claude tier, Codex concrete model, or cursor dispatch token); it is not a
     guarantee of what will run when a dispatch path does not thread the seat model."""
     if engine == "codex":
+        if model_registry.matrix_config(role, "codex") is None:
+            return _unsupported_model_marker("codex", role)
         m = resolve_engine_model("codex", pin_role, tier, prefs)
         return m if m is not None else _unsupported_model_marker("codex", tier)
     if engine == "cursor":
+        # Anthropic-only Claude tiers (override_only; no codex peer) are unrunnable on cursor —
+        # twin of engine_adapter.build_argv's `opts.get("model") == "fable"` guard.
+        if isinstance(tier, str):
+            try:
+                model_registry.codex_peer_for_claude_tier(tier)
+            except ValueError:
+                return _unsupported_model_marker("cursor", tier)
         m = model_registry.cursor_dispatch_id(role)
         return m if m is not None else _unsupported_model_marker("cursor", role)
     # claude — tier is the Claude-family dispatch token for this row.
