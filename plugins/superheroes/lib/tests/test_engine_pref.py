@@ -798,6 +798,30 @@ def test_effective_model_cursor_unknown_role_yields_marker():
     )
 
 
+def _third_party_engine_model_ids_from_registry():
+    claude_id = next(iter(MR._MODELS["claude"]))
+    codex_id = MR.codex_models()[0]
+    return claude_id, codex_id
+
+
+@pytest.mark.parametrize("engine_model", _third_party_engine_model_ids_from_registry())
+def test_build_argv_result_cursor_refuses_third_party_engine_model(engine_model):
+    """#650: third-party registry ids must not be accepted as cursor engine_model pins."""
+    res = EA.build_argv_result("cursor", "build", "high", {"engine_model": engine_model})
+    assert res == {"argv": [], "reason": "unregistered-engine-model"}
+
+
+def test_build_argv_result_cursor_accepts_first_party_engine_model_pin():
+    res = EA.build_argv_result(
+        "cursor", "review", None, {"engine_model": "composer-2.5"})
+    assert res["reason"] is None
+    assert res["argv"][res["argv"].index("--model") + 1] == "composer-2.5"
+    grok = EA.build_argv_result(
+        "cursor", "review", "high", {"engine_model": "cursor-grok-4.5"})
+    assert grok["reason"] is None
+    assert grok["argv"][grok["argv"].index("--model") + 1] == "cursor-grok-4.5-high"
+
+
 def test_dispatch_calibration_rows_tolerates_non_dict_prefs_and_tiers():
     tiers = _CALIBRATION_TIERS
     for prefs in (None, [], "x"):
