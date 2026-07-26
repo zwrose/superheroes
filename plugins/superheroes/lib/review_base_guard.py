@@ -181,7 +181,6 @@ def check_round_diff(path):
 
 _DIFF_GIT_HEADER = re.compile(r"^diff --git a/(?P<a>.*) b/(?P<b>.*)$")
 _PATH_SAMPLE_CAP = 8
-_NUMSTAT_BRACE = re.compile(r"\{([^}]+)\}")
 
 
 def _global_line_counts(file_stats):
@@ -267,55 +266,83 @@ def _artifact_diff_stats(diff_text):
     return file_stats, headers_parsed, global_added, global_deleted
 
 
-def _resolve_numstat_path(path_field):
-    """Map a ``--numstat`` path column to the new-side path, or None if unresolvable."""
-    if not path_field:
-        return None
-    if " => " in path_field:
-        return path_field.rsplit(" => ", 1)[-1].strip()
-    m = _NUMSTAT_BRACE.search(path_field)
-    if m:
-        inner = m.group(1)
-        if " => " not in inner:
-            return None
-        old, new = inner.split(" => ", 1)
-        return path_field[: m.start()] + new.strip() + path_field[m.end() :]
-    return path_field
-
-
 def _parse_numstat(numstat_out):
-    """Build per-file stats from ``git diff --numstat`` output.
+    """Build per-file stats from ``git diff --numstat -z`` output.
 
-    Values are ``(added, deleted)`` tuples or ``None`` for binary rows (``-\\t-\\tpath``).
-    Returns ``(file_stats, per_file_ok)``; ``per_file_ok`` is False when any path could not be
-    resolved (caller falls back to global totals only).
+    NUL-delimited fields: a normal row is ``added\\tdeleted\\tpath``; a rename/copy row is
+    ``added\\tdeleted\\t`` followed by old path and new path (new path is used). Values are
+    ``(added, deleted)`` tuples or ``None`` for binary rows (``-\\t-\\tpath``).
+
+    Returns ``(file_stats, per_file_ok, global_added, global_deleted)``. ``per_file_ok`` is False
+    when any path could not be mapped (caller falls back to global totals only). Global totals
+    include every row's counts even when per-file mapping failed. Resolved paths are not
+    ``.strip()``ped; ``store_core.run_git`` strips whole stdout, so a path whose last byte is
+    whitespace (only possible for the final NUL field) may still be corrupted — accepted deliberately.
     """
     file_stats = {}
     per_file_ok = True
-    for row in numstat_out.splitlines():
-        if not row.strip():
-            continue
+    global_added = 0
+    global_deleted = 0
+    if not numstat_out:
+        return file_stats, per_file_ok, global_added, global_deleted
+
+    fields = numstat_out.split("\0")
+    while fields and fields[-1] == "":
+        fields.pop()
+
+    i = 0
+    n = len(fields)
+    while i < n:
+        row = fields[i]
         parts = row.split("\t")
-        if len(parts) < 3:
+        if len(parts) < 2:
+            per_file_ok = False
+            i += 1
             continue
-        a, d, path_field = parts[0], parts[1], parts[2]
-        resolved = _resolve_numstat_path(path_field)
-        if resolved is None:
+        a, d = parts[0], parts[1]
+        if a == "-" or d == "-":
+            row_added = row_deleted = 0
+        else:
+            try:
+                row_added, row_deleted = int(a), int(d)
+            except ValueError:
+                per_file_ok = False
+                i += 1
+                continue
+        global_added += row_added
+        global_deleted += row_deleted
+
+        if len(parts) >= 3 and parts[2] != "":
+            resolved = parts[2]
+            i += 1
+        elif len(parts) >= 3 and parts[2] == "":
+            if i + 2 < n:
+                resolved = fields[i + 2]
+                i += 3
+            else:
+                per_file_ok = False
+                i += 1
+                continue
+        else:
+            per_file_ok = False
+            i += 1
+            continue
+
+        if not resolved:
             per_file_ok = False
             continue
+
         if a == "-" or d == "-":
             file_stats[resolved] = None
-            continue
-        try:
-            file_stats[resolved] = (int(a), int(d))
-        except ValueError:
-            per_file_ok = False
-    return file_stats, per_file_ok
+        else:
+            file_stats[resolved] = (row_added, row_deleted)
+
+    return file_stats, per_file_ok, global_added, global_deleted
 
 
 def _expected_diff_stats(pin, repo_root, run):
-    """Per-file stats git would emit for pin...HEAD (one ``--numstat`` subprocess)."""
-    numstat_out = run(repo_root, "diff", "--numstat", "%s...HEAD" % pin)
+    """Per-file stats git would emit for pin...HEAD (one ``--numstat -z`` subprocess)."""
+    numstat_out = run(repo_root, "diff", "--numstat", "-z", "%s...HEAD" % pin)
     if numstat_out is None:
         return None
     return _parse_numstat(numstat_out)
@@ -355,9 +382,8 @@ def check_diff_binding(diff_text, pin, repo_root, run=None):
             "reason": REASON_DIFF_BASE_UNVERIFIABLE,
             "detail": "expected diff could not be recomputed from pin",
         }
-    exp_stats, exp_per_file_ok = parsed
+    exp_stats, exp_per_file_ok, exp_added, exp_deleted = parsed
     act_stats, headers_ok, act_added, act_deleted = _artifact_diff_stats(diff_text)
-    exp_added, exp_deleted = _global_line_counts(exp_stats)
     if act_added != exp_added or act_deleted != exp_deleted:
         return {
             "ok": False,

@@ -748,6 +748,122 @@ def test_check_diff_binding_rename_ok(git_repo, tmp_path):
     text = _range_diff(root, pin)
     r = rbg.check_diff_binding(text, pin, root)
     assert r["ok"] and r["binding"] == "file-set+line-counts"
+    # Root-level rename only — git does not emit brace-compressed numstat for this shape.
+    # Brace-compressed directory renames are covered by test_check_diff_binding_dir_rename_ok.
+
+
+def _pin_and_dir_rename_with_modify(repo_root):
+    old_dir = os.path.join(repo_root, "olddir")
+    os.makedirs(old_dir)
+    fpath = os.path.join(old_dir, "f.txt")
+    with open(fpath, "w", encoding="utf-8") as fh:
+        fh.write("v1\n")
+    subprocess.run(["git", "-C", repo_root, "add", "olddir"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", repo_root, "commit", "-q", "-m", "base"], check=True, capture_output=True)
+    pin = subprocess.run(
+        ["git", "-C", repo_root, "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    new_path = os.path.join(repo_root, "newdir", "f.txt")
+    os.makedirs(os.path.dirname(new_path), exist_ok=True)
+    subprocess.run(
+        ["git", "-C", repo_root, "mv", fpath, new_path],
+        check=True,
+        capture_output=True,
+    )
+    with open(new_path, "w", encoding="utf-8") as fh:
+        fh.write("v1\nv2\n")
+    subprocess.run(["git", "-C", repo_root, "add", "-A"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", repo_root, "commit", "-q", "-m", "mvdir"], check=True, capture_output=True)
+    return pin
+
+
+def test_check_diff_binding_dir_rename_ok(git_repo, tmp_path):
+    root, _ = git_repo
+    pin = _pin_and_dir_rename_with_modify(root)
+    numstat_plain = subprocess.run(
+        ["git", "-C", root, "diff", "--numstat", "%s...HEAD" % pin],
+        check=True, capture_output=True, text=True,
+    ).stdout
+    assert "=>" in numstat_plain, "git must emit brace-compressed rename numstat: %r" % numstat_plain
+    text = _range_diff(root, pin)
+    r = rbg.check_diff_binding(text, pin, root)
+    assert r["ok"] and r["binding"] == "file-set+line-counts"
+
+
+def _pin_and_rename_within_dir(repo_root):
+    lib = os.path.join(repo_root, "lib")
+    os.makedirs(lib)
+    a_path = os.path.join(lib, "a.py")
+    with open(a_path, "w", encoding="utf-8") as fh:
+        fh.write("x\n")
+    subprocess.run(["git", "-C", repo_root, "add", "lib"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", repo_root, "commit", "-q", "-m", "base"], check=True, capture_output=True)
+    pin = subprocess.run(
+        ["git", "-C", repo_root, "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    b_path = os.path.join(lib, "b.py")
+    subprocess.run(["git", "-C", repo_root, "mv", a_path, b_path], check=True, capture_output=True)
+    with open(b_path, "w", encoding="utf-8") as fh:
+        fh.write("x\ny\n")
+    subprocess.run(["git", "-C", repo_root, "add", "-A"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", repo_root, "commit", "-q", "-m", "rename"], check=True, capture_output=True)
+    return pin
+
+
+def test_check_diff_binding_rename_within_dir_ok(git_repo, tmp_path):
+    root, _ = git_repo
+    pin = _pin_and_rename_within_dir(root)
+    text = _range_diff(root, pin)
+    r = rbg.check_diff_binding(text, pin, root)
+    assert r["ok"] and r["binding"] == "file-set+line-counts"
+
+
+def test_parse_numstat_z_normal_and_rename():
+    fixture = (
+        "1\t0\tkeep.txt"
+        + "\0"
+        + "1\t1\t"
+        + "\0"
+        + "olddir/f.txt"
+        + "\0"
+        + "newdir/f.txt"
+        + "\0"
+    )
+    stats, per_file_ok, added, deleted = rbg._parse_numstat(fixture)
+    assert per_file_ok is True
+    assert stats == {"keep.txt": (1, 0), "newdir/f.txt": (1, 1)}
+    assert added == 2 and deleted == 1
+
+
+def test_check_diff_binding_unresolvable_numstat_row_line_counts_only(git_repo, tmp_path):
+    root, _ = git_repo
+    pin = _second_commit(root, tmp_path)
+    text = (
+        "diff --git a/f.py b/f.py\n"
+        "--- a/f.py\n+++ b/f.py\n"
+        "@@ -1 +1,6 @@\n"
+        "-old\n"
+        "+n1\n+n2\n+n3\n+n4\n+n5\n"
+        "\\ No newline at end of file\n"
+        "@@ -2,2 +0,0 @@\n"
+        "-x\n"
+        "-y\n"
+    )
+    _, act_added, act_deleted = _global_counts_from_stats(text)
+    assert act_added == 5 and act_deleted == 3
+
+    # Incomplete rename triple: counts must still land in the global expected total.
+    numstat_z = "5\t3\t\0"
+
+    def stub(cwd, *args):
+        if args and args[0] == "diff" and "--numstat" in args:
+            return numstat_z
+        return store_core.run_git(cwd, *args)
+
+    r = rbg.check_diff_binding(text, pin, root, run=stub)
+    assert r["ok"] and r["binding"] == "line-counts-only"
 
 
 def test_check_diff_binding_quoted_path_line_counts_only(git_repo, tmp_path):
@@ -902,7 +1018,7 @@ def test_check_diff_binding_per_file_swap_refuses(git_repo, tmp_path):
 
     def stub(cwd, *args):
         if args and args[0] == "diff" and "--numstat" in args:
-            return "2\t0\tA.txt\n0\t2\tB.txt\n"
+            return "2\t0\tA.txt\00\t2\tB.txt\0"
         return store_core.run_git(cwd, *args)
 
     sections = []

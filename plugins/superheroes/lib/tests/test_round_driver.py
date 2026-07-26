@@ -2104,6 +2104,11 @@ def test_library_receipt_mode_without_cli_guard_stays_not_checked(tmp_path):
         assert receipt["baseGuard"] == "not-checked"
 
 
+def test_certification_base_explicit_not_checked_token(tmp_path):
+    state = {"config": {"baseGuard": "not-checked", "baseDegraded": False}}
+    assert RD._certification_base(state) == "not-checked"
+
+
 def test_base_guard_round_diff_malformed(tmp_path, capsys):
     d = str(tmp_path)
     ga = _guard_argv(d)

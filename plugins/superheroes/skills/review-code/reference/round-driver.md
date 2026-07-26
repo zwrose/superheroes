@@ -93,7 +93,7 @@ state; rounds 2+ rely on the skill's per-round shell halt for diff integrity.
 On fresh state, resolved values ride into config and may appear in the terminal receipt as an
 optional **`base` block** — `baseRef`, `baseFetch`, `mode`, `baseRepo`, `baseRepoCheck`,
 `diffBinding` (`file-set+line-counts` when per-file stat binding succeeded, or `line-counts-only`
-when git-quoted paths forced a global-totals fallback). Terminal `certification.base` is tri-state:
+when git-quoted paths or an unresolvable `--numstat` path column forced a global-totals fallback). Terminal `certification.base` is tri-state:
 `fetched` (CLI guard ran with a healthy `baseFetch`), `degraded` (fetch provenance unknown or
 failed), or `not-checked` (library/eval `run_loop` — guard did not run). `validate_receipt`
 **accepts but does not require** the `base` block, like the existing per-round `auditProvenance`
