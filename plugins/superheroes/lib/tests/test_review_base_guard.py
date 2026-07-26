@@ -918,19 +918,34 @@ def test_check_diff_binding_non_utf8_path_real_repo(git_repo, tmp_path):
         ["git", "-C", root, "rev-parse", "HEAD"],
         check=True, capture_output=True, text=True,
     ).stdout.strip()
-    bad_name = b"\xff\xfe.txt"
-    bad_path = os.path.join(root, bad_name.decode("latin-1"))
+    bad_path = os.path.join(root.encode(), b"\xff\xfe.txt")
     try:
         with open(bad_path, "wb") as fh:
             fh.write(b"x\n")
     except (OSError, UnicodeEncodeError):
-        pytest.skip("filesystem refuses non-UTF-8 filename (e.g. APFS on macOS)")
+        pytest.skip(
+            "filesystem rejected a non-UTF-8 byte sequence in the path (e.g. APFS EILSEQ)"
+        )
     subprocess.run(["git", "-C", root, "add", "--", bad_path], check=True, capture_output=True)
     subprocess.run(["git", "-C", root, "commit", "-q", "-m", "badname"], check=True, capture_output=True)
     text = _range_diff(root, pin)
     r = rbg.check_diff_binding(text, pin, root)
     assert r["ok"] is True
     assert r["binding"] == "line-counts-only"
+
+
+def test_check_diff_binding_explicit_run_returns_bytes(git_repo, tmp_path):
+    root, _ = git_repo
+    pin = _second_commit(root, tmp_path)
+    text = _range_diff(root, pin)
+
+    def stub_bytes(cwd, *args):
+        if args and args[0] == "diff" and "--numstat" in args:
+            return rbg._run_git_bytes(cwd, *args)
+        return store_core.run_git(cwd, *args)
+
+    r = rbg.check_diff_binding(text, pin, root, run=stub_bytes)
+    assert r["ok"] is True
 
 
 def test_check_diff_binding_unresolvable_numstat_row_line_counts_only(git_repo, tmp_path):

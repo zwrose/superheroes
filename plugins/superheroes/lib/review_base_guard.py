@@ -355,13 +355,22 @@ def _run_git_bytes(cwd, *args):
 
 
 def _numstat_z_output(pin, repo_root, run):
-    """``git diff --numstat -z`` as a string safe for ``_parse_numstat``."""
+    """``git diff --numstat -z`` as a string safe for ``_parse_numstat``.
+
+    ``run`` is a test seam: when supplied, it should return text-mode stdout or ``None``.
+    Production must leave ``run`` as ``None`` so stdout is captured as bytes and decoded with
+    ``surrogateescape``. Passing ``store_core.run_git`` here reintroduces a ``UnicodeDecodeError``
+    on non-UTF-8 paths. If an explicit ``run`` returns ``bytes``, they are decoded the same way.
+    """
     if run is None:
         raw = _run_git_bytes(repo_root, "diff", "--numstat", "-z", "%s...HEAD" % pin)
         if raw is None:
             return None
         return raw.decode("utf-8", errors="surrogateescape")
-    return run(repo_root, "diff", "--numstat", "-z", "%s...HEAD" % pin)
+    out = run(repo_root, "diff", "--numstat", "-z", "%s...HEAD" % pin)
+    if isinstance(out, bytes):
+        return out.decode("utf-8", errors="surrogateescape")
+    return out
 
 
 def _expected_diff_stats(pin, repo_root, run):
@@ -396,6 +405,12 @@ def check_diff_binding(diff_text, pin, repo_root, run=None):
     not merely that it looks like a diff. A content-identical substitution that preserves stats is
     deliberately out of scope — full recompute was declined by advisor ruling; a real specimen is the
     upgrade trigger.
+
+    ``run`` is a test seam for git subprocess output. Leave it ``None`` in production so
+    ``_numstat_z_output`` captures numstat stdout as bytes with ``surrogateescape``. An explicit
+    ``run`` must return text-mode stdout or ``None`` (``bytes`` are coerced); passing
+    ``store_core.run_git`` here reintroduces the decode crash on non-UTF-8 paths because that
+    helper decodes stdout as UTF-8 text.
     """
     parsed = _expected_diff_stats(pin, repo_root, run)
     if parsed is None:
