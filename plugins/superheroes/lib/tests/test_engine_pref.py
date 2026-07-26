@@ -2,18 +2,21 @@ import importlib.util
 import json
 import os
 
+import pytest
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def _load():
+def _load_module(basename, mod_name=None):
+    mod_name = mod_name or basename.replace(".py", "")
     spec = importlib.util.spec_from_file_location(
-        "engine_pref", os.path.join(_HERE, "..", "engine_pref.py"))
+        mod_name, os.path.join(_HERE, "..", basename))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
 
 
-EP = _load()
+EP = _load_module("engine_pref.py", "engine_pref")
 
 
 def test_resolve_engine_maps_role_to_key():
@@ -253,12 +256,12 @@ def test_dispatch_calibration_rows_codex_implementer_honors_persistent_pin():
     assert by_role["implementer"]["model"] == "gpt-5.6-sol"
 
 
-def test_dispatch_calibration_rows_cursor_implementer_reports_composer_literal():
+def test_dispatch_calibration_rows_cursor_implementer_reports_registry_composer():
     rows = EP.dispatch_calibration_rows(
         {"implementation": "cursor"},
         {"implementer": "sonnet", "pilot": "sonnet", "reviewer": "sonnet", "reviewer-deep": "opus"})
     by_role = {r["role"]: r for r in rows}
-    assert by_role["implementer"]["model"] == "(cursor composer)"
+    assert by_role["implementer"]["model"] == "composer-2.5"
 
 
 def test_dispatch_calibration_rows_claude_implementer_unchanged():
@@ -283,7 +286,7 @@ def test_dispatch_calibration_rows_brief_check_reports_effective_provider_model(
     rows = EP.dispatch_calibration_rows({"briefCheck": "cursor"}, tiers)
     by_role = {r["role"]: r for r in rows}
     assert by_role["brief-check"]["engine"] == "cursor"
-    assert by_role["brief-check"]["model"] == "(cursor composer)"
+    assert by_role["brief-check"]["model"] == "cursor-grok-4.5-high"
 
     # {} -> brief-check fails open to its codex default (see _ROLE_DEFAULT_ENGINE)
     rows = EP.dispatch_calibration_rows({}, tiers)
@@ -419,8 +422,249 @@ def test_dispatch_calibration_rows_fable_tier_on_codex_shows_unsupported_marker(
         {"implementer": "fable", "pilot": "sonnet", "reviewer": "sonnet", "reviewer-deep": "opus"})
     by_role = {r["role"]: r for r in rows}
     assert by_role["implementer"]["engine"] == "codex"
-    assert "unsupported" in by_role["implementer"]["model"]
+    assert by_role["implementer"]["model"] == "(unsupported on codex: fable)"
     assert by_role["implementer"]["model"] != "fable"
+
+
+MR = _load_module("model_registry.py", "model_registry")
+DG = _load_module("dispatch_guard.py", "dispatch_guard")
+EA = _load_module("engine_adapter.py", "engine_adapter")
+
+_CALIBRATION_TIERS = {
+    "implementer": "sonnet",
+    "pilot": "sonnet",
+    "reviewer": "sonnet",
+    "reviewer-deep": "opus",
+}
+
+_CURSOR_ALL_ROLES_PREFS = {
+    "implementation": "cursor",
+    "briefCheck": "cursor",
+    "reviewer": "cursor",
+    "pilot": "cursor",
+}
+
+
+def _parse_review_code_model_cell(model_cell):
+    reviewer_part, reviewer_deep_value = model_cell.split(" reviewer-deep=", 1)
+    assert reviewer_part.startswith("reviewer=")
+    return {
+        "reviewer": reviewer_part[len("reviewer="):],
+        "reviewer-deep": reviewer_deep_value,
+    }
+
+
+def _all_dispatch_tokens():
+    tokens = set()
+    for vendor in MR.vendors():
+        for model_id, effort in MR.ladder(vendor):
+            tok = MR.dispatch_token(vendor, model_id, effort)
+            if tok is not None:
+                tokens.add(tok)
+    return tokens
+
+
+def _vendor_ladder_dispatch_tokens(vendor):
+    tokens = set()
+    for model_id, effort in MR.ladder(vendor):
+        tok = MR.dispatch_token(vendor, model_id, effort)
+        if tok is not None:
+            tokens.add(tok)
+    return tokens
+
+
+def _all_registered_model_ids():
+    ids = set()
+    for vendor in MR.vendors():
+        ids.update(MR._MODELS[vendor])
+    return ids
+
+
+def _cell_valid_for_seated_role(cell, vendor):
+    if cell in _vendor_ladder_dispatch_tokens(vendor):
+        return True
+    if vendor == "codex" and MR.is_registered("codex", cell):
+        return True
+    return False
+
+
+def _assert_model_cell_category(cell, role, vendor):
+    tokens_all = _all_dispatch_tokens()
+    registered_ids = _all_registered_model_ids()
+
+    seat = MR.matrix_config(role, vendor)
+    if seat is not None:
+        assert _cell_valid_for_seated_role(cell, vendor), (
+            f"role {role!r} has a matrix seat on {vendor!r}; cell must be a dispatch token from "
+            f"that vendor's ladder or a registered codex model id, not {cell!r}"
+        )
+        return
+
+    assert cell.startswith("(unsupported on "), (
+        f"role {role!r} has no matrix seat on {vendor!r}; cell must be an unsupported marker, "
+        f"not {cell!r}"
+    )
+    assert cell not in tokens_all, (
+        f"unsupported marker {cell!r} must not be a dispatch token for any vendor"
+    )
+    assert cell not in registered_ids, (
+        f"unsupported marker {cell!r} must not be a registered model id"
+    )
+
+
+def test_dispatch_calibration_rows_cursor_model_cells_pass_dispatch_guard_or_marker():
+    rows = EP.dispatch_calibration_rows(_CURSOR_ALL_ROLES_PREFS, _CALIBRATION_TIERS)
+    by_role = {r["role"]: r for r in rows}
+
+    def _check(role, cell):
+        if cell.startswith("(unsupported"):
+            assert "cursor" in cell
+            return
+        assert DG.validate(role, "cursor", cell)["ok"] is True
+
+    _check("implementer", by_role["implementer"]["model"])
+    _check("brief-check", by_role["brief-check"]["model"])
+    review_parts = _parse_review_code_model_cell(by_role["review-code"]["model"])
+    _check("reviewer", review_parts["reviewer"])
+    _check("reviewer-deep", review_parts["reviewer-deep"])
+    _check("pilot", by_role["pilot"]["model"])
+
+
+def test_dispatch_calibration_rows_cursor_models_differ_per_role():
+    rows = EP.dispatch_calibration_rows(_CURSOR_ALL_ROLES_PREFS, _CALIBRATION_TIERS)
+    by_role = {r["role"]: r for r in rows}
+    assert by_role["implementer"]["model"] == "composer-2.5"
+    assert by_role["brief-check"]["model"] == "cursor-grok-4.5-high"
+    parts = _parse_review_code_model_cell(by_role["review-code"]["model"])
+    assert parts["reviewer"] == "cursor-grok-4.5-high"
+    assert parts["reviewer-deep"] == "cursor-grok-4.5-high"
+    assert by_role["implementer"]["model"] != by_role["brief-check"]["model"]
+
+
+def test_dispatch_calibration_rows_cursor_pilot_unsupported_marker():
+    rows = EP.dispatch_calibration_rows(_CURSOR_ALL_ROLES_PREFS, _CALIBRATION_TIERS)
+    pilot_model = {r["role"]: r for r in rows}["pilot"]["model"]
+    assert pilot_model == "(unsupported on cursor: pilot)"
+
+
+def test_assert_model_cell_category_rejects_cross_vendor_claude_token_on_cursor_row():
+    with pytest.raises(AssertionError):
+        _assert_model_cell_category("sonnet", "implementer", "cursor")
+    _assert_model_cell_category("sonnet", "implementer", "claude")
+
+
+def test_dispatch_calibration_rows_codex_pilot_unsupported_marker():
+    rows = EP.dispatch_calibration_rows(
+        {"pilot": "codex"},
+        _CALIBRATION_TIERS,
+    )
+    by_role = {r["role"]: r for r in rows}
+    assert by_role["pilot"]["engine"] == "codex"
+    assert by_role["pilot"]["model"] == "(unsupported on codex: pilot)"
+
+
+def test_dispatch_calibration_rows_codex_implementer_pin_unchanged_after_pilot_seat_guard():
+    rows = EP.dispatch_calibration_rows(
+        {"implementation": "codex", "codexModels": {"implementer": "gpt-5.6-sol"}},
+        _CALIBRATION_TIERS,
+    )
+    by_role = {r["role"]: r for r in rows}
+    assert by_role["implementer"]["model"] == "gpt-5.6-sol"
+
+
+def test_assert_model_cell_category_rejects_token_on_seatless_role():
+    with pytest.raises(AssertionError):
+        _assert_model_cell_category("composer-2.5", "pilot", "codex")
+
+
+def test_dispatch_calibration_rows_codex_below_seat_pin_passes_sweep_oracle():
+    rows = EP.dispatch_calibration_rows(
+        {"reviewer": "codex", "codexModels": {"reviewer-deep": "gpt-5.6-terra"}},
+        _CALIBRATION_TIERS,
+    )
+    review_code = {r["role"]: r for r in rows}["review-code"]["model"]
+    parts = _parse_review_code_model_cell(review_code)
+    _assert_model_cell_category(parts["reviewer-deep"], "reviewer-deep", "codex")
+    assert parts["reviewer-deep"] == "gpt-5.6-terra"
+
+
+def test_dispatch_calibration_rows_model_cells_are_token_composite_or_marker():
+    engine_prefs = {
+        "claude": {
+            "implementation": "claude",
+            "briefCheck": "claude",
+            "reviewer": "claude",
+            "pilot": "claude",
+        },
+        "codex": {
+            "implementation": "codex",
+            "briefCheck": "codex",
+            "reviewer": "codex",
+            "pilot": "codex",
+        },
+        "cursor": _CURSOR_ALL_ROLES_PREFS,
+    }
+    for _engine_name, prefs in engine_prefs.items():
+        rows = EP.dispatch_calibration_rows(prefs, _CALIBRATION_TIERS)
+        for row in rows:
+            vendor = row["engine"]
+            if row["role"] == "review-code":
+                parts = _parse_review_code_model_cell(row["model"])
+                _assert_model_cell_category(parts["reviewer"], "reviewer", vendor)
+                _assert_model_cell_category(parts["reviewer-deep"], "reviewer-deep", vendor)
+            else:
+                _assert_model_cell_category(row["model"], row["role"], vendor)
+
+
+def test_assert_model_cell_category_rejects_marker_when_matrix_seat_exists():
+    marker = "(unsupported on cursor: implementer)"
+    with pytest.raises(AssertionError):
+        _assert_model_cell_category(marker, "implementer", "cursor")
+    _assert_model_cell_category("(unsupported on cursor: pilot)", "pilot", "cursor")
+
+
+def test_parse_review_code_model_cell_round_trips_spaced_marker_in_reviewer_deep():
+    tiers = dict(_CALIBRATION_TIERS, **{"reviewer-deep": "fable"})
+    rows = EP.dispatch_calibration_rows({"reviewer": "codex"}, tiers)
+    review_code = {r["role"]: r for r in rows}["review-code"]["model"]
+    parts = _parse_review_code_model_cell(review_code)
+    assert parts["reviewer"] == "gpt-5.6-terra"
+    assert parts["reviewer-deep"] == "(unsupported on codex: fable)"
+
+
+def test_dispatch_calibration_rows_cursor_implementer_matches_adapter_default():
+    # The implementer row is the one cursor dispatch path that threads engine_adapter's default;
+    # if the calibration render diverges from _CURSOR_MODEL, builds will park on a bogus --model.
+    rows = EP.dispatch_calibration_rows(
+        {"implementation": "cursor"},
+        _CALIBRATION_TIERS,
+    )
+    by_role = {r["role"]: r for r in rows}
+    assert by_role["implementer"]["model"] == EA._CURSOR_MODEL
+
+
+def test_resolve_engine_always_returns_member_of_engines():
+    role_kinds = ("review", "build", "fix", "brief-check", "pilot", "bogus-role")
+    malformed_prefs = (None, {}, "not-a-dict", {"implementation": "bogus"}, {"implementation": 7})
+    for role_kind in role_kinds:
+        for prefs in malformed_prefs:
+            assert EP.resolve_engine(role_kind, prefs) in EP.ENGINES
+
+
+def test_effective_model_cursor_unknown_role_yields_marker():
+    assert EP._effective_model("not-a-role", "cursor", None, None, {}) == (
+        "(unsupported on cursor: not-a-role)"
+    )
+
+
+def test_dispatch_calibration_rows_tolerates_non_dict_prefs_and_tiers():
+    tiers = _CALIBRATION_TIERS
+    for prefs in (None, [], "x"):
+        rows = EP.dispatch_calibration_rows(prefs, tiers)
+        assert len(rows) == 4
+    for bad_tiers in (None, [], "x"):
+        rows = EP.dispatch_calibration_rows({}, bad_tiers)
+        assert len(rows) == 4
 
 
 def test_load_engine_prefs_surfaces_only_valid_per_role_codex_model_pins(tmp_path):

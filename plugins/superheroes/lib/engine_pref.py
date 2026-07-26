@@ -79,16 +79,32 @@ BRIEF_CHECK_CLAUDE_FALLBACK_TIER = model_registry.dispatch_token(
     "claude", _brief_check_claude_model)
 
 
-def _effective_model(engine, pin_role, tier, prefs):
+def _unsupported_model_marker(engine, detail):
+    return "(unsupported on %s: %s)" % (engine, detail)
+
+
+def _effective_model(role, engine, pin_role, tier, prefs):
     """The model to REPORT for a dispatch role given its resolved engine — honest provenance.
-    claude → the Claude tier; codex → the concrete Codex model (pin or tier→GPT map); cursor → the
-    single composer model. `pin_role` is the CODEX_PIN_ROLES key for this role (or None)."""
+    `role` is the model_registry dispatch role for the row; `pin_role` is the CODEX_PIN_ROLES key
+    for codex resolution (or None) — distinct from `role` so brief-check never inherits a stray
+    codexModels pin. The model cell is the registry-sanctioned seat model for that role on the
+    resolved engine (Claude tier, Codex concrete model, or cursor dispatch token); it is not a
+    guarantee of what will run when a dispatch path does not thread the seat model."""
     if engine == "codex":
+        if model_registry.matrix_config(role, "codex") is None:
+            return _unsupported_model_marker("codex", role)
         m = resolve_engine_model("codex", pin_role, tier, prefs)
-        return m if m is not None else "(unsupported on codex: %s)" % tier
+        return m if m is not None else _unsupported_model_marker("codex", tier)
     if engine == "cursor":
-        return "(cursor composer)"
-    return tier  # claude (or unknown) → the Claude-family tier
+        # Seat column only: registry-sanctioned cursor dispatch token for the role, or a no-seat
+        # marker. Tier gating belongs on the dispatch path (build/fix threads tier as `model`;
+        # review seats thread `engine_model` only) — this row cannot know which path runs.
+        m = model_registry.cursor_dispatch_id(role)
+        return m if m is not None else _unsupported_model_marker("cursor", role)
+    # claude — tier is the Claude-family dispatch token for this row.
+    # Unreachable from dispatch_calibration_rows for non-claude engines: resolve_engine only
+    # returns members of ENGINES (see test_resolve_engine_always_returns_member_of_engines).
+    return tier
 
 
 def dispatch_calibration_rows(prefs, tiers):
@@ -96,27 +112,32 @@ def dispatch_calibration_rows(prefs, tiers):
     and the preflight readout format. `prefs` MUST be the RAW enginePreferences dict (NOT
     load_engine_prefs output: an absent `briefCheck` must stay ABSENT so resolve_engine applies the
     codex default; a normalized 'claude' would suppress it). `tiers` is the effective model-tier map.
-    Honest per-engine provenance: `model` is meaningful only when engine==claude (the Claude tier);
-    an external engine carries its OWN model (the resolved Codex model, or cursor's single composer
-    model) via `_effective_model` — never the Claude tier misreported as what actually ran.
+    Honest per-engine provenance: each `model` cell is the registry-sanctioned seat model for that
+    role on the resolved engine (Claude tier, resolved Codex model, or per-role cursor dispatch
+    token via `_effective_model`) — never the Claude tier misreported as what an external engine ran.
     Returns a list of {role, engine, model}. Pure; tolerant of non-dict inputs."""
     prefs = prefs if isinstance(prefs, dict) else {}
     tiers = tiers if isinstance(tiers, dict) else {}
     brief_engine = resolve_engine("brief-check", prefs)
-    brief_model = _effective_model(brief_engine, None, BRIEF_CHECK_CLAUDE_FALLBACK_TIER, prefs)
+    brief_model = _effective_model(
+        "brief-check", brief_engine, None, BRIEF_CHECK_CLAUDE_FALLBACK_TIER, prefs)
     impl_engine = resolve_engine("build", prefs)
     rev_engine = resolve_engine("review", prefs)
     pilot_engine = resolve_engine("pilot", prefs)
     return [
         {"role": "implementer", "engine": impl_engine,
-         "model": _effective_model(impl_engine, "implementer", tiers.get("implementer"), prefs)},
+         "model": _effective_model(
+             "implementer", impl_engine, "implementer", tiers.get("implementer"), prefs)},
         {"role": "brief-check", "engine": brief_engine, "model": brief_model},
         {"role": "review-code", "engine": rev_engine,
          "model": "reviewer=%s reviewer-deep=%s" % (
-             _effective_model(rev_engine, "reviewer", tiers.get("reviewer"), prefs),
-             _effective_model(rev_engine, "reviewer-deep", tiers.get("reviewer-deep"), prefs))},
+             _effective_model(
+                 "reviewer", rev_engine, "reviewer", tiers.get("reviewer"), prefs),
+             _effective_model(
+                 "reviewer-deep", rev_engine, "reviewer-deep", tiers.get("reviewer-deep"), prefs))},
         {"role": "pilot", "engine": pilot_engine,
-         "model": _effective_model(pilot_engine, "pilot", tiers.get("pilot"), prefs)},
+         "model": _effective_model(
+             "pilot", pilot_engine, "pilot", tiers.get("pilot"), prefs)},
     ]
 
 

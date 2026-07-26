@@ -256,6 +256,15 @@ def test_render_guardian_lens_below_floor_not_passing(tmp_path):
     assert "dup is active" not in screen
 
 
+def test_render_dispatch_calibration_cursor_implementer_shows_registry_token(tmp_path):
+    root = _seed_core_and_layer(tmp_path, engine_preferences={"implementation": "cursor"})
+    screen = cv.render(str(tmp_path), root=root)
+    section_start = screen.index("## Dispatch calibration")
+    dispatch_section = screen[section_start:].split("\n\n")[0]
+    assert "(cursor composer)" not in dispatch_section
+    assert "implementer — cursor — composer-2.5" in screen
+
+
 def test_render_shows_review_panel_seat_pins(tmp_path):
     root = _seed_core_and_layer(tmp_path, engine_preferences={
         "seatPins": {
