@@ -285,7 +285,7 @@ The read-only paths run a single pass and compute the same local diff into `roun
 Then write `meta.json` in both modes:
 
 ```bash
-FOCUS_ARG=$(printf '%s' "${FOCUS_JSON:-}" | jq -cs 'if length == 1 and ((.[0]|type) == "object" or (.[0]|type) == "array") then .[0] else empty end' 2>/dev/null); [ -n "$FOCUS_ARG" ] || FOCUS_ARG=$(printf '%s' "${FOCUS_JSON:-}" | jq -Rs .)   # -s SLURPS, so the encoder can only ever emit ONE document: a lone JSON object/array rides through as JSON, and everything else (free text, a bare scalar, several documents, malformed JSON) becomes one JSON string via stdin — never a multi-document value --argjson would reject, and never a silently truncated note
+FOCUS_ARG=$(printf '%s' "${FOCUS_JSON:-}" | jq -cs 'if length == 1 and ((.[0]|type) == "object" or (.[0]|type) == "array") then .[0] else empty end' 2>/dev/null); [ -n "$FOCUS_ARG" ] || { [ -n "${FOCUS_JSON:-}" ] && FOCUS_ARG=$(printf '%s' "$FOCUS_JSON" | jq -Rs .) || FOCUS_ARG=null; }   # -s SLURPS, so the encoder can only ever emit ONE document: a lone JSON object/array rides through as JSON, and everything else (free text, a bare scalar, several documents, malformed JSON) becomes one JSON string via stdin — never a multi-document value --argjson would reject, and never a silently truncated note
 PR_ARG=$(printf '%s' "${PR_NUMBER:-null}" | jq -cs 'if length == 1 and (.[0]|type) == "number" then .[0] else null end' 2>/dev/null); [ -n "$PR_ARG" ] || PR_ARG=null
 jq -n --arg mode "$MODE" --arg path "$REVIEW_PATH" --arg repo "$REPO" --arg branch "$BRANCH" \
   --arg headSha "$HEAD_SHA" --arg baseRef "$BASE_REF" --arg baseBranch "$BASE_BRANCH" \
