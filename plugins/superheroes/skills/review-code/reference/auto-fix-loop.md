@@ -142,8 +142,9 @@ never drop a finding or a lens.
 >   --prompt-path "$SEAT_PROMPT" --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
 > ```
 >
-> `$SEAT_ENGINE_MODEL` is the seat's **registry id**; `$SEAT_EFFORT` is its effort — an empty
-> effort is only valid for a model the registry records as taking no effort level.
+> `$SEAT_ENGINE_MODEL` is the seat's **registry id** and `$SEAT_EFFORT` its effort — **both are
+> required by this runner**; `engine_dispatch` takes `--effort` as a required flag. Every review
+> seat the seat map assigns on cursor carries a real effort, so this is not a limitation in practice.
 >
 > Read-only sandbox is **hard-coded inside the runner API** — it cannot emit a write dispatch. Because
 > the runner runs codex from a non-repo cwd under "do not read files", the seat prompt MUST be
