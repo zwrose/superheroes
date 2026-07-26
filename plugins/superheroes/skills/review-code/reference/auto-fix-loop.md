@@ -142,6 +142,9 @@ never drop a finding or a lens.
 >   --prompt-path "$SEAT_PROMPT" --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
 > ```
 >
+> `$SEAT_ENGINE_MODEL` is the seat's **registry id**; `$SEAT_EFFORT` is its effort — an empty
+> effort is only valid for `composer-2.5`.
+>
 > Read-only sandbox is **hard-coded inside the runner API** — it cannot emit a write dispatch. Because
 > the runner runs codex from a non-repo cwd under "do not read files", the seat prompt MUST be
 > **self-contained** — inline the diff and any context the lens needs. This makes the codex/cursor
@@ -426,9 +429,18 @@ carries `{vendor, model, effort, tier, family, source}`:
 
 - **Read the seat's assignment** from `$SEAT_MAP.seats[<reviewer-name>]`. Dispatch a `claude`
   seat as the named subagent with `model: <seat>.model`; dispatch a `codex`/`cursor` seat through
-  `engine_adapter.py` (read-only sandbox), threading `<seat>.model` as `engine_model` so a cursor
-  seat runs its assigned model (composer or grok) — never the hard-coded default. The persona and
-  `$RUBRIC` are identical across engines; the only per-seat difference is the dispatch target.
+  `engine_adapter.py` (read-only sandbox), threading the seat's **registry id** as `engine_model`
+  and its **effort** as `--effort` (e.g. `cursor-grok-4.5` + `high`) — never the hard-coded
+  composer default. `build-argv` also accepts the composed token (`cursor-grok-4.5-high`) and
+  resolves it identically, but an effort that **contradicts** a composed token is refused rather
+  than silently resolved either way. A `--model` value that is not a native Claude tier short name
+  (`haiku`/`sonnet`/`opus`/`fable`) is **refused by name** (`unknown-claude-tier`) instead of
+  silently falling back to composer. A refused dispatch surfaces
+  `detail: "engine-config:<reason>"` with one of `unknown-engine`, `unknown-claude-tier`,
+  `fable-unrunnable`, `unregistered-engine-model`, `engine-model-effort-conflict`,
+  `invalid-model-effort`, `untokenizable` — so the panel's degradation disclosure names **what**
+  died. The persona and `$RUBRIC` are identical across engines; the only per-seat difference is
+  the dispatch target.
 - **The grounding seat** (`$SEAT_MAP.seats["grounding-seat"]`) is *assigned* a vendor by the seat map
   — chosen to be independent of both the author (code) and narrative (PR text) families — and that
   assignment is recorded in the receipt. The code-leg self-claims / DoD-table check (SKILL step 8)
