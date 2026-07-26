@@ -82,6 +82,7 @@ def build_argv_result(engine, role_kind, effort, opts):
         if not isinstance(claude_tier, str) or claude_tier not in model_registry.known_claude_models():
             return _refuse("unknown-claude-tier")
         if claude_tier == "fable":
+            # Config-time gate configured_dispatch_violations is primary; depth for bypass callers.
             return _refuse("fable-unrunnable")
     if engine == "codex":
         engine_model = opts.get("engine_model")
@@ -97,6 +98,7 @@ def build_argv_result(engine, role_kind, effort, opts):
             try:
                 engine_model = model_registry.codex_peer_for_claude_tier(claude_tier)
             except ValueError:
+                # Config-time gate configured_dispatch_violations is primary; depth for bypass callers.
                 return _refuse("fable-unrunnable")
         ok, _reason = model_registry.validate_config(
             "codex", engine_model, effort, allow_override_only=True)
@@ -109,7 +111,9 @@ def build_argv_result(engine, role_kind, effort, opts):
         if not is_read and cwd:
             argv += ["-C", cwd]           # confine writes to the managed worktree
         if is_read and schema_path:
-            argv += ["--output-schema", schema_path]
+            argv += ["--output-schema", schema_path]  # enforced structured review output
+        # trailing `-`: read the prompt from stdin. The dispatch runner redirects the staged
+        # prompt file into stdin (`<argv> < promptPath`) — the prompt is ALWAYS fed here.
         argv += ["-"]
         return _ok(argv)
     if engine == "cursor":

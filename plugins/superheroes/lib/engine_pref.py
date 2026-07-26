@@ -71,6 +71,14 @@ _ROLE_KEY = {"review": "reviewer", "build": "implementation", "fix": "implementa
 # claude+opus fallback), never here — this resolver is pure and never probes.
 _ROLE_DEFAULT_ENGINE = {"brief-check": "codex"}
 
+# enginePreferences key → default engine when the key is absent or invalid — derived from
+# ``_ROLE_DEFAULT_ENGINE`` via ``_ROLE_KEY`` so validation and dispatch cannot drift.
+_PREF_KEY_DEFAULT_ENGINE = {
+    pref_key: _ROLE_DEFAULT_ENGINE.get(role_kind, "claude")
+    for role_kind, pref_key in _ROLE_KEY.items()
+    if pref_key in ENGINE_ROLE_KEYS
+}
+
 # When the brief-check reviewer must fall back to a Claude reviewer (codex unavailable), it runs at
 # this tier — a tier UP from the sonnet implementer, never session-inherited. Disclosed at dispatch.
 _brief_check_claude_model, _brief_check_claude_effort = model_registry.matrix_config(
@@ -94,6 +102,8 @@ def _effective_model(role, engine, pin_role, tier, prefs):
         if model_registry.matrix_config(role, "codex") is None:
             return _unsupported_model_marker("codex", role)
         m = resolve_engine_model("codex", pin_role, tier, prefs)
+        # Unreachable from valid configuration once configured_dispatch_violations gates fable×external;
+        # kept for callers that bypass configuration (hand-rolled dispatch, direct model threading).
         return m if m is not None else _unsupported_model_marker("codex", tier)
     if engine == "cursor":
         # Seat column only: registry-sanctioned cursor dispatch token for the role, or a no-seat
@@ -105,6 +115,57 @@ def _effective_model(role, engine, pin_role, tier, prefs):
     # Unreachable from dispatch_calibration_rows for non-claude engines: resolve_engine only
     # returns members of ENGINES (see test_resolve_engine_always_returns_member_of_engines).
     return tier
+
+
+def resolve_engine_pref_key(pref_key, prefs):
+    """Return the engine for an ``enginePreferences`` role key (reviewer, implementation, …).
+
+    Fail-open defaults match ``resolve_engine`` for the mapped role kind: ``briefCheck`` → codex;
+    all other known keys → claude. A non-dict ``prefs``, absent key, or value outside ``ENGINES``
+    falls open to that default."""
+    default = _PREF_KEY_DEFAULT_ENGINE.get(pref_key, "claude")
+    if pref_key not in ENGINE_ROLE_KEYS:
+        return default
+    if not isinstance(prefs, dict):
+        return default
+    v = prefs.get(pref_key)
+    if isinstance(v, str) and v in ENGINES:
+        return v
+    return default
+
+
+def configured_dispatch_violations(prefs, tiers):
+    """Config-time refusal for fable tier on an external engine (codex/cursor).
+
+    Returns a list of violation dicts; empty means the configuration is fine. Pure; never touches
+    disk; never raises; non-dict ``prefs``/``tiers`` are treated as ``{}``. Roles that can never be
+    dispatched on an external engine (no codex and no cursor matrix seat) are skipped."""
+    prefs = prefs if isinstance(prefs, dict) else {}
+    tiers = tiers if isinstance(tiers, dict) else {}
+    violations = []
+    for role in sorted(model_registry.known_roles()):
+        if (
+            model_registry.matrix_config(role, "codex") is None
+            and model_registry.matrix_config(role, "cursor") is None
+        ):
+            continue
+        engine_key = model_registry.engine_pref_key(role)
+        if engine_key is None:
+            continue
+        engine = resolve_engine_pref_key(engine_key, prefs)
+        if engine not in ("codex", "cursor"):
+            continue
+        tier = tiers.get(role)
+        if not isinstance(tier, str) or tier != "fable":
+            continue
+        violations.append({
+            "role": role,
+            "engineKey": engine_key,
+            "engine": engine,
+            "tier": "fable",
+            "reason": "fable-on-external-engine",
+        })
+    return violations
 
 
 def dispatch_calibration_rows(prefs, tiers):
@@ -156,14 +217,15 @@ DEFAULT_STALL_LIMIT_SECONDS = 300
 # #309 role-appropriate dispatch ceilings (owner policy: HIGH ceilings + monitors, never borderline
 # limits). WRITE roles (build/fix) get a high ceiling; READ roles (review) a moderate one.
 # These are CEILINGS, not expected durations, and are PAIRED with the byte-activity stall monitor
-# (resolve_idle below). Twin of engine_pref.js's constants.
+# (resolve_idle below). Home for these ceilings is this module (the execution-spine JS twin
+# was retired in #468).
 WRITE_TIMEOUT_SECONDS = 2400
 READ_TIMEOUT_SECONDS = 900
 _ROLE_TIMEOUT = {"build": WRITE_TIMEOUT_SECONDS, "fix": WRITE_TIMEOUT_SECONDS,
                  "review": READ_TIMEOUT_SECONDS, "review-deep": READ_TIMEOUT_SECONDS}
 
-# #309 byte-activity stall thresholds — the monitor half of the ceiling+monitor pair (twin of
-# engine_pref.js). A dispatch emitting NO output bytes for this many seconds is wedged and is killed
+# #309 byte-activity stall thresholds — the monitor half of the ceiling+monitor pair (same home as
+# the role ceilings above). A dispatch emitting NO output bytes for this many seconds is wedged and is killed
 # well before the ceiling. Set far above a working engine's inter-chunk gaps (2026-07-09 receipts:
 # codex ≤ ~8s, cursor ≤ ~4s), so a working CLI is never false-killed. WRITE roles get the longer idle
 # window; READ roles the shorter. Both are under their role ceiling (monitor ≤ ceiling).

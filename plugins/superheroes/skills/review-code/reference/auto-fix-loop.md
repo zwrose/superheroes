@@ -450,8 +450,11 @@ carries `{vendor, model, effort, tier, family, source}`:
   currently runs **inline in the orchestrator** (which can read the PR body); dispatching it as a
   standalone `agents/grounding-seat.md` seat on its assigned vendor is a follow-up that must first
   stage the PR body as an input the seat can Read.
-- **Independence keys on model family, not the dispatch CLI** (CONVENTIONS §7.5): a `cursor` review
-  seat runs grok (xai family), never composer (cursor family) — so it is a genuine cross-family
-  check even when the implementer was cursor/composer. The `verify()` result (the #547c
+- **Independence keys on model family, not the dispatch CLI** (CONVENTIONS §7.5), and **cursor's
+  first-party models are ONE family**: composer and grok both carry the `xai` family (#651,
+  owner-ratified 2026-07-26). A `cursor` review seat is therefore NOT independent of a
+  cursor/composer implementer — a composer-made diff stamps `authorFamily = xai`, so the seat map
+  excludes cursor from the grounding seat and from every strong-tier and critical seat, and such a
+  panel buys its independence from anthropic/openai instead. The `verify()` result (the #547c
   maker-family-vs-seat check) and every degradation / unhonorable-pin fallback are recorded in the
   seat-map receipt, so a downgraded composition is visible at vet time, never silent.

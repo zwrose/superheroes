@@ -1036,7 +1036,8 @@ class CouplingLens(object):
         collapse = detect_collapse(src_census, parsed_census)
         if collapse:
             reason = _collapse_reason(
-                self.name + " js", src_census, collapse, versions)
+                self.name + " js", src_census, collapse, versions,
+                ts_toolchain_provided=ts_toolchain_provided)
             return self._eco_fail("js", reason, ts_toolchain_provided)
 
         cliff = detect_cliff(_eco_prev_digest(prev, "js"), len(parsed_paths),
@@ -1538,7 +1539,8 @@ def collapse_outcome(src_census, collapse):
     return "module-count-collapse"
 
 
-def _collapse_reason(lens_name, src_census, collapse, versions):
+def _collapse_reason(lens_name, src_census, collapse, versions,
+                     ts_toolchain_provided=False):
     parts = ", ".join(
         "%s/%s %d parsed of %d sources" % (
             _safe_repo_text(h["workspace"]), h["language"], h["parsed"],
@@ -1551,9 +1553,25 @@ def _collapse_reason(lens_name, src_census, collapse, versions):
             versions.get("typescriptVersionResolved"),
             versions.get("parseMode"), versions.get("pinHeld"))
     outcome = collapse_outcome(src_census, collapse)
-    return ("%s: %s — module-count collapse: %s%s. A collapsed collector is a broken "
-            "collector, never a clean repo."
-            % (lens_name, adapters.OUTCOMES[outcome][1], parts, ver))
+    reason = ("%s: %s — module-count collapse: %s%s. A collapsed collector is a broken "
+              "collector, never a clean repo."
+              % (lens_name, adapters.OUTCOMES[outcome][1], parts, ver))
+    if (versions
+            and versions.get("typescriptVersionResolved") is None
+            and versions.get("parseMode") == "javascript-only"
+            and _census_has_lang(src_census, "ts")):
+        if ts_toolchain_provided:
+            reason += (
+                " If this repo is TypeScript: a supported TypeScript was supplied on"
+                " NODE_PATH but dependency-cruiser still parsed javascript-only —"
+                " inspect the toolchain seam, not a missing install.")
+        else:
+            install = gt.INSTALL_COMMANDS["depcruise"]
+            reason += (
+                " If this repo is TypeScript: dependency-cruiser found no usable TypeScript,"
+                " so `.ts`/`.tsx` sources parse as plain JavaScript — install a supported"
+                " TypeScript co-located with your global depcruise (`%s`)." % install)
+    return reason
 
 
 def _js_targets(repo, src_census):

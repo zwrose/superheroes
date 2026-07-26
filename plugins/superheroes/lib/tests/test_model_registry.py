@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import re
 
 import pytest
 
@@ -111,9 +112,9 @@ def test_codex_effort_for_kind_matches_matrix_and_pilot_floor():
 
 
 def test_model_family():
-    assert MR.model_family("claude", "opus-4.8") == "anthropic"
+    assert MR.model_family("claude", "opus-5") == "anthropic"
     assert MR.model_family("codex", "gpt-5.6-sol") == "openai"
-    assert MR.model_family("cursor", "composer-2.5") == "cursor"
+    assert MR.model_family("cursor", "composer-2.5") == "xai"
     assert MR.model_family("cursor", "cursor-grok-4.5") == "xai"
     assert MR.model_family("cursor", "nope") is None
 
@@ -194,7 +195,7 @@ def test_dispatch_token():
 
 
 def test_escalate():
-    assert MR.escalate("claude", "sonnet-5", "high") == ("claude", "opus-4.8", "high")
+    assert MR.escalate("claude", "sonnet-5", "high") == ("claude", "opus-5", "high")
     assert MR.escalate("cursor", "cursor-grok-4.5", "high") == ("claude", "haiku-4.5", "medium")
     assert MR.escalate("claude", "fable-5", "high") is None
 
@@ -218,7 +219,7 @@ def test_family_for_review_roles():
     assert MR.family_for("reviewer-deep", "claude") == "anthropic"
     assert MR.family_for("reviewer-deep", "codex") == "openai"
     assert MR.family_for("reviewer-deep", "cursor") == "xai"
-    assert MR.family_for("implementer", "cursor") == "cursor"
+    assert MR.family_for("implementer", "cursor") == "xai"
     assert MR.family_for("synthesis", "codex") is None
     for role in _REVIEW_ROLES:
         for vendor in MR.vendors():
@@ -255,7 +256,7 @@ def test_is_allowed():
 
 
 def test_parse_dispatch_token_vendors():
-    assert MR.parse_dispatch_token("claude", "opus") == ("opus-4.8", None)
+    assert MR.parse_dispatch_token("claude", "opus") == ("opus-5", None)
     assert MR.parse_dispatch_token("claude", "fable") == ("fable-5", None)
     assert MR.parse_dispatch_token("codex", "gpt-5.6-sol") == ("gpt-5.6-sol", None)
     assert MR.parse_dispatch_token("cursor", "composer-2.5") == ("composer-2.5", None)
@@ -386,3 +387,58 @@ def test_resolve_dispatch_fail_closed_edges():
 
     r = MR.resolve_dispatch("reviewer", "cursor", "cursor-grok-4.5", 99)
     assert r["ok"] is False and r["reason"]
+
+
+def test_claude_alias_resolution_record_matches_registry_ids():
+    """#639: a claude model id is a LABEL for what its tier alias serves, so an id bumped without
+    re-probing the harness is invisible. Pin the two together: every claude model's dispatch alias
+    must appear in the verified resolution record, and the recorded harness model must be that
+    registry id in harness spelling (dots become dashes; a date suffix is allowed)."""
+    record = MR.CLAUDE_ALIAS_RESOLUTION["resolved"]
+    claude_models = MR._MODELS["claude"]
+    assert set(record) == {rec["dispatch"] for rec in claude_models.values()}
+    for model_id, rec in claude_models.items():
+        resolved = record[rec["dispatch"]]
+        expected_prefix = "claude-" + model_id.replace(".", "-")
+        assert re.fullmatch(re.escape(expected_prefix) + r"(-\d{8})?", resolved), (
+            model_id, resolved, expected_prefix)
+    assert MR.CLAUDE_ALIAS_RESOLUTION["harness"].startswith("claude-code/")
+    assert MR.SMART_CLAUDE_FALLBACK[0] in claude_models, MR.SMART_CLAUDE_FALLBACK
+
+
+_CURSOR_FIRST_PARTY_REGISTRY_IDS = frozenset({"composer-2.5", "cursor-grok-4.5"})
+
+
+def test_cursor_registered_models_are_exactly_first_party_pair():
+    """#650: cursor CLI billing is first-party only; the registry is the enforcing surface."""
+    registered = frozenset(MR._MODELS["cursor"])
+    assert registered == _CURSOR_FIRST_PARTY_REGISTRY_IDS
+
+
+def test_cursor_first_party_models_are_one_family():
+    """#651 (owner-ratified 2026-07-26): independence is never satisfied between two cursor
+    first-party models. Both carry `xai`, so no role pairing can present one as independent of the
+    other — this is exactly the condition round_driver._auditor_vendor keys on."""
+    assert MR.model_family("cursor", "composer-2.5") == "xai"
+    assert MR.model_family("cursor", "cursor-grok-4.5") == "xai"
+    assert len({MR.model_family("cursor", m) for m in MR._MODELS["cursor"]}) == 1
+    assert MR.family_for("code-fixer", "cursor") == "xai"
+    assert MR.family_for("verifier", "cursor") == "xai"
+    assert MR.family_for("implementer", "cursor") == MR.family_for("reviewer-deep", "cursor")
+
+
+def test_every_ladder_is_family_uniform():
+    """The workhorse charter's maker-family rule states that a rung-up inside ONE engine's ladder no
+    longer changes the maker family (#651 merged cursor's two first-party rungs; claude and codex
+    were already single-family). That is a property of `_LADDERS` + `_MODELS`, restated in prose —
+    so pin it here: the moment a ladder spans two families, this fails and both prose copies
+    (skills/workhorse/SKILL.md, CONVENTIONS §7.5) must be revisited."""
+    for vendor in MR.vendors():
+        rungs = MR.ladder(vendor)
+        assert rungs, vendor
+        families = {MR.model_family(vendor, model_id) for model_id, _effort in rungs}
+        assert None not in families, (vendor, rungs)
+        assert len(families) == 1, (
+            "ladder for %r spans families %r — the maker-family prose in "
+            "skills/workhorse/SKILL.md and CONVENTIONS §7.5 assumes it does not"
+            % (vendor, sorted(families)))

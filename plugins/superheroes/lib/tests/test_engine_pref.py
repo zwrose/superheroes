@@ -94,6 +94,18 @@ def test_engine_role_keys_are_all_surfaced_by_loader():
     assert set(EP.ENGINE_ROLE_KEYS) <= set(degenerate.keys())
 
 
+def test_pref_key_defaults_match_resolve_engine_drift_guard():
+    pref_key_to_role_kind = {}
+    for role_kind, pref_key in EP._ROLE_KEY.items():
+        pref_key_to_role_kind.setdefault(pref_key, role_kind)
+    for pref_key in EP.ENGINE_ROLE_KEYS:
+        role_kind = pref_key_to_role_kind[pref_key]
+        assert EP.resolve_engine_pref_key(pref_key, {}) == EP.resolve_engine(role_kind, {}), (
+            pref_key,
+            role_kind,
+        )
+
+
 def test_implementer_and_pilot_are_codex_pin_roles():
     assert "implementer" in EP.CODEX_PIN_ROLES
     assert "pilot" in EP.CODEX_PIN_ROLES
@@ -616,6 +628,132 @@ def test_dispatch_calibration_rows_model_cells_are_token_composite_or_marker():
                 _assert_model_cell_category(row["model"], row["role"], vendor)
 
 
+def _pin_role_for_calibration(role):
+    return role if role in EP.CODEX_PIN_ROLES else None
+
+
+def _prefs_for_role_external(role, vendor):
+    key = MR.engine_pref_key(role)
+    if key is None:
+        return {}
+    return {key: vendor}
+
+
+def _argv_dispatch_model(engine, argv):
+    flag = "-m" if engine == "codex" else "--model"
+    return argv[argv.index(flag) + 1]
+
+
+def _expected_build_argv_model(role, vendor, tier, prefs, cell):
+    role_kind = MR.engine_pref_role_kind(role)
+    assert role_kind is not None
+    effort_overrides = prefs.get("effort") if isinstance(prefs.get("effort"), dict) else None
+    effort = EP.resolve_effort(vendor, role_kind, effort_overrides)
+    if vendor == "cursor":
+        parsed = MR.parse_dispatch_token("cursor", cell)
+        if parsed is not None:
+            _mid, tok_effort = parsed
+            if tok_effort is not None:
+                effort = tok_effort
+    if vendor == "cursor" and cell == EA._CURSOR_MODEL:
+        opts = {}
+    elif vendor == "cursor":
+        opts = {"engine_model": cell}
+    else:
+        opts = {"model": tier}
+    res = EA.build_argv_result(vendor, role_kind, effort, opts)
+    assert res.get("reason") is None, res
+    return _argv_dispatch_model(vendor, res["argv"])
+
+
+def test_calibration_seat_column_matches_build_argv_for_seated_roles():
+    external_vendors = ("codex", "cursor")
+    valid_tiers = ("haiku", "sonnet", "opus")
+    for vendor in external_vendors:
+        for role in MR.roles():
+            if MR.matrix_config(role, vendor) is None:
+                prefs = _prefs_for_role_external(role, vendor)
+                for tier in valid_tiers:
+                    cell = EP._effective_model(
+                        role, vendor, _pin_role_for_calibration(role), tier, prefs)
+                    assert cell == "(unsupported on %s: %s)" % (vendor, role)
+                continue
+            prefs = _prefs_for_role_external(role, vendor)
+            for tier in valid_tiers:
+                cell = EP._effective_model(
+                    role, vendor, _pin_role_for_calibration(role), tier, prefs)
+                expected = _expected_build_argv_model(role, vendor, tier, prefs, cell)
+                assert cell == expected, (role, vendor, tier, cell, expected)
+
+
+def _roles_with_external_matrix_seat():
+    for role in MR.known_roles():
+        if (
+            MR.matrix_config(role, "codex") is None
+            and MR.matrix_config(role, "cursor") is None
+        ):
+            continue
+        if MR.engine_pref_key(role) is None:
+            continue
+        yield role
+
+
+@pytest.mark.parametrize("vendor", ("codex", "cursor"))
+def test_configured_dispatch_violations_fable_on_external_per_seated_role(vendor):
+    for role in _roles_with_external_matrix_seat():
+        key = MR.engine_pref_key(role)
+        prefs = {key: vendor}
+        tiers = {role: "fable"}
+        violations = EP.configured_dispatch_violations(prefs, tiers)
+        assert len(violations) == 1, (role, vendor, violations)
+        v = violations[0]
+        assert v["role"] == role
+        assert v["engineKey"] == key
+        assert v["engine"] == vendor
+        assert v["tier"] == "fable"
+        assert v["reason"] == "fable-on-external-engine"
+
+
+def test_configured_dispatch_violations_refuses_fable_on_external_engine():
+    prefs = {"implementation": "codex"}
+    tiers = {"implementer": "fable"}
+    violations = EP.configured_dispatch_violations(prefs, tiers)
+    assert len(violations) == 1
+    v = violations[0]
+    assert v["role"] == "implementer"
+    assert v["engineKey"] == "implementation"
+    assert v["engine"] == "codex"
+    assert v["tier"] == "fable"
+    assert v["reason"] == "fable-on-external-engine"
+
+
+def test_configured_dispatch_violations_tolerates_malformed_inputs():
+    assert EP.configured_dispatch_violations(None, None) == []
+    assert EP.configured_dispatch_violations([], {}) == []
+    assert EP.configured_dispatch_violations(
+        {"implementation": "codex"}, {"implementer": 7}) == []
+    assert EP.configured_dispatch_violations(
+        {"implementation": "bogus"}, {"implementer": "fable"}) == []
+
+
+def test_configured_dispatch_violations_skips_seatless_external_roles():
+    prefs = {"pilot": "codex"}
+    tiers = {"pilot": "fable"}
+    assert EP.configured_dispatch_violations(prefs, tiers) == []
+
+
+def test_configured_dispatch_violations_allows_fable_on_claude():
+    prefs = {"implementation": "claude"}
+    tiers = {"implementer": "fable"}
+    assert EP.configured_dispatch_violations(prefs, tiers) == []
+
+
+def test_configured_dispatch_violations_non_fable_external_tier_ok():
+    prefs = {"reviewer": "cursor"}
+    tiers = {"reviewer": "opus", "reviewer-deep": "sonnet"}
+    assert EP.configured_dispatch_violations(prefs, tiers) == []
+
+
 def test_assert_model_cell_category_rejects_marker_when_matrix_seat_exists():
     marker = "(unsupported on cursor: implementer)"
     with pytest.raises(AssertionError):
@@ -624,12 +762,15 @@ def test_assert_model_cell_category_rejects_marker_when_matrix_seat_exists():
 
 
 def test_parse_review_code_model_cell_round_trips_spaced_marker_in_reviewer_deep():
-    tiers = dict(_CALIBRATION_TIERS, **{"reviewer-deep": "fable"})
-    rows = EP.dispatch_calibration_rows({"reviewer": "codex"}, tiers)
-    review_code = {r["role"]: r for r in rows}["review-code"]["model"]
-    parts = _parse_review_code_model_cell(review_code)
+    rows = EP.dispatch_calibration_rows({"reviewer": "codex", "pilot": "codex"}, _CALIBRATION_TIERS)
+    by_role = {r["role"]: r for r in rows}
+    pilot_marker = by_role["pilot"]["model"]
+    assert pilot_marker == "(unsupported on codex: pilot)"
+    parts = _parse_review_code_model_cell(by_role["review-code"]["model"])
     assert parts["reviewer"] == "gpt-5.6-terra"
-    assert parts["reviewer-deep"] == "(unsupported on codex: fable)"
+    synthetic = "reviewer=%s reviewer-deep=%s" % (parts["reviewer"], pilot_marker)
+    round_tripped = _parse_review_code_model_cell(synthetic)
+    assert round_tripped["reviewer-deep"] == pilot_marker
 
 
 def test_dispatch_calibration_rows_cursor_implementer_matches_adapter_default():
@@ -655,6 +796,30 @@ def test_effective_model_cursor_unknown_role_yields_marker():
     assert EP._effective_model("not-a-role", "cursor", None, None, {}) == (
         "(unsupported on cursor: not-a-role)"
     )
+
+
+def _third_party_engine_model_ids_from_registry():
+    claude_id = next(iter(MR._MODELS["claude"]))
+    codex_id = MR.codex_models()[0]
+    return claude_id, codex_id
+
+
+@pytest.mark.parametrize("engine_model", _third_party_engine_model_ids_from_registry())
+def test_build_argv_result_cursor_refuses_third_party_engine_model(engine_model):
+    """#650: third-party registry ids must not be accepted as cursor engine_model pins."""
+    res = EA.build_argv_result("cursor", "build", "high", {"engine_model": engine_model})
+    assert res == {"argv": [], "reason": "unregistered-engine-model"}
+
+
+def test_build_argv_result_cursor_accepts_first_party_engine_model_pin():
+    res = EA.build_argv_result(
+        "cursor", "review", None, {"engine_model": "composer-2.5"})
+    assert res["reason"] is None
+    assert res["argv"][res["argv"].index("--model") + 1] == "composer-2.5"
+    grok = EA.build_argv_result(
+        "cursor", "review", "high", {"engine_model": "cursor-grok-4.5"})
+    assert grok["reason"] is None
+    assert grok["argv"][grok["argv"].index("--model") + 1] == "cursor-grok-4.5-high"
 
 
 def test_dispatch_calibration_rows_tolerates_non_dict_prefs_and_tiers():

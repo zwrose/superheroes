@@ -88,6 +88,9 @@ code, so you catch what the maker's context hid.
      0.18.0 wave. Standing accounting, no machinery — it makes the work-order authoring rules' effect
      measurable over time, and tells you when a build's defects point at order quality rather than the
      engine.
+   - **Vet dispatch provenance against engine doctrine** (CONVENTIONS `§7.5`): a provenance row
+     showing a non-first-party model dispatched through the cursor CLI, or a fable tier on an
+     external engine, is a **defect to catch at vet** — not a builder judgment call to accept.
    - **Disposition the PR's follow-ups before the vet receipt posts.** Every PR ends with a *Follow-ups
      for the advisor* section; you own what becomes of it, and a routing you only *intend* is a claim
      without a receipt — it evaporates in working context. Complete a **two-tier disposition before you

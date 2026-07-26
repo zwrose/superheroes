@@ -48,6 +48,9 @@ jobs:
       - name: Install uv (test-pilot block-execution tests)
         uses: astral-sh/setup-uv@v5
 
+      - name: Install jscpd (guardian duplication real-channel tests)
+        run: npm install -g jscpd@5.0.12 && jscpd --version
+
       - name: Run plugin + band-eval tests
         # Single pytest process is safe: the four plugins merged into one superheroes
         # plugin lib tree (no shared module basenames), and eval/lib/identifiers.py was

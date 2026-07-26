@@ -179,6 +179,91 @@ def test_write_new_is_written(tmp_path):
     assert got["verifyCommand"] == "npm test" and got["status"] == "confirmed"
 
 
+def test_write_refused_on_fable_external_engine_at_create(tmp_path, monkeypatch):
+    import model_tier_overrides as mto
+
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    monkeypatch.setattr(
+        mto,
+        "effective_tiers",
+        lambda profile_path: {"implementer": "fable", "reviewer": "sonnet"},
+    )
+    monkeypatch.setattr(mto, "resolve_profile_path", lambda cwd, root=None: "/fake/profile.md")
+    facts = {
+        "verifyCommand": "npm test",
+        "stackTags": ["node"],
+        "threatModel": "single-user",
+        "patterns": "",
+        "enginePreferences": {"implementation": "codex"},
+    }
+    res = CM.write(repo, facts, "confirmed", root=store, now="2026-06-26")
+    assert res["action"] == "refused"
+    assert res["violations"][0]["reason"] == "fable-on-external-engine"
+    assert CM.read(repo, root=store) is None
+
+
+def test_write_refused_on_fable_external_engine_when_existing_proposes_codex(tmp_path, monkeypatch):
+    import model_tier_overrides as mto
+
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    monkeypatch.setattr(
+        mto,
+        "effective_tiers",
+        lambda profile_path: {"implementer": "fable", "reviewer": "sonnet"},
+    )
+    monkeypatch.setattr(mto, "resolve_profile_path", lambda cwd, root=None: "/fake/profile.md")
+    initial = {
+        "verifyCommand": "npm test",
+        "stackTags": ["node"],
+        "threatModel": "single-user",
+        "patterns": "",
+        "enginePreferences": {"implementation": "claude"},
+    }
+    CM.write(repo, initial, "confirmed", root=store, now="2026-06-26")
+    res = CM.write(
+        repo,
+        {
+            "verifyCommand": "npm test",
+            "stackTags": ["node"],
+            "threatModel": "single-user",
+            "patterns": "",
+            "enginePreferences": {"implementation": "codex"},
+        },
+        "confirmed",
+        root=store,
+        now="2026-06-27",
+    )
+    assert res["action"] == "refused"
+    assert res["violations"][0]["reason"] == "fable-on-external-engine"
+    assert CM.read(repo, root=store)["enginePreferences"]["implementation"] == "claude"
+
+
+def test_write_refused_on_dispatch_gate_evaluation_failure(tmp_path, monkeypatch):
+    import model_tier_overrides as mto
+
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+
+    def _boom(profile_path):
+        raise RuntimeError("tier read failed")
+
+    monkeypatch.setattr(mto, "effective_tiers", _boom)
+    monkeypatch.setattr(mto, "resolve_profile_path", lambda cwd, root=None: "/fake/profile.md")
+    facts = {
+        "verifyCommand": "npm test",
+        "stackTags": ["node"],
+        "threatModel": "single-user",
+        "patterns": "",
+        "enginePreferences": {"implementation": "codex"},
+    }
+    res = CM.write(repo, facts, "confirmed", root=store, now="2026-06-26")
+    assert res["action"] == "refused"
+    assert res["violations"][0]["reason"] == "dispatch-gate-evaluation-failed"
+    assert CM.read(repo, root=store) is None
+
+
 def test_write_reuses_when_detected_equal_or_absent(tmp_path):
     repo = str(tmp_path)
     store = str(tmp_path / "store")

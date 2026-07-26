@@ -201,12 +201,66 @@ def _diff_proposals(detected, recorded):
     return proposals
 
 
+def _facts_include_engine_preferences(facts):
+    det = facts.get("enginePreferences") if isinstance(facts, dict) else None
+    return isinstance(det, dict) and det != {}
+
+
+def _candidate_engine_preferences(facts, existing):
+    """Incoming enginePreferences merged over the recorded block (incoming wins on keys)."""
+    recorded = {}
+    if isinstance(existing, dict):
+        rec_prefs = existing.get("enginePreferences")
+        if isinstance(rec_prefs, dict):
+            recorded = dict(rec_prefs)
+    incoming = facts.get("enginePreferences") if isinstance(facts, dict) else None
+    if not isinstance(incoming, dict):
+        return recorded
+    merged = dict(recorded)
+    merged.update(incoming)
+    return merged
+
+
+def _evaluate_configured_dispatch_gate(cwd, root, facts, existing):
+    """Evaluate fable×external gate. Returns (violations, evaluation_error).
+
+    ``violations`` is a list when evaluation succeeded (possibly empty). ``evaluation_error`` is a
+    non-empty string when the gate itself failed (distinct from a clean pass)."""
+    try:
+        import engine_pref
+        import model_tier_overrides
+
+        if existing is not None and not _facts_include_engine_preferences(facts):
+            return [], None
+        prefs = _candidate_engine_preferences(facts, existing)
+        tiers = model_tier_overrides.effective_tiers(
+            model_tier_overrides.resolve_profile_path(cwd, root))
+        return engine_pref.configured_dispatch_violations(prefs, tiers), None
+    except Exception as exc:
+        return None, "%s: %s" % (type(exc).__name__, exc)
+
+
+def _refused_dispatch_gate(violations=None, *, evaluation_error=None, record=None):
+    if evaluation_error:
+        violations = [{
+            "reason": "dispatch-gate-evaluation-failed",
+            "detail": evaluation_error,
+        }]
+    return {
+        "action": "refused",
+        "record": record,
+        "proposals": [],
+        "violations": violations,
+    }
+
+
 def write(cwd, facts, status, *, root=None, now=None):
     """Lock-guarded atomic write of core.md. Returns a structured result (never a bare None):
       - new core.md            → {action: "written"}
       - existing, all detected facts equal/absent → {action: "reused"}
       - existing, a detected fact DIFFERS         → {action: "proposed"} (NOT applied;
                                                      the differing fields are in `proposals`)
+      - fable tier on external engine with current tiers → {action: "refused"} (NOT applied)
       - lock contended / store unwritable         → {action: "deferred"} (UFR-4)
     Reuse-not-clobber (FR-6) is enforced HERE under the same lock that serializes a concurrent
     second-hero setup (FR-7). A `deferred` return drops a best-effort pending marker; a
@@ -220,6 +274,12 @@ def write(cwd, facts, status, *, root=None, now=None):
             mark_pending(cwd, root, detail={"reason": "lock-contended"})
             return {"action": "deferred", "record": None, "proposals": []}
         existing = read(cwd, root)
+        violations, gate_err = _evaluate_configured_dispatch_gate(cwd, root, facts, existing)
+        if gate_err is not None:
+            return _refused_dispatch_gate(evaluation_error=gate_err, record=existing)
+        if violations:
+            if existing is None or _facts_include_engine_preferences(facts):
+                return _refused_dispatch_gate(violations=violations, record=existing)
         if existing is not None:
             proposals = _diff_proposals(facts, existing)
             if proposals:

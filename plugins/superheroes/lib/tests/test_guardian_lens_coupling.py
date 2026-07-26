@@ -910,19 +910,59 @@ def test_diff_new_and_resolved_and_degraded_digests():
 # 7. the collapse tripwires
 # ======================================================================================
 
-def test_module_count_collapse_degrades_with_a_naming_reason(tmp_path):
+def test_module_count_collapse_degrades_with_a_naming_reason(tmp_path, monkeypatch):
     repo = init_calibrated_repo(tmp_path)
     for i in range(20):
         write(repo, "src/app/mod%d.ts" % i)
     # dependency-cruiser 18 on an unsupported TypeScript: exit 0, empty stderr, ~nothing
     # parsed. Measured on a real repo: 2 modules against 590 TS sources.
+    monkeypatch.setattr(
+        glc.gt, "typescript_toolchain_node_path", lambda _repo, _majors: None)
     run = depcruise_run(dc_report(extra_sources=["src/app/mod0.ts"], ts_available=False))
     out = lens().collect(ctx(repo, tmp_path, run=run))
     assert st(out) == "not-collected"
     assert "collapse" in out["reason"]
     assert "1 parsed of 20 sources" in out["reason"]
     assert "javascript-only" in out["reason"]
+    assert glc.gt.INSTALL_COMMANDS["depcruise"] in out["reason"]
     assert out["digest"] is None
+
+
+def test_js_collapse_with_toolchain_provided_does_not_suggest_typescript_install(
+        tmp_path, monkeypatch):
+    repo = init_calibrated_repo(tmp_path)
+    for i in range(20):
+        write(repo, "src/app/mod%d.ts" % i)
+    monkeypatch.setattr(
+        glc.gt, "typescript_toolchain_node_path",
+        lambda _repo, _majors: "/abs/outside/node_modules")
+    run = depcruise_run(dc_report(extra_sources=["src/app/mod0.ts"], ts_available=False))
+    out = lens().collect(ctx(repo, tmp_path, run=run))
+    assert st(out) == "not-collected"
+    assert "collapse" in out["reason"]
+    assert glc.gt.INSTALL_COMMANDS["depcruise"] not in out["reason"]
+    assert "NODE_PATH" in out["reason"]
+    assert "toolchain seam" in out["reason"]
+
+
+def test_js_only_collapse_does_not_suggest_typescript_install(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    for i in range(20):
+        write(repo, "src/legacy/mod%d.js" % i)
+    run = depcruise_run(dc_report(extra_sources=["src/legacy/mod0.js"], ts_available=False))
+    out = lens().collect(ctx(repo, tmp_path, run=run))
+    assert st(out) == "not-collected"
+    assert "collapse" in out["reason"]
+    assert "javascript-only" in out["reason"]
+    assert glc.gt.INSTALL_COMMANDS["depcruise"] not in out["reason"]
+
+
+def test_collapse_reason_py_path_never_suggests_typescript_install():
+    src_census = {"sources": {".": {"py": 20}}}
+    collapse = [{"workspace": ".", "language": "py", "sources": 20, "parsed": 0}]
+    reason = glc._collapse_reason("coupling py", src_census, collapse, None)
+    assert glc.gt.INSTALL_COMMANDS["depcruise"] not in reason
+    assert "A collapsed collector is a broken collector, never a clean repo." in reason
 
 
 def test_per_language_collapse_hidden_inside_a_healthy_total_is_still_caught(tmp_path):

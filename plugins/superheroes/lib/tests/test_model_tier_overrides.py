@@ -269,3 +269,190 @@ def test_resolve_profile_path_threads_root_to_calibration_resolve(monkeypatch):
     monkeypatch.setattr(calibration_resolve, "resolve_profile_path", _fake)
     assert MTO.resolve_profile_path("/proj", root="/store") == "/resolved/layer.md"
     assert captured == {"cwd": "/proj", "root": "/store"}
+
+
+def test_write_cli_refuses_fable_tier_on_external_engine(tmp_path, monkeypatch, capsys):
+    import importlib.util
+
+    cm_path = os.path.join(_HERE, "..", "core_md.py")
+    spec = importlib.util.spec_from_file_location("core_md", cm_path)
+    CM = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(CM)
+
+    cal = tmp_path / ".claude" / "superheroes"
+    cal.mkdir(parents=True)
+    core_text = CM.render_core(
+        {
+            "verifyCommand": "npm test",
+            "stackTags": [],
+            "enginePreferences": {"implementation": "codex"},
+            "threatModel": "t",
+            "patterns": "",
+        },
+        "confirmed",
+        "2026-01-01",
+        "2026-01-01",
+    )
+    (cal / "core.md").write_text(core_text, encoding="utf-8")
+    p = cal / "review-crew.md"
+    p.write_text("## Model tiers\n", encoding="utf-8")
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    monkeypatch.chdir(other)
+    rc = MTO.main(["model_tier_overrides.py", "write", "--profile", str(p), "--set", "implementer=fable"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert out["ok"] is False
+    assert out["reason"] == "fable-on-external-engine"
+    assert out["violations"][0]["reason"] == "fable-on-external-engine"
+    assert MTO.load_overrides(str(p)) == {}
+
+
+def test_write_cli_gate_reads_engine_prefs_from_profile_project_not_cwd(tmp_path, monkeypatch, capsys):
+    import importlib.util
+
+    cm_path = os.path.join(_HERE, "..", "core_md.py")
+    spec = importlib.util.spec_from_file_location("core_md", cm_path)
+    CM = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(CM)
+
+    project = tmp_path / "project"
+    cal = project / ".claude" / "superheroes"
+    cal.mkdir(parents=True)
+    core_text = CM.render_core(
+        {
+            "verifyCommand": "npm test",
+            "stackTags": [],
+            "enginePreferences": {"implementation": "codex"},
+            "threatModel": "t",
+            "patterns": "",
+        },
+        "confirmed",
+        "2026-01-01",
+        "2026-01-01",
+    )
+    (cal / "core.md").write_text(core_text, encoding="utf-8")
+    profile = cal / "review-crew.md"
+    profile.write_text("## Model tiers\n", encoding="utf-8")
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    monkeypatch.chdir(other)
+    rc = MTO.main([
+        "model_tier_overrides.py",
+        "write",
+        "--profile",
+        str(profile),
+        "--set",
+        "implementer=fable",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert out["reason"] == "fable-on-external-engine"
+    assert MTO.load_overrides(str(profile)) == {}
+
+
+def test_write_cli_clear_removes_fable_violation(tmp_path, monkeypatch, capsys):
+    import importlib.util
+
+    cm_path = os.path.join(_HERE, "..", "core_md.py")
+    spec = importlib.util.spec_from_file_location("core_md", cm_path)
+    CM = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(CM)
+
+    cal = tmp_path / ".claude" / "superheroes"
+    cal.mkdir(parents=True)
+    core_text = CM.render_core(
+        {
+            "verifyCommand": "npm test",
+            "stackTags": [],
+            "enginePreferences": {"implementation": "codex"},
+            "threatModel": "t",
+            "patterns": "",
+        },
+        "confirmed",
+        "2026-01-01",
+        "2026-01-01",
+    )
+    (cal / "core.md").write_text(core_text, encoding="utf-8")
+    p = cal / "review-crew.md"
+    p.write_text("## Model tiers\nimplementer: fable\n", encoding="utf-8")
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    monkeypatch.chdir(other)
+    rc = MTO.main(["model_tier_overrides.py", "write", "--profile", str(p), "--clear", "implementer"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert out["ok"] is True
+    assert "implementer" not in MTO.load_overrides(str(p))
+
+
+def test_read_engine_preferences_corrupt_core_beside_profile_is_evaluation_failure(tmp_path):
+    project = tmp_path / "project"
+    cal = project / ".claude" / "superheroes"
+    cal.mkdir(parents=True)
+    (cal / "core.md").write_text("not valid core markdown\n", encoding="utf-8")
+    profile = cal / "review-crew.md"
+    profile.write_text("## Model tiers\n", encoding="utf-8")
+    prefs, err = MTO._read_engine_preferences_for_gate(profile_path=str(profile))
+    assert prefs == {}
+    assert err is not None
+
+
+def test_write_cli_refuses_when_core_beside_profile_corrupt(tmp_path, capsys):
+    project = tmp_path / "project"
+    cal = project / ".claude" / "superheroes"
+    cal.mkdir(parents=True)
+    (cal / "core.md").write_text("corrupt {{{", encoding="utf-8")
+    profile = cal / "review-crew.md"
+    profile.write_text("## Model tiers\n", encoding="utf-8")
+    rc = MTO.main([
+        "model_tier_overrides.py",
+        "write",
+        "--profile",
+        str(profile),
+        "--set",
+        "implementer=fable",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert out["reason"] == "dispatch-gate-evaluation-failed"
+    assert MTO.load_overrides(str(profile)) == {}
+
+
+def test_write_cli_refuses_when_effective_tiers_raises(tmp_path, monkeypatch, capsys):
+    p = tmp_path / "profile.md"
+    p.write_text("## Model tiers\n", encoding="utf-8")
+
+    def _boom(profile_path, set_overrides=None, clear_roles=None):
+        raise RuntimeError("tier read failed")
+
+    monkeypatch.setattr(MTO, "_candidate_effective_tiers", _boom)
+    rc = MTO.main([
+        "model_tier_overrides.py",
+        "write",
+        "--profile",
+        str(p),
+        "--set",
+        "reviewer=sonnet",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert out["reason"] == "dispatch-gate-evaluation-failed"
+    assert "tier read failed" in out["violations"][0]["detail"]
+
+
+def test_write_cli_no_core_beside_profile_proceeds_clean(tmp_path, capsys):
+    p = tmp_path / "profile.md"
+    p.write_text("## Model tiers\n", encoding="utf-8")
+    rc = MTO.main([
+        "model_tier_overrides.py",
+        "write",
+        "--profile",
+        str(p),
+        "--set",
+        "reviewer=sonnet",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert out["ok"] is True
+    assert MTO.load_overrides(str(p)) == {"reviewer": "sonnet"}
