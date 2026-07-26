@@ -990,11 +990,11 @@ def test_journal_fault_makes_finalize_park(tmp_path):
     assert fail and "journal" in fail and "park" in fail
 
 
-def _guard_argv(session_dir, *, fresh=True, mode="branch"):
+def _guard_argv(session_dir, *, fresh=True, mode="branch", base_fetch="fetched", write_meta=True):
     """#648: the extra argv that satisfies the base guard for a CLI `next` on `session_dir`.
 
-    Builds a real one-commit git repo under the session dir, writes the meta.json the guard reads
-    (pinned to that repo's HEAD), and — on fresh state — a non-empty round-1 diff. Idempotent.
+    Builds a real two-commit git repo under the session dir, writes meta.json pinned to the first
+    commit, and — on fresh state — the real ``git diff <pin>...HEAD`` round-1 diff. Idempotent.
     """
     repo = os.path.join(session_dir, "_gitrepo")
     if not os.path.isdir(os.path.join(repo, ".git")):
@@ -1003,17 +1003,31 @@ def _guard_argv(session_dir, *, fresh=True, mode="branch"):
         subprocess.check_call(["git", "config", "user.email", "t@t"], cwd=repo)
         subprocess.check_call(["git", "config", "user.name", "t"], cwd=repo)
         subprocess.check_call(["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd=repo)
-    sha = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
+        pin = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
+        with open(os.path.join(repo, "f.py"), "w", encoding="utf-8") as fh:
+            fh.write("a\n")
+        subprocess.check_call(["git", "-C", repo, "add", "f.py"], cwd=repo)
+        subprocess.check_call(["git", "-C", repo, "commit", "-q", "-m", "change"], cwd=repo)
+    else:
+        pin = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD~1"], text=True).strip()
     toplevel = subprocess.check_output(
         ["git", "-C", repo, "rev-parse", "--show-toplevel"], text=True).strip()
-    meta = {"mode": mode, "baseRef": sha, "baseBranch": "main", "baseFetch": "fetched",
+    meta_path = os.path.join(session_dir, "meta.json")
+    if os.path.isfile(meta_path):
+        meta = json.load(open(meta_path, encoding="utf-8"))
+        if meta.get("baseRef"):
+            pin = meta["baseRef"]
+    meta = {"mode": mode, "baseRef": pin, "baseBranch": "main", "baseFetch": base_fetch,
             "repoRoot": toplevel}
-    with open(os.path.join(session_dir, "meta.json"), "w", encoding="utf-8") as fh:
-        json.dump(meta, fh)
+    if write_meta:
+        with open(meta_path, "w", encoding="utf-8") as fh:
+            json.dump(meta, fh)
     diffpath = os.path.join(session_dir, "round-1", "diff.txt")
     os.makedirs(os.path.dirname(diffpath), exist_ok=True)
+    diff_text = subprocess.check_output(
+        ["git", "-C", repo, "diff", "%s...HEAD" % pin], text=True)
     with open(diffpath, "w", encoding="utf-8") as fh:
-        fh.write(DIFF)
+        fh.write(diff_text)
     out = ["--repo-root", repo]
     if fresh:
         out += ["--diff-path", diffpath]
@@ -1776,7 +1790,8 @@ def test_base_guard_fresh_next_threads_pin(tmp_path, capsys):
     rc, out = _cli_next_json(d, ga, capsys)
     assert rc == 0 and out["ok"]
     ok, state = RD.load_state(d)
-    assert ok and state["config"]["baseRef"] == _guard_repo_sha(d)
+    pin = json.load(open(os.path.join(d, "meta.json"), encoding="utf-8"))["baseRef"]
+    assert ok and state["config"]["baseRef"] == pin
 
 
 def test_base_guard_no_meta_refuses_no_state(tmp_path, capsys):
@@ -1928,7 +1943,7 @@ def test_base_guard_receipt_carries_base_block(tmp_path, capsys):
     ga = _guard_argv(d)
     rc, out = _cli_next_json(d, ga, capsys)
     assert rc == 0 and out["ok"]
-    pin = _guard_repo_sha(d)
+    pin = json.load(open(os.path.join(d, "meta.json"), encoding="utf-8"))["baseRef"]
     for _ in range(80):
         n = RD.cmd_next(d)
         assert n["ok"], n
@@ -1940,9 +1955,135 @@ def test_base_guard_receipt_carries_base_block(tmp_path, capsys):
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
     assert receipt["base"]["baseRef"] == pin
-    assert receipt["baseGuard"] == "checked"
+    assert receipt["baseGuard"] == "checked-stat-bound"
+    assert receipt["base"]["diffBinding"] == "file-set+line-counts"
     ok, reason = RD.validate_receipt(receipt)
     assert ok, reason
+
+
+def test_base_guard_wrong_base_diff_refuses_no_state(tmp_path, capsys):
+    d = str(tmp_path)
+    ga = _guard_argv(d)
+    repo = os.path.join(d, "_gitrepo")
+    pin = json.load(open(os.path.join(d, "meta.json"), encoding="utf-8"))["baseRef"]
+    good = subprocess.check_output(["git", "-C", repo, "diff", "%s...HEAD" % pin], text=True)
+    bad = os.path.join(d, "wrong-diff.txt")
+    extra = (
+        "\ndiff --git a/extra b/extra\nnew file mode 100644\n--- /dev/null\n+++ b/extra\n"
+        "@@ -0,0 +1 @@\n+contam\n"
+    )
+    with open(bad, "w", encoding="utf-8") as fh:
+        fh.write(good + extra)
+    ga = [x if not x.endswith("diff.txt") else bad for x in ga]
+    rc, out = _cli_next_json(d, ga, capsys)
+    assert rc == 1 and out["reason"] == "round-diff-base-mismatch"
+    ok, state = RD.load_state(d)
+    assert ok and state is None
+
+
+def test_base_guard_healthy_next_stat_bound_receipt(tmp_path, capsys):
+    d = str(tmp_path)
+    ga = _guard_argv(d) + ["--vendors", "codex,cursor"]
+    rc, out = _cli_next_json(d, ga, capsys)
+    assert rc == 0 and out["ok"]
+    pin = json.load(open(os.path.join(d, "meta.json"), encoding="utf-8"))["baseRef"]
+    for _ in range(80):
+        n = RD.cmd_next(d)
+        assert n["ok"], n
+        if n["action"] == RD.P_TERMINAL:
+            break
+        art = _responder(round1_findings=None)(n["phase"], n["payload"], n["round"])
+        s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], art)
+        assert s["ok"], s
+    with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
+        receipt = json.load(fh)
+    assert receipt["baseGuard"] == "checked-stat-bound"
+    assert receipt["base"]["diffBinding"] == "file-set+line-counts"
+    assert receipt["certification"]["base"] == "fetched"
+    assert not receipt["certificationShape"].endswith("-degraded")
+
+
+def _guard_cli_to_terminal_receipt(d, capsys, guard_kwargs=None, next_extra=None):
+    gkw = dict(guard_kwargs or {})
+    ga = _guard_argv(d, **gkw)
+    if next_extra:
+        ga = ga + list(next_extra)
+    rc, out = _cli_next_json(d, ga, capsys)
+    assert rc == 0 and out["ok"], out
+    for _ in range(80):
+        n = RD.cmd_next(d)
+        assert n["ok"], n
+        if n["action"] == RD.P_TERMINAL:
+            break
+        art = _responder(round1_findings=None)(n["phase"], n["payload"], n["round"])
+        s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], art)
+        assert s["ok"], s
+    with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def test_base_degraded_fetch_failed_cert_shape(tmp_path, capsys):
+    d = str(tmp_path)
+    bf = "fetch-failed (offline)"
+    # Two-vendor pool is load-bearing: default single-vendor independence degradation
+    # would satisfy -degraded even if base degradation were dropped from _cert_shape.
+    receipt = _guard_cli_to_terminal_receipt(
+        d, capsys, {"base_fetch": bf},
+        next_extra=["--vendors", "codex,cursor"],
+    )
+    assert receipt["verdict"] == "converged"
+    assert receipt["certificationShape"].endswith("-degraded")
+    assert receipt["certificationShape"].count("-degraded") == 1
+    assert receipt["certification"]["independence"] == "independent"
+    assert receipt["certification"]["base"] == "degraded"
+    assert any("fetch-failed (offline)" in line for line in receipt["degraded"])
+
+
+def test_base_degraded_absent_base_fetch(tmp_path, capsys):
+    d = str(tmp_path)
+    _guard_argv(d)
+    meta = json.load(open(os.path.join(d, "meta.json"), encoding="utf-8"))
+    meta.pop("baseFetch", None)
+    with open(os.path.join(d, "meta.json"), "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+    repo = os.path.join(d, "_gitrepo")
+    diffpath = os.path.join(d, "round-1", "diff.txt")
+    ga = ["--repo-root", repo, "--diff-path", diffpath]
+    rc, out = _cli_next_json(d, ga, capsys)
+    assert rc == 0 and out["ok"]
+    for _ in range(80):
+        n = RD.cmd_next(d)
+        assert n["ok"], n
+        if n["action"] == RD.P_TERMINAL:
+            break
+        art = _responder(round1_findings=None)(n["phase"], n["payload"], n["round"])
+        s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], art)
+        assert s["ok"], s
+    with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
+        receipt = json.load(fh)
+    assert receipt["certification"]["base"] == "degraded"
+
+
+def test_base_and_independence_both_degraded_one_suffix(tmp_path, capsys):
+    d = str(tmp_path)
+    receipt = _guard_cli_to_terminal_receipt(
+        d, capsys, {"base_fetch": "fetch-failed (offline)"})
+    assert receipt["certificationShape"].endswith("-degraded")
+    assert receipt["certificationShape"].count("-degraded") == 1
+    assert receipt["certification"]["independence"] == "degraded"
+    assert receipt["certification"]["base"] == "degraded"
+
+
+def test_base_degraded_does_not_false_claim_independence(tmp_path, capsys):
+    d = str(tmp_path)
+    receipt = _guard_cli_to_terminal_receipt(
+        d, capsys,
+        {"base_fetch": "fetch-failed (offline)"},
+        next_extra=["--vendors", "codex,cursor"],
+    )
+    assert receipt["certificationShape"].endswith("-degraded")
+    assert receipt["certification"]["independence"] == "independent"
+    assert receipt["certification"]["base"] == "degraded"
 
 
 def test_library_receipt_omits_base_not_checked(tmp_path):

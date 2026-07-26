@@ -411,8 +411,14 @@ def _degraded(state):
     return bool(state.get("independenceDegraded"))
 
 
+def _base_degraded(state):
+    return bool((state.get("config") or {}).get("baseDegraded"))
+
+
 def _cert_shape(state, base):
-    return base + "-degraded" if _degraded(state) else base
+    if _degraded(state) or _base_degraded(state):
+        return base + "-degraded"
+    return base
 
 
 # =============================================================================================
@@ -1743,7 +1749,8 @@ def _terminal_converged(state, config, full_panel, note=None):
     shape = _cert_shape(state, base)
     state["terminal"] = "converged"
     cert = {"shape": shape, "fullPanel": bool(full_panel),
-            "independence": "degraded" if _degraded(state) else "independent"}
+            "independence": "degraded" if _degraded(state) else "independent",
+            "base": "degraded" if _base_degraded(state) else "fetched"}
     if note:
         cert["note"] = note
     skipped = state.get("_skippedBlockers") or []
@@ -1795,10 +1802,15 @@ def build_receipt(state, session_dir=None):
                  "verdict": f.get("verdict"), "challenge": f.get("challenge"),
                  "unverified": f.get("unverified")}
                 for f in (state.get("findings") or []) if isinstance(f, dict)]
+    cfg = state.get("config") or {}
     degraded = []
     if _degraded(state):
         degraded.append("independence: a single live vendor — the fix's auditor is the fixer's "
                         "vendor; independence degraded and named in the certification shape")
+    if _base_degraded(state):
+        degraded.append(
+            "base: reviewed against a base whose fetch degraded (%s) — the pin may be stale; "
+            "named in the certification shape" % (cfg.get("baseFetch") or ""))
     # The skipped-blocking channel (#507 R2a): an owner-skipped judgment blocker rides the exit
     # disclosure — a product-choice tradeoff shipped un-fixed, cited by its owner reason. It appears
     # BOTH in the degraded disclosure prose AND as the dedicated top-level `skippedBlockers` list
@@ -1832,9 +1844,8 @@ def build_receipt(state, session_dir=None):
                     rkey, ", ".join(smu)))
     scriptran = _scriptran_summary(session_dir) if session_dir else state.get("_scriptRan") or \
         {"invocations": 0, "byPhase": {}}
-    cfg = state.get("config") or {}
     base = {k: cfg.get(k) for k in ("baseRef", "baseBranch", "baseFetch", "mode", "baseRepo",
-                                    "baseRepoCheck", "repoRoot")
+                                    "baseRepoCheck", "repoRoot", "diffBinding")
             if cfg.get(k) is not None}
     receipt = {
         "schemaVersion": SCHEMA_VERSION,
@@ -2406,11 +2417,17 @@ def _dispatch(args):
                     return _refuse_base_guard(args.session_dir, res["reason"], res.get("detail"),
                                               value=args.diff_path if args.diff_path else None)
                 overrides["diff"] = res["text"]
-                for key in ("baseRef", "baseBranch", "baseFetch", "mode", "baseRepo", "baseRepoCheck",
-                            "repoRoot"):
+                bind = review_base_guard.check_diff_binding(
+                    res["text"], guard["baseRef"], repo_root)
+                if not bind["ok"]:
+                    return _refuse_base_guard(
+                        args.session_dir, bind["reason"], bind.get("detail"))
+                for key in ("baseRef", "baseBranch", "baseFetch", "baseDegraded", "mode", "baseRepo",
+                            "baseRepoCheck", "repoRoot"):
                     if guard.get(key) is not None:
                         overrides[key] = guard[key]
-                overrides["baseGuard"] = "checked"
+                overrides["baseGuard"] = "checked-stat-bound"
+                overrides["diffBinding"] = bind["binding"]
             elif args.diff_path:
                 return _refuse_base_guard(args.session_dir, "diff-path-not-fresh-state",
                                           value=args.diff_path)

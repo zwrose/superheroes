@@ -625,6 +625,190 @@ def test_ordering_repo_root_before_unpinned(git_repo, tmp_path):
     assert r["reason"] == REASON.REASON_REPO_ROOT_MISMATCH
 
 
+# --- #648 — diff binding (stat level) -----------------------------------------
+
+def _second_commit(repo_root, tmp_path, *, rename=False, binary=False, spaced_name=False):
+    """Add a second commit on top of the init empty commit; return pin (first) sha."""
+    pin = subprocess.run(
+        ["git", "-C", repo_root, "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    if rename:
+        path = os.path.join(repo_root, "old.txt")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("v\n")
+        subprocess.run(["git", "-C", repo_root, "add", "old.txt"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", repo_root, "commit", "-q", "-m", "add"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", repo_root, "mv", "old.txt", "new.txt"], check=True, capture_output=True)
+    elif spaced_name:
+        path = os.path.join(repo_root, "x y.txt")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("space\n")
+        subprocess.run(["git", "-C", repo_root, "add", "x y.txt"], check=True, capture_output=True)
+    elif binary:
+        path = os.path.join(repo_root, "blob.bin")
+        with open(path, "wb") as fh:
+            fh.write(b"\x00\x01\xff")
+        subprocess.run(["git", "-C", repo_root, "add", "blob.bin"], check=True, capture_output=True)
+    else:
+        path = os.path.join(repo_root, "f.py")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("line\n")
+        subprocess.run(["git", "-C", repo_root, "add", "f.py"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", repo_root, "commit", "-q", "-m", "change"], check=True, capture_output=True)
+    return pin
+
+
+def _range_diff(repo_root, pin):
+    return subprocess.run(
+        ["git", "-C", repo_root, "diff", "%s...HEAD" % pin],
+        check=True, capture_output=True, text=True,
+    ).stdout
+
+
+def test_check_diff_binding_real_diff_ok(git_repo, tmp_path):
+    root, _ = git_repo
+    pin = _second_commit(root, tmp_path)
+    text = _range_diff(root, pin)
+    r = rbg.check_diff_binding(text, pin, root)
+    assert r["ok"] and r["binding"] == "file-set+line-counts"
+
+
+def test_check_diff_binding_wrong_pin_totals(git_repo, tmp_path):
+    root, _ = git_repo
+    pin = _second_commit(root, tmp_path)
+    wrong_pin = subprocess.run(
+        ["git", "-C", root, "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    text = _range_diff(root, wrong_pin)
+    r = rbg.check_diff_binding(text, pin, root)
+    assert not r["ok"] and r["reason"] == REASON.REASON_DIFF_BASE_MISMATCH
+    assert "+" in r["detail"] and "-" in r["detail"]
+
+
+def test_check_diff_binding_contamination_refuses(git_repo, tmp_path):
+    root, _ = git_repo
+    pin = _second_commit(root, tmp_path)
+    text = _range_diff(root, pin)
+    extra = (
+        "\ndiff --git a/extra b/extra\nnew file mode 100644\n--- /dev/null\n+++ b/extra\n"
+        "@@ -0,0 +1 @@\n+contam\n"
+    )
+    r = rbg.check_diff_binding(text + extra, pin, root)
+    assert not r["ok"] and r["reason"] == REASON.REASON_DIFF_BASE_MISMATCH
+
+
+def test_check_diff_binding_line_count_drift_refuses(git_repo, tmp_path):
+    root, _ = git_repo
+    pin = _second_commit(root, tmp_path)
+    lines = _range_diff(root, pin).splitlines()
+    trimmed = "\n".join(ln for ln in lines if not (ln.startswith("+") and not ln.startswith("+++")))
+    r = rbg.check_diff_binding(trimmed + "\n", pin, root)
+    assert not r["ok"] and r["reason"] == REASON.REASON_DIFF_BASE_MISMATCH
+    assert "artifact" in r["detail"] and "pin" in r["detail"]
+
+
+def test_check_diff_binding_path_set_mismatch_totals_match(git_repo, tmp_path):
+    root, _ = git_repo
+    pin = _second_commit(root, tmp_path)
+    text = _range_diff(root, pin)
+    _, plus_before, minus_before, _ = rbg._artifact_diff_stats(text)
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("diff --git "):
+            lines[i] = "diff --git a/decoy.py b/decoy.py"
+            break
+    else:
+        pytest.fail("expected at least one diff --git header")
+    tampered = "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+    _, plus_after, minus_after, _ = rbg._artifact_diff_stats(tampered)
+    assert plus_after == plus_before and minus_after == minus_before
+    r = rbg.check_diff_binding(tampered, pin, root)
+    assert not r["ok"] and r["reason"] == REASON.REASON_DIFF_BASE_MISMATCH
+    assert "decoy.py" in r["detail"]
+
+
+def test_check_diff_binding_binary_skips_numstat_dash(git_repo, tmp_path):
+    root, _ = git_repo
+    pin = _second_commit(root, tmp_path, binary=True)
+    text = _range_diff(root, pin)
+    r = rbg.check_diff_binding(text, pin, root)
+    assert r["ok"]
+
+
+def test_check_diff_binding_rename_ok(git_repo, tmp_path):
+    root, _ = git_repo
+    pin = _second_commit(root, tmp_path, rename=True)
+    text = _range_diff(root, pin)
+    r = rbg.check_diff_binding(text, pin, root)
+    assert r["ok"] and r["binding"] == "file-set+line-counts"
+
+
+def test_check_diff_binding_quoted_path_line_counts_only(git_repo, tmp_path):
+    root, _ = git_repo
+    pin = _second_commit(root, tmp_path, spaced_name=True)
+    text = _range_diff(root, pin)
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("diff --git "):
+            # Force a quoted-path header git may emit; the simple regex cannot parse it.
+            lines[i] = re.sub(
+                r'^diff --git a/(.*) b/(.*)$',
+                r'diff --git "a/\1" "b/\2"',
+                line,
+            )
+            break
+    text = "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+    r = rbg.check_diff_binding(text, pin, root)
+    assert r["ok"] and r["binding"] == "line-counts-only"
+
+
+def test_check_diff_binding_git_none_fail_closed(git_repo, tmp_path):
+    root, _ = git_repo
+    pin = _second_commit(root, tmp_path)
+    text = _range_diff(root, pin)
+
+    def stub(cwd, *args):
+        if args and args[0] == "diff" and "--name-only" in args:
+            return None
+        return store_core.run_git(cwd, *args)
+
+    r = rbg.check_diff_binding(text, pin, root, run=stub)
+    assert not r["ok"] and r["reason"] == REASON.REASON_DIFF_BASE_MISMATCH
+    assert "recomputed" in r["detail"]
+
+
+# --- #648 — baseDegraded on check_base ----------------------------------------
+
+def test_check_base_base_fetch_fetched_not_degraded(git_repo, tmp_path):
+    root, sha = git_repo
+    session = str(tmp_path / "sess")
+    _write_meta(session, root, sha, baseFetch="fetched")
+    r = rbg.check_base(session, root)
+    assert r["ok"] and r["baseDegraded"] is False
+
+
+def test_check_base_base_fetch_failed_degraded(git_repo, tmp_path):
+    root, sha = git_repo
+    session = str(tmp_path / "sess")
+    _write_meta(session, root, sha, baseFetch="fetch-failed (offline)")
+    r = rbg.check_base(session, root)
+    assert r["ok"] and r["baseDegraded"] is True
+
+
+def test_check_base_base_fetch_absent_degraded(git_repo, tmp_path):
+    root, sha = git_repo
+    session = str(tmp_path / "sess")
+    _write_meta(session, root, sha)
+    meta = json.load(open(os.path.join(session, "meta.json"), encoding="utf-8"))
+    meta.pop("baseFetch", None)
+    with open(os.path.join(session, "meta.json"), "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+    r = rbg.check_base(session, root)
+    assert r["ok"] and r["baseDegraded"] is True
+
+
 # --- #648 / #637 — shipped SKILL.md base-fetch refspec (zsh :r) ---------------
 
 def _review_code_skill_md_path():

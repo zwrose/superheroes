@@ -31,6 +31,7 @@ REASON_DIFF_REQUIRED = "round-diff-required"
 REASON_DIFF_UNREADABLE = "round-diff-unreadable"
 REASON_DIFF_EMPTY = "round-diff-empty"
 REASON_DIFF_MALFORMED = "round-diff-malformed"
+REASON_DIFF_BASE_MISMATCH = "round-diff-base-mismatch"
 REASON_REPO_ROOT_MISMATCH = "base-repo-root-mismatch"
 REASON_MODE_UNRECOGNIZED = "base-mode-unrecognized"
 
@@ -177,6 +178,98 @@ def check_round_diff(path):
     return {"ok": True, "text": content}
 
 
+_DIFF_GIT_HEADER = re.compile(r"^diff --git a/(?P<a>.*) b/(?P<b>.*)$")
+_PATH_SAMPLE_CAP = 8
+
+
+def _artifact_diff_stats(diff_text):
+    """Line counts and b-side paths from a unified diff artifact."""
+    b_paths = set()
+    headers_parsed = True
+    added = 0
+    deleted = 0
+    for line in diff_text.splitlines():
+        if line.startswith("diff --git "):
+            m = _DIFF_GIT_HEADER.match(line)
+            if m:
+                b_paths.add(m.group("b"))
+            else:
+                headers_parsed = False
+        elif line.startswith("+") and not line.startswith("+++"):
+            added += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            deleted += 1
+    return b_paths, added, deleted, headers_parsed
+
+
+def _expected_diff_stats(pin, repo_root, run):
+    """File set and line totals git would emit for pin...HEAD."""
+    name_out = run(repo_root, "diff", "--name-only", "-z", "%s...HEAD" % pin)
+    numstat_out = run(repo_root, "diff", "--numstat", "%s...HEAD" % pin)
+    if name_out is None or numstat_out is None:
+        return None
+    paths = {p for p in name_out.split("\0") if p}
+    exp_added = 0
+    exp_deleted = 0
+    for row in numstat_out.splitlines():
+        if not row.strip():
+            continue
+        parts = row.split("\t")
+        if len(parts) < 3:
+            continue
+        a, d = parts[0], parts[1]
+        if a == "-" or d == "-":
+            continue
+        try:
+            exp_added += int(a)
+            exp_deleted += int(d)
+        except ValueError:
+            continue
+    return paths, exp_added, exp_deleted
+
+
+def check_diff_binding(diff_text, pin, repo_root, run=None):
+    """Bind a round diff artifact to the pinned base at file-set + line-count granularity.
+
+    Proves the artifact's shape (paths touched, +/- totals) came from ``git diff <pin>...HEAD``,
+    not merely that it looks like a diff. A content-identical substitution that preserves stats is
+    deliberately out of scope — full recompute was declined by advisor ruling; a real specimen is the
+    upgrade trigger.
+    """
+    if run is None:
+        run = store_core.run_git
+    expected = _expected_diff_stats(pin, repo_root, run)
+    if expected is None:
+        return {
+            "ok": False,
+            "reason": REASON_DIFF_BASE_MISMATCH,
+            "detail": "expected diff could not be recomputed from pin",
+        }
+    exp_paths, exp_added, exp_deleted = expected
+    act_paths, act_added, act_deleted, headers_ok = _artifact_diff_stats(diff_text)
+    if act_added != exp_added or act_deleted != exp_deleted:
+        return {
+            "ok": False,
+            "reason": REASON_DIFF_BASE_MISMATCH,
+            "detail": "artifact +%d/-%d vs pin +%d/-%d"
+            % (act_added, act_deleted, exp_added, exp_deleted),
+        }
+    binding = "line-counts-only"
+    if headers_ok:
+        binding = "file-set+line-counts"
+        if act_paths != exp_paths:
+            sym = sorted(act_paths ^ exp_paths)
+            sample = sym[:_PATH_SAMPLE_CAP]
+            extra = len(sym) - len(sample)
+            tail = (" (+%d more)" % extra) if extra > 0 else ""
+            return {
+                "ok": False,
+                "reason": REASON_DIFF_BASE_MISMATCH,
+                "detail": "path set mismatch (sample): %s%s" % (", ".join(sample), tail),
+            }
+    return {"ok": True, "binding": binding}
+
+
 def check_base(session_dir, repo_root, prior_pin=None, run=None):
     """Single entry point: validate session base pin and repo binding. Fail-closed."""
     if run is None:
@@ -291,11 +384,16 @@ def check_base(session_dir, repo_root, prior_pin=None, run=None):
             }
         base_repo_check = "matched"
 
+    # Absent or non-"fetched" baseFetch means unknown provenance — not proof the pin is fresh.
+    base_fetch = meta.get("baseFetch")
+    base_degraded = base_fetch != "fetched"
+
     return {
         "ok": True,
         "baseRef": pin,
         "baseBranch": meta.get("baseBranch"),
-        "baseFetch": meta.get("baseFetch"),
+        "baseFetch": base_fetch,
+        "baseDegraded": base_degraded,
         "mode": mode,
         "baseRepo": base_repo,
         "baseRepoCheck": base_repo_check,
