@@ -14,6 +14,7 @@ until a named consumer exists — detect and fail loud only.
 import json
 import os
 import re
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -275,9 +276,9 @@ def _parse_numstat(numstat_out):
 
     Returns ``(file_stats, per_file_ok, global_added, global_deleted)``. ``per_file_ok`` is False
     when any path could not be mapped (caller falls back to global totals only). Global totals
-    include every row's counts even when per-file mapping failed. Resolved paths are not
-    ``.strip()``ped; ``store_core.run_git`` strips whole stdout, so a path whose last byte is
-    whitespace (only possible for the final NUL field) may still be corrupted — accepted deliberately.
+    include every row's counts even when per-file mapping failed. The numstat stream is captured
+    as bytes and decoded with ``surrogateescape``, so arbitrary path bytes cannot raise or be
+    stripped away during capture.
     """
     file_stats = {}
     per_file_ok = True
@@ -340,9 +341,32 @@ def _parse_numstat(numstat_out):
     return file_stats, per_file_ok, global_added, global_deleted
 
 
+def _run_git_bytes(cwd, *args):
+    """Run git with binary stdout (no text decode). Return stdout bytes or None."""
+    try:
+        r = subprocess.run(
+            ["git", "-C", cwd, *args],
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def _numstat_z_output(pin, repo_root, run):
+    """``git diff --numstat -z`` as a string safe for ``_parse_numstat``."""
+    if run is None:
+        raw = _run_git_bytes(repo_root, "diff", "--numstat", "-z", "%s...HEAD" % pin)
+        if raw is None:
+            return None
+        return raw.decode("utf-8", errors="surrogateescape")
+    return run(repo_root, "diff", "--numstat", "-z", "%s...HEAD" % pin)
+
+
 def _expected_diff_stats(pin, repo_root, run):
     """Per-file stats git would emit for pin...HEAD (one ``--numstat -z`` subprocess)."""
-    numstat_out = run(repo_root, "diff", "--numstat", "-z", "%s...HEAD" % pin)
+    numstat_out = _numstat_z_output(pin, repo_root, run)
     if numstat_out is None:
         return None
     return _parse_numstat(numstat_out)
@@ -373,8 +397,6 @@ def check_diff_binding(diff_text, pin, repo_root, run=None):
     deliberately out of scope — full recompute was declined by advisor ruling; a real specimen is the
     upgrade trigger.
     """
-    if run is None:
-        run = store_core.run_git
     parsed = _expected_diff_stats(pin, repo_root, run)
     if parsed is None:
         return {

@@ -837,6 +837,102 @@ def test_parse_numstat_z_normal_and_rename():
     assert added == 2 and deleted == 1
 
 
+def test_parse_numstat_surrogate_escaped_path():
+    raw_name = b"\xff\xfe.txt"
+    path = raw_name.decode("utf-8", errors="surrogateescape")
+    fixture = (
+        "1\t0\tnormal.txt"
+        + "\0"
+        + "2\t1\t"
+        + path
+        + "\0"
+    )
+    stats, per_file_ok, added, deleted = rbg._parse_numstat(fixture)
+    assert per_file_ok is True
+    assert stats["normal.txt"] == (1, 0)
+    assert stats[path] == (2, 1)
+    assert added == 3 and deleted == 1
+    assert path in stats
+
+
+def test_run_git_bytes_fails_closed_on_bad_revision(git_repo):
+    root, _ = git_repo
+    assert rbg._run_git_bytes(root, "diff", "--numstat", "-z", "0" * 40 + "...HEAD") is None
+
+
+def test_check_diff_binding_numstat_raw_bytes_no_crash(git_repo, tmp_path, monkeypatch):
+    root, _ = git_repo
+    pin = _second_commit(root, tmp_path)
+    text = _range_diff(root, pin)
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("diff --git "):
+            lines[i] = 'diff --git "a/f.py" "b/f.py"'
+            break
+    text = "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+    _, _, exp_added, exp_deleted = rbg._artifact_diff_stats(text)
+    raw_path = b"\xff\xfe.txt"
+    numstat_bytes = (
+        ("%d\t%d\t" % (exp_added, exp_deleted)).encode("ascii") + raw_path + b"\x00"
+    )
+
+    real_bytes = rbg._run_git_bytes
+
+    def fake_bytes(cwd, *args):
+        if args and args[0] == "diff" and "--numstat" in args:
+            return numstat_bytes
+        return real_bytes(cwd, *args)
+
+    monkeypatch.setattr(rbg, "_run_git_bytes", fake_bytes)
+
+    def exploding_run(cwd, *args):
+        if args and args[0] == "diff" and "--numstat" in args:
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+        return store_core.run_git(cwd, *args)
+
+    monkeypatch.setattr(store_core, "run_git", exploding_run)
+    r = rbg.check_diff_binding(text, pin, root)
+    assert r["ok"] is True
+    assert r["binding"] == "line-counts-only"
+
+
+def test_check_diff_binding_default_path_calls_bytes_runner(git_repo, tmp_path, monkeypatch):
+    root, _ = git_repo
+    pin = _second_commit(root, tmp_path)
+    text = _range_diff(root, pin)
+    calls = []
+    real_bytes = rbg._run_git_bytes
+
+    def track(cwd, *args):
+        calls.append(args)
+        return real_bytes(cwd, *args)
+
+    monkeypatch.setattr(rbg, "_run_git_bytes", track)
+    rbg.check_diff_binding(text, pin, root)
+    assert any(a and a[0] == "diff" and "--numstat" in a for a in calls)
+
+
+def test_check_diff_binding_non_utf8_path_real_repo(git_repo, tmp_path):
+    root, _ = git_repo
+    pin = subprocess.run(
+        ["git", "-C", root, "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    bad_name = b"\xff\xfe.txt"
+    bad_path = os.path.join(root, bad_name.decode("latin-1"))
+    try:
+        with open(bad_path, "wb") as fh:
+            fh.write(b"x\n")
+    except (OSError, UnicodeEncodeError):
+        pytest.skip("filesystem refuses non-UTF-8 filename (e.g. APFS on macOS)")
+    subprocess.run(["git", "-C", root, "add", "--", bad_path], check=True, capture_output=True)
+    subprocess.run(["git", "-C", root, "commit", "-q", "-m", "badname"], check=True, capture_output=True)
+    text = _range_diff(root, pin)
+    r = rbg.check_diff_binding(text, pin, root)
+    assert r["ok"] is True
+    assert r["binding"] == "line-counts-only"
+
+
 def test_check_diff_binding_unresolvable_numstat_row_line_counts_only(git_repo, tmp_path):
     root, _ = git_repo
     pin = _second_commit(root, tmp_path)
