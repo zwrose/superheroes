@@ -2,6 +2,7 @@
 
 - [The one entrypoint](#the-one-entrypoint)
 - [next / submit protocol](#next--submit-protocol)
+- [Base guard](#base-guard)
 - [Actions and payloads](#actions-and-payloads)
 - [Journal and receipt](#journal-and-receipt)
 - [Certification shapes](#certification-shapes)
@@ -66,6 +67,66 @@ Persist state under `$SESSION_DIR/loop-state.json`. Append every `next`/`submit`
 `$SESSION_DIR/driver-journal.jsonl` (the `scriptRan` evidence). On `terminal`, the driver writes
 `$SESSION_DIR/round-receipt.json` — validate with `round_driver.validate_receipt`.
 
+## Base guard
+
+Before any round work, every `next` invocation runs through `lib/review_base_guard.py` at the **CLI
+layer** (`next` subcommand), not inside `run_loop`. The library/eval path drives `run_loop` with
+scripted seams and no real repo, so a git check there would be meaningless; `review-code` actually
+calls `next`, so that is where the invariant is enforced. On refusal the driver prints
+`{"ok": false, "reason": ..., "detail": ...}` to stdout, exits **1**, and appends a durable journal
+line with `outcome: "refused-base-guard"`.
+
+**Why it exists.** The review diff base used to live only in skill text, and that text drifted. A
+live incident put ~6,600 already-merged lines into a review of 2,931 real ones (#637), and an unset
+base produced a zero-line diff at exit 0 that the loop certified clean. #641 fixed the text; #648
+moved the invariant into the driver so a future text edit cannot reintroduce it. On fresh state the
+guard also stamps `baseGuard` on the receipt path — `"checked"` on this CLI path, `"not-checked"` on
+the library/eval path — so a receipt can never silently *look* guarded when it was not.
+
+**Inputs (no new required CLI flag).** The guard reads the session's own records: `$SESSION_DIR/meta.json`
+(`mode`, `baseRef`, `baseBranch`, `baseFetch`, `repoRoot`) and, in PR mode, `$SESSION_DIR/pr.json`
+(`url`) — both written by the skill's Setup before the first `next`. One optional flag:
+`--repo-root` (default: the process cwd), for tests.
+
+On fresh state, resolved values ride into config and may appear in the terminal receipt as an
+optional **`base` block** — `baseRef`, `baseFetch`, `mode`, `baseRepo`, `baseRepoCheck`
+(`"matched"` in PR mode, `"not-applicable-branch-mode"` otherwise). `validate_receipt` **accepts but
+does not require** it, like the existing per-round `auditProvenance` field.
+
+**Refusal reasons.**
+
+| `reason` | condition |
+| --- | --- |
+| `base-meta-unreadable` | `$SESSION_DIR/meta.json` missing / unparseable / not a JSON object |
+| `base-not-pinned` | `meta.baseRef` is not a full hex object id (40 or 64 chars) — catches an absent key, JSON `null`, `""`, the literal string `null`, an abbreviated sha, and a **branch name** substituted for a pin |
+| `base-unresolved` | `git rev-parse --verify --quiet "<baseRef>^{commit}"` fails, or peels to a *different* id (a deleted commit, an annotated-tag id, a well-formed sha that is not an object in this repo, or no git repo at all) |
+| `base-pin-moved` | on non-fresh state, `meta.baseRef` no longer equals the pin recorded in `loop-state.json` — a mid-session re-pin to a moved `origin/<base>` |
+| `base-repo-mismatch` | PR mode: the PR's base repository ≠ the repo `origin` resolves to (**the fork / multi-remote case**) |
+| `pr-base-repo-unresolved` | PR mode: `pr.json` missing, or its `url` is absent / not a PR url |
+| `origin-unresolved` | PR mode: `git remote get-url origin` unresolvable |
+| `base-repo-root-mismatch` | the checkout the driver is resolving against is not the one the session recorded in `meta.repoRoot` |
+| `round-diff-required` | fresh state with no `--diff-path` |
+| `round-diff-unreadable` | `--diff-path` absent, unreadable, a directory, or not valid UTF-8 — **the failed-diff case**, given the atomic publish below |
+| `round-diff-empty` | `--diff-path` is empty or whitespace-only — **an empty review surface is never certifiable-clean** |
+| `round-diff-malformed` | `--diff-path` is non-empty but carries no `diff --git ` header — not `git diff` output |
+| `diff-path-not-fresh-state` | `--diff-path` passed on non-fresh state (the same discipline as `--vendors` / `--fixer-vendor`) |
+
+**What to do on refusal (by family).**
+
+- **Base / pin / repo / checkout** (`base-meta-unreadable`, `base-not-pinned`, `base-unresolved`,
+  `base-pin-moved`, `base-repo-root-mismatch`, `pr-base-repo-unresolved`, `origin-unresolved`):
+  re-run Setup's resolve block and check `origin`; confirm `meta.json` has a full commit pin and
+  `repoRoot` matches this checkout.
+- **Diff artifact** (`round-diff-required`, `round-diff-unreadable`, `round-diff-empty`,
+  `round-diff-malformed`, `diff-path-not-fresh-state`): the diff command failed or produced nothing
+  invalid — fix the diff step and do not proceed with review.
+- **`base-repo-mismatch`:** this checkout's `origin` is not the PR's base repository — re-run from
+  a clone of the base repo (full fork support is deliberately not built).
+
+Git worktrees share one object store, so a pinned base commit can resolve from the *wrong* worktree
+while `origin` still matches there; `meta.repoRoot` lets the driver refuse `base-repo-root-mismatch`
+when the field is absent or disagrees with `--repo-root`.
+
 ## Actions and payloads
 
 | `action` / `phase` | Orchestrator fulfills |
@@ -85,6 +146,7 @@ Persist state under `$SESSION_DIR/loop-state.json`. Append every `next`/`submit`
 ## Journal and receipt
 
 **Journal (`driver-journal.jsonl`).** One JSON object per line: `{cmd, phase, round, attempt, outcome, ts}`.
+Outcomes include `refused-base-guard` when `next` is rejected by the base guard before round work.
 The receipt's `scriptRan` field summarizes it: `{invocations, byPhase}` where `byPhase` counts
 `next:<phase>` and `submit:<phase>` entries. A terminal on the mandated path has a non-empty journal.
 
@@ -148,6 +210,9 @@ Pinned by `test_round_driver.py` (ported from the retired `test_code_loop_plan.p
   `circuit_breaker.py "$SESSION_DIR" 7` call inside the loop; the driver owns stall/self-recovery.
 - `REDISPATCH_BUDGET` reads `loop_plan_common.REDISPATCH_BUDGET` only — never a local literal.
 - Fail-closed everywhere: junk in → conservative out; never certify on silence.
+- Base guard on every CLI `next`: pinned resolvable base, matching checkout/repo (PR mode), and a
+  valid non-empty round diff on fresh state — pinned by `lib/tests/test_review_base_guard.py` and the
+  CLI-gate tests in `lib/tests/test_round_driver.py`.
 
 ## Port note
 
