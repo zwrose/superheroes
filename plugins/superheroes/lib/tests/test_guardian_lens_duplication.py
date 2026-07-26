@@ -1041,6 +1041,108 @@ def test_prior_digest_without_scan_ratio_still_collects(tmp_path):
     assert gl.classify_collect(out_none)[0] == "collected"
 
 
+# --- F2/F3/F1 scan guards (mutation-pinned) --------------------------------------
+
+def test_degrade_on_negative_sources_rejects_report_contract(tmp_path):
+    """F2: negative statistics.total.sources must not collect (no prior scanRatio escape)."""
+    _seed_tracked(tmp_path, "a.py", "b.py")
+    report = _report([], sources=-1)
+    out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report))
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"
+    assert out["digest"] is None
+    assert "report contract" in reason
+    assert "sources" in reason
+
+
+def test_degrade_on_over_scan_without_prior_digest(tmp_path):
+    """F3: scanned > tracked_count degrades even with no prior pairs baseline."""
+    _seed_tracked(tmp_path, "a.py", "b.py")
+    report = _report([], sources=5)
+    out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report), prev_digest=None)
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"
+    assert out["digest"] is None
+    assert "scanned 5 files but only 2" in reason
+    assert "census file list was not honored" in reason
+
+
+def test_full_scan_at_tracked_count_still_collects(tmp_path):
+    """F3 boundary: over-scan guard uses strict >, not >=."""
+    _seed_tracked(tmp_path, "a.py", "b.py")
+    report = _report([], sources=2)
+    out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report), prev_digest=None)
+    assert gl.classify_collect(out)[0] == "collected"
+    assert out["digest"] is not None
+
+
+def _twenty_tracked_names():
+    return ["f%d.py" % i for i in range(20)]
+
+
+def test_gross_under_scan_without_prior_scan_ratio_degrades(tmp_path):
+    """F1: migration window — gross collapse with prior pairs and no scanRatio."""
+    names = _twenty_tracked_names()
+    _seed_tracked(tmp_path, *names)
+    report = _report([], sources=1)
+    pid = gld._pair_id("f0.py", "f1.py")
+    prev = {
+        "schemaVersion": 1,
+        "pairs": {pid: {"longest": 40, "shared": 40}},
+    }
+    run = _FakeJscpd(report, tracked=names)
+    out = _collect(gld.DuplicationLens(), tmp_path, run, prev_digest=prev)
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"
+    assert out["digest"] is None
+    assert "scanned 1 of 20" in reason
+    assert "no prior scanRatio" in reason
+
+
+def test_sub_gross_under_scan_without_prior_scan_ratio_still_collects(tmp_path):
+    """F1 anti-stranding: bad ratio above the 10% gross floor still collects."""
+    names = _twenty_tracked_names()
+    _seed_tracked(tmp_path, *names)
+    report = _report([], sources=5)
+    pid = gld._pair_id("f0.py", "f1.py")
+    prev = {
+        "schemaVersion": 1,
+        "pairs": {pid: {"longest": 40, "shared": 40}},
+    }
+    run = _FakeJscpd(report, tracked=names)
+    out = _collect(gld.DuplicationLens(), tmp_path, run, prev_digest=prev)
+    assert gl.classify_collect(out)[0] == "collected"
+    assert out["digest"] is not None
+
+
+def test_gross_under_scan_skipped_when_prior_pairs_empty(tmp_path):
+    """F1: no prior pairs ⇒ gross under-scan branch must not fire."""
+    names = _twenty_tracked_names()
+    _seed_tracked(tmp_path, *names)
+    report = _report([], sources=1)
+    prev = {"schemaVersion": 1, "pairs": {}}
+    run = _FakeJscpd(report, tracked=names)
+    out = _collect(gld.DuplicationLens(), tmp_path, run, prev_digest=prev)
+    assert gl.classify_collect(out)[0] == "collected"
+    assert out["digest"] is not None
+
+
+def test_gross_under_scan_floor_boundary_still_collects(tmp_path):
+    """F1 boundary: scanned * 10 < tracked_count is strict — at floor still collects."""
+    names = _twenty_tracked_names()
+    _seed_tracked(tmp_path, *names)
+    report = _report([], sources=2)
+    pid = gld._pair_id("f0.py", "f1.py")
+    prev = {
+        "schemaVersion": 1,
+        "pairs": {pid: {"longest": 40, "shared": 40}},
+    }
+    run = _FakeJscpd(report, tracked=names)
+    out = _collect(gld.DuplicationLens(), tmp_path, run, prev_digest=prev)
+    assert gl.classify_collect(out)[0] == "collected"
+    assert out["digest"] is not None
+
+
 def test_temp_dir_inside_repo_degrades_without_jscpd(tmp_path, monkeypatch):
     _seed_tracked(tmp_path, "a.py")
     inner = tmp_path / "inner-tmp"
