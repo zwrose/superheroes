@@ -14,6 +14,7 @@ are gone with them):
 - Severity tiers + BLOCKING / SEV_RANK / NON_BLOCKING  (home: rubric/review-base.md)
 - Terminal-state vocabulary                            (home: panel_tally.py)
 - Codex translation/effort policy (docs + adapter default) (home: engine_pref.py)
+- Model-registry ids + family vocabulary                (home: model_registry.py)
 
 The reviewer-roster and docs-location clusters live in their topical sibling guards
 (test_dispatch_tables.py, test_definition_doc.py).
@@ -215,6 +216,7 @@ _CONCRETE_MODEL_TOKENS = (
     "haiku-4.5",
     "sonnet-5",
     "opus-4.8",
+    "opus-5",
     "fable-5",
     "claude-fable-5-thinking",
 )
@@ -224,6 +226,7 @@ _RETIRED_MODEL_TOKENS = (
     "gpt-5.6-luna",
     "composer-2.5-fast",
     "claude-fable-5-thinking",
+    "opus-4.8",
 )
 
 
@@ -251,6 +254,35 @@ def test_no_concrete_model_id_in_charters_or_skills():
             if token in text:
                 hits.append((rel, token))
     assert not hits, "concrete model id in charter/skill (use roles, not models): %r" % hits
+
+
+# --- Cluster 5: model-registry copies (ids + family vocabulary) --------------
+
+def test_concrete_model_tokens_cover_every_registered_model():
+    """§11: `_CONCRETE_MODEL_TOKENS` is a hand-maintained copy of the registry's ids — the leak scan
+    it drives silently stops covering a model the moment someone registers one without adding it
+    here. Read the home and assert coverage (retired ids may stay in the tuple; the check is
+    one-directional)."""
+    import model_registry
+
+    registered = {m for v in model_registry.vendors() for m in model_registry._MODELS[v]}
+    missing = registered - set(_CONCRETE_MODEL_TOKENS)
+    assert not missing, "registered model id absent from _CONCRETE_MODEL_TOKENS: %r" % sorted(missing)
+
+
+def test_conventions_family_keys_match_the_registry():
+    """§11: CONVENTIONS' family-key enumeration is a doc copy of the registry's family vocabulary.
+    The `cursor` key outlived the family itself until a review caught it (#651) — read the home."""
+    import model_registry
+
+    home = {rec["family"] for v in model_registry.vendors() for rec in model_registry._MODELS[v].values()}
+    text = _read("../../CONVENTIONS.md")
+    m = re.search(r"\*\*Family keys\*\*[^(]*\(([^)]*)\)", text)
+    assert m, "CONVENTIONS: family-key enumeration not found"
+    documented = set(re.findall(r"`([a-z0-9-]+)`", m.group(1)))
+    assert documented == home, (
+        "CONVENTIONS family-key list %r drifted from model_registry families %r"
+        % (sorted(documented), sorted(home)))
 
 
 def _scan_retired_tokens(rel_paths):

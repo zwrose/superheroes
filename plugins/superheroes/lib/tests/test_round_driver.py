@@ -1818,9 +1818,16 @@ def test_auditor_vendor_family_keyed_single_vendor_same_family_degraded():
     assert RD._auditor_vendor({"vendors": ["claude"]}, "claude") == ("claude", "degraded")
 
 
-def test_auditor_vendor_family_keyed_single_vendor_cross_family_independent():
-    """#510: cursor-only env — composer fixer (cursor family) vs grok verifier (xai family) → independent."""
-    assert RD._auditor_vendor({"vendors": ["cursor"]}, "cursor") == ("cursor", "independent")
+# The #510-era `test_auditor_vendor_family_keyed_single_vendor_cross_family_independent` lived here.
+# It asserted that a cursor-only env is cross-family (composer='cursor' vs grok='xai') and therefore
+# independent. #651 (owner-ratified 2026-07-26) merged both cursor first-party models into the `xai`
+# family, so that env is now same-family and DEGRADED. Its replacement —
+# `test_cursor_fix_never_gets_an_independent_cursor_auditor`, at the end of this file — asserts the
+# new expectation AND the cross-family branches the old test did not cover. One thing did go with
+# it: that test was the only one reaching `_auditor_vendor`'s SECOND (same-vendor) loop on its
+# `independent` return, and post-#651 no vendor can satisfy that branch — every vendor's
+# `code-fixer` and `verifier` roles now resolve to the same family — so it is unreachable, not
+# merely untested. Flagged for the advisor rather than deleted here.
 
 
 def test_auditor_vendor_unknown_fixer_degraded():
@@ -1835,7 +1842,8 @@ def test_auditor_vendor_empty_string_fixer_degraded():
 
 
 def test_auditor_vendor_family_keyed_pass1_prefers_different_cli():
-    """Pass 1 prefers a different CLI vendor over same-CLI family-independent grok."""
+    """Pass 1 picks a different CLI vendor for a cursor fix. Post-#651 the same-CLI candidate (grok)
+    is same-family too, so codex is the only independent choice — pass 1 and pass 2 now agree here."""
     assert RD._auditor_vendor({"vendors": ["cursor", "codex"]}, "cursor") == ("codex", "independent")
 
 
@@ -2300,3 +2308,17 @@ def test_fell_open_two_rounds_deterministic_disclosure_order():
     assert len(fo_lines) == 2
     assert "round 1" in fo_lines[0] and "code-reviewer" in fo_lines[0]
     assert "round 2" in fo_lines[1] and "security-reviewer" in fo_lines[1]
+
+
+def test_cursor_fix_never_gets_an_independent_cursor_auditor():
+    """#651: composer and grok are ONE family, so a cursor-only panel auditing a cursor fix is
+    DEGRADED, never independent. Under the old registry (composer='cursor', grok='xai') the
+    same-vendor fallback loop returned ('cursor', 'independent') — a self-audit labelled
+    independent. This pins that lane closed while leaving the real cross-family path intact."""
+    vendor, independence = RD._auditor_vendor({"vendors": ["cursor"]}, "cursor")
+    assert independence == "degraded"
+    assert vendor == "cursor"
+    for other in ("claude", "codex"):
+        v, ind = RD._auditor_vendor({"vendors": [other, "cursor"]}, "cursor")
+        assert ind == "independent", (other, v, ind)
+        assert v == other

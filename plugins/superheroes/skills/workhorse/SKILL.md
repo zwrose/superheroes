@@ -236,8 +236,10 @@ fail-open engine-*selection* fallback that silently degrades when an engine is u
 (CONVENTIONS `§7.5`): an escalation is a **completed result rejected on receipts and re-dispatched**,
 which `§7.5` holds fail-closed — different events, recorded differently. **Maker-family accounting:**
 every work order's provenance entry records the **maker family** — the model *family* that
-implemented it (per CONVENTIONS `§7.5`, independence keys on family, not on the dispatch CLI; one
-rung up a single engine's ladder can cross families). A surface's **deep/adversarial** review seats
+implemented it (per CONVENTIONS `§7.5`, independence keys on family, not on the dispatch CLI —
+read the family off the registry, never off the dispatch CLI; since #651 merged cursor's two
+first-party rungs into one family, a rung-up inside one engine's ladder no longer changes the
+maker family). A surface's **deep/adversarial** review seats
 must then exclude that work order's maker family. The mechanical check of recorded maker family
 against seat assignments lands with **#510**'s seat-map machinery; until then this is the
 orchestrator's own accounting.

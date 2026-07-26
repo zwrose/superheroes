@@ -593,10 +593,15 @@ model, and effort actually used — is recorded in the PR body (the Workhorse
 charter's "dispatch provenance" section), not a separate journal.
 
 **Cursor is the token-efficiency engine** (owner-ratified 2026-07-09): Cursor is a
-**gateway CLI, not a single vendor** — the same `cursor-agent` account dispatches
-models from different families (the token-efficient `composer-2.5` is the cursor
-family; `cursor-grok-4.5` is the xAI family; it can also reach Anthropic/OpenAI
-models). Because of that, **panel independence keys on a model's family, not on
+**gateway CLI, not a single vendor** — the same `cursor-agent` account can also reach
+Anthropic/OpenAI models. But its **two first-party models — the token-efficient
+`composer-2.5` and `cursor-grok-4.5` — are ONE family, `xai`** (owner-ratified
+2026-07-26, #651: cursor and xAI sit under one corporate roof, correlated errors from
+one roof get harder to detect over time, and claude/codex are at least as likely to
+catch what grok catches). So **independence is never satisfied between two cursor
+first-party models** — a cursor-grok reviewer is NOT independent of a cursor-composer
+fix, and the composer→grok audit lane is closed. Because a gateway CLI still spans
+families, **panel independence keys on a model's family, not on
 the dispatch CLI** (consumed by the seat map, `lib/seat_map.py`, #510; owners supply
 per-seat pins via `enginePreferences.seatPins`, which the seat map reads). The default
 cursor dispatch stays `composer-2.5`; premium/Anthropic models are never routed
@@ -629,7 +634,7 @@ merge authorization is the owner's to grant; the band shows it and never applies
    (e.g. `cursor-grok-4.5` with `high`).
 2. **Composed dispatch tokens** — what `dispatch_token` emits and the engine CLI argv carries
    (e.g. `cursor-grok-4.5-high`).
-3. **Family keys** — independence accounting only (`anthropic` / `openai` / `cursor` / `xai`);
+3. **Family keys** — independence accounting only (`anthropic` / `openai` / `xai`);
    not a dispatch input.
 
 `model_registry.resolve_dispatch` is the single seam that converts a registry id, a composed
