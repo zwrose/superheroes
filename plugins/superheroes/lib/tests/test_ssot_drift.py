@@ -279,9 +279,8 @@ def test_conventions_family_keys_match_the_registry():
     spec = importlib.util.spec_from_file_location(
         "model_registry", os.path.join(PLUGIN, "lib", "model_registry.py"))
     mr = importlib.util.module_from_spec(spec)
-    mr_mod = mr
-    spec.loader.exec_module(mr_mod)
-    home = {rec["family"] for v in mr_mod.vendors() for rec in mr_mod._MODELS[v].values()}
+    spec.loader.exec_module(mr)
+    home = {rec["family"] for v in mr.vendors() for rec in mr._MODELS[v].values()}
     text = _read("../../CONVENTIONS.md")
     m = re.search(r"\*\*Family keys\*\*[^(]*\(([^)]*)\)", text)
     assert m, "CONVENTIONS: family-key enumeration not found"

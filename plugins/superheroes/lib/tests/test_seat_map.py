@@ -650,7 +650,14 @@ def test_cursor_only_panel_on_composer_diff_is_visibly_degraded():
     """#651: the configuration whose safety actually changed. Pre-merge, a cursor-only panel on a
     composer-made diff (author family 'cursor', every seat's family 'xai') recorded NO grounding
     degradation and NO maker-family violation — a whole panel of the author's own family read as
-    clean. Post-merge both fire, so the self-review is visible instead of silent."""
-    m = SM.build(SM.PANEL_ROSTER, ["cursor"], "xai", "anthropic", SM.seed_from(651, None))
+    clean. Post-merge both fire, so the self-review is visible instead of silent.
+
+    The author family is READ FROM THE REGISTRY, never hardcoded: hardcoding 'xai' would leave this
+    test green if `composer-2.5`'s family ever regressed, which is the one regression it exists to
+    catch."""
+    import model_registry as MRG
+
+    author = MRG.family_for("code-fixer", "cursor")
+    m = SM.build(SM.PANEL_ROSTER, ["cursor"], author, "anthropic", SM.seed_from(651, None))
     assert "grounding-independence" in {d["constraint"] for d in m["degradations"]}
-    assert "maker-family" in {v["constraint"] for v in SM.verify(m, "xai")}
+    assert "maker-family" in {v["constraint"] for v in SM.verify(m, author)}
