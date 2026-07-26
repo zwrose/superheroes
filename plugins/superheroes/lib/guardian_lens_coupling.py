@@ -1551,9 +1551,19 @@ def _collapse_reason(lens_name, src_census, collapse, versions):
             versions.get("typescriptVersionResolved"),
             versions.get("parseMode"), versions.get("pinHeld"))
     outcome = collapse_outcome(src_census, collapse)
-    return ("%s: %s — module-count collapse: %s%s. A collapsed collector is a broken "
-            "collector, never a clean repo."
-            % (lens_name, adapters.OUTCOMES[outcome][1], parts, ver))
+    reason = ("%s: %s — module-count collapse: %s%s. A collapsed collector is a broken "
+              "collector, never a clean repo."
+              % (lens_name, adapters.OUTCOMES[outcome][1], parts, ver))
+    if (versions
+            and versions.get("typescriptVersionResolved") is None
+            and versions.get("parseMode") == "javascript-only"
+            and _census_has_lang(src_census, "ts")):
+        install = gt.INSTALL_COMMANDS["depcruise"]
+        reason += (
+            " If this repo is TypeScript: dependency-cruiser found no usable TypeScript,"
+            " so `.ts`/`.tsx` sources parse as plain JavaScript — install a supported"
+            " TypeScript co-located with your global depcruise (`%s`)." % install)
+    return reason
 
 
 def _js_targets(repo, src_census):

@@ -922,7 +922,28 @@ def test_module_count_collapse_degrades_with_a_naming_reason(tmp_path):
     assert "collapse" in out["reason"]
     assert "1 parsed of 20 sources" in out["reason"]
     assert "javascript-only" in out["reason"]
+    assert "typescript@5" in out["reason"]
     assert out["digest"] is None
+
+
+def test_js_only_collapse_does_not_suggest_typescript_install(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    for i in range(20):
+        write(repo, "src/legacy/mod%d.js" % i)
+    run = depcruise_run(dc_report(extra_sources=["src/legacy/mod0.js"], ts_available=False))
+    out = lens().collect(ctx(repo, tmp_path, run=run))
+    assert st(out) == "not-collected"
+    assert "collapse" in out["reason"]
+    assert "javascript-only" in out["reason"]
+    assert "typescript@5" not in out["reason"]
+
+
+def test_collapse_reason_py_path_never_suggests_typescript_install():
+    src_census = {"sources": {".": {"py": 20}}}
+    collapse = [{"workspace": ".", "language": "py", "sources": 20, "parsed": 0}]
+    reason = glc._collapse_reason("coupling py", src_census, collapse, None)
+    assert "typescript@5" not in reason
+    assert "A collapsed collector is a broken collector, never a clean repo." in reason
 
 
 def test_per_language_collapse_hidden_inside_a_healthy_total_is_still_caught(tmp_path):

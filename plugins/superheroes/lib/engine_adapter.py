@@ -109,7 +109,7 @@ def build_argv_result(engine, role_kind, effort, opts):
         if not is_read and cwd:
             argv += ["-C", cwd]           # confine writes to the managed worktree
         if is_read and schema_path:
-            argv += ["--output-schema", schema_path]
+            argv += ["--output-schema", schema_path]  # enforced structured review output
         argv += ["-"]
         return _ok(argv)
     if engine == "cursor":
