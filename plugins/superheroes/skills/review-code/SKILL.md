@@ -255,48 +255,40 @@ REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo
 # No worktree, no prior comments — subagents verify against the current working tree
 ```
 
-**Resolve the diff base to a PINNED REMOTE commit — ONCE, at session setup.** `$BASE_BRANCH` is only a branch *name*, and a worktree's local copy of that branch goes stale as a matter of course in multi-agent setups: three-dot diff walks back to `merge-base($BASE_BRANCH, HEAD)`, so a stale local base drags everyone else's already-merged work into the review as if this branch added it (#637 — observed live: ~6,600 contaminated lines against 2,931 real ones). Fetch through a **fully qualified refspec** (never the DWIM short name — a local branch or tag called `origin/<base>` would shadow it, and a nonstandard remote refspec can leave the fresh object only at `FETCH_HEAD`) and **pin the result to an immutable commit**. Run this block **exactly once per session**, never per round: remote-tracking refs are shared by every worktree of the repo, so re-running it mid-session would re-pin to whatever another agent has since pushed — the very drift the pin exists to prevent.
+**Resolve the diff base to a PINNED REMOTE commit — BOTH MODES, ONCE, at session setup.** This block runs in PR mode and branch mode alike (it is not part of the branch-mode snippet above); PR mode sets `$BASE_BRANCH` from `baseRefName`, branch mode from `origin/HEAD`, and from here the two are identical. `$BASE_BRANCH` is only a branch *name*, and a worktree's local copy of that branch goes stale as a matter of course in multi-agent setups: three-dot diff walks back to `merge-base($BASE_BRANCH, HEAD)`, so a stale local base drags everyone else's already-merged work into the review as if this branch added it (#637 — observed live: ~6,600 contaminated lines against 2,931 real ones). Fetch through a **fully qualified refspec** (never the DWIM short name — a local branch or tag called `origin/<base>` would shadow it, and a nonstandard remote refspec can leave the fresh object only at `FETCH_HEAD`) and **pin the result to an immutable commit**. Run this block **exactly once per session**, never per round: remote-tracking refs are shared by every worktree of the repo, so re-running it mid-session would re-pin to whatever another agent has since pushed — the very drift the pin exists to prevent.
 
 ```bash
 BASE_FETCH=fetched; git fetch --quiet origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH" \
-  || BASE_FETCH="fetch-failed ($(git remote get-url origin >/dev/null 2>&1 && echo unreachable || echo 'no origin remote')); local-vs-last-fetched base divergence behind/ahead $(git rev-list --left-right --count "$BASE_BRANCH...refs/remotes/origin/$BASE_BRANCH" 2>/dev/null | tr '\t' '/' | grep . || echo unknown)"
+  || BASE_FETCH="fetch-failed ($(git remote get-url origin >/dev/null 2>&1 && echo 'origin configured; fetch failed — unreachable, auth, or base branch absent on the remote' || echo 'no origin remote')); local-vs-last-fetched base divergence behind/ahead $(git rev-list --left-right --count "$BASE_BRANCH...refs/remotes/origin/$BASE_BRANCH" 2>/dev/null | tr '\t' '/' | grep . || echo unknown)"
 BASE_REF=$(git rev-parse --verify --quiet "refs/remotes/origin/$BASE_BRANCH^{commit}") \
   || { BASE_REF=$(git rev-parse --verify --quiet "$BASE_BRANCH^{commit}"); BASE_FETCH="$BASE_FETCH; no-remote-ref — diffing the LOCAL base"; }
-[ -n "$BASE_REF" ] || { echo "review-code: cannot resolve a diff base for '${BASE_BRANCH:-<empty>}' — refusing to review, because an empty base makes 'git diff ...HEAD' an EMPTY diff that would certify clean (#637)"; exit 1; }
+BASE_REF=$(git rev-parse --verify --quiet "$BASE_REF^{commit}") || { echo "review-code: base '${BASE_BRANCH:-<empty>}' did not resolve to a commit (BASE_FETCH=${BASE_FETCH}) — refusing to review (#637)" >&2; exit 1; }
 ```
 
-**An unresolvable base is a HALT, never a fallback.** With `$BASE_REF` empty, `git diff "$BASE_REF"...HEAD` expands to argv `...HEAD`, which git resolves as `HEAD...HEAD` — a **zero-line diff that exits 0**, so the panel would review nothing and the loop would certify clean. The guard above is the only thing standing between that and a green review of an empty surface; never remove it, and never let a caller "recover" by substituting a branch name.
+**The base must RESOLVE TO A COMMIT — checked once, at the single point of consumption.** This is the only validation, and it is deliberately not a non-emptiness test: `$BASE_REF` reaching `git diff` as an empty string makes argv `...HEAD`, which git reads as `HEAD...HEAD` — a **zero-line diff at exit 0** the loop would certify clean — and reaching it as the literal string `null` (what `jq -r` prints for an absent key) passes any `[ -n … ]` check while `git diff null...HEAD` exits 128 and *still* leaves an empty `diff.txt`. `git rev-parse --verify --quiet "$BASE_REF^{commit}"` rejects both, plus a deleted branch and a non-commit tag. **Every** producer of `$BASE_REF` — the fetch/pin above, the local fallback, the `meta.json` restore below — routes through it; never add a second, weaker guard beside it, and never let a caller "recover" by substituting a branch name.
 
 **Never diff a stale base silently.** Any `$BASE_FETCH` other than `fetched` is a **degradation** — name it in the dispatch summary, record it in `meta.json`, and surface it in the `--post` review body and the `--review-only` presentation *before* any finding is shown. Both modes assume `origin` is the base branch's repository — the same assumption the `git fetch origin "$PR_BRANCH"` above already makes; a PR whose base lives in a *different* upstream repo than `origin` is out of scope here.
 
 **Per-round diff — every round, against the pin.** This is the ONLY command that runs per round. Do NOT use `gh pr diff` (rounds 2+ have local fix commits that are not on the remote), and do NOT re-run the setup block above:
 
 ```bash
-git diff "$BASE_REF"...HEAD > "$SESSION_DIR/round-<round>/diff.txt"
+git diff "$BASE_REF"...HEAD > "$SESSION_DIR/round-<round>/diff.txt" || { echo "review-code: git diff against $BASE_REF FAILED — refusing to review the artifact it left behind (#637)" >&2; exit 1; }
+[ -s "$SESSION_DIR/round-<round>/diff.txt" ] || { echo "review-code: round diff against $BASE_REF is EMPTY — an empty review surface is never certifiable-clean; halt and investigate (#637)" >&2; exit 1; }
 ```
 
-**If `$BASE_REF` is not in scope** — a resumed or compacted orchestrator, or a fresh shell — restore the pin from the session record rather than re-deriving it: `BASE_REF=$(jq -r .baseRef "$SESSION_DIR/meta.json")`, then re-apply the non-empty guard above. Re-running the setup block instead would silently re-pin to a moved `origin/<base>`.
+**If `$BASE_REF` is not in scope** — a resumed or compacted orchestrator, or a fresh shell — restore the pin from the session record rather than re-deriving it: `BASE_REF=$(jq -r '.baseRef // empty' "$SESSION_DIR/meta.json")`, then **re-run the resolve-to-a-commit check from the setup block** (`BASE_REF=$(git rev-parse --verify --quiet "$BASE_REF^{commit}") || exit 1`) before any diff. Use `// empty`, never a bare `.baseRef`: `jq -r` prints the literal string `null` for an absent key, which is non-empty and would sail past a naive check. Re-running the setup block instead would silently re-pin to a moved `origin/<base>`.
 
 The read-only paths run a single pass and compute the same local diff into `round-1/diff.txt`.
 
 Then write `meta.json` in both modes:
 
 ```bash
-cat > "$SESSION_DIR/meta.json" <<EOF
-{
-  "mode": "${MODE}",
-  "path": "${REVIEW_PATH}",
-  "pr": ${PR_NUMBER:-null},
-  "repo": "${REPO}",
-  "branch": "${BRANCH}",
-  "headSha": "${HEAD_SHA}",
-  "baseRef": "${BASE_REF}",
-  "baseBranch": "${BASE_BRANCH}", "baseFetch": "${BASE_FETCH}",
-  "sessionDir": "${SESSION_DIR}",
-  "verify": "${VERIFY_CMD:-unverified}",
-  "focusNotes": ${FOCUS_JSON:-null}
-}
-EOF
+jq -n --arg mode "$MODE" --arg path "$REVIEW_PATH" --arg repo "$REPO" --arg branch "$BRANCH" \
+  --arg headSha "$HEAD_SHA" --arg baseRef "$BASE_REF" --arg baseBranch "$BASE_BRANCH" \
+  --arg baseFetch "$BASE_FETCH" --arg sessionDir "$SESSION_DIR" --arg verify "${VERIFY_CMD:-unverified}" \
+  --argjson pr "${PR_NUMBER:-null}" --argjson focusNotes "${FOCUS_JSON:-null}" \
+  '{mode:$mode,path:$path,pr:$pr,repo:$repo,branch:$branch,headSha:$headSha,baseRef:$baseRef,baseBranch:$baseBranch,baseFetch:$baseFetch,sessionDir:$sessionDir,verify:$verify,focusNotes:$focusNotes}' \
+  > "$SESSION_DIR/meta.json"
 ```
 
 `REVIEW_PATH` is `loop` (default), `review-only`, or `post`, decided from the flags at invocation. It is written to `meta.json` so a cold-resumed orchestrator (after compaction) knows which top-level flow to continue. The `verify` field records the verify command string, or `"unverified"` / `"review-only"`, so a cold-resumed orchestrator recovers the verify story.
