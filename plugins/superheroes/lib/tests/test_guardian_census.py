@@ -132,6 +132,7 @@ def test_argv_operand_budget_bytes_positive_and_below_platform_max(tmp_path):
     assert isinstance(budget, int)
     assert budget > 0
     assert budget < platform_max
+    assert budget <= platform_max // 2
 
 
 def test_argv_operand_budget_bytes_larger_fixed_argv_yields_smaller_budget(tmp_path):
@@ -210,6 +211,26 @@ def test_argv_operand_budget_bytes_sanitized_env_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(gt, "sanitized_env", boom)
     budget = gcensus.argv_operand_budget_bytes(repo, ["vulture"])
     assert budget == 0
+
+
+def test_argv_operand_budget_detail_happy_path_env_flag_false(tmp_path):
+    repo = os.path.realpath(str(tmp_path))
+    budget, env_failed = gcensus.argv_operand_budget_detail(repo, ["vulture"])
+    assert isinstance(budget, int)
+    assert budget > 0
+    assert env_failed is False
+
+
+def test_argv_operand_budget_detail_sanitized_env_raises_sets_flag(tmp_path, monkeypatch):
+    repo = os.path.realpath(str(tmp_path))
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("env failed")
+
+    monkeypatch.setattr(gt, "sanitized_env", boom)
+    budget, env_failed = gcensus.argv_operand_budget_detail(repo, ["vulture"])
+    assert budget == 0
+    assert env_failed is True
 
 
 def test_argv_operand_budget_bytes_oversized_env_yields_zero(tmp_path, monkeypatch):

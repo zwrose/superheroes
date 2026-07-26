@@ -9,7 +9,6 @@ previous digest is read as camelCase ``ctx["prevDigest"]``.
 import difflib
 import json
 import os
-import re
 import shutil
 import subprocess
 
@@ -832,6 +831,25 @@ def test_degrade_on_report_missing_sources(tmp_path):
     assert "sources" in reason
 
 
+@pytest.mark.parametrize(
+    "report",
+    [
+        {"statistics": [], "duplicates": []},
+        {"statistics": {"total": 5}, "duplicates": []},
+        {"duplicates": []},
+    ],
+)
+def test_degrade_on_report_non_dict_statistics_or_total_via_stdout(tmp_path, report):
+    """_validate_report isinstance guards on statistics/total — raw stdout, not report=."""
+    _seed_tracked(tmp_path)
+    run = _FakeJscpd(None, stdout=json.dumps(report) + "\n", trailer=False)
+    out = _collect(gld.DuplicationLens(), tmp_path, run)
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"
+    assert out["digest"] is None
+    assert "sources" in reason
+
+
 def test_degrade_on_report_non_int_sources(tmp_path):
     _seed_tracked(tmp_path)
     for bad in (True, 1.5, "2"):
@@ -898,7 +916,11 @@ def test_under_scan_tripwires_ignore_malformed_prior_digest(tmp_path):
         "statistics": {"total": {"clones": 0, "sources": 0}},
         "duplicates": [],
     }
-    for bad_prev in ("not-a-dict", {"schemaVersion": 1, "pairs": []}):
+    for bad_prev in (
+        "not-a-dict",
+        {"schemaVersion": 1, "pairs": []},
+        {"schemaVersion": 1, "pairs": ["not-a-pair-map"]},
+    ):
         out = _collect(
             gld.DuplicationLens(), tmp_path, _FakeJscpd(report), prev_digest=bad_prev)
         assert gl.classify_collect(out)[0] == "collected"
@@ -965,15 +987,16 @@ def test_degrade_on_negative_sources_rejects_report_contract(tmp_path):
     assert "sources" in reason
 
 
-def test_degrade_on_over_scan_without_prior_digest(tmp_path):
+@pytest.mark.parametrize("sources", [3, 5])
+def test_degrade_on_over_scan_without_prior_digest(tmp_path, sources):
     """F3: scanned > tracked_count degrades even with no prior pairs baseline."""
     _seed_tracked(tmp_path, "a.py", "b.py")
-    report = _report([], sources=5)
+    report = _report([], sources=sources)
     out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report), prev_digest=None)
     status, reason = gl.classify_collect(out)
     assert status == "not-collected"
     assert out["digest"] is None
-    assert "scanned 5 files but only 2" in reason
+    assert "scanned %d files but only 2" % sources in reason
     assert "census file list was not honored" in reason
 
 
