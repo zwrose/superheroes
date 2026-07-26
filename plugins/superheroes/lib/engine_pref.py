@@ -71,6 +71,10 @@ _ROLE_KEY = {"review": "reviewer", "build": "implementation", "fix": "implementa
 # claude+opus fallback), never here — this resolver is pure and never probes.
 _ROLE_DEFAULT_ENGINE = {"brief-check": "codex"}
 
+# enginePreferences key → default engine when the key is absent or invalid (mirrors
+# resolve_engine's role-kind indirection for each ENGINE_ROLE_KEYS entry).
+_PREF_KEY_DEFAULT_ENGINE = {"briefCheck": "codex"}
+
 # When the brief-check reviewer must fall back to a Claude reviewer (codex unavailable), it runs at
 # this tier — a tier UP from the sonnet implementer, never session-inherited. Disclosed at dispatch.
 _brief_check_claude_model, _brief_check_claude_effort = model_registry.matrix_config(
@@ -109,6 +113,23 @@ def _effective_model(role, engine, pin_role, tier, prefs):
     return tier
 
 
+def resolve_engine_pref_key(pref_key, prefs):
+    """Return the engine for an ``enginePreferences`` role key (reviewer, implementation, …).
+
+    Fail-open defaults match ``resolve_engine`` for the mapped role kind: ``briefCheck`` → codex;
+    all other known keys → claude. A non-dict ``prefs``, absent key, or value outside ``ENGINES``
+    falls open to that default."""
+    default = _PREF_KEY_DEFAULT_ENGINE.get(pref_key, "claude")
+    if pref_key not in ENGINE_ROLE_KEYS:
+        return default
+    if not isinstance(prefs, dict):
+        return default
+    v = prefs.get(pref_key)
+    if isinstance(v, str) and v in ENGINES:
+        return v
+    return default
+
+
 def configured_dispatch_violations(prefs, tiers):
     """Config-time refusal for fable tier on an external engine (codex/cursor).
 
@@ -127,10 +148,7 @@ def configured_dispatch_violations(prefs, tiers):
         engine_key = model_registry.engine_pref_key(role)
         if engine_key is None:
             continue
-        role_kind = model_registry.engine_pref_role_kind(role)
-        if role_kind is None:
-            continue
-        engine = resolve_engine(role_kind, prefs)
+        engine = resolve_engine_pref_key(engine_key, prefs)
         if engine not in ("codex", "cursor"):
             continue
         tier = tiers.get(role)

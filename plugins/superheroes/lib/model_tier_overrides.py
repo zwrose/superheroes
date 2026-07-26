@@ -158,11 +158,21 @@ def _candidate_effective_tiers(profile_path, set_overrides=None, clear_roles=Non
     return {role: model_tier.resolve_model(role, current) for role in KNOWN_ROLES}
 
 
-def _read_engine_preferences_for_gate():
+def _read_engine_preferences_for_gate(profile_path=None, cwd=None, root=None):
+    """Engine preferences for the project whose profile is being written."""
     try:
         import core_md
 
-        rec = core_md.read(os.getcwd())
+        if profile_path:
+            layer = os.path.realpath(profile_path)
+            core_beside = os.path.join(os.path.dirname(layer), "core.md")
+            if os.path.isfile(core_beside):
+                with open(core_beside, encoding="utf-8") as fh:
+                    facts = core_md.parse_core(fh.read())
+                if isinstance(facts, dict):
+                    prefs = facts.get("enginePreferences")
+                    return prefs if isinstance(prefs, dict) else {}
+        rec = core_md.read(cwd or os.getcwd(), root)
         prefs = (rec or {}).get("enginePreferences")
         return prefs if isinstance(prefs, dict) else {}
     except Exception:
@@ -255,7 +265,7 @@ def main(argv):
 
         candidate_tiers = _candidate_effective_tiers(profile, updates, clear_roles)
         violations = engine_pref.configured_dispatch_violations(
-            _read_engine_preferences_for_gate(), candidate_tiers)
+            _read_engine_preferences_for_gate(profile_path=profile), candidate_tiers)
         if violations:
             sys.stdout.write(json.dumps({
                 "ok": False,

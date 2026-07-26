@@ -508,16 +508,34 @@ def _leg_seat_map(failures, checked):
                         _fail(failures, w, "dispatch_token is None")
 
 
+def _configured_dispatch_roles_examined(prefs, tiers):
+    """Roles ``configured_dispatch_violations`` inspects (one check each)."""
+    prefs = prefs if isinstance(prefs, dict) else {}
+    tiers = tiers if isinstance(tiers, dict) else {}
+    n = 0
+    for role in sorted(model_registry.known_roles()):
+        if (
+            model_registry.matrix_config(role, "codex") is None
+            and model_registry.matrix_config(role, "cursor") is None
+        ):
+            continue
+        engine_key = model_registry.engine_pref_key(role)
+        if engine_key is None:
+            continue
+        n += 1
+    return n
+
+
 def _leg_configured(config, failures, checked):
     prefs = config.get("prefs") if isinstance(config, dict) else {}
     tiers = config.get("tiers") if isinstance(config, dict) else {}
+    checked[0] += _configured_dispatch_roles_examined(prefs, tiers)
     try:
         violations = engine_pref.configured_dispatch_violations(prefs, tiers)
     except Exception as exc:
         _fail(failures, "configured-dispatch", "configured_dispatch_violations raised: %s" % exc)
         return
     for v in violations:
-        checked[0] += 1
         role = v.get("role", "?")
         engine = v.get("engine", "?")
         reason = v.get("reason", "?")

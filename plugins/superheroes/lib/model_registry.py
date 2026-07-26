@@ -441,7 +441,10 @@ def engine_pref_key(role: str) -> str | None:
 
 
 def engine_pref_role_kind(role: str) -> str | None:
-    """``engine_pref.resolve_engine`` role_kind for a model-tier dispatch role."""
+    """Codex effort / argv role_kind for a model-tier dispatch role.
+
+    Not every returned value is a ``resolve_engine`` role_kind (e.g. ``review-deep``); prefer
+    ``engine_pref_key`` + ``engine_pref.resolve_engine_pref_key`` for engine selection."""
     meta = _ROLE_META.get(role)
     if not meta:
         return None

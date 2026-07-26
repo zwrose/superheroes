@@ -89,6 +89,16 @@ def test_run_with_clean_config_still_ok():
     assert result["ok"] is True
 
 
+def test_run_with_clean_config_increments_checked_above_baseline():
+    baseline = DST.run()["checked"]
+    config = {
+        "prefs": {"implementation": "claude", "reviewer": "claude"},
+        "tiers": {"implementer": "sonnet", "reviewer": "sonnet"},
+    }
+    with_config = DST.run(config)["checked"]
+    assert with_config > baseline
+
+
 def test_format_probe_detail_caps_failures(monkeypatch):
     monkeypatch.setattr(
         DST,

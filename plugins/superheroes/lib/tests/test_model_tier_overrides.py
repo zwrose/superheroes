@@ -291,6 +291,49 @@ def test_write_cli_refuses_fable_tier_on_external_engine(tmp_path, monkeypatch, 
     assert MTO.load_overrides(str(p)) == {}
 
 
+def test_write_cli_gate_reads_engine_prefs_from_profile_project_not_cwd(tmp_path, monkeypatch, capsys):
+    import importlib.util
+
+    cm_path = os.path.join(_HERE, "..", "core_md.py")
+    spec = importlib.util.spec_from_file_location("core_md", cm_path)
+    CM = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(CM)
+
+    project = tmp_path / "project"
+    cal = project / ".claude" / "superheroes"
+    cal.mkdir(parents=True)
+    core_text = CM.render_core(
+        {
+            "verifyCommand": "npm test",
+            "stackTags": [],
+            "enginePreferences": {"implementation": "codex"},
+            "threatModel": "t",
+            "patterns": "",
+        },
+        "confirmed",
+        "2026-01-01",
+        "2026-01-01",
+    )
+    (cal / "core.md").write_text(core_text, encoding="utf-8")
+    profile = cal / "review-crew.md"
+    profile.write_text("## Model tiers\n", encoding="utf-8")
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    monkeypatch.chdir(other)
+    rc = MTO.main([
+        "model_tier_overrides.py",
+        "write",
+        "--profile",
+        str(profile),
+        "--set",
+        "implementer=fable",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert out["reason"] == "fable-on-external-engine"
+    assert MTO.load_overrides(str(profile)) == {}
+
+
 def test_write_cli_clear_removes_fable_violation(tmp_path, monkeypatch, capsys):
     import core_md
 

@@ -674,6 +674,34 @@ def test_calibration_seat_column_matches_build_argv_for_seated_roles():
                 assert cell == expected, (role, vendor, tier, cell, expected)
 
 
+def _roles_with_external_matrix_seat():
+    for role in MR.known_roles():
+        if (
+            MR.matrix_config(role, "codex") is None
+            and MR.matrix_config(role, "cursor") is None
+        ):
+            continue
+        if MR.engine_pref_key(role) is None:
+            continue
+        yield role
+
+
+@pytest.mark.parametrize("vendor", ("codex", "cursor"))
+def test_configured_dispatch_violations_fable_on_external_per_seated_role(vendor):
+    for role in _roles_with_external_matrix_seat():
+        key = MR.engine_pref_key(role)
+        prefs = {key: vendor}
+        tiers = {role: "fable"}
+        violations = EP.configured_dispatch_violations(prefs, tiers)
+        assert len(violations) == 1, (role, vendor, violations)
+        v = violations[0]
+        assert v["role"] == role
+        assert v["engineKey"] == key
+        assert v["engine"] == vendor
+        assert v["tier"] == "fable"
+        assert v["reason"] == "fable-on-external-engine"
+
+
 def test_configured_dispatch_violations_refuses_fable_on_external_engine():
     prefs = {"implementation": "codex"}
     tiers = {"implementer": "fable"}

@@ -203,6 +203,43 @@ def test_write_refused_on_fable_external_engine_at_create(tmp_path, monkeypatch)
     assert CM.read(repo, root=store) is None
 
 
+def test_write_refused_on_fable_external_engine_when_existing_proposes_codex(tmp_path, monkeypatch):
+    import model_tier_overrides as mto
+
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    monkeypatch.setattr(
+        mto,
+        "effective_tiers",
+        lambda profile_path: {"implementer": "fable", "reviewer": "sonnet"},
+    )
+    monkeypatch.setattr(mto, "resolve_profile_path", lambda cwd, root=None: "/fake/profile.md")
+    initial = {
+        "verifyCommand": "npm test",
+        "stackTags": ["node"],
+        "threatModel": "single-user",
+        "patterns": "",
+        "enginePreferences": {"implementation": "claude"},
+    }
+    CM.write(repo, initial, "confirmed", root=store, now="2026-06-26")
+    res = CM.write(
+        repo,
+        {
+            "verifyCommand": "npm test",
+            "stackTags": ["node"],
+            "threatModel": "single-user",
+            "patterns": "",
+            "enginePreferences": {"implementation": "codex"},
+        },
+        "confirmed",
+        root=store,
+        now="2026-06-27",
+    )
+    assert res["action"] == "refused"
+    assert res["violations"][0]["reason"] == "fable-on-external-engine"
+    assert CM.read(repo, root=store)["enginePreferences"]["implementation"] == "claude"
+
+
 def test_write_reuses_when_detected_equal_or_absent(tmp_path):
     repo = str(tmp_path)
     store = str(tmp_path / "store")
