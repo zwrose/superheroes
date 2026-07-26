@@ -235,7 +235,7 @@ def test_structured_triple_success_all_vendors():
 def test_opus_resolves_lowest_rung():
     result = DG.validate("reviewer", "claude", "opus")
     assert result["ok"] is True
-    assert result["model_id"] == "opus-4.8"
+    assert result["model_id"] == "opus-5"
     assert result["effort"] == "high"
     assert result["effort_source"] == "resolved-lowest-rung"
     _assert_success_triple(result)

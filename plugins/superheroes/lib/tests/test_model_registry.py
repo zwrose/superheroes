@@ -111,7 +111,7 @@ def test_codex_effort_for_kind_matches_matrix_and_pilot_floor():
 
 
 def test_model_family():
-    assert MR.model_family("claude", "opus-4.8") == "anthropic"
+    assert MR.model_family("claude", "opus-5") == "anthropic"
     assert MR.model_family("codex", "gpt-5.6-sol") == "openai"
     assert MR.model_family("cursor", "composer-2.5") == "cursor"
     assert MR.model_family("cursor", "cursor-grok-4.5") == "xai"
@@ -194,7 +194,7 @@ def test_dispatch_token():
 
 
 def test_escalate():
-    assert MR.escalate("claude", "sonnet-5", "high") == ("claude", "opus-4.8", "high")
+    assert MR.escalate("claude", "sonnet-5", "high") == ("claude", "opus-5", "high")
     assert MR.escalate("cursor", "cursor-grok-4.5", "high") == ("claude", "haiku-4.5", "medium")
     assert MR.escalate("claude", "fable-5", "high") is None
 
@@ -255,7 +255,7 @@ def test_is_allowed():
 
 
 def test_parse_dispatch_token_vendors():
-    assert MR.parse_dispatch_token("claude", "opus") == ("opus-4.8", None)
+    assert MR.parse_dispatch_token("claude", "opus") == ("opus-5", None)
     assert MR.parse_dispatch_token("claude", "fable") == ("fable-5", None)
     assert MR.parse_dispatch_token("codex", "gpt-5.6-sol") == ("gpt-5.6-sol", None)
     assert MR.parse_dispatch_token("cursor", "composer-2.5") == ("composer-2.5", None)
@@ -386,3 +386,18 @@ def test_resolve_dispatch_fail_closed_edges():
 
     r = MR.resolve_dispatch("reviewer", "cursor", "cursor-grok-4.5", 99)
     assert r["ok"] is False and r["reason"]
+
+
+def test_claude_alias_resolution_record_matches_registry_ids():
+    """#639: a claude model id is a LABEL for what its tier alias serves, so an id bumped without
+    re-probing the harness is invisible. Pin the two together: every claude model's dispatch alias
+    must appear in the verified resolution record, and the recorded harness model must be that
+    registry id in harness spelling (dots become dashes; a date suffix is allowed)."""
+    record = MR.CLAUDE_ALIAS_RESOLUTION["resolved"]
+    claude_models = MR._MODELS["claude"]
+    assert set(record) == {rec["dispatch"] for rec in claude_models.values()}
+    for model_id, rec in claude_models.items():
+        resolved = record[rec["dispatch"]]
+        expected_prefix = "claude-" + model_id.replace(".", "-")
+        assert resolved.startswith(expected_prefix), (model_id, resolved, expected_prefix)
+    assert MR.CLAUDE_ALIAS_RESOLUTION["harness"].startswith("claude-code/")

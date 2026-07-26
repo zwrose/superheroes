@@ -150,7 +150,7 @@ def test_verify_maker_family_violation():
         "seats": {
             "security-reviewer": {
                 "vendor": "claude",
-                "model": "opus-4.8",
+                "model": "opus-5",
                 "effort": "xhigh",
                 "tier": "reviewer-deep",
                 "family": "anthropic",
@@ -244,7 +244,7 @@ def _full_seats_template(**overrides):
         },
         "security-reviewer": {
             "vendor": "claude",
-            "model": "opus-4.8",
+            "model": "opus-5",
             "effort": "xhigh",
             "tier": "reviewer-deep",
             "family": "anthropic",
@@ -334,7 +334,7 @@ def test_verify_critical_diversity_violation():
     seats = _full_seats_template()
     seats["security-reviewer"] = {
         "vendor": "claude",
-        "model": "opus-4.8",
+        "model": "opus-5",
         "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": "anthropic",
@@ -342,7 +342,7 @@ def test_verify_critical_diversity_violation():
     }
     seats["premortem-reviewer"] = {
         "vendor": "claude",
-        "model": "opus-4.8",
+        "model": "opus-5",
         "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": "anthropic",
@@ -350,7 +350,7 @@ def test_verify_critical_diversity_violation():
     }
     seats["code-reviewer"] = {
         "vendor": "claude",
-        "model": "opus-4.8",
+        "model": "opus-5",
         "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": "anthropic",

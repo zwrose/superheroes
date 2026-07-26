@@ -14,7 +14,7 @@ _MODELS: dict[str, dict[str, dict]] = {
     "claude": {
         "haiku-4.5": {"family": "anthropic", "dispatch": "haiku", "override_only": False},
         "sonnet-5": {"family": "anthropic", "dispatch": "sonnet", "override_only": False},
-        "opus-4.8": {"family": "anthropic", "dispatch": "opus", "override_only": False},
+        "opus-5": {"family": "anthropic", "dispatch": "opus", "override_only": False},
         "fable-5": {"family": "anthropic", "dispatch": "fable", "override_only": True},
     },
     "codex": {
@@ -38,8 +38,8 @@ _LADDERS: dict[str, tuple[tuple[str, str | None], ...]] = {
     "claude": (
         ("haiku-4.5", "medium"),
         ("sonnet-5", "high"),
-        ("opus-4.8", "high"),
-        ("opus-4.8", "xhigh"),
+        ("opus-5", "high"),
+        ("opus-5", "xhigh"),
     ),
     "codex": (
         ("gpt-5.6-terra", "high"),
@@ -64,7 +64,7 @@ _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
         "cursor": ("composer-2.5", None),
     },
     "doc-reviser": {
-        "claude": ("opus-4.8", "high"),
+        "claude": ("opus-5", "high"),
         "codex": ("gpt-5.6-sol", "high"),
         "cursor": ("cursor-grok-4.5", "high"),
     },
@@ -74,22 +74,22 @@ _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
         "cursor": ("cursor-grok-4.5", "high"),
     },
     "reviewer-deep": {
-        "claude": ("opus-4.8", "xhigh"),
+        "claude": ("opus-5", "xhigh"),
         "codex": ("gpt-5.6-sol", "xhigh"),
         "cursor": ("cursor-grok-4.5", "high"),
     },
     "verifier": {
-        "claude": ("opus-4.8", "high"),
+        "claude": ("opus-5", "high"),
         "codex": ("gpt-5.6-sol", "high"),
         "cursor": ("cursor-grok-4.5", "high"),
     },
     "brief-check": {
-        "claude": ("opus-4.8", "xhigh"),
+        "claude": ("opus-5", "xhigh"),
         "codex": ("gpt-5.6-sol", "xhigh"),
         "cursor": ("cursor-grok-4.5", "high"),
     },
     "synthesis": {
-        "claude": ("opus-4.8", "high"),
+        "claude": ("opus-5", "high"),
         "codex": None,
         "cursor": None,
     },
@@ -209,8 +209,31 @@ _ROLE_META: dict[str, dict] = {
     },
 }
 
+# --- Claude tier-alias resolution (verified, not assumed; issue #639) ---------------------------
+# Claude dispatch tokens are tier ALIASES (`opus`, `sonnet`, `haiku`, `fable`): the harness resolves
+# each to the LATEST model in that tier, so a claude `model_id` above is a LABEL for what its alias
+# currently serves — never the string that dispatches. Decision (2026-07-26): keep the alias. An
+# alias tracks harness upgrades silently, which is exactly how the `opus-4.8` label went
+# stale-but-green; an explicit pin (`claude-opus-5`) would make the registry literal but would
+# replace the owner-facing tier vocabulary the whole config surface keys on, and would turn a missed
+# refresh into a dispatch of an OLDER model rather than a stale label. The alias's one weakness —
+# a silently stale label — is bounded by the record below and its drift guard in
+# tests/test_model_registry.py, which fails if a model id is bumped without re-probing.
+#
+# Probed live with `claude -p --model <alias>`; re-run and re-stamp on a harness upgrade.
+CLAUDE_ALIAS_RESOLUTION = {
+    "harness": "claude-code/2.1.219",
+    "verified": "2026-07-26",
+    "resolved": {
+        "haiku": "claude-haiku-4-5-20251001",
+        "sonnet": "claude-sonnet-5",
+        "opus": "claude-opus-5",
+        "fable": "claude-fable-5",
+    },
+}
+
 FABLE_NEVER_DEFAULT = True
-SMART_CLAUDE_FALLBACK = ("opus-4.8", None)
+SMART_CLAUDE_FALLBACK = ("opus-5", None)
 
 _MODEL_TIER_ROLES = (
     "orchestrator",

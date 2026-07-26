@@ -215,6 +215,7 @@ _CONCRETE_MODEL_TOKENS = (
     "haiku-4.5",
     "sonnet-5",
     "opus-4.8",
+    "opus-5",
     "fable-5",
     "claude-fable-5-thinking",
 )
@@ -224,6 +225,7 @@ _RETIRED_MODEL_TOKENS = (
     "gpt-5.6-luna",
     "composer-2.5-fast",
     "claude-fable-5-thinking",
+    "opus-4.8",
 )
 
 
