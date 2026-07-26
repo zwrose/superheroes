@@ -143,7 +143,7 @@ never drop a finding or a lens.
 > ```
 >
 > `$SEAT_ENGINE_MODEL` is the seat's **registry id**; `$SEAT_EFFORT` is its effort — an empty
-> effort is only valid for `composer-2.5`.
+> effort is only valid for a model the registry records as taking no effort level.
 >
 > Read-only sandbox is **hard-coded inside the runner API** — it cannot emit a write dispatch. Because
 > the runner runs codex from a non-repo cwd under "do not read files", the seat prompt MUST be
@@ -430,10 +430,10 @@ carries `{vendor, model, effort, tier, family, source}`:
 - **Read the seat's assignment** from `$SEAT_MAP.seats[<reviewer-name>]`. Dispatch a `claude`
   seat as the named subagent with `model: <seat>.model`; dispatch a `codex`/`cursor` seat through
   `engine_adapter.py` (read-only sandbox), threading the seat's **registry id** as `engine_model`
-  and its **effort** as `--effort` (e.g. `cursor-grok-4.5` + `high`) — never the hard-coded
-  composer default. `build-argv` also accepts the composed token (`cursor-grok-4.5-high`) and
-  resolves it identically, but an effort that **contradicts** a composed token is refused rather
-  than silently resolved either way. A `--model` value that is not a native Claude tier short name
+  and its **effort** as `--effort` — never the hard-coded composer default. `build-argv` also
+  accepts the **composed dispatch token** that joins registry id and effort, and resolves it
+  identically, but an effort that **contradicts** a composed token is refused rather than
+  silently resolved either way. A `--model` value that is not a native Claude tier short name
   (`haiku`/`sonnet`/`opus`/`fable`) is **refused by name** (`unknown-claude-tier`) instead of
   silently falling back to composer. A refused dispatch surfaces
   `detail: "engine-config:<reason>"` with one of `unknown-engine`, `unknown-claude-tier`,
