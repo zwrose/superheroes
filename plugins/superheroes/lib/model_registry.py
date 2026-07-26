@@ -475,3 +475,197 @@ def is_allowed(
     if effort is not None and not _is_str(effort):
         return False
     return (model, effort) in allowlist(role, vendor)
+
+
+def parse_dispatch_token(vendor: str, token: str) -> tuple[str, str | None] | None:
+    """Inverse of ``dispatch_token``: composed argv token → (model_id, effort)."""
+    if not _is_str(vendor) or not _is_str(token) or vendor not in VENDORS:
+        return None
+    if vendor == "claude":
+        for model_id, rec in _MODELS["claude"].items():
+            if rec["dispatch"] == token:
+                return (model_id, None)
+        return None
+    if vendor == "codex":
+        if is_registered("codex", token):
+            return (token, None)
+        return None
+    if vendor == "cursor":
+        if token == _COMPOSER_MODEL:
+            return (_COMPOSER_MODEL, None)
+        if token == _GROK_MODEL:
+            return None
+        prefix = f"{_GROK_MODEL}-"
+        if token.startswith(prefix):
+            effort = token[len(prefix) :]
+            if effort in _EFFORT_ENUM["cursor"]:
+                return (_GROK_MODEL, effort)
+        return None
+    return None
+
+
+def _allowlist_park_text(pairs: tuple[tuple[str, str | None], ...] | list) -> str:
+    return ", ".join("(%s, %s)" % (m, e) for m, e in pairs)
+
+
+def _resolve_dispatch_fail(
+    reason: str,
+    candidates: list[tuple[str, str | None]] | None = None,
+) -> dict:
+    return {
+        "ok": False,
+        "model_id": None,
+        "effort": None,
+        "dispatch_token": None,
+        "effort_source": None,
+        "candidates": [] if candidates is None else list(candidates),
+        "reason": reason,
+    }
+
+
+def resolve_dispatch(
+    role: str,
+    vendor: str,
+    model: str | None = None,
+    effort: str | None = None,
+) -> dict:
+    """Resolve registry id, dispatch token, or seat default to a dispatch triple."""
+    if not _is_str(role):
+        return _resolve_dispatch_fail(f"role must be a str, got {type(role).__name__}")
+    if not _is_str(vendor):
+        return _resolve_dispatch_fail(f"vendor must be a str, got {type(vendor).__name__}")
+    if vendor not in VENDORS:
+        return _resolve_dispatch_fail(f"unknown vendor {vendor!r}")
+    if role not in roles():
+        return _resolve_dispatch_fail(
+            f"unknown role {role!r} — not a registered dispatch role"
+        )
+
+    pairs = list(allowlist(role, vendor))
+    pairs_t = tuple(pairs)
+
+    if model is not None and not _is_str(model):
+        return _resolve_dispatch_fail(
+            f"model must be a str or None, got {type(model).__name__}",
+            pairs,
+        )
+    if effort is not None and not _is_str(effort):
+        return _resolve_dispatch_fail(
+            f"effort must be a str or None, got {type(effort).__name__}",
+            pairs,
+        )
+
+    if not pairs:
+        return _resolve_dispatch_fail(
+            f"role {role!r} has no sanctioned model on vendor {vendor!r}"
+        )
+
+    token_effort: str | None = None
+
+    if model is None:
+        cell = matrix_config(role, vendor)
+        if cell is None:
+            return _resolve_dispatch_fail(
+                f"no seat default for role {role!r} on vendor {vendor!r}"
+            )
+        if effort is None:
+            if cell not in pairs_t:
+                return _resolve_dispatch_fail(
+                    f"seat default {cell!r} for role {role!r} on vendor {vendor!r} "
+                    f"is not on its own allowlist",
+                    pairs,
+                )
+            model_id, eff = cell
+            effort_source = "seat-default"
+            tok = dispatch_token(vendor, model_id, eff)
+            if tok is None:
+                return _resolve_dispatch_fail(
+                    f"({model_id!r}, {eff!r}) has no dispatch token for vendor {vendor!r}",
+                    pairs,
+                )
+            ok_cfg, why = validate_config(
+                vendor, model_id, eff, allow_override_only=True
+            )
+            if not ok_cfg:
+                return _resolve_dispatch_fail(why or "invalid config", pairs)
+            return {
+                "ok": True,
+                "model_id": model_id,
+                "effort": eff,
+                "dispatch_token": tok,
+                "effort_source": effort_source,
+                "candidates": pairs,
+                "reason": None,
+            }
+        model = cell[0]
+
+    by_id = [p for p in pairs if p[0] == model]
+    if not by_id:
+        parsed = parse_dispatch_token(vendor, model)
+        if parsed is None:
+            pairs_text = _allowlist_park_text(pairs_t)
+            return _resolve_dispatch_fail(
+                f"model {model!r} is not on the {role}/{vendor} allowlist [{pairs_text}]",
+                pairs,
+            )
+        p_model, p_effort = parsed
+        if p_effort is not None and effort is not None and p_effort != effort:
+            return _resolve_dispatch_fail(
+                f"effort {effort!r} conflicts with the effort {p_effort!r} "
+                f"encoded in dispatch token {model!r}",
+                pairs,
+            )
+        token_effort = p_effort
+        by_id = [
+            p
+            for p in pairs
+            if p[0] == p_model and (p_effort is None or p[1] == p_effort)
+        ]
+        if not by_id:
+            pairs_text = _allowlist_park_text(pairs_t)
+            return _resolve_dispatch_fail(
+                f"model {model!r} is not on the {role}/{vendor} allowlist [{pairs_text}]",
+                pairs,
+            )
+
+    if effort is not None:
+        cands = [p for p in by_id if p[1] == effort]
+        if not cands:
+            pairs_text = _allowlist_park_text(pairs_t)
+            return _resolve_dispatch_fail(
+                f"model {model!r} at effort {effort!r} is not on the "
+                f"{role}/{vendor} allowlist [{pairs_text}]",
+                pairs,
+            )
+    else:
+        cands = by_id
+
+    model_id, eff = cands[0]
+    if effort is not None:
+        effort_source = "given"
+    elif token_effort is not None:
+        effort_source = "token-encoded"
+    elif len(cands) == 1:
+        effort_source = "resolved-unique"
+    else:
+        effort_source = "resolved-lowest-rung"
+
+    tok = dispatch_token(vendor, model_id, eff)
+    if tok is None:
+        return _resolve_dispatch_fail(
+            f"({model_id!r}, {eff!r}) has no dispatch token for vendor {vendor!r}",
+            pairs,
+        )
+    ok_cfg, why = validate_config(vendor, model_id, eff, allow_override_only=True)
+    if not ok_cfg:
+        return _resolve_dispatch_fail(why or "invalid config", pairs)
+
+    return {
+        "ok": True,
+        "model_id": model_id,
+        "effort": eff,
+        "dispatch_token": tok,
+        "effort_source": effort_source,
+        "candidates": pairs,
+        "reason": None,
+    }
