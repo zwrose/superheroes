@@ -419,6 +419,28 @@ def _base_degraded(state):
     return bool((state.get("config") or {}).get("baseDegraded"))
 
 
+def _same_family_seats(state):
+    """Seats the #510 seat map had to fill with the MAKER's own model family because no alternative
+    family was live (#670, owner-ratified 2026-07-26). A disclosed degradation, never a violation —
+    but a panel that reviewed itself must never certify as plainly clean, so it joins independence
+    and base provenance in the certification shape. Read off the seat map's own receipt; never
+    recomputed here."""
+    sm = state.get("seatMap")
+    degradations = sm.get("degradations") if isinstance(sm, dict) else None
+    if not isinstance(degradations, list):
+        return []
+    seats = []
+    for deg in degradations:
+        if isinstance(deg, dict) and deg.get("constraint") == "same-family":
+            seat = deg.get("seat")
+            seats.append(seat if isinstance(seat, str) and seat else "unnamed-seat")
+    return sorted(set(seats))
+
+
+def _same_family_degraded(state):
+    return bool(_same_family_seats(state))
+
+
 def _certification_base(state):
     """Tri-state base provenance for certification — never infer fetched from absence."""
     if _base_degraded(state):
@@ -430,7 +452,7 @@ def _certification_base(state):
 
 
 def _cert_shape(state, base):
-    if _degraded(state) or _base_degraded(state):
+    if _degraded(state) or _base_degraded(state) or _same_family_degraded(state):
         return base + "-degraded"
     return base
 
@@ -1826,6 +1848,11 @@ def build_receipt(state, session_dir=None):
             "base: reviewed against a base whose fetch degraded (%s) — the pin may be stale; "
             "named in the certification shape"
             % (cfg.get("baseFetch") or "baseFetch absent"))
+    if _same_family_degraded(state):
+        degraded.append(
+            "panel independence: seat(s) %s were filled with the MAKER's own model family — no "
+            "alternative family was live; disclosed by the seat map and named in the certification "
+            "shape" % ", ".join(_same_family_seats(state)))
     # The skipped-blocking channel (#507 R2a): an owner-skipped judgment blocker rides the exit
     # disclosure — a product-choice tradeoff shipped un-fixed, cited by its owner reason. It appears
     # BOTH in the degraded disclosure prose AND as the dedicated top-level `skippedBlockers` list

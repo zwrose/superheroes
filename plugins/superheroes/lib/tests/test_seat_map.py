@@ -205,7 +205,11 @@ def test_isolate_strong_seat_exclusion_with_pins():
         assert m["seats"][seat]["family"] != "anthropic"
 
 
-def test_middle_relaxation_author_minority_without_critical_diversity():
+def test_pinned_maker_seats_report_pin_breaks_constraint_not_author_minority():
+    """Pinned maker-family seats are owner overrides disclosed as pin-breaks-constraint.
+
+    The numeric author-minority cap is a separate constraint and was not breached here.
+    """
     pins = {
         "code-reviewer": {"vendor": "claude"},
         "test-reviewer": {"vendor": "claude"},
@@ -215,7 +219,17 @@ def test_middle_relaxation_author_minority_without_critical_diversity():
     m = SM.build(
         SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0, pins=pins
     )
-    assert any(d["constraint"] == "author-minority" for d in m["degradations"])
+    assert not any(d.get("constraint") == "author-minority" for d in m["degradations"])
+    for seat in (
+        "code-reviewer",
+        "test-reviewer",
+        "premortem-reviewer",
+        "grounding-seat",
+    ):
+        assert any(
+            d.get("constraint") == "pin-breaks-constraint" and d.get("seat") == seat
+            for d in m["degradations"]
+        )
     violations = SM.verify(m, "anthropic")
     assert not any(v.get("constraint") == "critical-diversity" for v in violations)
 
@@ -652,6 +666,10 @@ def test_cursor_only_panel_on_composer_diff_is_visibly_degraded():
     degradation and NO maker-family violation — a whole panel of the author's own family read as
     clean. Post-merge both fire, so the self-review is visible instead of silent.
 
+    #670 turned this exact configuration from violation into disclosed degradation: when no
+    alternative family is live, every roster seat records `same-family` and verify reports no
+    maker-family violation.
+
     The author family is READ FROM THE REGISTRY, never hardcoded: hardcoding 'xai' would leave this
     test green if `composer-2.5`'s family ever regressed, which is the one regression it exists to
     catch."""
@@ -660,4 +678,520 @@ def test_cursor_only_panel_on_composer_diff_is_visibly_degraded():
     author = MRG.family_for("code-fixer", "cursor")
     m = SM.build(SM.PANEL_ROSTER, ["cursor"], author, "anthropic", SM.seed_from(651, None))
     assert "grounding-independence" in {d["constraint"] for d in m["degradations"]}
-    assert "maker-family" in {v["constraint"] for v in SM.verify(m, author)}
+    same_family = {
+        (d["constraint"], d.get("seat"))
+        for d in m["degradations"]
+        if d.get("constraint") == "same-family"
+    }
+    for seat in SM.PANEL_ROSTER:
+        assert ("same-family", seat) in same_family, seat
+    assert not any(
+        v.get("constraint") == "maker-family" for v in SM.verify(m, author)
+    )
+
+
+def test_maker_family_barred_from_test_seat():
+    for seed in range(40):
+        m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "openai", "anthropic", seed)
+        assert m["seats"]["test-reviewer"]["family"] != "openai", seed
+        assert SM.verify(m, "openai") == [], seed
+
+
+def test_maker_family_barred_from_every_roster_seat():
+    import model_registry as MRG
+
+    families = (
+        MRG.family_for("code-fixer", "claude"),
+        MRG.family_for("code-fixer", "codex"),
+        MRG.family_for("code-fixer", "cursor"),
+    )
+    for author in families:
+        for seed in range(40):
+            m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, author, "anthropic", seed)
+            for seat in SM.PANEL_ROSTER:
+                assert m["seats"][seat]["family"] != author, (seed, author, seat)
+
+
+def test_single_vendor_collapse_is_same_family_degradation_not_violation():
+    import model_registry as MRG
+
+    author = MRG.family_for("code-fixer", "cursor")
+    m = SM.build(SM.PANEL_ROSTER, ["cursor"], author, "anthropic", SM.seed_from(670, None))
+    for seat in SM.PANEL_ROSTER:
+        assert any(
+            d.get("constraint") == "same-family" and d.get("seat") == seat
+            for d in m["degradations"]
+        ), seat
+    assert not any(
+        v.get("constraint") == "maker-family" for v in SM.verify(m, author)
+    )
+    assert not any(d.get("constraint") == "seat-unfilled" for d in m["degradations"])
+
+
+def test_single_vendor_collapse_does_not_claim_author_minority():
+    import model_registry as MRG
+
+    author = MRG.family_for("code-fixer", "cursor")
+    m = SM.build(SM.PANEL_ROSTER, ["cursor"], author, "anthropic", 0)
+    assert not any(d.get("constraint") == "author-minority" for d in m["degradations"])
+
+
+def test_grounding_prefers_narrative_family_over_maker():
+    m = SM.build(SM.PANEL_ROSTER, ["claude", "codex"], "anthropic", "openai", 0)
+    assert m["seats"][SM.GROUNDING_SEAT]["family"] == "openai"
+    assert any(d["constraint"] == "grounding-independence" for d in m["degradations"])
+
+
+def test_verify_unknown_liveness_is_a_violation():
+    seats = _full_seats_template()
+    seats["test-reviewer"] = {
+        "vendor": "claude",
+        "model": "opus-5",
+        "effort": "xhigh",
+        "tier": "reviewer-deep",
+        "family": "anthropic",
+        "source": "rotated",
+    }
+    violations = SM.verify({"seats": seats}, "anthropic")
+    assert any(
+        v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
+        for v in violations
+    )
+
+    seats2 = _full_seats_template()
+    seats2["test-reviewer"] = dict(seats["test-reviewer"])
+    violations2 = SM.verify(
+        {
+            "seats": seats2,
+            "liveVendors": ["claude"],
+            "livenessPinScoped": False,
+            "degradations": [
+                {"constraint": "live-vendors", "reason": "no live vendors — defaulted to claude"},
+            ],
+        },
+        "anthropic",
+    )
+    assert any(
+        v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
+        for v in violations2
+    )
+
+
+def test_verify_pin_scoped_liveness_is_a_violation():
+    import model_registry as MRG
+
+    author = MRG.family_for("code-fixer", "cursor")
+    seat_cfg = {
+        "vendor": "cursor",
+        "model": "cursor-grok-4.5",
+        "effort": "high",
+        "tier": "reviewer-deep",
+        "family": author,
+        "source": "rotated",
+    }
+    sm = {
+        "seats": {**_full_seats_template(), "test-reviewer": seat_cfg},
+        "liveVendors": ["cursor"],
+        "livenessPinScoped": True,
+    }
+    violations = SM.verify(sm, author)
+    assert any(
+        v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
+        for v in violations
+    )
+
+    sm["livenessPinScoped"] = False
+    violations_off = SM.verify(sm, author)
+    assert not any(
+        v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
+        for v in violations_off
+    )
+
+
+def test_verify_malformed_liveness_is_a_violation():
+    seats = _full_seats_template()
+    seats["code-reviewer"] = {
+        "vendor": "claude",
+        "model": "opus-5",
+        "effort": "xhigh",
+        "tier": "reviewer-deep",
+        "family": "anthropic",
+        "source": "rotated",
+    }
+    for live in (["not-a-real-vendor"], [None]):
+        violations = SM.verify({"seats": seats, "liveVendors": live}, "anthropic")
+        assert any(
+            v.get("constraint") == "maker-family" and v.get("seat") == "code-reviewer"
+            for v in violations
+        ), live
+
+
+def test_to_receipt_carries_liveness_pin_scoped_provenance():
+    import model_registry as MRG
+
+    author = MRG.family_for("code-fixer", "cursor")
+    seat_cfg = {
+        "vendor": "cursor",
+        "model": "cursor-grok-4.5",
+        "effort": "high",
+        "tier": "reviewer-deep",
+        "family": author,
+        "source": "rotated",
+    }
+    sm = {
+        "seats": {**_full_seats_template(), "test-reviewer": seat_cfg},
+        "liveVendors": ["cursor"],
+        "livenessPinScoped": True,
+    }
+    receipt = SM.to_receipt(sm, author)
+    assert receipt["livenessPinScoped"] is True
+    round_trip = SM.to_receipt(receipt, author)
+    assert any(
+        v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
+        for v in round_trip["violations"]
+    )
+
+    bare = {
+        "seats": _full_seats_template(),
+        "liveVendors": THREE_VENDORS,
+        "livenessPinScoped": False,
+    }
+    bare_receipt = SM.to_receipt(bare, "xai")
+    assert bare_receipt["livenessPinScoped"] is False
+    assert bare_receipt["seats"] == bare["seats"]
+    assert bare_receipt["liveVendors"] == bare["liveVendors"]
+
+
+def test_to_receipt_same_family_derivation_is_idempotent():
+    import model_registry as MRG
+
+    author = MRG.family_for("code-fixer", "cursor")
+    m = SM.build(SM.PANEL_ROSTER, ["cursor"], author, "anthropic", 0)
+    m["authorFamily"] = author
+    for _ in range(2):
+        receipt = SM.to_receipt(m, author)
+        counts = {}
+        for d in receipt["degradations"]:
+            if d.get("constraint") == "same-family":
+                counts[d.get("seat")] = counts.get(d.get("seat"), 0) + 1
+        for seat in SM.PANEL_ROSTER:
+            assert counts.get(seat, 0) == 1, seat
+        m = receipt
+
+
+def test_pinned_maker_seat_is_still_a_violation():
+    pins = {"test-reviewer": {"vendor": "claude"}}
+    m = SM.build(
+        SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0, pins=pins
+    )
+    assert m["seats"]["test-reviewer"]["source"] == "pinned"
+    assert m["seats"]["test-reviewer"]["family"] == "anthropic"
+    violations = SM.verify(m, "anthropic")
+    assert any(
+        v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
+        for v in violations
+    )
+
+
+def test_cache_only_synthesized_liveness_is_a_violation():
+    base = {
+        "seats": {
+            "test-reviewer": {
+                "vendor": "claude",
+                "model": "opus-5",
+                "effort": "xhigh",
+                "tier": "reviewer-deep",
+                "family": "anthropic",
+                "source": "rotated",
+            },
+        },
+        "liveVendors": ["claude"],
+        "livenessPinScoped": False,
+    }
+    with_note = {
+        **base,
+        "degradations": [
+            {"constraint": "preflight-cache-only", "reason": "cache miss — defaulted"},
+        ],
+    }
+    violations = SM.verify(with_note, "anthropic")
+    assert any(
+        v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
+        for v in violations
+    )
+    without_note = dict(base)
+    no_violation = SM.verify(without_note, "anthropic")
+    assert not any(v.get("constraint") == "maker-family" for v in no_violation)
+
+
+def test_compose_merges_probe_notes_before_deriving_the_receipt(monkeypatch, tmp_path, capsys):
+    import liveness_cache
+
+    cache_file = tmp_path / "composition-liveness.json"
+    monkeypatch.setattr(liveness_cache, "receipt_path", lambda cwd=None, root=None: str(cache_file))
+
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--probe-mode",
+            "cache-only",
+            "--configured-engines",
+            "codex,cursor",
+            "--author-family",
+            "anthropic",
+            "--narrative-family",
+            "openai",
+            "--pr-number",
+            "670",
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert any(d.get("constraint") == "preflight-cache-only" for d in receipt["degradations"])
+    assert any(v.get("constraint") == "maker-family" for v in receipt["violations"])
+
+
+def _seat_in_both_same_family_and_maker_family(receipt):
+    same = {d.get("seat") for d in receipt["degradations"] if d.get("constraint") == "same-family"}
+    maker = {v.get("seat") for v in receipt["violations"] if v.get("constraint") == "maker-family"}
+    return same & maker
+
+
+def test_receipt_never_asserts_same_family_and_maker_family_for_one_seat():
+    import model_registry as MRG
+
+    seed = SM.seed_from(670, None)
+    author = "anthropic"
+    sm = SM.build(
+        SM.PANEL_ROSTER,
+        ["claude"],
+        author,
+        "anthropic",
+        seed,
+        liveness_pin_scoped=False,
+    )
+    sm["degradations"] = list(sm["degradations"]) + [
+        {
+            "constraint": "preflight-cache-only",
+            "reason": "vendors not probed; panel falls open to Claude",
+        }
+    ]
+    receipt = SM.to_receipt(sm)
+
+    both = _seat_in_both_same_family_and_maker_family(receipt)
+    assert not both, f"seats asserting both ways: {sorted(both)}"
+
+    maker_seats = {
+        v.get("seat")
+        for v in receipt["violations"]
+        if v.get("constraint") == "maker-family"
+    }
+    for seat in SM.PANEL_ROSTER:
+        assert seat in maker_seats, seat
+
+    same_family_seats = {
+        d.get("seat")
+        for d in receipt["degradations"]
+        if d.get("constraint") == "same-family"
+    }
+    assert not same_family_seats, f"unexpected same-family: {sorted(same_family_seats)}"
+
+    assert any(
+        d.get("constraint") == "preflight-cache-only" for d in receipt["degradations"]
+    )
+
+    cursor_author = MRG.family_for("code-fixer", "cursor")
+    collapse = SM.build(
+        SM.PANEL_ROSTER,
+        ["cursor"],
+        cursor_author,
+        "anthropic",
+        seed,
+        liveness_pin_scoped=False,
+    )
+    collapse_receipt = SM.to_receipt(collapse)
+    for seat in SM.PANEL_ROSTER:
+        assert any(
+            d.get("constraint") == "same-family" and d.get("seat") == seat
+            for d in collapse_receipt["degradations"]
+        ), seat
+    assert not any(
+        v.get("constraint") == "maker-family" for v in collapse_receipt["violations"]
+    )
+
+
+def test_build_and_verify_agree_on_the_same_seat():
+    pins = {"test-reviewer": {"vendor": "claude"}}
+    pin_scoped = SM.build(
+        SM.PANEL_ROSTER,
+        THREE_VENDORS,
+        "anthropic",
+        "openai",
+        0,
+        pins=pins,
+        liveness_pin_scoped=True,
+    )
+    receipt_pin = SM.to_receipt(pin_scoped, "anthropic")
+    assert not _seat_in_both_same_family_and_maker_family(receipt_pin)
+
+    synthesized = SM.build(SM.PANEL_ROSTER, [], "xai", "anthropic", 0)
+    receipt_syn = SM.to_receipt(synthesized, "xai")
+    assert not _seat_in_both_same_family_and_maker_family(receipt_syn)
+
+
+def test_pinned_maker_seat_does_not_claim_author_minority():
+    pins = {"test-reviewer": {"vendor": "claude"}}
+    m = SM.build(
+        SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0, pins=pins
+    )
+    assert not any(d.get("constraint") == "author-minority" for d in m["degradations"])
+    assert any(
+        d.get("constraint") == "pin-breaks-constraint" and d.get("seat") == "test-reviewer"
+        for d in m["degradations"]
+    )
+    violations = SM.verify(m, "anthropic")
+    assert any(
+        v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
+        for v in violations
+    )
+
+
+def test_build_carries_liveness_pin_scoped():
+    import model_registry as MRG
+
+    author = MRG.family_for("code-fixer", "cursor")
+    m_default = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, author, "anthropic", 0)
+    assert m_default.get("livenessPinScoped") is False
+
+    m_scoped = SM.build(
+        SM.PANEL_ROSTER, THREE_VENDORS, author, "anthropic", 0, liveness_pin_scoped=True
+    )
+    assert m_scoped.get("livenessPinScoped") is True
+    seat_cfg = dict(m_scoped["seats"]["test-reviewer"])
+    seat_cfg["family"] = author
+    m_scoped["seats"] = {**m_scoped["seats"], "test-reviewer": seat_cfg}
+    violations = SM.verify(m_scoped, author)
+    assert any(
+        v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
+        for v in violations
+    )
+
+
+def test_absent_liveness_pin_scoped_is_unknown_and_fails_closed():
+    import model_registry as MRG
+
+    author = MRG.family_for("code-fixer", "cursor")
+    seat_cfg = {
+        "vendor": "cursor",
+        "model": "cursor-grok-4.5",
+        "effort": "high",
+        "tier": "reviewer-deep",
+        "family": author,
+        "source": "rotated",
+    }
+    absent = {
+        "seats": {**_full_seats_template(), "test-reviewer": seat_cfg},
+        "liveVendors": ["cursor"],
+    }
+    violations_absent = SM.verify(absent, author)
+    assert any(
+        v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
+        for v in violations_absent
+    )
+
+    explicit = {**absent, "livenessPinScoped": False}
+    violations_explicit = SM.verify(explicit, author)
+    assert not any(
+        v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
+        for v in violations_explicit
+    )
+
+
+def test_verify_mixed_valid_and_unknown_liveness_is_a_violation():
+    import model_registry as MRG
+
+    author = MRG.family_for("code-fixer", "cursor")
+    seat_cfg = {
+        "vendor": "cursor",
+        "model": "cursor-grok-4.5",
+        "effort": "high",
+        "tier": "reviewer-deep",
+        "family": author,
+        "source": "rotated",
+    }
+    mixed = {
+        "seats": {**_full_seats_template(), "test-reviewer": seat_cfg},
+        "liveVendors": ["cursor", "not-a-real-vendor"],
+        "livenessPinScoped": False,
+    }
+    violations_mixed = SM.verify(mixed, author)
+    assert any(
+        v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
+        for v in violations_mixed
+    )
+
+    clean = {**mixed, "liveVendors": ["cursor"]}
+    violations_clean = SM.verify(clean, author)
+    assert not any(
+        v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
+        for v in violations_clean
+    )
+
+
+def test_to_receipt_records_the_author_family_it_verified():
+    import model_registry as MRG
+
+    author = MRG.family_for("code-fixer", "cursor")
+    seat_cfg = {
+        "vendor": "cursor",
+        "model": "cursor-grok-4.5",
+        "effort": "high",
+        "tier": "reviewer-deep",
+        "family": author,
+        "source": "rotated",
+    }
+    stale_map = {
+        "seats": {**_full_seats_template(), "test-reviewer": seat_cfg},
+        "liveVendors": ["cursor"],
+        "livenessPinScoped": True,
+        "authorFamily": "stale-family",
+    }
+    receipt = SM.to_receipt(stale_map, author)
+    assert receipt["authorFamily"] == author
+    round_trip = SM.to_receipt(receipt)
+    assert any(
+        v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
+        for v in round_trip["violations"]
+    )
+
+
+def test_to_receipt_tolerates_null_degradations():
+    r1 = SM.to_receipt({"seats": {}, "degradations": None})
+    assert r1["degradations"] == []
+    r2 = SM.to_receipt({"seats": {}, "degradations": "not-a-list"})
+    assert r2["degradations"] == []
+
+
+def test_verify_unresolvable_tier_is_a_violation():
+    import model_registry as MRG
+
+    author = MRG.family_for("code-fixer", "cursor")
+    seat_cfg = {
+        "vendor": "cursor",
+        "model": "cursor-grok-4.5",
+        "effort": "high",
+        "tier": "not-a-tier",
+        "family": author,
+        "source": "rotated",
+    }
+    sm = {
+        "seats": {**_full_seats_template(), "test-reviewer": seat_cfg},
+        "liveVendors": ["cursor"],
+        "livenessPinScoped": False,
+    }
+    violations = SM.verify(sm, author)
+    assert any(
+        v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
+        for v in violations
+    )

@@ -614,8 +614,25 @@ first-party models** — a cursor-grok reviewer is NOT independent of a cursor-c
 fix, and the composer→grok audit lane is closed. Because a gateway CLI still spans
 families, **panel independence keys on a model's family, not on
 the dispatch CLI** (consumed by the seat map, `lib/seat_map.py`, #510; owners supply
-per-seat pins via `enginePreferences.seatPins`, which the seat map reads). The cursor
-CLI's only sanctioned use is the models Cursor bills as **first-party** — today
+per-seat pins via `enginePreferences.seatPins`, which the seat map reads). The seat map
+**bars the maker's model family from rotation onto every panel seat** — all five lens seats and the
+`grounding-seat` (#670, owner-ratified 2026-07-26), including seats that are neither
+strong-tier nor critical (closing the `test-reviewer` hole after #651 unified cursor's
+first-party models under one `xai` family). An owner pin can still seat the maker family on a
+panel seat; `verify()` then flags a `maker-family` violation and records a
+`pin-breaks-constraint` degradation naming the seat. Where an alternative family is live, the maker
+family simply never seats through rotation. Where **no** alternative family is live, the seat still fills
+with the maker family and the map records a disclosed `same-family` degradation, which
+rides the certification shape (`-degraded`) alongside `independenceDegraded` and
+`baseDegraded` — a single-vendor panel still certifies degraded, it does not halt.
+`verify()` treats a maker-family seat as a **violation** when an alternative family was
+reachable, and as **not** a violation when unavoidable (the degradation path); unusable
+liveness evidence — missing recorded `liveVendors`, synthesized liveness defaults,
+pin-scoped probes, malformed vendor names — **fails closed to violation**, and only a
+well-formed, registry-resolvable receipt authorizes the degradation branch. When neither
+narrative nor maker can seat the grounding seat independently, **maker exclusion outranks
+narrative independence**: the fallback prefers the narrative family over the maker's own.
+The cursor CLI's only sanctioned use is the models Cursor bills as **first-party** — today
 `composer-2.5` and `cursor-grok-4.5`, and nothing else, ever. Claude, GPT, or any
 other third-party model is **never** routed through cursor. The registry
 (`lib/model_registry.py`) is the **enforcing surface**: it admits only those two cursor
