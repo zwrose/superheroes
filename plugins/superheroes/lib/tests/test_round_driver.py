@@ -2885,7 +2885,8 @@ def test_canary_plant_miss_does_not_block_verification():
     assert not any("canary-" in d for d in receipt["degraded"])
 
 
-def test_canary_not_required_when_cross_vendor_has_findings():
+def test_canary_per_vendor_codex_finding_cursor_empty_still_unverified():
+    """Round-3 Critical: panel-wide emptiness must not suppress another vendor's probe."""
     state = RD.new_state(_cfg(leg="panel"))
     seats = {d: {"findings": []} for d in RD.DIMENSIONS}
     seats["code-reviewer"] = {"findings": [{"title": "issue", "severity": "Minor"}]}
@@ -2893,10 +2894,14 @@ def test_canary_not_required_when_cross_vendor_has_findings():
     seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
     seat_map["seats"]["security-reviewer"] = {"vendor": "cursor"}
     RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": seat_map})
-    assert "canaryUnverified" not in state["rounds"]["1"]
-    assert "canaryFailed" not in state["rounds"]["1"]
-    assert "canaryVerified" not in state["rounds"]["1"]
-    assert "canary-unverified" not in _decision_kinds(state)
+    r1 = state["rounds"]["1"]
+    assert sorted(r1["canaryUnverified"]) == ["security-reviewer"]
+    assert "canaryVerified" not in r1
+    assert "canaryFailed" not in r1
+    assert state["fullPanelRan"] is False
+    assert "canary-unverified" in _decision_kinds(state)
+    assert "panel-seat-missing" not in _decision_kinds(state)
+    assert r1.get("missingSeats") is None or r1.get("missingSeats") == []
 
 
 def test_canary_not_required_claude_only_empty_panel():
@@ -3042,6 +3047,110 @@ def test_canary_failed_one_vendor_only_downgrades_that_vendor_seats():
     assert sorted(r1["canaryFailed"]["seats"]) == ["security-reviewer"]
     assert r1["canaryVerified"] == {"codex": {"tokens": 1}}
     assert state["fullPanelRan"] is False
+
+
+def test_canary_liveness_duplicate_codex_probes_dead_both_orders():
+    dims = list(RD.DIMENSIONS)
+    seat_map = _seat_map_vendors({d: "claude" for d in dims})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    seats = {d: {"findings": []} for d in dims}
+    status = {d: "run" for d in dims}
+    engaged = {
+        "engine": "codex", "model": "gpt", "outcome": "ok", "engaged": True,
+        "evidence": {"tokens": 1}, "detectedPlant": False, "detail": "live",
+    }
+    failed = {
+        "engine": "codex", "model": "gpt", "outcome": "vacuous", "engaged": False,
+        "evidence": {"tokens": 0}, "detectedPlant": False, "detail": "dead",
+    }
+    for canary in ([engaged, failed], [failed, engaged]):
+        out = RD.canary_liveness(dims, status, seats, seat_map, {}, canary)
+        assert out["byVendor"]["codex"]["status"] == "dead"
+        assert out["byDim"]["code-reviewer"] == "dead"
+
+
+def test_canary_codex_configured_cursor_ran_needs_cursor_probe():
+    state = RD.new_state(_cfg(leg="panel"))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    RD._fold_panel(state, state["config"], {
+        "seats": seats,
+        "seatMap": seat_map,
+        "ranManifest": {"code-reviewer": "cursor"},
+    })
+    assert state["rounds"]["1"]["canaryUnverified"] == ["code-reviewer"]
+
+
+def test_canary_failed_record_includes_evidence():
+    state = RD.new_state(_cfg(leg="panel"))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    canary = {
+        "engine": "codex", "model": "gpt", "outcome": "vacuous", "engaged": False,
+        "evidence": {"tokens": 0, "toolCalls": 0}, "detectedPlant": False, "detail": "no engagement",
+    }
+    RD._fold_panel(state, state["config"], {
+        "seats": seats, "seatMap": seat_map, "canaryResult": canary,
+    })
+    cf = state["rounds"]["1"]["canaryFailed"]
+    assert cf["evidence"] == {"tokens": 0, "toolCalls": 0}
+    assert cf["detail"] == "no engagement"
+
+
+def test_canary_only_unverified_no_panel_seat_missing_decision():
+    state = RD.new_state(_cfg(leg="panel"))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": seat_map})
+    r1 = state["rounds"]["1"]
+    assert "canaryUnverified" in r1
+    assert "panel-seat-missing" not in _decision_kinds(state)
+    assert r1.get("missingSeats") is None or r1.get("missingSeats") == []
+
+
+def test_fold_panel_malformed_reason_list_or_dict_classed_missing_no_raise():
+    state = RD.new_state(_cfg(leg="panel"))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    for bad_reason in (["forfeited"], {"code": "forfeited"}):
+        st = RD.new_state(_cfg(leg="panel"))
+        s = dict(seats)
+        s["code-reviewer"] = {"findings": [], "reason": bad_reason}
+        RD._fold_panel(st, st["config"], {"seats": s, "seatMap": seat_map})
+        assert st["rounds"]["1"]["seatStatus"]["code-reviewer"] == "run"
+
+
+def test_canary_liveness_no_in_scope_vendors_empty_by_vendor():
+    dims = list(RD.DIMENSIONS)
+    seat_map = _seat_map_vendors({d: "claude" for d in dims})
+    out = RD.canary_liveness(dims, {d: "run" for d in dims}, {}, seat_map, {}, None)
+    assert out["byVendor"] == {}
+    assert all(out["byDim"].get(d) == "n/a" for d in dims)
+
+
+def test_canary_mixed_panel_receipt_does_not_claim_no_probe_ran():
+    state = RD.new_state(_cfg(leg="panel"))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    seat_map["seats"]["security-reviewer"] = {"vendor": "cursor"}
+    canary = {
+        "engine": "codex", "model": "gpt", "outcome": "ok", "engaged": True,
+        "evidence": {"tokens": 100}, "detectedPlant": False, "detail": "live",
+    }
+    RD._fold_panel(state, state["config"], {
+        "seats": seats, "seatMap": seat_map, "canaryResult": canary,
+    })
+    receipt = RD.build_receipt(state)
+    cu = [d for d in receipt["degraded"] if d.startswith("canary-unverified (round 1):")]
+    assert len(cu) == 1
+    line = cu[0].lower()
+    assert "security-reviewer" in cu[0]
+    assert "no control probe was run" not in line
+    assert "every cross-vendor seat" not in line
 
 
 def test_canary_fell_open_codex_configured_claude_ran_not_subject():

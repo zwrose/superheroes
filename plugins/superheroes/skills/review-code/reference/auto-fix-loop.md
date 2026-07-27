@@ -169,17 +169,28 @@ never drop a finding or a lens.
 > host-gated (a Python-spawned subprocess would bypass the host permission-classifier the write authz
 > depends on; CONVENTIONS `§7.5`).
 >
-> **Cross-vendor control probe (#668).** When **every** cross-vendor seat in a panel returns zero
-> findings, run the planted-defect control probe before treating the panel as clean:
+> **Cross-vendor control probe (#668).** For each **distinct cross-vendor vendor** among the
+> panel's seats that ran with zero findings on that vendor's seat(s), run the planted-defect control
+> probe **once per such vendor** before treating those seats as clean. Use that vendor's own seat
+> model and effort from the seat map.
 >
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-> python3 "$ROOT_DIR/lib/seat_canary.py" probe \
->   --engine "$REVIEWER_ENGINE" --engine-model "$SEAT_ENGINE_MODEL" --effort "$SEAT_EFFORT" \
->   --repo-root "$REPO_ROOT"
+> CANARY_RESULTS=()
+> for VENDOR in "${CROSS_VENDOR_VENDORS[@]}"; do
+>   SEAT_ENGINE_MODEL="${SEAT_MODEL_BY_VENDOR[${VENDOR}]}"
+>   SEAT_EFFORT="${SEAT_EFFORT_BY_VENDOR[${VENDOR}]}"
+>   CANARY_RESULTS+=("$(
+>     python3 "${ROOT_DIR}/lib/seat_canary.py" probe \
+>       --engine "${VENDOR}" --engine-model "${SEAT_ENGINE_MODEL}" --effort "${SEAT_EFFORT}" \
+>       --repo-root "${REPO_ROOT}"
+>   )")
+> done
 > ```
 >
-> Submit its JSON as `canaryResult` on the panel artifact. The probe is scored on **engagement
+> Submit the probe JSON objects as a **list** on the panel artifact as `canaryResult` (a single
+> dict is still accepted when only one cross-vendor vendor needs a probe). Each result must carry
+> its `engine` field matching the vendor you probed. The probe is scored on **engagement
 > evidence** — findings produced, a verifiable investigation record, or tool calls actually invoked
 > — and **never** on magnitudes: token spend and wall time are recorded but are deliberately not a
 > pass branch, because they classify backwards (a genuinely engaged clean review here spent 2,460

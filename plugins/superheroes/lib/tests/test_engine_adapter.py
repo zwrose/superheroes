@@ -33,23 +33,32 @@ def test_review_forfeit_vacuous_token_single_home_no_literal_drift():
         ("seat_canary.py", importlib.util.spec_from_file_location(
             "seat_canary_drift", os.path.join(lib, "seat_canary.py"))),
     )
+    import re
+    _vacuous_lit = re.compile(r'''(?<![\w-])(["'])vacuous\1''')
+    _vacuous_get = re.compile(r'''\.get\((["'])vacuous\1\)''')
     for basename, spec in consumers:
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        assert getattr(EA, "REVIEW_FORFEIT_VACUOUS") is EA.REVIEW_FORFEIT_VACUOUS
         src = open(os.path.join(lib, basename), encoding="utf-8").read()
         # Bare "vacuous" / 'vacuous' string literals (not vacuous-forfeit, vacuousSeats, etc.) re-open #666 drift.
-        import re
-        _vacuous_lit = re.compile(r'''(?<![\w-])(["'])vacuous\1''')
         for i, line in enumerate(src.splitlines(), 1):
             if "import engine_adapter" in line or "REVIEW_FORFEIT_VACUOUS" in line:
                 continue
-            if '.get("vacuous")' in line or ".get('vacuous')" in line:
-                continue  # boolean seat discriminant — separate from dispatch reason token
-            if _vacuous_lit.search(line):
+            remainder = _vacuous_get.sub("", line)
+            if _vacuous_lit.search(remainder):
                 raise AssertionError(
                     "%s:%d restates the vacuous token literally — import engine_adapter.REVIEW_FORFEIT_VACUOUS"
                     % (basename, i))
+
+
+def test_vacuous_drift_guard_catches_historical_fold_line_shape():
+    """Match-granular guard must flag bare reason token beside .get('vacuous')."""
+    import re
+    _vacuous_lit = re.compile(r'''(?<![\w-])(["'])vacuous\1''')
+    _vacuous_get = re.compile(r'''\.get\((["'])vacuous\1\)''')
+    historical = (
+        '            if seat.get("vacuous") is True or seat.get("reason") == "vacuous":'
+    )
+    remainder = _vacuous_get.sub("", historical)
+    assert _vacuous_lit.search(remainder), "historical fold line must still trip the drift guard"
 
 
 def test_build_argv_codex_review_read_only():
