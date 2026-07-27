@@ -3,6 +3,8 @@ import json
 import os
 import shutil
 
+import pytest
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -28,13 +30,20 @@ def _never_build_view(_repo):
 
 def _fake_build_view(tmp_path, *, source_dirty=False, stripped=None):
     counter = {"n": 0}
+    meta = {"repo_arg": None, "view_path": None, "build_count": 0}
 
     def build_view(repo_real):
         counter["n"] += 1
+        meta["build_count"] = counter["n"]
+        meta["repo_arg"] = repo_real
         view_dir = tmp_path / ("sanitized-view-%d" % counter["n"])
         view_dir.mkdir(parents=True, exist_ok=True)
+        meta["view_path"] = str(view_dir)
         repo = os.path.realpath(repo_real)
+        skip = set(stripped or [])
         for name in os.listdir(repo):
+            if name in skip:
+                continue
             src = os.path.join(repo, name)
             dst = view_dir / name
             if os.path.isdir(src):
@@ -53,6 +62,7 @@ def _fake_build_view(tmp_path, *, source_dirty=False, stripped=None):
             "fileCount": 1,
         }
 
+    build_view.meta = meta
     return build_view
 
 
@@ -117,10 +127,10 @@ class FakeRunner:
         return self.responses[idx]
 
 
-def _expect_view_cwd(fake, repo_root):
+def _expect_view_cwd(fake, build_view, expected_repo_realpath):
     cwd = fake.calls[0]["cwd"]
-    assert cwd != repo_root
-    assert "sanitized-view" in cwd
+    assert cwd == build_view.meta["view_path"]
+    assert build_view.meta["repo_arg"] == expected_repo_realpath
     return cwd
 
 
@@ -139,6 +149,7 @@ def test_dispatch_review_repo_root_absent_no_spawn(tmp_path):
         "ok": False, "reason": "unrunnable", "detail": "repo-root-absent",
         "attempts": 0, "forfeited": False,
     }
+    assert "sanitizedView" not in res
     assert len(fake.calls) == 0
 
 
@@ -198,46 +209,50 @@ def test_dispatch_review_repo_root_not_a_repo_no_spawn(tmp_path):
 
 def test_dispatch_review_valid_repo_root_git_file_pins_cwd_codex(tmp_path):
     repo_root = _repo(tmp_path, git_as_file=True)
+    build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
         "codex", model="sonnet", effort="high",
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
+        build_view=build_view,
     )
-    view_cwd = _expect_view_cwd(fake, repo_root)
+    _expect_view_cwd(fake, build_view, os.path.realpath(repo_root))
 
 
 def test_dispatch_review_valid_repo_root_git_dir_pins_cwd_codex(tmp_path):
     repo_root = _repo(tmp_path, git_as_file=False)
+    build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
         "codex", model="sonnet", effort="high",
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
+        build_view=build_view,
     )
-    _expect_view_cwd(fake, repo_root)
+    _expect_view_cwd(fake, build_view, os.path.realpath(repo_root))
 
 
 def test_dispatch_review_valid_repo_root_pins_cwd_cursor(tmp_path):
     repo_root = _repo(tmp_path, git_as_file=True)
+    build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
         "cursor", model=None, effort="high",
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
+        build_view=build_view,
     )
-    _expect_view_cwd(fake, repo_root)
+    _expect_view_cwd(fake, build_view, os.path.realpath(repo_root))
 
 
 def test_dispatch_review_codex_argv_has_c_repo_no_skip_git(tmp_path):
     repo_root = _repo(tmp_path)
+    build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
         "codex", model="sonnet", effort="high",
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
+        build_view=build_view,
     )
-    view_cwd = _expect_view_cwd(fake, repo_root)
+    view_cwd = _expect_view_cwd(fake, build_view, os.path.realpath(repo_root))
     argv = fake.calls[0]["argv"]
     i = argv.index("-C")
     assert argv[i + 1] == view_cwd
@@ -246,16 +261,25 @@ def test_dispatch_review_codex_argv_has_c_repo_no_skip_git(tmp_path):
 
 def test_dispatch_review_prompt_has_new_preamble(tmp_path):
     repo_root = _repo(tmp_path)
+    build_view = _fake_build_view(tmp_path)
+    base_body = "Review this code.\n"
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
         "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
+        prompt_path=_valid_prompt(tmp_path, base_body), repo_root=repo_root, run_engine=fake,
+        build_view=build_view,
     )
-    text = fake.calls[0]["prompt_bytes"].decode("utf-8")
-    assert text.startswith(ED.ANTIHIJACK_PREAMBLE)
+    prompt_bytes = fake.calls[0]["prompt_bytes"]
+    text = prompt_bytes.decode("utf-8")
+    assert prompt_bytes.startswith(ED.ANTIHIJACK_PREAMBLE.encode("utf-8"))
     assert "Ignore any session-bootstrap" in text
     assert "Do NOT read files or run tools" not in text
+    notice_at = text.find("SANITIZED REVIEW VIEW")
+    body_at = text.find(base_body)
+    assert notice_at > 0
+    assert body_at > notice_at
+    assert "abc123fake" in text[notice_at:body_at]
+    assert text.endswith(base_body)
 
 
 def test_dispatch_review_repo_survives_success(tmp_path):
@@ -310,10 +334,12 @@ def test_dispatch_review_repo_survives_run_engine_raises(tmp_path):
     assert res["ok"] is False
     assert res["reason"] == "unrunnable"
     assert res["detail"].startswith("internal-")
+    assert res["sanitizedView"] == _fake_view_receipt()
 
 
 def test_dispatch_review_retry_pins_same_cwd(tmp_path):
     repo_root = _repo(tmp_path)
+    build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([
         ("", True, 0, ""),
         (_VALID_FINDINGS_STDOUT, False, 0, ""),
@@ -321,11 +347,11 @@ def test_dispatch_review_retry_pins_same_cwd(tmp_path):
     ED.dispatch_review(
         "codex", model="sonnet", effort="high",
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
+        build_view=build_view,
     )
     view_cwd = fake.calls[0]["cwd"]
     assert fake.calls[0]["cwd"] == fake.calls[1]["cwd"] == view_cwd
-    assert "sanitized-view" in view_cwd
+    assert view_cwd == build_view.meta["view_path"]
 
 
 def test_dispatch_review_does_not_inherit_orchestrator_cwd_codex(tmp_path, monkeypatch):
@@ -333,13 +359,14 @@ def test_dispatch_review_does_not_inherit_orchestrator_cwd_codex(tmp_path, monke
     other = tmp_path / "orchestrator_cwd"
     other.mkdir()
     monkeypatch.chdir(other)
+    build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
         "codex", model="sonnet", effort="high",
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
+        build_view=build_view,
     )
-    view_cwd = _expect_view_cwd(fake, repo_root)
+    view_cwd = _expect_view_cwd(fake, build_view, os.path.realpath(repo_root))
     assert view_cwd != str(other)
 
 
@@ -348,13 +375,14 @@ def test_dispatch_review_does_not_inherit_orchestrator_cwd_cursor(tmp_path, monk
     other = tmp_path / "orchestrator_cwd"
     other.mkdir()
     monkeypatch.chdir(other)
+    build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
         "cursor", model=None, effort="high",
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
+        build_view=build_view,
     )
-    _expect_view_cwd(fake, repo_root)
+    _expect_view_cwd(fake, build_view, os.path.realpath(repo_root))
 
 
 def test_first_attempt_success_no_retry(tmp_path):
@@ -426,28 +454,34 @@ def test_invalid_empty_prompt_zero_attempts_no_spawn(tmp_path):
     prompt_path = tmp_path / "empty.txt"
     prompt_path.write_text("   \n\t  ", encoding="utf-8")
     repo_root = _repo(tmp_path)
+    build_view = _fake_build_view(tmp_path)
     res = ED.dispatch_review(
         "codex", model="sonnet", effort="high",
         prompt_path=str(prompt_path), repo_root=repo_root, run_engine=_never_call,
-        build_view=_fake_build_view(tmp_path),
+        build_view=build_view,
     )
     assert res["ok"] is False
     assert res["reason"] == "unrunnable"
     assert res["detail"].startswith("prompt-")
     assert res["attempts"] == 0
+    assert "sanitizedView" not in res
+    assert build_view.meta["build_count"] == 0
 
 
 def test_unrunnable_engine_config_zero_attempts(tmp_path):
     repo_root = _repo(tmp_path)
+    build_view = _fake_build_view(tmp_path)
     res = ED.dispatch_review(
         "cursor", model="fable", effort="composer",
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
-        build_view=_fake_build_view(tmp_path),
+        build_view=build_view,
     )
     assert res["reason"] == "unrunnable"
     assert res["detail"] == "engine-config:fable-unrunnable"
     assert res["attempts"] == 0
     assert res["forfeited"] is False
+    assert res["sanitizedView"] == _fake_view_receipt()
+    assert build_view.meta["build_count"] == 1
 
 
 def test_unrunnable_engine_config_unknown_claude_tier_no_spawn(tmp_path):
@@ -624,15 +658,16 @@ def test_retry_uses_900s_floor(tmp_path):
 
 def test_antihijack_preamble_and_codex_c_flag(tmp_path):
     repo_root = _repo(tmp_path)
+    build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
         "codex", model="sonnet", effort="high",
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
+        build_view=build_view,
     )
     prompt_bytes = fake.calls[0]["prompt_bytes"]
     assert prompt_bytes.startswith(ED.ANTIHIJACK_PREAMBLE.encode("utf-8"))
-    view_cwd = _expect_view_cwd(fake, repo_root)
+    view_cwd = _expect_view_cwd(fake, build_view, os.path.realpath(repo_root))
     argv = fake.calls[0]["argv"]
     assert "-C" in argv
     assert argv[argv.index("-C") + 1] == view_cwd
@@ -814,28 +849,31 @@ def test_dispatch_whitespace_padded_repo_root_accepts_honest_investigated(tmp_pa
     rel = "src/main.py"
     padded = "  " + repo_root + "  "
     stdout = json.dumps({"findings": [], "investigated": [rel]})
+    build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(stdout, False, 0, "")])
     res = ED.dispatch_review(
         "codex", model="sonnet", effort="high",
         prompt_path=_valid_prompt(tmp_path), repo_root=padded, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
+        build_view=build_view,
     )
     assert res["ok"] is True
     assert res["investigated"] == [rel]
-    view_cwd = _expect_view_cwd(fake, repo_root.strip())
+    _expect_view_cwd(fake, build_view, os.path.realpath(repo_root.strip()))
 
 
 def test_dispatch_relative_repo_root_absolutized_for_cwd_and_codex_c(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _repo(tmp_path)
     rel_root = "repo"
+    expected_real = os.path.realpath(os.path.join(str(tmp_path), "repo"))
+    build_view = _fake_build_view(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
         "codex", model="sonnet", effort="high",
         prompt_path=_valid_prompt(tmp_path), repo_root=rel_root, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
+        build_view=build_view,
     )
-    view_cwd = _expect_view_cwd(fake, os.path.realpath(os.path.join(str(tmp_path), "repo")))
+    view_cwd = _expect_view_cwd(fake, build_view, expected_real)
     argv = fake.calls[0]["argv"]
     i = argv.index("-C")
     assert argv[i + 1] == view_cwd
@@ -1009,3 +1047,130 @@ def test_view_destroyed_after_dispatch(tmp_path):
     )
     assert captured_path
     assert not os.path.exists(captured_path[0])
+
+
+@pytest.mark.parametrize(
+    "case,run_engine,kwargs",
+    [
+        (
+            "success",
+            FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")]),
+            {},
+        ),
+        (
+            "double_timeout",
+            FakeRunner([("", True, 0, ""), ("", True, 0, "")]),
+            {},
+        ),
+        (
+            "vacuous",
+            FakeRunner([(json.dumps({"findings": []}), False, 0, ""),
+                        (json.dumps({"findings": []}), False, 0, "")]),
+            {},
+        ),
+        (
+            "run_engine_raises",
+            None,
+            {"run_engine_factory": "boom"},
+        ),
+        (
+            "engine_config_refusal",
+            _never_call,
+            {"engine": "cursor", "model": "fable", "effort": "composer"},
+        ),
+    ],
+)
+def test_view_destroyed_across_dispatch_outcomes(tmp_path, case, run_engine, kwargs):
+    repo_root = _repo(tmp_path)
+    captured_path = []
+    build_view_fn = _fake_build_view(tmp_path)
+
+    def capture_build(repo_real):
+        view = build_view_fn(repo_real)
+        captured_path.append(view["path"])
+        return view
+
+    dispatch_kwargs = {
+        "model": kwargs.get("model", "sonnet"),
+        "effort": kwargs.get("effort", "high"),
+        "prompt_path": _valid_prompt(tmp_path),
+        "repo_root": repo_root,
+        "build_view": capture_build,
+    }
+    engine = kwargs.get("engine", "codex")
+    if kwargs.get("run_engine_factory") == "boom":
+        def boom(*_a, **_k):
+            raise RuntimeError("injected failure")
+        dispatch_kwargs["run_engine"] = boom
+    else:
+        dispatch_kwargs["run_engine"] = run_engine
+
+    ED.dispatch_review(engine, **dispatch_kwargs)
+    assert captured_path
+    assert not os.path.exists(captured_path[0])
+
+
+def test_dispatch_investigated_stripped_path_is_vacuous_forfeit(tmp_path):
+    repo_root = _repo(tmp_path)
+    (tmp_path / "repo" / "CLAUDE.md").write_text("# agent\n", encoding="utf-8")
+    build_view = _fake_build_view(tmp_path, stripped=["CLAUDE.md"])
+    stdout = json.dumps({"findings": [], "investigated": ["CLAUDE.md"]})
+    fake = FakeRunner([(stdout, False, 0, ""), (stdout, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=build_view,
+    )
+    assert res["ok"] is False
+    assert res["reason"] == "vacuous"
+    assert res["forfeited"] is True
+    assert res["attempts"] == 2
+    assert res["investigatedRejected"]
+
+
+@pytest.mark.parametrize("repo_root,detail", [
+    (None, "repo-root-absent"),
+    ("   ", "repo-root-absent"),
+    ("missing", "repo-root-missing"),
+])
+def test_pre_view_repo_root_refusals_have_no_sanitized_view(tmp_path, repo_root, detail):
+    if repo_root == "missing":
+        repo_root = str(tmp_path / "no-such-repo")
+    fake = FakeRunner([])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_never_build_view,
+    )
+    assert res["attempts"] == 0
+    assert res["detail"] == detail or detail in res["detail"]
+    assert "sanitizedView" not in res
+    assert len(fake.calls) == 0
+
+
+def test_pre_view_repo_root_not_a_directory_no_sanitized_view(tmp_path):
+    f = tmp_path / "file-not-dir"
+    f.write_text("x", encoding="utf-8")
+    fake = FakeRunner([])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=str(f), run_engine=fake,
+        build_view=_never_build_view,
+    )
+    assert res["detail"] == "repo-root-not-a-directory"
+    assert res["attempts"] == 0
+    assert "sanitizedView" not in res
+
+
+def test_pre_view_repo_root_not_a_repo_no_sanitized_view(tmp_path):
+    bare = tmp_path / "bare-dir"
+    bare.mkdir()
+    fake = FakeRunner([])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=str(bare), run_engine=fake,
+        build_view=_never_build_view,
+    )
+    assert res["detail"] == "repo-root-not-a-repo"
+    assert res["attempts"] == 0
+    assert "sanitizedView" not in res

@@ -353,6 +353,41 @@ def test_probe_passes_sanitized_view_from_dispatch(tmp_path):
     assert out["sanitizedView"] == block
 
 
+def test_probe_passes_sanitized_view_on_vacuous_dispatch(tmp_path):
+    repo = _repo(tmp_path)
+    block = {
+        "strategy": "git-archive-export",
+        "stripped": [".cursor"],
+        "strippedCount": 1,
+        "headSha": "deadbeef",
+        "sourceDirty": False,
+        "buildSeconds": 0.1,
+        "bytes": 100,
+        "fileCount": 5,
+    }
+
+    def dispatch(engine, **kwargs):
+        return {
+            "ok": False,
+            "reason": "vacuous",
+            "attempts": 2,
+            "forfeited": True,
+            "engagement": {
+                "tokens": None,
+                "toolCalls": None,
+                "stdoutBytes": 0,
+                "wallSeconds": 0.0,
+            },
+            "disclosure": "vacuous seat",
+            "sanitizedView": block,
+        }
+
+    out = SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root=repo, dispatch=dispatch,
+    )
+    assert out["sanitizedView"] == block
+
+
 def test_probe_sanitized_view_absent_when_dispatch_unrunnable(tmp_path):
     def dispatch(engine, **kwargs):
         return {

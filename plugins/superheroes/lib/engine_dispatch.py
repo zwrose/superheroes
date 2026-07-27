@@ -235,6 +235,18 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
         return {"ok": False, "reason": "unrunnable", "detail": repo_detail,
                 "attempts": 0, "forfeited": False}
 
+    ok, why = engine_adapter.prompt_path_ok(prompt_path)
+    if not ok:
+        return {"ok": False, "reason": "unrunnable", "detail": "prompt-%s" % why,
+                "attempts": 0, "forfeited": False}
+
+    try:
+        with open(prompt_path, "r", encoding="utf-8", errors="ignore") as fh:
+            base_prompt = fh.read()
+    except Exception:
+        return {"ok": False, "reason": "unrunnable", "detail": "prompt-unreadable",
+                "attempts": 0, "forfeited": False}
+
     try:
         view = build_view(repo_detail)
     except sanitized_view.SanitizedViewError as exc:
@@ -243,110 +255,108 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 
     view_path = view["path"]
     try:
-        cwd = view_path
-
-        ok, why = engine_adapter.prompt_path_ok(prompt_path)
-        if not ok:
-            return {"ok": False, "reason": "unrunnable", "detail": "prompt-%s" % why,
-                    "attempts": 0, "forfeited": False}
-        opts = {"model": model, "engine_model": engine_model, "schema_path": schema_path, "cwd": cwd}
-        built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
-        if built["reason"] is not None:
-            return {"ok": False, "reason": "unrunnable",
-                    "detail": "engine-config:%s" % built["reason"],
-                    "attempts": 0, "forfeited": False}
-        argv = built["argv"]
-
         try:
-            with open(prompt_path, "r", encoding="utf-8", errors="ignore") as fh:
-                base_prompt = fh.read()
-        except Exception:
-            return {"ok": False, "reason": "unrunnable", "detail": "prompt-unreadable",
-                    "attempts": 0, "forfeited": False}
+            cwd = view_path
 
-        notice = sanitized_view.sanitized_view_notice(view)
-        prompt_prefix = ANTIHIJACK_PREAMBLE + notice
-        prompt_bytes = (prompt_prefix + base_prompt).encode("utf-8")
-        fed_prompt = prompt_prefix + base_prompt
-        write_progress = _progress_writer(progress_path)
-        last_engagement = None
-        last_terminal = None
-        last_investigated_rejected = None
-        for attempt in (1, 2):
-            t = timeout if attempt == 1 else max(retry_timeout, RETRY_MIN_TIMEOUT)
-
-            def cb(elapsed, nbytes, _a=attempt):
-                write_progress(_a, elapsed, nbytes)
-
-            t0 = time.monotonic()
-            stdout, timed_out, rc, stderr_tail = run_engine(argv, prompt_bytes, t, cb, cwd)
-            elapsed = time.monotonic() - t0
-            if engine == "codex":
-                tokens = engine_adapter.codex_tokens_used(stderr_tail)
-                tool_calls = None
-                source = "codex-stderr" if tokens is not None else "none"
-            elif engine == "cursor":
-                tokens = None
-                tool_calls = engine_adapter.cursor_tool_calls(stdout)
-                source = "cursor-stream" if tool_calls is not None else "none"
-            else:
-                tokens = None
-                tool_calls = None
-                source = "none"
-            last_engagement = {
-                "tokens": tokens,
-                "toolCalls": tool_calls,
-                "stdoutBytes": len(stdout or ""),
-                "wallSeconds": round(elapsed, 1),
-                "source": source,
-            }
-            if timed_out:
-                last_terminal = "forfeited"
-                continue  # timeout forfeits WITHOUT parsing partial stdout
-            if rc not in (0, None):
-                last_terminal = "forfeited"
-                continue  # nonzero exit forfeits even if stdout parses (crashed engine)
-            res = engine_adapter.parse_result(engine, role_kind, stdout)
-            if not (res.get("ok") and res.get("findings")):
-                stripped = engine_adapter.strip_echoed_prompt(stdout, fed_prompt)
-                res = engine_adapter.parse_result(engine, role_kind, stripped)
-            if not res.get("ok"):
-                last_terminal = "forfeited"
-                continue
-            findings = res.get("findings") or []
-            if findings:
+            opts = {"model": model, "engine_model": engine_model, "schema_path": schema_path, "cwd": cwd}
+            built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
+            if built["reason"] is not None:
                 return _attach_sanitized_view(
-                    {"ok": True, "findings": findings, "attempts": attempt,
-                     "engagement": last_engagement},
+                    {"ok": False, "reason": "unrunnable",
+                     "detail": "engine-config:%s" % built["reason"],
+                     "attempts": 0, "forfeited": False},
                     view)
-            ok_inv, accepted, rejected = engine_adapter.spot_check_investigated(
-                res.get("investigated"), cwd)
-            if ok_inv:
-                return _attach_sanitized_view(
-                    {"ok": True, "findings": [], "attempts": attempt,
-                     "engagement": last_engagement, "investigated": accepted},
-                    view)
-            last_terminal = engine_adapter.REVIEW_FORFEIT_VACUOUS
-            last_investigated_rejected = rejected
-            # vacuous forfeit — retry like unreadable
-        if last_terminal == engine_adapter.REVIEW_FORFEIT_VACUOUS:
-            return _attach_sanitized_view({
-                "ok": False, "reason": engine_adapter.REVIEW_FORFEIT_VACUOUS, "attempts": 2,
-                "forfeited": True,
-                "engagement": last_engagement,
-                "investigatedRejected": [r["reason"] for r in (last_investigated_rejected or [])],
-                "disclosure": ("%s reviewer returned no findings and no verifiable investigation "
-                               "record twice (vacuous forfeit — a seat that proved nothing is a seat "
-                               "that never ran); fall open to a Claude reviewer and disclose the "
-                               "degraded vendor mix" % engine),
-            }, view)
-        return _attach_sanitized_view(
-            {"ok": False, "reason": "forfeited", "attempts": 2, "forfeited": True,
-             "disclosure": ("%s reviewer forfeited twice (timeout or unreadable); "
-                            "fall open to a Claude reviewer and disclose the degraded vendor mix"
-                            % engine),
-             "engagement": last_engagement},
-            view)
+            argv = built["argv"]
+
+            notice = sanitized_view.sanitized_view_notice(view)
+            prompt_prefix = ANTIHIJACK_PREAMBLE + notice
+            prompt_bytes = (prompt_prefix + base_prompt).encode("utf-8")
+            fed_prompt = prompt_prefix + base_prompt
+            write_progress = _progress_writer(progress_path)
+            last_engagement = None
+            last_terminal = None
+            last_investigated_rejected = None
+            for attempt in (1, 2):
+                t = timeout if attempt == 1 else max(retry_timeout, RETRY_MIN_TIMEOUT)
+
+                def cb(elapsed, nbytes, _a=attempt):
+                    write_progress(_a, elapsed, nbytes)
+
+                t0 = time.monotonic()
+                stdout, timed_out, rc, stderr_tail = run_engine(argv, prompt_bytes, t, cb, cwd)
+                elapsed = time.monotonic() - t0
+                if engine == "codex":
+                    tokens = engine_adapter.codex_tokens_used(stderr_tail)
+                    tool_calls = None
+                    source = "codex-stderr" if tokens is not None else "none"
+                elif engine == "cursor":
+                    tokens = None
+                    tool_calls = engine_adapter.cursor_tool_calls(stdout)
+                    source = "cursor-stream" if tool_calls is not None else "none"
+                else:
+                    tokens = None
+                    tool_calls = None
+                    source = "none"
+                last_engagement = {
+                    "tokens": tokens,
+                    "toolCalls": tool_calls,
+                    "stdoutBytes": len(stdout or ""),
+                    "wallSeconds": round(elapsed, 1),
+                    "source": source,
+                }
+                if timed_out:
+                    last_terminal = "forfeited"
+                    continue  # timeout forfeits WITHOUT parsing partial stdout
+                if rc not in (0, None):
+                    last_terminal = "forfeited"
+                    continue  # nonzero exit forfeits even if stdout parses (crashed engine)
+                res = engine_adapter.parse_result(engine, role_kind, stdout)
+                if not (res.get("ok") and res.get("findings")):
+                    stripped = engine_adapter.strip_echoed_prompt(stdout, fed_prompt)
+                    res = engine_adapter.parse_result(engine, role_kind, stripped)
+                if not res.get("ok"):
+                    last_terminal = "forfeited"
+                    continue
+                findings = res.get("findings") or []
+                if findings:
+                    return _attach_sanitized_view(
+                        {"ok": True, "findings": findings, "attempts": attempt,
+                         "engagement": last_engagement},
+                        view)
+                ok_inv, accepted, rejected = engine_adapter.spot_check_investigated(
+                    res.get("investigated"), cwd)
+                if ok_inv:
+                    return _attach_sanitized_view(
+                        {"ok": True, "findings": [], "attempts": attempt,
+                         "engagement": last_engagement, "investigated": accepted},
+                        view)
+                last_terminal = engine_adapter.REVIEW_FORFEIT_VACUOUS
+                last_investigated_rejected = rejected
+                # vacuous forfeit — retry like unreadable
+            if last_terminal == engine_adapter.REVIEW_FORFEIT_VACUOUS:
+                return _attach_sanitized_view({
+                    "ok": False, "reason": engine_adapter.REVIEW_FORFEIT_VACUOUS, "attempts": 2,
+                    "forfeited": True,
+                    "engagement": last_engagement,
+                    "investigatedRejected": [r["reason"] for r in (last_investigated_rejected or [])],
+                    "disclosure": ("%s reviewer returned no findings and no verifiable investigation "
+                                   "record twice (vacuous forfeit — a seat that proved nothing is a seat "
+                                   "that never ran); fall open to a Claude reviewer and disclose the "
+                                   "degraded vendor mix" % engine),
+                }, view)
+            return _attach_sanitized_view(
+                {"ok": False, "reason": "forfeited", "attempts": 2, "forfeited": True,
+                 "disclosure": ("%s reviewer forfeited twice (timeout or unreadable); "
+                                "fall open to a Claude reviewer and disclose the degraded vendor mix"
+                                % engine),
+                 "engagement": last_engagement},
+                view)
+        except Exception as exc:
+            return _attach_sanitized_view(
+                {"ok": False, "reason": "unrunnable",
+                 "detail": "internal-%s" % type(exc).__name__,
+                 "attempts": 0, "forfeited": False},
+                view)
     finally:
         sanitized_view.destroy_sanitized_view(view_path)
 
