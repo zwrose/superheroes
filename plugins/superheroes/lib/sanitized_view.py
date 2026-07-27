@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Disposable git export of a repo with agent/IDE config paths stripped (#684).
 
-Config path matching uses casefold on every platform (including case-sensitive
-filesystems) so behavior is predictable and case-variant agent config cannot leak.
+Config path matching folds ASCII A–Z to a–z on every platform (including
+case-sensitive filesystems) so behavior is predictable and case-variant agent
+config cannot leak. Non-ASCII letters are not folded.
 """
 import os
 import shutil
@@ -17,7 +18,7 @@ if _LIB_DIR not in sys.path:
 
 from guardian_tools import path_is_under_repo  # noqa: E402
 
-SANITIZED_VIEW_STRATEGY = "git-archive-export"
+SANITIZED_VIEW_STRATEGY = "git-tree-export"
 
 SANITIZED_VIEW_DIR_PREFIX = "superheroes-sanitized-view-"
 
@@ -57,10 +58,13 @@ _GIT_IDENTITY = (
     "user.name=sanitized-view",
 )
 
-_CONFIG_FILES_CASEFOLD = frozenset(n.casefold() for n in SANITIZED_CONFIG_FILES)
-_CONFIG_DIRS_CASEFOLD = frozenset(n.casefold() for n in SANITIZED_CONFIG_DIRS)
 
-_EXPORT_CHUNK_SIZE = 65536
+def _ascii_fold(s):
+    return "".join(c.lower() if "A" <= c <= "Z" else c for c in s)
+
+
+_CONFIG_FILES_ASCII = frozenset(_ascii_fold(n) for n in SANITIZED_CONFIG_FILES)
+_CONFIG_DIRS_ASCII = frozenset(_ascii_fold(n) for n in SANITIZED_CONFIG_DIRS)
 
 
 class SanitizedViewError(Exception):
@@ -72,11 +76,11 @@ class SanitizedViewError(Exception):
 
 
 def _is_config_file_basename(name):
-    return name.casefold() in _CONFIG_FILES_CASEFOLD
+    return _ascii_fold(name) in _CONFIG_FILES_ASCII
 
 
 def _is_config_dir_basename(name):
-    return name.casefold() in _CONFIG_DIRS_CASEFOLD
+    return _ascii_fold(name) in _CONFIG_DIRS_ASCII
 
 
 def _rel_path_would_be_stripped(rel_posix):
@@ -91,18 +95,31 @@ def _rel_path_would_be_stripped(rel_posix):
     return False
 
 
+def _stripped_marker_for_rel(rel_posix):
+    """Path recorded in ``stripped`` for a census entry, or None if not stripped."""
+    if not _rel_path_would_be_stripped(rel_posix):
+        return None
+    parts = rel_posix.replace("\\", "/").split("/")
+    if _is_config_file_basename(parts[-1]):
+        return rel_posix.replace("\\", "/")
+    for i, part in enumerate(parts[:-1]):
+        if _is_config_dir_basename(part):
+            return "/".join(parts[: i + 1])
+    return None
+
+
 def _canonical_names_from_stripped(stripped):
     """Map stripped relative paths to canonical constant names (never repo path text)."""
     file_names = set()
     dir_names = set()
     for rel in stripped:
         base = rel.rsplit("/", 1)[-1]
-        cf = base.casefold()
+        af = _ascii_fold(base)
         for canon in SANITIZED_CONFIG_FILES:
-            if canon.casefold() == cf:
+            if _ascii_fold(canon) == af:
                 file_names.add(canon)
         for canon in SANITIZED_CONFIG_DIRS:
-            if canon.casefold() == cf:
+            if _ascii_fold(canon) == af:
                 dir_names.add(canon)
     return sorted(file_names), sorted(dir_names)
 
@@ -162,11 +179,11 @@ def _sweep_stale_views(tmp_base):
     scanned = 0
     now = time.time()
     for name in names:
+        if not name.startswith(SANITIZED_VIEW_DIR_PREFIX):
+            continue
         if scanned >= SANITIZED_VIEW_STALE_SCAN_LIMIT:
             break
         scanned += 1
-        if not name.startswith(SANITIZED_VIEW_DIR_PREFIX):
-            continue
         full = os.path.join(tmp_base, name)
         try:
             if not os.path.isdir(full):
@@ -192,25 +209,53 @@ def _git_rev_parse_head(repo_real):
     return proc.stdout.strip()
 
 
-def _git_ls_tree_paths(repo_real, head_sha):
+def _parse_ls_tree_z(raw):
+    """Parse ``git ls-tree -r -z`` records (raw path bytes, no C-quoting)."""
+    entries = []
+    for record in raw.split(b"\0"):
+        if not record:
+            continue
+        sp1 = record.find(b" ")
+        sp2 = record.find(b" ", sp1 + 1)
+        tab = record.find(b"\t", sp2)
+        if sp1 < 0 or sp2 < 0 or tab < 0:
+            raise SanitizedViewError("sanitized-view-export-failed")
+        mode = record[:sp1].decode("ascii")
+        oid = record[sp2 + 1 : tab].decode("ascii")
+        path = record[tab + 1 :].decode("utf-8", errors="surrogateescape")
+        entries.append((mode, oid, path))
+    return entries
+
+
+def _git_ls_tree_census(repo_real, head_sha):
     try:
         proc = subprocess.run(
-            ["git", "-C", repo_real, "ls-tree", "-r", "--name-only", head_sha],
+            ["git", "-C", repo_real, "ls-tree", "-r", "-z", head_sha],
             capture_output=True,
-            text=True,
         )
     except OSError:
         raise SanitizedViewError("sanitized-view-export-failed")
     if proc.returncode != 0:
         raise SanitizedViewError("sanitized-view-export-failed")
-    text = proc.stdout.strip()
-    if not text:
-        return []
-    return text.splitlines()
+    return _parse_ls_tree_z(proc.stdout)
+
+
+def _close_process_pipes(proc):
+    if proc is None:
+        return
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
+        if stream is not None:
+            try:
+                stream.close()
+            except (OSError, AttributeError):
+                pass
 
 
 def _terminate_process(proc):
-    if proc is None or proc.poll() is not None:
+    if proc is None:
+        return
+    if proc.poll() is not None:
+        _close_process_pipes(proc)
         return
     try:
         proc.terminate()
@@ -220,53 +265,155 @@ def _terminate_process(proc):
             proc.kill()
         except Exception:
             pass
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+    _close_process_pipes(proc)
 
 
-def _export_archive(repo_real, head_sha, view_root):
-    started = time.monotonic()
-    total_bytes = 0
-    archive_proc = None
-    tar_proc = None
-    try:
-        archive_proc = subprocess.Popen(
-            ["git", "-C", repo_real, "archive", "--format=tar", head_sha],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        tar_proc = subprocess.Popen(
-            ["tar", "-x", "-C", view_root],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-    except OSError:
-        _terminate_process(archive_proc)
-        _terminate_process(tar_proc)
+class _CatFileBatch:
+    """Single long-lived ``git cat-file --batch`` session (strict request-then-response)."""
+
+    def __init__(self, repo_real):
+        try:
+            self._proc = subprocess.Popen(
+                ["git", "-C", repo_real, "cat-file", "--batch"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except OSError as exc:
+            raise SanitizedViewError("sanitized-view-export-failed") from exc
+        self._stdin = self._proc.stdin
+        self._stdout = self._proc.stdout
+
+    def read_blob(self, oid):
+        try:
+            self._stdin.write(oid.encode("ascii") + b"\n")
+            self._stdin.flush()
+        except OSError as exc:
+            raise SanitizedViewError("sanitized-view-export-failed") from exc
+        try:
+            header = self._stdout.readline()
+        except OSError as exc:
+            raise SanitizedViewError("sanitized-view-export-failed") from exc
+        if not header or header == b"\n":
+            raise SanitizedViewError("sanitized-view-export-failed")
+        parts = header.decode("ascii", errors="replace").split()
+        if len(parts) < 3:
+            raise SanitizedViewError("sanitized-view-export-failed")
+        try:
+            size = int(parts[2])
+        except ValueError as exc:
+            raise SanitizedViewError("sanitized-view-export-failed") from exc
+        try:
+            data = self._stdout.read(size)
+            if len(data) != size:
+                raise SanitizedViewError("sanitized-view-export-failed")
+            trailing = self._stdout.read(1)
+            if trailing != b"\n":
+                raise SanitizedViewError("sanitized-view-export-failed")
+        except OSError as exc:
+            raise SanitizedViewError("sanitized-view-export-failed") from exc
+        return data
+
+    def close(self):
+        if self._stdin is not None:
+            try:
+                self._stdin.close()
+            except OSError:
+                pass
+            self._stdin = None
+        _terminate_process(self._proc)
+        self._proc = None
+
+
+def _assert_path_under_view(view_root, rel_posix):
+    full = os.path.normpath(os.path.join(view_root, rel_posix))
+    if not path_is_under_repo(full, view_root):
         raise SanitizedViewError("sanitized-view-export-failed")
+    return full
 
+
+def _symlink_escapes_view(view_root, rel_posix, target_bytes):
+    link_dir = os.path.dirname(os.path.join(view_root, rel_posix))
     try:
-        while True:
+        target_text = target_bytes.decode("utf-8", errors="surrogateescape")
+    except Exception:
+        return True
+    resolved = os.path.normpath(os.path.join(link_dir, target_text))
+    return not path_is_under_repo(resolved, view_root)
+
+
+def _materialize_from_tree(repo_real, head_sha, view_root, started):
+    """Materialize HEAD from the git tree via cat-file (no .gitattributes processing).
+
+    ``git cat-file`` returns raw blob bytes, so export-ignore and export-subst from
+    .gitattributes cannot apply.
+    """
+    census = _git_ls_tree_census(repo_real, head_sha)
+    stripped_set = set()
+    submodules = set()
+    escaping_symlinks = set()
+    materialized = set()
+    total_bytes = 0
+    batch = None
+    try:
+        batch = _CatFileBatch(repo_real)
+        for mode, oid, path in census:
             if time.monotonic() - started > SANITIZED_VIEW_EXPORT_TIMEOUT_SECONDS:
                 raise SanitizedViewError("sanitized-view-export-timeout")
-            chunk = archive_proc.stdout.read(_EXPORT_CHUNK_SIZE)
-            if not chunk:
-                break
-            total_bytes += len(chunk)
-            if total_bytes > SANITIZED_VIEW_EXPORT_MAX_BYTES:
-                raise SanitizedViewError("sanitized-view-export-too-large")
-            tar_proc.stdin.write(chunk)
-        tar_proc.stdin.close()
-        archive_proc.wait()
-        tar_proc.wait()
-        if archive_proc.returncode != 0 or tar_proc.returncode != 0:
+
+            marker = _stripped_marker_for_rel(path)
+            if marker is not None:
+                stripped_set.add(marker)
+                continue
+
+            if mode == "160000":
+                submodules.add(path)
+                continue
+
+            if mode == "120000":
+                blob = batch.read_blob(oid)
+                total_bytes += len(blob)
+                if total_bytes > SANITIZED_VIEW_EXPORT_MAX_BYTES:
+                    raise SanitizedViewError("sanitized-view-export-too-large")
+                if _symlink_escapes_view(view_root, path, blob):
+                    stripped_set.add(path)
+                    escaping_symlinks.add(path)
+                    continue
+                dest = _assert_path_under_view(view_root, path)
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                os.symlink(blob.decode("utf-8", errors="surrogateescape"), dest)
+                materialized.add(path)
+                continue
+
+            if mode in ("100644", "100755"):
+                blob = batch.read_blob(oid)
+                total_bytes += len(blob)
+                if total_bytes > SANITIZED_VIEW_EXPORT_MAX_BYTES:
+                    raise SanitizedViewError("sanitized-view-export-too-large")
+                dest = _assert_path_under_view(view_root, path)
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                with open(dest, "wb") as fh:
+                    fh.write(blob)
+                if mode == "100755":
+                    os.chmod(dest, os.stat(dest).st_mode | 0o111)
+                materialized.add(path)
+                continue
+
             raise SanitizedViewError("sanitized-view-export-failed")
     except SanitizedViewError:
         raise
-    except OSError:
-        raise SanitizedViewError("sanitized-view-export-failed")
+    except OSError as exc:
+        raise SanitizedViewError("sanitized-view-export-failed") from exc
     finally:
-        _terminate_process(archive_proc)
-        _terminate_process(tar_proc)
+        if batch is not None:
+            batch.close()
+
+    _verify_export_complete(census, materialized, submodules, escaping_symlinks)
+    return sorted(stripped_set)
 
 
 def _rel_posix(view_root, abspath):
@@ -274,49 +421,20 @@ def _rel_posix(view_root, abspath):
     return rel.replace(os.sep, "/")
 
 
-def _list_view_files(view_root):
-    paths = set()
-    for dirpath, dirnames, filenames in os.walk(view_root):
-        if ".git" in dirnames:
-            dirnames.remove(".git")
-        for fname in filenames:
-            paths.add(_rel_posix(view_root, os.path.join(dirpath, fname)))
-    return paths
-
-
-def _verify_export_complete(repo_real, head_sha, view_root):
-    """Fail closed when git archive omits tracked paths (e.g. export-ignore).
-
-    export-subst may rewrite file contents in the archive; substitution values
-    come from git metadata, not attacker-controlled text. Path-set verification is
-    the guard; .gitattributes remains visible in the view when tracked.
-    """
-    tree_paths = _git_ls_tree_paths(repo_real, head_sha)
-    expected = {p for p in tree_paths if not _rel_path_would_be_stripped(p)}
-    actual = _list_view_files(view_root)
+def _verify_export_complete(census, materialized, submodules, escaping_symlinks):
+    """Fail closed when materialized paths differ from census − stripped − submodules."""
+    expected = set()
+    for mode, oid, path in census:
+        if mode == "160000":
+            continue
+        if _rel_path_would_be_stripped(path):
+            continue
+        if path in escaping_symlinks:
+            continue
+        expected.add(path)
+    actual = set(materialized)
     if expected != actual:
         raise SanitizedViewError("sanitized-view-export-incomplete")
-
-
-def _strip_sanitized_configs(view_root):
-    stripped = []
-    for dirpath, dirnames, filenames in os.walk(view_root, topdown=True):
-        if ".git" in dirnames:
-            dirnames.remove(".git")
-        for idx in range(len(dirnames) - 1, -1, -1):
-            name = dirnames[idx]
-            if _is_config_dir_basename(name):
-                full = os.path.join(dirpath, name)
-                stripped.append(_rel_posix(view_root, full))
-                shutil.rmtree(full)
-                del dirnames[idx]
-        for fname in list(filenames):
-            if _is_config_file_basename(fname):
-                full = os.path.join(dirpath, fname)
-                stripped.append(_rel_posix(view_root, full))
-                os.remove(full)
-    stripped.sort()
-    return stripped
 
 
 def _init_view_git(view_root):
@@ -383,7 +501,7 @@ def _measure_worktree(view_root):
 
 
 def build_sanitized_view(repo_root):
-    """Materialize a stripped git archive of ``repo_root`` at HEAD.
+    """Materialize a stripped copy of ``repo_root`` at HEAD from the git tree.
 
     ``sourceDirty`` in the returned dict is ``True`` when tracked files differ
     from HEAD, ``False`` when they match, and ``None`` when git status could not
@@ -391,9 +509,9 @@ def build_sanitized_view(repo_root):
     """
     repo_real = os.path.realpath(repo_root)
     tmp_base = tempfile.gettempdir()
-    _sweep_stale_views(tmp_base)
     if path_is_under_repo(tmp_base, repo_real):
         raise SanitizedViewError("sanitized-view-tempbase-inside-repo")
+    _sweep_stale_views(tmp_base)
 
     view_root = None
     started = time.monotonic()
@@ -403,9 +521,7 @@ def build_sanitized_view(repo_root):
             raise SanitizedViewError("sanitized-view-tempbase-inside-repo")
 
         head_sha = _git_rev_parse_head(repo_real)
-        _export_archive(repo_real, head_sha, view_root)
-        stripped = _strip_sanitized_configs(view_root)
-        _verify_export_complete(repo_real, head_sha, view_root)
+        stripped = _materialize_from_tree(repo_real, head_sha, view_root, started)
         _init_view_git(view_root)
 
         build_seconds = time.monotonic() - started
