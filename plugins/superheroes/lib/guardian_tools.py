@@ -270,6 +270,16 @@ def path_is_under_repo(path, repo):
     return _realpath_is_under(path, repo)
 
 
+def path_is_confidently_under(path, root):
+    """True only on a definite positive match; OSError and no-match fail CLOSED.
+
+    The authorize-direction counterpart of ``path_is_under_repo`` — use this when a
+    definite positive is required (e.g. proving a symlink target stays inside a
+    sanitized view), never the reject-direction helper, which returns True on error.
+    """
+    return _is_confidently_under(path, root)
+
+
 def _path_entry_is_relative(entry):
     """Empty, '.', or any non-absolute PATH entry — cwd-relative, not machine PATH."""
     if entry == "" or entry == ".":

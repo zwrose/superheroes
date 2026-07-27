@@ -1,6 +1,7 @@
 """Tests for sanitized_view — disposable export with agent config stripped."""
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -12,6 +13,16 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import sanitized_view as sv
+
+
+@pytest.fixture(autouse=True)
+def _pin_temp_base_to_tmp_path(tmp_path, monkeypatch):
+    """Keep sanitized views off the real system temp directory."""
+    base = str(tmp_path / "sanitized-temp-base")
+    os.makedirs(base, exist_ok=True)
+    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: base)
+    yield
+    assert _leftover_view_dirs(base) == []
 
 
 def _git(repo, *args, check=True):
@@ -297,17 +308,38 @@ def test_export_incomplete_export_ignore(tmp_path, monkeypatch):
     monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: fake_tmp)
     real_verify = sv._verify_export_complete
 
-    def drop_one_materialized(census, materialized, submodules, escaping):
+    def drop_one_materialized(view_root, census, materialized, submodules, escaping):
         trimmed = set(materialized)
         if trimmed:
             trimmed.pop()
-        real_verify(census, trimmed, submodules, escaping)
+        real_verify(view_root, census, trimmed, submodules, escaping)
 
     monkeypatch.setattr(sv, "_verify_export_complete", drop_one_materialized)
     with pytest.raises(sv.SanitizedViewError) as exc:
         _build(repo)
     assert exc.value.detail == "sanitized-view-export-incomplete"
     assert _leftover_view_dirs(fake_tmp) == []
+
+
+def test_export_ignore_materialized_positive(tmp_path):
+    repo = _init_repo(
+        tmp_path / "ignore-pos",
+        files={
+            "normal.py": "print('ok')\n",
+            "secret.py": "SECRET\n",
+            ".gitattributes": "secret.py export-ignore\n.gitattributes export-ignore\n",
+        },
+    )
+    view = _build(repo)
+    try:
+        root = view["path"]
+        assert view["stripped"] == []
+        assert os.path.isfile(os.path.join(root, "secret.py"))
+        with open(os.path.join(root, "secret.py"), encoding="utf-8") as fh:
+            assert fh.read() == "SECRET\n"
+        assert os.path.isfile(os.path.join(root, ".gitattributes"))
+    finally:
+        sv.destroy_sanitized_view(view["path"])
 
 
 def test_export_too_large(tmp_path, monkeypatch):
@@ -562,6 +594,7 @@ def test_sanitized_view_notice_no_repo_paths(tmp_path):
         assert "CLAUDE.md" in notice
         assert ".cursor" in notice
         assert ".Cursor" not in notice
+        assert "sub/" not in notice
         assert "3 path(s) removed" in notice
         assert len(view["stripped"]) == 3
     finally:
@@ -670,18 +703,31 @@ def test_export_subst_not_applied(tmp_path):
     repo = _init_repo(
         tmp_path / "subst",
         files={
-            "README.md": "Version: $Format:%B$\n",
+            "README.md": "Version: $Format:%B$\nHead: $Format:%H$\n",
             ".gitattributes": "README.md export-subst\n",
         },
     )
-    _git(repo, "commit", "--amend", "-m", inject_msg)
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "--amend",
+        "-m",
+        inject_msg,
+    )
     view = _build(repo)
     try:
         readme = os.path.join(view["path"], "README.md")
         with open(readme, encoding="utf-8") as fh:
             text = fh.read()
         assert "$Format:%B$" in text
+        assert "$Format:%H$" in text
         assert inject_msg not in text
+        head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+        assert head not in text
     finally:
         sv.destroy_sanitized_view(view["path"])
 
@@ -776,6 +822,19 @@ def test_submodule_gitlink_skipped(tmp_path):
     )
     if proc.returncode != 0:
         pytest.skip("submodule add not supported: %s" % proc.stderr.strip())
+    _git(
+        outer,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "add submodule",
+    )
+    ls = _git(outer, "ls-tree", "-r", "HEAD").stdout
+    assert "160000 commit" in ls
     view = _build(outer)
     try:
         assert not os.path.exists(os.path.join(view["path"], "submod", "inner.txt"))
@@ -806,8 +865,10 @@ def test_executable_bit_preserved(tmp_path):
     view = _build(repo)
     try:
         root = view["path"]
-        assert not os.access(os.path.join(root, "plain.txt"), os.X_OK)
-        assert os.access(os.path.join(root, "run.sh"), os.X_OK)
+        plain_mode = stat.S_IMODE(os.lstat(os.path.join(root, "plain.txt")).st_mode)
+        run_mode = stat.S_IMODE(os.lstat(os.path.join(root, "run.sh")).st_mode)
+        assert plain_mode & 0o111 == 0
+        assert run_mode & 0o111 != 0
     finally:
         sv.destroy_sanitized_view(view["path"])
 
@@ -828,3 +889,212 @@ def test_sweep_stale_views_prefix_and_age(tmp_path):
     assert not old_pref.exists()
     assert fresh_pref.exists()
     assert old_other.exists()
+
+
+def test_escaping_symlink_relative_target_stripped(tmp_path):
+    outside = tmp_path / "OUTSIDE_SECRET.txt"
+    outside.write_text("TOP SECRET\n", encoding="utf-8")
+    repo = _init_repo(tmp_path / "relsym", files={"innocent.py": "x\n"})
+    link_path = os.path.join(repo, "innocent.py")
+    os.remove(link_path)
+    os.symlink("../OUTSIDE_SECRET.txt", link_path)
+    _git(repo, "add", "innocent.py")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "relative symlink",
+    )
+    view = _build(repo)
+    try:
+        assert "innocent.py" in view["stripped"]
+        assert not os.path.exists(os.path.join(view["path"], "innocent.py"))
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_symlink_containment_oserror_fail_closed(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "oserr", files={"linkme": "x\n"})
+    link_path = os.path.join(repo, "linkme")
+    os.remove(link_path)
+    os.symlink("target", link_path)
+    _git(repo, "add", "linkme")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "symlink",
+    )
+
+    def boom_confidently_under(path, root):
+        raise OSError("simulated resolution failure")
+
+    monkeypatch.setattr(sv, "path_is_confidently_under", boom_confidently_under)
+    view = _build(repo)
+    try:
+        assert "linkme" in view["stripped"]
+        assert not os.path.exists(os.path.join(view["path"], "linkme"))
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_notice_escaping_symlink_only_no_false_config_claim(tmp_path):
+    outside = tmp_path / "OUTSIDE_SECRET.txt"
+    outside.write_text("secret\n", encoding="utf-8")
+    repo = _init_repo(tmp_path / "noticesym", files={"innocent.py": "x\n"})
+    link_path = os.path.join(repo, "innocent.py")
+    os.remove(link_path)
+    os.symlink(str(outside), link_path)
+    _git(repo, "add", "innocent.py")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "symlink",
+    )
+    view = _build(repo)
+    try:
+        notice = sv.sanitized_view_notice(view)
+        assert "Stripped agent/IDE config names:" not in notice
+        assert "symlinks outside the view" in notice
+        assert "1 path(s) removed" in notice
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_platform_alias_trailing_dot_stripped(tmp_path):
+    repo = _init_repo(tmp_path / "dotalias", files={"keep.txt": "k\n"})
+    alias = os.path.join(repo, "CLAUDE.md.")
+    with open(alias, "w", encoding="utf-8") as fh:
+        fh.write("alias\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "dot alias",
+    )
+    view = _build(repo)
+    try:
+        assert "CLAUDE.md." in view["stripped"]
+        assert not os.path.exists(os.path.join(view["path"], "CLAUDE.md."))
+        assert os.path.isfile(os.path.join(view["path"], "keep.txt"))
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_parse_ls_tree_z_direct():
+    raw = (
+        b"100644 blob blobaaa111\tplain.txt\0"
+        b"100644 blob blobbbb222\tfile with space.txt\0"
+        b"100644 blob blobccc333\tweird\nname.txt\0"
+    )
+    entries = sv._parse_ls_tree_z(raw)
+    assert entries == [
+        ("100644", "blobaaa111", "plain.txt"),
+        ("100644", "blobbbb222", "file with space.txt"),
+        ("100644", "blobccc333", "weird\nname.txt"),
+    ]
+
+
+def test_ls_tree_z_paths_with_space_and_newline(tmp_path):
+    repo = _init_repo(
+        tmp_path / "zpaths",
+        files={
+            "file with space.txt": "sp\n",
+            "weird\nname.txt": "nl\n",
+        },
+    )
+    view = _build(repo)
+    try:
+        root = view["path"]
+        assert os.path.isfile(os.path.join(root, "file with space.txt"))
+        assert os.path.isfile(os.path.join(root, "weird\nname.txt"))
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_census_output_too_large(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "censusbig", files={"a.txt": "x\n"})
+    monkeypatch.setattr(sv, "SANITIZED_VIEW_EXPORT_MAX_BYTES", 10)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        _build(repo)
+    assert exc.value.detail == "sanitized-view-export-too-large"
+
+
+def test_catfile_wrong_object_type_fails(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "badtype", files={"a.txt": "x\n"})
+    tree_oid = _git(repo, "rev-parse", "HEAD^{tree}").stdout.strip()
+    real_popen = subprocess.Popen
+    spawned = []
+
+    def fake_popen(argv, **kwargs):
+        proc = real_popen(argv, **kwargs)
+        if len(argv) >= 5 and argv[0] == "git" and argv[3] == "cat-file":
+            spawned.append(proc)
+        return proc
+
+    monkeypatch.setattr(sv.subprocess, "Popen", fake_popen)
+    real_census = sv._git_ls_tree_census
+
+    def census_with_tree_blob(repo_real, head_sha):
+        entries = real_census(repo_real, head_sha)
+        out = []
+        for mode, oid, path in entries:
+            if path == "a.txt":
+                out.append(("100644", tree_oid, path))
+            else:
+                out.append((mode, oid, path))
+        return out
+
+    monkeypatch.setattr(sv, "_git_ls_tree_census", census_with_tree_blob)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        _build(repo)
+    assert exc.value.detail == "sanitized-view-export-failed"
+    for proc in spawned:
+        assert proc.poll() is not None
+        assert proc.stdout.closed
+        assert proc.stdin.closed
+
+
+def test_catfile_process_reaped_after_success(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "reap", files={"a.txt": "hello\n"})
+    real_popen = subprocess.Popen
+    spawned = []
+
+    def track_popen(argv, **kwargs):
+        proc = real_popen(argv, **kwargs)
+        if len(argv) >= 5 and argv[0] == "git" and argv[3] == "cat-file":
+            spawned.append(proc)
+        return proc
+
+    monkeypatch.setattr(sv.subprocess, "Popen", track_popen)
+    view = _build(repo)
+    try:
+        assert len(spawned) == 1
+        proc = spawned[0]
+        assert proc.poll() is not None
+        assert proc.stdout.closed
+        assert proc.stdin.closed
+    finally:
+        sv.destroy_sanitized_view(view["path"])

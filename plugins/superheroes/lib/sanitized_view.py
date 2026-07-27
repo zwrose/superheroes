@@ -16,7 +16,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
-from guardian_tools import path_is_under_repo  # noqa: E402
+from guardian_tools import path_is_confidently_under, path_is_under_repo  # noqa: E402
 
 SANITIZED_VIEW_STRATEGY = "git-tree-export"
 
@@ -58,6 +58,8 @@ _GIT_IDENTITY = (
     "user.name=sanitized-view",
 )
 
+_CATFILE_READ_CHUNK = 1024 * 1024
+
 
 def _ascii_fold(s):
     return "".join(c.lower() if "A" <= c <= "Z" else c for c in s)
@@ -75,8 +77,13 @@ class SanitizedViewError(Exception):
         super().__init__(detail)
 
 
+def _platform_normalized_basename(name):
+    """Strip trailing dots/spaces (Win32 alias rules) before config matching."""
+    return name.rstrip(". ")
+
+
 def _is_config_file_basename(name):
-    return _ascii_fold(name) in _CONFIG_FILES_ASCII
+    return _ascii_fold(_platform_normalized_basename(name)) in _CONFIG_FILES_ASCII
 
 
 def _is_config_dir_basename(name):
@@ -114,7 +121,7 @@ def _canonical_names_from_stripped(stripped):
     dir_names = set()
     for rel in stripped:
         base = rel.rsplit("/", 1)[-1]
-        af = _ascii_fold(base)
+        af = _ascii_fold(_platform_normalized_basename(base))
         for canon in SANITIZED_CONFIG_FILES:
             if _ascii_fold(canon) == af:
                 file_names.add(canon)
@@ -140,10 +147,16 @@ def sanitized_view_notice(view):
     if stripped:
         file_names, dir_names = _canonical_names_from_stripped(stripped)
         labels = file_names + dir_names
-        lines.append(
-            "Stripped agent/IDE config names: %s (%d path(s) removed)"
-            % (", ".join(labels), len(stripped))
-        )
+        if labels:
+            lines.append(
+                "Stripped agent/IDE config names: %s (%d path(s) removed)"
+                % (", ".join(labels), len(stripped))
+            )
+        else:
+            lines.append(
+                "Stripped non-config paths (e.g. symlinks outside the view): "
+                "%d path(s) removed" % len(stripped)
+            )
         lines.append("")
     else:
         lines.append("")
@@ -227,6 +240,14 @@ def _parse_ls_tree_z(raw):
     return entries
 
 
+def _expected_git_type_for_mode(mode):
+    if mode in ("100644", "100755", "120000"):
+        return "blob"
+    if mode == "160000":
+        return "commit"
+    return None
+
+
 def _git_ls_tree_census(repo_real, head_sha):
     try:
         proc = subprocess.run(
@@ -237,6 +258,8 @@ def _git_ls_tree_census(repo_real, head_sha):
         raise SanitizedViewError("sanitized-view-export-failed")
     if proc.returncode != 0:
         raise SanitizedViewError("sanitized-view-export-failed")
+    if len(proc.stdout) > SANITIZED_VIEW_EXPORT_MAX_BYTES:
+        raise SanitizedViewError("sanitized-view-export-too-large")
     return _parse_ls_tree_z(proc.stdout)
 
 
@@ -272,8 +295,18 @@ def _terminate_process(proc):
     _close_process_pipes(proc)
 
 
+def _check_export_deadline(started):
+    if time.monotonic() - started > SANITIZED_VIEW_EXPORT_TIMEOUT_SECONDS:
+        raise SanitizedViewError("sanitized-view-export-timeout")
+
+
 class _CatFileBatch:
-    """Single long-lived ``git cat-file --batch`` session (strict request-then-response)."""
+    """Single long-lived ``git cat-file --batch`` session (strict request-then-response).
+
+    Stderr is discarded so git diagnostics cannot fill an undrained pipe and deadlock
+    the parent. A single pathological blocking ``read()`` on stdout is still theoretically
+    unbounded; chunked reads plus DEVNULL stderr reduce exposure to git's own behaviour.
+    """
 
     def __init__(self, repo_real):
         try:
@@ -281,19 +314,14 @@ class _CatFileBatch:
                 ["git", "-C", repo_real, "cat-file", "--batch"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
             )
         except OSError as exc:
             raise SanitizedViewError("sanitized-view-export-failed") from exc
         self._stdin = self._proc.stdin
         self._stdout = self._proc.stdout
 
-    def read_blob(self, oid):
-        try:
-            self._stdin.write(oid.encode("ascii") + b"\n")
-            self._stdin.flush()
-        except OSError as exc:
-            raise SanitizedViewError("sanitized-view-export-failed") from exc
+    def _read_header(self, oid):
         try:
             header = self._stdout.readline()
         except OSError as exc:
@@ -301,22 +329,85 @@ class _CatFileBatch:
         if not header or header == b"\n":
             raise SanitizedViewError("sanitized-view-export-failed")
         parts = header.decode("ascii", errors="replace").split()
-        if len(parts) < 3:
+        if len(parts) != 3:
+            raise SanitizedViewError("sanitized-view-export-failed")
+        resp_oid, obj_type, size_text = parts
+        if resp_oid != oid or obj_type != "blob":
             raise SanitizedViewError("sanitized-view-export-failed")
         try:
-            size = int(parts[2])
+            size = int(size_text)
         except ValueError as exc:
             raise SanitizedViewError("sanitized-view-export-failed") from exc
+        if size < 0:
+            raise SanitizedViewError("sanitized-view-export-failed")
+        return size
+
+    def read_blob_bytes(self, oid, started, total_bytes):
+        _check_export_deadline(started)
         try:
-            data = self._stdout.read(size)
-            if len(data) != size:
+            self._stdin.write(oid.encode("ascii") + b"\n")
+            self._stdin.flush()
+        except OSError as exc:
+            raise SanitizedViewError("sanitized-view-export-failed") from exc
+        size = self._read_header(oid)
+        if total_bytes + size > SANITIZED_VIEW_EXPORT_MAX_BYTES:
+            raise SanitizedViewError("sanitized-view-export-too-large")
+        chunks = []
+        remaining = size
+        while remaining > 0:
+            _check_export_deadline(started)
+            to_read = min(remaining, _CATFILE_READ_CHUNK)
+            try:
+                data = self._stdout.read(to_read)
+            except OSError as exc:
+                raise SanitizedViewError("sanitized-view-export-failed") from exc
+            if len(data) != to_read:
                 raise SanitizedViewError("sanitized-view-export-failed")
+            chunks.append(data)
+            remaining -= to_read
+            total_bytes += len(data)
+            if total_bytes > SANITIZED_VIEW_EXPORT_MAX_BYTES:
+                raise SanitizedViewError("sanitized-view-export-too-large")
+        try:
             trailing = self._stdout.read(1)
             if trailing != b"\n":
                 raise SanitizedViewError("sanitized-view-export-failed")
         except OSError as exc:
             raise SanitizedViewError("sanitized-view-export-failed") from exc
-        return data
+        return b"".join(chunks), total_bytes
+
+    def write_blob_to_file(self, oid, dest_fh, started, total_bytes):
+        _check_export_deadline(started)
+        try:
+            self._stdin.write(oid.encode("ascii") + b"\n")
+            self._stdin.flush()
+        except OSError as exc:
+            raise SanitizedViewError("sanitized-view-export-failed") from exc
+        size = self._read_header(oid)
+        if total_bytes + size > SANITIZED_VIEW_EXPORT_MAX_BYTES:
+            raise SanitizedViewError("sanitized-view-export-too-large")
+        remaining = size
+        while remaining > 0:
+            _check_export_deadline(started)
+            to_read = min(remaining, _CATFILE_READ_CHUNK)
+            try:
+                data = self._stdout.read(to_read)
+            except OSError as exc:
+                raise SanitizedViewError("sanitized-view-export-failed") from exc
+            if len(data) != to_read:
+                raise SanitizedViewError("sanitized-view-export-failed")
+            dest_fh.write(data)
+            remaining -= to_read
+            total_bytes += len(data)
+            if total_bytes > SANITIZED_VIEW_EXPORT_MAX_BYTES:
+                raise SanitizedViewError("sanitized-view-export-too-large")
+        try:
+            trailing = self._stdout.read(1)
+            if trailing != b"\n":
+                raise SanitizedViewError("sanitized-view-export-failed")
+        except OSError as exc:
+            raise SanitizedViewError("sanitized-view-export-failed") from exc
+        return total_bytes
 
     def close(self):
         if self._stdin is not None:
@@ -331,7 +422,7 @@ class _CatFileBatch:
 
 def _assert_path_under_view(view_root, rel_posix):
     full = os.path.normpath(os.path.join(view_root, rel_posix))
-    if not path_is_under_repo(full, view_root):
+    if not path_is_confidently_under(full, view_root):
         raise SanitizedViewError("sanitized-view-export-failed")
     return full
 
@@ -343,7 +434,10 @@ def _symlink_escapes_view(view_root, rel_posix, target_bytes):
     except Exception:
         return True
     resolved = os.path.normpath(os.path.join(link_dir, target_text))
-    return not path_is_under_repo(resolved, view_root)
+    try:
+        return not path_is_confidently_under(resolved, view_root)
+    except OSError:
+        return True
 
 
 def _materialize_from_tree(repo_real, head_sha, view_root, started):
@@ -362,8 +456,11 @@ def _materialize_from_tree(repo_real, head_sha, view_root, started):
     try:
         batch = _CatFileBatch(repo_real)
         for mode, oid, path in census:
-            if time.monotonic() - started > SANITIZED_VIEW_EXPORT_TIMEOUT_SECONDS:
-                raise SanitizedViewError("sanitized-view-export-timeout")
+            _check_export_deadline(started)
+
+            expected_type = _expected_git_type_for_mode(mode)
+            if expected_type is None:
+                raise SanitizedViewError("sanitized-view-export-failed")
 
             marker = _stripped_marker_for_rel(path)
             if marker is not None:
@@ -375,10 +472,7 @@ def _materialize_from_tree(repo_real, head_sha, view_root, started):
                 continue
 
             if mode == "120000":
-                blob = batch.read_blob(oid)
-                total_bytes += len(blob)
-                if total_bytes > SANITIZED_VIEW_EXPORT_MAX_BYTES:
-                    raise SanitizedViewError("sanitized-view-export-too-large")
+                blob, total_bytes = batch.read_blob_bytes(oid, started, total_bytes)
                 if _symlink_escapes_view(view_root, path, blob):
                     stripped_set.add(path)
                     escaping_symlinks.add(path)
@@ -390,14 +484,10 @@ def _materialize_from_tree(repo_real, head_sha, view_root, started):
                 continue
 
             if mode in ("100644", "100755"):
-                blob = batch.read_blob(oid)
-                total_bytes += len(blob)
-                if total_bytes > SANITIZED_VIEW_EXPORT_MAX_BYTES:
-                    raise SanitizedViewError("sanitized-view-export-too-large")
                 dest = _assert_path_under_view(view_root, path)
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
                 with open(dest, "wb") as fh:
-                    fh.write(blob)
+                    total_bytes = batch.write_blob_to_file(oid, fh, started, total_bytes)
                 if mode == "100755":
                     os.chmod(dest, os.stat(dest).st_mode | 0o111)
                 materialized.add(path)
@@ -412,7 +502,9 @@ def _materialize_from_tree(repo_real, head_sha, view_root, started):
         if batch is not None:
             batch.close()
 
-    _verify_export_complete(census, materialized, submodules, escaping_symlinks)
+    _verify_export_complete(
+        view_root, census, materialized, submodules, escaping_symlinks
+    )
     return sorted(stripped_set)
 
 
@@ -421,8 +513,35 @@ def _rel_posix(view_root, abspath):
     return rel.replace(os.sep, "/")
 
 
-def _verify_export_complete(census, materialized, submodules, escaping_symlinks):
-    """Fail closed when materialized paths differ from census − stripped − submodules."""
+def _disk_paths_in_view(view_root):
+    """Materialized blob/symlink paths under view_root (excluding ``.git``), via ``lstat``."""
+    on_disk = set()
+    for dirpath, dirnames, filenames in os.walk(view_root, followlinks=False):
+        if ".git" in dirnames:
+            dirnames.remove(".git")
+        if dirpath == view_root:
+            rel_dir = ""
+        else:
+            rel_dir = _rel_posix(view_root, dirpath)
+        for name in filenames:
+            full = os.path.join(dirpath, name)
+            os.lstat(full)
+            rel = "%s/%s" % (rel_dir, name) if rel_dir else name
+            on_disk.add(rel.replace("\\", "/"))
+        for name in list(dirnames):
+            full = os.path.join(dirpath, name)
+            if os.path.islink(full):
+                os.lstat(full)
+                rel = "%s/%s" % (rel_dir, name) if rel_dir else name
+                on_disk.add(rel.replace("\\", "/"))
+                dirnames.remove(name)
+    return on_disk
+
+
+def _verify_export_complete(
+    view_root, census, materialized, submodules, escaping_symlinks
+):
+    """Fail closed when on-disk paths differ from census − stripped − submodules."""
     expected = set()
     for mode, oid, path in census:
         if mode == "160000":
@@ -432,8 +551,10 @@ def _verify_export_complete(census, materialized, submodules, escaping_symlinks)
         if path in escaping_symlinks:
             continue
         expected.add(path)
-    actual = set(materialized)
-    if expected != actual:
+    on_disk = _disk_paths_in_view(view_root)
+    if expected != on_disk:
+        raise SanitizedViewError("sanitized-view-export-incomplete")
+    if set(materialized) != on_disk:
         raise SanitizedViewError("sanitized-view-export-incomplete")
 
 
