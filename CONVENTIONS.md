@@ -560,7 +560,11 @@ Two postures are held strictly separate, mirroring `model_tier`:
   hard-fails on engine choice.
 - **A completed external *result* fails closed.** A build or fix that fails or can't run
   verify stops; an unauditable run stops; an unreadable or incomplete review is re-run
-  on Claude, never accepted as green. This reuses the existing gates — no new safety logic.
+  on Claude, never accepted as green. A review seat that returns a well-formed empty result
+  **without a verifiable investigation record** is incomplete, not clean — a named **vacuous**
+  forfeit on the same fall-open path (`review-code` reference: `auto-fix-loop.md`, `round-driver.md`).
+  Engine telemetry corroborates engagement but never substitutes for that record. This reuses the
+  existing gates — no new safety logic.
 
 A **configuration gate** is a third, distinct control: an invalid engine×tier combination
 is refused at configure/calibration time and cannot be saved — not an engine-selection

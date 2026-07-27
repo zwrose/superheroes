@@ -23,6 +23,11 @@ import model_registry  # noqa: E402  (band-wide model taxonomy; same-tree siblin
 # build_state_cli git-log parser both reference this so the convention cannot fork.
 TASK_ID_TRAILER = "Task-Id"
 
+# Single home for the vacuous forfeit reason token (CONVENTIONS §11 Pattern 1). The dispatch
+# runner produces it; round_driver and seat_canary compare against it — consumers import this,
+# never restate the literal.
+REVIEW_FORFEIT_VACUOUS = "vacuous"
+
 # #392: the distinct, honest outcome for a fix whose SUBSTANCE is the history shape (squash to N
 # commits, reword, drop a commit) rather than content. Such a fix produces a tree content-identical
 # to pre_sha, so the fold-only invariant (commit_result never discards commits below pre_sha) folds
@@ -47,6 +52,10 @@ _CURSOR_MODEL = model_registry.dispatch_token("cursor", "composer-2.5")
 # re-read in FULL, so the bound never changes the result — it only avoids loading a small file's
 # worth extra in the common case. 512 KB comfortably exceeds any real findings payload.
 MAX_STDOUT_TAIL_BYTES = 512 * 1024
+
+# #668: runner stdout capture keeps only the tail (MAX_STDOUT_CAPTURE in engine_dispatch); a large
+# echoed prompt can arrive truncated while the trailing shape-contract example survives.
+ECHO_TAIL_CHARS = 2000
 
 
 # Named refusal tokens from build_argv_result (issue #636). The dispatch runner surfaces them as
@@ -108,8 +117,10 @@ def build_argv_result(engine, role_kind, effort, opts):
         argv = ["codex", "exec", "--sandbox", sandbox,
                 "-m", engine_model,
                 "-c", "model_reasoning_effort=%s" % effort]
-        if not is_read and cwd:
-            argv += ["-C", cwd]           # confine writes to the managed worktree
+        if cwd:
+            argv += ["-C", cwd]           # write: confine writes to the managed worktree.
+                                          # read (#665): pin the seat to the repo so it can trace
+                                          # into files instead of inheriting the dispatcher's cwd.
         if is_read and schema_path:
             argv += ["--output-schema", schema_path]  # enforced structured review output
         # trailing `-`: read the prompt from stdin. The dispatch runner redirects the staged
@@ -140,6 +151,8 @@ def build_argv_result(engine, role_kind, effort, opts):
             model = tok
         else:
             model = _CURSOR_MODEL
+        # cursor-agent has no cwd flag; a cursor read dispatch is pinned by the runner's subprocess
+        # cwd (#665), not by argv.
         # cursor-agent 2026.06.26: model flag is --model (not -m); -p/--print is REQUIRED for a
         # headless run (without it it goes interactive and --output-format is a no-op); --trust
         # clears the workspace-trust gate that otherwise HANGS a headless run (needed for the
@@ -220,6 +233,76 @@ def _last_json_array(stdout):
     or None — the tolerated bare-array reviewer shape (an engine emits `[...]` directly
     instead of `{"findings": [...]}`, #196)."""
     return _last_top_level_json(stdout, list)
+
+
+def strip_echoed_prompt(stdout, prompt_text):
+    """Remove verbatim echoes of the dispatched prompt from engine stdout before parse.
+
+    Strips the full prompt (raw and JSON-escaped), then the last ECHO_TAIL_CHARS of the prompt
+    (raw and JSON-escaped) for capture-truncated echoes. Never raises."""
+    if not isinstance(stdout, str) or not stdout:
+        return stdout
+    if not isinstance(prompt_text, str) or not prompt_text:
+        return stdout
+    out = stdout
+    escaped_full = json.dumps(prompt_text)[1:-1]
+    tail = prompt_text[-ECHO_TAIL_CHARS:]
+    tail_escaped = json.dumps(tail)[1:-1]
+    for fragment in (prompt_text, escaped_full, tail, tail_escaped):
+        out = out.replace(fragment, "")
+    if out and tail.endswith(out):
+        out = ""
+    return out
+
+
+def codex_tokens_used(stderr_tail):
+    """Parse codex stderr tail for the last 'tokens used' block; return int or None. Never raises."""
+    try:
+        if not isinstance(stderr_tail, str) or not stderr_tail:
+            return None
+        lines = stderr_tail.splitlines()
+        last_idx = None
+        for i, line in enumerate(lines):
+            if line.strip() == "tokens used":
+                last_idx = i
+        if last_idx is None or last_idx + 1 >= len(lines):
+            return None
+        count_line = lines[last_idx + 1].strip()
+        if not count_line:
+            return None
+        return int(count_line.replace(",", "").strip())
+    except Exception:
+        return None
+
+
+def cursor_tool_calls(stdout):
+    """Count distinct tool_call call_ids in a cursor stream-json stdout; int or None. Never raises."""
+    try:
+        if not isinstance(stdout, str) or not stdout:
+            return None
+        call_ids = set()
+        object_count = 0
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(obj, dict) or obj.get("type") != "tool_call":
+                continue
+            object_count += 1
+            cid = obj.get("call_id")
+            if isinstance(cid, str) and cid:
+                call_ids.add(cid)
+        if object_count == 0:
+            return 0
+        if call_ids:
+            return len(call_ids)
+        return object_count
+    except Exception:
+        return None
 
 
 def _read_stdout_tail(path, max_bytes):
@@ -307,6 +390,62 @@ def _scrub_findings(findings):
     return out
 
 
+def _scrub_investigated(investigated):
+    if not isinstance(investigated, list):
+        return []
+    out = []
+    for entry in investigated:
+        if not isinstance(entry, str) or not entry.strip():
+            continue
+        out.append(_scrub(entry))
+    return out
+
+
+def spot_check_investigated(investigated, repo_root):
+    """(ok, accepted, rejected) — does this seat's investigation record survive a reality check?
+
+    A spot check, not an audit: at least one claimed path must resolve inside the repo and exist.
+    One verifiable path is enough to distinguish a seat that read the repo from one that read
+    nothing; requiring every entry would fail an honest seat that cited a path deleted by the diff.
+    Never raises."""
+    accepted = []
+    rejected = []
+
+    def _reject(entry, reason):
+        rejected.append({"path": entry, "reason": reason})
+
+    if not isinstance(investigated, list) or not investigated:
+        return False, [], rejected
+    if not repo_root or not isinstance(repo_root, str) or not os.path.isdir(repo_root):
+        for entry in investigated:
+            _reject(entry, "no-repo")
+        return False, [], rejected
+
+    root_real = os.path.realpath(repo_root)
+    root_prefix = root_real + os.sep
+
+    for entry in investigated:
+        if not isinstance(entry, str) or not entry.strip():
+            _reject(entry, "not-a-path")
+            continue
+        if os.path.isabs(entry):
+            _reject(entry, "absolute")
+            continue
+        real = os.path.realpath(os.path.join(repo_root, entry))
+        if real != root_real and not real.startswith(root_prefix):
+            _reject(entry, "escapes-repo")
+            continue
+        if not os.path.exists(real):
+            _reject(entry, "missing")
+            continue
+        if not os.path.isfile(real):
+            _reject(entry, "not-a-file")
+            continue
+        accepted.append(entry)
+
+    return len(accepted) >= 1, accepted, rejected
+
+
 def parse_result(engine, role_kind, stdout):
     """Parse an external engine's stdout into the native result shape. review → scrubbed
     findings (from the canonical {"findings": [...]} object OR, tolerated, a bare top-level
@@ -337,7 +476,11 @@ def parse_result(engine, role_kind, stdout):
                     findings = arr
             if not isinstance(findings, list):
                 return {"ok": False, "reason": "unreadable"}
-            return {"ok": True, "findings": _scrub_findings(findings)}
+            investigated = []
+            if isinstance(obj, dict):
+                investigated = _scrub_investigated(obj.get("investigated"))
+            return {"ok": True, "findings": _scrub_findings(findings),
+                    "investigated": investigated}
         if obj is None:
             return {"ok": False, "reason": "unreadable"}
         # build | fix

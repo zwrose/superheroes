@@ -21,6 +21,46 @@ def test_task_id_trailer_constant():
     assert EA.TASK_ID_TRAILER == "Task-Id"
 
 
+def test_review_forfeit_vacuous_token_single_home_no_literal_drift():
+    """Drift guard: REVIEW_FORFEIT_VACUOUS is the only home; consumers must import, never restate."""
+    assert EA.REVIEW_FORFEIT_VACUOUS == "vacuous"
+    lib = os.path.join(_HERE, "..")
+    consumers = (
+        ("engine_dispatch.py", importlib.util.spec_from_file_location(
+            "engine_dispatch_drift", os.path.join(lib, "engine_dispatch.py"))),
+        ("round_driver.py", importlib.util.spec_from_file_location(
+            "round_driver_drift", os.path.join(lib, "round_driver.py"))),
+        ("seat_canary.py", importlib.util.spec_from_file_location(
+            "seat_canary_drift", os.path.join(lib, "seat_canary.py"))),
+    )
+    import re
+    _vacuous_lit = re.compile(r'''(?<![\w-])(["'])vacuous\1''')
+    _vacuous_get = re.compile(r'''\.get\((["'])vacuous\1\)''')
+    for basename, spec in consumers:
+        src = open(os.path.join(lib, basename), encoding="utf-8").read()
+        # Bare "vacuous" / 'vacuous' string literals (not vacuous-forfeit, vacuousSeats, etc.) re-open #666 drift.
+        for i, line in enumerate(src.splitlines(), 1):
+            if "import engine_adapter" in line or "REVIEW_FORFEIT_VACUOUS" in line:
+                continue
+            remainder = _vacuous_get.sub("", line)
+            if _vacuous_lit.search(remainder):
+                raise AssertionError(
+                    "%s:%d restates the vacuous token literally — import engine_adapter.REVIEW_FORFEIT_VACUOUS"
+                    % (basename, i))
+
+
+def test_vacuous_drift_guard_catches_historical_fold_line_shape():
+    """Match-granular guard must flag bare reason token beside .get('vacuous')."""
+    import re
+    _vacuous_lit = re.compile(r'''(?<![\w-])(["'])vacuous\1''')
+    _vacuous_get = re.compile(r'''\.get\((["'])vacuous\1\)''')
+    historical = (
+        '            if seat.get("vacuous") is True or seat.get("reason") == "vacuous":'
+    )
+    remainder = _vacuous_get.sub("", historical)
+    assert _vacuous_lit.search(remainder), "historical fold line must still trip the drift guard"
+
+
 def test_build_argv_codex_review_read_only():
     argv = EA.build_argv("codex", "review", "high",
                          {"cwd": "/wt", "schema_path": "/tmp/s.json"})
@@ -33,11 +73,28 @@ def test_build_argv_codex_review_read_only():
     assert argv[-1] == "-"  # codex reads the prompt from stdin (fed by the Task-10 JS runner)
 
 
+def test_build_argv_codex_review_with_cwd_pins_repo():
+    argv = EA.build_argv("codex", "review", "high", {"cwd": "/repo", "schema_path": "/s.json"})
+    i = argv.index("-C")
+    assert argv[i + 1] == "/repo"
+
+
 def test_build_argv_codex_build_workspace_write():
     argv = EA.build_argv("codex", "build", "high", {"cwd": "/wt"})
     assert argv[argv.index("--sandbox") + 1] == "workspace-write"
     assert "-C" in argv and argv[argv.index("-C") + 1] == "/wt"
     assert "model_reasoning_effort=high" in argv
+
+
+def test_build_argv_codex_build_with_cwd_still_has_c_flag():
+    argv = EA.build_argv("codex", "build", "high", {"cwd": "/repo"})
+    i = argv.index("-C")
+    assert argv[i + 1] == "/repo"
+
+
+def test_build_argv_codex_review_without_cwd_has_no_c_flag():
+    argv = EA.build_argv("codex", "review", "high", {})
+    assert "-C" not in argv
 
 
 def test_build_argv_codex_fix_low_effort():
@@ -144,7 +201,9 @@ def test_parse_result_review_bare_array_is_tolerated_and_scrubbed():
 def test_parse_result_review_bare_empty_array_is_clean_zero_findings():
     # An empty bare array is a clean review with nothing to flag — it must NOT be unreadable
     # (that would forfeit the slot to a needless UFR-7 re-run), it is ok:true with no findings.
-    assert EA.parse_result("codex", "review", "[]") == {"ok": True, "findings": []}
+    assert EA.parse_result("codex", "review", "[]") == {
+        "ok": True, "findings": [], "investigated": [],
+    }
 
 
 def test_parse_result_review_canonical_object_unchanged_by_tolerance():
@@ -861,3 +920,257 @@ def test_build_argv_prompt_path_directory_fails_closed(tmp_path, capsys):
 def test_build_argv_without_prompt_path_unchanged(capsys):
     rc, out = _build_argv_with_prompt(None, capsys, prompt_path=None)
     assert rc == 0 and isinstance(out, list) and out[0] == "codex"
+
+
+# ---------------------------------------------------------------------------
+# #668: strip echoed prompt before parse; engagement extractors
+
+
+def _review_prompt_with_shape_contract():
+    return (
+        "You are reviewing a pull request.\n"
+        "Respond with JSON only in this shape:\n"
+        '{"findings": [...]}\n'
+        "Example empty review:\n"
+        '{"findings": []}\n'
+        "Each finding must include severity, title, body, suggestion.\n"
+    )
+
+
+def _parse_review_after_strip(stdout, prompt_text):
+    stripped = EA.strip_echoed_prompt(stdout, prompt_text)
+    return EA.parse_result("codex", "review", stripped)
+
+
+def test_echo_only_prompt_after_strip_is_unreadable():
+    prompt = _review_prompt_with_shape_contract()
+    stdout = prompt  # engine echoed the prompt and answered nothing
+    assert _parse_review_after_strip(stdout, prompt) == {"ok": False, "reason": "unreadable"}
+
+
+def test_real_answer_after_echo_survives_strip_and_parse():
+    prompt = _review_prompt_with_shape_contract()
+    answer = json.dumps({"findings": [
+        {"severity": "Important", "title": "t", "body": "b", "suggestion": "s"}]})
+    stdout = prompt + "\n" + answer
+    res = _parse_review_after_strip(stdout, prompt)
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+    assert res["findings"][0]["title"] == "t"
+
+
+def test_json_escaped_echo_in_stream_envelope_stripped_to_unreadable():
+    prompt = _review_prompt_with_shape_contract()
+    escaped = json.dumps(prompt)[1:-1]
+    stdout = '{"type":"progress","text":"' + escaped + '"}\n'
+    assert _parse_review_after_strip(stdout, prompt) == {"ok": False, "reason": "unreadable"}
+
+
+def test_truncated_echo_tail_still_stripped_to_unreadable():
+    head = "x" * 2500
+    prompt = head + _review_prompt_with_shape_contract()
+    stdout = prompt[-1500:]
+    assert _parse_review_after_strip(stdout, prompt) == {"ok": False, "reason": "unreadable"}
+
+
+def test_middle_tail_slice_with_noise_still_unreadable():
+    head = "x" * 2500
+    prompt = head + _review_prompt_with_shape_contract()
+    tail = prompt[-EA.ECHO_TAIL_CHARS:]
+    middle = tail[400:1200]
+    stdout = "prefix-noise<<<" + middle + ">>>suffix-noise"
+    assert _parse_review_after_strip(stdout, prompt) == {"ok": False, "reason": "unreadable"}
+
+
+def test_strip_echoed_prompt_empty_or_non_string_inputs_unchanged_no_raise():
+    prompt = _review_prompt_with_shape_contract()
+    for stdout in (None, "", 123, []):
+        assert EA.strip_echoed_prompt(stdout, prompt) == stdout
+    for bad_prompt in (None, "", 7):
+        assert EA.strip_echoed_prompt("keep", bad_prompt) == "keep"
+
+
+def test_codex_tokens_used_parses_trailing_block():
+    assert EA.codex_tokens_used("noise\ntokens used\n17,417\n") == 17417
+
+
+def test_codex_tokens_used_takes_last_block():
+    tail = "tokens used\n1\nmore\ntokens used\n9,876\n"
+    assert EA.codex_tokens_used(tail) == 9876
+
+
+def test_codex_tokens_used_absent_garbage_empty_returns_none():
+    assert EA.codex_tokens_used("") is None
+    assert EA.codex_tokens_used("no token line here") is None
+    assert EA.codex_tokens_used("tokens used\n") is None
+    assert EA.codex_tokens_used("tokens used\nnot-a-number\n") is None
+
+
+def test_cursor_tool_calls_counts_distinct_call_ids():
+    lines = [
+        '{"type":"tool_call","call_id":"a","subtype":"started"}',
+        '{"type":"tool_call","call_id":"b","subtype":"started"}',
+        '{"type":"tool_call","call_id":"a","subtype":"completed"}',
+    ]
+    assert EA.cursor_tool_calls("\n".join(lines)) == 2
+
+
+def test_cursor_tool_calls_zero_when_no_tool_calls():
+    stream = '{"type":"result","subtype":"success","duration_ms":1}\n'
+    assert EA.cursor_tool_calls(stream) == 0
+
+
+def test_cursor_tool_calls_skips_garbage_no_raise():
+    stream = "not json\n" + '{"type":"tool_call","call_id":"z"}\n' + "{broken"
+    assert EA.cursor_tool_calls(stream) == 1
+
+
+def test_cursor_tool_calls_empty_returns_none():
+    assert EA.cursor_tool_calls("") is None
+    assert EA.cursor_tool_calls(None) is None
+
+
+# ---------------------------------------------------------------------------
+# #666: investigated propagation + spot_check_investigated floor
+
+
+def test_parse_result_review_propagates_investigated_scrubbed():
+    stdout = json.dumps({
+        "findings": [],
+        "investigated": [
+            "a.py",
+            42,
+            "log shows Authorization: Bearer sk-EXAMPLEfakenotarealsecret0",
+        ],
+    })
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert len(res["investigated"]) == 2
+    assert res["investigated"][0] == "a.py"
+    assert "sk-EXAMPLE" not in res["investigated"][1]
+    assert "[REDACTED]" in res["investigated"][1]
+
+
+def test_parse_result_review_missing_investigated_key_yields_empty_list():
+    stdout = json.dumps({"findings": [{"severity": "Minor", "title": "t", "body": "b"}]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["investigated"] == []
+
+
+def test_parse_result_review_bare_array_shape_yields_empty_investigated():
+    stdout = json.dumps([{"severity": "Minor", "title": "t", "body": "b"}])
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert res["investigated"] == []
+
+
+def _spot_reject_only(repo_root, entry, want_reason):
+    ok, accepted, rejected = EA.spot_check_investigated([entry], repo_root)
+    assert ok is False and accepted == []
+    assert len(rejected) == 1 and rejected[0]["reason"] == want_reason
+
+
+def test_spot_check_investigated_rejects_not_a_path(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    ok, accepted, rejected = EA.spot_check_investigated([""], str(root))
+    assert ok is False and accepted == []
+    assert rejected[0]["reason"] == "not-a-path"
+    ok, _, rejected = EA.spot_check_investigated([None], str(root))
+    assert rejected[0]["reason"] == "not-a-path"
+
+
+def test_spot_check_investigated_rejects_absolute(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    f = tmp_path / "abs.py"
+    f.write_text("x", encoding="utf-8")
+    _spot_reject_only(str(root), str(f), "absolute")
+
+
+def test_spot_check_investigated_rejects_escapes_repo_via_dotdot(tmp_path):
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    (outer / "secret.txt").write_text("x", encoding="utf-8")
+    root = tmp_path / "repo"
+    root.mkdir()
+    _spot_reject_only(str(root), "../outer/secret.txt", "escapes-repo")
+
+
+def test_spot_check_investigated_rejects_escapes_repo_via_symlink(tmp_path):
+    outer = tmp_path / "outside"
+    outer.mkdir()
+    (outer / "leak.txt").write_text("x", encoding="utf-8")
+    root = tmp_path / "repo"
+    root.mkdir()
+    link = root / "escape"
+    link.symlink_to(outer)
+    _spot_reject_only(str(root), "escape/leak.txt", "escapes-repo")
+
+
+def test_spot_check_investigated_rejects_sibling_prefix_path(tmp_path):
+    base = tmp_path / "x"
+    base.mkdir()
+    root = base / "repo"
+    root.mkdir()
+    evil = base / "repo-evil"
+    evil.mkdir()
+    (evil / "f").write_text("x", encoding="utf-8")
+    _spot_reject_only(str(root), "../repo-evil/f", "escapes-repo")
+
+
+def test_spot_check_investigated_rejects_missing(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _spot_reject_only(str(root), "no-such-file.py", "missing")
+
+
+def test_spot_check_investigated_rejects_dot_and_directories(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _spot_reject_only(str(root), ".", "not-a-file")
+    sub = root / "plugins"
+    sub.mkdir()
+    _spot_reject_only(str(root), "plugins", "not-a-file")
+
+
+def test_spot_check_investigated_mixed_one_valid_three_rejects(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    good = root / "ok.py"
+    good.write_text("x", encoding="utf-8")
+    ok, accepted, rejected = EA.spot_check_investigated(
+        ["ok.py", "/abs", "../x", ""], str(root))
+    assert ok is True
+    assert accepted == ["ok.py"]
+    assert len(rejected) == 3
+
+
+def test_spot_check_investigated_fail_closed_edges_no_raise(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    f = tmp_path / "notadir"
+    f.write_text("x", encoding="utf-8")
+    for inv in (None, "a.py"):
+        ok, accepted, rejected = EA.spot_check_investigated(inv, str(root))
+        assert ok is False and accepted == [] and not rejected
+    ok, accepted, rejected = EA.spot_check_investigated(["a.py"], None)
+    assert ok is False and rejected[0]["reason"] == "no-repo"
+    ok, accepted, rejected = EA.spot_check_investigated(["a.py"], str(f))
+    assert ok is False and all(r["reason"] == "no-repo" for r in rejected)
+
+
+def test_finding_body_quoting_prompt_tail_survives_conditional_strip():
+    """Genuine finding quoting the last 2k of the prompt must not be stripped away (#668)."""
+    head = "H" * 5000
+    prompt = head + _review_prompt_with_shape_contract()
+    tail = prompt[-EA.ECHO_TAIL_CHARS:]
+    answer = json.dumps({"findings": [
+        {"severity": "Important", "title": "quoted prompt in body",
+         "body": "context:\n" + tail,
+         "suggestion": "s"}]})
+    stdout = prompt + "\n" + answer
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+    assert tail[:80] in res["findings"][0]["body"]

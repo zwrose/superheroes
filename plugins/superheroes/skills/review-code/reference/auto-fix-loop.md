@@ -110,16 +110,26 @@ addition that never replaces the `--focus` notes and never removes or down-scope
 nothing. The detector is grep-grounded and has no authority: it can only add emphasis,
 never drop a finding or a lens.
 
-> **External-engine reviewers — stdout shape contract (#38, #196).** When `$REVIEWER_ENGINE` is
+> **External-engine reviewers — stdout shape contract (#38, #196, #666).** When `$REVIEWER_ENGINE` is
 > `codex` or `cursor`, a specialist is dispatched through `engine_adapter.py` (read-only sandbox)
 > instead of a named subagent, and it returns its findings on **stdout** rather than writing the
 > findings file. Its final stdout MUST be a single JSON object `{"findings": [...]}` (the same array
-> the subagent would have written, wrapped once as the `findings` value) with **nothing printed after
-> it** — `engine_adapter.parse_result(role="review")` reads the last top-level JSON value. Emit the
-> canonical object; the parser also **tolerates a bare top-level array** `[...]` of finding objects as
-> of #196, but anything else (prose, a trailing line, an empty stream, an array of non-objects) parses
-> as `unreadable`, which forfeits the slot to a Claude re-run (UFR-7) and silently doubles the round's
-> cost. State this shape verbatim in the dispatch prompt so orchestrators stop re-guessing it per run.
+> the subagent would have written, wrapped once as the `findings` value) **and** an **`investigated`**
+> array listing every repo-relative path the seat actually read to ground its review — full canonical
+> shape: `{"findings": [...], "investigated": ["repo/relative/path", ...]}` — **nothing printed
+> after the object is best practice** (`engine_adapter.parse_result` scans stdout for the **last
+> top-level JSON value**, so incidental trailing prose after a valid object is tolerated). An **empty** `findings` array is accepted as *clean* **only** when
+> `investigated` lists at least one path that survives the runner's spot-check (the path must resolve
+> inside `--repo-root` and exist on disk). A seat that returns empty findings with no verifiable
+> `investigated` record is a **vacuous forfeit** — a named cause (`reason: "vacuous"` from
+> `dispatch-review`): treated as a seat that **never ran**, not as a clean review; the orchestrator
+> submits the folded seat with `vacuous: true` (or `reason: "vacuous"`). Engine telemetry (token spend,
+> tool calls, wall time) is **corroborating evidence only** and can never satisfy that investigation
+> floor. Emit the canonical object; the parser also **tolerates a bare top-level array** `[...]` of
+> finding objects as of #196, but anything else (prose with no parseable JSON object/array, an empty
+> stream, an array of non-objects) parses as `unreadable`, which forfeits the slot to a Claude re-run (UFR-7) and silently
+> doubles the round's cost. State this shape verbatim in the dispatch prompt so orchestrators stop
+> re-guessing it per run.
 
 > **Reviewer-seat dispatch runs through the dispatch RUNNER (#563 DoD 2/4) — reviewer role ONLY.**
 > When `$REVIEWER_ENGINE` is `codex` or `cursor`, dispatch each read-only reviewer seat through
@@ -127,32 +137,69 @@ never drop a finding or a lens.
 > line). The runner owns the previously per-session dispatch mechanics as **machinery**: it prepends
 > the anti-hijack preamble (the mode-7 hardening that stops the codex SessionStart/skill-selection
 > derail), feeds the prompt via the `- < realfile` stdin form behind the `_prompt_path_ok`
-> empty-prompt guard, runs codex from a non-repo cwd with `--skip-git-repo-check`, bounds the attempt
-> and streams liveness heartbeats to `--progress-file`, and on a **terminal forfeit** (timeout OR
-> `unreadable` — never intermediate bootstrap noise that still yields a final answer) auto-retries
-> ONCE tight-inline with a ≥900 s ceiling before returning
-> `{"ok": false, "forfeited": true, "disclosure": …}`. A forfeit → the seat falls open to a Claude
-> re-run (UFR-7) and the orchestrator **discloses** the degraded vendor mix (the `disclosure` string);
-> making that fall-open loud by machinery in the receipt is #563 PR C.
+> empty-prompt guard, pins the dispatch to the repository under review (`--repo-root`, codex `-C`,
+> cursor's subprocess cwd), bounds the attempt and streams liveness heartbeats to `--progress-file`,
+> and on a **terminal forfeit** (timeout OR nonzero engine exit OR `unreadable` OR **vacuous** — never intermediate bootstrap
+> noise that still yields a final answer) auto-retries ONCE tight-inline with a ≥900 s ceiling before
+> returning `{"ok": false, "forfeited": true, "disclosure": …}` (or `reason: "vacuous"` when the
+> **last** attempt ended vacuous — e.g. attempt 1 timing out and attempt 2 coming back vacuous still
+> yields `vacuous`, not only a double vacuous forfeit). A forfeit → the seat falls open to a Claude re-run (UFR-7) and the
+> orchestrator **discloses** the degraded vendor mix (the `disclosure` string); making that fall-open
+> loud by machinery in the receipt is #563 PR C.
 >
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 > python3 "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
 >   --engine "$REVIEWER_ENGINE" --engine-model "$SEAT_ENGINE_MODEL" --effort "$SEAT_EFFORT" \
->   --prompt-path "$SEAT_PROMPT" --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
+>   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
+>   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
 > ```
 >
 > `$SEAT_ENGINE_MODEL` is the seat's **registry id** and `$SEAT_EFFORT` its effort — **both are
 > required by this runner**; `engine_dispatch` takes `--effort` as a required flag. Every review
 > seat the seat map assigns on cursor carries a real effort, so this is not a limitation in practice.
 >
-> Read-only sandbox is **hard-coded inside the runner API** — it cannot emit a write dispatch. Because
-> the runner runs codex from a non-repo cwd under "do not read files", the seat prompt MUST be
-> **self-contained** — inline the diff and any context the lens needs. This makes the codex/cursor
-> seat a **diff-scoped cross-vendor lens**; lenses that need repo inspection (grep-before-flag, caller
-> reachability) stay with the Claude seats, which keep full working-tree access. The **fixer / write
-> path is unchanged** — it stays model-driven and host-gated (a Python-spawned subprocess would bypass
-> the host permission-classifier the write authz depends on; CONVENTIONS `§7.5`).
+> Read-only sandbox is **hard-coded inside the runner API** — it cannot emit a write dispatch. The
+> runner pins the dispatch to the repository under review (`--repo-root`; codex `-C`; cursor via the
+> subprocess cwd): the seat **may and should** read files and run read-only commands there to ground
+> its findings. An unresolvable repo root is a **named refusal** before any spawn (`repo-root-absent`,
+> `repo-root-missing`, `repo-root-not-a-directory`, `repo-root-not-a-repo`) with `attempts: 0`. The
+> seat prompt should still inline the diff (a self-contained prompt remains the cheapest path); repo
+> access is no longer forbidden. The **fixer / write path is unchanged** — it stays model-driven and
+> host-gated (a Python-spawned subprocess would bypass the host permission-classifier the write authz
+> depends on; CONVENTIONS `§7.5`).
+>
+> **Cross-vendor control probe (#668).** For each **distinct cross-vendor vendor** among the
+> panel's seats that ran with zero findings on that vendor's seat(s), run the planted-defect control
+> probe **once per such vendor** before treating those seats as clean. Use that vendor's own seat
+> model and effort from the seat map.
+>
+> ```bash
+> ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+> CANARY_RESULTS=()
+> for VENDOR in "${CROSS_VENDOR_VENDORS[@]}"; do
+>   SEAT_ENGINE_MODEL="${SEAT_MODEL_BY_VENDOR[${VENDOR}]}"
+>   SEAT_EFFORT="${SEAT_EFFORT_BY_VENDOR[${VENDOR}]}"
+>   CANARY_RESULTS+=("$(
+>     python3 "${ROOT_DIR}/lib/seat_canary.py" probe \
+>       --engine "${VENDOR}" --engine-model "${SEAT_ENGINE_MODEL}" --effort "${SEAT_EFFORT}" \
+>       --repo-root "${REPO_ROOT}"
+>   )")
+> done
+> ```
+>
+> Submit the probe JSON objects as a **list** on the panel artifact as `canaryResult` (a single
+> dict is still accepted when only one cross-vendor vendor needs a probe). Each result must carry
+> its `engine` field matching the vendor you probed. The probe is scored on **engagement
+> evidence** — findings produced, a verifiable investigation record, or tool calls actually invoked
+> — and **never** on magnitudes: token spend and wall time are recorded but are deliberately not a
+> pass branch, because they classify backwards (a genuinely engaged clean review here spent 2,460
+> tokens while the field's vacuous seat spent about ten times that, and an 8-second dispatch returned
+> a Critical). It is also **never** scored on whether it detected the planted defect; a demonstrably
+> live seat can miss the plant (measured twice: PR #667's round-1 control, and this build's own live
+> probe, which spent 14,980 tokens and ran three repo commands while missing it). Without a probe,
+> the round records `canaryUnverified` and the receipt carries a degraded disclosure; a probe that
+> shows no engagement downgrades those seats to never-ran.
 
 > **External-engine dispatches — timeout is structural, an expired slot is `unreadable` (#202, #204).**
 > Every engine dispatch — the reviewer (read-only, above) AND the **fixer** (cursor, workspace-write) —

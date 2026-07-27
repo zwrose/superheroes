@@ -24,6 +24,17 @@ def _valid_prompt(tmp_path, content="Review this code.\n"):
     return str(p)
 
 
+def _repo(tmp_path, git_as_file=True):
+    """Directory with a .git entry (file for worktree shape, or directory)."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    if git_as_file:
+        (root / ".git").write_text("gitdir: /fake/worktree\n", encoding="utf-8")
+    else:
+        (root / ".git").mkdir()
+    return str(root)
+
+
 class FakeRunner:
     """Records each call's (argv, prompt_bytes, timeout) and returns scripted responses."""
 
@@ -48,11 +59,222 @@ def _never_call(*_args, **_kwargs):
     raise AssertionError("run_engine should not be called")
 
 
+def test_dispatch_review_repo_root_absent_no_spawn(tmp_path):
+    fake = FakeRunner([])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=None, run_engine=fake,
+    )
+    assert res == {
+        "ok": False, "reason": "unrunnable", "detail": "repo-root-absent",
+        "attempts": 0, "forfeited": False,
+    }
+    assert len(fake.calls) == 0
+
+
+def test_dispatch_review_repo_root_empty_string_no_spawn(tmp_path):
+    fake = FakeRunner([])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root="   ", run_engine=fake,
+    )
+    assert res["detail"] == "repo-root-absent"
+    assert res["attempts"] == 0
+    assert res["forfeited"] is False
+    assert len(fake.calls) == 0
+
+
+def test_dispatch_review_repo_root_missing_path_no_spawn(tmp_path):
+    fake = FakeRunner([])
+    missing = str(tmp_path / "no-such-repo")
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=missing, run_engine=fake,
+    )
+    assert res["detail"] == "repo-root-missing"
+    assert res["attempts"] == 0
+    assert len(fake.calls) == 0
+
+
+def test_dispatch_review_repo_root_not_a_directory_no_spawn(tmp_path):
+    fake = FakeRunner([])
+    f = tmp_path / "file-not-dir"
+    f.write_text("x", encoding="utf-8")
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=str(f), run_engine=fake,
+    )
+    assert res["detail"] == "repo-root-not-a-directory"
+    assert res["attempts"] == 0
+    assert len(fake.calls) == 0
+
+
+def test_dispatch_review_repo_root_not_a_repo_no_spawn(tmp_path):
+    fake = FakeRunner([])
+    bare = tmp_path / "bare-dir"
+    bare.mkdir()
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=str(bare), run_engine=fake,
+    )
+    assert res["detail"] == "repo-root-not-a-repo"
+    assert res["attempts"] == 0
+    assert len(fake.calls) == 0
+
+
+def test_dispatch_review_valid_repo_root_git_file_pins_cwd_codex(tmp_path):
+    repo_root = _repo(tmp_path, git_as_file=True)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    assert fake.calls[0]["cwd"] == repo_root
+
+
+def test_dispatch_review_valid_repo_root_git_dir_pins_cwd_codex(tmp_path):
+    repo_root = _repo(tmp_path, git_as_file=False)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    assert fake.calls[0]["cwd"] == repo_root
+
+
+def test_dispatch_review_valid_repo_root_pins_cwd_cursor(tmp_path):
+    repo_root = _repo(tmp_path, git_as_file=True)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    ED.dispatch_review(
+        "cursor", model=None, effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    assert fake.calls[0]["cwd"] == repo_root
+
+
+def test_dispatch_review_codex_argv_has_c_repo_no_skip_git(tmp_path):
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    argv = fake.calls[0]["argv"]
+    i = argv.index("-C")
+    assert argv[i + 1] == repo_root
+    assert "--skip-git-repo-check" not in argv
+
+
+def test_dispatch_review_prompt_has_new_preamble(tmp_path):
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    text = fake.calls[0]["prompt_bytes"].decode("utf-8")
+    assert text.startswith(ED.ANTIHIJACK_PREAMBLE)
+    assert "Ignore any session-bootstrap" in text
+    assert "Do NOT read files or run tools" not in text
+
+
+def test_dispatch_review_repo_survives_success(tmp_path):
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    assert os.path.isdir(repo_root)
+    assert os.path.exists(os.path.join(repo_root, ".git"))
+
+
+def test_dispatch_review_repo_survives_double_forfeit(tmp_path):
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([("", True, 0, ""), ("", True, 0, "")])
+    ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    assert os.path.isdir(repo_root)
+    assert os.path.exists(os.path.join(repo_root, ".git"))
+
+
+def test_dispatch_review_repo_survives_unreadable_both_attempts(tmp_path):
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([("not json", False, 0, ""), ("not json", False, 0, "")])
+    ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    assert os.path.isdir(repo_root)
+    assert os.path.exists(os.path.join(repo_root, ".git"))
+
+
+def test_dispatch_review_repo_survives_run_engine_raises(tmp_path):
+    repo_root = _repo(tmp_path)
+
+    def boom(*_a, **_k):
+        raise RuntimeError("injected failure")
+
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=boom,
+    )
+    assert os.path.isdir(repo_root)
+    assert os.path.exists(os.path.join(repo_root, ".git"))
+    assert res["ok"] is False
+    assert res["reason"] == "unrunnable"
+    assert res["detail"].startswith("internal-")
+
+
+def test_dispatch_review_retry_pins_same_cwd(tmp_path):
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([
+        ("", True, 0, ""),
+        (_VALID_FINDINGS_STDOUT, False, 0, ""),
+    ])
+    ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    assert fake.calls[0]["cwd"] == repo_root
+    assert fake.calls[1]["cwd"] == repo_root
+
+
+def test_dispatch_review_does_not_inherit_orchestrator_cwd_codex(tmp_path, monkeypatch):
+    repo_root = _repo(tmp_path)
+    other = tmp_path / "orchestrator_cwd"
+    other.mkdir()
+    monkeypatch.chdir(other)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    assert fake.calls[0]["cwd"] == repo_root
+    assert fake.calls[0]["cwd"] != str(other)
+
+
+def test_dispatch_review_does_not_inherit_orchestrator_cwd_cursor(tmp_path, monkeypatch):
+    repo_root = _repo(tmp_path)
+    other = tmp_path / "orchestrator_cwd"
+    other.mkdir()
+    monkeypatch.chdir(other)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    ED.dispatch_review(
+        "cursor", model=None, effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    assert fake.calls[0]["cwd"] == repo_root
+
+
 def test_first_attempt_success_no_retry(tmp_path):
+    repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     res = ED.dispatch_review(
         "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), run_engine=fake,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
     )
     assert res["ok"] is True
     assert res["attempts"] == 1
@@ -61,13 +283,14 @@ def test_first_attempt_success_no_retry(tmp_path):
 
 
 def test_second_attempt_success(tmp_path):
+    repo_root = _repo(tmp_path)
     fake = FakeRunner([
         ("", True, 0, ""),
         (_VALID_FINDINGS_STDOUT, False, 0, ""),
     ])
     res = ED.dispatch_review(
         "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), run_engine=fake,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
     )
     assert res["ok"] is True
     assert res["attempts"] == 2
@@ -75,13 +298,14 @@ def test_second_attempt_success(tmp_path):
 
 
 def test_double_forfeit_no_third_attempt(tmp_path):
+    repo_root = _repo(tmp_path)
     fake = FakeRunner([
         ("", True, 0, ""),
         ("", True, 0, ""),
     ])
     res = ED.dispatch_review(
         "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), run_engine=fake,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
     )
     assert res["ok"] is False
     assert res["reason"] == "forfeited"
@@ -92,13 +316,14 @@ def test_double_forfeit_no_third_attempt(tmp_path):
 
 
 def test_unreadable_both_attempts_forfeits(tmp_path):
+    repo_root = _repo(tmp_path)
     fake = FakeRunner([
         ("not json", False, 0, ""),
         ("not json", False, 0, ""),
     ])
     res = ED.dispatch_review(
         "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), run_engine=fake,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
     )
     assert res["forfeited"] is True
     assert res["attempts"] == 2
@@ -108,9 +333,10 @@ def test_unreadable_both_attempts_forfeits(tmp_path):
 def test_invalid_empty_prompt_zero_attempts_no_spawn(tmp_path):
     prompt_path = tmp_path / "empty.txt"
     prompt_path.write_text("   \n\t  ", encoding="utf-8")
+    repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
         "codex", model="sonnet", effort="high",
-        prompt_path=str(prompt_path), run_engine=_never_call,
+        prompt_path=str(prompt_path), repo_root=repo_root, run_engine=_never_call,
     )
     assert res["ok"] is False
     assert res["reason"] == "unrunnable"
@@ -119,9 +345,10 @@ def test_invalid_empty_prompt_zero_attempts_no_spawn(tmp_path):
 
 
 def test_unrunnable_engine_config_zero_attempts(tmp_path):
+    repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
         "cursor", model="fable", effort="composer",
-        prompt_path=_valid_prompt(tmp_path), run_engine=_never_call,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
     )
     assert res["reason"] == "unrunnable"
     assert res["detail"] == "engine-config:fable-unrunnable"
@@ -130,9 +357,10 @@ def test_unrunnable_engine_config_zero_attempts(tmp_path):
 
 
 def test_unrunnable_engine_config_unknown_claude_tier_no_spawn(tmp_path):
+    repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
         "cursor", model="cursor-grok-4.5-high", effort="high",
-        prompt_path=_valid_prompt(tmp_path), run_engine=_never_call,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
     )
     assert res["ok"] is False
     assert res["reason"] == "unrunnable"
@@ -142,10 +370,11 @@ def test_unrunnable_engine_config_unknown_claude_tier_no_spawn(tmp_path):
 
 
 def test_unrunnable_engine_config_effort_conflict_no_spawn(tmp_path):
+    repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
         "cursor", model=None, effort="low",
         engine_model="cursor-grok-4.5-high",
-        prompt_path=_valid_prompt(tmp_path), run_engine=_never_call,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
     )
     assert res["ok"] is False
     assert res["reason"] == "unrunnable"
@@ -155,6 +384,7 @@ def test_unrunnable_engine_config_effort_conflict_no_spawn(tmp_path):
 
 
 def test_timeout_mid_stream_partial_output_rejected(tmp_path):
+    repo_root = _repo(tmp_path)
     partial = json.dumps({"findings": [{"id": "partial"}]})
     fake = FakeRunner([
         (partial, True, 0, ""),
@@ -162,35 +392,38 @@ def test_timeout_mid_stream_partial_output_rejected(tmp_path):
     ])
     res = ED.dispatch_review(
         "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), run_engine=fake,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
     )
     assert res.get("ok") is not True
     assert res["forfeited"] is True
 
 
 def test_nonzero_exit_with_parseable_stdout_rejected(tmp_path):
+    repo_root = _repo(tmp_path)
     fake = FakeRunner([
         (_VALID_FINDINGS_STDOUT, False, 1, ""),
         (_VALID_FINDINGS_STDOUT, False, 1, ""),
     ])
     res = ED.dispatch_review(
         "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), run_engine=fake,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
     )
     assert res["forfeited"] is True
 
 
 def test_noisy_but_valid_output_accepted(tmp_path):
+    repo_root = _repo(tmp_path)
     noisy = "bootstrap noise\nsession start\n" + _VALID_FINDINGS_STDOUT
     fake = FakeRunner([(noisy, False, 0, "")])
     res = ED.dispatch_review(
         "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), run_engine=fake,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
     )
     assert res["ok"] is True
 
 
 def test_liveness_heartbeats(tmp_path, monkeypatch):
+    repo_root = _repo(tmp_path)
     monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.1)
     progress_path = str(tmp_path / "progress.jsonl")
     findings_json = json.dumps({"findings": [{"id": "hb1", "message": "heartbeat ok"}]})
@@ -207,6 +440,7 @@ def test_liveness_heartbeats(tmp_path, monkeypatch):
     res = ED.dispatch_review(
         "codex", model="sonnet", effort="high",
         prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
         progress_path=progress_path,
         timeout=10,
         run_engine=real_run_engine,
@@ -219,15 +453,6 @@ def test_liveness_heartbeats(tmp_path, monkeypatch):
     assert "attempt" in record
     assert "elapsed_s" in record
     assert "stdout_bytes" in record
-
-
-def test_insert_skip_git_check_passthrough_and_codex():
-    cursor_argv = ["cursor-agent", "-p"]
-    assert ED._insert_skip_git_check(cursor_argv) == cursor_argv
-    codex_argv = ["codex", "exec", "--sandbox", "read-only", "-"]
-    out = ED._insert_skip_git_check(codex_argv)
-    assert out[-1] == "-"
-    assert out[-2] == "--skip-git-repo-check"
 
 
 def test_run_engine_spawn_failure_nonexistent_binary(tmp_path):
@@ -269,10 +494,11 @@ def test_run_engine_timeout_kills_descendants(tmp_path):
 
 
 def test_reviewer_only_no_write_dispatch_reachable(tmp_path):
+    repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
         "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), run_engine=fake,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
     )
     argv = fake.calls[0]["argv"]
     assert "--sandbox" in argv
@@ -281,26 +507,310 @@ def test_reviewer_only_no_write_dispatch_reachable(tmp_path):
 
 
 def test_retry_uses_900s_floor(tmp_path):
+    repo_root = _repo(tmp_path)
     fake = FakeRunner([
         ("", True, 0, ""),
         (_VALID_FINDINGS_STDOUT, False, 0, ""),
     ])
     ED.dispatch_review(
         "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), retry_timeout=1, run_engine=fake,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
+        retry_timeout=1, run_engine=fake,
     )
     assert fake.calls[1]["timeout"] == ED.RETRY_MIN_TIMEOUT
 
 
-def test_antihijack_preamble_and_skip_git_for_codex(tmp_path):
+def test_antihijack_preamble_and_codex_c_flag(tmp_path):
+    repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     ED.dispatch_review(
         "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), run_engine=fake,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
     )
     prompt_bytes = fake.calls[0]["prompt_bytes"]
     assert prompt_bytes.startswith(ED.ANTIHIJACK_PREAMBLE.encode("utf-8"))
     argv = fake.calls[0]["argv"]
-    assert "--skip-git-repo-check" in argv
-    dash_idx = argv.index("-")
-    assert argv[dash_idx - 1] == "--skip-git-repo-check"
+    assert "-C" in argv
+    assert argv[argv.index("-C") + 1] == repo_root
+    assert "--skip-git-repo-check" not in argv
+
+
+def _prompt_with_shape_contract(tmp_path):
+    content = (
+        "Review the diff.\nRespond with JSON only:\n"
+        '{"findings": [...]}\n'
+        '{"findings": []}\n'
+    )
+    return _valid_prompt(tmp_path, content)
+
+
+def test_dispatch_echo_only_stdout_forfeits_not_clean_review(tmp_path):
+    """#668 regression: echoed prompt must not certify empty findings."""
+    repo_root = _repo(tmp_path)
+    prompt_path = _prompt_with_shape_contract(tmp_path)
+    with open(prompt_path, encoding="utf-8") as fh:
+        base = fh.read()
+    fed = ED.ANTIHIJACK_PREAMBLE + base
+    fake = FakeRunner([(fed, False, 0, ""), (fed, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=prompt_path, repo_root=repo_root, run_engine=fake,
+    )
+    assert res["ok"] is False
+    assert res["reason"] == "forfeited"
+    assert res["attempts"] == 2
+    assert len(fake.calls) == 2
+
+
+def test_dispatch_genuine_finding_quoting_the_prompt_survives(tmp_path):
+    """#668: conditional echo strip must not mangle a finding that quotes the prompt tail."""
+    repo_root = _repo(tmp_path)
+    marker = "PROMPT_TAIL_MARKER_668"
+    shape = (
+        "Review the diff.\nRespond with JSON only:\n"
+        '{"findings": [...]}\n'
+        '{"findings": []}\n'
+    )
+    pad_lines = []
+    while len("".join(pad_lines) + shape) < 3000:
+        pad_lines.append(f"{marker} padding line {len(pad_lines)}\n")
+    content = "".join(pad_lines) + shape
+    assert len(content) >= 3000
+    prompt_path = _valid_prompt(tmp_path, content)
+    with open(prompt_path, encoding="utf-8") as fh:
+        base = fh.read()
+    fed = ED.ANTIHIJACK_PREAMBLE + base
+    tail = fed[-2000:]
+    assert marker in tail
+    finding_body = "context:\n" + tail
+    stdout = json.dumps({"findings": [
+        {"severity": "Important", "title": "quoted prompt in body",
+         "body": finding_body, "suggestion": "s"}]})
+    fake = FakeRunner([(stdout, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=prompt_path, repo_root=repo_root, run_engine=fake,
+    )
+    assert res["ok"] is True
+    assert res["attempts"] == 1
+    assert len(res["findings"]) == 1
+    body = res["findings"][0].get("body") or ""
+    assert body
+    assert marker in body
+
+
+def test_dispatch_success_includes_engagement_fields(tmp_path):
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    eng = res["engagement"]
+    assert "stdoutBytes" in eng and "wallSeconds" in eng and "source" in eng
+    assert eng["stdoutBytes"] == len(_VALID_FINDINGS_STDOUT)
+
+
+def test_dispatch_codex_engagement_tokens_from_stderr(tmp_path):
+    repo_root = _repo(tmp_path)
+    stderr_tail = "log line\ntokens used\n1,234\n"
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, stderr_tail)])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    assert res["ok"] is True
+    assert res["engagement"]["tokens"] == 1234
+    assert res["engagement"]["source"] == "codex-stderr"
+
+
+def test_dispatch_cursor_engagement_tool_calls(tmp_path):
+    repo_root = _repo(tmp_path)
+    stream = "\n".join([
+        '{"type":"tool_call","call_id":"c1","subtype":"started"}',
+        '{"type":"tool_call","call_id":"c2","subtype":"started"}',
+        '{"type":"tool_call","call_id":"c1","subtype":"completed"}',
+        '{"type":"result","findings":[{"id":"f1","message":"ok"}]}',
+    ])
+    fake = FakeRunner([(stream, False, 0, "")])
+    res = ED.dispatch_review(
+        "cursor", model=None, effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    assert res["ok"] is True
+    assert res["engagement"]["toolCalls"] == 2
+    assert res["engagement"]["source"] == "cursor-stream"
+
+
+def test_dispatch_empty_findings_no_investigated_is_vacuous_forfeit(tmp_path):
+    """#666: empty findings without a verifiable investigation record must not certify clean."""
+    repo_root = _repo(tmp_path)
+    empty = json.dumps({"findings": []})
+    fake = FakeRunner([(empty, False, 0, ""), (empty, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    assert res["ok"] is False
+    assert res["reason"] == "vacuous"
+    assert res["forfeited"] is True
+    assert res["attempts"] == 2
+    assert "engagement" in res
+    assert "codex" in res["disclosure"]
+    assert "vacuous" in res["disclosure"]
+
+
+def test_dispatch_empty_findings_with_valid_investigated_accepted(tmp_path):
+    repo_root = _repo(tmp_path)
+    real_file = os.path.join(repo_root, "src", "main.py")
+    os.makedirs(os.path.dirname(real_file), exist_ok=True)
+    with open(real_file, "w", encoding="utf-8") as fh:
+        fh.write("# main\n")
+    rel = "src/main.py"
+    stdout = json.dumps({"findings": [], "investigated": [rel]})
+    fake = FakeRunner([(stdout, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    assert res["ok"] is True
+    assert res["findings"] == []
+    assert res["investigated"] == [rel]
+    assert res["attempts"] == 1
+
+
+def test_dispatch_empty_findings_all_investigated_rejected_is_vacuous(tmp_path):
+    repo_root = _repo(tmp_path)
+    stdout = json.dumps({"findings": [], "investigated": ["/abs/path", "missing.py"]})
+    fake = FakeRunner([(stdout, False, 0, ""), (stdout, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    assert res["ok"] is False
+    assert res["reason"] == "vacuous"
+    assert res["attempts"] == 2
+    assert res["investigatedRejected"] == ["absolute", "missing"]
+
+
+def test_dispatch_whitespace_padded_repo_root_accepts_honest_investigated(tmp_path):
+    repo_root = _repo(tmp_path)
+    real_file = os.path.join(repo_root, "src", "main.py")
+    os.makedirs(os.path.dirname(real_file), exist_ok=True)
+    with open(real_file, "w", encoding="utf-8") as fh:
+        fh.write("# main\n")
+    rel = "src/main.py"
+    padded = "  " + repo_root + "  "
+    stdout = json.dumps({"findings": [], "investigated": [rel]})
+    fake = FakeRunner([(stdout, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=padded, run_engine=fake,
+    )
+    assert res["ok"] is True
+    assert res["investigated"] == [rel]
+    assert fake.calls[0]["cwd"] == repo_root.strip()
+
+
+def test_dispatch_relative_repo_root_absolutized_for_cwd_and_codex_c(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _repo(tmp_path)
+    rel_root = "repo"
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=rel_root, run_engine=fake,
+    )
+    expected = os.path.realpath(os.path.join(str(tmp_path), "repo"))
+    assert fake.calls[0]["cwd"] == expected
+    argv = fake.calls[0]["argv"]
+    i = argv.index("-C")
+    assert argv[i + 1] == expected
+
+
+def test_main_dispatch_review_without_repo_root_json_refusal(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(ED, "_run_engine", _never_call)
+    prompt = _valid_prompt(tmp_path)
+    rc = ED.main([
+        "dispatch-review",
+        "--engine", "codex",
+        "--effort", "high",
+        "--prompt-path", prompt,
+    ])
+    assert rc == 0
+    res = json.loads(capsys.readouterr().out.strip())
+    assert res == {
+        "ok": False, "reason": "unrunnable", "detail": "repo-root-absent",
+        "attempts": 0, "forfeited": False,
+    }
+
+
+def test_dispatch_vacuous_then_valid_investigated_succeeds_on_retry(tmp_path):
+    repo_root = _repo(tmp_path)
+    real_file = os.path.join(repo_root, "a.py")
+    with open(real_file, "w", encoding="utf-8") as fh:
+        fh.write("x")
+    bad = json.dumps({"findings": []})
+    good = json.dumps({"findings": [], "investigated": ["a.py"]})
+    fake = FakeRunner([(bad, False, 0, ""), (good, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    assert res["ok"] is True
+    assert res["attempts"] == 2
+    assert res["investigated"] == ["a.py"]
+
+
+def test_dispatch_nonempty_findings_without_investigated_bypasses_floor(tmp_path):
+    repo_root = _repo(tmp_path)
+    stdout = json.dumps({"findings": [{"id": "f1", "message": "issue"}]})
+    fake = FakeRunner([(stdout, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    assert res["ok"] is True
+    assert res["attempts"] == 1
+    assert len(res["findings"]) == 1
+    assert "investigated" not in res
+
+
+def test_dispatch_double_timeout_stays_forfeited_not_vacuous(tmp_path):
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([("", True, 0, ""), ("", True, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    assert res["reason"] == "forfeited"
+    assert res["reason"] != "vacuous"
+
+
+def test_dispatch_timeout_then_vacuous_reports_vacuous(tmp_path):
+    repo_root = _repo(tmp_path)
+    empty = json.dumps({"findings": []})
+    fake = FakeRunner([("", True, 0, ""), (empty, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    assert res["ok"] is False
+    assert res["reason"] == "vacuous"
+    assert res["attempts"] == 2
+
+
+def test_double_forfeit_has_engagement_unrunnable_does_not(tmp_path):
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([("not json", False, 0, ""), ("not json", False, 0, "")])
+    forfeited = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+    )
+    assert "engagement" in forfeited
+    unrunnable = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=None, run_engine=fake,
+    )
+    assert "engagement" not in unrunnable
+    assert unrunnable["attempts"] == 0
