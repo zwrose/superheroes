@@ -562,6 +562,43 @@ def test_dispatch_echo_only_stdout_forfeits_not_clean_review(tmp_path):
     assert len(fake.calls) == 2
 
 
+def test_dispatch_genuine_finding_quoting_the_prompt_survives(tmp_path):
+    """#668: conditional echo strip must not mangle a finding that quotes the prompt tail."""
+    repo_root = _repo(tmp_path)
+    marker = "PROMPT_TAIL_MARKER_668"
+    shape = (
+        "Review the diff.\nRespond with JSON only:\n"
+        '{"findings": [...]}\n'
+        '{"findings": []}\n'
+    )
+    pad_lines = []
+    while len("".join(pad_lines) + shape) < 3000:
+        pad_lines.append(f"{marker} padding line {len(pad_lines)}\n")
+    content = "".join(pad_lines) + shape
+    assert len(content) >= 3000
+    prompt_path = _valid_prompt(tmp_path, content)
+    with open(prompt_path, encoding="utf-8") as fh:
+        base = fh.read()
+    fed = ED.ANTIHIJACK_PREAMBLE + base
+    tail = fed[-2000:]
+    assert marker in tail
+    finding_body = "context:\n" + tail
+    stdout = json.dumps({"findings": [
+        {"severity": "Important", "title": "quoted prompt in body",
+         "body": finding_body, "suggestion": "s"}]})
+    fake = FakeRunner([(stdout, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=prompt_path, repo_root=repo_root, run_engine=fake,
+    )
+    assert res["ok"] is True
+    assert res["attempts"] == 1
+    assert len(res["findings"]) == 1
+    body = res["findings"][0].get("body") or ""
+    assert body
+    assert marker in body
+
+
 def test_dispatch_success_includes_engagement_fields(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])

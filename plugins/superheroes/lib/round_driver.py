@@ -860,6 +860,15 @@ def _fell_open_rows(seat_map, ran_manifest, seat_status):
     return rows, provenance_missing
 
 
+def _seat_map_configured_vendor(seat_map, dim):
+    """Configured vendor for `dim` from a #510 seat map, or None if absent/unknown."""
+    if not isinstance(seat_map, dict) or not isinstance(seat_map.get("seats"), dict):
+        return None
+    c = seat_map["seats"].get(dim)
+    v = c.get("vendor") if isinstance(c, dict) else None
+    return v if isinstance(v, str) and v in _PANEL_VENDORS else None
+
+
 def _fold_panel(state, config, artifact):
     """Fold a full reviewer-deep panel. `artifact` maps dimension → {findings, receiptMissing?,
     receiptStale?}. A persistently receipt-missing/stale seat is terminal `missing` (shell
@@ -873,12 +882,16 @@ def _fold_panel(state, config, artifact):
     seat_status = {}
     unverified = []
     missing_dims = []
+    vacuous_dims = []
     for dim in _panel_dimensions(config):
         seat = seats.get(dim) if isinstance(seats, dict) else None
         findings = []
         status = "run"
         if isinstance(seat, dict):
             findings = seat.get("findings") or []
+            if seat.get("vacuous") is True or seat.get("reason") == "vacuous":
+                status = "missing"
+                vacuous_dims.append(dim)
             if seat.get("receiptMissing") or seat.get("receiptStale"):
                 status = "missing"
         elif isinstance(seat, list):
@@ -901,6 +914,62 @@ def _fold_panel(state, config, artifact):
                 unverified.append({"dimension": dim, "title": g.get("title"),
                                    "file": g.get("file"), "line": g.get("line")})
             raw.append(g)
+    if vacuous_dims:
+        _record_round(state, "vacuousSeats", list(vacuous_dims))
+        _decision(state, "seat-vacuous",
+                  "%d seat(s) returned no findings and no verifiable investigation record (%s) — "
+                  "classed as never-ran; certification cannot rest on them"
+                  % (len(vacuous_dims), ", ".join(vacuous_dims)))
+    # Cross-vendor liveness canary: when every external seat that ran returned zero findings,
+    # a control probe must prove the engine path was live — plant detection is recorded only.
+    _sm_for_canary = state.get("seatMap") if isinstance(state.get("seatMap"), dict) else seat_map
+    cross_vendor_run = []
+    for dim in _panel_dimensions(config):
+        if seat_status.get(dim) != "run":
+            continue
+        configured = _seat_map_configured_vendor(_sm_for_canary, dim)
+        if configured is None or configured == "claude":
+            continue
+        cross_vendor_run.append(dim)
+    if cross_vendor_run:
+        all_empty = True
+        for dim in cross_vendor_run:
+            seat = seats.get(dim) if isinstance(seats, dict) else None
+            fnds = []
+            if isinstance(seat, dict):
+                fnds = seat.get("findings") or []
+            elif isinstance(seat, list):
+                fnds = seat
+            if fnds:
+                all_empty = False
+                break
+        if all_empty:
+            canary = artifact.get("canaryResult")
+            if not isinstance(canary, dict):
+                _record_round(state, "canaryUnverified", sorted(cross_vendor_run))
+                _decision(state, "canary-unverified",
+                          "every cross-vendor seat (%s) returned zero findings and no control probe "
+                          "was run — external-seat liveness unverified"
+                          % ", ".join(sorted(cross_vendor_run)))
+            elif canary.get("engaged") is not True:
+                for dim in cross_vendor_run:
+                    if dim not in missing_dims:
+                        missing_dims.append(dim)
+                    seat_status[dim] = "missing"
+                _record_round(state, "canaryFailed", {
+                    "seats": sorted(cross_vendor_run),
+                    "detail": canary.get("detail"),
+                    "evidence": canary.get("evidence"),
+                })
+                _decision(state, "canary-failed",
+                          "the control probe showed no engagement (%s) — cross-vendor seat(s) %s "
+                          "downgraded to never-ran"
+                          % (canary.get("detail") or "engaged not true",
+                             ", ".join(sorted(cross_vendor_run))))
+            else:
+                evidence = canary.get("evidence")
+                _record_round(state, "canaryVerified",
+                              evidence if isinstance(evidence, dict) else {})
     incomplete = bool(missing_dims)
     compiled, drops = mechanical_compile(raw, state.get("reviewedDiff"))
     # A full reviewer-deep panel that runs COMPLETE in a DELTA round (round ≥ 2) is a qualifying
@@ -1810,6 +1879,14 @@ def build_receipt(state, session_dir=None):
             rd["fellOpenProvenanceMissing"] = rec.get("fellOpenProvenanceMissing")
         if rec.get("seatMapUnavailable"):
             rd["seatMapUnavailable"] = rec.get("seatMapUnavailable")
+        if rec.get("vacuousSeats"):
+            rd["vacuousSeats"] = rec.get("vacuousSeats")
+        if rec.get("canaryUnverified"):
+            rd["canaryUnverified"] = rec.get("canaryUnverified")
+        if rec.get("canaryFailed"):
+            rd["canaryFailed"] = rec.get("canaryFailed")
+        if rec.get("canaryVerified") is not None:
+            rd["canaryVerified"] = rec.get("canaryVerified")
         rounds.append(rd)
     findings = [{"id": f.get("id"), "file": f.get("file"), "line": f.get("line"),
                  "title": f.get("title"), "severity": f.get("severity"),
@@ -1857,6 +1934,25 @@ def build_receipt(state, session_dir=None):
                 "reviewer-fell-open-seatmap-unavailable (round %s): live cross-vendor vendor(s) %s "
                 "but no seat map submitted — fall-open provenance unverified for the panel" % (
                     rkey, ", ".join(smu)))
+        vac = rrec.get("vacuousSeats")
+        if vac:
+            degraded.append(
+                "vacuous-seat (round %s): seat(s) %s returned no findings and no verifiable "
+                "investigation record — classed as never-ran" % (rkey, ", ".join(vac)))
+        cuv = rrec.get("canaryUnverified")
+        if cuv:
+            degraded.append(
+                "canary-unverified (round %s): every cross-vendor seat (%s) returned zero findings "
+                "and no control probe was run — external-seat liveness unverified" % (
+                    rkey, ", ".join(cuv)))
+        cf = rrec.get("canaryFailed")
+        if cf:
+            detail = cf.get("detail") if isinstance(cf, dict) else None
+            seats_down = cf.get("seats") if isinstance(cf, dict) else []
+            degraded.append(
+                "canary-failed (round %s): the control probe showed no engagement (%s) — "
+                "cross-vendor seat(s) %s downgraded to never-ran" % (
+                    rkey, detail or "engaged not true", ", ".join(seats_down or [])))
     scriptran = _scriptran_summary(session_dir) if session_dir else state.get("_scriptRan") or \
         {"invocations": 0, "byPhase": {}}
     base = {k: cfg.get(k) for k in ("baseRef", "baseBranch", "baseFetch", "mode", "baseRepo",
