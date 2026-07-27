@@ -55,7 +55,9 @@ surfaces now instead of at 2am. See
 **Plugin update dialog — cache bookkeeping.** Claude Code may list `.in_use/` and `__pycache__/`
 entries under the plugin install cache as locally modified files. Those are runtime bookkeeping
 (session markers and Python bytecode from older installed versions); they are safe to overwrite,
-and no user content lives in the plugin cache directory.
+and no user content lives in the plugin cache directory. SessionStart best-effort removes stale
+`.in_use` markers from the active plugin install; set `SUPERHEROES_NO_CACHE_SWEEP` to any
+non-empty value to disable that sweep.
 
 ---
 

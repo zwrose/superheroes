@@ -410,7 +410,9 @@ def test_verifier_and_code_fixer_families_match_per_vendor():
     (#652 rider 4a). If a future registry change breaks the invariant, the fallback becomes reachable
     again and the deleted branch must be reconsidered — so this test failing is a design signal,
     not a test to relax."""
-    for vendor in MR.vendors():
+    vendors = MR.vendors()
+    assert vendors, "model_registry.vendors() must be non-empty for this invariant"
+    for vendor in vendors:
         fixer_fam = MR.family_for("code-fixer", vendor)
         verifier_fam = MR.family_for("verifier", vendor)
         assert fixer_fam is not None, (

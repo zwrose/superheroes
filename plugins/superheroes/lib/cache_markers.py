@@ -5,15 +5,21 @@ import re
 import stat
 import time
 
-_PID_NAME_RE = re.compile(r"^[0-9]+$")
+_PID_NAME_RE = re.compile(r"^([0-9]+)(?:\.tmp\.[0-9a-fA-F]+)?$")
 _STAT = os.stat
 _UNLINK = os.unlink
 
 
 def sweep_stale(plugin_root, now=None, grace_seconds=3600):
     """Remove <plugin_root>/.in_use/<pid> markers whose PID is provably dead. Returns the
-    number removed. NEVER raises."""
+    number removed. NEVER raises.
+
+    Set environment variable ``SUPERHEROES_NO_CACHE_SWEEP`` to any non-empty value to skip
+    the sweep (returns 0 without touching the filesystem)."""
     try:
+        if os.environ.get("SUPERHEROES_NO_CACHE_SWEEP", ""):
+            return 0
+
         if _UNLINK not in os.supports_dir_fd or _STAT not in os.supports_dir_fd:
             return 0
 
@@ -41,16 +47,17 @@ def sweep_stale(plugin_root, now=None, grace_seconds=3600):
             removed = 0
             for name in names:
                 try:
-                    if not _PID_NAME_RE.match(name):
+                    m = _PID_NAME_RE.match(name)
+                    if not m:
                         continue
                     try:
-                        pid = int(name)
+                        pid = int(m.group(1))
                     except ValueError:
                         continue
                     if pid == 0:
                         continue
 
-                    st = os.stat(name, dir_fd=dir_fd)
+                    st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
                     if not stat.S_ISREG(st.st_mode):
                         continue
 
@@ -69,7 +76,7 @@ def sweep_stale(plugin_root, now=None, grace_seconds=3600):
 
                     ino, dev = st.st_ino, st.st_dev
                     try:
-                        st2 = os.stat(name, dir_fd=dir_fd)
+                        st2 = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
                     except OSError:
                         continue
                     if st2.st_ino != ino or st2.st_dev != dev:

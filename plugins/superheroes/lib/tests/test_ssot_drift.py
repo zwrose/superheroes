@@ -23,6 +23,8 @@ The reviewer-roster and docs-location clusters live in their topical sibling gua
 import os
 import re
 
+import pytest
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN = os.path.abspath(os.path.join(HERE, "..", ".."))
 
@@ -37,6 +39,16 @@ def _one(matches, name, label, shape):
         "%s: expected exactly one `const %s = %s`, found %d (a rename, or a reformat "
         "the drift parser can't read)" % (label, name, shape, len(matches)))
     return matches[0]
+
+
+def test_one_raises_on_zero_matches():
+    with pytest.raises(AssertionError, match=r"doc\.md: expected exactly one"):
+        _one([], "FOO", "doc.md", "...")
+
+
+def test_one_raises_on_two_matches():
+    with pytest.raises(AssertionError, match=r"doc\.md: expected exactly one"):
+        _one(["a", "b"], "FOO", "doc.md", "...")
 
 
 # --- Cluster 1: severity tiers + blocking partition + rank order -------------
