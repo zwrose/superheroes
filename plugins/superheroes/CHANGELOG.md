@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.22.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.21.2...superheroes-v0.22.0) (2026-07-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* **superheroes:** Claude 5 model refresh + cursor first-party family merge (release re-statement of #653) ([#673](https://github.com/zwrose/superheroes/issues/673))
+
+### Features
+
+* **superheroes:** Claude 5 model refresh + cursor first-party family merge (release re-statement of [#653](https://github.com/zwrose/superheroes/issues/653)) ([#673](https://github.com/zwrose/superheroes/issues/673)) ([9f73450](https://github.com/zwrose/superheroes/commit/9f7345072a357cccfca71ad8ef1e744963ca9fe5))
+* **superheroes:** cursor CLI is first-party-only; sunset the fable-on-external fall-open ([#650](https://github.com/zwrose/superheroes/issues/650)) ([#675](https://github.com/zwrose/superheroes/issues/675)) ([00f730f](https://github.com/zwrose/superheroes/commit/00f730f76194bc880af6b8bef99a62b91d4fab0b))
+* **superheroes:** maker family barred from every panel seat — disclosed same-family degradation only when no alternative family is live ([#670](https://github.com/zwrose/superheroes/issues/670)) ([#679](https://github.com/zwrose/superheroes/issues/679)) ([9b26f25](https://github.com/zwrose/superheroes/commit/9b26f250121d01a329d7fa4defb7aac70af56a7e))
+* **superheroes:** review base guard as machinery — round_driver enforces resolve-to-commit + non-empty diff; fork mismatch fails loud ([#648](https://github.com/zwrose/superheroes/issues/648)) ([#667](https://github.com/zwrose/superheroes/issues/667)) ([ae6ebbe](https://github.com/zwrose/superheroes/commit/ae6ebbe4cb4dbc2e5b1f2d00ae14879e8b6788c4))
+* **superheroes:** review-trust cluster — pinned read seats, an investigation floor, and a standing control probe ([#665](https://github.com/zwrose/superheroes/issues/665), [#666](https://github.com/zwrose/superheroes/issues/666), [#668](https://github.com/zwrose/superheroes/issues/668)) ([#683](https://github.com/zwrose/superheroes/issues/683)) ([abcbcf0](https://github.com/zwrose/superheroes/commit/abcbcf032ed2dd74d9c17e24a7000440640e16f2))
+* **superheroes:** sanitized view for external review seats — the reviewed repo can neither steer nor hide from its own reviewer ([#684](https://github.com/zwrose/superheroes/issues/684)) ([#688](https://github.com/zwrose/superheroes/issues/688)) ([e2bc300](https://github.com/zwrose/superheroes/commit/e2bc300451bc613d3d7a2790db3653b48d30dcc2))
+
+
+### Chores
+
+* **superheroes:** charter hygiene 5 — eight mechanical riders ([#638](https://github.com/zwrose/superheroes/issues/638)) ([#663](https://github.com/zwrose/superheroes/issues/663)) ([a0b32e9](https://github.com/zwrose/superheroes/commit/a0b32e96cfede2f91eb626affdf16a53b9a37c09))
+* **superheroes:** charter hygiene 6 — eight riders ([#652](https://github.com/zwrose/superheroes/issues/652)) ([#686](https://github.com/zwrose/superheroes/issues/686)) ([9d4f107](https://github.com/zwrose/superheroes/commit/9d4f107b9b7c1cbe2550534f7208eeb276c964ab))
+
 ## [0.21.2](https://github.com/zwrose/superheroes/compare/superheroes-v0.21.1...superheroes-v0.21.2) (2026-07-26)
 
 
