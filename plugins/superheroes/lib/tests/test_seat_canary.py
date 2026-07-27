@@ -92,45 +92,66 @@ def test_vacuous_no_telemetry_not_engaged():
 
 def test_high_token_spend_alone_not_engaged():
     def dispatch(engine, **kwargs):
-        return {
-            "ok": False,
-            "reason": "vacuous",
-            "attempts": 2,
-            "forfeited": True,
-            "engagement": {
+        return _base_dispatch_result(
+            investigated=[],
+            engagement={
                 "tokens": 50000,
                 "toolCalls": None,
                 "stdoutBytes": 999,
                 "wallSeconds": 120.0,
             },
+        )
+
+    out = SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+    )
+    assert out["engaged"] is False
+    assert out["outcome"] == "ok"
+
+
+def test_wall_time_alone_not_engaged():
+    def dispatch(engine, **kwargs):
+        return _base_dispatch_result(
+            engagement={
+                "tokens": None,
+                "toolCalls": None,
+                "stdoutBytes": 0,
+                "wallSeconds": 600.0,
+            },
+        )
+
+    out = SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+    )
+    assert out["engaged"] is False
+    assert out["outcome"] == "ok"
+
+
+def test_vacuous_outcome_never_engaged_regardless_of_telemetry():
+    def dispatch(engine, **kwargs):
+        return {
+            "ok": False,
+            "reason": "vacuous",
+            "attempts": 2,
+            "forfeited": True,
+            "findings": [],
+            "engagement": {
+                "tokens": 50000,
+                "toolCalls": 5,
+                "stdoutBytes": 999,
+                "wallSeconds": 600.0,
+            },
+            "disclosure": "vacuous seat",
         }
 
     out = SC.run_canary(
         "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
     )
     assert out["engaged"] is False
+    assert out["outcome"] == "vacuous"
 
 
-def test_wall_time_alone_not_engaged_but_finding_with_fast_wall_engaged():
-    def dispatch_vacuous(engine, **kwargs):
-        return {
-            "ok": False,
-            "reason": "vacuous",
-            "attempts": 2,
-            "forfeited": True,
-            "engagement": {
-                "tokens": None,
-                "toolCalls": None,
-                "stdoutBytes": 0,
-                "wallSeconds": 600.0,
-            },
-        }
-
-    out_slow = SC.run_canary(
-        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch_vacuous,
-    )
-    assert out_slow["engaged"] is False
-
+def test_finding_with_fast_wall_engaged():
     def dispatch_finding(engine, **kwargs):
         return _base_dispatch_result(
             findings=[{"id": "f", "file": "a.py", "title": "t", "body": "b"}],
@@ -142,10 +163,10 @@ def test_wall_time_alone_not_engaged_but_finding_with_fast_wall_engaged():
             },
         )
 
-    out_fast = SC.run_canary(
+    out = SC.run_canary(
         "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch_finding,
     )
-    assert out_fast["engaged"] is True
+    assert out["engaged"] is True
 
 
 def test_tool_calls_engagement_ladder():
@@ -251,17 +272,44 @@ def test_dispatch_receives_fixture_prompt_and_repo_root(tmp_path):
     assert "investigated" in seen["contents"]
 
 
+def _engagement_decision_blocks(src):
+    blocks = []
+    for name in ("_engaged_from_dispatch", "run_canary"):
+        m = re.search(rf"def {name}\(.*?(?=\ndef |\Z)", src, re.DOTALL)
+        assert m is not None, "missing function %s" % name
+        blocks.append(m.group(0))
+    return blocks
+
+
+def _assert_engaged_not_branched_on_plant_detection(block):
+    assert not re.search(r"if\s+detected_plant\b", block)
+    assert not re.search(r"if\s+detectedPlant\b", block)
+    for line in block.splitlines():
+        if "engaged" in line and "=" in line:
+            assert "detected_plant" not in line
+            assert "detectedPlant" not in line
+
+
 def test_detected_plant_does_not_drive_engaged():
     # detectedPlant True requires a finding carrying PLANT_MARKER, which also satisfies the
-    # engagement OR-ladder — combination unconstructible. Pin: engaged logic never reads detectedPlant.
+    # engagement OR-ladder — combination unconstructible at the behavioural layer.
+    def dispatch(engine, **kwargs):
+        return _base_dispatch_result(
+            findings=[],
+            engagement={"tokens": None, "toolCalls": None, "stdoutBytes": 0, "wallSeconds": 0.0},
+        )
+
+    out = SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+    )
+    assert out["engaged"] is False
+    assert out["detectedPlant"] is False
+
     src_path = os.path.join(_HERE, "..", "seat_canary.py")
     with open(src_path, encoding="utf-8") as fh:
         src = fh.read()
-    engaged_block = re.search(
-        r"def _engaged_from_dispatch\(.*?(?=\ndef |\Z)", src, re.DOTALL)
-    assert engaged_block is not None
-    assert "detectedPlant" not in engaged_block.group(0)
-    assert "detected_plant" not in engaged_block.group(0)
+    for block in _engagement_decision_blocks(src):
+        _assert_engaged_not_branched_on_plant_detection(block)
 
 
 def test_dispatch_exception_still_cleans_temp_file(tmp_path):
