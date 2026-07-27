@@ -3171,6 +3171,113 @@ def test_canary_fell_open_codex_configured_claude_ran_not_subject():
     assert state["fullPanelRan"] is True
 
 
+def _codex_cross_vendor_canary_inputs(findings):
+    dims = list(RD.DIMENSIONS)
+    seat_map = _seat_map_vendors({d: "claude" for d in dims})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    seats = {d: {"findings": []} for d in dims}
+    seats["code-reviewer"] = {"findings": findings}
+    status = {d: "run" for d in dims}
+    return dims, status, seats, seat_map
+
+
+@pytest.mark.parametrize("findings,expected_dim_status", [
+    ([None], "unproven"),
+    ("garbage", "unproven"),
+    ([None, {"title": "x"}], "n/a"),
+    ([{}], "n/a"),
+    ([], "unproven"),
+])
+def test_canary_liveness_usable_findings_only_dicts_count(findings, expected_dim_status):
+    dims, status, seats, seat_map = _codex_cross_vendor_canary_inputs(
+        findings if isinstance(findings, list) else [])
+    seats["code-reviewer"] = {"findings": findings}
+    out = RD.canary_liveness(dims, status, seats, seat_map, {}, None)
+    assert out["byDim"]["code-reviewer"] == expected_dim_status
+
+
+def test_fold_panel_null_finding_cross_vendor_unverified_not_full_panel():
+    state = RD.new_state(_cfg(leg="panel"))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seats["code-reviewer"] = {"findings": [None]}
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": seat_map})
+    r1 = state["rounds"]["1"]
+    assert r1["canaryUnverified"] == ["code-reviewer"]
+    assert state["fullPanelRan"] is False
+    assert "canary-unverified" in _decision_kinds(state)
+
+
+@pytest.mark.parametrize("dimensions", [
+    1,
+    [["code-reviewer"]],
+    None,
+    ["code-reviewer", 42],
+])
+def test_canary_liveness_malformed_dimensions_no_raise(dimensions):
+    seat_map = _seat_map_vendors({"code-reviewer": "codex"})
+    out = RD.canary_liveness(
+        dimensions, {"code-reviewer": "run"},
+        {"code-reviewer": {"findings": []}}, seat_map, {}, None)
+    assert isinstance(out, dict) and "byDim" in out and "byVendor" in out
+
+
+def test_fold_panel_malformed_config_dimensions_no_raise():
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    for bad_dims in (1, [["code-reviewer"]], None, ["code-reviewer", 42]):
+        st = RD.new_state(_cfg(leg="panel", dimensions=bad_dims))
+        RD._fold_panel(st, st["config"], {"seats": seats, "seatMap": seat_map})
+        assert st["rounds"]["1"]["canaryUnverified"] == ["code-reviewer"]
+        assert st["fullPanelRan"] is False
+
+
+def test_canary_verified_record_stable_two_engaged_probe_orders():
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    probe_a = {
+        "engine": "codex", "model": "gpt", "outcome": "ok", "engaged": True,
+        "evidence": {"tokens": 1}, "detectedPlant": False, "detail": "alpha",
+    }
+    probe_b = {
+        "engine": "codex", "model": "gpt", "outcome": "ok", "engaged": True,
+        "evidence": {"tokens": 2}, "detectedPlant": False, "detail": "beta",
+    }
+    records = []
+    for canary in ([probe_a, probe_b], [probe_b, probe_a]):
+        st = RD.new_state(_cfg(leg="panel"))
+        RD._fold_panel(st, st["config"], {
+            "seats": seats, "seatMap": seat_map, "canaryResult": canary,
+        })
+        records.append(st["rounds"]["1"]["canaryVerified"])
+    assert records[0] == records[1]
+
+
+def test_canary_failed_record_stable_two_failing_probe_orders():
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    probe_a = {
+        "engine": "codex", "model": "gpt", "outcome": "vacuous", "engaged": False,
+        "evidence": {"tokens": 0}, "detectedPlant": False, "detail": "alpha",
+    }
+    probe_b = {
+        "engine": "codex", "model": "gpt", "outcome": "vacuous", "engaged": False,
+        "evidence": {"tokens": 9}, "detectedPlant": False, "detail": "beta",
+    }
+    records = []
+    for canary in ([probe_a, probe_b], [probe_b, probe_a]):
+        st = RD.new_state(_cfg(leg="panel"))
+        RD._fold_panel(st, st["config"], {
+            "seats": seats, "seatMap": seat_map, "canaryResult": canary,
+        })
+        records.append(st["rounds"]["1"]["canaryFailed"])
+    assert records[0] == records[1]
+
+
 def test_cursor_fix_never_gets_an_independent_cursor_auditor():
     """#651: composer and grok are ONE family, so a cursor-only panel auditing a cursor fix is
     DEGRADED, never independent. Under the old registry (composer='cursor', grok='xai') the

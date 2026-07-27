@@ -723,7 +723,10 @@ def _shard_payload(diff_text, dimensions):
 
 def _panel_dimensions(config):
     dims = config.get("dimensions")
-    return list(dims) if isinstance(dims, list) and dims else list(DIMENSIONS)
+    if isinstance(dims, (list, tuple)):
+        strings = [d for d in dims if isinstance(d, str)]
+        return strings if strings else list(DIMENSIONS)
+    return list(DIMENSIONS)
 
 
 def _advance(state, config):
@@ -868,17 +871,49 @@ def _canary_effective_vendor(seat_map, ran_manifest, dim):
     return _seat_map_configured_vendor(seat_map, dim)
 
 
+def _usable_findings(seat):
+    """Findings this panel will actually fold — only dict members count.
+
+    ``canary_liveness`` and ``_fold_panel`` must share this predicate so a seat cannot
+    skip the liveness probe while contributing nothing foldable (e.g. ``findings=[None]``).
+    """
+    if isinstance(seat, dict):
+        raw = seat.get("findings")
+    elif isinstance(seat, list):
+        raw = seat
+    else:
+        raw = []
+    if not isinstance(raw, list):
+        raw = []
+    return [f for f in raw if isinstance(f, dict)]
+
+
+def _canary_dimension_list(dimensions):
+    if isinstance(dimensions, (list, tuple)):
+        return [d for d in dimensions if isinstance(d, str)]
+    return []
+
+
 def _canary_probe_sort_key(probe):
+    if not isinstance(probe, dict):
+        return ("", "", "")
     eng = probe.get("engine")
     eng_s = eng if isinstance(eng, str) else repr(eng)
-    det = probe.get("detail")
-    det_s = det if isinstance(det, str) else repr(det)
-    return (eng_s, det_s, str(probe.get("engaged")))
+    engaged_s = repr(probe.get("engaged"))
+    try:
+        stable = json.dumps(probe, sort_keys=True, default=repr)
+    except (TypeError, ValueError):
+        stable = repr(probe)
+    return (eng_s, engaged_s, stable)
 
 
 def canary_liveness(dimensions, seat_status, seats, seat_map, ran_manifest, canary_result):
-    """Per-vendor liveness judgement for a panel's cross-vendor seats. Pure; never raises."""
-    dims = list(dimensions) if dimensions else []
+    """Per-vendor liveness judgement for a panel's cross-vendor seats.
+
+    Pure on normalized inputs: malformed ``dimensions`` (non-list/tuple, or non-string
+    members) are dropped; other arguments are type-guarded. Does not raise on those shapes.
+    """
+    dims = _canary_dimension_list(dimensions)
     status = seat_status if isinstance(seat_status, dict) else {}
     seat_data = seats if isinstance(seats, dict) else {}
     manifest = ran_manifest if isinstance(ran_manifest, dict) else {}
@@ -898,13 +933,7 @@ def canary_liveness(dimensions, seat_status, seats, seat_map, ran_manifest, cana
         dims_v = sorted(vendor_dims[vendor])
         has_finding = False
         for dim in dims_v:
-            seat = seat_data.get(dim)
-            fnds = []
-            if isinstance(seat, dict):
-                fnds = seat.get("findings") or []
-            elif isinstance(seat, list):
-                fnds = seat
-            if fnds:
+            if _usable_findings(seat_data.get(dim)):
                 has_finding = True
                 break
         if has_finding:
@@ -928,7 +957,7 @@ def canary_liveness(dimensions, seat_status, seats, seat_map, ran_manifest, cana
             deciding = sorted(failing, key=_canary_probe_sort_key)[0]
             st = "dead"
         elif engaged_ok:
-            deciding = engaged_ok[0]
+            deciding = sorted(engaged_ok, key=_canary_probe_sort_key)[0]
             st = "proven"
         else:
             deciding = None
@@ -988,10 +1017,9 @@ def _fold_panel(state, config, artifact):
     vacuous_dims = []
     for dim in _panel_dimensions(config):
         seat = seats.get(dim) if isinstance(seats, dict) else None
-        findings = []
+        findings = _usable_findings(seat)
         status = "run"
         if isinstance(seat, dict):
-            findings = seat.get("findings") or []
             reason = seat.get("reason")
             not_run = seat.get("vacuous") is True or (
                 isinstance(reason, str) and reason in _DISPATCH_NOT_RUN_REASONS)
@@ -1003,9 +1031,7 @@ def _fold_panel(state, config, artifact):
                     vacuous_dims.append(dim)
             if seat.get("receiptMissing") or seat.get("receiptStale"):
                 status = "missing"
-        elif isinstance(seat, list):
-            findings = seat
-        else:
+        elif not isinstance(seat, list):
             # A configured dimension with NO dict/list seat did not run: an omitted / null / mangled
             # seat is a silent coverage gap. Fail closed — status `missing`, never a clean `run`, so
             # it cannot count toward a full-panel certification (silence never certifies).
@@ -1014,8 +1040,6 @@ def _fold_panel(state, config, artifact):
             missing_dims.append(dim)
         seat_status[dim] = status
         for f in findings:
-            if not isinstance(f, dict):
-                continue
             g = dict(f)
             g.setdefault("dimension", dim)
             if status == "missing":
