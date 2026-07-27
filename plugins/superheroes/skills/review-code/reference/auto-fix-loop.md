@@ -181,7 +181,7 @@ never drop a finding or a lens.
 >   SEAT_ENGINE_MODEL="${SEAT_MODEL_BY_VENDOR[${VENDOR}]}"
 >   SEAT_EFFORT="${SEAT_EFFORT_BY_VENDOR[${VENDOR}]}"
 >   CANARY_RESULTS+=("$(
->     python3 "${ROOT_DIR}/lib/seat_canary.py" probe \
+>     python3 -B "${ROOT_DIR}/lib/seat_canary.py" probe \
 >       --engine "${VENDOR}" --engine-model "${SEAT_ENGINE_MODEL}" --effort "${SEAT_EFFORT}" \
 >       --repo-root "${REPO_ROOT}"
 >   )")
