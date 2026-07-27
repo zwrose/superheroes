@@ -429,6 +429,67 @@ class _CatFileBatch:
         self._proc = None
 
 
+class _CatFileBatchCheck:
+    """Single ``git cat-file --batch-check`` session (strict request-then-response)."""
+
+    def __init__(self, repo_real):
+        try:
+            self._proc = subprocess.Popen(
+                ["git", "-C", repo_real, "cat-file", "--batch-check"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError as exc:
+            raise SanitizedViewError("sanitized-view-export-failed") from exc
+        self._stdin = self._proc.stdin
+        self._stdout = self._proc.stdout
+
+    def check_object_type(self, oid, started):
+        _check_export_deadline(started)
+        try:
+            self._stdin.write(oid.encode("ascii") + b"\n")
+            self._stdin.flush()
+        except OSError as exc:
+            raise SanitizedViewError("sanitized-view-export-failed") from exc
+        try:
+            line = self._stdout.readline()
+        except OSError as exc:
+            raise SanitizedViewError("sanitized-view-export-failed") from exc
+        if not line or line == b"\n":
+            raise SanitizedViewError("sanitized-view-export-failed")
+        parts = line.decode("ascii", errors="replace").split()
+        if len(parts) == 2 and parts[0] == oid and parts[1] == "missing":
+            return "missing"
+        if len(parts) == 3 and parts[0] == oid:
+            return parts[1]
+        raise SanitizedViewError("sanitized-view-export-failed")
+
+    def close(self):
+        if self._stdin is not None:
+            try:
+                self._stdin.close()
+            except OSError:
+                pass
+            self._stdin = None
+        _terminate_process(self._proc)
+        self._proc = None
+
+
+def _resolve_gitlink_object_types(repo_real, oids, started):
+    """Map gitlink object ids to actual types (``missing`` when not in this repo)."""
+    if not oids:
+        return {}
+    unique = list(dict.fromkeys(oids))
+    batch = None
+    try:
+        batch = _CatFileBatchCheck(repo_real)
+        return {oid: batch.check_object_type(oid, started) for oid in unique}
+    finally:
+        if batch is not None:
+            batch.close()
+
+
 def _assert_path_under_view(view_root, rel_posix):
     full = os.path.normpath(os.path.join(view_root, rel_posix))
     if not path_is_confidently_under(full, view_root):
@@ -456,6 +517,8 @@ def _materialize_from_tree(repo_real, head_sha, view_root, started):
     .gitattributes cannot apply.
     """
     census = _git_ls_tree_census(repo_real, head_sha)
+    gitlink_oids = [oid for mode, _obj_type, oid, _path in census if mode == "160000"]
+    gitlink_types = _resolve_gitlink_object_types(repo_real, gitlink_oids, started)
     stripped_set = set()
     submodules = set()
     escaping_symlinks = set()
@@ -479,8 +542,15 @@ def _materialize_from_tree(repo_real, head_sha, view_root, started):
                 continue
 
             if mode == "160000":
-                submodules.add(path)
-                continue
+                actual_type = gitlink_types[oid]
+                if actual_type == "commit":
+                    submodules.add(path)
+                    continue
+                if actual_type == "missing":
+                    # Parent repos usually lack the submodule commit object locally.
+                    submodules.add(path)
+                    continue
+                raise SanitizedViewError("sanitized-view-export-failed")
 
             if mode == "120000":
                 blob, total_bytes = batch.read_blob_bytes(

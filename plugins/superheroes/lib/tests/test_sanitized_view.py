@@ -1149,22 +1149,46 @@ def test_literal_backslash_in_filename_materialized(tmp_path):
         sv.destroy_sanitized_view(view["path"])
 
 
-def test_gitlink_wrong_object_type_refuses(tmp_path, monkeypatch):
-    repo = _init_repo(tmp_path / "badgitlink", files={"keep.txt": "k\n"})
-    blob_oid = subprocess.run(
-        ["git", "-C", repo, "hash-object", "-w", "--stdin"],
-        input=b"not a commit tree",
+def test_forged_gitlink_hiding_blob_refuses(tmp_path):
+    """Mode 160000 pointing at a blob: ls-tree still reports commit; must refuse."""
+    repo = _init_repo(
+        tmp_path / "forge",
+        files={
+            "normal.py": "print('ok')\n",
+            "hidden.py": "SECRET_SOURCE\n",
+        },
+    )
+    blob_oid = _git(repo, "hash-object", "-w", "hidden.py").stdout.strip()
+    _git(repo, "rm", "--cached", "hidden.py")
+    _git(
+        repo,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        "160000,%s,hidden.py" % blob_oid,
+    )
+    tree_oid = _git(repo, "write-tree").stdout.strip()
+    parent = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    commit_oid = subprocess.run(
+        [
+            "git",
+            "-C",
+            repo,
+            "commit-tree",
+            tree_oid,
+            "-p",
+            parent,
+            "-m",
+            "crafted fake gitlink",
+        ],
         capture_output=True,
+        text=True,
         check=True,
-    ).stdout.decode().strip()
-    real_census = sv._git_ls_tree_census
-
-    def census_with_blob_gitlink(repo_real, head_sha):
-        entries = list(real_census(repo_real, head_sha))
-        entries.append(("160000", "blob", blob_oid, "evil-submod"))
-        return entries
-
-    monkeypatch.setattr(sv, "_git_ls_tree_census", census_with_blob_gitlink)
+    ).stdout.strip()
+    _git(repo, "update-ref", "HEAD", commit_oid)
+    ls = _git(repo, "ls-tree", "-r", "HEAD").stdout
+    assert "160000 commit" in ls and "hidden.py" in ls
+    assert _git(repo, "cat-file", "-t", blob_oid).stdout.strip() == "blob"
     with pytest.raises(sv.SanitizedViewError) as exc:
         _build(repo)
     assert exc.value.detail == "sanitized-view-export-failed"
