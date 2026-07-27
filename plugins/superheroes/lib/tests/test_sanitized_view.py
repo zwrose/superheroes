@@ -309,6 +309,31 @@ def test_source_dirty_tracked_only(tmp_path):
     assert only_untracked["sourceDirty"] is False
 
 
+def test_strip_oserror_cleans_temp_dir(tmp_path, monkeypatch):
+    import tempfile
+
+    repo = _init_repo(tmp_path / "stripfail", files={"CLAUDE.md": "x\n", "keep.txt": "y\n"})
+    tmp_base = tmp_path / "tmpdir"
+    tmp_base.mkdir()
+    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: str(tmp_base))
+    real_remove = os.remove
+
+    def boom_remove(path):
+        if path.endswith("CLAUDE.md"):
+            raise OSError("simulated strip failure")
+        return real_remove(path)
+
+    monkeypatch.setattr(sv.os, "remove", boom_remove)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo)
+    assert exc.value.detail == "sanitized-view-export-failed"
+    survivors = [
+        name for name in os.listdir(tmp_base)
+        if name.startswith("superheroes-sanitized-view-")
+    ]
+    assert survivors == []
+
+
 def test_source_dirty_false_when_only_untracked(tmp_path):
     repo = _init_repo(tmp_path / "ut", files={"keep.txt": "k\n"})
     with open(os.path.join(repo, "brand_new.txt"), "w", encoding="utf-8") as fh:

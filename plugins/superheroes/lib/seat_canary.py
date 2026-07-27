@@ -193,6 +193,7 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
             "evidence": _evidence_from_dispatch(res),
             "detectedPlant": detected_plant,
             "detail": detail,
+            "sanitizedView": res.get("sanitizedView"),
         }
     finally:
         if prompt_path and os.path.isfile(prompt_path):

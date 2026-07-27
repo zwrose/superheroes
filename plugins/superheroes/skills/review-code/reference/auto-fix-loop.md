@@ -120,7 +120,7 @@ never drop a finding or a lens.
 > after the object is best practice** (`engine_adapter.parse_result` scans stdout for the **last
 > top-level JSON value**, so incidental trailing prose after a valid object is tolerated). An **empty** `findings` array is accepted as *clean* **only** when
 > `investigated` lists at least one path that survives the runner's spot-check (the path must resolve
-> inside `--repo-root` and exist on disk). A seat that returns empty findings with no verifiable
+> inside the sanitized review view root and exist on disk). A seat that returns empty findings with no verifiable
 > `investigated` record is a **vacuous forfeit** — a named cause (`reason: "vacuous"` from
 > `dispatch-review`): treated as a seat that **never ran**, not as a clean review; the orchestrator
 > submits the folded seat with `vacuous: true` (or `reason: "vacuous"`). Engine telemetry (token spend,

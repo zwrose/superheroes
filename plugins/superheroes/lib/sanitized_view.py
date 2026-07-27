@@ -57,6 +57,30 @@ class SanitizedViewError(Exception):
         super().__init__(detail)
 
 
+def sanitized_view_notice(view):
+    """Plain-language notice appended to reviewer dispatch prompts (#684)."""
+    stripped = view.get("stripped") or []
+    head = view.get("headSha") or "unknown"
+    lines = [
+        "SANITIZED REVIEW VIEW: Your working directory is a disposable sanitized copy of the "
+        "repository at commit %s, not the operator's live checkout. "
+        "Repo-local agent and IDE config files were removed on purpose; their absence is NOT a "
+        "finding. Do NOT list any stripped path in your investigated array — citing a stripped "
+        "path fails the investigation floor and forfeits this seat. "
+        "This view has no git log or git blame (only a single synthetic commit).\n"
+        % head,
+    ]
+    if stripped:
+        show = stripped[:20]
+        lines.append("Stripped paths (sample): " + ", ".join(show))
+        if len(stripped) > 20:
+            lines.append("(%d additional stripped paths omitted)" % (len(stripped) - 20))
+        lines.append("")
+    else:
+        lines.append("")
+    return "\n".join(lines)
+
+
 def destroy_sanitized_view(path):
     """Best-effort removal of a view directory; never raises."""
     if not path:
@@ -214,6 +238,14 @@ def build_sanitized_view(repo_root):
             "fileCount": file_count,
         }
     except SanitizedViewError:
+        if view_root is not None:
+            destroy_sanitized_view(view_root)
+        raise
+    except OSError:
+        if view_root is not None:
+            destroy_sanitized_view(view_root)
+        raise SanitizedViewError("sanitized-view-export-failed")
+    except Exception:
         if view_root is not None:
             destroy_sanitized_view(view_root)
         raise
