@@ -205,7 +205,11 @@ def test_isolate_strong_seat_exclusion_with_pins():
         assert m["seats"][seat]["family"] != "anthropic"
 
 
-def test_middle_relaxation_author_minority_without_critical_diversity():
+def test_pinned_maker_seats_report_pin_breaks_constraint_not_author_minority():
+    """Pinned maker-family seats are owner overrides disclosed as pin-breaks-constraint.
+
+    The numeric author-minority cap is a separate constraint and was not breached here.
+    """
     pins = {
         "code-reviewer": {"vendor": "claude"},
         "test-reviewer": {"vendor": "claude"},
@@ -215,7 +219,17 @@ def test_middle_relaxation_author_minority_without_critical_diversity():
     m = SM.build(
         SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0, pins=pins
     )
-    assert any(d["constraint"] == "author-minority" for d in m["degradations"])
+    assert not any(d.get("constraint") == "author-minority" for d in m["degradations"])
+    for seat in (
+        "code-reviewer",
+        "test-reviewer",
+        "premortem-reviewer",
+        "grounding-seat",
+    ):
+        assert any(
+            d.get("constraint") == "pin-breaks-constraint" and d.get("seat") == seat
+            for d in m["degradations"]
+        )
     violations = SM.verify(m, "anthropic")
     assert not any(v.get("constraint") == "critical-diversity" for v in violations)
 
