@@ -3209,6 +3209,18 @@ def test_fold_panel_null_finding_cross_vendor_unverified_not_full_panel():
     assert "canary-unverified" in _decision_kinds(state)
 
 
+def test_fold_panel_null_finding_review_record_dim_findings_match_fold():
+    """Per-dimension review record must use _usable_findings, not raw seat.findings."""
+    state = RD.new_state(_cfg(leg="panel"))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seats["code-reviewer"] = {"findings": [None]}
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": seat_map})
+    dim_map = state["_records"][-1]["dimensions"]
+    assert dim_map["code-reviewer"]["findings"] == []
+
+
 @pytest.mark.parametrize("dimensions", [
     1,
     [["code-reviewer"]],

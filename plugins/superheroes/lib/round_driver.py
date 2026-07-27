@@ -1201,7 +1201,7 @@ def _fold_panel(state, config, artifact):
         confidence = "low" if seat_status.get(dim) == "missing" else "high"
         tier = DEEP
         if isinstance(seat, dict):
-            s_findings = seat.get("findings") or []
+            s_findings = _usable_findings(seat)
             if seat_status.get(dim) != "missing":
                 confidence = seat.get("confidence") or "high"
             tier = seat.get("tier") or DEEP
