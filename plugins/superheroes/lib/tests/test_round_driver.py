@@ -2767,6 +2767,18 @@ def test_vacuous_seat_vacuous_flag_classed_never_ran():
     assert "code-reviewer" in vac_lines[0]
 
 
+def test_forfeited_seat_reason_discriminant_classed_never_ran_not_vacuous():
+    state = RD.new_state(_cfg(leg="panel"))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seats["code-reviewer"] = {"findings": [], "reason": "forfeited"}
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": seat_map})
+    assert state["rounds"]["1"]["seatStatus"]["code-reviewer"] == "missing"
+    assert "vacuousSeats" not in state["rounds"]["1"]
+    assert "seat-vacuous" not in _decision_kinds(state)
+    assert state["fullPanelRan"] is False
+
+
 def test_vacuous_seat_reason_discriminant_classed_never_ran():
     state = RD.new_state(_cfg(leg="panel"))
     seats = {d: {"findings": []} for d in RD.DIMENSIONS}

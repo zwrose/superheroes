@@ -23,6 +23,11 @@ import model_registry  # noqa: E402  (band-wide model taxonomy; same-tree siblin
 # build_state_cli git-log parser both reference this so the convention cannot fork.
 TASK_ID_TRAILER = "Task-Id"
 
+# Single home for the vacuous forfeit reason token (CONVENTIONS §11 Pattern 1). The dispatch
+# runner produces it; round_driver and seat_canary compare against it — consumers import this,
+# never restate the literal.
+REVIEW_FORFEIT_VACUOUS = "vacuous"
+
 # #392: the distinct, honest outcome for a fix whose SUBSTANCE is the history shape (squash to N
 # commits, reword, drop a commit) rather than content. Such a fix produces a tree content-identical
 # to pre_sha, so the fold-only invariant (commit_result never discards commits below pre_sha) folds

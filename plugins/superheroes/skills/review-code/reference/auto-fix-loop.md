@@ -116,8 +116,9 @@ never drop a finding or a lens.
 > findings file. Its final stdout MUST be a single JSON object `{"findings": [...]}` (the same array
 > the subagent would have written, wrapped once as the `findings` value) **and** an **`investigated`**
 > array listing every repo-relative path the seat actually read to ground its review — full canonical
-> shape: `{"findings": [...], "investigated": ["repo/relative/path", ...]}` — with **nothing printed
-> after it** (`engine_adapter.parse_result` reads the last top-level JSON value). An **empty** `findings` array is accepted as *clean* **only** when
+> shape: `{"findings": [...], "investigated": ["repo/relative/path", ...]}` — **nothing printed
+> after the object is best practice** (`engine_adapter.parse_result` scans stdout for the **last
+> top-level JSON value**, so incidental trailing prose after a valid object is tolerated). An **empty** `findings` array is accepted as *clean* **only** when
 > `investigated` lists at least one path that survives the runner's spot-check (the path must resolve
 > inside `--repo-root` and exist on disk). A seat that returns empty findings with no verifiable
 > `investigated` record is a **vacuous forfeit** — a named cause (`reason: "vacuous"` from
@@ -125,8 +126,8 @@ never drop a finding or a lens.
 > submits the folded seat with `vacuous: true` (or `reason: "vacuous"`). Engine telemetry (token spend,
 > tool calls, wall time) is **corroborating evidence only** and can never satisfy that investigation
 > floor. Emit the canonical object; the parser also **tolerates a bare top-level array** `[...]` of
-> finding objects as of #196, but anything else (prose, a trailing line, an empty stream, an array of
-> non-objects) parses as `unreadable`, which forfeits the slot to a Claude re-run (UFR-7) and silently
+> finding objects as of #196, but anything else (prose with no parseable JSON object/array, an empty
+> stream, an array of non-objects) parses as `unreadable`, which forfeits the slot to a Claude re-run (UFR-7) and silently
 > doubles the round's cost. State this shape verbatim in the dispatch prompt so orchestrators stop
 > re-guessing it per run.
 
@@ -138,10 +139,11 @@ never drop a finding or a lens.
 > derail), feeds the prompt via the `- < realfile` stdin form behind the `_prompt_path_ok`
 > empty-prompt guard, pins the dispatch to the repository under review (`--repo-root`, codex `-C`,
 > cursor's subprocess cwd), bounds the attempt and streams liveness heartbeats to `--progress-file`,
-> and on a **terminal forfeit** (timeout OR `unreadable` OR **vacuous** — never intermediate bootstrap
+> and on a **terminal forfeit** (timeout OR nonzero engine exit OR `unreadable` OR **vacuous** — never intermediate bootstrap
 > noise that still yields a final answer) auto-retries ONCE tight-inline with a ≥900 s ceiling before
-> returning `{"ok": false, "forfeited": true, "disclosure": …}` (or `reason: "vacuous"` for a
-> double vacuous forfeit). A forfeit → the seat falls open to a Claude re-run (UFR-7) and the
+> returning `{"ok": false, "forfeited": true, "disclosure": …}` (or `reason: "vacuous"` when the
+> **last** attempt ended vacuous — e.g. attempt 1 timing out and attempt 2 coming back vacuous still
+> yields `vacuous`, not only a double vacuous forfeit). A forfeit → the seat falls open to a Claude re-run (UFR-7) and the
 > orchestrator **discloses** the degraded vendor mix (the `disclosure` string); making that fall-open
 > loud by machinery in the receipt is #563 PR C.
 >

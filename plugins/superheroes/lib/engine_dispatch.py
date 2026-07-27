@@ -282,12 +282,12 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
         if ok_inv:
             return {"ok": True, "findings": [], "attempts": attempt,
                     "engagement": last_engagement, "investigated": accepted}
-        last_terminal = "vacuous"
+        last_terminal = engine_adapter.REVIEW_FORFEIT_VACUOUS
         last_investigated_rejected = rejected
         # vacuous forfeit — retry like unreadable
-    if last_terminal == "vacuous":
+    if last_terminal == engine_adapter.REVIEW_FORFEIT_VACUOUS:
         return {
-            "ok": False, "reason": "vacuous", "attempts": 2, "forfeited": True,
+            "ok": False, "reason": engine_adapter.REVIEW_FORFEIT_VACUOUS, "attempts": 2, "forfeited": True,
             "engagement": last_engagement,
             "investigatedRejected": [r["reason"] for r in (last_investigated_rejected or [])],
             "disclosure": ("%s reviewer returned no findings and no verifiable investigation "

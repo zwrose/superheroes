@@ -21,6 +21,37 @@ def test_task_id_trailer_constant():
     assert EA.TASK_ID_TRAILER == "Task-Id"
 
 
+def test_review_forfeit_vacuous_token_single_home_no_literal_drift():
+    """Drift guard: REVIEW_FORFEIT_VACUOUS is the only home; consumers must import, never restate."""
+    assert EA.REVIEW_FORFEIT_VACUOUS == "vacuous"
+    lib = os.path.join(_HERE, "..")
+    consumers = (
+        ("engine_dispatch.py", importlib.util.spec_from_file_location(
+            "engine_dispatch_drift", os.path.join(lib, "engine_dispatch.py"))),
+        ("round_driver.py", importlib.util.spec_from_file_location(
+            "round_driver_drift", os.path.join(lib, "round_driver.py"))),
+        ("seat_canary.py", importlib.util.spec_from_file_location(
+            "seat_canary_drift", os.path.join(lib, "seat_canary.py"))),
+    )
+    for basename, spec in consumers:
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        assert getattr(EA, "REVIEW_FORFEIT_VACUOUS") is EA.REVIEW_FORFEIT_VACUOUS
+        src = open(os.path.join(lib, basename), encoding="utf-8").read()
+        # Bare "vacuous" / 'vacuous' string literals (not vacuous-forfeit, vacuousSeats, etc.) re-open #666 drift.
+        import re
+        _vacuous_lit = re.compile(r'''(?<![\w-])(["'])vacuous\1''')
+        for i, line in enumerate(src.splitlines(), 1):
+            if "import engine_adapter" in line or "REVIEW_FORFEIT_VACUOUS" in line:
+                continue
+            if '.get("vacuous")' in line or ".get('vacuous')" in line:
+                continue  # boolean seat discriminant — separate from dispatch reason token
+            if _vacuous_lit.search(line):
+                raise AssertionError(
+                    "%s:%d restates the vacuous token literally — import engine_adapter.REVIEW_FORFEIT_VACUOUS"
+                    % (basename, i))
+
+
 def test_build_argv_codex_review_read_only():
     argv = EA.build_argv("codex", "review", "high",
                          {"cwd": "/wt", "schema_path": "/tmp/s.json"})

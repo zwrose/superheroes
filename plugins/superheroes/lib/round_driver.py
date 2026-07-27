@@ -49,6 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import audits  # noqa: E402
 import circuit_breaker  # noqa: E402
 import delta_surface  # noqa: E402
+import engine_adapter  # noqa: E402
 import loop_plan_common  # noqa: E402
 import model_registry  # noqa: E402
 import panel_tally  # noqa: E402
@@ -813,6 +814,12 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None):
 
 _PANEL_VENDORS = tuple(model_registry.VENDORS)  # SSOT — never a hand-maintained copy (#563/§11)
 
+_DISPATCH_NOT_RUN_REASONS = frozenset({
+    engine_adapter.REVIEW_FORFEIT_VACUOUS,
+    "forfeited",
+    "unrunnable",
+})
+
 
 def _fell_open_rows(seat_map, ran_manifest, seat_status):
     """(rows, provenance_missing) for #563 DoD1 (loud fall-open by machinery).
@@ -829,16 +836,8 @@ def _fell_open_rows(seat_map, ran_manifest, seat_status):
     `provenance_missing` = the sorted cross-vendor (non-claude) CONFIGURED `run` seats that have NO
     trusted ran vendor reported (no manifest at all, or a manifest missing/malformed for that seat),
     so an omitted manifest is itself disclosed — the machinery is never silently lost."""
-    seats_cfg = {}
-    if isinstance(seat_map, dict) and isinstance(seat_map.get("seats"), dict):
-        seats_cfg = seat_map["seats"]
     manifest = ran_manifest if isinstance(ran_manifest, dict) else {}
     status = seat_status if isinstance(seat_status, dict) else {}
-
-    def _cfg_vendor(dim):
-        c = seats_cfg.get(dim)
-        v = c.get("vendor") if isinstance(c, dict) else None
-        return v if isinstance(v, str) and v in _PANEL_VENDORS else None
 
     def _ran_vendor(dim):
         v = manifest.get(dim)
@@ -848,16 +847,48 @@ def _fell_open_rows(seat_map, ran_manifest, seat_status):
     for dim in sorted(status):
         if status.get(dim) != "run":
             continue
-        configured, ran = _cfg_vendor(dim), _ran_vendor(dim)
+        configured, ran = _seat_map_configured_vendor(seat_map, dim), _ran_vendor(dim)
         if configured and ran and configured != ran:
             rows.append({"seat": dim, "configured": configured, "ran": ran,
                          "reason": "forfeit-fell-open"})
     provenance_missing = sorted(
         dim for dim in status
         if status.get(dim) == "run"
-        and _cfg_vendor(dim) not in (None, "claude")
+        and _seat_map_configured_vendor(seat_map, dim) not in (None, "claude")
         and _ran_vendor(dim) is None)
     return rows, provenance_missing
+
+
+def _canary_effective_vendor(seat_map, ran_manifest, dim):
+    """Configured cross-vendor vendor a canary must prove live for `dim`, or None if not subject.
+
+    A seat that fell open (configured external vendor but trusted ranManifest says Claude ran) is
+    not bound by the control probe — the external path did not certify that seat."""
+    configured = _seat_map_configured_vendor(seat_map, dim)
+    if configured is None or configured == "claude":
+        return None
+    manifest = ran_manifest if isinstance(ran_manifest, dict) else {}
+    ran = manifest.get(dim)
+    if isinstance(ran, str) and ran in _PANEL_VENDORS and ran != configured:
+        return None
+    return configured
+
+
+def _normalize_canary_probes(canary_raw):
+    if isinstance(canary_raw, dict):
+        return [canary_raw]
+    if isinstance(canary_raw, list):
+        return [p for p in canary_raw if isinstance(p, dict)]
+    return []
+
+
+def _canary_probe_by_engine(probes):
+    by_eng = {}
+    for probe in probes:
+        eng = probe.get("engine")
+        if isinstance(eng, str) and eng not in by_eng:
+            by_eng[eng] = probe
+    return by_eng
 
 
 def _seat_map_configured_vendor(seat_map, dim):
@@ -889,9 +920,10 @@ def _fold_panel(state, config, artifact):
         status = "run"
         if isinstance(seat, dict):
             findings = seat.get("findings") or []
-            if seat.get("vacuous") is True or seat.get("reason") == "vacuous":
+            if seat.get("vacuous") is True or seat.get("reason") in _DISPATCH_NOT_RUN_REASONS:
                 status = "missing"
-                vacuous_dims.append(dim)
+                if seat.get("vacuous") is True or seat.get("reason") == engine_adapter.REVIEW_FORFEIT_VACUOUS:
+                    vacuous_dims.append(dim)
             if seat.get("receiptMissing") or seat.get("receiptStale"):
                 status = "missing"
         elif isinstance(seat, list):
@@ -923,6 +955,7 @@ def _fold_panel(state, config, artifact):
     # Cross-vendor liveness canary: when every external seat that ran returned zero findings,
     # a control probe must prove the engine path was live — plant detection is recorded only.
     _sm_for_canary = state.get("seatMap") if isinstance(state.get("seatMap"), dict) else seat_map
+    canary_panel_gap = False
     cross_vendor_run = []
     for dim in _panel_dimensions(config):
         if seat_status.get(dim) != "run":
@@ -944,33 +977,66 @@ def _fold_panel(state, config, artifact):
                 all_empty = False
                 break
         if all_empty:
-            canary = artifact.get("canaryResult")
-            if not isinstance(canary, dict):
-                _record_round(state, "canaryUnverified", sorted(cross_vendor_run))
-                _decision(state, "canary-unverified",
-                          "every cross-vendor seat (%s) returned zero findings and no control probe "
-                          "was run — external-seat liveness unverified"
-                          % ", ".join(sorted(cross_vendor_run)))
-            elif canary.get("engaged") is not True:
-                for dim in cross_vendor_run:
-                    if dim not in missing_dims:
-                        missing_dims.append(dim)
-                    seat_status[dim] = "missing"
-                _record_round(state, "canaryFailed", {
-                    "seats": sorted(cross_vendor_run),
-                    "detail": canary.get("detail"),
-                    "evidence": canary.get("evidence"),
-                })
-                _decision(state, "canary-failed",
-                          "the control probe showed no engagement (%s) — cross-vendor seat(s) %s "
-                          "downgraded to never-ran"
-                          % (canary.get("detail") or "engaged not true",
-                             ", ".join(sorted(cross_vendor_run))))
-            else:
-                evidence = canary.get("evidence")
-                _record_round(state, "canaryVerified",
-                              evidence if isinstance(evidence, dict) else {})
-    incomplete = bool(missing_dims)
+            ran_manifest_canary = (artifact.get("ranManifest")
+                                   if isinstance(artifact.get("ranManifest"), dict) else {})
+            subject_dims = [
+                dim for dim in cross_vendor_run
+                if _canary_effective_vendor(_sm_for_canary, ran_manifest_canary, dim) is not None]
+            if subject_dims:
+                vendors_needed = sorted({
+                    _canary_effective_vendor(_sm_for_canary, ran_manifest_canary, dim)
+                    for dim in subject_dims})
+                probes = _normalize_canary_probes(artifact.get("canaryResult"))
+                probe_by_eng = _canary_probe_by_engine(probes)
+                unverified_dims = []
+                failed_dims = []
+                verified_by_vendor = {}
+                for vendor in vendors_needed:
+                    vendor_dims = [
+                        dim for dim in subject_dims
+                        if _canary_effective_vendor(_sm_for_canary, ran_manifest_canary, dim) == vendor]
+                    probe = probe_by_eng.get(vendor)
+                    if probe is None:
+                        unverified_dims.extend(vendor_dims)
+                    elif probe.get("engaged") is not True:
+                        for dim in vendor_dims:
+                            if dim not in missing_dims:
+                                missing_dims.append(dim)
+                            seat_status[dim] = "missing"
+                            failed_dims.append(dim)
+                    else:
+                        evidence = probe.get("evidence")
+                        verified_by_vendor[vendor] = evidence if isinstance(evidence, dict) else {}
+                if unverified_dims:
+                    canary_panel_gap = True
+                    _record_round(state, "canaryUnverified", sorted(set(unverified_dims)))
+                    _decision(state, "canary-unverified",
+                              "cross-vendor seat(s) (%s) returned zero findings and no engaged control "
+                              "probe for their vendor — external-seat liveness unverified"
+                              % ", ".join(sorted(set(unverified_dims))))
+                if failed_dims:
+                    failed_detail = None
+                    for vendor in vendors_needed:
+                        probe = probe_by_eng.get(vendor)
+                        if probe is not None and probe.get("engaged") is not True:
+                            failed_detail = probe.get("detail")
+                            break
+                    _record_round(state, "canaryFailed", {
+                        "seats": sorted(set(failed_dims)),
+                        "detail": failed_detail,
+                    })
+                    _decision(state, "canary-failed",
+                              "the control probe showed no engagement (%s) — cross-vendor seat(s) %s "
+                              "downgraded to never-ran"
+                              % (failed_detail or "engaged not true",
+                                 ", ".join(sorted(set(failed_dims)))))
+                if verified_by_vendor:
+                    if len(vendors_needed) == 1:
+                        _record_round(state, "canaryVerified",
+                                      verified_by_vendor[vendors_needed[0]])
+                    else:
+                        _record_round(state, "canaryVerified", verified_by_vendor)
+    incomplete = bool(missing_dims) or canary_panel_gap
     compiled, drops = mechanical_compile(raw, state.get("reviewedDiff"))
     # A full reviewer-deep panel that runs COMPLETE in a DELTA round (round ≥ 2) is a qualifying
     # confirmation panel: it consumes one of the two-panel budget (the #174 bar). An INCOMPLETE panel

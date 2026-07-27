@@ -11,6 +11,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import engine_adapter  # noqa: E402
 import engine_dispatch  # noqa: E402
 
 PLANT_MARKER = "check_receipt"
@@ -73,8 +74,8 @@ def _map_outcome(res):
     if res.get("ok") is True:
         return "ok", ""
     reason = res.get("reason")
-    if reason == "vacuous":
-        return "vacuous", (res.get("disclosure") or "vacuous-forfeit")
+    if reason == engine_adapter.REVIEW_FORFEIT_VACUOUS:
+        return engine_adapter.REVIEW_FORFEIT_VACUOUS, (res.get("disclosure") or "vacuous-forfeit")
     if reason == "forfeited":
         return "forfeited", (res.get("disclosure") or "forfeited")
     if reason == "unrunnable":
@@ -172,7 +173,7 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
         if not engaged:
             if outcome == "unrunnable":
                 detail = detail_hint
-            elif outcome == "vacuous":
+            elif outcome == engine_adapter.REVIEW_FORFEIT_VACUOUS:
                 detail = detail_hint or "vacuous-forfeit"
             elif outcome == "forfeited":
                 detail = detail_hint or "forfeited"
