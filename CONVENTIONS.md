@@ -666,6 +666,11 @@ free-text is secret-scrubbed at the adapter boundary (`engine_adapter.parse_resu
 every downstream surface — including a `/review-code --post` PR comment — is clean. The
 merge authorization is the owner's to grant; the band shows it and never applies it.
 
+**Sanitized review view (#684).** External **review** seats (codex/cursor via `dispatch-review`)
+run against a disposable sanitized export of the named repo root — machinery inside the runner, not
+orchestrator discipline. A view that cannot be built is a named refusal with `attempts: 0` and no
+spawn; there is no fallback to the raw checkout.
+
 **Dispatch vocabulary contract.** Three token shapes stay distinct:
 
 1. **Registry ids + a separate effort** — what the registry APIs and `engine_model` accept

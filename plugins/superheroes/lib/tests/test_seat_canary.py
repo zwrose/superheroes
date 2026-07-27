@@ -331,6 +331,79 @@ def test_detected_plant_does_not_drive_engaged():
     _assert_engaged_not_branched_on_plant_detection(engagement_src, src)
 
 
+def test_probe_passes_sanitized_view_from_dispatch(tmp_path):
+    repo = _repo(tmp_path)
+    block = {
+        "strategy": "git-archive-export",
+        "stripped": [".cursor"],
+        "strippedCount": 1,
+        "headSha": "deadbeef",
+        "sourceDirty": False,
+        "buildSeconds": 0.1,
+        "bytes": 100,
+        "fileCount": 5,
+    }
+
+    def dispatch(engine, **kwargs):
+        return _base_dispatch_result(sanitizedView=block)
+
+    out = SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root=repo, dispatch=dispatch,
+    )
+    assert out["sanitizedView"] == block
+
+
+def test_probe_passes_sanitized_view_on_vacuous_dispatch(tmp_path):
+    repo = _repo(tmp_path)
+    block = {
+        "strategy": "git-archive-export",
+        "stripped": [".cursor"],
+        "strippedCount": 1,
+        "headSha": "deadbeef",
+        "sourceDirty": False,
+        "buildSeconds": 0.1,
+        "bytes": 100,
+        "fileCount": 5,
+    }
+
+    def dispatch(engine, **kwargs):
+        return {
+            "ok": False,
+            "reason": "vacuous",
+            "attempts": 2,
+            "forfeited": True,
+            "engagement": {
+                "tokens": None,
+                "toolCalls": None,
+                "stdoutBytes": 0,
+                "wallSeconds": 0.0,
+            },
+            "disclosure": "vacuous seat",
+            "sanitizedView": block,
+        }
+
+    out = SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root=repo, dispatch=dispatch,
+    )
+    assert out["sanitizedView"] == block
+
+
+def test_probe_sanitized_view_absent_when_dispatch_unrunnable(tmp_path):
+    def dispatch(engine, **kwargs):
+        return {
+            "ok": False,
+            "reason": "unrunnable",
+            "detail": "repo-root-missing",
+            "attempts": 0,
+            "forfeited": False,
+        }
+
+    out = SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+    )
+    assert out.get("sanitizedView") is None
+
+
 def test_dispatch_exception_still_cleans_temp_file(tmp_path):
     repo = _repo(tmp_path)
     created = []
