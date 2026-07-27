@@ -50,7 +50,7 @@ def resolve_verify_from_profile(profile_path):
 
 # The cfg.tiers key -> model_tier role map. The single home for the review-code tier vocabulary
 # on the Python side. The review-code fixer resolves the `code-fixer` role (review-code only
-# fixes code); no JS twin survives (#468 retired showrunner.js's copy).
+# fixes code).
 _TIER_ROLE = {
     "reviewer": "reviewer",
     "reviewerDeep": "reviewer-deep",

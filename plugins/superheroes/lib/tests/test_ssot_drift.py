@@ -7,23 +7,21 @@ unparseable literal — so a change to the truth breaks CI in every copy-holder 
 than letting them silently diverge (the PR #205 class). Per the §11.2 caveat, every
 test enumerates its copy-holders explicitly: a NEW copy must be added here.
 
-Clusters covered (post spine-retirement #468 — the execution-spine copy-holders
+Clusters covered (post spine-retirement #468 — execution-spine JS twins
 `showrunner.js` / `build_phase.js` / `model_tier.js` / `engine_pref.js` and the
 `task_review` / `review_loop_plan` / `journal` producers are retired, so their clusters
-are gone with them):
+are gone with them; no lib/*.js copy-holders remain):
 - Severity tiers + BLOCKING / SEV_RANK / NON_BLOCKING  (home: rubric/review-base.md)
 - Terminal-state vocabulary                            (home: panel_tally.py)
 - Codex translation/effort policy (docs + adapter default) (home: engine_pref.py)
 - Model-registry ids + family vocabulary                (home: model_registry.py)
+- Base-guard refusal reasons                           (home: review_base_guard.py)
 
 The reviewer-roster and docs-location clusters live in their topical sibling guards
 (test_dispatch_tables.py, test_definition_doc.py).
 """
-import ast
 import os
 import re
-
-import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -34,69 +32,11 @@ def _read(rel):
         return f.read()
 
 
-# --- fail-closed JS literal readers (CONVENTIONS §11.2) ----------------------
-# Each asserts exactly one match and a well-formed literal; parsing nothing raises
-# (never returns an empty value that would make a downstream equality pass vacuously).
-
 def _one(matches, name, label, shape):
     assert len(matches) == 1, (
         "%s: expected exactly one `const %s = %s`, found %d (a rename, or a reformat "
         "the drift parser can't read)" % (label, name, shape, len(matches)))
     return matches[0]
-
-
-def _js_str_array(text, name, label):
-    """`const NAME = ['a', 'b', ...]` → list[str]."""
-    m = _one(re.findall(r"\bconst\s+%s\s*=\s*(\[[^\]]+\])" % re.escape(name), text),
-             name, label, "[...]")
-    value = ast.literal_eval(m)
-    assert isinstance(value, list) and value and all(
-        isinstance(x, str) and x for x in value), (
-        "%s: `%s` must be a non-empty list of strings" % (label, name))
-    return value
-
-
-def _js_str_set(text, name, label):
-    """`const NAME = new Set(['a', ...])` → set[str]."""
-    m = _one(re.findall(r"\bconst\s+%s\s*=\s*new Set\((\[[^\]]+\])\)" % re.escape(name), text),
-             name, label, "new Set([...])")
-    value = ast.literal_eval(m)
-    assert isinstance(value, list) and value and all(
-        isinstance(x, str) and x for x in value), (
-        "%s: `%s` Set must contain a non-empty list of strings" % (label, name))
-    return set(value)
-
-
-def _js_rank_map(text, name, label):
-    """`const NAME = { Key: 0, Key2: 1, ... }` (unquoted keys, int values) → dict[str,int]."""
-    m = _one(re.findall(r"\bconst\s+%s\s*=\s*\{([^}]+)\}" % re.escape(name), text),
-             name, label, "{ ... }")
-    pairs = re.findall(r"([A-Za-z_]\w*)\s*:\s*(\d+)", m)
-    assert pairs, "%s: `%s` object literal has no `key: int` pairs" % (label, name)
-    return {k: int(v) for k, v in pairs}
-
-
-@pytest.mark.parametrize("reader, text, name, match", [
-    # missing literal → zero matches
-    (_js_str_array, "const OTHER = ['a']\n", "A", "expected exactly one"),
-    (_js_str_set, "const OTHER = new Set(['a'])\n", "B", "expected exactly one"),
-    (_js_rank_map, "const OTHER = { A: 0 }\n", "M", "expected exactly one"),
-    # declared twice → ambiguous
-    (_js_str_array, "const A = ['a']\nconst A = ['b']\n", "A", "found 2"),
-    (_js_str_set, "const B = new Set(['a'])\nconst B = new Set(['b'])\n", "B", "found 2"),
-    # not the expected shape (a bare value, not a Set/array/object)
-    (_js_str_set, "const B = 1\n", "B", "expected exactly one"),
-    # malformed contents
-    (_js_str_array, "const A = ['a', 2]\n", "A", "non-empty list of strings"),
-    (_js_str_set, "const B = new Set(['a', 3])\n", "B", "non-empty list of strings"),
-    (_js_rank_map, "const M = {  }\n", "M", "no `key: int` pairs"),
-])
-def test_js_readers_fail_closed(reader, text, name, match):
-    """§11.2: the JS literal readers are the trust anchor for every drift guard in this
-    file — parsing nothing must RAISE, never return an empty/partial value that would let
-    a `== home` assertion pass vacuously."""
-    with pytest.raises(AssertionError, match=match):
-        reader(text, name, "<test>")
 
 
 # --- Cluster 1: severity tiers + blocking partition + rank order -------------
@@ -203,6 +143,40 @@ def test_complete_codex_policy_single_sourced():
             "%s Codex tier map drifted from engine_pref.py" % rel)
 
 
+# --- Cluster: base-guard refusal reasons (review_base_guard → round-driver.md) -
+
+def _reason_tokens_from_home():
+    """Every module-level REASON_* string constant in review_base_guard.py."""
+    import review_base_guard
+
+    reasons = {}
+    for name in dir(review_base_guard):
+        if not name.startswith("REASON_"):
+            continue
+        val = getattr(review_base_guard, name)
+        assert isinstance(val, str) and val, (
+            "review_base_guard.%s must be a non-empty str, got %r" % (name, val))
+        reasons[name] = val
+    assert reasons, "review_base_guard: no REASON_* constants discovered (rename/refactor?)"
+    assert len(reasons) >= 15, (
+        "review_base_guard: expected >= 15 REASON_* constants, found %d"
+        % len(reasons))
+    return reasons
+
+
+def test_base_guard_reason_tokens_in_round_driver_doc():
+    """§11: round-driver.md is the hand-maintained copy of review_base_guard's REASON_* tokens."""
+    reasons = _reason_tokens_from_home()
+    doc = _read("skills/review-code/reference/round-driver.md")
+    missing = [name for name, token in sorted(reasons.items()) if token not in doc]
+    assert not missing, (
+        "round-driver.md missing refusal token(s) from review_base_guard.py "
+        "(plain substring `token in doc` — a shorter token could be falsely satisfied "
+        "if only a longer confusable substring appears, e.g. base-repo-mismatch vs "
+        "base-repo-root-mismatch; each token value must appear literally): %r"
+        % [(n, reasons[n]) for n in missing])
+
+
 # --- Cluster 4: negative drift scans (concrete model ids must not leak) ------
 
 _CONCRETE_MODEL_TOKENS = (
@@ -304,15 +278,10 @@ def test_retired_model_tokens_absent_from_lib():
         for name in os.listdir(lib_dir)
         if name.endswith(".py") and name not in _skip
     ]
-    js_paths = [
-        os.path.join("lib", name)
-        for name in os.listdir(lib_dir)
-        if name.endswith(".js")
-    ]
     doc_paths = [
         "../../CONVENTIONS.md",
         "skills/configure/reference/set-up.md",
         "skills/configure/reference/view-and-tune.md",
     ]
-    hits = _scan_retired_tokens(py_paths + js_paths + doc_paths)
+    hits = _scan_retired_tokens(py_paths + doc_paths)
     assert not hits, "retired model token reappeared: %r" % hits
