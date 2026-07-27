@@ -599,7 +599,19 @@ def verify(seat_map: dict, author_family: str | None) -> list[dict]:
 def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
     af = author_family if author_family is not None else seat_map.get("authorFamily")
     raw = seat_map.get("degradations")
-    degradations = list(raw) if isinstance(raw, list) else []
+    incoming = list(raw) if isinstance(raw, list) else []
+    # #670 (advisor ruling on PR #679's parked seam): to_receipt is the SOLE authority for the
+    # same-family determination. `build()` records its copy before main() merges the preflight
+    # notes, so a build-stage record can be STALE — it may assert "no alternative family is live"
+    # for a seat whose liveness was never probed. Drop every incoming same-family record and derive
+    # exactly once here, where the map carries all three evidence sources (build()'s own
+    # degradations, the preflight notes, and livenessPinScoped). build()'s copy is advisory only.
+    # Invariant this establishes: a receipt NEVER carries both a same-family degradation and a
+    # maker-family violation for the same seat.
+    degradations = [
+        d for d in incoming
+        if not (isinstance(d, dict) and d.get("constraint") == "same-family")
+    ]
     seen = {
         (d.get("constraint"), d.get("seat"))
         for d in degradations

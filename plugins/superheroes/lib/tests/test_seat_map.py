@@ -958,6 +958,69 @@ def _seat_in_both_same_family_and_maker_family(receipt):
     return same & maker
 
 
+def test_receipt_never_asserts_same_family_and_maker_family_for_one_seat():
+    import model_registry as MRG
+
+    seed = SM.seed_from(670, None)
+    author = "anthropic"
+    sm = SM.build(
+        SM.PANEL_ROSTER,
+        ["claude"],
+        author,
+        "anthropic",
+        seed,
+        liveness_pin_scoped=False,
+    )
+    sm["degradations"] = list(sm["degradations"]) + [
+        {
+            "constraint": "preflight-cache-only",
+            "reason": "vendors not probed; panel falls open to Claude",
+        }
+    ]
+    receipt = SM.to_receipt(sm)
+
+    both = _seat_in_both_same_family_and_maker_family(receipt)
+    assert not both, f"seats asserting both ways: {sorted(both)}"
+
+    maker_seats = {
+        v.get("seat")
+        for v in receipt["violations"]
+        if v.get("constraint") == "maker-family"
+    }
+    for seat in SM.PANEL_ROSTER:
+        assert seat in maker_seats, seat
+
+    same_family_seats = {
+        d.get("seat")
+        for d in receipt["degradations"]
+        if d.get("constraint") == "same-family"
+    }
+    assert not same_family_seats, f"unexpected same-family: {sorted(same_family_seats)}"
+
+    assert any(
+        d.get("constraint") == "preflight-cache-only" for d in receipt["degradations"]
+    )
+
+    cursor_author = MRG.family_for("code-fixer", "cursor")
+    collapse = SM.build(
+        SM.PANEL_ROSTER,
+        ["cursor"],
+        cursor_author,
+        "anthropic",
+        seed,
+        liveness_pin_scoped=False,
+    )
+    collapse_receipt = SM.to_receipt(collapse)
+    for seat in SM.PANEL_ROSTER:
+        assert any(
+            d.get("constraint") == "same-family" and d.get("seat") == seat
+            for d in collapse_receipt["degradations"]
+        ), seat
+    assert not any(
+        v.get("constraint") == "maker-family" for v in collapse_receipt["violations"]
+    )
+
+
 def test_build_and_verify_agree_on_the_same_seat():
     pins = {"test-reviewer": {"vendor": "claude"}}
     pin_scoped = SM.build(
