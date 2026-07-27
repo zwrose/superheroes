@@ -1011,9 +1011,9 @@ def test_parse_ls_tree_z_direct():
     )
     entries = sv._parse_ls_tree_z(raw)
     assert entries == [
-        ("100644", "blobaaa111", "plain.txt"),
-        ("100644", "blobbbb222", "file with space.txt"),
-        ("100644", "blobccc333", "weird\nname.txt"),
+        ("100644", "blob", "blobaaa111", "plain.txt"),
+        ("100644", "blob", "blobbbb222", "file with space.txt"),
+        ("100644", "blob", "blobccc333", "weird\nname.txt"),
     ]
 
 
@@ -1060,11 +1060,11 @@ def test_catfile_wrong_object_type_fails(tmp_path, monkeypatch):
     def census_with_tree_blob(repo_real, head_sha):
         entries = real_census(repo_real, head_sha)
         out = []
-        for mode, oid, path in entries:
+        for mode, obj_type, oid, path in entries:
             if path == "a.txt":
-                out.append(("100644", tree_oid, path))
+                out.append(("100644", obj_type, tree_oid, path))
             else:
-                out.append((mode, oid, path))
+                out.append((mode, obj_type, oid, path))
         return out
 
     monkeypatch.setattr(sv, "_git_ls_tree_census", census_with_tree_blob)
@@ -1098,3 +1098,73 @@ def test_catfile_process_reaped_after_success(tmp_path, monkeypatch):
         assert proc.stdin.closed
     finally:
         sv.destroy_sanitized_view(view["path"])
+
+
+def test_symlink_target_exceeds_max_refuses(tmp_path, monkeypatch):
+    monkeypatch.setattr(sv, "SANITIZED_VIEW_MAX_SYMLINK_TARGET_BYTES", 4)
+    repo = _init_repo(tmp_path / "biglink", files={"keep.txt": "k\n"})
+    link_path = os.path.join(repo, "link")
+    os.symlink("12345", link_path)
+    _git(repo, "add", "link")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "symlink",
+    )
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        _build(repo)
+    assert exc.value.detail == "sanitized-view-export-failed"
+
+
+def test_platform_alias_config_dir_stripped(tmp_path):
+    repo = _init_repo(
+        tmp_path / "dirdot",
+        files={".cursor./rules.md": "secret\n", "keep.txt": "k\n"},
+    )
+    view = _build(repo)
+    try:
+        assert ".cursor." in view["stripped"]
+        assert not os.path.exists(os.path.join(view["path"], ".cursor."))
+        assert os.path.isfile(os.path.join(view["path"], "keep.txt"))
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_literal_backslash_in_filename_materialized(tmp_path):
+    rel = "docs\\note.txt"
+    repo = _init_repo(tmp_path / "bslash", files={rel: "backslash ok\n"})
+    view = _build(repo)
+    try:
+        path = os.path.join(view["path"], rel)
+        assert os.path.isfile(path)
+        with open(path, encoding="utf-8") as fh:
+            assert fh.read() == "backslash ok\n"
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_gitlink_wrong_object_type_refuses(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "badgitlink", files={"keep.txt": "k\n"})
+    blob_oid = subprocess.run(
+        ["git", "-C", repo, "hash-object", "-w", "--stdin"],
+        input=b"not a commit tree",
+        capture_output=True,
+        check=True,
+    ).stdout.decode().strip()
+    real_census = sv._git_ls_tree_census
+
+    def census_with_blob_gitlink(repo_real, head_sha):
+        entries = list(real_census(repo_real, head_sha))
+        entries.append(("160000", "blob", blob_oid, "evil-submod"))
+        return entries
+
+    monkeypatch.setattr(sv, "_git_ls_tree_census", census_with_blob_gitlink)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        _build(repo)
+    assert exc.value.detail == "sanitized-view-export-failed"

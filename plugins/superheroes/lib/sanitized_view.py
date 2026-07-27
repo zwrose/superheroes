@@ -59,6 +59,7 @@ _GIT_IDENTITY = (
 )
 
 _CATFILE_READ_CHUNK = 1024 * 1024
+SANITIZED_VIEW_MAX_SYMLINK_TARGET_BYTES = 8 * 1024
 
 
 def _ascii_fold(s):
@@ -87,7 +88,7 @@ def _is_config_file_basename(name):
 
 
 def _is_config_dir_basename(name):
-    return _ascii_fold(name) in _CONFIG_DIRS_ASCII
+    return _ascii_fold(_platform_normalized_basename(name)) in _CONFIG_DIRS_ASCII
 
 
 def _rel_path_would_be_stripped(rel_posix):
@@ -234,9 +235,10 @@ def _parse_ls_tree_z(raw):
         if sp1 < 0 or sp2 < 0 or tab < 0:
             raise SanitizedViewError("sanitized-view-export-failed")
         mode = record[:sp1].decode("ascii")
+        obj_type = record[sp1 + 1 : sp2].decode("ascii")
         oid = record[sp2 + 1 : tab].decode("ascii")
         path = record[tab + 1 :].decode("utf-8", errors="surrogateescape")
-        entries.append((mode, oid, path))
+        entries.append((mode, obj_type, oid, path))
     return entries
 
 
@@ -249,6 +251,9 @@ def _expected_git_type_for_mode(mode):
 
 
 def _git_ls_tree_census(repo_real, head_sha):
+    # ls-tree uses capture_output=True, so an absurdly large tree may allocate in
+    # full before the post-exit byte-limit check runs; bounding that would need
+    # streaming parse and is accepted as out of scope for now.
     try:
         proc = subprocess.run(
             ["git", "-C", repo_real, "ls-tree", "-r", "-z", head_sha],
@@ -296,6 +301,8 @@ def _terminate_process(proc):
 
 
 def _check_export_deadline(started):
+    # Deadline is checked between pipe reads only; a cat-file child that stalls
+    # mid-read is not interrupted by the export timeout (accepted bound).
     if time.monotonic() - started > SANITIZED_VIEW_EXPORT_TIMEOUT_SECONDS:
         raise SanitizedViewError("sanitized-view-export-timeout")
 
@@ -342,7 +349,7 @@ class _CatFileBatch:
             raise SanitizedViewError("sanitized-view-export-failed")
         return size
 
-    def read_blob_bytes(self, oid, started, total_bytes):
+    def read_blob_bytes(self, oid, started, total_bytes, *, max_blob_bytes=None):
         _check_export_deadline(started)
         try:
             self._stdin.write(oid.encode("ascii") + b"\n")
@@ -350,6 +357,8 @@ class _CatFileBatch:
         except OSError as exc:
             raise SanitizedViewError("sanitized-view-export-failed") from exc
         size = self._read_header(oid)
+        if max_blob_bytes is not None and size > max_blob_bytes:
+            raise SanitizedViewError("sanitized-view-export-failed")
         if total_bytes + size > SANITIZED_VIEW_EXPORT_MAX_BYTES:
             raise SanitizedViewError("sanitized-view-export-too-large")
         chunks = []
@@ -455,11 +464,13 @@ def _materialize_from_tree(repo_real, head_sha, view_root, started):
     batch = None
     try:
         batch = _CatFileBatch(repo_real)
-        for mode, oid, path in census:
+        for mode, obj_type, oid, path in census:
             _check_export_deadline(started)
 
             expected_type = _expected_git_type_for_mode(mode)
             if expected_type is None:
+                raise SanitizedViewError("sanitized-view-export-failed")
+            if obj_type != expected_type:
                 raise SanitizedViewError("sanitized-view-export-failed")
 
             marker = _stripped_marker_for_rel(path)
@@ -472,7 +483,12 @@ def _materialize_from_tree(repo_real, head_sha, view_root, started):
                 continue
 
             if mode == "120000":
-                blob, total_bytes = batch.read_blob_bytes(oid, started, total_bytes)
+                blob, total_bytes = batch.read_blob_bytes(
+                    oid,
+                    started,
+                    total_bytes,
+                    max_blob_bytes=SANITIZED_VIEW_MAX_SYMLINK_TARGET_BYTES,
+                )
                 if _symlink_escapes_view(view_root, path, blob):
                     stripped_set.add(path)
                     escaping_symlinks.add(path)
@@ -519,21 +535,15 @@ def _disk_paths_in_view(view_root):
     for dirpath, dirnames, filenames in os.walk(view_root, followlinks=False):
         if ".git" in dirnames:
             dirnames.remove(".git")
-        if dirpath == view_root:
-            rel_dir = ""
-        else:
-            rel_dir = _rel_posix(view_root, dirpath)
         for name in filenames:
             full = os.path.join(dirpath, name)
             os.lstat(full)
-            rel = "%s/%s" % (rel_dir, name) if rel_dir else name
-            on_disk.add(rel.replace("\\", "/"))
+            on_disk.add(_rel_posix(view_root, full))
         for name in list(dirnames):
             full = os.path.join(dirpath, name)
             if os.path.islink(full):
                 os.lstat(full)
-                rel = "%s/%s" % (rel_dir, name) if rel_dir else name
-                on_disk.add(rel.replace("\\", "/"))
+                on_disk.add(_rel_posix(view_root, full))
                 dirnames.remove(name)
     return on_disk
 
@@ -543,7 +553,7 @@ def _verify_export_complete(
 ):
     """Fail closed when on-disk paths differ from census − stripped − submodules."""
     expected = set()
-    for mode, oid, path in census:
+    for mode, obj_type, oid, path in census:
         if mode == "160000":
             continue
         if _rel_path_would_be_stripped(path):
