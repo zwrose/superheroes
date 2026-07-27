@@ -59,7 +59,7 @@ def _validate_repo_root(repo_root):
         return False, "repo-root-not-a-directory"
     if not os.path.exists(os.path.join(root, ".git")):
         return False, "repo-root-not-a-repo"
-    return True, root
+    return True, os.path.realpath(root)
 
 
 def _cleanup(proc, pgid):
@@ -278,7 +278,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
             return {"ok": True, "findings": findings, "attempts": attempt,
                     "engagement": last_engagement}
         ok_inv, accepted, rejected = engine_adapter.spot_check_investigated(
-            res.get("investigated"), repo_root)
+            res.get("investigated"), cwd)
         if ok_inv:
             return {"ok": True, "findings": [], "attempts": attempt,
                     "engagement": last_engagement, "investigated": accepted}
@@ -315,7 +315,7 @@ def main(argv):
     d.add_argument("--timeout", type=int, default=RETRY_MIN_TIMEOUT)
     d.add_argument("--retry-timeout", type=int, default=RETRY_MIN_TIMEOUT)
     d.add_argument("--progress-file", default=None)
-    d.add_argument("--repo-root", required=True)
+    d.add_argument("--repo-root", default=None)
     args = ap.parse_args(argv)
     res = dispatch_review(args.engine, model=args.model, effort=args.effort,
                           engine_model=args.engine_model, prompt_path=args.prompt_path,

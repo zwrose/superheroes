@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Planted-defect control probe (#668): dispatch a known-bad fixture through the real seat path
-and score ENGAGEMENT (not plant detection). stdlib only; never raises."""
+and score ENGAGEMENT (not plant detection). stdlib only; does not raise from dispatch()."""
 import argparse
 import json
 import os
@@ -59,6 +59,9 @@ def _finding_fields(f):
 
 
 def _detected_plant(findings):
+    # Whether any returned finding *names* PLANT_MARKER in file/title/body — a model can score
+    # True by echoing the symbol from the fixture. Recorded for humans reading a probe result;
+    # deliberately never a branch anywhere (do not gate on this field).
     for f in findings or []:
         file_s, title_s, body_s = _finding_fields(f)
         if PLANT_MARKER in file_s or PLANT_MARKER in title_s or PLANT_MARKER in body_s:
@@ -116,7 +119,11 @@ def _evidence_from_dispatch(res):
 
 
 def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeout=300):
-    """Dispatch the planted-defect fixture through the real seat path and score ENGAGEMENT."""
+    """Dispatch the planted-defect fixture through the real seat path and score ENGAGEMENT.
+
+    ``timeout`` bounds the first dispatch attempt only. On retry the runner floors its wait at
+    ``RETRY_MIN_TIMEOUT`` (900 s), so worst-case wall time is ``timeout + 900`` seconds.
+    """
     if dispatch is None:
         dispatch = engine_dispatch.dispatch_review
 
@@ -156,7 +163,7 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
             }
 
         outcome, detail_hint = _map_outcome(res)
-        if outcome in ("vacuous", "unrunnable"):
+        if outcome == "unrunnable":
             engaged = False
         else:
             engaged = _engaged_from_dispatch(res)
@@ -167,7 +174,7 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
                 detail = detail_hint
             elif outcome == "vacuous":
                 detail = detail_hint or "vacuous-forfeit"
-            elif outcome == "forfeited" and not engaged:
+            elif outcome == "forfeited":
                 detail = detail_hint or "forfeited"
             elif outcome == "ok":
                 detail = "no-engagement-evidence"

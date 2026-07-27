@@ -127,7 +127,7 @@ def test_wall_time_alone_not_engaged():
     assert out["outcome"] == "ok"
 
 
-def test_vacuous_outcome_never_engaged_regardless_of_telemetry():
+def test_vacuous_with_tool_calls_still_engaged_path_alive():
     def dispatch(engine, **kwargs):
         return {
             "ok": False,
@@ -137,7 +137,7 @@ def test_vacuous_outcome_never_engaged_regardless_of_telemetry():
             "findings": [],
             "engagement": {
                 "tokens": 50000,
-                "toolCalls": 5,
+                "toolCalls": 30,
                 "stdoutBytes": 999,
                 "wallSeconds": 600.0,
             },
@@ -147,8 +147,9 @@ def test_vacuous_outcome_never_engaged_regardless_of_telemetry():
     out = SC.run_canary(
         "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
     )
-    assert out["engaged"] is False
+    assert out["engaged"] is True
     assert out["outcome"] == "vacuous"
+    assert out["detail"] == ""
 
 
 def test_finding_with_fast_wall_engaged():
@@ -272,22 +273,40 @@ def test_dispatch_receives_fixture_prompt_and_repo_root(tmp_path):
     assert "investigated" in seen["contents"]
 
 
-def _engagement_decision_blocks(src):
-    blocks = []
+def _engagement_decision_source(src):
+    parts = []
     for name in ("_engaged_from_dispatch", "run_canary"):
         m = re.search(rf"def {name}\(.*?(?=\ndef |\Z)", src, re.DOTALL)
         assert m is not None, "missing function %s" % name
-        blocks.append(m.group(0))
-    return blocks
+        parts.append(m.group(0))
+    return "\n".join(parts)
 
 
-def _assert_engaged_not_branched_on_plant_detection(block):
-    assert not re.search(r"if\s+detected_plant\b", block)
-    assert not re.search(r"if\s+detectedPlant\b", block)
-    for line in block.splitlines():
-        if "engaged" in line and "=" in line:
+def _assert_engaged_not_branched_on_plant_detection(engagement_src, full_src):
+    # Pin: engagement never consults plant detection. Cannot prove absence of all indirect
+    # coupling — only that no `engaged` assignment names detected_plant and detected_plant is
+    # not referenced outside its compute line and the returned dict entry.
+    assert not re.search(r"if\s+detected_plant\b", engagement_src)
+    assert not re.search(r"if\s+detectedPlant\b", engagement_src)
+    for line in engagement_src.splitlines():
+        stripped = line.strip()
+        if re.search(r"\bengaged\b", line) and "=" in line and not stripped.startswith("#"):
             assert "detected_plant" not in line
             assert "detectedPlant" not in line
+    for line in full_src.splitlines():
+        if not re.search(r"\bdetected_plant\b", line) and "detectedPlant" not in line:
+            continue
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        if re.match(r"\s*detected_plant\s*=", line):
+            continue
+        if re.search(r'["\']detectedPlant["\']\s*:', line):
+            continue
+        raise AssertionError(
+            "detected_plant/detectedPlant referenced outside assignment and return: %r"
+            % stripped
+        )
 
 
 def test_detected_plant_does_not_drive_engaged():
@@ -308,8 +327,8 @@ def test_detected_plant_does_not_drive_engaged():
     src_path = os.path.join(_HERE, "..", "seat_canary.py")
     with open(src_path, encoding="utf-8") as fh:
         src = fh.read()
-    for block in _engagement_decision_blocks(src):
-        _assert_engaged_not_branched_on_plant_detection(block)
+    engagement_src = _engagement_decision_source(src)
+    _assert_engaged_not_branched_on_plant_detection(engagement_src, src)
 
 
 def test_dispatch_exception_still_cleans_temp_file(tmp_path):

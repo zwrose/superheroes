@@ -433,6 +433,9 @@ def spot_check_investigated(investigated, repo_root):
         if not os.path.exists(real):
             _reject(entry, "missing")
             continue
+        if not os.path.isfile(real):
+            _reject(entry, "not-a-file")
+            continue
         accepted.append(entry)
 
     return len(accepted) >= 1, accepted, rejected

@@ -933,6 +933,15 @@ def test_truncated_echo_tail_still_stripped_to_unreadable():
     assert _parse_review_after_strip(stdout, prompt) == {"ok": False, "reason": "unreadable"}
 
 
+def test_middle_tail_slice_with_noise_still_unreadable():
+    head = "x" * 2500
+    prompt = head + _review_prompt_with_shape_contract()
+    tail = prompt[-EA.ECHO_TAIL_CHARS:]
+    middle = tail[400:1200]
+    stdout = "prefix-noise<<<" + middle + ">>>suffix-noise"
+    assert _parse_review_after_strip(stdout, prompt) == {"ok": False, "reason": "unreadable"}
+
+
 def test_strip_echoed_prompt_empty_or_non_string_inputs_unchanged_no_raise():
     prompt = _review_prompt_with_shape_contract()
     for stdout in (None, "", 123, []):
@@ -1074,6 +1083,15 @@ def test_spot_check_investigated_rejects_missing(tmp_path):
     root = tmp_path / "repo"
     root.mkdir()
     _spot_reject_only(str(root), "no-such-file.py", "missing")
+
+
+def test_spot_check_investigated_rejects_dot_and_directories(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _spot_reject_only(str(root), ".", "not-a-file")
+    sub = root / "plugins"
+    sub.mkdir()
+    _spot_reject_only(str(root), "plugins", "not-a-file")
 
 
 def test_spot_check_investigated_mixed_one_valid_three_rejects(tmp_path):

@@ -690,6 +690,59 @@ def test_dispatch_empty_findings_all_investigated_rejected_is_vacuous(tmp_path):
     assert res["ok"] is False
     assert res["reason"] == "vacuous"
     assert res["attempts"] == 2
+    assert res["investigatedRejected"] == ["absolute", "missing"]
+
+
+def test_dispatch_whitespace_padded_repo_root_accepts_honest_investigated(tmp_path):
+    repo_root = _repo(tmp_path)
+    real_file = os.path.join(repo_root, "src", "main.py")
+    os.makedirs(os.path.dirname(real_file), exist_ok=True)
+    with open(real_file, "w", encoding="utf-8") as fh:
+        fh.write("# main\n")
+    rel = "src/main.py"
+    padded = "  " + repo_root + "  "
+    stdout = json.dumps({"findings": [], "investigated": [rel]})
+    fake = FakeRunner([(stdout, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=padded, run_engine=fake,
+    )
+    assert res["ok"] is True
+    assert res["investigated"] == [rel]
+    assert fake.calls[0]["cwd"] == repo_root.strip()
+
+
+def test_dispatch_relative_repo_root_absolutized_for_cwd_and_codex_c(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _repo(tmp_path)
+    rel_root = "repo"
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=rel_root, run_engine=fake,
+    )
+    expected = os.path.realpath(os.path.join(str(tmp_path), "repo"))
+    assert fake.calls[0]["cwd"] == expected
+    argv = fake.calls[0]["argv"]
+    i = argv.index("-C")
+    assert argv[i + 1] == expected
+
+
+def test_main_dispatch_review_without_repo_root_json_refusal(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(ED, "_run_engine", _never_call)
+    prompt = _valid_prompt(tmp_path)
+    rc = ED.main([
+        "dispatch-review",
+        "--engine", "codex",
+        "--effort", "high",
+        "--prompt-path", prompt,
+    ])
+    assert rc == 0
+    res = json.loads(capsys.readouterr().out.strip())
+    assert res == {
+        "ok": False, "reason": "unrunnable", "detail": "repo-root-absent",
+        "attempts": 0, "forfeited": False,
+    }
 
 
 def test_dispatch_vacuous_then_valid_investigated_succeeds_on_retry(tmp_path):
