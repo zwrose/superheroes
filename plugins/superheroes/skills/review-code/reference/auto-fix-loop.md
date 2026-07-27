@@ -137,8 +137,9 @@ never drop a finding or a lens.
 > line). The runner owns the previously per-session dispatch mechanics as **machinery**: it prepends
 > the anti-hijack preamble (the mode-7 hardening that stops the codex SessionStart/skill-selection
 > derail), feeds the prompt via the `- < realfile` stdin form behind the `_prompt_path_ok`
-> empty-prompt guard, pins the dispatch to the repository under review (`--repo-root`, codex `-C`,
-> cursor's subprocess cwd), bounds the attempt and streams liveness heartbeats to `--progress-file`,
+> empty-prompt guard, builds a **disposable sanitized export** of the repository named by
+> `--repo-root` and pins the dispatch to that view (codex `-C`, cursor's subprocess cwd — not the
+> caller's live checkout), bounds the attempt and streams liveness heartbeats to `--progress-file`,
 > and on a **terminal forfeit** (timeout OR nonzero engine exit OR `unreadable` OR **vacuous** — never intermediate bootstrap
 > noise that still yields a final answer) auto-retries ONCE tight-inline with a ≥900 s ceiling before
 > returning `{"ok": false, "forfeited": true, "disclosure": …}` (or `reason: "vacuous"` when the
@@ -146,6 +147,31 @@ never drop a finding or a lens.
 > yields `vacuous`, not only a double vacuous forfeit). A forfeit → the seat falls open to a Claude re-run (UFR-7) and the
 > orchestrator **discloses** the degraded vendor mix (the `disclosure` string); making that fall-open
 > loud by machinery in the receipt is #563 PR C.
+>
+> **Sanitized review view (#684).** The seat does not run inside the owner's checkout. The runner
+> materializes a fresh single-commit git repo at `headSha` holding the reviewed tree, with the named
+> repo-local agent-config surface removed (`AGENTS.md`, `.cursor/`, `CLAUDE.md`, and the other basenames
+> the runner strips at every directory level). That config is **not discoverable** from the seat's cwd —
+> which is the point of #684. Reading ordinary source files and `git grep` work; **`git log` and
+> `git blame` do not** (one synthetic commit, no history). Paths the runner stripped are **unreadable**
+> even when the diff under review touches them — the dispatch prompt should name stripped paths so the
+> seat knows why a read failed.
+>
+> **#666 investigation floor.** A seat that cites a **stripped** path in its `investigated` array fails
+> the investigation floor and forfeits vacuously — fail-safe (the seat falls open to Claude), never a
+> false clean. Do not treat that as a clean review.
+>
+> **View build refusal (no fallback).** If the sanitized view cannot be built, `dispatch-review`
+> returns a named `unrunnable` refusal with `attempts: 0` and **no spawn** — alongside the unchanged
+> `repo-root-*` refusals (`repo-root-absent`, `repo-root-missing`, `repo-root-not-a-directory`,
+> `repo-root-not-a-repo`, also `attempts: 0`): `sanitized-view-tempbase-inside-repo`,
+> `sanitized-view-head-unresolved`, `sanitized-view-export-failed`, `sanitized-view-init-failed`.
+> There is **no fallback to the raw repo and no opt-out**.
+>
+> **Receipt.** Every dispatch result carries a `sanitizedView` block (`strategy`, `stripped`,
+> `strippedCount`, `headSha`, `sourceDirty`, `buildSeconds`, `bytes`, `fileCount`). The view is the
+> **committed** tree at `headSha`; `sourceDirty: true` flags modified tracked files in the source repo
+> so a caller reviewing uncommitted work is disclosed rather than silently given the pre-change tree.
 >
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -160,10 +186,11 @@ never drop a finding or a lens.
 > seat the seat map assigns on cursor carries a real effort, so this is not a limitation in practice.
 >
 > Read-only sandbox is **hard-coded inside the runner API** — it cannot emit a write dispatch. The
-> runner pins the dispatch to the repository under review (`--repo-root`; codex `-C`; cursor via the
-> subprocess cwd): the seat **may and should** read files and run read-only commands there to ground
-> its findings. An unresolvable repo root is a **named refusal** before any spawn (`repo-root-absent`,
-> `repo-root-missing`, `repo-root-not-a-directory`, `repo-root-not-a-repo`) with `attempts: 0`. The
+> seat **may and should** read files and run read-only commands inside the sanitized view to ground
+> its findings (`--repo-root` on the CLI still names the **source** repository; the runner builds the
+> view itself). An unresolvable source repo root is a **named refusal** before any view is built
+> (`repo-root-absent`, `repo-root-missing`, `repo-root-not-a-directory`, `repo-root-not-a-repo`) with
+> `attempts: 0`. The
 > seat prompt should still inline the diff (a self-contained prompt remains the cheapest path); repo
 > access is no longer forbidden. The **fixer / write path is unchanged** — it stays model-driven and
 > host-gated (a Python-spawned subprocess would bypass the host permission-classifier the write authz
