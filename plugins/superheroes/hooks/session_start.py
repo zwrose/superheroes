@@ -64,6 +64,11 @@ def main():
         sys.stdout.write(json.dumps({
             "hookSpecificOutput": {"hookEventName": "SessionStart",
                                    "additionalContext": boot}}) + "\n")
+    try:
+        import cache_markers
+        cache_markers.sweep_stale(_PLUGIN_ROOT)
+    except Exception:
+        pass
     return 0
 
 

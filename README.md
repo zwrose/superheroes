@@ -52,6 +52,11 @@ surfaces now instead of at 2am. See
 | --- | --- |
 | `/superheroes:configure` | Set up, fix, view, or tune a project's superheroes calibration (**run this first**). |
 
+**Plugin update dialog — cache bookkeeping.** Claude Code may list `.in_use/` and `__pycache__/`
+entries under the plugin install cache as locally modified files. Those are runtime bookkeeping
+(session markers and Python bytecode from older installed versions); they are safe to overwrite,
+and no user content lives in the plugin cache directory.
+
 ---
 
 ## Two heroes run your sessions; four serve inside them
