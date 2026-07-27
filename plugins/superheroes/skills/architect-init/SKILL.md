@@ -16,7 +16,7 @@ setup step that `architect-discovery` and the rest of the band depend on.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 -c "
+python3 -B -c "
 import sys; sys.path.insert(0, '$ROOT_DIR/lib')
 import mode_registry, os
 result = mode_registry.resolve(os.getcwd())
@@ -32,7 +32,7 @@ band-wide init, not by this skill (CONVENTIONS `§2.3`).
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 -c "
+python3 -B -c "
 import sys, json, os; sys.path.insert(0, '$ROOT_DIR/lib')
 import architect_config
 p = architect_config.read_policy(os.getcwd())
@@ -55,7 +55,7 @@ visibility (committed vs gitignored) from the repo's existing doc layout:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 -c "
+python3 -B -c "
 import sys, json, os; sys.path.insert(0, '$ROOT_DIR/lib')
 import architect_config
 print(json.dumps(architect_config.analyze_repo(os.getcwd())))
@@ -69,7 +69,7 @@ keeps the repo pristine. Apply the owner's choice with `confirmed: true`:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 -c "
+python3 -B -c "
 import sys, os; sys.path.insert(0, '$ROOT_DIR/lib')
 import architect_config
 # Replace LOCATION and VISIBILITY with the owner's confirmed answers.
@@ -83,7 +83,7 @@ analysis-informed default directly with `confirmed: false` (provisional):
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 -c "
+python3 -B -c "
 import sys, os; sys.path.insert(0, '$ROOT_DIR/lib')
 import architect_config
 rec = architect_config.analyze_repo(os.getcwd())

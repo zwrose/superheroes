@@ -22,7 +22,7 @@ orchestrator or a human) routes each finding to a fix as it sees fit.
 2. **Navigation is constrained** to origins matching the profile's
    `baseUrl` (plus `allowedOrigins`). Anywhere else is off-limits.
 3. **Every quoted diagnostic is scrubbed** before it reaches a comment:
-   `python3 "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/pr_comment.py" scrub` (stdin→stdout).
+   `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/pr_comment.py" scrub` (stdin→stdout).
    Never quote raw request headers.
 4. The plan comment's checkboxes belong to the human — never check them.
 
@@ -38,14 +38,14 @@ frozen: any problem you hit is a finding, never a re-provisioning.
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
    # FR-7/8: surface the single coalesced storage-mode reconcile nudge (non-blocking, ack-gated).
-   NUDGE_MSG=$(python3 "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | jq -r 'if . == null then empty else .message end' 2>/dev/null)
+   NUDGE_MSG=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | jq -r 'if . == null then empty else .message end' 2>/dev/null)
    [ -n "$NUDGE_MSG" ] && echo "⚠ storage-mode: $NUDGE_MSG"
    ```
    Find plan records `<manifests_dir>/<key>.plan.json` for the current
    branch — default: every slot in sequence; an explicit slot argument
    narrows to one. None → run the test-pilot-plan skill to author one first,
    then return. The PR comment is NEVER parsed as the plan source.
-   Validate each before executing: `python3 "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/engine.py" validate-plan --branch B [--slot S] --json` — a validation error means the plan is not runnable: (re)author it via test-pilot-plan here in setup, never an app bug. Getting a valid plan to run is provisioning the input before the run — not a fix; you never fix.
+   Validate each before executing: `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/engine.py" validate-plan --branch B [--slot S] --json` — a validation error means the plan is not runnable: (re)author it via test-pilot-plan here in setup, never an app bug. Getting a valid plan to run is provisioning the input before the run — not a fix; you never fix.
 2. **Seed check.** `engine.py status --json`; apply the manifest if drift or
    nothing applied (`engine.py apply --branch B [--slot S] --json`). Seeding
    provisions the data the plan needs to run — it is setup, not a fix. If

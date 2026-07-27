@@ -395,7 +395,8 @@ def _auditor_vendor(config, fixer_vendor):
     models (#651, owner-ratified 2026-07-26): composer and grok share the `xai` family, so a
     cursor-grok auditor is NOT independent of a cursor-composer fix. When no family-independent
     vendor is live the audit still RUNS but is stamped degraded — never silently counted as
-    independent."""
+    independent. The same-vendor fallback loop was removed as unreachable post-#651 (issue #652
+    rider 4a); see test_verifier_and_code_fixer_families_match_per_vendor in test_model_registry."""
     live = _live_vendors(config)
     fixer_fam = model_registry.family_for("code-fixer", fixer_vendor)
     if fixer_fam is None:
@@ -405,10 +406,6 @@ def _auditor_vendor(config, fixer_vendor):
             cand_fam = model_registry.family_for("verifier", v)
             if cand_fam is not None and cand_fam != fixer_fam:
                 return v, "independent"
-    for v in live:
-        cand_fam = model_registry.family_for("verifier", v)
-        if cand_fam is not None and cand_fam != fixer_fam:
-            return v, "independent"
     return (live[0] if live else fixer_vendor), "degraded"
 
 

@@ -9,7 +9,7 @@ Wherever the user resolves a finding (this skill: the §5 step 7 interventions, 
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 "$ROOT_DIR/lib/decisions.py" \
+python3 -B "$ROOT_DIR/lib/decisions.py" \
   append "$DECISIONS" '<record-json>'
 ```
 
@@ -31,7 +31,7 @@ After the staleness nudge, analyze the decision store for a repeated signal:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 "$ROOT_DIR/lib/decisions.py" \
+python3 -B "$ROOT_DIR/lib/decisions.py" \
   analyze "$DECISIONS" --nudge-ack <comma-separated profile nudge-ack hashes>
 ```
 

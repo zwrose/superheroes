@@ -15,7 +15,7 @@ machine. Migrate-on-read is the trigger:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 -c "
+python3 -B -c "
 import sys; sys.path.insert(0,'$ROOT_DIR/lib'); import core_md
 print(core_md.resolve_shared('.'))"
 ```
@@ -37,7 +37,7 @@ that remote so pre-remote work does not fork:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 "$ROOT_DIR/lib/mode_migrate.py" rebind --cwd .
+python3 -B "$ROOT_DIR/lib/mode_migrate.py" rebind --cwd .
 ```
 
 A `conflict` result means the pre-remote and an existing remote-keyed setting disagree on a value —
@@ -56,7 +56,7 @@ bumping `updated`:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 "$ROOT_DIR/lib/core_md.py" confirm --cwd .
+python3 -B "$ROOT_DIR/lib/core_md.py" confirm --cwd .
 ```
 
 **Read the result, don't assume success.** `confirm` returns `{core: {action}, layers: {hero: {action}}}`.

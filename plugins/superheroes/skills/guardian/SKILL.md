@@ -39,7 +39,7 @@ Save the bundle JSON to a temp file. Sub-tools `guardian_store.py paths` and `gu
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 BUNDLE=$(mktemp /tmp/guardian-bundle-XXXXXXXX.json)
-python3 "$ROOT_DIR/lib/guardian_sweep.py" collect --cwd . > "$BUNDLE"
+python3 -B "$ROOT_DIR/lib/guardian_sweep.py" collect --cwd . > "$BUNDLE"
 cat "$BUNDLE" | jq .
 ```
 
@@ -47,14 +47,14 @@ Optional — resolved storage paths (CONVENTIONS §2):
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 "$ROOT_DIR/lib/guardian_store.py" paths --cwd . | jq .
+python3 -B "$ROOT_DIR/lib/guardian_store.py" paths --cwd . | jq .
 ```
 
 Optional — trust-but-verify the four FACTS before validating:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 "$ROOT_DIR/lib/guardian_sweep.py" verify-config --cwd . | jq .
+python3 -B "$ROOT_DIR/lib/guardian_sweep.py" verify-config --cwd . | jq .
 ```
 
 The bundle carries: `surfaced` (candidates needing validation), `funnel`, `factVerdicts`, `ledgerStatus`, `redLines`, `lensMeta` (per-lens validation guidance and consequence templates for surfaced lenses), and `nextSnapshot` (the staged baseline). Read `ledgerStatus` first — filed/tracked items are already dispositioned; do not re-litigate them.
@@ -92,7 +92,7 @@ DISP=$(mktemp /tmp/guardian-disp-XXXXXXXX.json)
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 "$ROOT_DIR/lib/guardian_sweep.py" finalize --cwd . \
+python3 -B "$ROOT_DIR/lib/guardian_sweep.py" finalize --cwd . \
   --bundle "$BUNDLE" --dispositions "$DISP" | jq .
 ```
 
@@ -111,7 +111,7 @@ than implying none; the baseline still advances.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 "$ROOT_DIR/lib/guardian_sweep.py" commit-ledger --cwd . \
+python3 -B "$ROOT_DIR/lib/guardian_sweep.py" commit-ledger --cwd . \
   --bundle "$BUNDLE" --dispositions "$DISP" | jq .
 ```
 

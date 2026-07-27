@@ -26,7 +26,7 @@ never be the recovery trigger.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 "$ROOT_DIR/lib/mode_migrate.py" recover --cwd .
+python3 -B "$ROOT_DIR/lib/mode_migrate.py" recover --cwd .
 ```
 
 A `recovered` result means an interrupted switch was finished or backed out — note it for the
@@ -37,7 +37,7 @@ progress, not drift).
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 -c "
+python3 -B -c "
 import sys, json; sys.path.insert(0, '$ROOT_DIR/lib')
 import configure_route
 print(json.dumps(configure_route.route('.', interactive=True)))

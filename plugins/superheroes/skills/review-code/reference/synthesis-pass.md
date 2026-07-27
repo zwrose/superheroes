@@ -92,7 +92,7 @@ The steps below are the reference shape of the fold (the doc-loop acceptance pat
 3. **Apply the verdicts deterministically** through the shared script:
 
    ```bash
-   python3 "$ROOT_DIR/lib/loop_synthesis.py" \
+   python3 -B "$ROOT_DIR/lib/loop_synthesis.py" \
      --merged "$SESSION_DIR/round-<N>/merged.json" \
      --leaf   "$SESSION_DIR/round-<N>/synthesis-verdicts.json" \
      > "$SESSION_DIR/round-<N>/synthesized.json"

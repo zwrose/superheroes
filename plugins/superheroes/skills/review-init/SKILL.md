@@ -28,7 +28,7 @@ ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 # Package manager / stack
 ls "$ROOT"/package.json "$ROOT"/pyproject.toml "$ROOT"/Cargo.toml "$ROOT"/go.mod 2>/dev/null
 # Verify-command candidate (JS): a "check"/"test" script
-[ -f "$ROOT/package.json" ] && python3 -c "import json;print(json.load(open('$ROOT/package.json')).get('scripts',{}))" 2>/dev/null
+[ -f "$ROOT/package.json" ] && python3 -B -c "import json;print(json.load(open('$ROOT/package.json')).get('scripts',{}))" 2>/dev/null
 # Default branch
 git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' \
   || git rev-parse --abbrev-ref HEAD
@@ -51,7 +51,7 @@ Read the engine versions for provenance:
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 sed -n '1p' "$ROOT_DIR/rubric/review-base.md"          # -> <!-- rubric-version: N -->
-python3 -c "import json;print(json.load(open('$ROOT_DIR/.claude-plugin/plugin.json'))['version'])"
+python3 -B -c "import json;print(json.load(open('$ROOT_DIR/.claude-plugin/plugin.json'))['version'])"
 ```
 
 ## Step 2 — Choose mode
@@ -62,12 +62,12 @@ global per-repo store). `review_store.py resolve` returns the resolved path, or
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-RES=$(python3 "$ROOT_DIR/lib/review_store.py" resolve --kind profile) \
+RES=$(python3 -B "$ROOT_DIR/lib/review_store.py" resolve --kind profile) \
   || RES='{"location":"none","exists":false,"path":null}'
 LOCATION=$(printf '%s' "$RES" | jq -r .location)
 PROFILE=$(printf '%s' "$RES" | jq -r '.path // empty')
 # FR-7/8: surface the single coalesced storage-mode reconcile nudge (non-blocking, ack-gated).
-NUDGE_MSG=$(python3 "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | jq -r 'if . == null then empty else .message end' 2>/dev/null)
+NUDGE_MSG=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | jq -r 'if . == null then empty else .message end' 2>/dev/null)
 [ -n "$NUDGE_MSG" ] && echo "⚠ storage-mode: $NUDGE_MSG"
 ```
 
@@ -79,15 +79,15 @@ storage location and mint the path before writing:
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$LOCATION" = "none" ]; then
   INTERACTIVE=true   # the orchestrator sets this to false on a headless/non-interactive run (no human to answer), so decide-location returns "global" deterministically instead of "ask"
-  LOC=$(python3 "$ROOT_DIR/lib/review_store.py" decide-location --interactive "$INTERACTIVE")
+  LOC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location --interactive "$INTERACTIVE")
   # If LOC is "ask" → present the in-repo-vs-global AskUserQuestion, set LOC to the owner's pick,
   # then record it band-wide (FR-3) and create.
   # If LOC is already in-repo/global → skip the record and go straight to create.
-  REC=$(python3 "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
+  REC=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
   if [ -z "$REC" ] || printf '%s' "$REC" | jq -e '.written == false' >/dev/null 2>&1; then
     echo "note: couldn't record the band storage mode this run — you'll be asked again next time."
   fi
-  PROFILE=$(python3 "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
+  PROFILE=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
 fi
 ```
 
@@ -161,10 +161,10 @@ STATUS=confirmed   # use `provisional` on a headless/non-interactive run (FR-5)
 # CREATE: shared facts → core.md (lock-guarded, reuse-not-clobber FR-6/FR-7; a
 # `proposed`/`deferred` action is surfaced, never silently overwritten).
 printf '%s' "$CORE_FACTS_JSON" \
-  | python3 "$ROOT_DIR/lib/core_md.py" write --status "$STATUS"
+  | python3 -B "$ROOT_DIR/lib/core_md.py" write --status "$STATUS"
 # CREATE: review-crew's own sections → its layer file (FR-3).
 printf '%s' "$REVIEW_LAYER_BODY" \
-  | python3 "$ROOT_DIR/lib/core_md.py" write-layer --hero review-crew --status "$STATUS" --rubric-version "$RUBRIC_VERSION"
+  | python3 -B "$ROOT_DIR/lib/core_md.py" write-layer --hero review-crew --status "$STATUS" --rubric-version "$RUBRIC_VERSION"
 ```
 
 `write` above is the **create** path: on an existing core it returns `reused`/`proposed`/`refused`/`deferred`.

@@ -64,6 +64,14 @@ def main():
         sys.stdout.write(json.dumps({
             "hookSpecificOutput": {"hookEventName": "SessionStart",
                                    "additionalContext": boot}}) + "\n")
+    try:
+        import cache_markers
+        swept = cache_markers.sweep_stale(_PLUGIN_ROOT)
+        if swept:
+            sys.stderr.write(
+                "superheroes: swept %d stale .in_use marker(s)\n" % swept)
+    except Exception:
+        pass
     return 0
 
 

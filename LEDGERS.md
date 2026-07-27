@@ -143,6 +143,24 @@ stated unlock condition is met — cite this ledger instead of re-arguing.
   The removed `scanRatio` guard was proven broken **in both directions** (PR #644 round-2 stranding
   proof); any future design must answer that proof. **Unlock / tripwire:** persisted `filesScanned` /
   `scanRatio` telemetry — a **vitals trend showing a real partial under-scan** is the filing trigger.
+- **No lock or transaction fix for the check-to-write race between the two configuration
+  gates until concurrent calibration writers exist.** *(Owner-ratified 2026-07-26, issue #652
+  rider 6; analysis PR #675, finding 7.)* Single-user posture; the check-to-write window is
+  narrow; and no current workflow runs two simultaneous configure-writing sessions. A lock or
+  transaction design without concurrent writers is **speculative machinery** — the named-consumer
+  rule: no producer without at least one named consumer built alongside. **Blocking tripwire:** any
+  future work that makes concurrent calibration writers real — orchestration machinery writing
+  config from subagents or parallel sessions, or a `configure` feature that does so — **inherits a
+  blocking precondition to solve this race first.**
+- **No standalone fix for `store_core.normalize_remote` dropping the port** so two forges sharing
+  a hostname but differing by port normalize equal and produce a false MATCH in the base guard's
+  repo comparison. *(Owner-ratified 2026-07-26, issue #652 rider 8; PR #667 follow-up 3.)*
+  GitHub.com never carries explicit ports and the review flow is `gh`-built, so triggering it
+  requires a **self-hosted, multi-instance-on-one-host forge that no current user runs**. The fix is
+  **not a one-liner**: default ports must still normalize away (ssh and https implicit ports; `:443`
+  must equal the bare host), and the helper's **other callers** need checking. **Blocking tripwire:**
+  the **first user on a ported forge**, or any work **adding non-GitHub forge support**, inherits
+  this as a blocking precondition.
 
 **Unlock rhythm:** the stability gate (two consecutive releases whose first real runs
 diagnose clean) re-opens the growth posture; #131's checkpoint re-opens
