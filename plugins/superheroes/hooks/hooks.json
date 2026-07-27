@@ -4,13 +4,13 @@
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/owner_authority_gate.py\" || printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"superheroes owner-authority gate unavailable (fail-closed)\"}}'" },
-          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/bash_timeout.py\" || true" }
+          { "type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/owner_authority_gate.py\" || printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"superheroes owner-authority gate unavailable (fail-closed)\"}}'" },
+          { "type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/bash_timeout.py\" || true" }
         ]
       }
     ],
     "SessionStart": [
-      { "hooks": [ { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session_start.py\" --host claude || true" } ] }
+      { "hooks": [ { "type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/session_start.py\" --host claude || true" } ] }
     ]
   }
 }

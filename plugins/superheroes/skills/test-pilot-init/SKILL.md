@@ -15,10 +15,10 @@ seeding blocks. Two modes: **create** (nothing resolves) and **reconcile**
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-RES=$(python3 "$ROOT_DIR/lib/store.py" resolve)
+RES=$(python3 -B "$ROOT_DIR/lib/store.py" resolve)
 LOCATION=$(printf '%s' "$RES" | jq -r .location)
 # FR-7/8: surface the single coalesced storage-mode reconcile nudge (non-blocking, ack-gated).
-NUDGE_MSG=$(python3 "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | jq -r 'if . == null then empty else .message end' 2>/dev/null)
+NUDGE_MSG=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | jq -r 'if . == null then empty else .message end' 2>/dev/null)
 [ -n "$NUDGE_MSG" ] && echo "⚠ storage-mode: $NUDGE_MSG"
 ```
 
@@ -46,16 +46,16 @@ Record the preference order for the profile.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-LOC=$(python3 "$ROOT_DIR/lib/store.py" decide-location --interactive true)
+LOC=$(python3 -B "$ROOT_DIR/lib/store.py" decide-location --interactive true)
 # "ask" -> AskUserQuestion: in-repo (committed, team-shared) vs global
 # (~/.claude/test-pilot/, zero git footprint). Headless runs get "global".
 # If LOC is "ask" → AskUserQuestion, set LOC to owner's pick, then record band-wide (FR-3).
 # If LOC is already in-repo/global → skip record, go straight to create.
-REC=$(python3 "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
+REC=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
 if [ -z "$REC" ] || printf '%s' "$REC" | jq -e '.written == false' >/dev/null 2>&1; then
   echo "note: couldn't record the band storage mode this run — you'll be asked again next time."
 fi
-PATHS=$(python3 "$ROOT_DIR/lib/store.py" create --location "$LOC")
+PATHS=$(python3 -B "$ROOT_DIR/lib/store.py" create --location "$LOC")
 ```
 
 ## Step 5 — Interview only the gaps
@@ -95,9 +95,9 @@ trade-offs AND a recommendation derived from what you detected.
    seed script. Every block declares non-empty `targets` and pins PEP 723
    dependency versions.
 3. Generate the catalog:
-   `python3 "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/catalog.py" --blocks-dir <blocks_dir>`
+   `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/catalog.py" --blocks-dir <blocks_dir>`
 4. CREATE path (fresh setup, FR-5): pipe the shared facts JSON (stack, verify command,
-   threat model) into `python3 "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/core_md.py" write
+   threat model) into `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/core_md.py" write
    --status confirmed` (use `provisional` on a headless run) to write the band-wide `core.md`,
    and pipe test-pilot's own sections (its `json test-pilot-config` block + prose) into
    `core_md.py write-layer --hero test-pilot --status <s>` so they land in the `test-pilot.md`

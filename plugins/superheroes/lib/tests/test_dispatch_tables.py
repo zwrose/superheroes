@@ -10,7 +10,7 @@ sync with the bundled agents and the rubric's dimension list.
 - Every dimension label used in a table row appears backticked in the rubric's
   Dimensions declaration.
 - The reviewer roster re-typed in code (`round_driver`/`spec_loop_plan` DIMENSIONS and
-  AGENT_SUFFIX; the old showrunner.js twins were retired in #468) matches the same
+  AGENT_SUFFIX) matches the same
   agents/ home — a CONVENTIONS §11 single-source-of-truth drift guard, fail-closed
   so a renamed literal cannot pass vacuously.
 """

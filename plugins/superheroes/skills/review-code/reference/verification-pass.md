@@ -110,7 +110,7 @@ from a prior same-round attempt were already removed before dispatch by the glob
 `find … -delete` in "The verifier dispatch" — so it only ever sees the current attempt's fresh set.)
 
 ```bash
-python3 -c "
+python3 -B -c "
 import json, sys, glob, os, re
 sys.path.insert(0, '$ROOT_DIR/lib')
 import verification
@@ -161,7 +161,7 @@ ids verbatim. Write the grouping to `$SESSION_DIR/round-<N>/grouping.json`.
 Then finalize:
 
 ```bash
-python3 -c "
+python3 -B -c "
 import json, sys
 sys.path.insert(0, '$ROOT_DIR/lib')
 import verification

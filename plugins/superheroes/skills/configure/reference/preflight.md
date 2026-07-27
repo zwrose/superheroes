@@ -73,7 +73,7 @@ reviewer, or pilot this project configures. Derive them; do not hard-code one en
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 -c "
+python3 -B -c "
 import sys, json; sys.path.insert(0, '$ROOT_DIR/lib')
 import core_md, preflight_probe
 prefs = (core_md.read('.') or {}).get('enginePreferences') or {}
@@ -93,7 +93,7 @@ Confirm sign-in:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 -c "
+python3 -B -c "
 import sys, json; sys.path.insert(0, '$ROOT_DIR/lib')
 import preflight_probe
 print(json.dumps(preflight_probe.gh_auth_probe()))
@@ -130,7 +130,7 @@ section, so anyone reading the PR later can see exactly what ran without re-deri
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 -c "
+python3 -B -c "
 import sys, json; sys.path.insert(0, '$ROOT_DIR/lib')
 import preflight_probe
 print(json.dumps(preflight_probe.dispatch_calibration(cwd='.'), indent=2))
@@ -147,7 +147,7 @@ When this build will run `review-code` (it always does at handback), seed the sh
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 "$ROOT_DIR/lib/preflight_probe.py" compose-liveness --cwd .
+python3 -B "$ROOT_DIR/lib/preflight_probe.py" compose-liveness --cwd .
 ```
 
 This probes each configured reviewer vendor's models **once** and writes a machine-readable receipt
@@ -186,7 +186,7 @@ distinct configured non-Claude engine itself (the same `configured_cross_vendor_
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 "$ROOT_DIR/lib/preflight_probe.py" run --cwd .
+python3 -B "$ROOT_DIR/lib/preflight_probe.py" run --cwd .
 ```
 
 The JSON output's `crossVendorEngines` field records which engines it derived and probed — an

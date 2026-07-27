@@ -31,7 +31,7 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-   WORK_ITEM=$(python3 "$ROOT_DIR/lib/definition_doc.py" mint --title "<title>")
+   WORK_ITEM=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" mint --title "<title>")
    ```
 
    Reuse an existing slug if this spec already exists (a revision); never re-mint
@@ -44,7 +44,7 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
    ROOT=$(git rev-parse --show-toplevel)
-   SPEC=$(python3 "$ROOT_DIR/lib/definition_doc.py" resolve-write \
+   SPEC=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" resolve-write \
      --work-item "$WORK_ITEM" --doc spec --root "$ROOT") \
      || { echo "the-architect: cannot place the spec safely (see message above) — not writing." >&2; exit 1; }
    ```
@@ -54,7 +54,7 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-   python3 "$ROOT_DIR/lib/definition_doc.py" frontmatter \
+   python3 -B "$ROOT_DIR/lib/definition_doc.py" frontmatter \
      --doc spec --work-item "$WORK_ITEM" --size "<size>"
    ```
 

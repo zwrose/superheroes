@@ -57,18 +57,18 @@ RUBRIC="$ROOT_DIR/rubric/review-base.md"   # absolute; embed the expanded value 
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-CAL=$(python3 "$ROOT_DIR/lib/calibration_resolve.py" resolve) \
+CAL=$(python3 -B "$ROOT_DIR/lib/calibration_resolve.py" resolve) \
   || CAL='{"location":"none","exists":false}'
 CORE=$(printf '%s' "$CAL" | jq -r '.dispatch_core // empty')
 LAYER=$(printf '%s' "$CAL" | jq -r '.dispatch_layer // empty')
 PROFILE="${LAYER:-$(printf '%s' "$CAL" | jq -r '.legacy_path // empty')}"
 LOCATION=$(printf '%s' "$CAL" | jq -r .location)
 EXISTS=$(printf '%s' "$CAL" | jq -r .exists)
-DRES=$(python3 "$ROOT_DIR/lib/review_store.py" resolve --kind decisions) \
+DRES=$(python3 -B "$ROOT_DIR/lib/review_store.py" resolve --kind decisions) \
   || DRES='{"path":null}'
 DECISIONS=$(printf '%s' "$DRES" | jq -r '.path // empty')
 # FR-7/8: surface the single coalesced storage-mode reconcile nudge (non-blocking, ack-gated).
-NUDGE_MSG=$(python3 "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | jq -r 'if . == null then empty else .message end' 2>/dev/null)
+NUDGE_MSG=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | jq -r 'if . == null then empty else .message end' 2>/dev/null)
 [ -n "$NUDGE_MSG" ] && echo "⚠ storage-mode: $NUDGE_MSG"
 ```
 
@@ -76,7 +76,7 @@ Also resolve the engine versions the staleness self-check (next) needs — the *
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-PLUGIN_VERSION=$(python3 -c "import json;print(json.load(open('$ROOT_DIR/.claude-plugin/plugin.json'))['version'])")
+PLUGIN_VERSION=$(python3 -B -c "import json;print(json.load(open('$ROOT_DIR/.claude-plugin/plugin.json'))['version'])")
 RUBRIC_VERSION=$(sed -n 's/.*rubric-version: *\([0-9][0-9]*\).*/\1/p' "$RUBRIC" | head -1)
 ```
 
@@ -85,7 +85,7 @@ RUBRIC_VERSION=$(sed -n 's/.*rubric-version: *\([0-9][0-9]*\).*/\1/p' "$RUBRIC" 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$EXISTS" = "true" ]; then
-  DOCTOR_JSON=$(python3 "$ROOT_DIR/lib/repo_doctor.py" \
+  DOCTOR_JSON=$(python3 -B "$ROOT_DIR/lib/repo_doctor.py" \
     "$PROFILE" "$PLUGIN_VERSION" "$RUBRIC_VERSION")
 fi
 ```
@@ -98,15 +98,15 @@ Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile 
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$LOCATION" = "none" ]; then
   INTERACTIVE=true   # the orchestrator sets this to false on a headless/non-interactive run (no human to answer), so decide-location returns "global" deterministically instead of "ask"
-  LOC=$(python3 "$ROOT_DIR/lib/review_store.py" decide-location --interactive "$INTERACTIVE")
+  LOC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location --interactive "$INTERACTIVE")
   # If LOC is "ask" → AskUserQuestion, set LOC to owner's pick, then record band-wide (FR-3).
   # If LOC is already in-repo/global → skip record, go straight to create.
-  REC=$(python3 "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
+  REC=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
   if [ -z "$REC" ] || printf '%s' "$REC" | jq -e '.written == false' >/dev/null 2>&1; then
     echo "note: couldn't record the band storage mode this run — you'll be asked again next time."
   fi
-  PROFILE=$(python3 "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
-  DECISIONS=$(python3 "$ROOT_DIR/lib/review_store.py" create --kind decisions --location "$LOC")
+  PROFILE=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
+  DECISIONS=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind decisions --location "$LOC")
 fi
 ```
 
@@ -216,9 +216,9 @@ via the shared knob, honoring any `## Model tiers` override block in the project
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 MT="$ROOT_DIR/lib/model_tier_resolve.py"
-OV=$(python3 "$ROOT_DIR/lib/model_tier_overrides.py" --profile "$PROFILE")  # {role:model} or {}
-REVIEWER_MODEL=$(python3 "$MT" --role reviewer --overrides "$OV" | jq -r '.model // empty')
-DEEP_MODEL=$(python3 "$MT" --role reviewer-deep --overrides "$OV" | jq -r '.model // empty')
+OV=$(python3 -B "$ROOT_DIR/lib/model_tier_overrides.py" --profile "$PROFILE")  # {role:model} or {}
+REVIEWER_MODEL=$(python3 -B "$MT" --role reviewer --overrides "$OV" | jq -r '.model // empty')
+DEEP_MODEL=$(python3 -B "$MT" --role reviewer-deep --overrides "$OV" | jq -r '.model // empty')
 ```
 
 When dispatching the four specialists, pass `model: $DEEP_MODEL` to `security-reviewer` and
@@ -424,7 +424,7 @@ After the staleness nudge, analyze the decision store for a repeated signal:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 "$ROOT_DIR/lib/decisions.py" \
+python3 -B "$ROOT_DIR/lib/decisions.py" \
   analyze "$DECISIONS" --nudge-ack <comma-separated profile nudge-ack hashes>
 ```
 

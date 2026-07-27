@@ -26,7 +26,7 @@ anyone with the repo. Resolve the band-wide decision (it is decided once and is 
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 -c "
+python3 -B -c "
 import sys; sys.path.insert(0,'$ROOT_DIR/lib'); import mode_registry
 print(mode_registry.decide_mode('.', None, True))"   # 'in-repo' | 'global' | 'ask'
 ```
@@ -68,9 +68,9 @@ view tune-menu does not re-offer it on every run (FR-6 / #121):
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 "$ROOT_DIR/lib/hero_setup.py" decline --cwd . --hero test-pilot
+python3 -B "$ROOT_DIR/lib/hero_setup.py" decline --cwd . --hero test-pilot
 # or, for guardian:
-python3 "$ROOT_DIR/lib/hero_setup.py" decline --cwd . --hero guardian
+python3 -B "$ROOT_DIR/lib/hero_setup.py" decline --cwd . --hero guardian
 ```
 
 ## 4.5 — Offer an external engine per role (FR-11/12/13/14), decline still completes
@@ -87,7 +87,7 @@ disclosed degradation. A decline leaves every role on its default and set-up sti
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-   python3 "$ROOT_DIR/lib/engine_detect.py"   # JSON verdict per engine: installed/authed + remediation
+   python3 -B "$ROOT_DIR/lib/engine_detect.py"   # JSON verdict per engine: installed/authed + remediation
    ```
    A not-ready engine is shown with its next-command remediation; it is never offered as ready.
 
@@ -107,7 +107,7 @@ disclosed degradation. A decline leaves every role on its default and set-up sti
    it goes; do **not** write it:
 
    ```bash
-   python3 "$ROOT_DIR/lib/engine_authz.py" snippet --host claude --engine <codex|cursor>
+   python3 -B "$ROOT_DIR/lib/engine_authz.py" snippet --host claude --engine <codex|cursor>
    # prints the autoMode.allow block + its location (.claude/settings.local.json). SHOW it; never write it.
    ```
 
@@ -116,7 +116,7 @@ disclosed degradation. A decline leaves every role on its default and set-up sti
    no-response case is bounded by the same finite limit as UFR-5 (`engine_pref.resolve_timeout`):
 
    ```bash
-   python3 "$ROOT_DIR/lib/engine_authz.py" test-dispatch --engine <codex|cursor> --cwd .
+   python3 -B "$ROOT_DIR/lib/engine_authz.py" test-dispatch --engine <codex|cursor> --cwd .
    # -> {"engine":E,"ok":true}  (ready)
    # -> {"engine":E,"ok":false} (denied or no-response bounded by the UFR-5 limit -> falls open to
    #    Claude; tell the owner how to enable, leave the engine not-ready with a retry instruction)

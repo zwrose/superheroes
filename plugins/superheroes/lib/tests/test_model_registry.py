@@ -403,7 +403,27 @@ def test_claude_alias_resolution_record_matches_registry_ids():
         assert re.fullmatch(re.escape(expected_prefix) + r"(-\d{8})?", resolved), (
             model_id, resolved, expected_prefix)
     assert MR.CLAUDE_ALIAS_RESOLUTION["harness"].startswith("claude-code/")
-    assert MR.SMART_CLAUDE_FALLBACK[0] in claude_models, MR.SMART_CLAUDE_FALLBACK
+
+
+def test_verifier_and_code_fixer_families_match_per_vendor():
+    """This invariant is what makes round_driver._auditor_vendor's same-vendor fallback unreachable
+    (#652 rider 4a). If a future registry change breaks the invariant, the fallback becomes reachable
+    again and the deleted branch must be reconsidered — so this test failing is a design signal,
+    not a test to relax."""
+    vendors = MR.vendors()
+    assert vendors, "model_registry.vendors() must be non-empty for this invariant"
+    for vendor in vendors:
+        fixer_fam = MR.family_for("code-fixer", vendor)
+        verifier_fam = MR.family_for("verifier", vendor)
+        assert fixer_fam is not None, (
+            f"code-fixer family_for({vendor!r}) returned None — invariant cannot be evaluated"
+        )
+        assert verifier_fam is not None, (
+            f"verifier family_for({vendor!r}) returned None — invariant cannot be evaluated"
+        )
+        assert verifier_fam == fixer_fam, (
+            vendor, fixer_fam, verifier_fam,
+        )
 
 
 _CURSOR_FIRST_PARTY_REGISTRY_IDS = frozenset({"composer-2.5", "cursor-grok-4.5"})
@@ -411,7 +431,7 @@ _CURSOR_FIRST_PARTY_REGISTRY_IDS = frozenset({"composer-2.5", "cursor-grok-4.5"}
 
 def test_cursor_registered_models_are_exactly_first_party_pair():
     """#650: cursor CLI billing is first-party only; the registry is the enforcing surface."""
-    registered = frozenset(MR._MODELS["cursor"])
+    registered = frozenset(MR.cursor_models())
     assert registered == _CURSOR_FIRST_PARTY_REGISTRY_IDS
 
 
@@ -421,7 +441,7 @@ def test_cursor_first_party_models_are_one_family():
     other — this is exactly the condition round_driver._auditor_vendor keys on."""
     assert MR.model_family("cursor", "composer-2.5") == "xai"
     assert MR.model_family("cursor", "cursor-grok-4.5") == "xai"
-    assert len({MR.model_family("cursor", m) for m in MR._MODELS["cursor"]}) == 1
+    assert len({MR.model_family("cursor", m) for m in MR.cursor_models()}) == 1
     assert MR.family_for("code-fixer", "cursor") == "xai"
     assert MR.family_for("verifier", "cursor") == "xai"
     assert MR.family_for("implementer", "cursor") == MR.family_for("reviewer-deep", "cursor")

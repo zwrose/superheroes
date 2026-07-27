@@ -16,7 +16,7 @@ up-to-date project changes nothing (FR-12).
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 -c "
+python3 -B -c "
 import sys; sys.path.insert(0,'$ROOT_DIR/lib'); import configure_view
 print(configure_view.render('.'))"
 ```
@@ -43,7 +43,7 @@ action that owns it, leaving the rest of the calibration untouched:
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-  python3 "$ROOT_DIR/lib/hero_setup.py" offerable --cwd .
+  python3 -B "$ROOT_DIR/lib/hero_setup.py" offerable --cwd .
   ```
 
   This is the mandatory/optional split: a missing **review-crew** layer is an incomplete set-up the
@@ -57,9 +57,9 @@ action that owns it, leaving the rest of the calibration untouched:
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-  python3 "$ROOT_DIR/lib/store_sweep.py" report
+  python3 -B "$ROOT_DIR/lib/store_sweep.py" report
   # show the owner the counts + orphaned paths; on their explicit confirm:
-  python3 "$ROOT_DIR/lib/store_sweep.py" sweep
+  python3 -B "$ROOT_DIR/lib/store_sweep.py" sweep
   ```
 
   `sweep` deletes only provenance-orphaned stores (recorded source path gone, no real content) —
@@ -114,7 +114,7 @@ action that owns it, leaving the rest of the calibration untouched:
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-  python3 "$ROOT_DIR/lib/model_tier_overrides.py" show
+  python3 -B "$ROOT_DIR/lib/model_tier_overrides.py" show
   ```
 
   To set overrides (including `fable` only when the role's engine is `claude` — `fable` is
@@ -125,7 +125,7 @@ action that owns it, leaving the rest of the calibration untouched:
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-  python3 "$ROOT_DIR/lib/model_tier_overrides.py" write --set reviewer=sonnet --clear code-fixer
+  python3 -B "$ROOT_DIR/lib/model_tier_overrides.py" write --set reviewer=sonnet --clear code-fixer
   ```
 
   Role names are validated against `KNOWN_ROLES`; unknown roles are dropped with a warning. Unknown
@@ -164,10 +164,10 @@ explicit confirm before doing anything. First preview, then (on confirm) execute
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 "$ROOT_DIR/lib/mode_migrate.py" preview --cwd . --target <in-repo|global>
+python3 -B "$ROOT_DIR/lib/mode_migrate.py" preview --cwd . --target <in-repo|global>
 # present the calibration + definition documents it lists, and the collaborator-visibility note;
 # on the owner's explicit confirm:
-python3 "$ROOT_DIR/lib/mode_migrate.py" execute --cwd . --target <in-repo|global>
+python3 -B "$ROOT_DIR/lib/mode_migrate.py" execute --cwd . --target <in-repo|global>
 ```
 
 - **What moves:** the full calibration (the shared core, every hero layer, the pinned patterns) and

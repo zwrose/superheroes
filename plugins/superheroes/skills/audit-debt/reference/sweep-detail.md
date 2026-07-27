@@ -47,7 +47,7 @@ audit-debt's resolution point is the §5 issue-gate (File / Drop, and the auto-i
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 "$ROOT_DIR/lib/decisions.py" \
+python3 -B "$ROOT_DIR/lib/decisions.py" \
   append "$DECISIONS" '<record-json>'
 ```
 
