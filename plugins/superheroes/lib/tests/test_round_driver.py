@@ -2323,7 +2323,8 @@ def test_auditor_vendor_family_keyed_single_vendor_same_family_degraded():
 # it: that test was the only one reaching `_auditor_vendor`'s SECOND (same-vendor) loop on its
 # `independent` return, and post-#651 no vendor can satisfy that branch — every vendor's
 # `code-fixer` and `verifier` roles now resolve to the same family — so it is unreachable, not
-# merely untested. Flagged for the advisor rather than deleted here.
+# merely untested. #652 rider 4a deleted that loop; the invariant is pinned by
+# test_verifier_and_code_fixer_families_match_per_vendor in test_model_registry.py.
 
 
 def test_auditor_vendor_unknown_fixer_degraded():

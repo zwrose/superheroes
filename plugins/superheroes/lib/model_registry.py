@@ -233,7 +233,6 @@ CLAUDE_ALIAS_RESOLUTION = {
 }
 
 FABLE_NEVER_DEFAULT = True
-SMART_CLAUDE_FALLBACK = ("opus-5", None)
 
 _MODEL_TIER_ROLES = (
     "orchestrator",
@@ -388,6 +387,10 @@ def known_claude_models() -> tuple[str, ...]:
 
 def codex_models() -> tuple[str, ...]:
     return tuple(_MODELS["codex"])
+
+
+def cursor_models() -> tuple[str, ...]:
+    return tuple(_MODELS["cursor"])
 
 
 def codex_efforts() -> tuple[str, ...]:
