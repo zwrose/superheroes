@@ -95,18 +95,18 @@ REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)  # absolute; the c
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-CAL=$(python3 "$ROOT_DIR/lib/calibration_resolve.py" resolve) \
+CAL=$(python3 -B "$ROOT_DIR/lib/calibration_resolve.py" resolve) \
   || CAL='{"location":"none","exists":false}'
 CORE=$(printf '%s' "$CAL" | jq -r '.dispatch_core // empty')
 LAYER=$(printf '%s' "$CAL" | jq -r '.dispatch_layer // empty')
 PROFILE="${LAYER:-$(printf '%s' "$CAL" | jq -r '.legacy_path // empty')}"
 LOCATION=$(printf '%s' "$CAL" | jq -r .location)
 EXISTS=$(printf '%s' "$CAL" | jq -r .exists)
-DRES=$(python3 "$ROOT_DIR/lib/review_store.py" resolve --kind decisions) \
+DRES=$(python3 -B "$ROOT_DIR/lib/review_store.py" resolve --kind decisions) \
   || DRES='{"path":null}'
 DECISIONS=$(printf '%s' "$DRES" | jq -r '.path // empty')
 # FR-7/8: surface the single coalesced storage-mode reconcile nudge (non-blocking, ack-gated).
-NUDGE_MSG=$(python3 "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | jq -r 'if . == null then empty else .message end' 2>/dev/null)
+NUDGE_MSG=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | jq -r 'if . == null then empty else .message end' 2>/dev/null)
 [ -n "$NUDGE_MSG" ] && echo "⚠ storage-mode: $NUDGE_MSG"
 ```
 
@@ -114,7 +114,7 @@ Also resolve the engine versions the staleness self-check (next) needs — the *
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-PLUGIN_VERSION=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['version'])" "$ROOT_DIR/.claude-plugin/plugin.json")
+PLUGIN_VERSION=$(python3 -B -c "import json,sys;print(json.load(open(sys.argv[1]))['version'])" "$ROOT_DIR/.claude-plugin/plugin.json")
 RUBRIC_VERSION=$(sed -n 's/.*rubric-version: *\([0-9][0-9]*\).*/\1/p' "$RUBRIC" | head -1)
 ```
 
@@ -123,20 +123,20 @@ RUBRIC_VERSION=$(sed -n 's/.*rubric-version: *\([0-9][0-9]*\).*/\1/p' "$RUBRIC" 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 MT="$ROOT_DIR/lib/model_tier_resolve.py"   # resolved like $RUBRIC
-OV=$(python3 "$ROOT_DIR/lib/model_tier_overrides.py" --profile "$PROFILE")  # {role:model} or {}
-REVIEWER_MODEL=$(python3 "$MT" --role reviewer --overrides "$OV" | jq -r '.model // empty')
-DEEP_MODEL=$(python3 "$MT" --role reviewer-deep --overrides "$OV" | jq -r '.model // empty')
-MECH_MODEL=$(python3 "$MT" --role mechanical --overrides "$OV" | jq -r '.model // empty')
-SYNTH_MODEL=$(python3 "$MT" --role synthesis --overrides "$OV" | jq -r '.model // empty')  # fail-closed synthesis judge
-VERIFIER_MODEL=$(python3 "$MT" --role verifier --overrides "$OV" | jq -r '.model // empty')  # per-finding verification tier
-FIXER_MODEL=$(python3 "$MT" --role code-fixer --overrides "$OV" | jq -r '.model // empty')  # auto-fix loop fixer tier (#510)
+OV=$(python3 -B "$ROOT_DIR/lib/model_tier_overrides.py" --profile "$PROFILE")  # {role:model} or {}
+REVIEWER_MODEL=$(python3 -B "$MT" --role reviewer --overrides "$OV" | jq -r '.model // empty')
+DEEP_MODEL=$(python3 -B "$MT" --role reviewer-deep --overrides "$OV" | jq -r '.model // empty')
+MECH_MODEL=$(python3 -B "$MT" --role mechanical --overrides "$OV" | jq -r '.model // empty')
+SYNTH_MODEL=$(python3 -B "$MT" --role synthesis --overrides "$OV" | jq -r '.model // empty')  # fail-closed synthesis judge
+VERIFIER_MODEL=$(python3 -B "$MT" --role verifier --overrides "$OV" | jq -r '.model // empty')  # per-finding verification tier
+FIXER_MODEL=$(python3 -B "$MT" --role code-fixer --overrides "$OV" | jq -r '.model // empty')  # auto-fix loop fixer tier (#510)
 ```
 
 **Resolve per-role engine (FR-15).** Default `claude` when unset.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-EP=$(python3 "$ROOT_DIR/lib/engine_pref_load.py")            # {"reviewer","implementation"} (both "claude" if unset)
+EP=$(python3 -B "$ROOT_DIR/lib/engine_pref_load.py")            # {"reviewer","implementation"} (both "claude" if unset)
 REVIEWER_ENGINE=$(echo "$EP" | jq -r '.reviewer // "claude"')
 IMPL_ENGINE=$(echo "$EP" | jq -r '.implementation // "claude"')
 ```
@@ -144,15 +144,15 @@ IMPL_ENGINE=$(echo "$EP" | jq -r '.implementation // "claude"')
 **Compose the panel seat map (#510).** Per-seat engine+model over the live vendors — this replaces the single `$REVIEWER_ENGINE`-for-all-seats knob. Optional per-seat pins come from `enginePreferences.seatPins` in `$EP`; pins the account cannot honor stay loud via the shipped seat-map machinery (degradations in the receipt, seat falls back to rotation). `$AUTHOR_FAMILY` is the implementation engine's maker family; the narrative family is this orchestrator (`anthropic`). The map (per-seat tiers + resolved models, any pin/degradation disclosures) rides into the receipt; per-seat consumption is in `reference/auto-fix-loop.md`.
 
 ```bash
-CONFIGURED=$(python3 -c "import sys;sys.path.insert(0,sys.argv[1]+'/lib');import preflight_probe,core_md;p=(core_md.read('.') or {}).get('enginePreferences') or {};print(','.join(preflight_probe.configured_cross_vendor_engines(p)))" "$ROOT_DIR")
-AUTHOR_FAMILY=$(python3 -c "import sys;sys.path.insert(0,sys.argv[1]+'/lib');import model_registry as m;print(m.family_for('code-fixer',sys.argv[2]) or '')" "$ROOT_DIR" "$IMPL_ENGINE")
+CONFIGURED=$(python3 -B -c "import sys;sys.path.insert(0,sys.argv[1]+'/lib');import preflight_probe,core_md;p=(core_md.read('.') or {}).get('enginePreferences') or {};print(','.join(preflight_probe.configured_cross_vendor_engines(p)))" "$ROOT_DIR")
+AUTHOR_FAMILY=$(python3 -B -c "import sys;sys.path.insert(0,sys.argv[1]+'/lib');import model_registry as m;print(m.family_for('code-fixer',sys.argv[2]) or '')" "$ROOT_DIR" "$IMPL_ENGINE")
 SEAT_PINS=$(echo "$EP" | jq -c 'if (.seatPins // {}) == {} then empty else .seatPins end')  # owner per-seat pins (#607); empty/absent → omit --pins
 PINS_ARGS=()
 [ -n "$SEAT_PINS" ] && PINS_ARGS=(--pins "$SEAT_PINS")
 # Leg 1 (#610): panel-dispatching paths probe live vendors on a cache miss; the --post path never
 # re-probes — it reuses a fresh short-TTL liveness receipt or falls open to Claude (disclosed).
 PROBE_MODE=probe   # on the --post path ONLY, set PROBE_MODE=cache-only
-SEAT_MAP=$(python3 "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "$CONFIGURED" --author-family "$AUTHOR_FAMILY" --narrative-family anthropic --pr-number "${PR_NUMBER:-}" --head-sha "$(git rev-parse HEAD 2>/dev/null)" "${PINS_ARGS[@]}" --probe-mode "$PROBE_MODE" || echo '{"seats":{},"degradations":[{"constraint":"compose-failed","reason":"seat_map compose failed — every seat falls open to Claude"}]}')
+SEAT_MAP=$(python3 -B "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "$CONFIGURED" --author-family "$AUTHOR_FAMILY" --narrative-family anthropic --pr-number "${PR_NUMBER:-}" --head-sha "$(git rev-parse HEAD 2>/dev/null)" "${PINS_ARGS[@]}" --probe-mode "$PROBE_MODE" || echo '{"seats":{},"degradations":[{"constraint":"compose-failed","reason":"seat_map compose failed — every seat falls open to Claude"}]}')
 ```
 
 When dispatching specialists, map each panel seat's **tier** to a model — `reviewer-deep` → `model: $DEEP_MODEL`, `reviewer` → `model: $REVIEWER_MODEL` (the auto-fix loop's per-round schedule is driver-owned; see `round-driver.md`). Triage subagents use `model: $MECH_MODEL`; the fixer uses `model: $FIXER_MODEL` (the `code-fixer` tier, #510). An empty value means "inherit the session model" — omit the `model` arg in that case.
@@ -163,7 +163,7 @@ When dispatching specialists, map each panel seat's **tier** to a model — `rev
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$EXISTS" = "true" ]; then
   # --post path: --root "$SESSION_DIR/repo" (PR-head worktree). branch/default: omit --root (working tree).
-  DOCTOR_JSON=$(python3 "$ROOT_DIR/lib/repo_doctor.py" \
+  DOCTOR_JSON=$(python3 -B "$ROOT_DIR/lib/repo_doctor.py" \
     "$PROFILE" "$PLUGIN_VERSION" "$RUBRIC_VERSION" ${DOCTOR_ROOT_ARG})
 fi
 ```
@@ -177,15 +177,15 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$LOCATION" = "none" ]; then
   # Decide location: env override > ask (interactive) > global (headless).
   INTERACTIVE=true   # the orchestrator sets this to false on a headless/non-interactive run (no human to answer), so decide-location returns "global" deterministically instead of "ask"
-  LOC=$(python3 "$ROOT_DIR/lib/review_store.py" decide-location --interactive "$INTERACTIVE")
+  LOC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location --interactive "$INTERACTIVE")
   # If LOC is "ask" → AskUserQuestion, set LOC to owner's pick, then record band-wide (FR-3).
   # If LOC is already in-repo/global → skip record, go straight to create.
-  REC=$(python3 "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
+  REC=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
   if [ -z "$REC" ] || printf '%s' "$REC" | jq -e '.written == false' >/dev/null 2>&1; then
     echo "note: couldn't record the band storage mode this run — you'll be asked again next time."
   fi
-  PROFILE=$(python3 "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
-  DECISIONS=$(python3 "$ROOT_DIR/lib/review_store.py" create --kind decisions --location "$LOC")
+  PROFILE=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
+  DECISIONS=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind decisions --location "$LOC")
 fi
 ```
 
@@ -195,7 +195,7 @@ When `decide-location` returns `ask`, present the in-repo-vs-global `AskUserQues
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-VERIFY_JSON=$(python3 "$ROOT_DIR/lib/review_code_config.py" 2>/dev/null) || VERIFY_JSON='{}'
+VERIFY_JSON=$(python3 -B "$ROOT_DIR/lib/review_code_config.py" 2>/dev/null) || VERIFY_JSON='{}'
 VERIFY_CMD=$(printf '%s' "$VERIFY_JSON" | jq -r '.verifyCommand // empty')
 VERIFY_MODE=$(printf '%s' "$VERIFY_JSON" | jq -r '.verifyMode // empty')
 [ "$VERIFY_CMD" = "none" ] && VERIFY_CMD=""
@@ -389,7 +389,7 @@ Order findings: Critical → Important → Minor → Nit, then by file path, the
 
 ## Auto-Fix Loop (default path)
 
-Runs when neither `--post` nor `--review-only` is set, and the profile's verify story is not `mode: review-only`. The loop is **driver-owned**: every per-round step is `python3 "$ROOT_DIR/lib/round_driver.py" next|submit` — the old `code_loop_plan` plan/record/decide, the manual `circuit_breaker.py` call, and the head-diff step all collapse into obeying `next`. Full contract: `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/round-driver.md`.
+Runs when neither `--post` nor `--review-only` is set, and the profile's verify story is not `mode: review-only`. The loop is **driver-owned**: every per-round step is `python3 -B "$ROOT_DIR/lib/round_driver.py" next|submit` — the old `code_loop_plan` plan/record/decide, the manual `circuit_breaker.py` call, and the head-diff step all collapse into obeying `next`. Full contract: `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/round-driver.md`.
 
 **If context was compacted mid-loop**, re-read `$SESSION_DIR/meta.json`, `$SESSION_DIR/loop-state.json`, and `$SESSION_DIR/driver-journal.jsonl`. Resume by calling `next` — a pending step re-emits idempotently.
 
@@ -399,8 +399,8 @@ Runs when neither `--post` nor `--review-only` is set, and the profile's verify 
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 # Live vendors from the seat map (family-aware; #510) — the pool the driver seats independent
 # fix-auditors from; falls back to the reviewer+impl engines if the seat map is unreadable.
-VENDORS=$(echo "$SEAT_MAP" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps(sorted(d.get("liveVendors") or [])))' 2>/dev/null || python3 -c 'import json,sys; print(json.dumps(sorted({v for v in sys.argv[1:] if v})))' "$REVIEWER_ENGINE" "$IMPL_ENGINE")
-python3 "$ROOT_DIR/lib/round_driver.py" next \
+VENDORS=$(echo "$SEAT_MAP" | python3 -B -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps(sorted(d.get("liveVendors") or [])))' 2>/dev/null || python3 -B -c 'import json,sys; print(json.dumps(sorted({v for v in sys.argv[1:] if v})))' "$REVIEWER_ENGINE" "$IMPL_ENGINE")
+python3 -B "$ROOT_DIR/lib/round_driver.py" next \
   --session-dir "$SESSION_DIR" \
   --diff-path "$SESSION_DIR/round-1/diff.txt" \
   --verify-command "${VERIFY_CMD:-none}" \
@@ -419,7 +419,7 @@ python3 "$ROOT_DIR/lib/round_driver.py" next \
 5. On `terminal`, read `payload.certification` and `round-receipt.json`; map `verdict` to `$ACTION`/`$REASON` for `--result-file` (`converged` → `exit_clean`; `halted`/`held`/`stalled`/`capped-with-open-critical` → `halt`).
 
 ```bash
-python3 "$ROOT_DIR/lib/round_driver.py" submit \
+python3 -B "$ROOT_DIR/lib/round_driver.py" submit \
   --session-dir "$SESSION_DIR" \
   --phase "<phase>" --attempt <attempt> \
   --state-hash "<expectedStateHash>" \
@@ -440,7 +440,7 @@ The fixer subagent prompt template (including the escalation-guard context) is i
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 "$ROOT_DIR/lib/review_result.py" write \
+python3 -B "$ROOT_DIR/lib/review_result.py" write \
   --path "$RESULT_FILE" \
   --action "$ACTION" \
   --round "$ROUND" \

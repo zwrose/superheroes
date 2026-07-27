@@ -243,10 +243,10 @@ automated review ran** — never claim a review that didn't happen:
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
   ROOT=$(git rev-parse --show-toplevel)
   WORK_ITEM="<work-item>"
-  DOC_PATH=$(python3 "$ROOT_DIR/lib/definition_doc.py" path \
+  DOC_PATH=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" path \
     --doc spec --work-item "$WORK_ITEM" --root "$ROOT")
-  HASH=$(python3 "$ROOT_DIR/lib/definition_doc.py" content-hash --path "$DOC_PATH")
-  python3 "$ROOT_DIR/lib/definition_doc.py" set-gate \
+  HASH=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" content-hash --path "$DOC_PATH")
+  python3 -B "$ROOT_DIR/lib/definition_doc.py" set-gate \
     --doc spec --work-item "$WORK_ITEM" --review passed --root "$ROOT" \
     --expected-hash "$HASH" --run-id "selfcert-$WORK_ITEM"
   ```

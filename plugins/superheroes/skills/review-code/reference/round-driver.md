@@ -33,7 +33,7 @@ Fresh state (first `next` of a session):
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 "$ROOT_DIR/lib/round_driver.py" next \
+python3 -B "$ROOT_DIR/lib/round_driver.py" next \
   --session-dir "$SESSION_DIR" \
   --diff-path "$SESSION_DIR/round-1/diff.txt" \
   --verify-command "${VERIFY_CMD:-none}" \
@@ -43,13 +43,13 @@ python3 "$ROOT_DIR/lib/round_driver.py" next \
 Every step thereafter:
 
 ```bash
-python3 "$ROOT_DIR/lib/round_driver.py" next --session-dir "$SESSION_DIR"
+python3 -B "$ROOT_DIR/lib/round_driver.py" next --session-dir "$SESSION_DIR"
 ```
 
 After fulfilling the emitted action, fold the artifact:
 
 ```bash
-python3 "$ROOT_DIR/lib/round_driver.py" submit \
+python3 -B "$ROOT_DIR/lib/round_driver.py" submit \
   --session-dir "$SESSION_DIR" \
   --phase "<phase from next>" \
   --attempt <attempt from next> \
