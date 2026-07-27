@@ -11,7 +11,7 @@ import hashlib
 import itertools
 import math
 
-from model_registry import family_for, is_allowed, matrix_config
+from model_registry import family_for, is_allowed, matrix_config, vendors
 
 LENS_SEATS = (
     "architecture-reviewer",
@@ -31,6 +31,14 @@ CRITICAL_SEATS = frozenset({"security-reviewer", "premortem-reviewer", "code-rev
 # violation recorded. STRONG_TIER_SEATS / CRITICAL_SEATS keep their OTHER jobs (the reviewer-deep bar
 # and the critical-diversity bar) unchanged.
 MAKER_EXCLUDED_SEATS = frozenset(PANEL_ROSTER)
+# Degradation constraints that mean the liveness set was SYNTHESIZED rather than probed. A seat map
+# carrying any of these cannot prove an alternative family was absent, so a maker-family seat under
+# one is a violation, never an excused degradation (#670 review).
+UNPROVEN_LIVENESS_CONSTRAINTS = frozenset({
+    "live-vendors",           # build() synthesized ["claude"] when handed no live vendors
+    "preflight-cache-only",   # --post / receipt-only path: vendors were never probed
+    "compose-failed",         # compose blew up and every seat fell open to Claude
+})
 DEFAULT_TIER_BY_SEAT = {s: "reviewer-deep" for s in LENS_SEATS}
 DEFAULT_TIER_BY_SEAT[GROUNDING_SEAT] = "reviewer"
 
@@ -61,23 +69,25 @@ def _alternative_family_live(seat_map: dict, seat: str, cfg: dict, author_family
     degradation on silence. Only a well-formed, registry-resolvable receipt can authorize the
     degradation branch.
     """
-    if seat_map.get("livenessPinScoped"):
-        # #670 finding 3: a pin-scoped probe may never have TRIED the alternative families, so its
-        # liveness set cannot prove they were absent.
+    pin_scoped = seat_map.get("livenessPinScoped")
+    if pin_scoped is not False:
+        # True (pin-scoped probe never tried the alternatives) or ABSENT (a replayed / hand-built map
+        # that carries no provenance at all) — neither can disprove an alternative family (#670 review).
         return True
     for deg in seat_map.get("degradations") or []:
-        if isinstance(deg, dict) and deg.get("constraint") == "live-vendors":
-            # #670 finding 2: build() synthesizes ["claude"] when handed no live vendors and records
-            # that synthetic value. Synthesized liveness is unknown liveness.
+        if isinstance(deg, dict) and deg.get("constraint") in UNPROVEN_LIVENESS_CONSTRAINTS:
             return True
     live = seat_map.get("liveVendors")
     if not isinstance(live, list) or not live:
         return True
     tier = _seat_tier(seat, cfg)
     resolved_any = False
+    known_vendors = set(vendors())
     for vendor in live:
-        if not isinstance(vendor, str) or not vendor:
-            return True          # a malformed entry makes the whole set untrustworthy
+        if not isinstance(vendor, str) or not vendor or vendor not in known_vendors:
+            # a malformed OR unregistered entry makes the whole set untrustworthy — an unknown
+            # vendor name cannot be shown NOT to have been an alternative family (#670 review).
+            return True
         cell = matrix_config(tier, vendor)
         if cell is None:
             continue
@@ -190,6 +200,7 @@ def build(
     seed: int,
     tier_by_seat: dict[str, str] | None = None,
     pins: dict[str, dict] | None = None,
+    liveness_pin_scoped: bool = False,
 ) -> dict:
     degradations: list[dict[str, str]] = []
     tier_degraded_seats: set[str] = set()
@@ -286,6 +297,7 @@ def build(
     # Per-seat eligibility
     eligible_by_seat: dict[str, list[dict]] = {}
     same_family_seats: set[str] = set()
+    pinned_maker_seats: set[str] = set()
     for seat in roster:
         base = [cfg for cfg in (_resolve(seat, v) for v in live) if cfg is not None]
 
@@ -331,7 +343,6 @@ def build(
                 eligible = non_maker
             else:
                 same_family_seats.add(seat)
-                degradations.append(_same_family_record(seat, author_family))
 
         eligible_by_seat[seat] = eligible
 
@@ -385,6 +396,13 @@ def build(
                         "reason": f"pinned strong seat {pin_seat} is below reviewer-deep",
                     }
                 )
+            if pin_seat in MAKER_EXCLUDED_SEATS and author_family and fam == author_family:
+                pinned_maker_seats.add(pin_seat)
+                degradations.append({
+                    "constraint": "pin-breaks-constraint",
+                    "seat": pin_seat,
+                    "reason": "pinned seat %s carries the maker family %s" % (pin_seat, author_family),
+                })
             eligible_by_seat[pin_seat] = [
                 {
                     "vendor": pin_vendor,
@@ -448,12 +466,13 @@ def build(
             if len(critical_families) < 2:
                 return False
         if check_author_minority and author_family:
-            # #670: the per-seat maker prohibition moved to eligibility + verify(); what remains here
-            # is the numeric minority cap only. Seats whose maker seating was UNAVOIDABLE (recorded
-            # `same-family`) are discounted — they are a disclosed degradation, not a cap breach.
+            # Per-seat maker prohibition (every roster seat) plus numeric minority cap. For a full
+            # PANEL_ROSTER the per-seat bar subsumes the cap; seats discounted are unavoidable
+            # (`same_family_seats`) or owner-pinned (`pinned_maker_seats`).
             author_seats = [
                 s for s in roster
-                if s not in same_family_seats and assignment[s]["family"] == author_family
+                if s not in same_family_seats and s not in pinned_maker_seats
+                and assignment[s]["family"] == author_family
             ]
             if len(author_seats) >= math.ceil(len(roster) / 2):
                 return False
@@ -518,14 +537,24 @@ def build(
                 })
                 seats_out = chosen
 
-    return {
+    result = {
         "seats": seats_out,
         "degradations": degradations,
         "seed": seed,
         "liveVendors": list(live),
         "authorFamily": author_family,
         "narrativeFamily": narrative_family,
+        "livenessPinScoped": bool(liveness_pin_scoped),
     }
+    # ONE predicate decides "was the maker unavoidable?" — recording it here from the finished map
+    # keeps build() and verify() from disagreeing on the same seat (#670 review, two seats).
+    seen = {(d.get("constraint"), d.get("seat")) for d in degradations if isinstance(d, dict)}
+    for rec in same_family_degradations(result, author_family):
+        key = (rec["constraint"], rec["seat"])
+        if key not in seen:
+            seen.add(key)
+            degradations.append(rec)
+    return result
 
 
 def verify(seat_map: dict, author_family: str | None) -> list[dict]:
@@ -569,7 +598,8 @@ def verify(seat_map: dict, author_family: str | None) -> list[dict]:
 
 def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
     af = author_family if author_family is not None else seat_map.get("authorFamily")
-    degradations = list(seat_map.get("degradations", []))
+    raw = seat_map.get("degradations")
+    degradations = list(raw) if isinstance(raw, list) else []
     seen = {
         (d.get("constraint"), d.get("seat"))
         for d in degradations
@@ -586,7 +616,7 @@ def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
         "seed": seat_map.get("seed"),
         "liveVendors": seat_map.get("liveVendors", []),
         "narrativeFamily": seat_map.get("narrativeFamily"),
-        "authorFamily": seat_map.get("authorFamily"),
+        "authorFamily": af,
         "livenessPinScoped": bool(seat_map.get("livenessPinScoped")),
         "violations": verify(seat_map, af),
     }
@@ -667,12 +697,13 @@ def main(argv):
             args.narrative_family,
             seed,
             pins=pins,
+            liveness_pin_scoped=liveness_pin_scoped,
         )
-        sm["livenessPinScoped"] = bool(liveness_pin_scoped)
-        receipt = to_receipt(sm)
-        receipt["livenessPinScoped"] = bool(liveness_pin_scoped)
         if notes:
-            receipt["degradations"] = list(receipt.get("degradations", [])) + notes
+            # merge BEFORE to_receipt: the evidence check reads sm["degradations"], so a note that
+            # lands after the receipt is derived can never be seen by it (#670 review, two seats).
+            sm["degradations"] = list(sm.get("degradations", [])) + list(notes)
+        receipt = to_receipt(sm)
         json.dump(receipt, sys.stdout)
         sys.stdout.write("\n")
         return 0

@@ -615,11 +615,13 @@ fix, and the composer→grok audit lane is closed. Because a gateway CLI still s
 families, **panel independence keys on a model's family, not on
 the dispatch CLI** (consumed by the seat map, `lib/seat_map.py`, #510; owners supply
 per-seat pins via `enginePreferences.seatPins`, which the seat map reads). The seat map
-**bars the maker's model family from every panel seat** — all five lens seats and the
+**bars the maker's model family from rotation onto every panel seat** — all five lens seats and the
 `grounding-seat` (#670, owner-ratified 2026-07-26), including seats that are neither
 strong-tier nor critical (closing the `test-reviewer` hole after #651 unified cursor's
-first-party models under one `xai` family). Where an alternative family is live, the maker
-family simply never seats. Where **no** alternative family is live, the seat still fills
+first-party models under one `xai` family). An owner pin can still seat the maker family on a
+panel seat; `verify()` then flags a `maker-family` violation and records a
+`pin-breaks-constraint` degradation naming the seat. Where an alternative family is live, the maker
+family simply never seats through rotation. Where **no** alternative family is live, the seat still fills
 with the maker family and the map records a disclosed `same-family` degradation, which
 rides the certification shape (`-degraded`) alongside `independenceDegraded` and
 `baseDegraded` — a single-vendor panel still certifies degraded, it does not halt.

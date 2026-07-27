@@ -454,11 +454,13 @@ carries `{vendor, model, effort, tier, family, source}`:
   first-party models are ONE family**: composer and grok both carry the `xai` family (#651,
   owner-ratified 2026-07-26). A `cursor` review seat is therefore NOT independent of a
   cursor/composer implementer — a composer-made diff stamps `authorFamily = xai`, so the seat map
-  excludes the maker family from **every** panel seat — all five lens seats
+  excludes the maker family from **rotation** onto every panel seat — all five lens seats
   (`architecture-reviewer`, `code-reviewer`, `security-reviewer`, `test-reviewer`,
   `premortem-reviewer`) **and** the `grounding-seat` (#670, owner-ratified 2026-07-26), not
-  merely from strong-tier, critical, and grounding. Where an alternative family is live, the maker
-  family never seats and such a panel buys its independence from anthropic/openai instead; where
+  merely from strong-tier, critical, and grounding. An owner pin can still seat the maker family;
+  `verify()` flags a `maker-family` violation and records `pin-breaks-constraint` for that seat.
+  Where an alternative family is live, the maker family never seats through rotation and such a
+  panel buys its independence from anthropic/openai instead; where
   none is live, the seat still fills with the maker family and the map records a disclosed
   `same-family` degradation, which rides the certification shape (`-degraded`) alongside
   `independenceDegraded` and `baseDegraded`. The `verify()` result (the #547c
