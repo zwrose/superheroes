@@ -306,6 +306,7 @@ def build(
             if not eligible:
                 degradations.append({
                     "constraint": "strong-tier",
+                    "seat": seat,
                     "reason": f"seat {seat} has no strong-tier-eligible live vendor",
                 })
         elif seat == GROUNDING_SEAT:
@@ -555,6 +556,64 @@ def build(
             seen.add(key)
             degradations.append(rec)
     return result
+
+
+# The only two constraints build() deliberately RELAXES and discloses as a degradation of the same
+# name when no assignment can satisfy them. Every other verify() constraint — maker-family,
+# missing-seat, malformed, and any constraint added later — is unexcusable by construction: the
+# fail-closed default for an unrecognised constraint is BREACH, never excused (#680).
+EXCUSABLE_RELAXATIONS = frozenset({"strong-tier", "critical-diversity"})
+
+
+def unexcused_violations(seat_map: dict) -> list[dict]:
+    """The violations a seat-map receipt carries that its OWN degradation channel does not excuse —
+    i.e. constraint BREACHES, as opposed to disclosed fallbacks (#680)."""
+    if not isinstance(seat_map, dict):
+        return []
+    violations = seat_map.get("violations")
+    if not isinstance(violations, list) or not violations:
+        return []
+    seats = seat_map.get("seats")
+    if not isinstance(seats, dict) or not seats:
+        return []
+
+    raw_degradations = seat_map.get("degradations")
+    degradations = raw_degradations if isinstance(raw_degradations, list) else []
+
+    unexcused: list[dict] = []
+    for v in violations:
+        if not isinstance(v, dict):
+            unexcused.append({"constraint": "malformed-violation-record"})
+            continue
+        constraint = v.get("constraint")
+        seat = v.get("seat")
+        if constraint not in EXCUSABLE_RELAXATIONS:
+            unexcused.append(v)
+            continue
+        if constraint == "strong-tier":
+            seat_cfg = seats.get(seat) if isinstance(seat, str) else None
+            if isinstance(seat_cfg, dict) and seat_cfg.get("source") == "pinned":
+                unexcused.append(v)
+                continue
+        elif constraint == "critical-diversity":
+            if any(
+                isinstance(seats.get(s), dict) and seats[s].get("source") == "pinned"
+                for s in CRITICAL_SEATS
+            ):
+                unexcused.append(v)
+                continue
+        excused = False
+        for d in degradations:
+            if not isinstance(d, dict):
+                continue
+            if d.get("constraint") == constraint and d.get("seat") == seat:
+                excused = True
+                break
+        if not excused:
+            unexcused.append(v)
+
+    unexcused.sort(key=lambda item: (item.get("constraint", ""), item.get("seat") or ""))
+    return unexcused
 
 
 def verify(seat_map: dict, author_family: str | None) -> list[dict]:

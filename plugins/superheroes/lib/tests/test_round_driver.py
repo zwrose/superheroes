@@ -2151,6 +2151,83 @@ def test_same_family_does_not_clear_other_degradations():
     assert len(sf_lines) == 1
 
 
+def _seat_map_receipt_with_unexcused_maker_family():
+    """Hand-built receipt-shaped map: all-claude panel (no canary gap) + unexcused breach."""
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seat_map["violations"] = [{"constraint": "maker-family", "seat": "code-reviewer"}]
+    seat_map["degradations"] = []
+    return seat_map
+
+
+def test_seat_map_unexcused_violation_constraint_violated_cert_shape():
+    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
+    seat_map = _seat_map_receipt_with_unexcused_maker_family()
+    SM = _load("seat_map")
+    assert SM.unexcused_violations(seat_map)
+    receipt = RD.run_loop(_seams(io={"seatMap": seat_map}), cfg)
+    assert receipt["verdict"] == "converged"
+    assert receipt["certificationShape"].endswith("-constraint-violated")
+    assert "-degraded" not in receipt["certificationShape"]
+    assert receipt["certificationShape"].count("-constraint-violated") == 1
+
+
+def test_seat_map_excused_only_violation_unchanged_cert_shape():
+    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
+    seat_map_clean = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    receipt_clean = RD.run_loop(_seams(io={"seatMap": seat_map_clean}), cfg)
+    seat_map_excused = dict(seat_map_clean)
+    seat_map_excused["violations"] = [{"constraint": "critical-diversity"}]
+    seat_map_excused["degradations"] = [{"constraint": "critical-diversity"}]
+    receipt_excused = RD.run_loop(_seams(io={"seatMap": seat_map_excused}), cfg)
+    assert receipt_excused["verdict"] == "converged"
+    assert receipt_excused["certificationShape"] == receipt_clean["certificationShape"]
+    assert "-constraint-violated" not in receipt_excused["certificationShape"]
+
+
+def test_certification_shape_drivers_lists_every_fired_channel():
+    seat_map = _seat_map_receipt_with_unexcused_maker_family()
+    seat_map = dict(seat_map)
+    seat_map["degradations"] = list(seat_map.get("degradations") or []) + [{
+        "constraint": "same-family",
+        "seat": "code-reviewer",
+        "reason": "test",
+    }]
+    state = RD.new_state(_cfg(leg="panel", vendors=["codex", "cursor"]))
+    state["seatMap"] = seat_map
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    drivers = state["certification"]["shapeDrivers"]
+    assert "seat-map-violation" in drivers
+    assert "same-family" in drivers
+    assert state["certification"]["shape"].endswith("-constraint-violated")
+    assert state["certification"]["shape"].count("-degraded") == 0
+
+
+def test_seat_map_violations_round_field_and_degraded_disclosure():
+    seat_map = _seat_map_receipt_with_unexcused_maker_family()
+    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
+    receipt = RD.run_loop(_seams(io={"seatMap": seat_map}), cfg)
+    r1 = receipt["rounds"][0]
+    assert r1.get("seatMapViolations")
+    viol_lines = [d for d in receipt["degraded"] if "constraint-violated" in d]
+    assert len(viol_lines) == 1
+    assert "maker-family" in viol_lines[0]
+
+
+def test_seat_map_violations_e8_sticky_across_round_map_overwrite():
+    seat_map_r1 = _seat_map_receipt_with_unexcused_maker_family()
+    SM = _load("seat_map")
+    clean = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    clean["violations"] = []
+    clean["degradations"] = []
+    state = RD.new_state(_cfg(leg="panel", vendors=["codex", "cursor"]))
+    state["rounds"] = {
+        "1": {"seatMapViolations": SM.unexcused_violations(seat_map_r1)},
+    }
+    state["seatMap"] = clean
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    assert state["certification"]["shape"].endswith("-constraint-violated")
+
+
 def test_library_receipt_omits_base_not_checked(tmp_path):
     receipt = RD.run_loop(_seams(), _cfg())
     assert "base" not in receipt

@@ -1195,3 +1195,109 @@ def test_verify_unresolvable_tier_is_a_violation():
         v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
         for v in violations
     )
+
+
+# --- unexcused_violations (#680) --------------------------------------------------------------
+
+
+def test_unexcused_maker_family_violation_is_unexcused():
+    sm = {
+        "seats": _full_seats_template(),
+        "liveVendors": list(THREE_VENDORS),
+        "livenessPinScoped": False,
+        "degradations": [],
+    }
+    receipt = SM.to_receipt(sm, "anthropic")
+    unexcused = SM.unexcused_violations(receipt)
+    assert any(v.get("constraint") == "maker-family" for v in unexcused)
+
+
+def test_unexcused_critical_diversity_claude_codex_is_excused():
+    m = SM.build(SM.PANEL_ROSTER, ["claude", "codex"], "anthropic", "anthropic", 0)
+    receipt = SM.to_receipt(m, "anthropic")
+    assert any(v.get("constraint") == "critical-diversity" for v in receipt["violations"])
+    assert SM.unexcused_violations(receipt) == []
+
+
+def test_unexcused_critical_diversity_pinned_critical_seats_unexcused():
+    pins = {
+        "code-reviewer": {"vendor": "claude"},
+        "security-reviewer": {"vendor": "claude"},
+        "premortem-reviewer": {"vendor": "claude"},
+    }
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0, pins=pins)
+    receipt = SM.to_receipt(m, "xai")
+    assert any(v.get("constraint") == "critical-diversity" for v in receipt["violations"])
+    unexcused = SM.unexcused_violations(receipt)
+    assert any(v.get("constraint") == "critical-diversity" for v in unexcused)
+
+
+def test_unexcused_e1_unrecognised_constraint_never_excused():
+    receipt = {
+        "seats": _full_seats_template(),
+        "degradations": [{"constraint": "maker-family", "seat": "code-reviewer"}],
+        "violations": [{"constraint": "maker-family", "seat": "code-reviewer"}],
+    }
+    unexcused = SM.unexcused_violations(receipt)
+    assert unexcused == [{"constraint": "maker-family", "seat": "code-reviewer"}]
+
+
+def test_unexcused_e2_non_dict_violation_entry():
+    receipt = {
+        "seats": _full_seats_template(),
+        "degradations": [],
+        "violations": [42, {"constraint": "critical-diversity"}],
+    }
+    unexcused = SM.unexcused_violations(receipt)
+    assert {"constraint": "malformed-violation-record"} in unexcused
+
+
+def test_unexcused_e3_non_list_degradations():
+    receipt = {
+        "seats": _full_seats_template(),
+        "degradations": "not-a-list",
+        "violations": [{"constraint": "critical-diversity"}],
+    }
+    assert SM.unexcused_violations(receipt) == [{"constraint": "critical-diversity"}]
+
+
+def test_unexcused_e4_seatless_degradation_does_not_excuse_per_seat():
+    receipt = {
+        "seats": _full_seats_template(),
+        "degradations": [{"constraint": "strong-tier"}],
+        "violations": [{"constraint": "strong-tier", "seat": "security-reviewer"}],
+    }
+    unexcused = SM.unexcused_violations(receipt)
+    assert unexcused == [{"constraint": "strong-tier", "seat": "security-reviewer"}]
+
+
+def test_unexcused_e5_pinned_seat_blocks_strong_tier_excusal():
+    seats = _full_seats_template()
+    seats["architecture-reviewer"] = {
+        "vendor": "claude",
+        "model": "sonnet-5",
+        "effort": "high",
+        "tier": "reviewer",
+        "family": "anthropic",
+        "source": "pinned",
+    }
+    receipt = {
+        "seats": seats,
+        "degradations": [
+            {"constraint": "strong-tier", "seat": "architecture-reviewer"},
+        ],
+        "violations": [{"constraint": "strong-tier", "seat": "architecture-reviewer"}],
+    }
+    unexcused = SM.unexcused_violations(receipt)
+    assert unexcused == [{"constraint": "strong-tier", "seat": "architecture-reviewer"}]
+
+
+def test_unexcused_e6_empty_seats_returns_empty():
+    for sm in (
+        {},
+        {"violations": [{"constraint": "critical-diversity"}]},
+        {"seats": {}, "violations": [{"constraint": "critical-diversity"}]},
+        {"seats": {}, "degradations": [{"constraint": "compose-failed"}],
+         "violations": [{"constraint": "missing-seat", "seat": "code-reviewer"}]},
+    ):
+        assert SM.unexcused_violations(sm) == []
