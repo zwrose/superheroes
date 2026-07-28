@@ -669,6 +669,11 @@ def unexcused_violations(seat_map: dict) -> list[dict]:
                 unexcused.append(v)
                 continue
         elif constraint == "critical-diversity":
+            # Unknown maker family: alternatives are uncomputable, not absent — never excuse.
+            author_family = seat_map.get("authorFamily")
+            if not isinstance(author_family, str) or not author_family:
+                unexcused.append(v)
+                continue
             if len(_alternative_families_at_tier(seat_map, "reviewer-deep")) >= 2:
                 unexcused.append(v)
                 continue
