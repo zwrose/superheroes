@@ -1796,13 +1796,14 @@ def test_gate_edge11_invalid_utf8(tmp_path):
     assert "UTF-8" in cfg.detail
 
 
-def test_read_returns_none_and_write_never_raises_on_invalid_utf8(tmp_path):
+def test_read_raises_on_invalid_utf8_write_refuses_via_gate(tmp_path):
     repo = str(tmp_path)
     store = str(tmp_path / "store")
     core_p = _gate_core_beside(repo)
     with open(core_p, "wb") as fh:
         fh.write(b"\xff broken\n")
-    assert CM.read(repo, root=store) is None
+    with pytest.raises(UnicodeDecodeError):
+        CM.read(repo, root=store)
     res = CM.write(
         repo,
         {"verifyCommand": "npm test", "stackTags": [], "threatModel": "t", "patterns": ""},
@@ -1957,157 +1958,20 @@ def test_write_readable_still_reuses_gate_676(tmp_path):
     assert res["action"] == "reused"
 
 
-def _migrate_legacy_and_unreadable_core(repo, store, core_setup):
-    legacy = _legacy_review_path(repo)
-    open(legacy, "w").write(_REVIEW_PROFILE)
-    core_p = _gate_core_beside(repo)
-    before_core = core_setup(core_p)
-    return legacy, core_p, before_core
-
-
-def _pending_detail(repo, store):
-    with open(CM._pending_path(repo, store), encoding="utf-8") as fh:
-        return json.loads(fh.read())["detail"]
-
-
-def _assert_deferred_unreadable_core(res, repo, store, core_p):
-    assert res["action"] == "deferred"
-    assert res["reason"] == CM.GATE_REASON_UNREADABLE
-    assert core_p in (res.get("detail") or "")
-    marker = _pending_detail(repo, store)
-    assert marker["reason"] == CM.GATE_REASON_UNREADABLE
-    assert core_p in (marker.get("detail") or "")
-
-
-def test_migrate_deferred_invalid_utf8_preserves_core_and_legacy(tmp_path):
-    repo = str(tmp_path)
-    store = str(tmp_path / "store")
-
-    def _setup(core_p):
-        payload = b"<!-- x -->\n\xff\xfe not utf8\n"
-        with open(core_p, "wb") as fh:
-            fh.write(payload)
-        return payload
-
-    legacy, core_p, before = _migrate_legacy_and_unreadable_core(repo, store, _setup)
-    res = CM.migrate_on_read(repo, "review-crew", root=store)
-    _assert_deferred_unreadable_core(res, repo, store, core_p)
-    with open(core_p, "rb") as fh:
-        assert fh.read() == before
-    assert os.path.exists(legacy)
-
-
-def test_migrate_deferred_mode_zero_preserves_core_and_legacy(tmp_path):
-    if os.geteuid() == 0:
-        pytest.skip("root reads mode-000 files")
-    repo = str(tmp_path)
-    store = str(tmp_path / "store")
-
-    def _setup(core_p):
-        open(core_p, "w").write(_gate_valid_core_text())
-        with open(core_p, "rb") as fh:
-            before = fh.read()
-        try:
-            os.chmod(core_p, 0)
-        except OSError:
-            pytest.skip("cannot chmod core.md to mode 000")
-        return before
-
-    legacy, core_p, before = _migrate_legacy_and_unreadable_core(repo, store, _setup)
-    try:
-        res = CM.migrate_on_read(repo, "review-crew", root=store)
-        _assert_deferred_unreadable_core(res, repo, store, core_p)
-    finally:
-        os.chmod(core_p, 0o644)
-    with open(core_p, "rb") as fh:
-        assert fh.read() == before
-    assert os.path.exists(legacy)
-
-
-def test_migrate_deferred_core_directory_preserves_files(tmp_path):
-    repo = str(tmp_path)
-    store = str(tmp_path / "store")
-
-    def _setup(core_p):
-        os.makedirs(core_p)
-        return None
-
-    legacy, core_p, _ = _migrate_legacy_and_unreadable_core(repo, store, _setup)
-    res = CM.migrate_on_read(repo, "review-crew", root=store)
-    _assert_deferred_unreadable_core(res, repo, store, core_p)
-    assert os.path.isdir(core_p)
-    assert os.path.exists(legacy)
-
-
-def test_migrate_no_legacy_unreadable_core_noops_without_pending_marker(tmp_path):
-    repo = str(tmp_path)
-    store = str(tmp_path / "store")
-    core_p = _gate_core_beside(repo)
-    os.makedirs(core_p)
-    res = CM.migrate_on_read(repo, "review-crew", root=store)
-    assert res["action"] == "noop"
-    assert not os.path.isfile(CM._pending_path(repo, store))
-
-
-def test_migrate_deferred_under_lock_unreadable_reread(tmp_path, monkeypatch):
+def test_migrate_legacy_with_undecodable_core_raises_and_preserves_files(tmp_path):
     repo = str(tmp_path)
     store = str(tmp_path / "store")
     legacy = _legacy_review_path(repo)
     open(legacy, "w").write(_REVIEW_PROFILE)
     core_p = _gate_core_beside(repo)
-    open(core_p, "w").write(_gate_valid_core_text())
-    real_lock = CM.mode_registry.config_lock
-    from contextlib import contextmanager
-
-    @contextmanager
-    def _corrupt_core_under_lock(cwd, root=None):
-        with real_lock(cwd, root) as got:
-            if got:
-                open(core_p, "w").write("plain prose with no json block\n")
-            yield got
-
-    monkeypatch.setattr(CM.mode_registry, "config_lock", _corrupt_core_under_lock)
-    res = CM.migrate_on_read(repo, "review-crew", root=store)
-    _assert_deferred_unreadable_core(res, repo, store, core_p)
-    assert os.path.exists(legacy)
-    with open(core_p, encoding="utf-8") as fh:
-        assert "plain prose" in fh.read()
-
-
-def test_migrate_deferred_dangling_symlink_preserves_link_and_legacy(tmp_path):
-    repo = str(tmp_path)
-    store = str(tmp_path / "store")
-    target = "/nonexistent/wo676-migrate-dangle"
-
-    def _setup(core_p):
-        os.symlink(target, core_p)
-        return target
-
-    legacy, core_p, link_target = _migrate_legacy_and_unreadable_core(repo, store, _setup)
-    res = CM.migrate_on_read(repo, "review-crew", root=store)
-    assert res["action"] == "deferred"
-    assert res["reason"] == CM.GATE_REASON_UNREADABLE
-    assert os.path.islink(core_p)
-    assert os.readlink(core_p) == link_target
-    assert os.path.exists(legacy)
-
-
-def test_migrate_deferred_corrupt_decodable_preserves_files(tmp_path):
-    repo = str(tmp_path)
-    store = str(tmp_path / "store")
-
-    def _setup(core_p):
-        text = "plain prose with no json block\n"
-        open(core_p, "w").write(text)
-        return text.encode("utf-8")
-
-    legacy, core_p, before = _migrate_legacy_and_unreadable_core(repo, store, _setup)
-    res = CM.migrate_on_read(repo, "review-crew", root=store)
-    assert res["action"] == "deferred"
-    assert res["reason"] == CM.GATE_REASON_UNREADABLE
+    payload = b"<!-- x -->\n\xff\xfe not utf8\n"
+    with open(core_p, "wb") as fh:
+        fh.write(payload)
+    with pytest.raises(UnicodeDecodeError):
+        CM.migrate_on_read(repo, "review-crew", root=store)
     with open(core_p, "rb") as fh:
-        assert fh.read() == before
-    assert os.path.exists(legacy)
+        assert fh.read() == payload
+    assert os.path.isfile(legacy)
 
 
 def test_migrate_no_core_still_migrates_legacy(tmp_path):
