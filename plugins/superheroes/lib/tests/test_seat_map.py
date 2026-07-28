@@ -1312,6 +1312,34 @@ def test_unexcused_empty_or_missing_seats_fail_closed():
     assert SM.unexcused_violations(receipt) == receipt["violations"]
 
 
+def test_unexcused_critical_diversity_missing_author_family_fail_closed():
+    """#680 FIX2: unknown maker family must not excuse critical-diversity via empty alternatives."""
+    seats = _full_seats_template()
+    base = {
+        "seats": seats,
+        "liveVendors": list(THREE_VENDORS),
+        "livenessPinScoped": False,
+        "degradations": [{"constraint": "critical-diversity"}],
+        "violations": [{"constraint": "critical-diversity"}],
+    }
+    breach = [{"constraint": "critical-diversity"}]
+
+    for author in (None, "", 42):
+        receipt = dict(base)
+        if author is None:
+            receipt["authorFamily"] = None
+        else:
+            receipt["authorFamily"] = author
+        assert SM.unexcused_violations(receipt) == breach
+
+    absent = dict(base)
+    assert "authorFamily" not in absent
+    assert SM.unexcused_violations(absent) == breach
+
+    xai_receipt = dict(base, authorFamily="xai")
+    assert SM.unexcused_violations(xai_receipt) == breach
+
+
 @pytest.mark.parametrize(
     "live,maker,excused",
     [
