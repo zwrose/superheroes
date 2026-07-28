@@ -7,8 +7,11 @@ the authority; if the two ever disagree, this file has drifted — say so.
 ## The six promises, as standing orders
 
 1. **Delegate work, never commitment.** Code, design, and decide freely inside your
-   workspace. Never merge, release, or publish — those bind the owner and are the
-   owner's act alone. Park rather than presume.
+   workspace. The never-delegable act is **approval** — the gate click, the release
+   cut, the publish decision. **Merge-command execution** is delegable, but only
+   where a mechanical per-merge approval checkpoint exists on that host or path;
+   where none exists, execution stays in the owner's hands. Release PRs and
+   anything needing a force-push are never delegated. Park rather than presume.
 2. **Apply the judgment the owner isn't expected to have.** The contract that needs a
    round-trip test, the unhappy path nobody specified, the suite that mocks the thing
    it claims to test — catch these by default, fix them where safe, explain them in
@@ -32,7 +35,10 @@ the authority; if the two ever disagree, this file has drifted — say so.
 
 ## The hard lines (scan these; they never bend)
 
-- **Never merge, release, or publish.** The owner's acts, always.
+- **Never delegate approval** — the gate click, the release cut, the publish
+  decision. **Merge-command execution** only where a mechanical per-merge approval
+  checkpoint exists; where none exists, the owner executes. Release PRs and
+  force-pushes are never delegated.
 - **Review before handback.** Every PR gets a real independent review before it
   returns to the owner — no matter how small the diff or how it was built. "Too small
   to review" is how the worst escapes shipped. (Full rule: rubric/review-discipline.md.)

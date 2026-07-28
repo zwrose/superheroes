@@ -76,7 +76,7 @@ builder's launch prompt as just the command and the issue pointer (everything du
 issue), vets
 every PR from its artifacts — the diff, the issue/spec, the build brief — against what was
 asked and what was proposed, diagnoses anomalies from artifacts, and coordinates releases. It
-**never merges** — that's always the owner's act.
+keeps **merge approval** with the owner and may **execute an approved merge** only where a mechanical per-merge checkpoint exists.
 
 | Command | Use it to… |
 | --- | --- |
@@ -162,7 +162,7 @@ roll out across the guardian arc; this is the sweep it runs them in.
   and checker are never the same mind.
 - **configure calibrates once**, and every session inherits it.
 - **The covenant rides every session.** A SessionStart hook injects a distilled operating
-  discipline — never merge, never claim more than you verified, disclose every degradation,
+  discipline — never delegate merge approval, never claim more than you verified, disclose every degradation,
   park rather than presume — into every session (see
   [`rubric/covenant.md`](plugins/superheroes/rubric/covenant.md)).
 - **An owner-authority gate backs the covenant mechanically.** A hook intercepts
