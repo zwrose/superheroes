@@ -168,41 +168,15 @@ def _prefs_from_core_facts(facts):
 def _read_engine_preferences_for_gate(profile_path=None, cwd=None, root=None):
     """Engine preferences for the gate. Returns ``(prefs, evaluation_error)``.
 
-    ``prefs`` is ``{}`` on confirmed absence (no core.md). ``evaluation_error`` is a non-empty
-    string when configuration exists but cannot be evaluated (mirrors ``core_md``'s gate)."""
-    try:
-        import core_md
+    ``prefs`` is ``{}`` on confirmed absence (no core.md). ``evaluation_error`` is a
+    ``{"reason", "detail"}`` dict when configuration exists but cannot be evaluated."""
+    import core_md
 
-        if profile_path:
-            layer = os.path.realpath(profile_path)
-            core_beside = os.path.join(os.path.dirname(layer), "core.md")
-            if os.path.isfile(core_beside):
-                try:
-                    with open(core_beside, encoding="utf-8") as fh:
-                        text = fh.read()
-                except OSError as exc:
-                    return {}, "%s: %s" % (type(exc).__name__, exc)
-                facts = core_md.parse_core(text)
-                if facts is None:
-                    return {}, "core.md beside profile is corrupt or unreadable"
-                prefs = _prefs_from_core_facts(facts)
-                if prefs is None:
-                    return {}, "core.md beside profile is corrupt or unreadable"
-                return prefs, None
-            return {}, None
-
-        path = core_md.core_path(cwd or os.getcwd(), root)
-        if not os.path.isfile(path):
-            return {}, None
-        rec = core_md.read(cwd or os.getcwd(), root)
-        if rec is None:
-            return {}, "core.md is corrupt or unreadable"
-        prefs = _prefs_from_core_facts(rec)
-        if prefs is None:
-            return {}, "core.md is corrupt or unreadable"
-        return prefs, None
-    except Exception as exc:
-        return {}, "%s: %s" % (type(exc).__name__, exc)
+    cfg = core_md.engine_preferences_for_gate(
+        profile_path=profile_path, cwd=cwd, root=root)
+    if cfg.status == core_md.CONFIG_UNREADABLE:
+        return {}, {"reason": core_md.GATE_REASON_UNREADABLE, "detail": cfg.detail}
+    return cfg.prefs, None
 
 
 def _evaluate_tier_writer_dispatch_gate(profile_path, set_overrides=None, clear_roles=None):
@@ -215,7 +189,10 @@ def _evaluate_tier_writer_dispatch_gate(profile_path, set_overrides=None, clear_
     try:
         candidate_tiers = _candidate_effective_tiers(profile_path, set_overrides, clear_roles)
     except Exception as exc:
-        return None, "%s: %s" % (type(exc).__name__, exc)
+        return None, {
+            "reason": "dispatch-gate-evaluation-failed",
+            "detail": "%s: %s" % (type(exc).__name__, exc),
+        }
     return engine_pref.configured_dispatch_violations(prefs, candidate_tiers), None
 
 
@@ -306,10 +283,10 @@ def main(argv):
         if gate_err is not None:
             sys.stdout.write(json.dumps({
                 "ok": False,
-                "reason": "dispatch-gate-evaluation-failed",
+                "reason": gate_err["reason"],
                 "violations": [{
-                    "reason": "dispatch-gate-evaluation-failed",
-                    "detail": gate_err,
+                    "reason": gate_err["reason"],
+                    "detail": gate_err["detail"],
                 }],
             }) + "\n")
             return 1

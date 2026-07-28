@@ -106,6 +106,10 @@ trade-offs AND a recommendation derived from what you detected.
    the format and the config lock. `write --status confirmed` is the CREATE path only; confirming
    a pre-existing **provisional** core/layer goes through `core_md.py confirm` (reached from
    `superheroes:configure`), which `write` cannot do on an existing file (it returns `reused`).
+   After `write`, check the result's `action`: `refused` (`fable-on-external-engine`,
+   `core-md-unreadable`, or `dispatch-gate-evaluation-failed`) means the core was **not** written —
+   surface the `violations` to the user and **stop**; do not run `write-layer` (`write` exits 0 either
+   way, so check `action`, not exit status).
 
 Report what was written and where; remind the user that `test-pilot-plan`
 picks it up from here.

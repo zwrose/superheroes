@@ -415,7 +415,7 @@ def test_write_cli_refuses_when_core_beside_profile_corrupt(tmp_path, capsys):
     ])
     out = json.loads(capsys.readouterr().out)
     assert rc == 1
-    assert out["reason"] == "dispatch-gate-evaluation-failed"
+    assert out["reason"] == "core-md-unreadable"
     assert MTO.load_overrides(str(profile)) == {}
 
 
@@ -456,3 +456,88 @@ def test_write_cli_no_core_beside_profile_proceeds_clean(tmp_path, capsys):
     assert rc == 0
     assert out["ok"] is True
     assert MTO.load_overrides(str(p)) == {"reviewer": "sonnet"}
+
+
+def _tier_gate_project(tmp_path, core_shape):
+    import importlib.util
+
+    cm_path = os.path.join(_HERE, "..", "core_md.py")
+    spec = importlib.util.spec_from_file_location("core_md_tg", cm_path)
+    CM = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(CM)
+    project = tmp_path / "project"
+    cal = project / ".claude" / "superheroes"
+    cal.mkdir(parents=True)
+    core_path = cal / "core.md"
+    core_text = CM.render_core(
+        {
+            "verifyCommand": "npm test",
+            "stackTags": [],
+            "enginePreferences": {"reviewer": "cursor", "implementation": "codex"},
+            "threatModel": "t",
+            "patterns": "",
+        },
+        "confirmed",
+        "2026-01-01",
+        "2026-01-01",
+    )
+    if core_shape == "regular":
+        core_path.write_text(core_text, encoding="utf-8")
+    elif core_shape == "absent":
+        pass
+    elif core_shape == "directory":
+        core_path.mkdir()
+    elif core_shape == "dangling":
+        core_path.symlink_to("/nonexistent/tier-gate-dangle")
+    else:
+        raise ValueError(core_shape)
+    profile = cal / "review-crew.md"
+    profile.write_text("## Model tiers\nimplementer: sonnet\n", encoding="utf-8")
+    return profile
+
+
+def test_tier_writer_gate_unreadable_directory_and_dangling(tmp_path, capsys):
+    for shape in ("directory", "dangling"):
+        profile = _tier_gate_project(tmp_path / shape, shape)
+        rc = MTO.main([
+            "model_tier_overrides.py",
+            "write",
+            "--profile",
+            str(profile),
+            "--set",
+            "reviewer=fable",
+        ])
+        out = json.loads(capsys.readouterr().out)
+        assert rc == 1
+        assert out["reason"] == "core-md-unreadable"
+        assert out["violations"][0]["reason"] == "core-md-unreadable"
+
+
+def test_tier_writer_gate_absent_core_allowed(tmp_path, capsys):
+    profile = _tier_gate_project(tmp_path, "absent")
+    rc = MTO.main([
+        "model_tier_overrides.py",
+        "write",
+        "--profile",
+        str(profile),
+        "--set",
+        "reviewer=sonnet",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert out["ok"] is True
+
+
+def test_tier_writer_gate_readable_still_fable_on_external(tmp_path, capsys):
+    profile = _tier_gate_project(tmp_path, "regular")
+    rc = MTO.main([
+        "model_tier_overrides.py",
+        "write",
+        "--profile",
+        str(profile),
+        "--set",
+        "reviewer=fable",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert out["reason"] == "fable-on-external-engine"

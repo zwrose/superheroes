@@ -4,10 +4,12 @@
 migrator. Stdlib-only, mirrors architect_config.py. The format (parse/render) and pure read
 are side-effect-free; write/migrate_on_read are lock-guarded (mode_registry.config_lock) and
 fail-open (return a `deferred` action, never raise, never block)."""
+import collections
 import datetime
 import json
 import os
 import re
+import stat
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -18,6 +20,13 @@ import mode_registry  # noqa: E402  (sibling)
 import store_core      # noqa: E402  (sibling)
 
 SCHEMA_VERSION = 2
+
+CONFIG_ABSENT = "absent"
+CONFIG_OK = "ok"
+CONFIG_UNREADABLE = "unreadable"
+GATE_REASON_UNREADABLE = "core-md-unreadable"
+
+CoreGateConfig = collections.namedtuple("CoreGateConfig", "prefs status detail")
 
 _PROV = re.compile(
     r"<!--\s*superheroes-core:\s*schemaVersion=(\d+)\s+status=(\w+)\s+"
@@ -116,13 +125,119 @@ def relocate_file(src, dst):
     os.remove(src)
 
 
+def _core_candidates(cwd, root=None):
+    in_repo = os.path.join(_repo_root(cwd), ".claude", "superheroes", "core.md")
+    global_path = os.path.join(mode_registry.project_store_dir(cwd, root), "config", "core.md")
+    return in_repo, global_path
+
+
 def core_path(cwd, root=None):
     """Mode-aware path to core.md (FR-1): in-repo .claude/superheroes/core.md, else the
     project store's config/core.md. An EXISTING file resolves to where it physically lives;
     a new one resolves by the recorded mode (mode_registry.resolve_artifact)."""
-    in_repo = os.path.join(_repo_root(cwd), ".claude", "superheroes", "core.md")
-    global_path = os.path.join(mode_registry.project_store_dir(cwd, root), "config", "core.md")
+    in_repo, global_path = _core_candidates(cwd, root)
     return mode_registry.resolve_artifact(cwd, in_repo, global_path, root)
+
+
+def _classify_core_md_at_path(path):
+    """Classify a single core.md path for gate purposes. Never raises."""
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        try:
+            os.lstat(path)
+        except FileNotFoundError:
+            return CoreGateConfig({}, CONFIG_ABSENT, None)
+        return CoreGateConfig(
+            {},
+            CONFIG_UNREADABLE,
+            "dangling symlink at %s" % path,
+        )
+    except OSError as exc:
+        return CoreGateConfig(
+            {},
+            CONFIG_UNREADABLE,
+            "%s at %s: %s" % (type(exc).__name__, path, exc),
+        )
+
+    if not stat.S_ISREG(st.st_mode):
+        return CoreGateConfig(
+            {},
+            CONFIG_UNREADABLE,
+            "not a regular file at %s" % path,
+        )
+
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except FileNotFoundError:
+        return CoreGateConfig({}, CONFIG_ABSENT, None)
+    except OSError as exc:
+        return CoreGateConfig(
+            {},
+            CONFIG_UNREADABLE,
+            "%s opening %s: %s" % (type(exc).__name__, path, exc),
+        )
+    except UnicodeDecodeError as exc:
+        return CoreGateConfig(
+            {},
+            CONFIG_UNREADABLE,
+            "UTF-8 decode failed at %s: %s" % (path, exc),
+        )
+
+    facts = parse_core(text)
+    if facts is None:
+        return CoreGateConfig(
+            {},
+            CONFIG_UNREADABLE,
+            "corrupt or unreadable core.md at %s" % path,
+        )
+    prefs = facts.get("enginePreferences")
+    if not isinstance(prefs, dict):
+        prefs = {}
+    else:
+        prefs = dict(prefs)
+    return CoreGateConfig(prefs, CONFIG_OK, None)
+
+
+def _merge_candidate_gate_configs(in_cls, gl_cls, cwd, root):
+    in_absent = in_cls.status == CONFIG_ABSENT
+    gl_absent = gl_cls.status == CONFIG_ABSENT
+    if in_absent and gl_absent:
+        return CoreGateConfig({}, CONFIG_ABSENT, None)
+    if in_absent:
+        return gl_cls
+    if gl_absent:
+        return in_cls
+    if mode_registry.resolve(cwd, root)["mode"] == mode_registry.IN_REPO:
+        return in_cls
+    return gl_cls
+
+
+def engine_preferences_for_gate(*, cwd=None, root=None, profile_path=None):
+    """Readable core.md gate accessor — single owner of the existence/readability decision.
+
+    When ``profile_path`` is given (wins over ``cwd``/``root``), the target is ``core.md`` in
+    the directory of ``os.path.realpath(profile_path)``. Otherwise both in-repo and global
+    candidate paths are classified and merged so a present-but-unreadable candidate is never
+    skipped as absent. Never raises."""
+    try:
+        if profile_path:
+            layer = os.path.realpath(profile_path)
+            core_beside = os.path.join(os.path.dirname(layer), "core.md")
+            return _classify_core_md_at_path(core_beside)
+
+        cwd = cwd or os.getcwd()
+        in_repo, global_path = _core_candidates(cwd, root)
+        in_cls = _classify_core_md_at_path(in_repo)
+        gl_cls = _classify_core_md_at_path(global_path)
+        return _merge_candidate_gate_configs(in_cls, gl_cls, cwd, root)
+    except Exception as exc:
+        return CoreGateConfig(
+            {},
+            CONFIG_UNREADABLE,
+            "%s: %s" % (type(exc).__name__, exc),
+        )
 
 
 def read(cwd, root=None):
@@ -136,6 +251,8 @@ def read(cwd, root=None):
         with open(core_path(cwd, root), encoding="utf-8") as fh:
             text = fh.read()
     except OSError:
+        return None
+    except UnicodeDecodeError:
         return None
     facts = parse_core(text)
     if facts is None:
@@ -225,10 +342,14 @@ def _evaluate_configured_dispatch_gate(cwd, root, facts, existing):
     """Evaluate fable×external gate. Returns (violations, evaluation_error).
 
     ``violations`` is a list when evaluation succeeded (possibly empty). ``evaluation_error`` is a
-    non-empty string when the gate itself failed (distinct from a clean pass)."""
+    ``{"reason", "detail"}`` dict when the gate itself failed (distinct from a clean pass)."""
     try:
         import engine_pref
         import model_tier_overrides
+
+        gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
+        if gate_cfg.status == CONFIG_UNREADABLE:
+            return None, {"reason": GATE_REASON_UNREADABLE, "detail": gate_cfg.detail}
 
         if existing is not None and not _facts_include_engine_preferences(facts):
             return [], None
@@ -237,14 +358,19 @@ def _evaluate_configured_dispatch_gate(cwd, root, facts, existing):
             model_tier_overrides.resolve_profile_path(cwd, root))
         return engine_pref.configured_dispatch_violations(prefs, tiers), None
     except Exception as exc:
-        return None, "%s: %s" % (type(exc).__name__, exc)
+        return None, {
+            "reason": "dispatch-gate-evaluation-failed",
+            "detail": "%s: %s" % (type(exc).__name__, exc),
+        }
 
 
 def _refused_dispatch_gate(violations=None, *, evaluation_error=None, record=None):
     if evaluation_error:
+        reason = evaluation_error.get("reason", "dispatch-gate-evaluation-failed")
+        detail = evaluation_error.get("detail", "")
         violations = [{
-            "reason": "dispatch-gate-evaluation-failed",
-            "detail": evaluation_error,
+            "reason": reason,
+            "detail": detail,
         }]
     return {
         "action": "refused",
