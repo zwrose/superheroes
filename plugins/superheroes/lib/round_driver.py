@@ -456,18 +456,20 @@ def _seat_map_violations(state):
         for v in rec.get("seatMapViolations") or []:
             if not isinstance(v, dict):
                 continue
-            key = (v.get("constraint"), v.get("seat"))
+            key = (str(v.get("constraint", "")), str(v.get("seat") or ""))
             if key in seen:
                 continue
             seen.add(key)
             merged.append(v)
     for v in _seat_map_unexcused_violations(state.get("seatMap") or {}):
-        key = (v.get("constraint"), v.get("seat"))
+        key = (str(v.get("constraint", "")), str(v.get("seat") or ""))
         if key in seen:
             continue
         seen.add(key)
         merged.append(v)
-    merged.sort(key=lambda item: (item.get("constraint", ""), item.get("seat") or ""))
+    merged.sort(
+        key=lambda item: (str(item.get("constraint", "")), str(item.get("seat") or "")),
+    )
     return merged
 
 
@@ -2156,9 +2158,15 @@ def build_receipt(state, session_dir=None):
             c = v.get("constraint") or "unknown"
             s = v.get("seat")
             _viol_parts.append("%s (seat %s)" % (c, s) if s else c)
-        degraded.append(
-            "seat-map constraint breach: %s — certification shape marked -constraint-violated"
-            % ", ".join(_viol_parts))
+        _shape = (state.get("certification") or {}).get("shape")
+        if isinstance(_shape, str) and _shape.endswith("-constraint-violated"):
+            degraded.append(
+                "seat-map constraint breach: %s — certification shape marked -constraint-violated"
+                % ", ".join(_viol_parts))
+        else:
+            degraded.append(
+                "seat-map constraint breach: %s — breach recorded; certification withheld"
+                % ", ".join(_viol_parts))
     # The skipped-blocking channel (#507 R2a): an owner-skipped judgment blocker rides the exit
     # disclosure — a product-choice tradeoff shipped un-fixed, cited by its owner reason. It appears
     # BOTH in the degraded disclosure prose AND as the dedicated top-level `skippedBlockers` list

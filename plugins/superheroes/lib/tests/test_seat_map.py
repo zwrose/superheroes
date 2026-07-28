@@ -1283,6 +1283,8 @@ def test_unexcused_e5_pinned_seat_blocks_strong_tier_excusal():
     }
     receipt = {
         "seats": seats,
+        "liveVendors": list(THREE_VENDORS),
+        "livenessPinScoped": False,
         "degradations": [
             {"constraint": "strong-tier", "seat": "architecture-reviewer"},
         ],
@@ -1292,12 +1294,109 @@ def test_unexcused_e5_pinned_seat_blocks_strong_tier_excusal():
     assert unexcused == [{"constraint": "strong-tier", "seat": "architecture-reviewer"}]
 
 
-def test_unexcused_e6_empty_seats_returns_empty():
-    for sm in (
-        {},
-        {"violations": [{"constraint": "critical-diversity"}]},
+def test_unexcused_empty_or_missing_seats_fail_closed():
+    assert SM.unexcused_violations({}) == []
+    assert SM.unexcused_violations({"violations": [{"constraint": "critical-diversity"}]}) == [
+        {"constraint": "critical-diversity"},
+    ]
+    assert SM.unexcused_violations(
         {"seats": {}, "violations": [{"constraint": "critical-diversity"}]},
-        {"seats": {}, "degradations": [{"constraint": "compose-failed"}],
-         "violations": [{"constraint": "missing-seat", "seat": "code-reviewer"}]},
-    ):
-        assert SM.unexcused_violations(sm) == []
+    ) == [{"constraint": "critical-diversity"}]
+    compose_failed = {
+        "seats": {},
+        "degradations": [{"constraint": "compose-failed"}],
+        "violations": [{"constraint": "missing-seat", "seat": "code-reviewer"}],
+    }
+    assert SM.unexcused_violations(compose_failed) == compose_failed["violations"]
+    receipt = SM.to_receipt({"seats": {}})
+    assert SM.unexcused_violations(receipt) == receipt["violations"]
+
+
+@pytest.mark.parametrize(
+    "live,maker,excused",
+    [
+        (["claude"], "anthropic", True),
+        (["claude", "codex"], "anthropic", True),
+        (["claude", "codex", "cursor"], "xai", False),
+        (["claude", "codex"], "xai", False),
+    ],
+)
+def test_unexcused_critical_diversity_availability_not_pin_presence(live, maker, excused):
+    seats = _full_seats_template()
+    receipt = {
+        "seats": seats,
+        "liveVendors": live,
+        "livenessPinScoped": False,
+        "authorFamily": maker,
+        "degradations": [{"constraint": "critical-diversity"}],
+        "violations": [{"constraint": "critical-diversity"}],
+    }
+    unexcused = SM.unexcused_violations(receipt)
+    if excused:
+        assert unexcused == []
+    else:
+        assert unexcused == [{"constraint": "critical-diversity"}]
+
+
+def test_unexcused_strong_tier_excused_when_reviewer_deep_unavailable(monkeypatch):
+    _real_matrix = SM.matrix_config
+
+    def _no_reviewer_deep(tier, vendor):
+        if tier == "reviewer-deep":
+            return None
+        return _real_matrix(tier, vendor)
+
+    monkeypatch.setattr(SM, "matrix_config", _no_reviewer_deep)
+    seats = _full_seats_template()
+    seats["architecture-reviewer"] = {
+        "vendor": "claude",
+        "model": "opus-5",
+        "effort": "xhigh",
+        "tier": "reviewer",
+        "family": "anthropic",
+        "source": "rotated",
+    }
+    receipt = {
+        "seats": seats,
+        "liveVendors": list(THREE_VENDORS),
+        "livenessPinScoped": False,
+        "degradations": [{"constraint": "strong-tier", "seat": "architecture-reviewer"}],
+        "violations": [{"constraint": "strong-tier", "seat": "architecture-reviewer"}],
+    }
+    assert SM.unexcused_violations(receipt) == []
+
+
+def test_unexcused_strong_tier_build_degradation_seat_field_load_bearing(monkeypatch):
+    """Kills mutant that drops build()'s per-seat strong-tier degradation (#680 FIX 6)."""
+    _real_matrix = SM.matrix_config
+
+    def _no_reviewer_deep(tier, vendor):
+        if tier == "reviewer-deep":
+            return None
+        return _real_matrix(tier, vendor)
+
+    monkeypatch.setattr(SM, "matrix_config", _no_reviewer_deep)
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0, liveness_pin_scoped=False)
+    receipt = SM.to_receipt(m, "xai")
+    strong_violations = [v for v in receipt["violations"] if v.get("constraint") == "strong-tier"]
+    assert strong_violations
+    assert SM.unexcused_violations(receipt) == []
+
+
+def test_unexcused_malformed_violation_field_types_do_not_raise():
+    receipt = {
+        "seats": _full_seats_template(),
+        "liveVendors": list(THREE_VENDORS),
+        "livenessPinScoped": False,
+        "degradations": [],
+        "violations": [
+            {"constraint": None},
+            {"constraint": "maker-family", "seat": 5},
+            {"constraint": "critical-diversity"},
+            {"constraint": "critical-diversity"},
+        ],
+    }
+    unexcused = SM.unexcused_violations(receipt)
+    assert {"constraint": "malformed-violation-record"} in unexcused
+    assert {"constraint": "maker-family", "seat": 5} in unexcused
+    assert unexcused.count({"constraint": "critical-diversity"}) == 2

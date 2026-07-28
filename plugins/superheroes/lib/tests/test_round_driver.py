@@ -2178,6 +2178,9 @@ def test_seat_map_excused_only_violation_unchanged_cert_shape():
     seat_map_excused = dict(seat_map_clean)
     seat_map_excused["violations"] = [{"constraint": "critical-diversity"}]
     seat_map_excused["degradations"] = [{"constraint": "critical-diversity"}]
+    seat_map_excused["livenessPinScoped"] = False
+    seat_map_excused["liveVendors"] = ["claude", "codex"]
+    seat_map_excused["authorFamily"] = "anthropic"
     receipt_excused = RD.run_loop(_seams(io={"seatMap": seat_map_excused}), cfg)
     assert receipt_excused["verdict"] == "converged"
     assert receipt_excused["certificationShape"] == receipt_clean["certificationShape"]
@@ -2192,12 +2195,14 @@ def test_certification_shape_drivers_lists_every_fired_channel():
         "seat": "code-reviewer",
         "reason": "test",
     }]
-    state = RD.new_state(_cfg(leg="panel", vendors=["codex", "cursor"]))
+    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
+    cfg["baseDegraded"] = True
+    state = RD.new_state(cfg)
+    state["independenceDegraded"] = True
     state["seatMap"] = seat_map
     RD._terminal_converged(state, state["config"], full_panel=True)
     drivers = state["certification"]["shapeDrivers"]
-    assert "seat-map-violation" in drivers
-    assert "same-family" in drivers
+    assert drivers == ["base", "independence", "same-family", "seat-map-violation"]
     assert state["certification"]["shape"].endswith("-constraint-violated")
     assert state["certification"]["shape"].count("-degraded") == 0
 

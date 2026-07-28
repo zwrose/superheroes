@@ -104,6 +104,69 @@ def _alternative_family_live(seat_map: dict, seat: str, cfg: dict, author_family
     return False
 
 
+def _liveness_provenance_usable(seat_map: dict) -> bool:
+    """True only when liveVendors carries probed, registry-resolvable liveness (#680 FIX 2)."""
+    pin_scoped = seat_map.get("livenessPinScoped")
+    if pin_scoped is not False:
+        return False
+    for deg in seat_map.get("degradations") or []:
+        if isinstance(deg, dict) and deg.get("constraint") in UNPROVEN_LIVENESS_CONSTRAINTS:
+            return False
+    live = seat_map.get("liveVendors")
+    if not isinstance(live, list) or not live:
+        return False
+    known_vendors = set(vendors())
+    for vendor in live:
+        if not isinstance(vendor, str) or not vendor or vendor not in known_vendors:
+            return False
+    return True
+
+
+def _alternative_families_at_tier(seat_map: dict, tier: str) -> set[str]:
+    """Registry families reachable from liveVendors at tier, excluding the maker family."""
+    author_family = seat_map.get("authorFamily")
+    if not isinstance(author_family, str) or not author_family:
+        return set()
+    live = seat_map.get("liveVendors")
+    if not isinstance(live, list) or not live:
+        return set()
+    known_vendors = set(vendors())
+    families: set[str] = set()
+    for vendor in live:
+        if not isinstance(vendor, str) or not vendor or vendor not in known_vendors:
+            return set()
+        cell = matrix_config(tier, vendor)
+        if cell is None:
+            continue
+        model, effort = cell
+        fam = family_for(tier, vendor)
+        if fam is None or not is_allowed(tier, vendor, model, effort):
+            continue
+        if fam != author_family:
+            families.add(fam)
+    return families
+
+
+def _any_live_vendor_at_tier(seat_map: dict, tier: str) -> bool:
+    """True when some registered live vendor resolves at tier (same bar as _alternative_family_live)."""
+    live = seat_map.get("liveVendors")
+    if not isinstance(live, list) or not live:
+        return False
+    known_vendors = set(vendors())
+    for vendor in live:
+        if not isinstance(vendor, str) or not vendor or vendor not in known_vendors:
+            return True
+        cell = matrix_config(tier, vendor)
+        if cell is None:
+            continue
+        model, effort = cell
+        fam = family_for(tier, vendor)
+        if fam is None or not is_allowed(tier, vendor, model, effort):
+            continue
+        return True
+    return False
+
+
 def same_family_degradations(seat_map: dict, author_family: str | None) -> list[dict]:
     """Derive the `same-family` records a seat map implies. `build()` records these directly; this
     derives the same records for a hand-built or replayed map so a receipt is never silent about a
@@ -573,12 +636,13 @@ def unexcused_violations(seat_map: dict) -> list[dict]:
     violations = seat_map.get("violations")
     if not isinstance(violations, list) or not violations:
         return []
-    seats = seat_map.get("seats")
-    if not isinstance(seats, dict) or not seats:
-        return []
+    raw_seats = seat_map.get("seats")
+    seats = raw_seats if isinstance(raw_seats, dict) else {}
+    pin_evidence_available = bool(seats)
 
     raw_degradations = seat_map.get("degradations")
     degradations = raw_degradations if isinstance(raw_degradations, list) else []
+    provenance_ok = _liveness_provenance_usable(seat_map)
 
     unexcused: list[dict] = []
     for v in violations:
@@ -586,8 +650,14 @@ def unexcused_violations(seat_map: dict) -> list[dict]:
             unexcused.append({"constraint": "malformed-violation-record"})
             continue
         constraint = v.get("constraint")
-        seat = v.get("seat")
+        seat = v.get("seat") if isinstance(v.get("seat"), str) else None
+        if not isinstance(constraint, str) or not constraint:
+            unexcused.append({"constraint": "malformed-violation-record"})
+            continue
         if constraint not in EXCUSABLE_RELAXATIONS:
+            unexcused.append(v)
+            continue
+        if not provenance_ok or not pin_evidence_available:
             unexcused.append(v)
             continue
         if constraint == "strong-tier":
@@ -595,11 +665,11 @@ def unexcused_violations(seat_map: dict) -> list[dict]:
             if isinstance(seat_cfg, dict) and seat_cfg.get("source") == "pinned":
                 unexcused.append(v)
                 continue
+            if _any_live_vendor_at_tier(seat_map, "reviewer-deep"):
+                unexcused.append(v)
+                continue
         elif constraint == "critical-diversity":
-            if any(
-                isinstance(seats.get(s), dict) and seats[s].get("source") == "pinned"
-                for s in CRITICAL_SEATS
-            ):
+            if len(_alternative_families_at_tier(seat_map, "reviewer-deep")) >= 2:
                 unexcused.append(v)
                 continue
         excused = False
@@ -612,7 +682,9 @@ def unexcused_violations(seat_map: dict) -> list[dict]:
         if not excused:
             unexcused.append(v)
 
-    unexcused.sort(key=lambda item: (item.get("constraint", ""), item.get("seat") or ""))
+    unexcused.sort(
+        key=lambda item: (str(item.get("constraint", "")), str(item.get("seat") or "")),
+    )
     return unexcused
 
 
