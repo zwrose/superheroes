@@ -1532,3 +1532,58 @@ def test_classify_pin_excuses_critical_diversity_collapsed_seats():
     classified = SM.classify_violations(receipt)
     assert classified["excusedByPin"]
     assert SM.unexcused_violations(receipt) == []
+
+
+def _resolvable_families_fixture():
+    seat_map = {
+        "liveVendors": list(THREE_VENDORS),
+        "degradations": [],
+    }
+    cfg = _full_seats_template()["security-reviewer"]
+    return seat_map, "security-reviewer", cfg
+
+
+@pytest.mark.parametrize(
+    "seat_map_override,cfg_override",
+    [
+        ({"livenessPinScoped": True}, None),
+        ({}, None),  # absent livenessPinScoped
+        ({"degradations": [{"constraint": "live-vendors", "reason": "synth"}]}, None),
+        ({"degradations": [{"constraint": "preflight-cache-only", "reason": "cache"}]}, None),
+        ({"degradations": [{"constraint": "compose-failed", "reason": "fail"}]}, None),
+        ({"liveVendors": None}, None),
+        ({"liveVendors": []}, None),
+        ({"liveVendors": ["not-a-real-vendor"]}, None),
+        (None, {"tier": "no-such-tier"}),
+    ],
+    ids=[
+        "pin-scoped-true",
+        "pin-scoped-absent",
+        "degradation-live-vendors",
+        "degradation-preflight-cache-only",
+        "degradation-compose-failed",
+        "live-vendors-absent",
+        "live-vendors-empty",
+        "unregistered-vendor",
+        "nothing-resolvable-at-tier",
+    ],
+)
+def test_resolvable_families_for_seat_unusable_shapes(seat_map_override, cfg_override):
+    seat_map, seat, cfg = _resolvable_families_fixture()
+    cfg = dict(cfg)
+    if seat_map_override is not None:
+        for key, val in seat_map_override.items():
+            if key == "liveVendors" and val is None:
+                seat_map.pop("liveVendors", None)
+            else:
+                seat_map[key] = val
+    if cfg_override:
+        cfg.update(cfg_override)
+    assert SM._resolvable_families_for_seat(seat_map, seat, cfg) is None
+
+
+def test_resolvable_families_for_seat_positive_family_set():
+    seat_map, seat, cfg = _resolvable_families_fixture()
+    seat_map["livenessPinScoped"] = False
+    fams = SM._resolvable_families_for_seat(seat_map, seat, cfg)
+    assert fams == {"anthropic", "openai", "xai"}

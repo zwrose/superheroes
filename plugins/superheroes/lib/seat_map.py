@@ -65,29 +65,29 @@ def _seat_tier(seat: str, cfg: dict) -> str:
     return DEFAULT_TIER_BY_SEAT.get(seat, "reviewer")
 
 
-def _alternative_family_evidence(
-    seat_map: dict, seat: str, cfg: dict, author_family: str,
-) -> str:
-    """Per-seat tri-state: proved no alternative, proved alternative live, or evidence unusable."""
-    if not isinstance(author_family, str) or not author_family:
-        return ALT_UNUSABLE
+def _resolvable_families_for_seat(seat_map: dict, seat: str, cfg: dict) -> set[str] | None:
+    """Every registry family this seat could have been filled with, at the seat's OWN tier, from
+    the map's live vendors. `None` means the evidence is UNUSABLE — the single fail-closed gate
+    (replayed/unprobed map, unregistered vendor, nothing resolvable at the tier). One
+    implementation: every liveness question in this module is asked of this function (#680 R-A)."""
     pin_scoped = seat_map.get("livenessPinScoped")
     if pin_scoped is not False:
-        return ALT_UNUSABLE
+        return None
     raw_degs = seat_map.get("degradations")
     degradations = raw_degs if isinstance(raw_degs, list) else []
     for deg in degradations:
         if isinstance(deg, dict) and deg.get("constraint") in UNPROVEN_LIVENESS_CONSTRAINTS:
-            return ALT_UNUSABLE
+            return None
     live = seat_map.get("liveVendors")
     if not isinstance(live, list) or not live:
-        return ALT_UNUSABLE
-    tier = _seat_tier(seat, cfg)
-    resolved_any = False
+        return None
     known_vendors = set(vendors())
     for vendor in live:
         if not isinstance(vendor, str) or not vendor or vendor not in known_vendors:
-            return ALT_UNUSABLE
+            return None
+    tier = _seat_tier(seat, cfg)
+    families: set[str] = set()
+    for vendor in live:
         cell = matrix_config(tier, vendor)
         if cell is None:
             continue
@@ -95,11 +95,23 @@ def _alternative_family_evidence(
         fam = family_for(tier, vendor)
         if fam is None or not is_allowed(tier, vendor, model, effort):
             continue
-        resolved_any = True
-        if fam != author_family:
-            return ALT_LIVE
-    if not resolved_any:
+        families.add(fam)
+    if not families:
+        return None
+    return families
+
+
+def _alternative_family_evidence(
+    seat_map: dict, seat: str, cfg: dict, author_family: str,
+) -> str:
+    """Per-seat tri-state: proved no alternative, proved alternative live, or evidence unusable."""
+    if not isinstance(author_family, str) or not author_family:
         return ALT_UNUSABLE
+    fams = _resolvable_families_for_seat(seat_map, seat, cfg)
+    if fams is None:
+        return ALT_UNUSABLE
+    if fams - {author_family}:
+        return ALT_LIVE
     return ALT_NONE
 
 
@@ -124,62 +136,6 @@ def _critical_families(seats: dict) -> set[str]:
         for fam in [seats[s].get("family") if isinstance(seats.get(s), dict) else None]
         if isinstance(fam, str) and fam
     }
-
-
-def _liveness_inputs_unusable(seat_map: dict) -> bool:
-    """Map-level liveness inputs that make any excusal-by-liveness claim unprovable."""
-    pin_scoped = seat_map.get("livenessPinScoped")
-    if pin_scoped is not False:
-        return True
-    raw_degs = seat_map.get("degradations")
-    degradations = raw_degs if isinstance(raw_degs, list) else []
-    for deg in degradations:
-        if isinstance(deg, dict) and deg.get("constraint") in UNPROVEN_LIVENESS_CONSTRAINTS:
-            return True
-    live = seat_map.get("liveVendors")
-    if not isinstance(live, list) or not live:
-        return True
-    author_family = seat_map.get("authorFamily")
-    if not isinstance(author_family, str) or not author_family:
-        return True
-    known_vendors = set(vendors())
-    for vendor in live:
-        if not isinstance(vendor, str) or not vendor or vendor not in known_vendors:
-            return True
-    return False
-
-
-def _non_maker_families_reachable_at_collapsed(
-    seat_map: dict, collapsed: list[str], seats: dict,
-) -> set[str] | None:
-    """Non-maker families any collapsed seat could have taken at its own tier — verify()'s old
-    critical-diversity availability bar without a hardcoded tier (#680 R-A, A8)."""
-    if _liveness_inputs_unusable(seat_map):
-        return None
-    author_family = seat_map.get("authorFamily")
-    assert isinstance(author_family, str)
-    live = seat_map.get("liveVendors")
-    assert isinstance(live, list)
-    known_vendors = set(vendors())
-    families: set[str] = set()
-    for cs in collapsed:
-        cfg = seats.get(cs)
-        if not isinstance(cfg, dict):
-            return None
-        tier = _seat_tier(cs, cfg)
-        for vendor in live:
-            if not isinstance(vendor, str) or not vendor or vendor not in known_vendors:
-                return None
-            cell = matrix_config(tier, vendor)
-            if cell is None:
-                continue
-            model, effort = cell
-            fam = family_for(tier, vendor)
-            if fam is None or not is_allowed(tier, vendor, model, effort):
-                continue
-            if fam != author_family:
-                families.add(fam)
-    return families
 
 
 def same_family_degradations(seat_map: dict, author_family: str | None) -> list[dict]:
@@ -684,22 +640,31 @@ def classify_violations(seat_map: dict) -> dict:
             continue
 
         if constraint == "strong-tier":
-            if _liveness_inputs_unusable(seat_map):
-                liveness_proven = False
+            cfg0 = seats.get(collapsed[0])
+            if not isinstance(cfg0, dict):
                 evidences = [ALT_UNUSABLE]
             else:
-                cfg0 = seats.get(collapsed[0])
-                if not isinstance(cfg0, dict):
-                    evidences = [ALT_UNUSABLE]
-                else:
-                    evidences = [
-                        _alternative_family_evidence(
-                            seat_map, collapsed[0], cfg0, author_family or "",
-                        ),
-                    ]
-                liveness_proven = evidences[0] == ALT_NONE
+                evidences = [
+                    _alternative_family_evidence(
+                        seat_map, collapsed[0], cfg0, author_family or "",
+                    ),
+                ]
+            liveness_proven = evidences[0] == ALT_NONE
         else:
-            reachable = _non_maker_families_reachable_at_collapsed(seat_map, collapsed, seats)
+            if not isinstance(author_family, str) or not author_family:
+                reachable = None
+            else:
+                reachable: set[str] | None = set()
+                for cs in collapsed:
+                    cfg = seats.get(cs)
+                    if not isinstance(cfg, dict):
+                        reachable = None
+                        break
+                    fams = _resolvable_families_for_seat(seat_map, cs, cfg)
+                    if fams is None:
+                        reachable = None
+                        break
+                    reachable |= fams - {author_family}
             if reachable is None:
                 liveness_proven = False
                 evidences = [ALT_UNUSABLE]
