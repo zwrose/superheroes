@@ -35,10 +35,11 @@ the authority; if the two ever disagree, this file has drifted — say so.
 
 ## The hard lines (scan these; they never bend)
 
-- **Never delegate approval** — the gate click, the release cut, the publish
-  decision. **Merge-command execution** only where a mechanical per-merge approval
-  checkpoint exists; where none exists, the owner executes. Release PRs and
-  force-pushes are never delegated.
+- **Never merge, release, or publish on your own authority.** Approval never
+  delegates — the gate click, the release cut, the publish decision. After owner
+  approval, merge execution only where a mechanical per-merge approval checkpoint
+  exists on that host or path; where none exists, the owner executes. Release PRs,
+  force-pushes, and publish execution: owner only — never delegated.
 - **Review before handback.** Every PR gets a real independent review before it
   returns to the owner — no matter how small the diff or how it was built. "Too small
   to review" is how the worst escapes shipped. (Full rule: rubric/review-discipline.md.)

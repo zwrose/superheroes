@@ -258,38 +258,24 @@ implementer that parks on a stale premise did the right thing. When you are abou
 to a design signal. Say what the seam problem looks like.
 
 **Await every dispatch in-turn — the default is poll synchronously until the work resolves; do not end
-a turn with an engine in flight unless you use the sanctioned detach-and-park fallback below.** A
-headless build session (`claude -p`) is not re-woken by the host's background-run or wakeup tools —
-those descriptions and success messages lie in headless mode — so ending a turn hoping something
-resumes it is a park dressed as a handoff. **Harness-tracked background work dies with the turn** (a
-probe wrote a start marker at t+8s, the session exited at t+15s, and the completion marker never
-appeared — harness 2.1.219, three runs); treating it like durable work is how builds orphan. Independent
-dispatches may run **concurrently** (§6), but every one is **awaited in-turn** — block on it, or
-**background it and poll inside this turn** (see dispatch-mechanics) — and you **await them all before
-the turn ends** unless the dispatch truly cannot fit and you execute the fallback. (The #574 build
-background-dispatched its implementer and ended its turn; that path orphaned mid-flight, recovered only
-via `--resume` — not a model to repeat.)
+a turn with an engine in flight unless you use the sanctioned detach-and-park fallback in the
+Channel-conditioned section below.** A headless build session (`claude -p`) is not re-woken by the host's
+background-run or wakeup tools — those descriptions and success messages lie in headless mode — so
+ending a turn hoping something resumes it is a park dressed as a handoff; mechanism and evidence for
+what survives a turn ending are in Channel-conditioned below, not here. Independent dispatches may run **concurrently**
+(§6), but every one is **awaited in-turn** — block on it, or **background it and poll inside this
+turn** (see dispatch-mechanics) — and you **await them all before the turn ends** unless the dispatch
+truly cannot fit and you execute that fallback. (The #574 build background-dispatched its implementer
+and ended its turn; that path orphaned mid-flight, recovered only via `--resume` — not a model to
+repeat.)
 
-**Channel-conditioned — what survives a turn ending (read with the rule above).** (1) **Default
-unchanged:** poll in-turn with tool calls until every dispatch resolves; nearly always the right
-answer — nothing here licenses ending a turn because waiting is tedious. (2) **Two physics, not one:**
-**harness-tracked background work** (a background task the harness manages) **dies when the turn ends**
-— no completion, no orphan process (probe above). **Shell-detached children with durable on-disk
-output survive the exit, keep working, and are recoverable** when the advisor resumes — proven twice
-mid-flight (brief-check builds): session exited, detached child completed to disk, resumed session
-recovered with zero work lost. Earlier readings that those recoveries were luck or that engines "were
-already finished" are **refuted**; the charter corrects its own record. Sessions that believed a waiter
-mechanism were **believing their tools** — background-run, wakeup scheduling, and its success message
-all promise re-wake that never fires headless; the rule must name mechanism, not only repeat
-prohibition. (3) **Sanctioned fallback when a dispatch cannot fit the turn:** detach with durable
-output, then hand recovery to the advisor — redirect output to **files, never pipes** (a pipe buffer
-dies with the reader; a piped dispatch makes stall look like progress); **stamp state to disk before
-any wait** (what was dispatched, where output lands, next step); **shell-detach** (tracked background
-does not survive; detached children do). (4) **Park, not handoff:** end with a **durable park** —
-what is running, where output is, what the advisor must do — never a turn that ends hoping re-wake;
-an outcome that outruns any plausible resolution time is a park, not unbounded in-turn poll. (5)
-**Owner-capability mid-run:** a running headless session is deaf — park durably with receipts; never
-improvise a notification path or assume someone is watching.
+**Channel-conditioned — what survives a turn ending (read with the rule above).**
+
+**Default unchanged: await in-turn.** Poll in-turn with tool calls until every dispatch resolves; nearly always the right answer — nothing here licenses ending a turn because waiting is tedious.
+**Two physics, not one.** **Harness-tracked background work** (a background task the harness manages) **dies when the turn ends** — a probe wrote a start marker at t+8s, the session exited at t+15s, and the completion marker never appeared (harness 2.1.219, three runs); no completion, no orphan process; treating it like durable work is how builds orphan. **Shell-detached children with durable on-disk output survive the exit, keep working, and are recoverable** when the advisor resumes — proven twice mid-flight (brief-check builds): session exited, detached child completed to disk, resumed session recovered with zero work lost. Earlier readings that those recoveries were luck or that engines "were already finished" are **refuted**; the charter corrects its own record. Sessions that believed a waiter mechanism were **believing their tools** — background-run, wakeup scheduling, and its success message all promise re-wake that never fires headless; the rule must name mechanism, not only repeat prohibition.
+**The sanctioned fallback** when a dispatch cannot fit the turn: detach with durable output, then hand recovery to the advisor — redirect output to **files, never pipes** (a pipe buffer dies with the reader; a piped dispatch makes stall look like progress); **stamp state to disk before any wait** (what was dispatched, where output lands, next step); **shell-detach** (tracked background does not survive; detached children do).
+**It ends in a park, not a handoff.** End with a **durable park** — what is running, where output is, what the advisor must do — never a turn that ends hoping re-wake; an outcome that outruns any plausible resolution time is a park, not unbounded in-turn poll.
+**Owner-capability needs surfacing mid-run: park durably, never improvise a channel.** A running headless session is deaf — park durably with receipts; never improvise a notification path or assume someone is watching.
 
 **This generalizes beyond dispatches — a headless session (`claude -p`) does not end a turn on a
 pending external outcome except via the same detach-and-park fallback when waiting truly cannot fit.**

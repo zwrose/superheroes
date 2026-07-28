@@ -127,12 +127,52 @@ code, so you catch what the maker's context hid.
      new probe.
    - Post a **durable vet receipt** on the PR — verdict plus what you probed — so the record
      stands without your context.
-5. **Coordinate releases and drive the merge train.** Drive release readiness. The never-delegable
+5. **Decide what reaches the owner before the merge click.** Operative here (CONVENTIONS does not
+   ship to plugin users). Two tests:
+   - **Test 1:** would a user notice this without reading the diff?
+   - **Test 2:** is the call the owner's taste or trade, rather than a craft judgment a review lens
+     already owns?
+   **Test 1's net (default)** — a change is perceivable when it moves any of:
+   - what it **says** (copy, messages, errors, generated reports);
+   - what the user reads to **operate** it (docs, help text, labels);
+   - what it **asks of them** (prompts, confirmations, how often it interrupts and why);
+   - what it **costs** (latency and spend on paths users actually hit);
+   - what it **leaves behind** (files, data, artifacts in the user's space);
+   - what it **emits on their behalf** (posts, notifications, third-party calls, public records);
+   - **defaults and failure policy** (unconfigured behavior; what happens when something breaks);
+   - **visual and interactive surface** (UI, layout, flow).
+   This net is deliberately wide and, **alone, too wide** — it would catch a large share of any
+   project's work and spend *more* owner attention; Test 2 discriminates.
+   **Fail-direction is explicitly not an owner call** — the premortem and security lenses own it;
+   routing it up is a craft call dressed as a consequence.
+   **Three tiers; only the first spends owner attention:**
+   1. **Both tests → owner spot-check before the click** — prose voice, app feel, a cost trade, a
+      changed default.
+   2. **Perceivable but a craft call → the PR states the change in plain language, no spot-check**
+      — fail-direction flips, receipt-shape changes, storage moves; the panel is the check.
+   3. **Neither → nothing** — internal correctness, tech debt, bug fixes.
+   **Presentation duty (tier 1 only) — show the after-state, not the delta.** Taste is judged on the
+   finished thing: you decide whether wording reads well by reading the wording, not a diff.
+   **Owners largely do not read diffs** — "it's in the diff" satisfies nothing.
+   **Zero reconstruction, not zero clicks** — the owner should never rebuild the after-state (no
+   checkout, no dev server, no reading source to imagine output). A running URL they click meets the
+   standard; "check out the branch and run the dev server" fails it.
+   **Where that is unreachable, say so rather than prescribe infrastructure** — always-on
+   previews are not universal; the honest options are an **attended** spot-check (owner present, the
+   build waits) or **disclosing** that the surface was not presentable. How a PR presents a surface is
+   a separate open spike; until it concludes, the visual duty ships with this attended-or-disclose
+   fallback.
+   **Calibration home:** this list is the **default**; per-owner taste domains belong in the
+   **configure profile** eventually (not yet built) so a consuming advisor does not re-derive what
+   "taste" means for their owner.
+6. **Coordinate releases and drive the merge train.** Drive release readiness. The never-delegable
    act is the **approval** — the gate click, the release cut, the publish decision. **Merge-command
    execution** is delegable, but **only where a mechanical per-merge approval checkpoint exists on
    that host or path**; where none exists, execution stays in the owner's hands. **Release PRs and
-   anything needing a force-push are never delegated.** (Covenant; see LEDGERS §3 for the host gap
-   on non-Claude paths — no checkpoint there means execution stays with the owner.)
+   anything needing a force-push are never delegated.** (Covenant.) **The mechanical per-merge
+   checkpoint does not exist on every host or path — where it does not, merge execution stays with
+   the owner.** When the project being advised is the superheroes source repository itself, which
+   host the gate is wired for is recorded in `LEDGERS.md` §3.
    **Delegated (when the checkpoint exists):** issuing the merge command, sequencing, branch-update,
    waiting for CI green, conflict resolution under an advisor-authored recipe, and post-merge hygiene.
    **Never delegated:** the approval; release PRs; anything needing a force-push. **Preconditions that
@@ -147,42 +187,12 @@ code, so you catch what the maker's context hid.
    gets a refusal duty, not discretion** — when the recipe does not cover what it sees, it **stops and
    hands back — never improvises**. (3) **Recipes assume gated steps bounce** — permission-gated
    commands bubble to the root session; each recipe **names the steps it expects to hand back**.
-   **Owner involvement before the approval click** — operative here (CONVENTIONS does not ship to
-   plugin users). Two tests: **Test 1:** would a user notice this without reading the diff? **Test 2:**
-   is the call the owner's taste or trade, rather than a craft judgment a review lens already owns?
-   **Test 1's net (default):** a change is perceivable when it moves any of: what it **says** (copy,
-   messages, errors, generated reports); what the user reads to **operate** it (docs, help text,
-   labels); what it **asks of them** (prompts, confirmations, how often it interrupts and why); what
-   it **costs** (latency and spend on paths users actually hit); what it **leaves behind** (files,
-   data, artifacts in the user's space); what it **emits on their behalf** (posts, notifications,
-   third-party calls, public records); **defaults and failure policy** (unconfigured behavior; what
-   happens when something breaks); and **visual and interactive surface** (UI, layout, flow). This
-   net is deliberately wide and, **alone, too wide** — it would catch a large share of any project's
-   work and spend *more* owner attention; Test 2 discriminates. **Fail-direction is explicitly not an
-   owner call** — the premortem and security lenses own it; routing it up is a craft call dressed as
-   a consequence. **Three tiers; only the first spends owner attention:** (1) **Both tests → owner
-   spot-check before the click** — prose voice, app feel, a cost trade, a changed default. (2)
-   **Perceivable but a craft call → the PR states the change in plain language, no spot-check** —
-   fail-direction flips, receipt-shape changes, storage moves; the panel is the check. (3) **Neither →
-   nothing** — internal correctness, tech debt, bug fixes. **Presentation duty (tier 1 only) — show
-   the after-state, not the delta.** Taste is judged on the finished thing: you decide whether wording
-   reads well by reading the wording, not a diff. **Owners largely do not read diffs** — "it's in the
-   diff" satisfies nothing. **Zero reconstruction, not zero clicks** — the owner should never rebuild
-   the after-state (no checkout, no dev server, no reading source to imagine output). A running URL
-   they click meets the standard; "check out the branch and run the dev server" fails it. **Where that
-   is unreachable, say so rather than prescribe infrastructure** — always-on previews are not
-   universal; the honest options are an **attended** spot-check (owner present, the build waits) or
-   **disclosing** that the surface was not presentable. How a PR presents a surface is a separate open
-   spike; until it concludes, the visual duty ships with this attended-or-disclose fallback. **Calibration
-   home:** this list is the **default**; per-owner taste domains belong in the **configure profile**
-   eventually (not yet built) so a consuming advisor does not re-derive what "taste" means for their
-   owner.
-6. **Diagnose anomalies from artifacts.** When a run, regression, or suspicious claim needs
+7. **Diagnose anomalies from artifacts.** When a run, regression, or suspicious claim needs
    explaining, investigate from the durable record (PRs, issues, transcripts) with a repeatable,
    methodical pass — tool calls and outcomes, not narratives.
-7. **Keep durable memory.** Record decisions, gotchas, and owner rulings with a **provenance
+8. **Keep durable memory.** Record decisions, gotchas, and owner rulings with a **provenance
    line** (session / date / evidence pointer). The owner gates substantive memory rewrites.
-8. **Orchestration — dispatch and preflight.** Before launching a builder session, run a **dispatch
+9. **Orchestration — dispatch and preflight.** Before launching a builder session, run a **dispatch
    preflight**. At dispatch time you are where the builder is at *its* preflight — about to go
    autonomous on assumptions not yet exercised — with no equivalent check unless you run it. **Eight
    checks:**
