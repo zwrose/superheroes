@@ -475,3 +475,145 @@ def test_scan_stale_siblings_clean_layout(tmp_path, monkeypatch):
     _dead_kill(monkeypatch)
     assert cm.scan_stale_siblings(plugin_root) == {"dirs": [], "markers": 0}
 
+
+def test_scan_stale_siblings_stops_dir_scan_at_limit(tmp_path, monkeypatch):
+    fixed_now = 6_000_000.0
+    plugin_root, parent = _sibling_install(tmp_path, extra_versions=("0.10.0",))
+    _mk_marker(parent / "0.10.0", "888100", mtime=fixed_now - 7200)
+    _dead_kill(monkeypatch)
+    for i in range(200):
+        (parent / ("noise-%03d" % i)).mkdir()
+    examined = []
+    real_scandir = os.scandir
+
+    def tracking_scandir(path):
+        class _It:
+            def __init__(self):
+                self._inner = real_scandir(path)
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                entry = next(self._inner)
+                examined.append(entry.name)
+                return entry
+
+            def close(self):
+                self._inner.close()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                self.close()
+                return False
+
+        return _It()
+
+    monkeypatch.setattr(os, "scandir", tracking_scandir)
+    cm.scan_stale_siblings(plugin_root, now=fixed_now)
+    assert len(examined) <= cm.SIBLING_SCAN_DIR_LIMIT
+
+
+def test_scan_stale_siblings_skips_symlinked_sibling_dir(tmp_path, monkeypatch):
+    fixed_now = 6_000_001.0
+    plugin_root, parent = _sibling_install(tmp_path)
+    real_ver = tmp_path / "real_ver"
+    real_ver.mkdir()
+    _mk_marker(real_ver, "888101", mtime=fixed_now - 7200)
+    os.symlink(str(real_ver), str(parent / "0.11.0"))
+    _dead_kill(monkeypatch)
+    assert cm.scan_stale_siblings(plugin_root, now=fixed_now) == {"dirs": [], "markers": 0}
+
+
+def test_scan_stale_siblings_skips_symlinked_in_use(tmp_path, monkeypatch):
+    fixed_now = 6_000_002.0
+    plugin_root, parent = _sibling_install(tmp_path, extra_versions=("0.10.0",))
+    real_in_use = tmp_path / "real_in_use"
+    real_in_use.mkdir()
+    marker = real_in_use / "888102"
+    marker.write_text("")
+    os.utime(marker, (fixed_now - 7200, fixed_now - 7200))
+    os.symlink(str(real_in_use), _in_use(parent / "0.10.0"))
+    _dead_kill(monkeypatch)
+    assert cm.scan_stale_siblings(plugin_root, now=fixed_now) == {"dirs": [], "markers": 0}
+
+
+def test_scan_stale_siblings_kill_permission_error_not_counted(tmp_path, monkeypatch):
+    fixed_now = 6_000_003.0
+    plugin_root, parent = _sibling_install(tmp_path, extra_versions=("0.10.0",))
+    _mk_marker(parent / "0.10.0", "888103", mtime=fixed_now - 7200)
+
+    def kill(pid, sig):
+        raise PermissionError()
+
+    monkeypatch.setattr(os, "kill", kill)
+    assert cm.scan_stale_siblings(plugin_root, now=fixed_now) == {"dirs": [], "markers": 0}
+
+
+def test_scan_stale_siblings_kill_oserror_not_counted(tmp_path, monkeypatch):
+    fixed_now = 6_000_004.0
+    plugin_root, parent = _sibling_install(tmp_path, extra_versions=("0.10.0",))
+    _mk_marker(parent / "0.10.0", "888104", mtime=fixed_now - 7200)
+
+    def kill(pid, sig):
+        raise OSError("simulated")
+
+    monkeypatch.setattr(os, "kill", kill)
+    assert cm.scan_stale_siblings(plugin_root, now=fixed_now) == {"dirs": [], "markers": 0}
+
+
+def test_stale_marker_count_respects_in_use_entry_limit(tmp_path, monkeypatch):
+    fixed_now = 6_000_005.0
+    in_use = _in_use(tmp_path)
+    os.makedirs(in_use, exist_ok=True)
+    for i in range(300):
+        path = os.path.join(in_use, "%d" % (900000 + i))
+        with open(path, "w") as fh:
+            fh.write("")
+        os.utime(path, (fixed_now - 7200, fixed_now - 7200))
+    _dead_kill(monkeypatch)
+    examined = []
+    real_scandir = os.scandir
+
+    def tracking_scandir(path):
+        class _It:
+            def __init__(self):
+                self._inner = real_scandir(path)
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                entry = next(self._inner)
+                if os.path.basename(os.path.normpath(str(path))) == ".in_use":
+                    examined.append(entry.name)
+                return entry
+
+            def close(self):
+                self._inner.close()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                self.close()
+                return False
+
+        return _It()
+
+    monkeypatch.setattr(os, "scandir", tracking_scandir)
+    cm._stale_marker_count(in_use, fixed_now, 3600)
+    assert len(examined) <= cm.SIBLING_IN_USE_ENTRY_LIMIT
+
+
+def test_version_dir_rejects_trailing_newline_in_name(tmp_path, monkeypatch):
+    fixed_now = 6_000_006.0
+    plugin_root, parent = _sibling_install(tmp_path)
+    bad_name = "0.1\n"
+    (parent / bad_name).mkdir()
+    _mk_marker(parent / bad_name, "888105", mtime=fixed_now - 7200)
+    _dead_kill(monkeypatch)
+    assert cm.scan_stale_siblings(plugin_root, now=fixed_now) == {"dirs": [], "markers": 0}
+

@@ -6,7 +6,7 @@ import stat
 import time
 
 _PID_NAME_RE = re.compile(r"^([0-9]+)(?:\.tmp\.[0-9a-fA-F]+)?$")
-_VERSION_DIR_RE = re.compile(r"^[0-9]+(\.[0-9]+)*$")
+_VERSION_DIR_RE = re.compile(r"^[0-9]+(\.[0-9]+)*\Z")
 SIBLING_SCAN_DIR_LIMIT = 64
 SIBLING_IN_USE_ENTRY_LIMIT = 256
 _STAT = os.stat
@@ -15,53 +15,56 @@ _UNLINK = os.unlink
 
 def _stale_marker_count(in_use_path, now, grace_seconds):
     """Count provably-dead stale markers under in_use_path. Read-only; never deletes."""
+    count = 0
     try:
-        names = os.listdir(in_use_path)
+        with os.scandir(in_use_path) as it:
+            examined = 0
+            while examined < SIBLING_IN_USE_ENTRY_LIMIT:
+                try:
+                    entry = next(it)
+                except StopIteration:
+                    break
+                examined += 1
+                name = entry.name
+                try:
+                    m = _PID_NAME_RE.match(name)
+                    if not m:
+                        continue
+                    try:
+                        pid = int(m.group(1))
+                    except ValueError:
+                        continue
+                    if pid == 0:
+                        continue
+
+                    marker_path = os.path.join(in_use_path, name)
+                    st = os.stat(marker_path, follow_symlinks=False)
+                    if not stat.S_ISREG(st.st_mode):
+                        continue
+
+                    if now - st.st_mtime < grace_seconds:
+                        continue
+
+                    try:
+                        os.kill(pid, 0)
+                        continue
+                    except ProcessLookupError:
+                        pass
+                    except PermissionError:
+                        continue
+                    except OSError:
+                        continue
+
+                    count += 1
+                except Exception:
+                    continue
     except OSError:
         return 0
-    count = 0
-    examined = 0
-    for name in names:
-        if examined >= SIBLING_IN_USE_ENTRY_LIMIT:
-            break
-        examined += 1
-        try:
-            m = _PID_NAME_RE.match(name)
-            if not m:
-                continue
-            try:
-                pid = int(m.group(1))
-            except ValueError:
-                continue
-            if pid == 0:
-                continue
-
-            marker_path = os.path.join(in_use_path, name)
-            st = os.stat(marker_path, follow_symlinks=False)
-            if not stat.S_ISREG(st.st_mode):
-                continue
-
-            if now - st.st_mtime < grace_seconds:
-                continue
-
-            try:
-                os.kill(pid, 0)
-                continue
-            except ProcessLookupError:
-                pass
-            except PermissionError:
-                continue
-            except OSError:
-                continue
-
-            count += 1
-        except Exception:
-            continue
     return count
 
 
 def scan_stale_siblings(plugin_root, now=None, grace_seconds=3600):
-    """READ-ONLY sibling scan: which OLDER plugin-version dirs hold stale `.in_use`
+    """READ-ONLY sibling scan: which other plugin-version dirs hold stale `.in_use`
     markers. Deletes NOTHING — ever. Returns {"dirs": [name, ...], "markers": int}.
     NEVER raises; on any error returns the empty result."""
     empty = {"dirs": [], "markers": 0}
@@ -77,7 +80,7 @@ def scan_stale_siblings(plugin_root, now=None, grace_seconds=3600):
             return empty
 
         try:
-            entries = os.listdir(parent)
+            scandir_it = os.scandir(parent)
         except OSError:
             return empty
 
@@ -86,34 +89,38 @@ def scan_stale_siblings(plugin_root, now=None, grace_seconds=3600):
 
         dirs_with_stale = []
         total_markers = 0
-        examined_siblings = 0
 
-        for name in entries:
-            if examined_siblings >= SIBLING_SCAN_DIR_LIMIT:
-                break
-            if name == running_name:
-                continue
-            if not _VERSION_DIR_RE.match(name):
-                continue
-            sibling_path = os.path.join(parent, name)
-            if os.path.islink(sibling_path):
-                continue
-            if not os.path.isdir(sibling_path):
-                continue
-            examined_siblings += 1
+        with scandir_it:
+            examined_siblings = 0
+            while examined_siblings < SIBLING_SCAN_DIR_LIMIT:
+                try:
+                    entry = next(scandir_it)
+                except StopIteration:
+                    break
+                examined_siblings += 1
+                name = entry.name
+                if name == running_name:
+                    continue
+                if not _VERSION_DIR_RE.match(name):
+                    continue
+                sibling_path = entry.path
+                if entry.is_symlink():
+                    continue
+                if not entry.is_dir(follow_symlinks=False):
+                    continue
 
-            in_use_path = os.path.join(sibling_path, ".in_use")
-            if not os.path.exists(in_use_path):
-                continue
-            if os.path.islink(in_use_path):
-                continue
-            if not os.path.isdir(in_use_path):
-                continue
+                in_use_path = os.path.join(sibling_path, ".in_use")
+                if not os.path.exists(in_use_path):
+                    continue
+                if os.path.islink(in_use_path):
+                    continue
+                if not os.path.isdir(in_use_path):
+                    continue
 
-            n = _stale_marker_count(in_use_path, now, grace_seconds)
-            if n > 0:
-                dirs_with_stale.append(name)
-                total_markers += n
+                n = _stale_marker_count(in_use_path, now, grace_seconds)
+                if n > 0:
+                    dirs_with_stale.append(name)
+                    total_markers += n
 
         return {"dirs": sorted(dirs_with_stale), "markers": total_markers}
     except Exception:

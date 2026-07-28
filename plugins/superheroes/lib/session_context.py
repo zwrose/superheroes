@@ -6,7 +6,8 @@ Current Claude Code natively loads the project-context layer — project/user
 plain chat, headless ``-p``, and slash-command spawn (probe-verified #627 F1 on
 Claude Code 2.1.219). This module injects ONLY what the harness does not supply
 and a superheroes session uniquely needs: the resolved absolute plugin + host-tool-map
-roots, and the distilled covenant (calibrated projects only).
+roots, the distilled covenant (calibrated projects only), and a read-only plugin-cache
+hygiene nudge when sibling installs hold stale markers.
 
 The slim set depends on the harness continuing to auto-load the project layer;
 that residual dependency is watched by ``lib/harness_probe.py`` (run it on harness
@@ -20,7 +21,7 @@ Design contract (see docs/superpowers/specs/2026-06-21-discovery-entry-path-boot
   <reason>``) is written to **stderr** — NEVER the file contents (stderr is the
   hook log; leaking contents there would defeat the diagnosable-not-leaky bar).
 - **Budget.** ``assemble`` keeps the block under ``char_budget`` as belt-and-suspenders
-  (with only two small records this no longer triggers at normal size; the loop
+  (with three small records this no longer triggers at normal size; the loop
   remains so truncated/omitted sources are never silently indistinguishable from
   absent files). A present source dropped by the budget is named in an in-block
   omitted-line AND breadcrumbed.
@@ -134,7 +135,7 @@ _NUDGE_TAIL = (
 
 
 def cache_hygiene(plugin_root):
-    """One-line advisor nudge when OLDER plugin-version dirs hold stale `.in_use`
+    """One-line advisor nudge when other plugin-version dirs hold stale `.in_use`
     markers. READ-ONLY — reports, never deletes. '' when nothing is stale (a clean
     bootstrap stays byte-identical to before)."""
     try:
@@ -147,11 +148,27 @@ def cache_hygiene(plugin_root):
 
         n_dirs = len(dirs)
         count_part = ": %d stale marker(s)" % markers
-        head = "Stale plugin-cache markers found in %d older version dir(s) (" % n_dirs
+        head = "Stale plugin-cache markers found in %d other version dir(s) (" % n_dirs
 
         def render(dir_list):
             inner = ", ".join(dir_list)
             return head + inner + ")" + count_part + _NUDGE_TAIL
+
+        def _fit_single_dir_name(name, extra_inner=""):
+            """Shrink ``name`` so render([name + extra_inner]) fits; never truncate the tail."""
+            if not name:
+                return name
+            if len(render([name + extra_inner])) <= _NUDGE_MAX_CHARS:
+                return name + extra_inner
+            fixed = len(head) + len(")") + len(count_part) + len(_NUDGE_TAIL)
+            inner_budget = _NUDGE_MAX_CHARS - fixed - len(extra_inner)
+            if inner_budget < 1:
+                return ("…" + extra_inner) if extra_inner else "…"
+            if len(name) <= inner_budget:
+                return name + extra_inner
+            if inner_budget == 1:
+                return "…" + extra_inner
+            return name[: inner_budget - 1] + "…" + extra_inner
 
         line = render(dirs)
         if len(line) <= _NUDGE_MAX_CHARS:
@@ -170,11 +187,8 @@ def cache_hygiene(plugin_root):
 
         hidden = n_dirs - 1
         suffix_label = ", +%d more" % hidden if hidden > 0 else ""
-        dir_list = [shown[0] + suffix_label] if shown else ["+%d more" % n_dirs]
-        candidate = render(dir_list)
-        if len(candidate) <= _NUDGE_MAX_CHARS:
-            return candidate
-        return candidate[:_NUDGE_MAX_CHARS].rstrip()
+        sole = _fit_single_dir_name(shown[0], suffix_label) if shown else "+%d more" % n_dirs
+        return render([sole])
     except Exception as exc:
         _breadcrumb("Plugin cache hygiene", type(exc).__name__)
         return ""

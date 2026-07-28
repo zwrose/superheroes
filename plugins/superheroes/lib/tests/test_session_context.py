@@ -3,11 +3,13 @@
 
 The assembler is best-effort: every source is gathered independently, a failed/
 absent source is omitted with a one-line stderr breadcrumb (never the file
-contents), and it must never raise. These tests pin the slim two-record injection
-set (resolved roots + covenant), the breadcrumb-but-not-leaky guard, and the
-budget-omit accounting (C2).
+contents), and it must never raise. These tests pin the three-record injection
+set (resolved roots, cache hygiene nudge, covenant), the breadcrumb-but-not-leaky
+guard, and the budget-omit accounting (C2).
 """
 import os
+import re
+import time
 
 import session_context as sc
 
@@ -276,3 +278,44 @@ def test_cache_hygiene_truncates_many_dirs_within_max_chars(monkeypatch):
     assert len(line) <= sc._NUDGE_MAX_CHARS
     assert line.endswith("advisor: propose a manual review/cleanup with the owner.")
     assert "99 stale marker" in line
+    assert re.search(r"\+\d+ more", line)
+    assert "0.0.0" in line
+
+
+def test_cache_hygiene_single_very_long_version_dir_name(tmp_path, monkeypatch):
+    long_name = "0." + ("9" * 250) + ".0"
+    assert len(long_name) >= 200
+    plugin_root = str(tmp_path / "0.1.0")
+    os.makedirs(plugin_root, exist_ok=True)
+    parent = tmp_path
+    sibling = parent / long_name
+    sibling.mkdir()
+    in_use = sibling / ".in_use"
+    in_use.mkdir()
+    marker = in_use / "424242"
+    marker.write_text("")
+    old = time.time() - 7200
+    os.utime(marker, (old, old))
+
+    def kill(pid, sig):
+        raise ProcessLookupError()
+
+    monkeypatch.setattr(os, "kill", kill)
+    line = sc.cache_hygiene(plugin_root)
+    assert line
+    assert len(line) <= sc._NUDGE_MAX_CHARS
+    assert line.endswith("advisor: propose a manual review/cleanup with the owner.")
+    assert "1 stale marker" in line
+
+
+def test_cache_hygiene_passes_plugin_root_to_scan_stale_siblings(monkeypatch):
+    seen = []
+
+    def spy(plugin_root, now=None, grace_seconds=3600):
+        seen.append(plugin_root)
+        return {"dirs": [], "markers": 0}
+
+    monkeypatch.setattr("cache_markers.scan_stale_siblings", spy)
+    root = "/abs/plugin/root"
+    assert sc.cache_hygiene(root) == ""
+    assert seen == [root]

@@ -474,7 +474,8 @@ def test_destroy_returns_false_when_rmtree_fails(tmp_path, monkeypatch):
 
 
 def test_destroy_refuses_non_view_basename(tmp_path):
-    d = tmp_path / "not-a-sanitized-view"
+    base = tmp_path / "sanitized-temp-base"
+    d = base / "not-a-sanitized-view"
     d.mkdir()
     marker = d / "keep.txt"
     marker.write_text("stay\n", encoding="utf-8")
@@ -502,6 +503,20 @@ def test_destroy_refuses_tempbase_itself_even_when_prefixed(tmp_path, monkeypatc
     marker.write_text("stay\n", encoding="utf-8")
     monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: str(prefixed_tmp))
     assert sv.destroy_sanitized_view(str(prefixed_tmp)) is False
+    assert prefixed_tmp.is_dir()
+    assert marker.is_file()
+
+
+def test_destroy_refuses_tempbase_itself_case_variant_path(tmp_path, monkeypatch):
+    parent = tmp_path / "Outer"
+    parent.mkdir()
+    prefixed_tmp = parent / (sv.SANITIZED_VIEW_DIR_PREFIX + "base")
+    prefixed_tmp.mkdir()
+    marker = prefixed_tmp / "keep.txt"
+    marker.write_text("stay\n", encoding="utf-8")
+    variant = str(prefixed_tmp).replace("Outer", "OUTER")
+    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: str(prefixed_tmp))
+    assert sv.destroy_sanitized_view(variant) is False
     assert prefixed_tmp.is_dir()
     assert marker.is_file()
 

@@ -659,19 +659,17 @@ def test_parse_result_subcommand_help_warns_echo_gap(capsys):
     with pytest.raises(SystemExit):
         EA.main(["parse-result", "--help"])
     text = capsys.readouterr().out
-    assert "never sees" in text.lower() or "does not" in text.lower()
-    assert "echo" in text.lower() or "strip" in text.lower()
-    assert "unverified" in text.lower()
+    assert "never sees the dispatched prompt" in text.lower()
+    assert "empty findings" in text.lower() and "unverified" in text.lower()
 
 
 def test_parse_result_echo_gap_is_stated_in_auto_fix_loop_reference():
     ref = os.path.join(_HERE, "..", "..", "skills", "review-code", "reference", "auto-fix-loop.md")
     with open(ref, encoding="utf-8") as fh:
         text = fh.read()
-    assert "empty-findings" in text.lower() or "empty-findings result" in text.lower()
-    assert "unverified" in text.lower()
-    assert "--prompt-path" in text
-    assert "deliberately not built" in text.lower() or "named consumer" in text.lower()
+    assert "empty-findings result from that path is" in text.lower()
+    assert "deliberately not built" in text.lower()
+    assert "parses raw stdout first" in text.lower()
 
 
 # ---------------------------------------------------------------------------
