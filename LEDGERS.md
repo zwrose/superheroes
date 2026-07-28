@@ -17,7 +17,7 @@ still diverge, and the trigger that reopens the decision. Upstream requests are 
 never duplicated — corroborate on the existing thread.
 
 The v2 pivot (see [ROADMAP.md](ROADMAP.md); PR #478) retired the deterministic
-execution spine, and with it the four divergences this ledger tracked — recorded in §1.2
+execution spine, and with it the four spine divergences this ledger tracked — recorded in §1.2
 below as B6 requires (a divergence that retires leaves its record, not a blank). No
 maintained spine divergence remains. A new, non-spine divergence is now maintained: the
 restored owner-authority gate (issue #482, §1.1 below) — a minimal PreToolUse hook,
