@@ -1219,7 +1219,7 @@ def test_unexcused_critical_diversity_claude_codex_is_excused():
     assert SM.unexcused_violations(receipt) == []
 
 
-def test_unexcused_critical_diversity_pinned_critical_seats_unexcused():
+def test_unexcused_critical_diversity_pinned_critical_seats_excused_by_pin():
     pins = {
         "code-reviewer": {"vendor": "claude"},
         "security-reviewer": {"vendor": "claude"},
@@ -1228,8 +1228,11 @@ def test_unexcused_critical_diversity_pinned_critical_seats_unexcused():
     m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0, pins=pins)
     receipt = SM.to_receipt(m, "xai")
     assert any(v.get("constraint") == "critical-diversity" for v in receipt["violations"])
-    unexcused = SM.unexcused_violations(receipt)
-    assert any(v.get("constraint") == "critical-diversity" for v in unexcused)
+    classified = SM.classify_violations(receipt)
+    assert SM.unexcused_violations(receipt) == []
+    assert any(
+        r.get("constraint") == "critical-diversity" for r in classified["excusedByPin"]
+    )
 
 
 def test_unexcused_e1_unrecognised_constraint_never_excused():
@@ -1258,7 +1261,9 @@ def test_unexcused_e3_non_list_degradations():
         "degradations": "not-a-list",
         "violations": [{"constraint": "critical-diversity"}],
     }
-    assert SM.unexcused_violations(receipt) == [{"constraint": "critical-diversity"}]
+    assert SM.unexcused_violations(receipt) == [
+        {"constraint": "critical-diversity", "evidence": "unproven-liveness"},
+    ]
 
 
 def test_unexcused_e4_seatless_degradation_does_not_excuse_per_seat():
@@ -1268,10 +1273,12 @@ def test_unexcused_e4_seatless_degradation_does_not_excuse_per_seat():
         "violations": [{"constraint": "strong-tier", "seat": "security-reviewer"}],
     }
     unexcused = SM.unexcused_violations(receipt)
-    assert unexcused == [{"constraint": "strong-tier", "seat": "security-reviewer"}]
+    assert unexcused == [
+        {"constraint": "strong-tier", "seat": "security-reviewer", "evidence": "unproven-liveness"},
+    ]
 
 
-def test_unexcused_e5_pinned_seat_blocks_strong_tier_excusal():
+def test_unexcused_e5_pinned_seat_excuses_strong_tier_via_pin():
     seats = _full_seats_template()
     seats["architecture-reviewer"] = {
         "vendor": "claude",
@@ -1285,13 +1292,21 @@ def test_unexcused_e5_pinned_seat_blocks_strong_tier_excusal():
         "seats": seats,
         "liveVendors": list(THREE_VENDORS),
         "livenessPinScoped": False,
+        "authorFamily": "xai",
         "degradations": [
             {"constraint": "strong-tier", "seat": "architecture-reviewer"},
         ],
         "violations": [{"constraint": "strong-tier", "seat": "architecture-reviewer"}],
     }
-    unexcused = SM.unexcused_violations(receipt)
-    assert unexcused == [{"constraint": "strong-tier", "seat": "architecture-reviewer"}]
+    classified = SM.classify_violations(receipt)
+    assert SM.unexcused_violations(receipt) == []
+    assert classified["excusedByPin"] == [
+        {
+            "constraint": "strong-tier",
+            "seat": "architecture-reviewer",
+            "excusedSeats": ["architecture-reviewer"],
+        },
+    ]
 
 
 def test_unexcused_empty_or_missing_seats_fail_closed():
@@ -1322,7 +1337,7 @@ def test_unexcused_critical_diversity_missing_author_family_fail_closed():
         "degradations": [{"constraint": "critical-diversity"}],
         "violations": [{"constraint": "critical-diversity"}],
     }
-    breach = [{"constraint": "critical-diversity"}]
+    breach = [{"constraint": "critical-diversity", "evidence": "unproven-liveness"}]
 
     for author in (None, "", 42):
         receipt = dict(base)
@@ -1337,7 +1352,9 @@ def test_unexcused_critical_diversity_missing_author_family_fail_closed():
     assert SM.unexcused_violations(absent) == breach
 
     xai_receipt = dict(base, authorFamily="xai")
-    assert SM.unexcused_violations(xai_receipt) == breach
+    assert SM.unexcused_violations(xai_receipt) == [
+        {"constraint": "critical-diversity", "evidence": "alternative-live"},
+    ]
 
 
 @pytest.mark.parametrize(
@@ -1363,7 +1380,7 @@ def test_unexcused_critical_diversity_availability_not_pin_presence(live, maker,
     if excused:
         assert unexcused == []
     else:
-        assert unexcused == [{"constraint": "critical-diversity"}]
+        assert unexcused == [{"constraint": "critical-diversity", "evidence": "alternative-live"}]
 
 
 def test_unexcused_strong_tier_excused_when_reviewer_deep_unavailable(monkeypatch):
@@ -1386,8 +1403,9 @@ def test_unexcused_strong_tier_excused_when_reviewer_deep_unavailable(monkeypatc
     }
     receipt = {
         "seats": seats,
-        "liveVendors": list(THREE_VENDORS),
+        "liveVendors": ["cursor"],
         "livenessPinScoped": False,
+        "authorFamily": "xai",
         "degradations": [{"constraint": "strong-tier", "seat": "architecture-reviewer"}],
         "violations": [{"constraint": "strong-tier", "seat": "architecture-reviewer"}],
     }
@@ -1404,11 +1422,18 @@ def test_unexcused_strong_tier_build_degradation_seat_field_load_bearing(monkeyp
         return _real_matrix(tier, vendor)
 
     monkeypatch.setattr(SM, "matrix_config", _no_reviewer_deep)
-    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0, liveness_pin_scoped=False)
+    m = SM.build(SM.PANEL_ROSTER, ["cursor"], "xai", "anthropic", 0, liveness_pin_scoped=False)
     receipt = SM.to_receipt(m, "xai")
     strong_violations = [v for v in receipt["violations"] if v.get("constraint") == "strong-tier"]
     assert strong_violations
-    assert SM.unexcused_violations(receipt) == []
+    classified = SM.classify_violations(receipt)
+    assert all(
+        any(
+            x.get("constraint") == "strong-tier" and x.get("seat") == v.get("seat")
+            for x in classified["excusedByLiveness"]
+        )
+        for v in strong_violations
+    )
 
 
 def test_unexcused_malformed_violation_field_types_do_not_raise():
@@ -1427,4 +1452,83 @@ def test_unexcused_malformed_violation_field_types_do_not_raise():
     unexcused = SM.unexcused_violations(receipt)
     assert {"constraint": "malformed-violation-record"} in unexcused
     assert {"constraint": "maker-family", "seat": 5} in unexcused
-    assert unexcused.count({"constraint": "critical-diversity"}) == 2
+    assert sum(1 for u in unexcused if u.get("constraint") == "critical-diversity") == 2
+    assert all(
+        u.get("evidence") == "unproven-liveness"
+        for u in unexcused
+        if u.get("constraint") == "critical-diversity"
+    )
+
+
+def test_verify_critical_seat_missing_family_key_does_not_raise():
+    seats = _full_seats_template()
+    seats["code-reviewer"] = {"vendor": "claude", "tier": "reviewer-deep"}
+    seats["security-reviewer"] = {
+        "vendor": "claude",
+        "tier": "reviewer-deep",
+        "family": "anthropic",
+    }
+    seats["premortem-reviewer"] = {
+        "vendor": "claude",
+        "tier": "reviewer-deep",
+        "family": "anthropic",
+    }
+    violations = SM.verify({"seats": seats}, "anthropic")
+    assert any(v.get("constraint") == "critical-diversity" for v in violations)
+
+
+def test_classify_unproven_liveness_liveness_pin_scoped_absent():
+    receipt = {
+        "seats": _full_seats_template(),
+        "liveVendors": list(THREE_VENDORS),
+        "authorFamily": "anthropic",
+        "violations": [{"constraint": "critical-diversity"}],
+    }
+    unexcused = SM.unexcused_violations(receipt)
+    assert unexcused == [
+        {"constraint": "critical-diversity", "evidence": "unproven-liveness"},
+    ]
+
+
+def test_classify_unproven_liveness_preflight_cache_only_degradation():
+    receipt = {
+        "seats": _full_seats_template(),
+        "liveVendors": list(THREE_VENDORS),
+        "livenessPinScoped": False,
+        "authorFamily": "anthropic",
+        "degradations": [{"constraint": "preflight-cache-only"}],
+        "violations": [{"constraint": "critical-diversity"}],
+    }
+    unexcused = SM.unexcused_violations(receipt)
+    assert unexcused == [
+        {"constraint": "critical-diversity", "evidence": "unproven-liveness"},
+    ]
+
+
+def test_classify_truthy_non_list_degradations_do_not_raise():
+    receipt = {
+        "seats": _full_seats_template(),
+        "liveVendors": list(THREE_VENDORS),
+        "livenessPinScoped": False,
+        "authorFamily": "anthropic",
+        "degradations": 42,
+        "violations": [{"constraint": "critical-diversity"}],
+    }
+    SM.unexcused_violations(receipt)
+
+
+def test_classify_pin_excuses_critical_diversity_collapsed_seats():
+    seats = _full_seats_template()
+    for s in SM.CRITICAL_SEATS:
+        seats[s] = dict(seats[s])
+        seats[s]["source"] = "pinned"
+    receipt = {
+        "seats": seats,
+        "liveVendors": list(THREE_VENDORS),
+        "livenessPinScoped": False,
+        "authorFamily": "xai",
+        "violations": [{"constraint": "critical-diversity"}],
+    }
+    classified = SM.classify_violations(receipt)
+    assert classified["excusedByPin"]
+    assert SM.unexcused_violations(receipt) == []

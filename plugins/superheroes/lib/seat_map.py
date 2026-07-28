@@ -42,6 +42,10 @@ UNPROVEN_LIVENESS_CONSTRAINTS = frozenset({
 DEFAULT_TIER_BY_SEAT = {s: "reviewer-deep" for s in LENS_SEATS}
 DEFAULT_TIER_BY_SEAT[GROUNDING_SEAT] = "reviewer"
 
+ALT_LIVE = "alternative-live"
+ALT_NONE = "no-alternative-live"
+ALT_UNUSABLE = "evidence-unusable"
+
 
 def _same_family_record(seat: str, family: str) -> dict:
     """The disclosed-degradation record for a seat that had to take the maker's own family because no
@@ -61,33 +65,29 @@ def _seat_tier(seat: str, cfg: dict) -> str:
     return DEFAULT_TIER_BY_SEAT.get(seat, "reviewer")
 
 
-def _alternative_family_live(seat_map: dict, seat: str, cfg: dict, author_family: str) -> bool:
-    """Could some live vendor have seated THIS seat at a family other than the maker's?
-
-    FAIL-CLOSED: this answers "is the alternative *disproved*", so every form of unusable evidence
-    returns True — i.e. an unexplained maker-family seat reads as a VIOLATION, never as an excused
-    degradation on silence. Only a well-formed, registry-resolvable receipt can authorize the
-    degradation branch.
-    """
+def _alternative_family_evidence(
+    seat_map: dict, seat: str, cfg: dict, author_family: str,
+) -> str:
+    """Per-seat tri-state: proved no alternative, proved alternative live, or evidence unusable."""
+    if not isinstance(author_family, str) or not author_family:
+        return ALT_UNUSABLE
     pin_scoped = seat_map.get("livenessPinScoped")
     if pin_scoped is not False:
-        # True (pin-scoped probe never tried the alternatives) or ABSENT (a replayed / hand-built map
-        # that carries no provenance at all) — neither can disprove an alternative family (#670 review).
-        return True
-    for deg in seat_map.get("degradations") or []:
+        return ALT_UNUSABLE
+    raw_degs = seat_map.get("degradations")
+    degradations = raw_degs if isinstance(raw_degs, list) else []
+    for deg in degradations:
         if isinstance(deg, dict) and deg.get("constraint") in UNPROVEN_LIVENESS_CONSTRAINTS:
-            return True
+            return ALT_UNUSABLE
     live = seat_map.get("liveVendors")
     if not isinstance(live, list) or not live:
-        return True
+        return ALT_UNUSABLE
     tier = _seat_tier(seat, cfg)
     resolved_any = False
     known_vendors = set(vendors())
     for vendor in live:
         if not isinstance(vendor, str) or not vendor or vendor not in known_vendors:
-            # a malformed OR unregistered entry makes the whole set untrustworthy — an unknown
-            # vendor name cannot be shown NOT to have been an alternative family (#670 review).
-            return True
+            return ALT_UNUSABLE
         cell = matrix_config(tier, vendor)
         if cell is None:
             continue
@@ -97,74 +97,89 @@ def _alternative_family_live(seat_map: dict, seat: str, cfg: dict, author_family
             continue
         resolved_any = True
         if fam != author_family:
-            return True
+            return ALT_LIVE
     if not resolved_any:
-        # #670 finding 6: an unknown/unresolvable tier or vendor set proves nothing.
-        return True
-    return False
+        return ALT_UNUSABLE
+    return ALT_NONE
 
 
-def _liveness_provenance_usable(seat_map: dict) -> bool:
-    """True only when liveVendors carries probed, registry-resolvable liveness (#680 FIX 2)."""
+def _alternative_family_live(seat_map: dict, seat: str, cfg: dict, author_family: str) -> bool:
+    """Could some live vendor have seated THIS seat at a family other than the maker's?
+
+    FAIL-CLOSED: this answers "is the alternative *disproved*", so every form of unusable evidence
+    returns True — i.e. an unexplained maker-family seat reads as a VIOLATION, never as an excused
+    degradation on silence. Only a well-formed, registry-resolvable receipt can authorize the
+    degradation branch.
+    """
+    return _alternative_family_evidence(seat_map, seat, cfg, author_family) != ALT_NONE
+
+
+def _critical_families(seats: dict) -> set[str]:
+    """The distinct families across the seated CRITICAL_SEATS — verify()'s own counting rule, in one
+    place so the excusal predicate cannot diverge from it (#680 R-A)."""
+    return {
+        fam
+        for s in CRITICAL_SEATS
+        if s in seats
+        for fam in [seats[s].get("family") if isinstance(seats.get(s), dict) else None]
+        if isinstance(fam, str) and fam
+    }
+
+
+def _liveness_inputs_unusable(seat_map: dict) -> bool:
+    """Map-level liveness inputs that make any excusal-by-liveness claim unprovable."""
     pin_scoped = seat_map.get("livenessPinScoped")
     if pin_scoped is not False:
-        return False
-    for deg in seat_map.get("degradations") or []:
+        return True
+    raw_degs = seat_map.get("degradations")
+    degradations = raw_degs if isinstance(raw_degs, list) else []
+    for deg in degradations:
         if isinstance(deg, dict) and deg.get("constraint") in UNPROVEN_LIVENESS_CONSTRAINTS:
-            return False
+            return True
     live = seat_map.get("liveVendors")
     if not isinstance(live, list) or not live:
-        return False
-    known_vendors = set(vendors())
-    for vendor in live:
-        if not isinstance(vendor, str) or not vendor or vendor not in known_vendors:
-            return False
-    return True
-
-
-def _alternative_families_at_tier(seat_map: dict, tier: str) -> set[str]:
-    """Registry families reachable from liveVendors at tier, excluding the maker family."""
+        return True
     author_family = seat_map.get("authorFamily")
     if not isinstance(author_family, str) or not author_family:
-        return set()
-    live = seat_map.get("liveVendors")
-    if not isinstance(live, list) or not live:
-        return set()
-    known_vendors = set(vendors())
-    families: set[str] = set()
-    for vendor in live:
-        if not isinstance(vendor, str) or not vendor or vendor not in known_vendors:
-            return set()
-        cell = matrix_config(tier, vendor)
-        if cell is None:
-            continue
-        model, effort = cell
-        fam = family_for(tier, vendor)
-        if fam is None or not is_allowed(tier, vendor, model, effort):
-            continue
-        if fam != author_family:
-            families.add(fam)
-    return families
-
-
-def _any_live_vendor_at_tier(seat_map: dict, tier: str) -> bool:
-    """True when some registered live vendor resolves at tier (same bar as _alternative_family_live)."""
-    live = seat_map.get("liveVendors")
-    if not isinstance(live, list) or not live:
-        return False
+        return True
     known_vendors = set(vendors())
     for vendor in live:
         if not isinstance(vendor, str) or not vendor or vendor not in known_vendors:
             return True
-        cell = matrix_config(tier, vendor)
-        if cell is None:
-            continue
-        model, effort = cell
-        fam = family_for(tier, vendor)
-        if fam is None or not is_allowed(tier, vendor, model, effort):
-            continue
-        return True
     return False
+
+
+def _non_maker_families_reachable_at_collapsed(
+    seat_map: dict, collapsed: list[str], seats: dict,
+) -> set[str] | None:
+    """Non-maker families any collapsed seat could have taken at its own tier — verify()'s old
+    critical-diversity availability bar without a hardcoded tier (#680 R-A, A8)."""
+    if _liveness_inputs_unusable(seat_map):
+        return None
+    author_family = seat_map.get("authorFamily")
+    assert isinstance(author_family, str)
+    live = seat_map.get("liveVendors")
+    assert isinstance(live, list)
+    known_vendors = set(vendors())
+    families: set[str] = set()
+    for cs in collapsed:
+        cfg = seats.get(cs)
+        if not isinstance(cfg, dict):
+            return None
+        tier = _seat_tier(cs, cfg)
+        for vendor in live:
+            if not isinstance(vendor, str) or not vendor or vendor not in known_vendors:
+                return None
+            cell = matrix_config(tier, vendor)
+            if cell is None:
+                continue
+            model, effort = cell
+            fam = family_for(tier, vendor)
+            if fam is None or not is_allowed(tier, vendor, model, effort):
+                continue
+            if fam != author_family:
+                families.add(fam)
+    return families
 
 
 def same_family_degradations(seat_map: dict, author_family: str | None) -> list[dict]:
@@ -628,23 +643,24 @@ def build(
 EXCUSABLE_RELAXATIONS = frozenset({"strong-tier", "critical-diversity"})
 
 
-def unexcused_violations(seat_map: dict) -> list[dict]:
-    """The violations a seat-map receipt carries that its OWN degradation channel does not excuse —
-    i.e. constraint BREACHES, as opposed to disclosed fallbacks (#680)."""
+def classify_violations(seat_map: dict) -> dict:
+    """{'unexcused': [...], 'excusedByPin': [...], 'excusedByLiveness': [...]} (#680 R-A/R-B)."""
+    empty = {"unexcused": [], "excusedByPin": [], "excusedByLiveness": []}
     if not isinstance(seat_map, dict):
-        return []
+        return empty
     violations = seat_map.get("violations")
     if not isinstance(violations, list) or not violations:
-        return []
+        return empty
     raw_seats = seat_map.get("seats")
     seats = raw_seats if isinstance(raw_seats, dict) else {}
-    pin_evidence_available = bool(seats)
-
-    raw_degradations = seat_map.get("degradations")
-    degradations = raw_degradations if isinstance(raw_degradations, list) else []
-    provenance_ok = _liveness_provenance_usable(seat_map)
+    author_family = seat_map.get("authorFamily")
+    if not isinstance(author_family, str) or not author_family:
+        author_family = None
 
     unexcused: list[dict] = []
+    excused_by_pin: list[dict] = []
+    excused_by_liveness: list[dict] = []
+
     for v in violations:
         if not isinstance(v, dict):
             unexcused.append({"constraint": "malformed-violation-record"})
@@ -657,40 +673,77 @@ def unexcused_violations(seat_map: dict) -> list[dict]:
         if constraint not in EXCUSABLE_RELAXATIONS:
             unexcused.append(v)
             continue
-        if not provenance_ok or not pin_evidence_available:
-            unexcused.append(v)
-            continue
+
         if constraint == "strong-tier":
-            seat_cfg = seats.get(seat) if isinstance(seat, str) else None
-            if isinstance(seat_cfg, dict) and seat_cfg.get("source") == "pinned":
-                unexcused.append(v)
-                continue
-            if _any_live_vendor_at_tier(seat_map, "reviewer-deep"):
-                unexcused.append(v)
-                continue
-        elif constraint == "critical-diversity":
-            # Unknown maker family: alternatives are uncomputable, not absent — never excuse.
-            author_family = seat_map.get("authorFamily")
-            if not isinstance(author_family, str) or not author_family:
-                unexcused.append(v)
-                continue
-            if len(_alternative_families_at_tier(seat_map, "reviewer-deep")) >= 2:
-                unexcused.append(v)
-                continue
-        excused = False
-        for d in degradations:
-            if not isinstance(d, dict):
-                continue
-            if d.get("constraint") == constraint and d.get("seat") == seat:
-                excused = True
-                break
-        if not excused:
-            unexcused.append(v)
+            collapsed = [seat] if isinstance(seat, str) and seat else []
+        else:
+            collapsed = [s for s in CRITICAL_SEATS if s in seats]
+
+        if not collapsed:
+            unexcused.append(dict(v))
+            continue
+
+        if constraint == "strong-tier":
+            if _liveness_inputs_unusable(seat_map):
+                liveness_proven = False
+                evidences = [ALT_UNUSABLE]
+            else:
+                cfg0 = seats.get(collapsed[0])
+                if not isinstance(cfg0, dict):
+                    evidences = [ALT_UNUSABLE]
+                else:
+                    evidences = [
+                        _alternative_family_evidence(
+                            seat_map, collapsed[0], cfg0, author_family or "",
+                        ),
+                    ]
+                liveness_proven = evidences[0] == ALT_NONE
+        else:
+            reachable = _non_maker_families_reachable_at_collapsed(seat_map, collapsed, seats)
+            if reachable is None:
+                liveness_proven = False
+                evidences = [ALT_UNUSABLE]
+            else:
+                liveness_proven = len(reachable) < 2
+                evidences = [ALT_LIVE if len(reachable) >= 2 else ALT_NONE]
+
+        if liveness_proven:
+            excused_by_liveness.append(dict(v))
+            continue
+
+        pinned_seats = [
+            cs for cs in collapsed
+            if isinstance(seats.get(cs), dict) and seats[cs].get("source") == "pinned"
+        ]
+        if pinned_seats:
+            rec = dict(v)
+            rec["excusedSeats"] = sorted(pinned_seats)
+            excused_by_pin.append(rec)
+            continue
+
+        if any(e == ALT_UNUSABLE for e in evidences):
+            stamped = dict(v)
+            stamped["evidence"] = "unproven-liveness"
+            unexcused.append(stamped)
+            continue
+
+        stamped = dict(v)
+        stamped["evidence"] = "alternative-live"
+        unexcused.append(stamped)
 
     unexcused.sort(
         key=lambda item: (str(item.get("constraint", "")), str(item.get("seat") or "")),
     )
-    return unexcused
+    return {
+        "unexcused": unexcused,
+        "excusedByPin": excused_by_pin,
+        "excusedByLiveness": excused_by_liveness,
+    }
+
+
+def unexcused_violations(seat_map: dict) -> list[dict]:
+    """Back-compat thin wrapper — the violations that STAND."""
+    return classify_violations(seat_map)["unexcused"]
 
 
 def verify(seat_map: dict, author_family: str | None) -> list[dict]:
@@ -720,11 +773,7 @@ def verify(seat_map: dict, author_family: str | None) -> list[dict]:
         if seat in seats and seats[seat].get("tier") != "reviewer-deep":
             violations.append({"seat": seat, "constraint": "strong-tier"})
 
-    critical_families = {
-        seats[s]["family"]
-        for s in CRITICAL_SEATS
-        if s in seats
-    }
+    critical_families = _critical_families(seats)
     if len(critical_families) < 2:
         violations.append({"constraint": "critical-diversity"})
 

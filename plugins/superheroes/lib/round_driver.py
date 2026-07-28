@@ -63,6 +63,7 @@ import verification  # noqa: E402
 from finding_identity import finding_identity, normalize_title  # noqa: E402
 
 _seat_map_unexcused_violations = seat_map.unexcused_violations
+_seat_map_classify_violations = seat_map.classify_violations
 
 # --- constants (the DIMENSIONS/AGENT_SUFFIX home, moved off the retired code_loop_plan) --------
 # The code leg is the FIVE shared reviewers. `grounding-reviewer` is spec-leg-only (doc
@@ -477,6 +478,34 @@ def _seat_map_violated(state):
     return bool(_seat_map_violations(state))
 
 
+def _seat_pin_excused(state):
+    sm = state.get("seatMap")
+    if not isinstance(sm, dict):
+        return False
+    return bool(_seat_map_classify_violations(sm).get("excusedByPin"))
+
+
+def _seat_pin_excused_seats(state):
+    sm = state.get("seatMap")
+    if not isinstance(sm, dict):
+        return []
+    seats: set[str] = set()
+    for rec in _seat_map_classify_violations(sm).get("excusedByPin") or []:
+        if not isinstance(rec, dict):
+            continue
+        for s in rec.get("excusedSeats") or []:
+            if isinstance(s, str) and s:
+                seats.add(s)
+    return sorted(seats)
+
+
+def _seat_map_unproven_liveness(state):
+    for v in _seat_map_violations(state):
+        if isinstance(v, dict) and v.get("evidence") == "unproven-liveness":
+            return True
+    return False
+
+
 def _certification_base(state):
     """Tri-state base provenance for certification — never infer fetched from absence."""
     if _base_degraded(state):
@@ -490,7 +519,12 @@ def _certification_base(state):
 def _cert_shape(state, base):
     if _seat_map_violated(state):
         return base + "-constraint-violated"
-    if _degraded(state) or _base_degraded(state) or _same_family_degraded(state):
+    if (
+        _degraded(state)
+        or _base_degraded(state)
+        or _same_family_degraded(state)
+        or _seat_pin_excused(state)
+    ):
         return base + "-degraded"
     return base
 
@@ -2069,8 +2103,12 @@ def _terminal_converged(state, config, full_panel, note=None):
         shape_drivers.append("base")
     if _same_family_degraded(state):
         shape_drivers.append("same-family")
+    if _seat_pin_excused(state):
+        shape_drivers.append("seat-pin")
     if _seat_map_violated(state):
         shape_drivers.append("seat-map-violation")
+    if _seat_map_unproven_liveness(state):
+        shape_drivers.append("unproven-liveness")
     state["terminal"] = "converged"
     cert = {"shape": shape, "fullPanel": bool(full_panel),
             "independence": "degraded" if _degraded(state) else "independent",
@@ -2152,6 +2190,11 @@ def build_receipt(state, session_dir=None):
             "panel independence: seat(s) %s were filled with the MAKER's own model family — no "
             "alternative family was live; disclosed by the seat map and named in the certification "
             "shape" % ", ".join(_same_family_seats(state)))
+    _pin_seats = _seat_pin_excused_seats(state)
+    if _pin_seats:
+        degraded.append(
+            "seat-map pin excusal: seat(s) %s authorized a disclosed constraint relaxation via pin; "
+            "named in the certification shape" % ", ".join(_pin_seats))
     if _seat_map_violated(state):
         _viol_parts = []
         for v in _seat_map_violations(state):

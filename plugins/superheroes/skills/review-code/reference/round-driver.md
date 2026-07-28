@@ -188,7 +188,8 @@ copy). Any fault → the CLI answers `{"ok": false, "reason": "receipt-fault", "
 - `certificationShape` — e.g. `full-panel-confirmed`, `audited-chain`, or `*-degraded` variants
 - `certification` — full block (`shape`, `fullPanel`, `independence`, `base` — `fetched` |
   `degraded` | `not-checked`, optional `note`/`reason`, `shapeDrivers` — sorted channel names that
-  fired for the certification shape)
+  fired for the certification shape (`independence`, `base`, `same-family`, `seat-map-violation`,
+  `unproven-liveness`, `seat-pin`))
 - `rounds` — per-round `kind`, `seatStatus`, `blockingCount`, `verifyResult`, `audits`, `auditProvenance` (`collection-manifest` when the round ran fix audits — the manifest-keyed provenance boundary, visible at vet), `fellOpen`, `fellOpenProvenanceMissing`, `seatMapUnavailable`, `seatMapViolations`, `vacuousSeats`, `canaryUnverified`, `canaryFailed`, `canaryVerified`, `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice`
 - `findings`, `decisions`, `seatMap`, `scriptRan`, `degraded` (disclosure list)
 
@@ -200,6 +201,7 @@ copy). Any fault → the CLI answers `{"ok": false, "reason": "receipt-fault", "
 | `fellOpenProvenanceMissing` | A cross-vendor seat ran but has no trusted `ranManifest` entry. | `reviewer-fell-open-provenance-unavailable (round N): …` |
 | `seatMapUnavailable` | Live cross-vendor vendor(s) ran but no `seatMap` was submitted. | `reviewer-fell-open-seatmap-unavailable (round N): …` |
 | `seatMapViolations` | The submitted seat map carries constraint violation(s) not excused by its own degradation channel (#680). | `seat-map constraint breach: …` (terminal `degraded` list; also recorded per round) |
+| *(pin excusal)* | A standing excusable violation was excused because a collapsed seat was owner-pinned (`classify_violations` → `excusedByPin`). | `seat-map pin excusal: seat(s) …` (terminal `degraded`; `shapeDrivers` includes `seat-pin` and certification shape uses `-degraded`, not a third suffix) |
 | `vacuousSeats` | Seat dict has `vacuous: true` or `reason: "vacuous"` (empty findings with no verifiable investigation record). The seat folds as `missing` in `seatStatus` — it cannot anchor a `full-panel-confirmed` certification. | `vacuous-seat (round N): …` |
 | `canaryUnverified` | Every cross-vendor seat that ran returned zero findings and no `canaryResult` was submitted. | `canary-unverified (round N): …` |
 | `canaryFailed` | `canaryResult` was submitted but `engaged` is not true — cross-vendor seats in that panel are downgraded to `missing`. | `canary-failed (round N): …` |
