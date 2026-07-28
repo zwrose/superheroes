@@ -672,7 +672,11 @@ def _migrate_deferred_unreadable_core(cwd, root, hero, gate_cfg):
             "detail": gate_cfg.detail,
         },
     )
-    return {"action": "deferred"}
+    return {
+        "action": "deferred",
+        "reason": GATE_REASON_UNREADABLE,
+        "detail": gate_cfg.detail,
+    }
 
 
 def _facts_are_empty(rec):
@@ -724,9 +728,6 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
         return {"action": "noop"}
     legacy_present = bool(legacy) and os.path.isfile(legacy)
     gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
-    deferred = _migrate_deferred_unreadable_core(cwd, root, hero, gate_cfg)
-    if deferred:
-        return deferred
     core_present = gate_cfg.status == CONFIG_OK
     layer_present = os.path.isfile(layer_p)
     # Nothing to migrate when there is no legacy profile — the core is already established or
@@ -749,18 +750,24 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
                 # false marker never clears.
                 clear_pending(cwd, root)
             return {"action": "noop"}
+    if legacy_present:
+        deferred = _migrate_deferred_unreadable_core(cwd, root, hero, gate_cfg)
+        if deferred:
+            return deferred
     if mode_registry.ensure_project_store(cwd, root) is None:
         mark_pending(cwd, root, detail={"hero": hero, "reason": "store-unwritable"})
         return {"action": "deferred"}
     with mode_registry.config_lock(cwd, root) as got:
         if not got:
             mark_pending(cwd, root, detail={"hero": hero, "reason": "lock-contended"})
-            return {"action": "deferred"}
+            return {"action": "deferred", "reason": "lock-contended"}
         # re-read state under the lock
         gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
-        deferred = _migrate_deferred_unreadable_core(cwd, root, hero, gate_cfg)
-        if deferred:
-            return deferred
+        legacy_present = bool(legacy) and os.path.isfile(legacy)
+        if legacy_present:
+            deferred = _migrate_deferred_unreadable_core(cwd, root, hero, gate_cfg)
+            if deferred:
+                return deferred
         core_present = gate_cfg.status == CONFIG_OK
         layer_present = os.path.isfile(layer_p)
         legacy_present = bool(legacy) and os.path.isfile(legacy)
@@ -807,7 +814,7 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
                                 layer_p, _render_layer(layer_text, hero, prev_status, stamp))
                     except OSError:
                         mark_pending(cwd, root, detail={"hero": hero, "reason": "write-failed"})
-                        return {"action": "deferred"}
+                        return {"action": "deferred", "reason": "write-failed"}
                     did_work = True
                 try:
                     os.unlink(legacy)
@@ -866,7 +873,7 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
             os.unlink(legacy)
         except OSError:
             mark_pending(cwd, root, detail={"hero": hero, "reason": "write-failed"})
-            return {"action": "deferred"}
+            return {"action": "deferred", "reason": "write-failed"}
         if _in_repo_mode(cwd, root):
             repo = _repo_root(cwd)
             problem = _record_migration_commit(cwd, repo, hero, core_p, layer_p, legacy, root)

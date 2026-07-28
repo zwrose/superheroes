@@ -1965,6 +1965,20 @@ def _migrate_legacy_and_unreadable_core(repo, store, core_setup):
     return legacy, core_p, before_core
 
 
+def _pending_detail(repo, store):
+    with open(CM._pending_path(repo, store), encoding="utf-8") as fh:
+        return json.loads(fh.read())["detail"]
+
+
+def _assert_deferred_unreadable_core(res, repo, store, core_p):
+    assert res["action"] == "deferred"
+    assert res["reason"] == CM.GATE_REASON_UNREADABLE
+    assert core_p in (res.get("detail") or "")
+    marker = _pending_detail(repo, store)
+    assert marker["reason"] == CM.GATE_REASON_UNREADABLE
+    assert core_p in (marker.get("detail") or "")
+
+
 def test_migrate_deferred_invalid_utf8_preserves_core_and_legacy(tmp_path):
     repo = str(tmp_path)
     store = str(tmp_path / "store")
@@ -1977,7 +1991,7 @@ def test_migrate_deferred_invalid_utf8_preserves_core_and_legacy(tmp_path):
 
     legacy, core_p, before = _migrate_legacy_and_unreadable_core(repo, store, _setup)
     res = CM.migrate_on_read(repo, "review-crew", root=store)
-    assert res["action"] == "deferred"
+    _assert_deferred_unreadable_core(res, repo, store, core_p)
     with open(core_p, "rb") as fh:
         assert fh.read() == before
     assert os.path.exists(legacy)
@@ -2002,7 +2016,7 @@ def test_migrate_deferred_mode_zero_preserves_core_and_legacy(tmp_path):
     legacy, core_p, before = _migrate_legacy_and_unreadable_core(repo, store, _setup)
     try:
         res = CM.migrate_on_read(repo, "review-crew", root=store)
-        assert res["action"] == "deferred"
+        _assert_deferred_unreadable_core(res, repo, store, core_p)
     finally:
         os.chmod(core_p, 0o644)
     with open(core_p, "rb") as fh:
@@ -2020,9 +2034,44 @@ def test_migrate_deferred_core_directory_preserves_files(tmp_path):
 
     legacy, core_p, _ = _migrate_legacy_and_unreadable_core(repo, store, _setup)
     res = CM.migrate_on_read(repo, "review-crew", root=store)
-    assert res["action"] == "deferred"
+    _assert_deferred_unreadable_core(res, repo, store, core_p)
     assert os.path.isdir(core_p)
     assert os.path.exists(legacy)
+
+
+def test_migrate_no_legacy_unreadable_core_noops_without_pending_marker(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    core_p = _gate_core_beside(repo)
+    os.makedirs(core_p)
+    res = CM.migrate_on_read(repo, "review-crew", root=store)
+    assert res["action"] == "noop"
+    assert not os.path.isfile(CM._pending_path(repo, store))
+
+
+def test_migrate_deferred_under_lock_unreadable_reread(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    legacy = _legacy_review_path(repo)
+    open(legacy, "w").write(_REVIEW_PROFILE)
+    core_p = _gate_core_beside(repo)
+    open(core_p, "w").write(_gate_valid_core_text())
+    real_lock = CM.mode_registry.config_lock
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _corrupt_core_under_lock(cwd, root=None):
+        with real_lock(cwd, root) as got:
+            if got:
+                open(core_p, "w").write("plain prose with no json block\n")
+            yield got
+
+    monkeypatch.setattr(CM.mode_registry, "config_lock", _corrupt_core_under_lock)
+    res = CM.migrate_on_read(repo, "review-crew", root=store)
+    _assert_deferred_unreadable_core(res, repo, store, core_p)
+    assert os.path.exists(legacy)
+    with open(core_p, encoding="utf-8") as fh:
+        assert "plain prose" in fh.read()
 
 
 def test_migrate_deferred_dangling_symlink_preserves_link_and_legacy(tmp_path):
@@ -2037,6 +2086,7 @@ def test_migrate_deferred_dangling_symlink_preserves_link_and_legacy(tmp_path):
     legacy, core_p, link_target = _migrate_legacy_and_unreadable_core(repo, store, _setup)
     res = CM.migrate_on_read(repo, "review-crew", root=store)
     assert res["action"] == "deferred"
+    assert res["reason"] == CM.GATE_REASON_UNREADABLE
     assert os.path.islink(core_p)
     assert os.readlink(core_p) == link_target
     assert os.path.exists(legacy)
@@ -2054,6 +2104,7 @@ def test_migrate_deferred_corrupt_decodable_preserves_files(tmp_path):
     legacy, core_p, before = _migrate_legacy_and_unreadable_core(repo, store, _setup)
     res = CM.migrate_on_read(repo, "review-crew", root=store)
     assert res["action"] == "deferred"
+    assert res["reason"] == CM.GATE_REASON_UNREADABLE
     with open(core_p, "rb") as fh:
         assert fh.read() == before
     assert os.path.exists(legacy)
@@ -2146,6 +2197,62 @@ def test_gate_merge_both_present_global_mode_uses_global(tmp_path):
     os.makedirs(os.path.dirname(in_repo), exist_ok=True)
     os.makedirs(os.path.dirname(global_path), exist_ok=True)
     open(in_repo, "w").write(_gate_valid_core_text({"reviewer": "inrepo"}))
+    open(global_path, "w").write(_gate_valid_core_text({"reviewer": "global"}))
+    cfg = CM.engine_preferences_for_gate(cwd=repo, root=store)
+    assert cfg.status == CM.CONFIG_OK
+    assert cfg.prefs.get("reviewer") == "global"
+
+
+def test_gate_merge_mode_selected_unreadable_in_repo(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.mode_registry.write_registry(repo, CM.mode_registry.IN_REPO, None, root=store)
+    in_repo, global_path = CM._core_candidates(repo, store)
+    os.makedirs(os.path.dirname(in_repo), exist_ok=True)
+    os.makedirs(os.path.dirname(global_path), exist_ok=True)
+    os.makedirs(in_repo)
+    open(global_path, "w").write(_gate_valid_core_text({"reviewer": "global"}))
+    cfg = CM.engine_preferences_for_gate(cwd=repo, root=store)
+    assert cfg.status == CM.CONFIG_UNREADABLE
+    assert in_repo in (cfg.detail or "")
+
+
+def test_gate_merge_mode_selected_unreadable_global(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.mode_registry.write_registry(repo, CM.mode_registry.GLOBAL, None, root=store)
+    in_repo, global_path = CM._core_candidates(repo, store)
+    os.makedirs(os.path.dirname(in_repo), exist_ok=True)
+    os.makedirs(os.path.dirname(global_path), exist_ok=True)
+    open(in_repo, "w").write(_gate_valid_core_text({"reviewer": "inrepo"}))
+    os.makedirs(global_path)
+    cfg = CM.engine_preferences_for_gate(cwd=repo, root=store)
+    assert cfg.status == CM.CONFIG_UNREADABLE
+    assert global_path in (cfg.detail or "")
+
+
+def test_gate_merge_inactive_unreadable_does_not_wedge_in_repo_mode(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.mode_registry.write_registry(repo, CM.mode_registry.IN_REPO, None, root=store)
+    in_repo, global_path = CM._core_candidates(repo, store)
+    os.makedirs(os.path.dirname(in_repo), exist_ok=True)
+    os.makedirs(os.path.dirname(global_path), exist_ok=True)
+    open(in_repo, "w").write(_gate_valid_core_text({"reviewer": "inrepo"}))
+    os.symlink("/no/such/inactive-global-wo676", global_path)
+    cfg = CM.engine_preferences_for_gate(cwd=repo, root=store)
+    assert cfg.status == CM.CONFIG_OK
+    assert cfg.prefs.get("reviewer") == "inrepo"
+
+
+def test_gate_merge_inactive_unreadable_does_not_wedge_global_mode(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.mode_registry.write_registry(repo, CM.mode_registry.GLOBAL, None, root=store)
+    in_repo, global_path = CM._core_candidates(repo, store)
+    os.makedirs(os.path.dirname(in_repo), exist_ok=True)
+    os.makedirs(os.path.dirname(global_path), exist_ok=True)
+    os.makedirs(in_repo)
     open(global_path, "w").write(_gate_valid_core_text({"reviewer": "global"}))
     cfg = CM.engine_preferences_for_gate(cwd=repo, root=store)
     assert cfg.status == CM.CONFIG_OK
