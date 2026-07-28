@@ -360,3 +360,118 @@ def test_session_start_stderr_when_sweep_removes_markers(monkeypatch, capsys):
     assert mod.main() == 0
     assert capsys.readouterr().err == "superheroes: swept 2 stale .in_use marker(s)\n"
 
+
+# ---------------------------------------------------------------- scan_stale_siblings (rider 3)
+def _sibling_install(tmp_path, running="0.21.2", extra_versions=()):
+    parent = tmp_path / "plugin-cache"
+    parent.mkdir()
+    run_dir = parent / running
+    run_dir.mkdir()
+    for ver in extra_versions:
+        (parent / ver).mkdir()
+    return str(run_dir), parent
+
+
+def _dead_kill(monkeypatch):
+    def kill(pid, sig):
+        raise ProcessLookupError()
+
+    monkeypatch.setattr(os, "kill", kill)
+
+
+def test_scan_stale_siblings_reports_dead_pid_in_older_dir(tmp_path, monkeypatch):
+    fixed_now = 5_000_000.0
+    plugin_root, _parent = _sibling_install(tmp_path, extra_versions=("0.10.0", "0.21.1"))
+    _mk_marker(_parent / "0.10.0", "888001", mtime=fixed_now - 7200)
+    _mk_marker(_parent / "0.21.1", "888002", mtime=fixed_now - 7200)
+    _dead_kill(monkeypatch)
+
+    result = cm.scan_stale_siblings(plugin_root, now=fixed_now)
+    assert result == {"dirs": ["0.10.0", "0.21.1"], "markers": 2}
+
+
+def test_scan_stale_siblings_skips_live_pid_in_older_dir(tmp_path):
+    fixed_now = 5_000_001.0
+    plugin_root, parent = _sibling_install(tmp_path, extra_versions=("0.10.0",))
+    _mk_marker(parent / "0.10.0", str(os.getpid()), mtime=fixed_now - 7200)
+
+    result = cm.scan_stale_siblings(plugin_root, now=fixed_now)
+    assert result == {"dirs": [], "markers": 0}
+
+
+def test_scan_stale_siblings_skips_fresh_mtime_dead_pid(tmp_path, monkeypatch):
+    fixed_now = 5_000_002.0
+    plugin_root, parent = _sibling_install(tmp_path, extra_versions=("0.21.1",))
+    _mk_marker(parent / "0.21.1", "888003", mtime=fixed_now - 100)
+    _dead_kill(monkeypatch)
+
+    result = cm.scan_stale_siblings(plugin_root, now=fixed_now, grace_seconds=3600)
+    assert result == {"dirs": [], "markers": 0}
+
+
+def test_scan_stale_siblings_skips_malformed_and_zero_pid(tmp_path, monkeypatch):
+    fixed_now = 5_000_003.0
+    plugin_root, parent = _sibling_install(tmp_path, extra_versions=("0.10.0",))
+    _mk_marker(parent / "0.10.0", "+123", mtime=fixed_now - 7200)
+    _mk_marker(parent / "0.10.0", "0", mtime=fixed_now - 7200)
+    _dead_kill(monkeypatch)
+
+    result = cm.scan_stale_siblings(plugin_root, now=fixed_now)
+    assert result == {"dirs": [], "markers": 0}
+
+
+def test_scan_stale_siblings_excludes_running_version_dir(tmp_path, monkeypatch):
+    fixed_now = 5_000_004.0
+    plugin_root, parent = _sibling_install(tmp_path, extra_versions=("0.10.0",))
+    _mk_marker(parent / "0.21.2", "888004", mtime=fixed_now - 7200)
+    _dead_kill(monkeypatch)
+
+    result = cm.scan_stale_siblings(plugin_root, now=fixed_now)
+    assert result == {"dirs": [], "markers": 0}
+
+
+def test_scan_stale_siblings_opt_out_no_filesystem(tmp_path, monkeypatch):
+    fixed_now = 5_000_005.0
+    plugin_root, parent = _sibling_install(tmp_path, extra_versions=("0.10.0",))
+    _mk_marker(parent / "0.10.0", "888005", mtime=fixed_now - 7200)
+    _dead_kill(monkeypatch)
+    monkeypatch.setenv("SUPERHEROES_NO_CACHE_SWEEP", "1")
+
+    listdir_calls = []
+
+    real_listdir = os.listdir
+
+    def tracking_listdir(path):
+        listdir_calls.append(path)
+        return real_listdir(path)
+
+    monkeypatch.setattr(os, "listdir", tracking_listdir)
+
+    assert cm.scan_stale_siblings(plugin_root, now=fixed_now) == {"dirs": [], "markers": 0}
+    assert listdir_calls == []
+
+
+def test_scan_stale_siblings_read_only_preserves_all_markers(tmp_path, monkeypatch):
+    fixed_now = 5_000_006.0
+    plugin_root, parent = _sibling_install(tmp_path, extra_versions=("0.10.0", "0.21.1"))
+    paths = [
+        _mk_marker(parent / "0.10.0", "888006", mtime=fixed_now - 7200),
+        _mk_marker(parent / "0.21.1", "888007", mtime=fixed_now - 7200),
+    ]
+    _dead_kill(monkeypatch)
+
+    result = cm.scan_stale_siblings(plugin_root, now=fixed_now)
+    assert result["markers"] == 2
+
+    for p in paths:
+        assert os.path.isfile(p)
+    assert (parent / "0.10.0").is_dir()
+    assert (parent / "0.21.1").is_dir()
+    assert _in_use(parent / "0.10.0") and os.path.isdir(_in_use(parent / "0.10.0"))
+
+
+def test_scan_stale_siblings_clean_layout(tmp_path, monkeypatch):
+    plugin_root, parent = _sibling_install(tmp_path, extra_versions=("0.10.0",))
+    _dead_kill(monkeypatch)
+    assert cm.scan_stale_siblings(plugin_root) == {"dirs": [], "markers": 0}
+

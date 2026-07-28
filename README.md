@@ -57,7 +57,10 @@ entries under the plugin install cache as locally modified files. Those are runt
 (session markers and Python bytecode from older installed versions); they are safe to overwrite,
 and no user content lives in the plugin cache directory. SessionStart best-effort removes stale
 `.in_use` markers from the active plugin install; set `SUPERHEROES_NO_CACHE_SWEEP` to any
-non-empty value to disable that sweep.
+non-empty value to disable that sweep. SessionStart also runs a read-only scan of **older**
+installed version directories under the same cache parent: it never deletes those markers, but
+may add a one-line bootstrap note asking the advisor to propose a manual cleanup with the owner.
+`SUPERHEROES_NO_CACHE_SWEEP` suppresses that sibling scan as well.
 
 ---
 

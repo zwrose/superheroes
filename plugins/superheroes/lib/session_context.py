@@ -125,6 +125,61 @@ def covenant(cwd, plugin_root):
         return ""
 
 
+# ----------------------------------------------------------------- cache hygiene nudge
+_NUDGE_MAX_CHARS = 400
+_NUDGE_TAIL = (
+    ". Nothing was deleted — this scan is read-only. "
+    "advisor: propose a manual review/cleanup with the owner."
+)
+
+
+def cache_hygiene(plugin_root):
+    """One-line advisor nudge when OLDER plugin-version dirs hold stale `.in_use`
+    markers. READ-ONLY — reports, never deletes. '' when nothing is stale (a clean
+    bootstrap stays byte-identical to before)."""
+    try:
+        import cache_markers
+        result = cache_markers.scan_stale_siblings(plugin_root)
+        dirs = result.get("dirs") or []
+        markers = int(result.get("markers") or 0)
+        if not dirs:
+            return ""
+
+        n_dirs = len(dirs)
+        count_part = ": %d stale marker(s)" % markers
+        head = "Stale plugin-cache markers found in %d older version dir(s) (" % n_dirs
+
+        def render(dir_list):
+            inner = ", ".join(dir_list)
+            return head + inner + ")" + count_part + _NUDGE_TAIL
+
+        line = render(dirs)
+        if len(line) <= _NUDGE_MAX_CHARS:
+            return line
+
+        shown = list(dirs)
+        while len(shown) > 1:
+            hidden = n_dirs - len(shown)
+            dir_list = list(shown)
+            if hidden > 0:
+                dir_list.append("+%d more" % hidden)
+            candidate = render(dir_list)
+            if len(candidate) <= _NUDGE_MAX_CHARS:
+                return candidate
+            shown.pop()
+
+        hidden = n_dirs - 1
+        suffix_label = ", +%d more" % hidden if hidden > 0 else ""
+        dir_list = [shown[0] + suffix_label] if shown else ["+%d more" % n_dirs]
+        candidate = render(dir_list)
+        if len(candidate) <= _NUDGE_MAX_CHARS:
+            return candidate
+        return candidate[:_NUDGE_MAX_CHARS].rstrip()
+    except Exception as exc:
+        _breadcrumb("Plugin cache hygiene", type(exc).__name__)
+        return ""
+
+
 # ----------------------------------------------------------------- assemble
 _Rec = collections.namedtuple("_Rec", "name text hint")
 
@@ -132,7 +187,8 @@ _Rec = collections.namedtuple("_Rec", "name text hint")
 def assemble(cwd, transcript_path, plugin_root, host, char_budget=9000):
     """Compose the injected `additionalContext` block, best-effort, never raising.
 
-    Priority order: resolved roots → covenant (calibrated projects only).
+    Priority order: resolved roots → plugin cache hygiene nudge → covenant (calibrated
+    projects only).
     The block stays under char_budget; an oversized
     source is truncated with a marker and stops the walk, and any present source
     dropped by that stop is named in an in-block omitted-line AND breadcrumbed
@@ -144,9 +200,11 @@ def assemble(cwd, transcript_path, plugin_root, host, char_budget=9000):
     hook's stderr (which an owner's agent cannot see)."""
     del _FAILURES[:]                                  # reset the per-assemble failure collector
     try:
+        cache_parent = os.path.dirname(os.path.abspath(plugin_root or "."))
         records = [
             _Rec("Resolved plugin roots", resolved_roots(plugin_root, host),
                  os.path.join(os.path.abspath(plugin_root or "."), "hosts", "%s-tools.md" % host)),
+            _Rec("Plugin cache hygiene", cache_hygiene(plugin_root), cache_parent),
             _Rec("Covenant", covenant(cwd, plugin_root),
                  _covenant_doc(plugin_root)),
         ]

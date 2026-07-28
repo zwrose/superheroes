@@ -202,3 +202,77 @@ def test_assemble_includes_covenant_section_when_calibrated(tmp_path, monkeypatc
     assert "### Covenant" in out
     assert "Never merge" in out and "superheroes:workhorse" in out
     assert "/superheroes:review-code" not in out        # covenant replaced the old note
+
+
+# ---------------------------------------------------------------- cache hygiene nudge (rider 3)
+def test_cache_hygiene_clean_scan_returns_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "cache_markers.scan_stale_siblings",
+        lambda plugin_root, now=None, grace_seconds=3600: {"dirs": [], "markers": 0},
+    )
+    assert sc.cache_hygiene("/any/plugin") == ""
+
+
+def test_assemble_silent_when_cache_hygiene_clean(tmp_path, monkeypatch):
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
+    monkeypatch.setattr(
+        "cache_markers.scan_stale_siblings",
+        lambda plugin_root, now=None, grace_seconds=3600: {"dirs": [], "markers": 0},
+    )
+    out = sc.assemble(str(tmp_path), None, _PLUGIN_ROOT, "claude")
+    assert "Plugin cache hygiene" not in out
+
+
+def test_assemble_includes_cache_hygiene_nudge_when_stale(tmp_path, monkeypatch):
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
+    monkeypatch.setattr(
+        "cache_markers.scan_stale_siblings",
+        lambda plugin_root, now=None, grace_seconds=3600: {
+            "dirs": ["0.10.0", "0.21.1"],
+            "markers": 5,
+        },
+    )
+    out = sc.assemble(str(tmp_path), None, _PLUGIN_ROOT, "claude")
+    assert "0.10.0" in out and "0.21.1" in out
+    assert "5 stale marker" in out
+    assert "advisor: propose a manual review/cleanup with the owner" in out
+
+
+def test_assemble_nudge_before_covenant_survives_tight_budget(tmp_path, monkeypatch):
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry",
+                        lambda cwd, root=None: {"storageMode": "in-repo"})
+    monkeypatch.setattr(
+        "cache_markers.scan_stale_siblings",
+        lambda plugin_root, now=None, grace_seconds=3600: {
+            "dirs": ["0.10.0"],
+            "markers": 2,
+        },
+    )
+    main = str(tmp_path)
+    _mk_repo(main)
+
+    out_room = sc.assemble(main, None, _PLUGIN_ROOT, "claude", char_budget=5000)
+    assert "Plugin cache hygiene" in out_room
+    assert "advisor: propose a manual review/cleanup with the owner" in out_room
+    assert "### Covenant" in out_room
+
+    monkeypatch.setattr(sc, "covenant", lambda cwd, plugin_root: "X" * 8000)
+    out_tight = sc.assemble(main, None, _PLUGIN_ROOT, "claude", char_budget=1200)
+    assert "Plugin cache hygiene" in out_tight
+    assert "advisor: propose a manual review/cleanup with the owner" in out_tight
+    assert "truncated" in out_tight or "omitted for space" in out_tight
+
+
+def test_cache_hygiene_truncates_many_dirs_within_max_chars(monkeypatch):
+    many = ["0.%d.0" % i for i in range(30)]
+    monkeypatch.setattr(
+        "cache_markers.scan_stale_siblings",
+        lambda plugin_root, now=None, grace_seconds=3600: {"dirs": many, "markers": 99},
+    )
+    line = sc.cache_hygiene("/p")
+    assert len(line) <= sc._NUDGE_MAX_CHARS
+    assert line.endswith("advisor: propose a manual review/cleanup with the owner.")
+    assert "99 stale marker" in line

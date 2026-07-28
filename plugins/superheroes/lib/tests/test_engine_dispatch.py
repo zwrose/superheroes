@@ -24,6 +24,15 @@ _SV_MOD = importlib.util.module_from_spec(_SV)
 _SV.loader.exec_module(_SV_MOD)
 
 
+@pytest.fixture(autouse=True)
+def _pin_temp_base_to_tmp_path(tmp_path, monkeypatch):
+    """Keep sanitized views off the real system temp directory."""
+    base = str(tmp_path / "sanitized-temp-base")
+    os.makedirs(base, exist_ok=True)
+    monkeypatch.setattr(_SV_MOD.tempfile, "gettempdir", lambda: base)
+    yield
+
+
 def _never_build_view(_repo):
     raise AssertionError("build_view should not be called")
 
@@ -36,22 +45,26 @@ def _fake_build_view(tmp_path, *, source_dirty=False, stripped=None):
         counter["n"] += 1
         meta["build_count"] = counter["n"]
         meta["repo_arg"] = repo_real
-        view_dir = tmp_path / ("sanitized-view-%d" % counter["n"])
-        view_dir.mkdir(parents=True, exist_ok=True)
-        meta["view_path"] = str(view_dir)
+        view_base = _SV_MOD.tempfile.gettempdir()
+        view_dir = os.path.join(
+            view_base,
+            _SV_MOD.SANITIZED_VIEW_DIR_PREFIX + str(counter["n"]),
+        )
+        os.makedirs(view_dir, exist_ok=True)
+        meta["view_path"] = view_dir
         repo = os.path.realpath(repo_real)
         skip = set(stripped or [])
         for name in os.listdir(repo):
             if name in skip:
                 continue
             src = os.path.join(repo, name)
-            dst = view_dir / name
+            dst = os.path.join(view_dir, name)
             if os.path.isdir(src):
                 shutil.copytree(src, dst)
             else:
                 shutil.copy2(src, dst)
         return {
-            "path": str(view_dir),
+            "path": view_dir,
             "strategy": "git-archive-export",
             "stripped": stripped if stripped is not None else [],
             "strippedCount": len(stripped) if stripped is not None else 0,

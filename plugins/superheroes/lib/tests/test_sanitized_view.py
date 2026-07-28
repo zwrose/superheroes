@@ -473,8 +473,51 @@ def test_destroy_returns_false_when_rmtree_fails(tmp_path, monkeypatch):
     real_rmtree(path, ignore_errors=True)
 
 
+def test_destroy_refuses_non_view_basename(tmp_path):
+    d = tmp_path / "not-a-sanitized-view"
+    d.mkdir()
+    marker = d / "keep.txt"
+    marker.write_text("stay\n", encoding="utf-8")
+    assert sv.destroy_sanitized_view(str(d)) is False
+    assert d.is_dir()
+    assert marker.is_file()
+
+
+def test_destroy_refuses_prefixed_path_outside_tempbase(tmp_path, monkeypatch):
+    fake_tmp = tmp_path / "patched-temp-base"
+    fake_tmp.mkdir()
+    other_base = tmp_path / "outside-temp"
+    other_base.mkdir()
+    outside = other_base / (sv.SANITIZED_VIEW_DIR_PREFIX + "outside")
+    outside.mkdir()
+    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: str(fake_tmp))
+    assert sv.destroy_sanitized_view(str(outside)) is False
+    assert outside.is_dir()
+
+
+def test_destroy_refuses_tempbase_itself_even_when_prefixed(tmp_path, monkeypatch):
+    prefixed_tmp = tmp_path / (sv.SANITIZED_VIEW_DIR_PREFIX + "tmpdir")
+    prefixed_tmp.mkdir()
+    marker = prefixed_tmp / "keep.txt"
+    marker.write_text("stay\n", encoding="utf-8")
+    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: str(prefixed_tmp))
+    assert sv.destroy_sanitized_view(str(prefixed_tmp)) is False
+    assert prefixed_tmp.is_dir()
+    assert marker.is_file()
+
+
+def test_destroy_accepts_real_view(tmp_path):
+    repo = _init_repo(tmp_path / "realview", files={"keep.txt": "k\n"})
+    view = sv.build_sanitized_view(repo)
+    path = view["path"]
+    assert sv.destroy_sanitized_view(path) is True
+    assert not os.path.exists(path)
+
+
 def test_destroy_never_raises(tmp_path):
-    missing = str(tmp_path / "nope")
+    missing = str(
+        tmp_path / "sanitized-temp-base" / (sv.SANITIZED_VIEW_DIR_PREFIX + "nope")
+    )
     assert sv.destroy_sanitized_view(missing) is True
     repo = _init_repo(tmp_path / "repo")
     view = sv.build_sanitized_view(repo)

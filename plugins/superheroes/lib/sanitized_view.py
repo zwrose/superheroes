@@ -164,14 +164,34 @@ def sanitized_view_notice(view):
     return "\n".join(lines)
 
 
+def _is_owned_view_path(path, _under=path_is_confidently_under):
+    """True only for a path we are authorized to destroy: a sanitized-view directory
+    strictly inside the temp base. Fails CLOSED — any doubt returns False."""
+    try:
+        real = os.path.realpath(path)
+        if not os.path.basename(real).startswith(SANITIZED_VIEW_DIR_PREFIX):
+            return False
+        tmp_base = tempfile.gettempdir()
+        if real == os.path.realpath(tmp_base):
+            return False
+        if not _under(real, tmp_base):
+            return False
+        return True
+    except Exception:
+        return False
+
+
 def destroy_sanitized_view(path):
     """Best-effort removal of a view directory; never raises.
 
-    Returns True when the path is gone (or was already absent), False when removal
-    failed after one retry.
+    Returns True when the path is gone (or was already absent), False when the path
+    is not an owned sanitized-view directory, when removal failed after one retry, or
+    when ownership cannot be established.
     """
     if not path:
         return True
+    if not _is_owned_view_path(path):
+        return False
     for _ in range(2):
         try:
             if not os.path.exists(path):

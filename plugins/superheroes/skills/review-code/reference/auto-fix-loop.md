@@ -161,6 +161,12 @@ never drop a finding or a lens.
 > the investigation floor and forfeits vacuously — fail-safe (the seat falls open to Claude), never a
 > false clean. Do not treat that as a clean review.
 >
+> **#685 CLI `parse-result` echo gap.** The CLI `parse-result --role review` path does not receive the
+> dispatched prompt, so it performs **no echo strip**. An **empty-findings result from that path is
+> unverified** — apply the investigation floor **manually**. The runner path (`engine_dispatch.py
+> dispatch-review`) is unaffected — it strips before parsing. A `--prompt-path` flag for `parse-result`
+> is **deliberately not built** pending a named consumer.
+>
 > **View build refusal (no fallback).** If the sanitized view cannot be built, `dispatch-review`
 > returns a named `unrunnable` refusal with `attempts: 0` and **no spawn** — alongside the unchanged
 > `repo-root-*` refusals (`repo-root-absent`, `repo-root-missing`, `repo-root-not-a-directory`,
