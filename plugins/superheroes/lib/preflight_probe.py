@@ -142,7 +142,9 @@ def dispatch_calibration(cwd=None, root=None, prefs=None, tiers=None):
 
 
 def _dispatch_selftest_config(cwd=None, root=None):
-    """prefs/tiers bundle for dispatch_selftest leg 5 — mirrors dispatch_calibration reads."""
+    """prefs/tiers bundle for dispatch_selftest leg 5 — reads engine prefs via
+    ``core_md.engine_preferences_for_gate`` (absent/ok/unreadable). ``dispatch_calibration`` has
+    not been migrated; it still uses ``core_md.read`` and treats unreadable as absent."""
     cwd = cwd or os.getcwd()
     try:
         cfg = core_md.engine_preferences_for_gate(cwd=cwd, root=root)

@@ -441,6 +441,33 @@ def test_write_cli_refuses_when_effective_tiers_raises(tmp_path, monkeypatch, ca
     assert "tier read failed" in out["violations"][0]["detail"]
 
 
+def test_write_cli_lazy_core_md_import_failure_writes_json(tmp_path, monkeypatch, capsys):
+    import builtins
+
+    p = tmp_path / "profile.md"
+    p.write_text("## Model tiers\n", encoding="utf-8")
+    real_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "core_md":
+            raise ImportError("simulated lazy import failure")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    rc = MTO.main([
+        "model_tier_overrides.py",
+        "write",
+        "--profile",
+        str(p),
+        "--set",
+        "reviewer=sonnet",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert out["reason"] == "dispatch-gate-evaluation-failed"
+    assert "simulated lazy import failure" in out["violations"][0]["detail"]
+
+
 def test_write_cli_no_core_beside_profile_proceeds_clean(tmp_path, capsys):
     p = tmp_path / "profile.md"
     p.write_text("## Model tiers\n", encoding="utf-8")

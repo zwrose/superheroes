@@ -158,25 +158,24 @@ def _candidate_effective_tiers(profile_path, set_overrides=None, clear_roles=Non
     return {role: model_tier.resolve_model(role, current) for role in KNOWN_ROLES}
 
 
-def _prefs_from_core_facts(facts):
-    if not isinstance(facts, dict):
-        return None
-    prefs = facts.get("enginePreferences")
-    return prefs if isinstance(prefs, dict) else {}
-
-
 def _read_engine_preferences_for_gate(profile_path=None, cwd=None, root=None):
     """Engine preferences for the gate. Returns ``(prefs, evaluation_error)``.
 
     ``prefs`` is ``{}`` on confirmed absence (no core.md). ``evaluation_error`` is a
     ``{"reason", "detail"}`` dict when configuration exists but cannot be evaluated."""
-    import core_md
+    try:
+        import core_md
 
-    cfg = core_md.engine_preferences_for_gate(
-        profile_path=profile_path, cwd=cwd, root=root)
-    if cfg.status == core_md.CONFIG_UNREADABLE:
-        return {}, {"reason": core_md.GATE_REASON_UNREADABLE, "detail": cfg.detail}
-    return cfg.prefs, None
+        cfg = core_md.engine_preferences_for_gate(
+            profile_path=profile_path, cwd=cwd, root=root)
+        if cfg.status == core_md.CONFIG_UNREADABLE:
+            return {}, {"reason": core_md.GATE_REASON_UNREADABLE, "detail": cfg.detail}
+        return cfg.prefs, None
+    except Exception as exc:
+        return {}, {
+            "reason": "dispatch-gate-evaluation-failed",
+            "detail": "%s: %s" % (type(exc).__name__, exc),
+        }
 
 
 def _evaluate_tier_writer_dispatch_gate(profile_path, set_overrides=None, clear_roles=None):

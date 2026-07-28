@@ -148,6 +148,12 @@ def _classify_core_md_at_path(path):
             os.lstat(path)
         except FileNotFoundError:
             return CoreGateConfig({}, CONFIG_ABSENT, None)
+        except OSError as exc:
+            return CoreGateConfig(
+                {},
+                CONFIG_UNREADABLE,
+                "lstat failed at %s: %s" % (path, exc),
+            )
         return CoreGateConfig(
             {},
             CONFIG_UNREADABLE,
@@ -171,7 +177,11 @@ def _classify_core_md_at_path(path):
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
     except FileNotFoundError:
-        return CoreGateConfig({}, CONFIG_ABSENT, None)
+        return CoreGateConfig(
+            {},
+            CONFIG_UNREADABLE,
+            "core.md existed at stat but was missing at open (read race) at %s" % path,
+        )
     except OSError as exc:
         return CoreGateConfig(
             {},
@@ -236,7 +246,8 @@ def engine_preferences_for_gate(*, cwd=None, root=None, profile_path=None):
         return CoreGateConfig(
             {},
             CONFIG_UNREADABLE,
-            "%s: %s" % (type(exc).__name__, exc),
+            "gate evaluation failed before core.md could be classified: %s: %s"
+            % (type(exc).__name__, exc),
         )
 
 
@@ -649,6 +660,21 @@ def _record_migration_commit(cwd, repo, hero, core_p, layer_p, legacy, root):
     return None
 
 
+def _migrate_deferred_unreadable_core(cwd, root, hero, gate_cfg):
+    if gate_cfg.status != CONFIG_UNREADABLE:
+        return None
+    mark_pending(
+        cwd,
+        root,
+        detail={
+            "hero": hero,
+            "reason": GATE_REASON_UNREADABLE,
+            "detail": gate_cfg.detail,
+        },
+    )
+    return {"action": "deferred"}
+
+
 def _facts_are_empty(rec):
     """An EMPTY PLACEHOLDER core: it parses, but carries no real shared facts (no verify command,
     threat model, patterns, or stack). Presence of such a record must never be mistaken for a
@@ -697,7 +723,11 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
     if _same_file(legacy, core_p) or _same_file(legacy, layer_p):
         return {"action": "noop"}
     legacy_present = bool(legacy) and os.path.isfile(legacy)
-    core_present = read(cwd, root) is not None
+    gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
+    deferred = _migrate_deferred_unreadable_core(cwd, root, hero, gate_cfg)
+    if deferred:
+        return deferred
+    core_present = gate_cfg.status == CONFIG_OK
     layer_present = os.path.isfile(layer_p)
     # Nothing to migrate when there is no legacy profile — the core is already established or
     # this is a bare greenfield. EXCEPTION: an in-repo split that landed on disk but whose
@@ -727,7 +757,11 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
             mark_pending(cwd, root, detail={"hero": hero, "reason": "lock-contended"})
             return {"action": "deferred"}
         # re-read state under the lock
-        core_present = read(cwd, root) is not None
+        gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
+        deferred = _migrate_deferred_unreadable_core(cwd, root, hero, gate_cfg)
+        if deferred:
+            return deferred
+        core_present = gate_cfg.status == CONFIG_OK
         layer_present = os.path.isfile(layer_p)
         legacy_present = bool(legacy) and os.path.isfile(legacy)
         # RESUME: both new files present ⇒ authoritative ⇒ complete retirement, never re-split
