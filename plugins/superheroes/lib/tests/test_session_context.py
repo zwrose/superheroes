@@ -308,6 +308,82 @@ def test_cache_hygiene_single_very_long_version_dir_name(tmp_path, monkeypatch):
     assert "1 stale marker" in line
 
 
+def _cache_hygiene_single_dir_line(name, markers=1):
+    head = "Stale plugin-cache markers found in 1 other version dir(s) ("
+    count_part = ": %d stale marker(s)" % markers
+    return head + name + ")" + count_part + sc._NUDGE_TAIL
+
+
+def test_cache_hygiene_single_dir_just_under_max_chars(monkeypatch):
+    markers = 7
+    head = "Stale plugin-cache markers found in 1 other version dir(s) ("
+    count_part = ": %d stale marker(s)" % markers
+    fixed = len(head) + len(")") + len(count_part) + len(sc._NUDGE_TAIL)
+    name_len = sc._NUDGE_MAX_CHARS - fixed - 1
+    name = "0." + ("a" * (name_len - 2))
+    assert len(_cache_hygiene_single_dir_line(name, markers)) == sc._NUDGE_MAX_CHARS - 1
+    monkeypatch.setattr(
+        "cache_markers.scan_stale_siblings",
+        lambda plugin_root, now=None, grace_seconds=3600: {"dirs": [name], "markers": markers},
+    )
+    line = sc.cache_hygiene("/p")
+    assert len(line) <= sc._NUDGE_MAX_CHARS
+    assert line.endswith("advisor: propose a manual review/cleanup with the owner.")
+    assert "%d stale marker" % markers in line
+    assert "…" not in line.split("(")[1].split(")")[0]
+
+
+def test_cache_hygiene_single_dir_exactly_at_max_chars(monkeypatch):
+    markers = 8
+    head = "Stale plugin-cache markers found in 1 other version dir(s) ("
+    count_part = ": %d stale marker(s)" % markers
+    fixed = len(head) + len(")") + len(count_part) + len(sc._NUDGE_TAIL)
+    name_len = sc._NUDGE_MAX_CHARS - fixed
+    name = "0." + ("b" * (name_len - 2))
+    assert len(_cache_hygiene_single_dir_line(name, markers)) == sc._NUDGE_MAX_CHARS
+    monkeypatch.setattr(
+        "cache_markers.scan_stale_siblings",
+        lambda plugin_root, now=None, grace_seconds=3600: {"dirs": [name], "markers": markers},
+    )
+    line = sc.cache_hygiene("/p")
+    assert len(line) <= sc._NUDGE_MAX_CHARS
+    assert line.endswith("advisor: propose a manual review/cleanup with the owner.")
+    assert "%d stale marker" % markers in line
+    assert "…" not in line.split("(")[1].split(")")[0]
+
+
+def test_cache_hygiene_one_long_dir_among_many_uses_more_suffix(monkeypatch):
+    markers = 42
+    short_dirs = ["0.%d.0" % i for i in range(25)]
+    long_name = "0." + ("z" * 220) + ".0"
+    dirs = short_dirs + [long_name]
+    monkeypatch.setattr(
+        "cache_markers.scan_stale_siblings",
+        lambda plugin_root, now=None, grace_seconds=3600: {"dirs": dirs, "markers": markers},
+    )
+    line = sc.cache_hygiene("/p")
+    assert len(line) <= sc._NUDGE_MAX_CHARS
+    assert line.endswith("advisor: propose a manual review/cleanup with the owner.")
+    assert "%d stale marker" % markers in line
+    assert re.search(r"\+\d+ more", line)
+
+
+def test_cache_hygiene_degenerate_inner_budget_still_within_max_chars(monkeypatch):
+    huge_markers = 10 ** 40
+    name = "0.9.0"
+    monkeypatch.setattr(
+        "cache_markers.scan_stale_siblings",
+        lambda plugin_root, now=None, grace_seconds=3600: {
+            "dirs": [name],
+            "markers": huge_markers,
+        },
+    )
+    line = sc.cache_hygiene("/p")
+    assert len(line) <= sc._NUDGE_MAX_CHARS
+    assert line.endswith("advisor: propose a manual review/cleanup with the owner.")
+    assert "stale marker" in line
+
+
 def test_cache_hygiene_passes_plugin_root_to_scan_stale_siblings(monkeypatch):
     seen = []
 

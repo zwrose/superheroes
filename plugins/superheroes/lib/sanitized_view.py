@@ -165,7 +165,12 @@ def sanitized_view_notice(view):
 
 
 def _owned_view_realpath(path, _under=path_is_confidently_under):
-    """Resolved path when authorized to destroy; None when not. Fails CLOSED."""
+    """Resolved path when authorized to destroy; None when not. Fails CLOSED.
+
+    ``_under`` defaults to ``path_is_confidently_under`` at import time on purpose: a
+    test that monkeypatches the module-global helper must not disable this guard during
+    teardown (see ``test_symlink_containment_oserror_fail_closed``).
+    """
     try:
         real = os.path.realpath(path)
         if not os.path.basename(real).startswith(SANITIZED_VIEW_DIR_PREFIX):
@@ -184,17 +189,6 @@ def _owned_view_realpath(path, _under=path_is_confidently_under):
         return real
     except Exception:
         return None
-
-
-def _is_owned_view_path(path, _under=path_is_confidently_under):
-    """True only for a path we are authorized to destroy: a sanitized-view directory
-    strictly inside the temp base. Fails CLOSED — any doubt returns False.
-
-    ``_under`` defaults to ``path_is_confidently_under`` at import time on purpose: a
-    test that monkeypatches the module-global helper must not disable this guard during
-    teardown (see ``test_symlink_containment_oserror_fail_closed``).
-    """
-    return _owned_view_realpath(path, _under=_under) is not None
 
 
 def destroy_sanitized_view(path):

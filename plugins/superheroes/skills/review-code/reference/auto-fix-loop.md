@@ -163,7 +163,7 @@ never drop a finding or a lens.
 >
 > **#685 CLI `parse-result` echo gap.** The CLI `parse-result --role review` path does not receive the
 > dispatched prompt, so it performs **no echo strip**. An **empty-findings result from that path is
-> unverified** — apply the investigation floor **manually**. The runner path (`engine_dispatch.py`
+> unverified** — apply the investigation floor **manually**. The runner path (`engine_dispatch.py
 > dispatch-review`) parses raw stdout first; only when that parse yields no findings does it strip
 > the echoed prompt and re-parse (so an empty-findings result from the runner path has been through
 > the strip). A `--prompt-path` flag for `parse-result`

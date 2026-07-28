@@ -163,7 +163,16 @@ def cache_hygiene(plugin_root):
             fixed = len(head) + len(")") + len(count_part) + len(_NUDGE_TAIL)
             inner_budget = _NUDGE_MAX_CHARS - fixed - len(extra_inner)
             if inner_budget < 1:
-                return ("…" + extra_inner) if extra_inner else "…"
+                inner_max = _NUDGE_MAX_CHARS - fixed
+                if inner_max < 1:
+                    return ""
+                if not extra_inner:
+                    return "…" if inner_max >= 1 else ""
+                if len(extra_inner) <= inner_max:
+                    return extra_inner
+                if inner_max == 1:
+                    return "…"
+                return extra_inner[: inner_max - 1] + "…"
             if len(name) <= inner_budget:
                 return name + extra_inner
             if inner_budget == 1:

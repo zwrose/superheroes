@@ -485,6 +485,7 @@ def test_scan_stale_siblings_stops_dir_scan_at_limit(tmp_path, monkeypatch):
         (parent / ("noise-%03d" % i)).mkdir()
     examined = []
     real_scandir = os.scandir
+    parent_norm = os.path.normpath(str(parent))
 
     def tracking_scandir(path):
         class _It:
@@ -496,7 +497,8 @@ def test_scan_stale_siblings_stops_dir_scan_at_limit(tmp_path, monkeypatch):
 
             def __next__(self):
                 entry = next(self._inner)
-                examined.append(entry.name)
+                if os.path.normpath(str(path)) == parent_norm:
+                    examined.append(entry.name)
                 return entry
 
             def close(self):
@@ -605,7 +607,7 @@ def test_stale_marker_count_respects_in_use_entry_limit(tmp_path, monkeypatch):
 
     monkeypatch.setattr(os, "scandir", tracking_scandir)
     cm._stale_marker_count(in_use, fixed_now, 3600)
-    assert len(examined) <= cm.SIBLING_IN_USE_ENTRY_LIMIT
+    assert len(examined) == cm.SIBLING_IN_USE_ENTRY_LIMIT
 
 
 def test_version_dir_rejects_trailing_newline_in_name(tmp_path, monkeypatch):

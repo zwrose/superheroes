@@ -508,15 +508,14 @@ def test_destroy_refuses_tempbase_itself_even_when_prefixed(tmp_path, monkeypatc
 
 
 def test_destroy_refuses_tempbase_itself_case_variant_path(tmp_path, monkeypatch):
-    parent = tmp_path / "Outer"
-    parent.mkdir()
-    prefixed_tmp = parent / (sv.SANITIZED_VIEW_DIR_PREFIX + "base")
+    prefixed_tmp = tmp_path / (sv.SANITIZED_VIEW_DIR_PREFIX + "base")
     prefixed_tmp.mkdir()
     marker = prefixed_tmp / "keep.txt"
     marker.write_text("stay\n", encoding="utf-8")
-    variant = str(prefixed_tmp).replace("Outer", "OUTER")
-    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: str(prefixed_tmp))
-    assert sv.destroy_sanitized_view(variant) is False
+    alias = tmp_path / "alias-temp-base"
+    os.symlink(prefixed_tmp, alias)
+    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: str(alias))
+    assert sv.destroy_sanitized_view(str(prefixed_tmp)) is False
     assert prefixed_tmp.is_dir()
     assert marker.is_file()
 

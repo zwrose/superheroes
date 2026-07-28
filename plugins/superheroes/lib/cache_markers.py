@@ -24,6 +24,8 @@ def _stale_marker_count(in_use_path, now, grace_seconds):
                     entry = next(it)
                 except StopIteration:
                     break
+                except OSError:
+                    return count
                 examined += 1
                 name = entry.name
                 try:
@@ -79,16 +81,16 @@ def scan_stale_siblings(plugin_root, now=None, grace_seconds=3600):
         if not os.path.isdir(parent):
             return empty
 
-        try:
-            scandir_it = os.scandir(parent)
-        except OSError:
-            return empty
-
         if now is None:
             now = time.time()
 
         dirs_with_stale = []
         total_markers = 0
+
+        try:
+            scandir_it = os.scandir(parent)
+        except OSError:
+            return empty
 
         with scandir_it:
             examined_siblings = 0
