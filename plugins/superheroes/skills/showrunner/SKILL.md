@@ -90,6 +90,8 @@ code, so you catch what the maker's context hid.
      claim that did not reproduce when re-run against the world. Each accounting record **names its
      window**. **Zero of either is a signal to inspect, never a clean sheet** — both guards are prose;
      if a future model is more agreeable, either rate can fall to zero and read as a clean batch.
+     The accounting lives in the **durable batch record**, not session memory; **inspect** means
+     re-reading a sample of that batch's park and vet receipts, not merely noticing the zero.
      Standing accounting, not machinery — the mechanical count is owed by the launcher build. Why
      these two and not the panel: **review panels check the diff against the brief, never the brief
      against the world**, so the class this guards — a bad advisor premise — is invisible to them.
@@ -151,17 +153,20 @@ code, so you catch what the maker's context hid.
    2. **Perceivable but a craft call → the PR states the change in plain language, no spot-check**
       — fail-direction flips, receipt-shape changes, storage moves; the panel is the check.
    3. **Neither → nothing** — internal correctness, tech debt, bug fixes.
+   **Tier overlap:** fail-direction inside an already-chosen policy is the lenses' craft call; changing
+   what the product does **by default for an unconfigured user** is the owner's trade. When a change
+   is both, **tier 1 wins**.
    **Presentation duty (tier 1 only) — show the after-state, not the delta.** Taste is judged on the
    finished thing: you decide whether wording reads well by reading the wording, not a diff.
    **Owners largely do not read diffs** — "it's in the diff" satisfies nothing.
    **Zero reconstruction, not zero clicks** — the owner should never rebuild the after-state (no
    checkout, no dev server, no reading source to imagine output). A running URL they click meets the
    standard; "check out the branch and run the dev server" fails it.
-   **Where that is unreachable, say so rather than prescribe infrastructure** — always-on
-   previews are not universal; the honest options are an **attended** spot-check (owner present, the
-   build waits) or **disclosing** that the surface was not presentable. How a PR presents a surface is
-   a separate open spike; until it concludes, the visual duty ships with this attended-or-disclose
-   fallback.
+   **Presentation order:** zero-reconstruction is the standard; **attended** spot-check (owner present,
+   the build waits) is the fallback when presentation is unreachable; **disclosure is the last resort**
+   — only after those attempts, naming what could not be presented and why, and **reaching the owner
+   before the merge click**, not a line in a body nobody reads after the fact. How a PR presents a
+   surface is a separate open spike; until it concludes, this ordering ships with the visual duty.
    **Calibration home:** this list is the **default**; per-owner taste domains belong in the
    **configure profile** eventually (not yet built) so a consuming advisor does not re-derive what
    "taste" means for their owner.
@@ -169,18 +174,20 @@ code, so you catch what the maker's context hid.
    act is the **approval** — the gate click, the release cut, the publish decision. **Merge-command
    execution** is delegable, but **only where a mechanical per-merge approval checkpoint exists on
    that host or path**; where none exists, execution stays in the owner's hands. **Release PRs and
-   anything needing a force-push are never delegated.** (Covenant.) **The mechanical per-merge
-   checkpoint does not exist on every host or path — where it does not, merge execution stays with
-   the owner.** When the project being advised is the superheroes source repository itself, which
-   host the gate is wired for is recorded in `LEDGERS.md` §3.
+   anything needing a force-push are never delegated.** (Covenant.) **The plugin ships its own
+   owner-authority gate as that checkpoint — it is not wired on every host.** Where it does not fire,
+   there is no per-merge ping and merge execution stays with the owner; delegation is not available
+   on that path. **If you cannot establish that the checkpoint fires on your host and path, the owner
+   executes** (covenant fail-closed). When the project being advised is the superheroes source
+   repository itself, which host the gate is wired for is recorded in `LEDGERS.md` §3.
    **Delegated (when the checkpoint exists):** issuing the merge command, sequencing, branch-update,
    waiting for CI green, conflict resolution under an advisor-authored recipe, and post-merge hygiene.
    **Never delegated:** the approval; release PRs; anything needing a force-push. **Preconditions that
    never waive:** an advisor vet with biting probes, CI green, branch current. **The gate is a
    backstop, not an authorization boundary** — delegation stands on advisor discipline with the gate
-   behind it, never the reverse. **Approval stays per-PR** — every merge pings the owner; that
-   checkpoint is what makes delegation safe. "Approve once, execute five" was considered and **not
-   adopted**.
+   behind it, never the reverse. **Approval stays per-PR** — the per-merge ping is what makes
+   delegation safe **where the checkpoint fires**; where it does not, delegation is not available and
+   the owner executes. "Approve once, execute five" was considered and **not adopted**.
    When you hand mechanical duties to a cheap in-session subagent, three conditions make that safe:
    (1) **Recipes are durable versioned artifacts, not session context** — a fresh subagent has none of
    your context; what it executes must be self-contained and written down. (2) **The delegated seat
@@ -205,10 +212,15 @@ code, so you catch what the maker's context hid.
    6. **Standing rulings present verbatim**, not reconstructed from memory — that collision's direct
       cause.
    7. **Owner-capability preconditions cleared, with a stated duration** (see below).
-   8. **Grant state** — whether one exists, its scope, and its exclusions.
-   **Scale with the batch:** cheap mechanical checks always; expensive ones only when the work needs
-   them; a check that does not apply is marked **explicitly N/A — never silently skipped.** A
-   twenty-minute preflight before every dispatch repeats, one layer up, the cost mistake the product
+   8. **Grant state** — whether one exists, its scope, and its exclusions; **failing** means no
+      grant, or work outside the grant's enumerated scope.
+   **Scale with the batch:** checks **1–3 and 5** (quota, engine auth, base state, workspace
+   isolation) are cheap mechanical checks that **always run**; **4, 6, 7, and 8** only when the work
+   needs them. Every check is recorded **ran** or **N/A** in the dispatch durable record — an N/A
+   carries a **one-line reason**; "marked N/A" without a reason is a silent skip. The preflight ends
+   in a recorded **go / no-go** there. **A failed check is a no-go** — the dispatch does not launch
+   until it is cleared or explicitly owner-accepted. A twenty-minute preflight before every dispatch
+   repeats, one layer up, the cost mistake the product
    already watches for. **Grant scope is always enumerated, never a fuzzy noun** — state scope as
    **enumerated PRs, a time box, or a count** (not an undefined phrase like "everything in these
    batches"). Standing exclusions: **release PRs are excluded, and force-push is never granted.**
@@ -224,8 +236,9 @@ code, so you catch what the maker's context hid.
    raised after launch reaches nobody. **Clear owner-capability preconditions at dispatch time — with
    the owner, before the session goes autonomous** — not via a builder preflight when nobody is there.
    State a **duration** — a session that expires two hours into a four-hour build is the same
-   failure, later. If owner capability is discovered mid-run, **park durably** — never improvise a
-   channel; the builder charter carries the builder's half.
+   failure, later. If owner capability is discovered mid-run, **park durably** on the **issue or PR** — somewhere
+   the advisor will read without being told to look — never improvise a channel; the builder charter
+   carries the builder's half.
 
 ## When you're tempted
 

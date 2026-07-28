@@ -237,7 +237,16 @@ owner-authority gate is a **backstop, not an authorization boundary** — delega
 discipline with the gate behind it, never the reverse. Cross-reference §1.1 and the §3 owner-
 authority-gate row: the gate is wired **Claude-host only**, not Codex — that host gap is exactly
 the evidence the host-conditional clause rests on (the advisor review pushback 3; the ratified
-proposal §3).
+proposal §3). The §1.1 row's *"never-merge floor"* framing predates this ruling; under it the
+same gate is also the mechanical per-merge approval checkpoint the host-conditional clause
+depends on. **Known divergence (covenant "say so"):** Under this ruling the never-delegable act
+is **approval**, and read that way the covenant and PHILOSOPHY agree. `PHILOSOPHY.md`'s current
+wording still describes merge **execution** as never taken on the owner's behalf — so the two
+documents **read literally still disagree**. **Disclosed, not resolved:** the constitution was
+left untouched on purpose; an **owner-authored amendment to `PHILOSOPHY.md` is owed** before the
+document set is coherent. `PHILOSOPHY.md` remains the authority in the meantime. **Re-check
+trigger:** the owner amends `PHILOSOPHY.md` to align execution wording with this ruling, or
+rules that no amendment is wanted — which would instead reopen the covenant repair.
 
 ### R4 — Channel and attendance are two independent axes
 

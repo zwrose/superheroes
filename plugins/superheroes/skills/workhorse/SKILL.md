@@ -284,14 +284,20 @@ repeat.)
   Sessions that believed a waiter mechanism were **believing their tools** — background-run, wakeup
   scheduling, and its success message all promise re-wake that never fires headless; the rule must
   name mechanism, not only repeat prohibition.
-- **The sanctioned fallback** when a dispatch cannot fit the turn: detach with durable output, then
-  hand recovery to the advisor — redirect output to **files, never pipes** (a pipe buffer dies with
-  the reader; a piped dispatch makes stall look like progress); **stamp state to disk before any
-  wait** (what was dispatched, where output lands, next step); **shell-detach** (tracked background
-  does not survive; detached children do).
+- **The sanctioned fallback** when a **shell/CLI dispatch you invoke yourself** cannot fit the turn
+  (not a native subagent — §7 long-dispatch rule): detach with durable output, then hand recovery to
+  the advisor — redirect output to **files, never pipes** (a pipe buffer dies with the reader; a piped
+  dispatch makes stall look like progress); **stamp state to disk before any wait** (what was
+  dispatched, where output lands, next step, the **child's PID**, and the **done-sentinel path**);
+  **remove any prior sentinel at that path or use a unique name before launch** — a stale sentinel
+  from an earlier run must never read as this run's completion; **shell-detach** (tracked background
+  does not survive; detached children do); the **child writes the done-sentinel on exit with its exit
+  code** — never the launcher; on resume, **output without a completion sentinel is an incomplete
+  run, not a result** — fail closed.
 - **It ends in a park, not a handoff.** End with a **durable park** — what is running, where output
-  is, what the advisor must do — never a turn that ends hoping re-wake; an outcome that outruns any
-  plausible resolution time is a park, not unbounded in-turn poll.
+  is, what the advisor must do — **on the issue or the PR** (where the advisor will find it without
+  being told to look), not in a session transcript or scratch file — never a turn that ends hoping
+  re-wake; an outcome that outruns any plausible resolution time is a park, not unbounded in-turn poll.
 - **Owner-capability needs surfacing mid-run: park durably, never improvise a channel.** A running
   headless session is deaf — park durably with receipts; never improvise a notification path or
   assume someone is watching.
@@ -304,10 +310,12 @@ post-handback CI watch (#608), and any outcome that resolves outside your turn (
 when the work must outlive the turn) — never end a turn to "wait" on something that will not re-wake
 you and is not a detached child you stamped to disk.
 
-**Long dispatches you own get room to finish and a stuck/runaway monitor** — for both a native
-subagent dispatch and an engine CLI run you invoke directly: **never a borderline limit you expect to
-just barely clear**, and **stay in-turn until it resolves** (background-and-poll) or **detach-and-park**
-when it truly cannot fit — never end on harness-tracked background work. The **concrete mechanics differ by
+**Long dispatches you own get room to finish and a stuck/runaway monitor.** For an **engine CLI run
+you invoke yourself**: **never a borderline limit you expect to just barely clear**; **stay in-turn
+until it resolves** (background-and-poll) or **detach-and-park** when it truly cannot fit — never end
+on harness-tracked background work. For a **native subagent dispatch there is no detach** — the
+harness owns the lifecycle; **await it in-turn**, and if it genuinely cannot fit the turn, **park
+durably before dispatching it** (issue or PR), not detach after. The **concrete mechanics differ by
 dispatch kind** — the foreground Bash cap and why you background-and-poll instead of raising a
 timeout, the output-file-not-`| tail` stall signal, the CPU-vs-elapsed liveness read, and the
 native-subagent lifecycle — so **read `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/workhorse/reference/dispatch-mechanics.md` at dispatch time**, before you invoke a long dispatch.
@@ -428,5 +436,5 @@ curation stay with the advisor.
 | "Main moved under the order I sent — the implementer should have coped." | The order's premises bind you, the dispatcher. Amend the order when the world moves; parking on a stale premise is correct behavior. |
 | "This dispatch will finish quickly — the default timeout is fine." | A long dispatch **you own** gets room to finish — **backgrounded and polled**, never squeezed under the ten-minute foreground Bash cap — and a stuck/runaway monitor (a skill-owned dispatch keeps its own timeout contract). Four 0.18.0 sessions died at the ten-minute `bash_timeout` cap mid-dispatch. Never a borderline limit. |
 | "The implementer botched it — escalate to a stronger engine." | Attribution first. In the 0.18.0 wave, order quality outweighed execution ~5:1. A defect the order under-specified (a missing fail-closed edge, an unnamed target file) is an **order** defect — rewrite the order at the same rung, don't blame the engine. |
-| "I'll kick off the implementer and wrap up my turn." | Default: await in-turn (block or background-and-poll inside the turn). Harness-tracked background work dies with the turn; only the detach-and-park fallback (files not pipes, stamp state, shell-detach) lets work outlive the turn — and it still ends in a durable park for the advisor, not a silent handoff. |
+| "I'll kick off the implementer and wrap up my turn." | Default: await in-turn (block or background-and-poll inside the turn). Harness-tracked background work dies with the turn; only a **shell/CLI** detach-and-park (charter §7 Channel-conditioned) outlives the turn — a **native subagent has no detach** — and it still ends in a durable park on the issue or PR, not a silent handoff. |
 | "It's committed locally — the PR is ready." | "Ready" requires the **remote** head containing every commit your receipts claim (`git rev-parse origin/<branch>` vs local HEAD). A local-only fix is a claim without a receipt. |

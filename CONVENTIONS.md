@@ -915,30 +915,18 @@ of content, so approval is a constant, not a property of the work. This section 
 what must happen *before* that constant fires.
 
 **Key on behavior, not file paths.** File-based heuristics miss most of what owners care about —
-copy, defaults, cost, what gets emitted on their behalf, visual surface. The ruling uses two
-behavioral tests instead:
-
-- **Test 1:** would a user notice this without reading the diff?
-- **Test 2:** is the call the owner's taste or trade, rather than a craft judgment a review lens
-  already owns?
-
-The operative wording, the default perceivability list (Test 1's net), and the three tiers are
-in the Showrunner charter — cite that home, do not restate it here.
+copy, defaults, cost, what gets emitted on their behalf, visual surface. The ruling keys on two
+behavioral tests instead — **Test 1** (perceivability without reading the diff) and **Test 2**
+(owner taste or trade vs. craft judgment the review lenses own). Operative wording, the default
+perceivability list, the three tiers, and the presentation standard the charter sets — judged by
+zero reconstruction, show the after-state — live in the **Showrunner charter**
+(`skills/showrunner/SKILL.md`); cite that home, do not restate it here.
 
 **Why one test is not enough.** Test 1's net is deliberately wide; alone it would catch a large
-share of any project's work and spend *more* owner attention, not less. Test 2 discriminates:
-is this the owner's taste or trade, or a craft judgment the review lenses already own?
-**Fail-direction is not the owner's call** — the premortem and security lenses own it, and
-routing it up is a craft call dressed as a consequence. That follows the covenant's third
-promise: route decisions to the owner as consequences, never as craft calls.
-
-**Presentation standard (contract): zero reconstruction, not zero clicks.** For a tier-1 item the
-owner must never have to rebuild the after-state to see it — no checkout, no starting a server,
-no reading source to imagine output. Show the **after-state, not the delta**: taste is judged on
-the finished thing, and owners largely do not read diffs, so "it's in the diff" satisfies
-nothing. Where that is unreachable — always-on preview environments are infrastructure many
-projects will not have — the honest options are an **attended** spot-check or **disclosing**
-that the surface was not presentable. A rule that assumes infrastructure gets ignored.
+share of any project's work and spend *more* owner attention, not less. Test 2 discriminates craft
+from owner taste. **Fail-direction is not the owner's call** — the premortem and security lenses
+own it, and routing it up is a craft call dressed as a consequence. That follows the covenant's
+third promise: route decisions to the owner as consequences, never as craft calls.
 
 **Still unbuilt.** (a) **How** a PR makes its after-state inspectable is a separate open
 question with its own spike — it applies equally to a PR the owner launched themselves, and it
