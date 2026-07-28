@@ -162,11 +162,12 @@ code, so you catch what the maker's context hid.
    **Zero reconstruction, not zero clicks** — the owner should never rebuild the after-state (no
    checkout, no dev server, no reading source to imagine output). A running URL they click meets the
    standard; "check out the branch and run the dev server" fails it.
-   **Presentation order:** zero-reconstruction is the standard; **attended** spot-check (owner present,
-   the build waits) is the fallback when presentation is unreachable; **disclosure is the last resort**
-   — only after those attempts, naming what could not be presented and why, and **reaching the owner
-   before the merge click**, not a line in a body nobody reads after the fact. How a PR presents a
-   surface is a separate open spike; until it concludes, this ordering ships with the visual duty.
+   **Where that is unreachable, say so rather than prescribe infrastructure** — zero-reconstruction is
+   still the standard when presentation is possible. The honest options are an **attended** spot-check
+   (owner present, the build waits) or **disclosing** that the surface was not presentable — disclosure
+   names what could not be presented and why, and **reaches the owner before the merge click**, not a
+   line in a body nobody reads after the fact. How a PR presents a surface is a separate open spike;
+   until it concludes, the visual duty ships with this attended-or-disclose fallback.
    **Calibration home:** this list is the **default**; per-owner taste domains belong in the
    **configure profile** eventually (not yet built) so a consuming advisor does not re-derive what
    "taste" means for their owner.

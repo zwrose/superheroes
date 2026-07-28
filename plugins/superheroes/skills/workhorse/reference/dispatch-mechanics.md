@@ -27,5 +27,6 @@ charter §7 (Channel-conditioned) — not restated here. Mechanics by dispatch k
 - **A native subagent dispatch** has a **harness-managed lifecycle** — no `bash_timeout` floor and no
   CPU column of your own to watch — so those shell mechanics don't apply and there is **no caller-set
   ceiling to invent**; the harness manages the lifecycle and returns when the subagent completes. **No
-  shell-detach** — await completion in-turn; if the dispatch genuinely cannot fit the turn, **park
-  durably on the issue or PR before dispatching it**, not detach after.
+  shell-detach** — await in-turn when you dispatch; if it genuinely cannot fit the turn, **do not
+  dispatch** — park durably on the issue or PR **with the work order ready** (charter §7), or split so
+  each dispatch fits one turn.

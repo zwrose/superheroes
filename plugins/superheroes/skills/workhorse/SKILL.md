@@ -314,8 +314,10 @@ you and is not a detached child you stamped to disk.
 you invoke yourself**: **never a borderline limit you expect to just barely clear**; **stay in-turn
 until it resolves** (background-and-poll) or **detach-and-park** when it truly cannot fit — never end
 on harness-tracked background work. For a **native subagent dispatch there is no detach** — the
-harness owns the lifecycle; **await it in-turn**, and if it genuinely cannot fit the turn, **park
-durably before dispatching it** (issue or PR), not detach after. The **concrete mechanics differ by
+harness owns the lifecycle. **Await it in-turn** when you dispatch; if a dispatch genuinely cannot fit
+the turn, **do not dispatch it** — **park durably** on the issue or PR **with the work order ready to
+go** (the advisor, or a resumed turn that can wait it out, dispatches then), or **split the work** so
+each dispatch is awaitable in one turn. The **concrete mechanics differ by
 dispatch kind** — the foreground Bash cap and why you background-and-poll instead of raising a
 timeout, the output-file-not-`| tail` stall signal, the CPU-vs-elapsed liveness read, and the
 native-subagent lifecycle — so **read `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/workhorse/reference/dispatch-mechanics.md` at dispatch time**, before you invoke a long dispatch.
