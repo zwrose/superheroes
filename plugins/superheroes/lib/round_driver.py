@@ -478,6 +478,26 @@ def _seat_map_violated(state):
     return bool(_seat_map_violations(state))
 
 
+def _seat_map_violation_breach_prose(v: dict) -> str:
+    """One-line breach prose for build_receipt — constraint, seat, and evidence class (#680 R3)."""
+    c = v.get("constraint") or "unknown"
+    s = v.get("seat")
+    ev = v.get("evidence")
+    if ev == "unproven-liveness":
+        ev_phrase = "excusal unprovable — liveness evidence unusable"
+    elif ev == "alternative-live":
+        ev_phrase = "an alternative was available"
+    else:
+        ev_phrase = None
+    if isinstance(s, str) and s and ev_phrase:
+        return "%s (seat %s; %s)" % (c, s, ev_phrase)
+    if ev_phrase:
+        return "%s (%s)" % (c, ev_phrase)
+    if isinstance(s, str) and s:
+        return "%s (seat %s)" % (c, s)
+    return c
+
+
 def _seat_pin_excused(state):
     sm = state.get("seatMap")
     if not isinstance(sm, dict):
@@ -2198,9 +2218,7 @@ def build_receipt(state, session_dir=None):
     if _seat_map_violated(state):
         _viol_parts = []
         for v in _seat_map_violations(state):
-            c = v.get("constraint") or "unknown"
-            s = v.get("seat")
-            _viol_parts.append("%s (seat %s)" % (c, s) if s else c)
+            _viol_parts.append(_seat_map_violation_breach_prose(v))
         _shape = (state.get("certification") or {}).get("shape")
         if isinstance(_shape, str) and _shape.endswith("-constraint-violated"):
             degraded.append(

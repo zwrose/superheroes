@@ -1403,13 +1403,65 @@ def test_unexcused_strong_tier_excused_when_reviewer_deep_unavailable(monkeypatc
     }
     receipt = {
         "seats": seats,
-        "liveVendors": ["cursor"],
+        "liveVendors": ["claude"],
         "livenessPinScoped": False,
-        "authorFamily": "xai",
+        "authorFamily": "anthropic",
         "degradations": [{"constraint": "strong-tier", "seat": "architecture-reviewer"}],
         "violations": [{"constraint": "strong-tier", "seat": "architecture-reviewer"}],
     }
+    classified = SM.classify_violations(receipt)
     assert SM.unexcused_violations(receipt) == []
+    assert classified["excusedByLiveness"] == [
+        {"constraint": "strong-tier", "seat": "architecture-reviewer"},
+    ]
+
+
+def test_unexcused_strong_tier_stands_when_reviewer_deep_available():
+    """FIX-1 counterexample: deep obtainable at claude — collapse not excused by liveness."""
+    seats = _full_seats_template()
+    seats["security-reviewer"] = {
+        "vendor": "claude",
+        "model": "sonnet-5",
+        "effort": "high",
+        "tier": "reviewer",
+        "family": "anthropic",
+        "source": "rotated",
+    }
+    receipt = {
+        "seats": seats,
+        "liveVendors": ["claude"],
+        "livenessPinScoped": False,
+        "authorFamily": "anthropic",
+        "degradations": [{"constraint": "strong-tier", "seat": "security-reviewer"}],
+        "violations": [{"constraint": "strong-tier", "seat": "security-reviewer"}],
+    }
+    assert SM.unexcused_violations(receipt) == [
+        {
+            "constraint": "strong-tier",
+            "seat": "security-reviewer",
+            "evidence": "alternative-live",
+        },
+    ]
+
+
+def test_unexcused_critical_diversity_pin_not_causal_f3a():
+    """FIX-2 F3a: pin on one critical seat does not excuse when diversity was achievable."""
+    seats = _full_seats_template()
+    for s in SM.PANEL_ROSTER:
+        seats[s] = dict(seats[s])
+        seats[s]["family"] = "anthropic"
+    seats["security-reviewer"]["source"] = "pinned"
+    receipt = {
+        "seats": seats,
+        "liveVendors": list(THREE_VENDORS),
+        "livenessPinScoped": False,
+        "authorFamily": "xai",
+        "degradations": [{"constraint": "critical-diversity"}],
+        "violations": [{"constraint": "critical-diversity"}],
+    }
+    assert SM.unexcused_violations(receipt) == [
+        {"constraint": "critical-diversity", "evidence": "alternative-live"},
+    ]
 
 
 def test_unexcused_strong_tier_build_degradation_seat_field_load_bearing(monkeypatch):
@@ -1514,7 +1566,9 @@ def test_classify_truthy_non_list_degradations_do_not_raise():
         "degradations": 42,
         "violations": [{"constraint": "critical-diversity"}],
     }
-    SM.unexcused_violations(receipt)
+    assert SM.unexcused_violations(receipt) == [
+        {"constraint": "critical-diversity", "evidence": "unproven-liveness"},
+    ]
 
 
 def test_classify_pin_excuses_critical_diversity_collapsed_seats():
@@ -1522,6 +1576,8 @@ def test_classify_pin_excuses_critical_diversity_collapsed_seats():
     for s in SM.CRITICAL_SEATS:
         seats[s] = dict(seats[s])
         seats[s]["source"] = "pinned"
+        seats[s]["family"] = "anthropic"
+        seats[s]["vendor"] = "claude"
     receipt = {
         "seats": seats,
         "liveVendors": list(THREE_VENDORS),
@@ -1538,37 +1594,38 @@ def _resolvable_families_fixture():
     seat_map = {
         "liveVendors": list(THREE_VENDORS),
         "degradations": [],
+        "livenessPinScoped": False,
     }
     cfg = _full_seats_template()["security-reviewer"]
     return seat_map, "security-reviewer", cfg
 
 
 @pytest.mark.parametrize(
-    "seat_map_override,cfg_override",
+    "seat_map_override,cfg_override,expect_empty",
     [
-        ({"livenessPinScoped": True}, None),
-        ({}, None),  # absent livenessPinScoped
-        ({"degradations": [{"constraint": "live-vendors", "reason": "synth"}]}, None),
-        ({"degradations": [{"constraint": "preflight-cache-only", "reason": "cache"}]}, None),
-        ({"degradations": [{"constraint": "compose-failed", "reason": "fail"}]}, None),
-        ({"liveVendors": None}, None),
-        ({"liveVendors": []}, None),
-        ({"liveVendors": ["not-a-real-vendor"]}, None),
-        (None, {"tier": "no-such-tier"}),
+        ({"livenessPinScoped": True}, None, False),
+        ({"degradations": [{"constraint": "live-vendors", "reason": "synth"}]}, None, False),
+        ({"degradations": [{"constraint": "preflight-cache-only", "reason": "cache"}]}, None, False),
+        ({"degradations": [{"constraint": "compose-failed", "reason": "fail"}]}, None, False),
+        ({"liveVendors": None}, None, False),
+        ({"liveVendors": []}, None, False),
+        ({"liveVendors": ["not-a-real-vendor"]}, None, False),
+        ({"degradations": 42}, None, False),
+        (None, {"tier": "no-such-tier"}, True),
     ],
     ids=[
         "pin-scoped-true",
-        "pin-scoped-absent",
         "degradation-live-vendors",
         "degradation-preflight-cache-only",
         "degradation-compose-failed",
         "live-vendors-absent",
         "live-vendors-empty",
         "unregistered-vendor",
+        "degradations-non-list",
         "nothing-resolvable-at-tier",
     ],
 )
-def test_resolvable_families_for_seat_unusable_shapes(seat_map_override, cfg_override):
+def test_resolvable_families_for_seat_unusable_shapes(seat_map_override, cfg_override, expect_empty):
     seat_map, seat, cfg = _resolvable_families_fixture()
     cfg = dict(cfg)
     if seat_map_override is not None:
@@ -1579,6 +1636,16 @@ def test_resolvable_families_for_seat_unusable_shapes(seat_map_override, cfg_ove
                 seat_map[key] = val
     if cfg_override:
         cfg.update(cfg_override)
+    result = SM._resolvable_families_for_seat(seat_map, seat, cfg)
+    if expect_empty:
+        assert result == set()
+    else:
+        assert result is None
+
+
+def test_resolvable_families_pin_scoped_absent_is_unusable():
+    seat_map, seat, cfg = _resolvable_families_fixture()
+    seat_map.pop("livenessPinScoped", None)
     assert SM._resolvable_families_for_seat(seat_map, seat, cfg) is None
 
 
