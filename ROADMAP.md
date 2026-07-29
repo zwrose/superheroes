@@ -11,7 +11,9 @@ builds test-first in its own worktree, and hands back a reviewed PR). Four more 
 them: **The Architect** (turns fuzzy intent into an owner-approved spec), **Review Crew** (the
 cross-vendor review panels), **Test-Pilot** (browser-evidence verification), and **Guardian**
 (the maintainability guardian — read-only repo-health sweeps that turn drift into plain-language
-consequences with receipts). Neither hero merges — that act stays the owner's, always.
+consequences with receipts). The owner's **approval** — every gate click, release cut, and
+publish decision — stays theirs always; neither hero takes that decision, and the builder
+never merges.
 
 **Why this roadmap looks the way it does:** [PHILOSOPHY.md](PHILOSOPHY.md) — the promises and
 bets this train exists to deliver. Issue-level status lives on the
@@ -75,9 +77,11 @@ milestone; a milestone is a grouping, not a mandate.
   lenses live, the docs lens caught two real findings on day one), and the owner ruled the
   full-loop leg satisfied by the census-fidelity cycle (sweep finding → issue → build →
   merge). Field-hardening items keep landing in the milestone.
-- **Build dispatch & orchestration** — who launches and watches builder sessions; the
-  advisor's operational surface. *Status:* discovery-first — the build-dispatch discovery is
-  the anchor; build items land here after the owner ratifies its outcome.
+- **Autonomous orchestration** — advisor-orchestrated build batches as a first-class, safe,
+  cheap operation: who launches and watches builder sessions, what makes an unattended
+  dispatch safe, and how little owner attention a correct batch should cost. *Status:*
+  active — opened 2026-07-27; supersedes **Build dispatch & orchestration** now that
+  build-dispatch discovery is ratified and its doctrine is landing.
 - **Growth** — the post-stabilization backlog; see Unscheduled below.
 
 Areas are **largely seam-independent** and interleave freely where their builders don't
