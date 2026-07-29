@@ -257,9 +257,10 @@ never drop a finding or a lens.
 > **Why the narrow write grant is now meaningful.** A narrow grant on the runner only means
 > something because the runner's child accepts **no smuggled authority** — `run-child` takes one
 > argument (the run dir) and derives every authority value from a sealed `launch-authority.json`
-> the supervisor wrote under its own gated invocation; the file's content hash is echoed into the
-> receipt and **re-verified at fold**, so a swapped or recreated file is detected and the run
-> refused, never trusted. Before that seal, a narrow grant string was cosmetic.
+> the supervisor wrote under its own gated invocation; at fold the sealed file is re-verified
+> against a reference the supervisor holds **outside the run dir**, on a path the engine is never
+> handed (the receipt's copy of the hash is informational only). A swapped or recreated file is
+> detected and the run refused, never trusted. Before that seal, a narrow grant string was cosmetic.
 >
 > The seat **may and should** read files and run read-only commands inside the sanitized view to
 > ground its findings (`--repo-root` on the CLI still names the **source** repository; the runner builds
