@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import secrets
+import shlex
 import shutil
 import signal
 import stat
@@ -52,6 +53,13 @@ HEARTBEAT_INTERVAL = 10
 _STDERR_TAIL = 4096
 MAX_STDOUT_CAPTURE = 8 * 1024 * 1024
 MAX_STDERR_CAPTURE = 64 * 1024
+MAX_ENGINE_STDOUT_ON_DISK = MAX_STDOUT_CAPTURE + (1024 * 1024)
+
+SUPERVISOR_DEAD_GRACE_SECONDS = 30
+
+RETRY_PENDING_DETAIL = (
+    "retry-pending; poll never spawns; re-invoke the originating verb"
+)
 
 MAX_SYNC_WAIT = 540
 DEFAULT_SYNC_WAIT = 540
@@ -163,12 +171,13 @@ def _scrub_git_env(env=None):
     return out
 
 
-def _git_scrubbed(cwd, *args):
+def _git_scrubbed(cwd, *args, timeout=None):
     return subprocess.run(
         ["git", "-C", cwd, *args],
         capture_output=True,
         text=True,
         env=_scrub_git_env(),
+        timeout=timeout,
     )
 
 
@@ -182,9 +191,9 @@ def _path_under_cwd(path, cwd_real):
     return common == real_cwd
 
 
-def _worktree_snapshot(cwd_real):
-    st = _git_scrubbed(cwd_real, "status", "--porcelain=v1")
-    head = _git_scrubbed(cwd_real, "rev-parse", "HEAD")
+def _worktree_snapshot(cwd_real, timeout=None):
+    st = _git_scrubbed(cwd_real, "status", "--porcelain=v1", timeout=timeout)
+    head = _git_scrubbed(cwd_real, "rev-parse", "HEAD", timeout=timeout)
     head_sha = head.stdout.strip() if head.returncode == 0 else ""
     porcelain = st.stdout if st.returncode == 0 else ""
     return head_sha, porcelain
@@ -195,7 +204,15 @@ def _worktree_lease_path(cwd_real):
     return os.path.join(tempfile.gettempdir(), WORKTREE_LEASE_PREFIX + digest)
 
 
-def _validate_linked_build_cwd(cwd):
+def _git_preflight_timeout(overall_deadline, max_wait):
+    remaining = overall_deadline - time.monotonic()
+    if remaining <= 0:
+        return 0.0
+    cap = float(max_wait) if max_wait is not None else float(DEFAULT_SYNC_WAIT)
+    return min(max(0.1, remaining), cap)
+
+
+def _validate_linked_build_cwd(cwd, timeout=None):
     """Return (ok, realpath_or_refusal_token)."""
     if cwd is None:
         return False, "cwd-absent"
@@ -206,13 +223,17 @@ def _validate_linked_build_cwd(cwd):
         return False, "cwd-missing"
     if not os.path.isdir(path):
         return False, "cwd-not-a-directory"
-    rp = subprocess.run(
-        ["git", "-C", path, "rev-parse", "--path-format=absolute",
-         "--show-toplevel", "--git-dir", "--git-common-dir"],
-        capture_output=True,
-        text=True,
-        env=_scrub_git_env(),
-    )
+    try:
+        rp = subprocess.run(
+            ["git", "-C", path, "rev-parse", "--path-format=absolute",
+             "--show-toplevel", "--git-dir", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            env=_scrub_git_env(),
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "git-preflight-timeout"
     if rp.returncode != 0:
         stderr = (rp.stderr or "").lower()
         if "not a git repository" in stderr or "not a git repo" in stderr:
@@ -233,12 +254,16 @@ def _validate_linked_build_cwd(cwd):
         return False, "cwd-not-worktree-root"
     if real_git_dir == real_git_common:
         return False, "cwd-primary-checkout"
-    wt = subprocess.run(
-        ["git", "-C", path, "worktree", "list", "--porcelain"],
-        capture_output=True,
-        text=True,
-        env=_scrub_git_env(),
-    )
+    try:
+        wt = subprocess.run(
+            ["git", "-C", path, "worktree", "list", "--porcelain"],
+            capture_output=True,
+            text=True,
+            env=_scrub_git_env(),
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "git-preflight-timeout"
     if wt.returncode != 0:
         return False, "cwd-not-a-linked-worktree"
     registered = False
@@ -327,6 +352,112 @@ def _release_worktree_lease_for_cwd(cwd_real, lease_token, lease_holder_snapshot
         pass
 
 
+def _refresh_worktree_lease_holder(cwd_real, lease_token, lease_holder_snapshot):
+    """Supervisor-owned lease refresh — updates holder pid while token matches."""
+    if not cwd_real or not lease_token:
+        return None
+    lease_path = _worktree_lease_path(cwd_real)
+    token_path = lease_path + LEASE_TOKEN_SUFFIX
+    try:
+        with open(token_path, encoding="utf-8") as fh:
+            stored = fh.read().strip()
+    except OSError:
+        return None
+    if stored != lease_token:
+        return None
+    cur = file_lock.read_holder(lease_path)
+    if lease_holder_snapshot and cur != lease_holder_snapshot:
+        return None
+    holder = file_lock.read_holder(lease_path)
+    if not holder:
+        holder = {}
+    holder["pid"] = os.getpid()
+    holder["acquiredAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    holder.setdefault("ttl", file_lock.DEFAULT_TTL)
+    holder.setdefault("bootId", holder.get("bootId"))
+    holder.setdefault("host", holder.get("host"))
+    try:
+        with open(lease_path, "w", encoding="utf-8") as fh:
+            json.dump(holder, fh)
+    except OSError:
+        return None
+    return holder
+
+
+def _process_group_alive(pgid):
+    if not pgid:
+        return False
+    try:
+        os.killpg(int(pgid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except (OSError, ValueError, TypeError):
+        return True
+
+
+def _terminate_process_group(pgid):
+    if not pgid:
+        return True
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(int(pgid), sig)
+        except ProcessLookupError:
+            return True
+        except Exception:
+            pass
+        time.sleep(0.2)
+    try:
+        while True:
+            pid, _ = os.waitpid(-int(pgid), os.WNOHANG)
+            if pid == 0:
+                break
+    except ChildProcessError:
+        return True
+    except (OSError, ValueError, TypeError):
+        pass
+    return not _process_group_alive(pgid)
+
+
+def _write_engine_pgid(path, pgid):
+    try:
+        _atomic_write_json(path, {"pgid": int(pgid)})
+    except (OSError, TypeError, ValueError):
+        pass
+
+
+def _read_engine_pgid(run_dir, attempt):
+    path = _attempt_paths(run_dir, attempt).get("engine_pgid")
+    if not path:
+        return None
+    data = _read_json(path)
+    if not isinstance(data, dict):
+        return None
+    pgid = data.get("pgid")
+    if pgid is None:
+        return None
+    try:
+        return int(pgid)
+    except (TypeError, ValueError):
+        return None
+
+
+def _cap_durable_stdout(path, max_bytes):
+    try:
+        size = os.path.getsize(path)
+        if size <= max_bytes:
+            return
+        with open(path, "r+b") as fh:
+            fh.seek(-max_bytes, os.SEEK_END)
+            tail = fh.read()
+            fh.seek(0)
+            fh.write(tail)
+            fh.truncate(len(tail))
+            fh.flush()
+    except OSError:
+        pass
+
+
 def _secure_temp_in_dir(directory):
     for _ in range(16):
         name = ".tmp-%s" % secrets.token_hex(16)
@@ -390,6 +521,7 @@ def _attempt_paths(run_dir, attempt):
         "stderr": base + ".stderr",
         "done": base + ".done",
         "supervisor": os.path.join(run_dir, "supervisor-%d.log" % attempt),
+        "engine_pgid": base + ".engine-pgid",
     }
 
 
@@ -548,7 +680,7 @@ def _run_engine(argv, prompt_bytes, timeout, progress_cb, cwd):
 
 
 def _run_engine_files(argv, prompt_path, stdout_path, stderr_path, timeout, progress_path, attempt, cwd,
-                      env=None):
+                      env=None, engine_pgid_path=None):
     """Run engine with durable file stdout/stderr (run-child). Never raises."""
     spawn_env = _scrub_git_env(env)
     stdin_f = None
@@ -573,6 +705,8 @@ def _run_engine_files(argv, prompt_path, stdout_path, stderr_path, timeout, prog
                 "endedAt": time.time(), "refusal": "spawn-failed:%s" % type(exc).__name__}
 
     pgid = proc.pid
+    if engine_pgid_path:
+        _write_engine_pgid(engine_pgid_path, pgid)
     write_progress = _progress_writer(progress_path)
     start = time.monotonic()
     last_beat = start
@@ -585,6 +719,7 @@ def _run_engine_files(argv, prompt_path, stdout_path, stderr_path, timeout, prog
             nbytes = 0
             try:
                 nbytes = os.path.getsize(stdout_path)
+                _cap_durable_stdout(stdout_path, MAX_ENGINE_STDOUT_ON_DISK)
             except OSError:
                 pass
             write_progress(attempt, now - start, nbytes)
@@ -594,20 +729,19 @@ def _run_engine_files(argv, prompt_path, stdout_path, stderr_path, timeout, prog
             timed_out = True
             break
         time.sleep(0.2)
-    if timed_out:
-        _cleanup(proc, pgid)
-    else:
-        try:
-            proc.wait(timeout=5)
-        except Exception:
-            _cleanup(proc, pgid)
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        pass
+    returncode = proc.returncode
+    _cleanup(proc, pgid)
     for fh in (stdin_f, stdout_f, stderr_f):
         try:
             fh.close()
         except Exception:
             pass
     sig = None
-    exit_code = proc.returncode
+    exit_code = returncode
     if exit_code is not None and exit_code < 0:
         sig = -exit_code
         exit_code = None
@@ -701,25 +835,71 @@ def _read_cached_result(run_dir, expected_nonce=None):
     return data
 
 
-def _resume_command_review(run_dir, max_wait):
-    return "%s -B %s dispatch-review --run-dir %s --max-wait %d" % (
-        sys.executable, _DISPATCH_SCRIPT, run_dir, max_wait)
+def _resume_command_review(run_dir, max_wait, state):
+    prompt_path = state.get("promptPath") or os.path.join(run_dir, PROMPT_NAME)
+    repo_root = state.get("repoRoot") or ""
+    parts = [
+        sys.executable, "-B", _DISPATCH_SCRIPT, "dispatch-review",
+        "--engine", state.get("engine") or "codex",
+        "--effort", state.get("effort") or "high",
+        "--prompt-path", prompt_path,
+        "--repo-root", repo_root,
+        "--run-dir", run_dir,
+        "--max-wait", str(int(max_wait)),
+    ]
+    if state.get("model") is not None:
+        parts.extend(["--model", state["model"]])
+    if state.get("engineModel"):
+        parts.extend(["--engine-model", state["engineModel"]])
+    if state.get("schemaPath"):
+        parts.extend(["--schema-path", state["schemaPath"]])
+    if state.get("orderId"):
+        parts.extend(["--order-id", state["orderId"]])
+    if state.get("timeout"):
+        parts.extend(["--timeout", str(int(state["timeout"]))])
+    if state.get("retryTimeout"):
+        parts.extend(["--retry-timeout", str(int(state["retryTimeout"]))])
+    if state.get("progressPath"):
+        parts.extend(["--progress-file", state["progressPath"]])
+    return " ".join(shlex.quote(str(p)) for p in parts)
 
 
 def _resume_command_poll(run_dir, max_wait):
     return "%s -B %s dispatch-poll --run-dir %s --max-wait %d" % (
-        sys.executable, _DISPATCH_SCRIPT, run_dir, max_wait)
+        sys.executable, _DISPATCH_SCRIPT, shlex.quote(run_dir), max_wait)
 
 
-def _resume_command_write(run_dir, max_wait):
-    return "%s -B %s dispatch-write --run-dir %s --max-wait %d" % (
-        sys.executable, _DISPATCH_SCRIPT, run_dir, max_wait)
+def _resume_command_write(run_dir, max_wait, state):
+    prompt_path = state.get("promptPath") or os.path.join(run_dir, PROMPT_NAME)
+    parts = [
+        sys.executable, "-B", _DISPATCH_SCRIPT, "dispatch-write",
+        "--engine", state.get("engine") or "codex",
+        "--effort", state.get("effort") or "high",
+        "--prompt-path", prompt_path,
+        "--cwd", state.get("cwd") or "",
+        "--order-id", state.get("orderId") or "",
+        "--run-dir", run_dir,
+        "--max-wait", str(int(max_wait)),
+    ]
+    if state.get("engineModel"):
+        parts.extend(["--engine-model", state["engineModel"]])
+    if state.get("model") is not None:
+        parts.extend(["--model", state["model"]])
+    if state.get("baseSha"):
+        parts.extend(["--base-sha", state["baseSha"]])
+    if state.get("timeout"):
+        parts.extend(["--timeout", str(int(state["timeout"]))])
+    if state.get("retryTimeout"):
+        parts.extend(["--retry-timeout", str(int(state["retryTimeout"]))])
+    if state.get("progressPath"):
+        parts.extend(["--progress-file", state["progressPath"]])
+    return " ".join(shlex.quote(str(p)) for p in parts)
 
 
 def _resume_for_state(run_dir, state, max_wait):
     if state.get("dispatchMode") == WRITE_DISPATCH_MODE:
-        return _resume_command_write(run_dir, max_wait)
-    return _resume_command_poll(run_dir, max_wait)
+        return _resume_command_write(run_dir, max_wait, state)
+    return _resume_command_review(run_dir, max_wait, state)
 
 
 def _spawned_argv_echo(argv, state=None):
@@ -774,9 +954,13 @@ def _terminal_meta(result, run_dir, argv, spawned_argv=None, state=None, run_non
 def _read_stdout_file(path):
     try:
         with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            if size > MAX_STDOUT_CAPTURE:
+                fh.seek(-MAX_STDOUT_CAPTURE, os.SEEK_END)
+            else:
+                fh.seek(0)
             data = fh.read()
-        if len(data) > MAX_STDOUT_CAPTURE:
-            data = data[-MAX_STDOUT_CAPTURE:]
         return data.decode("utf-8", "ignore")
     except OSError:
         return ""
@@ -785,8 +969,14 @@ def _read_stdout_file(path):
 def _read_stderr_tail(path):
     try:
         with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            tail_len = min(size, _STDERR_TAIL)
+            if tail_len <= 0:
+                return ""
+            fh.seek(-tail_len, os.SEEK_END)
             data = fh.read()
-        return data[-_STDERR_TAIL:].decode("utf-8", "ignore")
+        return data.decode("utf-8", "ignore")
     except OSError:
         return ""
 
@@ -1104,6 +1294,14 @@ def _run_child_main(run_dir, attempt, expected_kind, run_nonce, order_id, launch
         if not ok_cwd:
             return _refuse(cwd_or_token, 4)
         engine_cwd = cwd_or_token
+        refreshed = _refresh_worktree_lease_holder(
+            engine_cwd,
+            state.get("worktreeLeaseToken"),
+            state.get("worktreeLeaseHolder"),
+        )
+        if refreshed:
+            state["worktreeLeaseHolder"] = refreshed
+            _atomic_write_json(state_path, state)
         opts = {
             "model": state.get("model"),
             "engine_model": state.get("engineModel"),
@@ -1138,6 +1336,7 @@ def _run_child_main(run_dir, attempt, expected_kind, run_nonce, order_id, launch
     sentinel = _run_engine_files(
         argv, prompt_path, paths["stdout"], paths["stderr"],
         timeout, progress_path, attempt, engine_cwd,
+        engine_pgid_path=paths.get("engine_pgid"),
     )
     if run_nonce:
         sentinel["runNonce"] = run_nonce
@@ -1246,8 +1445,61 @@ def _validated_sanitized_view_path(path):
     return real
 
 
+def _maybe_synthesize_supervisor_dead_forfeit(run_dir, attempt, state, run_nonce):
+    """When supervisor is gone and grace elapsed, write a trusted forfeit sentinel."""
+    pid = state.get("supervisorPid")
+    if _is_supervisor_process(run_dir, pid, state.get("supervisorStart")):
+        return False
+    started = state.get("attemptStartedAt")
+    if started is None:
+        return False
+    if time.time() - float(started) < SUPERVISOR_DEAD_GRACE_SECONDS:
+        return False
+    paths = _attempt_paths(run_dir, attempt)
+    if os.path.isfile(paths["done"]):
+        return False
+    sentinel = {
+        "exit": None,
+        "timedOut": True,
+        "signal": None,
+        "endedAt": time.time(),
+        "refusal": "supervisor-dead",
+        "runNonce": run_nonce,
+    }
+    _atomic_write_json(paths["done"], sentinel)
+    return True
+
+
+def _compensate_failed_spawn(run_dir, state, launch, argv, run_nonce, is_write, view_receipt):
+    """Clear phantom in-flight state and persist terminal spawn failure."""
+    state_path = os.path.join(run_dir, STATE_NAME)
+    state["inFlightAttempt"] = None
+    state["supervisorPid"] = None
+    _atomic_write_json(state_path, state)
+    result = _terminal_meta({
+        "ok": False,
+        "reason": "unrunnable",
+        "detail": "supervisor-spawn-failed",
+        "attempts": 0,
+        "forfeited": False,
+    }, run_dir, argv, run_nonce=run_nonce)
+    if is_write:
+        ok_cwd, cwd_real = _validate_linked_build_cwd(launch.get("launch_cwd"))
+        if ok_cwd:
+            _release_worktree_lease_for_cwd(
+                cwd_real, launch.get("lease_token"), launch.get("lease_holder"))
+    else:
+        cwd = _review_cwd_path(run_dir)
+        view_path = _validated_sanitized_view_path(cwd)
+        if view_path:
+            sanitized_view.destroy_sanitized_view(view_path)
+        result = _attach_sanitized_view(result, view_receipt or {})
+    _atomic_write_json(os.path.join(run_dir, RESULT_NAME), result)
+    return result
+
+
 def dispatch_abandon(run_dir):
-    """Kill in-flight supervisor (when validated) and return a terminal abandoned result."""
+    """Kill in-flight supervisor engine group (when recorded) and return a terminal abandoned result."""
     ok, real_dir = _validate_run_dir(run_dir, create=False)
     if not ok:
         return {"ok": False, "terminal": True, "reason": "unrunnable", "detail": real_dir,
@@ -1263,16 +1515,36 @@ def dispatch_abandon(run_dir):
     try:
         state = _read_json(os.path.join(real_dir, STATE_NAME), {})
         skipped = []
-        pid = state.get("supervisorPid")
-        if _is_supervisor_process(real_dir, pid, state.get("supervisorStart")):
-            try:
-                os.killpg(int(pid), signal.SIGTERM)
-                time.sleep(0.2)
-                os.killpg(int(pid), signal.SIGKILL)
-            except Exception:
-                skipped.append("kill-failed")
+        engine_kill_confirmed = True
+        in_flight = state.get("inFlightAttempt")
+        engine_pgid = None
+        if in_flight:
+            engine_pgid = _read_engine_pgid(real_dir, in_flight)
+        if engine_pgid:
+            engine_kill_confirmed = _terminate_process_group(engine_pgid)
+            if not engine_kill_confirmed:
+                skipped.append("engine-group-still-live")
         else:
-            skipped.append("kill-skipped-unvalidated-pid")
+            pid = state.get("supervisorPid")
+            if _is_supervisor_process(real_dir, pid, state.get("supervisorStart")):
+                try:
+                    os.killpg(int(pid), signal.SIGTERM)
+                    time.sleep(0.2)
+                    os.killpg(int(pid), signal.SIGKILL)
+                except Exception:
+                    skipped.append("kill-failed")
+            else:
+                skipped.append("kill-skipped-unvalidated-pid")
+        if not engine_kill_confirmed:
+            result = _terminal_meta({
+                "ok": False,
+                "reason": "abandon-incomplete",
+                "forfeited": False,
+                "attempts": state.get("completedAttempts", 0),
+                "detail": "engine-group-still-live",
+                "terminal": True,
+            }, real_dir, state.get("argv") or [])
+            return result
         if state.get("dispatchMode") == WRITE_DISPATCH_MODE:
             _release_worktree_lease(state)
         else:
@@ -1360,6 +1632,12 @@ def _continue_run(run_dir, *, deadline, max_wait, allow_spawn, run_engine=_run_e
             sentinel = _wait_for_sentinel(
                 run_dir, in_flight, time.monotonic() + wait_budget, run_nonce=run_nonce)
             if sentinel is None:
+                if _maybe_synthesize_supervisor_dead_forfeit(
+                        run_dir, in_flight, state, run_nonce):
+                    sentinel = _read_json(_attempt_paths(run_dir, in_flight)["done"])
+                    if not _sentinel_trusted(sentinel, run_nonce):
+                        sentinel = None
+            if sentinel is None:
                 elapsed = time.time() - (state.get("attemptStartedAt") or time.time())
                 return _running_result(run_dir, state, in_flight, argv, elapsed, max_wait)
             # Completed in-flight attempt
@@ -1418,7 +1696,7 @@ def _continue_run(run_dir, *, deadline, max_wait, allow_spawn, run_engine=_run_e
                     _atomic_write_json(state_path, state)
                     if not allow_spawn:
                         return _running_result(run_dir, state, completed, argv, elapsed, max_wait,
-                                               detail="retry-pending")
+                                               detail=RETRY_PENDING_DETAIL)
                     sup_start = state.get("supervisorStart")
                     if not completed_supervisor or not sup_start:
                         return _fold_terminal_write(
@@ -1437,7 +1715,14 @@ def _continue_run(run_dir, *, deadline, max_wait, allow_spawn, run_engine=_run_e
                             "retry-unsafe-missing-worktree-snapshot", None, completed,
                             launch_binding=launch)
                     if cwd:
-                        cur = _worktree_snapshot(cwd)
+                        snap_timeout = max(0.1, deadline - time.monotonic())
+                        try:
+                            cur = _worktree_snapshot(cwd, timeout=snap_timeout)
+                        except subprocess.TimeoutExpired:
+                            return _fold_terminal_write(
+                                run_dir, state, argv, engagement,
+                                "retry-unsafe-missing-worktree-snapshot", None, completed,
+                                launch_binding=launch)
                         if list(cur) != list(snap_before):
                             return _fold_terminal_write(
                                 run_dir, state, argv, engagement,
@@ -1466,7 +1751,7 @@ def _continue_run(run_dir, *, deadline, max_wait, allow_spawn, run_engine=_run_e
                 _atomic_write_json(state_path, state)
                 if not allow_spawn:
                     return _running_result(run_dir, state, completed, argv, elapsed, max_wait,
-                                           detail="retry-pending")
+                                           detail=RETRY_PENDING_DETAIL)
                 # fall through to spawn retry below
             else:
                 state["pendingTerminal"] = kind
@@ -1525,7 +1810,18 @@ def _continue_run(run_dir, *, deadline, max_wait, allow_spawn, run_engine=_run_e
         state["attemptTimeout"] = timeout
         state["attemptStartedAt"] = time.time()
         if is_write and next_attempt == 1 and cwd:
-            state["worktreeSnapshot"] = list(_worktree_snapshot(cwd))
+            snap_timeout = max(0.1, deadline - time.monotonic())
+            try:
+                state["worktreeSnapshot"] = list(
+                    _worktree_snapshot(cwd, timeout=snap_timeout))
+            except subprocess.TimeoutExpired:
+                return _terminal_meta({
+                    "ok": False,
+                    "reason": "unrunnable",
+                    "detail": "git-preflight-timeout",
+                    "attempts": 0,
+                    "forfeited": False,
+                }, run_dir, argv, run_nonce=run_nonce)
         _atomic_write_json(state_path, state)
 
         if run_engine is not _run_engine or injected:
@@ -1562,10 +1858,8 @@ def _continue_run(run_dir, *, deadline, max_wait, allow_spawn, run_engine=_run_e
 
         proc = _spawn_run_child(run_dir, next_attempt, launch)
         if proc is None:
-            return _terminal_meta({
-                "ok": False, "reason": "unrunnable", "detail": "supervisor-spawn-failed",
-                "attempts": 0, "forfeited": False,
-            }, run_dir, argv)
+            return _compensate_failed_spawn(
+                run_dir, state, launch, argv, run_nonce, is_write, view_receipt)
         state["supervisorPid"] = proc.pid
         lstart = _supervisor_lstart(proc.pid)
         state["supervisorStart"] = lstart if lstart else ""
@@ -1620,7 +1914,9 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
         max_wait = min(max(int(max_wait), 0), MAX_SYNC_WAIT)
 
     if run_dir:
-        ok, real_dir = _validate_run_dir(run_dir, create=False)
+        probe_state = os.path.join(run_dir.strip(), STATE_NAME)
+        ok, real_dir = _validate_run_dir(
+            run_dir, create=not os.path.isfile(probe_state))
         if not ok:
             return {"ok": False, "terminal": True, "reason": "unrunnable", "detail": real_dir,
                     "attempts": 0, "forfeited": False, "runDir": run_dir}
@@ -1655,6 +1951,8 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
             {"ok": False, "reason": "unrunnable", "detail": repo_detail,
              "attempts": 0, "forfeited": False},
             run_dir or "", [])
+
+    git_timeout = _git_preflight_timeout(overall_deadline, max_wait)
 
     ok, why = engine_adapter.prompt_path_ok(prompt_path)
     if not ok:
@@ -1770,6 +2068,8 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
         "retryTimeout": retry_timeout,
         "orderId": order_id,
         "runNonce": run_nonce,
+        "repoRoot": repo_detail,
+        "promptPath": os.path.abspath(prompt_path),
         "completedAttempts": 0,
         "inFlightAttempt": None,
     }
@@ -1858,8 +2158,22 @@ def _dispatch_write_impl(engine, *, engine_model, effort, model=None, prompt_pat
 
     overall_deadline = time.monotonic() + (1e9 if loop_until_terminal else max_wait)
 
-    ok_cwd, cwd_detail = _validate_linked_build_cwd(cwd)
+    git_timeout = _git_preflight_timeout(overall_deadline, max_wait)
+    if git_timeout <= 0:
+        return _terminal_meta(
+            {"ok": False, "reason": "unrunnable", "detail": "deadline-exceeded-before-spawn",
+             "attempts": 0, "forfeited": False},
+            run_dir or "", [])
+    ok_cwd, cwd_detail = _validate_linked_build_cwd(cwd, timeout=git_timeout)
     if not ok_cwd:
+        if cwd_detail == "git-preflight-timeout" or time.monotonic() >= overall_deadline:
+            return _terminal_meta(
+                {"ok": False, "reason": "unrunnable",
+                 "detail": "git-preflight-timeout"
+                 if cwd_detail == "git-preflight-timeout"
+                 else "deadline-exceeded-before-spawn",
+                 "attempts": 0, "forfeited": False},
+                run_dir or "", [])
         return _terminal_meta(
             {"ok": False, "reason": "unrunnable", "detail": cwd_detail,
              "attempts": 0, "forfeited": False},
@@ -1967,6 +2281,7 @@ def _dispatch_write_impl(engine, *, engine_model, effort, model=None, prompt_pat
         "worktreeLeaseToken": lease_token,
         "worktreeLeaseHolder": lease_holder,
         "runNonce": run_nonce,
+        "promptPath": os.path.abspath(prompt_path),
         "completedAttempts": 0,
         "inFlightAttempt": None,
     }

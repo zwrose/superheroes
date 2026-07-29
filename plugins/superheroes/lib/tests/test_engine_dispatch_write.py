@@ -4,6 +4,7 @@ import inspect
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -1006,3 +1007,333 @@ def test_dispatch_review_kind_check_mutation_probe(tmp_path, monkeypatch):
         run_dir=write_run, max_wait=10,
     )
     assert res["reason"] == "run-kind-mismatch"
+
+
+# --- WO-702 G2: lifecycle and liveness (rulings A-3, A-4) ---
+
+
+def _parse_resume_cli(cmd_line):
+    import shlex
+    parts = shlex.split(cmd_line)
+    idx = next(i for i, t in enumerate(parts) if t.startswith("dispatch-"))
+    return ED.main(parts[idx:])
+
+
+def _seed_write_state_for_resume(tmp_path, linked, prompt, order_id="resume-o"):
+    run_dir = tmp_path / "resume-run"
+    run_dir.mkdir(mode=0o700)
+    built = EA.build_argv_result(
+        "codex", "build", "high",
+        {"engine_model": "gpt-5.6-terra", "cwd": linked},
+    )
+    state = {
+        "engine": "codex",
+        "roleKind": "build",
+        "dispatchMode": ED.WRITE_DISPATCH_MODE,
+        "effort": "high",
+        "engineModel": "gpt-5.6-terra",
+        "cwd": linked,
+        "argv": built["argv"],
+        "orderId": order_id,
+        "promptPath": prompt,
+        "timeout": 900,
+        "retryTimeout": 900,
+    }
+    return str(run_dir), state
+
+
+def test_abandon_terminates_engine_process_group_not_supervisor_only(tmp_path):
+    """Edge 1: abandon kills the engine process group recorded by the supervisor."""
+    main, linked = _linked_pair(tmp_path)
+    run_dir = tmp_path / "abandon-engine-pg"
+    run_dir.mkdir(mode=0o700)
+    code = (
+        "import time\n"
+        "time.sleep(120)\n"
+    )
+    proc = subprocess.Popen(
+        ["python3", "-c", code], start_new_session=True,
+    )
+    pgid = proc.pid
+    paths = ED._attempt_paths(str(run_dir), 1)
+    ED._write_engine_pgid(paths["engine_pgid"], pgid)
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(os.path.realpath(linked))
+    try:
+        (run_dir / "state.json").write_text(json.dumps({
+            "engine": "codex",
+            "dispatchMode": ED.WRITE_DISPATCH_MODE,
+            "cwd": linked,
+            "argv": [],
+            "inFlightAttempt": 1,
+            "completedAttempts": 0,
+            "worktreeLeaseToken": lease_token,
+            "worktreeLeaseHolder": lease_holder,
+        }), encoding="utf-8")
+        res = ED.dispatch_abandon(str(run_dir))
+        assert res.get("reason") == "abandoned"
+        time.sleep(0.5)
+        try:
+            os.killpg(pgid, 0)
+            dead = False
+        except OSError:
+            dead = True
+        assert dead
+    finally:
+        ED._release_worktree_lease_for_cwd(
+            os.path.realpath(linked), lease_token, lease_holder)
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except OSError:
+            pass
+
+
+def test_abandon_engine_group_unconfirmed_lease_stays_held(tmp_path, monkeypatch):
+    """Edge 2: unconfirmed engine death → lease held, named detail."""
+    main, linked = _linked_pair(tmp_path)
+    run_dir = tmp_path / "abandon-lease"
+    run_dir.mkdir(mode=0o700)
+    paths = ED._attempt_paths(str(run_dir), 1)
+    ED._write_engine_pgid(paths["engine_pgid"], os.getpid())
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(os.path.realpath(linked))
+    import file_lock
+    lease_path = ED._worktree_lease_path(os.path.realpath(linked))
+    monkeypatch.setattr(ED, "_terminate_process_group", lambda _pgid: False)
+    try:
+        (run_dir / "state.json").write_text(json.dumps({
+            "engine": "codex",
+            "dispatchMode": ED.WRITE_DISPATCH_MODE,
+            "cwd": linked,
+            "argv": [],
+            "inFlightAttempt": 1,
+            "worktreeLeaseToken": lease_token,
+            "worktreeLeaseHolder": lease_holder,
+        }), encoding="utf-8")
+        res = ED.dispatch_abandon(str(run_dir))
+        assert res.get("detail") == "engine-group-still-live"
+        assert res.get("reason") == "abandon-incomplete"
+        assert file_lock.read_holder(lease_path)
+        assert not (run_dir / "result.json").exists()
+    finally:
+        ED._release_worktree_lease_for_cwd(
+            os.path.realpath(linked), lease_token, lease_holder)
+
+
+def test_run_engine_files_sweeps_descendants_on_normal_exit(tmp_path):
+    """Edge 3: normal engine exit still kills the process group; leader rc preserved."""
+    marker = tmp_path / "files_gc.pid"
+    code = (
+        "import os,signal,time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "pid=os.fork()\n"
+        "if pid==0:\n"
+        "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "    open(%r,'w').write(str(os.getpid()))\n"
+        "    time.sleep(60)\n"
+        "else:\n"
+        "    time.sleep(0.3)\n" % str(marker)
+    )
+    stdout = tmp_path / "out.stdout"
+    stderr = tmp_path / "out.stderr"
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_bytes(b"x")
+    res = ED._run_engine_files(
+        ["python3", "-c", code],
+        str(prompt), str(stdout), str(stderr),
+        30, None, 1, str(tmp_path),
+        engine_pgid_path=str(tmp_path / "pgid.json"),
+    )
+    assert res.get("timedOut") is False
+    assert res.get("exit") == 0
+    time.sleep(0.5)
+    gc = int(marker.read_text())
+    try:
+        os.kill(gc, 0)
+        dead = False
+    except OSError:
+        dead = True
+    assert dead
+
+
+def test_dispatch_poll_never_spawns_on_retry_pending(tmp_path, monkeypatch):
+    """Edge 4: poll stays observational when retry is pending."""
+    run_dir = tmp_path / "poll-retry"
+    run_dir.mkdir(mode=0o700)
+    (run_dir / "attempt-1.done").write_text(json.dumps({
+        "exit": None, "timedOut": True, "runNonce": "n1",
+    }), encoding="utf-8")
+    (run_dir / "attempt-1.stdout").write_text("", encoding="utf-8")
+    (run_dir / "attempt-1.stderr").write_text("", encoding="utf-8")
+    (run_dir / "state.json").write_text(json.dumps({
+        "engine": "codex",
+        "roleKind": "review",
+        "effort": "high",
+        "model": "sonnet",
+        "argv": ["codex"],
+        "runNonce": "n1",
+        "repoRoot": str(tmp_path / "repo"),
+        "promptPath": str(run_dir / "prompt.txt"),
+        "viewReceipt": {},
+        "fedPrompt": "",
+        "inFlightAttempt": 1,
+        "completedAttempts": 0,
+        "attemptStartedAt": time.time(),
+    }), encoding="utf-8")
+    spawned = []
+    monkeypatch.setattr(ED, "_spawn_run_child", lambda *a, **k: spawned.append(1) or None)
+    res = ED.dispatch_poll(str(run_dir), max_wait=1)
+    assert res.get("terminal") is False
+    assert ED.RETRY_PENDING_DETAIL in (res.get("detail") or "")
+    assert spawned == []
+    assert not (run_dir / "attempt-2.stdout").exists()
+
+
+def test_dispatch_poll_spawn_mutation_probe(tmp_path, monkeypatch):
+    """Edge 4 mutation probe: allow_spawn=True in poll must be catchable; reverted after."""
+    path = os.path.join(_HERE, "..", "engine_dispatch.py")
+    anchor = "return _continue_run(real_dir, deadline=deadline, max_wait=max_wait, allow_spawn=False)"
+    with open(path, encoding="utf-8") as fh:
+        src = fh.read()
+    assert anchor in src
+    mutated = src.replace(anchor, anchor.replace("allow_spawn=False", "allow_spawn=True", 1), 1)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(mutated)
+    try:
+        ED_mut = _load_ed()
+        run_dir = tmp_path / "probe-poll"
+        run_dir.mkdir(mode=0o700)
+        (run_dir / "state.json").write_text(json.dumps({
+            "engine": "codex", "argv": [], "completedAttempts": 0,
+            "viewReceipt": {}, "fedPrompt": "",
+        }), encoding="utf-8")
+        spawned = []
+        monkeypatch.setattr(ED_mut, "_spawn_run_child", lambda *a, **k: spawned.append(1))
+        ED_mut.dispatch_poll(str(run_dir), max_wait=30)
+        assert spawned, "poll with allow_spawn=True should have spawned"
+    finally:
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(src)
+    global ED
+    ED = _load_ed()
+    with open(path, encoding="utf-8") as fh:
+        assert fh.read() == src
+
+
+def test_resume_commands_parse_review_write_and_space_run_dir(tmp_path):
+    """Edge 5: emitted resume commands parse under the module CLI."""
+    main, linked = _linked_pair(tmp_path)
+    prompt = _prompt(tmp_path)
+    run_dir, wstate = _seed_write_state_for_resume(tmp_path, linked, prompt)
+    run_dir_sp = str(tmp_path / "run with spaces")
+    os.makedirs(run_dir_sp, mode=0o700)
+    wstate_sp = dict(wstate)
+    cmd_w = ED._resume_command_write(run_dir_sp, 540, wstate_sp)
+    assert _parse_resume_cli(cmd_w) == 0
+    rstate = {
+        "engine": "codex",
+        "effort": "high",
+        "model": "sonnet",
+        "repoRoot": main,
+        "promptPath": prompt,
+        "orderId": "r1",
+    }
+    cmd_r = ED._resume_command_review(run_dir_sp, 540, rstate)
+    assert _parse_resume_cli(cmd_r) == 0
+    cmd_w2 = ED._resume_command_write(run_dir, 540, wstate)
+    assert _parse_resume_cli(cmd_w2) == 0
+    lease_res = ED._running_result(
+        run_dir, wstate, 1, wstate["argv"], 0, 540,
+        detail="worktree-lease-held",
+    )
+    assert _parse_resume_cli(lease_res["resume"]) == 0
+
+
+def test_supervisor_dead_becomes_forfeit_not_eternal_running(tmp_path, monkeypatch):
+    """Edge 6: dead supervisor + grace → synthetic forfeit, not eternal running."""
+    monkeypatch.setattr(ED, "SUPERVISOR_DEAD_GRACE_SECONDS", 0)
+    run_dir = tmp_path / "sup-dead"
+    run_dir.mkdir(mode=0o700)
+    (run_dir / "state.json").write_text(json.dumps({
+        "engine": "codex",
+        "roleKind": "review",
+        "effort": "high",
+        "model": "sonnet",
+        "argv": ["codex"],
+        "runNonce": "dead-n",
+        "repoRoot": str(tmp_path),
+        "promptPath": str(run_dir / "p.txt"),
+        "viewReceipt": {},
+        "fedPrompt": "x",
+        "inFlightAttempt": 1,
+        "completedAttempts": 0,
+        "supervisorPid": 999999991,
+        "supervisorStart": "not-a-real-start",
+        "attemptStartedAt": time.time() - 60,
+    }), encoding="utf-8")
+    (run_dir / "attempt-1.stdout").write_text("", encoding="utf-8")
+    res = ED.dispatch_poll(str(run_dir), max_wait=0)
+    assert res.get("terminal") is False
+    assert ED.RETRY_PENDING_DETAIL in (res.get("detail") or "")
+
+
+def test_spawn_failed_compensates_state_and_lease(tmp_path, monkeypatch):
+    """Edge 7: failed supervisor spawn persists terminal result and releases write lease."""
+    main, linked = _linked_pair(tmp_path)
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "spawn-fail"
+    run_dir.mkdir(mode=0o700)
+    monkeypatch.setattr(ED, "_spawn_run_child", lambda *a, **k: None)
+    res = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="sf-o",
+        run_engine=ED._run_engine, max_wait=10, run_dir=str(run_dir),
+    )
+    assert res.get("detail") == "supervisor-spawn-failed"
+    assert (run_dir / "result.json").is_file()
+    st = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    assert st.get("inFlightAttempt") is None
+    import file_lock
+    assert not file_lock.read_holder(ED._worktree_lease_path(os.path.realpath(linked)))
+
+def test_read_stdout_file_bounded_tail_read(tmp_path, monkeypatch):
+    """Edge 8: stdout fold reads a bounded tail without loading the whole file."""
+    monkeypatch.setattr(ED, "MAX_STDOUT_CAPTURE", 128)
+    p = tmp_path / "huge.stdout"
+    p.write_bytes(b"a" * 10_000 + b"MARKER-TAIL-END")
+    out = ED._read_stdout_file(str(p))
+    assert "MARKER-TAIL-END" in out
+    assert len(out.encode("utf-8")) <= 128
+
+
+def test_wedged_git_preflight_returns_named_refusal(tmp_path, monkeypatch):
+    """Edge 9: git preflight timeout → attempts 0 refusal, no spawn."""
+    main, linked = _linked_pair(tmp_path)
+
+    def _timeout_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs.get("timeout"))
+
+    monkeypatch.setattr(ED.subprocess, "run", _timeout_run)
+    fake = FakeWriteRunner([])
+    res = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=_prompt(tmp_path), cwd=linked, order_id="git-o",
+        run_engine=fake, max_wait=30,
+    )
+    assert res.get("detail") == "git-preflight-timeout"
+    assert res.get("attempts") == 0
+    assert len(fake.calls) == 0
+
+
+def test_dispatch_review_creates_missing_run_dir(tmp_path):
+    """Edge 10: dispatch-review creates a not-yet-existing --run-dir like dispatch-write."""
+    repo_root = _review_repo(tmp_path)
+    build_view = _fake_review_build_view(tmp_path)
+    run_dir = tmp_path / "brand new" / "review-run"
+    assert not run_dir.exists()
+    fake = _ReviewFakeRunner([(_VALID_REVIEW_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=build_view, run_dir=str(run_dir), max_wait=60,
+    )
+    assert res.get("ok") is True
+    assert run_dir.is_dir()
