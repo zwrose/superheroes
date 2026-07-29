@@ -70,7 +70,18 @@ def _detected_plant(findings):
     return False
 
 
+def _is_non_terminal(res):
+    return res.get("terminal") is False
+
+
 def _map_outcome(res):
+    if _is_non_terminal(res):
+        reason = res.get("reason")
+        if reason == "running":
+            return "running", ""
+        raw = reason or res.get("detail") or "unknown"
+        raise ValueError("non-terminal dispatch with unrecognised reason: %s" % raw)
+
     if res.get("ok") is True:
         return "ok", ""
     reason = res.get("reason")
@@ -83,6 +94,17 @@ def _map_outcome(res):
         return "unrunnable", "not-dispatched: %s" % detail
     raw = reason or res.get("detail") or "unknown"
     return "unrunnable", "not-dispatched: %s" % raw
+
+
+def _unmeasured_evidence():
+    return {
+        "findings": None,
+        "investigated": None,
+        "tokens": None,
+        "toolCalls": None,
+        "stdoutBytes": None,
+        "wallSeconds": None,
+    }
 
 
 def _engaged_from_dispatch(res):
@@ -119,11 +141,16 @@ def _evidence_from_dispatch(res):
     }
 
 
-def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeout=300):
+def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeout=300,
+               run_dir=None, max_wait=None):
     """Dispatch the planted-defect fixture through the real seat path and score ENGAGEMENT.
 
+    By default blocks until the dispatch result is terminal (``max_wait`` omitted). With an
+    explicit ``max_wait``, dispatch may return a non-terminal ``running`` outcome for continuation.
+
     ``timeout`` bounds the first dispatch attempt only. On retry the runner floors its wait at
-    ``RETRY_MIN_TIMEOUT`` (900 s), so worst-case wall time is ``timeout + 900`` seconds.
+    ``RETRY_MIN_TIMEOUT`` (900 s), so worst-case wall time for a blocking run is ``timeout + 900``
+    seconds.
     """
     if dispatch is None:
         dispatch = engine_dispatch.dispatch_review
@@ -136,20 +163,25 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
             fh.write(CANARY_FIXTURE_PROMPT)
 
         try:
-            res = dispatch(
-                engine,
-                model=None,
-                effort=effort,
-                engine_model=engine_model,
-                prompt_path=prompt_path,
-                repo_root=repo_root,
-                timeout=timeout,
-            )
+            dispatch_kw = {
+                "model": None,
+                "effort": effort,
+                "engine_model": engine_model,
+                "prompt_path": prompt_path,
+                "repo_root": repo_root,
+                "timeout": timeout,
+            }
+            if run_dir is not None:
+                dispatch_kw["run_dir"] = run_dir
+            if max_wait is not None:
+                dispatch_kw["max_wait"] = max_wait
+            res = dispatch(engine, **dispatch_kw)
         except Exception as exc:
             return {
                 "engine": engine,
                 "model": engine_model,
                 "outcome": "unrunnable",
+                "terminal": True,
                 "engaged": False,
                 "evidence": {
                     "findings": 0,
@@ -161,6 +193,21 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
                 },
                 "detectedPlant": False,
                 "detail": "internal-%s" % type(exc).__name__,
+            }
+
+        if _is_non_terminal(res):
+            outcome, _ = _map_outcome(res)
+            return {
+                "engine": engine,
+                "model": engine_model,
+                "outcome": outcome,
+                "terminal": False,
+                "engaged": None,
+                "evidence": _unmeasured_evidence(),
+                "detectedPlant": False,
+                "detail": "",
+                "runDir": res.get("runDir"),
+                "resume": res.get("resume"),
             }
 
         outcome, detail_hint = _map_outcome(res)
@@ -189,6 +236,7 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
             "engine": engine,
             "model": engine_model,
             "outcome": outcome,
+            "terminal": True,
             "engaged": engaged,
             "evidence": _evidence_from_dispatch(res),
             "detectedPlant": detected_plant,
@@ -212,6 +260,8 @@ def main(argv):
     p.add_argument("--effort", required=True)
     p.add_argument("--repo-root", required=True)
     p.add_argument("--timeout", type=int, default=300)
+    p.add_argument("--run-dir", default=None)
+    p.add_argument("--max-wait", type=int, default=None)
     args = ap.parse_args(argv)
     res = run_canary(
         args.engine,
@@ -219,6 +269,8 @@ def main(argv):
         effort=args.effort,
         repo_root=args.repo_root,
         timeout=args.timeout,
+        run_dir=args.run_dir,
+        max_wait=args.max_wait,
     )
     sys.stdout.write(json.dumps(res) + "\n")
     return 0

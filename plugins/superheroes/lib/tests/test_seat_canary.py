@@ -417,3 +417,191 @@ def test_dispatch_exception_still_cleans_temp_file(tmp_path):
     )
     assert created
     assert not os.path.exists(created[0])
+
+
+def _running_dispatch_result(**overrides):
+    base = {
+        "ok": False,
+        "terminal": False,
+        "running": True,
+        "reason": "running",
+        "forfeited": False,
+        "runDir": "/tmp/run-abc",
+        "resume": ["python3", "dispatch.py", "/tmp/run-abc", "30"],
+    }
+    base.update(overrides)
+    return base
+
+
+def test_non_terminal_running_never_maps_to_unrunnable():
+    outcome, detail = SC._map_outcome(_running_dispatch_result())
+    assert outcome == "running"
+    assert outcome != "unrunnable"
+    assert detail == ""
+
+
+def test_non_terminal_unknown_reason_fails_loud_not_unrunnable():
+    import pytest
+    res = _running_dispatch_result(reason="mystery", terminal=False)
+    with pytest.raises(ValueError, match="unrecognised reason"):
+        SC._map_outcome(res)
+
+
+def test_bounded_wait_running_outcome_engaged_none_not_false():
+    def dispatch(engine, **kwargs):
+        assert kwargs.get("max_wait") == 5
+        return _running_dispatch_result()
+
+    out = SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root="/r",
+        dispatch=dispatch, max_wait=5,
+    )
+    assert out["outcome"] == "running"
+    assert out["outcome"] != "unrunnable"
+    assert out["engaged"] is None
+    assert out["engaged"] is not False
+    assert out["terminal"] is False
+    assert out["runDir"] == "/tmp/run-abc"
+    assert out["resume"] == ["python3", "dispatch.py", "/tmp/run-abc", "30"]
+    assert out["evidence"] == SC._unmeasured_evidence()
+
+
+def test_run_canary_without_max_wait_never_returns_non_terminal():
+    def dispatch(engine, **kwargs):
+        assert "max_wait" not in kwargs
+        return _base_dispatch_result()
+
+    out = SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+    )
+    assert out["terminal"] is True
+
+
+def test_terminal_outcome_ok_legacy_shape_plus_terminal():
+    def dispatch(engine, **kwargs):
+        return _base_dispatch_result(
+            findings=[{"id": "f", "file": "a.py", "title": "t", "body": "b"}],
+            engagement={"tokens": 10, "toolCalls": None, "stdoutBytes": 1, "wallSeconds": 8.0},
+        )
+
+    out = SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+    )
+    assert out["outcome"] == "ok"
+    assert out["terminal"] is True
+    assert out["engaged"] is True
+    assert out["detail"] == ""
+    assert out["evidence"] == {
+        "findings": 1,
+        "investigated": 0,
+        "tokens": 10,
+        "toolCalls": None,
+        "stdoutBytes": 1,
+        "wallSeconds": 8.0,
+    }
+
+
+def test_terminal_outcome_vacuous_legacy_shape_plus_terminal():
+    def dispatch(engine, **kwargs):
+        return {
+            "ok": False,
+            "reason": "vacuous",
+            "attempts": 2,
+            "forfeited": True,
+            "engagement": {
+                "tokens": None,
+                "toolCalls": None,
+                "stdoutBytes": 0,
+                "wallSeconds": 0.0,
+            },
+            "disclosure": "vacuous seat",
+        }
+
+    out = SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+    )
+    assert out["outcome"] == "vacuous"
+    assert out["terminal"] is True
+    assert out["engaged"] is False
+    assert out["detail"] == "vacuous seat"
+
+
+def test_terminal_outcome_forfeited_legacy_shape_plus_terminal():
+    def dispatch(engine, **kwargs):
+        return {
+            "ok": False,
+            "reason": "forfeited",
+            "attempts": 2,
+            "forfeited": True,
+            "engagement": {
+                "tokens": None,
+                "toolCalls": None,
+                "stdoutBytes": 0,
+                "wallSeconds": 0.0,
+            },
+            "disclosure": "seat gave up",
+        }
+
+    out = SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+    )
+    assert out["outcome"] == "forfeited"
+    assert out["terminal"] is True
+    assert out["engaged"] is False
+    assert out["detail"] == "seat gave up"
+
+
+def test_terminal_outcome_unrunnable_legacy_shape_plus_terminal():
+    def dispatch(engine, **kwargs):
+        return {
+            "ok": False,
+            "reason": "unrunnable",
+            "detail": "repo-root-missing",
+            "attempts": 0,
+            "forfeited": False,
+            "engagement": {"tokens": None, "toolCalls": None, "stdoutBytes": 0, "wallSeconds": 0.0},
+        }
+
+    out = SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+    )
+    assert out["outcome"] == "unrunnable"
+    assert out["terminal"] is True
+    assert out["engaged"] is False
+    assert out["detail"] == "not-dispatched: repo-root-missing"
+
+
+def test_terminal_key_present_on_every_result():
+    def dispatch_running(engine, **kwargs):
+        return _running_dispatch_result()
+
+    running = SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root="/r",
+        dispatch=dispatch_running, max_wait=1,
+    )
+    assert "terminal" in running
+    assert running["terminal"] is False
+
+    def dispatch_ok(engine, **kwargs):
+        return _base_dispatch_result()
+
+    terminal = SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch_ok,
+    )
+    assert "terminal" in terminal
+    assert terminal["terminal"] is True
+
+
+def test_run_dir_and_max_wait_forwarded_to_dispatch():
+    seen = {}
+
+    def dispatch(engine, **kwargs):
+        seen.update(kwargs)
+        return _running_dispatch_result()
+
+    SC.run_canary(
+        "cursor", engine_model="c", effort="high", repo_root="/r",
+        dispatch=dispatch, run_dir="/runs/x", max_wait=10,
+    )
+    assert seen["run_dir"] == "/runs/x"
+    assert seen["max_wait"] == 10
