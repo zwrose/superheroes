@@ -555,28 +555,43 @@ def test_worktree_lease_held_non_terminal(tmp_path):
         file_lock.release(lease_path)
 
 
-def test_run_child_rejects_forged_cwd(tmp_path, monkeypatch):
-    main, linked1, linked2 = _two_linked_worktrees(tmp_path)
-    prompt = _prompt(tmp_path)
-    run_dir = tmp_path / "forge-run"
-    run_dir.mkdir(mode=0o700)
+def _seed_write_dispatch_completed_attempt(tmp_path, *, engine, linked1, prompt, run_dir, order_id):
+    run_dir = Path(run_dir)
+    run_dir.mkdir(mode=0o700, parents=True)
+    if engine == "codex":
+        dispatch_kw = {
+            "engine_model": "gpt-5.6-terra",
+            "effort": "high",
+        }
+    else:
+        dispatch_kw = {
+            "engine_model": "composer-2.5",
+            "effort": None,
+        }
     fake = FakeWriteRunner([(_WRITE_OK_STDOUT, False, 0, "")])
     res = ED.dispatch_write(
-        "codex", engine_model="gpt-5.6-terra", effort="high",
-        prompt_path=prompt, cwd=linked1, order_id="forge-o", run_engine=fake,
-        max_wait=60, run_dir=str(run_dir),
+        engine,
+        prompt_path=prompt,
+        cwd=linked1,
+        order_id=order_id,
+        run_engine=fake,
+        max_wait=60,
+        run_dir=str(run_dir),
+        **dispatch_kw,
     )
-    assert res.get("ok") is True
+    assert res.get("ok") is True, res
     state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
-    forged = EA.build_argv_result(
-        "codex", "build", "high",
-        {"engine_model": "gpt-5.6-terra", "cwd": linked2},
-    )
+    return state
+
+
+def _prepare_forged_cwd_retry_state(state, run_dir, linked1, linked2, *, argv=None):
+    state = dict(state)
     state["cwd"] = linked2
-    state["argv"] = forged["argv"]
-    _, forged_spawned = ED._resolve_argv_binary(forged["argv"])
-    state["spawnedArgv"] = forged_spawned
-    state["engineBinary"] = forged_spawned[0]
+    if argv is not None:
+        state["argv"] = argv
+        _, forged_spawned = ED._resolve_argv_binary(argv)
+        state["spawnedArgv"] = forged_spawned
+        state["engineBinary"] = forged_spawned[0]
     state["inFlightAttempt"] = None
     state["completedAttempts"] = 1
     state["pendingTerminal"] = "forfeited"
@@ -588,6 +603,37 @@ def test_run_child_rejects_forged_cwd(tmp_path, monkeypatch):
     except FileNotFoundError:
         pass
     (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    return state
+
+
+def _spy_engine_files_no_spawn(monkeypatch):
+    spawned = []
+    real = ED._run_engine_files
+
+    def _spy(argv, *args, **kwargs):
+        spawned.append(list(argv))
+        return real(argv, *args, **kwargs)
+
+    monkeypatch.setattr(ED, "_run_engine_files", _spy)
+    return spawned
+
+
+def test_run_child_rejects_forged_cwd(tmp_path, monkeypatch):
+    """Codex dispatch resume: forged cwd with argv rebuilt for the forged tree."""
+    main, linked1, linked2 = _two_linked_worktrees(tmp_path)
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "forge-run"
+    state = _seed_write_dispatch_completed_attempt(
+        tmp_path, engine="codex", linked1=linked1, prompt=prompt,
+        run_dir=run_dir, order_id="forge-o",
+    )
+    forged = EA.build_argv_result(
+        "codex", "build", "high",
+        {"engine_model": "gpt-5.6-terra", "cwd": linked2},
+    )
+    _prepare_forged_cwd_retry_state(
+        state, run_dir, linked1, linked2, argv=forged["argv"],
+    )
     spawned = []
     monkeypatch.setattr(ED, "_spawn_run_child", lambda *a, **k: spawned.append(1))
     res2 = ED.dispatch_write(
@@ -597,11 +643,89 @@ def test_run_child_rejects_forged_cwd(tmp_path, monkeypatch):
     )
     assert spawned == [], res2
     assert res2.get("terminal") is True
-    assert res2.get("detail") in (
-        "cwd-authorization-mismatch",
-        "worktree-lease-token-mismatch",
-        "launch-cwd-mismatch",
+    assert res2.get("detail") == "cwd-authorization-mismatch"
+
+
+def test_run_child_rejects_forged_cwd_codex_argv_consistent(tmp_path, monkeypatch):
+    """Codex run-child: argv re-derives for the authorized cwd; only cwd identity is wrong."""
+    main, linked1, linked2 = _two_linked_worktrees(tmp_path)
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "forge-codex-argv-ok"
+    state = _seed_write_dispatch_completed_attempt(
+        tmp_path, engine="codex", linked1=linked1, prompt=prompt,
+        run_dir=run_dir, order_id="forge-codex-argv",
     )
+    authorized_argv = EA.build_argv_result(
+        "codex", "build", "high",
+        {"engine_model": "gpt-5.6-terra", "cwd": linked1},
+    )["argv"]
+    state = _prepare_forged_cwd_retry_state(
+        state, run_dir, linked1, linked2, argv=authorized_argv,
+    )
+    spawned = _spy_engine_files_no_spawn(monkeypatch)
+    _invoke_run_child(
+        run_dir, 2, state,
+        launch_cwd=linked1,
+        launch_argv=authorized_argv,
+    )
+    assert spawned == []
+    done = json.loads((run_dir / "attempt-2.done").read_text(encoding="utf-8"))
+    assert done.get("refusal") == "cwd-authorization-mismatch"
+    assert done.get("refusal") != "argv-rederivation-mismatch"
+
+
+def test_run_child_rejects_forged_cwd_cursor(tmp_path, monkeypatch):
+    """Cursor run-child: forged cwd leaves argv byte-identical; authorization check is sole guard."""
+    main, linked1, linked2 = _two_linked_worktrees(tmp_path)
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "forge-cursor"
+    state = _seed_write_dispatch_completed_attempt(
+        tmp_path, engine="cursor", linked1=linked1, prompt=prompt,
+        run_dir=run_dir, order_id="forge-cursor-o",
+    )
+    original_argv = list(state["argv"])
+    state = _prepare_forged_cwd_retry_state(state, run_dir, linked1, linked2)
+    assert state["argv"] == original_argv
+    spawned = _spy_engine_files_no_spawn(monkeypatch)
+    _invoke_run_child(
+        run_dir, 2, state,
+        launch_cwd=linked1,
+        launch_argv=original_argv,
+    )
+    assert spawned == []
+    done = json.loads((run_dir / "attempt-2.done").read_text(encoding="utf-8"))
+    assert done.get("refusal") == "cwd-authorization-mismatch"
+    assert done.get("refusal") != "argv-rederivation-mismatch"
+
+
+def test_authorized_cwd_write_dispatch_codex_and_cursor(tmp_path):
+    """Happy path: authorized linked worktree cwd is not refused for codex or cursor."""
+    cases = (
+        ("codex", "gpt-5.6-terra", "high"),
+        ("cursor", "composer-2.5", None),
+    )
+    for i, (engine, engine_model, effort) in enumerate(cases):
+        main, linked1, linked2 = _two_linked_worktrees(tmp_path / ("happy-%d" % i))
+        prompt = _prompt(tmp_path / ("happy-%d" % i))
+        run_dir = tmp_path / ("happy-%d" % i) / "run"
+        fake = FakeWriteRunner([(_WRITE_OK_STDOUT, False, 0, "")])
+        res = ED.dispatch_write(
+            engine,
+            engine_model=engine_model,
+            effort=effort,
+            prompt_path=prompt,
+            cwd=linked1,
+            order_id="happy-%s" % engine,
+            run_engine=fake,
+            max_wait=60,
+            run_dir=str(run_dir),
+        )
+        assert res.get("ok") is True, (engine, res)
+        assert res.get("detail") not in (
+            "cwd-authorization-mismatch",
+            "argv-rederivation-mismatch",
+        )
+        assert len(fake.calls) == 1
 
 
 def test_run_child_rejects_argv_drift_write(tmp_path):
