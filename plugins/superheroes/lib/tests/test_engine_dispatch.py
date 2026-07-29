@@ -72,6 +72,7 @@ def _authority_from_state(run_dir, state, **kw):
 
 
 def _persist_test_authority(run_dir, state, **kw):
+    run_dir = os.path.realpath(str(run_dir))
     authority = _authority_from_state(run_dir, state, **kw)
     try:
         auth_hash = ED._persist_authority(authority)
@@ -90,11 +91,17 @@ def _persist_test_authority(run_dir, state, **kw):
             if isinstance(cur, dict):
                 cur["authorityHash"] = auth_hash
                 open(state_path, "w", encoding="utf-8").write(json.dumps(cur))
+    if auth_hash:
+        try:
+            ED._ledger_init(authority, auth_hash)
+        except FileExistsError:
+            pass
     return authority
 
 
 def _seal_test_launch(run_dir, attempt, state, **kw):
     """Seal a per-attempt launch record for tests that drive run-child / mid-flight."""
+    run_dir = os.path.realpath(str(run_dir))
     authority = _authority_from_state(run_dir, state, **kw)
     auth_hash = state.get("authorityHash") or ED._authority_file_hash(str(run_dir))
     if not auth_hash:
@@ -104,6 +111,14 @@ def _seal_test_launch(run_dir, attempt, state, **kw):
         state.get("attemptTimeout") or state.get("timeout")
         or (authority.timeout if int(attempt) == 1 else authority.retry_timeout)
         or 5)
+    wt_snap = state.get("worktreeSnapshot")
+    if wt_snap is not None:
+        wt_snap = list(wt_snap)
+    try:
+        ED._ledger_seal_attempt_intent(
+            run_dir, attempt, auth_hash, authority.run_nonce, timeout, wt_snap)
+    except FileExistsError:
+        pass
     try:
         ED._seal_attempt_launch(str(run_dir), attempt, authority, auth_hash, timeout)
     except FileExistsError:
@@ -113,6 +128,7 @@ def _seal_test_launch(run_dir, attempt, state, **kw):
 
 def _bind_inflight(run_dir, state, attempt=1, **kw):
     """Persist authority, seal launch, and stamp authorityHash onto any done sentinel."""
+    run_dir = os.path.realpath(str(run_dir))
     authority = _persist_test_authority(run_dir, state, **kw)
     auth_hash = state.get("authorityHash")
     _seal_test_launch(run_dir, attempt, state, **kw)
@@ -127,6 +143,28 @@ def _bind_inflight(run_dir, state, attempt=1, **kw):
             if not done.get("runNonce"):
                 done["runNonce"] = state.get("runNonce") or authority.run_nonce
             open(done_path, "w", encoding="utf-8").write(json.dumps(done))
+        nonce = state.get("runNonce") or authority.run_nonce
+        if (isinstance(done, dict) and auth_hash
+                and done.get("runNonce") == nonce):
+            claim_path = ED._ledger_attempt_path(run_dir, attempt, "claim")
+            if claim_path and not os.path.isfile(claim_path):
+                try:
+                    ED._ledger_seal(claim_path, {
+                        "schemaVersion": ED.LEDGER_SCHEMA_VERSION,
+                        "attempt": int(attempt),
+                        "authorityHash": auth_hash,
+                        "runNonce": nonce,
+                        "childPid": state.get("supervisorPid") or state.get(
+                            "completedAttemptSupervisorPid"),
+                        "childStart": state.get("supervisorStart") or "",
+                    })
+                except FileExistsError:
+                    pass
+            try:
+                ED._ledger_seal_attempt_complete(
+                    run_dir, attempt, auth_hash, nonce)
+            except FileExistsError:
+                pass
     return authority, auth_hash
 
 
@@ -1452,6 +1490,9 @@ def test_stale_done_sentinel_ignored_on_resume_with_inflight(tmp_path):
         "exit": 0, "timedOut": False, "runNonce": current_nonce,
         "authorityHash": state["authorityHash"],
     }), encoding="utf-8")
+    # Ledger completion is the authority fact; the run-dir .done alone is not.
+    ED._ledger_seal_attempt_complete(
+        os.path.realpath(str(run_dir)), 1, state["authorityHash"], current_nonce)
     res2 = ED.dispatch_poll(str(run_dir), max_wait=1)
     assert res2.get("terminal") is True
     assert (run_dir / "result.json").is_file()
