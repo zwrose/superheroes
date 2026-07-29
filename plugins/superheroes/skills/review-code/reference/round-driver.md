@@ -189,7 +189,7 @@ copy). Any fault → the CLI answers `{"ok": false, "reason": "receipt-fault", "
 - `certification` — full block (`shape`, `fullPanel`, `independence`, `base` — `fetched` |
   `degraded` | `not-checked`, optional `note`/`reason`, `shapeDrivers` — sorted channel names that
   fired for the certification shape (`independence`, `base`, `same-family`, `seat-map-violation`,
-  `unproven-liveness`, `seat-pin`))
+  `unproven-liveness`, `seat-pin`, `seat-map-unavailable`))
 - `rounds` — per-round `kind`, `seatStatus`, `blockingCount`, `verifyResult`, `audits`, `auditProvenance` (`collection-manifest` when the round ran fix audits — the manifest-keyed provenance boundary, visible at vet), `fellOpen`, `fellOpenProvenanceMissing`, `seatMapUnavailable`, `seatMapViolations`, `vacuousSeats`, `canaryUnverified`, `canaryFailed`, `canaryVerified`, `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice`
 - `findings`, `decisions`, `seatMap`, `scriptRan`, `degraded` (disclosure list)
 
@@ -199,7 +199,7 @@ copy). Any fault → the CLI answers `{"ok": false, "reason": "receipt-fault", "
 | --- | --- | --- |
 | `fellOpen` | A `run` seat's `ranManifest` vendor differs from the seat map's configured vendor (cross-vendor seat fell open to Claude). | `reviewer-fell-open (round N): …` |
 | `fellOpenProvenanceMissing` | A cross-vendor seat ran but has no trusted `ranManifest` entry. | `reviewer-fell-open-provenance-unavailable (round N): …` |
-| `seatMapUnavailable` | Live cross-vendor vendor(s) ran but no `seatMap` was submitted. | `reviewer-fell-open-seatmap-unavailable (round N): …` |
+| `seatMapUnavailable` | No `seatMap` was submitted (regardless of cross-vendor liveness); a missing map is unverifiable provenance. | `reviewer-fell-open-seatmap-unavailable (round N): …` |
 | `seatMapViolations` | The submitted seat map carries constraint violation(s) not excused by its own degradation channel (#680). | `seat-map constraint breach: …` (terminal `degraded` list; also recorded per round) |
 | *(pin excusal)* | A standing excusable violation was excused because a collapsed seat was owner-pinned (`classify_violations` → `excusedByPin`). | `seat-map pin excusal: seat(s) …` (terminal `degraded`; `shapeDrivers` includes `seat-pin` and certification shape uses `-degraded`, not a third suffix) |
 | `vacuousSeats` | Seat dict has `vacuous: true` or `reason: "vacuous"` (empty findings with no verifiable investigation record). The seat folds as `missing` in `seatStatus` — it cannot anchor a `full-panel-confirmed` certification. | `vacuous-seat (round N): …` |
@@ -218,7 +218,7 @@ copy). Any fault → the CLI answers `{"ok": false, "reason": "receipt-fault", "
 | --- | --- |
 | `full-panel-confirmed` | A qualifying full `reviewer-deep` confirmation panel ran before exit. |
 | `audited-chain` | Scoped certifying finish — fixes discharged via audits + scoped verification; **no** final full panel. Surface this honestly; never imply a pristine fresh pass. |
-| `*-degraded` | Appended when `independence` is degraded (single live vendor — auditor is fixer's vendor), base fetch degraded, or the seat map disclosed same-family self-review. |
+| `*-degraded` | Appended when `independence` is degraded (single live vendor — auditor is fixer's vendor), base fetch degraded, the seat map disclosed same-family self-review, seat-map pin excusal, unproven-liveness excusal, or no usable seat map was submitted (`seat-map-unavailable`). |
 | `*-constraint-violated` | Appended when the seat map carries unexcused constraint violation(s) (#680); supersedes `*-degraded` when both would apply. |
 | `null` / withheld | Verify fail, stall unresolved, capped-with-open-Critical park, owner `hold`, or `ship-smaller`/`spend-more`. |
 

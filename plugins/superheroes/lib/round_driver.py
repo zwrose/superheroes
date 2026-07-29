@@ -526,6 +526,26 @@ def _seat_map_unproven_liveness(state):
     return False
 
 
+def _seat_map_unavailable(state):
+    """A missing seat map is unverifiable provenance — neither fall-open nor same-family collapse
+    can be disclosed. The UNION of per-round `seatMapUnavailable` records and an empty merged
+    `state["seatMap"]`, mirroring `_seat_map_violations`: the rounds arm catches a panel that
+    omitted its map even when a later panel supplied one; the merged-map arm catches no map ever
+    submitted. `_seed_resume` restores review records and coverage only — not `state["rounds"]` or
+    `state["seatMap"]` — so a pre-resume round's omission is unrecoverable once the resumed panel
+    supplies a map (absence has no carrier the way a re-submitted map re-carries violations)."""
+    for rec in (state.get("rounds") or {}).values():
+        if isinstance(rec, dict) and rec.get("seatMapUnavailable"):
+            return True
+    sm = state.get("seatMap")
+    if not isinstance(sm, dict):
+        return True
+    seats = sm.get("seats")
+    if not isinstance(seats, dict) or not seats:
+        return True
+    return False
+
+
 def _certification_base(state):
     """Tri-state base provenance for certification — never infer fetched from absence."""
     if _base_degraded(state):
@@ -544,6 +564,7 @@ def _cert_shape(state, base):
         or _base_degraded(state)
         or _same_family_degraded(state)
         or _seat_pin_excused(state)
+        or _seat_map_unavailable(state)
     ):
         return base + "-degraded"
     return base
@@ -1255,16 +1276,18 @@ def _fold_panel(state, config, artifact):
         _record_round(state, "fellOpen", fell_open)
     if prov_missing:
         _record_round(state, "fellOpenProvenanceMissing", prov_missing)
-    # #563 DoD1 v7: an ABSENT seat-map baseline would silently disable all fall-open detection (both
-    # outputs anchor on the configured seat map). If the driver's live vendor pool has a cross-vendor
-    # engine but no seat map was submitted, disclose provenance-unavailable for the whole panel — so an
-    # absent seat map is loud, not silent (the exact class this feature prevents).
-    _sm = state.get("seatMap")
-    _seat_map_empty = not (isinstance(_sm, dict) and isinstance(_sm.get("seats"), dict) and _sm.get("seats"))
-    _live_cross = sorted(v for v in (config.get("vendors") or [])
-                         if isinstance(v, str) and v in _PANEL_VENDORS and v != "claude")
-    if _seat_map_empty and _live_cross:
-        _record_round(state, "seatMapUnavailable", _live_cross)
+    # #563 DoD1 v7 / #681: an ABSENT seat-map baseline would silently disable fall-open detection and
+    # same-family collapse (both read off the submitted map). If THIS panel submitted no usable
+    # seatMap, disclose provenance-unavailable for the whole panel — regardless of cross-vendor
+    # liveness — so unknown provenance never resolves toward clean.
+    _seat_map_empty = not (
+        isinstance(seat_map, dict)
+        and isinstance(seat_map.get("seats"), dict)
+        and seat_map.get("seats")
+    )
+    if _seat_map_empty:
+        _pool = sorted({v for v in _live_vendors(config) if isinstance(v, str) and v}) or ["unknown"]
+        _record_round(state, "seatMapUnavailable", _pool)
     _sm_violations = _seat_map_unexcused_violations(state.get("seatMap") or {})
     if _sm_violations:
         _record_round(state, "seatMapViolations", _sm_violations)
@@ -2129,6 +2152,8 @@ def _terminal_converged(state, config, full_panel, note=None):
         shape_drivers.append("seat-map-violation")
     if _seat_map_unproven_liveness(state):
         shape_drivers.append("unproven-liveness")
+    if _seat_map_unavailable(state):
+        shape_drivers.append("seat-map-unavailable")
     state["terminal"] = "converged"
     cert = {"shape": shape, "fullPanel": bool(full_panel),
             "independence": "degraded" if _degraded(state) else "independent",
@@ -2256,8 +2281,9 @@ def build_receipt(state, session_dir=None):
         smu = rrec.get("seatMapUnavailable")
         if smu:
             degraded.append(
-                "reviewer-fell-open-seatmap-unavailable (round %s): live cross-vendor vendor(s) %s "
-                "but no seat map submitted — fall-open provenance unverified for the panel" % (
+                "reviewer-fell-open-seatmap-unavailable (round %s): no seat map submitted; live vendor(s) %s — "
+                "panel provenance unverified: neither fall-open (which vendor actually ran each seat) nor a "
+                "family collapse (a panel that reviewed its own maker family) can be disclosed" % (
                     rkey, ", ".join(smu)))
         vac = rrec.get("vacuousSeats")
         if vac:

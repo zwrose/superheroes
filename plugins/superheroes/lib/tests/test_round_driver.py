@@ -70,6 +70,10 @@ def _big_diff(n_files=25):
         "@@ -1 +1 @@\n-a\n+b\n" % (i, i, i, i) for i in range(n_files))
 
 
+def _clean_all_claude_seat_map():
+    return {"seats": {d: {"vendor": "claude"} for d in RD.DIMENSIONS}}
+
+
 # --- default scripted seams ---------------------------------------------------
 
 def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=None,
@@ -96,6 +100,9 @@ def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=
     def default_verify(command, rnd):
         return "pass"
 
+    io_out = dict(io) if io else {}
+    io_out.setdefault("seatMap", _clean_all_claude_seat_map())
+
     return {
         "reviewer": reviewer or default_reviewer,
         "verifier": verifier or default_verifier,
@@ -103,7 +110,7 @@ def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=
         "auditor": auditor or default_auditor,
         "fix_step": fix_step or default_fix,
         "verify_runner": verify_runner or default_verify,
-        "io": io or {},
+        "io": io_out,
     }
 
 
@@ -218,7 +225,7 @@ def _responder(round1_findings=None, scoped=None, audit="discharged", verify="pa
             seats = {d: {"findings": []} for d in RD.DIMENSIONS}
             if rnd == 1 and round1_findings:
                 seats["code-reviewer"] = {"findings": list(round1_findings)}
-            return {"seats": seats}
+            return {"seats": seats, "seatMap": _clean_all_claude_seat_map()}
         if phase == RD.P_VERIFIERS:
             out = []
             for c in payload.get("clusters", []):
@@ -2845,12 +2852,116 @@ def test_fell_open_fold_receipt_seatmap_unavailable():
     state = RD.new_state(_cfg(leg="panel", vendors=["claude", "codex"]))
     seats = {d: {"findings": []} for d in RD.DIMENSIONS}
     RD._fold_panel(state, state["config"], {"seats": seats})
-    assert state["rounds"]["1"]["seatMapUnavailable"] == ["codex"]
+    assert state["rounds"]["1"]["seatMapUnavailable"] == ["claude", "codex"]
     receipt = RD.build_receipt(state)
     smu_lines = [d for d in receipt["degraded"]
                  if d.startswith("reviewer-fell-open-seatmap-unavailable")]
     assert len(smu_lines) == 1
-    assert "codex" in smu_lines[0]
+    assert "claude" in smu_lines[0] and "codex" in smu_lines[0]
+    assert "no seat map submitted" in smu_lines[0]
+
+
+def test_seat_map_unavailable_claude_only_collapsed_family():
+    """Issue #681: single-family collapse with no cross-vendor pool still records omission."""
+    state = RD.new_state(_cfg(leg="panel", vendors=["claude"]))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    RD._fold_panel(state, state["config"], {"seats": seats})
+    assert state["rounds"]["1"]["seatMapUnavailable"] == ["claude"]
+    receipt = RD.build_receipt(state)
+    smu_lines = [d for d in receipt["degraded"]
+                 if d.startswith("reviewer-fell-open-seatmap-unavailable")]
+    assert len(smu_lines) == 1
+    assert "claude" in smu_lines[0]
+
+
+def test_seat_map_unavailable_run_loop_degraded_shape_driver():
+    receipt = RD.run_loop(_seams(io={"seatMap": {}}), _cfg())
+    assert receipt["verdict"] == "converged"
+    assert receipt["certification"]["shape"].endswith("-degraded")
+    assert "seat-map-unavailable" in receipt["certification"]["shapeDrivers"]
+
+
+def test_seat_map_unavailable_per_round_omission_not_masked_by_earlier_map():
+    state = RD.new_state(_cfg(leg="panel", vendors=["claude", "codex"]))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seat_map_r1 = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": seat_map_r1})
+    assert "seatMapUnavailable" not in state["rounds"]["1"]
+    state["round"] = 2
+    RD._fold_panel(state, state["config"], {"seats": seats})
+    assert state["rounds"]["2"]["seatMapUnavailable"] == ["claude", "codex"]
+    receipt = RD.build_receipt(state)
+    r2_lines = [d for d in receipt["degraded"]
+                if d.startswith("reviewer-fell-open-seatmap-unavailable (round 2)")]
+    assert len(r2_lines) == 1
+
+
+def test_seat_map_unavailable_round1_omission_survives_round2_map():
+    state = RD.new_state(_cfg(leg="panel", vendors=["claude", "codex"]))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    RD._fold_panel(state, state["config"], {"seats": seats})
+    assert state["rounds"]["1"]["seatMapUnavailable"] == ["claude", "codex"]
+    state["round"] = 2
+    seat_map_r2 = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": seat_map_r2})
+    assert "seatMapUnavailable" not in state["rounds"]["2"]
+    receipt = RD.build_receipt(state)
+    r1_lines = [d for d in receipt["degraded"]
+                if d.startswith("reviewer-fell-open-seatmap-unavailable (round 1)")]
+    assert len(r1_lines) == 1
+
+
+def test_seat_map_unavailable_merged_map_arm_without_round_record():
+    cfg = _cfg()
+    state = RD.new_state(cfg)
+    state["seatMap"] = {}
+    RD._terminal_converged(state, cfg, full_panel=False)
+    assert state["certification"]["shape"].endswith("-degraded")
+    assert "seat-map-unavailable" in state["certification"]["shapeDrivers"]
+
+
+def test_seat_map_unavailable_degenerate_vendor_pool_unknown():
+    state = RD.new_state(_cfg(leg="panel", vendors=[""]))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    RD._fold_panel(state, state["config"], {"seats": seats})
+    assert state["rounds"]["1"]["seatMapUnavailable"] == ["unknown"]
+    receipt = RD.build_receipt(state)
+    smu_lines = [d for d in receipt["degraded"]
+                 if d.startswith("reviewer-fell-open-seatmap-unavailable")]
+    assert len(smu_lines) == 1
+
+
+def test_seat_map_unavailable_deduped_live_vendor_pool():
+    state = RD.new_state(_cfg(leg="panel", vendors=["claude", "claude"]))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    RD._fold_panel(state, state["config"], {"seats": seats})
+    assert state["rounds"]["1"]["seatMapUnavailable"] == ["claude"]
+
+
+def test_seat_map_unavailable_superseded_by_constraint_violated():
+    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
+    seat_map = _seat_map_receipt_with_unexcused_maker_family()
+    receipt = RD.run_loop(_seams(io={"seatMap": seat_map}), cfg)
+    assert receipt["certificationShape"].endswith("-constraint-violated")
+    assert "seat-map-unavailable" not in receipt["certification"]["shapeDrivers"]
+
+
+def test_seat_map_unavailable_no_false_positive_when_map_submitted():
+    state = RD.new_state(_cfg(leg="panel", vendors=["claude", "codex"]))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    RD._fold_panel(state, state["config"], {
+        "seats": seats,
+        "seatMap": _clean_all_claude_seat_map(),
+    })
+    assert "seatMapUnavailable" not in state["rounds"]["1"]
+    receipt = RD.build_receipt(state)
+    assert not any(d.startswith("reviewer-fell-open-seatmap-unavailable")
+                   for d in receipt["degraded"])
+    cfg = _cfg()
+    state2 = RD.new_state(cfg)
+    state2["seatMap"] = _clean_all_claude_seat_map()
+    RD._terminal_converged(state2, cfg, full_panel=False)
+    assert "seat-map-unavailable" not in state2["certification"]["shapeDrivers"]
 
 
 def test_fell_open_in_seat_ran_vendor_echo_ignored_at_fold():
