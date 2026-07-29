@@ -249,29 +249,44 @@ document set is coherent. `PHILOSOPHY.md` remains the authority in the meantime.
 trigger:** the owner amends `PHILOSOPHY.md` to align execution wording with this ruling, or
 rules that no amendment is wanted — which would instead reopen the covenant repair.
 
-**Resolved 2026-07-28 (#706):** the owner amended `PHILOSOPHY.md` promise 1 — the constitution now
+**Resolved 2026-07-29 (#706):** the owner amended `PHILOSOPHY.md` promise 1 — the constitution now
 draws the approval/execution distinction itself: the decisions that bind the owner are never made on
 their behalf, executing an approved merge may be delegated **only** behind a mechanical checkpoint
 that guarantees the owner's approval every time, and releases, publications, and rewritten history
 stay in the owner's hands. The re-check trigger above is therefore **satisfied on its first branch**,
 and the covenant's disclosed-divergence note is removed in the same change. The divergence record
-above stands as history, not as current state. **The constitution is now internally coherent on this
-point.** The owner ratified a scope extension on 2026-07-29 and the two residuals were repaired **in
-this same change**, not deferred: §3 bet **B1** now reads "they do the final review and give the merge
-approval at the end (the approval is always theirs)", §4 item 1 now ranks "the decisions that bind the
-owner (the approval behind a merge, a release, a publication)" as never moving, and §4's closing line
-names it "the owner-approval rule" in place of "the never-merge rule". The covenant's drift clause was
-extended in the same pass to say what a session actually does when the two documents disagree — park
-the difference with the owner, with `PHILOSOPHY.md` governing until they rule. Separately,
+above stands as history, not as current state. **What this change did.** The owner ratified a scope
+extension on 2026-07-29, and the residual *acts*-framing passages were repaired **in this same
+change**, not deferred: §3 bet **B1** now reads "they do the final review and give the merge approval
+at the end (the approval is always theirs)", §4 item 1 now ranks "the decisions that bind the owner
+(the approval behind a merge, a release, a publication)" as never moving, and §4's closing line names
+"the owner-approval rule" in place of "the never-merge rule". The covenant's drift clause now
+prescribes an action rather than only a disclosure — park the difference with the owner, with
+`PHILOSOPHY.md` governing until they rule.
+
+**What it closes, and what it does not.** This entry closes R3's re-check trigger and the §2-vs-§4
+*acts*/*decisions* divergence that trigger tracked. **It makes no wider coherence claim.** The
+cross-vendor review of this change raised three questions it does not settle — recorded here open,
+rather than closed by assertion:
+
+- **Which document wins when the covenant is *stricter*, not merely different.** The covenant carries
+  an epistemic fail-closed default `PHILOSOPHY.md` does not state — where you cannot establish that a
+  checkpoint fires on this host and path, execution stays in the owner's hands. The new drift clause
+  resolves a disagreement toward `PHILOSOPHY.md`, which on this point is the looser text. Whether
+  "park the difference" holds that line, or whether the covenant's stricter reading should win by
+  construction, is an owner call this entry does not presume.
+- **The checkpoint bar is stated two ways.** `PHILOSOPHY.md` licenses delegated execution where a
+  checkpoint "guarantees the owner's approval every time"; the covenant, `CONVENTIONS.md`, `README.md`
+  and the charters set the bar at one that *exists* — and §3 above records the wired gate as a regex
+  heuristic that by construction does not catch every variant.
+- **Host coverage is unchanged by this amendment.** The gate is wired Claude-host only;
+  `hooks/hooks-codex.json` is empty, so on that host neither the gate nor the covenant injection fires.
+
 `README.md`'s review-independence bullet reads "the owner merges": that one is **pipeline shorthand,
 not a divergence** — the same document states the full rule at `README.md:78-80`, exactly as
-`CONVENTIONS.md` and the session charters do beside their own flow lines — so it remains a wording
-cleanup, not a contradiction.
-**Unchanged by this change:** the checkpoint's wiring is still Claude-host only (see above), and the
-covenant's fail-closed default — where you cannot establish that a checkpoint fires on this host and
-path, execution stays in the owner's hands — remains the operative rule. This entry closes R3's
-trigger and the approval/execution divergence it recorded; the host gap above is a separate open
-matter, not part of what R3 tracked.
+`CONVENTIONS.md:61` is qualified at `:80-84`. (The `showrunner` charter likewise restates the full
+rule beside its flow line; the `workhorse` charter deliberately does not repeat the standing orders,
+deferring to the covenant for them.) A wording cleanup, not a contradiction.
 
 ### R4 — Channel and attendance are two independent axes
 

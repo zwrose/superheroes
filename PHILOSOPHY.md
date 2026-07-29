@@ -86,12 +86,12 @@ consequential or irreversible decision — a migration, a new dependency, an ext
 contract — which comes to the owner before the builder commits to it, and even that
 can be pre-authorized at spec time. We bet that for an owner who cannot supervise
 mid-flight, checkpoints at the right altitude beat both raw flexibility and a
-deterministic execution spine between them. *Re-check:* the checkpoints cost the
-after-the-fact forensic trail a staged execution would leave; they buy bounded
-behavior and work the checkers can review *before* it executes. If a fidelity,
-honest-failure, or auditability regression ever traces to the absence of staged
-execution between the checkpoints, the spine question reopens — the checkpoints
-themselves do not.
+deterministic execution spine between them.
+*Re-check:* the checkpoints cost the after-the-fact forensic trail a staged execution
+would leave; they buy bounded behavior and work the checkers can review *before* it
+executes. If a fidelity, honest-failure, or auditability regression ever traces to the
+absence of staged execution between the checkpoints, the spine question reopens — the
+checkpoints themselves do not.
 
 **B2 — Plain language can carry the contract.** Everything the owner touches — specs,
 readouts, park reasons, verdicts — is written in their language, and the spec is the

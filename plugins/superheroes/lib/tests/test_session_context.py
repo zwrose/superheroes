@@ -98,7 +98,14 @@ def test_covenant_pins_the_approval_execution_distinction(tmp_path, monkeypatch)
     note = sc.covenant(str(tmp_path), _PLUGIN_ROOT)
     assert "The never-delegable act is **approval**" in note
     assert "mechanical per-merge approval checkpoint" in note
+    # the EPISTEMIC half of the fail-closed default: "where none exists" alone would keep the
+    # trailing clause passing, so pin the can't-establish-it branch by name (#706 review round 3).
+    assert "you cannot establish that it fires on this host and path" in note
     assert "execution stays in the owner's hands" in note
+    # the drift clause this change rewrote: a session that finds the two documents disagreeing
+    # must park the difference with the owner rather than pick a winner on its own.
+    assert "park the difference with the owner" in note
+    assert "until the owner rules" in note
     assert "known, disclosed divergence" not in note
 
 
