@@ -26,7 +26,6 @@ _EXPECTED_DEFAULT_CLAUDE_TIERS = {
     "synthesis": "opus",
     "code-fixer": "sonnet",
     "doc-reviser": "opus",
-    "pr-body": "sonnet",
     "implementer": "sonnet",
     "pilot": "sonnet",
 }
@@ -63,7 +62,6 @@ def test_roles_covers_matrix_and_model_tier_roles_stable():
         "synthesis",
         "code-fixer",
         "doc-reviser",
-        "pr-body",
         "implementer",
         "pilot",
     )

@@ -106,6 +106,7 @@ def test_safety_machinery_set_members_are_pinned():
         "gate_write.py", "definition_doc.py",
         "enforcer.py", "allowance.py", "model_tier.py", "model_registry.py",
         "engine_pref.py", "seat_map.py", "dispatch_guard.py", "engine_dispatch.py", "seat_canary.py",
+        "engine_adapter.py",
         "hooks.json",
         "precompact.py", "session_start.py",
         "escalation-base.md", "review-base.md",

@@ -79,18 +79,28 @@ def test_code_fixer_override_wins():
     assert MT.resolve_model("code-fixer", {"code-fixer": "haiku"}) == "haiku"
 
 
-def test_pr_body_role_defaults_to_sonnet():
-    # #219: the durable draft-PR body composer (showrunner composePrBody) is a Sonnet leaf.
-    assert MT.DEFAULT_TIERS["pr-body"] == "sonnet"
-    assert MT.resolve_model("pr-body") == "sonnet"
-    assert "pr-body" in MT.ROLES
+def test_pr_body_role_is_retired():
+    # #692: the `pr-body` role retired — its v1 consumer (the draft-PR-body composer) went with the
+    # execution spine in PR #478, and #509/#523 carried the orphan into the new taxonomy. This guard
+    # keeps it retired-not-rebuilt.
+    #
+    # Membership alone is not enough: resolve_model("pr-body") returns the reviewer default BOTH
+    # before the retirement (as the role's own default, which was also "sonnet") and after
+    # (unknown-role fail-open), so the distinguishing property is that an explicit override no
+    # longer REACHES it.
+    assert "pr-body" not in MT.ROLES
+    assert "pr-body" not in MT.DEFAULT_TIERS
+    assert MT.resolve_model("pr-body", {"pr-body": "opus"}) == MT.DEFAULT_TIERS["reviewer"]
 
-
-def test_pr_body_override_wins():
-    # An explicit override must reach pr-body SPECIFICALLY — proving it is a real distinct role,
-    # not the unknown-role reviewer fallback (which also happens to yield 'sonnet').
-    assert MT.resolve_model("pr-body", {"pr-body": "opus"}) == "opus"
-    assert MT.resolve_model("reviewer", {"pr-body": "opus"}) == "sonnet"  # untouched -> default
+    # Pin the taxonomy HOME too, not just this module's derived projection. MT.ROLES/DEFAULT_TIERS
+    # both derive from `_MODEL_TIER_ROLES`, so restoring ONLY the `_MATRIX` cell would re-register
+    # `pr-body` as a live dispatch role with every assertion above still green (measured: 110
+    # taxonomy tests passed against exactly that mutant, and `resolve_dispatch` resolved it).
+    registry = MT.model_registry
+    assert "pr-body" not in registry.roles()
+    assert "pr-body" not in registry._ROLE_META
+    assert registry.matrix_config("pr-body", "claude") is None
+    assert registry.resolve_dispatch(role="pr-body", vendor="claude")["ok"] is False
 
 
 def test_implementer_role_defaults_to_sonnet():
