@@ -184,6 +184,8 @@ hidden defect. The orientation review walks this section too.
 | **Guardian ledger — an owner hand-editing `guardian/ledger.md` in another window at the exact write instant can lose that hand-edit** (2026-07-22, #539/PR #556). The advisor is the sole *automated* writer, but the owner's text editor honors no lock the plugin can hold. The never-clobber writer re-reads and re-splices onto the latest on-disk content, and immediately before writing it re-reads and requires a **full-byte match** against the exact bytes it spliced from — so any owner edit (prose or the machine-owned regions) that has landed by that final check triggers a re-splice, never a clobber. `atomic_write_bytes` gives torn-write safety (atomic *replace*, not compare-and-swap). The residual window is the sub-instant from that final full-byte re-check through the temp-file rename — an owner save landing inside it is not detected and is lost. | Best-effort conflict avoidance, not mutual exclusion. Every owner edit that has landed and settled before the final full-byte re-check is preserved (re-spliced onto the fresh content); loss requires the owner to save inside the recheck→rename sub-instant of an advisor `commit-ledger` running concurrently. The advisor writes interactively, when the owner is present and not mid-edit, which is what makes this rare in practice. | Owner-ratified 2026-07-22 — the alternatives were rejected by the owner: splitting machine state from owner prose into two files breaks §5's one-hand-editable-file contract; more locking cannot bind an external editor. Relocating the write to the sole interactive advisor closes the class by **workflow**; the residual is the small remaining mechanism gap, knowingly carried. | A **field incident of a lost owner hand-edit** to the ledger (reported or observed) — that upgrades the residual to a defect and reopens the two-file split. |
 | **Sanitized review view — repo-local agent-config discovery is closed, but an external seat's context is not provably neutral** (#684). The runner strips the named config surface from a fresh export with no reachable source objects, so neither filesystem discovery nor `git show` on a stripped path reaches it. Outside that bound: **home-level operator config** (`~/.codex/`, `~/.cursor/`, `~/.gitconfig`) — the dispatcher's own configuration, not the reviewed repo's — and any instruction the reviewed **code or diff itself** carries (the review's subject; no view can strip it). **History:** the view is one synthetic commit — no `git log` / `git blame`; reading files (and `git grep`) is the grounded-read capability #665 shipped. | Config stripping is bounded to `SANITIZED_CONFIG_FILES` / `SANITIZED_CONFIG_DIRS` on the export tree; history loss is total inside the view (single commit). | #684 targeted repo-local config steering a reviewer; operator home config is trusted by definition; text inside the diff is what a reviewer is supposed to read (with judgment). History loss is accepted because file reads ground findings today. | A seat demonstrably influenced by content the view did not strip; OR a new engine config-discovery surface (CLI or discovery path) not covered by the sanitized basename/dir lists; OR a review seat that demonstrably needed `git log`/`git blame` to ground a finding. |
 | **Supervised write-dispatch control plane — sealed `launch-authority.json` as cross-process trust root** (2026-07-29, owner-ratified Option A). The sealed `launch-authority.json` and its content hash are the trust root for a cross-process supervisor; a **same-user** unconfined engine (`cursor -f` is not confined to `cwd`) shares the filesystem with them (see the §3 worktree-confinement row — same same-user / unconfined-engine bound, not restated). | `run-child` accepts only a run-dir path and derives every authority value from the sealed file; the file's content hash is echoed into the receipt and **re-verified by the supervisor at fold**, so a swapped or recreated file is **detected and the run refused at fold**. `O_EXCL` plus mode `0400` prevents *modification* but **not unlink-and-recreate** — which is precisely why hash re-verification, not file mode, is the mechanism. | **Owner-ratified 2026-07-29:** detection-over-prevention remains the ratified stance for engine children (see the §3 worktree-confinement row); the same-user bound is the honest limit, and forging now requires defeating a hash check at fold rather than dropping a file. | A field incident of a forged or swapped run artifact; **or** a platform process-sandbox able to confine a `--trust` engine CLI (the same trigger the §3 worktree-confinement row names). |
+| **Lane assignment is judgement with no mechanical check** (2026-07-26, spike #577, built in #671). The advisor calls the lane at routing (`rubric/review-discipline.md` carries the canonical lane statement); nothing mechanically verifies the call. | **Light:** the advisor's **vet** is the late backstop before merge — it can catch a wrong lane call there. **Micro:** there is **no advisor vet**; the backstop is the one **non-Anthropic** reviewer plus **per-change owner authorization** — materially weaker than light's vet. Nothing catches a wrong call earlier at routing or mid-build except escalation triggers the builder notices. | A mechanical lane rule is exactly the plugin-owned enforcement machinery §2 bans ("No plugin-owned enforcement machinery", owner-ratified 2026-07-20, spike #475), and the evidence could not support one anyway — the guidance was right about three times in four. | A defect **escapes through a light-lane PR the vet passed**; OR a defect **escapes through a micro-lane PR** (no vet backstop); OR the vet formalization (#672) lands and changes the bound. |
+| **The light lane's safety is asserted from field practice, not measured** (2026-07-26, spike #577, built in #671). Eight of eight field-lean changes match where this guidance routes them (`rubric/review-discipline.md`), and none has a recorded escape. | **No panel ran on any of those eight**, so "no findings" is **absence of measurement, not evidence of absence**. Compounding it, the 8-of-8 alignment is **in-sample** — the guidance was fitted to the same 23 changes it validates against, so it is a fit and not a test. | Owner call — learn from the field rather than run a shadow panel over the same changes. The recording duty in the Showrunner charter (the lane call plus one line of reasoning) is what generates the out-of-sample evidence over time. | A defect **traced to a light-lane change**; OR enough recorded lane calls accumulate to compare out-of-sample. |
 
 ## 4. Orchestration rulings (ratified 2026-07-26)
 
@@ -249,6 +251,50 @@ left untouched on purpose; an **owner-authored amendment to `PHILOSOPHY.md` is o
 document set is coherent. `PHILOSOPHY.md` remains the authority in the meantime. **Re-check
 trigger:** the owner amends `PHILOSOPHY.md` to align execution wording with this ruling, or
 rules that no amendment is wanted — which would instead reopen the covenant repair.
+
+**Resolved 2026-07-29 (#706):** the owner amended `PHILOSOPHY.md` promise 1 — the constitution now
+draws the approval/execution distinction itself: the decisions that bind the owner are never made on
+their behalf, executing an approved merge may be delegated **only** behind a mechanical checkpoint
+that guarantees the owner's approval every time, and releases, publications, and rewritten history
+stay in the owner's hands. The re-check trigger above is therefore **satisfied on its first branch**,
+and the covenant's disclosed-divergence note is removed in the same change. The divergence record
+above stands as history, not as current state. **What this change did.** The owner ratified a scope
+extension on 2026-07-29, and the residual *acts*-framing passages were repaired **in this same
+change**, not deferred: §3 bet **B1** now reads "they do the final review and give the merge approval
+at the end (the approval is always theirs)", §4 item 1 now ranks "the decisions that bind the owner
+(the approval behind a merge, a release, a publication)" as never moving, and §4's closing line names
+"the owner-approval rule" in place of "the never-merge rule". The covenant's drift clause now
+prescribes an action rather than only a disclosure — park the difference with the owner, with
+`PHILOSOPHY.md` governing until they rule.
+
+**What it closes, and what it does not.** This entry closes R3's re-check trigger and the §2-vs-§4
+*acts*/*decisions* divergence that trigger tracked. **It makes no wider coherence claim.** The
+cross-vendor review of this change raised three questions it does not settle — recorded here open,
+rather than closed by assertion:
+
+- **Which document governs is settled; whether it should be, is the owner's to weigh.** The
+  covenant's ratified header answers today's question outright: on any disagreement, say so, park the
+  difference with the owner, and `PHILOSOPHY.md` governs until they rule. What remains open is a
+  policy question, not an ambiguity — the covenant carries an epistemic fail-closed default
+  `PHILOSOPHY.md` does not state (where you cannot establish that a checkpoint fires on this host and
+  path, execution stays in the owner's hands), so on that one point the settled rule resolves toward
+  the looser text. Whether a stricter covenant safeguard should instead win by construction is an
+  amendment for the owner; this entry neither presumes it nor treats today's rule as unsettled.
+- **The checkpoint bar is stated two ways.** `PHILOSOPHY.md` licenses delegated execution where a
+  checkpoint "guarantees the owner's approval every time"; the covenant, `CONVENTIONS.md` and the
+  `showrunner` charter set the bar at one that *exists* — and §3 above records the wired gate as a regex
+  heuristic that by construction does not catch every variant.
+- **Host coverage is unchanged by this amendment.** The gate is wired Claude-host only;
+  `hooks/hooks-codex.json` is empty, so on that host neither the gate nor the covenant injection fires.
+
+`README.md`'s review-independence bullet reads "the owner merges": that one is **pipeline shorthand,
+not a divergence** — the same document carries the approval/execution qualification at
+`README.md:78-80` (approval stays with the owner; execution only behind a per-merge checkpoint),
+exactly as `CONVENTIONS.md:61` is qualified at `:80-84`. The complete restatements — qualification
+plus the host/path fail-closed fallback and the release/force-push exclusions — live in
+`CONVENTIONS.md` and the `showrunner` charter's merge duty; the `workhorse` charter deliberately does
+not repeat the standing orders, deferring to the covenant for them. A wording cleanup, not a
+contradiction.
 
 ### R4 — Channel and attendance are two independent axes
 

@@ -605,7 +605,15 @@ and the engine-preference writer), so an invalid combination cannot be saved in 
 substitution** (this replaces the old silent `fable→gpt-5.6-sol` remap). Fable's
 long-term availability on Max plans removes the reason a graceful degrade ever existed.
 The dispatch-time named refusal (`fable-unrunnable`) **remains as defensive depth** for
-callers that bypass configuration, but is unreachable from a valid configuration. The
+callers that bypass configuration, but is unreachable from a valid configuration.
+`core_md`'s engine-preference write gate, `model_tier_overrides`' tier-writer gate, and the
+preflight `dispatch-vocab` probe read the project's `core.md`
+through a single accessor that reports `absent`, `ok`, or `unreadable`. A **present but
+unreadable** `core.md` — a non-regular file, a dangling symlink, a file with unreadable
+permissions, or a corrupt file — is **refused at configuration time** by name as
+`core-md-unreadable` rather than treated as absent; a genuinely absent
+`core.md` remains a clean create. A gate that treats an unreadable config as "no config"
+**fails open**, which is the failure this closes. The
 GPT-5.6 tier requires a sufficiently
 new Codex CLI; an unavailable model follows the observable fall-open path to
 Claude, never a guessed version gate. Dispatch provenance — the concrete engine,
@@ -781,7 +789,7 @@ an empty set that would make the equality vacuously pass. A rename of the truth 
 
 *Worked example 1 — the cross-charter boundary line.* Both session charters state the
 identical two-sided fact — "Workhorse never merges/releases/bumps versions/wires the
-board/re-scopes silently; Showrunner never builds." Neither charter is authoritative over
+board/re-scopes silently; Showrunner never builds — except the **micro** lane, a named hard-line edit defined in the showrunner charter." Neither charter is authoritative over
 the other, so `lib/tests/test_charter_boundary_sync.py` is a **symmetric** Pattern-2
 instance: it extracts the marked boundary line from both `skills/showrunner/SKILL.md` and
 `skills/workhorse/SKILL.md`, fails closed if either is missing, and asserts the two are
