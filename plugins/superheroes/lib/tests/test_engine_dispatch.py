@@ -1,3 +1,4 @@
+import ast
 import importlib.util
 import json
 import os
@@ -1575,4 +1576,310 @@ def test_dispatch_review_private_run_dir_argv_cwd_canonical(tmp_path, monkeypatc
     cwd_arg = argv[argv.index("-C") + 1]
     review_cwd = os.path.join(outer, REVIEW_CWD_BASENAME)
     assert cwd_arg == os.path.realpath(review_cwd)
+
+
+# --- WO-702-Q: B-2 authority-carrying sink invariant (AST) ---
+
+
+def _b2_engine_dispatch_path():
+    return os.path.join(_HERE, "..", "engine_dispatch.py")
+
+
+_B2_FORBIDDEN_DICT_NAMES = frozenset({
+    "state", "sentinel", "result", "receipt", "cached", "body",
+    "view_receipt", "last_engagement", "engagement", "data",
+    "payload", "holder", "snap", "snap_before", "cur",
+})
+
+
+def _b2_call_name(node):
+    if isinstance(node.func, ast.Name):
+        return node.func.id
+    if isinstance(node.func, ast.Attribute):
+        return node.func.attr
+    return None
+
+
+def _b2_expr_mentions_forbidden_dict(node):
+    """True when expr reads via subscript/.get on a forbidden dict name."""
+    if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
+        if node.value.id in _B2_FORBIDDEN_DICT_NAMES:
+            return True
+    if isinstance(node, ast.Call):
+        func = node.func
+        if (isinstance(func, ast.Attribute) and func.attr == "get"
+                and isinstance(func.value, ast.Name)
+                and func.value.id in _B2_FORBIDDEN_DICT_NAMES):
+            return True
+    for child in ast.iter_child_nodes(node):
+        if _b2_expr_mentions_forbidden_dict(child):
+            return True
+    return False
+
+
+def _b2_classify_authority_expr(node, authority_names, derived_names):
+    """Return 'authority', 'forbidden', or 'unclassified' for an expression."""
+    if _b2_expr_mentions_forbidden_dict(node):
+        return "forbidden"
+    if isinstance(node, ast.Name):
+        if node.id in authority_names or node.id in derived_names:
+            return "authority"
+        if node.id in _B2_FORBIDDEN_DICT_NAMES:
+            return "forbidden"
+        return "unclassified"
+    if isinstance(node, ast.Attribute):
+        if isinstance(node.value, ast.Name) and node.value.id in authority_names:
+            return "authority"
+        return _b2_classify_authority_expr(node.value, authority_names, derived_names)
+    if isinstance(node, ast.Call):
+        # list(authority.argv), tuple(...), _resolve_argv_binary(recorded), etc.
+        if not node.args:
+            return "unclassified"
+        kinds = [
+            _b2_classify_authority_expr(a, authority_names, derived_names) for a in node.args
+        ]
+        if "forbidden" in kinds:
+            return "forbidden"
+        if all(k == "authority" for k in kinds):
+            return "authority"
+        return "unclassified"
+    if isinstance(node, (ast.List, ast.Tuple)):
+        if not node.elts:
+            return "authority"
+        kinds = [
+            _b2_classify_authority_expr(e, authority_names, derived_names) for e in node.elts
+        ]
+        if "forbidden" in kinds:
+            return "forbidden"
+        if all(k == "authority" for k in kinds):
+            return "authority"
+        return "unclassified"
+    if isinstance(node, ast.BinOp):
+        left = _b2_classify_authority_expr(node.left, authority_names, derived_names)
+        right = _b2_classify_authority_expr(node.right, authority_names, derived_names)
+        if "forbidden" in (left, right):
+            return "forbidden"
+        if left == "authority" or right == "authority":
+            # Conservatively require both sides authority for arithmetic/concat.
+            if left == "authority" and right == "authority":
+                return "authority"
+        return "unclassified"
+    if isinstance(node, ast.IfExp):
+        for part in (node.body, node.orelse, node.test):
+            k = _b2_classify_authority_expr(part, authority_names, derived_names)
+            if k == "forbidden":
+                return "forbidden"
+        # Ternary is unclassified unless both branches are authority.
+        b = _b2_classify_authority_expr(node.body, authority_names, derived_names)
+        e = _b2_classify_authority_expr(node.orelse, authority_names, derived_names)
+        if b == "authority" and e == "authority":
+            return "authority"
+        return "unclassified"
+    if isinstance(node, ast.UnaryOp):
+        return _b2_classify_authority_expr(node.operand, authority_names, derived_names)
+    if isinstance(node, ast.Constant):
+        return "authority"
+    if isinstance(node, ast.BoolOp):
+        kinds = [
+            _b2_classify_authority_expr(v, authority_names, derived_names) for v in node.values
+        ]
+        if "forbidden" in kinds:
+            return "forbidden"
+        # `authority.x or authority.y` OK; `x or authority.y` unclassified.
+        if all(k == "authority" for k in kinds):
+            return "authority"
+        return "unclassified"
+    return "unclassified"
+
+
+def _b2_collect_derived(func_node, authority_names):
+    """Names assigned from authority-derived expressions inside func_node."""
+    derived = set()
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(func_node):
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                target = node.targets[0]
+                if isinstance(target, ast.Name):
+                    kind = _b2_classify_authority_expr(
+                        node.value, authority_names, derived)
+                    if kind == "authority" and target.id not in derived:
+                        derived.add(target.id)
+                        changed = True
+                elif isinstance(target, ast.Tuple):
+                    # resolved, argv = _resolve_argv_binary(recorded)
+                    if isinstance(node.value, ast.Call) and len(target.elts) >= 1:
+                        kind = _b2_classify_authority_expr(
+                            node.value, authority_names, derived)
+                        if kind == "authority":
+                            for elt in target.elts:
+                                if isinstance(elt, ast.Name) and elt.id not in derived:
+                                    derived.add(elt.id)
+                                    changed = True
+            elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+                # roots.append(_review_cwd_path(authority.run_dir))
+                if (isinstance(node.value, ast.Call)
+                        and isinstance(node.op, ast.Add) is False):
+                    pass
+                kind = _b2_classify_authority_expr(
+                    node.value, authority_names, derived)
+                # append is Call on Attribute; AugAssign unused for list.append
+            elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+                # roots.append(...)
+                call = node.value
+                if (isinstance(call.func, ast.Attribute)
+                        and call.func.attr == "append"
+                        and isinstance(call.func.value, ast.Name)
+                        and call.func.value.id in derived
+                        and call.args):
+                    kind = _b2_classify_authority_expr(
+                        call.args[0], authority_names, derived)
+                    # list stays derived if we append authority-derived value;
+                    # if unclassified append, drop from derived (fail closed)
+                    if kind != "authority" and call.func.value.id in derived:
+                        # keep the list name but the loop var from it becomes
+                        # mixed — handled by requiring iter classification
+                        pass
+            elif isinstance(node, ast.For):
+                if isinstance(node.target, ast.Name):
+                    kind = _b2_classify_authority_expr(
+                        node.iter, authority_names, derived)
+                    if kind == "authority" and node.target.id not in derived:
+                        derived.add(node.target.id)
+                        changed = True
+    return derived
+
+
+def _b2_sink_args(call):
+    """Yield (label, expr) for authority-carrying arguments at a sink call."""
+    name = _b2_call_name(call)
+    if name == "_spawn_run_child":
+        # (run_dir, attempt, authority) — authority is the carrying arg;
+        # argv/cwd/binary are built inside from it.
+        if len(call.args) >= 3:
+            yield "authority", call.args[2]
+        for kw in call.keywords:
+            if kw.arg == "authority":
+                yield "authority", kw.value
+    elif name == "_run_engine_files":
+        # argv, ..., cwd  (positional 0 and 7); authority kw
+        if len(call.args) >= 1:
+            yield "argv", call.args[0]
+        if len(call.args) >= 8:
+            yield "cwd", call.args[7]
+        for kw in call.keywords:
+            if kw.arg in ("argv", "cwd", "authority"):
+                yield kw.arg, kw.value
+    elif name == "_release_worktree_lease":
+        if call.args:
+            yield "authority", call.args[0]
+        for kw in call.keywords:
+            if kw.arg == "authority":
+                yield "authority", kw.value
+    elif name == "_release_worktree_lease_for_cwd":
+        labels = ("cwd", "lease_token", "lease_holder")
+        for i, arg in enumerate(call.args):
+            if i < len(labels):
+                yield labels[i], arg
+        for kw in call.keywords:
+            if kw.arg in labels:
+                yield kw.arg, kw.value
+    elif name == "_destroy_review_views":
+        if len(call.args) >= 2:
+            yield "authority", call.args[1]
+        for kw in call.keywords:
+            if kw.arg == "authority":
+                yield "authority", kw.value
+    elif name == "rmtree":
+        if call.args:
+            yield "rmtree_target", call.args[0]
+        for kw in call.keywords:
+            if kw.arg in (None, "path") or kw.arg == "path":
+                yield "rmtree_target", kw.value
+
+
+def _b2_enclosing_function(tree, node):
+    """Find the FunctionDef that contains node (by lineage walk)."""
+    parent_map = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parent_map[child] = parent
+    cur = node
+    while cur in parent_map:
+        cur = parent_map[cur]
+        if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return cur
+    return None
+
+
+def _b2_find_violations(source):
+    """Return list of (lineno, message) for B-2 authority-carrying sink violations."""
+    tree = ast.parse(source)
+    violations = []
+    # rmtree sites inside _destroy_review_views / _cleanup_path_permitted are
+    # authority-gated; pre-authority create-path rmtrees of sanitized views are
+    # not authority-carrying (view path from build_view, not engine). Scope
+    # rmtree checks to _destroy_review_views only.
+    for call in [n for n in ast.walk(tree) if isinstance(n, ast.Call)]:
+        name = _b2_call_name(call)
+        if name == "rmtree":
+            enc = _b2_enclosing_function(tree, call)
+            if enc is None or enc.name not in (
+                    "_destroy_review_views", "_cleanup_path_permitted"):
+                continue
+        elif name not in (
+                "_spawn_run_child", "_run_engine_files",
+                "_release_worktree_lease", "_release_worktree_lease_for_cwd",
+                "_destroy_review_views"):
+            continue
+        enc = _b2_enclosing_function(tree, call)
+        authority_names = {"authority"}
+        derived = set()
+        if enc is not None:
+            for arg in enc.args.args:
+                if arg.arg == "authority":
+                    authority_names.add(arg.arg)
+            derived = _b2_collect_derived(enc, authority_names)
+            # engine_cwd validated from authority.cwd is authority-derived when
+            # assigned in the write/review branches — collected via loop above
+            # when the RHS classifies. Also treat common locals set from authority.
+        for label, expr in _b2_sink_args(call):
+            kind = _b2_classify_authority_expr(expr, authority_names, derived)
+            snippet = ast.unparse(expr) if hasattr(ast, "unparse") else ast.dump(expr)
+            if kind == "forbidden":
+                violations.append((
+                    call.lineno,
+                    "B-2 violation: %s %s fed from forbidden dict at %s:%d: %s"
+                    % (name, label, "engine_dispatch.py", call.lineno, snippet),
+                ))
+            elif kind == "unclassified":
+                violations.append((
+                    call.lineno,
+                    "B-2 unclassified authority-carrying arg: %s %s at %s:%d: %s "
+                    "(make the provenance explicit)"
+                    % (name, label, "engine_dispatch.py", call.lineno, snippet),
+                ))
+    return violations
+
+
+def test_b2_authority_carrying_sinks_never_read_engine_authored_dicts():
+    """Ruling B-2: spawn/lease/cleanup sinks take values from authority, never state."""
+    path = _b2_engine_dispatch_path()
+    source = open(path, encoding="utf-8").read()
+    violations = _b2_find_violations(source)
+    assert not violations, "\n".join(msg for _, msg in violations)
+
+
+def test_b2_ast_check_fails_on_unclassified_expression():
+    """Edge 2: unrecognised provenance fails closed rather than passing."""
+    # Synthetic snippet: sink arg is a bare Name with no authority binding.
+    snippet = (
+        "def _continue_run(run_dir, authority):\n"
+        "    mystery = something_else()\n"
+        "    _spawn_run_child(run_dir, 1, mystery)\n"
+    )
+    violations = _b2_find_violations(snippet)
+    assert violations, "expected unclassified failure, got none"
+    assert any("unclassified" in msg for _, msg in violations)
 

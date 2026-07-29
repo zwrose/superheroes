@@ -196,9 +196,10 @@ def _recorded_run_kind(state):
 
 
 def _order_id_mismatch(invocation_order_id, recorded_order_id):
-    if invocation_order_id is None or invocation_order_id == "":
-        return False
-    return invocation_order_id != recorded_order_id
+    """Fail-closed: None/empty invocation does not skip a recorded order id."""
+    inv = "" if invocation_order_id is None else invocation_order_id
+    rec = "" if recorded_order_id is None else recorded_order_id
+    return inv != rec
 
 
 def _terminal_run_kind_mismatch(run_dir):
@@ -512,13 +513,39 @@ def _validate_linked_build_cwd(cwd, timeout=None):
 
 
 def _process_alive(pid):
+    """True when pid names a live (non-zombie) process.
+
+    ``os.kill(pid, 0)`` succeeds for zombies; treating them as alive blocked
+    retry after a finished supervisor (the parent had not yet reaped). Zombies
+    are dead for liveness purposes.
+    """
     if not pid:
         return False
     try:
-        os.kill(int(pid), 0)
-        return True
+        pid = int(pid)
+        os.kill(pid, 0)
     except (OSError, ValueError, TypeError):
         return False
+    try:
+        waited, _status = os.waitpid(pid, os.WNOHANG)
+        if waited == pid:
+            return False
+    except (ChildProcessError, OSError):
+        pass
+    try:
+        out = subprocess.check_output(
+            ["ps", "-p", str(pid), "-o", "state="], text=True,
+        )
+        state = (out or "").strip()
+        if not state:
+            return False
+        if state[0] in ("Z", "z"):
+            return False
+    except Exception:
+        # ps failed while signal 0 succeeded — treat as alive (fail closed for
+        # the still-live retry gate: prefer forfeit over a double spawn).
+        return True
+    return True
 
 
 def _supervisor_lstart(pid):
@@ -1134,7 +1161,9 @@ def _destroy_review_views(run_dir, authority):
     result_path = os.path.join(run_dir, RESULT_NAME)
     if not os.path.isfile(result_path):
         return
-    roots = list(authority.cleanup_roots) + [_review_cwd_path(run_dir)]
+    roots = list(authority.cleanup_roots)
+    if authority.run_kind == RUN_KIND_REVIEW:
+        roots.append(_review_cwd_path(authority.run_dir))
     seen = set()
     for root in roots:
         if not root or root in seen:
@@ -1143,7 +1172,7 @@ def _destroy_review_views(run_dir, authority):
         if not _cleanup_path_permitted(root, authority):
             # review-cwd path is always permitted when it matches run_dir derivation
             try:
-                if os.path.realpath(root) != os.path.realpath(_review_cwd_path(run_dir)):
+                if os.path.realpath(root) != os.path.realpath(_review_cwd_path(authority.run_dir)):
                     continue
             except OSError:
                 continue
@@ -1220,9 +1249,15 @@ def _resume_command_review(run_dir, max_wait, authority):
     return " ".join(shlex.quote(str(p)) for p in parts)
 
 
-def _resume_command_poll(run_dir, max_wait):
-    return "%s -B %s dispatch-poll --run-dir %s --max-wait %d" % (
-        sys.executable, _DISPATCH_SCRIPT, shlex.quote(run_dir), max_wait)
+def _resume_command_poll(run_dir, max_wait, authority=None):
+    parts = [
+        sys.executable, "-B", _DISPATCH_SCRIPT, "dispatch-poll",
+        "--run-dir", run_dir,
+        "--max-wait", str(int(max_wait)),
+    ]
+    if isinstance(authority, LaunchAuthority) and authority.order_id:
+        parts.extend(["--order-id", authority.order_id])
+    return " ".join(shlex.quote(str(p)) for p in parts)
 
 
 def _resume_command_write(run_dir, max_wait, authority):
@@ -1929,10 +1964,8 @@ def dispatch_abandon(run_dir):
             }, real_dir, list(authority.argv), authority=authority)
             return result
         if authority.is_write:
-            # Lease credentials from authority / authenticated pgid — not mutable receipt.
-            token = engine_record.get("leaseToken") or authority.lease_token
-            cwd = engine_record.get("cwd") or authority.cwd
-            _release_worktree_lease_for_cwd(cwd, token, authority.lease_holder)
+            # Lease movement is authority-carrying — never from pgid/receipt fields.
+            _release_worktree_lease(authority)
         result = _terminal_meta({
             "ok": False,
             "reason": "abandoned",
@@ -1951,8 +1984,13 @@ def dispatch_abandon(run_dir):
             _release_run_lock(lock_path)
 
 
-def dispatch_poll(run_dir, *, max_wait=DEFAULT_SYNC_WAIT):
-    """Wait on the in-flight attempt; never spawns — no exceptions."""
+def dispatch_poll(run_dir, *, max_wait=DEFAULT_SYNC_WAIT, order_id=None):
+    """Wait on the in-flight attempt; never spawns — no exceptions.
+
+    ``order_id`` is optional for observational callers that do not know the
+    binding; when supplied, a mismatch refuses before any cached result is
+    returned (same reused-run story as the originating verbs).
+    """
     max_wait = min(max(int(max_wait), 0), MAX_SYNC_WAIT)
     ok, real_dir = _validate_run_dir(run_dir, create=False)
     if not ok:
@@ -1963,6 +2001,8 @@ def dispatch_poll(run_dir, *, max_wait=DEFAULT_SYNC_WAIT):
         return {"ok": False, "terminal": True, "reason": "unrunnable",
                 "detail": "authority-missing", "attempts": 0, "forfeited": False,
                 "runDir": real_dir}
+    if order_id is not None and _order_id_mismatch(order_id, authority.order_id):
+        return _terminal_run_dir_reused(real_dir)
     cached = _read_cached_result(real_dir, authority.run_nonce)
     if cached:
         return cached
@@ -2836,6 +2876,7 @@ def main(argv):
     p = sub.add_parser("dispatch-poll")
     p.add_argument("--run-dir", required=True)
     p.add_argument("--max-wait", type=int, default=DEFAULT_SYNC_WAIT)
+    p.add_argument("--order-id", default=None)
 
     a = sub.add_parser("dispatch-abandon")
     a.add_argument("--run-dir", required=True)
@@ -2878,7 +2919,8 @@ def main(argv):
             max_wait=args.max_wait, progress_path=args.progress_file,
         )
     elif args.cmd == "dispatch-poll":
-        res = dispatch_poll(args.run_dir, max_wait=args.max_wait)
+        res = dispatch_poll(
+            args.run_dir, max_wait=args.max_wait, order_id=args.order_id)
     elif args.cmd == "dispatch-abandon":
         res = dispatch_abandon(args.run_dir)
     elif args.cmd == "run-child":

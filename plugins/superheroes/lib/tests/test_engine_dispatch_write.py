@@ -197,6 +197,30 @@ def _assert_spawn_detached(proc):
     assert proc is not None
     assert isinstance(proc, subprocess.Popen)
     assert proc.pid != os.getpid()
+    # Detached own-session child: must not share the caller's session/pgroup.
+    child_sid = os.getsid(proc.pid)
+    child_pgid = os.getpgid(proc.pid)
+    assert child_sid != os.getsid(os.getpid()), (
+        "child sid %s equals caller sid %s — not a new session" % (
+            child_sid, os.getsid(os.getpid())))
+    assert child_pgid != os.getpgid(os.getpid()), (
+        "child pgid %s equals caller pgid %s — not a new process group" % (
+            child_pgid, os.getpgid(os.getpid())))
+    assert child_pgid == proc.pid, (
+        "child pgid %s should equal child pid %s (session leader)" % (
+            child_pgid, proc.pid))
+
+
+def _wait_process_dead(pid, timeout_s=60):
+    """Wait until real ``_process_alive`` reports dead — no mock."""
+    if not pid:
+        return
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if not ED._process_alive(pid):
+            return
+        time.sleep(0.25)
+    raise AssertionError("pid %s still alive after %.1fs" % (pid, timeout_s))
 
 
 def _spy_run_engine_files_quick_ok(monkeypatch, captured):
@@ -816,24 +840,79 @@ def test_is_supervisor_process_requires_matching_lstart():
         assert ED._is_supervisor_process("/fake/run", pid, actual) is False
 
 
-def test_retry_unsafe_attempt_still_live(tmp_path, monkeypatch):
+def test_retry_unsafe_attempt_still_live(tmp_path):
+    """Still-live forfeit uses real ``_process_alive`` against a genuinely live pid."""
     main, linked = _linked_pair(tmp_path)
-    ok_stdout = json.dumps({"ok": True, "signal": "ok", "evidence": {}})
-    fake = FakeWriteRunner([
-        ("", True, 0, ""),
-        (ok_stdout, False, 0, ""),
-    ])
-    monkeypatch.setattr(ED, "_process_alive", lambda pid: True)
-    res = ED.dispatch_write(
-        "codex", engine_model="gpt-5.6-terra", effort="high",
-        prompt_path=_prompt(tmp_path), cwd=linked, order_id="o1", run_engine=fake,
-        max_wait=120,
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "still-live"
+    run_dir.mkdir(mode=0o700)
+    (run_dir / "prompt.txt").write_bytes(b"build\n")
+    built = EA.build_argv_result(
+        "codex", "build", "high",
+        {"engine_model": "gpt-5.6-terra", "cwd": linked},
     )
-    assert res["terminal"] is True
-    assert res["detail"] == "retry-unsafe-attempt-still-live"
-    assert res["forfeited"] is True
-    assert res["attempts"] == 1
-    assert len(fake.calls) == 1
+    argv = built["argv"]
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(
+        os.path.realpath(linked))
+    # Hold a real process so _process_alive is True without mocking the seam.
+    holder = subprocess.Popen(
+        ["python3", "-c", "import time; time.sleep(120)"],
+        start_new_session=True,
+    )
+    try:
+        state = {
+            "engine": "codex",
+            "roleKind": "build",
+            "dispatchMode": ED.WRITE_DISPATCH_MODE,
+            "effort": "high",
+            "engineModel": "gpt-5.6-terra",
+            "cwd": os.path.realpath(linked),
+            "argv": argv,
+            "spawnedArgv": argv,
+            "engineBinary": shutil.which(argv[0]) or "/bin/true",
+            "timeout": 5,
+            "retryTimeout": 5,
+            "orderId": "still-live-o",
+            "runNonce": "still-live-n",
+            "worktreeLeaseToken": lease_token,
+            "worktreeLeaseHolder": lease_holder,
+            "worktreeSnapshot": list(ED._worktree_snapshot(linked)),
+            "completedAttempts": 0,
+            "inFlightAttempt": 1,
+            "attemptStartedAt": time.time() - 10,
+            "supervisorPid": holder.pid,
+            "supervisorStart": ED._supervisor_lstart(holder.pid) or "live",
+            "promptPath": str(run_dir / "prompt.txt"),
+            "fedPrompt": "build\n",
+        }
+        (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+        _persist_test_authority(run_dir, state)
+        (run_dir / "attempt-1.done").write_text(json.dumps({
+            "exit": None, "timedOut": True, "runNonce": "still-live-n",
+            "endedAt": time.time(),
+        }), encoding="utf-8")
+        (run_dir / "attempt-1.stdout").write_text("", encoding="utf-8")
+        (run_dir / "attempt-1.stderr").write_text("", encoding="utf-8")
+        assert ED._process_alive(holder.pid) is True
+        res = ED.dispatch_write(
+            "codex", engine_model="gpt-5.6-terra", effort="high",
+            prompt_path=prompt, cwd=linked, order_id="still-live-o",
+            run_engine=FakeWriteRunner([]),
+            max_wait=120, run_dir=str(run_dir),
+        )
+        assert res["terminal"] is True, res
+        assert res["detail"] == "retry-unsafe-attempt-still-live"
+        assert res["forfeited"] is True
+        assert res["attempts"] == 1
+    finally:
+        try:
+            os.killpg(holder.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            holder.wait(timeout=2)
+        except Exception:
+            pass
 
 
 def test_unknown_engine_refused(tmp_path):
@@ -1635,7 +1714,8 @@ def test_write_retry_supervisor_pid_is_child_not_launcher(tmp_path, monkeypatch)
         time.sleep(0.25)
     poll = ED.dispatch_poll(str(run_dir), max_wait=5)
     assert ED.RETRY_PENDING_DETAIL in (poll.get("detail") or "")
-    monkeypatch.setattr(ED, "_process_alive", lambda _pid: False)
+    state_after = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    _wait_process_dead(state_after.get("completedAttemptSupervisorPid"))
     second = ED.dispatch_write(
         "codex", engine_model="gpt-5.6-terra", effort="high",
         prompt_path=prompt, cwd=linked, order_id="retry-sup",
@@ -1668,7 +1748,8 @@ def test_write_retry_attempt_two_durable_artifacts_from_child(tmp_path, monkeypa
     nonce = state["runNonce"]
     poll = ED.dispatch_poll(str(run_dir), max_wait=5)
     assert ED.RETRY_PENDING_DETAIL in (poll.get("detail") or "")
-    monkeypatch.setattr(ED, "_process_alive", lambda _pid: False)
+    state_after = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    _wait_process_dead(state_after.get("completedAttemptSupervisorPid"))
     res = ED.dispatch_write(
         "codex", engine_model="gpt-5.6-terra", effort="high",
         prompt_path=prompt, cwd=linked, order_id="retry-art",
@@ -1685,23 +1766,48 @@ def test_write_retry_attempt_two_durable_artifacts_from_child(tmp_path, monkeypa
 
 
 def test_write_retry_reinvoke_respects_max_wait(tmp_path, monkeypatch):
-    """Edge 4: one dispatch-write call returns running within max_wait while retry is long."""
+    """Edge 4: re-invoke after forfeit returns running within max_wait while retry is long.
+
+    Exercises real supervisor liveness (wait for death) — no ``_process_alive`` mock.
+    """
     main, linked = _linked_pair(tmp_path)
-    _install_fake_codex_on_path(monkeypatch, tmp_path, slow_first_seconds=60)
+    _install_fake_codex_on_path(
+        monkeypatch, tmp_path, slow_first_seconds=60, slow_by_attempt={2: 60})
     prompt = _prompt(tmp_path)
     run_dir = tmp_path / "retry-bounded"
     run_dir.mkdir(mode=0o700)
     t0 = time.monotonic()
-    res = ED.dispatch_write(
+    first = ED.dispatch_write(
         "codex", engine_model="gpt-5.6-terra", effort="high",
         prompt_path=prompt, cwd=linked, order_id="retry-bounded",
         run_engine=ED._run_engine, max_wait=2, timeout=5, run_dir=str(run_dir),
     )
-    elapsed = time.monotonic() - t0
-    assert elapsed < 15, elapsed
-    assert res.get("terminal") is False
-    assert res.get("running") is True
-    assert res.get("resume")
+    assert time.monotonic() - t0 < 15, time.monotonic() - t0
+    assert first.get("terminal") is False
+    assert first.get("running") is True
+    paths = ED._attempt_paths(str(run_dir), 1)
+    for _ in range(80):
+        if os.path.isfile(paths["done"]):
+            break
+        time.sleep(0.25)
+    poll = ED.dispatch_poll(str(run_dir), max_wait=5)
+    assert ED.RETRY_PENDING_DETAIL in (poll.get("detail") or "")
+    state_after = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    _wait_process_dead(state_after.get("completedAttemptSupervisorPid"))
+    t1 = time.monotonic()
+    second = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="retry-bounded",
+        run_engine=ED._run_engine, max_wait=2, timeout=5, run_dir=str(run_dir),
+    )
+    elapsed2 = time.monotonic() - t1
+    assert elapsed2 < 15, elapsed2
+    assert second.get("terminal") is False, second
+    assert second.get("running") is True
+    assert second.get("resume")
+    assert os.path.isfile(ED._attempt_paths(str(run_dir), 2)["supervisor"]) or (
+        json.loads((run_dir / "state.json").read_text(encoding="utf-8")).get(
+            "inFlightAttempt") == 2)
 
 
 def test_write_retry_spawns_once_after_poll_then_resume(tmp_path, monkeypatch):
@@ -1743,7 +1849,8 @@ def test_write_retry_spawns_once_after_poll_then_resume(tmp_path, monkeypatch):
     assert poll.get("terminal") is False
     assert ED.RETRY_PENDING_DETAIL in (poll.get("detail") or "")
     assert spawned_children == [1]
-    monkeypatch.setattr(ED, "_process_alive", lambda _pid: False)
+    state_after = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    _wait_process_dead(state_after.get("completedAttemptSupervisorPid"))
     second = ED.dispatch_write(
         "codex", engine_model="gpt-5.6-terra", effort="high",
         prompt_path=prompt, cwd=linked, order_id="retry-det",
@@ -2023,3 +2130,287 @@ def test_authority_required_structurally():
         ED._destroy_review_views("/tmp/nope", None)
     with pytest.raises(TypeError):
         ED._fold_terminal_write("/tmp/nope", None, [], {}, "forfeited", None, 1)
+
+
+# --- WO-702-Q: B-3 real run-child structural guarantees + survivors ---
+
+
+def test_e2e_a1_kind_mismatch_refuses_pre_spawn_no_engine(tmp_path, monkeypatch):
+    """B-3 / A-1: real run-child with authority kind disagreeing with the run refuses
+    pre-spawn; stub engine on PATH is never invoked."""
+    from dataclasses import replace
+    main, linked = _linked_pair(tmp_path)
+    bin_dir = _install_fake_codex_on_path(monkeypatch, tmp_path, slow_first_seconds=0)
+    run_dir = tmp_path / "a1-kind"
+    run_dir.mkdir(mode=0o700)
+    (run_dir / "prompt.txt").write_bytes(b"x")
+    built = EA.build_argv_result(
+        "codex", "build", "high",
+        {"engine_model": "gpt-5.6-terra", "cwd": linked},
+    )
+    argv = built["argv"]
+    state = {
+        "engine": "codex",
+        "roleKind": "build",
+        "dispatchMode": ED.WRITE_DISPATCH_MODE,
+        "effort": "high",
+        "engineModel": "gpt-5.6-terra",
+        "cwd": linked,
+        "argv": argv,
+        "engineBinary": shutil.which("codex"),
+        "runNonce": "a1-nonce",
+        "orderId": "a1-o",
+        "timeout": 30,
+        "retryTimeout": 30,
+    }
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    authority = _authority_from_state(run_dir, state)
+    # Kind disagrees with the write-shaped run (no review-cwd) — refuse before engine.
+    authority = replace(authority, run_kind=ED.RUN_KIND_REVIEW, role_kind="review")
+    proc = ED._spawn_run_child(str(run_dir), 1, authority)
+    _assert_spawn_detached(proc)
+    try:
+        done = Path(run_dir) / "attempt-1.done"
+        for _ in range(80):
+            if done.is_file():
+                break
+            time.sleep(0.25)
+        assert done.is_file(), "run-child did not write refusal sentinel"
+        data = json.loads(done.read_text(encoding="utf-8"))
+        assert data.get("refusal") == "launch-cwd-mismatch", data
+        marker = Path(linked) / ".fake-codex-invokes"
+        assert not marker.exists(), "engine process started despite A-1 refusal"
+        assert not (run_dir / "attempt-1.stdout").exists() or (
+            Path(run_dir / "attempt-1.stdout").stat().st_size == 0)
+    finally:
+        try:
+            proc.terminate()
+            proc.wait(timeout=3)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+
+def test_e2e_a4_poll_no_spawn_absent_attempt2_artifacts(tmp_path, monkeypatch):
+    """B-3 / A-4: forfeited attempt-1 then dispatch-poll creates no attempt-2 artifacts."""
+    main, linked = _linked_pair(tmp_path)
+    _install_fake_codex_on_path(monkeypatch, tmp_path, slow_first_seconds=60)
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "a4-poll"
+    run_dir.mkdir(mode=0o700)
+    first = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="a4-o",
+        run_engine=ED._run_engine, max_wait=1, timeout=5, run_dir=str(run_dir),
+    )
+    assert first.get("running") is True
+    paths1 = ED._attempt_paths(str(run_dir), 1)
+    for _ in range(80):
+        if os.path.isfile(paths1["done"]):
+            break
+        time.sleep(0.25)
+    assert os.path.isfile(paths1["done"])
+    poll = ED.dispatch_poll(str(run_dir), max_wait=5, order_id="a4-o")
+    assert poll.get("terminal") is False, poll
+    assert ED.RETRY_PENDING_DETAIL in (poll.get("detail") or ""), poll
+    assert not (run_dir / "attempt-2.stdout").exists()
+    assert not (run_dir / "attempt-2.stderr").exists()
+    assert not (run_dir / "attempt-2.done").exists()
+    assert not (run_dir / "attempt-2.supervisor").exists()
+    assert not list(run_dir.glob(".retry-parent-probe.*"))
+    marker = Path(linked) / ".fake-codex-invokes"
+    # Attempt 1 may have started the stub; attempt 2 must not.
+    invokes = int(marker.read_text()) if marker.exists() else 0
+    assert invokes <= 1, "poll must not start a second engine process (invokes=%s)" % invokes
+
+
+def test_e2e_b1_authority_wins_over_disagreeing_state(tmp_path, monkeypatch):
+    """B-3 / B-1: real child follows launch authority, not a forged state field."""
+    from dataclasses import replace
+    main, linked = _linked_pair(tmp_path)
+    _install_fake_codex_on_path(monkeypatch, tmp_path, slow_first_seconds=0)
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "b1-auth"
+    run_dir.mkdir(mode=0o700)
+    # Seed a completed write run so authority + state exist, then mutate state.
+    fake = FakeWriteRunner([(_WRITE_OK_STDOUT, False, 0, "")])
+    seeded = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="b1-o",
+        run_engine=fake, max_wait=60, run_dir=str(run_dir),
+    )
+    assert seeded.get("ok") is True, seeded
+    # Clear terminal result so a consumer would otherwise resume from state.
+    try:
+        (run_dir / "result.json").unlink()
+    except FileNotFoundError:
+        pass
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    authority = ED._load_authority(str(run_dir))
+    assert authority is not None
+    # Forge state cwd / orderId — authority must win on poll/write refuse paths.
+    state["cwd"] = "/tmp/forged-not-the-authority-cwd"
+    state["orderId"] = "forged-other-order"
+    state["inFlightAttempt"] = None
+    state["completedAttempts"] = 0
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    # Poll with the forged order_id refuses (authority order_id wins).
+    forged_poll = ED.dispatch_poll(str(run_dir), max_wait=0, order_id="forged-other-order")
+    assert forged_poll.get("reason") == "run-dir-reused", forged_poll
+    # Matching authority order_id is accepted (observational).
+    ok_poll = ED.dispatch_poll(str(run_dir), max_wait=0, order_id="b1-o")
+    assert ok_poll.get("reason") != "run-dir-reused", ok_poll
+
+    # Wrong authority field (cwd) makes run-child refuse — real spawn, fresh attempt.
+    for stale in run_dir.glob("attempt-1.*"):
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+    bad_auth = replace(authority, cwd="/tmp/definitely-not-linked-worktree")
+    proc = ED._spawn_run_child(str(run_dir), 1, bad_auth)
+    _assert_spawn_detached(proc)
+    try:
+        done = Path(run_dir) / "attempt-1.done"
+        for _ in range(80):
+            if done.is_file():
+                break
+            time.sleep(0.25)
+        assert done.is_file()
+        data = json.loads(done.read_text(encoding="utf-8"))
+        refusal = data.get("refusal") or ""
+        assert refusal in (
+            "cwd-absent", "cwd-not-a-directory", "cwd-not-a-repo",
+            "cwd-not-linked", "cwd-not-registered", "cwd-authorization-mismatch",
+            "launch-cwd-invalid",
+        ) or refusal.startswith("cwd-"), data
+        marker = Path(linked) / ".fake-codex-invokes"
+        assert not marker.exists(), "engine must not start on wrong-authority refuse"
+    finally:
+        try:
+            proc.terminate()
+            proc.wait(timeout=3)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+
+def test_different_order_id_refuses_on_every_verb_including_poll(tmp_path):
+    """Survivor 1: run dir bound to order-a refuses write/review/poll with order-b;
+    poll must not return the previous order's cached result."""
+    main, linked = _linked_pair(tmp_path)
+    prompt = _prompt(tmp_path)
+    run_dir = _seed_write_run(tmp_path, linked, prompt, order_id="order-a")
+    cached = json.loads((Path(run_dir) / "result.json").read_text(encoding="utf-8"))
+    assert cached.get("ok") is True
+
+    fake_w = FakeWriteRunner([])
+    write_res = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="order-b", run_engine=fake_w,
+        run_dir=run_dir, max_wait=10,
+    )
+    assert write_res["reason"] == "run-dir-reused"
+    assert write_res["attempts"] == 0
+    assert write_res.get("ok") is False
+    assert fake_w.calls == []
+
+    repo_root = _review_repo(tmp_path)
+    build_view = _fake_review_build_view(tmp_path)
+    review_res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=prompt, repo_root=repo_root, run_engine=_ReviewFakeRunner([]),
+        build_view=build_view, run_dir=run_dir, max_wait=10, order_id="order-b",
+    )
+    # Write-kind authority vs review verb → kind mismatch (still a refuse, not cache).
+    assert review_res["reason"] in ("run-dir-reused", "run-kind-mismatch"), review_res
+    assert review_res.get("ok") is not True
+
+    poll_res = ED.dispatch_poll(run_dir, max_wait=0, order_id="order-b")
+    assert poll_res["reason"] == "run-dir-reused", poll_res
+    assert poll_res.get("ok") is False
+    # Must not echo the prior order's cached success.
+    assert poll_res.get("runNonce") != cached.get("runNonce") or poll_res.get("ok") is False
+    assert "engagement" not in poll_res or poll_res.get("ok") is False
+
+    # Matching order_id still sees the cache.
+    poll_ok = ED.dispatch_poll(run_dir, max_wait=0, order_id="order-a")
+    assert poll_ok.get("ok") is True
+    assert poll_ok.get("runNonce") == cached.get("runNonce")
+
+
+def test_review_reentry_none_order_id_refuses_when_authority_bound(tmp_path):
+    """Survivor 1: order_id=None no longer skips mismatch against a bound authority."""
+    main, linked = _linked_pair(tmp_path)
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "review-bound"
+    run_dir.mkdir(mode=0o700)
+    repo_root = _review_repo(tmp_path)
+    build_view = _fake_review_build_view(tmp_path)
+    first = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=prompt, repo_root=repo_root,
+        run_engine=_ReviewFakeRunner([(_VALID_REVIEW_STDOUT, False, 0, "")]),
+        build_view=build_view, run_dir=str(run_dir), max_wait=60,
+        order_id="review-order-a",
+    )
+    assert first.get("ok") is True, first
+    # Re-enter with omitted order_id — fail-closed against recorded binding.
+    second = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=prompt, repo_root=repo_root,
+        run_engine=_ReviewFakeRunner([]),
+        build_view=build_view, run_dir=str(run_dir), max_wait=10,
+        order_id=None,
+    )
+    assert second["reason"] == "run-dir-reused", second
+    assert second.get("ok") is False
+
+
+def test_spawn_detached_own_session_attempt_1_and_2(tmp_path, monkeypatch):
+    """Survivor 2 / edge 7: attempt 1 and 2 children are each in their own session/pgid."""
+    main, linked = _linked_pair(tmp_path)
+    _install_fake_codex_on_path(monkeypatch, tmp_path, slow_first_seconds=60)
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "detach-sess"
+    run_dir.mkdir(mode=0o700)
+    spawned = []
+    real_spawn = ED._spawn_run_child
+
+    def _track(rd, att, auth):
+        proc = real_spawn(rd, att, auth)
+        _assert_spawn_detached(proc)
+        spawned.append((att, proc.pid, os.getsid(proc.pid), os.getpgid(proc.pid)))
+        return proc
+
+    monkeypatch.setattr(ED, "_spawn_run_child", _track)
+    first = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="detach-o",
+        run_engine=ED._run_engine, max_wait=1, timeout=5, run_dir=str(run_dir),
+    )
+    assert first.get("running") is True
+    paths = ED._attempt_paths(str(run_dir), 1)
+    for _ in range(80):
+        if os.path.isfile(paths["done"]):
+            break
+        time.sleep(0.25)
+    poll = ED.dispatch_poll(str(run_dir), max_wait=5, order_id="detach-o")
+    assert ED.RETRY_PENDING_DETAIL in (poll.get("detail") or "")
+    state_after = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    _wait_process_dead(state_after.get("completedAttemptSupervisorPid"))
+    second = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="detach-o",
+        run_engine=ED._run_engine, max_wait=120, timeout=5, run_dir=str(run_dir),
+    )
+    assert second.get("ok") is True, second
+    assert [a for a, *_ in spawned] == [1, 2]
+    for att, pid, sid, pgid in spawned:
+        assert sid != os.getsid(os.getpid())
+        assert pgid != os.getpgid(os.getpid())
+        assert pgid == pid
