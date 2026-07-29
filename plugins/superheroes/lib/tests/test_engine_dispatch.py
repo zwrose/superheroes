@@ -1865,6 +1865,14 @@ def _b2_classify_authority_expr(node, authority_names, derived_names, tainted_na
         return _b2_classify_authority_expr(
             node.value, authority_names, derived_names, tainted_names)
     if isinstance(node, ast.Call):
+        # Sealed-ledger / sealed-launch helpers are authority sources (never state.json).
+        cname = _b2_call_name(node)
+        if cname in (
+                "_ledger_expected_hash",
+                "_find_pending_launch",
+                "_completed_attempts_from_seals",
+                "_ledger_attempt_claim"):
+            return "authority"
         # list(authority.argv), tuple(...), _resolve_argv_binary(recorded), etc.
         if not node.args:
             return "unclassified"
@@ -1937,10 +1945,11 @@ def _b2_classify_authority_expr(node, authority_names, derived_names, tainted_na
 def _b2_bind_name(name, value_node, authority_names, derived, tainted):
     """Update derived/tainted for an ordered name binding (reassignment-aware).
 
-    Only a forbidden (receipt/state) reassignment of an authority-derived name
-    taints it. Unclassified rebinds drop derived provenance without tainting so
-    builder assignments like ``authority = _build_*_authority(...)`` stay usable
-    at sinks via the ``authority`` parameter name.
+    A forbidden (receipt/state) binding taints the name whether or not it was
+    previously authority-derived — a fresh ``authority_hash = state.get(...)``
+    must not reach a sink. Unclassified rebinds drop derived provenance without
+    tainting so builder assignments like ``authority = _build_*_authority(...)``
+    stay usable at sinks via the ``authority`` parameter name.
     """
     kind = _b2_classify_authority_expr(value_node, authority_names, derived, tainted)
     if kind == "authority":
@@ -1948,8 +1957,7 @@ def _b2_bind_name(name, value_node, authority_names, derived, tainted):
         tainted.discard(name)
         return
     if kind == "forbidden":
-        if name in derived or name in authority_names:
-            tainted.add(name)
+        tainted.add(name)
         derived.discard(name)
         return
     # unclassified — drop derived bit; do not taint
@@ -2044,43 +2052,75 @@ def _b2_sink_args(call):
     """Yield (label, expr) for authority-carrying arguments at a sink call."""
     name = _b2_call_name(call)
     if name == "_spawn_run_child":
-        # (run_dir, attempt, authority) — authority is the carrying arg;
-        # argv/cwd/binary are built inside from it.
+        # (run_dir, attempt, authority, authority_hash=...)
+        if len(call.args) >= 2:
+            yield "attempt", call.args[1]
         if len(call.args) >= 3:
             yield "authority", call.args[2]
         for kw in call.keywords:
-            if kw.arg == "authority":
-                yield "authority", kw.value
+            if kw.arg in ("attempt", "authority"):
+                yield kw.arg, kw.value
     elif name == "_run_engine_files":
-        # argv, timeout, cwd (positional 0, 4, 7); authority kw
+        # argv, timeout, attempt, cwd (positional 0, 4, 6, 7);
+        # authority / authority_hash kw; authority_hash also positional 11.
         if len(call.args) >= 1:
             yield "argv", call.args[0]
         if len(call.args) >= 5:
             yield "timeout", call.args[4]
+        if len(call.args) >= 7:
+            yield "attempt", call.args[6]
         if len(call.args) >= 8:
             yield "cwd", call.args[7]
+        if len(call.args) >= 12:
+            yield "authority_hash", call.args[11]
         for kw in call.keywords:
-            if kw.arg in ("argv", "cwd", "authority", "timeout"):
+            if kw.arg in (
+                    "argv", "cwd", "authority", "timeout", "authority_hash",
+                    "attempt"):
                 yield kw.arg, kw.value
     elif name == "_seal_attempt_launch":
         # (run_dir, attempt, authority, authority_hash, timeout)
+        if len(call.args) >= 2:
+            yield "attempt", call.args[1]
         if len(call.args) >= 3:
             yield "authority", call.args[2]
+        if len(call.args) >= 4:
+            yield "authority_hash", call.args[3]
         if len(call.args) >= 5:
             yield "timeout", call.args[4]
         for kw in call.keywords:
-            if kw.arg in ("authority", "timeout"):
+            if kw.arg in ("attempt", "authority", "authority_hash", "timeout"):
                 yield kw.arg, kw.value
     elif name == "_execute_injected_attempt":
-        # timeout at positional 6; cwd at 7; authority at 3
+        # attempt at 2; authority at 3; timeout at 6; cwd at 7; authority_hash at 8
+        if len(call.args) >= 3:
+            yield "attempt", call.args[2]
         if len(call.args) >= 4:
             yield "authority", call.args[3]
         if len(call.args) >= 7:
             yield "timeout", call.args[6]
         if len(call.args) >= 8:
             yield "cwd", call.args[7]
+        if len(call.args) >= 9:
+            yield "authority_hash", call.args[8]
         for kw in call.keywords:
-            if kw.arg in ("authority", "timeout", "cwd", "argv"):
+            if kw.arg in (
+                    "attempt", "authority", "timeout", "cwd", "argv",
+                    "authority_hash"):
+                yield kw.arg, kw.value
+    elif name in (
+            "_ledger_seal_attempt_intent",
+            "_ledger_claim_attempt",
+            "_ledger_seal_attempt_complete"):
+        # (run_dir_real, attempt, authority_hash, run_nonce, ...)
+        if len(call.args) >= 2:
+            yield "attempt", call.args[1]
+        if len(call.args) >= 3:
+            yield "authority_hash", call.args[2]
+        if len(call.args) >= 4:
+            yield "run_nonce", call.args[3]
+        for kw in call.keywords:
+            if kw.arg in ("attempt", "authority_hash", "run_nonce"):
                 yield kw.arg, kw.value
     elif name == "_release_worktree_lease":
         if call.args:
@@ -2155,12 +2195,69 @@ def _b2_guarding_if(parent_map, node):
     return None
 
 
+def _b2_spawn_control_tests(func_node, call, parent_map):
+    """Yield (test_expr, lineno) for enclosing ``if`` tests that gate reaching call.
+
+    Only enclosing ``if`` tests at any nesting depth (body branch only). Early-return
+    gates earlier in the function are intentionally not treated as spawn control
+    dependencies: in this module they can only stop a run (the downgrade-only
+    direction), the enabling shape is covered at the sinks (``attempt`` inspected),
+    and fall-through bypass coverage lives in ``test_engine_dispatch_write.py``.
+    """
+    seen = set()
+    # Enclosing ifs at any depth (body only — orelse is not a spawn-enable guard).
+    cur = call
+    while cur in parent_map:
+        parent = parent_map[cur]
+        if isinstance(parent, ast.If):
+            under_body = False
+            for stmt in parent.body:
+                if cur is stmt or cur in ast.walk(stmt):
+                    under_body = True
+                    break
+            if under_body:
+                key = id(parent.test)
+                if key not in seen:
+                    seen.add(key)
+                    yield parent.test, parent.lineno
+            else:
+                # Under orelse — stop treating outer ifs via this walk step.
+                pass
+        cur = parent
+
+
 _B2_SINK_NAMES = frozenset({
     "_spawn_run_child", "_run_engine_files", "_seal_attempt_launch",
     "_execute_injected_attempt",
+    "_ledger_seal_attempt_intent", "_ledger_claim_attempt",
+    "_ledger_seal_attempt_complete",
     "_release_worktree_lease", "_release_worktree_lease_for_cwd",
     "_destroy_review_views", "_destroy_run_dir_path",
 })
+
+_B2_AUTHORITY_PARAM_NAMES = frozenset({
+    "authority", "launch", "authority_hash", "run_nonce", "attempt",
+})
+
+
+def _b2_authority_names_for_call(parent_map, call, enc):
+    """Authority-carrying parameter names visible at call (incl. outer scopes)."""
+    authority_names = {"authority"}
+    # Walk every enclosing function so nested helpers closing over
+    # authority_hash / run_nonce still see them as authority params.
+    cur = call
+    funcs = []
+    while cur in parent_map:
+        cur = parent_map[cur]
+        if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            funcs.append(cur)
+    if enc is not None and enc not in funcs:
+        funcs.append(enc)
+    for func in funcs:
+        for arg in list(func.args.args) + list(func.args.kwonlyargs):
+            if arg.arg in _B2_AUTHORITY_PARAM_NAMES:
+                authority_names.add(arg.arg)
+    return authority_names
 
 
 def _b2_find_violations(source):
@@ -2183,31 +2280,34 @@ def _b2_find_violations(source):
         elif name not in _B2_SINK_NAMES:
             continue
         enc = _b2_enclosing_function(tree, call)
-        authority_names = {"authority"}
+        authority_names = _b2_authority_names_for_call(parent_map, call, enc)
         derived = set()
         tainted = set()
         if enc is not None:
-            for arg in enc.args.args:
-                # Sealed launch record is authority-adjacent (never state.json).
-                if arg.arg in ("authority", "launch"):
-                    authority_names.add(arg.arg)
             derived, tainted = _b2_collect_derived(enc, authority_names)
             # engine_cwd validated from authority.cwd is authority-derived when
             # assigned in the write/review branches — collected via loop above
             # when the RHS classifies. Also treat common locals set from authority.
-        # Spawn-decision: an If that gates _spawn_run_child must not read receipts.
-        if name == "_spawn_run_child":
-            guard = _b2_guarding_if(parent_map, call)
-            if guard is not None and _b2_expr_mentions_forbidden_dict(guard.test):
-                snippet = (
-                    ast.unparse(guard.test) if hasattr(ast, "unparse")
-                    else ast.dump(guard.test))
-                violations.append((
-                    guard.lineno,
-                    "B-2 violation: spawn-decision fed from forbidden dict at "
-                    "%s:%d: %s"
-                    % ("engine_dispatch.py", guard.lineno, snippet),
-                ))
+        # Spawn-decision (Miss 3): only enclosing ``if`` tests at any depth.
+        # Early-return / fall-through gates earlier in the function are not
+        # flagged — in this module they can only stop a run (downgrade-only);
+        # reintroduction of receipt-selected attempt is caught at sinks via the
+        # inspected ``attempt`` argument; fall-through bypass coverage lives in
+        # test_engine_dispatch_write.py. No production line-number allowlist.
+        if name == "_spawn_run_child" and enc is not None:
+            for test, lineno in _b2_spawn_control_tests(enc, call, parent_map):
+                kind = _b2_classify_authority_expr(
+                    test, authority_names, derived, tainted)
+                if kind == "forbidden":
+                    snippet = (
+                        ast.unparse(test) if hasattr(ast, "unparse")
+                        else ast.dump(test))
+                    violations.append((
+                        lineno,
+                        "B-2 violation: spawn-decision fed from forbidden dict at "
+                        "%s:%d: %s"
+                        % ("engine_dispatch.py", lineno, snippet),
+                    ))
         for label, expr in _b2_sink_args(call):
             kind = _b2_classify_authority_expr(
                 expr, authority_names, derived, tainted)
@@ -2286,4 +2386,177 @@ def test_b2_ast_check_fails_on_authority_var_reassigned_from_receipt():
     violations = _b2_find_violations(snippet)
     assert violations, "expected reassignment taint failure, got none"
     assert any("cwd" in msg and "forbidden" in msg for _, msg in violations)
+
+
+def test_b2_ast_check_fails_on_fresh_receipt_alias_at_seal_launch():
+    """Miss 1: a brand-new name bound from state.get is tainted at a sink."""
+    snippet = (
+        "def _continue_run(run_dir, authority, state):\n"
+        "    authority_hash = state.get('authorityHash')\n"
+        "    _seal_attempt_launch(run_dir, 1, authority, authority_hash, 5)\n"
+    )
+    violations = _b2_find_violations(snippet)
+    assert violations, "expected fresh receipt-alias failure, got none"
+    assert any(
+        "authority_hash" in msg and ("forbidden" in msg or "B-2 violation" in msg)
+        for _, msg in violations
+    ), violations
+
+
+def test_b2_ast_check_fails_on_fresh_receipt_alias_at_ledger_and_engine_sinks():
+    """Miss 2: authority_hash is an inspected sink arg (ledger + engine files)."""
+    snippet = (
+        "def _run_child_main(run_dir, authority, state):\n"
+        "    authority_hash = state.get('authorityHash')\n"
+        "    _ledger_claim_attempt(run_dir, 1, authority_hash, authority.run_nonce)\n"
+        "    _run_engine_files(\n"
+        "        list(authority.argv), 'p', 'o', 'e', 5, 'prog', 1, authority.cwd,\n"
+        "        authority_hash=authority_hash)\n"
+    )
+    violations = _b2_find_violations(snippet)
+    assert violations, "expected authority_hash sink failure, got none"
+    assert any(
+        "authority_hash" in msg and ("forbidden" in msg or "B-2 violation" in msg)
+        for _, msg in violations
+    ), violations
+
+
+def test_b2_ast_check_fails_on_receipt_selected_attempt_at_spawn():
+    """Miss 3 sink: receipt-bound attempt at _spawn_run_child is a violation."""
+    snippet = (
+        "def _continue_run(run_dir, authority, state):\n"
+        "    in_flight = state.get('inFlightAttempt')\n"
+        "    _spawn_run_child(run_dir, in_flight, authority)\n"
+    )
+    violations = _b2_find_violations(snippet)
+    assert violations, "expected receipt-selected attempt failure, got none"
+    assert any(
+        "attempt" in msg and ("forbidden" in msg or "B-2 violation" in msg)
+        for _, msg in violations
+    ), violations
+
+
+def test_b2_ast_check_fails_on_receipt_selected_attempt_at_ledger_claim():
+    """Miss 3 sink: receipt-bound attempt at _ledger_claim_attempt is a violation."""
+    snippet = (
+        "def _continue_run(run_dir, authority, state, authority_hash, run_nonce):\n"
+        "    in_flight = state.get('inFlightAttempt')\n"
+        "    _ledger_claim_attempt(run_dir, in_flight, authority_hash, run_nonce)\n"
+    )
+    violations = _b2_find_violations(snippet)
+    assert violations, "expected receipt-selected attempt at ledger claim, got none"
+    assert any(
+        "attempt" in msg and ("forbidden" in msg or "B-2 violation" in msg)
+        for _, msg in violations
+    ), violations
+
+
+def test_b2_ast_check_fails_on_receipt_selected_attempt_keyword():
+    """Miss 3 sink: keyword attempt= from a receipt alias is a violation."""
+    snippet = (
+        "def _continue_run(run_dir, authority, state):\n"
+        "    in_flight = state.get('inFlightAttempt')\n"
+        "    _spawn_run_child(run_dir, authority=authority, attempt=in_flight)\n"
+    )
+    violations = _b2_find_violations(snippet)
+    assert violations, "expected keyword attempt= failure, got none"
+    assert any(
+        "attempt" in msg and ("forbidden" in msg or "B-2 violation" in msg)
+        for _, msg in violations
+    ), violations
+
+
+def test_b2_ast_check_fails_on_receipt_arithmetic_attempt_at_seal():
+    """Miss 3 sink: state['completedAttempts'] + 1 at _seal_attempt_launch taints."""
+    snippet = (
+        "def _continue_run(run_dir, authority, state, authority_hash):\n"
+        "    attempt = state['completedAttempts'] + 1\n"
+        "    _seal_attempt_launch(run_dir, attempt, authority, authority_hash, 5)\n"
+    )
+    violations = _b2_find_violations(snippet)
+    assert violations, "expected receipt-arithmetic attempt failure, got none"
+    assert any(
+        "attempt" in msg and ("forbidden" in msg or "B-2 violation" in msg)
+        for _, msg in violations
+    ), violations
+
+
+def test_b2_ast_check_clean_on_early_return_receipt_gate_before_spawn():
+    """Miss 3 limit: early-return gate on a receipt value is not a spawn-decision.
+
+    Deliberate — not an oversight. Early-return / fall-through gates on receipt
+    values can only stop a run in this module (downgrade-only). Reintroduction of
+    receipt-selected attempt is caught at the inspected attempt sink argument;
+    fall-through bypass behavioural coverage lives in test_engine_dispatch_write.py.
+    """
+    snippet = (
+        "def _continue_run(run_dir, authority, state):\n"
+        "    if state.get('inFlightAttempt'):\n"
+        "        return {'ok': False}\n"
+        "    _spawn_run_child(run_dir, 1, authority)\n"
+    )
+    violations = _b2_find_violations(snippet)
+    assert not violations, "\n".join(msg for _, msg in violations)
+
+
+def test_b2_ast_check_clean_on_ledger_helper_authority_hash_at_sinks():
+    """Positive: authority_hash from _ledger_expected_hash is clean at sinks."""
+    snippet = (
+        "def _continue_run(run_dir, authority):\n"
+        "    authority_hash = _ledger_expected_hash(\n"
+        "        run_dir, authority.run_nonce, authority.order_id)\n"
+        "    _seal_attempt_launch(run_dir, 1, authority, authority_hash, 5)\n"
+        "    _ledger_claim_attempt(\n"
+        "        run_dir, 1, authority_hash, authority.run_nonce)\n"
+        "    _run_engine_files(\n"
+        "        list(authority.argv), 'p', 'o', 'e', 5, 'prog', 1, authority.cwd,\n"
+        "        authority_hash=authority_hash)\n"
+    )
+    violations = _b2_find_violations(snippet)
+    assert not violations, "\n".join(msg for _, msg in violations)
+
+
+def test_b2_ast_check_clean_on_sealed_attempt_sources_at_sinks():
+    """Positive: attempt from sealed launch/seals/ledger helpers is clean at sinks."""
+    snippet = (
+        "def _continue_run(run_dir, authority, authority_hash, run_nonce):\n"
+        "    attempt, launch = _find_pending_launch(\n"
+        "        run_dir, authority_hash, run_nonce)\n"
+        "    _spawn_run_child(run_dir, attempt, authority)\n"
+        "    completed = _completed_attempts_from_seals(\n"
+        "        run_dir, authority_hash, run_nonce)\n"
+        "    next_attempt = completed + 1\n"
+        "    _seal_attempt_launch(\n"
+        "        run_dir, next_attempt, authority, authority_hash, 5)\n"
+        "    record = _ledger_attempt_claim(\n"
+        "        run_dir, attempt, authority_hash, run_nonce)\n"
+        "    sealed_attempt = record.get('attempt')\n"
+        "    _ledger_claim_attempt(\n"
+        "        run_dir, sealed_attempt, authority_hash, run_nonce)\n"
+    )
+    violations = _b2_find_violations(snippet)
+    assert not violations, "\n".join(msg for _, msg in violations)
+
+
+def test_b2_ast_check_clean_on_authority_attr_spawn_without_receipt_gate():
+    """Positive: spawn reached without a receipt-fed control gate is clean."""
+    snippet = (
+        "def _continue_run(run_dir, authority):\n"
+        "    if not allow_spawn:\n"
+        "        return {'ok': False}\n"
+        "    _spawn_run_child(run_dir, 1, authority)\n"
+    )
+    violations = _b2_find_violations(snippet)
+    assert not violations, "\n".join(msg for _, msg in violations)
+
+
+def test_b2_ast_check_clean_on_unclassified_rebind_of_authority_param():
+    """Edge 2: unclassified rebind of authority drops derived but does not taint."""
+    snippet = (
+        "def _continue_run(run_dir, authority):\n"
+        "    authority = _build_write_authority(run_dir)\n"
+        "    _spawn_run_child(run_dir, 1, authority)\n"
+    )
+    violations = _b2_find_violations(snippet)
+    assert not violations, "\n".join(msg for _, msg in violations)
 
