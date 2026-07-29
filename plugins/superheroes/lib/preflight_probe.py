@@ -142,20 +142,23 @@ def dispatch_calibration(cwd=None, root=None, prefs=None, tiers=None):
 
 
 def _dispatch_selftest_config(cwd=None, root=None):
-    """prefs/tiers bundle for dispatch_selftest leg 5 — mirrors dispatch_calibration reads."""
+    """prefs/tiers bundle for dispatch_selftest leg 5 — reads engine prefs via
+    ``core_md.engine_preferences_for_gate`` (absent/ok/unreadable). ``dispatch_calibration`` has
+    not been migrated; it still uses ``core_md.read`` and treats unreadable as absent."""
     cwd = cwd or os.getcwd()
-    path = core_md.core_path(cwd, root)
-    if not os.path.isfile(path):
-        return {"prefs": {}, "tiers": {}}
     try:
-        raw = core_md.read(cwd, root)
-        if raw is None:
-            raise ValueError("core.md is corrupt or unreadable")
-        prefs = (raw or {}).get("enginePreferences")
-        prefs = prefs if isinstance(prefs, dict) else {}
+        cfg = core_md.engine_preferences_for_gate(cwd=cwd, root=root)
+        if cfg.status == core_md.CONFIG_ABSENT:
+            return {"prefs": {}, "tiers": {}}
+        if cfg.status == core_md.CONFIG_UNREADABLE:
+            return {
+                "prefs": {},
+                "tiers": {},
+                "read_error": "%s: %s" % (core_md.GATE_REASON_UNREADABLE, cfg.detail),
+            }
         tiers = model_tier_overrides.effective_tiers(
             model_tier_overrides.resolve_profile_path(cwd, root))
-        return {"prefs": prefs, "tiers": tiers}
+        return {"prefs": cfg.prefs, "tiers": tiers}
     except Exception as exc:
         return {
             "prefs": {},
