@@ -463,3 +463,111 @@ def test_unknown_engine_refused(tmp_path):
     )
     assert res["detail"] == "unknown-engine"
     assert len(fake.calls) == 0
+
+
+def _assert_spawned_argv_pair(res):
+    argv = res["argv"]
+    spawned = res["spawnedArgv"]
+    assert argv[0] in ("codex", "cursor-agent")
+    assert os.path.isabs(spawned[0])
+    assert os.path.isfile(spawned[0])
+    resolved = shutil.which(argv[0])
+    assert resolved
+    assert spawned[0] == resolved
+    assert spawned[1:] == argv[1:]
+
+
+def test_dispatch_write_spawned_argv_echo(tmp_path):
+    main, linked = _linked_pair(tmp_path)
+    ok_stdout = json.dumps({"ok": True, "signal": "ok", "evidence": {}})
+    fake = FakeWriteRunner([(ok_stdout, False, 0, "")])
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(mode=0o700)
+    res = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=_prompt(tmp_path), cwd=linked, order_id="o1", run_engine=fake,
+        max_wait=60, run_dir=str(run_dir),
+    )
+    assert res["ok"] is True
+    _assert_spawned_argv_pair(res)
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    assert state["argv"] == res["argv"]
+    assert state["spawnedArgv"] == res["spawnedArgv"]
+
+
+def _review_repo(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / ".git").write_text("gitdir: /fake/worktree\n", encoding="utf-8")
+    return str(root)
+
+
+def _fake_review_build_view(tmp_path):
+    def build_view(repo_real):
+        view_dir = tmp_path / "sanitized-view"
+        view_dir.mkdir(parents=True, exist_ok=True)
+        return {
+            "path": str(view_dir),
+            "strategy": "git-archive-export",
+            "stripped": [],
+            "strippedCount": 0,
+            "headSha": "abc123fake",
+            "sourceDirty": False,
+            "buildSeconds": 0.01,
+            "bytes": 1,
+            "fileCount": 1,
+        }
+    return build_view
+
+
+class _ReviewFakeRunner:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+        self.calls.append({"argv": list(argv), "cwd": cwd})
+        idx = len(self.calls) - 1
+        return self.responses[idx]
+
+
+_VALID_REVIEW_STDOUT = json.dumps({"findings": [{"id": "f1", "message": "issue found"}]})
+
+
+def test_dispatch_review_spawned_argv_echo(tmp_path):
+    repo_root = _review_repo(tmp_path)
+    build_view = _fake_review_build_view(tmp_path)
+    fake = _ReviewFakeRunner([(_VALID_REVIEW_STDOUT, False, 0, "")])
+    run_dir = tmp_path / "run-review"
+    run_dir.mkdir(mode=0o700)
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=build_view, run_dir=str(run_dir), max_wait=60,
+    )
+    assert res["ok"] is True
+    _assert_spawned_argv_pair(res)
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    assert state["argv"] == res["argv"]
+    assert state["spawnedArgv"] == res["spawnedArgv"]
+
+
+def test_run_child_rejects_argv_drift_review(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(mode=0o700)
+    (run_dir / "prompt.txt").write_bytes(b"x")
+    (run_dir / "review-cwd").mkdir()
+    state = {
+        "engine": "codex",
+        "roleKind": "review",
+        "effort": "high",
+        "model": "sonnet",
+        "argv": ["codex", "exec", "--sandbox", "read-only", "-m", "wrong",
+                 "-c", "model_reasoning_effort=high", "-"],
+        "engineBinary": shutil.which("codex") or "/usr/bin/false",
+        "attemptTimeout": 5,
+    }
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    ED._run_child_main(str(run_dir), 1)
+    done = json.loads((run_dir / "attempt-1.done").read_text(encoding="utf-8"))
+    assert done.get("refusal") == "argv-rederivation-mismatch"

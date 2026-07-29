@@ -80,7 +80,7 @@ def _map_outcome(res):
         if reason == "running":
             return "running", ""
         raw = reason or res.get("detail") or "unknown"
-        raise ValueError("non-terminal dispatch with unrecognised reason: %s" % raw)
+        return "running-unknown", str(raw)
 
     if res.get("ok") is True:
         return "ok", ""
@@ -196,7 +196,7 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
             }
 
         if _is_non_terminal(res):
-            outcome, _ = _map_outcome(res)
+            outcome, detail = _map_outcome(res)
             return {
                 "engine": engine,
                 "model": engine_model,
@@ -205,7 +205,7 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
                 "engaged": None,
                 "evidence": _unmeasured_evidence(),
                 "detectedPlant": False,
-                "detail": "",
+                "detail": detail,
                 "runDir": res.get("runDir"),
                 "resume": res.get("resume"),
             }

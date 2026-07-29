@@ -440,11 +440,40 @@ def test_non_terminal_running_never_maps_to_unrunnable():
     assert detail == ""
 
 
-def test_non_terminal_unknown_reason_fails_loud_not_unrunnable():
-    import pytest
+def test_non_terminal_unknown_reason_maps_running_unknown_not_unrunnable():
     res = _running_dispatch_result(reason="mystery", terminal=False)
-    with pytest.raises(ValueError, match="unrecognised reason"):
+    outcome, detail = SC._map_outcome(res)
+    assert outcome == "running-unknown"
+    assert outcome != "unrunnable"
+    assert detail == "mystery"
+
+
+def test_map_outcome_never_raises_terminal_or_non_terminal():
+    cases = [
+        _running_dispatch_result(),
+        _running_dispatch_result(reason="mystery"),
+        _base_dispatch_result(),
+        _base_dispatch_result(ok=False, reason="unrunnable", detail="x"),
+        {"ok": False, "reason": "vacuous", "terminal": True},
+        {"ok": False, "reason": "forfeited", "terminal": True},
+        {"ok": True, "terminal": True, "findings": []},
+        {},
+    ]
+    for res in cases:
         SC._map_outcome(res)
+
+
+def test_run_canary_non_terminal_unknown_reason_does_not_raise():
+    def dispatch(engine, **kwargs):
+        return _running_dispatch_result(reason="nonsense-reason")
+
+    out = SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root="/r",
+        dispatch=dispatch, max_wait=5,
+    )
+    assert out["outcome"] == "running-unknown"
+    assert out["engaged"] is None
+    assert out["detail"] == "nonsense-reason"
 
 
 def test_bounded_wait_running_outcome_engaged_none_not_false():

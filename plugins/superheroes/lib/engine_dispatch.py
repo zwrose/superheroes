@@ -570,7 +570,21 @@ def _resume_for_state(run_dir, state, max_wait):
     return _resume_command_poll(run_dir, max_wait)
 
 
-def _running_result(run_dir, state, attempt, argv, elapsed, max_wait, *, detail=None):
+def _spawned_argv_echo(argv, state=None):
+    if state:
+        recorded = state.get("spawnedArgv")
+        if recorded is not None:
+            return list(recorded)
+    if not argv:
+        return []
+    _, spawned = _resolve_argv_binary(argv)
+    return list(spawned)
+
+
+def _running_result(run_dir, state, attempt, argv, elapsed, max_wait, *, detail=None,
+                    spawned_argv=None):
+    if spawned_argv is None:
+        spawned_argv = _spawned_argv_echo(argv, state)
     out = {
         "ok": False,
         "terminal": False,
@@ -584,16 +598,22 @@ def _running_result(run_dir, state, attempt, argv, elapsed, max_wait, *, detail=
         "argv": argv,
         "resume": _resume_for_state(run_dir, state, max_wait),
     }
+    if argv:
+        out["spawnedArgv"] = spawned_argv
     if detail:
         out["detail"] = detail
     return out
 
 
-def _terminal_meta(result, run_dir, argv):
+def _terminal_meta(result, run_dir, argv, spawned_argv=None, state=None):
     out = dict(result)
     out["terminal"] = True
     out["runDir"] = run_dir
     out["argv"] = argv
+    if spawned_argv is None:
+        spawned_argv = _spawned_argv_echo(argv, state)
+    if argv:
+        out["spawnedArgv"] = spawned_argv
     return out
 
 
@@ -1441,7 +1461,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
         return _attach_sanitized_view(_terminal_meta(
             {"ok": False, "reason": "unrunnable", "detail": "engine-binary-unresolved",
              "attempts": 0, "forfeited": False},
-            real_dir, argv_spawn), view_receipt)
+            real_dir, argv, spawned_argv=argv_spawn), view_receipt)
 
     state = {
         "engine": engine,
@@ -1451,6 +1471,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
         "effort": effort,
         "schemaPath": schema_path,
         "argv": argv,
+        "spawnedArgv": argv_spawn,
         "engineBinary": engine_binary,
         "viewReceipt": view_receipt,
         "fedPrompt": fed_prompt,
@@ -1601,13 +1622,13 @@ def _dispatch_write_impl(engine, *, engine_model, effort, model=None, prompt_pat
         return _terminal_meta(
             {"ok": False, "reason": "unrunnable", "detail": "engine-binary-unresolved",
              "attempts": 0, "forfeited": False},
-            real_dir, argv_spawn)
+            real_dir, argv, spawned_argv=argv_spawn)
 
     if _path_under_cwd(engine_binary, cwd_detail):
         return _terminal_meta(
             {"ok": False, "reason": "unrunnable", "detail": "engine-binary-inside-cwd",
              "attempts": 0, "forfeited": False},
-            real_dir, argv_spawn)
+            real_dir, argv, spawned_argv=argv_spawn)
 
     lease_path = _worktree_lease_path(cwd_detail)
     try:
@@ -1617,10 +1638,11 @@ def _dispatch_write_impl(engine, *, engine_model, effort, model=None, prompt_pat
             real_dir,
             {"dispatchMode": WRITE_DISPATCH_MODE},
             1,
-            argv_spawn,
+            argv,
             0,
             max_wait,
             detail="worktree-lease-held",
+            spawned_argv=argv_spawn,
         )
 
     state = {
@@ -1632,6 +1654,7 @@ def _dispatch_write_impl(engine, *, engine_model, effort, model=None, prompt_pat
         "effort": effort,
         "cwd": cwd_detail,
         "argv": argv,
+        "spawnedArgv": argv_spawn,
         "engineBinary": engine_binary,
         "fedPrompt": prompt_bytes.decode("utf-8", "ignore"),
         "timeout": timeout,
