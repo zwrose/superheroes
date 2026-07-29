@@ -25,7 +25,6 @@ _FALLBACK = {
     "synthesis": "opus",
     "code-fixer": "sonnet",
     "doc-reviser": "opus",
-    "pr-body": "sonnet",
     "implementer": "sonnet",
     "pilot": "sonnet",
 }
