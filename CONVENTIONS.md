@@ -46,6 +46,7 @@ original numbers so existing citations stay valid.
 11. [One home per cross-boundary fact](#11-one-home-per-cross-boundary-fact-single-source-of-truth)
 12. [Verification contracts](#12-verification-contracts-fix-ships-its-detector-real-seam-tests)
 13. [New deterministic machinery needs a named consumer and a ledger entry](#13-new-deterministic-machinery-needs-a-named-consumer-and-a-ledger-entry)
+14. [Owner involvement before the merge click](#14-owner-involvement-before-the-merge-click)
 
 ---
 
@@ -76,7 +77,11 @@ restatement):
   big asks into small mergeable issues, drafts the builder's launch prompt (command + issue
   pointer; durable build context lives in the issue), vets every PR from its artifacts against the
   issue/spec and the build brief, owns board hygiene and release coordination, keeps
-  durable memory. **Never builds, never merges.**
+  durable memory. **Never builds.** The never-delegable act is the **approval** — the gate
+  click, the release cut, the publish decision. **Merge-command execution** is delegable, but
+  **only where a mechanical per-merge approval checkpoint exists on that host or path**; where
+  none exists, execution stays in the owner's hands. **Release PRs and anything needing a
+  force-push are never delegated.**
 - **Workhorse** — the builder session: issue-scoped, disposable, parallelizable. Takes a
   routed issue, writes and gets the build brief checked, delegates all implementation to
   tiered subagents or engines, verifies every receipt itself, runs test-pilot and
@@ -890,3 +895,51 @@ native permission rules), and carries the trigger that retires it.
 
 This rule is enforced the same way review discipline is: at review, a reviewer citing
 this section is enough to block a hook or gate that skipped either step.
+
+---
+
+## 14. Owner involvement before the merge click
+
+> **Contract framing, not the operative rule.** Repo-root conventions do not ship in the plugin
+> package (`plugins/superheroes/**` does). The two tests, the perceivability list, the three
+> tiers, and the presentation duty live in the **Showrunner charter**
+> (`skills/showrunner/SKILL.md`) so a consuming **advisor** can read them. This section records
+> why the rule keys on what it keys on, what standard it holds itself to, what evidence backs
+> it, and what is still unbuilt — it does **not** duplicate that list (§11: two hand-maintained
+> copies with no drift test is a review-blocking violation).
+
+**Scope.** Whether the **owner** is in the loop *before* the merge click — what the **advisor**
+must surface or schedule so the owner can judge the finished work, not merely bless a green CI
+run. **Merge approval itself is not on this axis:** every PR gets an owner approval regardless
+of content, so approval is a constant, not a property of the work. This section decides only
+what must happen *before* that constant fires.
+
+**Key on behavior, not file paths.** File-based heuristics miss most of what owners care about —
+copy, defaults, cost, what gets emitted on their behalf, visual surface. The ruling keys on two
+behavioral tests instead — **Test 1** (perceivability without reading the diff) and **Test 2**
+(owner taste or trade vs. craft judgment the review lenses own). Operative wording, the default
+perceivability list, the three tiers, and the presentation standard the charter sets — judged by
+zero reconstruction, show the after-state — live in the **Showrunner charter**
+(`skills/showrunner/SKILL.md`); cite that home, do not restate it here.
+
+**Why one test is not enough.** Test 1's net is deliberately wide; alone it would catch a large
+share of any project's work and spend *more* owner attention, not less. Test 2 discriminates craft
+from owner taste. **Fail-direction is not the owner's call** — the premortem and security lenses
+own it, and routing it up is a craft call dressed as a consequence. That follows the covenant's
+third promise: route decisions to the owner as consequences, never as craft calls.
+
+**Still unbuilt.** (a) **How** a PR makes its after-state inspectable is a separate open
+question with its own spike — it applies equally to a PR the owner launched themselves, and it
+touches PR templates, deploy infrastructure, browser-pilot output and host rendering, none of
+which this ruling decided. Until that spike concludes, the visual duty ships with the
+attended-or-disclose fallback. (b) The generic perceivability list ships as the **default**;
+the **configure profile** is the named eventual home for per-owner taste domains, so a consuming
+advisor does not re-derive what "taste" means for their owner. Not built yet.
+
+**Evidence and its limit.** The tiering was back-tested against real merged work and
+discriminated correctly across all three tiers. **Every tier-1 visual case is untested** —
+the repo the back-test came from has no visual surface, which is exactly why that repo is a
+poor sole witness for that half.
+
+**Provenance.** Ratified 2026-07-26 from the build-dispatch discovery (issue #526); the
+canonical ruling record is `LEDGERS.md` §4.
