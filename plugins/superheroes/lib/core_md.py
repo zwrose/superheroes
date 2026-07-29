@@ -25,6 +25,7 @@ CONFIG_ABSENT = "absent"
 CONFIG_OK = "ok"
 CONFIG_UNREADABLE = "unreadable"
 GATE_REASON_UNREADABLE = "core-md-unreadable"
+SHOW_IT_REASON_ABSENT = "core-md-absent"
 SHOW_IT_REASON_UNPARSEABLE = "core-md-unparseable"
 SHOW_IT_REASON_PROSE_FORBIDDEN = "show-it-prose-forbidden"
 SHOW_IT_REASON_ROUND_TRIP = "show-it-round-trip-refused"
@@ -473,16 +474,14 @@ def _show_it_prose_forbidden(prose):
     return False
 
 
-def _show_it_parsed_fields_equal(orig, new):
-    """All parse_core fields except showItSurface must match (round-trip guard)."""
-    skip = {"showItSurface"}
-    keys = set(orig) | set(new)
-    for key in keys:
-        if key in skip:
-            continue
-        if orig.get(key) != new.get(key):
-            return False
-    return True
+def _json_block_regions(text):
+    """Every ```json superheroes-core``` fenced region, including fences (round-trip guard)."""
+    return [m.group(0) for m in _JSON_BLOCK.finditer(text or "")]
+
+
+def _show_it_json_blocks_unchanged(orig_text, new_text):
+    """True when the candidate leaves every json block byte-identical (count + content)."""
+    return _json_block_regions(orig_text) == _json_block_regions(new_text)
 
 
 def replace_show_it_surface_section(text, prose):
@@ -525,6 +524,9 @@ def write_show_it_surface(cwd, prose, *, root=None):
             return {"action": "deferred"}
         record = read(cwd, root)
         if record is None:
+            cls = _classify_core_md_at_path(core_path(cwd, root))
+            if cls.status == CONFIG_ABSENT:
+                return {"action": "refused", "reason": SHOW_IT_REASON_ABSENT}
             return {"action": "refused", "reason": SHOW_IT_REASON_UNPARSEABLE}
         if record.get("behind"):
             return {"action": "behind", "record": record}
@@ -545,7 +547,7 @@ def write_show_it_surface(cwd, prose, *, root=None):
         if new_text == text:
             return {"action": "noop"}
         new_parsed = parse_core(new_text)
-        if new_parsed is None or not _show_it_parsed_fields_equal(orig, new_parsed):
+        if new_parsed is None or not _show_it_json_blocks_unchanged(text, new_text):
             return {"action": "refused", "reason": SHOW_IT_REASON_ROUND_TRIP}
         try:
             store_core.atomic_write(path, new_text)

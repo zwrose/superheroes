@@ -102,6 +102,11 @@ action that owns it, leaving the rest of the calibration untouched:
   printf '' | python3 -B "$ROOT_DIR/lib/core_md.py" write-show-it --cwd .
   ```
 
+  **Read the result, don't assume success.** `write-show-it` returns `{action, reason?}`.
+  Only `written` or `noop` means the Show-it declaration was saved — surface any other
+  `action` (`refused`, `deferred`, `behind`) to the owner with its `reason`; the command
+  exits 0 either way, so check `action`, not exit status.
+
 - **Pin a concrete Codex model for one role** → keep the provider-neutral `## Model tiers` block
   unchanged and write the pin under `core.md`'s `enginePreferences.codexModels`. Valid role keys are
   `reviewer`, `reviewer-deep`, `code-fixer`, `implementer`, and `pilot`; valid

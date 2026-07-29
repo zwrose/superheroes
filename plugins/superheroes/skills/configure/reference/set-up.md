@@ -98,6 +98,11 @@ printf '%s\n' '<Level/What-the-owner-does/Notes prose>' | \
   python3 -B "$ROOT_DIR/lib/core_md.py" write-show-it --cwd .
 ```
 
+**Read the result, don't assume success.** `write-show-it` returns `{action, reason?}`.
+Only `written` or `noop` means the Show-it declaration was saved — surface any other
+`action` (`refused`, `deferred`, `behind`) to the owner with its `reason`; the command
+exits 0 either way, so check `action`, not exit status.
+
 An empty stdin body clears the section and returns the project to `none`.
 
 ## 4.5 — Offer an external engine per role (FR-11/12/13/14), decline still completes

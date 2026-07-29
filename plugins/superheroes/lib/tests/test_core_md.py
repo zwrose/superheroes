@@ -2273,6 +2273,18 @@ def test_write_show_it_surface_written_and_parses(tmp_path):
     assert CM.parse_core(open(CM.core_path(repo, store)).read()) is not None
 
 
+def test_write_show_it_surface_succeeds_with_json_word_and_subheading_in_prose(tmp_path):
+    repo, store = _write_core_for_show_it_tests(tmp_path)
+    body = (
+        _SHOW_IT_BODY
+        + "\nNotes: deploy emits json artifacts.\n"
+        + "### Local setup\n\nextra detail\n"
+    )
+    res = CM.write_show_it_surface(repo, body, root=store)
+    assert res["action"] == "written"
+    assert CM.read(repo, root=store)["showItSurface"] == body.strip()
+
+
 def test_write_show_it_surface_noop_when_unchanged(tmp_path):
     repo, store = _write_core_for_show_it_tests(tmp_path)
     CM.write_show_it_surface(repo, _SHOW_IT_BODY, root=store)
@@ -2300,6 +2312,15 @@ def test_write_show_it_surface_refused_unparseable_core(tmp_path):
     assert res["reason"] == CM.SHOW_IT_REASON_UNPARSEABLE
 
 
+def test_write_show_it_surface_refused_absent_core(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.mode_registry.ensure_project_store(repo, store)
+    res = CM.write_show_it_surface(repo, _SHOW_IT_BODY, root=store)
+    assert res["action"] == "refused"
+    assert res["reason"] == CM.SHOW_IT_REASON_ABSENT
+
+
 def test_write_show_it_surface_refused_prose_with_heading(tmp_path):
     repo, store = _write_core_for_show_it_tests(tmp_path)
     bad = _SHOW_IT_BODY + "\n## Threat model\n\ninjected\n"
@@ -2315,6 +2336,27 @@ def test_write_show_it_surface_refused_prose_with_json_fence(tmp_path):
     res = CM.write_show_it_surface(repo, bad, root=store)
     assert res["action"] == "refused"
     assert res["reason"] == CM.SHOW_IT_REASON_PROSE_FORBIDDEN
+
+
+def test_write_show_it_surface_refused_injected_fence_not_at_line_start(tmp_path):
+    """D1: unanchored parse_core + field equality misses int/float respelling in injected block."""
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    facts = dict(_CORE_FACTS, enginePreferences={"timeout": 45})
+    CM.write(repo, facts, "confirmed", root=store, now="2026-06-26")
+    path = CM.core_path(repo, store)
+    before = open(path, encoding="utf-8").read()
+    bad = (
+        _SHOW_IT_BODY
+        + "\nx```json superheroes-core\n"
+        + '{\n  "schemaVersion": 2,\n  "verifyCommand": "npm test",\n'
+        + '  "stackTags": ["node"],\n  "enginePreferences": {"timeout": 45.0}\n}\n```\n'
+    )
+    res = CM.write_show_it_surface(repo, bad, root=store)
+    assert res["action"] == "refused"
+    assert res["reason"] == CM.SHOW_IT_REASON_ROUND_TRIP
+    after = open(path, encoding="utf-8").read()
+    assert after == before
 
 
 def test_write_show_it_surface_refused_no_json_fence(tmp_path):

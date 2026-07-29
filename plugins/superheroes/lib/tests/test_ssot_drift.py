@@ -338,34 +338,71 @@ def _review_code_step_8():
     return m.group(0)
 
 
-def _assert_omission_floor_substance(text, label):
-    """Load-bearing terms for the three-row floor, both markers, and missing-marker semantics."""
-    lower = text.lower()
-    checks = [
-        ("row1 deferred DoD", "deferred" in lower and "dod" in lower),
-        ("row2 blocking or important by severity", (
-            "blocking or important" in lower
-            and ("disposition label" in lower or "disposition status" in lower)
-        )),
-        ("row3 disclosed degradation", "disclosed degradation" in lower),
-        ("marker superheroes:build-record", "superheroes:build-record" in text),
-        ("marker superheroes:degradations", "superheroes:degradations" in text),
-        ("missing marker is finding", (
-            "missing" in lower
-            and "build-record" in text
-            and "degradations" in lower
-        )),
-        ("None vs absence", "none" in lower and ("absent" in lower or "absence" in lower)),
-    ]
-    missing = [name for name, ok in checks if not ok]
+def _omission_floor_expectations_from_home(home):
+    """Parse §10.7's three floor rows, marker names, and missing-marker rule (authoritative)."""
+    m = re.search(
+        r"under `## What we're accepting`:\s*\n\n(.*?)\n\nA \*\*missing\*\*",
+        home,
+        re.DOTALL,
+    )
+    assert m, "§10.7 omission floor rows not found (moved or reworded?)"
+    block = m.group(1)
+    rows = re.findall(
+        r"^\d+\.\s+(.+?)(?=^\d+\.\s+|\Z)",
+        block,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert len(rows) == 3, "expected three omission floor rows, got %r" % rows
+    row_terms = []
+    for row in rows:
+        terms = [t.strip() for t in re.findall(r"\*\*([^*]+)\*\*", row)]
+        assert terms, "no bold load-bearing terms in floor row: %r" % row
+        row_terms.append(terms)
+    markers = re.findall(r"(<!-- superheroes:[^>]+ -->)", home)
+    assert set(markers) == {
+        "<!-- superheroes:build-record -->",
+        "<!-- superheroes:degradations -->",
+    }, "unexpected §10.7 marker set: %r" % markers
+    assert re.search(
+        r"A \*\*missing\*\* `<!-- superheroes:build-record -->`.*?review finding",
+        home,
+        re.DOTALL,
+    ), "§10.7 missing-marker-as-finding rule not found"
+    assert re.search(
+        r"marker absence and \*\*None\*\* are different states",
+        home,
+    ), "§10.7 None vs marker-absence rule not found"
+    return row_terms, markers
+
+
+def _assert_omission_floor_matches_home(copy_text, label, home):
+    row_terms, markers = _omission_floor_expectations_from_home(home)
+    lower = copy_text.lower()
+    missing = []
+    for i, terms in enumerate(row_terms, 1):
+        for term in terms:
+            if term.lower() not in lower:
+                missing.append("row%d term %r" % (i, term))
+    for marker in markers:
+        if marker not in copy_text:
+            missing.append("marker %r" % marker)
+    if not re.search(
+        r"missing[\s\S]{0,400}?superheroes:build-record[\s\S]{0,400}?"
+        r"(?:review finding|itself[\s\S]{0,40}?finding|same finding shape)",
+        copy_text,
+        re.IGNORECASE,
+    ):
+        missing.append("missing-marker-as-finding rule")
+    if "none" not in lower or ("absent" not in lower and "absence" not in lower):
+        missing.append("None vs marker absence")
     assert not missing, (
-        "%s: omission floor substance drift — missing: %r" % (label, missing))
+        "%s: omission floor substance drift — missing: %r" % (label, missing)
+    )
 
 
 def test_omission_floor_matches_conventions_10_7():
     """§11: the omission floor and marker semantics in every copy-holder match CONVENTIONS §10.7."""
     home = _conventions_section_10_7()
-    _assert_omission_floor_substance(home, "CONVENTIONS §10.7 (home)")
 
     copies = (
         ("rubric/review-discipline.md (Ship-phase honesty)", _review_discipline_ship_phase_honesty()),
@@ -373,4 +410,4 @@ def test_omission_floor_matches_conventions_10_7():
         ("skills/review-code/SKILL.md step 8", _review_code_step_8()),
     )
     for label, text in copies:
-        _assert_omission_floor_substance(text, label)
+        _assert_omission_floor_matches_home(text, label, home)
