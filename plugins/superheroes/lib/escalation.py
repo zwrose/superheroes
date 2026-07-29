@@ -113,6 +113,7 @@ SAFETY_MACHINERY = (
     "dispatch_guard.py",     # workhorse dispatch-path model-allowlist gate (#600); a fixer editing it could re-allow an off-allowlist/cross-vendor model dispatch (the WE#511 escape)
     "engine_dispatch.py",     # #606 reviewer-scoped external-engine dispatch runner (auto-retry, liveness, anti-hijack); a fixer editing it could neuter those without tripping the pin (#608)
     "seat_canary.py",         # #668 control-probe engagement scoring; a fixer editing it could neuter round_driver's cross-vendor seat downgrade on its verdict
+    "engine_adapter.py",      # #685 parse trust boundary (echo strip, parse_result, investigation-floor inputs); a fixer could weaken strip or vacuous-parse detection
     "hooks.json",             # workhorse PreToolUse hook registration (F3)
     "precompact.py",          # workhorse resume hooks (resilience)
     "session_start.py",       # workhorse resume hooks (resilience)

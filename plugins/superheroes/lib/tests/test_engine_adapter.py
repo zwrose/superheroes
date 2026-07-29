@@ -3,6 +3,8 @@ import hashlib
 import json
 import os
 
+import pytest
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -649,6 +651,25 @@ def test_engine_dispatch_timeout_expiry_contract_is_stated_in_dispatch_reference
     assert "reviewer" in text and "fixer" in text
     # the expiry contract: an expired slot is `unreadable`, routed to UFR-7
     assert "unreadable" in text and "UFR-7" in text
+
+
+def test_parse_result_subcommand_help_warns_echo_gap(capsys):
+    # #685: the warning must live on the parse-result sub-parser (visible via parse-result -h),
+    # not only on the parent engine_adapter help.
+    with pytest.raises(SystemExit):
+        EA.main(["parse-result", "--help"])
+    text = capsys.readouterr().out
+    assert "never sees the dispatched prompt" in text.lower()
+    assert "empty findings" in text.lower() and "unverified" in text.lower()
+
+
+def test_parse_result_echo_gap_is_stated_in_auto_fix_loop_reference():
+    ref = os.path.join(_HERE, "..", "..", "skills", "review-code", "reference", "auto-fix-loop.md")
+    with open(ref, encoding="utf-8") as fh:
+        text = fh.read()
+    assert "empty-findings result from that path is" in text.lower()
+    assert "deliberately not built" in text.lower()
+    assert "parses raw stdout first" in text.lower()
 
 
 # ---------------------------------------------------------------------------

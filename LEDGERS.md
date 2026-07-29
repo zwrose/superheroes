@@ -17,7 +17,7 @@ still diverge, and the trigger that reopens the decision. Upstream requests are 
 never duplicated — corroborate on the existing thread.
 
 The v2 pivot (see [ROADMAP.md](ROADMAP.md); PR #478) retired the deterministic
-execution spine, and with it the four divergences this ledger tracked — recorded in §1.2
+execution spine, and with it the four spine divergences this ledger tracked — recorded in §1.2
 below as B6 requires (a divergence that retires leaves its record, not a blank). No
 maintained spine divergence remains. A new, non-spine divergence is now maintained: the
 restored owner-authority gate (issue #482, §1.1 below) — a minimal PreToolUse hook,
@@ -44,6 +44,7 @@ B6 analysis, not authored on the spine's exit.
 | **Couriers** | Single-command Bash subagents the spine dispatched as dumb pipes for shell side effects (git, gh, store writes) | Retired with the spine that dispatched them — a session does its own git/gh/store work directly; there is no orchestrator left to pipe side effects for | PR #478 |
 | **Enforcer (PreToolUse hook)** | Deterministic guardrail floor: owner-authority (never merge/release/publish), worktree confinement, role-scoped command policy | It WAS wired fail-closed in the shipped plugin: `hooks/hooks.json` wrapped `lib/enforcer.py hook …` on the Bash and Edit\|Write\|MultiEdit matchers with a `\|\| printf '…deny…'` fallback. PR #478 unwired it when it retired the whole file with the spine. v2 leaned on the platform permission model + owner presence instead — then found the never-merge line rode prose alone (branch protection blocks direct pushes, not `gh pr merge` on a green PR), so a minimal owner-authority gate is restored under issue #482 (see the maintained-divergence row in §1.1) | PR #478 |
 | **run_watch** | CLI watcher rendering a live run's `events.jsonl` into an owner-readable progress view | No spine run to watch; the promise-6 trail now rides the durable artifacts (issue, PR, review dispositions) a session leaves, read directly by the owner or their advisor | PR #478 |
+| **`pr-body` model tier role** | A registered, owner-tunable model-tier role in the band taxonomy (`lib/model_registry.py` `_MATRIX`/`_ROLE_META`/`_MODEL_TIER_ROLES`, mirrored in `lib/model_tier_resolve.py` and surfaced in `configure`'s tuning list) that resolved a Claude tier for composing a PR body | Orphaned: introduced by `dff5409` (#219 / PR #376) for the v1 draft-PR-body composer, whose consumer retired with the execution spine (#478, `9e11860` — CONVENTIONS §10.7 records `pr_entry.py`/`dod_gate.py` going with it); #509/#523 carried the role into the new taxonomy without re-checking. The workhorse charter assigns the PR body to the orchestrator as its own handback artifact, so no future consumer is coming — a knob that changes nothing is a false statement in the calibration surface. Retired-not-rebuilt; a regression guard (`test_pr_body_role_is_retired`) pins it | #692 |
 
 ## 2. Anti-opportunities ledger
 
@@ -182,3 +183,129 @@ hidden defect. The orientation review walks this section too.
 | **The owner-authority gate is a regex heuristic over command text, not a sandbox** (issue #482). It covers the exact enumerated owner-authority shapes (all `gh pr merge` / REST + GraphQL merge / `gh release` / `gh workflow` / force-push / push-to-`main`\|`master` paths), but by construction does NOT catch every conceivable variant — a leading-`+` force refspec (`git push origin +main`), a default branch named neither `main` nor `master`, or a backslash-continued multiline command can slip; and it is wired for the **Claude host only** (`hooks/hooks.json`), NOT Codex (`hooks-codex.json`), mirroring SessionStart today. On process failure the fail-closed wrapper denies ALL Bash wherever the plugin is enabled (loud, catastrophic-env-only). | The enumerated merge/release paths — the ones an honest owner-agent would actually run — are covered exactly; the gate emits only `ask` (a prompt), never blocks, on those. The residual is edge command shapes + the Codex-host gap + the process-failure blast radius, all disclosed. It detects-and-prompts against an honest agent; it is not a containment boundary. | #482 is deliberately minimal — lift the proven enumeration, do not re-derive/widen the regexes (that risks false-positives the v1 tests never vetted); Codex-host wiring is explicitly out of scope. The floor is a tripwire, not a jail. | An observed escape through an un-enumerated shape in the wild; OR Codex-host parity is requested (wire `hooks-codex.json`); OR plugin-shippable native permission rules ship (see the §1 maintained-divergence row) — which would replace the hook wholesale |
 | **Guardian ledger — an owner hand-editing `guardian/ledger.md` in another window at the exact write instant can lose that hand-edit** (2026-07-22, #539/PR #556). The advisor is the sole *automated* writer, but the owner's text editor honors no lock the plugin can hold. The never-clobber writer re-reads and re-splices onto the latest on-disk content, and immediately before writing it re-reads and requires a **full-byte match** against the exact bytes it spliced from — so any owner edit (prose or the machine-owned regions) that has landed by that final check triggers a re-splice, never a clobber. `atomic_write_bytes` gives torn-write safety (atomic *replace*, not compare-and-swap). The residual window is the sub-instant from that final full-byte re-check through the temp-file rename — an owner save landing inside it is not detected and is lost. | Best-effort conflict avoidance, not mutual exclusion. Every owner edit that has landed and settled before the final full-byte re-check is preserved (re-spliced onto the fresh content); loss requires the owner to save inside the recheck→rename sub-instant of an advisor `commit-ledger` running concurrently. The advisor writes interactively, when the owner is present and not mid-edit, which is what makes this rare in practice. | Owner-ratified 2026-07-22 — the alternatives were rejected by the owner: splitting machine state from owner prose into two files breaks §5's one-hand-editable-file contract; more locking cannot bind an external editor. Relocating the write to the sole interactive advisor closes the class by **workflow**; the residual is the small remaining mechanism gap, knowingly carried. | A **field incident of a lost owner hand-edit** to the ledger (reported or observed) — that upgrades the residual to a defect and reopens the two-file split. |
 | **Sanitized review view — repo-local agent-config discovery is closed, but an external seat's context is not provably neutral** (#684). The runner strips the named config surface from a fresh export with no reachable source objects, so neither filesystem discovery nor `git show` on a stripped path reaches it. Outside that bound: **home-level operator config** (`~/.codex/`, `~/.cursor/`, `~/.gitconfig`) — the dispatcher's own configuration, not the reviewed repo's — and any instruction the reviewed **code or diff itself** carries (the review's subject; no view can strip it). **History:** the view is one synthetic commit — no `git log` / `git blame`; reading files (and `git grep`) is the grounded-read capability #665 shipped. | Config stripping is bounded to `SANITIZED_CONFIG_FILES` / `SANITIZED_CONFIG_DIRS` on the export tree; history loss is total inside the view (single commit). | #684 targeted repo-local config steering a reviewer; operator home config is trusted by definition; text inside the diff is what a reviewer is supposed to read (with judgment). History loss is accepted because file reads ground findings today. | A seat demonstrably influenced by content the view did not strip; OR a new engine config-discovery surface (CLI or discovery path) not covered by the sanitized basename/dir lists; OR a review seat that demonstrably needed `git log`/`git blame` to ground a finding. |
+
+## 4. Orchestration rulings (ratified 2026-07-26)
+
+This section is the canonical in-repo record of the ruling set ratified 2026-07-26 from the
+build-dispatch discovery ([#526](https://github.com/zwrose/superheroes/issues/526)). It is
+policy, not machinery — the Showrunner and Workhorse charters carry enforcement; every entry
+below traces to at least one of two sources: [the ratified proposal](https://github.com/zwrose/superheroes/issues/526#issuecomment-5084102492)
+and [the advisor review](https://github.com/zwrose/superheroes/issues/526#issuecomment-5084118354)
+(where they conflict, the review wins). Nearly all evidence behind these rulings is this repo
+building itself — one repo, one advisor, one machine, no app and no ordinary end users — so
+the rules are written generically and the first consuming project is the real test.
+
+### R1 — Orchestration as a named advisor duty, with a two-guard tripwire
+
+**Ruled:** orchestration becomes a named advisor duty with mandatory guards. Review panels check
+the diff against the brief, never the brief against the world — a bad advisor premise is invisible
+to them. The two guards that have actually caught that class are prose: (a) a builder parking or
+refusing, and (b) the advisor's vet re-running a claim against the world (receipt-integrity; see
+the advisor review on PR #644). **Standing accounting:** park/refusal rate **and** vet
+receipt-integrity catches, each record naming its window, tracked alongside the existing
+order-vs-implementer ratio. **Zero of either is a signal to inspect, never a clean sheet** — a
+future agreeable model can drive both rates to zero and look healthy. Honest gap: this is
+accounting, not machinery — prose discipline wearing a number. Sequencing: manual accounting starts
+now; the mechanical count is a **blocking** deliverable of the launcher build, not nice-to-have
+(the ratified proposal, build item 2; the advisor review accepted this sequencing).
+
+### R2 — Owner involvement before the merge click keys on two properties
+
+**Ruled:** whether the owner is in the loop *before* the merge approval (R3 owns the approval
+itself) keys on two tests. **Test 1:** would a user notice this without reading the diff?
+**Test 2:** is the call the owner's taste or trade, rather than a craft judgment a review lens
+already owns? Three tiers — both tests → owner spot-check; perceivable but a craft call → the PR
+states it plainly, no spot-check; neither → nothing. Fail-direction is explicitly **not** an owner
+call (premortem and security lenses own it). The operative rule and the perceivability list live in
+the Showrunner charter; `CONVENTIONS.md` §14 carries the contract framing — this entry is the
+record, not a third copy. **Untested half:** every tier-1 **visual** case — this repo has no
+visual surface, so it is a poor sole witness for that half (the ratified proposal; the review
+named the configure profile as the eventual home for per-owner taste domains).
+
+### R3 — Covenant merge line repaired; train-driving duty formalized
+
+**Ruled:** the covenant line that read as if merge execution itself was never delegable was
+repaired after four days of practice where delegated `gh pr merge` plus owner gate clicks was the
+actual shape — the text did not say which reading was right. The never-delegable act is the
+**approval** — the gate click, the release cut, the publish decision. **Merge-command execution**
+is delegable, but **only where a mechanical per-merge approval checkpoint exists on that host or
+path**; where none exists, execution stays in the owner's hands. **Release PRs and anything
+needing a force-push are never delegated.** Delegated otherwise: issuing the merge command,
+sequencing, `update-branch`, CI-green waiting, conflict resolution under an advisor-authored recipe,
+post-merge hygiene — with advisor vet, CI green, and branch current as preconditions that never
+waive. **Approval stays per-PR** (owner ruling; "approve once, execute five" not adopted). The
+owner-authority gate is a **backstop, not an authorization boundary** — delegation stands on advisor
+discipline with the gate behind it, never the reverse. Cross-reference §1.1 and the §3 owner-
+authority-gate row: the gate is wired **Claude-host only**, not Codex — that host gap is exactly
+the evidence the host-conditional clause rests on (the advisor review pushback 3; the ratified
+proposal §3). The §1.1 row's *"never-merge floor"* framing predates this ruling; under it the
+same gate is also the mechanical per-merge approval checkpoint the host-conditional clause
+depends on. **Known divergence (covenant "say so"):** Under this ruling the never-delegable act
+is **approval**, and read that way the covenant and PHILOSOPHY agree. `PHILOSOPHY.md`'s current
+wording still describes merge **execution** as never taken on the owner's behalf — so the two
+documents **read literally still disagree**. **Disclosed, not resolved:** the constitution was
+left untouched on purpose; an **owner-authored amendment to `PHILOSOPHY.md` is owed** before the
+document set is coherent. `PHILOSOPHY.md` remains the authority in the meantime. **Re-check
+trigger:** the owner amends `PHILOSOPHY.md` to align execution wording with this ruling, or
+rules that no amendment is wanted — which would instead reopen the covenant repair.
+
+### R4 — Channel and attendance are two independent axes
+
+**Ruled:** a headless session is not re-woken — harness-tracked in-flight work dies with the turn;
+poll in-turn or park durably. Advisor-launch does **not** mean the owner is absent; the corpus spans
+attended, reachable-with-latency, and asleep. Needs sort by: **owner capability** (what an agent
+structurally cannot do — credentials, an account action) must reach the owner; **owner authority**
+can wait behind a park; **a live human to unblock** resolves to the advisor. **Owner-capability
+preconditions are cleared at dispatch time, by the advisor with the owner, before the session goes
+autonomous — with a stated duration** (a session that expires mid-build is the same failure, later).
+**Mid-run:** when such a need surfaces after launch anyway, **park durably, never improvise a
+channel** — the escalation path is the corpus's weakest link until it is machinery (the ratified
+proposal §1–§2, R4; charter channel-conditioned text carries §1's receipt).
+
+### R5 — Advisor preflight before dispatch; explicit scope on every grant
+
+**Ruled:** existing doctrine — never go autonomous on an assumption you have not exercised — applied
+one layer up at advisor dispatch. The preflight **must scale with the batch**: cheap mechanical
+checks always; expensive ones only when the work needs them, with **explicit N/A rather than silent
+skipping**. The eight checks are enumerated in the Showrunner charter (the ratified proposal lists
+the corpus failures behind each). **Grant scope:** a grant bounded by a fuzzy noun is real looseness;
+scope is stated as **enumerated PRs, a time box, or a count**, with **release PRs excluded and
+force-push never** — anything outside needs a fresh grant (adopted effective at ratification in the
+advisor review).
+
+### Seat ruling — B with A's mechanization inside
+
+**Ruled:** option B with A's mechanization inside — the advisor keeps route, premise, park
+adjudication and the vet; mechanical duties go to cheap in-session subagents under advisor-authored
+recipes; launch shape becomes scripted so nothing is reconstructed from memory. **Why the others
+lost:** A targets the error mechanism but gives no cost relief; C's separate long-lived courier
+session protects the independent check but cross-session reach is the least reliable channel in the
+corpus; D is board-driven automatic dispatch — queue machinery held by §2 with B7's evidence bar
+unmet. **Three safety conditions** (build content, not caveats):
+
+1. Recipes are **durable versioned artifacts, not session context** — a fresh subagent has none of
+   the advisor's context.
+2. The delegated seat gets a **refusal duty, not discretion** — when the recipe does not cover what
+   the seat is looking at, it stops and hands back, never improvises.
+3. Recipes **assume gated steps bounce** — permission-gated commands bubble to the root session by
+   design, so each recipe names the steps it expects to hand back.
+
+**C's written reopening trigger:** a **second orchestrator-attributed defect within one dispatch
+batch** reopens the judgment/courier split — with the **attribution test** from the advisor review:
+the triggering defect must be attributable to the **advisor's own execution**, not to a recipe
+defect a different seat would also have hit. Writing the trigger down now is the point — it gets
+decided on evidence rather than in the middle of a bad day.
+
+### Settled by the owner (2026-07-26)
+
+- Seat B with A's mechanization inside.
+- Merge approval stays per-PR ("approve once, execute five" not adopted).
+- The authenticated-app spike gates the first advisor-launched build on the first consuming
+  project and is in the MVP.
+- The review-seamlessness question is split out as its own spike; R2's visual duty ships meanwhile
+  under the attended-or-disclose fallback.
+- Mission-control gets an issue sequenced behind the liveness signal.
+- **"Wave" is not formalized** — each mechanism states its own scope.
+- Corroborating the existing upstream report ([#74685](https://github.com/anthropics/claude-code/issues/74685))
+  is approved rather than filing a duplicate.
+- This section (§4) is the canonical in-repo home of the ruling set.
