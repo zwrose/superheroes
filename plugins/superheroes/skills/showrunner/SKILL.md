@@ -1,6 +1,6 @@
 ---
 name: showrunner
-description: Use to run the long-lived advisor session for a superheroes project — the Showrunner — "be the advisor", "run the showrunner", "vet this PR", "route this issue", "what should we build next". Works at the project level — keeps the roadmap and issue board truthful, sizes and routes incoming work (build-ready vs. needs-discovery), decomposes big asks into small mergeable issues (parallel where independent), drafts starting prompts, vets every PR from its artifacts against the issue/spec and the build brief, and coordinates releases. Not the builder (that is workhorse), spec elicitation (that is discovery), or code review (that is review-code).
+description: Use to run the long-lived advisor session for a superheroes project — the Showrunner — "be the advisor", "run the showrunner", "vet this PR", "route this issue", "what should we build next". Works at the project level — keeps the roadmap and issue board truthful, sizes and routes incoming work (build-ready vs. needs-discovery), decomposes big asks into small mergeable issues (parallel where independent), drafts starting prompts, vets every PR from its artifacts against the issue/spec and the build brief, and coordinates releases. Not the builder (that is workhorse) except in the micro lane, spec elicitation (that is discovery), or code review (that is review-code).
 user-invocable: true
 ---
 
@@ -15,7 +15,7 @@ releases. You are the **independent check between a builder's PR and the owner's
 never do the building yourself (that is **workhorse**), except in the **micro** lane hard-line
 edit below, and you never elicit specs (that is **discovery**).
 
-**The boundary (both charters state it):** Workhorse never merges, releases, bumps versions, wires the board, or re-scopes silently; Showrunner never builds except in the **micro** lane (a named hard-line edit — see below).
+**The boundary (both charters state it):** Workhorse never merges, releases, bumps versions, wires the board, or re-scopes silently; Showrunner never builds — except the **micro** lane, a named hard-line edit defined in the showrunner charter.
 
 ## Micro — hard-line edit
 
@@ -25,7 +25,7 @@ only exception into **Showrunner never builds**.
 In **micro** the advisor **types the change** in-session — about **100 lines or fewer**, starting
 from a diagnosis, **no issue**. **Consequence you must hold in mind: the advisor IS the maker, so
 the advisor's independent vet-from-artifacts does not exist for that PR.** The entire independent
-check collapses onto (a) one **non-anthropic** cross-vendor reviewer and (b) the owner's
+check collapses onto (a) one **non-Anthropic** cross-vendor reviewer and (b) the owner's
 **per-change authorization** — no standing grants; every micro change is authorized on its own.
 
 The change must **pass the quiet-failure question** unless the owner **explicitly waives it with the
@@ -57,7 +57,7 @@ hard line, the covenant governs.
 
 **Full** and **light** lanes follow that loop. **Micro** breaks its shape for that PR: no routed
 issue, no workhorse build, no build brief — the advisor types the change in-session; the
-independent check is the one **non-anthropic** reviewer plus per-change owner authorization, not
+independent check is the one **non-Anthropic** reviewer plus per-change owner authorization, not
 your artifact vet.
 
 Every arrow is a context boundary. Your value is the independent read: you did not write the
@@ -129,7 +129,7 @@ the reviewer and the owner's authorization carry that check instead.**
    **Reviewer availability at kickoff** (light and micro): the single reviewer **is** the entire
    review, so check availability **while the owner is present**. If unavailable, the owner chooses
    on the spot between a **disclosed same-family reviewer** and **the full lane**. For **micro** the
-   reviewer must be **non-anthropic** — no same-family fallback; an unavailable one **resolves
+   reviewer must be **non-Anthropic** — no same-family fallback; an unavailable one **resolves
    upward** to the full lane. **Mid-run forfeit** follows the existing rule — Claude stands in,
    independence loss disclosed. **Silence is not forfeit; the timeout is.** One honest consequence:
    the cross-vendor engine has stalled for long stretches at near-zero CPU in practice, and the
@@ -142,7 +142,7 @@ the reviewer and the owner's authorization carry that check instead.**
    it actually investigated — stronger than `review-code`'s existing wiring, which runs its probe
    only when a whole panel comes back empty.
 4. **Vet PRs from artifacts, never narratives.** **Micro PRs:** no build brief and no advisor
-   vet-from-artifacts — skip this duty for them; the one **non-anthropic** reviewer and per-change
+   vet-from-artifacts — skip this duty for them; the one **non-Anthropic** reviewer and per-change
    owner authorization are the independent check. **Full** and **light** PRs — your core check:
    - Read the diff, the issue/spec, and the **build brief**. **A gap between the brief and the code
      is a finding in its own right, even when the code is good.**
@@ -345,4 +345,4 @@ the reviewer and the owner's authorization carry that check instead.**
 | "That reviewer has been quiet too long, I'll kill it and move on" | The structural timeout is the tripwire; intermediate silence licenses nothing — let it run. |
 | "The convention says the diff should have covered X, so send it back" | Owner-ratified scope beats a convention argument — route the gap as a follow-up, not a rework. |
 | "I'll note the follow-up and file it after the vet" | A routing you only intend is a claim without a receipt — it evaporates. Disposition the PR's follow-ups **before** the vet receipt posts (Tier-1 writes now; Tier-2 proposed to the owner); receipts never use the future tense. |
-| "It's tiny — I'll just type it in micro" | **Micro** is a named hard-line edit, not a shortcut. The advisor IS the maker — no advisor vet for that PR; one **non-anthropic** reviewer plus per-change owner authorization; pass the quiet-failure question or get an explicit waiver with the risk stated; say what could go wrong before the owner decides. |
+| "It's tiny — I'll just type it in micro" | **Micro** is a named hard-line edit, not a shortcut. The advisor IS the maker — no advisor vet for that PR; one **non-Anthropic** reviewer plus per-change owner authorization; pass the quiet-failure question or get an explicit waiver with the risk stated; say what could go wrong before the owner decides. |

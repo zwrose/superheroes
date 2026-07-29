@@ -46,7 +46,7 @@ and the failure then surfaces *after all the work is done*.
 **Single-reviewer lanes (light and micro).** The one reviewer must **cross vendors**:
 once the orchestrator (light) or the advisor (micro) types the change, that session is
 the *author*, so a same-family reviewer is not independent. For **micro**, the reviewer
-must additionally be **non-anthropic** — the maker-family rule applied to the advisor's
+must additionally be **non-Anthropic** — the maker-family rule applied to the advisor's
 own family, because in micro the advisor *is* the maker. That one reviewer carries a
 **mandatory control on every such review**: a planted-defect control probe, or an
 investigation-record floor that makes an empty result prove it actually investigated. A
@@ -77,7 +77,7 @@ alignment with practice is **in-sample** — fitted to the same changes it valid
 ### Micro — owner authorization
 
 In micro the advisor is the maker, so the advisor's independent vet-from-artifacts does
-not exist for that PR; the whole independent check is the one non-anthropic reviewer
+not exist for that PR; the whole independent check is the one non-Anthropic reviewer
 plus the owner's per-change authorization.
 
 **Resolution:** per-change owner authorization means the owner reads the owner-facing

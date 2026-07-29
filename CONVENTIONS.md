@@ -781,7 +781,7 @@ an empty set that would make the equality vacuously pass. A rename of the truth 
 
 *Worked example 1 — the cross-charter boundary line.* Both session charters state the
 identical two-sided fact — "Workhorse never merges/releases/bumps versions/wires the
-board/re-scopes silently; Showrunner never builds." Neither charter is authoritative over
+board/re-scopes silently; Showrunner never builds — except the **micro** lane, a named hard-line edit defined in the showrunner charter." Neither charter is authoritative over
 the other, so `lib/tests/test_charter_boundary_sync.py` is a **symmetric** Pattern-2
 instance: it extracts the marked boundary line from both `skills/showrunner/SKILL.md` and
 `skills/workhorse/SKILL.md`, fails closed if either is missing, and asserts the two are
