@@ -64,6 +64,7 @@ from finding_identity import finding_identity, normalize_title  # noqa: E402
 
 _seat_map_unexcused_violations = seat_map.unexcused_violations
 _seat_map_classify_violations = seat_map.classify_violations
+_seat_map_is_receipt = seat_map.is_receipt
 
 # --- constants (the DIMENSIONS/AGENT_SUFFIX home, moved off the retired code_loop_plan) --------
 # The code leg is the FIVE shared reviewers. `grounding-reviewer` is spec-leg-only (doc
@@ -1137,19 +1138,8 @@ def _seat_map_configured_vendor(seat_map, dim):
     return v if isinstance(v, str) and v in _PANEL_VENDORS else None
 
 
-def _seat_map_usable(seat_map, config):
-    """True when this panel's submitted map is receipt-faithful and covers every configured seat.
-
-    Presence-only checks let a hollow stub clear fall-open, violation, and same-family channels
-    while an honest omission degrades — inverting the guarantee that unknown provenance never
-    resolves toward clean."""
-    if not isinstance(seat_map, dict):
-        return False
-    seats = seat_map.get("seats")
-    if not isinstance(seats, dict) or not seats:
-        return False
-    if not isinstance(seat_map.get("violations"), list):
-        return False
+def _seat_map_covers_panel(seat_map, config):
+    """True when the map lists a recognized vendor for every configured panel dimension."""
     for dim in _panel_dimensions(config):
         if _seat_map_configured_vendor(seat_map, dim) is None:
             return False
@@ -1162,9 +1152,16 @@ def _fold_panel(state, config, artifact):
     :823-827 parity) but its findings ride the round record as UNVERIFIED/provisional — surfaced,
     never silently dropped (coordination note 2)."""
     seats = artifact.get("seats") if isinstance(artifact.get("seats"), dict) else artifact
+    seat_map_submitted = isinstance(artifact.get("seatMap"), dict) and artifact.get("seatMap")
     seat_map = artifact.get("seatMap") if isinstance(artifact.get("seatMap"), dict) else {}
-    if seat_map:
-        state["seatMap"].update(seat_map)
+    seat_map_refused = None
+    if seat_map_submitted:
+        if not _seat_map_is_receipt(seat_map):
+            seat_map_refused = {"clause": "shape", "merged": False}
+        elif not _seat_map_covers_panel(seat_map, config):
+            seat_map_refused = {"clause": "coverage", "merged": False}
+        else:
+            state["seatMap"].update(seat_map)
     raw = []
     seat_status = {}
     unverified = []
@@ -1297,14 +1294,16 @@ def _fold_panel(state, config, artifact):
         _record_round(state, "fellOpen", fell_open)
     if prov_missing:
         _record_round(state, "fellOpenProvenanceMissing", prov_missing)
-    # #563 DoD1 v7 / #681: an ABSENT seat-map baseline would silently disable fall-open detection and
-    # same-family collapse (both read off the submitted map). If THIS panel submitted no usable
-    # seatMap, disclose provenance-unavailable for the whole panel — regardless of cross-vendor
-    # liveness — so unknown provenance never resolves toward clean.
-    _seat_map_empty = not _seat_map_usable(seat_map, config)
-    if _seat_map_empty:
+    # #563 DoD1 v7 / #681: without a usable merged map for THIS panel, fall-open and same-family
+    # machinery cannot trust this round's provenance — disclose regardless of cross-vendor liveness.
+    _seat_map_unusable_for_panel = not (
+        seat_map_submitted and seat_map_refused is None
+    )
+    if _seat_map_unusable_for_panel:
         _pool = sorted(set(_live_vendors(config))) or ["unknown"]
         _record_round(state, "seatMapUnavailable", _pool)
+    if seat_map_refused is not None:
+        _record_round(state, "seatMapRefused", seat_map_refused)
     _sm_violations = _seat_map_unexcused_violations(state.get("seatMap") or {})
     if _sm_violations:
         _record_round(state, "seatMapViolations", _sm_violations)
@@ -2221,6 +2220,8 @@ def build_receipt(state, session_dir=None):
             rd["fellOpenProvenanceMissing"] = rec.get("fellOpenProvenanceMissing")
         if rec.get("seatMapUnavailable"):
             rd["seatMapUnavailable"] = rec.get("seatMapUnavailable")
+        if rec.get("seatMapRefused"):
+            rd["seatMapRefused"] = rec.get("seatMapRefused")
         if rec.get("seatMapViolations"):
             rd["seatMapViolations"] = rec.get("seatMapViolations")
         if rec.get("vacuousSeats"):
@@ -2298,11 +2299,18 @@ def build_receipt(state, session_dir=None):
         smu = rrec.get("seatMapUnavailable")
         if smu:
             degraded.append(
-                "reviewer-fell-open-seatmap-unavailable (round %s): no usable seat map submitted for this "
+                "reviewer-fell-open-seatmap-unavailable (round %s): no usable seat map merged for this "
                 "panel; live vendor(s) %s — this panel's seat provenance is unverified; any fall-open or "
-                "family-collapse disclosures shown for this round were judged against a seat map an earlier "
-                "round submitted, not this one" % (
+                "family-collapse disclosures for this round were judged against the merged seat map from "
+                "earlier rounds only (or none), not this round's submission" % (
                     rkey, ", ".join(smu)))
+        sm_ref = rrec.get("seatMapRefused")
+        if sm_ref:
+            clause = sm_ref.get("clause") if isinstance(sm_ref, dict) else "unknown"
+            degraded.append(
+                "reviewer-seat-map-refused (round %s): a seat map was submitted but not merged "
+                "(%s clause failed) — this round's submission did not become provenance" % (
+                    rkey, clause))
         vac = rrec.get("vacuousSeats")
         if vac:
             degraded.append(
@@ -2452,7 +2460,13 @@ def _run_seam(seams, action, payload, state, config):
                 attempts += 1
                 result = seams["reviewer"](dim, tier, state["round"], payload)
             seats[dim] = result
-        return {"seats": seats, "seatMap": io.get("seatMap") if isinstance(io, dict) else {}}
+        panel_art = {
+            "seats": seats,
+            "seatMap": io.get("seatMap") if isinstance(io, dict) else {},
+        }
+        if isinstance(io, dict) and io.get("canaryResult") is not None:
+            panel_art["canaryResult"] = io.get("canaryResult")
+        return panel_art
     if action == P_VERIFIERS:
         return {"verdicts": seams["verifier"](payload.get("clusters"), state["round"])}
     if action == P_SYNTHESIS:

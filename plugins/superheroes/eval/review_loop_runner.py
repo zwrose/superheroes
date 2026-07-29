@@ -33,6 +33,7 @@ import review_loop_plan as RLP  # noqa: E402
 import review_memory as RM  # noqa: E402
 import review_telemetry as RT  # noqa: E402
 import round_driver as RD  # noqa: E402
+import seat_map as SM  # noqa: E402
 
 # Synthetic citation surface so fixture findings (often file/line-less, written for the JS
 # shell's graftSynthesizedFindings path) survive round_driver.mechanical_compile.
@@ -529,6 +530,28 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
 
     RD._fold_panel = _fold_panel_persist
     try:
+        _roster = tuple(SM.PANEL_ROSTER)
+        _sm_built = SM.build(
+            _roster,
+            ["claude", "codex"],
+            "anthropic",
+            "anthropic",
+            0,
+        )
+        _sm_receipt = SM.to_receipt(_sm_built, "anthropic")
+        _io = {
+            "stall_menu": lambda payload: "hold",
+            "seatMap": _sm_receipt,
+            "canaryResult": {
+                "engine": "codex",
+                "model": "gpt",
+                "outcome": "ok",
+                "engaged": True,
+                "evidence": {"tokens": 1},
+                "detectedPlant": False,
+                "detail": "eval-fixture",
+            },
+        }
         seams = {
             "reviewer": reviewer,
             "synthesis": synthesis,
@@ -537,14 +560,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
             "fix_step": fix_step,
             "verify_runner": verify_runner,
             "changed_subjects": changed_subjects,
-            "io": {
-                "stall_menu": lambda payload: "hold",
-                "seatMap": {
-                    "seats": {d: {"vendor": "claude"} for d in reviewer_set},
-                    "violations": [],
-                    "degradations": [],
-                },
-            },
+            "io": _io,
         }
         config = {
             "leg": "panel",

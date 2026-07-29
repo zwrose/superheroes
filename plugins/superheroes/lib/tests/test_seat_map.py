@@ -1654,3 +1654,17 @@ def test_resolvable_families_for_seat_positive_family_set():
     seat_map["livenessPinScoped"] = False
     fams = SM._resolvable_families_for_seat(seat_map, seat, cfg)
     assert fams == {"anthropic", "openai", "xai"}
+
+
+def test_receipt_fields_match_to_receipt_producer():
+    m = SM.build(SM.PANEL_ROSTER, ["claude", "codex"], "anthropic", "anthropic", 42)
+    receipt = SM.to_receipt(m, "anthropic")
+    assert set(receipt) == set(SM.RECEIPT_FIELDS)
+    assert set(SM.RECEIPT_FIELDS) == set(receipt)
+
+
+def test_is_receipt_accepts_extra_keys_forward_compat():
+    m = SM.build(SM.PANEL_ROSTER, ["claude"], "anthropic", "anthropic", 0)
+    receipt = dict(SM.to_receipt(m, "anthropic"))
+    receipt["futureField"] = "ok"
+    assert SM.is_receipt(receipt)

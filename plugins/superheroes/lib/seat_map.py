@@ -768,6 +768,44 @@ def verify(seat_map: dict, author_family: str | None) -> list[dict]:
     return violations
 
 
+# Single definition of the receipt contract — `to_receipt` is its only producer.
+RECEIPT_FIELDS = frozenset({
+    "seats",
+    "degradations",
+    "seed",
+    "liveVendors",
+    "narrativeFamily",
+    "authorFamily",
+    "livenessPinScoped",
+    "violations",
+})
+
+
+def is_receipt(obj) -> bool:
+    """True when ``obj`` is a genuine seat-map receipt (all contract fields, non-empty ``seats``).
+
+    Callers need no field-level knowledge — one call answers whether a submitted map is
+    receipt-shaped and typed the way ``unexcused_violations`` / ``classify_violations`` /
+    ``same_family_degradations`` expect.
+    """
+    if not isinstance(obj, dict):
+        return False
+    if not RECEIPT_FIELDS.issubset(obj.keys()):
+        return False
+    seats = obj.get("seats")
+    if not isinstance(seats, dict) or not seats:
+        return False
+    if not isinstance(obj.get("violations"), list):
+        return False
+    if not isinstance(obj.get("degradations"), list):
+        return False
+    if not isinstance(obj.get("liveVendors"), list):
+        return False
+    if not isinstance(obj.get("livenessPinScoped"), bool):
+        return False
+    return True
+
+
 def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
     af = author_family if author_family is not None else seat_map.get("authorFamily")
     raw = seat_map.get("degradations")
