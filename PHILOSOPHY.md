@@ -77,20 +77,21 @@ evidence that would change our mind. A bet whose condition never gets checked is
 **B1 — Checkpoints at the right altitude, not a deterministic execution spine.**
 Discovery → spec → build → review → ship, with checkpoints between the stages — each a
 loop with a verifiable stop. The owner personally enters at just two: they approve the
-plain-language spec before build, and they do the final review and merge at the end
-(merging is always theirs). Everything in between runs autonomously — the build brief
-is checked by an independent reviewer before code, and the finished work gets an
-independent review before handback; these are checkpoints by construction, not owner
-interruptions. The one mid-flight exception is a genuinely consequential or irreversible
-decision — a migration, a new dependency, an external contract — which comes to the
-owner before the builder commits to it, and even that can be pre-authorized at spec
-time. We bet that for an owner who cannot supervise mid-flight, checkpoints at the right
-altitude beat both raw flexibility and a deterministic execution spine between them.
-*Re-check:* the checkpoints cost the after-the-fact forensic trail a staged execution
-would leave; they buy bounded behavior and work the checkers can review *before* it
-executes. If a fidelity, honest-failure, or auditability regression ever traces to the
-absence of staged execution between the checkpoints, the spine question reopens — the
-checkpoints themselves do not.
+plain-language spec before build, and they do the final review and give the merge
+approval at the end (the approval is always theirs). Everything in between runs
+autonomously — the build brief is checked by an independent reviewer before code, and
+the finished work gets an independent review before handback; these are checkpoints by
+construction, not owner interruptions. The one mid-flight exception is a genuinely
+consequential or irreversible decision — a migration, a new dependency, an external
+contract — which comes to the owner before the builder commits to it, and even that
+can be pre-authorized at spec time. We bet that for an owner who cannot supervise
+mid-flight, checkpoints at the right altitude beat both raw flexibility and a
+deterministic execution spine between them. *Re-check:* the checkpoints cost the
+after-the-fact forensic trail a staged execution would leave; they buy bounded
+behavior and work the checkers can review *before* it executes. If a fidelity,
+honest-failure, or auditability regression ever traces to the absence of staged
+execution between the checkpoints, the spine question reopens — the checkpoints
+themselves do not.
 
 **B2 — Plain language can carry the contract.** Everything the owner touches — specs,
 readouts, park reasons, verdicts — is written in their language, and the spec is the
@@ -149,8 +150,8 @@ delivery and economy are real goods that appear only in this list — and items 
 yield to either, otherwise delivery pressure quietly wins every collision. Highest
 wins:
 
-1. **Owner commitment** — not tradeable. The acts that bind the owner (merge, release,
-   publish) never move, under any delivery pressure.
+1. **Owner commitment** — not tradeable. The decisions that bind the owner (the approval
+   behind a merge, a release, a publication) never move, under any delivery pressure.
 2. **Honesty** — a parked run that tells the truth beats a shipped run that doesn't.
    We will lose deliveries to this. That's the product working.
 3. **Economy** — tokens, wall-clock, and owner attention are real budgets, not
@@ -162,7 +163,7 @@ wins:
 5. **Delivery** — subject to all the above, runs should *finish* and hand back
    something real. A product that mostly parks is honest and useless.
 
-The order is descriptive of decisions already made (the never-merge rule, the honesty
+The order is descriptive of decisions already made (the owner-approval rule, the honesty
 gate family, fail-closed parks, high-ceilings-plus-monitors) — and prescriptive for the
 ones ahead. When a proposal trades a higher value for a lower one, the answer is no.
 

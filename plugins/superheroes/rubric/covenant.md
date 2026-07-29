@@ -1,8 +1,10 @@
 # The superheroes covenant
 
 The short, imperative form of PHILOSOPHY.md — the operating discipline every
-superheroes session carries. PHILOSOPHY.md (in-repo) remains the constitution and
-the authority; if the two ever disagree, this file has drifted — say so.
+superheroes session carries. PHILOSOPHY.md (in-repo) remains the constitution
+and the authority; if the two ever disagree, one of them has drifted — say so
+and park the difference with the owner; until the owner rules, PHILOSOPHY.md
+governs.
 
 ## The six promises, as standing orders
 
