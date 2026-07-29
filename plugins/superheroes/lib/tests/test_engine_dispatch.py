@@ -74,18 +74,70 @@ def _authority_from_state(run_dir, state, **kw):
 def _persist_test_authority(run_dir, state, **kw):
     authority = _authority_from_state(run_dir, state, **kw)
     try:
-        ED._persist_authority(authority)
+        auth_hash = ED._persist_authority(authority)
     except FileExistsError:
-        pass
+        auth_hash = ED._authority_file_hash(str(run_dir))
     except OSError:
-        # already exists or race — load instead
-        pass
+        auth_hash = ED._authority_file_hash(str(run_dir))
+    if auth_hash and isinstance(state, dict):
+        state["authorityHash"] = auth_hash
+        state_path = os.path.join(str(run_dir), ED.STATE_NAME)
+        if os.path.isfile(state_path):
+            try:
+                cur = json.loads(open(state_path, encoding="utf-8").read())
+            except (OSError, ValueError):
+                cur = dict(state)
+            if isinstance(cur, dict):
+                cur["authorityHash"] = auth_hash
+                open(state_path, "w", encoding="utf-8").write(json.dumps(cur))
     return authority
 
 
-def _invoke_run_child(run_dir, attempt, state, **kw):
+def _seal_test_launch(run_dir, attempt, state, **kw):
+    """Seal a per-attempt launch record for tests that drive run-child / mid-flight."""
     authority = _authority_from_state(run_dir, state, **kw)
-    return ED._run_child_main(str(run_dir), attempt, authority)
+    auth_hash = state.get("authorityHash") or ED._authority_file_hash(str(run_dir))
+    if not auth_hash:
+        authority = _persist_test_authority(run_dir, state, **kw)
+        auth_hash = state.get("authorityHash") or ED._authority_file_hash(str(run_dir))
+    timeout = int(
+        state.get("attemptTimeout") or state.get("timeout")
+        or (authority.timeout if int(attempt) == 1 else authority.retry_timeout)
+        or 5)
+    try:
+        ED._seal_attempt_launch(str(run_dir), attempt, authority, auth_hash, timeout)
+    except FileExistsError:
+        pass
+    return authority, auth_hash
+
+
+def _bind_inflight(run_dir, state, attempt=1, **kw):
+    """Persist authority, seal launch, and stamp authorityHash onto any done sentinel."""
+    authority = _persist_test_authority(run_dir, state, **kw)
+    auth_hash = state.get("authorityHash")
+    _seal_test_launch(run_dir, attempt, state, **kw)
+    done_path = os.path.join(str(run_dir), "attempt-%d.done" % int(attempt))
+    if os.path.isfile(done_path):
+        try:
+            done = json.loads(open(done_path, encoding="utf-8").read())
+        except (OSError, ValueError):
+            done = None
+        if isinstance(done, dict) and auth_hash:
+            done["authorityHash"] = auth_hash
+            if not done.get("runNonce"):
+                done["runNonce"] = state.get("runNonce") or authority.run_nonce
+            open(done_path, "w", encoding="utf-8").write(json.dumps(done))
+    return authority, auth_hash
+
+
+def _invoke_run_child(run_dir, attempt, state, **kw):
+    authority, auth_hash = _seal_test_launch(run_dir, attempt, state, **kw)
+    launch = ED._load_attempt_launch(
+        str(run_dir), attempt, auth_hash, authority.run_nonce)
+    return ED._run_child_main(
+        str(run_dir), attempt, authority,
+        authority_hash=auth_hash, launch=launch,
+    )
 
 def _terminal_refusal(detail, **extra):
     base = {
@@ -1379,12 +1431,13 @@ def test_stale_done_sentinel_ignored_on_resume_with_inflight(tmp_path):
         "retryTimeout": 5,
     }
     (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
-    _persist_test_authority(run_dir, state)
+    _bind_inflight(run_dir, state)
     res = ED.dispatch_poll(str(run_dir), max_wait=0)
     assert res.get("terminal") is False
     assert not (run_dir / "result.json").exists()
     (run_dir / "attempt-1.done").write_text(json.dumps({
         "exit": 0, "timedOut": False, "runNonce": current_nonce,
+        "authorityHash": state["authorityHash"],
     }), encoding="utf-8")
     res2 = ED.dispatch_poll(str(run_dir), max_wait=1)
     assert res2.get("terminal") is True
@@ -1412,7 +1465,7 @@ def test_stdout_without_sentinel_is_incomplete_not_result(tmp_path):
         "retryTimeout": 5,
     }
     (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
-    _persist_test_authority(run_dir, state)
+    _bind_inflight(run_dir, state)
     res = ED.dispatch_poll(str(run_dir), max_wait=0)
     assert res.get("running") is True
     assert res.get("terminal") is False
@@ -1486,11 +1539,11 @@ def test_concurrent_run_dir_lock_prevents_duplicate_spawn(tmp_path, monkeypatch)
     release_spawn = threading.Event()
     real_spawn = ED._spawn_run_child
 
-    def _gated_spawn(rd, att, launch):
+    def _gated_spawn(rd, att, launch, authority_hash=None):
         if att == 1:
             hold_spawn.set()
             assert release_spawn.wait(timeout=20)
-        return real_spawn(rd, att, launch)
+        return real_spawn(rd, att, launch, authority_hash=authority_hash)
 
     monkeypatch.setattr(ED, "_spawn_run_child", _gated_spawn)
     results = {}

@@ -84,18 +84,70 @@ def _authority_from_state(run_dir, state, **kw):
 def _persist_test_authority(run_dir, state, **kw):
     authority = _authority_from_state(run_dir, state, **kw)
     try:
-        ED._persist_authority(authority)
+        auth_hash = ED._persist_authority(authority)
     except FileExistsError:
-        pass
+        auth_hash = ED._authority_file_hash(str(run_dir))
     except OSError:
-        # already exists or race — load instead
-        pass
+        auth_hash = ED._authority_file_hash(str(run_dir))
+    if auth_hash and isinstance(state, dict):
+        state["authorityHash"] = auth_hash
+        state_path = os.path.join(str(run_dir), ED.STATE_NAME)
+        if os.path.isfile(state_path):
+            try:
+                cur = json.loads(open(state_path, encoding="utf-8").read())
+            except (OSError, ValueError):
+                cur = dict(state)
+            if isinstance(cur, dict):
+                cur["authorityHash"] = auth_hash
+                open(state_path, "w", encoding="utf-8").write(json.dumps(cur))
     return authority
 
 
-def _invoke_run_child(run_dir, attempt, state, **kw):
+def _seal_test_launch(run_dir, attempt, state, **kw):
+    """Seal a per-attempt launch record for tests that drive run-child / mid-flight."""
     authority = _authority_from_state(run_dir, state, **kw)
-    return ED._run_child_main(str(run_dir), attempt, authority)
+    auth_hash = state.get("authorityHash") or ED._authority_file_hash(str(run_dir))
+    if not auth_hash:
+        authority = _persist_test_authority(run_dir, state, **kw)
+        auth_hash = state.get("authorityHash") or ED._authority_file_hash(str(run_dir))
+    timeout = int(
+        state.get("attemptTimeout") or state.get("timeout")
+        or (authority.timeout if int(attempt) == 1 else authority.retry_timeout)
+        or 5)
+    try:
+        ED._seal_attempt_launch(str(run_dir), attempt, authority, auth_hash, timeout)
+    except FileExistsError:
+        pass
+    return authority, auth_hash
+
+
+def _bind_inflight(run_dir, state, attempt=1, **kw):
+    """Persist authority, seal launch, and stamp authorityHash onto any done sentinel."""
+    authority = _persist_test_authority(run_dir, state, **kw)
+    auth_hash = state.get("authorityHash")
+    _seal_test_launch(run_dir, attempt, state, **kw)
+    done_path = os.path.join(str(run_dir), "attempt-%d.done" % int(attempt))
+    if os.path.isfile(done_path):
+        try:
+            done = json.loads(open(done_path, encoding="utf-8").read())
+        except (OSError, ValueError):
+            done = None
+        if isinstance(done, dict) and auth_hash:
+            done["authorityHash"] = auth_hash
+            if not done.get("runNonce"):
+                done["runNonce"] = state.get("runNonce") or authority.run_nonce
+            open(done_path, "w", encoding="utf-8").write(json.dumps(done))
+    return authority, auth_hash
+
+
+def _invoke_run_child(run_dir, attempt, state, **kw):
+    authority, auth_hash = _seal_test_launch(run_dir, attempt, state, **kw)
+    launch = ED._load_attempt_launch(
+        str(run_dir), attempt, auth_hash, authority.run_nonce)
+    return ED._run_child_main(
+        str(run_dir), attempt, authority,
+        authority_hash=auth_hash, launch=launch,
+    )
 
 def _git(repo, *args, check=True):
     return subprocess.run(
@@ -239,9 +291,10 @@ def _inline_run_child_spawn(monkeypatch, *, children=None):
     if children is None:
         children = []
 
-    def _inline(rd, attempt, authority):
+    def _inline(rd, attempt, authority, authority_hash=None):
         children.append(attempt)
-        ED._run_child_main(str(rd), attempt, authority)
+        ED._run_child_main(
+            str(rd), attempt, authority, authority_hash=authority_hash)
 
         class _Proc:
             pid = os.getpid()
@@ -730,7 +783,18 @@ def test_run_child_rejects_forged_cwd_codex_argv_consistent(tmp_path, monkeypatc
     lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(os.path.realpath(linked1))
     try:
         auth = replace(authority, lease_token=lease_token, lease_holder=lease_holder)
-        ED._run_child_main(str(run_dir), 2, auth)
+        auth_hash = state.get("authorityHash") or ED._authority_file_hash(str(run_dir))
+        # Re-persist with lease credentials so child refresh succeeds.
+        try:
+            os.unlink(os.path.join(str(run_dir), ED.AUTHORITY_NAME))
+        except FileNotFoundError:
+            pass
+        auth = replace(auth, run_dir=str(run_dir))
+        auth_hash = ED._persist_authority(auth)
+        state["authorityHash"] = auth_hash
+        open(run_dir / "state.json", "w", encoding="utf-8").write(json.dumps(state))
+        ED._seal_attempt_launch(str(run_dir), 2, auth, auth_hash, 5)
+        ED._run_child_main(str(run_dir), 2, auth, authority_hash=auth_hash)
         assert captured, "engine should run under authority cwd"
         assert os.path.realpath(captured[0]) == os.path.realpath(linked1)
         assert os.path.realpath(captured[0]) != os.path.realpath(linked2)
@@ -767,8 +831,17 @@ def test_run_child_rejects_forged_cwd_cursor(tmp_path, monkeypatch):
     monkeypatch.setattr(ED, "_run_engine_files", _spy)
     lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(os.path.realpath(linked1))
     try:
-        auth = replace(authority, lease_token=lease_token, lease_holder=lease_holder)
-        ED._run_child_main(str(run_dir), 2, auth)
+        auth = replace(authority, lease_token=lease_token, lease_holder=lease_holder,
+                       run_dir=str(run_dir))
+        try:
+            os.unlink(os.path.join(str(run_dir), ED.AUTHORITY_NAME))
+        except FileNotFoundError:
+            pass
+        auth_hash = ED._persist_authority(auth)
+        state["authorityHash"] = auth_hash
+        open(run_dir / "state.json", "w", encoding="utf-8").write(json.dumps(state))
+        ED._seal_attempt_launch(str(run_dir), 2, auth, auth_hash, 5)
+        ED._run_child_main(str(run_dir), 2, auth, authority_hash=auth_hash)
         assert captured
         assert os.path.realpath(captured[0]) == os.path.realpath(linked1)
         assert os.path.realpath(captured[0]) != os.path.realpath(linked2)
@@ -886,13 +959,13 @@ def test_retry_unsafe_attempt_still_live(tmp_path):
             "fedPrompt": "build\n",
         }
         (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
-        _persist_test_authority(run_dir, state)
         (run_dir / "attempt-1.done").write_text(json.dumps({
             "exit": None, "timedOut": True, "runNonce": "still-live-n",
             "endedAt": time.time(),
         }), encoding="utf-8")
         (run_dir / "attempt-1.stdout").write_text("", encoding="utf-8")
         (run_dir / "attempt-1.stderr").write_text("", encoding="utf-8")
+        _bind_inflight(run_dir, state)
         assert ED._process_alive(holder.pid) is True
         res = ED.dispatch_write(
             "codex", engine_model="gpt-5.6-terra", effort="high",
@@ -1182,7 +1255,16 @@ def test_run_child_refuses_expected_kind_mismatch(tmp_path):
     authority = _authority_from_state(run_dir, state)
     # Force review kind onto a write-shaped launch — child review path rejects write cwd.
     authority = replace(authority, run_kind=ED.RUN_KIND_REVIEW, role_kind="review")
-    ED._run_child_main(str(run_dir), 1, authority)
+    # Persist the *replaced* authority so run-child loads the disagreeing kind from seal.
+    try:
+        os.unlink(os.path.join(str(run_dir), ED.AUTHORITY_NAME))
+    except FileNotFoundError:
+        pass
+    auth_hash = ED._persist_authority(authority)
+    state["authorityHash"] = auth_hash
+    state["runNonce"] = authority.run_nonce
+    ED._seal_attempt_launch(str(run_dir), 1, authority, auth_hash, 5)
+    ED._run_child_main(str(run_dir), 1, authority, authority_hash=auth_hash)
     done = json.loads((run_dir / "attempt-1.done").read_text(encoding="utf-8"))
     assert done.get("refusal") == "launch-cwd-mismatch"
 
@@ -1276,7 +1358,14 @@ def test_blank_supervisor_metadata_forfeits_retry(tmp_path):
         "supervisorStart": "",
     }
     (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
-    _persist_test_authority(run_dir, state)
+    # Attempt-1 already completed under a sealed launch — resume sees retry slot.
+    (run_dir / "attempt-1.done").write_text(json.dumps({
+        "exit": None, "timedOut": True, "runNonce": "sup-nonce",
+        "endedAt": time.time(),
+    }), encoding="utf-8")
+    (run_dir / "attempt-1.stdout").write_text("", encoding="utf-8")
+    (run_dir / "attempt-1.stderr").write_text("", encoding="utf-8")
+    _bind_inflight(run_dir, state, attempt=1)
     res = ED.dispatch_write(
         "codex", engine_model="gpt-5.6-terra", effort="high",
         prompt_path=prompt, cwd=linked, order_id="sup-o", run_engine=FakeWriteRunner([]),
@@ -1439,7 +1528,7 @@ def test_abandon_terminates_engine_process_group_not_supervisor_only(tmp_path):
         paths["engine_pgid"], pgid,
         run_nonce="abandon-n1", order_id="abandon-o1", attempt=1,
         cwd=os.path.realpath(linked), lease_token=lease_token,
-        start_identity="test",
+        start_identity="test", authority_hash=state["authorityHash"],
     )
     try:
         res = ED.dispatch_abandon(str(run_dir))
@@ -1493,7 +1582,7 @@ def test_abandon_engine_group_unconfirmed_lease_stays_held(tmp_path, monkeypatch
         paths["engine_pgid"], os.getpid(),
         run_nonce="abandon-n2", order_id="abandon-o2", attempt=1,
         cwd=os.path.realpath(linked), lease_token=lease_token,
-        start_identity="test",
+        start_identity="test", authority_hash=state["authorityHash"],
     )
     monkeypatch.setattr(ED, "_terminate_process_group", lambda _pgid: False)
     try:
@@ -1535,12 +1624,14 @@ def test_run_engine_files_sweeps_descendants_on_normal_exit(tmp_path):
         fed_prompt="", view_receipt={}, repo_root=None, prompt_path=None,
         progress_path=None, base_sha=None,
     )
+    auth_hash = ED._persist_authority(auth)
     res = ED._run_engine_files(
         ["python3", "-c", code],
         str(prompt), str(stdout), str(stderr),
         30, None, 1, str(tmp_path),
         engine_pgid_path=str(tmp_path / "pgid.json"),
         authority=auth,
+        authority_hash=auth_hash,
     )
     assert res.get("timedOut") is False
     assert res.get("exit") == 0
@@ -1588,7 +1679,7 @@ def test_dispatch_poll_never_spawns_on_retry_pending(tmp_path, monkeypatch):
         "worktreeLeaseHolder": {"pid": 1},
     }
     (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
-    _persist_test_authority(run_dir, state)
+    _bind_inflight(run_dir, state)
     engine_calls = []
     monkeypatch.setattr(
         ED, "_run_engine_files",
@@ -1659,9 +1750,12 @@ def test_spawn_run_child_always_detached_review_and_write(tmp_path, monkeypatch)
             (str(write_run), wstate, linked),
             (review_run, rstate, str(Path(review_run) / ED.REVIEW_CWD_DIRNAME)),
         ):
-            authority = _authority_from_state(run_dir, state, launch_cwd=launch_cwd)
+            authority = _persist_test_authority(run_dir, state, launch_cwd=launch_cwd)
             for attempt in (1, 2):
-                proc = ED._spawn_run_child(run_dir, attempt, authority)
+                ED._seal_attempt_launch(
+                    run_dir, attempt, authority, state["authorityHash"], 5)
+                proc = ED._spawn_run_child(
+                    run_dir, attempt, authority, authority_hash=state["authorityHash"])
                 _assert_spawn_detached(proc)
                 procs.append(proc)
     finally:
@@ -1688,8 +1782,8 @@ def test_write_retry_supervisor_pid_is_child_not_launcher(tmp_path, monkeypatch)
     real_spawn = ED._spawn_run_child
     real_atomic = ED._atomic_write_json
 
-    def _track(rd, att, launch):
-        proc = real_spawn(rd, att, launch)
+    def _track(rd, att, launch, authority_hash=None):
+        proc = real_spawn(rd, att, launch, authority_hash=authority_hash)
         spawned_procs.append(proc)
         return proc
 
@@ -1820,9 +1914,9 @@ def test_write_retry_spawns_once_after_poll_then_resume(tmp_path, monkeypatch):
     spawned_children = []
     real_spawn = ED._spawn_run_child
 
-    def _track_spawn(rd, att, launch):
+    def _track_spawn(rd, att, launch, authority_hash=None):
         spawned_children.append(att)
-        proc = real_spawn(rd, att, launch)
+        proc = real_spawn(rd, att, launch, authority_hash=authority_hash)
         _assert_spawn_detached(proc)
         return proc
 
@@ -1928,7 +2022,7 @@ def test_supervisor_dead_becomes_forfeit_not_eternal_running(tmp_path, monkeypat
     state.setdefault("timeout", 5)
     state.setdefault("retryTimeout", 5)
     (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
-    _persist_test_authority(run_dir, state)
+    _bind_inflight(run_dir, state)
     res = ED.dispatch_poll(str(run_dir), max_wait=0)
     assert res.get("terminal") is False
     assert ED.RETRY_PENDING_DETAIL in (res.get("detail") or "")
@@ -2167,7 +2261,13 @@ def test_e2e_a1_kind_mismatch_refuses_pre_spawn_no_engine(tmp_path, monkeypatch)
     authority = _authority_from_state(run_dir, state)
     # Kind disagrees with the write-shaped run (no review-cwd) — refuse before engine.
     authority = replace(authority, run_kind=ED.RUN_KIND_REVIEW, role_kind="review")
-    proc = ED._spawn_run_child(str(run_dir), 1, authority)
+    # Seal the disagreeing authority — run-child loads only from the sealed file.
+    auth_hash = ED._persist_authority(authority)
+    state["authorityHash"] = auth_hash
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    ED._seal_attempt_launch(str(run_dir), 1, authority, auth_hash, 30)
+    proc = ED._spawn_run_child(
+        str(run_dir), 1, authority, authority_hash=auth_hash)
     _assert_spawn_detached(proc)
     try:
         done = Path(run_dir) / "attempt-1.done"
@@ -2269,8 +2369,22 @@ def test_e2e_b1_authority_wins_over_disagreeing_state(tmp_path, monkeypatch):
             stale.unlink()
         except OSError:
             pass
+    try:
+        os.unlink(run_dir / ED.AUTHORITY_NAME)
+    except FileNotFoundError:
+        pass
+    # Also clear prior launch seal so attempt-1 can be re-sealed.
+    try:
+        os.unlink(run_dir / "attempt-1.launch.json")
+    except FileNotFoundError:
+        pass
     bad_auth = replace(authority, cwd="/tmp/definitely-not-linked-worktree")
-    proc = ED._spawn_run_child(str(run_dir), 1, bad_auth)
+    auth_hash = ED._persist_authority(bad_auth)
+    state["authorityHash"] = auth_hash
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    ED._seal_attempt_launch(str(run_dir), 1, bad_auth, auth_hash, 30)
+    proc = ED._spawn_run_child(
+        str(run_dir), 1, bad_auth, authority_hash=auth_hash)
     _assert_spawn_detached(proc)
     try:
         done = Path(run_dir) / "attempt-1.done"
@@ -2381,8 +2495,8 @@ def test_spawn_detached_own_session_attempt_1_and_2(tmp_path, monkeypatch):
     spawned = []
     real_spawn = ED._spawn_run_child
 
-    def _track(rd, att, auth):
-        proc = real_spawn(rd, att, auth)
+    def _track(rd, att, auth, authority_hash=None):
+        proc = real_spawn(rd, att, auth, authority_hash=authority_hash)
         _assert_spawn_detached(proc)
         spawned.append((att, proc.pid, os.getsid(proc.pid), os.getpgid(proc.pid)))
         return proc
