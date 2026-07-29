@@ -125,6 +125,7 @@ class LaunchAuthority:
     prompt_path: object
     progress_path: object
     base_sha: object
+    prompt_sha256: object = None
 
     def lease_path(self):
         """Derive the worktree lease path from canonical cwd — never a stored path."""
@@ -165,6 +166,7 @@ class LaunchAuthority:
             "promptPath": self.prompt_path,
             "progressPath": self.progress_path,
             "baseSha": self.base_sha,
+            "promptSha256": self.prompt_sha256,
             "dispatchMode": WRITE_DISPATCH_MODE if self.is_write else None,
         }
 
@@ -386,6 +388,14 @@ def _ledger_run_record_path(run_dir_real):
     return os.path.join(ledger_dir, "run.json")
 
 
+def _ledger_attempt_path(run_dir_real, attempt, suffix):
+    ledger_dir = _ledger_dir(run_dir_real)
+    if ledger_dir is None:
+        return None
+    return os.path.join(
+        ledger_dir, "attempt-%d.%s.json" % (int(attempt), suffix))
+
+
 def _ledger_seal(path, payload_dict):
     raw = json.dumps(
         payload_dict, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -468,6 +478,100 @@ def _ledger_expected_hash(run_dir_real, run_nonce, order_id=None):
     return authority_hash
 
 
+def _ledger_seal_attempt_intent(run_dir_real, attempt, authority_hash, run_nonce,
+                                timeout, worktree_snapshot):
+    """Phase 1: supervisor seals launch intent before spawn."""
+    path = _ledger_attempt_path(run_dir_real, attempt, "intent")
+    if path is None:
+        raise OSError("authority-ledger-root-unusable")
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    payload = {
+        "schemaVersion": LEDGER_SCHEMA_VERSION,
+        "attempt": int(attempt),
+        "authorityHash": authority_hash,
+        "runNonce": run_nonce,
+        "timeout": int(timeout),
+        "worktreeSnapshot": worktree_snapshot,
+    }
+    _ledger_seal(path, payload)
+
+
+def _ledger_claim_attempt(run_dir_real, attempt, authority_hash, run_nonce):
+    """Phase 2: run-child O_EXCL claim before any engine execution.
+
+    Returns False when the claim already exists (FileExistsError) so a second
+    run-child refuses instead of racing. Other OSError propagates.
+    """
+    path = _ledger_attempt_path(run_dir_real, attempt, "claim")
+    if path is None:
+        raise OSError("authority-ledger-root-unusable")
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    payload = {
+        "schemaVersion": LEDGER_SCHEMA_VERSION,
+        "attempt": int(attempt),
+        "authorityHash": authority_hash,
+        "runNonce": run_nonce,
+        "childPid": os.getpid(),
+        "childStart": _supervisor_lstart(os.getpid()) or "",
+    }
+    try:
+        _ledger_seal(path, payload)
+    except FileExistsError:
+        return False
+    return True
+
+
+def _ledger_seal_attempt_complete(run_dir_real, attempt, authority_hash, run_nonce):
+    """Phase 3: run-child seals completion before writing the run-dir sentinel."""
+    path = _ledger_attempt_path(run_dir_real, attempt, "complete")
+    if path is None:
+        raise OSError("authority-ledger-root-unusable")
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    payload = {
+        "schemaVersion": LEDGER_SCHEMA_VERSION,
+        "attempt": int(attempt),
+        "authorityHash": authority_hash,
+        "runNonce": run_nonce,
+        "endedAt": time.time(),
+    }
+    _ledger_seal(path, payload)
+
+
+def _ledger_attempt_record(run_dir_real, attempt, suffix, authority_hash, run_nonce):
+    """Return a sealed attempt record or None on any binding failure."""
+    path = _ledger_attempt_path(run_dir_real, attempt, suffix)
+    data = _ledger_read(path)
+    if data is None:
+        return None
+    if data.get("schemaVersion") != LEDGER_SCHEMA_VERSION:
+        return None
+    try:
+        if int(data.get("attempt")) != int(attempt):
+            return None
+    except (TypeError, ValueError):
+        return None
+    if not authority_hash or data.get("authorityHash") != authority_hash:
+        return None
+    if not run_nonce or data.get("runNonce") != run_nonce:
+        return None
+    return data
+
+
+def _ledger_attempt_intent(run_dir_real, attempt, authority_hash, run_nonce):
+    return _ledger_attempt_record(
+        run_dir_real, attempt, "intent", authority_hash, run_nonce)
+
+
+def _ledger_attempt_claim(run_dir_real, attempt, authority_hash, run_nonce):
+    return _ledger_attempt_record(
+        run_dir_real, attempt, "claim", authority_hash, run_nonce)
+
+
+def _ledger_attempt_complete(run_dir_real, attempt, authority_hash, run_nonce):
+    return _ledger_attempt_record(
+        run_dir_real, attempt, "complete", authority_hash, run_nonce)
+
+
 def _authority_from_bytes(raw):
     """Parse LaunchAuthority from sealed bytes. Torn/partial → None."""
     if not raw:
@@ -505,6 +609,7 @@ def _authority_from_bytes(raw):
             prompt_path=data.get("prompt_path"),
             progress_path=data.get("progress_path"),
             base_sha=data.get("base_sha"),
+            prompt_sha256=data.get("prompt_sha256"),
         )
     except (KeyError, TypeError, ValueError):
         return None
@@ -554,18 +659,34 @@ def _verify_authority_hash_at_fold(run_dir, expected_hash):
 
 
 def _seal_attempt_launch(run_dir, attempt, authority, authority_hash, timeout):
-    """Seal per-attempt launch record (O_EXCL). Attempt is part of the seal, not argv."""
+    """Seal per-attempt launch record (O_EXCL). Attempt is part of the seal, not argv.
+
+    The sealed timeout is always the authority-derived bound (attempt-1 timeout or
+    retry floor), never a caller-supplied widen. Also seals the ledger intent when
+    absent; when the supervisor already sealed intent (with worktreeSnapshot),
+    FileExistsError preserves that record.
+    """
     if not isinstance(authority, LaunchAuthority):
         raise TypeError("authority is required to seal attempt launch")
     if not authority_hash:
         raise ValueError("authority_hash is required to seal attempt launch")
+    derived_timeout = (
+        int(authority.timeout) if int(attempt) == 1
+        else max(int(authority.retry_timeout), RETRY_MIN_TIMEOUT))
+    try:
+        run_dir_real = os.path.realpath(run_dir)
+        _ledger_seal_attempt_intent(
+            run_dir_real, attempt, authority_hash, authority.run_nonce,
+            derived_timeout, None)
+    except FileExistsError:
+        pass
     payload = {
         "attempt": int(attempt),
         "authorityHash": authority_hash,
         "runNonce": authority.run_nonce,
         "orderId": authority.order_id or "",
         "runKind": authority.run_kind,
-        "timeout": int(timeout),
+        "timeout": int(derived_timeout),
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     _seal_bytes_excl(_launch_path(run_dir, attempt), raw, mode=0o400)
@@ -590,15 +711,25 @@ def _load_attempt_launch(run_dir, attempt, expected_hash, expected_nonce):
 
 
 def _find_pending_launch(run_dir, authority_hash, run_nonce):
-    """Return (attempt, launch) for the sole pending sealed launch, or (None, None)."""
+    """Return (attempt, launch) for the sole pending sealed intent, or (None, None).
+
+    Pending means a sealed ledger intent with no ledger completion record — never
+    decided by the engine-writable run-dir ``.done`` sentinel.
+    """
+    try:
+        run_dir_real = os.path.realpath(run_dir)
+    except OSError:
+        return None, None
     pending = []
     for attempt in range(1, MAX_ATTEMPTS + 1):
+        intent = _ledger_attempt_intent(
+            run_dir_real, attempt, authority_hash, run_nonce)
+        if intent is None:
+            continue
+        if _ledger_attempt_complete(
+                run_dir_real, attempt, authority_hash, run_nonce) is not None:
+            continue
         launch = _load_attempt_launch(run_dir, attempt, authority_hash, run_nonce)
-        if launch is None:
-            continue
-        done = _read_json(_attempt_paths(run_dir, attempt)["done"])
-        if _sentinel_trusted(done, run_nonce, authority_hash):
-            continue
         pending.append((attempt, launch))
     if len(pending) != 1:
         return None, None
@@ -606,14 +737,15 @@ def _find_pending_launch(run_dir, authority_hash, run_nonce):
 
 
 def _completed_attempts_from_seals(run_dir, authority_hash, run_nonce):
-    """Count trusted completions from sealed launches — not from mutable state."""
+    """Count completions from ledger completion records — not from run-dir sentinels."""
+    try:
+        run_dir_real = os.path.realpath(run_dir)
+    except OSError:
+        return 0
     completed = 0
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        launch = _load_attempt_launch(run_dir, attempt, authority_hash, run_nonce)
-        if launch is None:
-            break
-        done = _read_json(_attempt_paths(run_dir, attempt)["done"])
-        if not _sentinel_trusted(done, run_nonce, authority_hash):
+        if _ledger_attempt_complete(
+                run_dir_real, attempt, authority_hash, run_nonce) is None:
             break
         completed = attempt
     return completed
@@ -622,7 +754,8 @@ def _completed_attempts_from_seals(run_dir, authority_hash, run_nonce):
 def _build_write_authority(
         *, engine, engine_model, effort, model, prompt_path, cwd_real, order_id,
         base_sha, run_dir, timeout, retry_timeout, progress_path, argv, spawned_argv,
-        engine_binary, lease_token, lease_holder, run_nonce, fed_prompt):
+        engine_binary, lease_token, lease_holder, run_nonce, fed_prompt,
+        prompt_sha256=None):
     return LaunchAuthority(
         role_kind="build",
         run_kind=RUN_KIND_WRITE,
@@ -649,13 +782,15 @@ def _build_write_authority(
         prompt_path=os.path.abspath(prompt_path),
         progress_path=progress_path,
         base_sha=base_sha,
+        prompt_sha256=prompt_sha256,
     )
 
 
 def _build_review_authority(
         *, engine, model, effort, engine_model, schema_path, prompt_path, repo_root,
         run_dir, timeout, retry_timeout, progress_path, argv, spawned_argv,
-        engine_binary, order_id, run_nonce, fed_prompt, view_receipt, cleanup_roots):
+        engine_binary, order_id, run_nonce, fed_prompt, view_receipt, cleanup_roots,
+        prompt_sha256=None):
     return LaunchAuthority(
         role_kind="review",
         run_kind=RUN_KIND_REVIEW,
@@ -682,6 +817,7 @@ def _build_review_authority(
         prompt_path=os.path.abspath(prompt_path),
         progress_path=progress_path,
         base_sha=None,
+        prompt_sha256=prompt_sha256,
     )
 
 
@@ -1325,19 +1461,30 @@ def _run_engine(argv, prompt_bytes, timeout, progress_cb, cwd):
 
 
 def _run_engine_files(argv, prompt_path, stdout_path, stderr_path, timeout, progress_path, attempt, cwd,
-                      env=None, engine_pgid_path=None, authority=None, authority_hash=None):
+                      env=None, engine_pgid_path=None, authority=None, authority_hash=None,
+                      prompt_bytes=None):
     """Run engine with durable file stdout/stderr (run-child). Never raises.
 
     ``authority`` is required for authenticated engine-pgid records. Omitting it
     when a pgid path is requested is a structural failure (no unauthenticated pgid).
     The pgid record is supervisor-sealed and bound to ``authority_hash``.
+
+    When ``prompt_bytes`` is given, feed the engine from an anonymous TemporaryFile
+    holding those bytes — nothing on disk can be swapped between check and read.
+    When ``prompt_bytes`` is None, open ``prompt_path`` (legacy / unset digest).
     """
     spawn_env = _scrub_git_env(env)
     stdin_f = None
     stdout_f = None
     stderr_f = None
     try:
-        stdin_f = open(prompt_path, "rb")
+        if prompt_bytes is not None:
+            stdin_f = tempfile.TemporaryFile()
+            stdin_f.write(prompt_bytes)
+            stdin_f.flush()
+            stdin_f.seek(0)
+        else:
+            stdin_f = open(prompt_path, "rb")
         stdout_f = _open_durable_write(stdout_path)
         stderr_f = _open_durable_write(stderr_path)
         proc = subprocess.Popen(
@@ -2108,7 +2255,15 @@ def _run_child_entry(run_dir):
         return 2
     authority = verified
     attempt, launch = _find_pending_launch(real_dir, authority_hash, authority.run_nonce)
-    if attempt is None or launch is None:
+    if attempt is None:
+        return 2
+    try:
+        claimed = _ledger_claim_attempt(
+            real_dir, attempt, authority_hash, authority.run_nonce)
+    except OSError:
+        return 2
+    if not claimed:
+        # Second run-child — refuse without writing a sentinel or running an engine.
         return 2
     return _run_child_main(
         real_dir, attempt, authority,
@@ -2129,8 +2284,17 @@ def _run_child_main(run_dir, attempt, authority, authority_hash=None, launch=Non
     if launch is None:
         return 2
     paths = _attempt_paths(run_dir, attempt)
+    try:
+        run_dir_real = os.path.realpath(run_dir)
+    except OSError:
+        return 2
 
     def _refuse(refusal_token, exit_code=2):
+        try:
+            _ledger_seal_attempt_complete(
+                run_dir_real, attempt, authority_hash, authority.run_nonce)
+        except OSError:
+            pass
         sentinel = {
             "exit": exit_code,
             "timedOut": False,
@@ -2142,6 +2306,27 @@ def _run_child_main(run_dir, attempt, authority, authority_hash=None, launch=Non
         }
         _child_write_sentinel(run_dir, attempt, sentinel)
         return exit_code
+
+    derived_timeout = (
+        authority.timeout if int(attempt) == 1
+        else max(authority.retry_timeout, RETRY_MIN_TIMEOUT))
+    intent = _ledger_attempt_intent(
+        run_dir_real, attempt, authority_hash, authority.run_nonce)
+    if intent is None:
+        return _refuse("launch-intent-missing", 4)
+    try:
+        intent_timeout = int(intent.get("timeout"))
+    except (TypeError, ValueError):
+        return _refuse("launch-timeout-mismatch", 4)
+    if intent_timeout != int(derived_timeout):
+        return _refuse("launch-timeout-mismatch", 4)
+    try:
+        launch_timeout = int(launch.get("timeout"))
+    except (TypeError, ValueError):
+        return _refuse("launch-timeout-mismatch", 4)
+    if launch_timeout != int(derived_timeout):
+        return _refuse("launch-timeout-mismatch", 4)
+    timeout = int(derived_timeout)
 
     if authority.run_kind == RUN_KIND_WRITE:
         ok_cwd, cwd_or_token = _validate_linked_build_cwd(authority.cwd)
@@ -2192,14 +2377,19 @@ def _run_child_main(run_dir, attempt, authority, authority_hash=None, launch=Non
             return _refuse(CHILD_LEASE_REFRESH_FAILED, 4)
         _write_child_lease_holder(run_dir, refreshed)
 
-    # attemptTimeout comes from the sealed launch / authority — never state.json.
-    try:
-        timeout = int(launch.get("timeout"))
-    except (TypeError, ValueError):
-        timeout = authority.timeout if int(attempt) == 1 else max(
-            authority.retry_timeout, RETRY_MIN_TIMEOUT)
     progress_path = os.path.join(run_dir, PROGRESS_NAME)
     prompt_path = os.path.join(run_dir, PROMPT_NAME)
+    try:
+        with open(prompt_path, "rb") as fh:
+            prompt_file_bytes = fh.read()
+    except OSError:
+        return _refuse("prompt-unreadable", 4)
+    feed_bytes = None
+    if authority.prompt_sha256 is not None:
+        digest = hashlib.sha256(prompt_file_bytes).hexdigest()
+        if digest != authority.prompt_sha256:
+            return _refuse("prompt-digest-mismatch", 4)
+        feed_bytes = prompt_file_bytes
     _purge_engine_pgid(run_dir, attempt)
     sentinel = _run_engine_files(
         argv, prompt_path, paths["stdout"], paths["stderr"],
@@ -2207,9 +2397,16 @@ def _run_child_main(run_dir, attempt, authority, authority_hash=None, launch=Non
         engine_pgid_path=paths.get("engine_pgid"),
         authority=authority,
         authority_hash=authority_hash,
+        prompt_bytes=feed_bytes,
     )
     sentinel["runNonce"] = authority.run_nonce
     sentinel["authorityHash"] = authority_hash
+    try:
+        _ledger_seal_attempt_complete(
+            run_dir_real, attempt, authority_hash, authority.run_nonce)
+    except OSError:
+        # Still write the run-dir sentinel for liveness/payload; fold requires ledger.
+        pass
     _child_write_sentinel(run_dir, attempt, sentinel)
     return 0 if sentinel.get("refusal") is None else 4
 
@@ -2302,6 +2499,15 @@ def _maybe_synthesize_supervisor_dead_forfeit(run_dir, attempt, state, run_nonce
     paths = _attempt_paths(run_dir, attempt)
     if os.path.isfile(paths["done"]):
         return False
+    if authority_hash:
+        try:
+            run_dir_real = os.path.realpath(run_dir)
+            if _ledger_attempt_complete(
+                    run_dir_real, attempt, authority_hash, run_nonce) is None:
+                _ledger_seal_attempt_complete(
+                    run_dir_real, attempt, authority_hash, run_nonce)
+        except OSError:
+            return False
     sentinel = {
         "exit": None,
         "timedOut": True,
@@ -2316,7 +2522,12 @@ def _maybe_synthesize_supervisor_dead_forfeit(run_dir, attempt, state, run_nonce
 
 
 def _compensate_failed_spawn(run_dir, state, authority, argv):
-    """Clear phantom in-flight state and persist terminal spawn failure."""
+    """Clear phantom in-flight state and persist terminal spawn failure.
+
+    Must not release the worktree lease while a trusted pending ledger intent
+    exists for any attempt, or while a readable authenticated engine-pgid record
+    names a live process group.
+    """
     if not isinstance(authority, LaunchAuthority):
         raise TypeError("authority is required for spawn compensation")
     state_path = os.path.join(run_dir, STATE_NAME)
@@ -2330,8 +2541,40 @@ def _compensate_failed_spawn(run_dir, state, authority, argv):
         "attempts": 0,
         "forfeited": False,
     }, run_dir, argv, authority=authority, run_nonce=authority.run_nonce)
+    retain_lease = False
+    disclosure = None
     if authority.is_write:
-        _release_worktree_lease(authority)
+        try:
+            run_dir_real = os.path.realpath(run_dir)
+        except OSError:
+            run_dir_real = None
+        authority_hash = None
+        if run_dir_real is not None:
+            authority_hash = _ledger_expected_hash(
+                run_dir_real, authority.run_nonce, authority.order_id)
+        if run_dir_real is not None and authority_hash:
+            pending_attempt, _pending_launch = _find_pending_launch(
+                run_dir, authority_hash, authority.run_nonce)
+            if pending_attempt is not None:
+                retain_lease = True
+                disclosure = (
+                    "supervisor-spawn-failed: lease retained "
+                    "(trusted pending ledger intent)")
+            if not retain_lease:
+                for attempt in range(1, MAX_ATTEMPTS + 1):
+                    engine_record = _read_engine_pgid(
+                        run_dir, attempt, authority.run_nonce, authority.order_id,
+                        authority_hash)
+                    if engine_record and _process_group_alive(engine_record["pgid"]):
+                        retain_lease = True
+                        disclosure = (
+                            "supervisor-spawn-failed: lease retained "
+                            "(live authenticated engine process group)")
+                        break
+        if retain_lease:
+            result["disclosure"] = disclosure
+        else:
+            _release_worktree_lease(authority)
     else:
         result = _attach_sanitized_view(
             result, authority.view_receipt if isinstance(authority.view_receipt, dict) else {})
@@ -2529,7 +2772,9 @@ def _continue_run(run_dir, authority, *, deadline, max_wait, allow_spawn,
     try:
         lock_path = _with_run_lock(run_dir)
     except file_lock.LockHeld:
-        attempt = state.get("inFlightAttempt") or state.get("completedAttempts", 0) + 1
+        pending_attempt, _ = _find_pending_launch(
+            run_dir, authority_hash, run_nonce)
+        attempt = pending_attempt or int(state.get("completedAttempts") or 0) + 1
         return _running_result(
             run_dir, authority, attempt, argv, 0, max_wait, detail="lock-held",
             supervisor_pid=state.get("supervisorPid"))
@@ -2538,7 +2783,7 @@ def _continue_run(run_dir, authority, *, deadline, max_wait, allow_spawn,
         last_engagement = state.get("lastEngagement")
         last_terminal = state.get("pendingTerminal")
         last_rejected = state.get("lastInvestigatedRejected")
-        # Spawn eligibility from sealed launches (authority), not mutable state alone.
+        # Spawn eligibility from ledger completion records, not mutable state alone.
         sealed_completed = _completed_attempts_from_seals(
             run_dir, authority_hash, run_nonce)
         completed = sealed_completed
@@ -2547,23 +2792,66 @@ def _continue_run(run_dir, authority, *, deadline, max_wait, allow_spawn,
             # Receipt may lag seals only downward; never trust a higher mutable count
             # to skip fold — but seals are source of truth for spawn.
             pass
-        in_flight = state.get("inFlightAttempt")
-        # In-flight must also bind to a sealed launch for this hash.
-        if in_flight:
-            if _load_attempt_launch(
-                    run_dir, in_flight, authority_hash, run_nonce) is None:
-                in_flight = None
+        try:
+            run_dir_real = os.path.realpath(run_dir)
+        except OSError:
+            run_dir_real = run_dir
+        pending_attempt, _pending_launch = _find_pending_launch(
+            run_dir, authority_hash, run_nonce)
+        in_flight = pending_attempt
+        # Receipt echo only — never the authority source for in-flight.
+        state["inFlightAttempt"] = in_flight
+
+        resume_sentinel = None
+        if sealed_completed > 0 and not in_flight:
+            done_path = _attempt_paths(run_dir, sealed_completed)["done"]
+            done_payload = _read_json(done_path)
+            if not os.path.isfile(done_path):
+                # Ledger completion without run-dir payload — not a success fold.
+                result = _terminal_meta({
+                    "ok": False,
+                    "reason": "unrunnable",
+                    "detail": "completion-payload-absent",
+                    "attempts": sealed_completed,
+                    "forfeited": False,
+                }, run_dir, argv, authority=authority, run_nonce=run_nonce)
+                if not is_write:
+                    result = _attach_sanitized_view(result, view_receipt)
+                    _destroy_review_views(run_dir, authority)
+                _atomic_write_json(os.path.join(run_dir, RESULT_NAME), result)
+                # Write lease retained — outcome payload absent.
+                return result
+            if not _sentinel_trusted(done_payload, run_nonce, authority_hash):
+                # Untrusted done (wrong nonce/hash) — do not fold; stay running.
+                elapsed = time.time() - (state.get("attemptStartedAt") or time.time())
+                return _running_result(
+                    run_dir, authority, sealed_completed, argv, elapsed, max_wait,
+                    supervisor_pid=state.get("supervisorPid"))
+            # Resume fold only when state has not yet recorded this completion
+            # (otherwise fall through to the bottom retry/spawn path).
+            if state_completed < sealed_completed:
+                in_flight = sealed_completed
+                resume_sentinel = done_payload
 
         if in_flight:
-            wait_budget = max(0, deadline - time.monotonic())
-            sentinel = _wait_for_sentinel(
-                run_dir, in_flight, time.monotonic() + wait_budget, run_nonce,
-                authority_hash)
-            if sentinel is None:
-                if _maybe_synthesize_supervisor_dead_forfeit(
-                        run_dir, in_flight, state, run_nonce, authority_hash):
-                    sentinel = _read_json(_attempt_paths(run_dir, in_flight)["done"])
-                    if not _sentinel_trusted(sentinel, run_nonce, authority_hash):
+            if resume_sentinel is not None:
+                sentinel = resume_sentinel
+            else:
+                wait_budget = max(0, deadline - time.monotonic())
+                sentinel = _wait_for_sentinel(
+                    run_dir, in_flight, time.monotonic() + wait_budget, run_nonce,
+                    authority_hash)
+                if sentinel is None:
+                    if _maybe_synthesize_supervisor_dead_forfeit(
+                            run_dir, in_flight, state, run_nonce, authority_hash):
+                        sentinel = _read_json(
+                            _attempt_paths(run_dir, in_flight)["done"])
+                        if not _sentinel_trusted(sentinel, run_nonce, authority_hash):
+                            sentinel = None
+                if sentinel is not None:
+                    # Completion transition requires the ledger record, not just .done.
+                    if _ledger_attempt_complete(
+                            run_dir_real, in_flight, authority_hash, run_nonce) is None:
                         sentinel = None
             if sentinel is None:
                 elapsed = time.time() - (state.get("attemptStartedAt") or time.time())
@@ -2630,23 +2918,33 @@ def _continue_run(run_dir, authority, *, deadline, max_wait, allow_spawn,
                             detail=RETRY_PENDING_DETAIL,
                             supervisor_pid=None)
                     # Retry spawn is an authority decision (allow_spawn + seal budget).
-                    sup_start = state.get("supervisorStart")
-                    if not completed_supervisor or not sup_start:
+                    claim = _ledger_attempt_claim(
+                        run_dir_real, completed, authority_hash, run_nonce)
+                    if claim is None:
                         return _fold_terminal_write(
                             run_dir, authority, argv, engagement,
                             "retry-unsafe-missing-supervisor-metadata", None, completed,
                             authority_hash=authority_hash)
-                    if _process_alive(completed_supervisor):
+                    child_pid = claim.get("childPid")
+                    child_start = claim.get("childStart")
+                    if not child_pid or not child_start:
+                        return _fold_terminal_write(
+                            run_dir, authority, argv, engagement,
+                            "retry-unsafe-missing-supervisor-metadata", None, completed,
+                            authority_hash=authority_hash)
+                    if _process_alive(child_pid):
                         return _fold_terminal_write(
                             run_dir, authority, argv, engagement,
                             "retry-unsafe-attempt-still-live", None, completed,
                             authority_hash=authority_hash)
-                    snap_before = state.get("worktreeSnapshot")
-                    if snap_before is None:
+                    intent1 = _ledger_attempt_intent(
+                        run_dir_real, 1, authority_hash, run_nonce)
+                    if intent1 is None or intent1.get("worktreeSnapshot") is None:
                         return _fold_terminal_write(
                             run_dir, authority, argv, engagement,
                             "retry-unsafe-missing-worktree-snapshot", None, completed,
                             authority_hash=authority_hash)
+                    snap_before = intent1.get("worktreeSnapshot")
                     if cwd:
                         snap_timeout = max(0.1, deadline - time.monotonic())
                         try:
@@ -2725,16 +3023,30 @@ def _continue_run(run_dir, authority, *, deadline, max_wait, allow_spawn,
             return _terminal_cwd_authorization_mismatch(run_dir, authority, argv)
 
         if is_write and completed > 0 and completed < MAX_ATTEMPTS:
-            sup_start = state.get("supervisorStart")
-            completed_supervisor = state.get("completedAttemptSupervisorPid") or state.get(
-                "supervisorPid")
-            if not completed_supervisor or not sup_start:
+            claim = _ledger_attempt_claim(
+                run_dir_real, completed, authority_hash, run_nonce)
+            if claim is None:
                 return _fold_terminal_write(
                     run_dir, authority, argv, last_engagement or {},
                     "retry-unsafe-missing-supervisor-metadata", None, completed,
                     authority_hash=authority_hash)
-            snap_before = state.get("worktreeSnapshot")
-            if snap_before is None:
+            child_pid = claim.get("childPid")
+            child_start = claim.get("childStart")
+            if not child_pid or not child_start:
+                return _fold_terminal_write(
+                    run_dir, authority, argv, last_engagement or {},
+                    "retry-unsafe-missing-supervisor-metadata", None, completed,
+                    authority_hash=authority_hash)
+            if _process_alive(child_pid):
+                return _fold_terminal_write(
+                    run_dir, authority, argv, last_engagement or {},
+                    "retry-unsafe-attempt-still-live", None, completed,
+                    authority_hash=authority_hash)
+            intent1 = _ledger_attempt_intent(
+                run_dir_real, 1, authority_hash, run_nonce)
+            # Presence-only here (same as pre-X2 bottom path). The dirty
+            # comparison runs on the in-flight allow_spawn path above.
+            if intent1 is None or intent1.get("worktreeSnapshot") is None:
                 return _fold_terminal_write(
                     run_dir, authority, argv, last_engagement or {},
                     "retry-unsafe-missing-worktree-snapshot", None, completed,
@@ -2756,11 +3068,13 @@ def _continue_run(run_dir, authority, *, deadline, max_wait, allow_spawn,
         state["inFlightAttempt"] = next_attempt
         state["attemptTimeout"] = timeout  # receipt echo only — never authoritative
         state["attemptStartedAt"] = time.time()
+        worktree_snapshot = None
         if is_write and next_attempt == 1 and cwd:
             snap_timeout = max(0.1, deadline - time.monotonic())
             try:
-                state["worktreeSnapshot"] = list(
+                worktree_snapshot = list(
                     _worktree_snapshot(cwd, timeout=snap_timeout))
+                state["worktreeSnapshot"] = worktree_snapshot
             except subprocess.TimeoutExpired:
                 state["inFlightAttempt"] = None
                 _atomic_write_json(state_path, state)
@@ -2778,6 +3092,9 @@ def _continue_run(run_dir, authority, *, deadline, max_wait, allow_spawn,
 
         if run_engine is not _run_engine or injected:
             try:
+                _ledger_seal_attempt_intent(
+                    run_dir_real, next_attempt, authority_hash, run_nonce,
+                    timeout, worktree_snapshot)
                 _seal_attempt_launch(
                     run_dir, next_attempt, authority, authority_hash, timeout)
             except (OSError, ValueError, TypeError, FileExistsError):
@@ -2785,6 +3102,22 @@ def _continue_run(run_dir, authority, *, deadline, max_wait, allow_spawn,
             if not state.get("supervisorPid"):
                 state["supervisorPid"] = 999999999
                 state["supervisorStart"] = "injected-dead-supervisor"
+            # Injected seam substitutes for run-child: seal claim with the
+            # injected supervisor identity (dead pid), not this process.
+            claim_path = _ledger_attempt_path(run_dir_real, next_attempt, "claim")
+            try:
+                if claim_path is None:
+                    raise OSError("authority-ledger-root-unusable")
+                _ledger_seal(claim_path, {
+                    "schemaVersion": LEDGER_SCHEMA_VERSION,
+                    "attempt": int(next_attempt),
+                    "authorityHash": authority_hash,
+                    "runNonce": run_nonce,
+                    "childPid": state["supervisorPid"],
+                    "childStart": state["supervisorStart"] or "",
+                })
+            except (OSError, FileExistsError):
+                return _compensate_failed_spawn(run_dir, state, authority, argv)
             prompt_bytes = open(os.path.join(run_dir, PROMPT_NAME), "rb").read()
             try:
                 sentinel, _so, _se, _el = _execute_injected_attempt(
@@ -2802,6 +3135,11 @@ def _continue_run(run_dir, authority, *, deadline, max_wait, allow_spawn,
                 _atomic_write_json(os.path.join(run_dir, RESULT_NAME), err)
                 _destroy_review_views(run_dir, authority)
                 return err
+            try:
+                _ledger_seal_attempt_complete(
+                    run_dir_real, next_attempt, authority_hash, run_nonce)
+            except OSError:
+                return _compensate_failed_spawn(run_dir, state, authority, argv)
             state["inFlightAttempt"] = next_attempt
             _atomic_write_json(state_path, state)
             wait_budget = max(0, deadline - time.monotonic())
@@ -2822,6 +3160,9 @@ def _continue_run(run_dir, authority, *, deadline, max_wait, allow_spawn,
 
         proc = None
         try:
+            _ledger_seal_attempt_intent(
+                run_dir_real, next_attempt, authority_hash, run_nonce,
+                timeout, worktree_snapshot)
             _seal_attempt_launch(
                 run_dir, next_attempt, authority, authority_hash, timeout)
         except (OSError, ValueError, TypeError, FileExistsError):
@@ -3032,7 +3373,9 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
     notice = sanitized_view.sanitized_view_notice({**view, "path": _cwd})
     prompt_prefix = ANTIHIJACK_PREAMBLE + notice
     fed_prompt = prompt_prefix + base_prompt
-    _atomic_write_bytes(os.path.join(real_dir, PROMPT_NAME), fed_prompt.encode("utf-8"))
+    prompt_file_bytes = fed_prompt.encode("utf-8")
+    _atomic_write_bytes(os.path.join(real_dir, PROMPT_NAME), prompt_file_bytes)
+    prompt_digest = hashlib.sha256(prompt_file_bytes).hexdigest()
 
     opts = {"model": model, "engine_model": engine_model, "schema_path": schema_path,
             "cwd": review_engine_cwd}
@@ -3047,7 +3390,8 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
             run_dir=real_dir, timeout=timeout, retry_timeout=retry_timeout,
             progress_path=progress_path, argv=[], spawned_argv=[],
             engine_binary="", order_id=order_id or "", run_nonce=run_nonce,
-            fed_prompt=fed_prompt, view_receipt=view_receipt, cleanup_roots=cleanup_roots)
+            fed_prompt=fed_prompt, view_receipt=view_receipt, cleanup_roots=cleanup_roots,
+            prompt_sha256=prompt_digest)
         result = _attach_sanitized_view(_terminal_meta(
             {"ok": False, "reason": "unrunnable",
              "detail": "engine-config:%s" % built["reason"],
@@ -3067,7 +3411,8 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
             run_dir=real_dir, timeout=timeout, retry_timeout=retry_timeout,
             progress_path=progress_path, argv=argv, spawned_argv=argv_spawn,
             engine_binary="", order_id=order_id or "", run_nonce=run_nonce,
-            fed_prompt=fed_prompt, view_receipt=view_receipt, cleanup_roots=cleanup_roots)
+            fed_prompt=fed_prompt, view_receipt=view_receipt, cleanup_roots=cleanup_roots,
+            prompt_sha256=prompt_digest)
         result = _attach_sanitized_view(_terminal_meta(
             {"ok": False, "reason": "unrunnable", "detail": "engine-binary-unresolved",
              "attempts": 0, "forfeited": False},
@@ -3085,7 +3430,8 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
         run_dir=real_dir, timeout=timeout, retry_timeout=retry_timeout,
         progress_path=progress_path, argv=argv, spawned_argv=argv_spawn,
         engine_binary=engine_binary, order_id=order_id or "", run_nonce=run_nonce,
-        fed_prompt=fed_prompt, view_receipt=view_receipt, cleanup_roots=cleanup_roots)
+        fed_prompt=fed_prompt, view_receipt=view_receipt, cleanup_roots=cleanup_roots,
+        prompt_sha256=prompt_digest)
     if _ledger_record_exists(real_dir):
         _destroy_review_views(real_dir, authority)
         return _terminal_run_dir_reused(real_dir)
@@ -3279,6 +3625,7 @@ def _dispatch_write_impl(engine, *, engine_model, effort, model=None, prompt_pat
             real_dir, [])
 
     _atomic_write_bytes(os.path.join(real_dir, PROMPT_NAME), prompt_bytes)
+    prompt_digest = hashlib.sha256(prompt_bytes).hexdigest()
 
     opts = {"model": model, "engine_model": engine_model, "cwd": cwd_detail}
     built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
@@ -3314,7 +3661,8 @@ def _dispatch_write_impl(engine, *, engine_model, effort, model=None, prompt_pat
             retry_timeout=retry_timeout, progress_path=progress_path, argv=argv,
             spawned_argv=argv_spawn, engine_binary=engine_binary, lease_token=None,
             lease_holder=None, run_nonce=secrets.token_hex(16),
-            fed_prompt=prompt_bytes.decode("utf-8", "ignore"))
+            fed_prompt=prompt_bytes.decode("utf-8", "ignore"),
+            prompt_sha256=prompt_digest)
         return _running_result(
             real_dir, tmp_auth, 1, argv, 0, max_wait,
             detail="worktree-lease-held", spawned_argv=argv_spawn)
@@ -3327,7 +3675,8 @@ def _dispatch_write_impl(engine, *, engine_model, effort, model=None, prompt_pat
         retry_timeout=retry_timeout, progress_path=progress_path, argv=argv,
         spawned_argv=argv_spawn, engine_binary=engine_binary,
         lease_token=lease_token, lease_holder=lease_holder, run_nonce=run_nonce,
-        fed_prompt=prompt_bytes.decode("utf-8", "ignore"))
+        fed_prompt=prompt_bytes.decode("utf-8", "ignore"),
+        prompt_sha256=prompt_digest)
     if _ledger_record_exists(real_dir):
         _release_worktree_lease(authority)
         return _terminal_run_dir_reused(real_dir)

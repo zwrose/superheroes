@@ -1,5 +1,6 @@
 """Tests for dispatch-write (#702) and write-specific supervision edges."""
 import importlib.util
+import hashlib
 import inspect
 import json
 import os
@@ -79,6 +80,7 @@ def _authority_from_state(run_dir, state, **kw):
         prompt_path=state.get("promptPath"),
         progress_path=state.get("progressPath"),
         base_sha=state.get("baseSha"),
+        prompt_sha256=kw.get("prompt_sha256", state.get("promptSha256")),
     )
 
 
@@ -112,6 +114,7 @@ def _persist_test_authority(run_dir, state, **kw):
 
 def _seal_test_launch(run_dir, attempt, state, **kw):
     """Seal a per-attempt launch record for tests that drive run-child / mid-flight."""
+    run_dir = os.path.realpath(str(run_dir))
     authority = _authority_from_state(run_dir, state, **kw)
     auth_hash = state.get("authorityHash") or ED._authority_file_hash(str(run_dir))
     if not auth_hash:
@@ -121,6 +124,14 @@ def _seal_test_launch(run_dir, attempt, state, **kw):
         state.get("attemptTimeout") or state.get("timeout")
         or (authority.timeout if int(attempt) == 1 else authority.retry_timeout)
         or 5)
+    wt_snap = state.get("worktreeSnapshot")
+    if wt_snap is not None:
+        wt_snap = list(wt_snap)
+    try:
+        ED._ledger_seal_attempt_intent(
+            run_dir, attempt, auth_hash, authority.run_nonce, timeout, wt_snap)
+    except FileExistsError:
+        pass
     try:
         ED._seal_attempt_launch(str(run_dir), attempt, authority, auth_hash, timeout)
     except FileExistsError:
@@ -129,7 +140,8 @@ def _seal_test_launch(run_dir, attempt, state, **kw):
 
 
 def _bind_inflight(run_dir, state, attempt=1, **kw):
-    """Persist authority, seal launch, and stamp authorityHash onto any done sentinel."""
+    """Persist authority, seal launch/intent, and stamp authorityHash onto any done sentinel."""
+    run_dir = os.path.realpath(str(run_dir))
     authority = _persist_test_authority(run_dir, state, **kw)
     auth_hash = state.get("authorityHash")
     _seal_test_launch(run_dir, attempt, state, **kw)
@@ -144,11 +156,41 @@ def _bind_inflight(run_dir, state, attempt=1, **kw):
             if not done.get("runNonce"):
                 done["runNonce"] = state.get("runNonce") or authority.run_nonce
             open(done_path, "w", encoding="utf-8").write(json.dumps(done))
+        nonce = state.get("runNonce") or authority.run_nonce
+        # Only seal ledger completion for a trusted same-nonce done — a stale
+        # prior-run sentinel must not count as complete.
+        if (isinstance(done, dict) and auth_hash
+                and done.get("runNonce") == nonce):
+            claim_path = ED._ledger_attempt_path(run_dir, attempt, "claim")
+            if claim_path and not os.path.isfile(claim_path):
+                try:
+                    ED._ledger_seal(claim_path, {
+                        "schemaVersion": ED.LEDGER_SCHEMA_VERSION,
+                        "attempt": int(attempt),
+                        "authorityHash": auth_hash,
+                        "runNonce": nonce,
+                        "childPid": state.get("supervisorPid") or state.get(
+                            "completedAttemptSupervisorPid"),
+                        "childStart": state.get("supervisorStart") or "",
+                    })
+                except FileExistsError:
+                    pass
+            try:
+                ED._ledger_seal_attempt_complete(
+                    run_dir, attempt, auth_hash, nonce)
+            except FileExistsError:
+                pass
     return authority, auth_hash
 
 
 def _invoke_run_child(run_dir, attempt, state, **kw):
     authority, auth_hash = _seal_test_launch(run_dir, attempt, state, **kw)
+    run_dir = os.path.realpath(str(run_dir))
+    try:
+        ED._ledger_claim_attempt(
+            run_dir, attempt, auth_hash, authority.run_nonce)
+    except OSError:
+        pass
     launch = ED._load_attempt_launch(
         str(run_dir), attempt, auth_hash, authority.run_nonce)
     return ED._run_child_main(
@@ -3046,3 +3088,445 @@ def test_x1_spawned_engine_env_scrubs_ledger_root(monkeypatch):
     })
     assert "SUPERHEROES_DISPATCH_LEDGER_ROOT" not in scrubbed2
     assert scrubbed2.get("PATH") == "/usr/bin"
+
+
+# --- WO-702-B order X2: authority facts off the engine-writable surface ---
+
+
+def _x2_write_state(tmp_path, linked, *, order_id, run_nonce, lease_token, lease_holder,
+                    run_dir, in_flight=1, completed=0, supervisor_pid=None,
+                    supervisor_start="", snapshot=None):
+    built = EA.build_argv_result(
+        "codex", "build", "high",
+        {"engine_model": "gpt-5.6-terra", "cwd": linked},
+    )
+    argv = built["argv"]
+    prompt_bytes = b"build\n"
+    (run_dir / "prompt.txt").write_bytes(prompt_bytes)
+    state = {
+        "engine": "codex",
+        "roleKind": "build",
+        "dispatchMode": ED.WRITE_DISPATCH_MODE,
+        "effort": "high",
+        "engineModel": "gpt-5.6-terra",
+        "cwd": os.path.realpath(linked),
+        "argv": argv,
+        "spawnedArgv": argv,
+        "engineBinary": shutil.which(argv[0]) or "/bin/true",
+        "timeout": 5,
+        "retryTimeout": 5,
+        "orderId": order_id,
+        "runNonce": run_nonce,
+        "worktreeLeaseToken": lease_token,
+        "worktreeLeaseHolder": lease_holder,
+        "worktreeSnapshot": list(snapshot or ED._worktree_snapshot(linked)),
+        "completedAttempts": completed,
+        "inFlightAttempt": in_flight,
+        "attemptStartedAt": time.time() - 5,
+        "supervisorPid": supervisor_pid,
+        "supervisorStart": supervisor_start,
+        "promptPath": str(run_dir / "prompt.txt"),
+        "fedPrompt": "build\n",
+        "promptSha256": hashlib.sha256(prompt_bytes).hexdigest(),
+    }
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    return state
+
+
+def test_x2_forged_completion_does_not_release_or_retry(tmp_path):
+    """Forged run-dir .done without ledger completion ⇒ still running, lease held."""
+    import hashlib
+    main, linked = _linked_pair(tmp_path)
+    run_dir = tmp_path / "x2-forged-done"
+    run_dir.mkdir(mode=0o700)
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(
+        os.path.realpath(linked))
+    state = _x2_write_state(
+        tmp_path, linked, order_id="x2-fg-o", run_nonce="x2-fg-n",
+        lease_token=lease_token, lease_holder=lease_holder, run_dir=run_dir,
+        supervisor_pid=999999991, supervisor_start="not-real")
+    # Seal intent + launch but NOT completion — attempt genuinely pending.
+    _persist_test_authority(run_dir, state)
+    _seal_test_launch(run_dir, 1, state)
+    auth_hash = state["authorityHash"]
+    (run_dir / "attempt-1.done").write_text(json.dumps({
+        "exit": 0, "timedOut": False, "runNonce": "x2-fg-n",
+        "authorityHash": auth_hash, "endedAt": time.time(),
+        "refusal": None,
+    }), encoding="utf-8")
+    (run_dir / "attempt-1.stdout").write_text(_WRITE_OK_STDOUT, encoding="utf-8")
+    (run_dir / "attempt-1.stderr").write_text("", encoding="utf-8")
+    assert ED._ledger_attempt_complete(
+        os.path.realpath(str(run_dir)), 1, auth_hash, "x2-fg-n") is None
+    res = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=_prompt(tmp_path), cwd=linked, order_id="x2-fg-o",
+        run_engine=FakeWriteRunner([]), max_wait=0, run_dir=str(run_dir),
+    )
+    assert res.get("terminal") is False, res
+    assert res.get("running") is True or not res.get("ok"), res
+    assert not (run_dir / "result.json").is_file()
+    assert _lease_held_for(linked)
+    ED._release_worktree_lease_for_cwd(
+        os.path.realpath(linked), lease_token, lease_holder)
+
+
+def test_x2_genuine_completion_still_folds(tmp_path):
+    """Same scenario with ledger completion present folds normally."""
+    main, linked = _linked_pair(tmp_path)
+    run_dir = tmp_path / "x2-genuine-done"
+    run_dir.mkdir(mode=0o700)
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(
+        os.path.realpath(linked))
+    state = _x2_write_state(
+        tmp_path, linked, order_id="x2-gn-o", run_nonce="x2-gn-n",
+        lease_token=lease_token, lease_holder=lease_holder, run_dir=run_dir,
+        supervisor_pid=999999992, supervisor_start="injected-dead-supervisor")
+    (run_dir / "attempt-1.done").write_text(json.dumps({
+        "exit": 0, "timedOut": False, "runNonce": "x2-gn-n",
+        "endedAt": time.time(),
+    }), encoding="utf-8")
+    (run_dir / "attempt-1.stdout").write_text(_WRITE_OK_STDOUT, encoding="utf-8")
+    (run_dir / "attempt-1.stderr").write_text("", encoding="utf-8")
+    _bind_inflight(run_dir, state)
+    res = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=_prompt(tmp_path), cwd=linked, order_id="x2-gn-o",
+        run_engine=FakeWriteRunner([]), max_wait=60, run_dir=str(run_dir),
+    )
+    assert res.get("ok") is True, res
+    assert res.get("terminal") is True
+    assert res.get("attempts") == 1
+
+
+def test_x2_retry_liveness_from_ledger_claim(tmp_path):
+    """state.json dead-looking pid cannot authorise retry when ledger claim is live."""
+    main, linked = _linked_pair(tmp_path)
+    run_dir = tmp_path / "x2-live-claim"
+    run_dir.mkdir(mode=0o700)
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(
+        os.path.realpath(linked))
+    holder = subprocess.Popen(
+        ["python3", "-c", "import time; time.sleep(120)"],
+        start_new_session=True,
+    )
+    try:
+        state = _x2_write_state(
+            tmp_path, linked, order_id="x2-lv-o", run_nonce="x2-lv-n",
+            lease_token=lease_token, lease_holder=lease_holder, run_dir=run_dir,
+            in_flight=None, completed=1,
+            # Dead-looking state fields — must NOT authorise retry.
+            supervisor_pid=999999993,
+            supervisor_start="injected-dead-supervisor")
+        state["completedAttemptSupervisorPid"] = 999999993
+        state["pendingTerminal"] = "forfeited"
+        (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+        (run_dir / "attempt-1.done").write_text(json.dumps({
+            "exit": None, "timedOut": True, "runNonce": "x2-lv-n",
+            "endedAt": time.time(),
+        }), encoding="utf-8")
+        (run_dir / "attempt-1.stdout").write_text("", encoding="utf-8")
+        (run_dir / "attempt-1.stderr").write_text("", encoding="utf-8")
+        # Bind with live claim pid (disagreeing with state).
+        state["supervisorPid"] = holder.pid
+        state["supervisorStart"] = ED._supervisor_lstart(holder.pid) or "live"
+        _bind_inflight(run_dir, state, attempt=1)
+        # Put dead-looking values back into state receipt.
+        st = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+        st["completedAttemptSupervisorPid"] = 999999993
+        st["supervisorPid"] = 999999993
+        st["supervisorStart"] = "injected-dead-supervisor"
+        st["inFlightAttempt"] = None
+        st["completedAttempts"] = 1
+        st["pendingTerminal"] = "forfeited"
+        (run_dir / "state.json").write_text(json.dumps(st), encoding="utf-8")
+        assert ED._process_alive(holder.pid) is True
+        res = ED.dispatch_write(
+            "codex", engine_model="gpt-5.6-terra", effort="high",
+            prompt_path=_prompt(tmp_path), cwd=linked, order_id="x2-lv-o",
+            run_engine=FakeWriteRunner([]), max_wait=60, run_dir=str(run_dir),
+        )
+        assert res["terminal"] is True, res
+        assert res["detail"] == "retry-unsafe-attempt-still-live"
+        assert res["forfeited"] is True
+    finally:
+        try:
+            os.killpg(holder.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            holder.wait(timeout=2)
+        except Exception:
+            pass
+        ED._release_worktree_lease_for_cwd(
+            os.path.realpath(linked), lease_token, lease_holder)
+
+
+def test_x2_retry_snapshot_from_ledger_intent(tmp_path):
+    """Rewriting state worktreeSnapshot cannot authorise a dirty-worktree retry."""
+    main, linked = _linked_pair(tmp_path)
+    run_dir = tmp_path / "x2-snap"
+    run_dir.mkdir(mode=0o700)
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(
+        os.path.realpath(linked))
+    snap_before = list(ED._worktree_snapshot(linked))
+    # completedAttempts=0 so resume-fold processes the sealed completion and
+    # hits the in-flight dirty-worktree gate (ledger intent snapshot wins).
+    state = _x2_write_state(
+        tmp_path, linked, order_id="x2-sn-o", run_nonce="x2-sn-n",
+        lease_token=lease_token, lease_holder=lease_holder, run_dir=run_dir,
+        in_flight=1, completed=0,
+        supervisor_pid=999999994, supervisor_start="injected-dead-supervisor",
+        snapshot=snap_before)
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    (run_dir / "attempt-1.done").write_text(json.dumps({
+        "exit": None, "timedOut": True, "runNonce": "x2-sn-n",
+        "endedAt": time.time(),
+    }), encoding="utf-8")
+    (run_dir / "attempt-1.stdout").write_text("", encoding="utf-8")
+    (run_dir / "attempt-1.stderr").write_text("", encoding="utf-8")
+    _bind_inflight(run_dir, state, attempt=1)
+    dirty = os.path.join(linked, "x2-dirty.txt")
+    with open(dirty, "w", encoding="utf-8") as fh:
+        fh.write("mutated\n")
+    snap_after = list(ED._worktree_snapshot(linked))
+    assert snap_after != snap_before
+    st = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    st["worktreeSnapshot"] = snap_after  # forged to match current — must not win
+    st["inFlightAttempt"] = 1
+    st["completedAttempts"] = 0
+    st["supervisorPid"] = 999999994
+    st["supervisorStart"] = "injected-dead-supervisor"
+    (run_dir / "state.json").write_text(json.dumps(st), encoding="utf-8")
+    res = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=_prompt(tmp_path), cwd=linked, order_id="x2-sn-o",
+        run_engine=FakeWriteRunner([]), max_wait=60, run_dir=str(run_dir),
+    )
+    assert res["terminal"] is True, res
+    assert res["detail"] == "retry-unsafe-dirty-worktree"
+    ED._release_worktree_lease_for_cwd(
+        os.path.realpath(linked), lease_token, lease_holder)
+
+
+def test_x2_forged_inflight_cannot_release_lease(tmp_path):
+    """Forged state inFlightAttempt must not drive compensation / lease release."""
+    main, linked = _linked_pair(tmp_path)
+    run_dir = tmp_path / "x2-forged-if"
+    run_dir.mkdir(mode=0o700)
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(
+        os.path.realpath(linked))
+    state = _x2_write_state(
+        tmp_path, linked, order_id="x2-if-o", run_nonce="x2-if-n",
+        lease_token=lease_token, lease_holder=lease_holder, run_dir=run_dir,
+        in_flight=99,  # invalid forged value
+        supervisor_pid=999999995, supervisor_start="not-real")
+    _persist_test_authority(run_dir, state)
+    _seal_test_launch(run_dir, 1, state)  # real pending attempt 1
+    # Confirm pending comes from ledger, not forged state.
+    auth_hash = state["authorityHash"]
+    pending, _ = ED._find_pending_launch(
+        os.path.realpath(str(run_dir)), auth_hash, "x2-if-n")
+    assert pending == 1
+    res = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=_prompt(tmp_path), cwd=linked, order_id="x2-if-o",
+        run_engine=FakeWriteRunner([]), max_wait=0, run_dir=str(run_dir),
+    )
+    assert res.get("terminal") is False, res
+    assert _lease_held_for(linked)
+    assert not (run_dir / "result.json").is_file()
+    ED._release_worktree_lease_for_cwd(
+        os.path.realpath(linked), lease_token, lease_holder)
+
+
+def test_x2_timeout_cannot_be_widened(tmp_path, monkeypatch):
+    """Forged launch.json timeout ⇒ launch-timeout-mismatch; no engine."""
+    main, linked = _linked_pair(tmp_path)
+    run_dir = tmp_path / "x2-timeout"
+    run_dir.mkdir(mode=0o700)
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(
+        os.path.realpath(linked))
+    state = _x2_write_state(
+        tmp_path, linked, order_id="x2-to-o", run_nonce="x2-to-n",
+        lease_token=lease_token, lease_holder=lease_holder, run_dir=run_dir)
+    authority = _persist_test_authority(run_dir, state)
+    auth_hash = state["authorityHash"]
+    _seal_test_launch(run_dir, 1, state)
+    # Recreate launch.json with widened timeout.
+    forged = {
+        "attempt": 1,
+        "authorityHash": auth_hash,
+        "runNonce": "x2-to-n",
+        "orderId": "x2-to-o",
+        "runKind": ED.RUN_KIND_WRITE,
+        "timeout": 99999,
+    }
+    launch_path = os.path.join(str(run_dir), "attempt-1.launch.json")
+    os.chmod(launch_path, 0o600)
+    open(launch_path, "w", encoding="utf-8").write(json.dumps(forged))
+    os.chmod(launch_path, 0o400)
+    engine_calls = []
+
+    def _no_engine(*a, **k):
+        engine_calls.append(1)
+        raise AssertionError("engine must not run")
+
+    monkeypatch.setattr(ED, "_run_engine_files", _no_engine)
+    rc = _invoke_run_child(run_dir, 1, state)
+    assert rc == 4
+    assert engine_calls == []
+    done = json.loads((run_dir / "attempt-1.done").read_text(encoding="utf-8"))
+    assert done.get("refusal") == "launch-timeout-mismatch"
+    ED._release_worktree_lease_for_cwd(
+        os.path.realpath(linked), lease_token, lease_holder)
+
+
+def test_x2_prompt_swap_refused_and_happy_path_feeds_bytes(tmp_path, monkeypatch):
+    """Swapped prompt.txt ⇒ prompt-digest-mismatch; matching path feeds prompt_bytes."""
+    main, linked = _linked_pair(tmp_path)
+    sealed_bytes = b"sealed-prompt-bytes\n"
+    digest = hashlib.sha256(sealed_bytes).hexdigest()
+
+    run_dir = tmp_path / "x2-prompt"
+    run_dir.mkdir(mode=0o700)
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(
+        os.path.realpath(linked))
+    state = _x2_write_state(
+        tmp_path, linked, order_id="x2-pr-o", run_nonce="x2-pr-n",
+        lease_token=lease_token, lease_holder=lease_holder, run_dir=run_dir)
+    state["promptSha256"] = digest
+    state["fedPrompt"] = sealed_bytes.decode("utf-8")
+    (run_dir / "prompt.txt").write_bytes(sealed_bytes)
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    _persist_test_authority(run_dir, state)
+    _seal_test_launch(run_dir, 1, state)
+
+    (run_dir / "prompt.txt").write_bytes(b"ATTACKER-PROMPT\n")
+    engine_calls = []
+
+    def _no_engine(*a, **k):
+        engine_calls.append(1)
+        raise AssertionError("engine must not run on digest mismatch")
+
+    monkeypatch.setattr(ED, "_run_engine_files", _no_engine)
+    rc = _invoke_run_child(run_dir, 1, state)
+    assert rc == 4
+    assert engine_calls == []
+    done = json.loads((run_dir / "attempt-1.done").read_text(encoding="utf-8"))
+    assert done.get("refusal") == "prompt-digest-mismatch"
+    ED._release_worktree_lease_for_cwd(
+        os.path.realpath(linked), lease_token, lease_holder)
+
+    run_dir2 = tmp_path / "x2-prompt-ok"
+    run_dir2.mkdir(mode=0o700)
+    lease_token2, lease_holder2 = ED._acquire_worktree_lease_for_cwd(
+        os.path.realpath(linked))
+    state2 = _x2_write_state(
+        tmp_path, linked, order_id="x2-pr2-o", run_nonce="x2-pr2-n",
+        lease_token=lease_token2, lease_holder=lease_holder2, run_dir=run_dir2)
+    state2["promptSha256"] = digest
+    state2["fedPrompt"] = sealed_bytes.decode("utf-8")
+    (run_dir2 / "prompt.txt").write_bytes(sealed_bytes)
+    (run_dir2 / "state.json").write_text(json.dumps(state2), encoding="utf-8")
+    _persist_test_authority(run_dir2, state2)
+    _seal_test_launch(run_dir2, 1, state2)
+    seen = {}
+
+    def _capture_engine(argv, prompt_path, stdout_path, stderr_path, timeout,
+                        progress_path, attempt, cwd, env=None, engine_pgid_path=None,
+                        authority=None, authority_hash=None, prompt_bytes=None):
+        seen["prompt_bytes"] = prompt_bytes
+        open(stdout_path, "wb").write(_WRITE_OK_STDOUT.encode("utf-8"))
+        open(stderr_path, "wb").write(b"")
+        return {"exit": 0, "timedOut": False, "signal": None,
+                "endedAt": time.time(), "refusal": None}
+
+    monkeypatch.setattr(ED, "_run_engine_files", _capture_engine)
+    rc2 = _invoke_run_child(run_dir2, 1, state2)
+    assert rc2 == 0, (rc2, seen)
+    assert seen.get("prompt_bytes") == sealed_bytes
+    ED._release_worktree_lease_for_cwd(
+        os.path.realpath(linked), lease_token2, lease_holder2)
+
+
+def test_x2_double_claim_second_exits_without_engine(tmp_path, monkeypatch):
+    """Second run-child on same pending attempt exits 2, no sentinel, no engine."""
+    main, linked = _linked_pair(tmp_path)
+    run_dir = tmp_path / "x2-dbl"
+    run_dir.mkdir(mode=0o700)
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(
+        os.path.realpath(linked))
+    state = _x2_write_state(
+        tmp_path, linked, order_id="x2-db-o", run_nonce="x2-db-n",
+        lease_token=lease_token, lease_holder=lease_holder, run_dir=run_dir)
+    _persist_test_authority(run_dir, state)
+    _seal_test_launch(run_dir, 1, state)
+    engine_calls = []
+
+    def _slow_engine(*a, **k):
+        engine_calls.append(1)
+        time.sleep(0.3)
+        return {"exit": 0, "timedOut": False, "signal": None,
+                "endedAt": time.time(), "refusal": None}
+
+    monkeypatch.setattr(ED, "_run_engine_files", _slow_engine)
+    real = os.path.realpath(str(run_dir))
+    auth_hash = state["authorityHash"]
+    # First claim succeeds; second run-child entry must refuse.
+    assert ED._ledger_claim_attempt(real, 1, auth_hash, "x2-db-n") is True
+    engine_calls.clear()
+    rc2 = ED._run_child_entry(real)
+    assert rc2 == 2
+    assert engine_calls == []
+    assert not (run_dir / "attempt-1.done").is_file()
+    ED._release_worktree_lease_for_cwd(
+        os.path.realpath(linked), lease_token, lease_holder)
+
+
+def test_x2_legacy_authority_without_prompt_sha256(tmp_path, monkeypatch):
+    """Legacy sealed authority missing prompt_sha256 parses and runs without refusal."""
+    main, linked = _linked_pair(tmp_path)
+    run_dir = tmp_path / "x2-legacy"
+    run_dir.mkdir(mode=0o700)
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(
+        os.path.realpath(linked))
+    (run_dir / "prompt.txt").write_bytes(b"legacy-prompt\n")
+    state = _x2_write_state(
+        tmp_path, linked, order_id="x2-lg-o", run_nonce="x2-lg-n",
+        lease_token=lease_token, lease_holder=lease_holder, run_dir=run_dir)
+    state.pop("promptSha256", None)
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    authority = _authority_from_state(run_dir, state)
+    # Force prompt_sha256=None on the sealed file.
+    from dataclasses import fields as dc_fields
+    kwargs = {f.name: getattr(authority, f.name) for f in dc_fields(authority)}
+    kwargs["prompt_sha256"] = None
+    authority = ED.LaunchAuthority(**kwargs)
+    auth_hash = ED._persist_authority(authority)
+    state["authorityHash"] = auth_hash
+    ED._ledger_init(authority, auth_hash)
+    _seal_test_launch(run_dir, 1, state)
+    # Swap prompt — legacy must NOT refuse on digest.
+    (run_dir / "prompt.txt").write_bytes(b"swapped-legacy\n")
+    seen = {}
+
+    def _capture(argv, prompt_path, stdout_path, stderr_path, timeout,
+                 progress_path, attempt, cwd, env=None, engine_pgid_path=None,
+                 authority=None, authority_hash=None, prompt_bytes=None):
+        seen["prompt_bytes"] = prompt_bytes
+        open(stdout_path, "wb").write(b"ok")
+        open(stderr_path, "wb").write(b"")
+        return {"exit": 0, "timedOut": False, "signal": None,
+                "endedAt": time.time(), "refusal": None}
+
+    monkeypatch.setattr(ED, "_run_engine_files", _capture)
+    rc = _invoke_run_child(run_dir, 1, state)
+    assert rc == 0
+    # Legacy path: prompt_bytes is None (path-based open).
+    assert seen.get("prompt_bytes") is None
+    loaded = ED._load_authority(os.path.realpath(str(run_dir)))
+    assert loaded is not None
+    assert loaded.prompt_sha256 is None
+    ED._release_worktree_lease_for_cwd(
+        os.path.realpath(linked), lease_token, lease_holder)
