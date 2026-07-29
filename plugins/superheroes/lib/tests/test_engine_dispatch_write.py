@@ -136,22 +136,73 @@ def test_dispatch_write_body_uses_build_role_literal():
     pytest.fail("role_kind = build literal not found in _dispatch_write_impl")
 
 
-def test_write_argv_sweep_from_registry():
+def _assert_write_workspace_argv(argv, engine):
+    if engine == "codex":
+        assert "--sandbox" in argv
+        idx = argv.index("--sandbox")
+        assert argv[idx + 1] == "workspace-write"
+        assert "read-only" not in argv
+        assert "--output-schema" not in argv
+    else:
+        assert "-f" in argv
+        assert "--mode" not in argv or argv[argv.index("--mode") + 1] != "plan"
+
+
+def test_build_argv_sweep_workspace_write_from_registry():
+    """Builder-level: argv shape when role_kind is explicitly build."""
     for engine, model_id, effort in _write_argv_combinations():
         opts = {"engine_model": model_id, "cwd": "/tmp"}
         built = EA.build_argv_result(engine, "build", effort, opts)
         assert built.get("reason") is None, (engine, model_id, effort, built)
         argv = built["argv"]
         assert argv[0] in ("codex", "cursor-agent")
-        if engine == "codex":
-            assert "--sandbox" in argv
-            idx = argv.index("--sandbox")
-            assert argv[idx + 1] == "workspace-write"
-            assert "read-only" not in argv
-            assert "--output-schema" not in argv
-        else:
-            assert "-f" in argv
-            assert "--mode" not in argv or argv[argv.index("--mode") + 1] != "plan"
+        _assert_write_workspace_argv(argv, engine)
+
+
+_WRITE_OK_STDOUT = json.dumps({"ok": True, "signal": "ok", "evidence": {}})
+
+
+def test_dispatch_write_argv_sweep_reports_workspace_write(tmp_path):
+    """Write API end-to-end: dispatch_write must emit workspace-write argv, not read-only."""
+    main, linked = _linked_pair(tmp_path)
+    prompt = _prompt(tmp_path)
+    for i, (engine, model_id, effort) in enumerate(_write_argv_combinations()):
+        run_dir = tmp_path / "write-sweep" / str(i)
+        run_dir.mkdir(parents=True)
+        fake = FakeWriteRunner([(_WRITE_OK_STDOUT, False, 0, "")])
+        res = ED.dispatch_write(
+            engine,
+            engine_model=model_id,
+            effort=effort,
+            prompt_path=prompt,
+            cwd=linked,
+            order_id="write-sweep-%d" % i,
+            run_engine=fake,
+            max_wait=60,
+            run_dir=str(run_dir),
+        )
+        assert res.get("ok") is True, (engine, model_id, effort, res)
+        assert len(fake.calls) == 1
+        _assert_spawned_argv_pair(res)
+        assert res["argv"][0] in ("codex", "cursor-agent")
+        _assert_write_workspace_argv(res["argv"], engine)
+        _assert_write_workspace_argv(res["spawnedArgv"], engine)
+        _assert_write_workspace_argv(fake.calls[0]["argv"], engine)
+
+
+def _review_argv_combinations():
+    combos = []
+    for engine in ("codex", "cursor"):
+        for model in MR.known_claude_models():
+            if model == "fable":
+                continue
+            for effort in MR._EFFORT_ENUM[engine]:
+                if effort in MR.OVERRIDE_ONLY_EFFORTS.get(engine, ()):
+                    continue
+                built = EA.build_argv_result(engine, "review", effort, {"model": model})
+                if built.get("reason") is None:
+                    combos.append((engine, model, effort))
+    return combos
 
 
 def test_review_argv_never_workspace_write():
@@ -550,6 +601,34 @@ def test_dispatch_review_spawned_argv_echo(tmp_path):
     state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
     assert state["argv"] == res["argv"]
     assert state["spawnedArgv"] == res["spawnedArgv"]
+
+
+def test_dispatch_review_argv_never_workspace_write(tmp_path):
+    """Review API end-to-end: dispatch_review argv must not carry workspace-write."""
+    repo_root = _review_repo(tmp_path)
+    build_view = _fake_review_build_view(tmp_path)
+    prompt = _prompt(tmp_path)
+    for i, (engine, model, effort) in enumerate(_review_argv_combinations()):
+        run_dir = tmp_path / "review-sweep" / str(i)
+        run_dir.mkdir(parents=True)
+        fake = _ReviewFakeRunner([(_VALID_REVIEW_STDOUT, False, 0, "")])
+        res = ED.dispatch_review(
+            engine,
+            model=model,
+            effort=effort,
+            prompt_path=prompt,
+            repo_root=repo_root,
+            run_engine=fake,
+            build_view=build_view,
+            run_dir=str(run_dir),
+            max_wait=60,
+        )
+        assert res.get("ok") is True, (engine, model, effort, res)
+        assert len(fake.calls) == 1
+        _assert_spawned_argv_pair(res)
+        assert "workspace-write" not in res["argv"]
+        assert "workspace-write" not in res["spawnedArgv"]
+        assert "workspace-write" not in fake.calls[0]["argv"]
 
 
 def test_run_child_rejects_argv_drift_review(tmp_path):
