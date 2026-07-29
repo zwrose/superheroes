@@ -2545,6 +2545,14 @@ def test_e2e_a4_poll_no_spawn_absent_attempt2_artifacts(tmp_path, monkeypatch):
     prompt = _prompt(tmp_path)
     run_dir = tmp_path / "a4-poll"
     run_dir.mkdir(mode=0o700)
+    spawned = []
+    real_spawn = ED._spawn_run_child
+
+    def _track_spawn(*a, **k):
+        spawned.append((a, k))
+        return real_spawn(*a, **k)
+
+    monkeypatch.setattr(ED, "_spawn_run_child", _track_spawn)
     first = ED.dispatch_write(
         "codex", engine_model="gpt-5.6-terra", effort="high",
         prompt_path=prompt, cwd=linked, order_id="a4-o",
@@ -2557,13 +2565,23 @@ def test_e2e_a4_poll_no_spawn_absent_attempt2_artifacts(tmp_path, monkeypatch):
             break
         time.sleep(0.25)
     assert os.path.isfile(paths1["done"])
+    spawns_before_poll = len(spawned)
     poll = ED.dispatch_poll(str(run_dir), max_wait=5, order_id="a4-o")
     assert poll.get("terminal") is False, poll
     assert ED.RETRY_PENDING_DETAIL in (poll.get("detail") or ""), poll
+    assert len(spawned) == spawns_before_poll, (
+        "dispatch_poll must not call _spawn_run_child (spawned=%s)" % spawned)
+    assert not any(
+        (a[1] if len(a) > 1 else None) == 2 for a, _k in spawned), spawned
     assert not (run_dir / "attempt-2.stdout").exists()
     assert not (run_dir / "attempt-2.stderr").exists()
     assert not (run_dir / "attempt-2.done").exists()
-    assert not (run_dir / "attempt-2.supervisor").exists()
+    # Real artifact name from _attempt_paths — not the nonexistent attempt-2.supervisor.
+    assert not (run_dir / "supervisor-2.log").exists()
+    assert not (run_dir / "attempt-2.launch.json").exists()
+    intent2 = ED._ledger_attempt_path(
+        os.path.realpath(str(run_dir)), 2, "intent")
+    assert intent2 is None or not os.path.isfile(intent2), intent2
     assert not list(run_dir.glob(".retry-parent-probe.*"))
     marker = Path(linked) / ".fake-codex-invokes"
     # Attempt 1 may have started the stub; attempt 2 must not.
@@ -3659,5 +3677,376 @@ def test_x2_legacy_authority_without_prompt_sha256(tmp_path, monkeypatch):
     loaded = ED._load_authority(os.path.realpath(str(run_dir)))
     assert loaded is not None
     assert loaded.prompt_sha256 is None
+    ED._release_worktree_lease_for_cwd(
+        os.path.realpath(linked), lease_token, lease_holder)
+
+
+# --- WO-702-X3: mechanism bite tests ---
+
+
+def test_x3_run_child_parser_option_a_only_run_dir(monkeypatch):
+    """Option A: run-child user actions are exactly --run-dir (+ -h/--help).
+
+    Builds the CLI parser via engine_dispatch.main's argparse construction and
+    introspects the run-child subparser. Retired authority-bearing flags must
+    fail to parse.
+    """
+    import argparse
+
+    hold = {}
+
+    class _StopAfterParse(Exception):
+        pass
+
+    real_parse_args = argparse.ArgumentParser.parse_args
+
+    def spy_parse_args(self, args=None, namespace=None):
+        hold["root"] = self
+        hold["ns"] = real_parse_args(self, args, namespace)
+        raise _StopAfterParse()
+
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", spy_parse_args)
+    with pytest.raises(_StopAfterParse):
+        ED.main(["run-child", "--run-dir", "/tmp/x3-rc-parser"])
+    root = hold["root"]
+    rc = None
+    for action in root._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            rc = action.choices.get("run-child")
+            break
+    assert rc is not None, "run-child subparser missing from main()"
+    option_strings = set()
+    for action in rc._actions:
+        option_strings.update(action.option_strings)
+    assert option_strings == {"--run-dir", "-h", "--help"}, option_strings
+    # Representative retired flags must fail to parse on the run-child surface.
+    # Restore real parse_args so SystemExit comes from argparse error handling.
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", real_parse_args)
+    for retired in (
+            ["--run-dir", "/tmp/x", "--attempt", "1"],
+            ["--run-dir", "/tmp/x", "--launch-cwd", "/tmp/y"],
+            ["--run-dir", "/tmp/x", "--authority-hash", "0" * 64],
+    ):
+        with pytest.raises(SystemExit) as exc:
+            rc.parse_args(retired)
+        assert exc.value.code == 2
+
+
+def test_x3_bite_fold_verification_refuses_swapped_authority(tmp_path):
+    """Bite 1: fold verification via _load_verified_authority / fold path.
+
+    Swapped sealed authority must refuse with AUTHORITY_HASH_MISMATCH. Neutralizing
+    _load_verified_authority to return authority unconditionally must break this.
+    """
+    main, linked = _linked_pair(tmp_path)
+    run_dir, authority, auth_hash, argv = _setup_write_fold_ready(
+        tmp_path, linked, order_id="x3-fold-bite")
+    _swap_sealed_authority(
+        run_dir, authority, effort="low", fed_prompt="forged-for-fold-bite")
+    assert ED._authority_file_hash(str(run_dir)) != auth_hash
+    result = ED._fold_terminal_write(
+        str(run_dir), authority, argv, {"engine": "codex"}, "success",
+        {"ok": True, "signal": "ok", "evidence": {}}, 1,
+        authority_hash=auth_hash,
+    )
+    assert result.get("ok") is False, result
+    assert result.get("detail") == ED.AUTHORITY_HASH_MISMATCH, result
+    assert result.get("reason") == "unrunnable", result
+    on_disk = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
+    assert on_disk.get("ok") is not True
+    assert on_disk.get("detail") == ED.AUTHORITY_HASH_MISMATCH
+
+
+def test_x3_bite_ledger_hash_poll_abandon_refuse_state_substitution(
+        tmp_path, monkeypatch):
+    """Bite 2: ledger-sourced reference on poll + abandon (not the X1 write path).
+
+    Forging launch-authority.json + state.authorityHash while the ledger still
+    holds the real hash must make dispatch_poll and dispatch_abandon refuse.
+    Replacing _ledger_expected_hash's result with state['authorityHash'] must
+    break this test.
+    """
+    main, linked = _linked_pair(tmp_path)
+    _install_fake_codex_on_path(monkeypatch, tmp_path, slow_first_seconds=60)
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "x3-led-hash"
+    run_dir.mkdir(mode=0o700)
+    first = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="x3-led-hash",
+        run_engine=ED._run_engine, max_wait=1, timeout=30, run_dir=str(run_dir),
+    )
+    assert first.get("running") is True, first
+    assert _lease_held_for(linked)
+    authority = ED._load_authority(str(run_dir))
+    assert authority is not None
+    ledger_hash = ED._ledger_expected_hash(
+        os.path.realpath(str(run_dir)), authority.run_nonce, authority.order_id)
+    assert ledger_hash
+    new_hash, _swapped = _swap_sealed_authority(
+        run_dir, authority, effort="low", fed_prompt="forged-prompt-x3")
+    assert new_hash != ledger_hash
+    state_path = run_dir / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["authorityHash"] = new_hash
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    # Ledger on disk still names the pre-forge hash (read the record directly —
+    # do not call _ledger_expected_hash here; that is the mechanism under bite).
+    led_path = ED._ledger_run_record_path(os.path.realpath(str(run_dir)))
+    led = json.loads(open(led_path, "rb").read().decode("utf-8"))
+    assert led.get("authorityHash") == ledger_hash
+
+    poll = ED.dispatch_poll(str(run_dir), max_wait=1, order_id="x3-led-hash")
+    assert poll.get("terminal") is True, poll
+    assert poll.get("detail") == ED.AUTHORITY_HASH_MISMATCH, poll
+    assert _lease_held_for(linked)
+
+    abandon = ED.dispatch_abandon(str(run_dir))
+    assert abandon.get("terminal") is True, abandon
+    assert abandon.get("reason") == ED.ABANDON_INCOMPLETE, abandon
+    assert abandon.get("detail") == ED.AUTHORITY_HASH_MISMATCH, abandon
+    assert _lease_held_for(linked)
+
+
+def test_x3_bite_ledger_completion_not_run_dir_done(tmp_path):
+    """Bite 3: _ledger_attempt_complete gates completion — not the .done sentinel.
+
+    Forged run-dir .done without a ledger completion must keep the run non-terminal
+    with the lease held. Making _completed_attempts_from_seals / _find_pending_launch
+    trust .done again must break this.
+    """
+    main, linked = _linked_pair(tmp_path)
+    run_dir = tmp_path / "x3-done-bite"
+    run_dir.mkdir(mode=0o700)
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(
+        os.path.realpath(linked))
+    state = _x2_write_state(
+        tmp_path, linked, order_id="x3-done-o", run_nonce="x3-done-n",
+        lease_token=lease_token, lease_holder=lease_holder, run_dir=run_dir,
+        supervisor_pid=999999981, supervisor_start="not-real")
+    _persist_test_authority(run_dir, state)
+    _seal_test_launch(run_dir, 1, state)
+    auth_hash = state["authorityHash"]
+    (run_dir / "attempt-1.done").write_text(json.dumps({
+        "exit": 0, "timedOut": False, "runNonce": "x3-done-n",
+        "authorityHash": auth_hash, "endedAt": time.time(),
+        "refusal": None,
+    }), encoding="utf-8")
+    (run_dir / "attempt-1.stdout").write_text(_WRITE_OK_STDOUT, encoding="utf-8")
+    (run_dir / "attempt-1.stderr").write_text("", encoding="utf-8")
+    assert ED._ledger_attempt_complete(
+        os.path.realpath(str(run_dir)), 1, auth_hash, "x3-done-n") is None
+    pending, _ = ED._find_pending_launch(
+        os.path.realpath(str(run_dir)), auth_hash, "x3-done-n")
+    assert pending == 1
+    assert ED._completed_attempts_from_seals(
+        os.path.realpath(str(run_dir)), auth_hash, "x3-done-n") == 0
+    res = ED.dispatch_poll(str(run_dir), max_wait=0, order_id="x3-done-o")
+    assert res.get("terminal") is False, res
+    assert res.get("running") is True or not res.get("ok"), res
+    assert not (run_dir / "result.json").is_file()
+    assert _lease_held_for(linked)
+    ED._release_worktree_lease_for_cwd(
+        os.path.realpath(linked), lease_token, lease_holder)
+
+
+def test_x3_bite_oneshot_claim_second_refuses(tmp_path, monkeypatch):
+    """Bite 4: _ledger_claim_attempt one-shot — second run-child exits 2, no engine.
+
+    Making _ledger_claim_attempt always return True must break this.
+    """
+    main, linked = _linked_pair(tmp_path)
+    run_dir = tmp_path / "x3-claim-bite"
+    run_dir.mkdir(mode=0o700)
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(
+        os.path.realpath(linked))
+    state = _x2_write_state(
+        tmp_path, linked, order_id="x3-cl-o", run_nonce="x3-cl-n",
+        lease_token=lease_token, lease_holder=lease_holder, run_dir=run_dir)
+    _persist_test_authority(run_dir, state)
+    _seal_test_launch(run_dir, 1, state)
+    engine_calls = []
+
+    def _no_engine(*a, **k):
+        engine_calls.append(1)
+        raise AssertionError("engine must not run on second claim")
+
+    monkeypatch.setattr(ED, "_run_engine_files", _no_engine)
+    real = os.path.realpath(str(run_dir))
+    auth_hash = state["authorityHash"]
+    assert ED._ledger_claim_attempt(real, 1, auth_hash, "x3-cl-n") is True
+    engine_calls.clear()
+    rc2 = ED._run_child_entry(real)
+    assert rc2 == 2
+    assert engine_calls == []
+    assert not (run_dir / "attempt-1.done").is_file()
+    ED._release_worktree_lease_for_cwd(
+        os.path.realpath(linked), lease_token, lease_holder)
+
+
+def test_x3_bite_prompt_digest_mismatch_refuses(tmp_path, monkeypatch):
+    """Bite 5: prompt-digest-mismatch refusal on swapped prompt.txt.
+
+    Making the digest check unconditional-pass must break this.
+    """
+    main, linked = _linked_pair(tmp_path)
+    sealed_bytes = b"x3-sealed-prompt\n"
+    digest = hashlib.sha256(sealed_bytes).hexdigest()
+    run_dir = tmp_path / "x3-prompt-bite"
+    run_dir.mkdir(mode=0o700)
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(
+        os.path.realpath(linked))
+    state = _x2_write_state(
+        tmp_path, linked, order_id="x3-pr-o", run_nonce="x3-pr-n",
+        lease_token=lease_token, lease_holder=lease_holder, run_dir=run_dir)
+    state["promptSha256"] = digest
+    state["fedPrompt"] = sealed_bytes.decode("utf-8")
+    (run_dir / "prompt.txt").write_bytes(sealed_bytes)
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    _persist_test_authority(run_dir, state)
+    _seal_test_launch(run_dir, 1, state)
+    (run_dir / "prompt.txt").write_bytes(b"ATTACKER-X3-PROMPT\n")
+    engine_calls = []
+
+    def _no_engine(*a, **k):
+        engine_calls.append(1)
+        raise AssertionError("engine must not run on digest mismatch")
+
+    monkeypatch.setattr(ED, "_run_engine_files", _no_engine)
+    rc = _invoke_run_child(run_dir, 1, state)
+    assert rc == 4
+    assert engine_calls == []
+    done = json.loads((run_dir / "attempt-1.done").read_text(encoding="utf-8"))
+    assert done.get("refusal") == "prompt-digest-mismatch", done
+    ED._release_worktree_lease_for_cwd(
+        os.path.realpath(linked), lease_token, lease_holder)
+
+
+def test_x3_bite_launch_timeout_mismatch_refuses(tmp_path, monkeypatch):
+    """Bite 6: launch-timeout-mismatch when launch.json timeout is widened.
+
+    Accepting the launch record's timeout again must break this.
+    """
+    main, linked = _linked_pair(tmp_path)
+    run_dir = tmp_path / "x3-timeout-bite"
+    run_dir.mkdir(mode=0o700)
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(
+        os.path.realpath(linked))
+    state = _x2_write_state(
+        tmp_path, linked, order_id="x3-to-o", run_nonce="x3-to-n",
+        lease_token=lease_token, lease_holder=lease_holder, run_dir=run_dir)
+    _persist_test_authority(run_dir, state)
+    auth_hash = state["authorityHash"]
+    _seal_test_launch(run_dir, 1, state)
+    forged = {
+        "attempt": 1,
+        "authorityHash": auth_hash,
+        "runNonce": "x3-to-n",
+        "orderId": "x3-to-o",
+        "runKind": ED.RUN_KIND_WRITE,
+        "timeout": 99999,
+    }
+    launch_path = os.path.join(str(run_dir), "attempt-1.launch.json")
+    os.chmod(launch_path, 0o600)
+    open(launch_path, "w", encoding="utf-8").write(json.dumps(forged))
+    os.chmod(launch_path, 0o400)
+    # Also widen the ledger intent timeout so only the launch-vs-derived check
+    # (or a neutralized accept-launch path) is in play for the bite.
+    intent_path = ED._ledger_attempt_path(
+        os.path.realpath(str(run_dir)), 1, "intent")
+    intent = json.loads(open(intent_path, "rb").read().decode("utf-8"))
+    intent["timeout"] = 5  # keep intent matching authority-derived
+    os.chmod(intent_path, 0o600)
+    os.unlink(intent_path)
+    ED._ledger_seal(intent_path, intent)
+    engine_calls = []
+
+    def _no_engine(*a, **k):
+        engine_calls.append(1)
+        raise AssertionError("engine must not run on timeout mismatch")
+
+    monkeypatch.setattr(ED, "_run_engine_files", _no_engine)
+    rc = _invoke_run_child(run_dir, 1, state)
+    assert rc == 4
+    assert engine_calls == []
+    done = json.loads((run_dir / "attempt-1.done").read_text(encoding="utf-8"))
+    assert done.get("refusal") == "launch-timeout-mismatch", done
+    ED._release_worktree_lease_for_cwd(
+        os.path.realpath(linked), lease_token, lease_holder)
+
+
+def test_x3_bite_live_child_evidence_release_without_live(tmp_path):
+    """Bite 7a: _live_child_evidence False → lease released on completion-payload-absent.
+
+    Making _live_child_evidence always return (True, ...) must break this.
+    """
+    main, linked = _linked_pair(tmp_path)
+    run_dir = tmp_path / "x3-live-rel"
+    run_dir.mkdir(mode=0o700)
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(
+        os.path.realpath(linked))
+    state = _x2_write_state(
+        tmp_path, linked, order_id="x3-lr-o", run_nonce="x3-lr-n",
+        lease_token=lease_token, lease_holder=lease_holder, run_dir=run_dir,
+        in_flight=None, completed=0,
+        supervisor_pid=999999982, supervisor_start="dead-x3")
+    _persist_test_authority(run_dir, state)
+    auth_hash = state["authorityHash"]
+    run_real = os.path.realpath(str(run_dir))
+    ED._ledger_seal_attempt_intent(
+        run_real, 1, auth_hash, "x3-lr-n", 5, list(state["worktreeSnapshot"]))
+    ED._ledger_seal(ED._ledger_attempt_path(run_real, 1, "claim"), {
+        "schemaVersion": ED.LEDGER_SCHEMA_VERSION,
+        "attempt": 1,
+        "authorityHash": auth_hash,
+        "runNonce": "x3-lr-n",
+        "childPid": 999999982,
+        "childStart": "dead-x3",
+    })
+    ED._ledger_seal_attempt_complete(run_real, 1, auth_hash, "x3-lr-n")
+    assert not (run_dir / "attempt-1.done").is_file()
+    res = ED.dispatch_poll(str(run_dir), max_wait=0, order_id="x3-lr-o")
+    assert res.get("detail") == "completion-payload-absent", res
+    assert res.get("terminal") is True
+    assert not _lease_held_for(linked), "no live evidence ⇒ lease must release"
+
+
+def test_x3_bite_live_child_evidence_retain_on_live_claim(tmp_path):
+    """Bite 7b: _live_child_evidence True → lease retained on completion-payload-absent.
+
+    Making _live_child_evidence always return (False, None) must break this.
+    """
+    main, linked = _linked_pair(tmp_path)
+    run_dir = tmp_path / "x3-live-ret"
+    run_dir.mkdir(mode=0o700)
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(
+        os.path.realpath(linked))
+    live_pid = os.getpid()
+    state = _x2_write_state(
+        tmp_path, linked, order_id="x3-lt-o", run_nonce="x3-lt-n",
+        lease_token=lease_token, lease_holder=lease_holder, run_dir=run_dir,
+        in_flight=None, completed=0,
+        supervisor_pid=live_pid,
+        supervisor_start=ED._supervisor_lstart(live_pid) or "live")
+    _persist_test_authority(run_dir, state)
+    auth_hash = state["authorityHash"]
+    run_real = os.path.realpath(str(run_dir))
+    ED._ledger_seal_attempt_intent(
+        run_real, 1, auth_hash, "x3-lt-n", 5, list(state["worktreeSnapshot"]))
+    ED._ledger_seal(ED._ledger_attempt_path(run_real, 1, "claim"), {
+        "schemaVersion": ED.LEDGER_SCHEMA_VERSION,
+        "attempt": 1,
+        "authorityHash": auth_hash,
+        "runNonce": "x3-lt-n",
+        "childPid": live_pid,
+        "childStart": state["supervisorStart"],
+    })
+    ED._ledger_seal_attempt_complete(run_real, 1, auth_hash, "x3-lt-n")
+    assert not (run_dir / "attempt-1.done").is_file()
+    res = ED.dispatch_poll(str(run_dir), max_wait=0, order_id="x3-lt-o")
+    assert res.get("detail") == "completion-payload-absent", res
+    assert res.get("terminal") is True
+    assert "live claimed run-child" in (res.get("disclosure") or ""), res
+    assert _lease_held_for(linked), "live claim ⇒ lease must retain"
     ED._release_worktree_lease_for_cwd(
         os.path.realpath(linked), lease_token, lease_holder)
