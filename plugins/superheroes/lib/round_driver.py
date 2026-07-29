@@ -1137,6 +1137,25 @@ def _seat_map_configured_vendor(seat_map, dim):
     return v if isinstance(v, str) and v in _PANEL_VENDORS else None
 
 
+def _seat_map_usable(seat_map, config):
+    """True when this panel's submitted map is receipt-faithful and covers every configured seat.
+
+    Presence-only checks let a hollow stub clear fall-open, violation, and same-family channels
+    while an honest omission degrades — inverting the guarantee that unknown provenance never
+    resolves toward clean."""
+    if not isinstance(seat_map, dict):
+        return False
+    seats = seat_map.get("seats")
+    if not isinstance(seats, dict) or not seats:
+        return False
+    if not isinstance(seat_map.get("violations"), list):
+        return False
+    for dim in _panel_dimensions(config):
+        if _seat_map_configured_vendor(seat_map, dim) is None:
+            return False
+    return True
+
+
 def _fold_panel(state, config, artifact):
     """Fold a full reviewer-deep panel. `artifact` maps dimension → {findings, receiptMissing?,
     receiptStale?}. A persistently receipt-missing/stale seat is terminal `missing` (shell
@@ -1282,13 +1301,9 @@ def _fold_panel(state, config, artifact):
     # same-family collapse (both read off the submitted map). If THIS panel submitted no usable
     # seatMap, disclose provenance-unavailable for the whole panel — regardless of cross-vendor
     # liveness — so unknown provenance never resolves toward clean.
-    _seat_map_empty = not (
-        isinstance(seat_map, dict)
-        and isinstance(seat_map.get("seats"), dict)
-        and seat_map.get("seats")
-    )
+    _seat_map_empty = not _seat_map_usable(seat_map, config)
     if _seat_map_empty:
-        _pool = sorted({v for v in _live_vendors(config) if isinstance(v, str) and v}) or ["unknown"]
+        _pool = sorted(set(_live_vendors(config))) or ["unknown"]
         _record_round(state, "seatMapUnavailable", _pool)
     _sm_violations = _seat_map_unexcused_violations(state.get("seatMap") or {})
     if _sm_violations:
@@ -2283,9 +2298,10 @@ def build_receipt(state, session_dir=None):
         smu = rrec.get("seatMapUnavailable")
         if smu:
             degraded.append(
-                "reviewer-fell-open-seatmap-unavailable (round %s): no seat map submitted; live vendor(s) %s — "
-                "panel provenance unverified: neither fall-open (which vendor actually ran each seat) nor a "
-                "family collapse (a panel that reviewed its own maker family) can be disclosed" % (
+                "reviewer-fell-open-seatmap-unavailable (round %s): no usable seat map submitted for this "
+                "panel; live vendor(s) %s — this panel's seat provenance is unverified; any fall-open or "
+                "family-collapse disclosures shown for this round were judged against a seat map an earlier "
+                "round submitted, not this one" % (
                     rkey, ", ".join(smu)))
         vac = rrec.get("vacuousSeats")
         if vac:

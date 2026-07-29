@@ -539,7 +539,11 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
             "changed_subjects": changed_subjects,
             "io": {
                 "stall_menu": lambda payload: "hold",
-                "seatMap": {"seats": {d: {"vendor": "claude"} for d in reviewer_set}},
+                "seatMap": {
+                    "seats": {d: {"vendor": "claude"} for d in reviewer_set},
+                    "violations": [],
+                    "degradations": [],
+                },
             },
         }
         config = {
