@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 import shutil
+import time
 
 import pytest
 
@@ -18,10 +19,29 @@ def _load():
 
 ED = _load()
 
+REVIEW_CWD_BASENAME = ED.REVIEW_CWD_DIRNAME
+
+
+def _terminal_refusal(detail, **extra):
+    base = {
+        "ok": False,
+        "reason": "unrunnable",
+        "detail": detail,
+        "attempts": 0,
+        "forfeited": False,
+        "terminal": True,
+        "runDir": "",
+        "argv": [],
+    }
+    base.update(extra)
+    return base
+
 _SV = importlib.util.spec_from_file_location(
     "sanitized_view", os.path.join(_HERE, "..", "sanitized_view.py"))
 _SV_MOD = importlib.util.module_from_spec(_SV)
 _SV.loader.exec_module(_SV_MOD)
+
+import engine_adapter as _engine_adapter  # noqa: E402
 
 
 def _never_build_view(_repo):
@@ -129,7 +149,7 @@ class FakeRunner:
 
 def _expect_view_cwd(fake, build_view, expected_repo_realpath):
     cwd = fake.calls[0]["cwd"]
-    assert cwd == build_view.meta["view_path"]
+    assert os.path.basename(cwd) == REVIEW_CWD_BASENAME
     assert build_view.meta["repo_arg"] == expected_repo_realpath
     return cwd
 
@@ -145,10 +165,7 @@ def test_dispatch_review_repo_root_absent_no_spawn(tmp_path):
         prompt_path=_valid_prompt(tmp_path), repo_root=None, run_engine=fake,
         build_view=_never_build_view,
     )
-    assert res == {
-        "ok": False, "reason": "unrunnable", "detail": "repo-root-absent",
-        "attempts": 0, "forfeited": False,
-    }
+    assert res == _terminal_refusal("repo-root-absent")
     assert "sanitizedView" not in res
     assert len(fake.calls) == 0
 
@@ -351,7 +368,7 @@ def test_dispatch_review_retry_pins_same_cwd(tmp_path):
     )
     view_cwd = fake.calls[0]["cwd"]
     assert fake.calls[0]["cwd"] == fake.calls[1]["cwd"] == view_cwd
-    assert view_cwd == build_view.meta["view_path"]
+    assert os.path.basename(view_cwd) == REVIEW_CWD_BASENAME
 
 
 def test_dispatch_review_does_not_inherit_orchestrator_cwd_codex(tmp_path, monkeypatch):
@@ -890,10 +907,7 @@ def test_main_dispatch_review_without_repo_root_json_refusal(tmp_path, monkeypat
     ])
     assert rc == 0
     res = json.loads(capsys.readouterr().out.strip())
-    assert res == {
-        "ok": False, "reason": "unrunnable", "detail": "repo-root-absent",
-        "attempts": 0, "forfeited": False,
-    }
+    assert res == _terminal_refusal("repo-root-absent")
 
 
 def test_dispatch_vacuous_then_valid_investigated_succeeds_on_retry(tmp_path):
@@ -985,10 +999,7 @@ def test_sanitized_view_build_error_refusal_no_spawn(tmp_path):
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=fail_build,
     )
-    assert res == {
-        "ok": False, "reason": "unrunnable", "detail": "sanitized-view-export-failed",
-        "attempts": 0, "forfeited": False,
-    }
+    assert res == _terminal_refusal("sanitized-view-export-failed")
     assert len(fake.calls) == 0
     assert "sanitizedView" not in res
 
@@ -1174,3 +1185,207 @@ def test_pre_view_repo_root_not_a_repo_no_sanitized_view(tmp_path):
     assert res["detail"] == "repo-root-not-a-repo"
     assert res["attempts"] == 0
     assert "sanitizedView" not in res
+
+
+# --- #702 supervision primitive edges ---
+
+
+def test_forged_state_json_paths_not_used_for_kill_or_delete(tmp_path):
+    """Edge 1: poisoned state.json cannot steer abandon kill/delete."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(mode=0o700)
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep", encoding="utf-8")
+    state = {
+        "engine": "codex",
+        "roleKind": "review",
+        "effort": "high",
+        "argv": ["codex"],
+        "viewPath": str(victim),
+        "supervisorPid": os.getpid(),
+        "pid": os.getpid(),
+    }
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    res = ED.dispatch_abandon(str(run_dir))
+    assert victim.read_text(encoding="utf-8") == "keep"
+    assert res.get("terminal") is True
+
+
+def test_run_child_argv_rederivation_mismatch(tmp_path):
+    """Edge 2: run-child refuses argv drift."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(mode=0o700)
+    (run_dir / "prompt.txt").write_bytes(b"x")
+    (run_dir / "review-cwd").mkdir()
+    state = {
+        "engine": "codex",
+        "roleKind": "review",
+        "effort": "high",
+        "model": "sonnet",
+        "argv": ["codex", "exec", "--sandbox", "read-only", "-m", "wrong",
+                 "-c", "model_reasoning_effort=high", "-"],
+        "engineBinary": shutil.which("codex") or "/usr/bin/false",
+        "attemptTimeout": 5,
+    }
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    rc = ED._run_child_main(str(run_dir), 1)
+    assert rc != 0
+    done = json.loads((run_dir / "attempt-1.done").read_text(encoding="utf-8"))
+    assert done.get("refusal") == "argv-rederivation-mismatch"
+
+
+def test_run_child_engine_binary_mismatch(tmp_path):
+    """Edge 3: re-resolved binary must match parent record."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(mode=0o700)
+    (run_dir / "prompt.txt").write_bytes(b"x")
+    cwd = run_dir / "review-cwd"
+    cwd.mkdir()
+    built = _engine_adapter.build_argv_result(
+        "codex", "review", "high",
+        {"model": "sonnet", "cwd": str(cwd)},
+    )
+    argv = built["argv"]
+    resolved = shutil.which(argv[0])
+    (run_dir / "state.json").write_text(json.dumps({
+        "engine": "codex",
+        "roleKind": "review",
+        "effort": "high",
+        "model": "sonnet",
+        "argv": argv,
+        "engineBinary": "/definitely/not/the/engine",
+        "attemptTimeout": 5,
+    }), encoding="utf-8")
+    ED._run_child_main(str(run_dir), 1)
+    done = json.loads((run_dir / "attempt-1.done").read_text(encoding="utf-8"))
+    assert done.get("refusal") == "engine-binary-mismatch"
+    assert resolved  # sanity
+
+
+def test_stale_done_sentinel_removed_before_launch(tmp_path):
+    """Edge 4: stale attempt-1.done is not accepted for a fresh attempt."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(mode=0o700)
+    stale = {"exit": 0, "timedOut": False, "signal": None,
+             "endedAt": 0.0, "refusal": None}
+    (run_dir / "attempt-1.done").write_text(json.dumps(stale), encoding="utf-8")
+    (run_dir / "attempt-1.stdout").write_text(_VALID_FINDINGS_STDOUT, encoding="utf-8")
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), run_dir=str(run_dir),
+    )
+    assert res["ok"] is True
+    assert len(fake.calls) == 1
+
+
+def test_stdout_without_sentinel_is_incomplete_not_result(tmp_path):
+    """Edge 5: output without done sentinel is not a terminal fold."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(mode=0o700)
+    (run_dir / "attempt-1.stdout").write_text(_VALID_FINDINGS_STDOUT, encoding="utf-8")
+    state = {
+        "engine": "codex",
+        "roleKind": "review",
+        "effort": "high",
+        "argv": [],
+        "inFlightAttempt": 1,
+        "attemptStartedAt": time.time(),
+        "viewReceipt": _fake_view_receipt(),
+        "fedPrompt": "",
+        "completedAttempts": 0,
+    }
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    res = ED.dispatch_poll(str(run_dir), max_wait=0)
+    assert res.get("running") is True
+    assert res.get("terminal") is False
+    assert not (run_dir / "result.json").exists()
+
+
+def test_deadline_exceeded_before_spawn_during_view_build(tmp_path, monkeypatch):
+    """Edge 6: view build consumes deadline → named refusal, no spawn."""
+    repo_root = _repo(tmp_path)
+    t = {"n": 0}
+
+    def slow_build(_repo):
+        t["n"] += 1
+        time.sleep(0.05)
+        return _fake_build_view(tmp_path)(_repo)
+
+    fake = FakeRunner([])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=slow_build, max_wait=0,
+    )
+    assert res["detail"] == "deadline-exceeded-before-spawn"
+    assert res["attempts"] == 0
+    assert len(fake.calls) == 0
+
+
+def test_running_result_not_forfeit_or_success(tmp_path):
+    """Edge 7: non-terminal running is distinct from forfeit/success."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(mode=0o700)
+    (run_dir / "state.json").write_text(json.dumps({
+        "engine": "codex", "argv": [], "inFlightAttempt": 1,
+        "attemptStartedAt": time.time(), "viewReceipt": {},
+    }), encoding="utf-8")
+    res = ED.dispatch_poll(str(run_dir), max_wait=0)
+    assert res["ok"] is False
+    assert res["terminal"] is False
+    assert res["forfeited"] is False
+    assert res.get("running") is True
+    assert res.get("reason") == "running"
+
+
+def test_dispatch_poll_never_spawns(tmp_path):
+    """Edge 8: poll never creates attempt artifacts (no spawn)."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(mode=0o700)
+    (run_dir / "state.json").write_text(json.dumps({
+        "engine": "codex", "argv": [], "completedAttempts": 0,
+        "viewReceipt": _fake_view_receipt(), "fedPrompt": "",
+    }), encoding="utf-8")
+    ED.dispatch_poll(str(run_dir), max_wait=0)
+    assert not (run_dir / "attempt-1.stdout").exists()
+    assert not (run_dir / "attempt-1.done").exists()
+
+
+def test_concurrent_run_dir_lock_prevents_duplicate_spawn(tmp_path):
+    """Edge 9: second holder gets lock-held running, no duplicate attempt."""
+    import threading
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(mode=0o700)
+    lock_path = run_dir / "run.lock"
+    ED.file_lock.acquire(str(lock_path))
+    try:
+        (run_dir / "state.json").write_text(json.dumps({
+            "engine": "codex", "argv": [], "completedAttempts": 0,
+            "viewReceipt": {}, "fedPrompt": "",
+        }), encoding="utf-8")
+        res = ED.dispatch_poll(str(run_dir), max_wait=0)
+        assert res.get("detail") == "lock-held"
+        assert res.get("terminal") is False
+    finally:
+        ED.file_lock.release(str(lock_path))
+
+
+def test_result_json_persisted_before_view_destroyed(tmp_path):
+    """Edge 10: fold writes result.json before destroying review-cwd."""
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    run_dir = res["runDir"]
+    assert (os.path.join(run_dir, "result.json"))
+    assert os.path.isfile(os.path.join(run_dir, "result.json"))
+    assert not os.path.exists(os.path.join(run_dir, REVIEW_CWD_BASENAME))
+    cached = json.loads(open(os.path.join(run_dir, "result.json"), encoding="utf-8").read())
+    assert cached.get("sanitizedView")
+

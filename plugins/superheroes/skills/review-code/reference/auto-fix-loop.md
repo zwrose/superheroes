@@ -175,26 +175,54 @@ never drop a finding or a lens.
 >
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+> RUN_DIR="$SESSION_DIR/round-<round>/seat-<agent>-run"
 > python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
 >   --engine "$REVIEWER_ENGINE" --engine-model "$SEAT_ENGINE_MODEL" --effort "$SEAT_EFFORT" \
 >   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
->   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
+>   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900 \
+>   --run-dir "$RUN_DIR" --max-wait 540
+> while true; do
+>   POLL="$(python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-poll --run-dir "$RUN_DIR")"
+>   # dispatch-poll never spawns — safe inside the turn on harness 2.1.219
+>   if jq -e '.terminal == true' <<<"$POLL" >/dev/null 2>&1; then break; fi
+>   # Non-terminal running is NOT a forfeit — keep polling in-turn
+>   sleep 15
+> done
+> RESULT="$POLL"
 > ```
+>
+> On harness **2.1.219**, `--max-wait` defaults to **540** and is hard-capped **below the 600 s
+> foreground conversion boundary** so each runner slice returns before conversion; the poll loop
+> (`dispatch-poll --run-dir`, which **never spawns**) carries long runs in-turn. A non-terminal
+> `{"reason": "running", "terminal": false, "forfeited": false}` **must not** be read as a forfeit.
+> Use `dispatch-abandon --run-dir` when abandoning a run directory. Every result carries **`terminal`**,
+> **`argv`** (exact spawned command), and **`runDir`** for audit.
 >
 > `$SEAT_ENGINE_MODEL` is the seat's **registry id** and `$SEAT_EFFORT` its effort — **both are
 > required by this runner**; `engine_dispatch` takes `--effort` as a required flag. Every review
 > seat the seat map assigns on cursor carries a real effort, so this is not a limitation in practice.
 >
-> Read-only sandbox is **hard-coded inside the runner API** — it cannot emit a write dispatch. The
-> seat **may and should** read files and run read-only commands inside the sanitized view to ground
-> its findings (`--repo-root` on the CLI still names the **source** repository; the runner builds the
-> view itself). An unresolvable source repo root is a **named refusal** before any view is built
+> Read-only sandbox is **hard-coded on `dispatch-review`** — that verb cannot emit a write dispatch.
+> **`dispatch-write`** (same PR) carries the **write** role under mechanical binding: role and
+> sandbox hard-coded, engines enumerated, **`cwd` refused unless it is a linked build worktree**, the
+> exact spawned **argv** echoed on every result, and a **distinct permission-grant string** so write
+> autonomy is revocable on its own. Record the two grant strings the owner may adopt at **subcommand**
+> granularity (the band never writes the owner's grant; it states it):
+>
+> `Bash(python3 -B */lib/engine_dispatch.py dispatch-review:*)`
+> `Bash(python3 -B */lib/engine_dispatch.py dispatch-write:*)`
+>
+> **Honest residual:** host permission rules match a command **prefix** — revocability holds only if
+> grants are written at subcommand granularity; a file-level or bare-`python3` rule would cover both
+> verbs. The seat **may and should** read files and run read-only commands inside the sanitized view to
+> ground its findings (`--repo-root` on the CLI still names the **source** repository; the runner builds
+> the view itself). An unresolvable source repo root is a **named refusal** before any view is built
 > (`repo-root-absent`, `repo-root-missing`, `repo-root-not-a-directory`, `repo-root-not-a-repo`) with
-> `attempts: 0`. The
-> seat prompt should still inline the diff (a self-contained prompt remains the cheapest path); repo
-> access is no longer forbidden. The **fixer / write path is unchanged** — it stays model-driven and
-> host-gated (a Python-spawned subprocess would bypass the host permission-classifier the write authz
-> depends on; CONVENTIONS `§7.5`).
+> `attempts: 0`. The seat prompt should still inline the diff (a self-contained prompt remains the
+> cheapest path); repo access is no longer forbidden. The **fixer write path** uses **`dispatch-write`**
+> through the same supervised runner machinery (poll + run directory) — not a model-only hand spawn.
+> CONVENTIONS `§7.5` governs engine **selection** failing open when a seat is unavailable; it never
+> said the write path may not be supervised.
 >
 > **Cross-vendor control probe (#668).** For each **distinct cross-vendor vendor** among the
 > panel's seats that ran with zero findings on that vendor's seat(s), run the planted-defect control
@@ -228,53 +256,27 @@ never drop a finding or a lens.
 > the round records `canaryUnverified` and the receipt carries a degraded disclosure; a probe that
 > shows no engagement downgrades those seats to never-ran.
 
-> **External-engine dispatches — timeout is structural, an expired slot is `unreadable` (#202, #204).**
-> Every engine dispatch — the reviewer (read-only, above) AND the **fixer** (cursor, workspace-write) —
-> runs as a Bash tool call, so its timeout is already **structural, not prompted**: the plugin's
-> `PreToolUse(Bash)` floor (`hooks/bash_timeout.py`, #204) injects a 600s `timeout` on any dispatch
-> that carries none, so a wedged engine CLI is bounded and killed instead of blocking the panel's
-> `wait` forever (a hang is **not** fail-open — CONVENTIONS `§7.5`). You do **not** compose a
-> per-dispatch watchdog. What this file owns is the **expiry contract**: treat a killed/timed-out
-> dispatch as an **expired slot** — its stdout is absent or partial, so `engine_adapter.parse_result`
-> returns `unreadable`. A timed-out **reviewer** then takes the existing UFR-7 re-run-on-Claude path;
-> a timed-out **fixer** commits no external write and the fix falls open to Claude. A hang becomes a
-> bounded cost, never a stuck loop.
+> **External-engine dispatches — runner-owned bound, expiry contract unchanged (#202, #204).**
+> On Claude Code harness **2.1.219** the plugin's `PreToolUse(Bash)` floor (`hooks/bash_timeout.py`,
+> #204) injects a 600 s `timeout` when a dispatch omits one — that is **conversion at 600 s**, not
+> clamp-and-kill; a wedged foreground Bash call does not die at the cap, it converts, and **dies when
+> the turn ends** if still running. The **supervised runner** owns the real bound: its per-attempt
+> timeout, its completion sentinel, its bounded `--max-wait` slice (default 540, below conversion), and
+> in-turn `dispatch-poll`. You do **not** compose a separate per-dispatch watchdog on top. What this
+> file owns is the **expiry contract**: treat an expired or terminal-forfeit slot as **`unreadable`**
+> (or runner forfeit) — `engine_adapter.parse_result` on partial/absent stdout returns `unreadable`. A
+> timed-out **reviewer** takes the existing UFR-7 re-run-on-Claude path; a timed-out **fixer**
+> commits no external write and the fix falls open to Claude. A hang becomes a bounded cost via the
+> runner, never a stuck loop — not fail-open (CONVENTIONS `§7.5` on engine *selection* is separate).
 >
-> **Hand-rolled engine dispatch — stdin form, empty-prompt guard, portable timeout (#563).** When a
-> builder hand-rolls an engine CLI dispatch (exactly when the adapter path fails), three verified
-> rules keep it from wedging:
-> 1. **Always feed the prompt from a real file over redirected stdin — `codex exec … - < promptfile`
->    — never an inherited/open stdin.** codex `exec` reads its prompt from stdin when given `-`, no
->    positional prompt, or even an empty-string positional; if that stdin is an open source that
->    never delivers data or EOF (the inherited stdin of a headless dispatch with no `< file`
->    redirect), codex **hangs forever**. An EOF-closed empty stdin (`< /dev/null`) does not hang — it
->    errors fast. Repro'd 2026-07-23 against codex 0.144.1.
-> 2. **Reject an empty/missing prompt before dispatch.** `engine_adapter.py build-argv --prompt-path
->    PATH` fails closed (emitting `{"ok":false,"reason":"empty-prompt",…}` instead of argv) unless
->    PATH is a readable regular file with non-whitespace content. The caller MUST redirect **that same
->    validated file** into the engine's stdin — validating one file and redirecting another (or none)
->    reopens the hang. (The reviewer-scoped dispatch runner of the follow-up work couples validate +
->    redirect in one step, closing the check/use window; a hand-rolled dispatch must couple them by
->    hand.)
-> 3. **Bound the run with a portable timeout — macOS has no `timeout(1)`.** Use a perl fork+kill
->    wrapper and a HIGH ceiling (≥900 s for a real engine run; never a borderline limit), redirecting
->    engine output to a **file** (never `| tail`, which buffers a stall to look identical to progress):
->    ```bash
->    perl -e 'my $t=shift; my $to=0; my $p=fork; die unless defined $p; if(!$p){exec @ARGV or die $!}
->      local $SIG{ALRM}=sub{$to=1; kill "KILL",$p}; alarm $t; waitpid $p,0; my $s=$?; alarm 0;
->      exit 124 if $to; exit($s>>8) if ($s&127)==0; exit(128+($s&127))' \
->      900 codex exec … - < promptfile > out.json 2> err.log
->    ```
->    (exit 124 = timed out.) Watch the process's **CPU-time column, not elapsed** — an engine CLI can
->    sit at ~0% CPU for minutes and still be live.
->
-> **Dispatch-runner scope boundary (#563).** A follow-up productizes an adapter-owned dispatch runner
-> for the **read-only reviewer role only** (auto-retry + liveness as machinery, not builder
-> discipline). The **fix/write path stays model-driven and host-gated**: its authorization depends on
-> the host permission-classifier gating the literal Bash `codex exec`/`cursor-agent` call, and a
-> Python-spawned subprocess would bypass that classification (CONVENTIONS `§7.5` — a completed
-> external result fails closed; engine *selection* fails open). Do not fold the write path into a
-> Python runner without a fresh authz design.
+> **Hand-rolled engine dispatch is no longer the sanctioned escape.** When the adapter path fails,
+> use `lib/engine_dispatch.py` (`dispatch-review` / `dispatch-write`) with `--run-dir`, `--max-wait`,
+> and the `dispatch-poll` loop above — not a foreground `codex exec` / `cursor-agent` Bash line and
+> not a perl fork+kill wrapper. If you must understand legacy failure modes: always feed the prompt
+> from a real file over redirected stdin (`codex exec … - < promptfile`); reject empty prompts before
+> dispatch (`build-argv` / `prompt_path_ok`); redirect engine output to a **file** (never `| tail`).
+> Watch CPU-time as corroboration only on a hand-rolled path — the **supervised runner** supersedes
+> that path for panel seats.
 
 After dispatch, wait for all five agents to return. Each writes its findings file to `$SESSION_DIR/round-<round>/`. The orchestrator does not read agent transcripts — only the JSON files.
 

@@ -367,7 +367,9 @@ security finding on that behavior is fixed or honestly parked, never deferred as
 Open a **ready** (not draft) PR: the **build brief + dispositions table + receipts + disclosures**,
 a **dispatch provenance** section — each dispatch (the brief-check reviewer, every implementer, the
 pilot, the review-code seats) with the **engine + model** it ran on — each validated against the registry allowlist (#600), so the advisor can vet what ran
-without your context — plus a **Follow-ups for the advisor** section — out-of-scope discoveries,
+without your context — for a dispatch run through the supervised runner, each provenance row also
+records the **exact spawned argv** the runner echoed, so the advisor can audit what actually ran even
+though the permission prompt names the runner rather than the engine — plus a **Follow-ups for the advisor** section — out-of-scope discoveries,
 deferred work, or issues you noticed but cannot file yourself (you never wire the board). List them
 plainly under that exact heading (write **None** when there are none) so the advisor can turn them
 into issues and the advisor's triage backstop can grep the section. The PR body also carries a **DoD
@@ -436,7 +438,7 @@ curation stay with the advisor.
 | "One more patch and this surface is finally right." | A third rework of the same surface in one build is the park tripwire, not another patch. Name the seam problem instead. |
 | "That reviewer dispatch has been quiet too long, I'll kill it and re-dispatch." | The structural timeout is the tripwire for a configured reviewer dispatch, not your read of silence. A memory recalls context — it is not a standing kill order. |
 | "Main moved under the order I sent — the implementer should have coped." | The order's premises bind you, the dispatcher. Amend the order when the world moves; parking on a stale premise is correct behavior. |
-| "This dispatch will finish quickly — the default timeout is fine." | A long dispatch **you own** gets room to finish — **backgrounded and polled**, never squeezed under the ten-minute foreground Bash cap — and a stuck/runaway monitor (a skill-owned dispatch keeps its own timeout contract). Four 0.18.0 sessions died at the ten-minute `bash_timeout` cap mid-dispatch. Never a borderline limit. |
+| "This dispatch will finish quickly — the default timeout is fine." | A long dispatch **you own** gets room to finish — supervised runner with in-turn **poll** (or shell-detach + sentinel), never a borderline foreground wait on harness **2.1.219** (600 s **conversion**, not clamp-and-kill; four 0.18.0 sessions died when **converted runs were killed at turn-end**, not at a cap) — and a stuck/runaway monitor (a skill-owned dispatch keeps its own timeout contract). Never a borderline limit. |
 | "The implementer botched it — escalate to a stronger engine." | Attribution first. In the 0.18.0 wave, order quality outweighed execution ~5:1. A defect the order under-specified (a missing fail-closed edge, an unnamed target file) is an **order** defect — rewrite the order at the same rung, don't blame the engine. |
 | "I'll kick off the implementer and wrap up my turn." | Default: await in-turn (block or background-and-poll inside the turn). Harness-tracked background work dies with the turn; only a **shell/CLI** detach-and-park (charter §7 Channel-conditioned) outlives the turn — a **native subagent has no detach** — and it still ends in a durable park on the issue or PR, not a silent handoff. |
 | "It's committed locally — the PR is ready." | "Ready" requires the **remote** head containing every commit your receipts claim (`git rev-parse origin/<branch>` vs local HEAD). A local-only fix is a claim without a receipt. |
