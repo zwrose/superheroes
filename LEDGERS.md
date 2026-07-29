@@ -269,22 +269,27 @@ prescribes an action rather than only a disclosure — park the difference with 
 cross-vendor review of this change raised three questions it does not settle — recorded here open,
 rather than closed by assertion:
 
-- **Which document wins when the covenant is *stricter*, not merely different.** The covenant carries
-  an epistemic fail-closed default `PHILOSOPHY.md` does not state — where you cannot establish that a
-  checkpoint fires on this host and path, execution stays in the owner's hands. The new drift clause
-  resolves a disagreement toward `PHILOSOPHY.md`, which on this point is the looser text. Whether
-  "park the difference" holds that line, or whether the covenant's stricter reading should win by
-  construction, is an owner call this entry does not presume.
+- **Which document governs is settled; whether it should be, is the owner's to weigh.** The
+  covenant's ratified header answers today's question outright: on any disagreement, say so, park the
+  difference with the owner, and `PHILOSOPHY.md` governs until they rule. What remains open is a
+  policy question, not an ambiguity — the covenant carries an epistemic fail-closed default
+  `PHILOSOPHY.md` does not state (where you cannot establish that a checkpoint fires on this host and
+  path, execution stays in the owner's hands), so on that one point the settled rule resolves toward
+  the looser text. Whether a stricter covenant safeguard should instead win by construction is an
+  amendment for the owner; this entry neither presumes it nor treats today's rule as unsettled.
 - **The checkpoint bar is stated two ways.** `PHILOSOPHY.md` licenses delegated execution where a
-  checkpoint "guarantees the owner's approval every time"; the covenant, `CONVENTIONS.md`, `README.md`
-  and the charters set the bar at one that *exists* — and §3 above records the wired gate as a regex
+  checkpoint "guarantees the owner's approval every time"; the covenant, `CONVENTIONS.md` and the
+  `showrunner` charter set the bar at one that *exists* — and §3 above records the wired gate as a regex
   heuristic that by construction does not catch every variant.
 - **Host coverage is unchanged by this amendment.** The gate is wired Claude-host only;
   `hooks/hooks-codex.json` is empty, so on that host neither the gate nor the covenant injection fires.
 
 `README.md`'s review-independence bullet reads "the owner merges": that one is **pipeline shorthand,
-not a divergence** — the same document states the full rule at `README.md:78-80`, exactly as
-`CONVENTIONS.md:61` is qualified at `:80-84`. (The `showrunner` charter likewise restates the full
+not a divergence** — the same document carries the approval/execution qualification at
+`README.md:78-80` (approval stays with the owner; execution only behind a per-merge checkpoint),
+exactly as `CONVENTIONS.md:61` is qualified at `:80-84`. The complete restatements — qualification
+plus the host/path fail-closed fallback and the release/force-push exclusions — live in
+`CONVENTIONS.md` and the `showrunner` charter's merge duty. (The `showrunner` charter likewise restates the full
 rule beside its flow line; the `workhorse` charter deliberately does not repeat the standing orders,
 deferring to the covenant for them.) A wording cleanup, not a contradiction.
 

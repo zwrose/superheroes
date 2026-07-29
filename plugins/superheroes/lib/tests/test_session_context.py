@@ -102,10 +102,13 @@ def test_covenant_pins_the_approval_execution_distinction(tmp_path, monkeypatch)
     # trailing clause passing, so pin the can't-establish-it branch by name (#706 review round 3).
     assert "you cannot establish that it fires on this host and path" in note
     assert "execution stays in the owner's hands" in note
-    # the drift clause this change rewrote: a session that finds the two documents disagreeing
-    # must park the difference with the owner rather than pick a winner on its own.
-    assert "park the difference with the owner" in note
-    assert "until the owner rules" in note
+    # The drift clause this change rewrote: a session that finds the two documents disagreeing
+    # must park the difference with the owner rather than pick a winner on its own. The covenant
+    # hard-wraps, so normalize whitespace and assert the WHOLE clause — pinning only the fragments
+    # would let "PHILOSOPHY.md governs" be swapped for "the covenant governs" with every assertion
+    # still green, reversing the very precedence this pins (#706 review round 4).
+    flat = " ".join(note.split())
+    assert "park the difference with the owner; until the owner rules, PHILOSOPHY.md governs." in flat
     assert "known, disclosed divergence" not in note
 
 
