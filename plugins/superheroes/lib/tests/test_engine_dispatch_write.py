@@ -34,7 +34,8 @@ def _load_ed():
 ED = _load_ed()
 
 
-def _invoke_run_child(run_dir, attempt, state, **kw):
+
+def _authority_from_state(run_dir, state, **kw):
     run_dir = str(run_dir)
     kind = (
         ED.RUN_KIND_WRITE
@@ -43,23 +44,58 @@ def _invoke_run_child(run_dir, attempt, state, **kw):
     )
     nonce = kw.get("run_nonce", state.get("runNonce", "test-nonce"))
     order_id = kw.get("order_id", state.get("orderId") or "")
-    launch_argv = kw.get("launch_argv", state.get("argv"))
+    launch_argv = list(kw.get("launch_argv", state.get("argv") or []))
     if "launch_cwd" in kw:
         launch_cwd = kw["launch_cwd"]
     elif kind == ED.RUN_KIND_WRITE:
         launch_cwd = state.get("cwd")
     else:
         launch_cwd = os.path.join(run_dir, ED.REVIEW_CWD_DIRNAME)
-    return ED._run_child_main(
-        run_dir,
-        attempt,
-        expected_kind=kind,
-        run_nonce=nonce or "",
+    role_kind = state.get("roleKind") or ("build" if kind == ED.RUN_KIND_WRITE else "review")
+    return ED.LaunchAuthority(
+        role_kind=role_kind,
+        run_kind=kind,
+        engine=state.get("engine") or "codex",
+        effort=state.get("effort") or "high",
+        model=state.get("model"),
+        engine_model=state.get("engineModel"),
+        schema_path=state.get("schemaPath"),
+        argv=tuple(launch_argv),
+        spawned_argv=tuple(state.get("spawnedArgv") or launch_argv),
+        engine_binary=kw.get("engine_binary", state.get("engineBinary") or ""),
+        cwd=str(launch_cwd),
         order_id=order_id or "",
-        launch_cwd=str(launch_cwd),
-        launch_argv=list(launch_argv or []),
+        run_nonce=nonce or "test-nonce",
+        run_dir=run_dir,
+        timeout=int(state.get("attemptTimeout") or state.get("timeout") or 5),
+        retry_timeout=int(state.get("retryTimeout") or 5),
+        lease_token=state.get("worktreeLeaseToken"),
+        lease_holder=state.get("worktreeLeaseHolder"),
+        cleanup_roots=tuple(state.get("cleanupRoots") or ()),
+        fed_prompt=state.get("fedPrompt") or "",
+        view_receipt=state.get("viewReceipt") or {},
+        repo_root=state.get("repoRoot"),
+        prompt_path=state.get("promptPath"),
+        progress_path=state.get("progressPath"),
+        base_sha=state.get("baseSha"),
     )
 
+
+def _persist_test_authority(run_dir, state, **kw):
+    authority = _authority_from_state(run_dir, state, **kw)
+    try:
+        ED._persist_authority(authority)
+    except FileExistsError:
+        pass
+    except OSError:
+        # already exists or race — load instead
+        pass
+    return authority
+
+
+def _invoke_run_child(run_dir, attempt, state, **kw):
+    authority = _authority_from_state(run_dir, state, **kw)
+    return ED._run_child_main(str(run_dir), attempt, authority)
 
 def _git(repo, *args, check=True):
     return subprocess.run(
@@ -178,19 +214,10 @@ def _inline_run_child_spawn(monkeypatch, *, children=None):
     """Replace supervisor Popen with in-process run-child so _run_engine_files spies apply."""
     if children is None:
         children = []
-    real_spawn = ED._spawn_run_child
 
-    def _inline(rd, attempt, launch):
+    def _inline(rd, attempt, authority):
         children.append(attempt)
-        ED._run_child_main(
-            str(rd),
-            attempt,
-            expected_kind=launch["kind"],
-            run_nonce=launch.get("run_nonce") or "",
-            order_id=launch.get("order_id") or "",
-            launch_cwd=launch.get("launch_cwd") or "",
-            launch_argv=list(launch.get("argv") or []),
-        )
+        ED._run_child_main(str(rd), attempt, authority)
 
         class _Proc:
             pid = os.getpid()
@@ -620,7 +647,7 @@ def _spy_engine_files_no_spawn(monkeypatch):
 
 
 def test_run_child_rejects_forged_cwd(tmp_path, monkeypatch):
-    """Codex dispatch resume: forged cwd with argv rebuilt for the forged tree."""
+    """Re-invoke with a cwd other than launch authority → cwd-authorization-mismatch."""
     main, linked1, linked2 = _two_linked_worktrees(tmp_path)
     prompt = _prompt(tmp_path)
     run_dir = tmp_path / "forge-run"
@@ -628,6 +655,7 @@ def test_run_child_rejects_forged_cwd(tmp_path, monkeypatch):
         tmp_path, engine="codex", linked1=linked1, prompt=prompt,
         run_dir=run_dir, order_id="forge-o",
     )
+    # Poison the receipt; authority remains bound to linked1.
     forged = EA.build_argv_result(
         "codex", "build", "high",
         {"engine_model": "gpt-5.6-terra", "cwd": linked2},
@@ -637,9 +665,10 @@ def test_run_child_rejects_forged_cwd(tmp_path, monkeypatch):
     )
     spawned = []
     monkeypatch.setattr(ED, "_spawn_run_child", lambda *a, **k: spawned.append(1))
+    # Attack: resume with the forged worktree as --cwd.
     res2 = ED.dispatch_write(
         "codex", engine_model="gpt-5.6-terra", effort="high",
-        prompt_path=prompt, cwd=linked1, order_id="forge-o",
+        prompt_path=prompt, cwd=linked2, order_id="forge-o",
         run_engine=ED._run_engine, max_wait=60, run_dir=str(run_dir),
     )
     assert spawned == [], res2
@@ -648,7 +677,8 @@ def test_run_child_rejects_forged_cwd(tmp_path, monkeypatch):
 
 
 def test_run_child_rejects_forged_cwd_codex_argv_consistent(tmp_path, monkeypatch):
-    """Codex run-child: argv re-derives for the authorized cwd; only cwd identity is wrong."""
+    """Forged receipt cwd cannot redirect the child — authority.cwd wins."""
+    from dataclasses import replace
     main, linked1, linked2 = _two_linked_worktrees(tmp_path)
     prompt = _prompt(tmp_path)
     run_dir = tmp_path / "forge-codex-argv-ok"
@@ -656,27 +686,38 @@ def test_run_child_rejects_forged_cwd_codex_argv_consistent(tmp_path, monkeypatc
         tmp_path, engine="codex", linked1=linked1, prompt=prompt,
         run_dir=run_dir, order_id="forge-codex-argv",
     )
-    authorized_argv = EA.build_argv_result(
-        "codex", "build", "high",
-        {"engine_model": "gpt-5.6-terra", "cwd": linked1},
-    )["argv"]
-    state = _prepare_forged_cwd_retry_state(
+    authority = ED._load_authority(str(run_dir))
+    assert authority is not None
+    authorized_argv = list(authority.argv)
+    _prepare_forged_cwd_retry_state(
         state, run_dir, linked1, linked2, argv=authorized_argv,
     )
-    spawned = _spy_engine_files_no_spawn(monkeypatch)
-    _invoke_run_child(
-        run_dir, 2, state,
-        launch_cwd=linked1,
-        launch_argv=authorized_argv,
-    )
-    assert spawned == []
-    done = json.loads((run_dir / "attempt-2.done").read_text(encoding="utf-8"))
-    assert done.get("refusal") == "cwd-authorization-mismatch"
-    assert done.get("refusal") != "argv-rederivation-mismatch"
+    captured = []
+
+    def _spy(argv, prompt_path, stdout_path, stderr_path, timeout, progress_path, attempt, cwd,
+             **kwargs):
+        captured.append(cwd)
+        return {
+            "exit": 0, "timedOut": False, "signal": None,
+            "endedAt": time.time(), "refusal": None,
+        }
+
+    monkeypatch.setattr(ED, "_run_engine_files", _spy)
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(os.path.realpath(linked1))
+    try:
+        auth = replace(authority, lease_token=lease_token, lease_holder=lease_holder)
+        ED._run_child_main(str(run_dir), 2, auth)
+        assert captured, "engine should run under authority cwd"
+        assert os.path.realpath(captured[0]) == os.path.realpath(linked1)
+        assert os.path.realpath(captured[0]) != os.path.realpath(linked2)
+    finally:
+        ED._release_worktree_lease_for_cwd(
+            os.path.realpath(linked1), lease_token, lease_holder)
 
 
 def test_run_child_rejects_forged_cwd_cursor(tmp_path, monkeypatch):
-    """Cursor run-child: forged cwd leaves argv byte-identical; authorization check is sole guard."""
+    """Cursor: forged receipt cwd cannot redirect; authority.cwd is sole launch cwd."""
+    from dataclasses import replace
     main, linked1, linked2 = _two_linked_worktrees(tmp_path)
     prompt = _prompt(tmp_path)
     run_dir = tmp_path / "forge-cursor"
@@ -684,19 +725,32 @@ def test_run_child_rejects_forged_cwd_cursor(tmp_path, monkeypatch):
         tmp_path, engine="cursor", linked1=linked1, prompt=prompt,
         run_dir=run_dir, order_id="forge-cursor-o",
     )
-    original_argv = list(state["argv"])
+    authority = ED._load_authority(str(run_dir))
+    assert authority is not None
+    original_argv = list(authority.argv)
     state = _prepare_forged_cwd_retry_state(state, run_dir, linked1, linked2)
     assert state["argv"] == original_argv
-    spawned = _spy_engine_files_no_spawn(monkeypatch)
-    _invoke_run_child(
-        run_dir, 2, state,
-        launch_cwd=linked1,
-        launch_argv=original_argv,
-    )
-    assert spawned == []
-    done = json.loads((run_dir / "attempt-2.done").read_text(encoding="utf-8"))
-    assert done.get("refusal") == "cwd-authorization-mismatch"
-    assert done.get("refusal") != "argv-rederivation-mismatch"
+    captured = []
+
+    def _spy(argv, prompt_path, stdout_path, stderr_path, timeout, progress_path, attempt, cwd,
+             **kwargs):
+        captured.append(cwd)
+        return {
+            "exit": 0, "timedOut": False, "signal": None,
+            "endedAt": time.time(), "refusal": None,
+        }
+
+    monkeypatch.setattr(ED, "_run_engine_files", _spy)
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(os.path.realpath(linked1))
+    try:
+        auth = replace(authority, lease_token=lease_token, lease_holder=lease_holder)
+        ED._run_child_main(str(run_dir), 2, auth)
+        assert captured
+        assert os.path.realpath(captured[0]) == os.path.realpath(linked1)
+        assert os.path.realpath(captured[0]) != os.path.realpath(linked2)
+    finally:
+        ED._release_worktree_lease_for_cwd(
+            os.path.realpath(linked1), lease_token, lease_holder)
 
 
 def test_authorized_cwd_write_dispatch_codex_and_cursor(tmp_path):
@@ -1019,6 +1073,8 @@ def test_dispatch_write_run_dir_review_run_refuses_kind_mismatch(tmp_path, monke
 
 
 def test_run_child_refuses_expected_kind_mismatch(tmp_path):
+    """A-1 via authority: review-shaped authority cannot drive a write cwd launch."""
+    from dataclasses import replace
     main, linked = _linked_pair(tmp_path)
     run_dir = tmp_path / "run"
     run_dir.mkdir(mode=0o700)
@@ -1040,18 +1096,16 @@ def test_run_child_refuses_expected_kind_mismatch(tmp_path):
         "attemptTimeout": 5,
         "runNonce": "nonce-a",
         "orderId": "o1",
+        "timeout": 5,
+        "retryTimeout": 5,
     }
     (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
-    ED._run_child_main(
-        str(run_dir), 1,
-        expected_kind=ED.RUN_KIND_REVIEW,
-        run_nonce="nonce-a",
-        order_id="o1",
-        launch_cwd=linked,
-        launch_argv=argv,
-    )
+    authority = _authority_from_state(run_dir, state)
+    # Force review kind onto a write-shaped launch — child review path rejects write cwd.
+    authority = replace(authority, run_kind=ED.RUN_KIND_REVIEW, role_kind="review")
+    ED._run_child_main(str(run_dir), 1, authority)
     done = json.loads((run_dir / "attempt-1.done").read_text(encoding="utf-8"))
-    assert done.get("refusal") == "run-kind-mismatch"
+    assert done.get("refusal") == "launch-cwd-mismatch"
 
 
 def test_wrong_nonce_sentinel_not_terminal(tmp_path):
@@ -1101,7 +1155,8 @@ def test_forged_worktree_lease_path_cannot_unlink_victim(tmp_path):
     state["worktreeLeasePath"] = str(victim)
     state["worktreeLeaseToken"] = None
     (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
-    ED._release_worktree_lease(state)
+    auth = _authority_from_state(run_dir, state)
+    ED._release_worktree_lease(auth)
     assert victim.read_text(encoding="utf-8") == "keep"
 
 
@@ -1142,6 +1197,7 @@ def test_blank_supervisor_metadata_forfeits_retry(tmp_path):
         "supervisorStart": "",
     }
     (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    _persist_test_authority(run_dir, state)
     res = ED.dispatch_write(
         "codex", engine_model="gpt-5.6-terra", effort="high",
         prompt_path=prompt, cwd=linked, order_id="sup-o", run_engine=FakeWriteRunner([]),
@@ -1255,35 +1311,61 @@ def _seed_write_state_for_resume(tmp_path, linked, prompt, order_id="resume-o"):
 
 
 def test_abandon_terminates_engine_process_group_not_supervisor_only(tmp_path):
-    """Edge 1: abandon kills the engine process group recorded by the supervisor."""
+    """Edge 1: abandon kills the authenticated engine process group (non-child)."""
     main, linked = _linked_pair(tmp_path)
     run_dir = tmp_path / "abandon-engine-pg"
     run_dir.mkdir(mode=0o700)
-    code = (
-        "import time\n"
-        "time.sleep(120)\n"
+    marker = run_dir / "engine.pid"
+    mid = subprocess.Popen(
+        ["python3", "-c",
+         "import subprocess, time\n"
+         "p = subprocess.Popen(['python3', '-c', 'import time; time.sleep(120)'],"
+         " start_new_session=True)\n"
+         "open(%r, 'w').write(str(p.pid))\n"
+         "p.wait()\n" % str(marker)],
+        start_new_session=True,
     )
-    proc = subprocess.Popen(
-        ["python3", "-c", code], start_new_session=True,
-    )
-    pgid = proc.pid
-    paths = ED._attempt_paths(str(run_dir), 1)
-    ED._write_engine_pgid(paths["engine_pgid"], pgid)
-    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(os.path.realpath(linked))
+    for _ in range(100):
+        if marker.exists() and marker.read_text().strip().isdigit():
+            break
+        time.sleep(0.05)
+    pgid = int(marker.read_text().strip())
     try:
-        (run_dir / "state.json").write_text(json.dumps({
-            "engine": "codex",
-            "dispatchMode": ED.WRITE_DISPATCH_MODE,
-            "cwd": linked,
-            "argv": [],
-            "inFlightAttempt": 1,
-            "completedAttempts": 0,
-            "worktreeLeaseToken": lease_token,
-            "worktreeLeaseHolder": lease_holder,
-        }), encoding="utf-8")
+        os.waitpid(pgid, os.WNOHANG)
+        raise AssertionError("engine unexpectedly a child of pytest")
+    except ChildProcessError:
+        pass
+    paths = ED._attempt_paths(str(run_dir), 1)
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(os.path.realpath(linked))
+    state = {
+        "engine": "codex",
+        "roleKind": "build",
+        "dispatchMode": ED.WRITE_DISPATCH_MODE,
+        "effort": "high",
+        "cwd": os.path.realpath(linked),
+        "argv": [],
+        "engineBinary": "/bin/true",
+        "runNonce": "abandon-n1",
+        "orderId": "abandon-o1",
+        "inFlightAttempt": 1,
+        "completedAttempts": 0,
+        "worktreeLeaseToken": lease_token,
+        "worktreeLeaseHolder": lease_holder,
+        "timeout": 5,
+        "retryTimeout": 5,
+    }
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    _persist_test_authority(run_dir, state)
+    ED._write_engine_pgid(
+        paths["engine_pgid"], pgid,
+        run_nonce="abandon-n1", order_id="abandon-o1", attempt=1,
+        cwd=os.path.realpath(linked), lease_token=lease_token,
+        start_identity="test",
+    )
+    try:
         res = ED.dispatch_abandon(str(run_dir))
-        assert res.get("reason") == "abandoned"
-        time.sleep(0.5)
+        assert res.get("reason") == "abandoned", res
+        time.sleep(0.3)
         try:
             os.killpg(pgid, 0)
             dead = False
@@ -1293,10 +1375,12 @@ def test_abandon_terminates_engine_process_group_not_supervisor_only(tmp_path):
     finally:
         ED._release_worktree_lease_for_cwd(
             os.path.realpath(linked), lease_token, lease_holder)
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except OSError:
-            pass
+        for target in (pgid, mid.pid):
+            try:
+                os.killpg(int(target), signal.SIGKILL)
+            except OSError:
+                pass
+
 
 
 def test_abandon_engine_group_unconfirmed_lease_stays_held(tmp_path, monkeypatch):
@@ -1305,21 +1389,35 @@ def test_abandon_engine_group_unconfirmed_lease_stays_held(tmp_path, monkeypatch
     run_dir = tmp_path / "abandon-lease"
     run_dir.mkdir(mode=0o700)
     paths = ED._attempt_paths(str(run_dir), 1)
-    ED._write_engine_pgid(paths["engine_pgid"], os.getpid())
     lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(os.path.realpath(linked))
     import file_lock
     lease_path = ED._worktree_lease_path(os.path.realpath(linked))
+    state = {
+        "engine": "codex",
+        "roleKind": "build",
+        "dispatchMode": ED.WRITE_DISPATCH_MODE,
+        "effort": "high",
+        "cwd": os.path.realpath(linked),
+        "argv": [],
+        "engineBinary": "/bin/true",
+        "runNonce": "abandon-n2",
+        "orderId": "abandon-o2",
+        "inFlightAttempt": 1,
+        "worktreeLeaseToken": lease_token,
+        "worktreeLeaseHolder": lease_holder,
+        "timeout": 5,
+        "retryTimeout": 5,
+    }
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    _persist_test_authority(run_dir, state)
+    ED._write_engine_pgid(
+        paths["engine_pgid"], os.getpid(),
+        run_nonce="abandon-n2", order_id="abandon-o2", attempt=1,
+        cwd=os.path.realpath(linked), lease_token=lease_token,
+        start_identity="test",
+    )
     monkeypatch.setattr(ED, "_terminate_process_group", lambda _pgid: False)
     try:
-        (run_dir / "state.json").write_text(json.dumps({
-            "engine": "codex",
-            "dispatchMode": ED.WRITE_DISPATCH_MODE,
-            "cwd": linked,
-            "argv": [],
-            "inFlightAttempt": 1,
-            "worktreeLeaseToken": lease_token,
-            "worktreeLeaseHolder": lease_holder,
-        }), encoding="utf-8")
         res = ED.dispatch_abandon(str(run_dir))
         assert res.get("detail") == "engine-group-still-live"
         assert res.get("reason") == "abandon-incomplete"
@@ -1348,11 +1446,22 @@ def test_run_engine_files_sweeps_descendants_on_normal_exit(tmp_path):
     stderr = tmp_path / "out.stderr"
     prompt = tmp_path / "prompt.txt"
     prompt.write_bytes(b"x")
+    auth = ED.LaunchAuthority(
+        role_kind="build", run_kind=ED.RUN_KIND_WRITE, engine="codex", effort="high",
+        model=None, engine_model=None, schema_path=None, argv=("python3",),
+        spawned_argv=("python3",), engine_binary="/usr/bin/python3",
+        cwd=str(tmp_path), order_id="sweep", run_nonce="sweep-n",
+        run_dir=str(tmp_path), timeout=30, retry_timeout=30,
+        lease_token=None, lease_holder=None, cleanup_roots=(),
+        fed_prompt="", view_receipt={}, repo_root=None, prompt_path=None,
+        progress_path=None, base_sha=None,
+    )
     res = ED._run_engine_files(
         ["python3", "-c", code],
         str(prompt), str(stdout), str(stderr),
         30, None, 1, str(tmp_path),
         engine_pgid_path=str(tmp_path / "pgid.json"),
+        authority=auth,
     )
     assert res.get("timedOut") is False
     assert res.get("exit") == 0
@@ -1367,36 +1476,56 @@ def test_run_engine_files_sweeps_descendants_on_normal_exit(tmp_path):
 
 
 def test_dispatch_poll_never_spawns_on_retry_pending(tmp_path, monkeypatch):
-    """Edge 4: poll stays observational when retry is pending."""
+    """Edge 4: poll stays observational when retry is pending — including write path."""
+    main, linked = _linked_pair(tmp_path)
     run_dir = tmp_path / "poll-retry"
     run_dir.mkdir(mode=0o700)
+    (run_dir / "prompt.txt").write_bytes(b"x")
     (run_dir / "attempt-1.done").write_text(json.dumps({
         "exit": None, "timedOut": True, "runNonce": "n1",
     }), encoding="utf-8")
     (run_dir / "attempt-1.stdout").write_text("", encoding="utf-8")
     (run_dir / "attempt-1.stderr").write_text("", encoding="utf-8")
-    (run_dir / "state.json").write_text(json.dumps({
+    linked_real = os.path.realpath(linked)
+    state = {
         "engine": "codex",
-        "roleKind": "review",
+        "roleKind": "build",
+        "dispatchMode": ED.WRITE_DISPATCH_MODE,
         "effort": "high",
-        "model": "sonnet",
-        "argv": ["codex"],
+        "engineModel": "gpt-5.6-terra",
+        "cwd": linked_real,
+        "argv": ["codex", "exec", "--sandbox", "workspace-write", "-"],
+        "engineBinary": "/bin/true",
         "runNonce": "n1",
-        "repoRoot": str(tmp_path / "repo"),
+        "orderId": "poll-o",
         "promptPath": str(run_dir / "prompt.txt"),
-        "viewReceipt": {},
         "fedPrompt": "",
         "inFlightAttempt": 1,
         "completedAttempts": 0,
         "attemptStartedAt": time.time(),
-    }), encoding="utf-8")
+        "timeout": 5,
+        "retryTimeout": 5,
+        "worktreeLeaseToken": "tok",
+        "worktreeLeaseHolder": {"pid": 1},
+    }
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    _persist_test_authority(run_dir, state)
+    engine_calls = []
+    monkeypatch.setattr(
+        ED, "_run_engine_files",
+        lambda *a, **k: engine_calls.append(1) or {
+            "exit": 0, "timedOut": False, "signal": None,
+            "endedAt": time.time(), "refusal": None,
+        })
     spawned = []
     monkeypatch.setattr(ED, "_spawn_run_child", lambda *a, **k: spawned.append(1) or None)
     res = ED.dispatch_poll(str(run_dir), max_wait=1)
     assert res.get("terminal") is False
     assert ED.RETRY_PENDING_DETAIL in (res.get("detail") or "")
     assert spawned == []
+    assert engine_calls == []
     assert not (run_dir / "attempt-2.stdout").exists()
+    assert not list(run_dir.glob(".retry-parent-probe.*"))
 
 
 def test_spawn_run_child_always_detached_review_and_write(tmp_path, monkeypatch):
@@ -1441,21 +1570,19 @@ def test_spawn_run_child_always_detached_review_and_write(tmp_path, monkeypatch)
         "retryTimeout": 5,
     }
     (Path(review_run) / "state.json").write_text(json.dumps(rstate), encoding="utf-8")
+    wstate["engineBinary"] = shutil.which(built_w["argv"][0]) or "/bin/true"
+    rstate["engineBinary"] = shutil.which(built_r["argv"][0]) or "/bin/true"
+    (write_run / "state.json").write_text(json.dumps(wstate), encoding="utf-8")
+    (Path(review_run) / "state.json").write_text(json.dumps(rstate), encoding="utf-8")
     procs = []
     try:
-        for run_dir, kind, launch_cwd, argv in (
-            (str(write_run), ED.RUN_KIND_WRITE, linked, built_w["argv"]),
-            (review_run, ED.RUN_KIND_REVIEW, str(Path(review_run) / ED.REVIEW_CWD_DIRNAME), built_r["argv"]),
+        for run_dir, state, launch_cwd in (
+            (str(write_run), wstate, linked),
+            (review_run, rstate, str(Path(review_run) / ED.REVIEW_CWD_DIRNAME)),
         ):
+            authority = _authority_from_state(run_dir, state, launch_cwd=launch_cwd)
             for attempt in (1, 2):
-                launch = {
-                    "kind": kind,
-                    "run_nonce": "spawn-nonce-w" if kind == ED.RUN_KIND_WRITE else "spawn-nonce-r",
-                    "order_id": "spawn-w" if kind == ED.RUN_KIND_WRITE else "",
-                    "launch_cwd": launch_cwd,
-                    "argv": argv,
-                }
-                proc = ED._spawn_run_child(run_dir, attempt, launch)
+                proc = ED._spawn_run_child(run_dir, attempt, authority)
                 _assert_spawn_detached(proc)
                 procs.append(proc)
     finally:
@@ -1636,23 +1763,31 @@ def test_resume_commands_parse_review_write_and_space_run_dir(tmp_path):
     run_dir, wstate = _seed_write_state_for_resume(tmp_path, linked, prompt)
     run_dir_sp = str(tmp_path / "run with spaces")
     os.makedirs(run_dir_sp, mode=0o700)
-    wstate_sp = dict(wstate)
-    cmd_w = ED._resume_command_write(run_dir_sp, 540, wstate_sp)
+    wauth = _authority_from_state(run_dir, wstate)
+    wauth_sp = _authority_from_state(run_dir_sp, wstate)
+    cmd_w = ED._resume_command_write(run_dir_sp, 540, wauth_sp)
     assert _parse_resume_cli(cmd_w) == 0
     rstate = {
         "engine": "codex",
+        "roleKind": "review",
         "effort": "high",
         "model": "sonnet",
         "repoRoot": main,
         "promptPath": prompt,
         "orderId": "r1",
+        "argv": ["codex"],
+        "engineBinary": "/bin/true",
+        "runNonce": "r-nonce",
+        "timeout": 5,
+        "retryTimeout": 5,
     }
-    cmd_r = ED._resume_command_review(run_dir_sp, 540, rstate)
+    rauth = _authority_from_state(run_dir_sp, rstate)
+    cmd_r = ED._resume_command_review(run_dir_sp, 540, rauth)
     assert _parse_resume_cli(cmd_r) == 0
-    cmd_w2 = ED._resume_command_write(run_dir, 540, wstate)
+    cmd_w2 = ED._resume_command_write(run_dir, 540, wauth)
     assert _parse_resume_cli(cmd_w2) == 0
     lease_res = ED._running_result(
-        run_dir, wstate, 1, wstate["argv"], 0, 540,
+        run_dir, wauth, 1, list(wauth.argv), 0, 540,
         detail="worktree-lease-held",
     )
     assert _parse_resume_cli(lease_res["resume"]) == 0
@@ -1681,6 +1816,12 @@ def test_supervisor_dead_becomes_forfeit_not_eternal_running(tmp_path, monkeypat
         "attemptStartedAt": time.time() - 60,
     }), encoding="utf-8")
     (run_dir / "attempt-1.stdout").write_text("", encoding="utf-8")
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    state.setdefault("engineBinary", "/bin/true")
+    state.setdefault("timeout", 5)
+    state.setdefault("retryTimeout", 5)
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    _persist_test_authority(run_dir, state)
     res = ED.dispatch_poll(str(run_dir), max_wait=0)
     assert res.get("terminal") is False
     assert ED.RETRY_PENDING_DETAIL in (res.get("detail") or "")
@@ -1869,3 +2010,16 @@ def test_e2e_write_run_child_real_spawn_terminal_success(tmp_path, monkeypatch):
     }
     for tok in _sentinel_refusal_tokens(run_dir):
         assert tok not in mismatch, tok
+
+
+def test_authority_required_structurally():
+    """Edge: consumers require LaunchAuthority — omitting raises TypeError, no state fallback."""
+    import pytest
+    with pytest.raises(TypeError):
+        ED._continue_run("/tmp/nope", deadline=0, max_wait=0, allow_spawn=False)
+    with pytest.raises(TypeError):
+        ED._spawn_run_child("/tmp/nope", 1)
+    with pytest.raises(TypeError):
+        ED._destroy_review_views("/tmp/nope", None)
+    with pytest.raises(TypeError):
+        ED._fold_terminal_write("/tmp/nope", None, [], {}, "forfeited", None, 1)

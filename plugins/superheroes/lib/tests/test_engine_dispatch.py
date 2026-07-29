@@ -21,8 +21,10 @@ def _load():
 
 ED = _load()
 
+REVIEW_CWD_BASENAME = ED.REVIEW_CWD_DIRNAME
 
-def _invoke_run_child(run_dir, attempt, state, **kw):
+
+def _authority_from_state(run_dir, state, **kw):
     run_dir = str(run_dir)
     kind = (
         ED.RUN_KIND_WRITE
@@ -31,26 +33,58 @@ def _invoke_run_child(run_dir, attempt, state, **kw):
     )
     nonce = kw.get("run_nonce", state.get("runNonce", "test-nonce"))
     order_id = kw.get("order_id", state.get("orderId") or "")
-    launch_argv = kw.get("launch_argv", state.get("argv"))
+    launch_argv = list(kw.get("launch_argv", state.get("argv") or []))
     if "launch_cwd" in kw:
         launch_cwd = kw["launch_cwd"]
     elif kind == ED.RUN_KIND_WRITE:
         launch_cwd = state.get("cwd")
     else:
-        launch_cwd = os.path.join(run_dir, REVIEW_CWD_BASENAME)
-    return ED._run_child_main(
-        run_dir,
-        attempt,
-        expected_kind=kind,
-        run_nonce=nonce or "",
+        launch_cwd = os.path.join(run_dir, ED.REVIEW_CWD_DIRNAME)
+    role_kind = state.get("roleKind") or ("build" if kind == ED.RUN_KIND_WRITE else "review")
+    return ED.LaunchAuthority(
+        role_kind=role_kind,
+        run_kind=kind,
+        engine=state.get("engine") or "codex",
+        effort=state.get("effort") or "high",
+        model=state.get("model"),
+        engine_model=state.get("engineModel"),
+        schema_path=state.get("schemaPath"),
+        argv=tuple(launch_argv),
+        spawned_argv=tuple(state.get("spawnedArgv") or launch_argv),
+        engine_binary=kw.get("engine_binary", state.get("engineBinary") or ""),
+        cwd=str(launch_cwd),
         order_id=order_id or "",
-        launch_cwd=str(launch_cwd),
-        launch_argv=list(launch_argv or []),
+        run_nonce=nonce or "test-nonce",
+        run_dir=run_dir,
+        timeout=int(state.get("attemptTimeout") or state.get("timeout") or 5),
+        retry_timeout=int(state.get("retryTimeout") or 5),
+        lease_token=state.get("worktreeLeaseToken"),
+        lease_holder=state.get("worktreeLeaseHolder"),
+        cleanup_roots=tuple(state.get("cleanupRoots") or ()),
+        fed_prompt=state.get("fedPrompt") or "",
+        view_receipt=state.get("viewReceipt") or {},
+        repo_root=state.get("repoRoot"),
+        prompt_path=state.get("promptPath"),
+        progress_path=state.get("progressPath"),
+        base_sha=state.get("baseSha"),
     )
 
 
-REVIEW_CWD_BASENAME = ED.REVIEW_CWD_DIRNAME
+def _persist_test_authority(run_dir, state, **kw):
+    authority = _authority_from_state(run_dir, state, **kw)
+    try:
+        ED._persist_authority(authority)
+    except FileExistsError:
+        pass
+    except OSError:
+        # already exists or race — load instead
+        pass
+    return authority
 
+
+def _invoke_run_child(run_dir, attempt, state, **kw):
+    authority = _authority_from_state(run_dir, state, **kw)
+    return ED._run_child_main(str(run_dir), attempt, authority)
 
 def _terminal_refusal(detail, **extra):
     base = {
@@ -1325,12 +1359,13 @@ def test_stale_done_sentinel_ignored_on_resume_with_inflight(tmp_path):
         "exit": 0, "timedOut": False, "runNonce": "stale-previous-nonce",
     }), encoding="utf-8")
     (run_dir / "attempt-1.stdout").write_text(stale_stdout, encoding="utf-8")
-    (run_dir / "state.json").write_text(json.dumps({
+    state = {
         "engine": "codex",
         "roleKind": "review",
         "effort": "high",
         "model": "sonnet",
         "argv": ["codex"],
+        "engineBinary": "/bin/true",
         "runNonce": current_nonce,
         "repoRoot": str(tmp_path / "repo"),
         "promptPath": str(run_dir / "prompt.txt"),
@@ -1339,7 +1374,11 @@ def test_stale_done_sentinel_ignored_on_resume_with_inflight(tmp_path):
         "inFlightAttempt": 1,
         "completedAttempts": 0,
         "attemptStartedAt": time.time(),
-    }), encoding="utf-8")
+        "timeout": 5,
+        "retryTimeout": 5,
+    }
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    _persist_test_authority(run_dir, state)
     res = ED.dispatch_poll(str(run_dir), max_wait=0)
     assert res.get("terminal") is False
     assert not (run_dir / "result.json").exists()
@@ -1361,13 +1400,18 @@ def test_stdout_without_sentinel_is_incomplete_not_result(tmp_path):
         "roleKind": "review",
         "effort": "high",
         "argv": [],
+        "engineBinary": "/bin/true",
+        "runNonce": "stdout-only-n",
         "inFlightAttempt": 1,
         "attemptStartedAt": time.time(),
         "viewReceipt": _fake_view_receipt(),
         "fedPrompt": "",
         "completedAttempts": 0,
+        "timeout": 5,
+        "retryTimeout": 5,
     }
     (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    _persist_test_authority(run_dir, state)
     res = ED.dispatch_poll(str(run_dir), max_wait=0)
     assert res.get("running") is True
     assert res.get("terminal") is False
@@ -1399,10 +1443,14 @@ def test_running_result_not_forfeit_or_success(tmp_path):
     """Edge 7: non-terminal running is distinct from forfeit/success."""
     run_dir = tmp_path / "run"
     run_dir.mkdir(mode=0o700)
-    (run_dir / "state.json").write_text(json.dumps({
-        "engine": "codex", "argv": [], "inFlightAttempt": 1,
-        "attemptStartedAt": time.time(), "viewReceipt": {},
-    }), encoding="utf-8")
+    state = {
+        "engine": "codex", "roleKind": "review", "effort": "high",
+        "argv": [], "engineBinary": "/bin/true", "runNonce": "run-n",
+        "inFlightAttempt": 1, "attemptStartedAt": time.time(),
+        "viewReceipt": {}, "timeout": 5, "retryTimeout": 5,
+    }
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    _persist_test_authority(run_dir, state)
     res = ED.dispatch_poll(str(run_dir), max_wait=0)
     assert res["ok"] is False
     assert res["terminal"] is False
@@ -1415,10 +1463,14 @@ def test_dispatch_poll_never_spawns(tmp_path):
     """Edge 8: poll never creates attempt artifacts (no spawn)."""
     run_dir = tmp_path / "run"
     run_dir.mkdir(mode=0o700)
-    (run_dir / "state.json").write_text(json.dumps({
-        "engine": "codex", "argv": [], "completedAttempts": 0,
-        "viewReceipt": _fake_view_receipt(), "fedPrompt": "",
-    }), encoding="utf-8")
+    state = {
+        "engine": "codex", "roleKind": "review", "effort": "high",
+        "argv": [], "engineBinary": "/bin/true", "runNonce": "poll-n",
+        "completedAttempts": 0, "viewReceipt": _fake_view_receipt(),
+        "fedPrompt": "", "timeout": 5, "retryTimeout": 5,
+    }
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    _persist_test_authority(run_dir, state)
     ED.dispatch_poll(str(run_dir), max_wait=0)
     assert not (run_dir / "attempt-1.stdout").exists()
     assert not (run_dir / "attempt-1.done").exists()
