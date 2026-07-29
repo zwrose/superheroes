@@ -48,10 +48,11 @@ table and cross-lane invariants live in
 `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md` — **do not restate that table
 here.**
 
-**Default to the full lane; anything unclear resolves upward.** A build may **escalate up
-on its own**; moving **down** a lane is **never** your call — it requires the owner, per
-change. Disclosure alone never authorizes a downgrade. A quiet-failure path means **the
-full lane at any size.** Everything below
+**Default to the full lane; anything unclear resolves upward** (as bounded in
+`review-discipline.md`). A build may **escalate up on its own**; moving **down** a lane is **never**
+your call — it requires the owner, per change. Disclosure alone never authorizes a downgrade. A
+quiet-failure path means **the full lane at any size** (as bounded in `review-discipline.md`).
+Everything below
 that names the light lane is an exception; otherwise behaviour is the **full lane** exactly as this
 charter states today.
 
@@ -63,9 +64,13 @@ charter states today.
   panel loop — and that reviewer must be **outside the maker family** (you typed the change, so you
   are the maker), except when the owner chooses a **disclosed same-family reviewer** at kickoff
   because no cross-vendor reviewer is available (owner decision only — disclosed degradation or full
-  lane; never your call). On **every** light-lane review that reviewer carries the **mandatory
-  planted-defect control probe** from `review-discipline.md` (the investigation-record floor for
-  empty external seats already applies automatically in the full panel path).
+  lane; never your call; mid-run forfeit follows the rubric's three-case rule). On **every**
+  light-lane review that reviewer carries the **mandatory planted-defect control probe** from
+  `review-discipline.md` — the probe must come back **engaged** (not engaged means that review did
+  not happen; re-dispatch once, then resolve upward or park; never a pass; exit zero is not evidence
+  of engagement). The investigation-record floor for empty external seats already applies
+  automatically to **every external review seat**, single-seat lanes included (as bounded in
+  `review-discipline.md`).
 - **Preflight is kept** (§3) — and matters more here than in the full lane: without a brief post, the
   first `gh` write may be creating the PR, so a blocked permission surfaces after the work is done.
 
@@ -99,6 +104,11 @@ that it was written late**, naming the trigger. Record already-typed work in the
 section as **orchestrator-typed** (your maker family). Then run the **full review loop** (brief
 check if not yet done, delegation as needed, full `review-code`) before handback — prose disclosure,
 not a new gate.
+
+**Light lane — implementer dispatch.** **Any implementer dispatch originating in the light lane is
+an escalation to the full lane** (escalation bridge above) — review fixes and pilot-discovered bugs
+included. In the light lane you type the implementation; you dispatch implementers only after you
+have escalated back to the full lane.
 
 **Micro** is not this charter's home — the **showrunner** charter carries micro's shape. This
 charter covers **full** and **light**.
@@ -267,9 +277,8 @@ satisfying them is your obligation as the author.
 **In the full lane, all implementation is delegated — the ONLY exceptions are the light and micro
 lanes, where you (light) or the advisor (micro) type the change, and nowhere else.** The exception
 is a *lane*, never a size judgment — "this fix is tiny" is still not a reason to type in a full-lane
-build. **In the light lane you type the implementation** (Build lanes); you still dispatch work orders when
-you have escalated back to the full lane, or for fix loops that route through implementers. **Full
-lane and those escalated paths:** every work order goes
+build. **In the light lane you type the implementation** (Build lanes and the implementer-dispatch
+rule above). **Full lane and escalated-from-light paths:** every work order goes
 to an implementer under the one **implementer template**
 (`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/agents/implementer.md`), which holds the rules and the
 work-order protocol:
@@ -427,7 +436,9 @@ mechanical tripwire, not the memory of it (the mutation-probe sibling of §6's c
 
 - **You** do test-pilot **planning and seeding** (invoke `test-pilot-plan`).
 - **Execution is a pilot subagent** (`agents/pilot.md`) that **observes and reports structured
-  results only — it never fixes.** A bug it reports becomes an **implementer work order** you dispatch.
+  results only — it never fixes.** A bug it reports in the **full lane** (or after light-lane
+  escalation) becomes an **implementer work order** you dispatch; in the **light lane** it triggers
+  the **implementer-dispatch escalation rule** (Build lanes) — move up to full, then dispatch.
 - **Test-pilot applies only to a build with an app surface.** A plugin, library, or docs build has
   nothing to pilot — record test-pilot as **N/A (no running app)** in the PR, with the positive
   evidence that stands in for it (the receipts you re-ran, the review). Do not fabricate a browser
@@ -444,9 +455,13 @@ apply here** — every pre-handback full-lane review is the full loop.
 
 **Light lane:** **one independent cross-vendor reviewer** — not the full panel loop — **outside the
 maker family**, carrying the **mandatory planted-defect control probe** on every such review (Build
-lanes). **Review fixes stay orchestrator-typed** — you apply them in this session. If the work
-genuinely needs an **implementer dispatch**, that is **escalation to the full lane** (escalation
-bridge above); record **every maker family** involved so independence can still be checked. Re-review
+lanes; probe must come back **engaged** — as bounded in `review-discipline.md`). **Review fixes stay
+orchestrator-typed** — you apply them in this session. If the work genuinely needs an **implementer
+dispatch**, that is **escalation to the full lane** (implementer-dispatch rule and escalation
+bridge above). An escalated build **records every maker family in dispatch provenance**; panel
+composition excludes only **one** author family, so any **additional** maker family is a
+**disclosed independence limitation** on that PR — call it out in the PR body for the advisor to weigh
+at vet. Prefer keeping an escalated light build to **one** maker family where possible. Re-review
 to convergence on that single-seat model, or **honestly park on an open blocker**.
 
 Record how
@@ -522,7 +537,7 @@ curation stay with the advisor.
 |---|---|
 | "This fix is tiny, I'll just type it" | In the **full lane**, all implementation is delegated — the only typing exceptions are the **light** and **micro** lanes, never a size judgment. Dispatch a work order (or route to the light lane at kickoff with the owner present). |
 | "The implementer says tests pass" | Re-run every receipt yourself and read the raw output. Verification authority never delegates. |
-| "The pilot found a bug, I'll fix it inline" | The pilot observes only. Route the fix back as an implementer work order. |
+| "The pilot found a bug, I'll fix it inline" | The pilot observes only. In the light lane, route through the implementer-dispatch escalation rule; in the full lane (or after escalation), dispatch an implementer work order. |
 | "These orders are related, I'll do them one by one" | Independent orders run in parallel by default, isolated worktrees. Sequence only real dependencies. |
 | "The route's unclear but I'll guess what they meant" | Disclose your call, or park. Guessed requirements are plausible-but-wrong shipped as done. |
 | "The last build escalated, so this one should too" | Escalation needs receipts from **this** work — a previous build's escalation is field evidence, never a standing rule; the registry ladder comes before any cross-vendor jump. |

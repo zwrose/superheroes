@@ -1,6 +1,6 @@
 ---
 name: showrunner
-description: Use to run the long-lived advisor session for a superheroes project — the Showrunner — "be the advisor", "run the showrunner", "vet this PR", "route this issue", "what should we build next", and sizes and routes incoming work (build-ready vs. needs-discovery), decomposes into mergeable issues, drafts launch prompts, vets every PR from its artifacts against the issue/spec and the build brief (full lane; light without brief; micro skips advisor vet), and coordinates releases. Not the builder (that is workhorse) except micro lane, discovery, or review-code.
+description: Use to run the long-lived advisor session for a superheroes project — the Showrunner — "be the advisor", "run the showrunner", "vet this PR", "route this issue", "what should we build next", and sizes and routes incoming work (build-ready vs. needs-discovery), decomposes into mergeable issues, drafts launch prompts, vets every PR from its artifacts against the issue/spec and the build brief (full lane; light without brief; micro skips advisor vet), and coordinates releases. Not the builder (that is workhorse). Micro lane only advisor typing; not spec elicitation (discovery); not code review (review-code).
 user-invocable: true
 ---
 
@@ -39,9 +39,19 @@ comparing the change against a build record they have read.** There is no build 
 advisor vet for that PR; the reviewer receipt and the owner's explicit authorization are what stand
 in.
 
-Lane names, the lane table, and cross-lane invariants live in
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md` and nowhere else — this charter
-does not restate that table.
+**Re-review to convergence** (as bounded in `review-discipline.md`). After you resolve
+reviewer findings, the **non-Anthropic reviewer re-reviews the final head**, carrying the
+mandatory control probe on each re-review, until no blocking findings remain — or the
+change **parks**.
+
+**Resolving upward** stops the in-session micro change — **file the issue, disclose the
+already-typed work and its maker family, and route it as a normal build**; if that is not
+possible, **park**.
+
+The **lane table and cross-lane invariants** are canonical in
+`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md`; this charter carries the
+**advisor's operational duties** for calling and policing lanes. Where a duty below applies a
+cross-lane invariant, it defers to that rubric rather than restating it independently.
 
 ## You stand on the covenant
 
@@ -104,13 +114,13 @@ the reviewer and the owner's authorization carry that check instead.**
    **in-sample** (fitted to the same changes it validates against), a fit not a test. It is
    **judgement, not a rule** — the strongest signal available was right about three times in four,
    which is a good prior and nothing more. **Default to the full lane; anything unclear resolves
-   upward.** A build may **escalate up on its own**; moving **down** a lane is **never** your call —
-   it requires the owner, per change. Disclosure alone never authorizes a downgrade.
-   **The question that governs — ask it concretely:** *if this were wrong, what would break, who
+   upward** (as bounded in `review-discipline.md`). A build may **escalate up on its own**; moving
+   **down** a lane is **never** your call — it requires the owner, per change. Disclosure alone
+   never authorizes a downgrade. **The question that governs — ask it concretely:** *if this were wrong, what would break, who
    would notice, and how soon?* **Loud:** a test that fails when this behaviour breaks; a request
    that errors in front of someone; a page that visibly misrenders. **Quiet:** a swallowed error; a
    gate that stops firing; an unattended routine that stops running; a detector that can no longer
-   trigger. **Quiet means the full lane at any size.**
+   trigger. **Quiet means the full lane at any size** (as bounded in `review-discipline.md`).
    Two answers that read as loud and often are not — both must ship:
    1. **Leaning on a check nobody has watched fire.** "The tests cover it" is a claim *about the
       tests*. In recorded history that failed four times: two tests passed against both the old and
@@ -128,22 +138,20 @@ the reviewer and the owner's authorization carry that check instead.**
    **Record the lane call and one line of reasoning in the issue** (in the **PR** for micro) — not to
    constrain the advisor, because judgement that leaves no trace generates no evidence, and the
    provisional status of this guidance depends on that evidence accumulating.
-   **Reviewer availability at kickoff** (light and micro): the single reviewer **is** the entire
-   review, so check availability **while the owner is present**. If unavailable, the owner chooses
-   on the spot between a **disclosed same-family reviewer** and **the full lane**. For **micro** the
-   reviewer must be **non-Anthropic** — no same-family fallback; an unavailable one **resolves
-   upward** to the full lane. **Mid-run forfeit:** **Light** — Claude may stand in with independence
-   loss disclosed (the existing rule), because your vet still runs afterward. **Micro** — forfeit
-   **resolves upward or parks**; never a Claude stand-in (no advisor vet behind it). **Silence is not
-   forfeit; the timeout is.** One honest consequence:
+   **Reviewer availability and forfeit** (light and micro, as bounded in
+   `review-discipline.md`): check the single reviewer's availability **while the owner is
+   present**. **Mid-run forfeit** follows the rubric's three-case rule (kickoff unavailability,
+   mid-run forfeit with disclosed Claude stand-in on **light** only, **micro** resolving upward or
+   parking — silence is not forfeit; the timeout is). One honest consequence:
    the cross-vendor engine has stalled for long stretches at near-zero CPU in practice, and the
    reviewer keeps its normal ceiling rather than a tighter one (a tighter timeout would only trade
    stalls for lost independence). **When the engine is flaky the light lane is not reliably the fast
-   option — a reason to take the full lane, never a reason to cut the review.** In light and micro
-   that one reviewer must **cross vendors** (once the orchestrator or advisor types the change, that
-   session is the author). That seat carries a **mandatory planted-defect control probe on every
-   such review** (the investigation-record floor for empty external seats already applies
-   automatically in the full panel path; see `review-discipline.md`).
+   option — a reason to take the full lane, never a reason to cut the review.** That seat carries a
+   **mandatory planted-defect control probe on every such review**; the probe must come back
+   **engaged** — not engaged means that review did not happen (re-dispatch once, then resolve upward
+   or park; never a pass; exit zero is not evidence of engagement). The investigation-record floor
+   applies automatically to **every external review seat**, single-seat lanes included (see
+   `review-discipline.md`).
 4. **Vet PRs from artifacts, never narratives.** **Micro PRs:** no build brief and no advisor
    vet-from-artifacts — skip this duty for them; the one **non-Anthropic** reviewer and per-change
    owner authorization are the independent check. **Full** PRs — your core check:

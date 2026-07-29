@@ -45,21 +45,32 @@ and the failure then surfaces *after all the work is done*.
 
 **Single-reviewer lanes (light and micro).** The one reviewer must **cross vendors**:
 once the orchestrator (light) or the advisor (micro) types the change, that session is
-the *author*, so a same-family reviewer is not independent — an invariant, with one
-bounded exception for **light** only: if no cross-vendor reviewer is available at
-kickoff, the **owner** chooses on the spot between a **disclosed** same-family reviewer
-(a named, disclosed degradation of independence) and taking the **full lane**. It is never
-the builder's or advisor's own call, and it never applies to **micro** (which requires
-non-Anthropic and resolves upward instead). For **micro**, the reviewer must additionally
-be **non-Anthropic** — the maker-family rule applied to the advisor's own family, because
-in micro the advisor *is* the maker. That one reviewer carries a **mandatory
-planted-defect control probe on every light or micro review** — the control that makes
-single-seat review trustworthy. The **investigation-record floor** (an empty external
+the *author*, so a same-family reviewer is not independent. **Three distinct reviewer-loss
+events — do not collapse them:**
+
+1. **Cross-vendor reviewer unavailable at kickoff (light only).** The **owner** chooses on
+   the spot between a **disclosed** same-family reviewer (a named degradation of
+   independence) and taking the **full lane**. Never the builder's or advisor's own call.
+2. **The reviewer forfeits mid-run** (its structural timeout fires — *silence is not
+   forfeit*). **Light:** Claude may stand in with the **independence loss disclosed** — a
+   disclosed degradation, not an owner decision, acceptable because the advisor's vet still
+   runs afterward. **Micro:** no Claude stand-in (no advisor vet behind it) — **resolve
+   upward or park**.
+3. **Micro at kickoff.** The reviewer must be **non-Anthropic** (the advisor *is* the
+   maker). No same-family fallback at kickoff and no Claude stand-in mid-run — unavailable
+   or forfeited reviewers **resolve upward or park** in both cases.
+
+That one reviewer carries a **mandatory planted-defect control probe on every light or
+micro review** — the control that makes single-seat review trustworthy. The probe must
+come back **engaged**. A probe that returns **not engaged** — for any reason — means **that
+review did not happen:** **re-dispatch once**, and if it is still not engaged, **resolve
+upward to the full lane or park.** A not-engaged probe is **never** a pass, and exiting
+zero is not evidence of engagement. The **investigation-record floor** (an empty external
 review seat must prove it actually investigated, or forfeit as vacuous) already applies
-automatically to every empty external review seat in the full panel path; it is a standing
-safeguard, not something these lanes add. What single-reviewer lanes **add** is that the
-planted-defect probe runs on **every** light or micro review, not only when a vendor's
-seats all came back empty. This is doctrine in prose only; lane assignment has no
+automatically to **every external review seat**, single-seat lanes included; it is a
+standing safeguard, not something these lanes add. What single-reviewer lanes **add** is
+that the planted-defect probe runs on **every** light or micro review, not only when a
+vendor's seats all came back empty. This is doctrine in prose only; lane assignment has no
 mechanical check.
 
 ### The spine
@@ -100,6 +111,10 @@ have read.
 quiet-failure question like any lane. The owner may **waive that question for one change**
 when they state the risk explicitly — **owner-only, per change, never a standing grant**.
 The advisor must say what could go wrong before the owner decides.
+
+**Re-review to convergence.** After the advisor resolves reviewer findings, the
+**non-Anthropic reviewer re-reviews the final head**, carrying the mandatory control probe
+on each re-review, until no blocking findings remain — or the change **parks**.
 
 ## The rule — no unreviewed PRs
 
