@@ -274,9 +274,11 @@ the reviewer and the owner's authorization carry that check instead.**
    **Overlap (owner trade vs craft call):** fail-direction inside an already-chosen policy is the
    lenses' craft call; changing what the product does **by default for an unconfigured user** is the
    owner's trade. When a change is both, **show it** wins.
-   **The call is made at routing, not at handback (ruling P6).** When the issue is routed, record the
-   **show it / say it / nothing to see** call **in the issue with one line of reasoning** — the same
-   moment and place as the lane call (duty 3). For **show it**, the issue's **Definition of Done
+   **The call is made at routing, not at handback (ruling P6).** When the issue is routed, **read the
+   project's `## Show-it surface` declaration in `core.md`** so a **show it** call matches what level
+   the project can actually offer, then record the **show it / say it / nothing to see** call **in the
+   issue with one line of reasoning** — the same moment and place as the lane call (duty 3). For
+   **show it**, the issue's **Definition of Done
    carries the presentation obligation as a bullet** like any other requirement, so the builder
    inherits it as scope, not as a surprise. Evidence: a build shipped a refusal message a user reads,
    and no wording for it exists, because the issue's DoD never asked for any — **the builder met its

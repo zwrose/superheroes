@@ -750,6 +750,12 @@ rows that must appear under `## What we're accepting`:
    disposition is called;
 3. every **disclosed degradation**.
 
+A **missing** `<!-- superheroes:build-record -->` boundary marker or a **missing**
+`<!-- superheroes:degradations -->` section is **itself** a review finding — same
+**Important** / `tradeoff` / author-resolved shape as the DoD-table check, not a silent
+pass. An empty degradation list is only clean when the section body is the literal word
+**None**; marker absence and **None** are different states.
+
 The hook is **severity, not disposition status**: keying on "parked" misses a genuine
 **Important**-severity race dispositioned "Deferred — follow-up"; severity is already
 carried by every dispositions table, and keying on it keeps craft nits below the bar.

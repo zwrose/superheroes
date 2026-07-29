@@ -90,6 +90,16 @@ are not the same offer.
 
 A decline still **completes** set-up; the tune menu can add or change the declaration later.
 
+To persist an accepted declaration (multi-line prose on stdin):
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+printf '%s\n' '<Level/What-the-owner-does/Notes prose>' | \
+  python3 -B "$ROOT_DIR/lib/core_md.py" write-show-it --cwd .
+```
+
+An empty stdin body clears the section and returns the project to `none`.
+
 ## 4.5 — Offer an external engine per role (FR-11/12/13/14), decline still completes
 
 After the verify command (§3) is set — external implementers are verify-gated, so this must follow it —

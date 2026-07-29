@@ -85,10 +85,22 @@ action that owns it, leaving the rest of the calibration untouched:
   implementer/pilot) → show the effective map first, then write only the `## Model tiers` block in
   the resolved review-crew profile. This is an optional tune action: if the owner declines, change
   nothing.
-- **Declare or change the Show-it surface** → a focused guided edit that creates or replaces
-  **only** the `## Show-it surface` section in `core.md`, leaving every other section untouched
-  (the same section-scoped discipline the `## Model tiers` bullet above describes). Clearing it
-  returns the project to `none`.
+- **Declare or change the Show-it surface** → persist **only** the `## Show-it surface`
+  section in `core.md`, leaving every other section untouched. Clearing it (empty stdin)
+  returns the project to `none`:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  printf '%s\n' '<Level/What-the-owner-does/Notes prose>' | \
+    python3 -B "$ROOT_DIR/lib/core_md.py" write-show-it --cwd .
+  ```
+
+  To clear:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  printf '' | python3 -B "$ROOT_DIR/lib/core_md.py" write-show-it --cwd .
+  ```
 
 - **Pin a concrete Codex model for one role** → keep the provider-neutral `## Model tiers` block
   unchanged and write the pin under `core.md`'s `enginePreferences.codexModels`. Valid role keys are

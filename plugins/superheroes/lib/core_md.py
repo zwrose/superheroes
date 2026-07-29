@@ -25,6 +25,9 @@ CONFIG_ABSENT = "absent"
 CONFIG_OK = "ok"
 CONFIG_UNREADABLE = "unreadable"
 GATE_REASON_UNREADABLE = "core-md-unreadable"
+SHOW_IT_REASON_UNPARSEABLE = "core-md-unparseable"
+SHOW_IT_REASON_PROSE_FORBIDDEN = "show-it-prose-forbidden"
+SHOW_IT_REASON_ROUND_TRIP = "show-it-round-trip-refused"
 
 CoreGateConfig = collections.namedtuple("CoreGateConfig", "prefs status detail")
 
@@ -451,6 +454,7 @@ def write(cwd, facts, status, *, root=None, now=None):
 
 
 _SHOW_IT_HEADING = re.compile(r"^\s*##\s+Show-it surface\s*$", re.IGNORECASE)
+_TOP_LEVEL_SECTION = re.compile(r"^\s*##\s+")
 _JSON_FENCE_LINE = re.compile(r"^\s*```json superheroes-core\s*$")
 
 
@@ -458,7 +462,27 @@ def _render_show_it_surface_block(prose):
     body = (prose or "").strip()
     if not body:
         return ""
-    return "## Show-it surface\n\n%s\n\n" % body
+    return "## Show-it surface\n\n" + body + "\n\n"
+
+
+def _show_it_prose_forbidden(prose):
+    """Prose must not carry its own top-level section or json fence (parse_core safety)."""
+    for line in (prose or "").splitlines():
+        if _TOP_LEVEL_SECTION.match(line) or _JSON_FENCE_LINE.match(line):
+            return True
+    return False
+
+
+def _show_it_parsed_fields_equal(orig, new):
+    """All parse_core fields except showItSurface must match (round-trip guard)."""
+    skip = {"showItSurface"}
+    keys = set(orig) | set(new)
+    for key in keys:
+        if key in skip:
+            continue
+        if orig.get(key) != new.get(key):
+            return False
+    return True
 
 
 def replace_show_it_surface_section(text, prose):
@@ -481,7 +505,7 @@ def replace_show_it_surface_section(text, prose):
         return "".join(lines[:insert_at]) + new_block + "".join(lines[insert_at:])
     end = len(lines)
     for j in range(start + 1, len(lines)):
-        if lines[j].startswith("## ") or _JSON_FENCE_LINE.match(lines[j]):
+        if _TOP_LEVEL_SECTION.match(lines[j]) or _JSON_FENCE_LINE.match(lines[j]):
             end = j
             break
     if not new_block:
@@ -490,7 +514,8 @@ def replace_show_it_surface_section(text, prose):
 
 
 def write_show_it_surface(cwd, prose, *, root=None):
-    """Lock-guarded surgical write of the Show-it surface prose section only. Fail-open like write()."""
+    """Lock-guarded surgical write of the Show-it surface prose section only. Fail-closed on
+    corrupt core, forbidden prose, or a round-trip that would change any other parsed field."""
     if mode_registry.ensure_project_store(cwd, root) is None:
         mark_pending(cwd, root, detail={"reason": "store-unwritable"})
         return {"action": "deferred"}
@@ -498,6 +523,11 @@ def write_show_it_surface(cwd, prose, *, root=None):
         if not got:
             mark_pending(cwd, root, detail={"reason": "lock-contended"})
             return {"action": "deferred"}
+        record = read(cwd, root)
+        if record is None:
+            return {"action": "refused", "reason": SHOW_IT_REASON_UNPARSEABLE}
+        if record.get("behind"):
+            return {"action": "behind", "record": record}
         path = core_path(cwd, root)
         try:
             with open(path, encoding="utf-8") as fh:
@@ -505,9 +535,18 @@ def write_show_it_surface(cwd, prose, *, root=None):
         except OSError:
             mark_pending(cwd, root, detail={"reason": "store-unwritable"})
             return {"action": "deferred"}
-        new_text = replace_show_it_surface_section(text, prose)
+        orig = parse_core(text)
+        if orig is None:
+            return {"action": "refused", "reason": SHOW_IT_REASON_UNPARSEABLE}
+        body = prose if prose is not None else ""
+        if body.strip() and _show_it_prose_forbidden(body):
+            return {"action": "refused", "reason": SHOW_IT_REASON_PROSE_FORBIDDEN}
+        new_text = replace_show_it_surface_section(text, body)
         if new_text == text:
             return {"action": "noop"}
+        new_parsed = parse_core(new_text)
+        if new_parsed is None or not _show_it_parsed_fields_equal(orig, new_parsed):
+            return {"action": "refused", "reason": SHOW_IT_REASON_ROUND_TRIP}
         try:
             store_core.atomic_write(path, new_text)
         except OSError:
@@ -1153,6 +1192,9 @@ def main(argv):
     cp = sub.add_parser("confirm")  # FR-18 owner-confirm: core + every present hero layer
     cp.add_argument("--cwd", default=".")
     cp.add_argument("--root", default=None)
+    sip = sub.add_parser("write-show-it")  # Show-it surface prose section only
+    sip.add_argument("--cwd", default=".")
+    sip.add_argument("--root", default=None)
     args = ap.parse_args(argv)
     if args.cmd == "resolve":
         try:
@@ -1180,6 +1222,11 @@ def main(argv):
         try:
             out = write_layer(args.cwd, args.hero, sys.stdin.read(), args.status,
                               root=args.root, rubric_version=args.rubric_version)
+        except Exception:
+            out = {"action": "deferred"}
+    elif args.cmd == "write-show-it":
+        try:
+            out = write_show_it_surface(args.cwd, sys.stdin.read(), root=args.root)
         except Exception:
             out = {"action": "deferred"}
     else:  # confirm

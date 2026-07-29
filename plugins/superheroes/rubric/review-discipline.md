@@ -216,10 +216,14 @@ fail-closed gates operate on the PR body — a review seat flags a PR missing an
   missed a genuine Important-severity race dispositioned "Deferred — follow-up"; severity is
   already carried by every dispositions table, and it keeps craft nits below the bar for free:
   (1) every **deferred** DoD row; (2) every **blocking or important** review finding that was
-  **not fixed**, whatever its disposition is called; (3) every **disclosed degradation**. The
-  markers `<!-- superheroes:build-record -->` and `<!-- superheroes:degradations -->` join the
-  family this section already names (`superheroes:dod-table`, `superheroes:stubbed-seams`). The
-  **review seat** flags a PR whose owner half omits a floor row — same seat, same finding shape
+  **not fixed**, whatever its disposition is called; (3) every **disclosed degradation**. A
+  **missing** `<!-- superheroes:build-record -->` boundary marker or a **missing**
+  `<!-- superheroes:degradations -->` section is **itself** a finding — same **Important** /
+  `tradeoff` / author-resolved shape as the DoD-table check, not a silent pass; an empty
+  degradation list is only clean when the section says the literal **None** (absence and **None**
+  differ). The markers `<!-- superheroes:build-record -->` and `<!-- superheroes:degradations -->`
+  join the family this section already names (`superheroes:dod-table`, `superheroes:stubbed-seams`).
+  The **review seat** flags a PR whose owner half omits a floor row — same seat, same finding shape
   as the DoD-table check, no new machinery. **Micro** has no DoD table (that gate already excludes
   micro), but the **degradation** and **unfixed-finding** rows apply on **every** lane.
 

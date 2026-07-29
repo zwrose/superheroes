@@ -496,9 +496,15 @@ format.
   whatever its disposition is called; (3) every **disclosed degradation**. When there are genuinely none,
   write exactly **None** — mirroring *Follow-ups for the advisor* — never **N/A**.
 - **`## How to see it`** — **show it** cases only; on **say it** and **nothing to see**, write exactly
-  **N/A** with a brief why. It carries the **entry point** (the concrete instance — the URL or the
-  command) and the **drive-to-state instructions** — the shortest exact path from that entry point to
-  the thing being judged, **including transient states**. The ranked entry-point levels and the
+  **N/A** with a brief why. On a **show it** PR, **read the project's `## Show-it surface`
+  declaration in `core.md`** for the level and shape, then carry the concrete instance here; **absent
+  declaration → level `none`, disclosed** (below). It carries the **entry point** (the concrete
+  instance — the URL or the command) and the **drive-to-state instructions** — the shortest exact
+  path from that entry point to the thing being judged, **including transient states**. When the
+  honest entry point is **`command`, `attended`, or `none`**, or `core.md` has **no** `## Show-it
+  surface`, that limitation is a **disclosed degradation**: one bullet under
+  `<!-- superheroes:degradations -->` and a matching consequence under **`## What we're accepting`**
+  — not a silent **None** on the floor's third row. The ranked entry-point levels and the
   presentation standard live in `rubric/review-discipline.md` — cite that home rather than restating
   the ranking here.
 - **`## Advisor vet`** — an empty slot the builder creates; the advisor writes into it. Contents and
@@ -535,7 +541,10 @@ baseline (0.18.0 wave) — the advisor's standing accounting duty; the **showrun
 
 Inside the build record, the marker `<!-- superheroes:degradations -->` is **immediately followed** by
 `### Disclosed degradations` — one bullet per degradation (what was promised, what was delivered
-instead, and why), or the single word **None** when there are none. That list gives the omission
+instead, and why), or the single word **None** when there are none. A **missing**
+`<!-- superheroes:build-record -->` or **missing** `<!-- superheroes:degradations -->` section is a
+review finding, not a silent pass — **None** means no degradations, not absence of the section. That
+list gives the omission
 floor's third row a **mechanism** instead of a judgment call, so the review seat can enumerate the
 degradations and check each has a consequence line in the owner half.
 

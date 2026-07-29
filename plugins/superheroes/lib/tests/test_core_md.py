@@ -2167,23 +2167,36 @@ def test_render_core_omits_show_it_heading_when_empty():
     text = CM.render_core(facts, "confirmed", "2026-06-26", "2026-06-26")
     assert "## Show-it surface" not in text
     golden = (
-        "<!-- superheroes-core: schemaVersion=2 status=confirmed "
+        "<!-- superheroes-core: schemaVersion=%d status=confirmed "
         "created=2026-06-26 updated=2026-06-26 -->\n\n"
         "## Threat model\n\nsingle-user\n\n"
         "## Canonical patterns\n\n- x: a.ts:1\n\n"
         "```json superheroes-core\n"
-        '{\n  "schemaVersion": 2,\n  "verifyCommand": "npm test",\n'
+        '{\n  "schemaVersion": %d,\n  "verifyCommand": "npm test",\n'
         '  "stackTags": [\n    "node"\n  ],\n  "enginePreferences": {}\n}\n```\n'
+        % (CM.SCHEMA_VERSION, CM.SCHEMA_VERSION)
     )
     assert text == golden
     facts["showItSurface"] = ""
     assert CM.render_core(facts, "confirmed", "2026-06-26", "2026-06-26") == golden
 
 
-def test_render_core_parse_core_roundtrips_show_it_surface():
-    facts = dict(_CORE_FACTS, showItSurface=_SHOW_IT_BODY)
-    text = CM.render_core(facts, "confirmed", "2026-06-26", "2026-06-26")
-    assert CM.parse_core(text)["showItSurface"] == _SHOW_IT_BODY
+def test_parse_core_hand_authored_show_it_section_ordering():
+    text = (
+        "<!-- superheroes-core: schemaVersion=%d status=confirmed "
+        "created=2026-06-26 updated=2026-06-26 -->\n\n"
+        "## Threat model\n\nsingle-user\n\n"
+        "## Show-it surface\n\n%s\n\n"
+        "## Canonical patterns\n\n- x: a.ts:1\n\n"
+        "```json superheroes-core\n"
+        '{\n  "schemaVersion": %d,\n  "verifyCommand": "npm test",\n'
+        '  "stackTags": ["node"],\n  "enginePreferences": {}\n}\n```\n'
+        % (CM.SCHEMA_VERSION, _SHOW_IT_BODY, CM.SCHEMA_VERSION)
+    )
+    got = CM.parse_core(text)
+    assert got["showItSurface"] == _SHOW_IT_BODY
+    assert CM._section(text, "Threat model") == "single-user"
+    assert CM._section(text, "Canonical patterns") == "- x: a.ts:1"
 
 
 def test_json_block_has_no_show_it_surface_key():
@@ -2226,3 +2239,174 @@ def test_replace_show_it_surface_section_create_replace_clear_preserves_rest():
     cleared = CM.replace_show_it_surface_section(replaced, "")
     assert "## Show-it surface" not in cleared
     assert cleared == text
+
+    manual = (
+        prov
+        + threat
+        + patterns
+        + "## Show-it surface\n\nold body\n\n"
+        + "   ## Extra notes\n\nkeep indented heading section\n\n"
+        + json_part
+    )
+    fixed = CM.replace_show_it_surface_section(manual, _SHOW_IT_BODY)
+    assert CM._section(fixed, "Show-it surface") == _SHOW_IT_BODY
+    assert "keep indented heading section" in fixed
+    assert CM._section(fixed, "Extra notes") == "keep indented heading section"
+
+    no_section = prov + threat + patterns + json_part
+    assert CM.replace_show_it_surface_section(no_section, "") == no_section
+
+
+def _write_core_for_show_it_tests(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.write(repo, dict(_CORE_FACTS), "confirmed", root=store, now="2026-06-26")
+    return repo, store
+
+
+def test_write_show_it_surface_written_and_parses(tmp_path):
+    repo, store = _write_core_for_show_it_tests(tmp_path)
+    res = CM.write_show_it_surface(repo, _SHOW_IT_BODY, root=store)
+    assert res["action"] == "written"
+    got = CM.read(repo, root=store)
+    assert got["showItSurface"] == _SHOW_IT_BODY
+    assert CM.parse_core(open(CM.core_path(repo, store)).read()) is not None
+
+
+def test_write_show_it_surface_noop_when_unchanged(tmp_path):
+    repo, store = _write_core_for_show_it_tests(tmp_path)
+    CM.write_show_it_surface(repo, _SHOW_IT_BODY, root=store)
+    res = CM.write_show_it_surface(repo, _SHOW_IT_BODY, root=store)
+    assert res["action"] == "noop"
+
+
+def test_write_show_it_surface_clear_returns_none_level(tmp_path):
+    repo, store = _write_core_for_show_it_tests(tmp_path)
+    CM.write_show_it_surface(repo, _SHOW_IT_BODY, root=store)
+    res = CM.write_show_it_surface(repo, "", root=store)
+    assert res["action"] == "written"
+    assert CM.read(repo, root=store)["showItSurface"] == ""
+
+
+def test_write_show_it_surface_refused_unparseable_core(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.mode_registry.ensure_project_store(repo, store)
+    path = CM.core_path(repo, store)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "w").write("not a core.md\n")
+    res = CM.write_show_it_surface(repo, _SHOW_IT_BODY, root=store)
+    assert res["action"] == "refused"
+    assert res["reason"] == CM.SHOW_IT_REASON_UNPARSEABLE
+
+
+def test_write_show_it_surface_refused_prose_with_heading(tmp_path):
+    repo, store = _write_core_for_show_it_tests(tmp_path)
+    bad = _SHOW_IT_BODY + "\n## Threat model\n\ninjected\n"
+    res = CM.write_show_it_surface(repo, bad, root=store)
+    assert res["action"] == "refused"
+    assert res["reason"] == CM.SHOW_IT_REASON_PROSE_FORBIDDEN
+    assert CM.read(repo, root=store)["showItSurface"] == ""
+
+
+def test_write_show_it_surface_refused_prose_with_json_fence(tmp_path):
+    repo, store = _write_core_for_show_it_tests(tmp_path)
+    bad = "**Level:** command\n```json superheroes-core\n{}\n```\n"
+    res = CM.write_show_it_surface(repo, bad, root=store)
+    assert res["action"] == "refused"
+    assert res["reason"] == CM.SHOW_IT_REASON_PROSE_FORBIDDEN
+
+
+def test_write_show_it_surface_refused_no_json_fence(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.mode_registry.ensure_project_store(repo, store)
+    path = CM.core_path(repo, store)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "w").write(
+        "<!-- superheroes-core: schemaVersion=2 status=confirmed "
+        "created=2026-06-26 updated=2026-06-26 -->\n\n"
+        "## Threat model\n\nx\n\n"
+    )
+    res = CM.write_show_it_surface(repo, _SHOW_IT_BODY, root=store)
+    assert res["action"] == "refused"
+    assert res["reason"] == CM.SHOW_IT_REASON_UNPARSEABLE
+
+
+def test_write_show_it_surface_deferred_lock_contended(tmp_path, monkeypatch):
+    repo, store = _write_core_for_show_it_tests(tmp_path)
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _contended(cwd, root=None):
+        yield False
+
+    monkeypatch.setattr(CM.mode_registry, "config_lock", _contended)
+    res = CM.write_show_it_surface(repo, _SHOW_IT_BODY, root=store)
+    assert res["action"] == "deferred"
+    assert CM.read(repo, root=store)["showItSurface"] == ""
+
+
+def test_write_show_it_surface_deferred_store_unwritable(tmp_path, monkeypatch):
+    repo, store = _write_core_for_show_it_tests(tmp_path)
+    monkeypatch.setattr(CM.mode_registry, "ensure_project_store", lambda cwd, root=None: None)
+    res = CM.write_show_it_surface(repo, _SHOW_IT_BODY, root=store)
+    assert res["action"] == "deferred"
+
+
+def test_write_show_it_surface_pending_cleared_only_on_real_write(tmp_path, monkeypatch):
+    repo, store = _write_core_for_show_it_tests(tmp_path)
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _contended(cwd, root=None):
+        yield False
+
+    monkeypatch.setattr(CM.mode_registry, "config_lock", _contended)
+    res = CM.write_show_it_surface(repo, _SHOW_IT_BODY, root=store)
+    assert res["action"] == "deferred"
+    assert os.path.isfile(CM._pending_path(repo, store))
+    monkeypatch.undo()
+    res = CM.write_show_it_surface(repo, _SHOW_IT_BODY, root=store)
+    assert res["action"] == "written"
+    assert not os.path.isfile(CM._pending_path(repo, store))
+    CM.mark_pending(repo, store, detail={"reason": "test"})
+    res = CM.write_show_it_surface(repo, _SHOW_IT_BODY, root=store)
+    assert res["action"] == "noop"
+    assert os.path.isfile(CM._pending_path(repo, store))
+
+
+def test_write_show_it_surface_behind_refuses(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    facts = dict(_CORE_FACTS)
+    text = CM.render_core(facts, "confirmed", "2026-06-26", "2026-06-26")
+    text = text.replace(
+        '"schemaVersion": %d' % CM.SCHEMA_VERSION,
+        '"schemaVersion": %d' % (CM.SCHEMA_VERSION + 1),
+        1,
+    )
+    text = text.replace(
+        "schemaVersion=%d" % CM.SCHEMA_VERSION,
+        "schemaVersion=%d" % (CM.SCHEMA_VERSION + 1),
+        1,
+    )
+    CM.mode_registry.ensure_project_store(repo, store)
+    path = CM.core_path(repo, store)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "w").write(text)
+    res = CM.write_show_it_surface(repo, _SHOW_IT_BODY, root=store)
+    assert res["action"] == "behind"
+    assert CM.read(repo, root=store)["showItSurface"] == ""
+
+
+def test_cli_write_show_it_from_stdin(tmp_path, capsys, monkeypatch):
+    import io
+
+    repo, store = _write_core_for_show_it_tests(tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO(_SHOW_IT_BODY))
+    rc = CM.main(["write-show-it", "--cwd", repo, "--root", store])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["action"] == "written"
+    assert CM.read(repo, root=store)["showItSurface"] == _SHOW_IT_BODY
