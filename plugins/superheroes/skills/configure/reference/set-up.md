@@ -4,6 +4,7 @@
 - §2 — Seed the core + the light hero layers (FR-16)
 - §3 — Verify command first (UFR-5)
 - §4 — Offer the heavier heroes (FR-3), decline still completes
+- §4.4 — Offer the Show-it surface (optional), decline still completes
 - §4.5 — Offer an external engine per role (FR-11/12/13/14), decline still completes
 - §4.6 — Offer the review-discipline CLAUDE.md section (in-repo only), decline still completes
 - §5 — Secrets stay out of shared calibration (NFR)
@@ -72,6 +73,22 @@ python3 -B "$ROOT_DIR/lib/hero_setup.py" decline --cwd . --hero test-pilot
 # or, for guardian:
 python3 -B "$ROOT_DIR/lib/hero_setup.py" decline --cwd . --hero guardian
 ```
+
+## 4.4 — Offer the Show-it surface (optional), decline still completes
+
+Optionally record **where the owner goes to look at a finished change** — the entry point a
+**show it** PR's *How to see it* section points at. The declaration lives as prose under
+`## Show-it surface` in `core.md`; it holds the **shape** (command pattern or URL form), not the
+per-branch instance the PR carries. **Absent means `none`** — no level is claimed for the project.
+Ranked levels and the disclosure rule (`link` > `running` > `command` > `attended` > `none`; take
+the highest the project supports; disclose at `command` or below) are defined in
+`rubric/review-discipline.md` — cite that doc rather than restating the table here.
+
+Before recommending `link`, find out whether this project already has a per-change environment or
+whether one would be a **build** with one-time provisioning and recurring operational cost — those
+are not the same offer.
+
+A decline still **completes** set-up; the tune menu can add or change the declaration later.
 
 ## 4.5 — Offer an external engine per role (FR-11/12/13/14), decline still completes
 

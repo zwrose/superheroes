@@ -42,14 +42,20 @@ def render_core(facts, status, created, updated):
         "stackTags": list(facts.get("stackTags") or []),
         "enginePreferences": dict(facts.get("enginePreferences") or {}),
     }
+    show_it = (facts.get("showItSurface") or "").strip()
+    show_it_block = ""
+    if show_it:
+        show_it_block = "## Show-it surface\n\n%s\n\n" % show_it
     return (
         "<!-- superheroes-core: schemaVersion=%d status=%s created=%s updated=%s -->\n\n"
         "## Threat model\n\n%s\n\n"
         "## Canonical patterns\n\n%s\n\n"
+        "%s"
         "```json superheroes-core\n%s\n```\n"
         % (SCHEMA_VERSION, status, created, updated,
            (facts.get("threatModel") or "").strip(),
            (facts.get("patterns") or "").strip(),
+           show_it_block,
            json.dumps(block, indent=2))
     )
 
@@ -106,6 +112,7 @@ def parse_core(text):
         "enginePreferences": dict(prefs) if isinstance(prefs, dict) else {},
         "threatModel": _section(text, "Threat model"),
         "patterns": _section(text, "Canonical patterns"),
+        "showItSurface": _section(text, "Show-it surface"),
         "created": created,
         "updated": updated,
     }
@@ -277,6 +284,7 @@ def read(cwd, root=None):
         "enginePreferences": facts["enginePreferences"],
         "threatModel": facts["threatModel"],
         "patterns": facts["patterns"],
+        "showItSurface": facts["showItSurface"],
         "behind": behind,
         "created": facts["created"],
         "updated": facts["updated"],
@@ -318,6 +326,7 @@ def _diff_proposals(detected, recorded):
     """Per-field proposals where the detected value DIFFERS from the recorded one.
     A detected value equal to or absent (None / empty) is a reuse, not a proposal (FR-6)."""
     proposals = []
+    # Show-it surface is owner-declared prose only — never auto-detected from a repo.
     for field in ("verifyCommand", "stackTags", "threatModel", "patterns", "enginePreferences"):
         det = detected.get(field)
         if det is None or det == "" or det == []:
@@ -439,6 +448,73 @@ def write(cwd, facts, status, *, root=None, now=None):
         record = read(cwd, root)
         clear_pending(cwd, root)
         return {"action": "written", "record": record, "proposals": []}
+
+
+_SHOW_IT_HEADING = re.compile(r"^\s*##\s+Show-it surface\s*$", re.IGNORECASE)
+_JSON_FENCE_LINE = re.compile(r"^\s*```json superheroes-core\s*$")
+
+
+def _render_show_it_surface_block(prose):
+    body = (prose or "").strip()
+    if not body:
+        return ""
+    return "## Show-it surface\n\n%s\n\n" % body
+
+
+def replace_show_it_surface_section(text, prose):
+    """Create, replace, or clear only the `## Show-it surface` section; preserve all else."""
+    new_block = _render_show_it_surface_block(prose)
+    lines = (text or "").splitlines(keepends=True)
+    start = None
+    for i, line in enumerate(lines):
+        if _SHOW_IT_HEADING.match(line):
+            start = i
+            break
+    if start is None:
+        if not new_block:
+            return text
+        insert_at = len(lines)
+        for i, line in enumerate(lines):
+            if _JSON_FENCE_LINE.match(line):
+                insert_at = i
+                break
+        return "".join(lines[:insert_at]) + new_block + "".join(lines[insert_at:])
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        if lines[j].startswith("## ") or _JSON_FENCE_LINE.match(lines[j]):
+            end = j
+            break
+    if not new_block:
+        return "".join(lines[:start]) + "".join(lines[end:])
+    return "".join(lines[:start]) + new_block + "".join(lines[end:])
+
+
+def write_show_it_surface(cwd, prose, *, root=None):
+    """Lock-guarded surgical write of the Show-it surface prose section only. Fail-open like write()."""
+    if mode_registry.ensure_project_store(cwd, root) is None:
+        mark_pending(cwd, root, detail={"reason": "store-unwritable"})
+        return {"action": "deferred"}
+    with mode_registry.config_lock(cwd, root) as got:
+        if not got:
+            mark_pending(cwd, root, detail={"reason": "lock-contended"})
+            return {"action": "deferred"}
+        path = core_path(cwd, root)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError:
+            mark_pending(cwd, root, detail={"reason": "store-unwritable"})
+            return {"action": "deferred"}
+        new_text = replace_show_it_surface_section(text, prose)
+        if new_text == text:
+            return {"action": "noop"}
+        try:
+            store_core.atomic_write(path, new_text)
+        except OSError:
+            mark_pending(cwd, root, detail={"reason": "store-unwritable"})
+            return {"action": "deferred"}
+        clear_pending(cwd, root)
+        return {"action": "written"}
 
 
 # Recognized headings per hero. Shared-fact headings live in core.md; hero headings → the
@@ -982,7 +1058,8 @@ def confirm(cwd, *, root=None, now=None):
             return {"action": "behind", "record": existing}
         if existing.get("status") == "confirmed":
             return {"action": "noop", "record": existing}
-        facts = {k: existing[k] for k in ("verifyCommand", "stackTags", "threatModel", "patterns")}
+        facts = {k: existing[k] for k in (
+            "verifyCommand", "stackTags", "threatModel", "patterns", "showItSurface")}
         created = existing.get("created") or stamp
         try:
             store_core.atomic_write(core_path(cwd, root),

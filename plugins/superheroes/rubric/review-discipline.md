@@ -136,10 +136,69 @@ fast-follow):
 - **A review that halts with an open blocker** (circuit breaker, park) is resolved
   or explicitly owner-accepted in the PR body — never quietly merged.
 
+## Presentation standard (show it / say it / nothing to see)
+
+Three **presentation calls** name how much the owner must *see* before merge — not how much ceremony
+the build carried:
+
+| old name | call | means |
+|---|---|---|
+| tier 1 | **show it** | the owner looks at the after-state before merging |
+| tier 2 | **say it** | the PR states it plainly; no spot-check |
+| tier 3 | **nothing to see** | nothing perceivable changed |
+
+The **advisor** makes the call **when the issue is routed**, not at handback. For **show it**, the
+issue's Definition of Done carries the presentation obligation as a bullet like any other requirement —
+a duty that first appears at handback is a duty nobody was resourced to discharge. The routing-time call
+is **revisable during the build**: a builder who discovers a perceivable surface mid-build **upgrades
+it with a disclosure line** — never a park, and never a silent skip.
+
+**The show-it duty is wayfinding, not media** — **no screenshots and no recordings**. The duty is to
+remove the friction of putting hands on the build.
+
+**(a) An entry point, ranked** — take the **highest level the project supports**; **disclose whenever
+it is `command` or below.** An absent project declaration means **`none`**.
+
+| Level | What the owner does | Meets zero reconstruction? |
+|---|---|---|
+| `link` | clicks a link — a per-change environment that already exists | **fully; works from any device** |
+| `running` | opens something already up on their own machine | **yes, while it is up, and it is not after the session ends** |
+| `command` | runs one command in a workspace already prepared for them | **no; a named, disclosed degradation. Cheap, but it is reconstruction** |
+| `attended` | owner present; the build waits | — |
+| `none` | disclosed as unpresentable | — |
+
+`command` is **explicitly allowed** — often the honest best a project can do — but never silently
+equivalent to `link`. For some projects `link` already exists (per-change environments are default-on
+in plenty of stacks); for others it **may be a build**, carrying one-time provisioning and recurring
+operational work. **Find out which before recommending it** — a rule that assumes infrastructure gets
+ignored. **`link` and `running` do different jobs**: a per-change environment is a *review* surface, a
+local server is an *iteration* surface, and a project that reaches `link` does not stop wanting
+`running`.
+
+**(b) Drive-to-state instructions** — the shortest exact path from the entry point to the thing being
+judged, **including transient states** (e.g. *open the entry point, go to the settings page, start a
+save; the control disappears while it is in flight*). The build already knows this path when a pilot has
+driven the surface; today it is never written down for the owner.
+
+**(c) When the honest answer is `none`, disclose it** — naming what could not be presented and why,
+reaching the owner **before the merge click**.
+
+**Portability — the band states the standard, the project declares the mechanism.** Shipping text names
+**no technology** — no port scheme, hosting provider, auth library, or package script. The per-project
+answer is the **Show-it surface** declaration: prose in the project's `core.md` under a `## Show-it
+surface` heading, carrying **Level**, **What the owner does**, and optional **Notes**. It declares a
+**shape**, never an instance; the PR's *How to see it* carries the concrete instance. Two heroes read it
+(the builder authoring a PR, the advisor routing and vetting) — one home per fact. **Absent means
+`none`** — a project with no declaration cannot have a level claimed on its behalf, so the builder
+discloses that none is declared.
+
+**The tripwire is omission, not length.** There is **no size cap** on the owner half; the failure mode
+is that the owner half **omits something the owner is being asked to accept**.
+
 ## Ship-phase honesty (CONVENTIONS §10.7)
 
-On every lane PR, a green, branch-current PR can still be silently incomplete. Two
-fail-closed gates operate on the PR body — a review seat flags a PR missing either:
+On every lane PR, a green, branch-current PR can still be silently incomplete. Three
+fail-closed gates operate on the PR body — a review seat flags a PR missing any:
 
 - **Definition of done disposition table** (`superheroes:dod-table`): one row per spec
   DoD bullet, each `done` (with an evidence pointer) or `deferred` (with a filed issue
@@ -152,6 +211,17 @@ fail-closed gates operate on the PR body — a review seat flags a PR missing ei
   mandatory, CI-validated) and surfaces in this generated section. A seam disclosed only
   in a docstring is a finding. **Every lane** — including micro; a deliberate unwired seam
   in a micro change is itself a reason to escalate.
+- **Omission floor** (owner half, `## What we're accepting`): three rows that must appear,
+  keyed on **severity, not disposition status** — an earlier draft keyed on "parked" and
+  missed a genuine Important-severity race dispositioned "Deferred — follow-up"; severity is
+  already carried by every dispositions table, and it keeps craft nits below the bar for free:
+  (1) every **deferred** DoD row; (2) every **blocking or important** review finding that was
+  **not fixed**, whatever its disposition is called; (3) every **disclosed degradation**. The
+  markers `<!-- superheroes:build-record -->` and `<!-- superheroes:degradations -->` join the
+  family this section already names (`superheroes:dod-table`, `superheroes:stubbed-seams`). The
+  **review seat** flags a PR whose owner half omits a floor row — same seat, same finding shape
+  as the DoD-table check, no new machinery. **Micro** has no DoD table (that gate already excludes
+  micro), but the **degradation** and **unfixed-finding** rows apply on **every** lane.
 
 ## Why it is stated this strongly
 

@@ -21,7 +21,8 @@ import sys; sys.path.insert(0,'$ROOT_DIR/lib'); import configure_view
 print(configure_view.render('.'))"
 ```
 
-One plain-text screen, top to bottom: the project's core facts, the **Dispatch calibration** (the
+One plain-text screen, top to bottom: the project's core facts (including the **Show-it surface**
+declaration when present), the **Dispatch calibration** (the
 effective engine + model for every v2 dispatch role) and its Codex model-pin detail, each hero's
 layer, the pinned patterns, and the **Model tiers** block — "here is everything superheroes knows
 about this project," not a list of files. Any current staleness/drift is shown as a **single,
@@ -84,6 +85,10 @@ action that owns it, leaving the rest of the calibration untouched:
   implementer/pilot) → show the effective map first, then write only the `## Model tiers` block in
   the resolved review-crew profile. This is an optional tune action: if the owner declines, change
   nothing.
+- **Declare or change the Show-it surface** → a focused guided edit that creates or replaces
+  **only** the `## Show-it surface` section in `core.md`, leaving every other section untouched
+  (the same section-scoped discipline the `## Model tiers` bullet above describes). Clearing it
+  returns the project to `none`.
 
 - **Pin a concrete Codex model for one role** → keep the provider-neutral `## Model tiers` block
   unchanged and write the pin under `core.md`'s `enginePreferences.codexModels`. Valid role keys are

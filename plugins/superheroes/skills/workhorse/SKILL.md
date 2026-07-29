@@ -474,39 +474,85 @@ security finding on that behavior is fixed or honestly parked, never deferred as
 
 ## 11. Hand back the ready PR
 
-Open a **ready** (not draft) PR: **in the full lane** the **build brief** plus dispositions table +
-receipts + disclosures; **in the light lane** dispositions table + receipts + disclosures (no brief
-from §4); plus for both lanes
-a **dispatch provenance** section — each dispatch (the brief-check reviewer, every implementer, the
-pilot, the review-code seats) with the **engine + model** it ran on — each validated against the registry allowlist (#600), so the advisor can vet what ran
-without your context — plus a **Follow-ups for the advisor** section — out-of-scope discoveries,
-deferred work, or issues you noticed but cannot file yourself (you never wire the board). List them
-plainly under that exact heading (write **None** when there are none) so the advisor can turn them
-into issues and the advisor's triage backstop can grep the section. The PR body also carries a **DoD
-disposition table** (the `superheroes:dod-table` marker) against the issue/spec — one row per
-Definition-of-Done bullet, each **done** (with an evidence pointer) or **deferred** (with a filed
-issue and a one-line reason). This is distinct from the review dispositions table above (that grades
-review findings; this grades every spec'd claim shipped/deferred/dropped) and is the honesty marker
-the review seat verifies (CONVENTIONS `§10.7`, `rubric/review-discipline.md`). The dispatch-provenance
-section also records, per order, whether it was a **rework** and — for any blocking review finding —
-whether it was attributed to **order quality, implementer execution, or the orchestrator's own
-integration/assembly** (external or unknown where none fits), so the advisor can track the build
-against the ~5:1 order-vs-execution baseline (0.18.0 wave) — the advisor's standing accounting duty;
-the **showrunner** charter reads it. **Issue-linking discipline — never auto-close an issue that must
-stay open.** GitHub's closing-keyword parser is **negation-blind**: `Resolves #NNN` / `Closes #NNN` /
-`Fixes #NNN` closes the issue on merge **even inside a sentence that says it does not**. For an issue
-the PR must **not** close (a parent epic, a tracking issue, a "part of" link), use a **non-closing**
-verb — **"addresses," "part of," "relates to"** — and reserve the closing keywords for the issue this
-PR genuinely closes (weekly-eats we#518 wrote "Resolves the storage-mode decision in #505" while
-stating it did not close #505; GitHub closed it anyway). **Verify the remote head before you declare
-ready.** A commit that lives only in your local worktree is not a receipt the advisor can see —
-**"PR ready" requires confirming the REMOTE branch head contains every commit your receipts claim**
-(after your final `git push`: `git fetch`, then `git merge-base --is-ancestor HEAD origin/<branch>`; the
-review-fix commit is the usual straggler). A PR that claims a fix its pushed branch does not contain is a claim without a receipt.
-(The #585 build committed its final review-fix locally but never pushed it; the advisor had to complete
-the push at vet.) **Keep the PR body current** — edit it
-in place so it reads
-correct top to bottom. **You never merge** — hand back to the owner.
+Open a **ready** (not draft) PR whose body has **two addressees and one home per fact**. The **owner
+half** answers *what is different, and do I accept it?* The **build record** answers *did the process
+hold, and what must I route?* **Consequence up, mechanism down** — the owner half states
+consequences; the build record carries mechanism. The owner half is **not** a summary of the build
+record.
+
+**The owner half** — three fixed headings, always present in this order, each filled or explicitly
+marked **N/A** where the contract allows, then **`## Advisor vet`**. The owner half is **usually
+short** — a few lines even on a very large PR — and that is the normal case, not a failure of the
+format.
+
+- **`## What's changing, and why`** — on **every** PR, not conditional on perceivability. A sentence
+  naming only *what moved*, with no *why*, has not done this section's job. Never **N/A**, never
+  **None**.
+- **`## What we're accepting`** — the risks and trades merging commits the owner to: parked residual
+  risks, disclosed degradations, deferred DoD rows, and any direct question the builder has for the
+  owner. **Anything the owner still carries after merging appears here, stated as a consequence.** The
+  **omission floor** requires three rows here, keyed on **severity, not disposition label**: (1) every
+  **deferred** DoD row; (2) every **blocking or important** review finding that was **not fixed**,
+  whatever its disposition is called; (3) every **disclosed degradation**. When there are genuinely none,
+  write exactly **None** — mirroring *Follow-ups for the advisor* — never **N/A**.
+- **`## How to see it`** — **show it** cases only; on **say it** and **nothing to see**, write exactly
+  **N/A** with a brief why. It carries the **entry point** (the concrete instance — the URL or the
+  command) and the **drive-to-state instructions** — the shortest exact path from that entry point to
+  the thing being judged, **including transient states**. The ranked entry-point levels and the
+  presentation standard live in `rubric/review-discipline.md` — cite that home rather than restating
+  the ranking here.
+- **`## Advisor vet`** — an empty slot the builder creates; the advisor writes into it. Contents and
+  timing are owned elsewhere (**#672**). If you rewrite the PR body later, **re-add the slot rather
+  than dropping it**.
+
+The advisor makes the **show it** / **say it** / **nothing to see** call when the issue is routed; that
+call is **revisable during the build**. A builder who discovers a perceivable surface mid-build
+**upgrades the call with a disclosure line** — never a park, and never a silent skip.
+
+Immediately above the build record, place the boundary marker `<!-- superheroes:build-record -->`, then
+wrap the build record in `<details><summary>Build record</summary>…</details>`. `<details>` is a
+**pure owner-side gain**: an agent reading `gh pr view --json body` gets identical raw markdown.
+
+**The build record** — everything §11 already required, **unchanged and unshrunk**, relocated below the
+boundary marker: **in the full lane** the **build brief** plus dispositions table + receipts +
+disclosures; **in the light lane** dispositions table + receipts + disclosures (no brief from §4);
+plus for both lanes a **dispatch provenance** section — each dispatch (the brief-check reviewer, every
+implementer, the pilot, the review-code seats) with the **engine + model** it ran on — each validated
+against the registry allowlist (#600), so the advisor can vet what ran without your context — plus a
+**Follow-ups for the advisor** section — out-of-scope discoveries, deferred work, or issues you noticed
+but cannot file yourself (you never wire the board). List them plainly under that exact heading (write
+**None** when there are none) so the advisor can turn them into issues and the advisor's triage
+backstop can grep the section. The PR body also carries a **DoD disposition table** (the
+`superheroes:dod-table` marker) against the issue/spec — one row per Definition-of-Done bullet, each
+**done** (with an evidence pointer) or **deferred** (with a filed issue and a one-line reason). This is
+distinct from the review dispositions table above (that grades review findings; this grades every spec'd
+claim shipped/deferred/dropped) and is the honesty marker the review seat verifies (CONVENTIONS
+`§10.7`, `rubric/review-discipline.md`). The dispatch-provenance section also records, per order,
+whether it was a **rework** and — for any blocking review finding — whether it was attributed to
+**order quality, implementer execution, or the orchestrator's own integration/assembly** (external or
+unknown where none fits), so the advisor can track the build against the ~5:1 order-vs-execution
+baseline (0.18.0 wave) — the advisor's standing accounting duty; the **showrunner** charter reads it.
+
+Inside the build record, the marker `<!-- superheroes:degradations -->` is **immediately followed** by
+`### Disclosed degradations` — one bullet per degradation (what was promised, what was delivered
+instead, and why), or the single word **None** when there are none. That list gives the omission
+floor's third row a **mechanism** instead of a judgment call, so the review seat can enumerate the
+degradations and check each has a consequence line in the owner half.
+
+**Issue-linking discipline — never auto-close an issue that must stay open.** GitHub's closing-keyword
+parser is **negation-blind**: `Resolves #NNN` / `Closes #NNN` / `Fixes #NNN` closes the issue on merge
+**even inside a sentence that says it does not**. For an issue the PR must **not** close (a parent epic,
+a tracking issue, a "part of" link), use a **non-closing** verb — **"addresses," "part of," "relates
+to"** — and reserve the closing keywords for the issue this PR genuinely closes (weekly-eats we#518
+wrote "Resolves the storage-mode decision in #505" while stating it did not close #505; GitHub closed
+it anyway). **Verify the remote head before you declare ready.** A commit that lives only in your local
+worktree is not a receipt the advisor can see — **"PR ready" requires confirming the REMOTE branch head
+contains every commit your receipts claim** (after your final `git push`: `git fetch`, then `git
+merge-base --is-ancestor HEAD origin/<branch>`; the review-fix commit is the usual straggler). A PR that
+claims a fix its pushed branch does not contain is a claim without a receipt. (The #585 build committed
+its final review-fix locally but never pushed it; the advisor had to complete the push at vet.) **Keep
+the PR body current** — edit it in place so it reads correct top to bottom. **You never merge** — hand
+back to the owner.
 
 ## 12. Post-handback loop & park protocol
 

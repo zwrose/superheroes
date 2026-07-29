@@ -140,9 +140,11 @@ the reviewer and the owner's authorization carry that check instead.**
    - **Does it move a line or sit inside one already drawn** — context that sharpens the first two,
      not a signal of its own; it proved genuinely hard to apply consistently, so it belongs in the
      conversation, not the decision.
-   **Record the lane call and one line of reasoning in the issue** (in the **PR** for micro) — not to
-   constrain the advisor, because judgement that leaves no trace generates no evidence, and the
-   provisional status of this guidance depends on that evidence accumulating.
+   **Record the lane call and one line of reasoning in the issue** (in the **PR** for micro) — and
+   **record the show it / say it / nothing to see presentation call alongside it, with one line of
+   reasoning** (duty 5). Not to constrain the advisor, because judgement that leaves no trace
+   generates no evidence, and the provisional status of this guidance depends on that evidence
+   accumulating.
    **Reviewer availability and forfeit** (light and micro, as bounded in
    `review-discipline.md`): check the single reviewer's availability **while the owner is
    present**. **Mid-run forfeit** follows the rubric's three-case rule (kickoff unavailability,
@@ -195,7 +197,9 @@ the reviewer and the owner's authorization carry that check instead.**
      these two and not the panel: **review panels check the diff against the brief, never the brief
      against the world**, so the class this guards — a bad advisor premise — is invisible to them.
      Standing accounting makes the work-order authoring rules' effect measurable over time, and tells
-     you when a build's defects point at order quality rather than the engine.
+     you when a build's defects point at order quality rather than the engine. An **owner-half
+     omission caught at vet** attributes to the **orchestrator's own integration/assembly**, so
+     systematic under-statement surfaces as a **rate** rather than an anecdote.
    - **Vet dispatch provenance against engine doctrine** (CONVENTIONS `§7.5`): a provenance row
      showing a non-first-party model dispatched through the cursor CLI, or a fable tier on an
      external engine, is a **defect to catch at vet** — not a builder judgment call to accept.
@@ -256,27 +260,50 @@ the reviewer and the owner's authorization carry that check instead.**
    project's work and spend *more* owner attention; Test 2 discriminates.
    **Fail-direction is explicitly not an owner call** — the premortem and security lenses own it;
    routing it up is a craft call dressed as a consequence.
-   **Three tiers; only the first spends owner attention:**
-   1. **Both tests → owner spot-check before the click** — prose voice, app feel, a cost trade, a
-      changed default.
-   2. **Perceivable but a craft call → the PR states the change in plain language, no spot-check**
-      — fail-direction flips, receipt-shape changes, storage moves; the panel is the check.
-   3. **Neither → nothing** — internal correctness, tech debt, bug fixes.
-   **Tier overlap:** fail-direction inside an already-chosen policy is the lenses' craft call; changing
-   what the product does **by default for an unconfigured user** is the owner's trade. When a change
-   is both, **tier 1 wins**.
-   **Presentation duty (tier 1 only) — show the after-state, not the delta.** Taste is judged on the
+   **Three presentation levels** — formerly numbered tier 1 / 2 / 3; those numbers **collided** with
+   duty 4's unrelated **Tier 1 / Tier 2** follow-up-disposition axis and **read as a ranking** ("tier
+   3" sounded unimportant, but a real fail-closed fix was a tier-3 change under the old scheme). The
+   names are now **show it** / **say it** / **nothing to see**; only **show it** spends owner
+   attention before the click:
+   1. **show it** — both tests → owner spot-check before the click — prose voice, app feel, a cost
+      trade, a changed default.
+   2. **say it** — perceivable but a craft call → the PR states the change in plain language, no
+      spot-check — fail-direction flips, receipt-shape changes, storage moves; the panel is the check.
+   3. **nothing to see** — neither test → nothing perceivable to judge — internal correctness, tech
+      debt, bug fixes with no perceivable surface.
+   **Overlap (owner trade vs craft call):** fail-direction inside an already-chosen policy is the
+   lenses' craft call; changing what the product does **by default for an unconfigured user** is the
+   owner's trade. When a change is both, **show it** wins.
+   **The call is made at routing, not at handback (ruling P6).** When the issue is routed, record the
+   **show it / say it / nothing to see** call **in the issue with one line of reasoning** — the same
+   moment and place as the lane call (duty 3). For **show it**, the issue's **Definition of Done
+   carries the presentation obligation as a bullet** like any other requirement, so the builder
+   inherits it as scope, not as a surprise. Evidence: a build shipped a refusal message a user reads,
+   and no wording for it exists, because the issue's DoD never asked for any — **the builder met its
+   DoD exactly.** A duty that first appears at handback is a duty nobody was resourced to discharge;
+   the same holds for the wayfinding half — an entry point must be **planned**, not retrofitted after
+   the last dispatch returns. **Mid-build revision valve:** if a builder discovers a perceivable
+   surface mid-build after a **nothing to see** call, **upgrade the call with a disclosure line** in
+   the issue — never a park, never a silent skip — because the call will sometimes be wrong (this
+   doctrine's own worked example misclassified a change on the first pass), and a wrong call must not
+   become an undischargeable duty again. **Issue bodies do not adopt the two-half PR template** — an
+   issue has three readers (the owner approving scope, the builder executing, the advisor routing), and
+   *is this worth doing* is a different question from *do I merge*; same discipline, different
+   document.
+   **Presentation duty (show it only) — show the after-state, not the delta.** Taste is judged on the
    finished thing: you decide whether wording reads well by reading the wording, not a diff.
    **Owners largely do not read diffs** — "it's in the diff" satisfies nothing.
    **Zero reconstruction, not zero clicks** — the owner should never rebuild the after-state (no
    checkout, no dev server, no reading source to imagine output). A running URL they click meets the
    standard; "check out the branch and run the dev server" fails it.
    **Where that is unreachable, say so rather than prescribe infrastructure** — zero-reconstruction is
-   still the standard when presentation is possible. The honest options are an **attended** spot-check
-   (owner present, the build waits) or **disclosing** that the surface was not presentable — disclosure
-   names what could not be presented and why, and **reaches the owner before the merge click**, not a
-   line in a body nobody reads after the fact. How a PR presents a surface is a separate open spike;
-   until it concludes, the visual duty ships with this attended-or-disclose fallback.
+   still the standard when presentation is possible. The honest floor is the bottom of the ranked
+   entry-point levels in
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md` (issue #661, owner-ratified
+   2026-07-27): take the highest level the project supports, disclose at **command** or below, plus
+   drive-to-state instructions — `attended` and **none** remain the honest floor when nothing higher is
+   reachable. Disclosure names what could not be presented and why, and **reaches the owner before the
+   merge click**, not a line in a body nobody reads after the fact.
    **Calibration home:** this list is the **default**; per-owner taste domains belong in the
    **configure profile** eventually (not yet built) so a consuming advisor does not re-derive what
    "taste" means for their owner.

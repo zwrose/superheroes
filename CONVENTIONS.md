@@ -713,7 +713,7 @@ the PR-body convention below survives, and only as a review-seat check, not a co
 
 ### 10.7 PR-body honesty markers (survive as a review-seat convention)
 
-Two PR-body markers from the retired execution spine survive independently of it:
+PR-body markers from the retired execution spine survive independently of it:
 
 - **Stub markers** — `# STUB(#NNN): <what is unwired and the live effect>` on any
   deliberately-unwired seam. Still **CI-enforced on source**:
@@ -727,15 +727,60 @@ Two PR-body markers from the retired execution spine survive independently of it
   the **workhorse** charter's ready-PR section (§11) mandates authoring it and
   **review-code**'s review seat verifies it in PR mode (the deterministic gate is not
   reinstated; the mandate and the seat are the enforcement).
+- **Build-record boundary** (`<!-- superheroes:build-record -->`) — everything **above**
+  this marker in the PR body is the *owner half*; everything **below** it is the *build
+  record*. The marker sits immediately above the opening `<details>` that wraps the build
+  record — a pure owner-side gain: an agent reading `gh pr view --json body` gets
+  identical raw markdown. It gives **#609** a clean staging boundary for live grounding
+  dispatch and gives the advisor's follow-ups backstop a **grep anchor**.
+- **Disclosed degradations** (`<!-- superheroes:degradations -->`) — immediately followed
+  by `### Disclosed degradations` and a list of bullets (one per degradation: what was
+  promised, what was delivered instead, and why), or the single word **None** when there
+  are none. Ratification amendment F2: disclosed degradations are **prose** in every PR
+  examined, so without a marker the omission floor's third row would be a judgment call
+  rather than a mechanism.
+
+**Omission floor (owner half).** Anything the owner still **carries after merging** appears
+in the PR's owner half, **stated as a consequence**. The checkable floor beneath that
+principle — because a model judging *"is this a consequence?"* is not a tripwire — is three
+rows that must appear under `## What we're accepting`:
+
+1. every **deferred** DoD row;
+2. every **blocking or important** review finding that was **not fixed**, whatever its
+   disposition is called;
+3. every **disclosed degradation**.
+
+The hook is **severity, not disposition status**: keying on "parked" misses a genuine
+**Important**-severity race dispositioned "Deferred — follow-up"; severity is already
+carried by every dispositions table, and keying on it keeps craft nits below the bar.
+
+No new machinery, and no waiting: the home is `skills/review-code/SKILL.md` step 8, the
+existing *PR-body honesty check (PR mode only)* — already PR-gated, already reads the
+`superheroes:dod-table` marker, already emits an **Important** / `tradeoff` /
+author-resolved finding. The floor is the **same check emitting the same finding shape**.
+Step 8 catches the floor on any review of an **existing** PR; a build's pre-handback
+`review-code` run happens **before** the PR is opened, so it runs in **branch mode** and
+skips step 8 — the **advisor's vet** is the ratified independent checker for the
+principle in every case (do not re-order the build or add a new body-aware pass here).
+
+The principle-level checker is the **advisor's vet**, not step 8 — step 8 runs in the same
+session that wrote the body, so it is the author checking whether the author forgot: fine
+for presence-matching, weak for judgment. Adopted for the vet: scoped to the **principle
+only** (the vet does not re-run the floor's presence match); lands as a **mandatory receipt
+field with an explicit `None`**; **#609 does not retire it** — when the dispatched grounding
+seat lands, the vet becomes the backstop for that seat being absent, vacuous, or
+misconfigured, so **the principle is not sequenced behind #609**. `agents/grounding-seat.md`
+is deliberately narrow (beyond pointer fixes elsewhere); that narrowness is what makes the
+seat reliable.
 
 This self-claims / DoD-grounding check is formalized as the **grounding seat**
 (`plugins/superheroes/agents/grounding-seat.md`, `reviewer` tier — never `mechanical`,
 since a false "claims check out" is a silence nothing downstream re-checks); it is
 currently instantiated by the **review-code** orchestrator inline (the interim
-mechanism — the PR-body honesty check above), with live dispatch owned by #510.
+mechanism — the PR-body honesty check above), with live dispatch owned by #609.
 
-Both are cited by `rubric/review-discipline.md`, the canonical statement of the band's
-review convention (no unreviewed PRs, §7.4).
+Markers and the omission floor are cited by `rubric/review-discipline.md`, the canonical
+statement of the band's review convention (no unreviewed PRs, §7.4).
 
 ---
 
@@ -909,8 +954,9 @@ this section is enough to block a hook or gate that skipped either step.
 ## 14. Owner involvement before the merge click
 
 > **Contract framing, not the operative rule.** Repo-root conventions do not ship in the plugin
-> package (`plugins/superheroes/**` does). The two tests, the perceivability list, the three
-> tiers, and the presentation duty live in the **Showrunner charter**
+> package (`plugins/superheroes/**` does). The two tests, the perceivability list, the
+> **show it** / **say it** / **nothing to see** levels, and the presentation duty live in the
+> **Showrunner charter**
 > (`skills/showrunner/SKILL.md`) so a consuming **advisor** can read them. This section records
 > why the rule keys on what it keys on, what standard it holds itself to, what evidence backs
 > it, and what is still unbuilt — it does **not** duplicate that list (§11: two hand-maintained
@@ -926,7 +972,8 @@ what must happen *before* that constant fires.
 copy, defaults, cost, what gets emitted on their behalf, visual surface. The ruling keys on two
 behavioral tests instead — **Test 1** (perceivability without reading the diff) and **Test 2**
 (owner taste or trade vs. craft judgment the review lenses own). Operative wording, the default
-perceivability list, the three tiers, and the presentation standard the charter sets — judged by
+perceivability list, the **show it** / **say it** / **nothing to see** levels, and the
+presentation standard the charter sets — judged by
 zero reconstruction, show the after-state — live in the **Showrunner charter**
 (`skills/showrunner/SKILL.md`); cite that home, do not restate it here.
 
@@ -936,16 +983,16 @@ from owner taste. **Fail-direction is not the owner's call** — the premortem a
 own it, and routing it up is a craft call dressed as a consequence. That follows the covenant's
 third promise: route decisions to the owner as consequences, never as craft calls.
 
-**Still unbuilt.** (a) **How** a PR makes its after-state inspectable is a separate open
-question with its own spike — it applies equally to a PR the owner launched themselves, and it
-touches PR templates, deploy infrastructure, browser-pilot output and host rendering, none of
-which this ruling decided. Until that spike concludes, the visual duty ships with the
-attended-or-disclose fallback. (b) The generic perceivability list ships as the **default**;
+**Still unbuilt.** (a) **Settled** (issue #661, owner-ratified 2026-07-27): how a PR makes its
+after-state inspectable — ranked entry-point levels, drive-to-state instructions, and the
+two-half PR body — now lives in `plugins/superheroes/rubric/review-discipline.md` and the
+**workhorse** charter's §11; cite those homes, do not restate the ranking here. (b) The generic
+perceivability list ships as the **default**;
 the **configure profile** is the named eventual home for per-owner taste domains, so a consuming
 advisor does not re-derive what "taste" means for their owner. Not built yet.
 
 **Evidence and its limit.** The tiering was back-tested against real merged work and
-discriminated correctly across all three tiers. **Every tier-1 visual case is untested** —
+discriminated correctly across all three levels. **Every show-it visual case is untested** —
 the repo the back-test came from has no visual surface, which is exactly why that repo is a
 poor sole witness for that half.
 

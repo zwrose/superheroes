@@ -2137,3 +2137,92 @@ def test_gate_accessor_matches_core_path_selection(tmp_path):
     at_selected = CM._classify_core_md_at_path(selected)
     assert at_selected.status == cfg.status
     assert at_selected.prefs == cfg.prefs
+
+
+_SHOW_IT_BODY = (
+    "**Level:** command\n"
+    "**What the owner does:** npm run dev (from repo root)\n"
+    "**Notes:** optional"
+)
+
+
+def test_parse_core_returns_show_it_surface_when_section_present():
+    facts = dict(_CORE_FACTS, showItSurface=_SHOW_IT_BODY)
+    text = CM.render_core(facts, "confirmed", "2026-06-26", "2026-06-26")
+    got = CM.parse_core(text)
+    assert got["showItSurface"] == _SHOW_IT_BODY
+
+
+def test_parse_core_and_read_return_empty_show_it_when_section_absent(tmp_path):
+    text = CM.render_core(dict(_CORE_FACTS), "confirmed", "2026-06-26", "2026-06-26")
+    assert CM.parse_core(text)["showItSurface"] == ""
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.write(repo, dict(_CORE_FACTS), "confirmed", root=store, now="2026-06-26")
+    assert CM.read(repo, root=store)["showItSurface"] == ""
+
+
+def test_render_core_omits_show_it_heading_when_empty():
+    facts = dict(_CORE_FACTS)
+    text = CM.render_core(facts, "confirmed", "2026-06-26", "2026-06-26")
+    assert "## Show-it surface" not in text
+    golden = (
+        "<!-- superheroes-core: schemaVersion=2 status=confirmed "
+        "created=2026-06-26 updated=2026-06-26 -->\n\n"
+        "## Threat model\n\nsingle-user\n\n"
+        "## Canonical patterns\n\n- x: a.ts:1\n\n"
+        "```json superheroes-core\n"
+        '{\n  "schemaVersion": 2,\n  "verifyCommand": "npm test",\n'
+        '  "stackTags": [\n    "node"\n  ],\n  "enginePreferences": {}\n}\n```\n'
+    )
+    assert text == golden
+    facts["showItSurface"] = ""
+    assert CM.render_core(facts, "confirmed", "2026-06-26", "2026-06-26") == golden
+
+
+def test_render_core_parse_core_roundtrips_show_it_surface():
+    facts = dict(_CORE_FACTS, showItSurface=_SHOW_IT_BODY)
+    text = CM.render_core(facts, "confirmed", "2026-06-26", "2026-06-26")
+    assert CM.parse_core(text)["showItSurface"] == _SHOW_IT_BODY
+
+
+def test_json_block_has_no_show_it_surface_key():
+    facts = dict(_CORE_FACTS, showItSurface=_SHOW_IT_BODY)
+    text = CM.render_core(facts, "confirmed", "2026-06-26", "2026-06-26")
+    block = json.loads(CM._JSON_BLOCK.search(text).group(1))
+    assert "showItSurface" not in block
+
+
+def test_confirm_preserves_show_it_surface_on_provisional_core(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    facts = dict(_CORE_FACTS, showItSurface=_SHOW_IT_BODY)
+    CM.write(repo, facts, "provisional", root=store, now="2026-06-26")
+    res = CM.confirm(repo, root=store, now="2026-06-28")
+    assert res["action"] == "confirmed"
+    got = CM.read(repo, root=store)
+    assert got["showItSurface"] == _SHOW_IT_BODY
+
+
+def test_replace_show_it_surface_section_create_replace_clear_preserves_rest():
+    base_facts = dict(_CORE_FACTS)
+    text = CM.render_core(base_facts, "confirmed", "2026-06-26", "2026-06-26")
+    prov = text[: text.index("## Threat model")]
+    threat = CM._section(text, "Threat model")
+    patterns = CM._section(text, "Canonical patterns")
+    json_part = text[text.index("```json superheroes-core") :]
+
+    created = CM.replace_show_it_surface_section(text, _SHOW_IT_BODY)
+    assert prov == created[: created.index("## Threat model")]
+    assert CM._section(created, "Threat model") == threat
+    assert CM._section(created, "Canonical patterns") == patterns
+    assert created.endswith(json_part)
+    assert CM._section(created, "Show-it surface") == _SHOW_IT_BODY
+
+    replaced = CM.replace_show_it_surface_section(created, _SHOW_IT_BODY + "\nextra")
+    assert CM._section(replaced, "Show-it surface") == _SHOW_IT_BODY + "\nextra"
+    assert replaced.endswith(json_part)
+
+    cleared = CM.replace_show_it_surface_section(replaced, "")
+    assert "## Show-it surface" not in cleared
+    assert cleared == text
