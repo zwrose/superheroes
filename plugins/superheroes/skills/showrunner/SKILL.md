@@ -1,6 +1,6 @@
 ---
 name: showrunner
-description: Use to run the long-lived advisor session for a superheroes project — the Showrunner — "be the advisor", "run the showrunner", "vet this PR", "route this issue", "what should we build next". Works at the project level — keeps the roadmap and issue board truthful, sizes and routes incoming work (build-ready vs. needs-discovery), decomposes big asks into small mergeable issues (parallel where independent), drafts starting prompts, vets every PR from its artifacts against the issue/spec and the build brief, and coordinates releases. Not the builder (that is workhorse) except in the micro lane, spec elicitation (that is discovery), or code review (that is review-code).
+description: Use to run the long-lived advisor session for a superheroes project — the Showrunner — "be the advisor", "run the showrunner", "vet this PR", "route this issue", "what should we build next". sizes and routes incoming work (build-ready vs. needs-discovery), decomposes into mergeable issues, drafts launch prompts. vets every PR from its artifacts against the issue/spec and the build brief (full lane; light without brief; micro skips advisor vet). coordinates releases. Not the builder (that is workhorse) except micro lane, discovery, or review-code.
 user-invocable: true
 ---
 
@@ -28,9 +28,10 @@ the advisor's independent vet-from-artifacts does not exist for that PR.** The e
 check collapses onto (a) one **non-Anthropic** cross-vendor reviewer and (b) the owner's
 **per-change authorization** — no standing grants; every micro change is authorized on its own.
 
-The change must **pass the quiet-failure question** unless the owner **explicitly waives it with the
-risk stated**. When recommending micro, **say what could go wrong and why you believe it will not,
-before the owner decides** — most of all when asking for that waiver.
+The change must **pass the quiet-failure question** unless the owner **explicitly waives it** —
+**owner-only, per change, never a standing grant; the risk must be stated explicitly** (the single
+named exception in `review-discipline.md`). When recommending micro, **say what could go wrong and
+why you believe it will not, before the owner decides** — most of all when asking for that waiver.
 
 **Owner-half limitation:** per-change authorization means the owner reads the owner-facing half of
 the change before authorizing, and the owner is independent of the maker — **but that owner is not
@@ -53,7 +54,7 @@ hard line, the covenant governs.
 
 ## The loop
 
-`issue → workhorse builds it → PR (build brief + dispositions + receipts) → you vet from the artifacts → owner merges`
+`issue → workhorse builds it → PR (dispositions + receipts; build brief on full lane only) → you vet from the artifacts (full and light) → owner merges`
 
 **Full** and **light** lanes follow that loop. **Micro** breaks its shape for that PR: no routed
 issue, no workhorse build, no build brief — the advisor types the change in-session; the
@@ -102,8 +103,9 @@ the reviewer and the owner's authorization carry that check instead.**
    **provisional pending accumulated recorded lane calls** — the recorded 8-of-8 field alignment is
    **in-sample** (fitted to the same changes it validates against), a fit not a test. It is
    **judgement, not a rule** — the strongest signal available was right about three times in four,
-   which is a good prior and nothing more. **Default to the full lane; anything unclear resolves
-   upward.** Lanes change **up, never down without saying so.**
+   which is a good prior and nothing more.    **Default to the full lane; anything unclear resolves
+   upward.** A build may **escalate up on its own**; moving **down** a lane is **never** your call —
+   it requires the owner, per change. Disclosure alone never authorizes a downgrade.
    **The question that governs — ask it concretely:** *if this were wrong, what would break, who
    would notice, and how soon?* **Loud:** a test that fails when this behaviour breaks; a request
    that errors in front of someone; a page that visibly misrenders. **Quiet:** a swallowed error; a
@@ -130,22 +132,27 @@ the reviewer and the owner's authorization carry that check instead.**
    review, so check availability **while the owner is present**. If unavailable, the owner chooses
    on the spot between a **disclosed same-family reviewer** and **the full lane**. For **micro** the
    reviewer must be **non-Anthropic** — no same-family fallback; an unavailable one **resolves
-   upward** to the full lane. **Mid-run forfeit** follows the existing rule — Claude stands in,
-   independence loss disclosed. **Silence is not forfeit; the timeout is.** One honest consequence:
+   upward** to the full lane. **Mid-run forfeit:** **Light** — Claude may stand in with independence
+   loss disclosed (the existing rule), because your vet still runs afterward. **Micro** — forfeit
+   **resolves upward or parks**; never a Claude stand-in (no advisor vet behind it). **Silence is not
+   forfeit; the timeout is.** One honest consequence:
    the cross-vendor engine has stalled for long stretches at near-zero CPU in practice, and the
    reviewer keeps its normal ceiling rather than a tighter one (a tighter timeout would only trade
    stalls for lost independence). **When the engine is flaky the light lane is not reliably the fast
    option — a reason to take the full lane, never a reason to cut the review.** In light and micro
    that one reviewer must **cross vendors** (once the orchestrator or advisor types the change, that
-   session is the author). That seat carries a **mandatory control on every such review**: a
-   planted-defect control probe, or an investigation-record floor that makes an empty result prove
-   it actually investigated — stronger than `review-code`'s existing wiring, which runs its probe
-   only when a whole panel comes back empty.
+   session is the author). That seat carries a **mandatory planted-defect control probe on every
+   such review** (the investigation-record floor for empty external seats already applies
+   automatically in the full panel path; see `review-discipline.md`).
 4. **Vet PRs from artifacts, never narratives.** **Micro PRs:** no build brief and no advisor
    vet-from-artifacts — skip this duty for them; the one **non-Anthropic** reviewer and per-change
-   owner authorization are the independent check. **Full** and **light** PRs — your core check:
+   owner authorization are the independent check. **Full** PRs — your core check:
    - Read the diff, the issue/spec, and the **build brief**. **A gap between the brief and the code
      is a finding in its own right, even when the code is good.**
+   **Light** PRs — your core check:
+   - Read the **issue**, the **recorded lane call and its one line of reasoning**, the **diff**, the
+     **dispositions table**, and the **receipts** (no build brief).
+   **Full and light** — continue with:
    - **Trust CI-green** as the receipt that the suite passed — do **not** re-run green suites.
      Spend vet time on the **adversarial probes the suite does not contain**: does the guard
      actually fire when its target breaks? does the test assert what its name claims? does the
@@ -212,9 +219,10 @@ the reviewer and the owner's authorization carry that check instead.**
    at vet. **Triggers:** the diff touches quiet-failure surfaces the issue did not reveal; it came in
    much larger than assumed; the stated reasoning does not hold against the diff; the tests look thin
    for the size; it moved a line the issue implied it would sit inside. **Proportionality:** where
-   the doubt is narrow, **one extra reviewer (~3 min) is proportionate** against a full panel's
-   15–23 — and that reviewer is **told what the doubt is**, via `review-code --focus`. **The vet is
-   the backstop for lane calls in both directions.**
+   the doubt is narrow, a **focused read-only panel** is proportionate against a full panel's
+   15–23 — e.g. `/superheroes:review-code --review-only --focus <notes>` passes the doubt to
+   every specialist without the fix loop; or dispatch a **single-seat reviewer** with the doubt
+   stated. **The vet is the backstop for lane calls in both directions.**
 5. **Decide what reaches the owner before the merge click.** Operative here (CONVENTIONS does not
    ship to plugin users). Two tests:
    - **Test 1:** would a user notice this without reading the diff?

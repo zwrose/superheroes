@@ -45,24 +45,34 @@ and the failure then surfaces *after all the work is done*.
 
 **Single-reviewer lanes (light and micro).** The one reviewer must **cross vendors**:
 once the orchestrator (light) or the advisor (micro) types the change, that session is
-the *author*, so a same-family reviewer is not independent. For **micro**, the reviewer
-must additionally be **non-Anthropic** — the maker-family rule applied to the advisor's
-own family, because in micro the advisor *is* the maker. That one reviewer carries a
-**mandatory control on every such review**: a planted-defect control probe, or an
-investigation-record floor that makes an empty result prove it actually investigated. A
-single-seat review inherits undiluted the risk that an external seat silently returns a
-well-formed empty pass — deliberately stronger than running such a probe only when a whole
-panel comes back empty. This is doctrine in prose only; lane assignment has no mechanical
-check.
+the *author*, so a same-family reviewer is not independent — an invariant, with one
+bounded exception for **light** only: if no cross-vendor reviewer is available at
+kickoff, the **owner** chooses on the spot between a **disclosed** same-family reviewer
+(a named, disclosed degradation of independence) and taking the **full lane**. It is never
+the builder's or advisor's own call, and it never applies to **micro** (which requires
+non-Anthropic and resolves upward instead). For **micro**, the reviewer must additionally
+be **non-Anthropic** — the maker-family rule applied to the advisor's own family, because
+in micro the advisor *is* the maker. That one reviewer carries a **mandatory
+planted-defect control probe on every light or micro review** — the control that makes
+single-seat review trustworthy. The **investigation-record floor** (an empty external
+review seat must prove it actually investigated, or forfeit as vacuous) already applies
+automatically to every empty external review seat in the full panel path; it is a standing
+safeguard, not something these lanes add. What single-reviewer lanes **add** is that the
+planted-defect probe runs on **every** light or micro review, not only when a vendor's
+seats all came back empty. This is doctrine in prose only; lane assignment has no
+mechanical check.
 
 ### The spine
 
 **Default to the full lane; anything unclear resolves upward.**
 
 If this were wrong, what would break, who would notice, and how soon? **Quiet** failure
-means **the full lane at any size**.
+means **the full lane at any size**. The **one** exception is an explicit **per-change
+owner waiver** in **micro** (see Micro — owner authorization below) — owner-only, risk
+stated, never a standing grant.
 
-**Lanes change up, never down without saying so.**
+**Lanes change up on their own; moving down a lane is never the builder's or advisor's
+call — it requires the owner, per change.** Disclosure alone never authorizes a downgrade.
 
 This default does not bend. The thoughts that precede a bad light call — *it's just a
 wording fix*, *I know this area* — are exactly the ones this convention exists to
@@ -86,6 +96,11 @@ half of the change before authorizing, and the owner is independent of the maker
 **Limitation:** that owner is **not** comparing the change against a build record they
 have read.
 
+**Quiet-failure waiver (single named exception).** Micro normally must pass the
+quiet-failure question like any lane. The owner may **waive that question for one change**
+when they state the risk explicitly — **owner-only, per change, never a standing grant**.
+The advisor must say what could go wrong before the owner decides.
+
 ## The rule — no unreviewed PRs
 
 Every PR gets a real review before it is handed back to the owner, no matter how
@@ -107,19 +122,20 @@ fast-follow):
 
 ## Ship-phase honesty (CONVENTIONS §10.7)
 
-On **full** and **light** lane PRs, a green, branch-current PR can still be silently
-incomplete. Two fail-closed gates operate on the PR body — a review seat flags a PR
-missing either:
+On every lane PR, a green, branch-current PR can still be silently incomplete. Two
+fail-closed gates operate on the PR body — a review seat flags a PR missing either:
 
 - **Definition of done disposition table** (`superheroes:dod-table`): one row per spec
   DoD bullet, each `done` (with an evidence pointer) or `deferred` (with a filed issue
   `#NNN` and a one-line reason). The **review seat** flags a PR whose table is missing,
   or a row whose evidence or deferral is empty or hollow. **Micro has no DoD table** —
-  nothing to disposition against; it starts from a diagnosis, not a spec'd issue.
+  nothing to disposition against; it starts from a diagnosis, not a spec'd issue; this
+  gate does not apply to micro.
 - **Stubbed seams** (`superheroes:stubbed-seams`, generated): every deliberately-unwired
   seam carries a `# STUB(#NNN): <what is unwired and the live effect>` marker (issue
   mandatory, CI-validated) and surfaces in this generated section. A seam disclosed only
-  in a docstring is a finding.
+  in a docstring is a finding. **Every lane** — including micro; a deliberate unwired seam
+  in a micro change is itself a reason to escalate.
 
 ## Why it is stated this strongly
 
