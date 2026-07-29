@@ -83,7 +83,11 @@ ABANDON_UNCONFIRMED_DETAIL = "engine-death-unconfirmed"
 MAX_ATTEMPTS = 2
 AUTHORITY_HASH_MISMATCH = "authority-hash-mismatch"
 AUTHORITY_PERSIST_FAILED = "authority-persist-failed"
+AUTHORITY_LEDGER_MISSING = "authority-ledger-missing"
+AUTHORITY_LEDGER_INIT_FAILED = "authority-ledger-init-failed"
 LAUNCH_SEAL_FAILED = "launch-seal-failed"
+LEDGER_ROOT_NAME = "superheroes-launch-ledger"
+LEDGER_SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -318,6 +322,11 @@ def _persist_authority(authority):
 
 
 def _authority_file_hash(run_dir):
+    """Content hash of the sealed authority file. Not an authority decision source.
+
+    Kept for publish-time digest helpers and tests; fold/continue/abandon never
+    use this as the expected-hash reference (that lives in the launch ledger).
+    """
     path = _authority_path(run_dir)
     try:
         with open(path, "rb") as fh:
@@ -329,39 +338,138 @@ def _authority_file_hash(run_dir):
     return hashlib.sha256(raw).hexdigest()
 
 
-def _verify_authority_hash_at_fold(run_dir, expected_hash):
-    """Re-verify sealed authority bytes against the hash echoed at publish time.
+def _ledger_root():
+    """Supervisor-owned launch-ledger root. None when unusable (fail closed)."""
+    override = os.environ.get("SUPERHEROES_DISPATCH_LEDGER_ROOT")
+    if override is not None and override != "":
+        path = override
+    else:
+        path = os.path.join(tempfile.gettempdir(), LEDGER_ROOT_NAME)
+    if not os.path.exists(path):
+        try:
+            os.makedirs(path, mode=0o700, exist_ok=True)
+        except OSError:
+            return None
+    if os.path.islink(path):
+        return None
+    try:
+        real = os.path.realpath(path)
+    except OSError:
+        return None
+    if os.path.islink(real) or not os.path.isdir(real):
+        return None
+    try:
+        st = os.stat(real)
+    except OSError:
+        return None
+    if st.st_uid != os.getuid():
+        return None
+    return real
 
-    O_EXCL + mode 0400 prevents *modification* of an existing sealed file, not
-    unlink-and-recreate. That is exactly why the hash re-verification is the
-    mechanism and the file mode is not — a swapped or recreated sealed file
-    between spawn and fold must be detected and refused here, never trusted.
-    """
-    if not expected_hash:
-        return False
-    current = _authority_file_hash(run_dir)
-    if not current or current != expected_hash:
-        return False
-    # Refuse a torn/partial file: hash matched only if bytes were readable; also
-    # require the payload to parse as authority.
-    if _load_authority(run_dir) is None:
-        return False
-    return True
+
+def _ledger_dir(run_dir_real):
+    root = _ledger_root()
+    if root is None:
+        return None
+    try:
+        key = os.path.realpath(run_dir_real)
+    except OSError:
+        return None
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    return os.path.join(root, "run-" + digest)
 
 
-def _load_authority(run_dir):
-    """Load immutable supervisor-held binding for cross-process re-entry.
+def _ledger_run_record_path(run_dir_real):
+    ledger_dir = _ledger_dir(run_dir_real)
+    if ledger_dir is None:
+        return None
+    return os.path.join(ledger_dir, "run.json")
 
-    This is not the mutable receipt (state.json). Cross-process originating-verb
-    continuations and observational verbs reconstruct LaunchAuthority from this
-    binding. A torn/partial file never becomes authority (parse failure → None).
-    """
-    path = _authority_path(run_dir)
+
+def _ledger_seal(path, payload_dict):
+    raw = json.dumps(
+        payload_dict, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    _seal_bytes_excl(path, raw, mode=0o400)
+
+
+def _ledger_read(path):
+    if not path:
+        return None
     try:
         with open(path, "rb") as fh:
             raw = fh.read()
     except OSError:
         return None
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def _ledger_record_exists(run_dir_real):
+    path = _ledger_run_record_path(run_dir_real)
+    return bool(path) and os.path.isfile(path)
+
+
+def _ledger_init(authority, authority_hash):
+    """Seal the supervisor-owned run record. Propagates OSError (incl. FileExistsError)."""
+    if not isinstance(authority, LaunchAuthority):
+        raise TypeError("authority is required for ledger init")
+    root = _ledger_root()
+    if root is None:
+        raise OSError("authority-ledger-root-unusable")
+    try:
+        run_dir_key = os.path.realpath(authority.run_dir)
+    except OSError as exc:
+        raise OSError("authority-ledger-rundir-unusable") from exc
+    ledger_dir = _ledger_dir(run_dir_key)
+    if ledger_dir is None:
+        raise OSError("authority-ledger-root-unusable")
+    os.makedirs(ledger_dir, mode=0o700, exist_ok=True)
+    payload = {
+        "schemaVersion": LEDGER_SCHEMA_VERSION,
+        "runDir": run_dir_key,
+        "authorityHash": authority_hash,
+        "runNonce": authority.run_nonce,
+        "orderId": authority.order_id or "",
+        "runKind": authority.run_kind,
+    }
+    _ledger_seal(_ledger_run_record_path(run_dir_key), payload)
+
+
+def _ledger_expected_hash(run_dir_real, run_nonce, order_id=None):
+    """Return the sealed authorityHash from the launch ledger, or None.
+
+    Never computes a hash from the file being verified — the ledger is the
+    sole reference. Binding failures (schema/runDir/nonce/orderId) refuse.
+    """
+    try:
+        run_dir_real = os.path.realpath(run_dir_real)
+    except OSError:
+        return None
+    path = _ledger_run_record_path(run_dir_real)
+    data = _ledger_read(path)
+    if data is None:
+        return None
+    if data.get("schemaVersion") != LEDGER_SCHEMA_VERSION:
+        return None
+    if data.get("runDir") != run_dir_real:
+        return None
+    if data.get("runNonce") != run_nonce:
+        return None
+    if order_id is not None and (data.get("orderId") or "") != (order_id or ""):
+        return None
+    authority_hash = data.get("authorityHash")
+    if not authority_hash:
+        return None
+    return authority_hash
+
+
+def _authority_from_bytes(raw):
+    """Parse LaunchAuthority from sealed bytes. Torn/partial → None."""
     if not raw:
         return None
     try:
@@ -400,6 +508,49 @@ def _load_authority(run_dir):
         )
     except (KeyError, TypeError, ValueError):
         return None
+
+
+def _load_authority(run_dir):
+    """Load immutable supervisor-held binding for cross-process re-entry.
+
+    This is not the mutable receipt (state.json). Cross-process originating-verb
+    continuations and observational verbs reconstruct LaunchAuthority from this
+    binding. A torn/partial file never becomes authority (parse failure → None).
+    """
+    path = _authority_path(run_dir)
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return None
+    return _authority_from_bytes(raw)
+
+
+def _load_verified_authority(run_dir, expected_hash):
+    """Single-snapshot verify: hash and parse the same bytes. None on any failure.
+
+    O_EXCL + mode 0400 prevents *modification* of an existing sealed file, not
+    unlink-and-recreate. The expected hash must come from the supervisor-owned
+    launch ledger — never from state.json or from hashing the file itself.
+    """
+    if not expected_hash:
+        return None
+    path = _authority_path(run_dir)
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    if hashlib.sha256(raw).hexdigest() != expected_hash:
+        return None
+    return _authority_from_bytes(raw)
+
+
+def _verify_authority_hash_at_fold(run_dir, expected_hash):
+    """Boolean wrapper retained for existing tests; prefer _load_verified_authority."""
+    return _load_verified_authority(run_dir, expected_hash) is not None
 
 
 def _seal_attempt_launch(run_dir, attempt, authority, authority_hash, timeout):
@@ -538,6 +689,8 @@ def _scrub_git_env(env=None):
     out = dict(env or os.environ)
     for key in _GIT_ROUTING_VARS:
         out.pop(key, None)
+    # Engine must never learn the supervisor-owned launch-ledger root.
+    out.pop("SUPERHEROES_DISPATCH_LEDGER_ROOT", None)
     return out
 
 
@@ -1206,8 +1359,6 @@ def _run_engine_files(argv, prompt_path, stdout_path, stderr_path, timeout, prog
         if authority is None:
             raise TypeError("authority is required when writing engine_pgid")
         if not authority_hash:
-            authority_hash = _authority_file_hash(authority.run_dir)
-        if not authority_hash:
             raise TypeError("authority_hash is required when writing engine_pgid")
         start_identity = _supervisor_lstart(pgid) or ("pid:%s" % pgid)
         _write_engine_pgid(
@@ -1681,10 +1832,8 @@ def _fold_terminal_write(run_dir, authority, argv, engagement, kind, body, attem
     """Persist write dispatch terminal result and release worktree lease from authority."""
     if not isinstance(authority, LaunchAuthority):
         raise TypeError("authority is required for write terminal fold")
-    if authority_hash is None:
-        authority_hash = _authority_file_hash(run_dir)
-    # O_EXCL + mode 0400 prevents modification, not unlink-and-recreate — hash check.
-    if not _verify_authority_hash_at_fold(run_dir, authority_hash):
+    # Required reference — no self-hash fallback (that was the circular trust root).
+    if not authority_hash:
         result = _terminal_meta({
             "ok": False,
             "reason": "unrunnable",
@@ -1693,7 +1842,21 @@ def _fold_terminal_write(run_dir, authority, argv, engagement, kind, body, attem
             "forfeited": False,
         }, run_dir, argv, authority=authority, run_nonce=authority.run_nonce)
         _atomic_write_json(os.path.join(run_dir, RESULT_NAME), result)
+        # Worktree lease retained — unverified authority must not release.
         return result
+    verified = _load_verified_authority(run_dir, authority_hash)
+    if verified is None:
+        result = _terminal_meta({
+            "ok": False,
+            "reason": "unrunnable",
+            "detail": AUTHORITY_HASH_MISMATCH,
+            "attempts": attempts_done,
+            "forfeited": False,
+        }, run_dir, argv, authority=authority, run_nonce=authority.run_nonce)
+        _atomic_write_json(os.path.join(run_dir, RESULT_NAME), result)
+        # Worktree lease retained — unverified authority must not release.
+        return result
+    authority = verified
     run_nonce = authority.run_nonce
     if kind == "success" and body:
         result = _terminal_meta({
@@ -1773,10 +1936,8 @@ def _fold_terminal(run_dir, authority, argv, last_engagement,
     """Under run lock: parse durable stdout, spot_check, persist result.json, destroy view."""
     if not isinstance(authority, LaunchAuthority):
         raise TypeError("authority is required for review terminal fold")
-    if authority_hash is None:
-        authority_hash = _authority_file_hash(run_dir)
-    # O_EXCL + mode 0400 prevents modification, not unlink-and-recreate — hash check.
-    if not _verify_authority_hash_at_fold(run_dir, authority_hash):
+    # Required reference — no self-hash fallback (that was the circular trust root).
+    if not authority_hash:
         result = _terminal_meta({
             "ok": False,
             "reason": "unrunnable",
@@ -1789,6 +1950,21 @@ def _fold_terminal(run_dir, authority, argv, last_engagement,
         _atomic_write_json(os.path.join(run_dir, RESULT_NAME), result)
         _destroy_review_views(run_dir, authority)
         return result
+    verified = _load_verified_authority(run_dir, authority_hash)
+    if verified is None:
+        result = _terminal_meta({
+            "ok": False,
+            "reason": "unrunnable",
+            "detail": AUTHORITY_HASH_MISMATCH,
+            "attempts": attempts_done,
+            "forfeited": False,
+        }, run_dir, argv, authority=authority, run_nonce=authority.run_nonce)
+        view_receipt = authority.view_receipt if isinstance(authority.view_receipt, dict) else {}
+        result = _attach_sanitized_view(result, view_receipt)
+        _atomic_write_json(os.path.join(run_dir, RESULT_NAME), result)
+        _destroy_review_views(run_dir, authority)
+        return result
+    authority = verified
     run_nonce = authority.run_nonce
     engine = authority.engine
     role_kind = authority.role_kind
@@ -1923,9 +2099,14 @@ def _run_child_entry(run_dir):
     authority = _load_authority(real_dir)
     if authority is None:
         return 2
-    authority_hash = _authority_file_hash(real_dir)
+    authority_hash = _ledger_expected_hash(
+        real_dir, authority.run_nonce, authority.order_id)
     if not authority_hash:
         return 2
+    verified = _load_verified_authority(real_dir, authority_hash)
+    if verified is None:
+        return 2
+    authority = verified
     attempt, launch = _find_pending_launch(real_dir, authority_hash, authority.run_nonce)
     if attempt is None or launch is None:
         return 2
@@ -1940,8 +2121,7 @@ def _run_child_main(run_dir, attempt, authority, authority_hash=None, launch=Non
     if not isinstance(authority, LaunchAuthority):
         raise TypeError("authority is required for run-child")
     if not authority_hash:
-        authority_hash = _authority_file_hash(run_dir)
-    if not authority_hash:
+        # No self-hash fallback — missing reference exits 2 with no sentinel.
         return 2
     if launch is None:
         launch = _load_attempt_launch(
@@ -2040,7 +2220,7 @@ def _execute_injected_attempt(run_engine, run_dir, attempt, authority, argv, pro
     if not isinstance(authority, LaunchAuthority):
         raise TypeError("authority is required for injected attempt")
     if not authority_hash:
-        authority_hash = _authority_file_hash(run_dir)
+        raise ValueError("authority_hash is required for injected attempt")
     paths = _attempt_paths(run_dir, attempt)
     progress_path = os.path.join(run_dir, PROGRESS_NAME)
     extra = authority.progress_path
@@ -2180,12 +2360,21 @@ def dispatch_abandon(run_dir):
             "disclosure": "abandon incomplete: launch authority missing; lease retained",
         }
     state = _read_json(os.path.join(real_dir, STATE_NAME), {}) or {}
-    authority_hash = state.get("authorityHash")
-    # Prefer the receipt echo; fall back to current file hash only when echo absent
-    # (legacy) — fold still re-verifies. Abandon requires hash binding for pgid.
+    authority_hash = _ledger_expected_hash(
+        real_dir, authority.run_nonce, authority.order_id)
     if not authority_hash:
-        authority_hash = _authority_file_hash(real_dir)
-    if not _verify_authority_hash_at_fold(real_dir, authority_hash):
+        return {
+            "ok": False,
+            "terminal": True,
+            "reason": ABANDON_INCOMPLETE,
+            "detail": AUTHORITY_LEDGER_MISSING,
+            "attempts": 0,
+            "forfeited": False,
+            "runDir": real_dir,
+            "disclosure": "abandon incomplete: launch authority ledger missing; lease retained",
+        }
+    verified = _load_verified_authority(real_dir, authority_hash)
+    if verified is None:
         return {
             "ok": False,
             "terminal": True,
@@ -2196,6 +2385,7 @@ def dispatch_abandon(run_dir):
             "runDir": real_dir,
             "disclosure": "abandon incomplete: launch authority hash mismatch; lease retained",
         }
+    authority = verified
     cached = _read_cached_result(real_dir, authority.run_nonce)
     if cached:
         return cached
@@ -2296,8 +2486,18 @@ def _continue_run(run_dir, authority, *, deadline, max_wait, allow_spawn,
         return {"ok": False, "terminal": True, "reason": "unrunnable", "detail": "state-missing",
                 "attempts": 0, "forfeited": False, "runDir": run_dir}
     run_nonce = authority.run_nonce
-    authority_hash = state.get("authorityHash")
-    if not authority_hash or not _verify_authority_hash_at_fold(run_dir, authority_hash):
+    authority_hash = _ledger_expected_hash(
+        run_dir, authority.run_nonce, authority.order_id)
+    if not authority_hash:
+        return _terminal_meta({
+            "ok": False,
+            "reason": "unrunnable",
+            "detail": AUTHORITY_LEDGER_MISSING,
+            "attempts": int(state.get("completedAttempts") or 0),
+            "forfeited": False,
+        }, run_dir, list(authority.argv), authority=authority, run_nonce=run_nonce)
+    verified = _load_verified_authority(run_dir, authority_hash)
+    if verified is None:
         return _terminal_meta({
             "ok": False,
             "reason": "unrunnable",
@@ -2305,6 +2505,8 @@ def _continue_run(run_dir, authority, *, deadline, max_wait, allow_spawn,
             "attempts": int(state.get("completedAttempts") or 0),
             "forfeited": False,
         }, run_dir, list(authority.argv), authority=authority, run_nonce=run_nonce)
+    authority = verified
+    run_nonce = authority.run_nonce
     cached = _read_cached_result(run_dir, run_nonce)
     if cached:
         return cached
@@ -2884,6 +3086,9 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
         progress_path=progress_path, argv=argv, spawned_argv=argv_spawn,
         engine_binary=engine_binary, order_id=order_id or "", run_nonce=run_nonce,
         fed_prompt=fed_prompt, view_receipt=view_receipt, cleanup_roots=cleanup_roots)
+    if _ledger_record_exists(real_dir):
+        _destroy_review_views(real_dir, authority)
+        return _terminal_run_dir_reused(real_dir)
     try:
         auth_hash = _persist_authority(authority)
     except OSError:
@@ -2894,8 +3099,23 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
         _atomic_write_json(os.path.join(real_dir, RESULT_NAME), result)
         _destroy_review_views(real_dir, authority)
         return result
+    try:
+        _ledger_init(authority, auth_hash)
+    except FileExistsError:
+        _destroy_review_views(real_dir, authority)
+        return _terminal_run_dir_reused(real_dir)
+    except OSError:
+        result = _attach_sanitized_view(_terminal_meta(
+            {"ok": False, "reason": "unrunnable", "detail": AUTHORITY_LEDGER_INIT_FAILED,
+             "attempts": 0, "forfeited": False},
+            real_dir, argv, spawned_argv=argv_spawn, authority=authority), view_receipt)
+        _atomic_write_json(os.path.join(real_dir, RESULT_NAME), result)
+        _destroy_review_views(real_dir, authority)
+        return result
 
     # state.json is a human/PR receipt only — never an authority source.
+    # authorityHash is written as a human/PR receipt echo only — never read back
+    # into an authority decision (the launch ledger is the sole reference).
     state = authority.to_receipt()
     state["authorityHash"] = auth_hash
     state["completedAttempts"] = 0
@@ -3108,6 +3328,9 @@ def _dispatch_write_impl(engine, *, engine_model, effort, model=None, prompt_pat
         spawned_argv=argv_spawn, engine_binary=engine_binary,
         lease_token=lease_token, lease_holder=lease_holder, run_nonce=run_nonce,
         fed_prompt=prompt_bytes.decode("utf-8", "ignore"))
+    if _ledger_record_exists(real_dir):
+        _release_worktree_lease(authority)
+        return _terminal_run_dir_reused(real_dir)
     try:
         auth_hash = _persist_authority(authority)
     except OSError:
@@ -3117,7 +3340,21 @@ def _dispatch_write_impl(engine, *, engine_model, effort, model=None, prompt_pat
             {"ok": False, "reason": "unrunnable", "detail": AUTHORITY_PERSIST_FAILED,
              "attempts": 0, "forfeited": False},
             real_dir, argv, spawned_argv=argv_spawn, authority=authority)
+    try:
+        _ledger_init(authority, auth_hash)
+    except FileExistsError:
+        _release_worktree_lease(authority)
+        return _terminal_run_dir_reused(real_dir)
+    except OSError:
+        _release_worktree_lease(authority)
+        return _terminal_meta(
+            {"ok": False, "reason": "unrunnable", "detail": AUTHORITY_LEDGER_INIT_FAILED,
+             "attempts": 0, "forfeited": False},
+            real_dir, argv, spawned_argv=argv_spawn, authority=authority)
 
+    # state.json is a human/PR receipt only — never an authority source.
+    # authorityHash is written as a human/PR receipt echo only — never read back
+    # into an authority decision (the launch ledger is the sole reference).
     state = authority.to_receipt()
     state["authorityHash"] = auth_hash
     state["completedAttempts"] = 0

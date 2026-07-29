@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -82,6 +83,7 @@ def _authority_from_state(run_dir, state, **kw):
 
 
 def _persist_test_authority(run_dir, state, **kw):
+    run_dir = os.path.realpath(str(run_dir))
     authority = _authority_from_state(run_dir, state, **kw)
     try:
         auth_hash = ED._persist_authority(authority)
@@ -100,6 +102,11 @@ def _persist_test_authority(run_dir, state, **kw):
             if isinstance(cur, dict):
                 cur["authorityHash"] = auth_hash
                 open(state_path, "w", encoding="utf-8").write(json.dumps(cur))
+    if auth_hash:
+        try:
+            ED._ledger_init(authority, auth_hash)
+        except FileExistsError:
+            pass
     return authority
 
 
@@ -2543,6 +2550,13 @@ def test_e2e_b1_authority_wins_over_disagreeing_state(tmp_path, monkeypatch):
         except FileNotFoundError:
             pass
         auth_hash = ED._persist_authority(auth)
+        # Re-seal the supervisor ledger for the replaced authority (same run_dir;
+        # ledger records are O_EXCL — drop the prior record so the new hash binds).
+        prior_ledger = ED._ledger_run_record_path(os.path.realpath(str(run_dir)))
+        if prior_ledger and os.path.isfile(prior_ledger):
+            os.chmod(prior_ledger, 0o600)
+            os.unlink(prior_ledger)
+        ED._ledger_init(auth, auth_hash)
         # State still names the *other* valid cwd.
         state["cwd"] = linked_state
         state["authorityHash"] = auth_hash
@@ -2696,3 +2710,339 @@ def test_spawn_detached_own_session_attempt_1_and_2(tmp_path, monkeypatch):
         assert sid != os.getsid(os.getpid())
         assert pgid != os.getpgid(os.getpid())
         assert pgid == pid
+
+
+# --- WO-702-B X1: supervisor-owned launch ledger ---
+
+
+def _lease_held_for(cwd):
+    import file_lock
+    return bool(file_lock.read_holder(ED._worktree_lease_path(os.path.realpath(cwd))))
+
+
+def _delete_ledger_record(run_dir):
+    path = ED._ledger_run_record_path(os.path.realpath(str(run_dir)))
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    return path
+
+
+def test_x1_state_hash_bypass_refused_at_reentry(tmp_path, monkeypatch):
+    """End-to-end: forging launch-authority.json + state.authorityHash must not pass fold."""
+    main, linked = _linked_pair(tmp_path)
+    _install_fake_codex_on_path(monkeypatch, tmp_path, slow_first_seconds=60)
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "x1-bypass"
+    run_dir.mkdir(mode=0o700)
+    first = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="x1-bypass",
+        run_engine=ED._run_engine, max_wait=1, timeout=30, run_dir=str(run_dir),
+    )
+    assert first.get("running") is True, first
+    assert _lease_held_for(linked), "lease must be held before the forge"
+    authority = ED._load_authority(str(run_dir))
+    assert authority is not None
+    # Forge without touching order_id (that gate is independent of the hash bypass).
+    new_hash, _swapped = _swap_sealed_authority(
+        run_dir, authority, effort="low", fed_prompt="forged-prompt")
+    state_path = run_dir / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["authorityHash"] = new_hash
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    marker = Path(linked) / ".fake-codex-invokes"
+    invokes_before = int(marker.read_text()) if marker.exists() else 0
+    second = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="x1-bypass",
+        run_engine=ED._run_engine, max_wait=1, timeout=30, run_dir=str(run_dir),
+    )
+    assert second.get("terminal") is True, second
+    assert second.get("detail") == ED.AUTHORITY_HASH_MISMATCH, second
+    invokes_after = int(marker.read_text()) if marker.exists() else 0
+    assert invokes_after == invokes_before, "forged re-entry must not spawn an engine"
+    assert _lease_held_for(linked), "unverified authority must retain the lease"
+
+
+def test_x1_ledger_missing_refuses_reentry_poll_abandon(tmp_path, monkeypatch):
+    """Ledger record deleted → continue / poll / abandon all refuse; lease retained."""
+    main, linked = _linked_pair(tmp_path)
+    _install_fake_codex_on_path(monkeypatch, tmp_path, slow_first_seconds=60)
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "x1-led-miss"
+    run_dir.mkdir(mode=0o700)
+    first = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="x1-led-miss",
+        run_engine=ED._run_engine, max_wait=1, timeout=30, run_dir=str(run_dir),
+    )
+    assert first.get("running") is True, first
+    assert _lease_held_for(linked)
+    _delete_ledger_record(run_dir)
+    reenter = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="x1-led-miss",
+        run_engine=ED._run_engine, max_wait=1, timeout=30, run_dir=str(run_dir),
+    )
+    assert reenter.get("terminal") is True, reenter
+    assert reenter.get("detail") == ED.AUTHORITY_LEDGER_MISSING, reenter
+    assert _lease_held_for(linked)
+    poll = ED.dispatch_poll(str(run_dir), max_wait=1, order_id="x1-led-miss")
+    assert poll.get("terminal") is True, poll
+    assert poll.get("detail") == ED.AUTHORITY_LEDGER_MISSING, poll
+    assert _lease_held_for(linked)
+    abandon = ED.dispatch_abandon(str(run_dir))
+    assert abandon.get("terminal") is True, abandon
+    assert abandon.get("reason") == ED.ABANDON_INCOMPLETE, abandon
+    assert abandon.get("detail") == ED.AUTHORITY_LEDGER_MISSING, abandon
+    assert _lease_held_for(linked)
+
+
+def test_x1_ledger_wrong_hash_refuses(tmp_path, monkeypatch):
+    """Ledger authorityHash disagrees with sealed file → AUTHORITY_HASH_MISMATCH."""
+    main, linked = _linked_pair(tmp_path)
+    _install_fake_codex_on_path(monkeypatch, tmp_path, slow_first_seconds=60)
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "x1-led-hash"
+    run_dir.mkdir(mode=0o700)
+    first = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="x1-led-hash",
+        run_engine=ED._run_engine, max_wait=1, timeout=30, run_dir=str(run_dir),
+    )
+    assert first.get("running") is True, first
+    authority = ED._load_authority(str(run_dir))
+    real = os.path.realpath(str(run_dir))
+    path = ED._ledger_run_record_path(real)
+    record = json.loads(open(path, "rb").read().decode("utf-8"))
+    record["authorityHash"] = "0" * 64
+    os.chmod(path, 0o600)
+    os.unlink(path)
+    ED._ledger_seal(path, record)
+    # Sealed file + state echo still match each other; only the ledger disagrees.
+    res = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="x1-led-hash",
+        run_engine=ED._run_engine, max_wait=1, timeout=30, run_dir=str(run_dir),
+    )
+    assert res.get("detail") == ED.AUTHORITY_HASH_MISMATCH, res
+    assert _lease_held_for(linked)
+
+
+def test_x1_ledger_binding_nonce_rundir_schema(tmp_path, monkeypatch):
+    """Disagreement on runNonce / runDir / schemaVersion is not accepted."""
+    main, linked = _linked_pair(tmp_path)
+    _install_fake_codex_on_path(monkeypatch, tmp_path, slow_first_seconds=60)
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "x1-bind"
+    run_dir.mkdir(mode=0o700)
+    first = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="x1-bind",
+        run_engine=ED._run_engine, max_wait=1, timeout=30, run_dir=str(run_dir),
+    )
+    assert first.get("running") is True, first
+    authority = ED._load_authority(str(run_dir))
+    real = os.path.realpath(str(run_dir))
+    path = ED._ledger_run_record_path(real)
+    raw = open(path, "rb").read()
+    record = json.loads(raw.decode("utf-8"))
+
+    def _reseal(mutated):
+        os.chmod(path, 0o600)
+        os.unlink(path)
+        ED._ledger_seal(path, mutated)
+
+    # runNonce
+    bad = dict(record)
+    bad["runNonce"] = "not-the-nonce"
+    _reseal(bad)
+    assert ED._ledger_expected_hash(
+        real, authority.run_nonce, authority.order_id) is None
+
+    # runDir
+    bad = dict(record)
+    bad["runDir"] = real + "-other"
+    _reseal(bad)
+    assert ED._ledger_expected_hash(
+        real, authority.run_nonce, authority.order_id) is None
+
+    # schemaVersion
+    bad = dict(record)
+    bad["schemaVersion"] = int(ED.LEDGER_SCHEMA_VERSION) + 99
+    _reseal(bad)
+    assert ED._ledger_expected_hash(
+        real, authority.run_nonce, authority.order_id) is None
+
+
+def test_x1_load_verified_authority_single_snapshot(tmp_path, monkeypatch):
+    """_load_verified_authority hashes and parses the same bytes; one read only."""
+    main, linked = _linked_pair(tmp_path)
+    run_dir, authority, auth_hash, _argv = _setup_write_fold_ready(
+        tmp_path, linked, order_id="x1-snap")
+    path = _authority_path(run_dir)
+    original = open(path, "rb").read()
+    reads = []
+    real_open = open
+
+    def _counting_open(file, *args, **kwargs):
+        if str(file) == str(path):
+            reads.append(1)
+            if len(reads) == 1:
+                class _First:
+                    def read(self, *a, **k):
+                        return original
+
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, *a):
+                        return False
+
+                return _First()
+            class _Second:
+                def read(self, *a, **k):
+                    return b'{"role_kind":"review","run_kind":"review",' \
+                           b'"engine":"codex","effort":"high","engine_binary":"x",' \
+                           b'"cwd":"/tmp","run_nonce":"other","run_dir":"/tmp",' \
+                           b'"timeout":1,"retry_timeout":1,"argv":[],' \
+                           b'"spawned_argv":[],"order_id":"x"}'
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *a):
+                    return False
+
+            return _Second()
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", _counting_open)
+    verified = ED._load_verified_authority(str(run_dir), auth_hash)
+    assert verified is not None
+    assert verified.run_nonce == authority.run_nonce
+    assert verified.order_id == authority.order_id
+    assert verified.run_kind == ED.RUN_KIND_WRITE
+    assert len(reads) == 1, "must not re-open the authority path"
+
+
+def test_x1_ledger_init_failure_releases_lease_no_spawn(tmp_path, monkeypatch):
+    """OSError from _ledger_init → AUTHORITY_LEDGER_INIT_FAILED; FileExistsError → reused."""
+    main, linked = _linked_pair(tmp_path)
+    prompt = _prompt(tmp_path)
+    spawned = []
+    monkeypatch.setattr(
+        ED, "_spawn_run_child",
+        lambda *a, **k: spawned.append(1) or (_ for _ in ()).throw(AssertionError("spawn")))
+
+    def _boom(*a, **k):
+        raise OSError("ledger boom")
+
+    monkeypatch.setattr(ED, "_ledger_init", _boom)
+    run_dir = tmp_path / "x1-init-fail"
+    run_dir.mkdir(mode=0o700)
+    res = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="x1-init-fail",
+        run_engine=FakeWriteRunner([]), max_wait=5, run_dir=str(run_dir),
+    )
+    assert res.get("detail") == ED.AUTHORITY_LEDGER_INIT_FAILED, res
+    assert spawned == []
+    assert not _lease_held_for(linked), "init failure must release the lease"
+
+    def _exists(*a, **k):
+        raise FileExistsError("ledger exists")
+
+    monkeypatch.setattr(ED, "_ledger_init", _exists)
+    run_dir2 = tmp_path / "x1-init-exists"
+    run_dir2.mkdir(mode=0o700)
+    res2 = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="x1-init-exists",
+        run_engine=FakeWriteRunner([]), max_wait=5, run_dir=str(run_dir2),
+    )
+    assert res2.get("reason") == "run-dir-reused", res2
+    assert spawned == []
+    assert not _lease_held_for(linked)
+
+
+def test_x1_reused_run_dir_path_via_existing_ledger(tmp_path, monkeypatch):
+    """Emptied run dir whose ledger record still exists → run-dir-reused; no lease leak."""
+    main, linked = _linked_pair(tmp_path)
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "x1-reuse"
+    run_dir.mkdir(mode=0o700)
+    first = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="x1-reuse",
+        run_engine=FakeWriteRunner([(_WRITE_OK_STDOUT, False, 0, "")]),
+        max_wait=60, run_dir=str(run_dir),
+    )
+    assert first.get("ok") is True, first
+    real = os.path.realpath(str(run_dir))
+    assert os.path.isfile(ED._ledger_run_record_path(real))
+    # Empty the run dir but leave the ledger record.
+    for child in run_dir.iterdir():
+        if child.is_file():
+            child.unlink()
+        else:
+            shutil.rmtree(child)
+    spawned = []
+    monkeypatch.setattr(
+        ED, "_spawn_run_child",
+        lambda *a, **k: spawned.append(1))
+    second = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="x1-reuse-2",
+        run_engine=FakeWriteRunner([(_WRITE_OK_STDOUT, False, 0, "")]),
+        max_wait=5, run_dir=str(run_dir),
+    )
+    assert second.get("reason") == "run-dir-reused", second
+    assert spawned == []
+    assert not _lease_held_for(linked)
+
+
+def test_x1_ledger_root_hygiene(tmp_path, monkeypatch):
+    """Symlink / non-directory ledger roots are refused.
+
+    Foreign-uid ownership cannot be constructed without root; that edge is
+    covered by the same st_uid != getuid() check as _validate_run_dir and is
+    not exercised here (see implementer return).
+    """
+    # Symlink
+    target = tmp_path / "led-real"
+    target.mkdir(mode=0o700)
+    link = tmp_path / "led-link"
+    link.symlink_to(target)
+    monkeypatch.setenv("SUPERHEROES_DISPATCH_LEDGER_ROOT", str(link))
+    assert ED._ledger_root() is None
+
+    # Non-directory
+    file_root = tmp_path / "led-file"
+    file_root.write_text("nope", encoding="utf-8")
+    monkeypatch.setenv("SUPERHEROES_DISPATCH_LEDGER_ROOT", str(file_root))
+    assert ED._ledger_root() is None
+
+    # Missing root is created 0700 and accepted when owned by us.
+    missing = tmp_path / "led-missing"
+    monkeypatch.setenv("SUPERHEROES_DISPATCH_LEDGER_ROOT", str(missing))
+    root = ED._ledger_root()
+    assert root is not None
+    assert os.path.isdir(root)
+    assert stat.S_IMODE(os.stat(root).st_mode) == 0o700
+
+
+def test_x1_spawned_engine_env_scrubs_ledger_root(monkeypatch):
+    """Engine subprocess env must not carry SUPERHEROES_DISPATCH_LEDGER_ROOT."""
+    monkeypatch.setenv("SUPERHEROES_DISPATCH_LEDGER_ROOT", "/tmp/secret-led-root")
+    scrubbed = ED._scrub_git_env()
+    assert "SUPERHEROES_DISPATCH_LEDGER_ROOT" not in scrubbed
+    # Also pin via an explicit env dict (the path _run_engine_files uses).
+    scrubbed2 = ED._scrub_git_env({
+        "SUPERHEROES_DISPATCH_LEDGER_ROOT": "/tmp/secret-led-root",
+        "PATH": "/usr/bin",
+    })
+    assert "SUPERHEROES_DISPATCH_LEDGER_ROOT" not in scrubbed2
+    assert scrubbed2.get("PATH") == "/usr/bin"

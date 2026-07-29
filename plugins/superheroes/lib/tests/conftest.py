@@ -26,6 +26,9 @@ def _isolate_store_root(monkeypatch, tmp_path):
     # store_core's pointer self-heal can WRITE INTO — the developer's real
     # ~/.claude/test-pilot store. A test that sets its own still wins (applies after this).
     monkeypatch.setenv("TEST_PILOT_STORE_ROOT", str(tmp_path / "_tp_store_isolation"))
+    # #702-B: supervisor-owned launch ledger must stay out of the real temp root. A test
+    # that sets its own SUPERHEROES_DISPATCH_LEDGER_ROOT still wins (applies after this).
+    monkeypatch.setenv("SUPERHEROES_DISPATCH_LEDGER_ROOT", str(tmp_path / "_ledger_isolation"))
     # 0.10.0 qualification finding #7: the acceptance harness's child env carries the
     # SUPERHEROES_ACCEPTANCE_* markers, and a build-worktree verify run inherits them —
     # making any marker-sensitive test (e.g. enforcer selfcheck arming) fail inside a
