@@ -173,27 +173,41 @@ never drop a finding or a lens.
 > **committed** tree at `headSha`; `sourceDirty: true` flags modified tracked files in the source repo
 > so a caller reviewing uncommitted work is disclosed rather than silently given the pre-change tree.
 >
+> **Verb ↔ run-kind binding (ruling A-1).** Each originating verb is bound to one run kind:
+> `dispatch-review` may only supervise review runs; `dispatch-write` may only supervise write runs.
+> The runner refuses a `--run-dir` whose persisted kind does not match the verb (`run-kind-mismatch`,
+> `attempts: 0`, no spawn) — a review permission grant can never reach a write spawn. A run directory
+> is also **refused when it is inside — or equal to — the write `cwd`**.
+>
+> **`dispatch-poll` never spawns — no exceptions.** It is purely observational. When a run reports
+> `retry-pending`, the caller **re-invokes the originating verb** (`dispatch-review` / `dispatch-write`)
+> with the **same `--run-dir`**. That re-invocation passes the verb ↔ run-kind check and therefore
+> carries the correct permission grant **by construction** — which is exactly why poll is not allowed
+> to do it.
+>
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 > RUN_DIR="$SESSION_DIR/round-<round>/seat-<agent>-run"
-> python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
->   --engine "$REVIEWER_ENGINE" --engine-model "$SEAT_ENGINE_MODEL" --effort "$SEAT_EFFORT" \
->   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
->   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900 \
->   --run-dir "$RUN_DIR" --max-wait 540
+> mkdir -p "$RUN_DIR"
 > while true; do
->   POLL="$(python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-poll --run-dir "$RUN_DIR")"
->   # dispatch-poll never spawns — safe inside the turn on harness 2.1.219
->   if jq -e '.terminal == true' <<<"$POLL" >/dev/null 2>&1; then break; fi
->   # Non-terminal running is NOT a forfeit — keep polling in-turn
+>   RESULT="$(python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
+>     --engine "$REVIEWER_ENGINE" --engine-model "$SEAT_ENGINE_MODEL" --effort "$SEAT_EFFORT" \
+>     --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
+>     --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900 \
+>     --run-dir "$RUN_DIR" --max-wait 540)"
+>   if jq -e '.terminal == true' <<<"$RESULT" >/dev/null 2>&1; then break; fi
+>   # Non-terminal running is NOT a forfeit — re-invoke the originating verb (not poll-to-spawn).
+>   # retry-pending means call dispatch-review again with the same --run-dir, not keep polling.
 >   sleep 15
 > done
-> RESULT="$POLL"
+> # Optional observational read only — never spawns:
+> # python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-poll --run-dir "$RUN_DIR"
 > ```
 >
 > On harness **2.1.219**, `--max-wait` defaults to **540** and is hard-capped **below the 600 s
-> foreground conversion boundary** so each runner slice returns before conversion; the poll loop
-> (`dispatch-poll --run-dir`, which **never spawns**) carries long runs in-turn. A non-terminal
+> foreground conversion boundary** so each runner slice returns before conversion; while the result is
+> non-terminal, **re-invoke the originating verb** with the same `--run-dir` (attempt 2+ after
+> `retry-pending` is spawned only by that re-invocation, never by `dispatch-poll`). A non-terminal
 > `{"reason": "running", "terminal": false, "forfeited": false}` **must not** be read as a forfeit.
 > Use `dispatch-abandon --run-dir` when abandoning a run directory. Every result carries **`terminal`**,
 > **`argv`** (exact spawned command), and **`runDir`** for audit.
@@ -262,7 +276,8 @@ never drop a finding or a lens.
 > clamp-and-kill; a wedged foreground Bash call does not die at the cap, it converts, and **dies when
 > the turn ends** if still running. The **supervised runner** owns the real bound: its per-attempt
 > timeout, its completion sentinel, its bounded `--max-wait` slice (default 540, below conversion), and
-> in-turn `dispatch-poll`. You do **not** compose a separate per-dispatch watchdog on top. What this
+> in-turn **re-invocation of the originating verb** with the same `--run-dir` until `.terminal == true`.
+> You do **not** compose a separate per-dispatch watchdog on top. What this
 > file owns is the **expiry contract**: treat an expired or terminal-forfeit slot as **`unreadable`**
 > (or runner forfeit) — `engine_adapter.parse_result` on partial/absent stdout returns `unreadable`. A
 > timed-out **reviewer** takes the existing UFR-7 re-run-on-Claude path; a timed-out **fixer**
@@ -271,7 +286,7 @@ never drop a finding or a lens.
 >
 > **Hand-rolled engine dispatch is no longer the sanctioned escape.** When the adapter path fails,
 > use `lib/engine_dispatch.py` (`dispatch-review` / `dispatch-write`) with `--run-dir`, `--max-wait`,
-> and the `dispatch-poll` loop above — not a foreground `codex exec` / `cursor-agent` Bash line and
+> and the originating-verb loop above — not a foreground `codex exec` / `cursor-agent` Bash line and
 > not a perl fork+kill wrapper. If you must understand legacy failure modes: always feed the prompt
 > from a real file over redirected stdin (`codex exec … - < promptfile`); reject empty prompts before
 > dispatch (`build-argv` / `prompt_path_ok`); redirect engine output to a **file** (never `| tail`).

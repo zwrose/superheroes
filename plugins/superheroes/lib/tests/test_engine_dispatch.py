@@ -19,6 +19,34 @@ def _load():
 
 ED = _load()
 
+
+def _invoke_run_child(run_dir, attempt, state, **kw):
+    run_dir = str(run_dir)
+    kind = (
+        ED.RUN_KIND_WRITE
+        if state.get("dispatchMode") == ED.WRITE_DISPATCH_MODE
+        else ED.RUN_KIND_REVIEW
+    )
+    nonce = kw.get("run_nonce", state.get("runNonce", "test-nonce"))
+    order_id = kw.get("order_id", state.get("orderId") or "")
+    launch_argv = kw.get("launch_argv", state.get("argv"))
+    if "launch_cwd" in kw:
+        launch_cwd = kw["launch_cwd"]
+    elif kind == ED.RUN_KIND_WRITE:
+        launch_cwd = state.get("cwd")
+    else:
+        launch_cwd = os.path.join(run_dir, REVIEW_CWD_BASENAME)
+    return ED._run_child_main(
+        run_dir,
+        attempt,
+        expected_kind=kind,
+        run_nonce=nonce or "",
+        order_id=order_id or "",
+        launch_cwd=str(launch_cwd),
+        launch_argv=list(launch_argv or []),
+    )
+
+
 REVIEW_CWD_BASENAME = ED.REVIEW_CWD_DIRNAME
 
 
@@ -1226,9 +1254,11 @@ def test_run_child_argv_rederivation_mismatch(tmp_path):
                  "-c", "model_reasoning_effort=high", "-"],
         "engineBinary": shutil.which("codex") or "/usr/bin/false",
         "attemptTimeout": 5,
+        "runNonce": "n1",
+        "orderId": "",
     }
     (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
-    rc = ED._run_child_main(str(run_dir), 1)
+    rc = _invoke_run_child(run_dir, 1, state)
     assert rc != 0
     done = json.loads((run_dir / "attempt-1.done").read_text(encoding="utf-8"))
     assert done.get("refusal") == "argv-rederivation-mismatch"
@@ -1255,8 +1285,10 @@ def test_run_child_engine_binary_mismatch(tmp_path):
         "argv": argv,
         "engineBinary": "/definitely/not/the/engine",
         "attemptTimeout": 5,
+        "runNonce": "n2",
+        "orderId": "",
     }), encoding="utf-8")
-    ED._run_child_main(str(run_dir), 1)
+    _invoke_run_child(run_dir, 1, json.loads((run_dir / "state.json").read_text(encoding="utf-8")))
     done = json.loads((run_dir / "attempt-1.done").read_text(encoding="utf-8"))
     assert done.get("refusal") == "engine-binary-mismatch"
     assert resolved  # sanity

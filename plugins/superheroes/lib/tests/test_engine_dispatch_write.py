@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -28,6 +29,33 @@ def _load_ed():
 
 
 ED = _load_ed()
+
+
+def _invoke_run_child(run_dir, attempt, state, **kw):
+    run_dir = str(run_dir)
+    kind = (
+        ED.RUN_KIND_WRITE
+        if state.get("dispatchMode") == ED.WRITE_DISPATCH_MODE
+        else ED.RUN_KIND_REVIEW
+    )
+    nonce = kw.get("run_nonce", state.get("runNonce", "test-nonce"))
+    order_id = kw.get("order_id", state.get("orderId") or "")
+    launch_argv = kw.get("launch_argv", state.get("argv"))
+    if "launch_cwd" in kw:
+        launch_cwd = kw["launch_cwd"]
+    elif kind == ED.RUN_KIND_WRITE:
+        launch_cwd = state.get("cwd")
+    else:
+        launch_cwd = os.path.join(run_dir, ED.REVIEW_CWD_DIRNAME)
+    return ED._run_child_main(
+        run_dir,
+        attempt,
+        expected_kind=kind,
+        run_nonce=nonce or "",
+        order_id=order_id or "",
+        launch_cwd=str(launch_cwd),
+        launch_argv=list(launch_argv or []),
+    )
 
 
 def _git(repo, *args, check=True):
@@ -443,13 +471,20 @@ def test_run_child_rejects_forged_cwd(tmp_path):
         "dispatchMode": ED.WRITE_DISPATCH_MODE,
         "effort": "high",
         "engineModel": "gpt-5.6-terra",
-        "cwd": main,
+        "cwd": linked,
         "argv": argv,
         "engineBinary": resolved,
         "attemptTimeout": 5,
+        "runNonce": "nonce-forged-cwd",
+        "orderId": "o-forge",
     }
     (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
-    ED._run_child_main(str(run_dir), 1)
+    _invoke_run_child(
+        run_dir, 1, state,
+        launch_cwd=main,
+        run_nonce="nonce-forged-cwd",
+        order_id="o-forge",
+    )
     done = json.loads((run_dir / "attempt-1.done").read_text(encoding="utf-8"))
     assert done.get("refusal") == "cwd-primary-checkout"
 
@@ -470,9 +505,11 @@ def test_run_child_rejects_argv_drift_write(tmp_path):
                  "-c", "model_reasoning_effort=high", "-C", linked, "-"],
         "engineBinary": shutil.which("codex") or "/usr/bin/false",
         "attemptTimeout": 5,
+        "runNonce": "drift-w",
+        "orderId": "o-drift",
     }
     (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
-    ED._run_child_main(str(run_dir), 1)
+    _invoke_run_child(run_dir, 1, state)
     done = json.loads((run_dir / "attempt-1.done").read_text(encoding="utf-8"))
     assert done.get("refusal") == "argv-rederivation-mismatch"
 
@@ -547,7 +584,9 @@ def test_dispatch_write_spawned_argv_echo(tmp_path):
 
 
 def _review_repo(tmp_path):
-    root = tmp_path / "repo"
+    base = Path(tmp_path)
+    base.mkdir(parents=True, exist_ok=True)
+    root = base / "repo"
     root.mkdir()
     (root / ".git").write_text("gitdir: /fake/worktree\n", encoding="utf-8")
     return str(root)
@@ -645,8 +684,325 @@ def test_run_child_rejects_argv_drift_review(tmp_path):
                  "-c", "model_reasoning_effort=high", "-"],
         "engineBinary": shutil.which("codex") or "/usr/bin/false",
         "attemptTimeout": 5,
+        "runNonce": "drift-r",
+        "orderId": "",
     }
     (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
-    ED._run_child_main(str(run_dir), 1)
+    _invoke_run_child(run_dir, 1, state)
     done = json.loads((run_dir / "attempt-1.done").read_text(encoding="utf-8"))
     assert done.get("refusal") == "argv-rederivation-mismatch"
+
+
+# --- A-1 / A-2 authority-model edges (WO-702 G1) ---
+
+
+_WRITE_OK = json.dumps({"ok": True, "signal": "ok", "evidence": {}})
+
+
+def _seed_write_run(tmp_path, linked, prompt, order_id="write-seed"):
+    run_dir = tmp_path / "seed-write-run"
+    run_dir.mkdir(mode=0o700)
+    fake = FakeWriteRunner([(_WRITE_OK, False, 0, "")])
+    res = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id=order_id, run_engine=fake,
+        max_wait=60, run_dir=str(run_dir),
+    )
+    assert res.get("ok") is True
+    return str(run_dir)
+
+
+def test_dispatch_review_run_dir_write_run_refuses_kind_mismatch(tmp_path, monkeypatch):
+    main, linked = _linked_pair(tmp_path)
+    prompt = _prompt(tmp_path)
+    write_run = _seed_write_run(tmp_path, linked, prompt)
+    spawned = []
+    monkeypatch.setattr(ED, "_spawn_run_child", lambda *a, **k: spawned.append(1))
+    repo_root = _review_repo(tmp_path)
+    build_view = _fake_review_build_view(tmp_path)
+    fake = _ReviewFakeRunner([])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=prompt, repo_root=repo_root, run_engine=fake,
+        build_view=build_view, run_dir=write_run, max_wait=10,
+    )
+    assert res["reason"] == "run-kind-mismatch"
+    assert res["attempts"] == 0
+    assert res["forfeited"] is False
+    assert res["terminal"] is True
+    assert spawned == []
+
+
+def test_dispatch_write_run_dir_review_run_refuses_kind_mismatch(tmp_path, monkeypatch):
+    main, linked = _linked_pair(tmp_path)
+    prompt = _prompt(tmp_path)
+    repo_root = _review_repo(tmp_path)
+    build_view = _fake_review_build_view(tmp_path)
+    review_run = tmp_path / "seed-review-run"
+    review_run.mkdir(mode=0o700)
+    fake_r = _ReviewFakeRunner([(_VALID_REVIEW_STDOUT, False, 0, "")])
+    res_r = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=prompt, repo_root=repo_root, run_engine=fake_r,
+        build_view=build_view, run_dir=str(review_run), max_wait=60,
+    )
+    assert res_r.get("ok") is True
+    spawned = []
+    monkeypatch.setattr(ED, "_spawn_run_child", lambda *a, **k: spawned.append(1))
+    fake_w = FakeWriteRunner([])
+    res = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="w1", run_engine=fake_w,
+        run_dir=str(review_run), max_wait=10,
+    )
+    assert res["reason"] == "run-kind-mismatch"
+    assert res["attempts"] == 0
+    assert spawned == []
+
+
+def test_run_child_refuses_expected_kind_mismatch(tmp_path):
+    main, linked = _linked_pair(tmp_path)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(mode=0o700)
+    (run_dir / "prompt.txt").write_bytes(b"x")
+    built = EA.build_argv_result(
+        "codex", "build", "high",
+        {"engine_model": "gpt-5.6-terra", "cwd": linked},
+    )
+    argv = built["argv"]
+    state = {
+        "engine": "codex",
+        "roleKind": "build",
+        "dispatchMode": ED.WRITE_DISPATCH_MODE,
+        "effort": "high",
+        "engineModel": "gpt-5.6-terra",
+        "cwd": linked,
+        "argv": argv,
+        "engineBinary": shutil.which(argv[0]),
+        "attemptTimeout": 5,
+        "runNonce": "nonce-a",
+        "orderId": "o1",
+    }
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    ED._run_child_main(
+        str(run_dir), 1,
+        expected_kind=ED.RUN_KIND_REVIEW,
+        run_nonce="nonce-a",
+        order_id="o1",
+        launch_cwd=linked,
+        launch_argv=argv,
+    )
+    done = json.loads((run_dir / "attempt-1.done").read_text(encoding="utf-8"))
+    assert done.get("refusal") == "run-kind-mismatch"
+
+
+def test_wrong_nonce_sentinel_not_terminal(tmp_path):
+    main, linked = _linked_pair(tmp_path)
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "nonce-run"
+    run_dir.mkdir(mode=0o700)
+    fake = FakeWriteRunner([(_WRITE_OK, False, 0, "")])
+    res = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="nonce-o", run_engine=fake,
+        max_wait=60, run_dir=str(run_dir),
+    )
+    assert res.get("ok") is True
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    try:
+        (run_dir / "result.json").unlink()
+    except FileNotFoundError:
+        pass
+    (run_dir / "attempt-1.done").write_text(
+        json.dumps({"exit": 0, "timedOut": False, "runNonce": "wrong-nonce"}),
+        encoding="utf-8",
+    )
+    state["inFlightAttempt"] = 1
+    state["completedAttempts"] = 0
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    poll = ED.dispatch_poll(str(run_dir), max_wait=0)
+    assert poll.get("terminal") is False
+    assert not (run_dir / "result.json").exists()
+
+
+def test_forged_worktree_lease_path_cannot_unlink_victim(tmp_path):
+    main, linked = _linked_pair(tmp_path)
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "lease-run"
+    run_dir.mkdir(mode=0o700)
+    victim = tmp_path / "victim-lease.txt"
+    victim.write_text("keep", encoding="utf-8")
+    fake = FakeWriteRunner([(_WRITE_OK, False, 0, "")])
+    res = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="lease-o", run_engine=fake,
+        max_wait=60, run_dir=str(run_dir),
+    )
+    assert res.get("ok") is True
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    state["worktreeLeasePath"] = str(victim)
+    state["worktreeLeaseToken"] = None
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    ED._release_worktree_lease(state)
+    assert victim.read_text(encoding="utf-8") == "keep"
+
+
+def test_blank_supervisor_metadata_forfeits_retry(tmp_path):
+    main, linked = _linked_pair(tmp_path)
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "sup-run"
+    run_dir.mkdir(mode=0o700)
+    (run_dir / "prompt.txt").write_bytes(b"build\n")
+    built = EA.build_argv_result(
+        "codex", "build", "high",
+        {"engine_model": "gpt-5.6-terra", "cwd": linked},
+    )
+    argv = built["argv"]
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(
+        os.path.realpath(linked))
+    state = {
+        "engine": "codex",
+        "roleKind": "build",
+        "dispatchMode": ED.WRITE_DISPATCH_MODE,
+        "effort": "high",
+        "engineModel": "gpt-5.6-terra",
+        "cwd": linked,
+        "argv": argv,
+        "spawnedArgv": argv,
+        "engineBinary": shutil.which(argv[0]),
+        "timeout": 900,
+        "retryTimeout": 900,
+        "orderId": "sup-o",
+        "runNonce": "sup-nonce",
+        "worktreeLeaseToken": lease_token,
+        "worktreeLeaseHolder": lease_holder,
+        "worktreeSnapshot": list(ED._worktree_snapshot(linked)),
+        "completedAttempts": 1,
+        "inFlightAttempt": None,
+        "pendingTerminal": "forfeited",
+        "supervisorPid": None,
+        "supervisorStart": "",
+    }
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    res = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="sup-o", run_engine=FakeWriteRunner([]),
+        max_wait=120, run_dir=str(run_dir),
+    )
+    assert res["terminal"] is True
+    assert res["detail"] == "retry-unsafe-missing-supervisor-metadata"
+    assert res["forfeited"] is True
+    ED._release_worktree_lease_for_cwd(os.path.realpath(linked), lease_token, lease_holder)
+
+
+def test_run_dir_equals_cwd_refused(tmp_path):
+    main, linked = _linked_pair(tmp_path)
+    fake = FakeWriteRunner([])
+    res = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=_prompt(tmp_path), cwd=linked, order_id="eq-o",
+        run_dir=linked, run_engine=fake,
+    )
+    assert res["detail"] == "run-dir-inside-cwd"
+    assert res["attempts"] == 0
+
+
+def test_symlink_tmp_does_not_truncate_victim(tmp_path):
+    main, linked = _linked_pair(tmp_path)
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "symlink-run"
+    run_dir.mkdir(mode=0o700)
+    victim = tmp_path / "victim-state.txt"
+    victim.write_text("precious", encoding="utf-8")
+    fake = FakeWriteRunner([(_WRITE_OK, False, 0, "")])
+    ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="sym-o", run_engine=fake,
+        max_wait=60, run_dir=str(run_dir),
+    )
+    trap = run_dir / "state.json.tmp"
+    try:
+        os.symlink(victim, trap)
+    except OSError:
+        pytest.skip("symlink not supported")
+    state = {"engine": "codex", "roleKind": "build", "dispatchMode": "write", "effort": "high"}
+    ED._atomic_write_json(str(run_dir / "state.json"), state)
+    assert victim.read_text(encoding="utf-8") == "precious"
+
+
+def test_run_dir_reused_order_id_refuses(tmp_path):
+    main, linked = _linked_pair(tmp_path)
+    prompt = _prompt(tmp_path)
+    run_dir = _seed_write_run(tmp_path, linked, prompt, order_id="order-a")
+    fake = FakeWriteRunner([])
+    res = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="order-b", run_engine=fake,
+        run_dir=run_dir, max_wait=10,
+    )
+    assert res["reason"] == "run-dir-reused"
+    assert res["attempts"] == 0
+
+
+def test_preexisting_review_cwd_refused_not_deleted(tmp_path):
+    repo_root = _review_repo(tmp_path)
+    build_view = _fake_review_build_view(tmp_path)
+    run_dir = tmp_path / "review-pre"
+    run_dir.mkdir(mode=0o700)
+    review_cwd = run_dir / ED.REVIEW_CWD_DIRNAME
+    review_cwd.mkdir()
+    marker = review_cwd / "marker.txt"
+    marker.write_text("do-not-delete", encoding="utf-8")
+    fake = _ReviewFakeRunner([])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=build_view, run_dir=str(run_dir), max_wait=10,
+    )
+    assert res["detail"] == "review-cwd-exists"
+    assert marker.read_text(encoding="utf-8") == "do-not-delete"
+
+
+def test_dispatch_review_kind_check_mutation_probe(tmp_path, monkeypatch):
+    """Production-file mutation probe for edge 1 (revert is inverse edit)."""
+    main, linked = _linked_pair(tmp_path)
+    prompt = _prompt(tmp_path)
+    write_run = _seed_write_run(tmp_path, linked, prompt)
+    path = os.path.join(_HERE, "..", "engine_dispatch.py")
+    anchor = "if _recorded_run_kind(state_probe) != RUN_KIND_REVIEW:"
+    with open(path, encoding="utf-8") as fh:
+        src = fh.read()
+    assert anchor in src
+    mutated = src.replace(
+        anchor,
+        "if False and _recorded_run_kind(state_probe) != RUN_KIND_REVIEW:",
+        1,
+    )
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(mutated)
+    try:
+        ED_probe = _load_ed()
+        spawned = []
+        monkeypatch.setattr(ED_probe, "_spawn_run_child", lambda *a, **k: spawned.append(1))
+        repo_root = _review_repo(tmp_path)
+        build_view = _fake_review_build_view(tmp_path)
+        fake = _ReviewFakeRunner([])
+        res_mut = ED_probe.dispatch_review(
+            "codex", model="sonnet", effort="high",
+            prompt_path=prompt, repo_root=repo_root, run_engine=fake,
+            build_view=build_view, run_dir=write_run, max_wait=10,
+        )
+        assert res_mut.get("reason") != "run-kind-mismatch"
+    finally:
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(src)
+    global ED
+    ED = _load_ed()
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=prompt, repo_root=_review_repo(tmp_path / "probe-base"),
+        run_engine=_ReviewFakeRunner([]),
+        build_view=_fake_review_build_view(tmp_path / "probe-view"),
+        run_dir=write_run, max_wait=10,
+    )
+    assert res["reason"] == "run-kind-mismatch"

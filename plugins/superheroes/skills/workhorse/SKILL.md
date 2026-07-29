@@ -281,6 +281,7 @@ repeat.)
   resumes — proven twice mid-flight (brief-check builds): session exited, detached child completed to
   disk, resumed session recovered with zero work lost. Earlier readings that those recoveries were
   luck or that engines "were already finished" are **refuted**; the charter corrects its own record.
+  On harness **2.1.219** the **surviving** detach shape is a **`start_new_session` subprocess with stdout/stderr to files** (as `lib/engine_dispatch.py` uses), whereas a bare `setsid <cmd> &` inside one tool call did not survive that call's process group — **#656** owns encoding the surviving shape at launch.
   Sessions that believed a waiter mechanism were **believing their tools** — background-run, wakeup
   scheduling, and its success message all promise re-wake that never fires headless; the rule must
   name mechanism, not only repeat prohibition.
