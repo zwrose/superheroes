@@ -996,10 +996,12 @@ def test_sweep_skips_symlink_to_aged_prefix_dir_inside_temp_base(tmp_path, monke
 
 
 def test_sweep_aged_prefix_symlink_to_outside_dir_untouched(tmp_path, monkeypatch):
-    # The islink guard fires first (static symlink), so this entry never reaches
+    # Static symlink: the islink guard short-circuits this entry before
     # containment — belt-and-braces. Containment alone is pinned by
-    # test_sweep_lists_passed_base_but_authorizes_via_gettempdir; the islink guard
-    # alone by test_sweep_skips_symlink_to_aged_prefix_dir_inside_temp_base.
+    # test_sweep_lists_passed_base_but_authorizes_via_gettempdir. The islink guard
+    # is defense-in-depth only: deletion uses the enumerated path and
+    # shutil.rmtree(full) refuses a symlink on its own, so removing the guard
+    # breaks no test.
     base = tmp_path / "fake-tmp"
     base.mkdir()
     outside = tmp_path / (sv.SANITIZED_VIEW_DIR_PREFIX + "outside-target")
