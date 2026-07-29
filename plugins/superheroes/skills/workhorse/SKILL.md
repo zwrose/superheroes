@@ -1,6 +1,6 @@
 ---
 name: workhorse
-description: Use to run the build — Workhorse is the entry point that takes a routed issue all the way to a ready PR — "build this issue", "build this out", "workhorse it", "take this to a PR", "run the builder". It reads the route — build-ready needs no discovery step; needs-discovery runs discovery to an owner-approved spec first, in the same session, then builds. Full lane: brief, delegates all implementation to tiered subagents or engines under a shared contract, test-pilot, multi-model review; light lane: you type, one review. independently re-runs every receipt they claim. Hands back a ready PR with dispositions and receipts. Never merges, releases, bumps versions, or wires the board. Not advising the project (that is showrunner).
+description: Use to run the build — Workhorse is the entry point that takes a routed issue all the way to a ready PR — "build this issue", "build this out", "workhorse it", "take this to a PR", "run the builder". It reads the route — build-ready needs no discovery step; needs-discovery runs discovery to an owner-approved spec first, in the same session, then builds. Full lane — brief, delegates all implementation to tiered subagents or engines under a shared contract, test-pilot, multi-model review; light lane — you type, one independent review. It independently re-runs every receipt they claim. Hands back a ready PR with dispositions and receipts. Never merges, releases, bumps versions, or wires the board. Not advising the project (that is showrunner).
 user-invocable: true
 ---
 

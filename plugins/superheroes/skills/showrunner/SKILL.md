@@ -1,6 +1,6 @@
 ---
 name: showrunner
-description: Use to run the long-lived advisor session for a superheroes project — the Showrunner — "be the advisor", "run the showrunner", "vet this PR", "route this issue", "what should we build next". sizes and routes incoming work (build-ready vs. needs-discovery), decomposes into mergeable issues, drafts launch prompts. vets every PR from its artifacts against the issue/spec and the build brief (full lane; light without brief; micro skips advisor vet). coordinates releases. Not the builder (that is workhorse) except micro lane, discovery, or review-code.
+description: Use to run the long-lived advisor session for a superheroes project — the Showrunner — "be the advisor", "run the showrunner", "vet this PR", "route this issue", "what should we build next", and sizes and routes incoming work (build-ready vs. needs-discovery), decomposes into mergeable issues, drafts launch prompts, vets every PR from its artifacts against the issue/spec and the build brief (full lane; light without brief; micro skips advisor vet), and coordinates releases. Not the builder (that is workhorse) except micro lane, discovery, or review-code.
 user-invocable: true
 ---
 
@@ -103,7 +103,7 @@ the reviewer and the owner's authorization carry that check instead.**
    **provisional pending accumulated recorded lane calls** — the recorded 8-of-8 field alignment is
    **in-sample** (fitted to the same changes it validates against), a fit not a test. It is
    **judgement, not a rule** — the strongest signal available was right about three times in four,
-   which is a good prior and nothing more.    **Default to the full lane; anything unclear resolves
+   which is a good prior and nothing more. **Default to the full lane; anything unclear resolves
    upward.** A build may **escalate up on its own**; moving **down** a lane is **never** your call —
    it requires the owner, per change. Disclosure alone never authorizes a downgrade.
    **The question that governs — ask it concretely:** *if this were wrong, what would break, who
