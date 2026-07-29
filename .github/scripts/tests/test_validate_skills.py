@@ -1,3 +1,7 @@
+import os
+
+import yaml
+
 import validate_skills as vs
 
 def test_links_resolve(tmp_path):
@@ -131,8 +135,6 @@ def test_line_count_fails_over_ceiling():
 def test_line_count_ignores_skills_without_a_ceiling():
     assert vs.check_line_count("test-pilot/test-pilot-plan", 700, {"review-crew/review-code": 499}) == []
 
-import os
-
 def _mk_skill(root, plugin, skill, body_lines, desc="Use when reviewing code changes"):
     d = os.path.join(root, plugin, "skills", skill)
     os.makedirs(d)
@@ -187,3 +189,73 @@ def test_gather_combined_size_no_error_when_genuinely_smaller(tmp_path):
     assert not any("description-size" in e for e in errors), (
         f"smaller combined size should NOT produce a description-size error, got: {errors}"
     )
+
+
+def test_ci_installs_pyyaml_before_validate_skills():
+    repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    ci_path = os.path.join(repo, ".github", "workflows", "ci.yml")
+    with open(ci_path, encoding="utf-8") as fh:
+        workflow = yaml.safe_load(fh.read())
+    steps = workflow["jobs"]["validate"]["steps"]
+    pip_idx = None
+    validate_skills_idx = None
+    for i, step in enumerate(steps):
+        run = step.get("run", "")
+        if "pip install" in run and "pyyaml" in run:
+            pip_idx = i
+        if "validate_skills.py" in run:
+            validate_skills_idx = i
+    assert pip_idx is not None, "no pip install pyyaml step found in validate job"
+    assert validate_skills_idx is not None, "no validate_skills.py step found in validate job"
+    assert pip_idx < validate_skills_idx
+
+
+def test_frontmatter_yaml_flags_bare_colon_space(tmp_path):
+    root = str(tmp_path / "plugins")
+    os.makedirs(root)
+    body = (
+        "---\nname: bad\ndescription: Use when gates.review: passed\n---\nbody\n"
+    )
+    d = os.path.join(root, "p", "skills", "bad")
+    os.makedirs(d)
+    with open(os.path.join(d, "SKILL.md"), "w", encoding="utf-8") as fh:
+        fh.write(body)
+    reg = {"bodyCeilings": {}, "requiredPhrases": {}}
+    errors, _ = vs.gather_violations(root, reg, set(), set(), yaml_module=yaml)
+    assert any("frontmatter-yaml" in e and "bad" in e for e in errors)
+
+
+def test_frontmatter_yaml_quiet_on_valid_frontmatter(tmp_path):
+    root = str(tmp_path / "plugins")
+    _mk_skill(root, "p", "good", 5, desc="Use when reviewing code changes")
+    reg = {"bodyCeilings": {}, "requiredPhrases": {}}
+    errors, _ = vs.gather_violations(root, reg, set(), set(), yaml_module=yaml)
+    assert not any("frontmatter-yaml" in e for e in errors)
+
+
+def test_frontmatter_yaml_flags_parse_skill_disagreement(tmp_path):
+    root = str(tmp_path / "plugins")
+    os.makedirs(root)
+    body = "---\nname: t\ndescription: |\n  multi\n---\nbody\n"
+    d = os.path.join(root, "p", "skills", "block")
+    os.makedirs(d)
+    with open(os.path.join(d, "SKILL.md"), "w", encoding="utf-8") as fh:
+        fh.write(body)
+    reg = {"bodyCeilings": {}, "requiredPhrases": {}}
+    errors, _ = vs.gather_violations(root, reg, set(), set(), yaml_module=yaml)
+    assert any(
+        "frontmatter-yaml" in e and "disagree" in e for e in errors
+    ), errors
+
+
+def test_main_fails_closed_without_pyyaml(capsys):
+    original = vs.yaml
+    vs.yaml = None
+    try:
+        rc = vs.main([])
+    finally:
+        vs.yaml = original
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "PyYAML" in captured.err or "pyyaml" in captured.err.lower()
+    assert "✓" not in captured.out

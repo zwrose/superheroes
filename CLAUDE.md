@@ -89,11 +89,13 @@ Every PR and push to `main` runs `.github/workflows/ci.yml`:
 Run all steps locally before pushing:
 
 ```bash
-python3 .github/scripts/validate_marketplace.py
-python3 .github/scripts/validate_hosts.py
-python3 .github/scripts/validate_skills.py
-python3 -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ plugins/superheroes/eval/tests/ eval/lib/tests/ -q
+/usr/bin/python3 .github/scripts/validate_marketplace.py
+/usr/bin/python3 .github/scripts/validate_hosts.py
+/usr/bin/python3 .github/scripts/validate_skills.py
+/usr/bin/python3 -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ plugins/superheroes/eval/tests/ eval/lib/tests/ -q
 ```
+
+Use `/usr/bin/python3` for local gates: that interpreter carries both pytest and PyYAML, which the validators and test suite require.
 
 ## Review discipline — no unreviewed PRs
 

@@ -162,12 +162,12 @@ roll out across the guardian arc; this is the sweep it runs them in.
   checked once before code, and vetted against at the PR. No plan documents, no doc-review
   treadmills.
 - **Review is structurally independent.** Cross-vendor panels mean models that didn't write
-  the code review it; the advisor vets every PR with fresh context; the owner merges. Maker
-  and checker are never the same mind.
+  the code review it; the advisor vets every PR with fresh context; merge approval stays with
+  the owner. Maker and checker are never the same mind.
 - **configure calibrates once**, and every session inherits it.
 - **The covenant rides every session.** A SessionStart hook injects a distilled operating
-  discipline — never delegate merge approval, never claim more than you verified,
-  disclose every degradation, park rather than presume — into every session (see
+  discipline — never delegate merge approval; claim only what you verified; disclose every
+  degradation; park rather than presume — into every session (see
   [`rubric/covenant.md`](plugins/superheroes/rubric/covenant.md)).
 - **An owner-authority gate backs the covenant mechanically.** A hook intercepts
   merge, release, force-push, and workflow-run actions and routes them to the owner — not just a

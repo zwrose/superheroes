@@ -2,6 +2,7 @@ import importlib.util
 import hashlib
 import json
 import os
+import re
 
 import pytest
 
@@ -17,6 +18,15 @@ def _load():
 
 
 EA = _load()
+
+
+def _help_text_for_substring_match(text: str) -> str:
+    """Normalize argparse --help for substring assertions.
+
+    argparse re-wraps help to the terminal width; a raw substring pin is a
+    false-failure waiting for a narrow terminal.
+    """
+    return re.sub(r"\s+", " ", text, flags=re.UNICODE).strip().lower()
 
 
 def test_task_id_trailer_constant():
@@ -659,8 +669,9 @@ def test_parse_result_subcommand_help_warns_echo_gap(capsys):
     with pytest.raises(SystemExit):
         EA.main(["parse-result", "--help"])
     text = capsys.readouterr().out
-    assert "never sees the dispatched prompt" in text.lower()
-    assert "empty findings" in text.lower() and "unverified" in text.lower()
+    normalized = _help_text_for_substring_match(text)
+    assert "never sees the dispatched prompt" in normalized
+    assert "empty findings" in normalized and "unverified" in normalized
 
 
 def test_parse_result_echo_gap_is_stated_in_auto_fix_loop_reference():

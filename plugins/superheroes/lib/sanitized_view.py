@@ -179,6 +179,8 @@ def _owned_view_realpath(path, _under=path_is_confidently_under):
         tmp_base_real = os.path.realpath(tmp_base)
         is_temp_base = False
         try:
+            # Catches a case-variant path naming the temp base itself; that identity
+            # is only observable on case-insensitive filesystems (#699 rider 15).
             is_temp_base = os.path.samefile(real, tmp_base_real)
         except OSError:
             is_temp_base = real == tmp_base_real
@@ -216,7 +218,15 @@ def destroy_sanitized_view(path):
 
 
 def _sweep_stale_views(tmp_base):
-    """Remove old sanitized-view directories under the temp base (best-effort)."""
+    """Remove old owned sanitized-view directories (best-effort; never raises).
+
+    ``tmp_base`` selects what is **listed** (the caller's checked enumeration base).
+    ``_owned_view_realpath`` is the sole authority for what may be **deleted**; it reads
+    ``tempfile.gettempdir()`` for containment. Age and directory kind are additional
+    sweep-only conditions on top of that predicate. If the passed ``tmp_base`` and
+    ``gettempdir()`` disagree, every candidate fails the ownership check and nothing
+    is deleted.
+    """
     try:
         names = os.listdir(tmp_base)
     except OSError:
@@ -230,12 +240,15 @@ def _sweep_stale_views(tmp_base):
             break
         scanned += 1
         full = os.path.join(tmp_base, name)
+        real = _owned_view_realpath(full)
+        if real is None:
+            continue
         try:
-            if not os.path.isdir(full):
+            if not os.path.isdir(real):
                 continue
-            if now - os.path.getmtime(full) < SANITIZED_VIEW_STALE_AGE_SECONDS:
+            if now - os.path.getmtime(real) < SANITIZED_VIEW_STALE_AGE_SECONDS:
                 continue
-            shutil.rmtree(full, ignore_errors=True)
+            shutil.rmtree(real, ignore_errors=True)
         except OSError:
             continue
 

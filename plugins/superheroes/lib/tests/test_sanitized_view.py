@@ -930,7 +930,7 @@ def test_executable_bit_preserved(tmp_path):
         sv.destroy_sanitized_view(view["path"])
 
 
-def test_sweep_stale_views_prefix_and_age(tmp_path):
+def test_sweep_stale_views_prefix_and_age(tmp_path, monkeypatch):
     base = tmp_path / "fake-tmp"
     base.mkdir()
     old_pref = base / (sv.SANITIZED_VIEW_DIR_PREFIX + "old")
@@ -942,10 +942,78 @@ def test_sweep_stale_views_prefix_and_age(tmp_path):
     stale_time = time.time() - sv.SANITIZED_VIEW_STALE_AGE_SECONDS - 120
     os.utime(old_pref, (stale_time, stale_time))
     os.utime(old_other, (stale_time, stale_time))
+    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: str(base))
     sv._sweep_stale_views(str(base))
     assert not old_pref.exists()
     assert fresh_pref.exists()
     assert old_other.exists()
+
+
+def test_sweep_delete_authority_is_the_ownership_predicate(tmp_path, monkeypatch):
+    base = tmp_path / "fake-tmp"
+    base.mkdir()
+    aged = base / (sv.SANITIZED_VIEW_DIR_PREFIX + "stale")
+    aged.mkdir()
+    stale_time = time.time() - sv.SANITIZED_VIEW_STALE_AGE_SECONDS - 120
+    os.utime(aged, (stale_time, stale_time))
+    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: str(base))
+    monkeypatch.setattr(sv, "_owned_view_realpath", lambda _path: None)
+    sv._sweep_stale_views(str(base))
+    assert aged.exists()
+
+
+def test_sweep_lists_passed_base_but_authorizes_via_gettempdir(tmp_path, monkeypatch):
+    enum_base = tmp_path / "enumerate-here"
+    enum_base.mkdir()
+    auth_base = tmp_path / "authorize-here"
+    auth_base.mkdir()
+    aged = enum_base / (sv.SANITIZED_VIEW_DIR_PREFIX + "stale")
+    aged.mkdir()
+    stale_time = time.time() - sv.SANITIZED_VIEW_STALE_AGE_SECONDS - 120
+    os.utime(aged, (stale_time, stale_time))
+    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: str(auth_base))
+    sv._sweep_stale_views(str(enum_base))
+    assert aged.exists()
+
+
+def test_sweep_aged_prefix_symlink_to_outside_dir_untouched(tmp_path, monkeypatch):
+    # Pins the rule (ownership + non-symlink rmtree), not a behavior delta — old
+    # code also left the link and target alone because rmtree refuses symlinks.
+    base = tmp_path / "fake-tmp"
+    base.mkdir()
+    outside = tmp_path / "outside-target"
+    outside.mkdir()
+    (outside / "marker.txt").write_text("keep\n", encoding="utf-8")
+    link_name = sv.SANITIZED_VIEW_DIR_PREFIX + "via-link"
+    link_path = base / link_name
+    os.symlink(str(outside), str(link_path))
+    stale_time = time.time() - sv.SANITIZED_VIEW_STALE_AGE_SECONDS - 120
+    os.utime(link_path, (stale_time, stale_time), follow_symlinks=False)
+    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: str(base))
+    sv._sweep_stale_views(str(base))
+    assert link_path.is_symlink()
+    assert outside.exists()
+    assert (outside / "marker.txt").read_text(encoding="utf-8") == "keep\n"
+
+
+def test_destroy_refuses_case_variant_of_temp_base(tmp_path, monkeypatch):
+    probe = tmp_path / "CaseProbeDir"
+    probe.mkdir()
+    if not os.path.exists(tmp_path / "caseprobedir"):
+        pytest.skip(
+            "filesystem is case-sensitive — a case-variant path names a different "
+            "directory here, so there is no identity for the guard to catch; this "
+            "behavior exists only on case-insensitive filesystems (macOS dev, where "
+            "every build's local suite runs). #699 rider 15."
+        )
+    base = tmp_path / (sv.SANITIZED_VIEW_DIR_PREFIX + "Base")
+    base.mkdir()
+    (base / "keep.txt").write_text("marker\n", encoding="utf-8")
+    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: str(base))
+    variant = str(tmp_path / (sv.SANITIZED_VIEW_DIR_PREFIX + "base"))
+    assert sv.destroy_sanitized_view(variant) is False
+    assert base.exists()
+    assert (base / "keep.txt").read_text(encoding="utf-8") == "marker\n"
 
 
 def test_escaping_symlink_relative_target_stripped(tmp_path):

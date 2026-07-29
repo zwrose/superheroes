@@ -20,9 +20,10 @@ def _unquote(value):
     """Strip one surrounding pair of matching YAML quotes from a single-line scalar.
 
     A description with a bare ``colon: space`` (e.g. ``gates.review: passed``) must be
-    quoted or strict ``yaml.safe_load`` rejects it. This module is stdlib-only — it runs
-    in validate_skills.py, which executes before PyYAML is installed in CI — so we cannot
-    defer to a real YAML loader here. SKILL descriptions are simple single-line scalars,
+    quoted or strict ``yaml.safe_load`` rejects it. This module stays stdlib-only so it
+    works on interpreters with no PyYAML, while validate_skills.py delegates YAML validity
+    to ``yaml.safe_load`` and fails closed when PyYAML is unavailable. SKILL descriptions
+    are simple single-line scalars,
     so a minimal unquote (one pair, plus the escapes each quote style allows) is enough to
     keep the structural parser's view of a description in agreement with yaml.safe_load.
     """

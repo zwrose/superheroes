@@ -619,3 +619,50 @@ def test_version_dir_rejects_trailing_newline_in_name(tmp_path, monkeypatch):
     _dead_kill(monkeypatch)
     assert cm.scan_stale_siblings(plugin_root, now=fixed_now) == {"dirs": [], "markers": 0}
 
+
+def test_scan_and_sweep_agree_on_staleness_predicate(tmp_path, monkeypatch):
+    """Scan count and sweep removal use the same staleness predicate (rider 2)."""
+    fixed_now = 7_000_000.0
+    plugin_root, parent = _sibling_install(tmp_path, extra_versions=("0.10.0",))
+    sibling = parent / "0.10.0"
+    _mk_marker(sibling, str(os.getpid()), mtime=fixed_now - 7200)
+    _mk_marker(sibling, "424242", mtime=fixed_now - 100)
+    _mk_marker(sibling, "0", mtime=fixed_now - 7200)
+    d = _in_use(sibling)
+    os.makedirs(os.path.join(d, "55555"), exist_ok=True)
+    dead_path = _mk_marker(sibling, "888888", mtime=fixed_now - 7200)
+
+    def kill(pid, sig):
+        if pid == os.getpid():
+            return None
+        raise ProcessLookupError()
+
+    monkeypatch.setattr(os, "kill", kill)
+
+    scan = cm.scan_stale_siblings(plugin_root, now=fixed_now, grace_seconds=3600)
+    assert scan == {"dirs": ["0.10.0"], "markers": 1}
+
+    removed = cm.sweep_stale(str(sibling), now=fixed_now, grace_seconds=3600)
+    assert removed == 1
+    assert not os.path.isfile(dead_path)
+    assert os.path.isfile(os.path.join(d, str(os.getpid())))
+    assert os.path.isfile(os.path.join(d, "424242"))
+    assert os.path.isfile(os.path.join(d, "0"))
+    assert os.path.isdir(os.path.join(d, "55555"))
+
+
+def test_pid_name_re_newline_suffix_not_matched_by_sweep(tmp_path, monkeypatch):
+    fixed_now = 7_000_001.0
+    in_use = _in_use(tmp_path)
+    os.makedirs(in_use, exist_ok=True)
+    legit = _mk_marker(tmp_path, "123", mtime=fixed_now - 7200)
+    newline_name = "123\n"
+    newline_path = os.path.join(in_use, newline_name)
+    with open(newline_path, "w") as fh:
+        fh.write("")
+    os.utime(newline_path, (fixed_now - 7200, fixed_now - 7200))
+    _dead_kill(monkeypatch)
+
+    assert cm.sweep_stale(str(tmp_path), now=fixed_now) == 1
+    assert not os.path.isfile(legit)
+    assert os.path.isfile(newline_path)
