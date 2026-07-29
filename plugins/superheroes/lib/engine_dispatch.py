@@ -2521,12 +2521,45 @@ def _maybe_synthesize_supervisor_dead_forfeit(run_dir, attempt, state, run_nonce
     return True
 
 
+def _live_child_evidence(run_dir, authority, authority_hash):
+    """Return (True, reason) when a claimed run-child or engine pgid is live.
+
+    Evidence is a live claim ``childPid`` or an authenticated live engine process
+    group — never a bare pending intent. Unreadable/unbindable records and
+    ``OSError`` (including an unusable ledger root) yield ``(False, None)``.
+    """
+    if not isinstance(authority, LaunchAuthority) or not authority_hash:
+        return False, None
+    try:
+        run_dir_real = os.path.realpath(run_dir)
+    except OSError:
+        return False, None
+    run_nonce = authority.run_nonce
+    try:
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            claim = _ledger_attempt_claim(
+                run_dir_real, attempt, authority_hash, run_nonce)
+            if claim is None:
+                continue
+            if _process_alive(claim.get("childPid")):
+                return True, "live claimed run-child"
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            engine_record = _read_engine_pgid(
+                run_dir, attempt, run_nonce, authority.order_id, authority_hash)
+            if engine_record and _process_group_alive(engine_record["pgid"]):
+                return True, "live authenticated engine process group"
+    except OSError:
+        return False, None
+    return False, None
+
+
 def _compensate_failed_spawn(run_dir, state, authority, argv):
     """Clear phantom in-flight state and persist terminal spawn failure.
 
-    Must not release the worktree lease while a trusted pending ledger intent
-    exists for any attempt, or while a readable authenticated engine-pgid record
-    names a live process group.
+    Must not release the worktree lease while live-child evidence exists
+    (a live claimed run-child or a live authenticated engine process group).
+    A bare pending ledger intent is not evidence — the supervisor seals intent
+    before spawn, so every failed spawn leaves one behind.
     """
     if not isinstance(authority, LaunchAuthority):
         raise TypeError("authority is required for spawn compensation")
@@ -2541,38 +2574,18 @@ def _compensate_failed_spawn(run_dir, state, authority, argv):
         "attempts": 0,
         "forfeited": False,
     }, run_dir, argv, authority=authority, run_nonce=authority.run_nonce)
-    retain_lease = False
-    disclosure = None
     if authority.is_write:
+        authority_hash = None
         try:
             run_dir_real = os.path.realpath(run_dir)
-        except OSError:
-            run_dir_real = None
-        authority_hash = None
-        if run_dir_real is not None:
             authority_hash = _ledger_expected_hash(
                 run_dir_real, authority.run_nonce, authority.order_id)
-        if run_dir_real is not None and authority_hash:
-            pending_attempt, _pending_launch = _find_pending_launch(
-                run_dir, authority_hash, authority.run_nonce)
-            if pending_attempt is not None:
-                retain_lease = True
-                disclosure = (
-                    "supervisor-spawn-failed: lease retained "
-                    "(trusted pending ledger intent)")
-            if not retain_lease:
-                for attempt in range(1, MAX_ATTEMPTS + 1):
-                    engine_record = _read_engine_pgid(
-                        run_dir, attempt, authority.run_nonce, authority.order_id,
-                        authority_hash)
-                    if engine_record and _process_group_alive(engine_record["pgid"]):
-                        retain_lease = True
-                        disclosure = (
-                            "supervisor-spawn-failed: lease retained "
-                            "(live authenticated engine process group)")
-                        break
-        if retain_lease:
-            result["disclosure"] = disclosure
+        except OSError:
+            authority_hash = None
+        alive, reason = _live_child_evidence(run_dir, authority, authority_hash)
+        if alive:
+            result["disclosure"] = (
+                "supervisor-spawn-failed: lease retained (%s)" % reason)
         else:
             _release_worktree_lease(authority)
     else:
@@ -2818,8 +2831,16 @@ def _continue_run(run_dir, authority, *, deadline, max_wait, allow_spawn,
                 if not is_write:
                     result = _attach_sanitized_view(result, view_receipt)
                     _destroy_review_views(run_dir, authority)
+                else:
+                    alive, reason = _live_child_evidence(
+                        run_dir, authority, authority_hash)
+                    if alive:
+                        result["disclosure"] = (
+                            "completion-payload-absent: lease retained (%s)"
+                            % reason)
+                    else:
+                        _release_worktree_lease(authority)
                 _atomic_write_json(os.path.join(run_dir, RESULT_NAME), result)
-                # Write lease retained — outcome payload absent.
                 return result
             if not _sentinel_trusted(done_payload, run_nonce, authority_hash):
                 # Untrusted done (wrong nonce/hash) — do not fold; stay running.

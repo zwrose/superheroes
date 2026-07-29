@@ -1490,6 +1490,9 @@ def test_stale_done_sentinel_ignored_on_resume_with_inflight(tmp_path):
         "exit": 0, "timedOut": False, "runNonce": current_nonce,
         "authorityHash": state["authorityHash"],
     }), encoding="utf-8")
+    # Ledger completion is the authority fact; the run-dir .done alone is not.
+    ED._ledger_seal_attempt_complete(
+        os.path.realpath(str(run_dir)), 1, state["authorityHash"], current_nonce)
     res2 = ED.dispatch_poll(str(run_dir), max_wait=1)
     assert res2.get("terminal") is True
     assert (run_dir / "result.json").is_file()

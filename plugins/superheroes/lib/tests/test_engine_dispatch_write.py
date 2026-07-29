@@ -2078,7 +2078,10 @@ def test_supervisor_dead_becomes_forfeit_not_eternal_running(tmp_path, monkeypat
 
 
 def test_spawn_failed_compensates_state_and_lease(tmp_path, monkeypatch):
-    """Edge 7: failed supervisor spawn persists terminal result and releases write lease."""
+    """Edge 7: failed supervisor spawn persists terminal result and releases write lease.
+
+    A sealed ledger intent alone is not live-child evidence — lease must still release.
+    """
     main, linked = _linked_pair(tmp_path)
     prompt = _prompt(tmp_path)
     run_dir = tmp_path / "spawn-fail"
@@ -2093,8 +2096,52 @@ def test_spawn_failed_compensates_state_and_lease(tmp_path, monkeypatch):
     assert (run_dir / "result.json").is_file()
     st = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
     assert st.get("inFlightAttempt") is None
+    # Intent is sealed before spawn; prove it was present so the release is the
+    # live-evidence rule, not the accidental absence of an intent.
+    auth = ED._load_authority(str(run_dir))
+    assert auth is not None
+    run_real = os.path.realpath(str(run_dir))
+    auth_hash = ED._ledger_expected_hash(run_real, auth.run_nonce, auth.order_id)
+    intent = ED._ledger_attempt_intent(run_real, 1, auth_hash, auth.run_nonce)
+    assert intent is not None, "spawn-fail path seals intent before spawn"
+    assert ED._ledger_attempt_claim(run_real, 1, auth_hash, auth.run_nonce) is None
     import file_lock
     assert not file_lock.read_holder(ED._worktree_lease_path(os.path.realpath(linked)))
+
+
+def test_spawn_failed_retains_lease_on_live_claim(tmp_path, monkeypatch):
+    """Spawn failure while a ledger claim names a live pid → lease retained."""
+    main, linked = _linked_pair(tmp_path)
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "spawn-fail-live-claim"
+    run_dir.mkdir(mode=0o700)
+    live_pid = os.getpid()
+
+    def _spawn_seal_live_claim_then_fail(rd, attempt, authority, authority_hash=None):
+        run_real = os.path.realpath(rd)
+        claim_path = ED._ledger_attempt_path(run_real, attempt, "claim")
+        ED._ledger_seal(claim_path, {
+            "schemaVersion": ED.LEDGER_SCHEMA_VERSION,
+            "attempt": int(attempt),
+            "authorityHash": authority_hash,
+            "runNonce": authority.run_nonce,
+            "childPid": live_pid,
+            "childStart": ED._supervisor_lstart(live_pid) or "test-live",
+        })
+        return None
+
+    monkeypatch.setattr(ED, "_spawn_run_child", _spawn_seal_live_claim_then_fail)
+    res = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="sf-live-o",
+        run_engine=ED._run_engine, max_wait=10, run_dir=str(run_dir),
+    )
+    assert res.get("detail") == "supervisor-spawn-failed", res
+    assert "live claimed run-child" in (res.get("disclosure") or ""), res
+    assert _lease_held_for(linked)
+    auth = ED._load_authority(str(run_dir))
+    if auth is not None:
+        ED._release_worktree_lease(auth)
 
 def test_read_stdout_file_bounded_tail_read(tmp_path, monkeypatch):
     """Edge 8: stdout fold reads a bounded tail without loading the whole file."""
@@ -2599,6 +2646,16 @@ def test_e2e_b1_authority_wins_over_disagreeing_state(tmp_path, monkeypatch):
             os.chmod(prior_ledger, 0o600)
             os.unlink(prior_ledger)
         ED._ledger_init(auth, auth_hash)
+        # Drop prior attempt ledger records (sealed 0400) so _seal_attempt_launch
+        # can O_EXCL-seal a fresh intent bound to the new hash — same pattern as
+        # the run record above. Without this, FileExistsError preserves the old
+        # intent and run-child finds nothing pending for the new hash.
+        run_real = os.path.realpath(str(run_dir))
+        for suffix in ("intent", "claim", "complete"):
+            prior = ED._ledger_attempt_path(run_real, 1, suffix)
+            if prior and os.path.isfile(prior):
+                os.chmod(prior, 0o600)
+                os.unlink(prior)
         # State still names the *other* valid cwd.
         state["cwd"] = linked_state
         state["authorityHash"] = auth_hash
@@ -3131,6 +3188,80 @@ def _x2_write_state(tmp_path, linked, *, order_id, run_nonce, lease_token, lease
     }
     (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
     return state
+
+
+# --- WO-702-B order X2b: lease retention keys on live-child evidence ---
+
+
+def test_x2b_completion_payload_absent_releases_lease_without_live_evidence(tmp_path):
+    """Ledger completion without .done and no live child → terminal, lease released."""
+    main, linked = _linked_pair(tmp_path)
+    run_dir = tmp_path / "x2b-cpa-release"
+    run_dir.mkdir(mode=0o700)
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(
+        os.path.realpath(linked))
+    state = _x2_write_state(
+        tmp_path, linked, order_id="x2b-cpa-r", run_nonce="x2b-cpa-rn",
+        lease_token=lease_token, lease_holder=lease_holder, run_dir=run_dir,
+        in_flight=None, completed=0,
+        supervisor_pid=999999993, supervisor_start="dead-cpa")
+    _persist_test_authority(run_dir, state)
+    auth_hash = state["authorityHash"]
+    run_real = os.path.realpath(str(run_dir))
+    ED._ledger_seal_attempt_intent(
+        run_real, 1, auth_hash, "x2b-cpa-rn", 5, list(state["worktreeSnapshot"]))
+    ED._ledger_seal(ED._ledger_attempt_path(run_real, 1, "claim"), {
+        "schemaVersion": ED.LEDGER_SCHEMA_VERSION,
+        "attempt": 1,
+        "authorityHash": auth_hash,
+        "runNonce": "x2b-cpa-rn",
+        "childPid": 999999993,
+        "childStart": "dead-cpa",
+    })
+    ED._ledger_seal_attempt_complete(run_real, 1, auth_hash, "x2b-cpa-rn")
+    assert not (run_dir / "attempt-1.done").is_file()
+    res = ED.dispatch_poll(str(run_dir), max_wait=0, order_id="x2b-cpa-r")
+    assert res.get("detail") == "completion-payload-absent", res
+    assert res.get("terminal") is True
+    assert not _lease_held_for(linked)
+
+
+def test_x2b_completion_payload_absent_retains_lease_on_live_claim(tmp_path):
+    """Ledger completion without .done but live claim → terminal, lease retained."""
+    main, linked = _linked_pair(tmp_path)
+    run_dir = tmp_path / "x2b-cpa-retain"
+    run_dir.mkdir(mode=0o700)
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(
+        os.path.realpath(linked))
+    live_pid = os.getpid()
+    state = _x2_write_state(
+        tmp_path, linked, order_id="x2b-cpa-k", run_nonce="x2b-cpa-kn",
+        lease_token=lease_token, lease_holder=lease_holder, run_dir=run_dir,
+        in_flight=None, completed=0,
+        supervisor_pid=live_pid,
+        supervisor_start=ED._supervisor_lstart(live_pid) or "live")
+    _persist_test_authority(run_dir, state)
+    auth_hash = state["authorityHash"]
+    run_real = os.path.realpath(str(run_dir))
+    ED._ledger_seal_attempt_intent(
+        run_real, 1, auth_hash, "x2b-cpa-kn", 5, list(state["worktreeSnapshot"]))
+    ED._ledger_seal(ED._ledger_attempt_path(run_real, 1, "claim"), {
+        "schemaVersion": ED.LEDGER_SCHEMA_VERSION,
+        "attempt": 1,
+        "authorityHash": auth_hash,
+        "runNonce": "x2b-cpa-kn",
+        "childPid": live_pid,
+        "childStart": state["supervisorStart"],
+    })
+    ED._ledger_seal_attempt_complete(run_real, 1, auth_hash, "x2b-cpa-kn")
+    assert not (run_dir / "attempt-1.done").is_file()
+    res = ED.dispatch_poll(str(run_dir), max_wait=0, order_id="x2b-cpa-k")
+    assert res.get("detail") == "completion-payload-absent", res
+    assert res.get("terminal") is True
+    assert "live claimed run-child" in (res.get("disclosure") or ""), res
+    assert _lease_held_for(linked)
+    ED._release_worktree_lease_for_cwd(
+        os.path.realpath(linked), lease_token, lease_holder)
 
 
 def test_x2_forged_completion_does_not_release_or_retry(tmp_path):
