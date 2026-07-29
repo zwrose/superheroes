@@ -996,8 +996,10 @@ def test_sweep_skips_symlink_to_aged_prefix_dir_inside_temp_base(tmp_path, monke
 
 
 def test_sweep_aged_prefix_symlink_to_outside_dir_untouched(tmp_path, monkeypatch):
-    # Containment under gettempdir() is what keeps the outside target alive; link and
-    # target are both aged and prefix-named so the age gate cannot mask a bad delete.
+    # The islink guard fires first (static symlink), so this entry never reaches
+    # containment — belt-and-braces. Containment alone is pinned by
+    # test_sweep_lists_passed_base_but_authorizes_via_gettempdir; the islink guard
+    # alone by test_sweep_skips_symlink_to_aged_prefix_dir_inside_temp_base.
     base = tmp_path / "fake-tmp"
     base.mkdir()
     outside = tmp_path / (sv.SANITIZED_VIEW_DIR_PREFIX + "outside-target")
@@ -1014,6 +1016,40 @@ def test_sweep_aged_prefix_symlink_to_outside_dir_untouched(tmp_path, monkeypatc
     assert link_path.is_symlink()
     assert outside.exists()
     assert (outside / "marker.txt").read_text(encoding="utf-8") == "keep\n"
+
+
+def test_sweep_swap_symlink_after_islink_check_victim_survives(tmp_path, monkeypatch):
+    base = tmp_path / "fake-tmp"
+    base.mkdir()
+    nest = base / "nest"
+    nest.mkdir()
+    victim = nest / (sv.SANITIZED_VIEW_DIR_PREFIX + "victim")
+    victim.mkdir()
+    (victim / "PRECIOUS.txt").write_text("keep\n", encoding="utf-8")
+    entry_name = sv.SANITIZED_VIEW_DIR_PREFIX + "stale-entry"
+    full_path = base / entry_name
+    full_path.mkdir()
+    stale_time = time.time() - sv.SANITIZED_VIEW_STALE_AGE_SECONDS - 120
+    os.utime(full_path, (stale_time, stale_time))
+    os.utime(victim, (stale_time, stale_time))
+    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: str(base))
+    real_owned = sv._owned_view_realpath
+    swapped = {"done": False}
+
+    def realpath_with_midflight_swap(path):
+        norm_full = os.path.normpath(str(full_path))
+        if not swapped["done"] and os.path.normpath(path) == norm_full:
+            swapped["done"] = True
+            hidden = base / (entry_name + ".hidden")
+            full_path.rename(hidden)
+            os.symlink(str(victim), str(full_path))
+            return str(victim.resolve())
+        return real_owned(path)
+
+    monkeypatch.setattr(sv, "_owned_view_realpath", realpath_with_midflight_swap)
+    sv._sweep_stale_views(str(base))
+    assert victim.is_dir()
+    assert (victim / "PRECIOUS.txt").read_text(encoding="utf-8") == "keep\n"
 
 
 def test_destroy_refuses_case_variant_of_temp_base(tmp_path, monkeypatch):

@@ -240,10 +240,7 @@ def _sweep_stale_views(tmp_base):
             break
         scanned += 1
         full = os.path.join(tmp_base, name)
-        try:
-            if os.path.islink(full):
-                continue
-        except OSError:
+        if os.path.islink(full):
             continue
         real = _owned_view_realpath(full)
         if real is None:
@@ -253,7 +250,10 @@ def _sweep_stale_views(tmp_base):
                 continue
             if now - os.path.getmtime(real) < SANITIZED_VIEW_STALE_AGE_SECONDS:
                 continue
-            shutil.rmtree(real, ignore_errors=True)
+            # Authorization resolves; deletion must target the enumerated entry so
+            # rmtree's own symlink refusal is the atomic backstop against a swap
+            # after the islink check.
+            shutil.rmtree(full, ignore_errors=True)
         except OSError:
             continue
 

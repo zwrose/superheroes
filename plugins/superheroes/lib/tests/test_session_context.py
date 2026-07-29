@@ -438,12 +438,14 @@ def test_cache_hygiene_passes_plugin_root_to_scan_stale_siblings(monkeypatch):
 def test_cache_parent_hint_matches_cache_markers(tmp_path):
     import cache_markers as cm
 
-    plugin_root = str(tmp_path / "plugin-cache" / "0.22.0")
-    os.makedirs(plugin_root)
+    anchor = tmp_path / "home" / "plugins"
+    anchor.mkdir(parents=True)
+    plugin_root = str(anchor / ".." / "plugin-cache" / "0.22.0")
+    os.makedirs(os.path.normpath(plugin_root), exist_ok=True)
     assert sc._cache_parent_hint(plugin_root) == cm.cache_parent(plugin_root)
 
 
-def test_assemble_survives_broken_cache_parent_hint(tmp_path, monkeypatch):
+def test_assemble_survives_broken_cache_parent_hint(tmp_path, monkeypatch, capsys):
     import mode_registry
 
     monkeypatch.setattr(
@@ -464,3 +466,6 @@ def test_assemble_survives_broken_cache_parent_hint(tmp_path, monkeypatch):
     assert "Plugin root (absolute):" in out
     assert "### Covenant" in out
     assert "assemble: source gather errored" not in out
+    captured = capsys.readouterr()
+    assert "Plugin cache hygiene" in captured.err
+    assert "RuntimeError" in captured.err

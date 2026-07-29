@@ -248,7 +248,7 @@ def test_frontmatter_yaml_flags_parse_skill_disagreement(tmp_path):
     ), errors
 
 
-def test_main_wires_frontmatter_yaml_rule(tmp_path, monkeypatch):
+def test_main_wires_frontmatter_yaml_rule(tmp_path, monkeypatch, capsys):
     root = str(tmp_path / "plugins")
     os.makedirs(root)
     body = (
@@ -260,6 +260,9 @@ def test_main_wires_frontmatter_yaml_rule(tmp_path, monkeypatch):
         fh.write(body)
     monkeypatch.setattr(vs, "PLUGINS", root)
     assert vs.main([]) == 1
+    captured = capsys.readouterr()
+    assert "frontmatter-yaml:" in captured.err
+    assert "p/bad" in captured.err
 
 
 def test_main_fails_closed_without_pyyaml(capsys):
