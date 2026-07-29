@@ -51,14 +51,15 @@ events — do not collapse them:**
 1. **Cross-vendor reviewer unavailable at kickoff (light only).** The **owner** chooses on
    the spot between a **disclosed** same-family reviewer (a named degradation of
    independence) and taking the **full lane**. Never the builder's or advisor's own call.
-2. **The reviewer forfeits mid-run** (its structural timeout fires — *silence is not
-   forfeit*). **Light:** Claude may stand in with the **independence loss disclosed** — a
-   disclosed degradation, not an owner decision, acceptable because the advisor's vet still
-   runs afterward. **Micro:** no Claude stand-in (no advisor vet behind it) — **resolve
-   upward or park**.
+2. **The reviewer forfeits mid-run** (the dispatch returns a **terminal forfeit** — its
+   structural timeout firing, a nonzero exit, unreadable or unparseable output, or a vacuous
+   forfeit — *silence is not forfeit; a terminal forfeit result is*). **Light:** Claude may
+   stand in with the **independence loss disclosed** — a disclosed degradation, not an owner
+   decision, acceptable because the advisor's vet still runs afterward. **Micro:** no Claude
+   stand-in (no advisor vet behind it) — **resolve upward to the full lane or park**.
 3. **Micro at kickoff.** The reviewer must be **non-Anthropic** (the advisor *is* the
    maker). No same-family fallback at kickoff and no Claude stand-in mid-run — unavailable
-   or forfeited reviewers **resolve upward or park** in both cases.
+   or forfeited reviewers **resolve upward to the full lane or park** in both cases.
 
 That one reviewer carries a **mandatory planted-defect control probe on every light or
 micro review** — the control that makes single-seat review trustworthy. The probe must

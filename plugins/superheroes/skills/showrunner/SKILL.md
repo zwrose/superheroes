@@ -45,8 +45,13 @@ mandatory control probe on each re-review, until no blocking findings remain —
 change **parks**.
 
 **Resolving upward** stops the in-session micro change — **file the issue, disclose the
-already-typed work and its maker family, and route it as a normal build**; if that is not
-possible, **park**.
+already-typed work and its maker family**, then:
+- **Routine escalation** (the change outgrew micro): **route it as a normal build** and **call
+  the lane as usual**; if that is not possible, **park**.
+- **Forced upward resolution** — an unavailable non-Anthropic reviewer at kickoff, a mid-run
+  forfeit, or a planted-defect control probe still **not engaged** after one re-dispatch:
+  route to the **full lane specifically**, or **park** — **never light**, because light is
+  also a single-reviewer lane and would inherit the same unverified-review problem.
 
 The **lane table and cross-lane invariants** are canonical in
 `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md`; this charter carries the
@@ -141,15 +146,17 @@ the reviewer and the owner's authorization carry that check instead.**
    **Reviewer availability and forfeit** (light and micro, as bounded in
    `review-discipline.md`): check the single reviewer's availability **while the owner is
    present**. **Mid-run forfeit** follows the rubric's three-case rule (kickoff unavailability,
-   mid-run forfeit with disclosed Claude stand-in on **light** only, **micro** resolving upward or
-   parking — silence is not forfeit; the timeout is). One honest consequence:
+   mid-run forfeit with disclosed Claude stand-in on **light** only, **micro** resolving upward to
+   the full lane or parking — silence is not forfeit; a terminal forfeit result is). One honest
+   consequence:
    the cross-vendor engine has stalled for long stretches at near-zero CPU in practice, and the
    reviewer keeps its normal ceiling rather than a tighter one (a tighter timeout would only trade
    stalls for lost independence). **When the engine is flaky the light lane is not reliably the fast
    option — a reason to take the full lane, never a reason to cut the review.** That seat carries a
    **mandatory planted-defect control probe on every such review**; the probe must come back
    **engaged** — not engaged means that review did not happen (re-dispatch once, then resolve upward
-   or park; never a pass; exit zero is not evidence of engagement). The investigation-record floor
+   to the full lane or park; never a pass; exit zero is not evidence of engagement). The
+   investigation-record floor
    applies automatically to **every external review seat**, single-seat lanes included (see
    `review-discipline.md`).
 4. **Vet PRs from artifacts, never narratives.** **Micro PRs:** no build brief and no advisor
