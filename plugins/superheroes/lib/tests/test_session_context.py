@@ -86,6 +86,22 @@ def test_covenant_injected_for_calibrated_project(tmp_path, monkeypatch):
     assert "/superheroes:review-code" not in note
 
 
+def test_covenant_pins_the_approval_execution_distinction(tmp_path, monkeypatch):
+    # #706: the covenant ships into every calibrated session, so WHICH act never delegates
+    # is load-bearing runtime guidance. The generic "Never merge" marker above survives
+    # edits that would gut the distinction, so pin the distinction itself — and pin the
+    # ABSENCE of the 2026-07-26 divergence note, whose stated condition ("until the owner
+    # amends it") the owner's PHILOSOPHY amendment satisfied.
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry",
+                        lambda cwd, root=None: {"storageMode": "in-repo"})
+    note = sc.covenant(str(tmp_path), _PLUGIN_ROOT)
+    assert "The never-delegable act is **approval**" in note
+    assert "mechanical per-merge approval checkpoint" in note
+    assert "execution stays in the owner's hands" in note
+    assert "known, disclosed divergence" not in note
+
+
 def test_covenant_via_hero_evidence_when_registry_absent(tmp_path, monkeypatch):
     # No registry record, but hero calibration evidence exists → still calibrated.
     import mode_registry

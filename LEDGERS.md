@@ -254,11 +254,16 @@ their behalf, executing an approved merge may be delegated **only** behind a mec
 that guarantees the owner's approval every time, and releases, publications, and rewritten history
 stay in the owner's hands. The re-check trigger above is therefore **satisfied on its first branch**,
 and the covenant's disclosed-divergence note is removed in the same change. The divergence record
-above stands as history, not as current state. **Not yet coherent everywhere:** §3 bet **B1** still
-frames the owner's checkpoint as doing "the final review and merge at the end (merging is always
-theirs)", and `README.md`'s review-independence bullet still reads "the owner merges" — both predate
-the distinction and are **owed a follow-up**; this entry closes R3's trigger, it does not claim the
-document set is coherent.
+above stands as history, not as current state. **Not yet coherent everywhere — three known residuals,
+all owed a follow-up.** Inside the constitution: §3 bet **B1** still frames the owner's checkpoint as
+doing "the final review and merge at the end (merging is always theirs)", and §4 item 1 still ranks
+"the acts that bind the owner (merge, release, publish)" as never moving — echoed at §4's close as
+"the never-merge rule" — which is the pre-amendment *acts* framing that §2 promise 1 has now replaced
+with *decisions*. Outside it: `README.md`'s review-independence bullet still reads "the owner merges".
+**Unchanged by this amendment:** the checkpoint's wiring is still Claude-host only (see above), and the
+covenant's fail-closed default — where you cannot establish that a checkpoint fires on this host and
+path, execution stays in the owner's hands — remains the operative rule. This entry closes R3's
+trigger; it does not claim the document set is coherent.
 
 ### R4 — Channel and attendance are two independent axes
 
