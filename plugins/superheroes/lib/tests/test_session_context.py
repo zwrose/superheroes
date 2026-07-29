@@ -18,6 +18,16 @@ import session_context as sc
 # text (single source of truth), not a fixture copy that could drift from it.
 _PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(sc.__file__)))
 
+# The covenant header decides WHICH document wins when the covenant and PHILOSOPHY.md disagree.
+# Pinned by exact match (whitespace-normalized) rather than substring: a substring guard is
+# defeatable by appending a contradicting sentence after it (#706 review round 5).
+_EXPECTED_COVENANT_HEADER = (
+    "The short, imperative form of PHILOSOPHY.md — the operating discipline every superheroes "
+    "session carries. PHILOSOPHY.md (in-repo) remains the constitution and the authority; if the "
+    "two ever disagree, one of them has drifted — say so and park the difference with the owner; "
+    "until the owner rules, PHILOSOPHY.md governs."
+)
+
 
 # ---------------------------------------------------------------- helpers
 def _mk_repo(d, claude_md=None):
@@ -86,6 +96,34 @@ def test_covenant_injected_for_calibrated_project(tmp_path, monkeypatch):
     assert "superheroes:showrunner" in note and "superheroes:workhorse" in note  # charter pointer
     # The covenant subsumed the old note: it no longer carries the review-code command string.
     assert "/superheroes:review-code" not in note
+
+
+def test_covenant_pins_the_approval_execution_distinction(tmp_path, monkeypatch):
+    # #706: the covenant ships into every calibrated session, so WHICH act never delegates
+    # is load-bearing runtime guidance. The generic "Never merge" marker above survives
+    # edits that would gut the distinction, so pin the distinction itself — and pin the
+    # ABSENCE of the 2026-07-26 divergence note, whose stated condition ("until the owner
+    # amends it") the owner's PHILOSOPHY amendment satisfied.
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry",
+                        lambda cwd, root=None: {"storageMode": "in-repo"})
+    note = sc.covenant(str(tmp_path), _PLUGIN_ROOT)
+    assert "The never-delegable act is **approval**" in note
+    assert "mechanical per-merge approval checkpoint" in note
+    # the EPISTEMIC half of the fail-closed default: "where none exists" alone would keep the
+    # trailing clause passing, so pin the can't-establish-it branch by name (#706 review round 3).
+    assert "you cannot establish that it fires on this host and path" in note
+    assert "execution stays in the owner's hands" in note
+    # The drift clause this change rewrote decides which document wins when the two disagree, so
+    # it is pinned by EXACT MATCH on the whole header, not by substring. A substring pin is
+    # defeatable by APPENDING: "…PHILOSOPHY.md governs. When the covenant is stricter, follow it
+    # instead." keeps every substring assertion green while reversing the precedence (#706 review
+    # rounds 4-5 each found one more way past a substring guard; equality ends that class).
+    # Whitespace is normalized first so a pure re-wrap of the source is not a false failure.
+    flat = " ".join(note.split())
+    header = flat[flat.index("The short, imperative form"):flat.index("## The six promises")].strip()
+    assert header == _EXPECTED_COVENANT_HEADER
+    assert "known, disclosed divergence" not in note
 
 
 def test_covenant_via_hero_evidence_when_registry_absent(tmp_path, monkeypatch):
