@@ -1586,33 +1586,53 @@ def test_concurrent_run_dir_lock_prevents_duplicate_spawn(tmp_path, monkeypatch)
     t.join(timeout=60)
 
 
+def _minimal_review_authority(run_dir, cleanup_roots):
+    """Minimal LaunchAuthority for run-dir cleanup unit tests."""
+    return ED.LaunchAuthority(
+        role_kind="review",
+        run_kind=ED.RUN_KIND_REVIEW,
+        engine="codex",
+        effort="high",
+        model=None,
+        engine_model=None,
+        schema_path=None,
+        argv=(),
+        spawned_argv=(),
+        engine_binary="",
+        cwd=str(run_dir),
+        order_id="",
+        run_nonce="test-nonce",
+        run_dir=str(run_dir),
+        timeout=5,
+        retry_timeout=5,
+        lease_token=None,
+        lease_holder=None,
+        cleanup_roots=tuple(cleanup_roots),
+        fed_prompt="",
+        view_receipt={},
+        repo_root=None,
+        prompt_path=None,
+        progress_path=None,
+        base_sha=None,
+    )
+
+
 def test_result_json_persisted_before_view_destroyed(tmp_path, monkeypatch):
     """result.json must exist and parse before review-cwd destruction runs."""
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
     destroy_moments = []
-    real_destroy = ED.sanitized_view.destroy_sanitized_view
+    real_destroy = ED._destroy_run_dir_path
 
-    def _spy_destroy(path):
-        probe = os.path.realpath(path)
-        result_path = None
-        for _ in range(6):
-            candidate = os.path.join(probe, "result.json")
-            if os.path.isfile(candidate):
-                result_path = candidate
-                break
-            parent = os.path.dirname(probe)
-            if parent == probe:
-                break
-            probe = parent
-        assert result_path, "result.json missing at destroy"
+    def _spy_run_dir_destroy(path, authority):
+        result_path = os.path.join(authority.run_dir, ED.RESULT_NAME)
+        assert os.path.isfile(result_path), "result.json missing at destroy"
         parsed = json.loads(open(result_path, encoding="utf-8").read())
         assert parsed.get("ok") is True
         destroy_moments.append(result_path)
-        return real_destroy(path)
+        return real_destroy(path, authority)
 
-    import sanitized_view as _sv_mod
-    monkeypatch.setattr(ED.sanitized_view, "destroy_sanitized_view", _spy_destroy)
+    monkeypatch.setattr(ED, "_destroy_run_dir_path", _spy_run_dir_destroy)
     res = ED.dispatch_review(
         "codex", model="sonnet", effort="high",
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
@@ -1622,6 +1642,97 @@ def test_result_json_persisted_before_view_destroyed(tmp_path, monkeypatch):
     assert destroy_moments
     run_dir = res["runDir"]
     assert not os.path.exists(os.path.join(run_dir, REVIEW_CWD_BASENAME))
+
+
+def test_run_dir_cleanup_survives_temp_base_change(tmp_path, monkeypatch):
+    """Edge 1 isolation: cleanup succeeds after process temp base changes."""
+    run_dir = tmp_path / "run-under-original-temp"
+    run_dir.mkdir()
+    review_cwd = run_dir / REVIEW_CWD_BASENAME
+    review_cwd.mkdir()
+    (review_cwd / "keep-me.txt").write_text("x", encoding="utf-8")
+    (run_dir / ED.RESULT_NAME).write_text(
+        json.dumps({"ok": True}), encoding="utf-8")
+    authority = _minimal_review_authority(run_dir, (str(review_cwd),))
+    other_base = tmp_path / "other-temp-base"
+    other_base.mkdir()
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(other_base))
+    monkeypatch.setattr(_SV_MOD.tempfile, "gettempdir", lambda: str(other_base))
+    ED._destroy_review_views(str(run_dir), authority)
+    assert not os.path.exists(str(review_cwd))
+
+
+def test_run_dir_cleanup_refuses_outside_cleanup_roots(tmp_path):
+    """Edge 3: run-dir cleanup refuses a target outside authority.cleanup_roots."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    review_cwd = run_dir / REVIEW_CWD_BASENAME
+    review_cwd.mkdir()
+    outside = tmp_path / "outside-victim"
+    outside.mkdir()
+    marker = outside / "keep.txt"
+    marker.write_text("keep", encoding="utf-8")
+    authority = _minimal_review_authority(run_dir, (str(review_cwd),))
+    assert ED._cleanup_path_permitted(str(outside), authority) is False
+    assert ED._destroy_run_dir_path(str(outside), authority) is False
+    assert outside.is_dir()
+    assert marker.read_text(encoding="utf-8") == "keep"
+
+
+def test_run_dir_cleanup_refuses_symlink(tmp_path):
+    """Edge 4: run-dir cleanup refuses a symlink even if it resolves into a root."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    real_target = tmp_path / "real-target"
+    real_target.mkdir()
+    marker = real_target / "keep.txt"
+    marker.write_text("keep", encoding="utf-8")
+    link = run_dir / REVIEW_CWD_BASENAME
+    try:
+        os.symlink(str(real_target), str(link))
+    except OSError as exc:
+        pytest.skip("symlink not supported: %s" % exc)
+    authority = _minimal_review_authority(run_dir, (str(link),))
+    assert ED._cleanup_path_permitted(str(link), authority) is False
+    assert ED._destroy_run_dir_path(str(link), authority) is False
+    assert os.path.lexists(str(link))
+    assert real_target.is_dir()
+    assert marker.read_text(encoding="utf-8") == "keep"
+
+
+def test_destroy_sanitized_view_never_called_with_run_dir_path(tmp_path, monkeypatch):
+    """Edges 5–6: destroy_sanitized_view only sees prefix/temp views; source is gone."""
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    build_view = _fake_build_view(tmp_path)
+    called_paths = []
+    real_destroy = ED.sanitized_view.destroy_sanitized_view
+
+    def _spy_destroy(path):
+        called_paths.append(path)
+        return real_destroy(path)
+
+    monkeypatch.setattr(ED.sanitized_view, "destroy_sanitized_view", _spy_destroy)
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=build_view,
+    )
+    assert res["ok"] is True, res
+    assert called_paths, "expected destroy_sanitized_view on the source view"
+    tmp_base = os.path.realpath(_SV_MOD.tempfile.gettempdir())
+    prefix = _SV_MOD.SANITIZED_VIEW_DIR_PREFIX
+    run_dir_real = os.path.realpath(res["runDir"])
+    for path in called_paths:
+        real = os.path.realpath(path)
+        assert os.path.basename(real).startswith(prefix), path
+        assert os.path.commonpath([real, tmp_base]) == tmp_base, path
+        assert os.path.basename(real) != REVIEW_CWD_BASENAME
+        assert not real.startswith(run_dir_real + os.sep), path
+    source = build_view.meta["view_path"]
+    assert source, "fake build_view must record its path"
+    assert not os.path.exists(source)
+    assert not os.path.exists(os.path.join(res["runDir"], REVIEW_CWD_BASENAME))
 
 
 def test_dispatch_review_private_run_dir_argv_cwd_canonical(tmp_path, monkeypatch):
@@ -1950,6 +2061,14 @@ def _b2_sink_args(call):
         for kw in call.keywords:
             if kw.arg == "authority":
                 yield "authority", kw.value
+    elif name == "_destroy_run_dir_path":
+        if call.args:
+            yield "path", call.args[0]
+        if len(call.args) >= 2:
+            yield "authority", call.args[1]
+        for kw in call.keywords:
+            if kw.arg in ("path", "authority"):
+                yield kw.arg, kw.value
     elif name == "rmtree":
         if call.args:
             yield "rmtree_target", call.args[0]
@@ -1999,7 +2118,7 @@ _B2_SINK_NAMES = frozenset({
     "_spawn_run_child", "_run_engine_files", "_seal_attempt_launch",
     "_execute_injected_attempt",
     "_release_worktree_lease", "_release_worktree_lease_for_cwd",
-    "_destroy_review_views",
+    "_destroy_review_views", "_destroy_run_dir_path",
 })
 
 
@@ -2008,16 +2127,17 @@ def _b2_find_violations(source):
     tree = ast.parse(source)
     violations = []
     parent_map = _b2_parent_map(tree)
-    # rmtree sites inside _destroy_review_views / _cleanup_path_permitted are
-    # authority-gated; pre-authority create-path rmtrees of sanitized views are
-    # not authority-carrying (view path from build_view, not engine). Scope
-    # rmtree checks to _destroy_review_views only.
+    # rmtree sites inside _destroy_run_dir_path / _destroy_review_views /
+    # _cleanup_path_permitted are authority-gated; pre-authority create-path
+    # rmtrees of sanitized views are not authority-carrying (view path from
+    # build_view, not engine). Scope rmtree checks to those helpers only.
     for call in [n for n in ast.walk(tree) if isinstance(n, ast.Call)]:
         name = _b2_call_name(call)
         if name == "rmtree":
             enc = _b2_enclosing_function(tree, call)
             if enc is None or enc.name not in (
-                    "_destroy_review_views", "_cleanup_path_permitted"):
+                    "_destroy_review_views", "_destroy_run_dir_path",
+                    "_cleanup_path_permitted"):
                 continue
         elif name not in _B2_SINK_NAMES:
             continue

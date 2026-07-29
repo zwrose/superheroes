@@ -1322,35 +1322,89 @@ def _materialize_review_cwd(run_dir, view):
     receipt = _sanitized_view_receipt(view)
     # Destroy the supervisor-owned source export immediately after the derived
     # copy exists so cleanup never needs a receipt-controlled deletion target.
+    # Source lives under the sanitized-view temp prefix — use that destroyer.
+    # review-cwd under run_dir is a different ownership domain (see
+    # _destroy_run_dir_path); do not merge the two cleanup paths.
     try:
-        if src and os.path.isdir(src):
-            shutil.rmtree(src, ignore_errors=False)
+        if src:
+            sanitized_view.destroy_sanitized_view(src)
     except OSError:
         pass
     return dest, receipt, None
 
 
 def _cleanup_path_permitted(path, authority):
+    """True only for a non-symlink path whose realpath is an authority cleanup root.
+
+    B-2: cleanup targets are authority-derived (cleanup_roots), never receipt-derived.
+    Symlinks are refused even when they resolve into a cleanup root.
+    """
     if not path or not isinstance(authority, LaunchAuthority):
+        return False
+    try:
+        if os.path.islink(path):
+            return False
+    except OSError:
         return False
     try:
         real = os.path.realpath(path)
     except OSError:
         return False
     for root in authority.cleanup_roots:
+        if not root:
+            continue
         try:
+            if os.path.islink(root):
+                continue
             root_real = os.path.realpath(root)
         except OSError:
             continue
         if real == root_real:
             return True
-    # review-cwd under run_dir is always an implicit cleanup root for review
-    if authority.run_kind == RUN_KIND_REVIEW:
+    return False
+
+
+def _destroy_run_dir_path(path, authority):
+    """Remove a path inside authority.cleanup_roots (run-dir ownership).
+
+    Separate from sanitized_view.destroy_sanitized_view: review-cwd lives inside
+    the run directory this module owns and does not carry the sanitized-view
+    temp prefix, so the temp-view destroyer correctly refuses it. Keep both
+    paths — do not "simplify" run-dir cleanup back through the sanitized-view
+    destroyer.
+
+    Destruction always iterates authority.cleanup_roots (B-2): the ``path``
+    argument only selects which root to remove; it is never the rmtree operand.
+    """
+    if not _cleanup_path_permitted(path, authority):
+        return False
+    try:
+        want = os.path.realpath(path)
+    except OSError:
+        return False
+    for root in authority.cleanup_roots:
+        if not root or not _cleanup_path_permitted(root, authority):
+            continue
         try:
-            if real == os.path.realpath(_review_cwd_path(authority.run_dir)):
-                return True
+            if os.path.realpath(root) != want:
+                continue
         except OSError:
-            pass
+            continue
+        try:
+            if not os.path.exists(root):
+                return True
+            if os.path.islink(root):
+                return False
+            shutil.rmtree(root, ignore_errors=False)
+        except OSError:
+            try:
+                shutil.rmtree(root, ignore_errors=True)
+            except OSError:
+                return False
+        try:
+            return not os.path.exists(root)
+        except OSError:
+            return False
     return False
 
 
@@ -1361,29 +1415,14 @@ def _destroy_review_views(run_dir, authority):
     result_path = os.path.join(run_dir, RESULT_NAME)
     if not os.path.isfile(result_path):
         return
-    roots = list(authority.cleanup_roots)
-    if authority.run_kind == RUN_KIND_REVIEW:
-        roots.append(_review_cwd_path(authority.run_dir))
-    seen = set()
-    for root in roots:
-        if not root or root in seen:
+    # Authority-derived only — never invent an extra root outside cleanup_roots.
+    for root in authority.cleanup_roots:
+        if not root:
             continue
-        seen.add(root)
-        if not _cleanup_path_permitted(root, authority):
-            # review-cwd path is always permitted when it matches run_dir derivation
-            try:
-                if os.path.realpath(root) != os.path.realpath(_review_cwd_path(authority.run_dir)):
-                    continue
-            except OSError:
-                continue
         try:
-            if os.path.exists(root):
-                sanitized_view.destroy_sanitized_view(root)
+            _destroy_run_dir_path(root, authority)
         except OSError:
-            try:
-                shutil.rmtree(root, ignore_errors=True)
-            except OSError:
-                pass
+            pass
 
 
 def _resolve_argv_binary(argv):
@@ -2067,33 +2106,6 @@ def _is_supervisor_process(run_dir, pid, start_time):
     return True
 
 
-def _validated_sanitized_view_path(path):
-    """Return path if safe to destroy, else None."""
-    if not path:
-        return None
-    try:
-        real = os.path.realpath(path)
-    except OSError:
-        return None
-    if os.path.islink(path) or os.path.islink(real):
-        return None
-    if not os.path.isdir(real):
-        return None
-    base = os.path.basename(real)
-    if not base.startswith(sanitized_view.SANITIZED_VIEW_DIR_PREFIX):
-        if base != REVIEW_CWD_DIRNAME:
-            return None
-    parent = os.path.dirname(real)
-    tmp_base = os.path.realpath(tempfile.gettempdir())
-    try:
-        common = os.path.commonpath([parent, tmp_base])
-    except ValueError:
-        return None
-    if common != tmp_base:
-        return real if base == REVIEW_CWD_DIRNAME else None
-    return real
-
-
 def _maybe_synthesize_supervisor_dead_forfeit(run_dir, attempt, state, run_nonce,
                                               authority_hash=None):
     """When supervisor is gone and grace elapsed, write a trusted forfeit sentinel."""
@@ -2753,9 +2765,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 
     if time.monotonic() >= overall_deadline:
         try:
-            validated = _validated_sanitized_view_path(view.get("path") if view else None)
-            if validated:
-                shutil.rmtree(validated, ignore_errors=True)
+            sanitized_view.destroy_sanitized_view(view.get("path") if view else None)
         except Exception:
             pass
         return _terminal_meta(
@@ -2770,9 +2780,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
         ok, real_dir = _validate_run_dir(real_dir, create=True)
         if not ok:
             try:
-                validated = _validated_sanitized_view_path(view.get("path") if view else None)
-                if validated:
-                    shutil.rmtree(validated, ignore_errors=True)
+                sanitized_view.destroy_sanitized_view(view.get("path") if view else None)
             except Exception:
                 pass
             return _terminal_meta(
@@ -2783,9 +2791,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
     # Pre-state result artifacts are reused control-plane data — refuse without nonce.
     if os.path.isfile(os.path.join(real_dir, RESULT_NAME)):
         try:
-            validated = _validated_sanitized_view_path(view.get("path") if view else None)
-            if validated:
-                shutil.rmtree(validated, ignore_errors=True)
+            sanitized_view.destroy_sanitized_view(view.get("path") if view else None)
         except Exception:
             pass
         return _terminal_meta(
@@ -2795,9 +2801,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 
     if os.path.exists(_review_cwd_path(real_dir)):
         try:
-            validated = _validated_sanitized_view_path(view.get("path") if view else None)
-            if validated:
-                shutil.rmtree(validated, ignore_errors=True)
+            sanitized_view.destroy_sanitized_view(view.get("path") if view else None)
         except Exception:
             pass
         return _terminal_meta(
@@ -2809,9 +2813,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
         _cwd, view_receipt, _view_source = _materialize_review_cwd(real_dir, view)
     except OSError:
         try:
-            validated = _validated_sanitized_view_path(view.get("path") if view else None)
-            if validated:
-                shutil.rmtree(validated, ignore_errors=True)
+            sanitized_view.destroy_sanitized_view(view.get("path") if view else None)
         except Exception:
             pass
         return _terminal_meta(
