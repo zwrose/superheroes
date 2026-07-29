@@ -289,9 +289,9 @@ not a divergence** — the same document carries the approval/execution qualific
 `README.md:78-80` (approval stays with the owner; execution only behind a per-merge checkpoint),
 exactly as `CONVENTIONS.md:61` is qualified at `:80-84`. The complete restatements — qualification
 plus the host/path fail-closed fallback and the release/force-push exclusions — live in
-`CONVENTIONS.md` and the `showrunner` charter's merge duty. (The `showrunner` charter likewise restates the full
-rule in its merge duty; the `workhorse` charter deliberately does not repeat the standing orders,
-deferring to the covenant for them.) A wording cleanup, not a contradiction.
+`CONVENTIONS.md` and the `showrunner` charter's merge duty; the `workhorse` charter deliberately does
+not repeat the standing orders, deferring to the covenant for them. A wording cleanup, not a
+contradiction.
 
 ### R4 — Channel and attendance are two independent axes
 
