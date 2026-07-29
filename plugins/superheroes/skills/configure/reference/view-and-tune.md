@@ -119,7 +119,9 @@ action that owns it, leaving the rest of the calibration untouched:
 
   To set overrides (including `fable` only when the role's engine is `claude` — `fable` is
   anthropic-native and is **refused** with `fable-on-external-engine` when that role routes to
-  codex or cursor) or clear overrides back to `DEFAULT_TIERS`, run the helper; it creates the
+  codex or cursor; the same command also **refuses** with `core-md-unreadable` when the project's
+  `core.md` exists but cannot be read — the tier is not saved and the refusal names the file, so it
+  is a broken-config signal, not a rejected tier) or clear overrides back to `DEFAULT_TIERS`, run the helper; it creates the
   block if absent, replaces it if present, and preserves every other profile section. `fixer` is
   accepted as a legacy alias for `code-fixer` (read, write, and clear):
 
