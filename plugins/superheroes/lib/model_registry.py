@@ -98,11 +98,6 @@ _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
         "codex": None,
         "cursor": None,
     },
-    "pr-body": {
-        "claude": ("sonnet-5", "medium"),
-        "codex": None,
-        "cursor": None,
-    },
     "pilot": {
         "claude": ("sonnet-5", "high"),
         "codex": None,
@@ -175,14 +170,6 @@ _ROLE_META: dict[str, dict] = {
         "pin_eligible": False,
         "owner_tunable": True,
     },
-    "pr-body": {
-        "model_tier_role": True,
-        "engine_pref_key": None,
-        "codex_kind": None,
-        "read_write": None,
-        "pin_eligible": False,
-        "owner_tunable": True,
-    },
     "implementer": {
         "model_tier_role": True,
         "engine_pref_key": "implementation",
@@ -243,7 +230,6 @@ _MODEL_TIER_ROLES = (
     "synthesis",
     "code-fixer",
     "doc-reviser",
-    "pr-body",
     "implementer",
     "pilot",
 )
