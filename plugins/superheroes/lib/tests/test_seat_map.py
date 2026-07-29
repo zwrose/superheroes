@@ -1195,3 +1195,462 @@ def test_verify_unresolvable_tier_is_a_violation():
         v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
         for v in violations
     )
+
+
+# --- unexcused_violations (#680) --------------------------------------------------------------
+
+
+def test_unexcused_maker_family_violation_is_unexcused():
+    sm = {
+        "seats": _full_seats_template(),
+        "liveVendors": list(THREE_VENDORS),
+        "livenessPinScoped": False,
+        "degradations": [],
+    }
+    receipt = SM.to_receipt(sm, "anthropic")
+    unexcused = SM.unexcused_violations(receipt)
+    assert any(v.get("constraint") == "maker-family" for v in unexcused)
+
+
+def test_unexcused_critical_diversity_claude_codex_is_excused():
+    m = SM.build(SM.PANEL_ROSTER, ["claude", "codex"], "anthropic", "anthropic", 0)
+    receipt = SM.to_receipt(m, "anthropic")
+    assert any(v.get("constraint") == "critical-diversity" for v in receipt["violations"])
+    assert SM.unexcused_violations(receipt) == []
+
+
+def test_unexcused_critical_diversity_pinned_critical_seats_excused_by_pin():
+    pins = {
+        "code-reviewer": {"vendor": "claude"},
+        "security-reviewer": {"vendor": "claude"},
+        "premortem-reviewer": {"vendor": "claude"},
+    }
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0, pins=pins)
+    receipt = SM.to_receipt(m, "xai")
+    assert any(v.get("constraint") == "critical-diversity" for v in receipt["violations"])
+    classified = SM.classify_violations(receipt)
+    assert SM.unexcused_violations(receipt) == []
+    assert any(
+        r.get("constraint") == "critical-diversity" for r in classified["excusedByPin"]
+    )
+
+
+def test_unexcused_e1_unrecognised_constraint_never_excused():
+    receipt = {
+        "seats": _full_seats_template(),
+        "degradations": [{"constraint": "maker-family", "seat": "code-reviewer"}],
+        "violations": [{"constraint": "maker-family", "seat": "code-reviewer"}],
+    }
+    unexcused = SM.unexcused_violations(receipt)
+    assert unexcused == [{"constraint": "maker-family", "seat": "code-reviewer"}]
+
+
+def test_unexcused_e2_non_dict_violation_entry():
+    receipt = {
+        "seats": _full_seats_template(),
+        "degradations": [],
+        "violations": [42, {"constraint": "critical-diversity"}],
+    }
+    unexcused = SM.unexcused_violations(receipt)
+    assert {"constraint": "malformed-violation-record"} in unexcused
+
+
+def test_unexcused_e3_non_list_degradations():
+    receipt = {
+        "seats": _full_seats_template(),
+        "degradations": "not-a-list",
+        "violations": [{"constraint": "critical-diversity"}],
+    }
+    assert SM.unexcused_violations(receipt) == [
+        {"constraint": "critical-diversity", "evidence": "unproven-liveness"},
+    ]
+
+
+def test_unexcused_e4_seatless_degradation_does_not_excuse_per_seat():
+    receipt = {
+        "seats": _full_seats_template(),
+        "degradations": [{"constraint": "strong-tier"}],
+        "violations": [{"constraint": "strong-tier", "seat": "security-reviewer"}],
+    }
+    unexcused = SM.unexcused_violations(receipt)
+    assert unexcused == [
+        {"constraint": "strong-tier", "seat": "security-reviewer", "evidence": "unproven-liveness"},
+    ]
+
+
+def test_unexcused_e5_pinned_seat_excuses_strong_tier_via_pin():
+    seats = _full_seats_template()
+    seats["architecture-reviewer"] = {
+        "vendor": "claude",
+        "model": "sonnet-5",
+        "effort": "high",
+        "tier": "reviewer",
+        "family": "anthropic",
+        "source": "pinned",
+    }
+    receipt = {
+        "seats": seats,
+        "liveVendors": list(THREE_VENDORS),
+        "livenessPinScoped": False,
+        "authorFamily": "xai",
+        "degradations": [
+            {"constraint": "strong-tier", "seat": "architecture-reviewer"},
+        ],
+        "violations": [{"constraint": "strong-tier", "seat": "architecture-reviewer"}],
+    }
+    classified = SM.classify_violations(receipt)
+    assert SM.unexcused_violations(receipt) == []
+    assert classified["excusedByPin"] == [
+        {
+            "constraint": "strong-tier",
+            "seat": "architecture-reviewer",
+            "excusedSeats": ["architecture-reviewer"],
+        },
+    ]
+
+
+def test_unexcused_empty_or_missing_seats_fail_closed():
+    assert SM.unexcused_violations({}) == []
+    assert SM.unexcused_violations({"violations": [{"constraint": "critical-diversity"}]}) == [
+        {"constraint": "critical-diversity"},
+    ]
+    assert SM.unexcused_violations(
+        {"seats": {}, "violations": [{"constraint": "critical-diversity"}]},
+    ) == [{"constraint": "critical-diversity"}]
+    compose_failed = {
+        "seats": {},
+        "degradations": [{"constraint": "compose-failed"}],
+        "violations": [{"constraint": "missing-seat", "seat": "code-reviewer"}],
+    }
+    assert SM.unexcused_violations(compose_failed) == compose_failed["violations"]
+    receipt = SM.to_receipt({"seats": {}})
+    assert SM.unexcused_violations(receipt) == receipt["violations"]
+
+
+def test_unexcused_critical_diversity_missing_author_family_fail_closed():
+    """#680 FIX2: unknown maker family must not excuse critical-diversity via empty alternatives."""
+    seats = _full_seats_template()
+    base = {
+        "seats": seats,
+        "liveVendors": list(THREE_VENDORS),
+        "livenessPinScoped": False,
+        "degradations": [{"constraint": "critical-diversity"}],
+        "violations": [{"constraint": "critical-diversity"}],
+    }
+    breach = [{"constraint": "critical-diversity", "evidence": "unproven-liveness"}]
+
+    for author in (None, "", 42):
+        receipt = dict(base)
+        if author is None:
+            receipt["authorFamily"] = None
+        else:
+            receipt["authorFamily"] = author
+        assert SM.unexcused_violations(receipt) == breach
+
+    absent = dict(base)
+    assert "authorFamily" not in absent
+    assert SM.unexcused_violations(absent) == breach
+
+    xai_receipt = dict(base, authorFamily="xai")
+    assert SM.unexcused_violations(xai_receipt) == [
+        {"constraint": "critical-diversity", "evidence": "alternative-live"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "live,maker,excused",
+    [
+        (["claude"], "anthropic", True),
+        (["claude", "codex"], "anthropic", True),
+        (["claude", "codex", "cursor"], "xai", False),
+        (["claude", "codex"], "xai", False),
+    ],
+)
+def test_unexcused_critical_diversity_availability_not_pin_presence(live, maker, excused):
+    seats = _full_seats_template()
+    receipt = {
+        "seats": seats,
+        "liveVendors": live,
+        "livenessPinScoped": False,
+        "authorFamily": maker,
+        "degradations": [{"constraint": "critical-diversity"}],
+        "violations": [{"constraint": "critical-diversity"}],
+    }
+    unexcused = SM.unexcused_violations(receipt)
+    if excused:
+        assert unexcused == []
+    else:
+        assert unexcused == [{"constraint": "critical-diversity", "evidence": "alternative-live"}]
+
+
+def test_unexcused_strong_tier_excused_when_reviewer_deep_unavailable(monkeypatch):
+    _real_matrix = SM.matrix_config
+
+    def _no_reviewer_deep(tier, vendor):
+        if tier == "reviewer-deep":
+            return None
+        return _real_matrix(tier, vendor)
+
+    monkeypatch.setattr(SM, "matrix_config", _no_reviewer_deep)
+    seats = _full_seats_template()
+    seats["architecture-reviewer"] = {
+        "vendor": "claude",
+        "model": "opus-5",
+        "effort": "xhigh",
+        "tier": "reviewer",
+        "family": "anthropic",
+        "source": "rotated",
+    }
+    receipt = {
+        "seats": seats,
+        "liveVendors": ["claude"],
+        "livenessPinScoped": False,
+        "authorFamily": "anthropic",
+        "degradations": [{"constraint": "strong-tier", "seat": "architecture-reviewer"}],
+        "violations": [{"constraint": "strong-tier", "seat": "architecture-reviewer"}],
+    }
+    classified = SM.classify_violations(receipt)
+    assert SM.unexcused_violations(receipt) == []
+    assert classified["excusedByLiveness"] == [
+        {"constraint": "strong-tier", "seat": "architecture-reviewer"},
+    ]
+
+
+def test_unexcused_strong_tier_stands_when_reviewer_deep_available():
+    """FIX-1 counterexample: deep obtainable at claude — collapse not excused by liveness."""
+    seats = _full_seats_template()
+    seats["security-reviewer"] = {
+        "vendor": "claude",
+        "model": "sonnet-5",
+        "effort": "high",
+        "tier": "reviewer",
+        "family": "anthropic",
+        "source": "rotated",
+    }
+    receipt = {
+        "seats": seats,
+        "liveVendors": ["claude"],
+        "livenessPinScoped": False,
+        "authorFamily": "anthropic",
+        "degradations": [{"constraint": "strong-tier", "seat": "security-reviewer"}],
+        "violations": [{"constraint": "strong-tier", "seat": "security-reviewer"}],
+    }
+    assert SM.unexcused_violations(receipt) == [
+        {
+            "constraint": "strong-tier",
+            "seat": "security-reviewer",
+            "evidence": "alternative-live",
+        },
+    ]
+
+
+def test_unexcused_critical_diversity_pin_not_causal_f3a():
+    """FIX-2 F3a: pin on one critical seat does not excuse when diversity was achievable."""
+    seats = _full_seats_template()
+    for s in SM.PANEL_ROSTER:
+        seats[s] = dict(seats[s])
+        seats[s]["family"] = "anthropic"
+    seats["security-reviewer"]["source"] = "pinned"
+    receipt = {
+        "seats": seats,
+        "liveVendors": list(THREE_VENDORS),
+        "livenessPinScoped": False,
+        "authorFamily": "xai",
+        "degradations": [{"constraint": "critical-diversity"}],
+        "violations": [{"constraint": "critical-diversity"}],
+    }
+    assert SM.unexcused_violations(receipt) == [
+        {"constraint": "critical-diversity", "evidence": "alternative-live"},
+    ]
+
+
+def test_unexcused_strong_tier_build_degradation_seat_field_load_bearing(monkeypatch):
+    """Kills mutant that drops build()'s per-seat strong-tier degradation (#680 FIX 6)."""
+    _real_matrix = SM.matrix_config
+
+    def _no_reviewer_deep(tier, vendor):
+        if tier == "reviewer-deep":
+            return None
+        return _real_matrix(tier, vendor)
+
+    monkeypatch.setattr(SM, "matrix_config", _no_reviewer_deep)
+    m = SM.build(SM.PANEL_ROSTER, ["cursor"], "xai", "anthropic", 0, liveness_pin_scoped=False)
+    receipt = SM.to_receipt(m, "xai")
+    strong_violations = [v for v in receipt["violations"] if v.get("constraint") == "strong-tier"]
+    assert strong_violations
+    classified = SM.classify_violations(receipt)
+    assert all(
+        any(
+            x.get("constraint") == "strong-tier" and x.get("seat") == v.get("seat")
+            for x in classified["excusedByLiveness"]
+        )
+        for v in strong_violations
+    )
+
+
+def test_unexcused_malformed_violation_field_types_do_not_raise():
+    receipt = {
+        "seats": _full_seats_template(),
+        "liveVendors": list(THREE_VENDORS),
+        "livenessPinScoped": False,
+        "degradations": [],
+        "violations": [
+            {"constraint": None},
+            {"constraint": "maker-family", "seat": 5},
+            {"constraint": "critical-diversity"},
+            {"constraint": "critical-diversity"},
+        ],
+    }
+    unexcused = SM.unexcused_violations(receipt)
+    assert {"constraint": "malformed-violation-record"} in unexcused
+    assert {"constraint": "maker-family", "seat": 5} in unexcused
+    assert sum(1 for u in unexcused if u.get("constraint") == "critical-diversity") == 2
+    assert all(
+        u.get("evidence") == "unproven-liveness"
+        for u in unexcused
+        if u.get("constraint") == "critical-diversity"
+    )
+
+
+def test_verify_critical_seat_missing_family_key_does_not_raise():
+    seats = _full_seats_template()
+    seats["code-reviewer"] = {"vendor": "claude", "tier": "reviewer-deep"}
+    seats["security-reviewer"] = {
+        "vendor": "claude",
+        "tier": "reviewer-deep",
+        "family": "anthropic",
+    }
+    seats["premortem-reviewer"] = {
+        "vendor": "claude",
+        "tier": "reviewer-deep",
+        "family": "anthropic",
+    }
+    violations = SM.verify({"seats": seats}, "anthropic")
+    assert any(v.get("constraint") == "critical-diversity" for v in violations)
+
+
+def test_classify_unproven_liveness_liveness_pin_scoped_absent():
+    receipt = {
+        "seats": _full_seats_template(),
+        "liveVendors": list(THREE_VENDORS),
+        "authorFamily": "anthropic",
+        "violations": [{"constraint": "critical-diversity"}],
+    }
+    unexcused = SM.unexcused_violations(receipt)
+    assert unexcused == [
+        {"constraint": "critical-diversity", "evidence": "unproven-liveness"},
+    ]
+
+
+def test_classify_unproven_liveness_preflight_cache_only_degradation():
+    receipt = {
+        "seats": _full_seats_template(),
+        "liveVendors": list(THREE_VENDORS),
+        "livenessPinScoped": False,
+        "authorFamily": "anthropic",
+        "degradations": [{"constraint": "preflight-cache-only"}],
+        "violations": [{"constraint": "critical-diversity"}],
+    }
+    unexcused = SM.unexcused_violations(receipt)
+    assert unexcused == [
+        {"constraint": "critical-diversity", "evidence": "unproven-liveness"},
+    ]
+
+
+def test_classify_truthy_non_list_degradations_do_not_raise():
+    receipt = {
+        "seats": _full_seats_template(),
+        "liveVendors": list(THREE_VENDORS),
+        "livenessPinScoped": False,
+        "authorFamily": "anthropic",
+        "degradations": 42,
+        "violations": [{"constraint": "critical-diversity"}],
+    }
+    assert SM.unexcused_violations(receipt) == [
+        {"constraint": "critical-diversity", "evidence": "unproven-liveness"},
+    ]
+
+
+def test_classify_pin_excuses_critical_diversity_collapsed_seats():
+    seats = _full_seats_template()
+    for s in SM.CRITICAL_SEATS:
+        seats[s] = dict(seats[s])
+        seats[s]["source"] = "pinned"
+        seats[s]["family"] = "anthropic"
+        seats[s]["vendor"] = "claude"
+    receipt = {
+        "seats": seats,
+        "liveVendors": list(THREE_VENDORS),
+        "livenessPinScoped": False,
+        "authorFamily": "xai",
+        "violations": [{"constraint": "critical-diversity"}],
+    }
+    classified = SM.classify_violations(receipt)
+    assert classified["excusedByPin"]
+    assert SM.unexcused_violations(receipt) == []
+
+
+def _resolvable_families_fixture():
+    seat_map = {
+        "liveVendors": list(THREE_VENDORS),
+        "degradations": [],
+        "livenessPinScoped": False,
+    }
+    cfg = _full_seats_template()["security-reviewer"]
+    return seat_map, "security-reviewer", cfg
+
+
+@pytest.mark.parametrize(
+    "seat_map_override,cfg_override,expect_empty",
+    [
+        ({"livenessPinScoped": True}, None, False),
+        ({"degradations": [{"constraint": "live-vendors", "reason": "synth"}]}, None, False),
+        ({"degradations": [{"constraint": "preflight-cache-only", "reason": "cache"}]}, None, False),
+        ({"degradations": [{"constraint": "compose-failed", "reason": "fail"}]}, None, False),
+        ({"liveVendors": None}, None, False),
+        ({"liveVendors": []}, None, False),
+        ({"liveVendors": ["not-a-real-vendor"]}, None, False),
+        ({"degradations": 42}, None, False),
+        (None, {"tier": "no-such-tier"}, True),
+    ],
+    ids=[
+        "pin-scoped-true",
+        "degradation-live-vendors",
+        "degradation-preflight-cache-only",
+        "degradation-compose-failed",
+        "live-vendors-absent",
+        "live-vendors-empty",
+        "unregistered-vendor",
+        "degradations-non-list",
+        "nothing-resolvable-at-tier",
+    ],
+)
+def test_resolvable_families_for_seat_unusable_shapes(seat_map_override, cfg_override, expect_empty):
+    seat_map, seat, cfg = _resolvable_families_fixture()
+    cfg = dict(cfg)
+    if seat_map_override is not None:
+        for key, val in seat_map_override.items():
+            if key == "liveVendors" and val is None:
+                seat_map.pop("liveVendors", None)
+            else:
+                seat_map[key] = val
+    if cfg_override:
+        cfg.update(cfg_override)
+    result = SM._resolvable_families_for_seat(seat_map, seat, cfg)
+    if expect_empty:
+        assert result == set()
+    else:
+        assert result is None
+
+
+def test_resolvable_families_pin_scoped_absent_is_unusable():
+    seat_map, seat, cfg = _resolvable_families_fixture()
+    seat_map.pop("livenessPinScoped", None)
+    assert SM._resolvable_families_for_seat(seat_map, seat, cfg) is None
+
+
+def test_resolvable_families_for_seat_positive_family_set():
+    seat_map, seat, cfg = _resolvable_families_fixture()
+    seat_map["livenessPinScoped"] = False
+    fams = SM._resolvable_families_for_seat(seat_map, seat, cfg)
+    assert fams == {"anthropic", "openai", "xai"}

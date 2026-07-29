@@ -23,7 +23,9 @@ LENS_SEATS = (
 GROUNDING_SEAT = "grounding-seat"
 PANEL_ROSTER = LENS_SEATS + (GROUNDING_SEAT,)
 STRONG_TIER_SEATS = frozenset({"security-reviewer", "architecture-reviewer"})
+STRONG_TIER_REQUIRED = "reviewer-deep"
 CRITICAL_SEATS = frozenset({"security-reviewer", "premortem-reviewer", "code-reviewer"})
+MIN_CRITICAL_FAMILIES = 2
 # The maker's model family is barred from EVERY panel seat (#670, owner-ratified 2026-07-26) — the
 # five lens seats AND the grounding seat, not merely the strong-tier/critical subset. `test-reviewer`
 # was the hole: it is neither strong-tier nor critical, so post-#651 (cursor's first-party models are
@@ -41,6 +43,10 @@ UNPROVEN_LIVENESS_CONSTRAINTS = frozenset({
 })
 DEFAULT_TIER_BY_SEAT = {s: "reviewer-deep" for s in LENS_SEATS}
 DEFAULT_TIER_BY_SEAT[GROUNDING_SEAT] = "reviewer"
+
+ALT_LIVE = "alternative-live"
+ALT_NONE = "no-alternative-live"
+ALT_UNUSABLE = "evidence-unusable"
 
 
 def _same_family_record(seat: str, family: str) -> dict:
@@ -61,6 +67,58 @@ def _seat_tier(seat: str, cfg: dict) -> str:
     return DEFAULT_TIER_BY_SEAT.get(seat, "reviewer")
 
 
+def _resolvable_families_for_seat(
+    seat_map: dict, seat: str, cfg: dict, tier: str | None = None,
+) -> set[str] | None:
+    """Every registry family this seat could have been filled with at `tier`, from the map's live
+    vendors. `None` = evidence UNUSABLE. An EMPTY SET = usable evidence, nothing resolvable at that
+    tier. `tier` defaults to the seat's own recorded tier; a caller asking about a REQUIRED tier
+    passes it explicitly (#680 round 3)."""
+    pin_scoped = seat_map.get("livenessPinScoped")
+    if pin_scoped is not False:
+        return None
+    raw_degs = seat_map.get("degradations")
+    if raw_degs is not None and not isinstance(raw_degs, list):
+        return None
+    degradations = raw_degs if isinstance(raw_degs, list) else []
+    for deg in degradations:
+        if isinstance(deg, dict) and deg.get("constraint") in UNPROVEN_LIVENESS_CONSTRAINTS:
+            return None
+    live = seat_map.get("liveVendors")
+    if not isinstance(live, list) or not live:
+        return None
+    known_vendors = set(vendors())
+    for vendor in live:
+        if not isinstance(vendor, str) or not vendor or vendor not in known_vendors:
+            return None
+    tier = tier or _seat_tier(seat, cfg)
+    families: set[str] = set()
+    for vendor in live:
+        cell = matrix_config(tier, vendor)
+        if cell is None:
+            continue
+        model, effort = cell
+        fam = family_for(tier, vendor)
+        if fam is None or not is_allowed(tier, vendor, model, effort):
+            continue
+        families.add(fam)
+    return families
+
+
+def _alternative_family_evidence(
+    seat_map: dict, seat: str, cfg: dict, author_family: str,
+) -> str:
+    """Per-seat tri-state: proved no alternative, proved alternative live, or evidence unusable."""
+    if not isinstance(author_family, str) or not author_family:
+        return ALT_UNUSABLE
+    fams = _resolvable_families_for_seat(seat_map, seat, cfg)
+    if fams is None or fams == set():
+        return ALT_UNUSABLE
+    if fams - {author_family}:
+        return ALT_LIVE
+    return ALT_NONE
+
+
 def _alternative_family_live(seat_map: dict, seat: str, cfg: dict, author_family: str) -> bool:
     """Could some live vendor have seated THIS seat at a family other than the maker's?
 
@@ -69,39 +127,20 @@ def _alternative_family_live(seat_map: dict, seat: str, cfg: dict, author_family
     degradation on silence. Only a well-formed, registry-resolvable receipt can authorize the
     degradation branch.
     """
-    pin_scoped = seat_map.get("livenessPinScoped")
-    if pin_scoped is not False:
-        # True (pin-scoped probe never tried the alternatives) or ABSENT (a replayed / hand-built map
-        # that carries no provenance at all) — neither can disprove an alternative family (#670 review).
-        return True
-    for deg in seat_map.get("degradations") or []:
-        if isinstance(deg, dict) and deg.get("constraint") in UNPROVEN_LIVENESS_CONSTRAINTS:
-            return True
-    live = seat_map.get("liveVendors")
-    if not isinstance(live, list) or not live:
-        return True
-    tier = _seat_tier(seat, cfg)
-    resolved_any = False
-    known_vendors = set(vendors())
-    for vendor in live:
-        if not isinstance(vendor, str) or not vendor or vendor not in known_vendors:
-            # a malformed OR unregistered entry makes the whole set untrustworthy — an unknown
-            # vendor name cannot be shown NOT to have been an alternative family (#670 review).
-            return True
-        cell = matrix_config(tier, vendor)
-        if cell is None:
-            continue
-        model, effort = cell
-        fam = family_for(tier, vendor)
-        if fam is None or not is_allowed(tier, vendor, model, effort):
-            continue
-        resolved_any = True
-        if fam != author_family:
-            return True
-    if not resolved_any:
-        # #670 finding 6: an unknown/unresolvable tier or vendor set proves nothing.
-        return True
-    return False
+    return _alternative_family_evidence(seat_map, seat, cfg, author_family) != ALT_NONE
+
+
+def _critical_families(seats: dict) -> set[str]:
+    """The distinct families across the seated CRITICAL_SEATS — verify()'s counting rule extracted
+    for clarity. classify_violations asks a different question (families reachable, not seated); the
+    shared invariant between the two paths is MIN_CRITICAL_FAMILIES (#680 round 3)."""
+    return {
+        fam
+        for s in CRITICAL_SEATS
+        if s in seats
+        for fam in [seats[s].get("family") if isinstance(seats.get(s), dict) else None]
+        if isinstance(fam, str) and fam
+    }
 
 
 def same_family_degradations(seat_map: dict, author_family: str | None) -> list[dict]:
@@ -306,6 +345,7 @@ def build(
             if not eligible:
                 degradations.append({
                     "constraint": "strong-tier",
+                    "seat": seat,
                     "reason": f"seat {seat} has no strong-tier-eligible live vendor",
                 })
         elif seat == GROUNDING_SEAT:
@@ -557,6 +597,142 @@ def build(
     return result
 
 
+# The only two constraints build() deliberately RELAXES and discloses as a degradation of the same
+# name when no assignment can satisfy them. Every other verify() constraint — maker-family,
+# missing-seat, malformed, and any constraint added later — is unexcusable by construction: the
+# fail-closed default for an unrecognised constraint is BREACH, never excused (#680).
+EXCUSABLE_RELAXATIONS = frozenset({"strong-tier", "critical-diversity"})
+
+
+def classify_violations(seat_map: dict) -> dict:
+    """{'unexcused': [...], 'excusedByPin': [...], 'excusedByLiveness': [...]} (#680 R-A/R-B)."""
+    empty = {"unexcused": [], "excusedByPin": [], "excusedByLiveness": []}
+    if not isinstance(seat_map, dict):
+        return empty
+    violations = seat_map.get("violations")
+    if not isinstance(violations, list) or not violations:
+        return empty
+    raw_seats = seat_map.get("seats")
+    seats = raw_seats if isinstance(raw_seats, dict) else {}
+    author_family = seat_map.get("authorFamily")
+    if not isinstance(author_family, str) or not author_family:
+        author_family = None
+
+    unexcused: list[dict] = []
+    excused_by_pin: list[dict] = []
+    excused_by_liveness: list[dict] = []
+
+    for v in violations:
+        if not isinstance(v, dict):
+            unexcused.append({"constraint": "malformed-violation-record"})
+            continue
+        constraint = v.get("constraint")
+        seat = v.get("seat") if isinstance(v.get("seat"), str) else None
+        if not isinstance(constraint, str) or not constraint:
+            unexcused.append({"constraint": "malformed-violation-record"})
+            continue
+        if constraint not in EXCUSABLE_RELAXATIONS:
+            unexcused.append(v)
+            continue
+
+        if constraint == "strong-tier":
+            collapsed = [seat] if isinstance(seat, str) and seat else []
+        else:
+            collapsed = [s for s in CRITICAL_SEATS if s in seats]
+
+        if not collapsed:
+            unexcused.append(dict(v))
+            continue
+
+        if constraint == "strong-tier":
+            cs = collapsed[0]
+            cfg0 = seats.get(cs)
+            if isinstance(cfg0, dict) and cfg0.get("source") == "pinned":
+                rec = dict(v)
+                rec["excusedSeats"] = [cs]
+                excused_by_pin.append(rec)
+                continue
+            if not isinstance(cfg0, dict):
+                stamped = dict(v)
+                stamped["evidence"] = "unproven-liveness"
+                unexcused.append(stamped)
+                continue
+            fams = _resolvable_families_for_seat(
+                seat_map, cs, cfg0, tier=STRONG_TIER_REQUIRED,
+            )
+            if fams is None:
+                stamped = dict(v)
+                stamped["evidence"] = "unproven-liveness"
+                unexcused.append(stamped)
+                continue
+            if fams == set():
+                excused_by_liveness.append(dict(v))
+                continue
+            stamped = dict(v)
+            stamped["evidence"] = "alternative-live"
+            unexcused.append(stamped)
+            continue
+
+        if not isinstance(author_family, str) or not author_family:
+            stamped = dict(v)
+            stamped["evidence"] = "unproven-liveness"
+            unexcused.append(stamped)
+            continue
+
+        achievable: set[str] | None = set()
+        for cs in collapsed:
+            cfg = seats.get(cs)
+            if not isinstance(cfg, dict):
+                achievable = None
+                break
+            if cfg.get("source") == "pinned":
+                fam = cfg.get("family")
+                if isinstance(fam, str) and fam:
+                    achievable.add(fam)
+            else:
+                fams = _resolvable_families_for_seat(seat_map, cs, cfg)
+                if fams is None:
+                    achievable = None
+                    break
+                achievable |= fams - {author_family}
+
+        if achievable is None:
+            stamped = dict(v)
+            stamped["evidence"] = "unproven-liveness"
+            unexcused.append(stamped)
+            continue
+        if len(achievable) >= MIN_CRITICAL_FAMILIES:
+            stamped = dict(v)
+            stamped["evidence"] = "alternative-live"
+            unexcused.append(stamped)
+            continue
+
+        pinned_seats = [
+            cs for cs in collapsed
+            if isinstance(seats.get(cs), dict) and seats[cs].get("source") == "pinned"
+        ]
+        if pinned_seats:
+            rec = dict(v)
+            rec["excusedSeats"] = sorted(pinned_seats)
+            excused_by_pin.append(rec)
+        else:
+            excused_by_liveness.append(dict(v))
+
+    unexcused.sort(
+        key=lambda item: (str(item.get("constraint", "")), str(item.get("seat") or "")),
+    )
+    return {
+        "unexcused": unexcused,
+        "excusedByPin": excused_by_pin,
+        "excusedByLiveness": excused_by_liveness,
+    }
+
+
+def unexcused_violations(seat_map: dict) -> list[dict]:
+    """Back-compat thin wrapper — the violations that STAND."""
+    return classify_violations(seat_map)["unexcused"]
+
+
 def verify(seat_map: dict, author_family: str | None) -> list[dict]:
     seats = seat_map.get("seats")
     if not isinstance(seats, dict):
@@ -581,15 +757,11 @@ def verify(seat_map: dict, author_family: str | None) -> list[dict]:
             # else: unavoidable — carried as the `same-family` DEGRADATION, not a violation (#670)
 
     for seat in STRONG_TIER_SEATS:
-        if seat in seats and seats[seat].get("tier") != "reviewer-deep":
+        if seat in seats and seats[seat].get("tier") != STRONG_TIER_REQUIRED:
             violations.append({"seat": seat, "constraint": "strong-tier"})
 
-    critical_families = {
-        seats[s]["family"]
-        for s in CRITICAL_SEATS
-        if s in seats
-    }
-    if len(critical_families) < 2:
+    critical_families = _critical_families(seats)
+    if len(critical_families) < MIN_CRITICAL_FAMILIES:
         violations.append({"constraint": "critical-diversity"})
 
     violations.sort(key=lambda v: (v.get("constraint", ""), v.get("seat", "")))

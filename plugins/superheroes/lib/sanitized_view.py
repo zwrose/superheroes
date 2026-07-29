@@ -164,24 +164,55 @@ def sanitized_view_notice(view):
     return "\n".join(lines)
 
 
+def _owned_view_realpath(path, _under=path_is_confidently_under):
+    """Resolved path when authorized to destroy; None when not. Fails CLOSED.
+
+    ``_under`` defaults to ``path_is_confidently_under`` at import time on purpose: a
+    test that monkeypatches the module-global helper must not disable this guard during
+    teardown (see ``test_symlink_containment_oserror_fail_closed``).
+    """
+    try:
+        real = os.path.realpath(path)
+        if not os.path.basename(real).startswith(SANITIZED_VIEW_DIR_PREFIX):
+            return None
+        tmp_base = tempfile.gettempdir()
+        tmp_base_real = os.path.realpath(tmp_base)
+        is_temp_base = False
+        try:
+            is_temp_base = os.path.samefile(real, tmp_base_real)
+        except OSError:
+            is_temp_base = real == tmp_base_real
+        if is_temp_base:
+            return None
+        if not _under(real, tmp_base):
+            return None
+        return real
+    except Exception:
+        return None
+
+
 def destroy_sanitized_view(path):
     """Best-effort removal of a view directory; never raises.
 
-    Returns True when the path is gone (or was already absent), False when removal
-    failed after one retry.
+    Returns True when the path is gone (or was already absent), False when the path
+    is not an owned sanitized-view directory, when removal failed after one retry, or
+    when ownership cannot be established.
     """
     if not path:
         return True
+    real = _owned_view_realpath(path)
+    if real is None:
+        return False
     for _ in range(2):
         try:
-            if not os.path.exists(path):
+            if not os.path.exists(real):
                 return True
-            shutil.rmtree(path, ignore_errors=False)
+            shutil.rmtree(real, ignore_errors=False)
         except Exception:
             pass
-        if not os.path.exists(path):
+        if not os.path.exists(real):
             return True
-    return not os.path.exists(path)
+    return not os.path.exists(real)
 
 
 def _sweep_stale_views(tmp_base):

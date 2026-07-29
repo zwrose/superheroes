@@ -389,6 +389,51 @@ def test_dispatch_selftest_config_clean_when_no_core(tmp_path):
     assert pr["ok"] is True
 
 
+def _selftest_repo_with_core_shape(tmp_path, shape):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    cal = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(cal, exist_ok=True)
+    core_p = os.path.join(cal, "core.md")
+    text = core_md.render_core(
+        {
+            "verifyCommand": "npm test",
+            "stackTags": [],
+            "enginePreferences": {"reviewer": "cursor"},
+            "threatModel": "t",
+            "patterns": "",
+        },
+        "confirmed",
+        "2026-01-01",
+        "2026-01-01",
+    )
+    if shape == "directory":
+        os.mkdir(core_p)
+    elif shape == "dangling":
+        os.symlink("/nonexistent/preflight-dangle", core_p)
+    elif shape == "absent":
+        pass
+    elif shape == "ok":
+        open(core_p, "w", encoding="utf-8").write(text)
+    return repo, store
+
+
+def test_dispatch_selftest_config_unreadable_shapes(tmp_path):
+    for shape in ("directory", "dangling"):
+        repo, store = _selftest_repo_with_core_shape(tmp_path / shape, shape)
+        cfg = pp._dispatch_selftest_config(cwd=repo, root=store)
+        assert "read_error" in cfg
+        assert "core-md-unreadable" in cfg["read_error"]
+
+
+def test_dispatch_selftest_config_ok_returns_prefs(tmp_path):
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
+    cfg = pp._dispatch_selftest_config(cwd=repo, root=store)
+    assert "read_error" not in cfg
+    assert cfg["prefs"] == {"reviewer": "cursor"}
+    assert isinstance(cfg["tiers"], dict)
+
+
 def test_dispatch_vocab_probe_blocks_aggregate_on_failure(monkeypatch):
     import dispatch_selftest
 
