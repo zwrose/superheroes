@@ -58,8 +58,12 @@ import review_base_guard  # noqa: E402
 import review_loop_plan  # noqa: E402
 import review_memory  # noqa: E402
 import review_round_policy  # noqa: E402
+import seat_map  # noqa: E402
 import verification  # noqa: E402
 from finding_identity import finding_identity, normalize_title  # noqa: E402
+
+_seat_map_unexcused_violations = seat_map.unexcused_violations
+_seat_map_classify_violations = seat_map.classify_violations
 
 # --- constants (the DIMENSIONS/AGENT_SUFFIX home, moved off the retired code_loop_plan) --------
 # The code leg is the FIVE shared reviewers. `grounding-reviewer` is spec-leg-only (doc
@@ -439,6 +443,89 @@ def _same_family_degraded(state):
     return bool(_same_family_seats(state))
 
 
+def _seat_map_violations(state):
+    """Unexcused seat-map constraint violations — a BREACH channel, distinct from the disclosed
+    degradations (#680). The UNION of what each round recorded and what the live merged seat map
+    carries, so neither channel alone is load-bearing: `state["rounds"]` is lost across a
+    `recordsPath` resume, and `state["seatMap"].update()` lets a later round's map overwrite an
+    earlier one. Deduped by (constraint, seat), sorted."""
+    seen: set[tuple] = set()
+    merged: list[dict] = []
+    for rec in (state.get("rounds") or {}).values():
+        if not isinstance(rec, dict):
+            continue
+        for v in rec.get("seatMapViolations") or []:
+            if not isinstance(v, dict):
+                continue
+            key = (str(v.get("constraint", "")), str(v.get("seat") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(v)
+    for v in _seat_map_unexcused_violations(state.get("seatMap") or {}):
+        key = (str(v.get("constraint", "")), str(v.get("seat") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(v)
+    merged.sort(
+        key=lambda item: (str(item.get("constraint", "")), str(item.get("seat") or "")),
+    )
+    return merged
+
+
+def _seat_map_violated(state):
+    return bool(_seat_map_violations(state))
+
+
+def _seat_map_violation_breach_prose(v: dict) -> str:
+    """One-line breach prose for build_receipt — constraint, seat, and evidence class (#680 R3)."""
+    c = v.get("constraint") or "unknown"
+    s = v.get("seat")
+    ev = v.get("evidence")
+    if ev == "unproven-liveness":
+        ev_phrase = "excusal unprovable — liveness evidence unusable"
+    elif ev == "alternative-live":
+        ev_phrase = "an alternative was available"
+    else:
+        ev_phrase = None
+    if isinstance(s, str) and s and ev_phrase:
+        return "%s (seat %s; %s)" % (c, s, ev_phrase)
+    if ev_phrase:
+        return "%s (%s)" % (c, ev_phrase)
+    if isinstance(s, str) and s:
+        return "%s (seat %s)" % (c, s)
+    return c
+
+
+def _seat_pin_excused(state):
+    sm = state.get("seatMap")
+    if not isinstance(sm, dict):
+        return False
+    return bool(_seat_map_classify_violations(sm).get("excusedByPin"))
+
+
+def _seat_pin_excused_seats(state):
+    sm = state.get("seatMap")
+    if not isinstance(sm, dict):
+        return []
+    seats: set[str] = set()
+    for rec in _seat_map_classify_violations(sm).get("excusedByPin") or []:
+        if not isinstance(rec, dict):
+            continue
+        for s in rec.get("excusedSeats") or []:
+            if isinstance(s, str) and s:
+                seats.add(s)
+    return sorted(seats)
+
+
+def _seat_map_unproven_liveness(state):
+    for v in _seat_map_violations(state):
+        if isinstance(v, dict) and v.get("evidence") == "unproven-liveness":
+            return True
+    return False
+
+
 def _certification_base(state):
     """Tri-state base provenance for certification — never infer fetched from absence."""
     if _base_degraded(state):
@@ -450,7 +537,14 @@ def _certification_base(state):
 
 
 def _cert_shape(state, base):
-    if _degraded(state) or _base_degraded(state) or _same_family_degraded(state):
+    if _seat_map_violated(state):
+        return base + "-constraint-violated"
+    if (
+        _degraded(state)
+        or _base_degraded(state)
+        or _same_family_degraded(state)
+        or _seat_pin_excused(state)
+    ):
         return base + "-degraded"
     return base
 
@@ -1171,6 +1265,16 @@ def _fold_panel(state, config, artifact):
                          if isinstance(v, str) and v in _PANEL_VENDORS and v != "claude")
     if _seat_map_empty and _live_cross:
         _record_round(state, "seatMapUnavailable", _live_cross)
+    _sm_violations = _seat_map_unexcused_violations(state.get("seatMap") or {})
+    if _sm_violations:
+        _record_round(state, "seatMapViolations", _sm_violations)
+        _parts = []
+        for v in _sm_violations:
+            c = v.get("constraint") or "unknown"
+            s = v.get("seat")
+            _parts.append("%s@%s" % (c, s) if s else c)
+        _decision(state, "seat-map-constraint-violated",
+                  "unexcused seat-map constraint violation(s): %s" % ", ".join(_parts))
     _record_round(state, "compileDrops", drops)
     if unverified:
         _record_round(state, "unverified", unverified)
@@ -2012,10 +2116,24 @@ def _terminal_converged(state, config, full_panel, note=None):
         return
     base = "full-panel-confirmed" if full_panel else "audited-chain"
     shape = _cert_shape(state, base)
+    shape_drivers = []
+    if _degraded(state):
+        shape_drivers.append("independence")
+    if _base_degraded(state):
+        shape_drivers.append("base")
+    if _same_family_degraded(state):
+        shape_drivers.append("same-family")
+    if _seat_pin_excused(state):
+        shape_drivers.append("seat-pin")
+    if _seat_map_violated(state):
+        shape_drivers.append("seat-map-violation")
+    if _seat_map_unproven_liveness(state):
+        shape_drivers.append("unproven-liveness")
     state["terminal"] = "converged"
     cert = {"shape": shape, "fullPanel": bool(full_panel),
             "independence": "degraded" if _degraded(state) else "independent",
-            "base": _certification_base(state)}
+            "base": _certification_base(state),
+            "shapeDrivers": sorted(shape_drivers)}
     if note:
         cert["note"] = note
     skipped = state.get("_skippedBlockers") or []
@@ -2061,6 +2179,8 @@ def build_receipt(state, session_dir=None):
             rd["fellOpenProvenanceMissing"] = rec.get("fellOpenProvenanceMissing")
         if rec.get("seatMapUnavailable"):
             rd["seatMapUnavailable"] = rec.get("seatMapUnavailable")
+        if rec.get("seatMapViolations"):
+            rd["seatMapViolations"] = rec.get("seatMapViolations")
         if rec.get("vacuousSeats"):
             rd["vacuousSeats"] = rec.get("vacuousSeats")
         if rec.get("canaryUnverified"):
@@ -2090,6 +2210,24 @@ def build_receipt(state, session_dir=None):
             "panel independence: seat(s) %s were filled with the MAKER's own model family — no "
             "alternative family was live; disclosed by the seat map and named in the certification "
             "shape" % ", ".join(_same_family_seats(state)))
+    _pin_seats = _seat_pin_excused_seats(state)
+    if _pin_seats:
+        degraded.append(
+            "seat-map pin excusal: seat(s) %s authorized a disclosed constraint relaxation via pin; "
+            "named in the certification shape" % ", ".join(_pin_seats))
+    if _seat_map_violated(state):
+        _viol_parts = []
+        for v in _seat_map_violations(state):
+            _viol_parts.append(_seat_map_violation_breach_prose(v))
+        _shape = (state.get("certification") or {}).get("shape")
+        if isinstance(_shape, str) and _shape.endswith("-constraint-violated"):
+            degraded.append(
+                "seat-map constraint breach: %s — certification shape marked -constraint-violated"
+                % ", ".join(_viol_parts))
+        else:
+            degraded.append(
+                "seat-map constraint breach: %s — breach recorded; certification withheld"
+                % ", ".join(_viol_parts))
     # The skipped-blocking channel (#507 R2a): an owner-skipped judgment blocker rides the exit
     # disclosure — a product-choice tradeoff shipped un-fixed, cited by its owner reason. It appears
     # BOTH in the degraded disclosure prose AND as the dedicated top-level `skippedBlockers` list
