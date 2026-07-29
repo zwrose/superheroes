@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 import shutil
+import tempfile
 import threading
 import time
 
@@ -1502,4 +1503,24 @@ def test_result_json_persisted_before_view_destroyed(tmp_path, monkeypatch):
     assert destroy_moments
     run_dir = res["runDir"]
     assert not os.path.exists(os.path.join(run_dir, REVIEW_CWD_BASENAME))
+
+
+def test_dispatch_review_private_run_dir_argv_cwd_canonical(tmp_path, monkeypatch):
+    """Recorded codex -C must match run-child re-derivation (realpath) for auto run dirs."""
+    repo_root = _repo(tmp_path)
+    outer = tempfile.mkdtemp(prefix="superheroes-dispatch-")
+    if os.path.realpath(outer) == outer:
+        pytest.skip("need macOS /var TMPDIR alias layout")
+    monkeypatch.setattr(ED, "_private_run_dir", lambda: outer)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), max_wait=60,
+    )
+    state = json.loads(open(os.path.join(outer, "state.json"), encoding="utf-8").read())
+    argv = state["argv"]
+    cwd_arg = argv[argv.index("-C") + 1]
+    review_cwd = os.path.join(outer, REVIEW_CWD_BASENAME)
+    assert cwd_arg == os.path.realpath(review_cwd)
 

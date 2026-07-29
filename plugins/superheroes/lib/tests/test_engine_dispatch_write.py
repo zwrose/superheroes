@@ -7,6 +7,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -1747,3 +1748,124 @@ def test_dispatch_review_creates_missing_run_dir(tmp_path):
     )
     assert res.get("ok") is True
     assert run_dir.is_dir()
+
+
+# --- WO-702-N: real run-child end-to-end (no injected run_engine seam) ---
+
+
+def _var_symlink_dispatch_parent():
+    """Run-dir parent under macOS /var spelling that realpath canonicalizes differently."""
+    direct = tempfile.mkdtemp(prefix="dispatch-e2e-")
+    if direct.startswith("/private/var/"):
+        alias = "/var" + direct[len("/private/var"):]
+        if os.path.exists(alias) and os.path.samefile(direct, alias):
+            return alias
+    if direct.startswith("/var/") and os.path.realpath(direct) != direct:
+        return direct
+    if direct.startswith("/private/var/"):
+        pytest.skip("need /var spelling for dispatch parent")
+    pytest.skip("need macOS /var -> /private/var TMPDIR layout")
+
+
+def _sentinel_refusal_tokens(run_dir):
+    tokens = []
+    rd = Path(run_dir)
+    for attempt in (1, 2):
+        done = rd / ("attempt-%d.done" % attempt)
+        if not done.is_file():
+            continue
+        data = json.loads(done.read_text(encoding="utf-8"))
+        refusal = data.get("refusal")
+        if refusal:
+            tokens.append(refusal)
+    return tokens
+
+
+def _wait_for_result_json(run_dir, timeout_s=120):
+    deadline = time.monotonic() + timeout_s
+    result_path = Path(run_dir) / "result.json"
+    while time.monotonic() < deadline:
+        if result_path.is_file():
+            return json.loads(result_path.read_text(encoding="utf-8"))
+        time.sleep(0.25)
+    return None
+
+
+def test_e2e_review_run_child_real_spawn_terminal_success(tmp_path, monkeypatch):
+    """Real detached run-child + stub codex on PATH; no run_engine injection."""
+    _install_fake_codex_on_path(monkeypatch, tmp_path, ok_stdout=_VALID_REVIEW_STDOUT, slow_first_seconds=0)
+    repo_root = _review_repo(tmp_path)
+    build_view = _fake_review_build_view(tmp_path)
+    res = ED.dispatch_review(
+        "codex",
+        model="sonnet",
+        effort="high",
+        prompt_path=_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=ED._run_engine,
+        build_view=build_view,
+        max_wait=120,
+        timeout=30,
+    )
+    run_dir = res.get("runDir")
+    assert run_dir
+    if not res.get("ok"):
+        polled = _wait_for_result_json(run_dir)
+        if polled:
+            res = polled
+    assert res.get("ok") is True, res
+    engagement = res.get("engagement") or {}
+    stdout_bytes = engagement.get("stdoutBytes", 0)
+    if stdout_bytes <= 0:
+        stdout_path = Path(run_dir) / "attempt-1.stdout"
+        if stdout_path.is_file():
+            stdout_bytes = stdout_path.stat().st_size
+    assert stdout_bytes > 0
+    assert os.path.isfile(os.path.join(run_dir, "result.json"))
+    mismatch = {
+        "argv-rederivation-mismatch",
+        "engine-binary-mismatch",
+        "cwd-authorization-mismatch",
+    }
+    for tok in _sentinel_refusal_tokens(run_dir):
+        assert tok not in mismatch, tok
+
+
+def test_e2e_write_run_child_real_spawn_terminal_success(tmp_path, monkeypatch):
+    """Real detached run-child for write dispatch; linked worktree + stub codex on PATH."""
+    main, linked = _linked_pair(tmp_path)
+    parent = _var_symlink_dispatch_parent()
+    run_dir = os.path.join(parent, "write-e2e")
+    os.makedirs(run_dir, mode=0o700)
+    _install_fake_codex_on_path(monkeypatch, tmp_path, slow_first_seconds=0)
+    res = ED.dispatch_write(
+        "codex",
+        engine_model="gpt-5.6-terra",
+        effort="high",
+        prompt_path=_prompt(tmp_path),
+        cwd=linked,
+        order_id="e2e-write",
+        run_engine=ED._run_engine,
+        run_dir=run_dir,
+        max_wait=120,
+        timeout=30,
+    )
+    if not res.get("ok"):
+        polled = _wait_for_result_json(run_dir)
+        if polled:
+            res = polled
+    assert res.get("ok") is True, res
+    engagement = res.get("engagement") or {}
+    stdout_bytes = engagement.get("stdoutBytes", 0)
+    if stdout_bytes <= 0:
+        stdout_path = Path(run_dir) / "attempt-1.stdout"
+        if stdout_path.is_file():
+            stdout_bytes = stdout_path.stat().st_size
+    assert stdout_bytes > 0
+    mismatch = {
+        "argv-rederivation-mismatch",
+        "engine-binary-mismatch",
+        "cwd-authorization-mismatch",
+    }
+    for tok in _sentinel_refusal_tokens(run_dir):
+        assert tok not in mismatch, tok

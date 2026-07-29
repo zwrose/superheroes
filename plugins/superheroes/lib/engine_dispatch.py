@@ -1663,7 +1663,13 @@ def _continue_run(run_dir, *, deadline, max_wait, allow_spawn, run_engine=_run_e
     engine = state["engine"]
     role_kind = state.get("roleKind", "review")
     is_write = state.get("dispatchMode") == WRITE_DISPATCH_MODE
-    cwd = launch["launch_cwd"] if is_write else _review_cwd_path(run_dir)
+    if is_write:
+        cwd = launch["launch_cwd"]
+    else:
+        try:
+            cwd = os.path.realpath(_review_cwd_path(run_dir))
+        except OSError:
+            cwd = _review_cwd_path(run_dir)
 
     lock_path = None
     try:
@@ -2098,13 +2104,20 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
             {"ok": False, "reason": "unrunnable", "detail": "review-cwd-exists",
              "attempts": 0, "forfeited": False},
             real_dir, [])
+    try:
+        review_engine_cwd = os.path.realpath(_cwd)
+    except OSError:
+        return _terminal_meta(
+            {"ok": False, "reason": "unrunnable", "detail": "review-cwd-exists",
+             "attempts": 0, "forfeited": False},
+            real_dir, [])
     notice = sanitized_view.sanitized_view_notice({**view, "path": _cwd})
     prompt_prefix = ANTIHIJACK_PREAMBLE + notice
     fed_prompt = prompt_prefix + base_prompt
     _atomic_write_bytes(os.path.join(real_dir, PROMPT_NAME), fed_prompt.encode("utf-8"))
 
     opts = {"model": model, "engine_model": engine_model, "schema_path": schema_path,
-            "cwd": _cwd}
+            "cwd": review_engine_cwd}
     built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
     if built["reason"] is not None:
         result = _attach_sanitized_view(_terminal_meta(
