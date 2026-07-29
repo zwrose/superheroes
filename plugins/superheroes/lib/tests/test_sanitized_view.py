@@ -1048,6 +1048,7 @@ def test_sweep_swap_symlink_after_islink_check_victim_survives(tmp_path, monkeyp
 
     monkeypatch.setattr(sv, "_owned_view_realpath", realpath_with_midflight_swap)
     sv._sweep_stale_views(str(base))
+    assert swapped["done"], "the simulated swap never fired — this test would pass vacuously"
     assert victim.is_dir()
     assert (victim / "PRECIOUS.txt").read_text(encoding="utf-8") == "keep\n"
 

@@ -251,8 +251,8 @@ def _sweep_stale_views(tmp_base):
             if now - os.path.getmtime(real) < SANITIZED_VIEW_STALE_AGE_SECONDS:
                 continue
             # Authorization resolves; deletion must target the enumerated entry so
-            # rmtree's own symlink refusal is the atomic backstop against a swap
-            # after the islink check.
+            # rmtree's refusal of a top-level symlink (every platform) catches a
+            # post-check swap — race-free where avoids_symlink_attacks is True.
             shutil.rmtree(full, ignore_errors=True)
         except OSError:
             continue
