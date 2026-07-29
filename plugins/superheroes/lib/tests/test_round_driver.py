@@ -2911,15 +2911,6 @@ def test_seat_map_unavailable_round1_omission_survives_round2_map():
     assert len(r1_lines) == 1
 
 
-def test_seat_map_unavailable_merged_map_arm_without_round_record():
-    cfg = _cfg()
-    state = RD.new_state(cfg)
-    state["seatMap"] = {}
-    RD._terminal_converged(state, cfg, full_panel=False)
-    assert state["certification"]["shape"].endswith("-degraded")
-    assert "seat-map-unavailable" in state["certification"]["shapeDrivers"]
-
-
 def test_seat_map_unavailable_degenerate_vendor_pool_unknown():
     state = RD.new_state(_cfg(leg="panel", vendors=[""]))
     seats = {d: {"findings": []} for d in RD.DIMENSIONS}
@@ -2957,11 +2948,10 @@ def test_seat_map_unavailable_no_false_positive_when_map_submitted():
     receipt = RD.build_receipt(state)
     assert not any(d.startswith("reviewer-fell-open-seatmap-unavailable")
                    for d in receipt["degraded"])
-    cfg = _cfg()
-    state2 = RD.new_state(cfg)
-    state2["seatMap"] = _clean_all_claude_seat_map()
-    RD._terminal_converged(state2, cfg, full_panel=False)
-    assert "seat-map-unavailable" not in state2["certification"]["shapeDrivers"]
+    receipt = RD.run_loop(_seams(io={"seatMap": _clean_all_claude_seat_map()}), _cfg())
+    assert "seat-map-unavailable" not in receipt["certification"]["shapeDrivers"]
+    assert not any(d.startswith("reviewer-fell-open-seatmap-unavailable")
+                   for d in receipt["degraded"])
 
 
 def test_fell_open_in_seat_ran_vendor_echo_ignored_at_fold():

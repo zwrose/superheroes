@@ -527,22 +527,24 @@ def _seat_map_unproven_liveness(state):
 
 
 def _seat_map_unavailable(state):
-    """A missing seat map is unverifiable provenance — neither fall-open nor same-family collapse
-    can be disclosed. The UNION of per-round `seatMapUnavailable` records and an empty merged
-    `state["seatMap"]`, mirroring `_seat_map_violations`: the rounds arm catches a panel that
-    omitted its map even when a later panel supplied one; the merged-map arm catches no map ever
-    submitted. `_seed_resume` restores review records and coverage only — not `state["rounds"]` or
-    `state["seatMap"]` — so a pre-resume round's omission is unrecoverable once the resumed panel
-    supplies a map (absence has no carrier the way a re-submitted map re-carries violations)."""
+    """True when any folded panel omitted its seat map (per-round `seatMapUnavailable` ledger).
+
+    `_fold_panel` records `seatMapUnavailable` on that panel's own submission, keyed to the
+    panel that omitted its map, so every such omission is on the ledger and certification
+    cannot be reached over an undisclosed one.
+
+    The merged `state["seatMap"]` is deliberately not consulted: it is `.update()`-accumulated,
+    so it answers whether a map was ever submitted, not whether a given panel submitted one —
+    the question that matters. Consulting it would flag states that never folded a panel at all.
+
+    Honest limit: `_seed_resume` restores review records and coverage only — not
+    `state["rounds"]` — so per-round disclosures recorded before a `recordsPath` resume do not
+    survive it. That is a general property of the resume seam (shared by `fellOpen`,
+    `canaryUnverified`, and every other per-round channel), not specific to seat-map
+    availability, and is out of scope here."""
     for rec in (state.get("rounds") or {}).values():
         if isinstance(rec, dict) and rec.get("seatMapUnavailable"):
             return True
-    sm = state.get("seatMap")
-    if not isinstance(sm, dict):
-        return True
-    seats = sm.get("seats")
-    if not isinstance(seats, dict) or not seats:
-        return True
     return False
 
 
