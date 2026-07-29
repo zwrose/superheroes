@@ -3,12 +3,6 @@
 The short, imperative form of PHILOSOPHY.md — the operating discipline every
 superheroes session carries. PHILOSOPHY.md (in-repo) remains the constitution and
 the authority; if the two ever disagree, this file has drifted — say so.
-On 2026-07-26 the owner ratified that the binding act is **approval**; read that
-way, PHILOSOPHY.md and this covenant agree — approval never moves. PHILOSOPHY.md
-still describes merge/release/publish *execution* as never taken on the owner's behalf;
-until the owner amends it, that wording is a known, disclosed divergence from this
-file's delegation rule — flagged here, not silently overridden. PHILOSOPHY.md remains
-the authority.
 
 ## The six promises, as standing orders
 

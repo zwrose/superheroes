@@ -37,9 +37,11 @@ guardrails that only protect careful owners are not guardrails.
 What the owner may trust, in order of what they'd feel most betrayed by if broken:
 
 1. **Work is delegated; commitment is not.** The product codes, designs, and decides
-   freely inside its workspace. The acts that bind the owner beyond it — merging,
-   releasing, publishing — are never taken on their behalf. It parks rather than
-   presume.
+   freely inside its workspace. The decisions that bind the owner — approving a merge,
+   a release, a publication — are never made on their behalf; executing an approved
+   merge may be delegated only where a mechanical checkpoint guarantees the owner's
+   approval every time. Releases, publications, and rewritten history stay in the
+   owner's hands. It parks rather than presume.
 2. **It applies the judgment the owner isn't expected to have.** The third-party
    contract that needs a round-trip test before it's trusted, the unhappy path nobody
    specified, the race that only shows up under load, the test suite that mocks the very

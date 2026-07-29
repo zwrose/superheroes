@@ -248,6 +248,18 @@ document set is coherent. `PHILOSOPHY.md` remains the authority in the meantime.
 trigger:** the owner amends `PHILOSOPHY.md` to align execution wording with this ruling, or
 rules that no amendment is wanted — which would instead reopen the covenant repair.
 
+**Resolved 2026-07-28 (#706):** the owner amended `PHILOSOPHY.md` promise 1 — the constitution now
+draws the approval/execution distinction itself: the decisions that bind the owner are never made on
+their behalf, executing an approved merge may be delegated **only** behind a mechanical checkpoint
+that guarantees the owner's approval every time, and releases, publications, and rewritten history
+stay in the owner's hands. The re-check trigger above is therefore **satisfied on its first branch**,
+and the covenant's disclosed-divergence note is removed in the same change. The divergence record
+above stands as history, not as current state. **Not yet coherent everywhere:** §3 bet **B1** still
+frames the owner's checkpoint as doing "the final review and merge at the end (merging is always
+theirs)", and `README.md`'s review-independence bullet still reads "the owner merges" — both predate
+the distinction and are **owed a follow-up**; this entry closes R3's trigger, it does not claim the
+document set is coherent.
+
 ### R4 — Channel and attendance are two independent axes
 
 **Ruled:** a headless session is not re-woken — harness-tracked in-flight work dies with the turn;
