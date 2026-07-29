@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """The deterministic engine argv/parse/commit core (kept out of the effectful dispatch layer so
 it is unit-testable). Named engine_adapter (NOT engine_cli — that is test-pilot's). Every
-external free-text surface is scrubbed at THIS trust boundary (parse_result). Flags verified
-live 2026-07-12 against codex 0.144.1 (GPT-5.6; 0.141.0 is rejected by the API as too old)
-and cursor-agent 2026.06.26 (--model / -p / --trust; -m is gone)."""
+external free-text surface is scrubbed at THIS trust boundary (parse_result). The library path
+strips echoed prompts when given prompt text; the ``parse-result`` CLI subcommand never sees the
+dispatched prompt and cannot strip echoes — empty-findings from that path are unverified. Flags
+verified live 2026-07-12 against codex 0.144.1 (GPT-5.6; 0.141.0 is rejected by the API as too
+old) and cursor-agent 2026.06.26 (--model / -p / --trust; -m is gone)."""
 import argparse
 import hashlib
 import json
@@ -658,9 +660,23 @@ def main(argv):
                    help="if set, fail build-argv closed unless PATH is a readable regular file with "
                         "non-whitespace content (prevents dispatching an empty prompt that would hang "
                         "codex on stdin — #563)")
-    pr = sub.add_parser("parse-result")
+    _PARSE_RESULT_HELP = (
+        "Parse engine stdout. This path never sees the dispatched prompt, so it cannot strip an "
+        "echoed prompt; an empty-findings result here is unverified — apply the investigation floor "
+        "manually. The library path (parse_result with prompt-stripped stdout) performs the strip."
+    )
+    pr = sub.add_parser(
+        "parse-result",
+        description=_PARSE_RESULT_HELP,
+        help="parse stdout (no prompt → no echo strip; empty findings unverified)",
+    )
     pr.add_argument("--engine", required=True, choices=("codex", "cursor"))
-    pr.add_argument("--role", required=True, choices=("review", "build", "fix"))
+    pr.add_argument(
+        "--role",
+        required=True,
+        choices=("review", "build", "fix"),
+        help="dispatch role; for review, empty findings from this CLI are unverified (no echo strip)",
+    )
     pr.add_argument("--stdout-path", default=None,
                      help="file holding the external engine's raw stdout; stdin if omitted")
     cm = sub.add_parser("commit")
