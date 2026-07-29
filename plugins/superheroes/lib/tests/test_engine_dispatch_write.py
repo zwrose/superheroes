@@ -2134,8 +2134,29 @@ def _wait_for_result_json(run_dir, timeout_s=120):
 
 
 def test_e2e_review_run_child_real_spawn_terminal_success(tmp_path, monkeypatch):
-    """Real detached run-child + stub codex on PATH; no run_engine injection."""
+    """Real detached run-child + stub codex on PATH; no run_engine injection.
+
+    Proves the real subprocess path ran: supervisor/child artifacts exist, and
+    the injected ``_execute_injected_attempt`` seam was never entered.
+    """
     _install_fake_codex_on_path(monkeypatch, tmp_path, ok_stdout=_VALID_REVIEW_STDOUT, slow_first_seconds=0)
+    injected_calls = []
+    real_injected = ED._execute_injected_attempt
+
+    def _track_injected(*a, **k):
+        injected_calls.append(1)
+        return real_injected(*a, **k)
+
+    monkeypatch.setattr(ED, "_execute_injected_attempt", _track_injected)
+    spawned = []
+    real_spawn = ED._spawn_run_child
+
+    def _track_spawn(rd, att, auth, authority_hash=None):
+        proc = real_spawn(rd, att, auth, authority_hash=authority_hash)
+        spawned.append((att, proc.pid if proc is not None else None))
+        return proc
+
+    monkeypatch.setattr(ED, "_spawn_run_child", _track_spawn)
     repo_root = _review_repo(tmp_path)
     build_view = _fake_review_build_view(tmp_path)
     res = ED.dispatch_review(
@@ -2156,6 +2177,12 @@ def test_e2e_review_run_child_real_spawn_terminal_success(tmp_path, monkeypatch)
         if polled:
             res = polled
     assert res.get("ok") is True, res
+    assert injected_calls == [], "injected run-engine seam must not run on real path"
+    assert spawned, "real _spawn_run_child must have been called"
+    assert (Path(run_dir) / "supervisor-1.log").is_file(), (
+        "real run-child writes supervisor-1.log; missing ⇒ injected seam or bypass")
+    assert (Path(run_dir) / "attempt-1.launch.json").is_file()
+    assert (Path(run_dir) / "attempt-1.done").is_file()
     engagement = res.get("engagement") or {}
     stdout_bytes = engagement.get("stdoutBytes", 0)
     if stdout_bytes <= 0:
@@ -2229,68 +2256,190 @@ def test_authority_required_structurally():
 # --- WO-702-Q: B-3 real run-child structural guarantees + survivors ---
 
 
-def test_e2e_a1_kind_mismatch_refuses_pre_spawn_no_engine(tmp_path, monkeypatch):
-    """B-3 / A-1: real run-child with authority kind disagreeing with the run refuses
-    pre-spawn; stub engine on PATH is never invoked."""
-    from dataclasses import replace
-    main, linked = _linked_pair(tmp_path)
-    bin_dir = _install_fake_codex_on_path(monkeypatch, tmp_path, slow_first_seconds=0)
-    run_dir = tmp_path / "a1-kind"
+def _authority_path(run_dir):
+    return os.path.join(str(run_dir), ED.AUTHORITY_NAME)
+
+
+def _setup_write_fold_ready(tmp_path, linked, *, order_id="fold-hash"):
+    """Seal a write run with a success-shaped attempt sentinel ready to fold.
+
+    Returns (run_dir, authority, authority_hash, argv).
+    """
+    run_dir = tmp_path / ("fold-" + order_id)
     run_dir.mkdir(mode=0o700)
-    (run_dir / "prompt.txt").write_bytes(b"x")
-    built = EA.build_argv_result(
-        "codex", "build", "high",
-        {"engine_model": "gpt-5.6-terra", "cwd": linked},
+    prompt = _prompt(tmp_path)
+    fake = FakeWriteRunner([(_WRITE_OK_STDOUT, False, 0, "")])
+    seeded = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id=order_id,
+        run_engine=fake, max_wait=60, run_dir=str(run_dir),
     )
-    argv = built["argv"]
-    state = {
-        "engine": "codex",
-        "roleKind": "build",
-        "dispatchMode": ED.WRITE_DISPATCH_MODE,
-        "effort": "high",
-        "engineModel": "gpt-5.6-terra",
-        "cwd": linked,
-        "argv": argv,
-        "engineBinary": shutil.which("codex"),
-        "runNonce": "a1-nonce",
-        "orderId": "a1-o",
-        "timeout": 30,
-        "retryTimeout": 30,
-    }
-    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
-    authority = _authority_from_state(run_dir, state)
-    # Kind disagrees with the write-shaped run (no review-cwd) — refuse before engine.
-    authority = replace(authority, run_kind=ED.RUN_KIND_REVIEW, role_kind="review")
-    # Seal the disagreeing authority — run-child loads only from the sealed file.
-    auth_hash = ED._persist_authority(authority)
-    state["authorityHash"] = auth_hash
-    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
-    ED._seal_attempt_launch(str(run_dir), 1, authority, auth_hash, 30)
-    proc = ED._spawn_run_child(
-        str(run_dir), 1, authority, authority_hash=auth_hash)
-    _assert_spawn_detached(proc)
+    assert seeded.get("ok") is True, seeded
+    authority = ED._load_authority(str(run_dir))
+    assert authority is not None
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    auth_hash = state.get("authorityHash")
+    assert auth_hash
+    # Clear terminal result so a subsequent fold can write a new one.
     try:
-        done = Path(run_dir) / "attempt-1.done"
-        for _ in range(80):
-            if done.is_file():
-                break
-            time.sleep(0.25)
-        assert done.is_file(), "run-child did not write refusal sentinel"
-        data = json.loads(done.read_text(encoding="utf-8"))
-        assert data.get("refusal") == "launch-cwd-mismatch", data
-        marker = Path(linked) / ".fake-codex-invokes"
-        assert not marker.exists(), "engine process started despite A-1 refusal"
-        assert not (run_dir / "attempt-1.stdout").exists() or (
-            Path(run_dir / "attempt-1.stdout").stat().st_size == 0)
+        (run_dir / "result.json").unlink()
+    except FileNotFoundError:
+        pass
+    return run_dir, authority, auth_hash, list(authority.argv)
+
+
+def _swap_sealed_authority(run_dir, authority, **replace_fields):
+    """Unlink the sealed file and write a different valid authority payload."""
+    from dataclasses import replace
+    path = _authority_path(run_dir)
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    swapped = replace(authority, **replace_fields)
+    return ED._persist_authority(swapped), swapped
+
+
+def test_fold_refuses_swapped_sealed_authority_hash_mismatch(tmp_path):
+    """Edge 1 / B-3: swapped launch-authority.json is refused at fold."""
+    main, linked = _linked_pair(tmp_path)
+    run_dir, authority, auth_hash, argv = _setup_write_fold_ready(
+        tmp_path, linked, order_id="swap-auth")
+    # After seal + sentinel, replace sealed bytes with different valid JSON.
+    _swap_sealed_authority(
+        run_dir, authority, run_kind=ED.RUN_KIND_REVIEW, role_kind="review",
+        cwd=os.path.join(str(run_dir), ED.REVIEW_CWD_DIRNAME))
+    assert ED._authority_file_hash(str(run_dir)) != auth_hash
+    engagement = {"engine": "codex", "stdoutBytes": 1}
+    result = ED._fold_terminal_write(
+        str(run_dir), authority, argv, engagement, "success",
+        {"ok": True, "signal": "ok", "evidence": {}}, 1,
+        authority_hash=auth_hash,
+    )
+    assert result.get("ok") is False, result
+    assert result.get("detail") == ED.AUTHORITY_HASH_MISMATCH, result
+    assert result.get("reason") == "unrunnable", result
+    # Must not produce a trusted success terminal.
+    on_disk = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
+    assert on_disk.get("ok") is not True
+    assert on_disk.get("detail") == ED.AUTHORITY_HASH_MISMATCH
+
+
+def test_fold_refuses_recreated_sealed_authority_nonidentical_bytes(tmp_path):
+    """Edge 2 / B-3: unlink+recreate with non-identical bytes refused at fold.
+
+    Identical-byte recreate is pinned as legitimate pass (O_EXCL does not
+    prevent recreate; hash equality is the mechanism).
+    """
+    main, linked = _linked_pair(tmp_path)
+    run_dir, authority, auth_hash, argv = _setup_write_fold_ready(
+        tmp_path, linked, order_id="recreate-auth")
+    path = _authority_path(run_dir)
+    original = open(path, "rb").read()
+
+    # Non-identical recreate (different cwd string in payload).
+    new_hash, _ = _swap_sealed_authority(
+        run_dir, authority, order_id=authority.order_id + "-mutated")
+    assert new_hash != auth_hash
+    result = ED._fold_terminal_write(
+        str(run_dir), authority, argv, {}, "success",
+        {"ok": True, "signal": "ok", "evidence": {}}, 1,
+        authority_hash=auth_hash,
+    )
+    assert result.get("ok") is False, result
+    assert result.get("detail") == ED.AUTHORITY_HASH_MISMATCH, result
+
+    # Identical-byte recreate: semantics pinned — hash match must pass verify.
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    # Independent write of the same bytes (not the original inode).
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    fd = os.open(path, flags, 0o400)
+    try:
+        os.write(fd, original)
     finally:
-        try:
-            proc.terminate()
-            proc.wait(timeout=3)
-        except Exception:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+        os.close(fd)
+    assert ED._authority_file_hash(str(run_dir)) == auth_hash
+    assert ED._verify_authority_hash_at_fold(str(run_dir), auth_hash) is True
+    # Fold with matching hash must not refuse on hash mismatch.
+    try:
+        (run_dir / "result.json").unlink()
+    except FileNotFoundError:
+        pass
+    ok_fold = ED._fold_terminal_write(
+        str(run_dir), authority, argv, {"engine": "codex"}, "success",
+        {"ok": True, "signal": "ok", "evidence": {}}, 1,
+        authority_hash=auth_hash,
+    )
+    assert ok_fold.get("detail") != ED.AUTHORITY_HASH_MISMATCH, ok_fold
+    assert ok_fold.get("ok") is True, ok_fold
+
+
+def test_fold_refuses_truncated_sealed_authority(tmp_path):
+    """Edge 3 / B-3: truncated/torn sealed authority is never trusted at fold."""
+    main, linked = _linked_pair(tmp_path)
+    run_dir, authority, auth_hash, argv = _setup_write_fold_ready(
+        tmp_path, linked, order_id="trunc-auth")
+    path = _authority_path(run_dir)
+    raw = open(path, "rb").read()
+    assert len(raw) > 8
+    os.chmod(path, 0o600)
+    with open(path, "wb") as fh:
+        fh.write(raw[: max(1, len(raw) // 4)])
+    os.chmod(path, 0o400)
+    assert ED._verify_authority_hash_at_fold(str(run_dir), auth_hash) is False
+    result = ED._fold_terminal_write(
+        str(run_dir), authority, argv, {}, "success",
+        {"ok": True, "signal": "ok", "evidence": {}}, 1,
+        authority_hash=auth_hash,
+    )
+    assert result.get("ok") is False, result
+    assert result.get("detail") == ED.AUTHORITY_HASH_MISMATCH, result
+    assert result.get("reason") == "unrunnable", result
+    on_disk = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
+    assert on_disk.get("ok") is not True
+
+
+def test_e2e_a1_kind_mismatch_refuses_pre_spawn_no_engine(tmp_path, monkeypatch):
+    """B-3 / A-1: otherwise-valid write run_dir refused by review verb on kind alone.
+
+    The only defect is run_kind (write authority vs review verb). Cwd and other
+    launch fields stay valid so the refusal must be ``run-kind-mismatch``, not a
+    cwd guard.
+    """
+    main, linked = _linked_pair(tmp_path)
+    _install_fake_codex_on_path(monkeypatch, tmp_path, slow_first_seconds=0)
+    prompt = _prompt(tmp_path)
+    write_run = _seed_write_run(tmp_path, linked, prompt, order_id="a1-kind-e2e")
+    # Clear cache so re-entry hits the kind gate (not a cached success).
+    try:
+        (Path(write_run) / "result.json").unlink()
+    except FileNotFoundError:
+        pass
+    spawned = []
+    real_spawn = ED._spawn_run_child
+
+    def _track_spawn(*a, **k):
+        spawned.append(1)
+        return real_spawn(*a, **k)
+
+    monkeypatch.setattr(ED, "_spawn_run_child", _track_spawn)
+    repo_root = _review_repo(tmp_path)
+    build_view = _fake_review_build_view(tmp_path)
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=prompt, repo_root=repo_root, run_engine=ED._run_engine,
+        build_view=build_view, run_dir=write_run, max_wait=10,
+    )
+    assert res["reason"] == "run-kind-mismatch", res
+    assert res.get("ok") is False
+    assert res.get("terminal") is True
+    assert res.get("attempts") == 0
+    assert spawned == [], "A-1 must refuse before spawn"
+    marker = Path(linked) / ".fake-codex-invokes"
+    assert not marker.exists(), "engine process started despite A-1 kind refusal"
 
 
 def test_e2e_a4_poll_no_spawn_absent_attempt2_artifacts(tmp_path, monkeypatch):
@@ -2327,22 +2476,23 @@ def test_e2e_a4_poll_no_spawn_absent_attempt2_artifacts(tmp_path, monkeypatch):
 
 
 def test_e2e_b1_authority_wins_over_disagreeing_state(tmp_path, monkeypatch):
-    """B-3 / B-1: real child follows launch authority, not a forged state field."""
+    """B-3 / B-1: real child follows launch authority cwd when state names another
+    independently valid linked worktree — authority wins over state.
+    """
     from dataclasses import replace
-    main, linked = _linked_pair(tmp_path)
+    main, linked_auth, linked_state = _two_linked_worktrees(tmp_path)
     _install_fake_codex_on_path(monkeypatch, tmp_path, slow_first_seconds=0)
     prompt = _prompt(tmp_path)
     run_dir = tmp_path / "b1-auth"
     run_dir.mkdir(mode=0o700)
-    # Seed a completed write run so authority + state exist, then mutate state.
+    # Seed a completed write run bound to linked_auth so authority + argv exist.
     fake = FakeWriteRunner([(_WRITE_OK_STDOUT, False, 0, "")])
     seeded = ED.dispatch_write(
         "codex", engine_model="gpt-5.6-terra", effort="high",
-        prompt_path=prompt, cwd=linked, order_id="b1-o",
+        prompt_path=prompt, cwd=linked_auth, order_id="b1-o",
         run_engine=fake, max_wait=60, run_dir=str(run_dir),
     )
     assert seeded.get("ok") is True, seeded
-    # Clear terminal result so a consumer would otherwise resume from state.
     try:
         (run_dir / "result.json").unlink()
     except FileNotFoundError:
@@ -2350,67 +2500,85 @@ def test_e2e_b1_authority_wins_over_disagreeing_state(tmp_path, monkeypatch):
     state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
     authority = ED._load_authority(str(run_dir))
     assert authority is not None
-    # Forge state cwd / orderId — authority must win on poll/write refuse paths.
-    state["cwd"] = "/tmp/forged-not-the-authority-cwd"
+    assert os.path.realpath(authority.cwd) == os.path.realpath(linked_auth)
+    # Both cwds are valid linked worktrees; only the *source* differs.
+    assert os.path.isdir(linked_state)
+    ok_state, _ = ED._validate_linked_build_cwd(linked_state)
+    assert ok_state, "forged state cwd must be independently valid"
+    ok_auth, _ = ED._validate_linked_build_cwd(linked_auth)
+    assert ok_auth, "authority cwd must be independently valid"
+    # Forge state cwd to the other valid worktree — authority must still win.
+    state["cwd"] = linked_state
     state["orderId"] = "forged-other-order"
     state["inFlightAttempt"] = None
     state["completedAttempts"] = 0
     (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
-    # Poll with the forged order_id refuses (authority order_id wins).
     forged_poll = ED.dispatch_poll(str(run_dir), max_wait=0, order_id="forged-other-order")
     assert forged_poll.get("reason") == "run-dir-reused", forged_poll
-    # Matching authority order_id is accepted (observational).
     ok_poll = ED.dispatch_poll(str(run_dir), max_wait=0, order_id="b1-o")
     assert ok_poll.get("reason") != "run-dir-reused", ok_poll
 
-    # Wrong authority field (cwd) makes run-child refuse — real spawn, fresh attempt.
     for stale in run_dir.glob("attempt-1.*"):
         try:
             stale.unlink()
         except OSError:
             pass
     try:
-        os.unlink(run_dir / ED.AUTHORITY_NAME)
-    except FileNotFoundError:
-        pass
-    # Also clear prior launch seal so attempt-1 can be re-sealed.
-    try:
         os.unlink(run_dir / "attempt-1.launch.json")
     except FileNotFoundError:
         pass
-    bad_auth = replace(authority, cwd="/tmp/definitely-not-linked-worktree")
-    auth_hash = ED._persist_authority(bad_auth)
-    state["authorityHash"] = auth_hash
-    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
-    ED._seal_attempt_launch(str(run_dir), 1, bad_auth, auth_hash, 30)
-    proc = ED._spawn_run_child(
-        str(run_dir), 1, bad_auth, authority_hash=auth_hash)
-    _assert_spawn_detached(proc)
+    # Re-bind lease on the authority cwd and re-seal for a fresh real spawn.
+    lease_token, lease_holder = ED._acquire_worktree_lease_for_cwd(
+        os.path.realpath(linked_auth))
     try:
-        done = Path(run_dir) / "attempt-1.done"
-        for _ in range(80):
-            if done.is_file():
-                break
-            time.sleep(0.25)
-        assert done.is_file()
-        data = json.loads(done.read_text(encoding="utf-8"))
-        refusal = data.get("refusal") or ""
-        assert refusal in (
-            "cwd-absent", "cwd-not-a-directory", "cwd-not-a-repo",
-            "cwd-not-linked", "cwd-not-registered", "cwd-authorization-mismatch",
-            "launch-cwd-invalid",
-        ) or refusal.startswith("cwd-"), data
-        marker = Path(linked) / ".fake-codex-invokes"
-        assert not marker.exists(), "engine must not start on wrong-authority refuse"
-    finally:
+        auth = replace(
+            authority,
+            lease_token=lease_token,
+            lease_holder=lease_holder,
+            run_dir=str(run_dir),
+            cwd=str(linked_auth),
+        )
         try:
-            proc.terminate()
-            proc.wait(timeout=3)
-        except Exception:
+            os.unlink(run_dir / ED.AUTHORITY_NAME)
+        except FileNotFoundError:
+            pass
+        auth_hash = ED._persist_authority(auth)
+        # State still names the *other* valid cwd.
+        state["cwd"] = linked_state
+        state["authorityHash"] = auth_hash
+        state["worktreeLeaseToken"] = lease_token
+        (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+        ED._seal_attempt_launch(str(run_dir), 1, auth, auth_hash, 30)
+        proc = ED._spawn_run_child(
+            str(run_dir), 1, auth, authority_hash=auth_hash)
+        _assert_spawn_detached(proc)
+        try:
+            done = Path(run_dir) / "attempt-1.done"
+            for _ in range(80):
+                if done.is_file():
+                    break
+                time.sleep(0.25)
+            assert done.is_file(), "run-child did not finish"
+            data = json.loads(done.read_text(encoding="utf-8"))
+            assert data.get("refusal") is None, data
+            marker_auth = Path(linked_auth) / ".fake-codex-invokes"
+            marker_state = Path(linked_state) / ".fake-codex-invokes"
+            assert marker_auth.is_file(), (
+                "engine must run in authority cwd; marker missing at %s" % linked_auth)
+            assert not marker_state.exists(), (
+                "engine must not run in state cwd; marker at %s" % linked_state)
+        finally:
             try:
-                proc.kill()
+                proc.terminate()
+                proc.wait(timeout=3)
             except Exception:
-                pass
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+    finally:
+        ED._release_worktree_lease_for_cwd(
+            os.path.realpath(linked_auth), lease_token, lease_holder)
 
 
 def test_different_order_id_refuses_on_every_verb_including_poll(tmp_path):

@@ -1670,26 +1670,42 @@ def _b2_expr_mentions_forbidden_dict(node):
     return False
 
 
-def _b2_classify_authority_expr(node, authority_names, derived_names):
+def _b2_is_module_constant_name(name):
+    """True for ALL_CAPS module constants (e.g. RETRY_MIN_TIMEOUT)."""
+    if not name or not name[0].isupper():
+        return False
+    return all(c.isupper() or c.isdigit() or c == "_" for c in name)
+
+
+def _b2_classify_authority_expr(node, authority_names, derived_names, tainted_names=None):
     """Return 'authority', 'forbidden', or 'unclassified' for an expression."""
+    tainted_names = tainted_names or frozenset()
     if _b2_expr_mentions_forbidden_dict(node):
         return "forbidden"
     if isinstance(node, ast.Name):
+        if node.id in tainted_names:
+            return "forbidden"
         if node.id in authority_names or node.id in derived_names:
             return "authority"
         if node.id in _B2_FORBIDDEN_DICT_NAMES:
             return "forbidden"
+        if _b2_is_module_constant_name(node.id):
+            return "authority"
         return "unclassified"
     if isinstance(node, ast.Attribute):
+        if isinstance(node.value, ast.Name) and node.value.id in tainted_names:
+            return "forbidden"
         if isinstance(node.value, ast.Name) and node.value.id in authority_names:
             return "authority"
-        return _b2_classify_authority_expr(node.value, authority_names, derived_names)
+        return _b2_classify_authority_expr(
+            node.value, authority_names, derived_names, tainted_names)
     if isinstance(node, ast.Call):
         # list(authority.argv), tuple(...), _resolve_argv_binary(recorded), etc.
         if not node.args:
             return "unclassified"
         kinds = [
-            _b2_classify_authority_expr(a, authority_names, derived_names) for a in node.args
+            _b2_classify_authority_expr(
+                a, authority_names, derived_names, tainted_names) for a in node.args
         ]
         if "forbidden" in kinds:
             return "forbidden"
@@ -1700,7 +1716,8 @@ def _b2_classify_authority_expr(node, authority_names, derived_names):
         if not node.elts:
             return "authority"
         kinds = [
-            _b2_classify_authority_expr(e, authority_names, derived_names) for e in node.elts
+            _b2_classify_authority_expr(
+                e, authority_names, derived_names, tainted_names) for e in node.elts
         ]
         if "forbidden" in kinds:
             return "forbidden"
@@ -1708,8 +1725,10 @@ def _b2_classify_authority_expr(node, authority_names, derived_names):
             return "authority"
         return "unclassified"
     if isinstance(node, ast.BinOp):
-        left = _b2_classify_authority_expr(node.left, authority_names, derived_names)
-        right = _b2_classify_authority_expr(node.right, authority_names, derived_names)
+        left = _b2_classify_authority_expr(
+            node.left, authority_names, derived_names, tainted_names)
+        right = _b2_classify_authority_expr(
+            node.right, authority_names, derived_names, tainted_names)
         if "forbidden" in (left, right):
             return "forbidden"
         if left == "authority" or right == "authority":
@@ -1719,22 +1738,27 @@ def _b2_classify_authority_expr(node, authority_names, derived_names):
         return "unclassified"
     if isinstance(node, ast.IfExp):
         for part in (node.body, node.orelse, node.test):
-            k = _b2_classify_authority_expr(part, authority_names, derived_names)
+            k = _b2_classify_authority_expr(
+                part, authority_names, derived_names, tainted_names)
             if k == "forbidden":
                 return "forbidden"
         # Ternary is unclassified unless both branches are authority.
-        b = _b2_classify_authority_expr(node.body, authority_names, derived_names)
-        e = _b2_classify_authority_expr(node.orelse, authority_names, derived_names)
+        b = _b2_classify_authority_expr(
+            node.body, authority_names, derived_names, tainted_names)
+        e = _b2_classify_authority_expr(
+            node.orelse, authority_names, derived_names, tainted_names)
         if b == "authority" and e == "authority":
             return "authority"
         return "unclassified"
     if isinstance(node, ast.UnaryOp):
-        return _b2_classify_authority_expr(node.operand, authority_names, derived_names)
+        return _b2_classify_authority_expr(
+            node.operand, authority_names, derived_names, tainted_names)
     if isinstance(node, ast.Constant):
         return "authority"
     if isinstance(node, ast.BoolOp):
         kinds = [
-            _b2_classify_authority_expr(v, authority_names, derived_names) for v in node.values
+            _b2_classify_authority_expr(
+                v, authority_names, derived_names, tainted_names) for v in node.values
         ]
         if "forbidden" in kinds:
             return "forbidden"
@@ -1745,63 +1769,110 @@ def _b2_classify_authority_expr(node, authority_names, derived_names):
     return "unclassified"
 
 
+def _b2_bind_name(name, value_node, authority_names, derived, tainted):
+    """Update derived/tainted for an ordered name binding (reassignment-aware).
+
+    Only a forbidden (receipt/state) reassignment of an authority-derived name
+    taints it. Unclassified rebinds drop derived provenance without tainting so
+    builder assignments like ``authority = _build_*_authority(...)`` stay usable
+    at sinks via the ``authority`` parameter name.
+    """
+    kind = _b2_classify_authority_expr(value_node, authority_names, derived, tainted)
+    if kind == "authority":
+        derived.add(name)
+        tainted.discard(name)
+        return
+    if kind == "forbidden":
+        if name in derived or name in authority_names:
+            tainted.add(name)
+        derived.discard(name)
+        return
+    # unclassified — drop derived bit; do not taint
+    derived.discard(name)
+
+
 def _b2_collect_derived(func_node, authority_names):
-    """Names assigned from authority-derived expressions inside func_node."""
+    """Names assigned from authority-derived expressions inside func_node.
+
+    Walks statements in source order so a later reassignment from a receipt/state
+    dict taints a name that was earlier bound from authority.
+    """
     derived = set()
-    changed = True
-    while changed:
-        changed = False
-        for node in ast.walk(func_node):
-            if isinstance(node, ast.Assign) and len(node.targets) == 1:
-                target = node.targets[0]
-                if isinstance(target, ast.Name):
+    tainted = set()
+
+    def visit_stmt(stmt):
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+            target = stmt.targets[0]
+            if isinstance(target, ast.Name):
+                _b2_bind_name(
+                    target.id, stmt.value, authority_names, derived, tainted)
+            elif isinstance(target, ast.Tuple):
+                if isinstance(stmt.value, ast.Call) and len(target.elts) >= 1:
                     kind = _b2_classify_authority_expr(
-                        node.value, authority_names, derived)
-                    if kind == "authority" and target.id not in derived:
-                        derived.add(target.id)
-                        changed = True
-                elif isinstance(target, ast.Tuple):
-                    # resolved, argv = _resolve_argv_binary(recorded)
-                    if isinstance(node.value, ast.Call) and len(target.elts) >= 1:
-                        kind = _b2_classify_authority_expr(
-                            node.value, authority_names, derived)
+                        stmt.value, authority_names, derived, tainted)
+                    for elt in target.elts:
+                        if not isinstance(elt, ast.Name):
+                            continue
                         if kind == "authority":
-                            for elt in target.elts:
-                                if isinstance(elt, ast.Name) and elt.id not in derived:
-                                    derived.add(elt.id)
-                                    changed = True
-            elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
-                # roots.append(_review_cwd_path(authority.run_dir))
-                if (isinstance(node.value, ast.Call)
-                        and isinstance(node.op, ast.Add) is False):
-                    pass
+                            derived.add(elt.id)
+                            tainted.discard(elt.id)
+                        else:
+                            _b2_bind_name(
+                                elt.id, stmt.value, authority_names, derived, tainted)
+        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+            if stmt.value is not None:
+                _b2_bind_name(
+                    stmt.target.id, stmt.value, authority_names, derived, tainted)
+        elif isinstance(stmt, ast.AugAssign) and isinstance(stmt.target, ast.Name):
+            _b2_bind_name(
+                stmt.target.id, stmt.value, authority_names, derived, tainted)
+        elif isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+            call = stmt.value
+            if (isinstance(call.func, ast.Attribute)
+                    and call.func.attr == "append"
+                    and isinstance(call.func.value, ast.Name)
+                    and call.func.value.id in derived
+                    and call.args):
                 kind = _b2_classify_authority_expr(
-                    node.value, authority_names, derived)
-                # append is Call on Attribute; AugAssign unused for list.append
-            elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
-                # roots.append(...)
-                call = node.value
-                if (isinstance(call.func, ast.Attribute)
-                        and call.func.attr == "append"
-                        and isinstance(call.func.value, ast.Name)
-                        and call.func.value.id in derived
-                        and call.args):
-                    kind = _b2_classify_authority_expr(
-                        call.args[0], authority_names, derived)
-                    # list stays derived if we append authority-derived value;
-                    # if unclassified append, drop from derived (fail closed)
-                    if kind != "authority" and call.func.value.id in derived:
-                        # keep the list name but the loop var from it becomes
-                        # mixed — handled by requiring iter classification
-                        pass
-            elif isinstance(node, ast.For):
-                if isinstance(node.target, ast.Name):
-                    kind = _b2_classify_authority_expr(
-                        node.iter, authority_names, derived)
-                    if kind == "authority" and node.target.id not in derived:
-                        derived.add(node.target.id)
-                        changed = True
-    return derived
+                    call.args[0], authority_names, derived, tainted)
+                if kind != "authority":
+                    tainted.add(call.func.value.id)
+                    derived.discard(call.func.value.id)
+        elif isinstance(stmt, ast.For):
+            if isinstance(stmt.target, ast.Name):
+                _b2_bind_name(
+                    stmt.target.id, stmt.iter, authority_names, derived, tainted)
+            for child in stmt.body:
+                visit_stmt(child)
+            for child in stmt.orelse:
+                visit_stmt(child)
+        elif isinstance(stmt, ast.If):
+            for child in stmt.body:
+                visit_stmt(child)
+            for child in stmt.orelse:
+                visit_stmt(child)
+        elif isinstance(stmt, ast.While):
+            for child in stmt.body:
+                visit_stmt(child)
+            for child in stmt.orelse:
+                visit_stmt(child)
+        elif isinstance(stmt, ast.With):
+            for child in stmt.body:
+                visit_stmt(child)
+        elif isinstance(stmt, ast.Try):
+            for child in stmt.body:
+                visit_stmt(child)
+            for handler in stmt.handlers:
+                for child in handler.body:
+                    visit_stmt(child)
+            for child in stmt.orelse:
+                visit_stmt(child)
+            for child in stmt.finalbody:
+                visit_stmt(child)
+
+    for stmt in func_node.body:
+        visit_stmt(stmt)
+    return derived, tainted
 
 
 def _b2_sink_args(call):
@@ -1816,13 +1887,35 @@ def _b2_sink_args(call):
             if kw.arg == "authority":
                 yield "authority", kw.value
     elif name == "_run_engine_files":
-        # argv, ..., cwd  (positional 0 and 7); authority kw
+        # argv, timeout, cwd (positional 0, 4, 7); authority kw
         if len(call.args) >= 1:
             yield "argv", call.args[0]
+        if len(call.args) >= 5:
+            yield "timeout", call.args[4]
         if len(call.args) >= 8:
             yield "cwd", call.args[7]
         for kw in call.keywords:
-            if kw.arg in ("argv", "cwd", "authority"):
+            if kw.arg in ("argv", "cwd", "authority", "timeout"):
+                yield kw.arg, kw.value
+    elif name == "_seal_attempt_launch":
+        # (run_dir, attempt, authority, authority_hash, timeout)
+        if len(call.args) >= 3:
+            yield "authority", call.args[2]
+        if len(call.args) >= 5:
+            yield "timeout", call.args[4]
+        for kw in call.keywords:
+            if kw.arg in ("authority", "timeout"):
+                yield kw.arg, kw.value
+    elif name == "_execute_injected_attempt":
+        # timeout at positional 6; cwd at 7; authority at 3
+        if len(call.args) >= 4:
+            yield "authority", call.args[3]
+        if len(call.args) >= 7:
+            yield "timeout", call.args[6]
+        if len(call.args) >= 8:
+            yield "cwd", call.args[7]
+        for kw in call.keywords:
+            if kw.arg in ("authority", "timeout", "cwd", "argv"):
                 yield kw.arg, kw.value
     elif name == "_release_worktree_lease":
         if call.args:
@@ -1866,10 +1959,42 @@ def _b2_enclosing_function(tree, node):
     return None
 
 
+def _b2_parent_map(tree):
+    parent_map = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parent_map[child] = parent
+    return parent_map
+
+
+def _b2_guarding_if(parent_map, node):
+    """Nearest enclosing ``If`` whose body (not orelse) contains node."""
+    cur = node
+    while cur in parent_map:
+        parent = parent_map[cur]
+        if isinstance(parent, ast.If):
+            # Only treat as a spawn-decision guard when node is under body.
+            for stmt in parent.body:
+                if cur is stmt or cur in ast.walk(stmt):
+                    return parent
+            return None
+        cur = parent
+    return None
+
+
+_B2_SINK_NAMES = frozenset({
+    "_spawn_run_child", "_run_engine_files", "_seal_attempt_launch",
+    "_execute_injected_attempt",
+    "_release_worktree_lease", "_release_worktree_lease_for_cwd",
+    "_destroy_review_views",
+})
+
+
 def _b2_find_violations(source):
     """Return list of (lineno, message) for B-2 authority-carrying sink violations."""
     tree = ast.parse(source)
     violations = []
+    parent_map = _b2_parent_map(tree)
     # rmtree sites inside _destroy_review_views / _cleanup_path_permitted are
     # authority-gated; pre-authority create-path rmtrees of sanitized views are
     # not authority-carrying (view path from build_view, not engine). Scope
@@ -1881,24 +2006,37 @@ def _b2_find_violations(source):
             if enc is None or enc.name not in (
                     "_destroy_review_views", "_cleanup_path_permitted"):
                 continue
-        elif name not in (
-                "_spawn_run_child", "_run_engine_files",
-                "_release_worktree_lease", "_release_worktree_lease_for_cwd",
-                "_destroy_review_views"):
+        elif name not in _B2_SINK_NAMES:
             continue
         enc = _b2_enclosing_function(tree, call)
         authority_names = {"authority"}
         derived = set()
+        tainted = set()
         if enc is not None:
             for arg in enc.args.args:
-                if arg.arg == "authority":
+                # Sealed launch record is authority-adjacent (never state.json).
+                if arg.arg in ("authority", "launch"):
                     authority_names.add(arg.arg)
-            derived = _b2_collect_derived(enc, authority_names)
+            derived, tainted = _b2_collect_derived(enc, authority_names)
             # engine_cwd validated from authority.cwd is authority-derived when
             # assigned in the write/review branches — collected via loop above
             # when the RHS classifies. Also treat common locals set from authority.
+        # Spawn-decision: an If that gates _spawn_run_child must not read receipts.
+        if name == "_spawn_run_child":
+            guard = _b2_guarding_if(parent_map, call)
+            if guard is not None and _b2_expr_mentions_forbidden_dict(guard.test):
+                snippet = (
+                    ast.unparse(guard.test) if hasattr(ast, "unparse")
+                    else ast.dump(guard.test))
+                violations.append((
+                    guard.lineno,
+                    "B-2 violation: spawn-decision fed from forbidden dict at "
+                    "%s:%d: %s"
+                    % ("engine_dispatch.py", guard.lineno, snippet),
+                ))
         for label, expr in _b2_sink_args(call):
-            kind = _b2_classify_authority_expr(expr, authority_names, derived)
+            kind = _b2_classify_authority_expr(
+                expr, authority_names, derived, tainted)
             snippet = ast.unparse(expr) if hasattr(ast, "unparse") else ast.dump(expr)
             if kind == "forbidden":
                 violations.append((
@@ -1935,4 +2073,43 @@ def test_b2_ast_check_fails_on_unclassified_expression():
     violations = _b2_find_violations(snippet)
     assert violations, "expected unclassified failure, got none"
     assert any("unclassified" in msg for _, msg in violations)
+
+
+def test_b2_ast_check_fails_on_receipt_fed_attempt_timeout():
+    """Edge 4: receipt-fed execution timeout at an engine sink is a B-2 violation."""
+    snippet = (
+        "def _run_child_main(run_dir, authority, state):\n"
+        "    _run_engine_files(\n"
+        "        list(authority.argv), 'p', 'o', 'e',\n"
+        "        state['attemptTimeout'], 'prog', 1, authority.cwd)\n"
+    )
+    violations = _b2_find_violations(snippet)
+    assert violations, "expected receipt-fed timeout failure, got none"
+    assert any("timeout" in msg and "forbidden" in msg for _, msg in violations)
+
+
+def test_b2_ast_check_fails_on_receipt_fed_spawn_decision():
+    """Edge 5: a spawn gated by a receipt/state dict is a B-2 violation."""
+    snippet = (
+        "def _continue_run(run_dir, authority, state):\n"
+        "    if state.get('allowSpawn'):\n"
+        "        _spawn_run_child(run_dir, 1, authority)\n"
+    )
+    violations = _b2_find_violations(snippet)
+    assert violations, "expected receipt-fed spawn-decision failure, got none"
+    assert any("spawn-decision" in msg for _, msg in violations)
+
+
+def test_b2_ast_check_fails_on_authority_var_reassigned_from_receipt():
+    """Edge 6: authority-derived name later rebound from a receipt is not trusted."""
+    snippet = (
+        "def _run_child_main(run_dir, authority, state):\n"
+        "    cwd = authority.cwd\n"
+        "    cwd = state.get('cwd')\n"
+        "    _run_engine_files(\n"
+        "        list(authority.argv), 'p', 'o', 'e', 5, 'prog', 1, cwd)\n"
+    )
+    violations = _b2_find_violations(snippet)
+    assert violations, "expected reassignment taint failure, got none"
+    assert any("cwd" in msg and "forbidden" in msg for _, msg in violations)
 
