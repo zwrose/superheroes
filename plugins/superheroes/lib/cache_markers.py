@@ -21,6 +21,7 @@ def cache_parent(plugin_root):
 
 
 def _marker_pid(name):
+    """Parse a ``.in_use`` entry basename into a PID, or ``None`` if it is not a marker name."""
     m = _PID_NAME_RE.match(name)
     if not m:
         return None
@@ -34,6 +35,7 @@ def _marker_pid(name):
 
 
 def _marker_is_dead(st, pid, now, grace_seconds):
+    """``st`` MUST come from a ``follow_symlinks=False`` stat — the ``S_ISREG`` check is the symlink guard for the deleting sweep."""
     if not stat.S_ISREG(st.st_mode):
         return False
     if now - st.st_mtime < grace_seconds:

@@ -221,11 +221,11 @@ def _sweep_stale_views(tmp_base):
     """Remove old owned sanitized-view directories (best-effort; never raises).
 
     ``tmp_base`` selects what is **listed** (the caller's checked enumeration base).
-    ``_owned_view_realpath`` is the sole authority for what may be **deleted**; it reads
-    ``tempfile.gettempdir()`` for containment. Age and directory kind are additional
-    sweep-only conditions on top of that predicate. If the passed ``tmp_base`` and
-    ``gettempdir()`` disagree, every candidate fails the ownership check and nothing
-    is deleted.
+    ``_owned_view_realpath`` alone authorizes deletion; its containment root is
+    ``tempfile.gettempdir()``, so an entry is deleted only when it is an owned view
+    under **that** root — which is why a base disjoint from ``gettempdir()`` deletes
+    nothing. Age and directory kind are additional sweep-only conditions on top of
+    that predicate.
     """
     try:
         names = os.listdir(tmp_base)
@@ -240,6 +240,11 @@ def _sweep_stale_views(tmp_base):
             break
         scanned += 1
         full = os.path.join(tmp_base, name)
+        try:
+            if os.path.islink(full):
+                continue
+        except OSError:
+            continue
         real = _owned_view_realpath(full)
         if real is None:
             continue

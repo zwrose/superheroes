@@ -221,7 +221,7 @@ def test_frontmatter_yaml_flags_bare_colon_space(tmp_path):
     with open(os.path.join(d, "SKILL.md"), "w", encoding="utf-8") as fh:
         fh.write(body)
     reg = {"bodyCeilings": {}, "requiredPhrases": {}}
-    errors, _ = vs.gather_violations(root, reg, set(), set(), yaml_module=yaml)
+    errors, _ = vs.gather_violations(root, reg, set(), set())
     assert any("frontmatter-yaml" in e and "bad" in e for e in errors)
 
 
@@ -229,7 +229,7 @@ def test_frontmatter_yaml_quiet_on_valid_frontmatter(tmp_path):
     root = str(tmp_path / "plugins")
     _mk_skill(root, "p", "good", 5, desc="Use when reviewing code changes")
     reg = {"bodyCeilings": {}, "requiredPhrases": {}}
-    errors, _ = vs.gather_violations(root, reg, set(), set(), yaml_module=yaml)
+    errors, _ = vs.gather_violations(root, reg, set(), set())
     assert not any("frontmatter-yaml" in e for e in errors)
 
 
@@ -242,10 +242,24 @@ def test_frontmatter_yaml_flags_parse_skill_disagreement(tmp_path):
     with open(os.path.join(d, "SKILL.md"), "w", encoding="utf-8") as fh:
         fh.write(body)
     reg = {"bodyCeilings": {}, "requiredPhrases": {}}
-    errors, _ = vs.gather_violations(root, reg, set(), set(), yaml_module=yaml)
+    errors, _ = vs.gather_violations(root, reg, set(), set())
     assert any(
         "frontmatter-yaml" in e and "disagree" in e for e in errors
     ), errors
+
+
+def test_main_wires_frontmatter_yaml_rule(tmp_path, monkeypatch):
+    root = str(tmp_path / "plugins")
+    os.makedirs(root)
+    body = (
+        "---\nname: bad\ndescription: Use when gates.review: passed\n---\nbody\n"
+    )
+    d = os.path.join(root, "p", "skills", "bad")
+    os.makedirs(d)
+    with open(os.path.join(d, "SKILL.md"), "w", encoding="utf-8") as fh:
+        fh.write(body)
+    monkeypatch.setattr(vs, "PLUGINS", root)
+    assert vs.main([]) == 1
 
 
 def test_main_fails_closed_without_pyyaml(capsys):

@@ -976,12 +976,31 @@ def test_sweep_lists_passed_base_but_authorizes_via_gettempdir(tmp_path, monkeyp
     assert aged.exists()
 
 
+def test_sweep_skips_symlink_to_aged_prefix_dir_inside_temp_base(tmp_path, monkeypatch):
+    base = tmp_path / "tbase"
+    base.mkdir()
+    nest = base / "nest"
+    nest.mkdir()
+    victim = nest / (sv.SANITIZED_VIEW_DIR_PREFIX + "victim")
+    victim.mkdir()
+    (victim / "PRECIOUS.txt").write_text("keep\n", encoding="utf-8")
+    link_path = base / (sv.SANITIZED_VIEW_DIR_PREFIX + "link")
+    os.symlink(str(victim), str(link_path))
+    stale_time = time.time() - sv.SANITIZED_VIEW_STALE_AGE_SECONDS - 120
+    os.utime(victim, (stale_time, stale_time))
+    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: str(base))
+    sv._sweep_stale_views(str(base))
+    assert victim.is_dir()
+    assert (victim / "PRECIOUS.txt").read_text(encoding="utf-8") == "keep\n"
+    assert link_path.is_symlink()
+
+
 def test_sweep_aged_prefix_symlink_to_outside_dir_untouched(tmp_path, monkeypatch):
-    # Pins the rule (ownership + non-symlink rmtree), not a behavior delta — old
-    # code also left the link and target alone because rmtree refuses symlinks.
+    # Containment under gettempdir() is what keeps the outside target alive; link and
+    # target are both aged and prefix-named so the age gate cannot mask a bad delete.
     base = tmp_path / "fake-tmp"
     base.mkdir()
-    outside = tmp_path / "outside-target"
+    outside = tmp_path / (sv.SANITIZED_VIEW_DIR_PREFIX + "outside-target")
     outside.mkdir()
     (outside / "marker.txt").write_text("keep\n", encoding="utf-8")
     link_name = sv.SANITIZED_VIEW_DIR_PREFIX + "via-link"
@@ -989,6 +1008,7 @@ def test_sweep_aged_prefix_symlink_to_outside_dir_untouched(tmp_path, monkeypatc
     os.symlink(str(outside), str(link_path))
     stale_time = time.time() - sv.SANITIZED_VIEW_STALE_AGE_SECONDS - 120
     os.utime(link_path, (stale_time, stale_time), follow_symlinks=False)
+    os.utime(outside, (stale_time, stale_time))
     monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: str(base))
     sv._sweep_stale_views(str(base))
     assert link_path.is_symlink()

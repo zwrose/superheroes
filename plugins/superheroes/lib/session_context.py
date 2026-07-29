@@ -139,7 +139,8 @@ def _cache_parent_hint(plugin_root):
     try:
         import cache_markers
         return cache_markers.cache_parent(plugin_root)
-    except Exception:
+    except Exception as exc:
+        _breadcrumb("Plugin cache hygiene", type(exc).__name__)
         return None
 
 

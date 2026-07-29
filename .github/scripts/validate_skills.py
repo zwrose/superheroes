@@ -92,15 +92,14 @@ def check_phrases(skill_key, description, required_phrases):
     ]
 
 
-def check_frontmatter_yaml(skill_key, raw, yaml_module, regex_description):
+def check_frontmatter_yaml(skill_key, raw, regex_description):
     """Validate SKILL.md frontmatter with yaml.safe_load (same block as skills.parse_skill)."""
-    m = skills._FRONTMATTER.match(raw)
-    if not m:
+    block = skills.frontmatter_block(raw)
+    if block is None:
         return []
-    block = m.group(1)
     try:
-        data = yaml_module.safe_load(block)
-    except yaml_module.YAMLError as exc:
+        data = yaml.safe_load(block)
+    except yaml.YAMLError as exc:
         return [
             f"frontmatter-yaml: {skill_key}: frontmatter is not valid YAML "
             f"(quote the description if it contains a bare colon: space): {exc}"
@@ -164,7 +163,7 @@ def known_red_ceilings(baseline):
 
 
 def gather_violations(plugins_root, registry, red_set, conv_secs, combined_before=None,
-                      allowed_unresolved=frozenset(), *, yaml_module=None):
+                      allowed_unresolved=frozenset()):
     """Walk skills under plugins_root and collect per-skill + combined-size violations.
 
     Pure over its inputs (no global file reads) so it is unit-testable on a temp tree.
@@ -198,8 +197,7 @@ def gather_violations(plugins_root, registry, red_set, conv_secs, combined_befor
         errors += check_conventions_refs(key, raw, conv_secs)
         errors += check_depth(key, raw, plugin_dir)
         errors += check_phrases(key, description, registry["requiredPhrases"].get(key, []))
-        if yaml_module is not None:
-            errors += check_frontmatter_yaml(key, raw, yaml_module, description)
+        errors += check_frontmatter_yaml(key, raw, description)
 
     # FR-10: combined description size strictly smaller than the recorded pre-change baseline.
     if combined_before is not None and combined_now >= combined_before:
@@ -231,8 +229,7 @@ def main(argv=None):
     errors, _ = gather_violations(
         PLUGINS, registry, known_red_ceilings(baseline), conv_secs,
         baseline.get("combinedDescriptionChars"),
-        allowed_unresolved=allowed_unresolved,
-        yaml_module=yaml)
+        allowed_unresolved=allowed_unresolved)
 
     # FR-6: TOC on long reference files (any .md under a plugin's reference/ dirs)
     import glob as _glob

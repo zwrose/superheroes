@@ -16,6 +16,14 @@ _FRONTMATTER = re.compile(r"^---\n(.*?)\n---\n(.*)$", re.DOTALL)
 _DESCRIPTION = re.compile(r"^description:[ \t]*(.*)$", re.MULTILINE)
 
 
+def frontmatter_block(text):
+    """The raw frontmatter block of a SKILL.md, or None when there is no leading block.
+
+    One definition of 'the frontmatter block' — parse_skill and validate_skills both read it."""
+    m = _FRONTMATTER.match(text)
+    return m.group(1) if m else None
+
+
 def _unquote(value):
     """Strip one surrounding pair of matching YAML quotes from a single-line scalar.
 
@@ -38,10 +46,11 @@ def _unquote(value):
 
 
 def parse_skill(text):
-    m = _FRONTMATTER.match(text)
-    if not m:
+    frontmatter = frontmatter_block(text)
+    if frontmatter is None:
         raise ValueError("SKILL.md has no leading frontmatter block")
-    frontmatter, body = m.group(1), m.group(2)
+    m = _FRONTMATTER.match(text)
+    body = m.group(2)
     dm = _DESCRIPTION.search(frontmatter)
     description = _unquote(dm.group(1).strip()) if dm else ""
     return description, body
