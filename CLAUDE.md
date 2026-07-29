@@ -18,7 +18,7 @@ When a change alters the **cast, commands, or cross-plugin contracts**, update t
 the same PR:
 
 - **README.md** — the hero sections + their command tables.
-- **CONVENTIONS.md** — the cross-plugin contracts (§1–§13).
+- **CONVENTIONS.md** — the cross-plugin contracts (§1–§14).
 
 **ROADMAP.md carries the coarse train** (owner-ratified 2026-07-09; simplified to
 areas-of-focus 2026-07-22, owner call): the cut rules, the cut record, and the areas
