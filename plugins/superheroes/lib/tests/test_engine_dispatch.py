@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 import shutil
+import threading
 import time
 
 import pytest
@@ -1313,6 +1314,42 @@ def test_stale_done_sentinel_removed_before_launch(tmp_path):
     assert len(fake.calls) == 1
 
 
+def test_stale_done_sentinel_ignored_on_resume_with_inflight(tmp_path):
+    """Resume with in-flight attempt must not accept a prior run's successful sentinel."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(mode=0o700)
+    current_nonce = "current-run-nonce-702"
+    stale_stdout = _VALID_FINDINGS_STDOUT
+    (run_dir / "attempt-1.done").write_text(json.dumps({
+        "exit": 0, "timedOut": False, "runNonce": "stale-previous-nonce",
+    }), encoding="utf-8")
+    (run_dir / "attempt-1.stdout").write_text(stale_stdout, encoding="utf-8")
+    (run_dir / "state.json").write_text(json.dumps({
+        "engine": "codex",
+        "roleKind": "review",
+        "effort": "high",
+        "model": "sonnet",
+        "argv": ["codex"],
+        "runNonce": current_nonce,
+        "repoRoot": str(tmp_path / "repo"),
+        "promptPath": str(run_dir / "prompt.txt"),
+        "viewReceipt": _fake_view_receipt(),
+        "fedPrompt": "",
+        "inFlightAttempt": 1,
+        "completedAttempts": 0,
+        "attemptStartedAt": time.time(),
+    }), encoding="utf-8")
+    res = ED.dispatch_poll(str(run_dir), max_wait=0)
+    assert res.get("terminal") is False
+    assert not (run_dir / "result.json").exists()
+    (run_dir / "attempt-1.done").write_text(json.dumps({
+        "exit": 0, "timedOut": False, "runNonce": current_nonce,
+    }), encoding="utf-8")
+    res2 = ED.dispatch_poll(str(run_dir), max_wait=1)
+    assert res2.get("terminal") is True
+    assert (run_dir / "result.json").is_file()
+
+
 def test_stdout_without_sentinel_is_incomplete_not_result(tmp_path):
     """Edge 5: output without done sentinel is not a terminal fold."""
     run_dir = tmp_path / "run"
@@ -1386,38 +1423,83 @@ def test_dispatch_poll_never_spawns(tmp_path):
     assert not (run_dir / "attempt-1.done").exists()
 
 
-def test_concurrent_run_dir_lock_prevents_duplicate_spawn(tmp_path):
-    """Edge 9: second holder gets lock-held running, no duplicate attempt."""
-    import threading
+def test_concurrent_run_dir_lock_prevents_duplicate_spawn(tmp_path, monkeypatch):
+    """Two dispatch calls on one run-dir: one child, loser gets resumable non-terminal."""
+    repo_root = _repo(tmp_path)
     run_dir = tmp_path / "run"
     run_dir.mkdir(mode=0o700)
-    lock_path = run_dir / "run.lock"
-    ED.file_lock.acquire(str(lock_path))
-    try:
-        (run_dir / "state.json").write_text(json.dumps({
-            "engine": "codex", "argv": [], "completedAttempts": 0,
-            "viewReceipt": {}, "fedPrompt": "",
-        }), encoding="utf-8")
-        res = ED.dispatch_poll(str(run_dir), max_wait=0)
-        assert res.get("detail") == "lock-held"
-        assert res.get("terminal") is False
-    finally:
-        ED.file_lock.release(str(lock_path))
+    hold_spawn = threading.Event()
+    release_spawn = threading.Event()
+    real_spawn = ED._spawn_run_child
+
+    def _gated_spawn(rd, att, launch):
+        if att == 1:
+            hold_spawn.set()
+            assert release_spawn.wait(timeout=20)
+        return real_spawn(rd, att, launch)
+
+    monkeypatch.setattr(ED, "_spawn_run_child", _gated_spawn)
+    results = {}
+
+    def _start():
+        results["a"] = ED.dispatch_review(
+            "codex", model="sonnet", effort="high",
+            prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
+            run_engine=ED._run_engine, build_view=_fake_build_view(tmp_path),
+            run_dir=str(run_dir), max_wait=120,
+        )
+
+    t = threading.Thread(target=_start, daemon=True)
+    t.start()
+    assert hold_spawn.wait(timeout=30)
+    results["b"] = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
+        run_engine=ED._run_engine, build_view=_fake_build_view(tmp_path),
+        run_dir=str(run_dir), max_wait=5,
+    )
+    assert results["b"].get("detail") == "lock-held"
+    assert results["b"].get("terminal") is False
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    assert state.get("inFlightAttempt") == 1
+    release_spawn.set()
+    t.join(timeout=60)
 
 
-def test_result_json_persisted_before_view_destroyed(tmp_path):
-    """Edge 10: fold writes result.json before destroying review-cwd."""
+def test_result_json_persisted_before_view_destroyed(tmp_path, monkeypatch):
+    """result.json must exist and parse before review-cwd destruction runs."""
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    destroy_moments = []
+    real_destroy = ED.sanitized_view.destroy_sanitized_view
+
+    def _spy_destroy(path):
+        probe = os.path.realpath(path)
+        result_path = None
+        for _ in range(6):
+            candidate = os.path.join(probe, "result.json")
+            if os.path.isfile(candidate):
+                result_path = candidate
+                break
+            parent = os.path.dirname(probe)
+            if parent == probe:
+                break
+            probe = parent
+        assert result_path, "result.json missing at destroy"
+        parsed = json.loads(open(result_path, encoding="utf-8").read())
+        assert parsed.get("ok") is True
+        destroy_moments.append(result_path)
+        return real_destroy(path)
+
+    import sanitized_view as _sv_mod
+    monkeypatch.setattr(ED.sanitized_view, "destroy_sanitized_view", _spy_destroy)
     res = ED.dispatch_review(
         "codex", model="sonnet", effort="high",
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
+    assert res["ok"] is True, res
+    assert destroy_moments
     run_dir = res["runDir"]
-    assert (os.path.join(run_dir, "result.json"))
-    assert os.path.isfile(os.path.join(run_dir, "result.json"))
     assert not os.path.exists(os.path.join(run_dir, REVIEW_CWD_BASENAME))
-    cached = json.loads(open(os.path.join(run_dir, "result.json"), encoding="utf-8").read())
-    assert cached.get("sanitizedView")
 

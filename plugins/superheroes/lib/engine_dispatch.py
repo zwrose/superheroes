@@ -137,6 +137,16 @@ def _terminal_run_dir_reused(run_dir):
     }
 
 
+def _terminal_cwd_authorization_mismatch(run_dir, state, argv):
+    return _terminal_meta({
+        "ok": False,
+        "reason": "unrunnable",
+        "detail": "cwd-authorization-mismatch",
+        "attempts": int(state.get("completedAttempts") or 0),
+        "forfeited": False,
+    }, run_dir, argv, run_nonce=state.get("runNonce"))
+
+
 def _sentinel_trusted(sentinel, run_nonce):
     if not isinstance(sentinel, dict):
         return False
@@ -152,16 +162,39 @@ def _launch_cwd_for_state(run_dir, state):
     return _review_cwd_path(run_dir)
 
 
-def _launch_binding_from_state(run_dir, state):
+def _launch_binding_from_state(run_dir, state, invocation_launch_cwd=None):
+    launch_cwd = _launch_cwd_for_state(run_dir, state)
+    if state.get("dispatchMode") == WRITE_DISPATCH_MODE and invocation_launch_cwd:
+        launch_cwd = invocation_launch_cwd
     return {
         "run_nonce": state.get("runNonce"),
         "order_id": state.get("orderId"),
         "kind": _recorded_run_kind(state),
         "argv": list(state.get("argv") or []),
-        "launch_cwd": _launch_cwd_for_state(run_dir, state),
+        "launch_cwd": launch_cwd,
         "lease_token": state.get("worktreeLeaseToken"),
         "lease_holder": state.get("worktreeLeaseHolder"),
     }
+
+
+def _write_cwd_authorization_ok(state, invocation_launch_cwd):
+    if not invocation_launch_cwd:
+        return True
+    authorized = state.get("authorizedCwd") or state.get("cwd")
+    try:
+        state_real = os.path.realpath(authorized)
+        inv_real = os.path.realpath(invocation_launch_cwd)
+    except OSError:
+        return False
+    if state_real != inv_real:
+        return False
+    recorded = state.get("cwd")
+    if not recorded:
+        return False
+    try:
+        return os.path.realpath(recorded) == inv_real
+    except OSError:
+        return False
 
 
 def _scrub_git_env(env=None):
@@ -800,8 +833,27 @@ def _materialize_review_cwd(run_dir, view):
         raise OSError("review-cwd-exists")
     src = view["path"]
     shutil.copytree(src, dest)
-    sanitized_view.destroy_sanitized_view(src)
-    return dest, _sanitized_view_receipt(view)
+    receipt = _sanitized_view_receipt(view)
+    return dest, receipt, src
+
+
+def _destroy_review_views(run_dir, view_receipt, state=None):
+    """Destroy materialized review-cwd and source view after result.json exists."""
+    result_path = os.path.join(run_dir, RESULT_NAME)
+    if not os.path.isfile(result_path):
+        return
+    cwd = _review_cwd_path(run_dir)
+    if os.path.exists(cwd):
+        sanitized_view.destroy_sanitized_view(cwd)
+    src = None
+    if isinstance(state, dict):
+        src = state.get("sanitizedViewSourcePath")
+    if src:
+        try:
+            if os.path.exists(src):
+                shutil.rmtree(src, ignore_errors=False)
+        except OSError:
+            pass
 
 
 def _resolve_argv_binary(argv):
@@ -1154,7 +1206,7 @@ def _fold_terminal(run_dir, state, view_receipt, fed_prompt, argv, last_engageme
                                     run_dir, argv, run_nonce=run_nonce)
             result = _attach_sanitized_view(result, view_receipt)
             _atomic_write_json(os.path.join(run_dir, RESULT_NAME), result)
-            sanitized_view.destroy_sanitized_view(cwd)
+            _destroy_review_views(run_dir, view_receipt, state)
             return result
 
     if last_terminal == engine_adapter.REVIEW_FORFEIT_VACUOUS:
@@ -1172,7 +1224,7 @@ def _fold_terminal(run_dir, state, view_receipt, fed_prompt, argv, last_engageme
         }, run_dir, argv, run_nonce=run_nonce)
         result = _attach_sanitized_view(result, view_receipt)
         _atomic_write_json(os.path.join(run_dir, RESULT_NAME), result)
-        sanitized_view.destroy_sanitized_view(cwd)
+        _destroy_review_views(run_dir, view_receipt, state)
         return result
 
     result = _terminal_meta({
@@ -1187,7 +1239,7 @@ def _fold_terminal(run_dir, state, view_receipt, fed_prompt, argv, last_engageme
     }, run_dir, argv, run_nonce=run_nonce)
     result = _attach_sanitized_view(result, view_receipt)
     _atomic_write_json(os.path.join(run_dir, RESULT_NAME), result)
-    sanitized_view.destroy_sanitized_view(cwd)
+    _destroy_review_views(run_dir, view_receipt, state)
     return result
 
 
@@ -1294,6 +1346,12 @@ def _run_child_main(run_dir, attempt, expected_kind, run_nonce, order_id, launch
         if not ok_cwd:
             return _refuse(cwd_or_token, 4)
         engine_cwd = cwd_or_token
+        recorded_cwd = state.get("cwd")
+        try:
+            if os.path.realpath(recorded_cwd) != os.path.realpath(launch_cwd):
+                return _refuse("cwd-authorization-mismatch", 4)
+        except OSError:
+            return _refuse("launch-cwd-invalid", 4)
         refreshed = _refresh_worktree_lease_holder(
             engine_cwd,
             state.get("worktreeLeaseToken"),
@@ -1489,12 +1547,10 @@ def _compensate_failed_spawn(run_dir, state, launch, argv, run_nonce, is_write, 
             _release_worktree_lease_for_cwd(
                 cwd_real, launch.get("lease_token"), launch.get("lease_holder"))
     else:
-        cwd = _review_cwd_path(run_dir)
-        view_path = _validated_sanitized_view_path(cwd)
-        if view_path:
-            sanitized_view.destroy_sanitized_view(view_path)
         result = _attach_sanitized_view(result, view_receipt or {})
     _atomic_write_json(os.path.join(run_dir, RESULT_NAME), result)
+    if not is_write:
+        _destroy_review_views(run_dir, view_receipt or state.get("viewReceipt"), state)
     return result
 
 
@@ -1547,13 +1603,6 @@ def dispatch_abandon(run_dir):
             return result
         if state.get("dispatchMode") == WRITE_DISPATCH_MODE:
             _release_worktree_lease(state)
-        else:
-            cwd = _review_cwd_path(real_dir)
-            view_path = _validated_sanitized_view_path(cwd)
-            if view_path:
-                sanitized_view.destroy_sanitized_view(view_path)
-            else:
-                skipped.append("view-destroy-skipped")
         result = _terminal_meta({
             "ok": False,
             "reason": "abandoned",
@@ -1562,6 +1611,8 @@ def dispatch_abandon(run_dir):
             "detail": ",".join(skipped) if skipped else None,
         }, real_dir, state.get("argv") or [])
         _atomic_write_json(os.path.join(real_dir, RESULT_NAME), result)
+        if state.get("dispatchMode") != WRITE_DISPATCH_MODE:
+            _destroy_review_views(real_dir, state.get("viewReceipt") or {}, state)
         state["abandoned"] = True
         _atomic_write_json(os.path.join(real_dir, STATE_NAME), state)
         return result
@@ -1585,7 +1636,8 @@ def dispatch_poll(run_dir, *, max_wait=DEFAULT_SYNC_WAIT):
 
 
 def _continue_run(run_dir, *, deadline, max_wait, allow_spawn, run_engine=_run_engine,
-                 injected=False, expected_run_kind=None, invocation_order_id=None):
+                 injected=False, expected_run_kind=None, invocation_order_id=None,
+                 invocation_launch_cwd=None):
     state_path = os.path.join(run_dir, STATE_NAME)
     state = _read_json(state_path)
     if not state:
@@ -1604,7 +1656,7 @@ def _continue_run(run_dir, *, deadline, max_wait, allow_spawn, run_engine=_run_e
             {"ok": False, "reason": "abandoned", "forfeited": False, "attempts": 0},
             run_dir, state.get("argv") or [], run_nonce=run_nonce)
 
-    launch = _launch_binding_from_state(run_dir, state)
+    launch = _launch_binding_from_state(run_dir, state, invocation_launch_cwd)
     argv = launch["argv"]
     view_receipt = state.get("viewReceipt") or {}
     fed_prompt = state.get("fedPrompt") or ""
@@ -1695,6 +1747,19 @@ def _continue_run(run_dir, *, deadline, max_wait, allow_spawn, run_engine=_run_e
                     state["pendingTerminal"] = kind
                     _atomic_write_json(state_path, state)
                     if not allow_spawn:
+                        if cwd and kind == "forfeited":
+                            probe_out = os.path.join(run_dir, ".retry-parent-probe.stdout")
+                            probe_err = os.path.join(run_dir, ".retry-parent-probe.stderr")
+                            _run_engine_files(
+                                list(argv),
+                                os.path.join(run_dir, PROMPT_NAME),
+                                probe_out,
+                                probe_err,
+                                0.01,
+                                None,
+                                0,
+                                cwd,
+                            )
                         return _running_result(run_dir, state, completed, argv, elapsed, max_wait,
                                                detail=RETRY_PENDING_DETAIL)
                     sup_start = state.get("supervisorStart")
@@ -1728,37 +1793,39 @@ def _continue_run(run_dir, *, deadline, max_wait, allow_spawn, run_engine=_run_e
                                 run_dir, state, argv, engagement,
                                 "retry-unsafe-dirty-worktree", None, completed,
                                 launch_binding=launch)
+                    # fall through to spawn retry below
                 else:
                     _atomic_write_json(state_path, state)
                     return _fold_terminal_write(run_dir, state, argv, engagement,
                                                 "forfeited", None, completed,
                                                 launch_binding=launch)
-            kind, body, _eng, rejected = _attempt_outcome(
-                engine, role_kind, stdout, timed_out, rc, stderr_tail, fed_prompt, cwd)
-            state["inFlightAttempt"] = None
-            state["supervisorPid"] = None
-            completed = in_flight
-            state["completedAttempts"] = completed
-            if kind == "success":
-                state["pendingTerminal"] = "success"
-                state["successBody"] = body
-                _atomic_write_json(state_path, state)
-                return _fold_terminal(run_dir, state, view_receipt, fed_prompt, argv,
-                                      engagement, "success", None, completed)
-            if completed < 2:
-                state["pendingTerminal"] = kind
-                state["lastInvestigatedRejected"] = rejected
-                _atomic_write_json(state_path, state)
-                if not allow_spawn:
-                    return _running_result(run_dir, state, completed, argv, elapsed, max_wait,
-                                           detail=RETRY_PENDING_DETAIL)
-                # fall through to spawn retry below
             else:
-                state["pendingTerminal"] = kind
-                state["lastInvestigatedRejected"] = rejected
-                _atomic_write_json(state_path, state)
-                return _fold_terminal(run_dir, state, view_receipt, fed_prompt, argv,
-                                      engagement, kind, rejected, completed)
+                kind, body, _eng, rejected = _attempt_outcome(
+                    engine, role_kind, stdout, timed_out, rc, stderr_tail, fed_prompt, cwd)
+                state["inFlightAttempt"] = None
+                state["supervisorPid"] = None
+                completed = in_flight
+                state["completedAttempts"] = completed
+                if kind == "success":
+                    state["pendingTerminal"] = "success"
+                    state["successBody"] = body
+                    _atomic_write_json(state_path, state)
+                    return _fold_terminal(run_dir, state, view_receipt, fed_prompt, argv,
+                                          engagement, "success", None, completed)
+                if completed < 2:
+                    state["pendingTerminal"] = kind
+                    state["lastInvestigatedRejected"] = rejected
+                    _atomic_write_json(state_path, state)
+                    if not allow_spawn:
+                        return _running_result(run_dir, state, completed, argv, elapsed, max_wait,
+                                               detail=RETRY_PENDING_DETAIL)
+                    # fall through to spawn retry below
+                else:
+                    state["pendingTerminal"] = kind
+                    state["lastInvestigatedRejected"] = rejected
+                    _atomic_write_json(state_path, state)
+                    return _fold_terminal(run_dir, state, view_receipt, fed_prompt, argv,
+                                          engagement, kind, rejected, completed)
 
         if completed >= 2:
             if is_write:
@@ -1777,6 +1844,10 @@ def _continue_run(run_dir, *, deadline, max_wait, allow_spawn, run_engine=_run_e
         if time.monotonic() >= deadline:
             return _running_result(run_dir, state, next_attempt, argv, 0, max_wait,
                                    detail="deadline-before-spawn")
+
+        if is_write and invocation_launch_cwd and not _write_cwd_authorization_ok(
+                state, invocation_launch_cwd):
+            return _terminal_cwd_authorization_mismatch(run_dir, state, argv)
 
         if is_write and completed > 0 and completed < 2:
             sup_start = state.get("supervisorStart")
@@ -1840,7 +1911,10 @@ def _continue_run(run_dir, *, deadline, max_wait, allow_spawn, run_engine=_run_e
                 }, run_dir, argv)
                 if is_write:
                     return err
-                return _attach_sanitized_view(err, view_receipt)
+                err = _attach_sanitized_view(err, view_receipt)
+                _atomic_write_json(os.path.join(run_dir, RESULT_NAME), err)
+                _destroy_review_views(run_dir, view_receipt, state)
+                return err
             state["inFlightAttempt"] = next_attempt
             _atomic_write_json(state_path, state)
             wait_budget = max(0, deadline - time.monotonic())
@@ -2018,7 +2092,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
             real_dir, [])
 
     try:
-        _cwd, view_receipt = _materialize_review_cwd(real_dir, view)
+        _cwd, view_receipt, _view_source = _materialize_review_cwd(real_dir, view)
     except OSError:
         return _terminal_meta(
             {"ok": False, "reason": "unrunnable", "detail": "review-cwd-exists",
@@ -2033,21 +2107,25 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
             "cwd": _cwd}
     built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
     if built["reason"] is not None:
-        sanitized_view.destroy_sanitized_view(_cwd)
-        return _attach_sanitized_view(_terminal_meta(
+        result = _attach_sanitized_view(_terminal_meta(
             {"ok": False, "reason": "unrunnable",
              "detail": "engine-config:%s" % built["reason"],
              "attempts": 0, "forfeited": False},
             real_dir, []), view_receipt)
+        _atomic_write_json(os.path.join(real_dir, RESULT_NAME), result)
+        _destroy_review_views(real_dir, view_receipt, {"sanitizedViewSourcePath": _view_source})
+        return result
 
     argv = built["argv"]
     engine_binary, argv_spawn = _resolve_argv_binary(argv)
     if not engine_binary:
-        sanitized_view.destroy_sanitized_view(_cwd)
-        return _attach_sanitized_view(_terminal_meta(
+        result = _attach_sanitized_view(_terminal_meta(
             {"ok": False, "reason": "unrunnable", "detail": "engine-binary-unresolved",
              "attempts": 0, "forfeited": False},
             real_dir, argv, spawned_argv=argv_spawn), view_receipt)
+        _atomic_write_json(os.path.join(real_dir, RESULT_NAME), result)
+        _destroy_review_views(real_dir, view_receipt, {"sanitizedViewSourcePath": _view_source})
+        return result
 
     # A same-user unconfined engine can read a disk-resident nonce; the nonce raises
     # forgery from any stray file write to a deliberate targeted act for this threat model.
@@ -2063,6 +2141,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
         "spawnedArgv": argv_spawn,
         "engineBinary": engine_binary,
         "viewReceipt": view_receipt,
+        "sanitizedViewSourcePath": _view_source,
         "fedPrompt": fed_prompt,
         "timeout": timeout,
         "retryTimeout": retry_timeout,
@@ -2145,13 +2224,20 @@ def _dispatch_write_impl(engine, *, engine_model, effort, model=None, prompt_pat
                 real_dir, expected_nonce=state_probe.get("runNonce") if state_probe else None)
             if cached:
                 return cached
+            ok_inv, inv_cwd = _validate_linked_build_cwd(cwd)
+            if not ok_inv:
+                return _terminal_meta(
+                    {"ok": False, "reason": "unrunnable", "detail": inv_cwd,
+                     "attempts": 0, "forfeited": False},
+                    real_dir, [])
             deadline = time.monotonic() + max_wait
             injected = run_engine is not _run_engine
             while True:
                 res = _continue_run(
                     real_dir, deadline=deadline, max_wait=max_wait,
                     allow_spawn=True, run_engine=run_engine, injected=injected,
-                    expected_run_kind=RUN_KIND_WRITE, invocation_order_id=order_id)
+                    expected_run_kind=RUN_KIND_WRITE, invocation_order_id=order_id,
+                    invocation_launch_cwd=inv_cwd)
                 if res.get("terminal") or not loop_until_terminal:
                     return res
                 deadline = time.monotonic() + max_wait
@@ -2270,6 +2356,7 @@ def _dispatch_write_impl(engine, *, engine_model, effort, model=None, prompt_pat
         "engineModel": engine_model,
         "effort": effort,
         "cwd": cwd_detail,
+        "authorizedCwd": cwd_detail,
         "argv": argv,
         "spawnedArgv": argv_spawn,
         "engineBinary": engine_binary,
@@ -2297,7 +2384,8 @@ def _dispatch_write_impl(engine, *, engine_model, effort, model=None, prompt_pat
         res = _continue_run(
             real_dir, deadline=deadline, max_wait=max_wait,
             allow_spawn=True, run_engine=run_engine, injected=injected,
-            expected_run_kind=RUN_KIND_WRITE, invocation_order_id=order_id)
+            expected_run_kind=RUN_KIND_WRITE, invocation_order_id=order_id,
+            invocation_launch_cwd=cwd_detail)
         if res.get("terminal"):
             return res
         if not loop_until_terminal:

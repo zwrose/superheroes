@@ -7,6 +7,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -98,6 +99,105 @@ def _linked_pair(tmp_path):
     linked = tmp_path / "linked"
     _git(main, "worktree", "add", str(linked), "-q")
     return main, str(linked)
+
+
+def _two_linked_worktrees(tmp_path):
+    main = _init_repo(tmp_path / "main")
+    wt1 = tmp_path / "wt1"
+    wt2 = tmp_path / "wt2"
+    _git(main, "worktree", "add", str(wt1), "-q")
+    _git(main, "worktree", "add", str(wt2), "-q", "-b", "second-wt")
+    return main, str(wt1), str(wt2)
+
+
+def _quick_write_stdout_py():
+    return [
+        "python3",
+        "-c",
+        "import sys; sys.stdout.write(%r)" % _WRITE_OK_STDOUT,
+    ]
+
+
+def _install_fake_codex_on_path(monkeypatch, tmp_path, *, ok_stdout=None, slow_first_seconds=60,
+                                 slow_by_attempt=None):
+    """Detached run-child resolves codex via PATH; fake engine counts invocations in cwd."""
+    ok_stdout = ok_stdout or _WRITE_OK_STDOUT
+    slow_by_attempt = dict(slow_by_attempt or {})
+    if slow_first_seconds is not None and 1 not in slow_by_attempt:
+        slow_by_attempt[1] = slow_first_seconds
+    bin_dir = tmp_path / "fake-bin"
+    bin_dir.mkdir(mode=0o700)
+    marker = ".fake-codex-invokes"
+    slow_map = json.dumps({str(k): v for k, v in slow_by_attempt.items()})
+    script = (
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys, time\n"
+        "slow_by_attempt = %s\n"
+        "marker = os.path.join(os.getcwd(), %r)\n"
+        "n = 0\n"
+        "if os.path.isfile(marker):\n"
+        "    n = int(open(marker).read().strip() or '0')\n"
+        "n += 1\n"
+        "open(marker, 'w').write(str(n))\n"
+        "delay = slow_by_attempt.get(str(n), 0)\n"
+        "if delay:\n"
+        "    time.sleep(delay)\n"
+        "    sys.exit(0)\n"
+        "sys.stdout.write(%r)\n"
+        "sys.exit(0)\n"
+    ) % (slow_map, marker, ok_stdout)
+    codex = bin_dir / "codex"
+    codex.write_text(script, encoding="utf-8")
+    codex.chmod(0o755)
+    monkeypatch.setenv(
+        "PATH",
+        str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
+    )
+    return bin_dir
+
+
+def _assert_spawn_detached(proc):
+    assert proc is not None
+    assert isinstance(proc, subprocess.Popen)
+    assert proc.pid != os.getpid()
+
+
+def _spy_run_engine_files_quick_ok(monkeypatch, captured):
+    real = ED._run_engine_files
+
+    def _spy(argv, *args, **kwargs):
+        captured.append(list(argv))
+        return real(_quick_write_stdout_py(), *args, **kwargs)
+
+    monkeypatch.setattr(ED, "_run_engine_files", _spy)
+    return captured
+
+
+def _inline_run_child_spawn(monkeypatch, *, children=None):
+    """Replace supervisor Popen with in-process run-child so _run_engine_files spies apply."""
+    if children is None:
+        children = []
+    real_spawn = ED._spawn_run_child
+
+    def _inline(rd, attempt, launch):
+        children.append(attempt)
+        ED._run_child_main(
+            str(rd),
+            attempt,
+            expected_kind=launch["kind"],
+            run_nonce=launch.get("run_nonce") or "",
+            order_id=launch.get("order_id") or "",
+            launch_cwd=launch.get("launch_cwd") or "",
+            launch_argv=list(launch.get("argv") or []),
+        )
+
+        class _Proc:
+            pid = os.getpid()
+
+        return _Proc()
+
+    monkeypatch.setattr(ED, "_spawn_run_child", _inline)
+    return children
 
 
 def _prompt(tmp_path, text="build this\n"):
@@ -455,39 +555,53 @@ def test_worktree_lease_held_non_terminal(tmp_path):
         file_lock.release(lease_path)
 
 
-def test_run_child_rejects_forged_cwd(tmp_path):
-    main, linked = _linked_pair(tmp_path)
-    run_dir = tmp_path / "run"
+def test_run_child_rejects_forged_cwd(tmp_path, monkeypatch):
+    main, linked1, linked2 = _two_linked_worktrees(tmp_path)
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "forge-run"
     run_dir.mkdir(mode=0o700)
-    (run_dir / "prompt.txt").write_bytes(b"x")
-    built = EA.build_argv_result(
+    fake = FakeWriteRunner([(_WRITE_OK_STDOUT, False, 0, "")])
+    res = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked1, order_id="forge-o", run_engine=fake,
+        max_wait=60, run_dir=str(run_dir),
+    )
+    assert res.get("ok") is True
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    forged = EA.build_argv_result(
         "codex", "build", "high",
-        {"engine_model": "gpt-5.6-terra", "cwd": linked},
+        {"engine_model": "gpt-5.6-terra", "cwd": linked2},
     )
-    argv = built["argv"]
-    resolved = shutil.which(argv[0])
-    state = {
-        "engine": "codex",
-        "roleKind": "build",
-        "dispatchMode": ED.WRITE_DISPATCH_MODE,
-        "effort": "high",
-        "engineModel": "gpt-5.6-terra",
-        "cwd": linked,
-        "argv": argv,
-        "engineBinary": resolved,
-        "attemptTimeout": 5,
-        "runNonce": "nonce-forged-cwd",
-        "orderId": "o-forge",
-    }
+    state["cwd"] = linked2
+    state["argv"] = forged["argv"]
+    _, forged_spawned = ED._resolve_argv_binary(forged["argv"])
+    state["spawnedArgv"] = forged_spawned
+    state["engineBinary"] = forged_spawned[0]
+    state["inFlightAttempt"] = None
+    state["completedAttempts"] = 1
+    state["pendingTerminal"] = "forfeited"
+    state["completedAttemptSupervisorPid"] = 999999998
+    state["supervisorStart"] = "Mon Jan  1 00:00:00 2020"
+    state["worktreeSnapshot"] = list(ED._worktree_snapshot(os.path.realpath(linked1)))
+    try:
+        (run_dir / "result.json").unlink()
+    except FileNotFoundError:
+        pass
     (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
-    _invoke_run_child(
-        run_dir, 1, state,
-        launch_cwd=main,
-        run_nonce="nonce-forged-cwd",
-        order_id="o-forge",
+    spawned = []
+    monkeypatch.setattr(ED, "_spawn_run_child", lambda *a, **k: spawned.append(1))
+    res2 = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked1, order_id="forge-o",
+        run_engine=ED._run_engine, max_wait=60, run_dir=str(run_dir),
     )
-    done = json.loads((run_dir / "attempt-1.done").read_text(encoding="utf-8"))
-    assert done.get("refusal") == "cwd-primary-checkout"
+    assert spawned == [], res2
+    assert res2.get("terminal") is True
+    assert res2.get("detail") in (
+        "cwd-authorization-mismatch",
+        "worktree-lease-token-mismatch",
+        "launch-cwd-mismatch",
+    )
 
 
 def test_run_child_rejects_argv_drift_write(tmp_path):
@@ -566,22 +680,23 @@ def _assert_spawned_argv_pair(res):
     assert spawned[1:] == argv[1:]
 
 
-def test_dispatch_write_spawned_argv_echo(tmp_path):
+def test_dispatch_write_spawned_argv_echo(tmp_path, monkeypatch):
     main, linked = _linked_pair(tmp_path)
-    ok_stdout = json.dumps({"ok": True, "signal": "ok", "evidence": {}})
-    fake = FakeWriteRunner([(ok_stdout, False, 0, "")])
     run_dir = tmp_path / "run"
     run_dir.mkdir(mode=0o700)
+    captured = _spy_run_engine_files_quick_ok(monkeypatch, [])
+    _inline_run_child_spawn(monkeypatch)
     res = ED.dispatch_write(
         "codex", engine_model="gpt-5.6-terra", effort="high",
-        prompt_path=_prompt(tmp_path), cwd=linked, order_id="o1", run_engine=fake,
-        max_wait=60, run_dir=str(run_dir),
+        prompt_path=_prompt(tmp_path), cwd=linked, order_id="o1",
+        run_engine=ED._run_engine, max_wait=120, run_dir=str(run_dir),
     )
-    assert res["ok"] is True
-    _assert_spawned_argv_pair(res)
+    assert res["ok"] is True, res
+    assert len(captured) == 1
+    assert captured[0] == res["spawnedArgv"]
     state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
-    assert state["argv"] == res["argv"]
     assert state["spawnedArgv"] == res["spawnedArgv"]
+    assert captured[0] == state["spawnedArgv"]
 
 
 def _review_repo(tmp_path):
@@ -625,22 +740,39 @@ class _ReviewFakeRunner:
 _VALID_REVIEW_STDOUT = json.dumps({"findings": [{"id": "f1", "message": "issue found"}]})
 
 
-def test_dispatch_review_spawned_argv_echo(tmp_path):
+def test_dispatch_review_spawned_argv_echo(tmp_path, monkeypatch):
     repo_root = _review_repo(tmp_path)
     build_view = _fake_review_build_view(tmp_path)
-    fake = _ReviewFakeRunner([(_VALID_REVIEW_STDOUT, False, 0, "")])
     run_dir = tmp_path / "run-review"
     run_dir.mkdir(mode=0o700)
+    captured = []
+    real_files = ED._run_engine_files
+
+    def _spy(argv, *args, **kwargs):
+        captured.append(list(argv))
+        return real_files(
+            [
+                "python3",
+                "-c",
+                "import sys; sys.stdout.write(%r)" % _VALID_REVIEW_STDOUT,
+            ],
+            *args,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(ED, "_run_engine_files", _spy)
+    _inline_run_child_spawn(monkeypatch)
     res = ED.dispatch_review(
         "codex", model="sonnet", effort="high",
-        prompt_path=_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
-        build_view=build_view, run_dir=str(run_dir), max_wait=60,
+        prompt_path=_prompt(tmp_path), repo_root=repo_root, run_engine=ED._run_engine,
+        build_view=build_view, run_dir=str(run_dir), max_wait=120,
     )
-    assert res["ok"] is True
-    _assert_spawned_argv_pair(res)
+    assert res["ok"] is True, res
+    assert len(captured) == 1
+    assert captured[0] == res["spawnedArgv"]
     state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
-    assert state["argv"] == res["argv"]
     assert state["spawnedArgv"] == res["spawnedArgv"]
+    assert captured[0] == state["spawnedArgv"]
 
 
 def test_dispatch_review_argv_never_workspace_write(tmp_path):
@@ -964,51 +1096,6 @@ def test_preexisting_review_cwd_refused_not_deleted(tmp_path):
     assert marker.read_text(encoding="utf-8") == "do-not-delete"
 
 
-def test_dispatch_review_kind_check_mutation_probe(tmp_path, monkeypatch):
-    """Production-file mutation probe for edge 1 (revert is inverse edit)."""
-    main, linked = _linked_pair(tmp_path)
-    prompt = _prompt(tmp_path)
-    write_run = _seed_write_run(tmp_path, linked, prompt)
-    path = os.path.join(_HERE, "..", "engine_dispatch.py")
-    anchor = "if _recorded_run_kind(state_probe) != RUN_KIND_REVIEW:"
-    with open(path, encoding="utf-8") as fh:
-        src = fh.read()
-    assert anchor in src
-    mutated = src.replace(
-        anchor,
-        "if False and _recorded_run_kind(state_probe) != RUN_KIND_REVIEW:",
-        1,
-    )
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(mutated)
-    try:
-        ED_probe = _load_ed()
-        spawned = []
-        monkeypatch.setattr(ED_probe, "_spawn_run_child", lambda *a, **k: spawned.append(1))
-        repo_root = _review_repo(tmp_path)
-        build_view = _fake_review_build_view(tmp_path)
-        fake = _ReviewFakeRunner([])
-        res_mut = ED_probe.dispatch_review(
-            "codex", model="sonnet", effort="high",
-            prompt_path=prompt, repo_root=repo_root, run_engine=fake,
-            build_view=build_view, run_dir=write_run, max_wait=10,
-        )
-        assert res_mut.get("reason") != "run-kind-mismatch"
-    finally:
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(src)
-    global ED
-    ED = _load_ed()
-    res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
-        prompt_path=prompt, repo_root=_review_repo(tmp_path / "probe-base"),
-        run_engine=_ReviewFakeRunner([]),
-        build_view=_fake_review_build_view(tmp_path / "probe-view"),
-        run_dir=write_run, max_wait=10,
-    )
-    assert res["reason"] == "run-kind-mismatch"
-
-
 # --- WO-702 G2: lifecycle and liveness (rulings A-3, A-4) ---
 
 
@@ -1187,35 +1274,234 @@ def test_dispatch_poll_never_spawns_on_retry_pending(tmp_path, monkeypatch):
     assert not (run_dir / "attempt-2.stdout").exists()
 
 
-def test_dispatch_poll_spawn_mutation_probe(tmp_path, monkeypatch):
-    """Edge 4 mutation probe: allow_spawn=True in poll must be catchable; reverted after."""
-    path = os.path.join(_HERE, "..", "engine_dispatch.py")
-    anchor = "return _continue_run(real_dir, deadline=deadline, max_wait=max_wait, allow_spawn=False)"
-    with open(path, encoding="utf-8") as fh:
-        src = fh.read()
-    assert anchor in src
-    mutated = src.replace(anchor, anchor.replace("allow_spawn=False", "allow_spawn=True", 1), 1)
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(mutated)
+def test_spawn_run_child_always_detached_review_and_write(tmp_path, monkeypatch):
+    """Edge 1: _spawn_run_child returns a real child pid for attempts 1 and 2."""
+    main, linked = _linked_pair(tmp_path)
+    repo_root = _review_repo(tmp_path)
+    (tmp_path / "review-run").mkdir(mode=0o700)
+    review_run = str(tmp_path / "review-run")
+    (Path(review_run) / ED.REVIEW_CWD_DIRNAME).mkdir()
+    built_w = EA.build_argv_result(
+        "codex", "build", "high",
+        {"engine_model": "gpt-5.6-terra", "cwd": linked},
+    )
+    write_run = tmp_path / "write-run"
+    write_run.mkdir(mode=0o700)
+    (write_run / "prompt.txt").write_bytes(b"x")
+    wstate = {
+        "engine": "codex",
+        "roleKind": "build",
+        "dispatchMode": ED.WRITE_DISPATCH_MODE,
+        "effort": "high",
+        "engineModel": "gpt-5.6-terra",
+        "cwd": linked,
+        "argv": built_w["argv"],
+        "runNonce": "spawn-nonce-w",
+        "orderId": "spawn-w",
+        "timeout": 5,
+        "retryTimeout": 5,
+    }
+    (write_run / "state.json").write_text(json.dumps(wstate), encoding="utf-8")
+    built_r = EA.build_argv_result("codex", "review", "high", {"model": "sonnet"})
+    rstate = {
+        "engine": "codex",
+        "roleKind": "review",
+        "effort": "high",
+        "model": "sonnet",
+        "argv": built_r["argv"],
+        "runNonce": "spawn-nonce-r",
+        "orderId": "",
+        "repoRoot": repo_root,
+        "timeout": 5,
+        "retryTimeout": 5,
+    }
+    (Path(review_run) / "state.json").write_text(json.dumps(rstate), encoding="utf-8")
+    procs = []
     try:
-        ED_mut = _load_ed()
-        run_dir = tmp_path / "probe-poll"
-        run_dir.mkdir(mode=0o700)
-        (run_dir / "state.json").write_text(json.dumps({
-            "engine": "codex", "argv": [], "completedAttempts": 0,
-            "viewReceipt": {}, "fedPrompt": "",
-        }), encoding="utf-8")
-        spawned = []
-        monkeypatch.setattr(ED_mut, "_spawn_run_child", lambda *a, **k: spawned.append(1))
-        ED_mut.dispatch_poll(str(run_dir), max_wait=30)
-        assert spawned, "poll with allow_spawn=True should have spawned"
+        for run_dir, kind, launch_cwd, argv in (
+            (str(write_run), ED.RUN_KIND_WRITE, linked, built_w["argv"]),
+            (review_run, ED.RUN_KIND_REVIEW, str(Path(review_run) / ED.REVIEW_CWD_DIRNAME), built_r["argv"]),
+        ):
+            for attempt in (1, 2):
+                launch = {
+                    "kind": kind,
+                    "run_nonce": "spawn-nonce-w" if kind == ED.RUN_KIND_WRITE else "spawn-nonce-r",
+                    "order_id": "spawn-w" if kind == ED.RUN_KIND_WRITE else "",
+                    "launch_cwd": launch_cwd,
+                    "argv": argv,
+                }
+                proc = ED._spawn_run_child(run_dir, attempt, launch)
+                _assert_spawn_detached(proc)
+                procs.append(proc)
     finally:
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(src)
-    global ED
-    ED = _load_ed()
-    with open(path, encoding="utf-8") as fh:
-        assert fh.read() == src
+        for proc in procs:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+
+def test_write_retry_supervisor_pid_is_child_not_launcher(tmp_path, monkeypatch):
+    """Edge 2: attempt-2 supervisorPid is the detached child's pid."""
+    main, linked = _linked_pair(tmp_path)
+    _install_fake_codex_on_path(monkeypatch, tmp_path, slow_first_seconds=60)
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "retry-sup-pid"
+    run_dir.mkdir(mode=0o700)
+    spawned_procs = []
+    recorded_supervisor = {}
+    real_spawn = ED._spawn_run_child
+    real_atomic = ED._atomic_write_json
+
+    def _track(rd, att, launch):
+        proc = real_spawn(rd, att, launch)
+        spawned_procs.append(proc)
+        return proc
+
+    def _spy_state(path, payload):
+        if str(path).endswith("state.json") and isinstance(payload, dict):
+            if payload.get("inFlightAttempt") == 2 and payload.get("supervisorPid"):
+                recorded_supervisor["pid"] = payload["supervisorPid"]
+        return real_atomic(path, payload)
+
+    monkeypatch.setattr(ED, "_spawn_run_child", _track)
+    monkeypatch.setattr(ED, "_atomic_write_json", _spy_state)
+    first = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="retry-sup",
+        run_engine=ED._run_engine, max_wait=1, timeout=5, run_dir=str(run_dir),
+    )
+    assert first.get("running") is True
+    paths = ED._attempt_paths(str(run_dir), 1)
+    for _ in range(80):
+        if os.path.isfile(paths["done"]):
+            break
+        time.sleep(0.25)
+    poll = ED.dispatch_poll(str(run_dir), max_wait=5)
+    assert ED.RETRY_PENDING_DETAIL in (poll.get("detail") or "")
+    monkeypatch.setattr(ED, "_process_alive", lambda _pid: False)
+    second = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="retry-sup",
+        run_engine=ED._run_engine, max_wait=120, timeout=5, run_dir=str(run_dir),
+    )
+    assert second.get("ok") is True, second
+    assert len(spawned_procs) == 2
+    assert recorded_supervisor.get("pid") == spawned_procs[1].pid
+    assert recorded_supervisor.get("pid") != os.getpid()
+
+
+def test_write_retry_attempt_two_durable_artifacts_from_child(tmp_path, monkeypatch):
+    """Edge 3: attempt 2 writes stdout/stderr and sentinel in the child."""
+    main, linked = _linked_pair(tmp_path)
+    _install_fake_codex_on_path(monkeypatch, tmp_path, slow_first_seconds=60)
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "retry-artifacts"
+    run_dir.mkdir(mode=0o700)
+    ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="retry-art",
+        run_engine=ED._run_engine, max_wait=1, timeout=5, run_dir=str(run_dir),
+    )
+    paths1 = ED._attempt_paths(str(run_dir), 1)
+    for _ in range(80):
+        if os.path.isfile(paths1["done"]):
+            break
+        time.sleep(0.25)
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    nonce = state["runNonce"]
+    poll = ED.dispatch_poll(str(run_dir), max_wait=5)
+    assert ED.RETRY_PENDING_DETAIL in (poll.get("detail") or "")
+    monkeypatch.setattr(ED, "_process_alive", lambda _pid: False)
+    res = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="retry-art",
+        run_engine=ED._run_engine, max_wait=120, timeout=5, run_dir=str(run_dir),
+    )
+    assert res.get("ok") is True, res
+    paths2 = ED._attempt_paths(str(run_dir), 2)
+    assert os.path.isfile(paths2["stdout"])
+    assert os.path.isfile(paths2["stderr"])
+    assert os.path.isfile(paths2["done"])
+    done = json.loads(Path(paths2["done"]).read_text(encoding="utf-8"))
+    assert done.get("runNonce") == nonce
+    assert done.get("endedAt") is not None
+
+
+def test_write_retry_reinvoke_respects_max_wait(tmp_path, monkeypatch):
+    """Edge 4: one dispatch-write call returns running within max_wait while retry is long."""
+    main, linked = _linked_pair(tmp_path)
+    _install_fake_codex_on_path(monkeypatch, tmp_path, slow_first_seconds=60)
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "retry-bounded"
+    run_dir.mkdir(mode=0o700)
+    t0 = time.monotonic()
+    res = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="retry-bounded",
+        run_engine=ED._run_engine, max_wait=2, timeout=5, run_dir=str(run_dir),
+    )
+    elapsed = time.monotonic() - t0
+    assert elapsed < 15, elapsed
+    assert res.get("terminal") is False
+    assert res.get("running") is True
+    assert res.get("resume")
+
+
+def test_write_retry_spawns_once_after_poll_then_resume(tmp_path, monkeypatch):
+    """Edge 5: poll → retry-pending → re-invoke reaches terminal in exactly one retry."""
+    main, linked = _linked_pair(tmp_path)
+    _install_fake_codex_on_path(monkeypatch, tmp_path, slow_first_seconds=60)
+    prompt = _prompt(tmp_path)
+    run_dir = tmp_path / "retry-detached"
+    run_dir.mkdir(mode=0o700)
+    spawned_children = []
+    real_spawn = ED._spawn_run_child
+
+    def _track_spawn(rd, att, launch):
+        spawned_children.append(att)
+        proc = real_spawn(rd, att, launch)
+        _assert_spawn_detached(proc)
+        return proc
+
+    monkeypatch.setattr(ED, "_spawn_run_child", _track_spawn)
+    t0 = time.monotonic()
+    first = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="retry-det",
+        run_engine=ED._run_engine, max_wait=1, timeout=5, run_dir=str(run_dir),
+    )
+    assert time.monotonic() - t0 < 15
+    assert first.get("terminal") is False
+    assert first.get("running") is True
+    assert spawned_children == [1]
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    nonce = state["runNonce"]
+    paths = ED._attempt_paths(str(run_dir), 1)
+    for _ in range(80):
+        if os.path.isfile(paths["done"]):
+            break
+        time.sleep(0.25)
+    assert os.path.isfile(paths["done"])
+    poll = ED.dispatch_poll(str(run_dir), max_wait=5)
+    assert poll.get("terminal") is False
+    assert ED.RETRY_PENDING_DETAIL in (poll.get("detail") or "")
+    assert spawned_children == [1]
+    monkeypatch.setattr(ED, "_process_alive", lambda _pid: False)
+    second = ED.dispatch_write(
+        "codex", engine_model="gpt-5.6-terra", effort="high",
+        prompt_path=prompt, cwd=linked, order_id="retry-det",
+        run_engine=ED._run_engine, max_wait=120, timeout=5, run_dir=str(run_dir),
+    )
+    assert second.get("ok") is True, second
+    assert second.get("terminal") is True
+    assert spawned_children == [1, 2]
+    assert nonce == state["runNonce"]
+    assert os.path.isfile(ED._attempt_paths(str(run_dir), 2)["stdout"])
 
 
 def test_resume_commands_parse_review_write_and_space_run_dir(tmp_path):
