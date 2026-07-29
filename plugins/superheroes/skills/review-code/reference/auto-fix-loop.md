@@ -226,9 +226,34 @@ never drop a finding or a lens.
 > `Bash(python3 -B */lib/engine_dispatch.py dispatch-review:*)`
 > `Bash(python3 -B */lib/engine_dispatch.py dispatch-write:*)`
 >
-> **Honest residual:** host permission rules match a command **prefix** — revocability holds only if
-> grants are written at subcommand granularity; a file-level or bare-`python3` rule would cover both
-> verbs. The seat **may and should** read files and run read-only commands inside the sanitized view to
+> **Owner half of the write grant (manual).** To authorize supervised write dispatch, the owner adds
+> this exact allowlist entry by hand to the project's `.claude/settings.local.json` under
+> `autoMode.allow` (paste-ready; the band never writes it):
+>
+> `Bash(python3 -B */lib/engine_dispatch.py dispatch-write:*)`
+>
+> That entry is deliberately **narrower** than the reviewer grant — a separate `dispatch-write`
+> subcommand prefix — so write autonomy is revocable on its own without touching
+> `dispatch-review`. **Honest residual (restated):** host permission rules match a command
+> **prefix** — that revocability holds only if the grants are written at **subcommand**
+> granularity; a file-level or bare-`python3` rule would cover both verbs.
+>
+> **Absent grant → fail closed.** With no matching grant the **dispatch does not run** — the host
+> denies it, no engine is spawned, nothing is written — and the build **parks loudly** rather than
+> degrading, falling open, or silently continuing. Absence of the grant is never a soft failure.
+>
+> A `configure`-driven onboarding offer for this write-grant allowlist rule is **deferred to
+> [#549](https://github.com/zwrose/superheroes/issues/549)** and is deliberately not part of this
+> change — there is no interactive setup path here; the owner pastes the rule by hand.
+>
+> **Why the narrow write grant is now meaningful.** A narrow grant on the runner only means
+> something because the runner's child accepts **no smuggled authority** — `run-child` takes one
+> argument (the run dir) and derives every authority value from a sealed `launch-authority.json`
+> the supervisor wrote under its own gated invocation; the file's content hash is echoed into the
+> receipt and **re-verified at fold**, so a swapped or recreated file is detected and the run
+> refused, never trusted. Before that seal, a narrow grant string was cosmetic.
+>
+> The seat **may and should** read files and run read-only commands inside the sanitized view to
 > ground its findings (`--repo-root` on the CLI still names the **source** repository; the runner builds
 > the view itself). An unresolvable source repo root is a **named refusal** before any view is built
 > (`repo-root-absent`, `repo-root-missing`, `repo-root-not-a-directory`, `repo-root-not-a-repo`) with
