@@ -236,13 +236,23 @@ def _file_section(rel, heading, read_text=None):
     """Extract a named section from any plugin file.
 
     Exact stripped-line heading match; section runs to the next heading of same-or-higher
-    level. Raises if the heading is absent or appears more than once.
+    level. Raises if the heading is absent or appears more than once. Heading detection
+    ignores lines inside ``` fenced blocks (fence lines themselves are not headings).
     """
     if read_text is None:
         read_text = _read_plugin
     text = read_text(rel)
     lines = text.splitlines()
-    indices = [i for i, line in enumerate(lines) if line.strip() == heading]
+    in_fence = False
+    indices = []
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if line.strip() == heading:
+            indices.append(i)
     if len(indices) == 0:
         raise RuntimeError(f"{rel}: heading {heading!r} not found")
     if len(indices) > 1:
@@ -252,8 +262,15 @@ def _file_section(rel, heading, read_text=None):
     start = indices[0]
     start_level = _heading_level(lines[start])
     end = len(lines)
+    in_fence = False
     for i in range(start + 1, len(lines)):
-        level = _heading_level(lines[i])
+        line = lines[i]
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        level = _heading_level(line)
         if level is not None and level <= start_level:
             end = i
             break
@@ -629,6 +646,168 @@ def test_negative_roster_widened_holder_section():
         table.append(updated)
     with pytest.raises(RuntimeError, match="section drift"):
         _validate_invariant_table(table)
+
+
+def test_negative_holder_clause_missing_from_declared_section():
+    """Holder-clause branch must run after shared clauses pass in the declared section."""
+    # Mutant killed: neuter the holder-clause loop
+    # (`for clause in holder_clauses.get(rel, [])` -> `for clause in []`) and this test must fail.
+    synthetic_path = "synthetic/showrunner.md"
+    holder_clause = (
+        "owner-only, per change, never a standing grant; "
+        "the risk must be stated explicitly"
+    )
+    synthetic_text = "\n".join([
+        "## Micro — hard-line edit",
+        (
+            "owner-only, per change, never a standing grant; quiet-failure question; "
+            "single named exception"
+        ),
+        "## When you're tempted",
+        f"{holder_clause} — only here, not in declared section",
+    ])
+    texts = {synthetic_path: synthetic_text}
+
+    def read_text(rel):
+        if rel not in texts:
+            raise FileNotFoundError(rel)
+        return texts[rel]
+
+    table = [{
+        "name": "waiver-bounds",
+        "clauses": [
+            {
+                "text": "owner-only, per change, never a standing grant",
+                "home_section": "### Micro — owner authorization",
+            },
+            {
+                "text": "quiet-failure question",
+                "home_section": "### Micro — owner authorization",
+            },
+            {
+                "text": "single named exception",
+                "home_section": "### Micro — owner authorization",
+            },
+        ],
+        "copy_holder_sections": {
+            synthetic_path: "## Micro — hard-line edit",
+        },
+        "holder_clauses": {
+            synthetic_path: [holder_clause],
+        },
+    }]
+    with pytest.raises(
+        AssertionError,
+        match=r"holder clause missing from",
+    ):
+        _check_copy_holder_clauses(table, read_text)
+
+
+def test_negative_home_section_drift():
+    # Mutant killed: neuter the home_section drift comparison
+    # (`if home_section != expected_section: raise ...` -> `if False: pass`) and this test must fail.
+    table = []
+    for row in _INVARIANT_TABLE:
+        if row["name"] != "resolve-upward":
+            table.append(row)
+            continue
+        updated = dict(row)
+        clauses = []
+        for i, clause_entry in enumerate(row["clauses"]):
+            if i == 0:
+                clauses.append({
+                    "text": clause_entry["text"],
+                    "home_section": "### What never changes in any lane",
+                })
+            else:
+                clauses.append(dict(clause_entry))
+        updated["clauses"] = clauses
+        table.append(updated)
+    with pytest.raises(RuntimeError, match="home_section drift"):
+        _validate_invariant_table(table)
+
+
+def test_negative_home_per_clause_not_row_union():
+    # Mutant killed: home check uses row-union of all clause sections
+    # (`home_text = _file_section(_HOME, home_section, read_text)` ->
+    #  `" ".join(_file_section(_HOME, sec, read_text)
+    #            for sec in sorted({c['home_section'] for c in row['clauses']}))`)
+    # and this test must fail.
+    synthetic_text = "\n".join([
+        "### Section One",
+        "Content without clause A here.",
+        "### Section Two",
+        "Clause A text lives here: PROBE_CLAUSE_A only in section two.",
+        "Clause B text: PROBE_CLAUSE_B correctly here.",
+    ])
+
+    def read_text(rel):
+        if rel == _HOME:
+            return synthetic_text
+        return _read_plugin(rel)
+
+    table = [{
+        "name": "synthetic-row-union-probe",
+        "clauses": [
+            {
+                "text": "PROBE_CLAUSE_A only in section two",
+                "home_section": "### Section One",
+            },
+            {
+                "text": "PROBE_CLAUSE_B correctly here",
+                "home_section": "### Section Two",
+            },
+        ],
+        "copy_holder_sections": {
+            "skills/showrunner/SKILL.md": "## Your duties",
+        },
+    }]
+    with pytest.raises(
+        AssertionError,
+        match=(
+            r"clause no longer appears in authoritative home "
+            r"\(rubric/review-discipline\.md, section ### Section One\)"
+        ),
+    ):
+        _check_home_clauses(table, read_text)
+
+
+def test_fence_heading_inside_section_does_not_truncates():
+    # Mutant killed: revert `_file_section` to fence-blind scanning and this must fail.
+    synthetic_text = "\n".join([
+        "## Your duties",
+        "before",
+        "```md",
+        "## Example inside a fence",
+        "```",
+        "CLAUSE_AFTER_FENCE",
+        "## Next real section",
+        "later",
+    ])
+
+    def read_text(_rel):
+        return synthetic_text
+
+    result = _file_section("synthetic.md", "## Your duties", read_text)
+    assert "CLAUSE_AFTER_FENCE" in result
+
+
+def test_fence_heading_does_not_count_as_duplicate():
+    # Mutant killed: revert `_file_section` to fence-blind scanning and this must fail.
+    synthetic_text = "\n".join([
+        "## Your duties",
+        "real section content",
+        "```",
+        "## Your duties",
+        "```",
+        "## Next section",
+    ])
+
+    def read_text(_rel):
+        return synthetic_text
+
+    result = _file_section("synthetic.md", "## Your duties", read_text)
+    assert "real section content" in result
 
 
 def test_negative_section_scoped_copy_check_rejects_out_of_section_match():
