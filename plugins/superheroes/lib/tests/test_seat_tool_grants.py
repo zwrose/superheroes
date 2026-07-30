@@ -57,15 +57,6 @@ POINTER_FILES = [
     os.path.join("agents", "check-runner.md"),
 ]
 
-# Of those pointers, the ones that QUOTE the home's title verbatim (whitespace-normalized,
-# since the quote wraps mid-sentence in two of them). `auto-fix-loop.md` is the one
-# exception: its rule 8 carries its OWN title ("You have no shell — never verify by
-# running code.") and refers to the home as "the base rubric's verification rule of the
-# same name" without ever quoting that name, so the derived title does not appear there.
-# Every pointer still gets the floor assertion in the test below; only these three get
-# the exact-title assertion on top of it.
-TITLE_QUOTING_POINTERS = [p for p in POINTER_FILES if not p.endswith("auto-fix-loop.md")]
-
 # Both byte-identical copies of the Claude host map. `validate_hosts.py` already owns
 # byte-equality between them; this file asserts PRESENCE of the carve-out, which
 # byte-equality alone would NOT catch if both copies lost the sentence together.
@@ -318,32 +309,22 @@ def test_pointer_resolves_to_the_home_rule(rel):
     DERIVED from `review-base.md` at runtime (edge 5) — never on a literal retyped here,
     which would let a title change pass green while the pointers dangled.
 
-    Two tiers, both derived, so no pointer is left unguarded and none is weakened:
-
-    - **the floor, asserted on all four** — the pointer names the base rubric as the
-      authoritative home, and carries the title's distinctive predicate (its last three
-      words, the largest fragment of the derived title that every pointer shares today).
-    - **the exact title, asserted on the three that quote it** — see
-      TITLE_QUOTING_POINTERS for why `auto-fix-loop.md` is not among them.
+    One uniform tier, applied to all four pointers: each names the base rubric as the
+    authoritative home (the floor assertion) AND quotes the home's title verbatim
+    (whitespace-normalized). The title is read from `review-base.md` at runtime, so a
+    rename in the home fails every pointer here rather than passing green.
     """
     title, _ = _no_shell_rule()
     ntitle = _norm(title)
-    predicate = " " + " ".join(ntitle.split()[-3:])
     text = _norm(_read_required(os.path.join(PLUGIN, rel),
                                 "a pointer at the no-shell verification rule"))
     assert "base rubric" in text.lower(), (
         "%s no longer names the **base rubric** as the authoritative home of the "
         "no-shell rule. A pointer that does not name its home is a second copy." % rel)
-    assert predicate in text, (
-        "%s does not carry %r — the distinctive predicate of the home rule's title "
-        "(%r, read from review-base.md at runtime). Either the pointer drifted or the "
-        "title was renamed in the home without updating this pointer."
-        % (rel, predicate, title))
-    if rel in TITLE_QUOTING_POINTERS:
-        assert ntitle in text, (
-            "%s no longer quotes the home rule's title %r (read from review-base.md at "
-            "runtime). This pointer cites the rule by name, so a rename in the home "
-            "leaves it dangling." % (rel, title))
+    assert ntitle in text, (
+        "%s no longer quotes the home rule's title %r (read from review-base.md at "
+        "runtime). This pointer cites the rule by name, so a rename in the home "
+        "leaves it dangling." % (rel, title))
 
 
 @pytest.mark.parametrize("path", HOST_MAP_COPIES)
