@@ -2093,3 +2093,66 @@ def test_run_engine_files_caps_under_live_writer_stdout_and_stderr(tmp_path, mon
     state = ED._journal_state(records)
     grade = ED._grade_write_attempt(run_dir, state, 1)
     assert grade["ok"] is True
+
+
+def test_run_engine_files_caps_only_after_terminate_on_timeout(tmp_path, monkeypatch):
+    """On timeout, _cap_file_tail must not run until after _terminate_process_group."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    script = (
+        "import signal, sys, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "while True:\n"
+        "    sys.stdout.write('x' * 50000)\n"
+        "    sys.stdout.flush()\n"
+        "    sys.stderr.write('e' * 1000)\n"
+        "    sys.stderr.flush()\n"
+    )
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
+        "roleKind": "build", "orderId": "x", "argv": ["python3", "-c", "x"],
+        "cwd": run_dir, "timeout": 1, "retryTimeout": 1,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "supervisorPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    events = []
+    real_cap = ED._cap_file_tail
+    real_terminate = ED._terminate_process_group
+
+    def obs_cap(path, max_bytes):
+        if path == stdout_path:
+            events.append("cap-stdout")
+        elif path == stderr_path:
+            events.append("cap-stderr")
+        else:
+            events.append("cap-other")
+        return real_cap(path, max_bytes)
+
+    def obs_terminate(pgid):
+        events.append("terminate")
+        return real_terminate(pgid)
+
+    monkeypatch.setattr(ED, "_cap_file_tail", obs_cap)
+    monkeypatch.setattr(ED, "_terminate_process_group", obs_terminate)
+    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.01)
+    ED._run_engine_files(
+        run_dir, 1, [sys.executable, "-c", script], run_dir,
+        prompt_path, stdout_path, stderr_path, 1,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    attempt_ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    assert attempt_ended["timedOut"] is True
+    assert "terminate" in events
+    cap_events = [e for e in events if e.startswith("cap-")]
+    assert cap_events, "expected cap events after timeout: %r" % events
+    term_idx = events.index("terminate")
+    first_cap_idx = events.index(cap_events[0])
+    assert term_idx < first_cap_idx, "caps must run after terminate, got %r" % events

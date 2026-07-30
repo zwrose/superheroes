@@ -810,13 +810,13 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             timed_out = True
             break
         time.sleep(0.2)
-    _cap_file_tail(stdout_path, MAX_STDOUT_CAPTURE)
-    _cap_file_tail(stderr_path, MAX_STDERR_CAPTURE)
     _terminate_process_group(pgid)
     try:
         proc.wait(timeout=2)
     except Exception:
         pass
+    _cap_file_tail(stdout_path, MAX_STDOUT_CAPTURE)
+    _cap_file_tail(stderr_path, MAX_STDERR_CAPTURE)
     returncode = proc.returncode
     _journal_append(run_dir_real, {
         "kind": "attempt-ended", "attempt": attempt,
