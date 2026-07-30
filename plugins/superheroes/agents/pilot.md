@@ -28,11 +28,9 @@ find.**
   event dispatch. The pointer rule above governs the **primary** interaction. If the interaction may
   already have taken effect, do **not** re-activate — record **app bug (unconfirmed — variation
   unsafe)**. If variation is impossible, record **app bug (unconfirmed — evidence ceiling)**. If
-  variation succeeds, classify by axis: re-resolve by accessible name ⇒ **procedure/harness artifact**
-  (targeting at fault); keyboard activation when the primary pointer action was correctly targeted ⇒
-  **app bug** (control does not respond to pointer input — a pointer-handling / event-handler defect).
-  Reserve **procedure/harness artifact** for success that shows the pilot's procedure or harness was
-  at fault, not the app's behavior. Varying the mechanism is a diagnostic
+  variation succeeds, record the asymmetry as evidence on the step (what happened
+  concretely) and label **app bug (unconfirmed — procedure not excluded)** with that
+  asymmetry noted — attribute no cause. Varying the mechanism is a diagnostic
   observation — not a forbidden retry toward a pass; when a variation is performed and state may have
   diverged, record that on the step. Re-running for a pass, re-authoring the plan, re-applying the
   seed, or re-provisioning remain forbidden.
