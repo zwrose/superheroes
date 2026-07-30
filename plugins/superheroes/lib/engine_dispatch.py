@@ -552,7 +552,7 @@ def _run_dir_nonempty(run_dir_real):
 
 
 def _finalize_run(state, *, terminal):
-    """Single cleanup site: destroy view (review) and release lease (write). Never raises."""
+    """Cleanup helper — only callable from _terminate_run. Never raises."""
     opened = state.get("opened") if state else None
     view_path = opened.get("viewPath") if opened else None
     if view_path:
@@ -564,19 +564,55 @@ def _finalize_run(state, *, terminal):
         _release_worktree_lease(state)
 
 
-def _fold_run(run_dir_real, state, result):
-    if not _journal_append(run_dir_real, {
-        "kind": "run-folded", "result": result, "at": time.time(),
-    }):
-        opened = state.get("opened") or {}
+def _terminal_record_not_durable(run_dir_real, state, result):
+    opened = state.get("opened") or {}
+    attempts = result.get("attempts")
+    if attempts is None:
+        attempts = _highest_attempt(state)
+    return _with_run_fields(
+        {"ok": False, "terminal": False, "reason": "unrunnable",
+         "detail": "terminal-record-not-durable",
+         "attempts": attempts, "forfeited": False},
+        run_dir=run_dir_real, argv=opened.get("argv") or result.get("argv") or [],
+    )
+
+
+def _terminate_run(run_dir_real, state, *, record_kind, result, abandon_detail=None):
+    """The ONLY path to a terminal run. Journals terminal record, verifies append, then
+    finalizes (release lease, destroy view). Returns the terminal result, or a named
+    non-cleanup refusal when the terminal record could not be made durable. Never raises."""
+    opened = state.get("opened") or {}
+    argv = list(opened.get("argv") or result.get("argv") or [])
+
+    if record_kind == "run-folded":
+        record = {"kind": "run-folded", "result": result, "at": time.time()}
+    elif record_kind == "run-abandoned":
+        record = {
+            "kind": "run-abandoned",
+            "detail": abandon_detail or "abandoned",
+            "at": time.time(),
+        }
+    else:
+        record = {"kind": record_kind, "at": time.time()}
+
+    if not _journal_append(run_dir_real, record):
+        return _terminal_record_not_durable(run_dir_real, state, result)
+
+    _finalize_run(state, terminal=True)
+
+    if record_kind == "run-abandoned":
         return _with_run_fields(
             {"ok": False, "terminal": True, "reason": "unrunnable",
-             "detail": "journal-append-failed",
-             "attempts": _highest_attempt(state), "forfeited": False},
-            run_dir=run_dir_real, argv=opened.get("argv") or [],
+             "detail": "run-abandoned",
+             "attempts": len(state.get("attempts") or {}), "forfeited": False},
+            run_dir=run_dir_real, argv=argv,
         )
-    _finalize_run(state, terminal=True)
-    return result
+
+    return _with_run_fields(result, run_dir=run_dir_real, argv=argv)
+
+
+def _fold_run(run_dir_real, state, result):
+    return _terminate_run(run_dir_real, state, record_kind="run-folded", result=result)
 
 
 def _with_run_fields(result, *, run_dir, argv):
@@ -719,11 +755,15 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     immediately after Popen returns, then attempt-ended on completion or spawn failure."""
     write_progress = _progress_writer(progress_path)
     try:
-        with open(prompt_path, "rb") as prompt_fh, \
-             open(stdout_path, "wb") as out_fh, \
-             open(stderr_path, "wb") as err_fh:
+        with open(prompt_path, "rb") as prompt_fh:
+            stdout_fd = os.open(
+                stdout_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644,
+            )
+            stderr_fd = os.open(
+                stderr_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644,
+            )
             proc = subprocess.Popen(
-                argv, stdin=prompt_fh, stdout=out_fh, stderr=err_fh,
+                argv, stdin=prompt_fh, stdout=stdout_fd, stderr=stderr_fd,
                 cwd=cwd, start_new_session=True, env=_scrub_env(),
             )
     except Exception as exc:
@@ -759,7 +799,6 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         now = time.monotonic()
         if now - last_beat >= HEARTBEAT_INTERVAL:
             last_beat = now
-            _cap_file_tail(stdout_path, MAX_STDOUT_CAPTURE)
             try:
                 nbytes = os.path.getsize(stdout_path)
             except OSError:
@@ -772,6 +811,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             break
         time.sleep(0.2)
     _cap_file_tail(stdout_path, MAX_STDOUT_CAPTURE)
+    _cap_file_tail(stderr_path, MAX_STDERR_CAPTURE)
     _terminate_process_group(pgid)
     try:
         proc.wait(timeout=2)
@@ -1468,19 +1508,9 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 
     view = None
     view_path = None
-    view_destroyed = False
     continuation = False
     argv = []
     run_dir_real = None
-
-    def _destroy_view_once():
-        nonlocal view_destroyed
-        if view_path and not view_destroyed:
-            view_destroyed = True
-            try:
-                sanitized_view.destroy_sanitized_view(view_path)
-            except Exception:
-                pass
 
     try:
         if run_dir is not None:
@@ -1536,13 +1566,18 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                     "schema_path": schema_path, "cwd": cwd}
             built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
             if built["reason"] is not None:
-                _destroy_view_once()
-                return _attach_sanitized_view(_with_run_fields(
+                err = _attach_sanitized_view(_with_run_fields(
                     {"ok": False, "reason": "unrunnable",
                      "detail": "engine-config:%s" % built["reason"],
                      "attempts": 0, "forfeited": False, "terminal": True},
-                    run_dir="", argv=[],
+                    run_dir=run_dir_real or "", argv=[],
                 ), view)
+                if run_dir_real is None:
+                    run_dir_real = tempfile.mkdtemp(prefix="superheroes-dispatch-review-")
+                return _terminate_run(
+                    run_dir_real, {"opened": {"viewPath": view_path}},
+                    record_kind="run-folded", result=err,
+                )
 
             argv = built["argv"]
             notice = sanitized_view.sanitized_view_notice(view)
@@ -1558,12 +1593,16 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 progress_path=progress_path or os.path.join(run_dir_real, PROGRESS_NAME),
             )
             if not ok_open:
-                _destroy_view_once()
-                return _attach_sanitized_view(_with_run_fields(
+                err = _attach_sanitized_view(_with_run_fields(
                     {"ok": False, "reason": "unrunnable", "detail": open_detail,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=argv,
                 ), view)
+                return _terminate_run(
+                    run_dir_real,
+                    {"opened": {"viewPath": view_path, "viewMeta": view}},
+                    record_kind="run-folded", result=err,
+                )
 
         slice_wait = MAX_SYNC_WAIT if max_wait is None else min(max(int(max_wait), 0), MAX_SYNC_WAIT)
         while True:
@@ -1574,20 +1613,17 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                     run_engine=run_engine,
                 )
             except Exception as exc:
-                if not continuation:
-                    _destroy_view_once()
-                view_meta = view if view else {}
-                return _attach_sanitized_view(_with_run_fields(
+                records, _corrupt = _journal_read(run_dir_real)
+                state = _journal_state(records)
+                err = _with_run_fields(
                     {"ok": False, "reason": "unrunnable",
                      "detail": "internal-%s" % type(exc).__name__,
-                     "attempts": 0, "forfeited": False, "terminal": True},
-                    run_dir=run_dir_real, argv=argv,
-                ), view_meta) if view_meta else _with_run_fields(
-                    {"ok": False, "reason": "unrunnable",
-                     "detail": "internal-%s" % type(exc).__name__,
-                     "attempts": 0, "forfeited": False, "terminal": True},
+                     "attempts": _highest_attempt(state), "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=argv,
                 )
+                if view:
+                    err = _attach_sanitized_view(err, view)
+                return _fold_run(run_dir_real, state, err)
 
             if result.get("terminal"):
                 if view and result.get("ok") and "sanitizedView" not in result:
@@ -1596,15 +1632,11 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                     "forfeited", engine_adapter.REVIEW_FORFEIT_VACUOUS,
                 ) and "sanitizedView" not in result:
                     result = _attach_sanitized_view(result, view)
-                if not continuation:
-                    _destroy_view_once()
                 return result
             if max_wait is not None:
                 return result
             time.sleep(SUPERVISOR_POLL_INTERVAL)
     except Exception as exc:
-        if not continuation:
-            _destroy_view_once()
         err = _with_run_fields(
             {"ok": False, "reason": "unrunnable",
              "detail": "internal-%s" % type(exc).__name__,
@@ -1612,7 +1644,11 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
             run_dir=run_dir_real or "", argv=argv,
         )
         if view:
-            return _attach_sanitized_view(err, view)
+            err = _attach_sanitized_view(err, view)
+        if run_dir_real and view_path:
+            records, _corrupt = _journal_read(run_dir_real)
+            state = _journal_state(records)
+            return _fold_run(run_dir_real, state, err)
         return err
 
 
@@ -1762,7 +1798,6 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
             )
         base_sha = (head.stdout or "").strip() if head.returncode == 0 else None
 
-    run_dir_realpath = run_dir_real
     try:
         records, _corrupt = _journal_read(run_dir_real)
         state = _journal_state(records)
@@ -1847,10 +1882,7 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
                 return result
             time.sleep(SUPERVISOR_POLL_INTERVAL)
     finally:
-        records, _corrupt = _journal_read(run_dir_realpath)
-        state = _journal_state(records)
-        terminal = state.get("folded") is not None or state.get("abandoned") is not None
-        _finalize_run(state, terminal=terminal)
+        pass
 
 
 def _poll_projection(state):
@@ -1940,8 +1972,31 @@ def dispatch_poll(run_dir):
         )
 
 
+def _launching_uncertain(state):
+    """An attempt with engine-launching but no engine-started — liveness cannot be confirmed."""
+    for att in sorted(state.get("attempts", {})):
+        slot = state["attempts"][att]
+        if slot.get("ended") is not None:
+            continue
+        launching = att in state.get("launching", {})
+        started = slot.get("enginePgid") is not None
+        if launching and not started:
+            return True
+    return False
+
+
+def _signal_live_attempts(state):
+    for att in sorted(state.get("attempts", {})):
+        slot = state["attempts"][att]
+        if slot.get("ended") is None:
+            if slot.get("enginePgid") is not None:
+                _terminate_process_group(slot["enginePgid"])
+            if slot.get("childPid") is not None:
+                _terminate_pid(slot["childPid"])
+
+
 def dispatch_abandon(run_dir):
-    """Ordered abandon transition — terminates live children, journals run-abandoned."""
+    """Ordered abandon transition — terminates live children, then journals run-abandoned."""
     try:
         ok, detail = _validate_run_dir(run_dir)
         if not ok:
@@ -1951,96 +2006,84 @@ def dispatch_abandon(run_dir):
                 run_dir=run_dir or "", argv=[],
             )
         run_dir_real = detail
-        lock_path = os.path.join(run_dir_real, RUN_LOCK_NAME)
-        try:
-            file_lock.acquire(lock_path, ttl=RUN_LOCK_TTL)
-        except file_lock.LockHeld:
-            records, _corrupt = _journal_read(run_dir_real)
+
+        records, interior_corrupt = _journal_read(run_dir_real)
+        if interior_corrupt:
             state = _journal_state(records)
-            opened = state.get("opened") or {}
             return _with_run_fields(
-                {"ok": False, "terminal": False, "reason": "running",
-                 "detail": "run-locked",
-                 "attempts": _highest_attempt(state), "forfeited": False},
-                run_dir=run_dir_real, argv=opened.get("argv") or [],
+                {"ok": False, "terminal": True, "reason": "unrunnable",
+                 "detail": "journal-corrupt", "attempts": 0, "forfeited": False},
+                run_dir=run_dir_real, argv=(state.get("opened") or {}).get("argv") or [],
             )
+        state = _journal_state(records)
+        opened = state.get("opened") or {}
+        argv = opened.get("argv") or []
 
-        try:
-            records, interior_corrupt = _journal_read(run_dir_real)
-            if interior_corrupt:
-                state = _journal_state(records)
-                return _with_run_fields(
-                    {"ok": False, "terminal": True, "reason": "unrunnable",
-                     "detail": "journal-corrupt", "attempts": 0, "forfeited": False},
-                    run_dir=run_dir_real, argv=(state.get("opened") or {}).get("argv") or [],
-                )
-            state = _journal_state(records)
-            opened = state.get("opened") or {}
-            argv = opened.get("argv") or []
-
-            if state.get("abandoned") is not None:
-                return _with_run_fields(
-                    {"ok": False, "terminal": True, "reason": "unrunnable",
-                     "detail": "run-abandoned", "attempts": len(state.get("attempts") or {}),
-                     "forfeited": False},
-                    run_dir=run_dir_real, argv=argv,
-                )
-
-            if state.get("folded") is not None:
-                return _with_run_fields(state["folded"], run_dir=run_dir_real, argv=argv)
-
-            _journal_append(run_dir_real, {"kind": "abandon-requested", "at": time.time()})
-
-            def _signal_live_attempts(st):
-                for att in sorted(st.get("attempts", {})):
-                    slot = st["attempts"][att]
-                    if slot.get("ended") is None:
-                        if slot.get("enginePgid") is not None:
-                            _terminate_process_group(slot["enginePgid"])
-                        if slot.get("childPid") is not None:
-                            _terminate_pid(slot["childPid"])
-
-            alive, _who = _run_live_evidence(state)
-            engine_was_live = alive
-            _signal_live_attempts(state)
-
-            deadline = time.monotonic() + ABANDON_CONFIRM_SECONDS
-            resignalled = False
-            while True:
-                records, _corrupt = _journal_read(run_dir_real)
-                state = _journal_state(records)
-                alive, _who = _run_live_evidence(state)
-                if not alive:
-                    break
-                if time.monotonic() >= deadline:
-                    return _with_run_fields(
-                        {"ok": False, "terminal": True, "reason": "unrunnable",
-                         "detail": "abandon-incomplete", "abandonDetail": "engine-death-unconfirmed",
-                         "attempts": len(state.get("attempts") or {}), "forfeited": False},
-                        run_dir=run_dir_real, argv=argv,
-                    )
-                if not resignalled:
-                    resignalled = True
-                    _signal_live_attempts(state)
-                time.sleep(SUPERVISOR_POLL_INTERVAL)
-
-            if engine_was_live:
-                _release_worktree_lease(state)
-            if not _journal_append(run_dir_real, {
-                "kind": "run-abandoned", "detail": "abandoned", "at": time.time(),
-            }):
-                return _with_run_fields(
-                    {"ok": False, "terminal": True, "reason": "unrunnable",
-                     "detail": "journal-append-failed",
-                     "attempts": len(state.get("attempts") or {}), "forfeited": False},
-                    run_dir=run_dir_real, argv=argv,
-                )
-            _finalize_run(state, terminal=not engine_was_live)
+        if state.get("abandoned") is not None:
             return _with_run_fields(
                 {"ok": False, "terminal": True, "reason": "unrunnable",
                  "detail": "run-abandoned", "attempts": len(state.get("attempts") or {}),
                  "forfeited": False},
                 run_dir=run_dir_real, argv=argv,
+            )
+
+        if state.get("folded") is not None:
+            return _with_run_fields(state["folded"], run_dir=run_dir_real, argv=argv)
+
+        _journal_append(run_dir_real, {"kind": "abandon-requested", "at": time.time()})
+        _signal_live_attempts(state)
+
+        deadline = time.monotonic() + ABANDON_CONFIRM_SECONDS
+        resignalled = False
+        while True:
+            records, _corrupt = _journal_read(run_dir_real)
+            state = _journal_state(records)
+            if _launching_uncertain(state):
+                return _with_run_fields(
+                    {"ok": False, "terminal": True, "reason": "unrunnable",
+                     "detail": "abandon-incomplete", "abandonDetail": "engine-death-unconfirmed",
+                     "attempts": len(state.get("attempts") or {}), "forfeited": False},
+                    run_dir=run_dir_real, argv=argv,
+                )
+            alive, _who = _run_live_evidence(state)
+            if not alive:
+                break
+            if time.monotonic() >= deadline:
+                return _with_run_fields(
+                    {"ok": False, "terminal": True, "reason": "unrunnable",
+                     "detail": "abandon-incomplete", "abandonDetail": "engine-death-unconfirmed",
+                     "attempts": len(state.get("attempts") or {}), "forfeited": False},
+                    run_dir=run_dir_real, argv=argv,
+                )
+            if not resignalled:
+                resignalled = True
+                _signal_live_attempts(state)
+            time.sleep(SUPERVISOR_POLL_INTERVAL)
+
+        lock_path = os.path.join(run_dir_real, RUN_LOCK_NAME)
+        try:
+            file_lock.acquire(lock_path, ttl=RUN_LOCK_TTL)
+        except file_lock.LockHeld:
+            return _with_run_fields(
+                {"ok": False, "terminal": False, "reason": "running",
+                 "detail": "run-locked",
+                 "attempts": _highest_attempt(state), "forfeited": False},
+                run_dir=run_dir_real, argv=argv,
+            )
+
+        try:
+            records, _corrupt = _journal_read(run_dir_real)
+            state = _journal_state(records)
+            argv = (state.get("opened") or {}).get("argv") or argv
+            if state.get("abandoned") is not None:
+                return _with_run_fields(
+                    {"ok": False, "terminal": True, "reason": "unrunnable",
+                     "detail": "run-abandoned",
+                     "attempts": len(state.get("attempts") or {}), "forfeited": False},
+                    run_dir=run_dir_real, argv=argv,
+                )
+            return _terminate_run(
+                run_dir_real, state, record_kind="run-abandoned", result={},
             )
         finally:
             try:

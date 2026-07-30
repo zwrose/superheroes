@@ -614,23 +614,23 @@ def test_e2e_dispatch_abandon_order_and_idempotent(tmp_path, monkeypatch):
     prompt_path = _prompt(tmp_path)
     death_marker = str(tmp_path / "engine-death.marker")
     lease_at_abandon = []
-    engine_alive_at_release = []
+    engine_alive_at_cleanup = []
     real_append = ED._journal_append
-    real_release = ED._release_worktree_lease
+    real_finalize = ED._finalize_run
 
     def tracking_append(run_dir_real, record):
         if record.get("kind") == "run-abandoned":
             lease_at_abandon.append(os.path.exists(_lease_path(wt)))
         return real_append(run_dir_real, record)
 
-    def tracking_release(state):
+    def tracking_finalize(state, terminal=False):
         records, _ = ED._journal_read(run_dir)
         alive, _who = ED._run_live_evidence(ED._journal_state(records))
-        engine_alive_at_release.append(alive)
-        return real_release(state)
+        engine_alive_at_cleanup.append(alive)
+        return real_finalize(state, terminal=terminal)
 
     monkeypatch.setattr(ED, "_journal_append", tracking_append)
-    monkeypatch.setattr(ED, "_release_worktree_lease", tracking_release)
+    monkeypatch.setattr(ED, "_finalize_run", tracking_finalize)
 
     _install_fake_engine(
         tmp_path, monkeypatch, "cursor-agent",
@@ -658,8 +658,8 @@ def test_e2e_dispatch_abandon_order_and_idempotent(tmp_path, monkeypatch):
     assert len(abandoned) == 1
     assert os.path.isfile(death_marker)
     assert os.path.getmtime(death_marker) < abandoned[0]["at"]
-    assert lease_at_abandon == [False]
-    assert engine_alive_at_release == [False]
+    assert lease_at_abandon == [True]
+    assert engine_alive_at_cleanup == [False]
     assert records[-1]["kind"] == "run-abandoned"
     assert first["terminal"] is True
     assert first["detail"] == "run-abandoned"
