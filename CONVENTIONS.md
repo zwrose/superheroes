@@ -847,12 +847,16 @@ that boundary line between `skills/showrunner/SKILL.md` and `skills/workhorse/SK
 file now also carries **asymmetric** rows for named cross-lane invariants — **resolve-upward**, the
 **not-engaged-never-passes** probe rule, and the **waiver bounds** — where
 `rubric/review-discipline.md` is the authoritative home and the charters hold deliberate
-paraphrases. Because the copies are paraphrases, those rows assert **presence of load-bearing
-clauses within the rubric section that owns each invariant**, not byte equality; every clause is
-**first verified present in the home** (§11.3), so the right-hand side still traces back to the
-authoritative copy. The guard fails closed if a declared rubric heading is missing **or duplicated**.
-**Limitation:** it catches a clause deleted or reworded in a copy, but not the home gaining a new
-qualifier the copies fail to mirror. The waiver row's copy-holders are the rubric and the
+paraphrases. Those rows are **clause-presence sentinels**, not byte-equality or semantic equality.
+**Both** the home and the copy sides are section-scoped: shared clauses are checked within the
+rubric section that owns each invariant, and each copy-holder is checked within the section that
+owns that invariant in that file. Shared clauses are **first verified present in the home** (§11.3);
+`holder_clauses` pins holder-specific wording where the home states the same bound in different
+words — a narrower, holder-specific guarantee, not home-derived. The guard fails closed if a
+declared heading is missing **or duplicated**. **Residual blind spots:** (1) the home gaining a new
+qualifier, scope, or exception the copies do not mirror; (2) a copy keeping every clause verbatim
+while adding a contradicting exception nearby; (3) matches spanning a boundary after normalization;
+(4) `holder_clauses` being holder-specific, not home-derived. The waiver row's copy-holders are the
 **showrunner** charter only, because micro is the showrunner's lane.
 
 *Worked example 2 — the reviewer roster (sanctioned-subset invariant).* The set of
