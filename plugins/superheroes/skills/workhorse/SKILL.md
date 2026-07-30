@@ -67,9 +67,9 @@ charter states today.
   lane; never your call; mid-run forfeit follows the rubric's three-case rule). On **every**
   light-lane review that reviewer carries the **mandatory planted-defect control probe** from
   `review-discipline.md` — the probe must come back **engaged** (not engaged means that review did
-  not happen; re-dispatch once, then resolve upward to the full lane or park; never a pass; exit zero
-  is not evidence
-  of engagement). The investigation-record floor for empty external seats already applies
+  not happen; re-dispatch once, then resolve upward to the full lane or park;
+  never a pass; exit zero is not evidence of engagement).
+  The investigation-record floor for empty external seats already applies
   automatically to **every external review seat**, single-seat lanes included (as bounded in
   `review-discipline.md`).
 - **Preflight is kept** (§3) — and matters more here than in the full lane: without a brief post, the
