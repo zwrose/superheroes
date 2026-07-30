@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
-"""Reviewer-scoped external-engine dispatch runner (#563 DoD 2 auto-retry + DoD 4 liveness).
+"""Supervised external-engine dispatch runner (#563 DoD 2 auto-retry + DoD 4 liveness; #702 write path).
 
-READ-ONLY REVIEWER ROLE ONLY. The fix/write path stays model-driven and host-gated — a
-Python-spawned subprocess bypasses the host permission-classifier the write-path authz depends on
-(CONVENTIONS §7.5: engine *selection* fails open; a completed external *result* fails closed). This
-module is the effectful counterpart to engine_adapter's pure core: it composes build_argv +
+Runs two hard-scoped roles as distinct CLI subcommands — ``dispatch-review`` (role ``review``,
+read-only sandbox) and ``dispatch-write`` (role ``build``, workspace-write sandbox; ``cwd`` is
+refused unless it is a linked build worktree). Each subcommand is a separate host-permission
+grant (``dispatch-review:*`` vs ``dispatch-write:*``); absent the matching grant the dispatch
+does not run.
+
+This module is the effectful counterpart to engine_adapter's pure core: it composes build_argv +
 parse_result + prompt_path_ok, spawns the engine in its own process group with a bounded timeout,
 emits liveness heartbeats, detects terminal forfeit (timeout OR unreadable parse), and retries ONCE
-tight-inline before forfeiting to the caller (which falls open to Claude). Never raises to its caller.
+tight-inline before forfeiting to the caller (which falls open to Claude). Review dispatches
+prepend the anti-hijack preamble. The supervisor journal (outside the run directory) is the
+decision record — spawn, retry, fold, and abandon transitions consult journal state, not engine
+output. Engine stdout and any worktree files the engine wrote are advisory evidence parsed only
+for findings or build signals. Never raises to its caller.
+
+(CONVENTIONS §7.5: engine *selection* fails open; a completed external *result* fails closed.)
 """
 import argparse
 import hashlib

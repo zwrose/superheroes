@@ -45,13 +45,16 @@ The sanctioned way to dispatch a long-running **external implementer** is the su
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-write \
-  --engine cursor --engine-model composer-2.5 \
+  --engine "$IMPL_ENGINE" --engine-model "$IMPL_ENGINE_MODEL" \
   --prompt-path "$ORDER_PROMPT" --cwd "$BUILD_WORKTREE" --order-id "$ORDER_ID" \
   --run-dir "$RUN_DIR" --max-wait 540
 ```
 
-`--effort` is **optional** on `dispatch-write` (registry models like cursor `composer-2.5` carry no
-effort); on `dispatch-review` it remains **required**. Re-invoke the **originating verb**
+`$IMPL_ENGINE` and `$IMPL_ENGINE_MODEL` come from the project's dispatch calibration for the
+**implementer** role. `--effort` is **optional** on `dispatch-write` because a registry model may
+legitimately carry no effort, while it stays **required** on `dispatch-review`; an engine/model that
+*does* need an effort still fails closed without one (`engine-config:invalid-model-effort`,
+`attempts: 0`, no spawn, no lease). Re-invoke the **originating verb**
 (`dispatch-write`, never `dispatch-poll`) with the same `--run-dir` and `--max-wait 540` while
 `.terminal` is false. A non-terminal `{"reason": "running", "terminal": false}` is **not** a forfeit.
 `dispatch-poll` is observational and never spawns; `dispatch-abandon` abandons a run directory. Every

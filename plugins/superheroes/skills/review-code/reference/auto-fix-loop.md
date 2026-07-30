@@ -287,9 +287,8 @@ never drop a finding or a lens.
 >    PATH` fails closed (emitting `{"ok":false,"reason":"empty-prompt",…}` instead of argv) unless
 >    PATH is a readable regular file with non-whitespace content. The caller MUST redirect **that same
 >    validated file** into the engine's stdin — validating one file and redirecting another (or none)
->    reopens the hang. (The reviewer-scoped dispatch runner of the follow-up work couples validate +
->    redirect in one step, closing the check/use window; a hand-rolled dispatch must couple them by
->    hand.)
+>    reopens the hang. (The supervised runner couples validate + redirect in one step, closing the
+>    check/use window; a hand-rolled dispatch must couple them by hand.)
 > 3. **Bound the run with a portable timeout — macOS has no `timeout(1)`.** Use a perl fork+kill
 >    wrapper and a HIGH ceiling (≥900 s for a real engine run; never a borderline limit), redirecting
 >    engine output to a **file** (never `| tail`, which buffers a stall to look identical to progress):
@@ -302,13 +301,16 @@ never drop a finding or a lens.
 >    (exit 124 = timed out.) Watch the process's **CPU-time column, not elapsed** — an engine CLI can
 >    sit at ~0% CPU for minutes and still be live.
 >
-> **Dispatch-runner scope boundary (#563).** A follow-up productizes an adapter-owned dispatch runner
-> for the **read-only reviewer role only** (auto-retry + liveness as machinery, not builder
-> discipline). The **fix/write path stays model-driven and host-gated**: its authorization depends on
-> the host permission-classifier gating the literal Bash `codex exec`/`cursor-agent` call, and a
-> Python-spawned subprocess would bypass that classification (CONVENTIONS `§7.5` — a completed
-> external result fails closed; engine *selection* fails open). Do not fold the write path into a
-> Python runner without a fresh authz design.
+> **Dispatch-runner scope boundary (#563).** The supervised runner now supervises **both**
+> `dispatch-review` and `dispatch-write`; each is a **distinct subcommand** with its **own** host
+> grant string, so write autonomy is revocable on its own — that **is** the fresh authz design the
+> earlier text here asked for, ratified in [#623](https://github.com/zwrose/superheroes/issues/623)
+> and re-based by [#702](https://github.com/zwrose/superheroes/issues/702). (The paragraph's earlier
+> prohibition against folding the write path into a Python runner is **superseded**.) The host
+> permission classifier still gates the dispatch **at the Bash call** — absent a matching grant
+> nothing spawns and the caller parks loudly. CONVENTIONS `§7.5` still holds and still means what it
+> always meant: engine **selection** fails open when a seat is unavailable, a completed external
+> **result** fails closed. It never said the write path may not be supervised.
 
 After dispatch, wait for all five agents to return. Each writes its findings file to `$SESSION_DIR/round-<round>/`. The orchestrator does not read agent transcripts — only the JSON files.
 
