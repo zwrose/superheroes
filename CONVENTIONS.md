@@ -838,13 +838,22 @@ nothing (literal renamed, moved, duplicated, or malformed) it raises rather than
 an empty set that would make the equality vacuously pass. A rename of the truth then
 **fails the drift test**, not production.
 
-*Worked example 1 — the cross-charter boundary line.* Both session charters state the
-identical two-sided fact — "Workhorse never merges/releases/bumps versions/wires the
-board/re-scopes silently; Showrunner never builds — except the **micro** lane, a named hard-line edit defined in the showrunner charter." Neither charter is authoritative over
-the other, so `lib/tests/test_charter_boundary_sync.py` is a **symmetric** Pattern-2
-instance: it extracts the marked boundary line from both `skills/showrunner/SKILL.md` and
-`skills/workhorse/SKILL.md`, fails closed if either is missing, and asserts the two are
-byte-identical — editing one charter's boundary breaks CI until the other matches.
+*Worked example 1 — the cross-charter boundary line and cross-lane invariants.* Both session
+charters state the identical two-sided fact — "Workhorse never merges/releases/bumps versions/wires
+the board/re-scopes silently; Showrunner never builds — except the **micro** lane, a named
+hard-line edit defined in the showrunner charter." Neither charter is authoritative over the other,
+so `lib/tests/test_charter_boundary_sync.py` keeps a **symmetric** byte-identical equality check on
+that boundary line between `skills/showrunner/SKILL.md` and `skills/workhorse/SKILL.md`. The same
+file now also carries **asymmetric** rows for named cross-lane invariants — **resolve-upward**, the
+**not-engaged-never-passes** probe rule, and the **waiver bounds** — where
+`rubric/review-discipline.md` is the authoritative home and the charters hold deliberate
+paraphrases. Because the copies are paraphrases, those rows assert **presence of load-bearing
+clauses within the rubric section that owns each invariant**, not byte equality; every clause is
+**first verified present in the home** (§11.3), so the right-hand side still traces back to the
+authoritative copy. The guard fails closed if a declared rubric heading is missing **or duplicated**.
+**Limitation:** it catches a clause deleted or reworded in a copy, but not the home gaining a new
+qualifier the copies fail to mirror. The waiver row's copy-holders are the rubric and the
+**showrunner** charter only, because micro is the showrunner's lane.
 
 *Worked example 2 — the reviewer roster (sanctioned-subset invariant).* The set of
 `agents/*-reviewer` files is the single home of the **sanctioned reviewer universe** — now
