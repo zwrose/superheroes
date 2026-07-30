@@ -348,7 +348,7 @@ def test_legacy_profile_signal_when_detection_exception(tmp_path, monkeypatch):
     assert len(legacy) == 1
     assert legacy[0]["detail"]["hero"] == "review-crew"
     assert legacy[0]["detail"]["path"] is None
-    assert "denied for test" in legacy[0]["detail"]["detail"]
+    assert "denied for test" in legacy[0]["detail"]["reason"]
 
 
 def test_legacy_profile_signal_on_detection_total_failure(tmp_path, monkeypatch):
@@ -368,7 +368,7 @@ def test_legacy_profile_signal_on_detection_total_failure(tmp_path, monkeypatch)
     assert len(legacy) == 1
     assert legacy[0]["detail"]["hero"] is None
     assert legacy[0]["detail"]["path"] is None
-    assert legacy[0]["detail"]["detail"] == "RuntimeError: detection exploded"
+    assert legacy[0]["detail"]["reason"] == "RuntimeError: detection exploded"
 
 
 def test_legacy_profile_signal_core_facts_empty(tmp_path, monkeypatch):

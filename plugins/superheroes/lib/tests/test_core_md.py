@@ -798,23 +798,24 @@ def test_resolve_shared_refusal_leaves_no_pending_marker(tmp_path):
     store = str(tmp_path / "store")
     _init_git_repo(repo)
     legacy_path = _write_legacy_inrepo(repo, "review-crew")
-    subprocess.run(["/usr/bin/git", "-C", repo, "add", legacy_path], check=True)
-    subprocess.run(["/usr/bin/git", "-C", repo, "commit", "-q", "-m", "track legacy"], check=True)
+    subprocess.run(["git", "-C", repo, "add", legacy_path], check=True)
+    subprocess.run(["git", "-C", repo, "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-q", "-m", "track legacy"], check=True)
     head_before = subprocess.check_output(
-        ["/usr/bin/git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
+        ["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
     legacy_bytes_before = open(legacy_path, "rb").read()
     porcelain_before = subprocess.check_output(
-        ["/usr/bin/git", "-C", repo, "status", "--porcelain"], text=True)
+        ["git", "-C", repo, "status", "--porcelain"], text=True)
     got = CM.resolve_shared(repo, root=store)
     assert got is not None and got["action"] == "refused"
     assert not os.path.exists(CM._pending_path(repo, store))
     assert os.path.isfile(legacy_path)
     assert open(legacy_path, "rb").read() == legacy_bytes_before
     head_after = subprocess.check_output(
-        ["/usr/bin/git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
+        ["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
     assert head_after == head_before
     porcelain_after = subprocess.check_output(
-        ["/usr/bin/git", "-C", repo, "status", "--porcelain"], text=True)
+        ["git", "-C", repo, "status", "--porcelain"], text=True)
     rel_legacy = os.path.relpath(legacy_path, repo)
     assert rel_legacy not in porcelain_before
     assert rel_legacy not in porcelain_after

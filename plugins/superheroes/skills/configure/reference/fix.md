@@ -43,10 +43,12 @@ The remedy is **re-calibration through this skill**, and it has two shapes:
 - **legacy profile, no `core.md`** → **fix** (not set-up): legacy is hero evidence so
   `mode_registry.resolve` backfills a registry; seed `core.md` + hero layers keeping the recorded
   mode. Once `core.md` parses, `resolve_shared` stops refusing.
-- **`core.md` present + stray legacy** → **fix** via `legacy-profile-unsupported`. When
-  `coreFactsEmpty` is false, tell the owner the stray file is no longer read and they may remove
-  or archive it. When true, name the legacy path as the only populated calibration and require its
-  content into `core.md` + the layer before removal.
+- **`core.md` present + stray legacy** → **fix** via `legacy-profile-unsupported`. Branch on
+  `coreFactsEmpty` from the reconcile signal's `detail` (step 1's `configure_route.route` JSON) —
+  not from `resolve_shared`, which carries only hero detail and `coreMd`. Treat a missing or
+  unknown `coreFactsEmpty` as true (cautious). When false, tell the owner the stray file is no
+  longer read and they may remove or archive it. When true, name the legacy path as the only
+  populated calibration and require its content into `core.md` + the layer before removal.
 
 **Superheroes never deletes the legacy file** — the owner does. An unreadable or malformed legacy
 profile is reported, left untouched, and asked about rather than guessed at (UFR-9). The refusal

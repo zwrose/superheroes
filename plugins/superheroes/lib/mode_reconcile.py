@@ -82,15 +82,9 @@ def gather_signals(cwd, root=None):
     # per-hero legacy-profile drift: presence-only (whether or not core.md parses)
     try:
         legacy_refusal = core_md.legacy_profile_refusal(cwd, root)
-    except Exception as exc:
-        legacy_refusal = {
-            "action": "refused",
-            "reason": core_md.LEGACY_PROFILE_REASON,
-            "heroes": [],
-            "paths": [],
-            "remedy": core_md.LEGACY_PROFILE_REMEDY,
-            "detail": {"*": "%s: %s" % (type(exc).__name__, exc)},
-        }
+    except Exception:
+        # legacy_profile_refusal never raises; only an unbound core_md reaches here — skip block.
+        legacy_refusal = None
     if legacy_refusal is not None:
         detail_map = legacy_refusal.get("detail") or {}
         heroes = legacy_refusal.get("heroes") or []
@@ -103,7 +97,7 @@ def gather_signals(cwd, root=None):
                 "detail": {
                     "hero": None,
                     "path": None,
-                    "detail": detail_map.get("*"),
+                    "reason": detail_map.get("*"),
                     "remedy": core_md.LEGACY_PROFILE_REMEDY,
                     "coreFactsEmpty": core_facts_empty,
                 },
@@ -119,7 +113,7 @@ def gather_signals(cwd, root=None):
                     "coreFactsEmpty": core_facts_empty,
                 }
                 if hero_detail is not None and path is None:
-                    sig_detail["detail"] = hero_detail
+                    sig_detail["reason"] = hero_detail
                 sigs.append({
                     "type": core_md.LEGACY_PROFILE_REASON,
                     "identity": _sig_id(core_md.LEGACY_PROFILE_REASON, hero),

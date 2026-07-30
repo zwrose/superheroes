@@ -202,7 +202,7 @@ REFUSAL=$(printf '%s' "$VERIFY_JSON" | jq -r '.calibrationRefusal.remedy // empt
 [ "$VERIFY_CMD" = "none" ] && VERIFY_CMD=""
 ```
 
-When `REFUSAL` is non-empty, `core.md` calibration was not read and the legacy profile is unsupported — state that, quote the remedy, and note any `VERIFY_CMD`/tier values shown still came from that legacy profile (not band defaults). When `VERIFY_MODE` is `unverified`, skip the verify gate. When `VERIFY_MODE` is `review-only`, degrade to one pass + presentation.
+When `REFUSAL` is non-empty, `core.md` calibration was not read and the legacy profile is unsupported — state that, quote the remedy, and note the legacy profile may still have supplied `VERIFY_CMD` and per-role tier overrides; say which values differ from band defaults rather than asserting they all came from the legacy file. When `VERIFY_MODE` is `unverified`, skip the verify gate. When `VERIFY_MODE` is `review-only`, degrade to one pass + presentation.
 
 **Refresh dispatch paths before specialists.** Re-run the `calibration_resolve.py` jq block above once after bootstrap.
 
