@@ -432,15 +432,16 @@ implementer work** — a probe's revert (a subagent's `git checkout --`) has wip
 uncommitted work five times across recent waves despite the memory of it, so the commit itself is the
 mechanical tripwire, not the memory of it (the mutation-probe sibling of §6's commit-between-orders rule).
 
-**Empirical proof that needs a write has exactly three sanctioned destinations, and a review seat is
-never one of them.** No review seat may mutate anything, and a **bundled** seat cannot run anything at
-all — the base rubric's verification rule *"A review seat never mutates, and never claims a run it did
-not make."* (`rubric/review-base.md`) is the authoritative statement. An **external** review seat can
-run a *read-only* command and should when the diff cannot settle a question, so asking one to ground a
-finding that way is fine; asking any review seat for a **mutation probe, a planted defect, or a
-written throwaway test** is an **orchestrator defect**, and asking a bundled seat to run anything at
-all is the same defect — it will answer in the register of a receipt having run nothing. When a claim
-needs a run no review seat may make:
+**Proof that requires changing code has exactly three sanctioned destinations, and a review seat is
+never one of them.** A review seat is **obliged** never to change the repository and never to claim a
+run it did not make — the base rubric's verification rule *"A review seat never changes the
+repository, and never claims a run it did not make."* (`rubric/review-base.md`) is the authoritative
+statement, and it is an obligation, **not** something a tool grant enforces (what a seat can do varies
+by host and dispatch shape, so never reason about a seat from its tool list). A review seat may
+legitimately ground a finding by *reading*, and where its dispatch permits a read-only command, by
+running one and quoting it. What it may never do is **change** anything — so asking any review seat
+for a mutation probe, a planted defect, or a written throwaway test is an **orchestrator defect**, and
+it will answer in the register of a receipt. When a claim needs a run no review seat may make:
 
 1. **You run it** — the default, and the only place the *decisive* check ever runs.
 2. **A committed test, via an implementer order** — when the proof belongs in the repo as a durable
@@ -450,9 +451,13 @@ needs a run no review seat may make:
    command's raw stdout, stderr, and exit code to paths you name **outside** the repo; and **you read
    those files off disk**. Name a **byte ceiling** per command — its stated purpose is bulky runs, and
    an unbounded capture can fill the volume. Each stdout capture opens with a `# ran: <command>` line;
-   **compare every one against the list you authored** — the files alone prove only that *something*
-   ran. Its return prose is never the receipt. It buys **context relief, not
-   trust** — treat its output exactly as you treat an implementer's. Dispatch it at the
+   for **each** command you authored, read the **first line** of the capture **at the path you named
+   for that command** and compare *that line* against *that command* — a `# ran:` line anywhere else
+   in a capture body is output, not a receipt, and is ignored. Its return prose is never the receipt.
+   It buys **context relief, not trust** — treat its output exactly as you treat an implementer's. A
+   capture is **redacted when you quote it** into the PR or any durable record — secrets, tokens,
+   private URLs, PII — the captures themselves are working artifacts outside the repo, not durable
+   receipts in themselves. Dispatch it at the
    **`mechanical`** registry role (`--role mechanical`) and **never to an external engine**; it
    renders no judgment, so no independence or maker-family constraint applies to it and none should be
    bolted on. If the seat needs a stronger model to do its job, your command list was
@@ -460,8 +465,8 @@ needs a run no review seat may make:
 
 **Probe the tree before and after every `check-runner` dispatch — this is your discipline, not a
 gate.** Commit the landed work first so the baseline is clean, then capture `git rev-parse HEAD`, the
-full `git status --porcelain` (**not** `-uno`: a run's untracked output is exactly what you want to
-see), and `git reflog --date=iso HEAD | wc -l`. Any delta afterwards is a **failed verification**,
+full `git status --porcelain` (**not** `-uno` and not its long form `--untracked-files=no`: a run's
+untracked output is exactly what you want to see), and `git reflog --date=iso HEAD | wc -l`. Any delta afterwards is a **failed verification**,
 not a warning. A dispatch that timed out, or whose child you never joined, is **INDETERMINATE** —
 never clean. What the probe cannot see is recorded as an accepted residual (`LEDGERS.md` §3), not
 claimed as covered.

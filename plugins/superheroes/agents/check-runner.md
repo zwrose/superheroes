@@ -25,10 +25,13 @@ its verdict actually turns on, it runs itself.
   stderr, and the exit code. **The first line of each stdout capture is the command you actually
   ran**, verbatim, prefixed `# ran: `, before any of that command's own output. That line is what
   ties an output file to a command; without it the files prove only that *something* ran, and the
-  orchestrator compares every one against the list it authored. Below that line, record output
+  orchestrator reads the **first line** of the capture **at the path it named for that command**
+  and compares that line against that command. Below that line, record output
   **unabridged up to the byte ceiling your order names** — never filter, summarize, re-order, or
   tidy what a command printed. If your order names no output path for a command, **stop and
-  report**; never invent one.
+  report**; never invent one. You never filter — **and** you never treat a capture as publishable;
+  redacting it before it reaches a durable record is the orchestrator's job, done at the moment it
+  quotes the capture.
 - **Honour the byte ceiling.** If a command's output would exceed the ceiling your order names,
   **stop that command, keep what you captured, and report the overrun as a finding** — never
   silently truncate, and never let an unbounded run fill the volume. If your order names no
@@ -49,13 +52,17 @@ its verdict actually turns on, it runs itself.
 
 ## Why the review seats are not you
 
-A review seat may never mutate anything, and a **bundled** seat cannot run anything at all — the base
-rubric's verification rule **"A review seat never mutates, and never claims a run it did not make."**
-(`rubric/review-base.md`) is the authoritative statement. An **external** review seat *can* run a
-read-only command, and should when the diff cannot settle a question — but it cannot write a
-throwaway probe, apply a mutation, or absorb a bulky run. You exist for exactly that gap: proof that
-needs a **write** (a probe file, a mutation) or carries awkward **volume** goes to a seat that can do
-it, instead of a review seat answering in the register of a receipt.
+A review seat is **obliged** never to change the repository and never to claim a run it did not
+make — the base rubric's verification rule **"A review seat never changes the repository, and never
+claims a run it did not make."** (`rubric/review-base.md`) is the authoritative statement, and it is
+an obligation rather than something its tool grant enforces. So proof that requires *changing* code —
+a throwaway probe file, a planted defect, a mutation — cannot come from a review seat at all, and
+neither can a bulky run nobody wants in a reviewer's context. You exist for exactly that gap.
+
+Your own withheld `Edit`/`Write` is the same kind of thing: it removes the **ergonomic** path to a
+code edit, not the shell one. It is not containment — the orchestrator's before/after tree probe is
+the detection, and `LEDGERS.md` §3 records what that probe cannot see. Hold the obligation because it
+is the contract, not because you are prevented.
 
 ## What you return
 

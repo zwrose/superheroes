@@ -47,7 +47,10 @@ EXECUTION_SEATS = {
     "pilot",
     # Runs the enumerated command list the orchestrator authored. `Bash` is granted so
     # that "this needs to be run" has an honest answer; `Edit`/`Write` are withheld so
-    # the seat cannot mutate the tree it runs over (test_check_runner_* pins that shape).
+    # the seat has no ergonomic path to a code edit (not the shell one — `Bash` can
+    # still redirect or run a mutating command). test_check_runner_* pins this
+    # declared shape; the orchestrator's before/after tree probe (`LEDGERS.md` §3) is
+    # what actually detects a mutation.
     "check-runner",
 }
 
@@ -234,13 +237,36 @@ def _no_mutation_no_claim_rule():
     return title, rest[:nxt.start()] if nxt else rest
 
 
-def test_observe_only_seats_cannot_run_or_edit():
+# The observe-only ALLOWLIST (item 8, #719 round 4). A seat's granted tools must be a
+# SUBSET of this small permitted set — never a two-name DENYLIST of ("Bash", "Edit"),
+# which passes on everything else: `MultiEdit`/`NotebookEdit` edit files without being
+# named `Edit`; an `mcp__*` shell tool is neither literal name; and sharpest of all,
+# `Task` — a seat holding `Task` can dispatch a `general-purpose` child that holds
+# `Bash` + `Edit` + `Write`, exactly the capability-restoration path
+# `hosts/claude-tools.md`'s derail-fallback carve-out exists to close. A denylist has
+# to predict every tool name that will ever exist; an allowlist only has to state the
+# ones this seat needs, so a brand-new mutation- or dispatch-capable tool fails by
+# default instead of passing by omission.
+OBSERVE_ONLY_ALLOWED_TOOLS = {"Read", "Grep", "Glob", "Write"}
+
+
+def test_observe_only_seats_grant_is_a_subset_of_the_allowlist():
     """Axis 1 — the tool grant. Every seat that is not on the small execution allowlist
-    must explicitly grant neither `Bash` nor `Edit`.
+    must hold ONLY tools drawn from `OBSERVE_ONLY_ALLOWED_TOOLS` (`Read`, `Grep`, `Glob`,
+    `Write`) — an ALLOWLIST, not the prior two-name denylist of `("Bash", "Edit")`. That
+    denylist verifiably would NOT have bitten on `MultiEdit`, `NotebookEdit`, an
+    `mcp__*` shell tool, or `Task` (which can dispatch an unconstrained
+    `general-purpose` child holding `Bash`+`Edit`+`Write` — exactly the
+    capability-restoration path this same branch closes at `hosts/claude-tools.md`).
+    The allowlist form fails a NEW mutation- or dispatch-capable tool by default instead
+    of passing it by omission.
 
     The observe-only set is DERIVED from `agents/` (edge 1), so a future seat added with
-    a shell fails here until someone consciously puts it on the allowlist. `Write` is
-    deliberately NOT forbidden: the review seats write their findings JSON.
+    a disallowed tool fails here until someone consciously puts it on `EXECUTION_SEATS`.
+    This test pins the **declared** grant for the seats this host constrains — it does
+    not, by itself, prove a seat cannot mutate (`Bash` on an execution seat can still
+    redirect or run a mutating command); the never-change-the-repository half of rule 7
+    (review-base.md) is an obligation on the seat, not something this grant enforces.
     """
     slugs = _agent_slugs()
     missing = EXECUTION_SEATS - slugs
@@ -258,15 +284,18 @@ def test_observe_only_seats_cannot_run_or_edit():
             _read_required(os.path.join(PLUGIN, "agents", slug + ".md"),
                            "an observe-only review seat"),
             slug)
-        for forbidden in ("Bash", "Edit"):
-            assert forbidden not in tools, (
-                "agents/%s.md grants `%s` (tools: %s). %s is a **bundled** seat: its "
-                "grant must omit both `Bash` (a bundled seat cannot run anything at "
-                "all, so its every empirical statement is analysis, not a receipt) and "
-                "`Edit` (no review seat, bundled or external, may mutate). If this seat "
-                "is meant to hold execution capability, that is a deliberate change to "
-                "the guarantee in review-base.md's verification rule 7 — add it to "
-                "EXECUTION_SEATS with its reason." % (slug, forbidden, tools, slug))
+        extra = sorted(set(tools) - OBSERVE_ONLY_ALLOWED_TOOLS)
+        assert not extra, (
+            "agents/%s.md grants %s (tools: %s) outside the observe-only ALLOWLIST %s. "
+            "%s is a **bundled** review seat: a two-name denylist of (\"Bash\", "
+            "\"Edit\") would miss this — `MultiEdit`/`NotebookEdit` edit files without "
+            "being named `Edit`, and `Task` can dispatch an unconstrained "
+            "`general-purpose` child holding `Bash`+`Edit`+`Write`. If this seat is "
+            "meant to hold that capability, that is a deliberate change to the "
+            "guarantee in review-base.md's verification rule 7 — add it to "
+            "EXECUTION_SEATS with its reason." % (slug, extra, tools,
+                                                   sorted(OBSERVE_ONLY_ALLOWED_TOOLS),
+                                                   slug))
 
 
 @pytest.mark.parametrize("text, match", [
@@ -301,8 +330,11 @@ def test_tools_parser_fails_closed(text, match):
 
 def test_check_runner_grant_is_the_constrained_shape():
     """`check-runner` is the seat that exists so "this needs to be run" has an honest
-    answer, so it holds `Bash` — but it must not be able to mutate the tree it runs
-    over, so `Edit` and `Write` are both withheld. Asserted on the PARSED grant, not a
+    answer, so it holds `Bash`; `Edit` and `Write` are withheld. That withheld grant
+    removes only the **ergonomic** path to a code edit — `Bash` can still redirect or
+    run a mutating command, so this does not itself prevent mutation. This test pins
+    the seat's **declared** shape; the orchestrator's before/after tree probe
+    (`LEDGERS.md` §3) is the actual detection. Asserted on the PARSED grant, not a
     substring of the file: the prose body mentions all three tool names.
     """
     tools = _parse_tools(
@@ -316,9 +348,44 @@ def test_check_runner_grant_is_the_constrained_shape():
     for withheld in ("Edit", "Write"):
         assert withheld not in tools, (
             "agents/check-runner.md grants `%s` (tools: %s). It is withheld on purpose: "
-            "the seat runs commands over a tree it must not mutate, and the withheld "
-            "grant is what makes that constraint legible in the seat's own frontmatter."
+            "it removes the ergonomic path to a code edit (not the shell one — `Bash` "
+            "can still redirect or run a mutating command), and the withheld grant is "
+            "what makes the declared constraint legible in the seat's own frontmatter; "
+            "the orchestrator's before/after tree probe (`LEDGERS.md` §3) is what "
+            "actually detects a mutation."
             % (withheld, tools))
+
+
+# The receipt envelope's magic string. Both homes must agree on the literal token that
+# ties an output file to a command; this is a CONVENTIONS §11.2 copy-plus-drift TOKEN
+# pin, not a prose-semantics pin — it does not assert the two homes describe the
+# envelope identically (they may word it differently), only that the literal marker
+# both sides key on is present in both places.
+RAN_MARKER_TOKEN = "# ran: "
+
+
+def test_ran_marker_token_present_in_both_homes():
+    """The `# ran: ` receipt-envelope token is defined in TWO places — the producer
+    (`agents/check-runner.md`, which prefixes each stdout capture's first line with it)
+    and the consumer (`skills/workhorse/SKILL.md` §8 item 3, which reads that first
+    line back) — with no drift test before this one, so the two could disagree on the
+    literal marker while CI stayed green.
+
+    This is a TOKEN pin (CONVENTIONS §11.2's copy-plus-drift pattern), not a pin on the
+    surrounding protocol prose: it asserts only that the exact string `'# ran: '`
+    occurs in both files, which is the magic string both sides must agree on to tie an
+    output file to a command. It does not assert anything about how each file
+    describes the envelope around that token.
+    """
+    for rel in (os.path.join("agents", "check-runner.md"),
+                os.path.join("skills", "workhorse", "SKILL.md")):
+        text = _read_required(os.path.join(PLUGIN, rel),
+                              "one of the two `# ran: ` receipt-envelope token homes")
+        assert RAN_MARKER_TOKEN in text, (
+            "%s no longer contains the literal receipt-envelope token %r. The producer "
+            "(check-runner.md) and consumer (workhorse SKILL.md §8 item 3) must agree "
+            "on this exact marker or an output file can no longer be tied to a command."
+            % (rel, RAN_MARKER_TOKEN))
 
 
 def test_no_mutation_no_claim_rule_lives_in_review_base_verification_rules():
@@ -522,6 +589,15 @@ def test_workhorse_tree_probe_paragraph_carries_its_load_bearing_elements():
         "specific weakening the Test seat named: `-uno` hides untracked output, which "
         "is exactly what a shell-based mutation (a planted file, a probe left behind) "
         "would produce.")
+    assert ("git status --untracked-files=no" not in para
+            and "git status --porcelain --untracked-files=no" not in para), (
+        "the tree-probe paragraph's git-status INVOCATION now uses the long form "
+        "`--untracked-files=no` — the same weakening as `-uno` (edge 6, #719 round 4): "
+        "it hides untracked output, which is exactly what a shell-based mutation (a "
+        "planted file, a probe left behind) would produce. (The paragraph's own "
+        "explanatory aside naming `--untracked-files=no` as the excluded long form is "
+        "fine — this check only rejects the INVOCATION, mirroring the `-uno` check "
+        "above.)")
 
     assert "failed verification" in para, (
         "the tree-probe paragraph no longer says a delta is a FAILED VERIFICATION — "

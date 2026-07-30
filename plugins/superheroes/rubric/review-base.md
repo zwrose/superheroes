@@ -66,20 +66,23 @@ Minor and Nit findings never change the verdict regardless of strictness.
    restates the constant instead of reading the home proves nothing. (In this repo
    the rule is formalized as **CONVENTIONS §11**, with the phase-list drift test as
    its worked example; cite it by number.)
-7. **A review seat never mutates, and never claims a run it did not make.** Seats differ in
-   what they can *run*, so this rule keys on the two things true of every seat. **Never
-   mutate:** no review seat edits a file, writes a probe into the tree, or runs anything that
-   changes the repository — mutation-dependent proof (a mutation probe, a planted defect, a
-   throwaway test file) is beyond **every** review seat and belongs to the dispatching
-   orchestrator. **Never claim a run you did not make:** a **bundled** seat's tool grant omits
-   `Bash`, so it cannot run anything at all and its every empirical statement is **analysis,
-   not a receipt**; an **external** seat runs in a read-only sandbox, so it *may* run read-only
-   commands — and should, when the diff alone cannot settle a question — but only a command it
-   actually ran, quoted with its output, is a receipt. When a finding's proof needs a run you
-   cannot make, **still emit the finding**: name the **check** — the exact command, mutation, or
-   input that would settle it — and leave its confidence at the level your evidence supports.
-   Naming the check is the useful act; claiming the run is the defect, and silently dropping the
-   finding is worse than either.
+7. **A review seat never changes the repository, and never claims a run it did not make.**
+   Both halves are **obligations on the seat, not consequences of its tool grant.** What a
+   seat is *able* to do varies by host and dispatch shape — a frontmatter grant constrains
+   one host's subagent but is only methodology on another's, a read-only sandbox forbids
+   writes yet permits commands, and a findings-file write capability is a general
+   create/edit/delete — so this rule states what a seat **must** do and never derives it from
+   what a seat *can* do. **Never change the repository:** no review seat edits a file, writes
+   a probe into the tree, or runs anything that alters it. Proof that requires changing code —
+   a mutation probe, a planted defect, a throwaway test file — belongs to the dispatching
+   orchestrator, and only it may make that change. **Never claim a run you did not make:** if
+   you ran something, quote the exact command and its output; if you did not, say so plainly.
+   A mutation, test, or parity statement you did not actually run is **analysis, not a
+   receipt**, and must never be written in the register of one. When a finding's proof needs a
+   run you must not or cannot make, **still emit the finding**: name the **check** — the exact
+   command, mutation, or input that would settle it — and leave its confidence at the level
+   your evidence supports. Naming the check is the useful act; claiming the run is the defect,
+   and silently dropping the finding is worse than either.
 
 ## Findings output format (the single schema — agents reference this, never restate it)
 

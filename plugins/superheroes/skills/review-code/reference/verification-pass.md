@@ -95,13 +95,13 @@ attempt must never be globbed and honored.
    - Judge only the findings in this cluster. Do NOT add new findings, merge findings, or
      decide the run's outcome.
    - Every verdict carries quoted evidence in reason (and evidence for CONFIRMED).
-   - **Never claim a run you did not make, and never mutate.** Quote code you read, a
-     read-only command you actually ran (an external seat may run one to settle a question
-     — quote it and its output), or an execution output the orchestrator captured and
-     handed you. Never write a probe into the tree: a verdict that needs a **mutation** to
-     establish stays **PLAUSIBLE**, with the needed check named in `reason` for the
-     orchestrator. (Base rubric: "A review seat never mutates, and never claims a run it
-     did not make.")
+   - **Never change the repository, and never claim a run you did not make.** Quote code
+     you read, a read-only command you actually ran (with its output), or an execution
+     output the orchestrator captured and handed you — and never imply a run you did not
+     make. Never write a probe into the tree: a verdict that needs the code **changed** to
+     establish it stays **PLAUSIBLE**, with the needed check named in `reason` for the
+     orchestrator. (Base rubric: "A review seat never changes the repository, and never
+     claims a run it did not make.")
 
    ## Output
    Write a JSON array to <absolute round-<N>/verdicts-<cluster-index>.json path — THIS
@@ -141,7 +141,7 @@ print(json.dumps(verification.apply_verdicts(merged, verdicts)))
   `{id, file, title, reason, was_blocking_tagged}` (`was_blocking_tagged` preserved when the
   reviewer tagged it Critical/Important).
 - **CONFIRMED** — survivor stamped `verdict: "CONFIRMED"`; CONFIRMED evidence from the verdict
-  overwrites/sets the finding's `evidence` (the executed receipt).
+  overwrites/sets the finding's `evidence` (the verification evidence).
 - **PLAUSIBLE** — survivor stamped `verdict: "PLAUSIBLE"`.
 - **KEEP-ON-UNCERTAIN** — a missing verdict, malformed verdict, or REFUTED without a
   non-empty reason keeps the finding as **PLAUSIBLE** at its pre-verification severity — a
