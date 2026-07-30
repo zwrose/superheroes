@@ -84,6 +84,18 @@ _DISALLOWED_TOOLS_RE = re.compile(r"^disallowedTools\s*:", re.M)
 # raw split token would silently pass a seat that really does hold a shell.
 _TOOL_TOKEN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 
+# A slug-agnostic first-column reader for the dispatch tables (item 4a, #719 round 2
+# confirmation). `test_dispatch_tables._table_rows`' own `ROW_RE` only matches slugs
+# ending `-reviewer`, so an `assert "check-runner" not in slugs_in_table` built on it is
+# tautological — `check-runner` is filtered out before the set exists, so the assertion
+# can never fail (the confirmation seat demonstrated this: a literal `check-runner` row
+# injected in memory left the parsed count unchanged and `check-runner` unparsed). This
+# regex requires only a lowercase first column with at least one internal hyphen — it
+# does not care what the slug ends in, so a `check-runner` row is caught the same as a
+# `*-reviewer` row. It also does not match the tables' own header row (`| reviewer | ...`
+# has no hyphen) or separator row (leading `-`, not a letter).
+_FIRST_COL_RE = re.compile(r"^\|\s*([a-z][a-z-]*-[a-z-]*)\s*\|", re.M)
+
 
 def _norm(text):
     """Collapse every whitespace run to one space.
@@ -463,14 +475,24 @@ def test_check_runner_registers_as_itself_and_is_absent_from_every_reviewer_rost
     generally; this test adds the check-runner-SPECIFIC guarantees the order names:
     its registered name is exactly `check-runner`, it matches no `*-reviewer`
     pattern, and it is absent from every panel-roster source this test suite already
-    reads elsewhere — read via those same modules/helpers (never a fresh parser),
-    per CONVENTIONS §11:
+    reads elsewhere, per CONVENTIONS §11:
     - `lib/spec_loop_plan.py`'s `DIMENSIONS` (imported directly, as
       `test_dispatch_tables.py` does).
     - `lib/round_driver.py`'s reviewer roster (`DIMENSIONS`, imported the same way).
-    - The skill dispatch tables `lib/tests/test_dispatch_tables.py` reads (its own
-      `_table_rows` helper, imported rather than re-implemented) for `review-code`,
-      `review-spec`, and `audit-debt`.
+    - The skill dispatch tables' first-column cells, parsed slug-agnostically by
+      `_FIRST_COL_RE` above (item 4a, #719 round 2 confirmation) — deliberately NOT
+      `test_dispatch_tables._table_rows`, whose `ROW_RE` matches only slugs ending
+      `-reviewer` and so pre-filters `check-runner` out before the set is built,
+      making an `assert "check-runner" not in slugs_in_table` built on it
+      tautological (verified: injecting a literal `| check-runner | check-runner |
+      Code |` row left `_table_rows`' parsed count unchanged and `check-runner`
+      unparsed). `_FIRST_COL_RE` has no such filter, so a `check-runner` row is
+      caught the same as any other.
+    - `seat_map.PANEL_ROSTER` and `seat_map.LENS_SEATS` (item 4b, #719 round 2
+      confirmation) — the default roster for the live `compose` command
+      `review-code` invokes; `lib/tests/test_seat_map.py` references
+      `PANEL_ROSTER` 49 times, so it is a roster source this suite already reads
+      and the prior assertion's omission of it was a real gap, not a nice-to-have.
     Any of these sources failing to import/read is a hard failure, not a skip.
     """
     text = _read_required(os.path.join(PLUGIN, "agents", "check-runner.md"),
@@ -494,14 +516,38 @@ def test_check_runner_registers_as_itself_and_is_absent_from_every_reviewer_rost
         "roster). check-runner is not a review seat and must never be dispatched as "
         "one.")
 
-    from test_dispatch_tables import _table_rows
     for skill in ("review-code", "review-spec", "audit-debt"):
-        rows = _table_rows(os.path.join("skills", skill, "SKILL.md"))
-        slugs_in_table = {slug for slug, _findings, _dim in rows}
-        assert "check-runner" not in slugs_in_table, (
+        text = _read_required(
+            os.path.join(PLUGIN, "skills", skill, "SKILL.md"),
+            "the %s dispatch table (item 4a, #719 round 2 confirmation)" % skill)
+        cells_in_table = set(_FIRST_COL_RE.findall(text))
+        # Fail-closed (edge 3): a regex that matched nothing would make the
+        # absence assertion below vacuous again, the exact class of defect this
+        # replacement exists to fix — a zero-cell parse is a failure, not a pass.
+        assert cells_in_table, (
+            "skills/%s/SKILL.md: _FIRST_COL_RE parsed zero first-column cells "
+            "from the dispatch table. A vacuous parse would make the "
+            "check-runner-absence assertion below trivially true; treat this as "
+            "a hard failure, not a pass." % skill)
+        assert "check-runner" not in cells_in_table, (
             "skills/%s/SKILL.md's dispatch table lists check-runner as a reviewer "
             "row. check-runner is not a review seat and must never be dispatched as "
             "one." % skill)
+
+    # Item 4b (#719 round 2 confirmation): the default panel roster for the live
+    # `compose` command `review-code` invokes. Read by import, the same way the
+    # two DIMENSIONS rosters above are — fails closed on a missing import/attribute
+    # (an AttributeError/ImportError propagates as a hard test failure, never a
+    # silent skip).
+    import seat_map
+    assert "check-runner" not in seat_map.PANEL_ROSTER, (
+        "check-runner is present in seat_map.PANEL_ROSTER (the default live panel "
+        "roster review-code's `compose` command uses). check-runner is not a "
+        "review seat and must never be dispatched as one.")
+    assert "check-runner" not in seat_map.LENS_SEATS, (
+        "check-runner is present in seat_map.LENS_SEATS (the five lens seats "
+        "PANEL_ROSTER is built from). check-runner is not a review seat and must "
+        "never be dispatched as one.")
 
 
 # The receipt envelope's magic string. Both homes must agree on the literal token that

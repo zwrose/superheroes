@@ -429,7 +429,7 @@ Report it under "escalated" with the id and why.
 
 ## Verification Rules (for subagents)
 
-These are the base rubric's binding verification rules, restated in every subagent prompt. Two of them are mechanically enforced again at compile time: the **citation** rule and the **diff-scope** rule — a finding violating either is **dropped** before the user ever sees it. The **reachability** rule is **downgraded, not dropped**, and only on the read-only path. Every other rule here — including rule 8 — is **obligation-only**: nothing here mechanically drops or downgrades a finding for violating it. See the base rubric's "Verification rules" and "In-pass Chain-of-Verification & single-pass discipline" sections for the authoritative statement.
+These are the base rubric's binding verification rules, restated in every subagent prompt. Some are additionally checked when findings are compiled and some are not — the compile step in `skills/review-code/SKILL.md` is the authority on exactly what it does, and this paragraph does not restate it. Rule 8 has no compile-time check at all — it is **obligation-only**, exactly as its own text and the `LEDGERS.md` §3 row say: nothing mechanically drops or downgrades a finding for violating it. See the base rubric's "Verification rules" and "In-pass Chain-of-Verification & single-pass discipline" sections for the authoritative statement.
 
 1. **`file:line` citation required.** No citation → finding is dropped at compile time, before presentation.
 2. **Diff-scope rule.** Only `+` and `-` lines of `$SESSION_DIR/round-<N>/diff.txt` are in scope. Context lines (no prefix) and unchanged code in modified files are pre-existing — flagging them is the #1 source of false findings.
