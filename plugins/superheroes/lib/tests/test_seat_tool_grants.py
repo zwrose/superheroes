@@ -76,26 +76,6 @@ _DISALLOWED_TOOLS_RE = re.compile(r"^disallowedTools\s*:", re.M)
 # raw split token would silently pass a seat that really does hold a shell.
 _TOOL_TOKEN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 
-# The window (in whitespace-normalized characters) around a pointer's quoted title
-# occurrence that is asserted to carry the `mutat` word stem (WO6, #719 round 2
-# continuation). Measured against the current text of all four pointers:
-#   - 260 chars BEFORE the title start is enough to reach every pointer's own
-#     restatement of the never-mutate clause (the farthest is verification-pass.md's
-#     "and never claims a run you did not make, and never mutate." at -122; the next
-#     farthest is auto-fix-loop.md's "name the **check** — the exact command,
-#     mutation, or input" at -199) while STAYING SHORT of workhorse/SKILL.md's
-#     unrelated §8 mutation-probe paragraph (its nearest `mutat` mention sits at -308,
-#     a 48-char margin outside this window) — the exact false-pass the order named:
-#     a file-wide check would pass on that paragraph even if the pointer's own
-#     restatement were deleted; this window cannot.
-#   - 450 chars AFTER the title start is enough to reach every pointer's own
-#     restatement that follows the title (the farthest is check-runner.md's "(a probe
-#     file, a mutation)" at +399; workhorse/SKILL.md's "**mutation probe**" at +321),
-#     while staying inside the same paragraph in every pointer (none of the four
-#     pointers' rule-carrying paragraphs run past ~600 normalized chars total).
-_MUTATE_WINDOW_BEFORE = 260
-_MUTATE_WINDOW_AFTER = 450
-
 
 def _norm(text):
     """Collapse every whitespace run to one space.
@@ -390,19 +370,22 @@ def test_pointer_resolves_to_the_home_rule(rel):
     and this test is the drift guard that reads the home at runtime and fails the four
     copies out of sync with it, per §11.3.
 
-    The rule has TWO axes and this guard pins both, in every copy:
+    What this guards: the rule's **title**, derived from the home at runtime, must
+    appear in all four pointers — so a rename in the home reddens every stale pointer.
 
-    - **never-claim-a-run** — pinned by quoting the home's title verbatim
-      (whitespace-normalized). The title is read from `review-base.md` at runtime, so a
-      rename in the home fails every pointer here rather than passing green. (Kept
-      exactly as it was before WO6 — this is the assertion that pins this axis; do not
-      weaken it.)
-    - **never-mutate** — pinned by asserting the `mutat` word stem is present in a
-      bounded window around the title occurrence (`_MUTATE_WINDOW_BEFORE`/`_AFTER`),
-      not the pointer file as a whole. A file-wide `in` check would pass on
-      workhorse/SKILL.md's unrelated §8 mutation-probe paragraph even if the pointer's
-      OWN restatement of "never mutate" were deleted; the windowed check cannot, because
-      that paragraph sits outside the window (see the window-size comment above).
+    What this does NOT guard (disclosed, not silently dropped — WO7, #719): each
+    pointer also carries its own **restatement** of the rule's substance (the
+    never-mutate half), and nothing here checks those restatements against the home. A
+    pointer could drop its never-mutate clause while keeping the title and CI would
+    stay green. A prior round (WO6) added a windowed `mutat`-stem assertion meant to
+    pin exactly that gap; it was inert, because the home's own title reads "A review
+    seat never mutates, and never claims a run it did not make" — the title itself
+    contains `mutates`, so any assertion anchored on the title's own occurrence is
+    pre-satisfied by the anchor before it ever reaches the pointer's real restatement.
+    Anchor and payload were not disjoint. The durable fix is a **design** change — one
+    shared fragment every dispatcher inlines, so there is literally one copy to drift —
+    rather than a stronger substring; that is handed to the advisor as a follow-up, not
+    attempted here.
     """
     title, _ = _no_mutation_no_claim_rule()
     ntitle = _norm(title)
@@ -417,20 +400,6 @@ def test_pointer_resolves_to_the_home_rule(rel):
         "%s no longer quotes the home rule's title %r (read from review-base.md at "
         "runtime). This pointer cites the rule by name, so a rename in the home "
         "leaves it dangling." % (rel, title))
-    # Axis 2 — never-mutate, scoped to the neighbourhood of the title occurrence so a
-    # file-wide match cannot pass on unrelated prose elsewhere in a long charter (edge 1).
-    idx = text.find(ntitle)
-    assert idx != -1, (
-        "%s: title located above via `in` but not via `find` — should be unreachable."
-        % rel)
-    window = text[max(0, idx - _MUTATE_WINDOW_BEFORE):
-                  idx + len(ntitle) + _MUTATE_WINDOW_AFTER]
-    assert "mutat" in window.lower(), (
-        "%s no longer carries the `mutat` word stem within %d characters of its quoted "
-        "title (window: %r). This pointer's own restatement of the never-mutate half of "
-        "the rule appears to have been dropped even though it still quotes the title — "
-        "the never-claim-a-run axis alone is not the whole rule." %
-        (rel, _MUTATE_WINDOW_BEFORE + _MUTATE_WINDOW_AFTER, window))
 
 
 @pytest.mark.parametrize("path", HOST_MAP_COPIES)
