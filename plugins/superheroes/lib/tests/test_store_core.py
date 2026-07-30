@@ -382,3 +382,15 @@ def test_run_git_wrapper_matches_run_git_result_out(tmp_path, monkeypatch):
     monkeypatch.setattr("subprocess.run", lambda *a, **kw: _Declined())
     res = sc.run_git_result(str(tmp_path), "status")
     assert res.out is None and sc.run_git(str(tmp_path), "status") is None
+
+
+def test_not_a_repository_true_on_declined_not_a_git_repo():
+    res = sc.GitResult(None, sc.GIT_DECLINED, "fatal: not a git repository")
+    assert sc.not_a_repository(res) is True
+
+
+def test_not_a_repository_false_on_other_declined():
+    res = sc.GitResult(None, sc.GIT_DECLINED, "fatal: detected dubious ownership")
+    assert sc.not_a_repository(res) is False
+    assert sc.not_a_repository(sc.GitResult(None, sc.GIT_UNAVAILABLE, "x")) is False
+    assert sc.not_a_repository(sc.GitResult("/repo", sc.GIT_OK, None)) is False

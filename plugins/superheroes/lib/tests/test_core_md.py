@@ -1881,6 +1881,38 @@ def test_repo_root_declined_non_git_uses_cwd(tmp_path, monkeypatch):
     assert CM._repo_root(str(tmp_path)) == os.path.realpath(str(tmp_path))
 
 
+def test_repo_root_raises_on_dubious_ownership(tmp_path, monkeypatch):
+    import os as _os
+
+    if _os.environ.get("GIT_TEST_ASSUME_DIFFERENT_OWNER") == "1":
+        repo = tmp_path / "pkg" / "deep"
+        repo.mkdir(parents=True)
+        subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
+        with pytest.raises(CM.RepoRootUnavailable):
+            CM._repo_root(str(repo))
+        return
+
+    class _Dubious:
+        returncode = 128
+        stdout = ""
+        stderr = "fatal: detected dubious ownership in repository at '/fake'"
+
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: _Dubious())
+    with pytest.raises(CM.RepoRootUnavailable):
+        CM._repo_root(str(tmp_path))
+
+
+def test_repo_root_raises_on_permission_denied(tmp_path, monkeypatch):
+    class _Perm:
+        returncode = 128
+        stdout = ""
+        stderr = "fatal: cannot open '/fake/.git': Permission denied"
+
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: _Perm())
+    with pytest.raises(CM.RepoRootUnavailable):
+        CM._repo_root(str(tmp_path))
+
+
 def test_read_none_when_repo_root_unavailable(tmp_path, monkeypatch):
     repo = str(tmp_path)
     store = str(tmp_path / "store")
@@ -1934,3 +1966,19 @@ def test_write_refused_on_toctou_undecodable_after_gate_ok(tmp_path, monkeypatch
     assert res["action"] == "refused"
     assert res["violations"][0]["reason"] == CM.GATE_REASON_UNREADABLE
     assert open(core_p, "rb").read() == corrupt_bytes
+
+
+def test_confirm_deferred_on_undecodable_core(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    core_p = _gate_core_beside(repo)
+    open(core_p, "wb").write(b"\xff broken\n")
+    res = CM.confirm(repo, root=store)
+    assert res["action"] == "deferred"
+
+
+def test_confirm_absent_when_core_genuinely_missing(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    res = CM.confirm(repo, root=store)
+    assert res["action"] == "absent"

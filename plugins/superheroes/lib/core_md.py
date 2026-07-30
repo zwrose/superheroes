@@ -145,7 +145,12 @@ def _repo_root(cwd):
     if res.status == store_core.GIT_UNAVAILABLE:
         raise RepoRootUnavailable(
             "git could not be run at %s: %s" % (cwd, res.detail))
-    return os.path.realpath(res.out) if res.out else os.path.realpath(cwd)
+    if res.status == store_core.GIT_OK:
+        return os.path.realpath(res.out) if res.out else os.path.realpath(cwd)
+    if store_core.not_a_repository(res):
+        return os.path.realpath(cwd)
+    raise RepoRootUnavailable(
+        "git declined rev-parse --show-toplevel at %s: %s" % (cwd, res.detail))
 
 
 def relocate_file(src, dst):
@@ -460,13 +465,6 @@ def write(cwd, facts, status, *, root=None, now=None):
                 record=None,
             )
         existing = read(cwd, root)
-        if existing is None:
-            re_cls = _classify_core_md_at_path(core_path(cwd, root))
-            if re_cls.status == CONFIG_UNREADABLE:
-                return _refused_dispatch_gate(
-                    evaluation_error=gate_refusal(GATE_REASON_UNREADABLE, re_cls.detail),
-                    record=None,
-                )
         violations, gate_err = _evaluate_configured_dispatch_gate(cwd, root, facts, existing)
         if gate_err is not None:
             return _refused_dispatch_gate(evaluation_error=gate_err, record=existing)
@@ -795,6 +793,8 @@ def confirm(cwd, *, root=None, now=None):
     stamp = now or _today()
     existing = read(cwd, root)
     if existing is None:
+        if engine_preferences_for_gate(cwd=cwd, root=root).status == CONFIG_UNREADABLE:
+            return {"action": "deferred", "record": None}
         return {"action": "absent", "record": None}
     if existing.get("behind"):
         return {"action": "behind", "record": existing}
@@ -809,6 +809,8 @@ def confirm(cwd, *, root=None, now=None):
             return {"action": "deferred", "record": None}
         existing = read(cwd, root)  # re-read under the lock
         if existing is None:
+            if engine_preferences_for_gate(cwd=cwd, root=root).status == CONFIG_UNREADABLE:
+                return {"action": "deferred", "record": None}
             return {"action": "absent", "record": None}
         # UFR-3: never rewrite a forward-schema core — render_core would downgrade it to
         # SCHEMA_VERSION and drop fields this version doesn't understand. Surface, don't write.

@@ -59,15 +59,26 @@ def short_hash(s):
     return hashlib.sha256(s.encode("utf-8")).hexdigest()[:16]
 
 
+def not_a_repository(res):
+    """True when git declined with its canonical not-a-repository message (issue #699)."""
+    if res.status != GIT_DECLINED:
+        return False
+    detail = (res.detail or "").lower()
+    return "not a git repository" in detail or "not a git repo" in detail
+
+
 def run_git_result(cwd, *args):
     """`run_git` plus WHY there is no output (issue #699 rider 11).
 
     ``GIT_DECLINED`` means git ran and answered no — callers may believe it. ``GIT_UNAVAILABLE``
     means git never ran (missing binary, OSError, timeout), so a caller that would otherwise fall
     back to a default must fail closed instead: it has no answer, not a negative one."""
+    env = dict(os.environ)
+    env["LC_ALL"] = "C"
+    env["LANGUAGE"] = "C"  # stderr messages only; path output is locale-independent
     try:
         r = subprocess.run(["git", "-C", cwd, *args],
-                           capture_output=True, text=True, timeout=10)
+                           capture_output=True, text=True, timeout=10, env=env)
     except (OSError, subprocess.SubprocessError) as exc:
         return GitResult(None, GIT_UNAVAILABLE, "%s: %s" % (type(exc).__name__, exc))
     if r.returncode != 0:

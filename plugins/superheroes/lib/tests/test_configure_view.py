@@ -347,15 +347,20 @@ def test_collect_and_render_survive_git_unavailable(tmp_path, monkeypatch):
         ),
     )
 
+    real_run_git = sc.run_git_result
+
     def fake(cwd, *args):
         if args == ("rev-parse", "--show-toplevel"):
             return sc.GitResult(None, sc.GIT_UNAVAILABLE, "FileNotFoundError: no git")
-        return sc.run_git_result(cwd, *args)
+        return real_run_git(cwd, *args)
 
     monkeypatch.setattr(sc, "run_git_result", fake)
     data = cv.collect(str(tmp_path), root=root)
     assert data["layers"] == []
     assert data["core"] is None
+    assert data["mode"] == mr.IN_REPO
+    assert data["drift"] is not None
+    assert data["drift"]["count"] >= 1
     screen = cv.render(str(tmp_path), root=root)
     assert isinstance(screen, str)
     assert "## Core\n(no core calibration yet)" in screen

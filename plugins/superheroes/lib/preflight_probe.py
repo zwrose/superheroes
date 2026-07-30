@@ -148,7 +148,8 @@ def dispatch_calibration(cwd=None, root=None, prefs=None, tiers=None):
                 model_tier_overrides.resolve_profile_path(cwd, root))
         return engine_pref.dispatch_calibration_rows(prefs, tiers)
     except Exception as exc:
-        return _dispatch_calibration_read_error_marker(type(exc).__name__, exc)
+        return _dispatch_calibration_read_error_marker(
+            core_md.GATE_REASON_EVALUATION_FAILED, core_md.gate_refusal_detail(exc))
 
 
 def _dispatch_selftest_config(cwd=None, root=None):
@@ -175,7 +176,8 @@ def _dispatch_selftest_config(cwd=None, root=None):
             "prefs": {},
             "tiers": {},
             "read_error": core_md.gate_refusal_line(
-                core_md.gate_refusal(type(exc).__name__, exc)),
+                core_md.gate_refusal(
+                    core_md.GATE_REASON_EVALUATION_FAILED, core_md.gate_refusal_detail(exc))),
         }
 
 

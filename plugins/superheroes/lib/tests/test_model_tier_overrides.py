@@ -461,6 +461,7 @@ def test_gate_refusal_fallback_matches_core_md_shape():
     import core_md
 
     assert MTO._gate_refusal_fallback("r", "d") == core_md.gate_refusal("r", "d")
+    assert MTO._GATE_REASON_EVALUATION_FAILED_FALLBACK == core_md.GATE_REASON_EVALUATION_FAILED
 
 
 def test_gate_refusal_fallback_needs_no_core_md_import(monkeypatch):
