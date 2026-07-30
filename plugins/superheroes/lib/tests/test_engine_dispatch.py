@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 import shutil
+import time
 
 import pytest
 
@@ -26,10 +27,13 @@ _SV.loader.exec_module(_SV_MOD)
 
 @pytest.fixture(autouse=True)
 def _pin_temp_base_to_tmp_path(tmp_path, monkeypatch):
-    """Keep sanitized views off the real system temp directory."""
+    """Keep sanitized views and dispatch journals off the real system temp directory."""
     base = str(tmp_path / "sanitized-temp-base")
     os.makedirs(base, exist_ok=True)
     monkeypatch.setattr(_SV_MOD.tempfile, "gettempdir", lambda: base)
+    journal_root = str(tmp_path / "dispatch-journal-root")
+    os.makedirs(journal_root, exist_ok=True)
+    monkeypatch.setenv(ED.JOURNAL_ROOT_ENV, journal_root)
     yield
 
 
@@ -160,7 +164,7 @@ def test_dispatch_review_repo_root_absent_no_spawn(tmp_path):
     )
     assert res == {
         "ok": False, "reason": "unrunnable", "detail": "repo-root-absent",
-        "attempts": 0, "forfeited": False,
+        "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
     }
     assert "sanitizedView" not in res
     assert len(fake.calls) == 0
@@ -905,7 +909,7 @@ def test_main_dispatch_review_without_repo_root_json_refusal(tmp_path, monkeypat
     res = json.loads(capsys.readouterr().out.strip())
     assert res == {
         "ok": False, "reason": "unrunnable", "detail": "repo-root-absent",
-        "attempts": 0, "forfeited": False,
+        "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
     }
 
 
@@ -1000,7 +1004,7 @@ def test_sanitized_view_build_error_refusal_no_spawn(tmp_path):
     )
     assert res == {
         "ok": False, "reason": "unrunnable", "detail": "sanitized-view-export-failed",
-        "attempts": 0, "forfeited": False,
+        "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
     }
     assert len(fake.calls) == 0
     assert "sanitizedView" not in res
@@ -1187,3 +1191,184 @@ def test_pre_view_repo_root_not_a_repo_no_sanitized_view(tmp_path):
     assert res["detail"] == "repo-root-not-a-repo"
     assert res["attempts"] == 0
     assert "sanitizedView" not in res
+
+
+def _manual_open_review_run(tmp_path, run_dir):
+    """Journal run-opened without spawning — for supervision primitive tests."""
+    repo_root = _repo(tmp_path)
+    build_view = _fake_build_view(tmp_path)
+    view = build_view(os.path.realpath(repo_root))
+    cwd = os.path.realpath(view["path"])
+    built = __import__("engine_adapter").build_argv_result(
+        "codex", "review", "high", {"model": "sonnet", "cwd": cwd},
+    )
+    argv = built["argv"]
+    prompt_path = _valid_prompt(tmp_path)
+    with open(prompt_path, encoding="utf-8") as fh:
+        base = fh.read()
+    fed = ED.ANTIHIJACK_PREAMBLE + _SV_MOD.sanitized_view_notice(view) + base
+    os.makedirs(run_dir, exist_ok=True)
+    ok, detail = ED._open_review_run(
+        run_dir, engine="codex", argv=argv, cwd=cwd,
+        timeout=ED.RETRY_MIN_TIMEOUT, retry_timeout=ED.RETRY_MIN_TIMEOUT,
+        prompt_path=prompt_path, view_path=view["path"], view_meta=view,
+        fed_prompt=fed, order_id="test-order", progress_path=os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert ok, detail
+    return repo_root, view
+
+
+def test_run_lock_serializes_concurrent_spawn(tmp_path, monkeypatch):
+    """A3: two concurrent supervisors cannot both spawn attempt 1."""
+    import subprocess
+    import sys
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_codex = fake_bin / "codex"
+    fake_codex.write_text("#!/usr/bin/env python3\nimport time\ntime.sleep(120)\n", encoding="utf-8")
+    fake_codex.chmod(0o755)
+    path_env = str(fake_bin) + os.pathsep + "/usr/bin" + os.pathsep + "/bin"
+
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    mod_path = os.path.join(_HERE, "..", "engine_dispatch.py")
+    journal_env = os.environ.get(ED.JOURNAL_ROOT_ENV, "")
+    child = r"""
+import json, os, sys, time
+sys.path.insert(0, os.path.dirname(%(mod)r))
+os.environ[%(jenv)r] = %(jval)r
+os.environ["PATH"] = %(path)r
+import importlib.util
+spec = importlib.util.spec_from_file_location("engine_dispatch", %(mod)r)
+ed = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ed)
+deadline = time.monotonic() + 2
+res = ed._supervise(%(run_dir)r, run_kind=ed.RUN_KIND_REVIEW, deadline=deadline)
+print(json.dumps({"detail": res.get("detail"), "attempts": res.get("attempts")}))
+""" % {"mod": mod_path, "jenv": ED.JOURNAL_ROOT_ENV, "jval": json.dumps(journal_env),
+       "run_dir": run_dir, "path": json.dumps(path_env)}
+    p1 = subprocess.Popen([sys.executable, "-c", child], stdout=subprocess.PIPE, text=True)
+    p2 = subprocess.Popen([sys.executable, "-c", child], stdout=subprocess.PIPE, text=True)
+    out1 = p1.communicate(timeout=60)[0]
+    out2 = p2.communicate(timeout=60)[0]
+    details = {json.loads(out1).get("detail"), json.loads(out2).get("detail")}
+    assert "run-locked" in details
+    records, _ = ED._journal_read(run_dir)
+    started = [r for r in records if r.get("kind") == "attempt-started" and r.get("attempt") == 1]
+    assert len(started) == 1
+
+
+def test_journal_torn_tail_discarded_valid_prefix_kept(tmp_path):
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    records_before, _ = ED._journal_read(run_dir)
+    path = ED._journal_path(run_dir)
+    with open(path, "ab") as fh:
+        fh.write(b'{"kind":"run-folded","result":{"ok":true},"at":1.0}')  # no newline
+    records, corrupt = ED._journal_read(run_dir)
+    assert corrupt is False
+    assert records == records_before
+
+
+def test_journal_interior_corruption_fails_closed(tmp_path):
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    path = ED._journal_path(run_dir)
+    with open(path, "ab") as fh:
+        fh.write(b"not-json\n")
+    records, corrupt = ED._journal_read(run_dir)
+    assert corrupt is True
+    res = ED._supervise(
+        run_dir, run_kind=ED.RUN_KIND_REVIEW,
+        deadline=time.monotonic() + 5,
+    )
+    assert res["terminal"] is True
+    assert res["detail"] == "journal-corrupt"
+    started = [r for r in ED._journal_read(run_dir)[0] if r.get("kind") == "attempt-started"]
+    assert started == []
+
+
+def test_journal_root_pointer_survives_env_removal(tmp_path, monkeypatch):
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    pointer = os.path.join(run_dir, "journal-root.txt")
+    assert os.path.isfile(pointer)
+    monkeypatch.delenv(ED.JOURNAL_ROOT_ENV, raising=False)
+    records, _ = ED._journal_read(run_dir)
+    assert any(r.get("kind") == "run-opened" for r in records)
+
+
+def test_run_dir_not_empty_unopened_refused(tmp_path):
+    repo_root = _repo(tmp_path)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "stale.txt").write_text("leftover\n", encoding="utf-8")
+    fake = FakeRunner([])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), run_dir=str(run_dir),
+    )
+    assert res["detail"] == "run-dir-not-empty-unopened"
+    assert res["attempts"] == 0
+    assert len(fake.calls) == 0
+
+
+def test_review_run_dir_inside_repo_root_refused(tmp_path):
+    repo_root = _repo(tmp_path)
+    run_dir = os.path.join(repo_root, "dispatch-run")
+    os.makedirs(run_dir)
+    fake = FakeRunner([])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir,
+    )
+    assert res["detail"] == "run-dir-inside-repo-root"
+    assert res["attempts"] == 0
+    assert len(fake.calls) == 0
+
+
+def test_dispatch_abandon_idempotent_terminal(tmp_path):
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    first = ED.dispatch_abandon(run_dir)
+    second = ED.dispatch_abandon(run_dir)
+    assert first["terminal"] is True
+    assert first["detail"] == "run-abandoned"
+    assert second["detail"] == "run-abandoned"
+    records, _ = ED._journal_read(run_dir)
+    abandoned = [r for r in records if r.get("kind") == "run-abandoned"]
+    assert len(abandoned) == 1
+
+
+def test_dispatch_poll_never_spawns(tmp_path):
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    res = ED.dispatch_poll(run_dir)
+    assert res["reason"] == "running"
+    records, _ = ED._journal_read(run_dir)
+    assert not any(r.get("kind") == "attempt-started" for r in records)
+
+
+def test_supervise_run_not_opened(tmp_path):
+    run_dir = str(tmp_path / "empty-run")
+    os.makedirs(run_dir)
+    res = ED._supervise(
+        run_dir, run_kind=ED.RUN_KIND_REVIEW, deadline=time.monotonic() + 5,
+    )
+    assert res["detail"] == "run-not-opened"
+    assert res["attempts"] == 0
+
+
+def test_supervise_run_kind_mismatch(tmp_path):
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    res = ED._supervise(
+        run_dir, run_kind=ED.RUN_KIND_WRITE, deadline=time.monotonic() + 5,
+    )
+    assert res["detail"] == "run-kind-mismatch"
+    assert res["attempts"] == 0
+    records, _ = ED._journal_read(run_dir)
+    assert not any(r.get("kind") == "attempt-started" for r in records)

@@ -10,11 +10,13 @@ emits liveness heartbeats, detects terminal forfeit (timeout OR unreadable parse
 tight-inline before forfeiting to the caller (which falls open to Claude). Never raises to its caller.
 """
 import argparse
+import hashlib
 import json
 import os
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -23,6 +25,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import engine_adapter  # noqa: E402  build_argv, parse_result, prompt_path_ok — the pure core
+import file_lock  # noqa: E402
 import sanitized_view  # noqa: E402
 
 # The adopted mode-7 hardening (#563) and sanitized review cwd (#684): a dispatched one-shot reviewer
@@ -38,6 +41,24 @@ ANTIHIJACK_PREAMBLE = (
     "when the diff alone cannot settle a question. Respond with your review ONLY.\n\n"
 )
 
+DEFAULT_SYNC_WAIT = 540          # below the 600 s foreground-conversion boundary (2.1.219)
+MAX_SYNC_WAIT = 540              # hard cap: a caller can ask for less, never more
+MAX_ATTEMPTS = 2                 # unchanged semantics: one tight-inline retry
+SUPERVISOR_POLL_INTERVAL = 0.5
+JOURNAL_ROOT_ENV = "SUPERHEROES_DISPATCH_JOURNAL_ROOT"
+JOURNAL_ROOT_NAME = "superheroes-dispatch-journal"
+JOURNAL_NAME = "journal.jsonl"
+RUN_LOCK_NAME = "run.lock"
+WORKTREE_LEASE_PREFIX = "superheroes-worktree-lease-"
+PROMPT_NAME = "prompt.txt"
+PROGRESS_NAME = "progress.jsonl"
+RUN_KIND_REVIEW = "review"
+RUN_KIND_WRITE = "write"
+_DISPATCH_SCRIPT = os.path.abspath(__file__)
+_GIT_ROUTING_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+                     "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_GLOBAL",
+                     "GIT_CONFIG_SYSTEM", "GIT_COMMON_DIR")
+
 RETRY_MIN_TIMEOUT = 900     # DoD 2: the tight-inline retry gets a generous ceiling (never borderline)
 HEARTBEAT_INTERVAL = 10     # DoD 4: seconds between liveness heartbeats (time-based, not output-based)
 _STDERR_TAIL = 4096
@@ -45,6 +66,198 @@ MAX_STDOUT_CAPTURE = 8 * 1024 * 1024   # keep only the last 8 MB of engine stdou
 # is at the TAIL (parse_result reads the tail), and an unbounded read would let a runaway engine OOM
 # the runner before it can return the structured forfeit that triggers the Claude fall-open (#563).
 MAX_STDERR_CAPTURE = 64 * 1024
+
+
+def _scrub_env(env=None):
+    """Remove git routing vars and the journal root from a spawn environment."""
+    base = dict(env if env is not None else os.environ)
+    for key in _GIT_ROUTING_VARS:
+        base.pop(key, None)
+    base.pop(JOURNAL_ROOT_ENV, None)
+    return base
+
+
+def _journal_root_for_run_dir(run_dir_real):
+    pointer = os.path.join(run_dir_real, "journal-root.txt")
+    if os.path.isfile(pointer):
+        try:
+            with open(pointer, encoding="utf-8") as fh:
+                root = fh.read().strip()
+            if root:
+                return root
+        except OSError:
+            pass
+    env_root = os.environ.get(JOURNAL_ROOT_ENV)
+    if env_root:
+        return env_root
+    return os.path.join(tempfile.gettempdir(), JOURNAL_ROOT_NAME)
+
+
+def _journal_path(run_dir_real):
+    root = _journal_root_for_run_dir(run_dir_real)
+    digest = hashlib.sha256(os.path.realpath(run_dir_real).encode("utf-8")).hexdigest()
+    return os.path.join(root, digest, JOURNAL_NAME)
+
+
+def _journal_append(run_dir_real, record):
+    """Append one JSON line; flush + fsync. False on OSError; never raises."""
+    path = _journal_path(run_dir_real)
+    try:
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        line = json.dumps(record, separators=(",", ":")) + "\n"
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(line)
+            fh.flush()
+            os.fsync(fh.fileno())
+        return True
+    except OSError:
+        return False
+
+
+def _journal_read(run_dir_real):
+    """Return (records, interior_corrupt). Skips torn trailing write; never raises."""
+    path = _journal_path(run_dir_real)
+    records = []
+    interior_corrupt = False
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return records, interior_corrupt
+    if not raw:
+        return records, interior_corrupt
+    text = raw.decode("utf-8", "ignore")
+    if not text.endswith("\n"):
+        text = text.rsplit("\n", 1)[0] if "\n" in text else ""
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            records.append(json.loads(line))
+        except (ValueError, TypeError):
+            interior_corrupt = True
+    return records, interior_corrupt
+
+
+def _journal_state(records):
+    state = {
+        "opened": None,
+        "leaseToken": None,
+        "attempts": {},
+        "folded": None,
+        "abandoned": None,
+        "launching": {},
+    }
+    for rec in records:
+        kind = rec.get("kind")
+        if kind == "run-opened":
+            state["opened"] = rec
+        elif kind == "lease-acquired":
+            state["leaseToken"] = rec.get("leaseToken")
+        elif kind == "attempt-started":
+            att = rec.get("attempt")
+            if att is not None:
+                slot = state["attempts"].setdefault(att, {"childPid": None, "enginePgid": None, "ended": None})
+                slot["childPid"] = rec.get("childPid")
+        elif kind == "engine-launching":
+            att = rec.get("attempt")
+            if att is not None:
+                state["launching"][att] = rec
+        elif kind == "engine-started":
+            att = rec.get("attempt")
+            if att is not None:
+                slot = state["attempts"].setdefault(att, {"childPid": None, "enginePgid": None, "ended": None})
+                slot["enginePgid"] = rec.get("enginePgid")
+        elif kind == "attempt-ended":
+            att = rec.get("attempt")
+            if att is not None:
+                slot = state["attempts"].setdefault(att, {"childPid": None, "enginePgid": None, "ended": None})
+                slot["ended"] = rec
+        elif kind == "run-folded":
+            state["folded"] = rec.get("result")
+        elif kind == "run-abandoned":
+            state["abandoned"] = rec.get("detail")
+    return state
+
+
+def _process_alive(pid):
+    """Zombie-aware liveness; fail closed when ps is ambiguous."""
+    if pid is None:
+        return False
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except Exception:
+        return True
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "state=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=2,
+        )
+        if out.returncode != 0:
+            return True
+        state = (out.stdout or "").strip()
+        if state.startswith("Z"):
+            return False
+        return True
+    except Exception:
+        return True
+
+
+def _process_group_alive(pgid):
+    if pgid is None:
+        return False
+    try:
+        os.killpg(int(pgid), 0)
+        return True
+    except Exception:
+        return False
+
+
+def _terminate_process_group(pgid):
+    if pgid is None:
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(int(pgid), sig)
+        except Exception:
+            pass
+        time.sleep(0.2)
+
+
+def _terminate_pid(pid):
+    if pid is None:
+        return
+    try:
+        os.kill(int(pid), signal.SIGTERM)
+    except Exception:
+        pass
+    time.sleep(0.2)
+    try:
+        os.kill(int(pid), signal.SIGKILL)
+    except Exception:
+        pass
+
+
+def _run_live_evidence(state):
+    pending = None
+    for att in sorted(state.get("attempts", {})):
+        slot = state["attempts"][att]
+        if slot.get("ended") is None:
+            pending = (att, slot)
+    if pending is None:
+        return False, "no-pending-attempt"
+    _att, slot = pending
+    if _process_alive(slot.get("childPid")):
+        return True, "child-pid"
+    if _process_group_alive(slot.get("enginePgid")):
+        return True, "engine-pgroup"
+    return False, "none"
 
 
 def _validate_repo_root(repo_root):
@@ -61,6 +274,63 @@ def _validate_repo_root(repo_root):
     if not os.path.exists(os.path.join(root, ".git")):
         return False, "repo-root-not-a-repo"
     return True, os.path.realpath(root)
+
+
+def _validate_run_dir(run_dir):
+    if not run_dir:
+        return False, "run-dir-absent"
+    if not os.path.exists(run_dir):
+        return False, "run-dir-missing"
+    if os.path.islink(run_dir):
+        return False, "run-dir-is-symlink"
+    if not os.path.isdir(run_dir):
+        return False, "run-dir-not-a-directory"
+    real = os.path.realpath(run_dir)
+    abspath = os.path.abspath(run_dir)
+    if real != abspath:
+        return False, "run-dir-is-symlink"
+    if not os.access(real, os.W_OK):
+        return False, "run-dir-not-writable"
+    return True, real
+
+
+def _path_inside(parent, child):
+    parent = os.path.realpath(parent)
+    child = os.path.realpath(child)
+    return child == parent or child.startswith(parent + os.sep)
+
+
+def _run_dir_nonempty(run_dir_real):
+    try:
+        return bool(os.listdir(run_dir_real))
+    except OSError:
+        return True
+
+
+def _finalize_run(run_dir_real, state, *, terminal):
+    """Single cleanup site: destroy the recorded sanitized view. Never raises."""
+    opened = state.get("opened") if state else None
+    view_path = opened.get("viewPath") if opened else None
+    if view_path:
+        try:
+            sanitized_view.destroy_sanitized_view(view_path)
+        except Exception:
+            pass
+
+
+def _fold_run(run_dir_real, state, result):
+    _journal_append(run_dir_real, {"kind": "run-folded", "result": result, "at": time.time()})
+    _finalize_run(run_dir_real, state, terminal=True)
+    return result
+
+
+def _with_run_fields(result, *, run_dir, argv):
+    out = dict(result)
+    out["runDir"] = run_dir
+    out["argv"] = list(argv or [])
+    if "terminal" not in out:
+        out["terminal"] = out.get("reason") != "running"
+    return out
 
 
 def _cleanup(proc, pgid):
@@ -93,7 +363,8 @@ def _run_engine(argv, prompt_bytes, timeout, progress_cb, cwd):
     Never raises."""
     try:
         proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, cwd=cwd, start_new_session=True)
+                                stderr=subprocess.PIPE, cwd=cwd, start_new_session=True,
+                                env=_scrub_env())
     except Exception as exc:
         return "", False, 127, ("spawn-failed: %s" % exc)[:_STDERR_TAIL]
 
@@ -154,6 +425,531 @@ def _run_engine(argv, prompt_bytes, timeout, progress_cb, cwd):
     return bytes(out).decode("utf-8", "ignore"), timed_out, returncode, stderr_tail
 
 
+def _run_engine_files(argv, prompt_path, stdout_path, stderr_path, timeout, progress_path, attempt):
+    """Run-child engine spawn: durable files, never pipes. Never raises to caller."""
+    write_progress = _progress_writer(progress_path)
+    timed_out = False
+    returncode = None
+    stderr_tail = ""
+    signal_num = None
+    refusal = None
+    try:
+        with open(prompt_path, "rb") as prompt_fh, \
+             open(stdout_path, "wb") as out_fh, \
+             open(stderr_path, "wb") as err_fh:
+            proc = subprocess.Popen(
+                argv, stdin=prompt_fh, stdout=out_fh, stderr=err_fh,
+                start_new_session=True, env=_scrub_env(),
+            )
+    except Exception as exc:
+        return False, None, 127, False, None, ("spawn-failed: %s" % exc)[:_STDERR_TAIL]
+
+    pgid = proc.pid
+    start = time.monotonic()
+    last_beat = start
+    while True:
+        rc = proc.poll()
+        now = time.monotonic()
+        if now - last_beat >= HEARTBEAT_INTERVAL:
+            last_beat = now
+            try:
+                nbytes = os.path.getsize(stdout_path)
+            except OSError:
+                nbytes = 0
+            write_progress(attempt, now - start, nbytes)
+        if rc is not None:
+            returncode = rc
+            break
+        if now - start >= timeout:
+            timed_out = True
+            break
+        time.sleep(0.2)
+    _terminate_process_group(pgid)
+    try:
+        proc.wait(timeout=2)
+    except Exception:
+        pass
+    try:
+        with open(stderr_path, "rb") as fh:
+            err = fh.read()
+        stderr_tail = bytes(err)[-_STDERR_TAIL:].decode("utf-8", "ignore")
+    except OSError:
+        pass
+    return True, pgid, returncode, timed_out, signal_num, refusal or stderr_tail if refusal else stderr_tail
+
+
+def _attempt_timeout(opened, attempt):
+    if attempt == 1:
+        return opened.get("timeout", RETRY_MIN_TIMEOUT)
+    return max(opened.get("retryTimeout", RETRY_MIN_TIMEOUT), RETRY_MIN_TIMEOUT)
+
+
+def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
+    """In-process attempt via the injected run_engine seam.
+
+    This path does NOT exercise the real run-child spawn — production uses subprocess.Popen in
+    _spawn_attempt and _run_engine_files instead."""
+    opened = state["opened"]
+    argv = opened["argv"]
+    cwd = opened["cwd"]
+    timeout = _attempt_timeout(opened, attempt)
+    prompt_path = opened["promptPath"]
+    with open(prompt_path, "rb") as fh:
+        prompt_bytes = fh.read()
+    progress_path = opened.get("progressPath") or os.path.join(run_dir_real, PROGRESS_NAME)
+    write_progress = _progress_writer(progress_path)
+
+    if not _journal_append(run_dir_real, {
+        "kind": "attempt-started", "attempt": attempt,
+        "childPid": os.getpid(), "at": time.time(),
+    }):
+        return False, "journal-append-failed"
+    if not _journal_append(run_dir_real, {
+        "kind": "engine-started", "attempt": attempt,
+        "enginePgid": os.getpid(), "at": time.time(),
+    }):
+        return False, "journal-append-failed"
+
+    def cb(elapsed, nbytes, _a=attempt):
+        write_progress(_a, elapsed, nbytes)
+
+    t0 = time.monotonic()
+    stdout, timed_out, rc, stderr_tail = run_engine(argv, prompt_bytes, timeout, cb, cwd)
+    elapsed = time.monotonic() - t0
+
+    stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
+    stderr_path = os.path.join(run_dir_real, "attempt-%d.stderr" % attempt)
+    try:
+        with open(stdout_path, "w", encoding="utf-8", errors="ignore") as fh:
+            fh.write(stdout or "")
+        with open(stderr_path, "w", encoding="utf-8", errors="ignore") as fh:
+            fh.write(stderr_tail or "")
+    except OSError:
+        pass
+
+    refusal = None
+    if rc == 127 and stderr_tail.startswith("spawn-failed:"):
+        refusal = stderr_tail
+    _journal_append(run_dir_real, {
+        "kind": "attempt-ended", "attempt": attempt,
+        "exit": rc, "timedOut": timed_out, "signal": None,
+        "refusal": refusal, "at": time.time(),
+        "wallSeconds": round(elapsed, 1),
+        "stdoutBytes": len(stdout or ""),
+        "stderrTail": stderr_tail,
+    })
+    return True, ""
+
+
+def _spawn_attempt(run_dir_real, state, attempt, *, run_engine=None):
+    alive, who = _run_live_evidence(state)
+    if alive:
+        return False, "attempt-already-live:%s" % who
+    if attempt > MAX_ATTEMPTS:
+        return False, "attempts-exhausted"
+    if attempt in state.get("attempts", {}) and state["attempts"][attempt].get("childPid") is not None:
+        return False, "attempt-already-started"
+
+    if run_engine is not None and run_engine is not _run_engine:
+        return _execute_injected_attempt(run_dir_real, state, attempt, run_engine)
+
+    child_log = os.path.join(run_dir_real, "child-%d.log" % attempt)
+    try:
+        log_fh = open(child_log, "ab")
+    except OSError:
+        return False, "child-log-open-failed"
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-B", _DISPATCH_SCRIPT, "run-child", "--run-dir", run_dir_real],
+            stdin=subprocess.DEVNULL, stdout=log_fh, stderr=subprocess.STDOUT,
+            cwd=run_dir_real, start_new_session=True, env=_scrub_env(),
+        )
+    except Exception as exc:
+        try:
+            log_fh.close()
+        except Exception:
+            pass
+        return False, "spawn-failed:%s" % type(exc).__name__
+
+    if not _journal_append(run_dir_real, {
+        "kind": "attempt-started", "attempt": attempt,
+        "childPid": proc.pid, "at": time.time(),
+    }):
+        _terminate_process_group(proc.pid)
+        try:
+            proc.wait(timeout=2)
+        except Exception:
+            pass
+        try:
+            log_fh.close()
+        except Exception:
+            pass
+        return False, "journal-append-failed"
+    try:
+        log_fh.close()
+    except Exception:
+        pass
+    return True, ""
+
+
+def _grade_review_attempt(run_dir_real, state, attempt):
+    """Grade a completed review attempt from durable stdout files."""
+    opened = state["opened"]
+    engine = opened["engine"]
+    role_kind = opened.get("roleKind", RUN_KIND_REVIEW)
+    cwd = opened["cwd"]
+    fed_prompt = opened.get("fedPrompt", "")
+    slot = state["attempts"][attempt]
+    ended = slot.get("ended") or {}
+    stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
+    stderr_path = os.path.join(run_dir_real, "attempt-%d.stderr" % attempt)
+
+    if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
+        return {"forfeit": True, "reason": "forfeited"}
+
+    try:
+        with open(stdout_path, encoding="utf-8", errors="ignore") as fh:
+            stdout = fh.read()
+    except OSError:
+        return {"forfeit": True, "reason": "forfeited"}
+
+    try:
+        with open(stderr_path, encoding="utf-8", errors="ignore") as fh:
+            stderr_tail = fh.read()
+    except OSError:
+        stderr_tail = ended.get("stderrTail", "")
+
+    elapsed = ended.get("wallSeconds", 0)
+    stdout_bytes = ended.get("stdoutBytes", len(stdout or ""))
+    if engine == "codex":
+        tokens = engine_adapter.codex_tokens_used(stderr_tail)
+        tool_calls = None
+        source = "codex-stderr" if tokens is not None else "none"
+    elif engine == "cursor":
+        tokens = None
+        tool_calls = engine_adapter.cursor_tool_calls(stdout)
+        source = "cursor-stream" if tool_calls is not None else "none"
+    else:
+        tokens = None
+        tool_calls = None
+        source = "none"
+    engagement = {
+        "tokens": tokens,
+        "toolCalls": tool_calls,
+        "stdoutBytes": stdout_bytes,
+        "wallSeconds": elapsed,
+        "source": source,
+    }
+
+    res = engine_adapter.parse_result(engine, role_kind, stdout)
+    if not (res.get("ok") and res.get("findings")):
+        stripped = engine_adapter.strip_echoed_prompt(stdout, fed_prompt)
+        res = engine_adapter.parse_result(engine, role_kind, stripped)
+    if not res.get("ok"):
+        return {"forfeit": True, "reason": "forfeited", "engagement": engagement}
+
+    findings = res.get("findings") or []
+    if findings:
+        return {"ok": True, "findings": findings, "engagement": engagement}
+
+    ok_inv, accepted, rejected = engine_adapter.spot_check_investigated(res.get("investigated"), cwd)
+    if ok_inv:
+        return {"ok": True, "findings": [], "investigated": accepted, "engagement": engagement}
+    return {
+        "forfeit": True,
+        "reason": engine_adapter.REVIEW_FORFEIT_VACUOUS,
+        "engagement": engagement,
+        "investigatedRejected": [r["reason"] for r in (rejected or [])],
+    }
+
+
+def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None, investigated_rejected=None):
+    if reason == engine_adapter.REVIEW_FORFEIT_VACUOUS:
+        return {
+            "ok": False,
+            "terminal": True,
+            "reason": engine_adapter.REVIEW_FORFEIT_VACUOUS,
+            "attempts": attempts,
+            "forfeited": True,
+            "engagement": engagement,
+            "investigatedRejected": investigated_rejected or [],
+            "disclosure": (
+                "%s reviewer returned no findings and no verifiable investigation "
+                "record twice (vacuous forfeit — a seat that proved nothing is a seat "
+                "that never ran); fall open to a Claude reviewer and disclose the "
+                "degraded vendor mix" % engine
+            ),
+        }
+    return {
+        "ok": False,
+        "terminal": True,
+        "reason": "forfeited",
+        "attempts": attempts,
+        "forfeited": True,
+        "disclosure": (
+            "%s reviewer forfeited twice (timeout or unreadable); "
+            "fall open to a Claude reviewer and disclose the degraded vendor mix" % engine
+        ),
+        "engagement": engagement,
+    }
+
+
+def _highest_attempt(state):
+    attempts = state.get("attempts") or {}
+    return max(attempts) if attempts else 0
+
+
+def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
+    lock_path = os.path.join(run_dir_real, RUN_LOCK_NAME)
+    try:
+        file_lock.acquire(lock_path)
+    except file_lock.LockHeld:
+        records, _corrupt = _journal_read(run_dir_real)
+        state = _journal_state(records)
+        opened = state.get("opened") or {}
+        return _with_run_fields(
+            {"ok": False, "terminal": False, "reason": "running", "detail": "run-locked",
+             "attempts": _highest_attempt(state), "forfeited": False},
+            run_dir=run_dir_real, argv=opened.get("argv") or [],
+        )
+
+    try:
+        while True:
+            records, interior_corrupt = _journal_read(run_dir_real)
+            if interior_corrupt:
+                state = _journal_state(records)
+                return _fold_run(run_dir_real, state, _with_run_fields(
+                    {"ok": False, "terminal": True, "reason": "unrunnable",
+                     "detail": "journal-corrupt", "attempts": 0, "forfeited": False},
+                    run_dir=run_dir_real, argv=(state.get("opened") or {}).get("argv") or [],
+                ))
+
+            state = _journal_state(records)
+            opened = state.get("opened")
+            argv = (opened or {}).get("argv") or []
+
+            if state.get("folded") is not None:
+                return _with_run_fields(state["folded"], run_dir=run_dir_real, argv=argv)
+
+            if state.get("abandoned") is not None:
+                return _with_run_fields(
+                    {"ok": False, "terminal": True, "reason": "unrunnable",
+                     "detail": "run-abandoned", "attempts": len(state.get("attempts") or {}),
+                     "forfeited": False},
+                    run_dir=run_dir_real, argv=argv,
+                )
+
+            if opened is None:
+                return _with_run_fields(
+                    {"ok": False, "terminal": True, "reason": "unrunnable",
+                     "detail": "run-not-opened", "attempts": 0, "forfeited": False},
+                    run_dir=run_dir_real, argv=[],
+                )
+
+            if opened.get("runKind") != run_kind:
+                return _with_run_fields(
+                    {"ok": False, "terminal": True, "reason": "unrunnable",
+                     "detail": "run-kind-mismatch", "attempts": 0, "forfeited": False},
+                    run_dir=run_dir_real, argv=argv,
+                )
+
+            if time.monotonic() >= deadline:
+                return _with_run_fields(
+                    {"ok": False, "terminal": False, "reason": "running",
+                     "attempts": _highest_attempt(state), "forfeited": False},
+                    run_dir=run_dir_real, argv=argv,
+                )
+
+            attempts = state.get("attempts") or {}
+
+            for att in sorted(attempts):
+                slot = attempts[att]
+                if slot.get("ended") is not None:
+                    continue
+                launching = att in state.get("launching", {})
+                started = slot.get("enginePgid") is not None
+                if launching and not started:
+                    alive, _who = _run_live_evidence(state)
+                    if not alive:
+                        return _fold_run(run_dir_real, state, _with_run_fields(
+                            {"ok": False, "terminal": True, "reason": "unrunnable",
+                             "detail": "engine-launch-uncertain", "attempts": att,
+                             "forfeited": False,
+                             "disclosure": (
+                                 "Engine launch state is uncertain for attempt %d; inspect "
+                                 "worktree/view before respawning." % att
+                             )},
+                            run_dir=run_dir_real, argv=argv,
+                        ))
+                alive, _who = _run_live_evidence(state)
+                if alive:
+                    time.sleep(SUPERVISOR_POLL_INTERVAL)
+                    break
+                ended_rec = {
+                    "kind": "attempt-ended", "attempt": att,
+                    "exit": None, "timedOut": False, "signal": None,
+                    "refusal": "attempt-died-unrecorded", "at": time.time(),
+                }
+                _journal_append(run_dir_real, ended_rec)
+                break
+            else:
+                if not attempts:
+                    ok_spawn, detail = _spawn_attempt(
+                        run_dir_real, state, 1, run_engine=run_engine,
+                    )
+                    if not ok_spawn:
+                        return _fold_run(run_dir_real, state, _with_run_fields(
+                            {"ok": False, "terminal": True, "reason": "unrunnable",
+                             "detail": detail, "attempts": 0, "forfeited": False},
+                            run_dir=run_dir_real, argv=argv,
+                        ))
+                    continue
+
+                in_flight = any(
+                    attempts[a].get("ended") is None for a in attempts
+                )
+                if in_flight:
+                    time.sleep(SUPERVISOR_POLL_INTERVAL)
+                    continue
+
+                latest = max(attempts)
+                grade = _grade_review_attempt(run_dir_real, state, latest)
+                engine = opened["engine"]
+                if grade.get("ok"):
+                    result = _with_run_fields(
+                        {"ok": True, "terminal": True, "findings": grade.get("findings", []),
+                         "attempts": latest, "engagement": grade["engagement"]},
+                        run_dir=run_dir_real, argv=argv,
+                    )
+                    if grade.get("investigated") is not None:
+                        result["investigated"] = grade["investigated"]
+                    view = opened.get("viewMeta")
+                    if view:
+                        result = _attach_sanitized_view(result, view)
+                    return _fold_run(run_dir_real, state, result)
+
+                reason = grade.get("reason", "forfeited")
+                if latest < MAX_ATTEMPTS:
+                    ok_spawn, detail = _spawn_attempt(
+                        run_dir_real, state, latest + 1, run_engine=run_engine,
+                    )
+                    if not ok_spawn:
+                        if detail.startswith("attempt-already-live"):
+                            time.sleep(SUPERVISOR_POLL_INTERVAL)
+                            continue
+                        return _fold_run(run_dir_real, state, _with_run_fields(
+                            {"ok": False, "terminal": True, "reason": "unrunnable",
+                             "detail": detail, "attempts": latest, "forfeited": False},
+                            run_dir=run_dir_real, argv=argv,
+                        ))
+                    continue
+
+                terminal = _review_terminal_forfeit(
+                    engine, reason, MAX_ATTEMPTS,
+                    engagement=grade.get("engagement"),
+                    investigated_rejected=grade.get("investigatedRejected"),
+                )
+                view = opened.get("viewMeta")
+                if view:
+                    terminal = _attach_sanitized_view(terminal, view)
+                return _fold_run(run_dir_real, state, _with_run_fields(
+                    terminal, run_dir=run_dir_real, argv=argv,
+                ))
+
+            continue
+    finally:
+        try:
+            file_lock.release(lock_path)
+        except Exception:
+            pass
+
+
+def _run_child_main(run_dir_real):
+    records, _corrupt = _journal_read(run_dir_real)
+    state = _journal_state(records)
+    opened = state.get("opened")
+    if opened is None:
+        return 0
+
+    pending_att = None
+    for att in sorted(state.get("attempts", {})):
+        slot = state["attempts"][att]
+        if slot.get("ended") is None:
+            pending_att = att
+            break
+    if pending_att is None:
+        return 0
+
+    argv = opened["argv"]
+    cwd = opened["cwd"]
+    timeout = _attempt_timeout(opened, pending_att)
+    prompt_path = opened["promptPath"]
+    progress_path = opened.get("progressPath") or os.path.join(run_dir_real, PROGRESS_NAME)
+    stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % pending_att)
+    stderr_path = os.path.join(run_dir_real, "attempt-%d.stderr" % pending_att)
+
+    _journal_append(run_dir_real, {
+        "kind": "engine-launching", "attempt": pending_att,
+        "childPid": os.getpid(), "at": time.time(),
+    })
+
+    try:
+        with open(prompt_path, "rb") as prompt_fh, \
+             open(stdout_path, "wb") as out_fh, \
+             open(stderr_path, "wb") as err_fh:
+            proc = subprocess.Popen(
+                argv, stdin=prompt_fh, stdout=out_fh, stderr=err_fh,
+                cwd=cwd, start_new_session=True, env=_scrub_env(),
+            )
+    except Exception as exc:
+        _journal_append(run_dir_real, {
+            "kind": "attempt-ended", "attempt": pending_att,
+            "exit": 127, "timedOut": False, "signal": None,
+            "refusal": "spawn-failed: %s" % exc, "at": time.time(),
+        })
+        return 0
+
+    pgid = proc.pid
+    _journal_append(run_dir_real, {
+        "kind": "engine-started", "attempt": pending_att,
+        "enginePgid": pgid, "at": time.time(),
+    })
+
+    write_progress = _progress_writer(progress_path)
+    start = time.monotonic()
+    last_beat = start
+    timed_out = False
+    while True:
+        rc = proc.poll()
+        now = time.monotonic()
+        if now - last_beat >= HEARTBEAT_INTERVAL:
+            last_beat = now
+            try:
+                nbytes = os.path.getsize(stdout_path)
+            except OSError:
+                nbytes = 0
+            write_progress(pending_att, now - start, nbytes)
+        if rc is not None:
+            break
+        if now - start >= timeout:
+            timed_out = True
+            break
+        time.sleep(0.2)
+
+    _terminate_process_group(pgid)
+    try:
+        proc.wait(timeout=2)
+    except Exception:
+        pass
+    returncode = proc.returncode
+    _journal_append(run_dir_real, {
+        "kind": "attempt-ended", "attempt": pending_att,
+        "exit": returncode, "timedOut": timed_out, "signal": None,
+        "refusal": None, "at": time.time(),
+    })
+    return 0
+
+
 def _progress_writer(progress_path):
     """Return a write(attempt, elapsed, nbytes) that appends ONE newline-delimited JSON heartbeat.
     Telemetry failure never invalidates a review (fail-soft: swallow write errors)."""
@@ -197,10 +993,56 @@ def _attach_sanitized_view(result, view):
     return out
 
 
+def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
+                     prompt_path, view_path, view_meta, fed_prompt, order_id,
+                     progress_path):
+    journal_root = _journal_root_for_run_dir(run_dir_real)
+    try:
+        os.makedirs(run_dir_real, mode=0o700, exist_ok=True)
+        with open(os.path.join(run_dir_real, "journal-root.txt"), "w", encoding="utf-8") as fh:
+            fh.write(journal_root + "\n")
+        dest_prompt = os.path.join(run_dir_real, PROMPT_NAME)
+        with open(prompt_path, "r", encoding="utf-8", errors="ignore") as src:
+            base = src.read()
+        with open(dest_prompt, "w", encoding="utf-8") as dst:
+            dst.write(fed_prompt if fed_prompt else base)
+        if progress_path:
+            try:
+                open(progress_path, "a").close()
+            except OSError:
+                pass
+    except OSError as exc:
+        return False, "run-dir-setup-failed:%s" % type(exc).__name__
+
+    record = {
+        "kind": "run-opened",
+        "runKind": RUN_KIND_REVIEW,
+        "engine": engine,
+        "roleKind": RUN_KIND_REVIEW,
+        "orderId": order_id,
+        "argv": argv,
+        "cwd": cwd,
+        "timeout": timeout,
+        "retryTimeout": retry_timeout,
+        "promptPath": os.path.join(run_dir_real, PROMPT_NAME),
+        "progressPath": progress_path or os.path.join(run_dir_real, PROGRESS_NAME),
+        "viewPath": view_path,
+        "viewMeta": view_meta,
+        "baseSha": view_meta.get("headSha"),
+        "fedPrompt": fed_prompt,
+        "supervisorPid": os.getpid(),
+        "at": time.time(),
+    }
+    if not _journal_append(run_dir_real, record):
+        return False, "journal-append-failed"
+    return True, ""
+
+
 def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
                     schema_path=None, repo_root=None, timeout=RETRY_MIN_TIMEOUT,
                     retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
-                    build_view=sanitized_view.build_sanitized_view):
+                    build_view=sanitized_view.build_sanitized_view,
+                    run_dir=None, max_wait=None, order_id=None):
     """Reviewer-scoped dispatch in the repository under review (#665). An unresolvable repo root is
     a named refusal (attempts: 0). Never raises: any unexpected internal failure (build_argv,
     the injected run_engine, parse_result) is converted to a structured fall-open result so the
@@ -210,160 +1052,302 @@ def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
             engine, model=model, effort=effort, engine_model=engine_model, prompt_path=prompt_path,
             schema_path=schema_path, repo_root=repo_root, timeout=timeout,
             retry_timeout=retry_timeout, progress_path=progress_path, run_engine=run_engine,
-            build_view=build_view)
+            build_view=build_view, run_dir=run_dir, max_wait=max_wait, order_id=order_id)
     except Exception as exc:
         return {"ok": False, "reason": "unrunnable", "detail": "internal-%s" % type(exc).__name__,
-                "attempts": 0, "forfeited": False}
+                "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": []}
 
 
 def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_path,
                           schema_path=None, repo_root=None, timeout=RETRY_MIN_TIMEOUT,
                           retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
-                          build_view=sanitized_view.build_sanitized_view):
+                          build_view=sanitized_view.build_sanitized_view,
+                          run_dir=None, max_wait=None, order_id=None):
     """Reviewer-scoped dispatch in the repository under review (#665). The role is HARD-CODED
-    'review' (read-only sandbox) — this API cannot emit a workspace-write dispatch. An
-    unresolvable repo root is a named refusal (attempts: 0). Returns exactly one of:
-      {ok:True,  findings:[...], attempts:N}
-      {ok:False, reason:'unrunnable', detail:..., attempts:0, forfeited:False}   # preflight, no spawn
-      {ok:False, reason:'forfeited', attempts:2, forfeited:True, disclosure:...} # double terminal forfeit
-    Preflight failures fail BEFORE any spawn and never consume the retry. A timeout or nonzero exit
-    forfeits the attempt WITHOUT parsing partial stdout. Never raises."""
-    role_kind = "review"  # hard-coded; not caller-controllable — the reviewer-only guarantee
+    'review' (read-only sandbox) — this API cannot emit a workspace-write dispatch."""
+    role_kind = RUN_KIND_REVIEW
 
     ok, repo_detail = _validate_repo_root(repo_root)
     if not ok:
-        return {"ok": False, "reason": "unrunnable", "detail": repo_detail,
-                "attempts": 0, "forfeited": False}
+        return _with_run_fields(
+            {"ok": False, "reason": "unrunnable", "detail": repo_detail,
+             "attempts": 0, "forfeited": False, "terminal": True},
+            run_dir="", argv=[],
+        )
 
     ok, why = engine_adapter.prompt_path_ok(prompt_path)
     if not ok:
-        return {"ok": False, "reason": "unrunnable", "detail": "prompt-%s" % why,
-                "attempts": 0, "forfeited": False}
+        return _with_run_fields(
+            {"ok": False, "reason": "unrunnable", "detail": "prompt-%s" % why,
+             "attempts": 0, "forfeited": False, "terminal": True},
+            run_dir="", argv=[],
+        )
 
     try:
         with open(prompt_path, "r", encoding="utf-8", errors="ignore") as fh:
             base_prompt = fh.read()
     except Exception:
-        return {"ok": False, "reason": "unrunnable", "detail": "prompt-unreadable",
-                "attempts": 0, "forfeited": False}
+        return _with_run_fields(
+            {"ok": False, "reason": "unrunnable", "detail": "prompt-unreadable",
+             "attempts": 0, "forfeited": False, "terminal": True},
+            run_dir="", argv=[],
+        )
 
     try:
         view = build_view(repo_detail)
     except sanitized_view.SanitizedViewError as exc:
-        return {"ok": False, "reason": "unrunnable", "detail": exc.detail,
-                "attempts": 0, "forfeited": False}
+        return _with_run_fields(
+            {"ok": False, "reason": "unrunnable", "detail": exc.detail,
+             "attempts": 0, "forfeited": False, "terminal": True},
+            run_dir="", argv=[],
+        )
 
     view_path = view["path"]
+    view_destroyed = False
+
+    def _destroy_view_once():
+        nonlocal view_destroyed
+        if not view_destroyed:
+            view_destroyed = True
+            try:
+                sanitized_view.destroy_sanitized_view(view_path)
+            except Exception:
+                pass
+
     try:
-        try:
-            cwd = view_path
-
-            opts = {"model": model, "engine_model": engine_model, "schema_path": schema_path, "cwd": cwd}
-            built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
-            if built["reason"] is not None:
-                return _attach_sanitized_view(
-                    {"ok": False, "reason": "unrunnable",
-                     "detail": "engine-config:%s" % built["reason"],
-                     "attempts": 0, "forfeited": False},
-                    view)
-            argv = built["argv"]
-
-            notice = sanitized_view.sanitized_view_notice(view)
-            prompt_prefix = ANTIHIJACK_PREAMBLE + notice
-            prompt_bytes = (prompt_prefix + base_prompt).encode("utf-8")
-            fed_prompt = prompt_prefix + base_prompt
-            write_progress = _progress_writer(progress_path)
-            last_engagement = None
-            last_terminal = None
-            last_investigated_rejected = None
-            for attempt in (1, 2):
-                t = timeout if attempt == 1 else max(retry_timeout, RETRY_MIN_TIMEOUT)
-
-                def cb(elapsed, nbytes, _a=attempt):
-                    write_progress(_a, elapsed, nbytes)
-
-                t0 = time.monotonic()
-                stdout, timed_out, rc, stderr_tail = run_engine(argv, prompt_bytes, t, cb, cwd)
-                elapsed = time.monotonic() - t0
-                if engine == "codex":
-                    tokens = engine_adapter.codex_tokens_used(stderr_tail)
-                    tool_calls = None
-                    source = "codex-stderr" if tokens is not None else "none"
-                elif engine == "cursor":
-                    tokens = None
-                    tool_calls = engine_adapter.cursor_tool_calls(stdout)
-                    source = "cursor-stream" if tool_calls is not None else "none"
-                else:
-                    tokens = None
-                    tool_calls = None
-                    source = "none"
-                last_engagement = {
-                    "tokens": tokens,
-                    "toolCalls": tool_calls,
-                    "stdoutBytes": len(stdout or ""),
-                    "wallSeconds": round(elapsed, 1),
-                    "source": source,
-                }
-                if timed_out:
-                    last_terminal = "forfeited"
-                    continue  # timeout forfeits WITHOUT parsing partial stdout
-                if rc not in (0, None):
-                    last_terminal = "forfeited"
-                    continue  # nonzero exit forfeits even if stdout parses (crashed engine)
-                res = engine_adapter.parse_result(engine, role_kind, stdout)
-                if not (res.get("ok") and res.get("findings")):
-                    stripped = engine_adapter.strip_echoed_prompt(stdout, fed_prompt)
-                    res = engine_adapter.parse_result(engine, role_kind, stripped)
-                if not res.get("ok"):
-                    last_terminal = "forfeited"
-                    continue
-                findings = res.get("findings") or []
-                if findings:
-                    return _attach_sanitized_view(
-                        {"ok": True, "findings": findings, "attempts": attempt,
-                         "engagement": last_engagement},
-                        view)
-                ok_inv, accepted, rejected = engine_adapter.spot_check_investigated(
-                    res.get("investigated"), cwd)
-                if ok_inv:
-                    return _attach_sanitized_view(
-                        {"ok": True, "findings": [], "attempts": attempt,
-                         "engagement": last_engagement, "investigated": accepted},
-                        view)
-                last_terminal = engine_adapter.REVIEW_FORFEIT_VACUOUS
-                last_investigated_rejected = rejected
-                # vacuous forfeit — retry like unreadable
-            if last_terminal == engine_adapter.REVIEW_FORFEIT_VACUOUS:
-                return _attach_sanitized_view({
-                    "ok": False, "reason": engine_adapter.REVIEW_FORFEIT_VACUOUS, "attempts": 2,
-                    "forfeited": True,
-                    "engagement": last_engagement,
-                    "investigatedRejected": [r["reason"] for r in (last_investigated_rejected or [])],
-                    "disclosure": ("%s reviewer returned no findings and no verifiable investigation "
-                                   "record twice (vacuous forfeit — a seat that proved nothing is a seat "
-                                   "that never ran); fall open to a Claude reviewer and disclose the "
-                                   "degraded vendor mix" % engine),
-                }, view)
-            return _attach_sanitized_view(
-                {"ok": False, "reason": "forfeited", "attempts": 2, "forfeited": True,
-                 "disclosure": ("%s reviewer forfeited twice (timeout or unreadable); "
-                                "fall open to a Claude reviewer and disclose the degraded vendor mix"
-                                % engine),
-                 "engagement": last_engagement},
-                view)
-        except Exception as exc:
-            return _attach_sanitized_view(
+        cwd = os.path.realpath(view_path)
+        opts = {"model": model, "engine_model": engine_model, "schema_path": schema_path, "cwd": cwd}
+        built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
+        if built["reason"] is not None:
+            _destroy_view_once()
+            return _attach_sanitized_view(_with_run_fields(
                 {"ok": False, "reason": "unrunnable",
-                 "detail": "internal-%s" % type(exc).__name__,
+                 "detail": "engine-config:%s" % built["reason"],
+                 "attempts": 0, "forfeited": False, "terminal": True},
+                run_dir="", argv=[],
+            ), view)
+
+        argv = built["argv"]
+        notice = sanitized_view.sanitized_view_notice(view)
+        prompt_prefix = ANTIHIJACK_PREAMBLE + notice
+        fed_prompt = prompt_prefix + base_prompt
+
+        run_dir_real = None
+        if run_dir is not None:
+            ok_rd, rd_detail = _validate_run_dir(run_dir)
+            if not ok_rd:
+                _destroy_view_once()
+                return _attach_sanitized_view(_with_run_fields(
+                    {"ok": False, "reason": "unrunnable", "detail": rd_detail,
+                     "attempts": 0, "forfeited": False, "terminal": True},
+                    run_dir=run_dir or "", argv=[],
+                ), view)
+            run_dir_real = rd_detail
+            if _path_inside(repo_detail, run_dir_real):
+                _destroy_view_once()
+                return _attach_sanitized_view(_with_run_fields(
+                    {"ok": False, "reason": "unrunnable", "detail": "run-dir-inside-repo-root",
+                     "attempts": 0, "forfeited": False, "terminal": True},
+                    run_dir=run_dir_real, argv=[],
+                ), view)
+            records, _corrupt = _journal_read(run_dir_real)
+            state = _journal_state(records)
+            if state.get("opened") is None:
+                if _run_dir_nonempty(run_dir_real):
+                    _destroy_view_once()
+                    return _attach_sanitized_view(_with_run_fields(
+                        {"ok": False, "reason": "unrunnable",
+                         "detail": "run-dir-not-empty-unopened",
+                         "attempts": 0, "forfeited": False, "terminal": True},
+                        run_dir=run_dir_real, argv=[],
+                    ), view)
+                ok_open, open_detail = _open_review_run(
+                    run_dir_real, engine=engine, argv=argv, cwd=cwd,
+                    timeout=timeout, retry_timeout=retry_timeout,
+                    prompt_path=prompt_path, view_path=view_path, view_meta=view,
+                    fed_prompt=fed_prompt, order_id=order_id,
+                    progress_path=progress_path or os.path.join(run_dir_real, PROGRESS_NAME),
+                )
+                if not ok_open:
+                    _destroy_view_once()
+                    return _attach_sanitized_view(_with_run_fields(
+                        {"ok": False, "reason": "unrunnable", "detail": open_detail,
+                         "attempts": 0, "forfeited": False, "terminal": True},
+                        run_dir=run_dir_real, argv=argv,
+                    ), view)
+        else:
+            run_dir_real = tempfile.mkdtemp(prefix="superheroes-dispatch-review-")
+            ok_open, open_detail = _open_review_run(
+                run_dir_real, engine=engine, argv=argv, cwd=cwd,
+                timeout=timeout, retry_timeout=retry_timeout,
+                prompt_path=prompt_path, view_path=view_path, view_meta=view,
+                fed_prompt=fed_prompt, order_id=order_id,
+                progress_path=progress_path or os.path.join(run_dir_real, PROGRESS_NAME),
+            )
+            if not ok_open:
+                _destroy_view_once()
+                return _with_run_fields(
+                    {"ok": False, "reason": "unrunnable", "detail": open_detail,
+                     "attempts": 0, "forfeited": False, "terminal": True},
+                    run_dir=run_dir_real, argv=argv,
+                )
+
+        slice_wait = MAX_SYNC_WAIT if max_wait is None else min(max(int(max_wait), 0), MAX_SYNC_WAIT)
+        while True:
+            deadline = time.monotonic() + slice_wait
+            try:
+                result = _supervise(
+                    run_dir_real, run_kind=RUN_KIND_REVIEW, deadline=deadline,
+                    run_engine=run_engine,
+                )
+            except Exception as exc:
+                _destroy_view_once()
+                return _attach_sanitized_view(_with_run_fields(
+                    {"ok": False, "reason": "unrunnable",
+                     "detail": "internal-%s" % type(exc).__name__,
+                     "attempts": 0, "forfeited": False, "terminal": True},
+                    run_dir=run_dir_real, argv=argv,
+                ), view)
+
+            if result.get("terminal"):
+                if result.get("ok") and "sanitizedView" not in result:
+                    result = _attach_sanitized_view(result, view)
+                elif not result.get("ok") and result.get("reason") in (
+                    "forfeited", engine_adapter.REVIEW_FORFEIT_VACUOUS,
+                ) and "sanitizedView" not in result:
+                    result = _attach_sanitized_view(result, view)
+                _destroy_view_once()
+                return result
+            if max_wait is not None:
+                return result
+    except Exception as exc:
+        _destroy_view_once()
+        return _attach_sanitized_view(_with_run_fields(
+            {"ok": False, "reason": "unrunnable",
+             "detail": "internal-%s" % type(exc).__name__,
+             "attempts": 0, "forfeited": False, "terminal": True},
+            run_dir=run_dir_real or "", argv=argv if "argv" in dir() else [],
+        ), view)
+
+
+def dispatch_poll(run_dir):
+    """Observational poll — never spawns."""
+    try:
+        ok, detail = _validate_run_dir(run_dir)
+        if not ok:
+            return _with_run_fields(
+                {"ok": False, "terminal": True, "reason": "unrunnable", "detail": detail,
                  "attempts": 0, "forfeited": False},
-                view)
-    finally:
-        sanitized_view.destroy_sanitized_view(view_path)
+                run_dir=run_dir or "", argv=[],
+            )
+        records, interior_corrupt = _journal_read(detail)
+        state = _journal_state(records)
+        opened = state.get("opened") or {}
+        argv = opened.get("argv") or []
+        if interior_corrupt:
+            return _with_run_fields(
+                {"ok": False, "terminal": True, "reason": "unrunnable",
+                 "detail": "journal-corrupt", "attempts": 0, "forfeited": False,
+                 "state": state},
+                run_dir=detail, argv=argv,
+            )
+        if state.get("folded") is not None:
+            return _with_run_fields(
+                dict(state["folded"]), run_dir=detail, argv=argv,
+            )
+        highest = max(state["attempts"]) if state.get("attempts") else 0
+        return _with_run_fields(
+            {"ok": False, "terminal": False, "reason": "running",
+             "attempts": highest, "forfeited": False, "state": state},
+            run_dir=detail, argv=argv,
+        )
+    except Exception as exc:
+        return _with_run_fields(
+            {"ok": False, "terminal": True, "reason": "unrunnable",
+             "detail": "internal-%s" % type(exc).__name__,
+             "attempts": 0, "forfeited": False},
+            run_dir=run_dir or "", argv=[],
+        )
+
+
+def dispatch_abandon(run_dir):
+    """Ordered abandon transition — terminates live children, journals run-abandoned."""
+    try:
+        ok, detail = _validate_run_dir(run_dir)
+        if not ok:
+            return _with_run_fields(
+                {"ok": False, "terminal": True, "reason": "unrunnable", "detail": detail,
+                 "attempts": 0, "forfeited": False},
+                run_dir=run_dir or "", argv=[],
+            )
+        run_dir_real = detail
+        records, interior_corrupt = _journal_read(run_dir_real)
+        if interior_corrupt:
+            state = _journal_state(records)
+            return _with_run_fields(
+                {"ok": False, "terminal": True, "reason": "unrunnable",
+                 "detail": "journal-corrupt", "attempts": 0, "forfeited": False},
+                run_dir=run_dir_real, argv=(state.get("opened") or {}).get("argv") or [],
+            )
+        state = _journal_state(records)
+        opened = state.get("opened") or {}
+        argv = opened.get("argv") or []
+
+        if state.get("abandoned") is not None:
+            return _with_run_fields(
+                {"ok": False, "terminal": True, "reason": "unrunnable",
+                 "detail": "run-abandoned", "attempts": len(state.get("attempts") or {}),
+                 "forfeited": False},
+                run_dir=run_dir_real, argv=argv,
+            )
+
+        if state.get("folded") is not None:
+            return _with_run_fields(state["folded"], run_dir=run_dir_real, argv=argv)
+
+        _journal_append(run_dir_real, {"kind": "abandon-requested", "at": time.time()})
+
+        for att in sorted(state.get("attempts", {})):
+            slot = state["attempts"][att]
+            if slot.get("ended") is None:
+                if slot.get("enginePgid") is not None:
+                    _terminate_process_group(slot["enginePgid"])
+                if slot.get("childPid") is not None:
+                    _terminate_pid(slot["childPid"])
+
+        records, _corrupt = _journal_read(run_dir_real)
+        state = _journal_state(records)
+        alive, _who = _run_live_evidence(state)
+        if alive:
+            return _with_run_fields(
+                {"ok": False, "terminal": True, "reason": "unrunnable",
+                 "detail": "abandon-incomplete", "abandonDetail": "engine-death-unconfirmed",
+                 "attempts": len(state.get("attempts") or {}), "forfeited": False},
+                run_dir=run_dir_real, argv=argv,
+            )
+
+        _finalize_run(run_dir_real, state, terminal=True)
+        _journal_append(run_dir_real, {
+            "kind": "run-abandoned", "detail": "abandoned", "at": time.time(),
+        })
+        return _with_run_fields(
+            {"ok": False, "terminal": True, "reason": "unrunnable",
+             "detail": "run-abandoned", "attempts": len(state.get("attempts") or {}),
+             "forfeited": False},
+            run_dir=run_dir_real, argv=argv,
+        )
+    except Exception as exc:
+        return _with_run_fields(
+            {"ok": False, "terminal": True, "reason": "unrunnable",
+             "detail": "internal-%s" % type(exc).__name__,
+             "attempts": 0, "forfeited": False},
+            run_dir=run_dir or "", argv=[],
+        )
 
 
 def main(argv):
     ap = argparse.ArgumentParser(prog="engine_dispatch")
     sub = ap.add_subparsers(dest="cmd", required=True)
+
     d = sub.add_parser("dispatch-review")
     d.add_argument("--engine", required=True, choices=("codex", "cursor"))
     d.add_argument("--model", default=None)
@@ -375,12 +1359,37 @@ def main(argv):
     d.add_argument("--retry-timeout", type=int, default=RETRY_MIN_TIMEOUT)
     d.add_argument("--progress-file", default=None)
     d.add_argument("--repo-root", default=None)
+    d.add_argument("--run-dir", default=None)
+    d.add_argument("--max-wait", type=int, default=None)
+    d.add_argument("--order-id", default=None)
+
+    p = sub.add_parser("dispatch-poll")
+    p.add_argument("--run-dir", required=True)
+
+    a = sub.add_parser("dispatch-abandon")
+    a.add_argument("--run-dir", required=True)
+
+    c = sub.add_parser("run-child")
+    c.add_argument("--run-dir", required=True)
+
     args = ap.parse_args(argv)
-    res = dispatch_review(args.engine, model=args.model, effort=args.effort,
-                          engine_model=args.engine_model, prompt_path=args.prompt_path,
-                          schema_path=args.schema_path, repo_root=args.repo_root,
-                          timeout=args.timeout, retry_timeout=args.retry_timeout,
-                          progress_path=args.progress_file)
+    if args.cmd == "dispatch-review":
+        res = dispatch_review(args.engine, model=args.model, effort=args.effort,
+                              engine_model=args.engine_model, prompt_path=args.prompt_path,
+                              schema_path=args.schema_path, repo_root=args.repo_root,
+                              timeout=args.timeout, retry_timeout=args.retry_timeout,
+                              progress_path=args.progress_file, run_dir=args.run_dir,
+                              max_wait=args.max_wait, order_id=args.order_id)
+    elif args.cmd == "dispatch-poll":
+        res = dispatch_poll(args.run_dir)
+    elif args.cmd == "dispatch-abandon":
+        res = dispatch_abandon(args.run_dir)
+    elif args.cmd == "run-child":
+        raise SystemExit(_run_child_main(os.path.realpath(args.run_dir)))
+    else:
+        res = {"ok": False, "terminal": True, "reason": "unrunnable",
+               "detail": "unknown-command", "attempts": 0, "forfeited": False,
+               "runDir": "", "argv": []}
     sys.stdout.write(json.dumps(res) + "\n")
     return 0
 
