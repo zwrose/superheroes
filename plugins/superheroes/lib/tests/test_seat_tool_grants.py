@@ -342,19 +342,6 @@ def test_no_mutation_no_claim_rule_lives_in_review_base_verification_rules():
         "execution is STILL emitted with the check named. Dropping that clause turns "
         "the rule into a reason to stay silent, which the rule itself calls worse than "
         "either failure it forbids." % title)
-    # Axis 2b (WO6, #719 round 2 continuation): the never-mutate half of the rule, keyed
-    # on the `mutat` word stem (covers "mutate"/"mutates"/"mutation"). The home body
-    # carries it via the bolded "**Never mutate:**" clause and the "mutation-dependent
-    # proof" phrase that explains it — both survive only if this half of the rule is
-    # still there. This is a DIFFERENT axis from the two clauses above (which cover the
-    # never-claim-a-run half); dropping the mutate clause alone, while leaving the
-    # analysis/name-the-check clauses intact, would pass both assertions above and must
-    # still fail here.
-    assert "mutat" in nbody.lower(), (
-        "review-base.md rule 7 (%r) no longer contains the `mutat` word stem anywhere in "
-        "its body — the never-mutate half of the rule (the bolded \"Never mutate:\" "
-        "clause and the mutation-dependent-proof explanation) appears to have been "
-        "dropped even though the never-claim-a-run clauses above still pass." % title)
 
 
 @pytest.mark.parametrize("rel", POINTER_FILES)
@@ -386,6 +373,14 @@ def test_pointer_resolves_to_the_home_rule(rel):
     shared fragment every dispatcher inlines, so there is literally one copy to drift —
     rather than a stronger substring; that is handed to the advisor as a follow-up, not
     attempted here.
+
+    The same gap applies on the **home** side, not just the pointers (WO8, #719): a
+    second `mutat`-stem assertion against the home body (removed here) was equally
+    inert, because every `mutat` occurrence in the home is either inside the title
+    (already covered above) or inside the already-asserted still-emit clause, so it
+    could never fail on its own. Nothing in this file pins the home's never-mutate
+    prohibition independently of those two already-genuine clauses; that gap ships
+    disclosed, not silently dropped, alongside the pointer gap above.
     """
     title, _ = _no_mutation_no_claim_rule()
     ntitle = _norm(title)
