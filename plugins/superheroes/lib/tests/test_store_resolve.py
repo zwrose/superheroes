@@ -285,9 +285,9 @@ def test_cli_key_and_resolve(tmp_path):
 # ---------------------------------------------------------------------------
 # #428 direction 2 — create() is layer-native on migrated projects. Pointing
 # callers (test-pilot-init writes the profile at create()'s returned path) back
-# at the legacy .claude/test-pilot/profile.md re-minted the legacy file, which
-# re-armed core_md.migrate_on_read inside build worktrees — the trigger of the
-# destructive layer-deletion commit (weekly-eats 9dad0f6).
+# at the legacy .claude/test-pilot/profile.md re-minted the legacy file, which had been the
+# trigger for core_md.migrate_on_read inside build worktrees — the destructive layer-deletion
+# commit (weekly-eats 9dad0f6). That migration path was removed in #724.
 # ---------------------------------------------------------------------------
 
 def test_create_in_repo_migrated_project_targets_layer_not_legacy(tmp_path):

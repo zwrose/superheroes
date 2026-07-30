@@ -36,3 +36,8 @@ def test_resolve_falls_back_to_legacy_when_core_absent(tmp_path, monkeypatch):
     open(prof, "w").write("## Verify\ncommand: make test\n")
     out = rcc.resolve(repo, root=store)
     assert out["verifyCommand"] == "make test"
+    refusal = out["calibrationRefusal"]
+    assert isinstance(refusal, dict)
+    assert refusal["reason"] == "legacy-profile-unsupported"
+    assert refusal["paths"]
+    assert refusal["remedy"]

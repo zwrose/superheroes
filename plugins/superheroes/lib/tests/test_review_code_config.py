@@ -94,3 +94,37 @@ def test_resolve_failopen_on_calibration_error(tmp_path, monkeypatch):
     assert out["verifyCommand"] == "none"
     assert out["verifyMode"] is None
     assert out["tiers"]["fixer"] == "sonnet"
+
+
+def test_resolve_surfaces_legacy_profile_refusal(tmp_path):
+    # E15/E16: legacy profile without core.md surfaces calibrationRefusal fail-open on values.
+    import subprocess
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    prof = os.path.join(repo, ".claude", "review-profile.md")
+    os.makedirs(os.path.dirname(prof), exist_ok=True)
+    open(prof, "w").write("## Verify\ncommand: make test\n")
+    out = RC.resolve(repo, root=store)
+    refusal = out["calibrationRefusal"]
+    assert isinstance(refusal, dict)
+    assert refusal["reason"] == "legacy-profile-unsupported"
+    assert refusal["paths"]
+    assert refusal["remedy"]
+    assert out["tiers"] == {
+        "reviewer": "sonnet", "reviewerDeep": "opus", "synthesis": "opus", "fixer": "sonnet"}
+
+
+def test_resolve_no_calibration_refusal_when_core_present(tmp_path):
+    import subprocess
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    core = tmp_path / ".claude" / "superheroes" / "core.md"
+    core.parent.mkdir(parents=True)
+    core.write_text(
+        __import__("core_md").render_core(
+            {"verifyCommand": "pytest -q", "stackTags": [], "threatModel": "x", "patterns": ""},
+            "confirmed", "2026-06-26", "2026-06-26"))
+    out = RC.resolve(repo, root=store)
+    assert out["calibrationRefusal"] is None

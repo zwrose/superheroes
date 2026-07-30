@@ -92,6 +92,36 @@ def test_staleness_drift_stays_in_view(tmp_path, monkeypatch):
     assert out["path"] == "view"
 
 
+def test_legacy_profile_no_core_routes_to_set_up(tmp_path, monkeypatch):
+    # E19: legacy profile with no registry and no core.md routes to set-up — fresh calibration
+    # IS the remedy, and the greenfield branch deliberately returns before structural signals.
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "review-profile.md").write_text("legacy profile\n")
+  # mode_registry.resolve() would backfill from legacy hero_evidence; pin greenfield so
+  # route() exercises the set-up branch (structural signals are not consulted there).
+    monkeypatch.setattr(
+        crt.mode_registry, "resolve",
+        lambda cwd, root=None: {
+            "mode": mr.GLOBAL, "authoritative": False, "source": "provisional",
+            "evidence": "none",
+        })
+    out = crt.route(str(tmp_path), interactive=True, root=root)
+    assert out["path"] == "set-up"
+
+
+def test_stray_legacy_with_core_routes_to_fix(tmp_path):
+    # E20: confirmed core + registry + stray legacy profile routes to fix via _STRUCTURAL.
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    _seed_core(tmp_path)
+    (tmp_path / ".claude" / "review-profile.md").write_text("stray legacy\n")
+    out = crt.route(str(tmp_path), interactive=True, root=root)
+    assert out["path"] == "fix"
+
+
 def test_work_in_flight_always_false_v2(tmp_path):
     # v2 has no lease store — the spine's ref_lock (and the common-dir control-plane leases it
     # tracked) was retired with the execution spine (#478). work_in_flight fails OPEN: no

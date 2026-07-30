@@ -18,7 +18,7 @@ def test_disagreement_yields_one_signal(tmp_path, monkeypatch):
     monkeypatch.setattr(mr, "_hero_global_root", lambda n: g if n == "test-pilot" else str(tmp_path/"x"))
     sigs = rc.gather_signals(str(tmp_path), root=str(tmp_path / "store"))
     # exactly one storage-mode disagreement signal (the seeded stub review-profile.md also
-    # surfaces a #81 legacy-migration-ambiguous signal — assert on the disagreement specifically).
+    # surfaces a legacy-profile-unsupported signal — assert on the disagreement specifically).
     disagreements = [s for s in sigs if s["type"] == "disagreement"]
     assert len(disagreements) == 1
 
@@ -219,7 +219,7 @@ def test_core_md_confirmed_emits_no_provisional_signal(tmp_path, monkeypatch):
     assert not any(s["type"] == "core-md-provisional" for s in sigs)
 
 
-def test_legacy_migration_ambiguous_signal(tmp_path, monkeypatch):
+def test_legacy_profile_unsupported_signal(tmp_path, monkeypatch):
     _init_repo(tmp_path)
     monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
     (tmp_path / ".claude").mkdir(exist_ok=True)
@@ -227,11 +227,10 @@ def test_legacy_migration_ambiguous_signal(tmp_path, monkeypatch):
     (tmp_path / ".claude" / "review-profile.md").write_text(
         "## How we check\ncommand: npm test\n## Threat model\nx\n")
     sigs = rc.gather_signals(str(tmp_path), root=str(tmp_path / "store"))
-    assert any(s["type"] == "legacy-migration-ambiguous" for s in sigs)
+    assert any(s["type"] == "legacy-profile-unsupported" for s in sigs)
 
 
-def test_legacy_migration_ambiguous_absent_and_ack_suppresses(tmp_path, monkeypatch):
-    # signal-absent: a STANDARD legacy profile (verify under a recognized heading) → no signal.
+def test_legacy_profile_unsupported_ack_suppresses(tmp_path, monkeypatch):
     _init_repo(tmp_path)
     root = str(tmp_path / "store")
     monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
@@ -239,16 +238,17 @@ def test_legacy_migration_ambiguous_absent_and_ack_suppresses(tmp_path, monkeypa
     (tmp_path / ".claude" / "review-profile.md").write_text(
         "## Verify\ncommand: npm test\n## Threat model\nx\n")
     sigs = rc.gather_signals(str(tmp_path), root=root)
-    assert not any(s["type"] == "legacy-migration-ambiguous" for s in sigs)
+    assert any(s["type"] == "legacy-profile-unsupported" for s in sigs)
     # ack-suppresses: re-make it ambiguous, ack the signal, then it must not coalesce.
     (tmp_path / ".claude" / "review-profile.md").write_text(
         "## How we check\ncommand: npm test\n## Threat model\nx\n")
-    amb = [s for s in rc.gather_signals(str(tmp_path), root=root)
-           if s["type"] == "legacy-migration-ambiguous"]
-    assert len(amb) == 1
-    rc.ack_signal(str(tmp_path), amb[0]["identity"], root=root)
+    unsupported = [s for s in rc.gather_signals(str(tmp_path), root=root)
+                   if s["type"] == "legacy-profile-unsupported"]
+    assert len(unsupported) == 1
+    rc.ack_signal(str(tmp_path), unsupported[0]["identity"], root=root)
     coalesced = rc.coalesce(str(tmp_path), root=root)
-    assert coalesced is None or all(i["identity"] != amb[0]["identity"] for i in coalesced["items"])
+    assert coalesced is None or all(i["identity"] != unsupported[0]["identity"]
+                                    for i in coalesced["items"])
 
 
 def test_core_md_unreadable_signal_not_on_greenfield(tmp_path, monkeypatch):
@@ -301,33 +301,80 @@ def test_hero_behind_absent_on_current_and_ack_suppresses(tmp_path, monkeypatch)
     assert coalesced is None or all(i["identity"] != behind[0]["identity"] for i in coalesced["items"])
 
 
-def test_migration_incomplete_signal(tmp_path, monkeypatch):
+def test_legacy_profile_unsupported_with_core_present(tmp_path, monkeypatch):
+    # E17: parseable core.md + legacy profile still emits exactly one signal for that hero.
     _init_repo(tmp_path)
     monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
     _write_core_file(str(tmp_path), status="confirmed")
     (tmp_path / ".claude").mkdir(exist_ok=True)
     (tmp_path / ".claude" / "review-profile.md").write_text("stray legacy\n")
-    assert any(s["type"] == "migration-incomplete"
-               for s in rc.gather_signals(str(tmp_path), root=str(tmp_path / "store")))
+    sigs = [s for s in rc.gather_signals(str(tmp_path), root=str(tmp_path / "store"))
+            if s["type"] == "legacy-profile-unsupported"]
+    assert len(sigs) == 1
+    assert sigs[0]["detail"]["hero"] == "review-crew"
 
 
-def test_migration_incomplete_absent_and_ack_suppresses(tmp_path, monkeypatch):
+def test_legacy_profile_one_signal_per_hero(tmp_path, monkeypatch):
+    # E17: exactly one signal per affected hero — not two, not one for both.
+    _init_repo(tmp_path)
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    (tmp_path / ".claude").mkdir(exist_ok=True)
+    (tmp_path / ".claude" / "review-profile.md").write_text("review legacy\n")
+    tp_dir = tmp_path / ".claude" / "test-pilot"
+    tp_dir.mkdir(parents=True)
+    (tp_dir / "profile.md").write_text("pilot legacy\n")
+    sigs = [s for s in rc.gather_signals(str(tmp_path), root=str(tmp_path / "store"))
+            if s["type"] == "legacy-profile-unsupported"]
+    assert len(sigs) == 2
+    heroes = {s["detail"]["hero"] for s in sigs}
+    assert heroes == {"review-crew", "test-pilot"}
+
+
+def test_legacy_profile_signal_when_detection_exception(tmp_path, monkeypatch):
+    # E18: when detection records an exception for a hero, the signal is still emitted.
+    _init_repo(tmp_path)
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    (tmp_path / ".claude").mkdir(exist_ok=True)
+    target = str(tmp_path / ".claude" / "review-profile.md")
+    open(target, "w").write("legacy\n")
+    real_lstat = os.lstat
+
+    def _lstat(path, *a, **k):
+        if os.path.abspath(path) == os.path.abspath(target):
+            raise PermissionError("denied for test")
+        return real_lstat(path, *a, **k)
+
+    monkeypatch.setattr(os, "lstat", _lstat)
+    sigs = rc.gather_signals(str(tmp_path), root=str(tmp_path / "store"))
+    assert any(s["type"] == "legacy-profile-unsupported"
+               and s["detail"]["hero"] == "review-crew" for s in sigs)
+
+
+def test_no_legacy_no_legacy_profile_signal(tmp_path, monkeypatch):
+    _init_repo(tmp_path)
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    sigs = rc.gather_signals(str(tmp_path), root=str(tmp_path / "store"))
+    assert not any(s["type"] == "legacy-profile-unsupported" for s in sigs)
+
+
+def test_legacy_profile_unsupported_absent_and_ack_suppresses(tmp_path, monkeypatch):
     _init_repo(tmp_path)
     root = str(tmp_path / "store")
     monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
-    # core.md present, NO stray legacy → no migration-incomplete (signal-absent)
+    # core.md present, NO stray legacy → no legacy-profile-unsupported (signal-absent)
     _write_core_file(str(tmp_path), status="confirmed")
-    assert not any(s["type"] == "migration-incomplete"
+    assert not any(s["type"] == "legacy-profile-unsupported"
                    for s in rc.gather_signals(str(tmp_path), root=root))
     # add a stray legacy → signal present, then ack suppresses
     (tmp_path / ".claude").mkdir(exist_ok=True)
     (tmp_path / ".claude" / "review-profile.md").write_text("stray legacy\n")
-    inc = [s for s in rc.gather_signals(str(tmp_path), root=root)
-           if s["type"] == "migration-incomplete"]
-    assert len(inc) == 1
-    rc.ack_signal(str(tmp_path), inc[0]["identity"], root=root)
+    unsupported = [s for s in rc.gather_signals(str(tmp_path), root=root)
+                   if s["type"] == "legacy-profile-unsupported"]
+    assert len(unsupported) == 1
+    rc.ack_signal(str(tmp_path), unsupported[0]["identity"], root=root)
     coalesced = rc.coalesce(str(tmp_path), root=root)
-    assert coalesced is None or all(i["identity"] != inc[0]["identity"] for i in coalesced["items"])
+    assert coalesced is None or all(i["identity"] != unsupported[0]["identity"]
+                                    for i in coalesced["items"])
 
 
 def test_calibration_not_saved_signal_present_absent_and_ack(tmp_path, monkeypatch):
