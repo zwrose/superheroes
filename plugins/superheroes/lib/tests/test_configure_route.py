@@ -106,14 +106,29 @@ def test_legacy_profile_no_core_routes_to_fix(tmp_path):
 
 
 def test_stray_legacy_with_core_routes_to_fix(tmp_path):
-    # E20: confirmed core + registry + stray legacy profile routes to fix via _STRUCTURAL.
+    # E20: confirmed core + registry + light layers + stray legacy profile routes to fix
+    # via the _STRUCTURAL roster (not the incomplete-set-up branch). The sibling control
+    # test_healthy_project_without_stray_legacy_stays_in_view proves the mechanism.
     _init_repo(tmp_path, "git@github.com:o/r.git")
     root = str(tmp_path / "store")
     mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
-    _seed_core(tmp_path)
+    _seed_light_layers(_seed_core(tmp_path, status="confirmed"))
     (tmp_path / ".claude" / "review-profile.md").write_text("stray legacy\n")
     out = crt.route(str(tmp_path), interactive=True, root=root)
     assert out["path"] == "fix"
+    assert "legacy-profile-unsupported" in " ".join(out["reasons"])
+    assert any(s.get("type") == "legacy-profile-unsupported" for s in out["signals"])
+
+
+def test_healthy_project_without_stray_legacy_stays_in_view(tmp_path):
+    # Control for test_stray_legacy_with_core_routes_to_fix: same healthy fixture, no stray
+    # legacy profile — must stay in view so the structural signal is load-bearing.
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    _seed_light_layers(_seed_core(tmp_path, status="confirmed"))
+    out = crt.route(str(tmp_path), interactive=True, root=root)
+    assert out["path"] == "view"
 
 
 def test_work_in_flight_always_false_v2(tmp_path):
