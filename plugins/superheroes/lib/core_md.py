@@ -606,13 +606,10 @@ def _legacy_candidates(cwd, hero, root=None):
     if sub is None:
         return []
     out = [os.path.join(_repo_root(cwd), sub)]
-    try:
-        g = store_core.resolve_global(
-            cwd, mode_registry._hero_global_root(hero), heal=False)
-        if g is not None:
-            out.append(os.path.join(g["dir"], mode_registry._HERO_GLOBAL_FILENAME[hero]))
-    except Exception:
-        pass
+    g = store_core.resolve_global(
+        cwd, mode_registry._hero_global_root(hero), heal=False)
+    if g is not None:
+        out.append(os.path.join(g["dir"], mode_registry._HERO_GLOBAL_FILENAME[hero]))
     return out
 
 
@@ -695,8 +692,10 @@ _HEROES = ("review-crew", "test-pilot", "guardian")
 def resolve_shared(cwd, *, root=None):
     """The shared facts (FR-2). A legacy single-file profile is NO LONGER migrated on read: when
     core.md supplies the facts the legacy file is simply never consulted, and when it does not,
-    a legacy profile is a named refusal pointing at superheroes:configure (issue #724). Pure —
-    no writes, no unlink, no git, no config lock."""
+    a legacy profile is a named refusal pointing at superheroes:configure (issue #724). Never
+    migrates, unlinks, or commits, and the detection half writes nothing — but it calls read(),
+    which inherits mode_registry.resolve's pre-existing project-store backfill, so it is not
+    write-free."""
     rec = read(cwd, root)
     if rec is not None:
         return rec

@@ -8,8 +8,10 @@ provisional. Apply what is unambiguous silently; surface what needs an owner dec
 
 ## 1 — Apply mechanical updates silently (FR-8)
 
-A calibration file brought up to date by a single unambiguous transformation (a format/version bump
-with exactly one correct result) is applied **without prompting**. In repo-shared mode the change
+An unambiguous format/version update is applied **without prompting** where such an update exists
+(`core_md.py confirm`, and `write` on a create path). On the shared-facts read path there is no
+on-disk transformation at all — older `schemaVersion` is upgraded **in memory only**, never written
+back (UFR-2), and a legacy profile is refused rather than converted (#724). In repo-shared mode the change
 travels with the repo (collaborators receive it); in out-of-repo mode it is made only on the local
 machine. `resolve_shared` is a **pure read** — it returns the shared facts from `core.md`, or the
 named `legacy-profile-unsupported` refusal when `core.md` cannot supply them and a pre-`core.md`
