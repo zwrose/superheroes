@@ -150,10 +150,12 @@ def test_route_fix_when_git_unavailable(tmp_path, monkeypatch):
     mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
     _seed_light_layers(_seed_core(tmp_path))
 
+    real_run_git = sc.run_git_result
+
     def fake(cwd, *args):
         if args == ("rev-parse", "--show-toplevel"):
             return sc.GitResult(None, sc.GIT_UNAVAILABLE, "FileNotFoundError: no git")
-        return sc.run_git_result(cwd, *args)
+        return real_run_git(cwd, *args)
 
     monkeypatch.setattr(sc, "run_git_result", fake)
     out = crt.route(str(tmp_path), interactive=True, root=root)

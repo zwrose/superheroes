@@ -355,6 +355,8 @@ def test_collect_and_render_survive_git_unavailable(tmp_path, monkeypatch):
     monkeypatch.setattr(sc, "run_git_result", fake)
     data = cv.collect(str(tmp_path), root=root)
     assert data["layers"] == []
+    assert data["core"] is None
     screen = cv.render(str(tmp_path), root=root)
     assert isinstance(screen, str)
-    assert "pytest" in screen
+    assert "## Core\n(no core calibration yet)" in screen
+    assert "pytest" not in screen

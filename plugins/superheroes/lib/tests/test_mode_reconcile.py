@@ -518,3 +518,27 @@ def test_gather_signals_directory_emits_unreadable(tmp_path, monkeypatch):
     sigs = rc.gather_signals(repo, root=root)
     assert any(s["type"] == "core-md-unreadable" for s in sigs)
 
+
+def test_gather_signals_core_md_import_failure_is_fail_open(tmp_path, monkeypatch):
+    import builtins
+    import sys
+
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    real_import = builtins.__import__
+    saved_core_md = sys.modules.pop("core_md", None)
+    try:
+
+        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "core_md":
+                raise ImportError("simulated core_md import failure")
+            return real_import(name, globals, locals, fromlist, level)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        sigs = rc.gather_signals(str(tmp_path), root=root)
+    finally:
+        if saved_core_md is not None:
+            sys.modules["core_md"] = saved_core_md
+
+    assert not any(s["type"] == "core-md-unreadable" for s in sigs)
+

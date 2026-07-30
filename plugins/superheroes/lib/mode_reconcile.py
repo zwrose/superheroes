@@ -56,8 +56,10 @@ def gather_signals(cwd, root=None):
                          "detail": {"location": pol.get("location")}})
 
     # --- #81: core.md calibration drift (all disk-derived; only dismissal is durable) ---
+    core_status, core_rec, config_unreadable = None, None, None
     try:
         import core_md
+        config_unreadable = core_md.CONFIG_UNREADABLE
         core_rec = core_md.read(cwd, root)
         core_status = core_md.engine_preferences_for_gate(cwd=cwd, root=root).status
     except Exception:
@@ -73,7 +75,7 @@ def gather_signals(cwd, root=None):
         elif core_rec.get("status") == "provisional":
             sigs.append({"type": "core-md-provisional",
                          "identity": _sig_id("core-md-provisional"), "detail": {}})
-    elif core_status == core_md.CONFIG_UNREADABLE:
+    elif config_unreadable is not None and core_status == config_unreadable:
         # accessor says core.md is present but unreadable (corrupt, dangling symlink, etc.) — NOT greenfield.
         sigs.append({"type": "core-md-unreadable",
                      "identity": _sig_id("core-md-unreadable"), "detail": {}})
