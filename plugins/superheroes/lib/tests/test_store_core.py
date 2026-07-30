@@ -326,3 +326,59 @@ def test_resolve_global_heal_false_is_read_only(tmp_path):
     assert g is not None and g["entry_id"] == "e1" and g["healed"] is False
     assert sorted(os.listdir(os.path.join(root, "keys"))) == before  # no new pointer written
     assert not os.path.exists(os.path.join(entry, "keys.json"))      # no keys.json written
+
+
+# ---------------------------------------------------------------------------
+# issue #699 rider 11 — run_git_result / run_git equivalence
+# ---------------------------------------------------------------------------
+
+def test_run_git_result_unavailable_on_file_not_found(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *a, **kw: (_ for _ in ()).throw(FileNotFoundError("no git")),
+    )
+    res = sc.run_git_result(str(tmp_path), "rev-parse", "--show-toplevel")
+    assert res.out is None
+    assert res.status == sc.GIT_UNAVAILABLE
+
+
+def test_run_git_result_unavailable_on_timeout(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *a, **kw: (_ for _ in ()).throw(subprocess.TimeoutExpired("git", 10)),
+    )
+    res = sc.run_git_result(str(tmp_path), "rev-parse", "--show-toplevel")
+    assert res.out is None
+    assert res.status == sc.GIT_UNAVAILABLE
+
+
+def test_run_git_result_declined_on_nonzero_exit(tmp_path, monkeypatch):
+    class _Declined:
+        returncode = 128
+        stdout = ""
+        stderr = "not a git repository"
+
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: _Declined())
+    res = sc.run_git_result(str(tmp_path), "rev-parse", "--show-toplevel")
+    assert res.out is None
+    assert res.status == sc.GIT_DECLINED
+
+
+def test_run_git_wrapper_matches_run_git_result_out(tmp_path, monkeypatch):
+    class _Ok:
+        returncode = 0
+        stdout = "  /repo/root\n"
+        stderr = ""
+
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: _Ok())
+    res = sc.run_git_result(str(tmp_path), "rev-parse", "--show-toplevel")
+    assert sc.run_git(str(tmp_path), "rev-parse", "--show-toplevel") == res.out == "/repo/root"
+
+    class _Declined:
+        returncode = 1
+        stdout = ""
+        stderr = "err"
+
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: _Declined())
+    res = sc.run_git_result(str(tmp_path), "status")
+    assert res.out is None and sc.run_git(str(tmp_path), "status") is None

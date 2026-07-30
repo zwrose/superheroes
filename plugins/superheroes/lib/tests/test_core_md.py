@@ -1222,14 +1222,13 @@ def test_gate_edge11_invalid_utf8(tmp_path):
     assert "UTF-8" in cfg.detail
 
 
-def test_read_raises_on_invalid_utf8_write_refuses_via_gate(tmp_path):
+def test_read_returns_none_on_invalid_utf8_write_refuses_via_gate(tmp_path):
     repo = str(tmp_path)
     store = str(tmp_path / "store")
     core_p = _gate_core_beside(repo)
     with open(core_p, "wb") as fh:
         fh.write(b"\xff broken\n")
-    with pytest.raises(UnicodeDecodeError):
-        CM.read(repo, root=store)
+    assert CM.read(repo, root=store) is None
     res = CM.write(
         repo,
         {"verifyCommand": "npm test", "stackTags": [], "threatModel": "t", "patterns": ""},
@@ -1837,3 +1836,101 @@ def test_cli_write_show_it_from_stdin(tmp_path, capsys, monkeypatch):
     out = json.loads(capsys.readouterr().out)
     assert out["action"] == "written"
     assert CM.read(repo, root=store)["showItSurface"] == _SHOW_IT_BODY
+
+
+# ---------------------------------------------------------------------------
+# issue #699 riders 11 + 12
+# ---------------------------------------------------------------------------
+
+import store_core as SC
+
+
+def _git_unavailable(monkeypatch, detail="FileNotFoundError: no git"):
+    def fake(cwd, *args):
+        if args == ("rev-parse", "--show-toplevel"):
+            return SC.GitResult(None, SC.GIT_UNAVAILABLE, detail)
+        return SC.run_git_result(cwd, *args)
+    monkeypatch.setattr(SC, "run_git_result", fake)
+
+
+def test_repo_root_raises_on_git_unavailable_file_not_found(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *a, **kw: (_ for _ in ()).throw(FileNotFoundError("no git")),
+    )
+    with pytest.raises(CM.RepoRootUnavailable):
+        CM._repo_root(str(tmp_path))
+
+
+def test_repo_root_raises_on_git_timeout(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *a, **kw: (_ for _ in ()).throw(subprocess.TimeoutExpired("git", 10)),
+    )
+    with pytest.raises(CM.RepoRootUnavailable):
+        CM._repo_root(str(tmp_path))
+
+
+def test_repo_root_declined_non_git_uses_cwd(tmp_path, monkeypatch):
+    class _Declined:
+        returncode = 128
+        stdout = ""
+        stderr = "not a git repository"
+
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: _Declined())
+    assert CM._repo_root(str(tmp_path)) == os.path.realpath(str(tmp_path))
+
+
+def test_read_none_when_repo_root_unavailable(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    _git_unavailable(monkeypatch)
+    assert CM.read(repo, root=store) is None
+
+
+def test_engine_preferences_unreadable_when_repo_root_unavailable(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    _git_unavailable(monkeypatch)
+    cfg = CM.engine_preferences_for_gate(cwd=repo, root=store)
+    assert cfg.status == CM.CONFIG_UNREADABLE
+    assert cfg.detail
+
+
+def test_write_refused_on_toctou_undecodable_after_gate_ok(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    core_p = _gate_core_beside(repo)
+    open(core_p, "w", encoding="utf-8").write(_gate_valid_core_text())
+    corrupt_bytes = b"\xff broken\n"
+    real_gate = CM.engine_preferences_for_gate
+    gate_calls = {"n": 0}
+
+    def gate_ok_once(**kwargs):
+        gate_calls["n"] += 1
+        if gate_calls["n"] == 1:
+            return CM.CoreGateConfig({}, CM.CONFIG_OK, None)
+        return real_gate(**kwargs)
+
+    real_read = CM.read
+    read_calls = {"n": 0}
+
+    def corrupt_then_read(cwd, root=None):
+        read_calls["n"] += 1
+        if read_calls["n"] == 1:
+            with open(core_p, "wb") as fh:
+                fh.write(b"\xff broken\n")
+        return real_read(cwd, root)
+
+    monkeypatch.setattr(CM, "engine_preferences_for_gate", gate_ok_once)
+    monkeypatch.setattr(CM, "read", corrupt_then_read)
+    res = CM.write(
+        repo,
+        {"verifyCommand": "npm test", "stackTags": [], "threatModel": "t", "patterns": ""},
+        "confirmed",
+        root=store,
+        now="2026-01-01",
+    )
+    assert res["action"] == "refused"
+    assert res["violations"][0]["reason"] == CM.GATE_REASON_UNREADABLE
+    assert open(core_p, "rb").read() == corrupt_bytes

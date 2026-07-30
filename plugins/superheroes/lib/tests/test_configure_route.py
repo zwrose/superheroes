@@ -142,3 +142,19 @@ def test_work_in_flight_always_false_v2(tmp_path):
     # in-flight work rather than fabricate one.
     _init_repo(tmp_path)
     assert crt.work_in_flight(str(tmp_path)) is False
+
+
+def test_route_fix_when_git_unavailable(tmp_path, monkeypatch):
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    _seed_light_layers(_seed_core(tmp_path))
+
+    def fake(cwd, *args):
+        if args == ("rev-parse", "--show-toplevel"):
+            return sc.GitResult(None, sc.GIT_UNAVAILABLE, "FileNotFoundError: no git")
+        return sc.run_git_result(cwd, *args)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    out = crt.route(str(tmp_path), interactive=True, root=root)
+    assert out["path"] == "fix"

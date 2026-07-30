@@ -330,3 +330,31 @@ def test_render_shows_not_declared_line_when_show_it_absent(tmp_path):
     )
     screen = cv.render(str(tmp_path), root=root)
     assert '(not declared — the presentation level for this project is "none")' in screen
+
+
+def test_collect_and_render_survive_git_unavailable(tmp_path, monkeypatch):
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    cdir = os.path.join(str(tmp_path), ".claude", "superheroes")
+    os.makedirs(cdir, exist_ok=True)
+    sc.atomic_write(
+        os.path.join(cdir, "core.md"),
+        core_md.render_core(
+            {"verifyCommand": "pytest", "stackTags": ["py"],
+             "threatModel": "single-user", "patterns": "x"},
+            "confirmed", "2026-06-27", "2026-06-27",
+        ),
+    )
+
+    def fake(cwd, *args):
+        if args == ("rev-parse", "--show-toplevel"):
+            return sc.GitResult(None, sc.GIT_UNAVAILABLE, "FileNotFoundError: no git")
+        return sc.run_git_result(cwd, *args)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    data = cv.collect(str(tmp_path), root=root)
+    assert data["layers"] == []
+    screen = cv.render(str(tmp_path), root=root)
+    assert isinstance(screen, str)
+    assert "pytest" in screen

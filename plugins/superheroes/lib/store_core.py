@@ -8,6 +8,7 @@ constants, kind-keyed resolve/create, artifact_key, etc.).
 
 Stdlib-only; no third-party dependencies.
 """
+import collections
 import hashlib
 import json
 import os
@@ -15,6 +16,12 @@ import re
 import subprocess
 import sys
 import tempfile
+
+GIT_OK = "ok"
+GIT_DECLINED = "declined"        # git ran and exited non-zero — an authoritative "no"
+GIT_UNAVAILABLE = "unavailable"  # git could not be run at all — the answer is unknown
+
+GitResult = collections.namedtuple("GitResult", "out status detail")
 
 
 def normalize_remote(url):
@@ -52,14 +59,26 @@ def short_hash(s):
     return hashlib.sha256(s.encode("utf-8")).hexdigest()[:16]
 
 
-def run_git(cwd, *args):
-    """Run git with an argv array + timeout. Return stdout (stripped) or None."""
+def run_git_result(cwd, *args):
+    """`run_git` plus WHY there is no output (issue #699 rider 11).
+
+    ``GIT_DECLINED`` means git ran and answered no — callers may believe it. ``GIT_UNAVAILABLE``
+    means git never ran (missing binary, OSError, timeout), so a caller that would otherwise fall
+    back to a default must fail closed instead: it has no answer, not a negative one."""
     try:
         r = subprocess.run(["git", "-C", cwd, *args],
                            capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return r.stdout.strip() if r.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError) as exc:
+        return GitResult(None, GIT_UNAVAILABLE, "%s: %s" % (type(exc).__name__, exc))
+    if r.returncode != 0:
+        return GitResult(None, GIT_DECLINED, (r.stderr or "").strip())
+    return GitResult(r.stdout.strip(), GIT_OK, None)
+
+
+def run_git(cwd, *args):
+    """Run git with an argv array + timeout. Return stdout (stripped) or None.
+    Thin wrapper over `run_git_result` — see it for the failure distinction."""
+    return run_git_result(cwd, *args).out
 
 
 def get_remote(cwd):

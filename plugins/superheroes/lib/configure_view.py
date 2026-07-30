@@ -192,13 +192,16 @@ def collect(cwd, root=None):
     the pinned patterns, the resolved storage mode, the coalesced drift notice, the effective
     model tiers, and the validated engine preferences."""
     core = core_md.read(cwd, root)
-    cal_dir = os.path.dirname(core_md.core_path(cwd, root))
     layers = []
-    if os.path.isdir(cal_dir):
+    try:
+        cal_dir = os.path.dirname(core_md.core_path(cwd, root))
+    except OSError:
+        cal_dir = None
+    if cal_dir and os.path.isdir(cal_dir):
         for name in sorted(os.listdir(cal_dir)):
             if name.endswith(".md") and name not in _NON_LAYER:
                 layers.append((name[:-3], _read(os.path.join(cal_dir, name)) or ""))
-    patterns = _read(os.path.join(cal_dir, "patterns.md"))
+    patterns = _read(os.path.join(cal_dir, "patterns.md")) if cal_dir else None
     if patterns is None and core is not None:
         patterns = core.get("patterns")
     try:

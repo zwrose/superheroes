@@ -26,6 +26,17 @@ CONFIG_ABSENT = "absent"
 CONFIG_OK = "ok"
 CONFIG_UNREADABLE = "unreadable"
 GATE_REASON_UNREADABLE = "core-md-unreadable"
+
+
+class RepoRootUnavailable(OSError):
+    """Git could not be RUN, so the repository root is unknown (issue #699 rider 11).
+
+    Subclasses OSError deliberately: every fail-closed reader in this module already handles
+    OSError — `read()` returns None and `engine_preferences_for_gate` reports `unreadable` — so an
+    unknown repo root surfaces through the refusal vocabulary callers already understand instead of
+    silently keying a different project's store."""
+
+
 GATE_REASON_EVALUATION_FAILED = "dispatch-gate-evaluation-failed"
 LEGACY_PROFILE_REASON = "legacy-profile-unsupported"
 LEGACY_PROFILE_REMEDY = (
@@ -130,8 +141,11 @@ def parse_core(text):
 
 
 def _repo_root(cwd):
-    out = store_core.run_git(cwd, "rev-parse", "--show-toplevel")
-    return os.path.realpath(out) if out else os.path.realpath(cwd)
+    res = store_core.run_git_result(cwd, "rev-parse", "--show-toplevel")
+    if res.status == store_core.GIT_UNAVAILABLE:
+        raise RepoRootUnavailable(
+            "git could not be run at %s: %s" % (cwd, res.detail))
+    return os.path.realpath(res.out) if res.out else os.path.realpath(cwd)
 
 
 def relocate_file(src, dst):
@@ -279,7 +293,7 @@ def read(cwd, root=None):
     try:
         with open(core_path(cwd, root), encoding="utf-8") as fh:
             text = fh.read()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None
     facts = parse_core(text)
     if facts is None:
@@ -446,6 +460,13 @@ def write(cwd, facts, status, *, root=None, now=None):
                 record=None,
             )
         existing = read(cwd, root)
+        if existing is None:
+            re_cls = _classify_core_md_at_path(core_path(cwd, root))
+            if re_cls.status == CONFIG_UNREADABLE:
+                return _refused_dispatch_gate(
+                    evaluation_error=gate_refusal(GATE_REASON_UNREADABLE, re_cls.detail),
+                    record=None,
+                )
         violations, gate_err = _evaluate_configured_dispatch_gate(cwd, root, facts, existing)
         if gate_err is not None:
             return _refused_dispatch_gate(evaluation_error=gate_err, record=existing)
