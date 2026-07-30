@@ -73,8 +73,9 @@ frozen: any problem you hit is a finding, never a re-provisioning.
    - Drive each interaction with a **pointer** action (a real input event) —
      never an evaluated `.click()` or other **scripted event dispatch**
      through the browser tool's script-evaluation escape hatch.
-   - When a step says "the first" or "the next" <thing>, skip targets
+   - When a step says "the first" or "the next" thing, skip targets
      reported as **`aria-disabled`**.
+
    Provisioning is finished: from here the plan and seed are frozen — a plan
    or seed problem you hit while executing is a finding (step 6), never a
    re-author, re-apply, or retry. **One carve-out:** you may vary the
