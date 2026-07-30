@@ -314,10 +314,9 @@ def test_legacy_profile_unsupported_with_core_present(tmp_path, monkeypatch):
     assert sigs[0]["detail"]["hero"] == "review-crew"
 
 
-def test_legacy_profile_one_signal_per_hero(tmp_path, monkeypatch):
+def test_legacy_profile_one_signal_per_hero(tmp_path):
     # E17: exactly one signal per affected hero — not two, not one for both.
     _init_repo(tmp_path)
-    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
     (tmp_path / ".claude").mkdir(exist_ok=True)
     (tmp_path / ".claude" / "review-profile.md").write_text("review legacy\n")
     tp_dir = tmp_path / ".claude" / "test-pilot"
@@ -333,7 +332,6 @@ def test_legacy_profile_one_signal_per_hero(tmp_path, monkeypatch):
 def test_legacy_profile_signal_when_detection_exception(tmp_path, monkeypatch):
     # E18: when detection records an exception for a hero, the signal is still emitted.
     _init_repo(tmp_path)
-    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
     (tmp_path / ".claude").mkdir(exist_ok=True)
     target = str(tmp_path / ".claude" / "review-profile.md")
     open(target, "w").write("legacy\n")
@@ -350,9 +348,8 @@ def test_legacy_profile_signal_when_detection_exception(tmp_path, monkeypatch):
                and s["detail"]["hero"] == "review-crew" for s in sigs)
 
 
-def test_no_legacy_no_legacy_profile_signal(tmp_path, monkeypatch):
+def test_no_legacy_no_legacy_profile_signal(tmp_path):
     _init_repo(tmp_path)
-    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
     sigs = rc.gather_signals(str(tmp_path), root=str(tmp_path / "store"))
     assert not any(s["type"] == "legacy-profile-unsupported" for s in sigs)
 

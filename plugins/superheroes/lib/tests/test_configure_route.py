@@ -92,23 +92,17 @@ def test_staleness_drift_stays_in_view(tmp_path, monkeypatch):
     assert out["path"] == "view"
 
 
-def test_legacy_profile_no_core_routes_to_set_up(tmp_path, monkeypatch):
-    # E19: legacy profile with no registry and no core.md routes to set-up — fresh calibration
-    # IS the remedy, and the greenfield branch deliberately returns before structural signals.
+def test_legacy_profile_no_core_routes_to_fix(tmp_path):
+    # E19: a legacy profile is hero evidence, so mode_registry.resolve backfills a registry
+    # and the greenfield branch does not fire; fix is the correct route and carries the
+    # legacy-profile-unsupported signal.
     _init_repo(tmp_path)
     root = str(tmp_path / "store")
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".claude" / "review-profile.md").write_text("legacy profile\n")
-  # mode_registry.resolve() would backfill from legacy hero_evidence; pin greenfield so
-  # route() exercises the set-up branch (structural signals are not consulted there).
-    monkeypatch.setattr(
-        crt.mode_registry, "resolve",
-        lambda cwd, root=None: {
-            "mode": mr.GLOBAL, "authoritative": False, "source": "provisional",
-            "evidence": "none",
-        })
     out = crt.route(str(tmp_path), interactive=True, root=root)
-    assert out["path"] == "set-up"
+    assert out["path"] == "fix"
+    assert any(s.get("type") == "legacy-profile-unsupported" for s in out["signals"])
 
 
 def test_stray_legacy_with_core_routes_to_fix(tmp_path):

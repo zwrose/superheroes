@@ -731,30 +731,16 @@ def test_resolve_shared_none_when_neither_present(tmp_path):
     assert CM.resolve_shared(repo, root=store) is None
 
 
-def test_resolve_shared_refusal_no_lock_no_pending(tmp_path, monkeypatch):
-    # E14: refusing path takes no config lock and leaves no calibration-pending marker.
-    from contextlib import contextmanager
-
+def test_resolve_shared_refusal_leaves_no_pending_marker(tmp_path):
+    # E14: refusal path leaves no calibration-pending marker. Not asserting config_lock:
+    # resolve_shared does acquire the lock once via read()'s mode_registry.resolve backfill
+    # (predates #724; base migrate_on_read took the lock and could unlink/commit). The refusal
+    # path guarantees no migrate, unlink, commit, or mark_pending.
     repo = str(tmp_path)
     store = str(tmp_path / "store")
     _write_legacy_inrepo(repo, "review-crew")
-    # Legacy profile makes hero_evidence report in-repo, which can trigger a backfill write
-    # (and config_lock) inside read()'s core_path chain — isolate the refusal leg.
-    monkeypatch.setattr(
-        CM.mode_registry, "hero_evidence",
-        lambda *a, **k: {"review-crew": "none", "test-pilot": "none"})
-    lock_called = False
-
-    @contextmanager
-    def _track_lock(cwd, root=None):
-        nonlocal lock_called
-        lock_called = True
-        yield True
-
-    monkeypatch.setattr(CM.mode_registry, "config_lock", _track_lock)
     got = CM.resolve_shared(repo, root=store)
     assert got is not None and got["action"] == "refused"
-    assert not lock_called
     assert not os.path.exists(CM._pending_path(repo, store))
 
 
