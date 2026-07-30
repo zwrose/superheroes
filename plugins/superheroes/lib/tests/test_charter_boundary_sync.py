@@ -220,6 +220,12 @@ _INVARIANT_TABLE = [
     },
 ]
 
+# Import-time snapshot: the invariance test compares against this, NOT against a copy taken
+# inside the test body. pytest runs tests in declaration order, so a baseline captured in the
+# test body is already polluted by every test declared above it (measured: mutations from
+# earlier-declared tests went undetected).
+_INVARIANT_TABLE_AT_IMPORT = copy.deepcopy(_INVARIANT_TABLE)
+
 
 def _read_plugin(rel):
     path = os.path.join(_PLUGIN_ROOT, rel)
@@ -770,7 +776,6 @@ def test_negative_home_per_clause_not_row_union():
 
 def test_invariant_table_not_mutated_by_test_run():
     """Running every test in this module must not mutate the live _INVARIANT_TABLE."""
-    baseline = copy.deepcopy(_INVARIANT_TABLE)
     current_module = globals()
     test_names = sorted(
         name for name in current_module
@@ -778,8 +783,20 @@ def test_invariant_table_not_mutated_by_test_run():
     )
     for order in (test_names, list(reversed(test_names))):
         for name in order:
-            current_module[name]()
-    assert _INVARIANT_TABLE == baseline
+            try:
+                current_module[name]()
+            except BaseException as exc:
+                if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                    raise
+                raise RuntimeError(
+                    f"called test '{name}' failed; this is NOT a table-mutation failure"
+                ) from exc
+    if _INVARIANT_TABLE != _INVARIANT_TABLE_AT_IMPORT:
+        raise AssertionError(
+            "_INVARIANT_TABLE was mutated during test run — live table differs from "
+            f"import-time snapshot: live={_INVARIANT_TABLE!r}, "
+            f"snapshot={_INVARIANT_TABLE_AT_IMPORT!r}"
+        )
 
 
 def test_negative_section_scoped_copy_check_rejects_out_of_section_match():
