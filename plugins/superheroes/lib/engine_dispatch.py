@@ -13,8 +13,8 @@ emits liveness heartbeats, detects terminal forfeit (timeout OR unreadable parse
 tight-inline before forfeiting to the caller (which falls open to Claude). Review dispatches
 prepend the anti-hijack preamble. The supervisor journal (outside the run directory) is the
 decision record — spawn, retry, fold, and abandon transitions consult journal state, not engine
-output. Engine stdout and any worktree files the engine wrote are advisory evidence parsed only
-for findings or build signals. Never raises to its caller.
+output. Engine writes to the build worktree are the deliverable; engine stdout/stderr and any
+status files are advisory evidence for supervisor decisions only. Never raises to its caller.
 
 (CONVENTIONS §7.5: engine *selection* fails open; a completed external *result* fails closed.)
 """
@@ -55,6 +55,8 @@ DEFAULT_SYNC_WAIT = 540          # below the 600 s foreground-conversion boundar
 MAX_SYNC_WAIT = 540              # hard cap: a caller can ask for less, never more
 MAX_ATTEMPTS = 2                 # unchanged semantics: one tight-inline retry
 SUPERVISOR_POLL_INTERVAL = 0.5
+RUN_CHILD_RECORD_WAIT_SECONDS = 10
+RUN_LOCK_TTL = 2 * MAX_SYNC_WAIT
 ABANDON_CONFIRM_SECONDS = 10
 JOURNAL_ROOT_ENV = "SUPERHEROES_DISPATCH_JOURNAL_ROOT"
 JOURNAL_ROOT_NAME = "superheroes-dispatch-journal"
@@ -441,7 +443,8 @@ def _try_reclaim_malformed_lease(lease_path):
 
 
 def _release_worktree_lease(state):
-    """Single lease-release site — releases iff the on-disk token matches the journal."""
+    """Terminal lease release (via _finalize_run) — releases iff the on-disk token matches the
+    journal. Acquisition rollback and open-failure paths call file_lock.release directly."""
     if not state:
         return
     opened = state.get("opened")
@@ -548,7 +551,7 @@ def _run_dir_nonempty(run_dir_real):
         return True
 
 
-def _finalize_run(run_dir_real, state, *, terminal):
+def _finalize_run(state, *, terminal):
     """Single cleanup site: destroy view (review) and release lease (write). Never raises."""
     opened = state.get("opened") if state else None
     view_path = opened.get("viewPath") if opened else None
@@ -572,7 +575,7 @@ def _fold_run(run_dir_real, state, result):
              "attempts": _highest_attempt(state), "forfeited": False},
             run_dir=run_dir_real, argv=opened.get("argv") or [],
         )
-    _finalize_run(run_dir_real, state, terminal=True)
+    _finalize_run(state, terminal=True)
     return result
 
 
@@ -1071,7 +1074,7 @@ def _highest_attempt(state):
 def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
     lock_path = os.path.join(run_dir_real, RUN_LOCK_NAME)
     try:
-        file_lock.acquire(lock_path)
+        file_lock.acquire(lock_path, ttl=RUN_LOCK_TTL)
     except file_lock.LockHeld:
         records, _corrupt = _journal_read(run_dir_real)
         state = _journal_state(records)
@@ -1272,6 +1275,14 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
             pass
 
 
+def _pending_attempt(state):
+    for att in sorted(state.get("attempts", {})):
+        slot = state["attempts"][att]
+        if slot.get("ended") is None:
+            return att
+    return None
+
+
 def _run_child_main(run_dir_real):
     records, _corrupt = _journal_read(run_dir_real)
     state = _journal_state(records)
@@ -1279,12 +1290,16 @@ def _run_child_main(run_dir_real):
     if opened is None:
         return 0
 
-    pending_att = None
-    for att in sorted(state.get("attempts", {})):
-        slot = state["attempts"][att]
-        if slot.get("ended") is None:
-            pending_att = att
-            break
+    pending_att = _pending_attempt(state)
+    if pending_att is None:
+        deadline = time.monotonic() + RUN_CHILD_RECORD_WAIT_SECONDS
+        while time.monotonic() < deadline:
+            time.sleep(SUPERVISOR_POLL_INTERVAL)
+            records, _corrupt = _journal_read(run_dir_real)
+            state = _journal_state(records)
+            pending_att = _pending_attempt(state)
+            if pending_att is not None:
+                break
     if pending_att is None:
         return 0
 
@@ -1835,7 +1850,7 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
         records, _corrupt = _journal_read(run_dir_realpath)
         state = _journal_state(records)
         terminal = state.get("folded") is not None or state.get("abandoned") is not None
-        _finalize_run(run_dir_realpath, state, terminal=terminal)
+        _finalize_run(state, terminal=terminal)
 
 
 def _poll_projection(state):
@@ -1938,7 +1953,7 @@ def dispatch_abandon(run_dir):
         run_dir_real = detail
         lock_path = os.path.join(run_dir_real, RUN_LOCK_NAME)
         try:
-            file_lock.acquire(lock_path)
+            file_lock.acquire(lock_path, ttl=RUN_LOCK_TTL)
         except file_lock.LockHeld:
             records, _corrupt = _journal_read(run_dir_real)
             state = _journal_state(records)
@@ -1985,6 +2000,8 @@ def dispatch_abandon(run_dir):
                         if slot.get("childPid") is not None:
                             _terminate_pid(slot["childPid"])
 
+            alive, _who = _run_live_evidence(state)
+            engine_was_live = alive
             _signal_live_attempts(state)
 
             deadline = time.monotonic() + ABANDON_CONFIRM_SECONDS
@@ -2007,6 +2024,8 @@ def dispatch_abandon(run_dir):
                     _signal_live_attempts(state)
                 time.sleep(SUPERVISOR_POLL_INTERVAL)
 
+            if engine_was_live:
+                _release_worktree_lease(state)
             if not _journal_append(run_dir_real, {
                 "kind": "run-abandoned", "detail": "abandoned", "at": time.time(),
             }):
@@ -2016,7 +2035,7 @@ def dispatch_abandon(run_dir):
                      "attempts": len(state.get("attempts") or {}), "forfeited": False},
                     run_dir=run_dir_real, argv=argv,
                 )
-            _finalize_run(run_dir_real, state, terminal=True)
+            _finalize_run(state, terminal=not engine_was_live)
             return _with_run_fields(
                 {"ok": False, "terminal": True, "reason": "unrunnable",
                  "detail": "run-abandoned", "attempts": len(state.get("attempts") or {}),

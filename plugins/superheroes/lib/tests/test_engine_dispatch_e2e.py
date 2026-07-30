@@ -114,21 +114,36 @@ def _honest_refusal_stdout():
 
 
 def _install_fake_engine(tmp_path, monkeypatch, name, *, stdout="", sleep_s=0, exit_code=0,
-                          argv_file=None, out_file=None):
+                          argv_file=None, out_file=None, death_marker=None, stage_out_file=False):
     """Install a fake engine; behavior is literal in the script (survives env scrub)."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     exe = bin_dir / name
     body = '''#!/usr/bin/env python3
 import json
+import subprocess
 import sys
 import time
 
 _argv_file = %(argv_file)r
 _out_file = %(out_file)r
+_death_marker = %(death_marker)r
+_stage_out_file = %(stage_out_file)s
 _stdout_payload = %(stdout)r
 _sleep_s = %(sleep)s
 _exit_code = %(exit_code)s
+
+if _death_marker:
+    import atexit
+    import signal
+
+    def _mark_death(signum=None, frame=None):
+        with open(_death_marker, "w", encoding="utf-8"):
+            pass
+
+    signal.signal(signal.SIGTERM, _mark_death)
+    signal.signal(signal.SIGINT, _mark_death)
+    atexit.register(_mark_death)
 
 if _argv_file:
     with open(_argv_file, "w", encoding="utf-8") as fh:
@@ -138,6 +153,8 @@ _stdin_data = sys.stdin.read()
 if _out_file:
     with open(_out_file, "w", encoding="utf-8") as fh:
         fh.write(_stdin_data)
+    if _stage_out_file:
+        subprocess.run(["git", "add", _out_file], check=False)
 
 if _sleep_s:
     time.sleep(_sleep_s)
@@ -150,6 +167,8 @@ sys.exit(_exit_code)
 ''' % {
         "argv_file": argv_file,
         "out_file": out_file,
+        "death_marker": death_marker,
+        "stage_out_file": stage_out_file,
         "stdout": stdout,
         "sleep": sleep_s,
         "exit_code": exit_code,
@@ -306,8 +325,11 @@ def test_e2e_write_real_path_terminal_success(tmp_path, monkeypatch):
     assert os.path.isfile(out_marker)
     head_after = _git(wt, "rev-parse", "HEAD").stdout.strip()
     porcelain_after = _git(wt, "status", "--porcelain").stdout
+    cached = _git(wt, "diff", "--cached", "--name-only").stdout.strip()
     assert head_before == head_after
     assert "engine-wrote.txt" in porcelain_after
+    assert porcelain_after.strip().startswith("??")
+    assert cached == ""
     assert porcelain_before != porcelain_after
 
 
@@ -590,10 +612,29 @@ def test_e2e_dispatch_abandon_order_and_idempotent(tmp_path, monkeypatch):
     wt, _main = _linked_worktree(tmp_path)
     run_dir = _run_dir(tmp_path, "run-abandon")
     prompt_path = _prompt(tmp_path)
+    death_marker = str(tmp_path / "engine-death.marker")
+    lease_at_abandon = []
+    engine_alive_at_release = []
+    real_append = ED._journal_append
+    real_release = ED._release_worktree_lease
+
+    def tracking_append(run_dir_real, record):
+        if record.get("kind") == "run-abandoned":
+            lease_at_abandon.append(os.path.exists(_lease_path(wt)))
+        return real_append(run_dir_real, record)
+
+    def tracking_release(state):
+        records, _ = ED._journal_read(run_dir)
+        alive, _who = ED._run_live_evidence(ED._journal_state(records))
+        engine_alive_at_release.append(alive)
+        return real_release(state)
+
+    monkeypatch.setattr(ED, "_journal_append", tracking_append)
+    monkeypatch.setattr(ED, "_release_worktree_lease", tracking_release)
 
     _install_fake_engine(
         tmp_path, monkeypatch, "cursor-agent",
-        stdout=_build_ok_stdout(), sleep_s=120,
+        stdout=_build_ok_stdout(), sleep_s=120, death_marker=death_marker,
     )
 
     ED.dispatch_write(
@@ -613,6 +654,12 @@ def test_e2e_dispatch_abandon_order_and_idempotent(tmp_path, monkeypatch):
     assert not ED._process_group_alive(pgid)
     assert not os.path.exists(_lease_path(wt))
     records = _journal_records(run_dir)
+    abandoned = [r for r in records if r.get("kind") == "run-abandoned"]
+    assert len(abandoned) == 1
+    assert os.path.isfile(death_marker)
+    assert os.path.getmtime(death_marker) < abandoned[0]["at"]
+    assert lease_at_abandon == [False]
+    assert engine_alive_at_release == [False]
     assert records[-1]["kind"] == "run-abandoned"
     assert first["terminal"] is True
     assert first["detail"] == "run-abandoned"

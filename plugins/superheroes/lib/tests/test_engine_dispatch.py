@@ -1386,12 +1386,13 @@ def _subprocess_popen_census():
     with open(path, encoding="utf-8") as fh:
         tree = ast.parse(fh.read(), filename=path)
 
-    popen_functions = set()
+    popen_counts = {}
     run_engine_files_has_cwd = False
 
     for node in tree.body:
         if not isinstance(node, ast.FunctionDef):
             continue
+        count = 0
         for child in ast.walk(node):
             if not isinstance(child, ast.Call):
                 continue
@@ -1399,12 +1400,19 @@ def _subprocess_popen_census():
             if not (isinstance(func, ast.Attribute) and func.attr == "Popen"
                     and isinstance(func.value, ast.Name) and func.value.id == "subprocess"):
                 continue
-            popen_functions.add(node.name)
+            count += 1
             if node.name == "_run_engine_files":
                 run_engine_files_has_cwd = any(kw.arg == "cwd" for kw in child.keywords)
-            break
+        if count:
+            popen_counts[node.name] = count
 
-    return popen_functions, run_engine_files_has_cwd
+    return popen_counts, run_engine_files_has_cwd
+
+
+def test_subprocess_popen_census():
+    popen_counts, run_engine_files_has_cwd = _subprocess_popen_census()
+    assert popen_counts == {"_run_engine": 1, "_run_engine_files": 1, "_spawn_attempt": 1}
+    assert run_engine_files_has_cwd
 
 
 def _linked_worktree(tmp_path):
@@ -1427,12 +1435,6 @@ def _linked_worktree(tmp_path):
 
 def _build_ok_stdout():
     return json.dumps({"ok": True, "signal": "ok", "evidence": {"testFailed": False, "testPassed": True}})
-
-
-def test_subprocess_popen_census():
-    popen_functions, run_engine_files_has_cwd = _subprocess_popen_census()
-    assert popen_functions == {"_run_engine", "_run_engine_files", "_spawn_attempt"}
-    assert run_engine_files_has_cwd
 
 
 # --- WO F1: continuation owns argv/cwd/view; journal before build_view -------------
@@ -1592,6 +1594,89 @@ def test_blocking_supervise_loop_bounded_under_held_lock(tmp_path, monkeypatch):
         assert calls["n"] <= 8
     finally:
         file_lock.release(lock_path)
+
+
+def test_run_child_waits_for_late_attempt_started(tmp_path, monkeypatch):
+    """Run-child must wait for attempt-started when spawned before the journal record lands."""
+    import threading
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_codex = fake_bin / "codex"
+    fake_codex.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "sys.stdout.write(%r)\n" % _build_ok_stdout(),
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + "/usr/bin" + os.pathsep + "/bin")
+
+    wt = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    baseline = ED._worktree_baseline(os.path.realpath(wt))
+    _EA = importlib.util.spec_from_file_location(
+        "engine_adapter", os.path.join(_HERE, "..", "engine_adapter.py"))
+    EA = importlib.util.module_from_spec(_EA)
+    _EA.loader.exec_module(EA)
+    built = EA.build_argv_result(
+        "codex", "build", "high", {"model": "sonnet", "cwd": os.path.realpath(wt)},
+    )
+    ED._open_write_run(
+        run_dir, engine="codex", argv=built["argv"], cwd=os.path.realpath(wt),
+        timeout=ED.RETRY_MIN_TIMEOUT, retry_timeout=ED.RETRY_MIN_TIMEOUT,
+        prompt_path=_valid_prompt(tmp_path), order_id="race-1", base_sha="abc",
+        worktree_baseline=baseline,
+        progress_path=os.path.join(run_dir, "progress.jsonl"),
+    )
+
+    mod_path = os.path.join(_HERE, "..", "engine_dispatch.py")
+    journal_env = os.environ.get(ED.JOURNAL_ROOT_ENV, "")
+    child = subprocess.Popen(
+        [sys.executable, "-B", mod_path, "run-child", "--run-dir", run_dir],
+        cwd=run_dir, start_new_session=True,
+        env={k: v for k, v in os.environ.items() if k != ED.JOURNAL_ROOT_ENV}
+        | {ED.JOURNAL_ROOT_ENV: journal_env},
+    )
+
+    def _late_journal():
+        time.sleep(0.15)
+        ED._journal_append(run_dir, {
+            "kind": "attempt-started", "attempt": 1,
+            "childPid": child.pid, "at": time.time(),
+        })
+
+    threading.Thread(target=_late_journal, daemon=True).start()
+    rc = child.wait(timeout=30)
+    assert rc == 0
+    records, _ = ED._journal_read(run_dir)
+    kinds = [r.get("kind") for r in records]
+    assert "engine-started" in kinds
+    assert "attempt-ended" in kinds
+
+
+def test_stale_run_lock_reclaimed(tmp_path):
+    """A dead supervisor's run.lock older than RUN_LOCK_TTL is reclaimed on next acquire."""
+    import file_lock
+    import hostinfo
+    import socket
+
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    lock_path = os.path.join(run_dir, ED.RUN_LOCK_NAME)
+    stale_holder = {
+        "pid": 99999999,
+        "host": socket.gethostname(),
+        "acquiredAt": "2000-01-01T00:00:00Z",
+        "bootId": hostinfo.boot_id(),
+        "ttl": ED.RUN_LOCK_TTL,
+    }
+    with open(lock_path, "w", encoding="utf-8") as fh:
+        json.dump(stale_holder, fh)
+
+    file_lock.acquire(lock_path, ttl=ED.RUN_LOCK_TTL)
+    file_lock.release(lock_path)
 
 
 # --- WO F1 2a/2b/2e: abandon, fold durability, poll projection -----------------

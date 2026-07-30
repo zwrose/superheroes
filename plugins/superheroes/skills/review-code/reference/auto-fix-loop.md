@@ -218,7 +218,10 @@ never drop a finding or a lens.
 > - `Bash(python3 -B */lib/engine_dispatch.py dispatch-write:*)`
 > The write grant is deliberately narrower so **write autonomy is revocable on its own**. Host rules
 > match a **prefix**, so that revocability holds only at subcommand granularity — a file-level or
-> bare-`python3` rule would cover both verbs. **Absent grant → fail closed:** with no matching grant
+> bare-`python3` rule would cover both verbs. The path wildcard (`*/lib/engine_dispatch.py`) matches
+> any install location, so the grant discriminates the **subcommand**, not the script's identity —
+> an executable at any matching path would be covered by the same rule; owners who want script
+> identity too should pin the absolute installed plugin path in their own rule. **Absent grant → fail closed:** with no matching grant
 > the dispatch does not run, no engine is spawned, nothing is written, and the caller **parks loudly**
 > — never a soft failure, never a silent fall-open. A `configure` onboarding offer for the rule is
 > deferred to [#549](https://github.com/zwrose/superheroes/issues/549); the owner pastes the rule by
