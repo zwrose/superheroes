@@ -682,3 +682,123 @@ def test_dispatch_abandon_alive_engine_releases_lease(tmp_path):
             proc.wait(timeout=2)
         except Exception:
             pass
+
+
+# --- WO F1 1b/1c/2c/2d: write-path seams ---------------------------------------
+
+
+def test_write_blocking_supervise_loop_bounded_under_held_lock(tmp_path, monkeypatch):
+    import threading
+    import file_lock
+
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, max_wait=1)
+    lock_path = os.path.join(run_dir, ED.RUN_LOCK_NAME)
+    file_lock.acquire(lock_path)
+    try:
+        calls = {"n": 0}
+        real_supervise = ED._supervise
+
+        def counting_supervise(*args, **kwargs):
+            calls["n"] += 1
+            return real_supervise(*args, **kwargs)
+
+        monkeypatch.setattr(ED, "_supervise", counting_supervise)
+        monkeypatch.setattr(ED, "SUPERVISOR_POLL_INTERVAL", 0.05)
+
+        def run_dispatch():
+            _dispatch_write(tmp_path, FakeRunner([]), cwd=wt, run_dir=run_dir, max_wait=None)
+
+        t = threading.Thread(target=run_dispatch, daemon=True)
+        t.start()
+        time.sleep(0.3)
+        assert calls["n"] <= 8
+    finally:
+        file_lock.release(lock_path)
+
+
+def test_write_git_preflight_bounded_by_max_wait(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree(tmp_path)
+
+    def slow_validate(cwd, timeout=None):
+        time.sleep(2)
+        return False, "git-preflight-timeout"
+
+    monkeypatch.setattr(ED, "_validate_linked_build_cwd", slow_validate)
+    fake = FakeRunner([])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, max_wait=1)
+    assert res["detail"] == "git-preflight-timeout"
+    assert res["attempts"] == 0
+    assert len(fake.calls) == 0
+
+
+def test_lease_not_reclaimed_when_engine_pgroup_alive(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    lease_path = ED._worktree_lease_path(os.path.realpath(wt))
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)"],
+        start_new_session=True,
+    )
+    try:
+        import file_lock
+        file_lock.acquire(lease_path)
+        holder = file_lock.read_holder(lease_path)
+        holder["enginePgid"] = proc.pid
+        holder["dispatchToken"] = "stale-token"
+        holder["pid"] = 999999
+        holder["acquiredAt"] = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ",
+            time.gmtime(time.time() - file_lock.DEFAULT_TTL - 60),
+        )
+        with open(lease_path, "w", encoding="utf-8") as fh:
+            json.dump(holder, fh)
+        assert file_lock.is_stale(lease_path)
+        fake = FakeRunner([])
+        res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=str(tmp_path / "run-b"))
+        assert res["detail"] == "worktree-lease-held"
+        assert res["attempts"] == 0
+    finally:
+        file_lock.release(lease_path)
+        ED._terminate_process_group(proc.pid)
+        try:
+            proc.wait(timeout=2)
+        except Exception:
+            pass
+
+
+def test_engine_started_append_failure_terminates_engine(tmp_path, monkeypatch):
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
+        "roleKind": "build", "orderId": "x", "argv": [sys.executable, "-c", "import time; time.sleep(120)"],
+        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "supervisorPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    real_append = ED._journal_append
+
+    def fail_engine_started(rd, record):
+        if record.get("kind") == "engine-started":
+            return False
+        return real_append(rd, record)
+
+    monkeypatch.setattr(ED, "_journal_append", fail_engine_started)
+    ED._run_engine_files(
+        run_dir, 1, [sys.executable, "-c", "import time; time.sleep(120)"], run_dir,
+        prompt_path, stdout_path, stderr_path, 30, os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"]
+    assert ended
+    assert ended[-1].get("refusal") == "journal-append-failed"
+    assert not any(r.get("kind") == "engine-started" for r in records)
