@@ -111,12 +111,18 @@ Three markers, **all written by the advisor at vet time**, after handback:
   body is the items, or the literal `None`).
 - `<!-- superheroes:advisor-vet -->` — stamped inside the PR's `## Advisor vet` owner-half slot,
   immediately above what you write there. The slot is **append-only and yours**: you edit your own
-  prior text in place, never the builder's prose. If a later body rewrite drops the slot, the missing
-  marker is how you notice — re-add it.
+  prior text in place, never the builder's prose. **What this marker detects is the hidden case:** a
+  body rewrite that **re-creates the heading but drops your text** leaves the slot looking present and
+  saying nothing, and the absent marker is the only thing that tells that apart from a slot you have
+  not written yet. (A rewrite that drops the heading entirely is visible without it.) Re-add your write
+  when the marker is gone.
 
-**No review seat checks these and no code gate reads them.** A build's pre-handback review runs in
-branch mode, before a PR body exists; these markers exist so *your own* backstops have a grep anchor —
-above all the age of a carried item, and the loss of an advisor write.
+**No review seat checks these at review time.** A build's pre-handback review runs in branch mode,
+before a PR body or a vet exists, so their absence during a review is the normal state and is never a
+finding. (A CI drift test *does* read these literals — it pins them to the marker inventory in
+`CONVENTIONS.md` §10.7 so the bytes cannot drift between copies — but that is a docs-consistency check,
+not a consumer of the markers in a PR.) They exist so *your own* backstops have a grep anchor — above
+all the age of a carried item, and the loss of an advisor write.
 
 ## Skeleton
 

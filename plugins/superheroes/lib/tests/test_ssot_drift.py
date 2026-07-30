@@ -362,7 +362,8 @@ _SECTION_10_7_MARKERS = _FLOOR_MARKERS | _VET_RECEIPT_MARKERS
 
 
 def _omission_floor_expectations_from_home(home):
-    """Parse §10.7's three floor rows, floor marker names, and missing-marker rule (authoritative)."""
+    """Parse §10.7's three floor rows and missing-marker rule from the home, validate the
+    floor marker family against that rule, and return the floor family for copy-holders."""
     m = re.search(
         r"under `## What we're accepting`:\s*\n\n(.*?)\n\nA \*\*missing\*\*",
         home,
@@ -386,6 +387,22 @@ def _omission_floor_expectations_from_home(home):
         "unexpected §10.7 marker set: %r — a new marker must be sorted into "
         "_FLOOR_MARKERS (propagates to every copy-holder) or _VET_RECEIPT_MARKERS "
         "(advisor-authored at vet; must not be required of the copy-holders)" % markers
+    )
+    # v12: family membership must be DERIVED from the home, never trusted from the constant.
+    # §10.7's missing-marker rule names exactly the floor family, so moving a literal between
+    # _FLOOR_MARKERS and _VET_RECEIPT_MARKERS now FAILS instead of silently dropping a
+    # copy-holder requirement.
+    rule = re.search(
+        r"A \*\*missing\*\*.*?is \*\*itself\*\* a review finding",
+        home,
+        re.DOTALL,
+    )
+    assert rule, "§10.7 missing-marker rule not found (moved or reworded?)"
+    floor_from_home = set(re.findall(r"(<!-- superheroes:[^>]+ -->)", rule.group(0)))
+    assert floor_from_home == set(_FLOOR_MARKERS), (
+        "§10.7's missing-marker rule names %r but _FLOOR_MARKERS is %r — the floor family "
+        "must be derived from the home, not reclassified in the test" % (
+            sorted(floor_from_home), sorted(_FLOOR_MARKERS))
     )
     assert re.search(
         r"A \*\*missing\*\* `<!-- superheroes:build-record -->`.*?review finding",
@@ -436,3 +453,38 @@ def test_omission_floor_matches_conventions_10_7():
     )
     for label, text in copies:
         _assert_omission_floor_matches_home(text, label, home)
+
+
+def test_vet_receipt_markers_match_conventions_10_7():
+    """§11 + §12.3: the vet-receipt marker literals agree across every hand-maintained copy.
+
+    These three markers are grep anchors — the advisor's own backstops key on their exact
+    bytes — so a rename in one copy that misses another silently breaks the anchor. §10.7
+    names vet-receipt.md as the authoritative home; this binds the copies to it.
+    """
+    home = _conventions_section_10_7()
+    in_home = set(re.findall(r"(<!-- superheroes:[^>]+ -->)", home)) - set(_FLOOR_MARKERS)
+    assert in_home == set(_VET_RECEIPT_MARKERS), (
+        "CONVENTIONS §10.7 names vet-receipt markers %r but _VET_RECEIPT_MARKERS is %r"
+        % (sorted(in_home), sorted(_VET_RECEIPT_MARKERS))
+    )
+
+    # The authoritative home's own `## Markers` section — NOT the whole file: the `## Skeleton`
+    # section below it repeats every literal, so a whole-file scan would pass vacuously.
+    receipt = _read("skills/showrunner/reference/vet-receipt.md")
+    section = re.search(r"^## Markers$\n(.*?)(?=^## )", receipt, re.MULTILINE | re.DOTALL)
+    assert section, "vet-receipt.md `## Markers` section not found (moved or renamed?)"
+    in_receipt = set(re.findall(r"(<!-- superheroes:[^>]+ -->)", section.group(1)))
+    assert in_receipt == set(_VET_RECEIPT_MARKERS), (
+        "vet-receipt.md `## Markers` lists %r but CONVENTIONS §10.7 names %r — the marker "
+        "literals drifted between the home and the section that documents them"
+        % (sorted(in_receipt), sorted(_VET_RECEIPT_MARKERS))
+    )
+
+    # The advisor is told to stamp and re-check this exact literal, so its bytes are load-bearing
+    # in the charter too. (Only advisor-vet: the charter does not carry the other two.)
+    charter = _read("skills/showrunner/SKILL.md")
+    assert "<!-- superheroes:advisor-vet -->" in charter, (
+        "showrunner/SKILL.md no longer carries the advisor-vet marker literal it tells the "
+        "advisor to stamp and to re-check on every re-vet"
+    )

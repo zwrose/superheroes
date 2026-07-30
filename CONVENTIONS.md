@@ -918,7 +918,7 @@ must trace back to the authoritative home (directly, or via the fixture the home
 > portable band contract. Provenance: the 2026-07-08 engine-fidelity escape
 > ([#307](https://github.com/zwrose/superheroes/issues/307)–[#311](https://github.com/zwrose/superheroes/issues/311)),
 > which penetrated every verification layer in place at the time, because every test of
-> the seam stubbed the seam. These two rules are the layer-independent part of the fix.
+> the seam stubbed the seam. These rules are the layer-independent part of the fix.
 > Grounding: [PHILOSOPHY.md](PHILOSOPHY.md) promises 2 (judgment the owner isn't
 > expected to have) and 4 (never claim more than verified).
 

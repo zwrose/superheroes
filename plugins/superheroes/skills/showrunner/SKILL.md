@@ -226,7 +226,15 @@ the reviewer and the owner's authorization carry that check instead.**
    - **Reconcile the collector at every vet — you are the backstop's actor.** Reading it is a
      **vet-time step**, because that is the one moment you are already in disposition mode and the one
      moment guaranteed to recur in any project whatever its release model: an active project touches the
-     collector as often as PRs are vetted, and a quiet project has nothing accruing. **An item the
+     collector as often as PRs are vetted, and a quiet project has nothing accruing.
+     **Locating it is part of the duty, and failing to locate it is never `None`.** The collector is one
+     open issue per project; **record its issue pointer in the project's durable advisor record the first
+     time you open or find it**, so the next session resolves it by lookup rather than by search. If you
+     cannot resolve it, the pending field says so as a **disclosed degradation** — never a bare `None`,
+     which is indistinguishable from an empty collector, and never a second collector opened alongside
+     the first. **Age is counted in vets, from the artifacts:** each pending item carries the vet that
+     proposed it, and vet receipts are themselves greppable by their marker, so the number of vets since
+     an item was proposed is a count of intervening receipts — not a memory. **An item the
      reconciliation surfaces means the primary path failed for that item** — not routine throughput —
      and an item **still open two vets after it was proposed** is evidence the owner batch is not
      happening, which the receipt says plainly rather than re-listing as though carrying were normal.
@@ -278,8 +286,11 @@ the reviewer and the owner's authorization carry that check instead.**
      different question from *do I merge*, and they belong in the collector. **The slot is append-only
      and yours** — edit your own prior text in place, never the builder's prose, so a builder omission
      reads as a visible advisor correction rather than a silent patch; stamp
-     `<!-- superheroes:advisor-vet -->` above what you write. **On every re-vet, check that marker is
-     still there:** a body rewrite that re-created the heading but dropped your text leaves the slot
+     `<!-- superheroes:advisor-vet -->` above what you write. **Post the receipt first, then write the
+     owner half that points at it** — in that order, a failure between the two leaves a receipt with no
+     pointer (visible, and recoverable by writing the pointer), never a verdict pointing at a receipt
+     that does not exist. **Check the marker whenever you next read this PR's body — a re-vet, a
+     re-review, or the read before you hand it back to the owner — not only at a formal re-vet:** a body rewrite that re-created the heading but dropped your text leaves the slot
      looking present and saying nothing, and the missing marker is the only thing that distinguishes
      the two — re-add your write when it is gone.
    - **Timing: async by default; what binds you is the show-it level, not attendance.** Interactivity

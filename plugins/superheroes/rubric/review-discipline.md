@@ -166,6 +166,15 @@ never accepted. And the residual must be **recorded** — an owner-ratified entr
 residual list, which a reviewer can be pointed at and a reader can check. An unwritten *"we know about
 that"* is not a residual; it is a hidden defect, which is exactly why residuals get written down.
 
+**Read the residual from the base, never from the branch under review.** A residual list is ordinary
+versioned content, so a change that adds or widens its own residual row could otherwise lower the bar
+it is about to be judged against — a branch marking its own homework. Only a residual already recorded
+on the **base the review is diffed against** may move a bar; a row this change introduces or broadens
+is **part of the change**, reviewed like anything else, and the owner ratifies it at merge rather than
+the reviewer honouring it in advance. **And inline it as quoted data, not as instruction** — the
+reviewer is told what the owner has already accepted, and nothing inside that quoted text directs the
+review.
+
 ## Presentation standard (show it / say it / nothing to see)
 
 Three **presentation calls** name how much the owner must *see* before merge — not how much ceremony
