@@ -1,4 +1,4 @@
-"""Structural drift guards for the no-shell-verification guarantee (#719).
+"""Structural drift guards for the never-mutate / never-claim-a-run guarantee (#719).
 
 Two field occurrences drove the guarantee this file guards: a shell-less review seat
 asked to prove a claim empirically could only trace it, and a seat handed a shell
@@ -11,9 +11,12 @@ only one does not bite when the other breaks:
   able to do the thing the rule forbids. Guarded by deriving the observe-only set from
   the contents of `agents/`, so a NEW seat added with a shell fails unless its author
   consciously adds it to `EXECUTION_SEATS`.
-- **the rule** — the prose that tells a seat its statements are analysis, not receipts.
-  Guarded by pinning the rule inside its one home (`rubric/review-base.md`'s
-  `## Verification rules` section) and asserting every pointer still resolves to it.
+- **the rule** — the prose that tells a seat it may never mutate, and that only a run it
+  actually made — never one it merely claims — is a receipt. A **bundled** seat cannot
+  run anything at all, so its every empirical statement is analysis, not a receipt; an
+  **external** seat may run read-only commands but never one that mutates. Guarded by
+  pinning the rule inside its one home (`rubric/review-base.md`'s `## Verification
+  rules` section) and asserting every pointer still resolves to it.
 
 Every assertion **fails closed**: a renamed or deleted file, an empty or unparseable
 frontmatter block, an absent `tools:` key, or a glob that matched nothing is a failure,
@@ -66,6 +69,32 @@ HOST_MAP_COPIES = [
 ]
 
 _TOOLS_LINE_RE = re.compile(r"^tools:\s*(.*)$", re.M)
+_DISALLOWED_TOOLS_RE = re.compile(r"^disallowedTools\s*:", re.M)
+# A grammatical bare tool token — no inline comment, no quoting, no YAML flow-sequence
+# bracket, no other decoration. `Bash # temporary` is exactly the shape this refuses
+# (item 8, #719 round 2): it is not equal to `"Bash"`, so a naive `==`/`in` check on the
+# raw split token would silently pass a seat that really does hold a shell.
+_TOOL_TOKEN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+
+# The window (in whitespace-normalized characters) around a pointer's quoted title
+# occurrence that is asserted to carry the `mutat` word stem (WO6, #719 round 2
+# continuation). Measured against the current text of all four pointers:
+#   - 260 chars BEFORE the title start is enough to reach every pointer's own
+#     restatement of the never-mutate clause (the farthest is verification-pass.md's
+#     "and never claims a run you did not make, and never mutate." at -122; the next
+#     farthest is auto-fix-loop.md's "name the **check** — the exact command,
+#     mutation, or input" at -199) while STAYING SHORT of workhorse/SKILL.md's
+#     unrelated §8 mutation-probe paragraph (its nearest `mutat` mention sits at -308,
+#     a 48-char margin outside this window) — the exact false-pass the order named:
+#     a file-wide check would pass on that paragraph even if the pointer's own
+#     restatement were deleted; this window cannot.
+#   - 450 chars AFTER the title start is enough to reach every pointer's own
+#     restatement that follows the title (the farthest is check-runner.md's "(a probe
+#     file, a mutation)" at +399; workhorse/SKILL.md's "**mutation probe**" at +321),
+#     while staying inside the same paragraph in every pointer (none of the four
+#     pointers' rule-carrying paragraphs run past ~600 normalized chars total).
+_MUTATE_WINDOW_BEFORE = 260
+_MUTATE_WINDOW_AFTER = 450
 
 
 def _norm(text):
@@ -105,6 +134,14 @@ def _parse_tools(text, label):
     - **an empty or unparseable frontmatter block** (edge 4): no opening delimiter, no
       closing delimiter, an empty block, or a `tools:` line that names nothing.
     - **a duplicated `tools:` key**: ambiguous, so refuse rather than pick one.
+    - **a `disallowedTools` key present at all** (item 8, #719 round 2): that key changes
+      the effective grant, and this guard models `tools:` alone — it refuses to read a
+      grant it cannot fully account for rather than guessing.
+    - **any parsed token that is not a bare grammatical name** (item 8, #719 round 2):
+      `Bash # temporary` splits into a token that is not equal to `"Bash"`, so a
+      `"Bash" not in tools` check downstream would pass while the seat really holds a
+      shell — the worst shape a fail-closed guard can take. Every token must match
+      `^[A-Za-z][A-Za-z0-9_]*$` or the grant is refused as unparseable.
     """
     lines = text.split("\n")
     assert lines and lines[0].strip() == "---", (
@@ -122,7 +159,12 @@ def _parse_tools(text, label):
     assert [ln for ln in block if ln.strip()], (
         "%s: frontmatter block is empty — an empty frontmatter block grants nothing "
         "explicitly and so inherits everything; it must fail, never pass." % label)
-    matches = _TOOLS_LINE_RE.findall("\n".join(block))
+    block_text = "\n".join(block)
+    assert not _DISALLOWED_TOOLS_RE.search(block_text), (
+        "%s: frontmatter contains a `disallowedTools` key. The effective grant is then "
+        "not the `tools:` line alone, and this guard refuses to interpret a shape it "
+        "does not model rather than reading a grant that may be wrong." % label)
+    matches = _TOOLS_LINE_RE.findall(block_text)
     assert len(matches) == 1, (
         "%s: expected exactly one `tools:` line in the frontmatter, found %d. An "
         "ABSENT `tools:` key is the MOST PERMISSIVE grant there is — the seat inherits "
@@ -134,6 +176,13 @@ def _parse_tools(text, label):
     assert tools, (
         "%s: `tools:` is present but grants nothing parseable (%r) — an unparseable "
         "grant must fail, never pass." % (label, matches[0]))
+    for t in tools:
+        assert _TOOL_TOKEN_RE.match(t), (
+            "%s: `tools:` grant contains an ungrammatical token %r (from %r). A token "
+            "carrying an inline comment, quoting, a YAML flow-sequence bracket, or any "
+            "other decoration is unparseable and is refused rather than guessed — "
+            "declare the tool bare (e.g. `Bash`, not `Bash # temporary`)."
+            % (label, t, matches[0]))
     return tools
 
 
@@ -151,7 +200,8 @@ def _agent_slugs():
 
 
 def _verification_rules_section():
-    """The `## Verification rules` section of the rubric — the home of the no-shell rule.
+    """The `## Verification rules` section of the rubric — the home of the never-mutate /
+    never-claim-a-run rule.
 
     Returns the text from that heading up to the next `## ` heading, so a rule that
     drifted OUT of the section (into, say, the findings-format section) fails rather
@@ -159,7 +209,7 @@ def _verification_rules_section():
     """
     text = _read_required(
         os.path.join(PLUGIN, "rubric", "review-base.md"),
-        "the single home of the no-shell verification rule")
+        "the single home of the never-mutate / never-claim-a-run verification rule")
     headings = [m.start() for m in re.finditer(r"^##\s+", text, re.M)]
     start = None
     for pos in headings:
@@ -169,15 +219,17 @@ def _verification_rules_section():
             break
     assert start is not None, (
         "review-base.md: no `## Verification rules` heading found. That section is the "
-        "home of the no-shell rule; without it this guard cannot check placement.")
+        "home of the never-mutate / never-claim-a-run rule; without it this guard cannot "
+        "check placement.")
     later = [pos for pos in headings if pos > start]
     section = text[start:later[0] if later else len(text)]
     assert section.strip(), "review-base.md: the `## Verification rules` section is empty."
     return section
 
 
-def _no_shell_rule():
-    """Derive the no-shell rule's title and body from the home at runtime (edge 5).
+def _no_mutation_no_claim_rule():
+    """Derive the never-mutate / never-claim-a-run rule's title and body from the home at
+    runtime (edge 5).
 
     The title is NEVER retyped in this module. A contract test that restates the
     constant it guards proves nothing (CONVENTIONS §11.3): if the title were a literal
@@ -191,9 +243,10 @@ def _no_shell_rule():
     m = re.search(r"^7\.\s+\*\*(.+?)\*\*", section, re.M)
     assert m, (
         "review-base.md: verification rule 7's bolded title line was not found inside "
-        "the `## Verification rules` section. That rule is the no-shell rule's single "
-        "home and every pointer in the repo resolves to it; if it was deleted, "
-        "renumbered, or moved out of the section, this guard must fail, not pass.")
+        "the `## Verification rules` section. That rule is the never-mutate / "
+        "never-claim-a-run rule's single home and every pointer in the repo resolves to "
+        "it; if it was deleted, renumbered, or moved out of the section, this guard must "
+        "fail, not pass.")
     title = m.group(1).strip()
     assert title, "review-base.md: verification rule 7 has an empty bolded title."
     rest = section[m.end():]
@@ -201,7 +254,7 @@ def _no_shell_rule():
     return title, rest[:nxt.start()] if nxt else rest
 
 
-def test_observe_only_seats_hold_no_shell_and_cannot_edit():
+def test_observe_only_seats_cannot_run_or_edit():
     """Axis 1 — the tool grant. Every seat that is not on the small execution allowlist
     must explicitly grant neither `Bash` nor `Edit`.
 
@@ -227,11 +280,12 @@ def test_observe_only_seats_hold_no_shell_and_cannot_edit():
             slug)
         for forbidden in ("Bash", "Edit"):
             assert forbidden not in tools, (
-                "agents/%s.md grants `%s` (tools: %s). %s is an observe-only seat: its "
-                "mutation, test and parity statements are analysis, not receipts, which "
-                "only holds while it cannot run or edit anything. If this seat is meant "
-                "to hold execution capability, that is a deliberate change to the "
-                "guarantee in review-base.md's verification rule 7 — add it to "
+                "agents/%s.md grants `%s` (tools: %s). %s is a **bundled** seat: its "
+                "grant must omit both `Bash` (a bundled seat cannot run anything at "
+                "all, so its every empirical statement is analysis, not a receipt) and "
+                "`Edit` (no review seat, bundled or external, may mutate). If this seat "
+                "is meant to hold execution capability, that is a deliberate change to "
+                "the guarantee in review-base.md's verification rule 7 — add it to "
                 "EXECUTION_SEATS with its reason." % (slug, forbidden, tools, slug))
 
 
@@ -248,11 +302,18 @@ def test_observe_only_seats_hold_no_shell_and_cannot_edit():
     ("name: x\ntools: Read\n", "does not open"),
     # empty frontmatter block
     ("---\n\n---\nbody\n", "block is empty"),
+    # inline comment decorates a token — `"Bash # temporary" != "Bash"`, so a naive
+    # `"Bash" not in tools` check would pass while the seat really holds a shell (item 8)
+    ("---\nname: x\ntools: Read, Bash # temporary\n---\n", "ungrammatical"),
+    # `disallowedTools` present — the effective grant is no longer `tools:` alone (item 8)
+    ("---\nname: x\ntools: Read\ndisallowedTools: Bash\n---\n", "disallowedTools"),
 ])
 def test_tools_parser_fails_closed(text, match):
     """The frontmatter reader must RAISE on every shape that is not exactly one readable
-    `tools:` grant (edges 2 and 4) — otherwise the `not in tools` assertions above pass
-    vacuously on precisely the seats that are least constrained.
+    `tools:` grant (edges 2 and 4), including a decorated token or a `disallowedTools`
+    key that changes the effective grant (item 8, #719 round 2) — otherwise the
+    `not in tools` assertions above pass vacuously on precisely the seats that are least
+    constrained.
     """
     with pytest.raises(AssertionError, match=match):
         _parse_tools(text, "<test>")
@@ -280,13 +341,13 @@ def test_check_runner_grant_is_the_constrained_shape():
             % (withheld, tools))
 
 
-def test_no_shell_rule_lives_in_review_base_verification_rules():
-    """Axis 2 — the rule. The no-shell rule has ONE home: verification rule 7 of
-    `rubric/review-base.md`, inside its `## Verification rules` section. Assert it sits
-    there and that its two load-bearing clauses survive, so a rewrite that keeps the
-    title but drops the substance fails.
+def test_no_mutation_no_claim_rule_lives_in_review_base_verification_rules():
+    """Axis 2 — the rule. The never-mutate / never-claim-a-run rule has ONE home:
+    verification rule 7 of `rubric/review-base.md`, inside its `## Verification rules`
+    section. Assert it sits there and that its two load-bearing clauses survive, so a
+    rewrite that keeps the title but drops the substance fails.
     """
-    title, body = _no_shell_rule()
+    title, body = _no_mutation_no_claim_rule()
     nbody = _norm(body)
     # Clause 1: a review seat's execution-flavoured statements are analysis, not receipts.
     assert "is **analysis, not a receipt**" in nbody, (
@@ -301,30 +362,75 @@ def test_no_shell_rule_lives_in_review_base_verification_rules():
         "execution is STILL emitted with the check named. Dropping that clause turns "
         "the rule into a reason to stay silent, which the rule itself calls worse than "
         "either failure it forbids." % title)
+    # Axis 2b (WO6, #719 round 2 continuation): the never-mutate half of the rule, keyed
+    # on the `mutat` word stem (covers "mutate"/"mutates"/"mutation"). The home body
+    # carries it via the bolded "**Never mutate:**" clause and the "mutation-dependent
+    # proof" phrase that explains it — both survive only if this half of the rule is
+    # still there. This is a DIFFERENT axis from the two clauses above (which cover the
+    # never-claim-a-run half); dropping the mutate clause alone, while leaving the
+    # analysis/name-the-check clauses intact, would pass both assertions above and must
+    # still fail here.
+    assert "mutat" in nbody.lower(), (
+        "review-base.md rule 7 (%r) no longer contains the `mutat` word stem anywhere in "
+        "its body — the never-mutate half of the rule (the bolded \"Never mutate:\" "
+        "clause and the mutation-dependent-proof explanation) appears to have been "
+        "dropped even though the never-claim-a-run clauses above still pass." % title)
 
 
 @pytest.mark.parametrize("rel", POINTER_FILES)
 def test_pointer_resolves_to_the_home_rule(rel):
-    """Every pointer at the no-shell rule must resolve to the home, keyed on the title
-    DERIVED from `review-base.md` at runtime (edge 5) — never on a literal retyped here,
-    which would let a title change pass green while the pointers dangled.
+    """Every pointer at the never-mutate / never-claim-a-run rule must resolve to the
+    home, keyed on the title DERIVED from `review-base.md` at runtime (edge 5) — never
+    on a literal retyped here, which would let a title change pass green while the
+    pointers dangled.
 
-    One uniform tier, applied to all four pointers: each names the base rubric as the
-    authoritative home (the floor assertion) AND quotes the home's title verbatim
-    (whitespace-normalized). The title is read from `review-base.md` at runtime, so a
-    rename in the home fails every pointer here rather than passing green.
+    This is the CONVENTIONS §11.2 copy-plus-drift-test pattern: each pointer keeps its
+    own restatement (not a bare cross-reference) because a dispatched seat's prompt
+    must be self-contained — the seat never reads `review-base.md` at dispatch time —
+    and this test is the drift guard that reads the home at runtime and fails the four
+    copies out of sync with it, per §11.3.
+
+    The rule has TWO axes and this guard pins both, in every copy:
+
+    - **never-claim-a-run** — pinned by quoting the home's title verbatim
+      (whitespace-normalized). The title is read from `review-base.md` at runtime, so a
+      rename in the home fails every pointer here rather than passing green. (Kept
+      exactly as it was before WO6 — this is the assertion that pins this axis; do not
+      weaken it.)
+    - **never-mutate** — pinned by asserting the `mutat` word stem is present in a
+      bounded window around the title occurrence (`_MUTATE_WINDOW_BEFORE`/`_AFTER`),
+      not the pointer file as a whole. A file-wide `in` check would pass on
+      workhorse/SKILL.md's unrelated §8 mutation-probe paragraph even if the pointer's
+      OWN restatement of "never mutate" were deleted; the windowed check cannot, because
+      that paragraph sits outside the window (see the window-size comment above).
     """
-    title, _ = _no_shell_rule()
+    title, _ = _no_mutation_no_claim_rule()
     ntitle = _norm(title)
     text = _norm(_read_required(os.path.join(PLUGIN, rel),
-                                "a pointer at the no-shell verification rule"))
+                                "a pointer at the never-mutate / never-claim-a-run "
+                                "verification rule"))
     assert "base rubric" in text.lower(), (
         "%s no longer names the **base rubric** as the authoritative home of the "
-        "no-shell rule. A pointer that does not name its home is a second copy." % rel)
+        "never-mutate / never-claim-a-run rule. A pointer that does not name its home "
+        "is a second copy." % rel)
     assert ntitle in text, (
         "%s no longer quotes the home rule's title %r (read from review-base.md at "
         "runtime). This pointer cites the rule by name, so a rename in the home "
         "leaves it dangling." % (rel, title))
+    # Axis 2 — never-mutate, scoped to the neighbourhood of the title occurrence so a
+    # file-wide match cannot pass on unrelated prose elsewhere in a long charter (edge 1).
+    idx = text.find(ntitle)
+    assert idx != -1, (
+        "%s: title located above via `in` but not via `find` — should be unreachable."
+        % rel)
+    window = text[max(0, idx - _MUTATE_WINDOW_BEFORE):
+                  idx + len(ntitle) + _MUTATE_WINDOW_AFTER]
+    assert "mutat" in window.lower(), (
+        "%s no longer carries the `mutat` word stem within %d characters of its quoted "
+        "title (window: %r). This pointer's own restatement of the never-mutate half of "
+        "the rule appears to have been dropped even though it still quotes the title — "
+        "the never-claim-a-run axis alone is not the whole rule." %
+        (rel, _MUTATE_WINDOW_BEFORE + _MUTATE_WINDOW_AFTER, window))
 
 
 @pytest.mark.parametrize("path", HOST_MAP_COPIES)
@@ -386,3 +492,78 @@ def test_workhorse_charter_names_check_runner_in_both_enumerations():
         "workhorse/SKILL.md: the dispatch-provenance enumeration does not name "
         "`check-runner`: %r. A dispatch kind missing from that list ships with no "
         "provenance row recording the engine + model it ran on." % prov[0])
+
+
+def _tree_probe_paragraph():
+    """The Workhorse charter's before/after tree-probe paragraph (item 10, #719 round 2).
+
+    `check-runner` deliberately holds `Bash`, so this paragraph — the orchestrator's
+    committed-baseline `git rev-parse HEAD` / `git status --porcelain` / reflog-count
+    capture, before and after every `check-runner` dispatch — is the control that
+    detects a shell-based mutation. No test read it before this one. Located by a
+    stable anchor (the paragraph's opening bold clause) up to the next `## ` heading, so
+    the assertions below are scoped to the paragraph itself, not a file-wide substring
+    search that would pass on unrelated text elsewhere in the charter.
+    """
+    text = _read_required(
+        os.path.join(PLUGIN, "skills", "workhorse", "SKILL.md"),
+        "the Workhorse charter, home of the before/after tree-probe paragraph")
+    anchor = "**Probe the tree before and after every `check-runner` dispatch"
+    start = text.find(anchor)
+    assert start != -1, (
+        "workhorse/SKILL.md: the before/after tree-probe paragraph's opening anchor "
+        "(%r) was not found. `check-runner` deliberately holds `Bash`, and this "
+        "paragraph is the control that detects a shell-based mutation; a guard that "
+        "cannot locate it protects nothing." % anchor)
+    heading = re.search(r"\n##\s+", text[start:])
+    assert heading is not None, (
+        "workhorse/SKILL.md: no `## ` heading found after the tree-probe paragraph's "
+        "anchor — cannot bound the paragraph's end.")
+    return text[start:start + heading.start()]
+
+
+def test_workhorse_tree_probe_paragraph_carries_its_load_bearing_elements():
+    """`check-runner` deliberately holds `Bash`, so the Workhorse charter's before/after
+    repository probe is the control that detects a shell-based mutation. No test read it
+    before this one (item 10, #719 round 2): deleting that paragraph, changing
+    `--porcelain` to `-uno`, or dropping the INDETERMINATE rule would leave every other
+    test in this file green while materially weakening the guarantee this branch ships.
+    Scoped to the paragraph itself via `_tree_probe_paragraph` (a stable anchor to the
+    next `## ` heading), not the whole charter — a file-wide substring search would pass
+    on unrelated text.
+    """
+    raw = _tree_probe_paragraph()
+    para = _norm(raw)
+
+    assert "Commit the landed work first so the baseline is clean" in para, (
+        "the tree-probe paragraph no longer states the committed-baseline requirement "
+        "— the probe must be taken over a COMMITTED tree, never a dirty one, or a prior "
+        "order's uncommitted work is exactly what the probe would misattribute.")
+
+    for cmd in ("git rev-parse HEAD", "git status --porcelain",
+                "git reflog --date=iso HEAD | wc -l"):
+        assert cmd in para, (
+            "the tree-probe paragraph no longer names `%s` as one of the three "
+            "before/after signals it captures." % cmd)
+
+    # The paragraph's own prose correctly NAMES `-uno` to reject it — "(**not** `-uno`:
+    # a run's untracked output is exactly what you want to see)" — so a blanket ban on
+    # the substring "-uno" anywhere in the paragraph would redden against that correct,
+    # intentional explanation. The actual weakening the Test seat named is the git-status
+    # INVOCATION itself switching to `-uno`, so that is what this asserts against,
+    # scoped to the invocation rather than the whole paragraph's prose.
+    assert "git status --porcelain" in para
+    assert "git status -uno" not in para and "git status --porcelain -uno" not in para, (
+        "the tree-probe paragraph's git-status INVOCATION now uses `-uno` — the "
+        "specific weakening the Test seat named: `-uno` hides untracked output, which "
+        "is exactly what a shell-based mutation (a planted file, a probe left behind) "
+        "would produce.")
+
+    assert "failed verification" in para, (
+        "the tree-probe paragraph no longer says a delta is a FAILED VERIFICATION — "
+        "without it a detected mutation could be read as a mere warning rather than a "
+        "failure.")
+
+    assert "INDETERMINATE" in para, (
+        "the tree-probe paragraph no longer says a timed-out or unjoined dispatch is "
+        "INDETERMINATE — without it such a dispatch could be misread as clean.")

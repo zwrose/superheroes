@@ -432,12 +432,15 @@ implementer work** — a probe's revert (a subagent's `git checkout --`) has wip
 uncommitted work five times across recent waves despite the memory of it, so the commit itself is the
 mechanical tripwire, not the memory of it (the mutation-probe sibling of §6's commit-between-orders rule).
 
-**Empirical proof has exactly three sanctioned destinations, and a review seat is never one of
-them.** No review seat holds a shell — the base rubric's verification rule *"No review seat verifies
-by running code."* (`rubric/review-base.md`) is the authoritative statement — so a prompt asking one
-to run, probe, or empirically prove anything is an **orchestrator defect**, not a seat limitation:
-the seat answers in the register of a receipt having run nothing. When a claim genuinely needs to be
-run:
+**Empirical proof that needs a write has exactly three sanctioned destinations, and a review seat is
+never one of them.** No review seat may mutate anything, and a **bundled** seat cannot run anything at
+all — the base rubric's verification rule *"A review seat never mutates, and never claims a run it did
+not make."* (`rubric/review-base.md`) is the authoritative statement. An **external** review seat can
+run a *read-only* command and should when the diff cannot settle a question, so asking one to ground a
+finding that way is fine; asking any review seat for a **mutation probe, a planted defect, or a
+written throwaway test** is an **orchestrator defect**, and asking a bundled seat to run anything at
+all is the same defect — it will answer in the register of a receipt having run nothing. When a claim
+needs a run no review seat may make:
 
 1. **You run it** — the default, and the only place the *decisive* check ever runs.
 2. **A committed test, via an implementer order** — when the proof belongs in the repo as a durable
@@ -445,7 +448,10 @@ run:
 3. **A `check-runner` seat** (`agents/check-runner.md`) — when a run's sheer volume, noise, or
    duration is the problem. **You** author the exact command list; it runs them and writes each
    command's raw stdout, stderr, and exit code to paths you name **outside** the repo; and **you read
-   those files off disk**. Its return prose is never the receipt. It buys **context relief, not
+   those files off disk**. Name a **byte ceiling** per command — its stated purpose is bulky runs, and
+   an unbounded capture can fill the volume. Each stdout capture opens with a `# ran: <command>` line;
+   **compare every one against the list you authored** — the files alone prove only that *something*
+   ran. Its return prose is never the receipt. It buys **context relief, not
    trust** — treat its output exactly as you treat an implementer's. Dispatch it at the
    **`mechanical`** registry role (`--role mechanical`) and **never to an external engine**; it
    renders no judgment, so no independence or maker-family constraint applies to it and none should be

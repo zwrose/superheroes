@@ -22,9 +22,17 @@ its verdict actually turns on, it runs itself.
   and is not delegable. If your order asks you to *design* a probe, decide what counts as proof, or
   judge whether a result means a claim holds, that is an order defect — **stop and report it**.
 - **Write each command's output to the paths your order names** — one set per command: stdout,
-  stderr, and the exit code, unabridged and untruncated. Never filter, summarize, re-order, or tidy
-  what a command printed. If your order names no output path for a command, **stop and report**;
-  never invent one.
+  stderr, and the exit code. **The first line of each stdout capture is the command you actually
+  ran**, verbatim, prefixed `# ran: `, before any of that command's own output. That line is what
+  ties an output file to a command; without it the files prove only that *something* ran, and the
+  orchestrator compares every one against the list it authored. Below that line, record output
+  **unabridged up to the byte ceiling your order names** — never filter, summarize, re-order, or
+  tidy what a command printed. If your order names no output path for a command, **stop and
+  report**; never invent one.
+- **Honour the byte ceiling.** If a command's output would exceed the ceiling your order names,
+  **stop that command, keep what you captured, and report the overrun as a finding** — never
+  silently truncate, and never let an unbounded run fill the volume. If your order names no
+  ceiling for a command whose output you cannot bound, stop and report before running it.
 - **Never mutate the repository.** No edits, no writes inside the working tree, and no `git` command
   that changes a ref, the index, the stash, or a file — not even to undo something you disturbed. You
   hold no `Edit` and no `Write`; a shell does not license what the tool grant withholds. Output files
@@ -41,12 +49,13 @@ its verdict actually turns on, it runs itself.
 
 ## Why the review seats are not you
 
-The five risk-domain review lenses and the Grounding seats hold no shell **by design** — their
-mutation, test, and parity statements are analysis, not receipts. That rule, and what a review seat
-does instead when a finding's proof needs execution, has one home: the base rubric's verification
-rule **"No review seat verifies by running code."** (`rubric/review-base.md`). You exist so that the
-honest answer to "this needs to be run" is a seat that can actually run it, rather than a review seat
-answering in the register of a receipt.
+A review seat may never mutate anything, and a **bundled** seat cannot run anything at all — the base
+rubric's verification rule **"A review seat never mutates, and never claims a run it did not make."**
+(`rubric/review-base.md`) is the authoritative statement. An **external** review seat *can* run a
+read-only command, and should when the diff cannot settle a question — but it cannot write a
+throwaway probe, apply a mutation, or absorb a bulky run. You exist for exactly that gap: proof that
+needs a **write** (a probe file, a mutation) or carries awkward **volume** goes to a seat that can do
+it, instead of a review seat answering in the register of a receipt.
 
 ## What you return
 

@@ -81,9 +81,9 @@ attempt must never be globbed and honored.
    - reason: one sentence with quoted evidence. Required for every verdict.
    - severity: optional — the single rubric tier the evidence justifies (Critical/Important/
      Minor/Nit); omit to keep the finding's pre-verification tier.
-   - evidence: for CONFIRMED only — name the triggering input, cite the line, and quote the
-     code you read (or an execution output the orchestrator captured and supplied) that
-     proves the issue is real.
+   - evidence: for CONFIRMED only — name the triggering input, cite the line, and quote what
+     proves the issue is real: the code you read, a read-only command you actually ran (with
+     its output), or an execution output the orchestrator captured and supplied.
 
    Verdict semantics:
    - CONFIRMED — you found the triggering input and can cite it.
@@ -95,11 +95,13 @@ attempt must never be globbed and honored.
    - Judge only the findings in this cluster. Do NOT add new findings, merge findings, or
      decide the run's outcome.
    - Every verdict carries quoted evidence in reason (and evidence for CONFIRMED).
-   - **You have no shell.** Never state or imply that you ran anything — quote code you
-     read, or an execution output the orchestrator captured and handed you. A finding whose
-     proof genuinely requires a run you cannot perform stays **PLAUSIBLE**, with the needed
-     check named in `reason` for the orchestrator. (Base rubric: "No review seat verifies by
-     running code.")
+   - **Never claim a run you did not make, and never mutate.** Quote code you read, a
+     read-only command you actually ran (an external seat may run one to settle a question
+     — quote it and its output), or an execution output the orchestrator captured and
+     handed you. Never write a probe into the tree: a verdict that needs a **mutation** to
+     establish stays **PLAUSIBLE**, with the needed check named in `reason` for the
+     orchestrator. (Base rubric: "A review seat never mutates, and never claims a run it
+     did not make.")
 
    ## Output
    Write a JSON array to <absolute round-<N>/verdicts-<cluster-index>.json path — THIS
@@ -204,8 +206,8 @@ Critical never GATEs and never parks**:
 1. **Fix if safe** — fold into the fix batch when the fix is mechanical and low-risk.
 2. **Confirming probe** — re-dispatch the verifier (`--role verifier`) for that single
    finding to seek the triggering input in the diff and the repo; a CONFIRMED upgrade then
-   becomes GATE-eligible. Where the triggering input can only be established by *running*
-   something, that run is the orchestrator's — the verifier never performs it.
+   becomes GATE-eligible. Where the triggering input can only be established by a **mutation**,
+   that run is the orchestrator's — the verifier never mutates.
 3. **Grounded advisory** — record `action: "skip"`, `advisory: true`, with the PLAUSIBLE
    verdict as the verification trace (citable ground truth). It rides the handback disclosed
    through the skipped-blocker channel and never interrupts mid-run.
