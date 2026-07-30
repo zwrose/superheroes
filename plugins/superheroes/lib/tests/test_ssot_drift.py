@@ -338,8 +338,31 @@ def _review_code_step_8():
     return m.group(0)
 
 
+# CONVENTIONS §10.7 carries two distinct marker families, and only one of them propagates.
+#
+# The OMISSION FLOOR family is a PR-body contract every copy-holder restates, so §11 drift
+# applies to it: review-discipline.md, workhorse §11 and review-code step 8 must each carry it.
+_FLOOR_MARKERS = frozenset({
+    "<!-- superheroes:build-record -->",
+    "<!-- superheroes:degradations -->",
+})
+# The VET-RECEIPT family (#672 ratified, built in #694) is advisor-authored AT VET, after
+# handback: two of the three live in the vet-receipt comment, not the PR body. It is
+# deliberately NOT propagated to the copy-holders — a build's pre-handback review-code runs in
+# BRANCH mode, before any PR body or vet exists, so requiring these of review-code step 8 would
+# manufacture a finding nothing can satisfy (CONVENTIONS §13: no machinery without a consumer).
+_VET_RECEIPT_MARKERS = frozenset({
+    "<!-- superheroes:vet-receipt -->",
+    "<!-- superheroes:pending-proposals -->",
+    "<!-- superheroes:advisor-vet -->",
+})
+# Closed world over BOTH families: any new marker added to §10.7 fails this test on purpose,
+# forcing a decision about whether it propagates. Never relax this to a subset check.
+_SECTION_10_7_MARKERS = _FLOOR_MARKERS | _VET_RECEIPT_MARKERS
+
+
 def _omission_floor_expectations_from_home(home):
-    """Parse §10.7's three floor rows, marker names, and missing-marker rule (authoritative)."""
+    """Parse §10.7's three floor rows, floor marker names, and missing-marker rule (authoritative)."""
     m = re.search(
         r"under `## What we're accepting`:\s*\n\n(.*?)\n\nA \*\*missing\*\*",
         home,
@@ -359,10 +382,11 @@ def _omission_floor_expectations_from_home(home):
         assert terms, "no bold load-bearing terms in floor row: %r" % row
         row_terms.append(terms)
     markers = re.findall(r"(<!-- superheroes:[^>]+ -->)", home)
-    assert set(markers) == {
-        "<!-- superheroes:build-record -->",
-        "<!-- superheroes:degradations -->",
-    }, "unexpected §10.7 marker set: %r" % markers
+    assert set(markers) == set(_SECTION_10_7_MARKERS), (
+        "unexpected §10.7 marker set: %r — a new marker must be sorted into "
+        "_FLOOR_MARKERS (propagates to every copy-holder) or _VET_RECEIPT_MARKERS "
+        "(advisor-authored at vet; must not be required of the copy-holders)" % markers
+    )
     assert re.search(
         r"A \*\*missing\*\* `<!-- superheroes:build-record -->`.*?review finding",
         home,
@@ -372,7 +396,8 @@ def _omission_floor_expectations_from_home(home):
         r"marker absence and \*\*None\*\* are different states",
         home,
     ), "§10.7 None vs marker-absence rule not found"
-    return row_terms, markers
+    # Only the floor family propagates to the copy-holders (see _VET_RECEIPT_MARKERS).
+    return row_terms, sorted(_FLOOR_MARKERS)
 
 
 def _assert_omission_floor_matches_home(copy_text, label, home):

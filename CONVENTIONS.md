@@ -756,7 +756,9 @@ PR-body markers from the retired execution spine survive independently of it:
   **Lifecycle — and why nothing flags their absence.** Unlike every marker above, these are **not a
   builder obligation and not a review-seat check**: a build's pre-handback `review-code` runs in
   **branch mode**, before any PR body or vet exists, so a missing vet-receipt marker at review time is
-  the **normal** state and must never be emitted as a finding. Their absence becomes meaningful only
+  the **normal** state and must never be emitted as a finding. (The §11 drift test enumerates this
+  section's marker inventory and holds this family **out** of the copy-holders for exactly that reason —
+  a docs-consistency check, not a consumer of these markers at review time.) Their absence becomes meaningful only
   **at vet or re-vet**, and only to the advisor. They exist as grep anchors for the **advisor's own**
   backstops: `pending-proposals` is what makes a carried item's age inspectable (an item proposed two
   or more vets ago owes an escalation line), and `advisor-vet` is how a body rewrite that re-created
