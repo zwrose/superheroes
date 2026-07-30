@@ -522,6 +522,10 @@ def test_write_argv_shape_cursor(tmp_path):
     )
     assert res["ok"] is True
     argv = fake.calls[0]["argv"]
+    assert argv == [
+        "cursor-agent", "--model", "composer-2.5", "-p", "--trust", "-f",
+        "--output-format", "stream-json",
+    ]
     built = EA.build_argv_result(
         "cursor", "build", None, {"engine_model": "composer-2.5", "cwd": os.path.realpath(wt)},
     )
@@ -532,3 +536,53 @@ def test_write_argv_shape_cursor(tmp_path):
     review_built = EA.build_argv_result("cursor", "review", None, {"engine_model": "composer-2.5"})
     assert "-f" not in review_built["argv"]
     assert "--mode" in review_built["argv"]
+
+
+def test_dispatch_write_codex_effort_none_refuses_no_lease(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    lease_path = ED._worktree_lease_path(os.path.realpath(wt))
+    fake = FakeRunner([])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, engine="codex", effort=None)
+    assert res["ok"] is False
+    assert res["terminal"] is True
+    assert res["reason"] == "unrunnable"
+    assert res["detail"] == "engine-config:invalid-model-effort"
+    assert res["attempts"] == 0
+    assert len(fake.calls) == 0
+    assert not os.path.exists(lease_path)
+
+
+def test_dispatch_write_cursor_grok_effort_none_refuses(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    fake = FakeRunner([])
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt, engine="cursor",
+        engine_model="cursor-grok-4.5", effort=None, model=None,
+    )
+    assert res["ok"] is False
+    assert res["terminal"] is True
+    assert res["reason"] == "unrunnable"
+    assert res["detail"] == "engine-config:invalid-model-effort"
+    assert res["attempts"] == 0
+    assert len(fake.calls) == 0
+    built = EA.build_argv_result(
+        "cursor", "build", None, {"engine_model": "cursor-grok-4.5", "cwd": os.path.realpath(wt)},
+    )
+    assert built["reason"] == "invalid-model-effort"
+
+
+def test_dispatch_write_cli_effort_optional(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    prompt = _prompt(tmp_path)
+    argv = [
+        "dispatch-write",
+        "--engine", "cursor",
+        "--engine-model", "composer-2.5",
+        "--prompt-path", prompt,
+        "--cwd", wt,
+        "--run-dir", run_dir,
+        "--max-wait", "0",
+    ]
+    code = ED.main(argv)
+    assert code == 0

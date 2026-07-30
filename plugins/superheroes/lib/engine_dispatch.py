@@ -1493,7 +1493,7 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     return True, ""
 
 
-def dispatch_write(engine, *, model, effort, engine_model=None, prompt_path, cwd,
+def dispatch_write(engine, *, model, effort=None, engine_model=None, prompt_path, cwd,
                    order_id=None, base_sha=None, timeout=RETRY_MIN_TIMEOUT,
                    retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
                    run_dir=None, max_wait=None):
@@ -1513,7 +1513,7 @@ def dispatch_write(engine, *, model, effort, engine_model=None, prompt_path, cwd
                 "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": []}
 
 
-def _dispatch_write_impl(engine, *, model, effort, engine_model=None, prompt_path, cwd,
+def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, prompt_path, cwd,
                          order_id=None, base_sha=None, timeout=RETRY_MIN_TIMEOUT,
                          retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
                          run_dir=None, max_wait=None):
@@ -1808,7 +1808,7 @@ def main(argv):
     w = sub.add_parser("dispatch-write")
     w.add_argument("--engine", required=True, choices=("codex", "cursor"))
     w.add_argument("--model", default=None)
-    w.add_argument("--effort", required=True)
+    w.add_argument("--effort", default=None)
     w.add_argument("--engine-model", default=None)
     w.add_argument("--prompt-path", required=True)
     w.add_argument("--cwd", required=True)
