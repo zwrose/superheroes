@@ -1047,6 +1047,56 @@ def _gate_core_beside(repo):
     return os.path.join(d, "core.md")
 
 
+def test_gate_refusal_returns_reason_detail_dict():
+    got = CM.gate_refusal("a", "b")
+    assert got == {"reason": "a", "detail": "b"}
+    assert set(got.keys()) == {"reason", "detail"}
+
+
+def test_gate_refusal_line_derived_from_payload():
+    payload = CM.gate_refusal("a", "b")
+    assert CM.gate_refusal_line(payload) == "a: b"
+    payload["detail"] = "c"
+    assert CM.gate_refusal_line(payload) == "a: c"
+    assert CM.gate_refusal_line(CM.gate_refusal("a", "b")) == "a: b"
+
+
+def test_gate_refusal_line_missing_detail_raises_keyerror():
+    with pytest.raises(KeyError):
+        CM.gate_refusal_line({"reason": "only-reason"})
+
+
+def test_gate_refusal_detail_exception_format():
+    assert CM.gate_refusal_detail(ValueError("boom")) == "ValueError: boom"
+    assert CM.gate_refusal_detail(ValueError("")) == "ValueError: "
+
+
+def test_gate_refusal_none_detail_renders_as_none_string():
+    payload = CM.gate_refusal("r", None)
+    assert payload == {"reason": "r", "detail": None}
+    assert CM.gate_refusal_line(payload) == "r: None"
+
+
+def test_write_refused_unreadable_core_violations_byte_identity(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    core_p = _gate_core_beside(repo)
+    open(core_p, "w").write("not a core document\n")
+    cfg = CM._classify_core_md_at_path(core_p)
+    res = CM.write(
+        repo,
+        {"verifyCommand": "npm test", "stackTags": [], "threatModel": "t", "patterns": ""},
+        "confirmed",
+        root=store,
+        now="2026-01-01",
+    )
+    assert res["action"] == "refused"
+    assert res["violations"][0] == {
+        "reason": CM.GATE_REASON_UNREADABLE,
+        "detail": cfg.detail,
+    }
+
+
 def test_gate_accessor_dangling_in_repo_symlink_global_mode_is_unreadable(tmp_path):
     repo = str(tmp_path)
     store = str(tmp_path / "store")

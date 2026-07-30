@@ -26,6 +26,7 @@ CONFIG_ABSENT = "absent"
 CONFIG_OK = "ok"
 CONFIG_UNREADABLE = "unreadable"
 GATE_REASON_UNREADABLE = "core-md-unreadable"
+GATE_REASON_EVALUATION_FAILED = "dispatch-gate-evaluation-failed"
 LEGACY_PROFILE_REASON = "legacy-profile-unsupported"
 LEGACY_PROFILE_REMEDY = (
     "run superheroes:configure to re-calibrate this project; "
@@ -366,6 +367,23 @@ def _candidate_engine_preferences(facts, existing):
     return merged
 
 
+def gate_refusal(reason, detail):
+    """The ONE dict shape for a named configuration-gate refusal: {"reason", "detail"}.
+    Every producer of that payload goes through here so the shape cannot drift (rider 9 of #699)."""
+    return {"reason": reason, "detail": detail}
+
+
+def gate_refusal_detail(exc):
+    """The ONE detail string for an exception-caused gate refusal: "ExcName: message"."""
+    return "%s: %s" % (type(exc).__name__, exc)
+
+
+def gate_refusal_line(payload):
+    """The ONE flattened "reason: detail" form, DERIVED FROM the payload rather than rebuilt, so the
+    dict form and the flattened form can never disagree."""
+    return "%s: %s" % (payload["reason"], payload["detail"])
+
+
 def _evaluate_configured_dispatch_gate(cwd, root, facts, existing):
     """Evaluate fable×external gate. Returns (violations, evaluation_error).
 
@@ -377,7 +395,7 @@ def _evaluate_configured_dispatch_gate(cwd, root, facts, existing):
 
         gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
         if gate_cfg.status == CONFIG_UNREADABLE:
-            return None, {"reason": GATE_REASON_UNREADABLE, "detail": gate_cfg.detail}
+            return None, gate_refusal(GATE_REASON_UNREADABLE, gate_cfg.detail)
 
         if existing is not None and not _facts_include_engine_preferences(facts):
             return [], None
@@ -386,20 +404,14 @@ def _evaluate_configured_dispatch_gate(cwd, root, facts, existing):
             model_tier_overrides.resolve_profile_path(cwd, root))
         return engine_pref.configured_dispatch_violations(prefs, tiers), None
     except Exception as exc:
-        return None, {
-            "reason": "dispatch-gate-evaluation-failed",
-            "detail": "%s: %s" % (type(exc).__name__, exc),
-        }
+        return None, gate_refusal(GATE_REASON_EVALUATION_FAILED, gate_refusal_detail(exc))
 
 
 def _refused_dispatch_gate(violations=None, *, evaluation_error=None, record=None):
     if evaluation_error:
         reason = evaluation_error.get("reason", "dispatch-gate-evaluation-failed")
         detail = evaluation_error.get("detail", "")
-        violations = [{
-            "reason": reason,
-            "detail": detail,
-        }]
+        violations = [gate_refusal(reason, detail)]
     return {
         "action": "refused",
         "record": record,
@@ -430,7 +442,7 @@ def write(cwd, facts, status, *, root=None, now=None):
         gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
         if gate_cfg.status == CONFIG_UNREADABLE:
             return _refused_dispatch_gate(
-                evaluation_error={"reason": GATE_REASON_UNREADABLE, "detail": gate_cfg.detail},
+                evaluation_error=gate_refusal(GATE_REASON_UNREADABLE, gate_cfg.detail),
                 record=None,
             )
         existing = read(cwd, root)

@@ -169,17 +169,16 @@ def _read_engine_preferences_for_gate(profile_path=None, cwd=None, root=None):
         cfg = core_md.engine_preferences_for_gate(
             profile_path=profile_path, cwd=cwd, root=root)
         if cfg.status == core_md.CONFIG_UNREADABLE:
-            return {}, {"reason": core_md.GATE_REASON_UNREADABLE, "detail": cfg.detail}
+            return {}, core_md.gate_refusal(core_md.GATE_REASON_UNREADABLE, cfg.detail)
         return cfg.prefs, None
     except Exception as exc:
-        return {}, {
-            "reason": "dispatch-gate-evaluation-failed",
-            "detail": "%s: %s" % (type(exc).__name__, exc),
-        }
+        return {}, core_md.gate_refusal(
+            core_md.GATE_REASON_EVALUATION_FAILED, core_md.gate_refusal_detail(exc))
 
 
 def _evaluate_tier_writer_dispatch_gate(profile_path, set_overrides=None, clear_roles=None):
     """Returns ``(violations, evaluation_error)`` — same posture as ``core_md``'s configured gate."""
+    import core_md
     import engine_pref
 
     prefs, gate_err = _read_engine_preferences_for_gate(profile_path=profile_path)
@@ -188,10 +187,8 @@ def _evaluate_tier_writer_dispatch_gate(profile_path, set_overrides=None, clear_
     try:
         candidate_tiers = _candidate_effective_tiers(profile_path, set_overrides, clear_roles)
     except Exception as exc:
-        return None, {
-            "reason": "dispatch-gate-evaluation-failed",
-            "detail": "%s: %s" % (type(exc).__name__, exc),
-        }
+        return None, core_md.gate_refusal(
+            core_md.GATE_REASON_EVALUATION_FAILED, core_md.gate_refusal_detail(exc))
     return engine_pref.configured_dispatch_violations(prefs, candidate_tiers), None
 
 
@@ -280,13 +277,14 @@ def main(argv):
 
         violations, gate_err = _evaluate_tier_writer_dispatch_gate(profile, updates, clear_roles)
         if gate_err is not None:
+            import core_md
+
             sys.stdout.write(json.dumps({
                 "ok": False,
                 "reason": gate_err["reason"],
-                "violations": [{
-                    "reason": gate_err["reason"],
-                    "detail": gate_err["detail"],
-                }],
+                "violations": [
+                    core_md.gate_refusal(gate_err["reason"], gate_err["detail"]),
+                ],
             }) + "\n")
             return 1
         if violations:

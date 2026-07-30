@@ -398,6 +398,22 @@ def test_read_engine_preferences_corrupt_core_beside_profile_is_evaluation_failu
     assert err is not None
 
 
+def test_read_engine_preferences_unreadable_byte_identity(tmp_path):
+    project = tmp_path / "project"
+    cal = project / ".claude" / "superheroes"
+    cal.mkdir(parents=True)
+    core_p = cal / "core.md"
+    core_p.write_text("not valid core markdown\n", encoding="utf-8")
+    profile = cal / "review-crew.md"
+    profile.write_text("## Model tiers\n", encoding="utf-8")
+    import core_md
+
+    cfg = core_md._classify_core_md_at_path(str(core_p))
+    prefs, err = MTO._read_engine_preferences_for_gate(profile_path=str(profile))
+    assert prefs == {}
+    assert err == {"reason": "core-md-unreadable", "detail": cfg.detail}
+
+
 def test_write_cli_refuses_when_core_beside_profile_corrupt(tmp_path, capsys):
     project = tmp_path / "project"
     cal = project / ".claude" / "superheroes"

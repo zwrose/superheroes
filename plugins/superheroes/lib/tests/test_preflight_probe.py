@@ -426,6 +426,19 @@ def test_dispatch_selftest_config_unreadable_shapes(tmp_path):
         assert "core-md-unreadable" in cfg["read_error"]
 
 
+def test_dispatch_selftest_config_unreadable_read_error_byte_identity(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    cal = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(cal, exist_ok=True)
+    core_p = os.path.join(cal, "core.md")
+    open(core_p, "w", encoding="utf-8").write("not parseable core\n")
+    cfg_cls = core_md._classify_core_md_at_path(core_p)
+    expected = "core-md-unreadable: " + cfg_cls.detail
+    cfg = pp._dispatch_selftest_config(cwd=repo, root=store)
+    assert cfg["read_error"] == expected
+
+
 def test_dispatch_selftest_config_ok_returns_prefs(tmp_path):
     repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
     cfg = pp._dispatch_selftest_config(cwd=repo, root=store)

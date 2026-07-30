@@ -154,7 +154,8 @@ def _dispatch_selftest_config(cwd=None, root=None):
             return {
                 "prefs": {},
                 "tiers": {},
-                "read_error": "%s: %s" % (core_md.GATE_REASON_UNREADABLE, cfg.detail),
+                "read_error": core_md.gate_refusal_line(
+                    core_md.gate_refusal(core_md.GATE_REASON_UNREADABLE, cfg.detail)),
             }
         tiers = model_tier_overrides.effective_tiers(
             model_tier_overrides.resolve_profile_path(cwd, root))
@@ -163,7 +164,8 @@ def _dispatch_selftest_config(cwd=None, root=None):
         return {
             "prefs": {},
             "tiers": {},
-            "read_error": "%s: %s" % (type(exc).__name__, exc),
+            "read_error": core_md.gate_refusal_line(
+                core_md.gate_refusal(type(exc).__name__, exc)),
         }
 
 
