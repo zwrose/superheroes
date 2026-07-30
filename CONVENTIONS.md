@@ -611,7 +611,9 @@ preflight `dispatch-vocab` probe read the project's `core.md`
 through a single accessor that reports `absent`, `ok`, or `unreadable`. A **present but
 unreadable** `core.md` — a non-regular file, a dangling symlink, a file with unreadable
 permissions, or a corrupt file — is **refused at configuration time** by name as
-`core-md-unreadable` rather than treated as absent; a genuinely absent
+`core-md-unreadable` rather than treated as absent; `dispatch_selftest.run`
+refuses the same condition when the configuration bundle carries `read_error`.
+A genuinely absent
 `core.md` remains a clean create. A gate that treats an unreadable config as "no config"
 **fails open**, which is the failure this closes. The
 GPT-5.6 tier requires a sufficiently
