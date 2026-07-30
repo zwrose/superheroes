@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import os
+import secrets
 import signal
 import subprocess
 import sys
@@ -54,6 +55,7 @@ PROMPT_NAME = "prompt.txt"
 PROGRESS_NAME = "progress.jsonl"
 RUN_KIND_REVIEW = "review"
 RUN_KIND_WRITE = "write"
+LEASE_MALFORMED_RECLAIM_SECONDS = 60
 _DISPATCH_SCRIPT = os.path.abspath(__file__)
 _GIT_ROUTING_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
                      "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_GLOBAL",
@@ -260,6 +262,166 @@ def _run_live_evidence(state):
     return False, "none"
 
 
+def _git_scrubbed(cwd, *args, timeout=None):
+    return subprocess.run(
+        ["git", "-C", cwd, *args],
+        capture_output=True, text=True, env=_scrub_env(), timeout=timeout,
+    )
+
+
+def _validate_linked_build_cwd(cwd, timeout=None):
+    """Ordered fail-closed checks for a linked build worktree. attempts: 0 on every refusal."""
+    if cwd is None:
+        return False, "cwd-absent"
+    if not isinstance(cwd, str) or not cwd.strip():
+        return False, "cwd-absent"
+    path = cwd.strip()
+    if not os.path.exists(path):
+        return False, "cwd-missing"
+    if not os.path.isdir(path):
+        return False, "cwd-not-a-directory"
+    cwd_real = os.path.realpath(path)
+    try:
+        top = _git_scrubbed(cwd_real, "rev-parse", "--show-toplevel", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return False, "git-preflight-timeout"
+    if top.returncode != 0:
+        git_entry = os.path.join(path, ".git")
+        if not os.path.exists(git_entry):
+            return False, "cwd-not-a-repo"
+        return False, "cwd-not-a-repo"
+    if os.path.realpath((top.stdout or "").strip()) != cwd_real:
+        return False, "cwd-not-worktree-root"
+    git_entry = os.path.join(path, ".git")
+    if not os.path.exists(git_entry):
+        return False, "cwd-not-a-repo"
+    if os.path.isdir(git_entry):
+        try:
+            git_dir = _git_scrubbed(cwd_real, "rev-parse", "--git-dir", timeout=timeout)
+            common = _git_scrubbed(cwd_real, "rev-parse", "--git-common-dir", timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return False, "git-preflight-timeout"
+        if git_dir.returncode != 0 or common.returncode != 0:
+            return False, "cwd-not-a-repo"
+        if os.path.realpath((git_dir.stdout or "").strip()) == os.path.realpath((common.stdout or "").strip()):
+            return False, "cwd-primary-checkout"
+        return False, "cwd-not-a-linked-worktree"
+    try:
+        git_dir = _git_scrubbed(cwd_real, "rev-parse", "--git-dir", timeout=timeout)
+        common = _git_scrubbed(cwd_real, "rev-parse", "--git-common-dir", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return False, "git-preflight-timeout"
+    if git_dir.returncode != 0 or common.returncode != 0:
+        return False, "cwd-not-a-repo"
+    if os.path.realpath((git_dir.stdout or "").strip()) == os.path.realpath((common.stdout or "").strip()):
+        return False, "cwd-primary-checkout"
+    try:
+        wt_list = _git_scrubbed(cwd_real, "worktree", "list", "--porcelain", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return False, "git-preflight-timeout"
+    if wt_list.returncode != 0:
+        return False, "cwd-not-a-repo"
+    registered = False
+    for line in (wt_list.stdout or "").splitlines():
+        if line.startswith("worktree "):
+            wt_path = os.path.realpath(line[len("worktree "):].strip())
+            if wt_path == cwd_real:
+                registered = True
+                break
+    if not registered:
+        return False, "cwd-not-registered"
+    return True, cwd_real
+
+
+def _worktree_baseline(cwd_real, timeout=None):
+    try:
+        head = _git_scrubbed(cwd_real, "rev-parse", "HEAD", timeout=timeout)
+        status = _git_scrubbed(cwd_real, "status", "--porcelain=v1", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None
+    if head.returncode != 0 or status.returncode != 0:
+        return None
+    porcelain = status.stdout or ""
+    return {
+        "headSha": (head.stdout or "").strip(),
+        "porcelainSha256": hashlib.sha256(porcelain.encode("utf-8")).hexdigest(),
+    }
+
+
+def _worktree_lease_path(cwd_real):
+    digest = hashlib.sha256(cwd_real.encode("utf-8")).hexdigest()
+    return os.path.join(tempfile.gettempdir(), WORKTREE_LEASE_PREFIX + digest)
+
+
+def _try_reclaim_malformed_lease(lease_path):
+    try:
+        st = os.stat(lease_path)
+    except OSError:
+        return False
+    holder = file_lock.read_holder(lease_path)
+    if holder and holder.get("pid"):
+        return False
+    if time.time() - st.st_mtime < LEASE_MALFORMED_RECLAIM_SECONDS:
+        return False
+    try:
+        os.unlink(lease_path)
+    except OSError:
+        return False
+    return True
+
+
+def _release_worktree_lease(state):
+    """Single lease-release site — releases iff the on-disk token matches the journal."""
+    if not state:
+        return
+    opened = state.get("opened")
+    if not opened or opened.get("runKind") != RUN_KIND_WRITE:
+        return
+    token = state.get("leaseToken")
+    if not token:
+        return
+    cwd_real = opened.get("cwd")
+    if not cwd_real:
+        return
+    lease_path = _worktree_lease_path(os.path.realpath(cwd_real))
+    holder = file_lock.read_holder(lease_path)
+    if holder.get("dispatchToken") == token:
+        file_lock.release(lease_path)
+
+
+def _acquire_worktree_lease(cwd_real, run_dir_real):
+    lease_path = _worktree_lease_path(cwd_real)
+    reclaimed = False
+    for attempt in range(2):
+        try:
+            file_lock.acquire(lease_path)
+            break
+        except file_lock.LockHeld:
+            if attempt == 0 and _try_reclaim_malformed_lease(lease_path):
+                reclaimed = True
+                continue
+            return False, "worktree-lease-held", None, lease_path
+    token = secrets.token_hex(16)
+    holder = file_lock.read_holder(lease_path)
+    holder["dispatchToken"] = token
+    try:
+        with open(lease_path, "w", encoding="utf-8") as fh:
+            json.dump(holder, fh)
+    except OSError:
+        file_lock.release(lease_path)
+        return False, "lease-record-failed", None, lease_path
+    if reclaimed:
+        _journal_append(run_dir_real, {
+            "kind": "lease-reclaimed", "reason": "malformed-holder", "at": time.time(),
+        })
+    if not _journal_append(run_dir_real, {
+        "kind": "lease-acquired", "cwd": cwd_real, "leaseToken": token, "at": time.time(),
+    }):
+        file_lock.release(lease_path)
+        return False, "journal-append-failed", None, lease_path
+    return True, "", token, lease_path
+
+
 def _validate_repo_root(repo_root):
     """Return (ok, detail_token). Ordered fail-closed checks before any spawn (#665)."""
     if repo_root is None:
@@ -308,7 +470,7 @@ def _run_dir_nonempty(run_dir_real):
 
 
 def _finalize_run(run_dir_real, state, *, terminal):
-    """Single cleanup site: destroy the recorded sanitized view. Never raises."""
+    """Single cleanup site: destroy view (review) and release lease (write). Never raises."""
     opened = state.get("opened") if state else None
     view_path = opened.get("viewPath") if opened else None
     if view_path:
@@ -316,6 +478,8 @@ def _finalize_run(run_dir_real, state, *, terminal):
             sanitized_view.destroy_sanitized_view(view_path)
         except Exception:
             pass
+    if terminal:
+        _release_worktree_lease(state)
 
 
 def _fold_run(run_dir_real, state, result):
@@ -672,6 +836,73 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     }
 
 
+def _grade_write_attempt(run_dir_real, state, attempt):
+    """Grade a completed write attempt from durable stdout files."""
+    opened = state["opened"]
+    engine = opened["engine"]
+    role_kind = opened.get("roleKind", "build")
+    slot = state["attempts"][attempt]
+    ended = slot.get("ended") or {}
+    stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
+
+    if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
+        return {"forfeit": True, "reason": "forfeited"}
+
+    try:
+        with open(stdout_path, encoding="utf-8", errors="ignore") as fh:
+            stdout = fh.read()
+    except OSError:
+        return {"forfeit": True, "reason": "forfeited"}
+
+    res = engine_adapter.parse_result(engine, role_kind, stdout)
+    if res.get("ok") is True:
+        return {
+            "ok": True,
+            "signal": res.get("signal", "ok"),
+            "evidence": res.get("evidence", {}),
+        }
+    if res.get("reason") == "unreadable":
+        return {"forfeit": True, "reason": "forfeited"}
+    return {
+        "ok": False,
+        "terminal_refusal": True,
+        "reason": res.get("reason"),
+        "signal": res.get("signal"),
+        "evidence": res.get("evidence", {}),
+    }
+
+
+def _write_terminal_forfeit(engine, attempts):
+    return {
+        "ok": False,
+        "terminal": True,
+        "reason": "forfeited",
+        "attempts": attempts,
+        "forfeited": True,
+        "disclosure": (
+            "%s build worker forfeited twice (timeout or unreadable); "
+            "inspect the worktree and retry manually" % engine
+        ),
+    }
+
+
+def _worktree_dirtied_forfeit(engine):
+    return {
+        "ok": False,
+        "terminal": True,
+        "reason": "forfeited",
+        "detail": "worktree-dirtied-by-attempt",
+        "attempts": 1,
+        "forfeited": True,
+        "disclosure": (
+            "%s forfeited attempt 1 after modifying the build worktree; the retry was "
+            "refused because a second attempt on a dirtied tree can contaminate or commit "
+            "partial work. The worktree is left exactly as the engine left it — inspect "
+            "and clean it yourself." % engine
+        ),
+    }
+
+
 def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None, investigated_rejected=None):
     if reason == engine_adapter.REVIEW_FORFEIT_VACUOUS:
         return {
@@ -822,23 +1053,50 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     continue
 
                 latest = max(attempts)
-                grade = _grade_review_attempt(run_dir_real, state, latest)
+                if run_kind == RUN_KIND_WRITE:
+                    grade = _grade_write_attempt(run_dir_real, state, latest)
+                else:
+                    grade = _grade_review_attempt(run_dir_real, state, latest)
                 engine = opened["engine"]
                 if grade.get("ok"):
+                    if run_kind == RUN_KIND_WRITE:
+                        result = _with_run_fields(
+                            {"ok": True, "terminal": True, "signal": grade.get("signal", "ok"),
+                             "evidence": grade.get("evidence", {}), "attempts": latest},
+                            run_dir=run_dir_real, argv=argv,
+                        )
+                    else:
+                        result = _with_run_fields(
+                            {"ok": True, "terminal": True, "findings": grade.get("findings", []),
+                             "attempts": latest, "engagement": grade["engagement"]},
+                            run_dir=run_dir_real, argv=argv,
+                        )
+                        if grade.get("investigated") is not None:
+                            result["investigated"] = grade["investigated"]
+                        view = opened.get("viewMeta")
+                        if view:
+                            result = _attach_sanitized_view(result, view)
+                    return _fold_run(run_dir_real, state, result)
+
+                if run_kind == RUN_KIND_WRITE and grade.get("terminal_refusal"):
                     result = _with_run_fields(
-                        {"ok": True, "terminal": True, "findings": grade.get("findings", []),
-                         "attempts": latest, "engagement": grade["engagement"]},
+                        {"ok": False, "terminal": True, "reason": grade["reason"],
+                         "signal": grade.get("signal"), "evidence": grade.get("evidence", {}),
+                         "attempts": latest, "forfeited": False},
                         run_dir=run_dir_real, argv=argv,
                     )
-                    if grade.get("investigated") is not None:
-                        result["investigated"] = grade["investigated"]
-                    view = opened.get("viewMeta")
-                    if view:
-                        result = _attach_sanitized_view(result, view)
                     return _fold_run(run_dir_real, state, result)
 
                 reason = grade.get("reason", "forfeited")
                 if latest < MAX_ATTEMPTS:
+                    if run_kind == RUN_KIND_WRITE:
+                        baseline = opened.get("worktreeBaseline")
+                        current = _worktree_baseline(opened["cwd"])
+                        if baseline is None or current is None or current != baseline:
+                            return _fold_run(run_dir_real, state, _with_run_fields(
+                                _worktree_dirtied_forfeit(engine),
+                                run_dir=run_dir_real, argv=argv,
+                            ))
                     ok_spawn, detail = _spawn_attempt(
                         run_dir_real, state, latest + 1, run_engine=run_engine,
                     )
@@ -853,14 +1111,17 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         ))
                     continue
 
-                terminal = _review_terminal_forfeit(
-                    engine, reason, MAX_ATTEMPTS,
-                    engagement=grade.get("engagement"),
-                    investigated_rejected=grade.get("investigatedRejected"),
-                )
-                view = opened.get("viewMeta")
-                if view:
-                    terminal = _attach_sanitized_view(terminal, view)
+                if run_kind == RUN_KIND_WRITE:
+                    terminal = _write_terminal_forfeit(engine, MAX_ATTEMPTS)
+                else:
+                    terminal = _review_terminal_forfeit(
+                        engine, reason, MAX_ATTEMPTS,
+                        engagement=grade.get("engagement"),
+                        investigated_rejected=grade.get("investigatedRejected"),
+                    )
+                    view = opened.get("viewMeta")
+                    if view:
+                        terminal = _attach_sanitized_view(terminal, view)
                 return _fold_run(run_dir_real, state, _with_run_fields(
                     terminal, run_dir=run_dir_real, argv=argv,
                 ))
@@ -1189,6 +1450,228 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
         ), view)
 
 
+def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
+                    prompt_path, order_id, base_sha, worktree_baseline, progress_path):
+    journal_root = _journal_root_for_run_dir(run_dir_real)
+    try:
+        os.makedirs(run_dir_real, mode=0o700, exist_ok=True)
+        with open(os.path.join(run_dir_real, "journal-root.txt"), "w", encoding="utf-8") as fh:
+            fh.write(journal_root + "\n")
+        dest_prompt = os.path.join(run_dir_real, PROMPT_NAME)
+        with open(prompt_path, "r", encoding="utf-8", errors="ignore") as src:
+            content = src.read()
+        with open(dest_prompt, "w", encoding="utf-8") as dst:
+            dst.write(content)
+        if progress_path:
+            try:
+                open(progress_path, "a").close()
+            except OSError:
+                pass
+    except OSError as exc:
+        return False, "run-dir-setup-failed:%s" % type(exc).__name__
+
+    record = {
+        "kind": "run-opened",
+        "runKind": RUN_KIND_WRITE,
+        "engine": engine,
+        "roleKind": "build",
+        "orderId": order_id,
+        "argv": argv,
+        "cwd": cwd,
+        "timeout": timeout,
+        "retryTimeout": retry_timeout,
+        "promptPath": os.path.join(run_dir_real, PROMPT_NAME),
+        "progressPath": progress_path or os.path.join(run_dir_real, PROGRESS_NAME),
+        "viewPath": None,
+        "baseSha": base_sha,
+        "worktreeBaseline": worktree_baseline,
+        "supervisorPid": os.getpid(),
+        "at": time.time(),
+    }
+    if not _journal_append(run_dir_real, record):
+        return False, "journal-append-failed"
+    return True, ""
+
+
+def dispatch_write(engine, *, model, effort, engine_model=None, prompt_path, cwd,
+                   order_id=None, base_sha=None, timeout=RETRY_MIN_TIMEOUT,
+                   retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
+                   run_dir=None, max_wait=None):
+    """Build-scoped dispatch into a linked worktree (#702). Role is HARD-CODED 'build'
+    (workspace-write sandbox). ok: True means the engine reported success — the runner never
+    commits and never mutates git state; whether a commit lands is the caller's business.
+    Never raises: any unexpected internal failure is converted to a structured result."""
+    try:
+        return _dispatch_write_impl(
+            engine, model=model, effort=effort, engine_model=engine_model,
+            prompt_path=prompt_path, cwd=cwd, order_id=order_id, base_sha=base_sha,
+            timeout=timeout, retry_timeout=retry_timeout, progress_path=progress_path,
+            run_engine=run_engine, run_dir=run_dir, max_wait=max_wait,
+        )
+    except Exception as exc:
+        return {"ok": False, "reason": "unrunnable", "detail": "internal-%s" % type(exc).__name__,
+                "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": []}
+
+
+def _dispatch_write_impl(engine, *, model, effort, engine_model=None, prompt_path, cwd,
+                         order_id=None, base_sha=None, timeout=RETRY_MIN_TIMEOUT,
+                         retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
+                         run_dir=None, max_wait=None):
+    """Build-scoped dispatch — role HARD-CODED 'build'. Never commits or mutates git."""
+    role_kind = "build"
+    argv = []
+
+    ok, cwd_detail = _validate_linked_build_cwd(cwd)
+    if not ok:
+        return _with_run_fields(
+            {"ok": False, "reason": "unrunnable", "detail": cwd_detail,
+             "attempts": 0, "forfeited": False, "terminal": True},
+            run_dir="", argv=[],
+        )
+    cwd_real = cwd_detail
+
+    ok, why = engine_adapter.prompt_path_ok(prompt_path)
+    if not ok:
+        return _with_run_fields(
+            {"ok": False, "reason": "unrunnable", "detail": "prompt-%s" % why,
+             "attempts": 0, "forfeited": False, "terminal": True},
+            run_dir="", argv=[],
+        )
+
+    opts = {"model": model, "engine_model": engine_model, "cwd": cwd_real}
+    built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
+    if built["reason"] is not None:
+        return _with_run_fields(
+            {"ok": False, "reason": "unrunnable",
+             "detail": "engine-config:%s" % built["reason"],
+             "attempts": 0, "forfeited": False, "terminal": True},
+            run_dir="", argv=[],
+        )
+    argv = built["argv"]
+
+    if run_dir is None:
+        return _with_run_fields(
+            {"ok": False, "reason": "unrunnable", "detail": "run-dir-absent",
+             "attempts": 0, "forfeited": False, "terminal": True},
+            run_dir="", argv=argv,
+        )
+
+    ok_rd, rd_detail = _validate_run_dir(run_dir)
+    if not ok_rd:
+        if rd_detail == "run-dir-missing":
+            try:
+                os.makedirs(run_dir, mode=0o700, exist_ok=True)
+            except OSError as exc:
+                return _with_run_fields(
+                    {"ok": False, "reason": "unrunnable",
+                     "detail": "run-dir-setup-failed:%s" % type(exc).__name__,
+                     "attempts": 0, "forfeited": False, "terminal": True},
+                    run_dir=run_dir or "", argv=argv,
+                )
+            ok_rd, rd_detail = _validate_run_dir(run_dir)
+        if not ok_rd:
+            return _with_run_fields(
+                {"ok": False, "reason": "unrunnable", "detail": rd_detail,
+                 "attempts": 0, "forfeited": False, "terminal": True},
+                run_dir=run_dir or "", argv=argv,
+            )
+    run_dir_real = rd_detail
+
+    if _path_inside(cwd_real, run_dir_real):
+        return _with_run_fields(
+            {"ok": False, "reason": "unrunnable", "detail": "run-dir-inside-cwd",
+             "attempts": 0, "forfeited": False, "terminal": True},
+            run_dir=run_dir_real, argv=argv,
+        )
+
+    if base_sha is None:
+        head = _git_scrubbed(cwd_real, "rev-parse", "HEAD")
+        base_sha = (head.stdout or "").strip() if head.returncode == 0 else None
+
+    run_dir_realpath = run_dir_real
+    try:
+        records, _corrupt = _journal_read(run_dir_real)
+        state = _journal_state(records)
+        opened = state.get("opened")
+
+        if opened is not None:
+            if os.path.realpath(opened.get("cwd", "")) != cwd_real:
+                return _with_run_fields(
+                    {"ok": False, "reason": "unrunnable", "detail": "cwd-authorization-mismatch",
+                     "attempts": 0, "forfeited": False, "terminal": True},
+                    run_dir=run_dir_real, argv=opened.get("argv") or argv,
+                )
+            if order_id is not None and opened.get("orderId") != order_id:
+                return _with_run_fields(
+                    {"ok": False, "reason": "unrunnable", "detail": "run-dir-reused",
+                     "attempts": 0, "forfeited": False, "terminal": True},
+                    run_dir=run_dir_real, argv=opened.get("argv") or argv,
+                )
+            argv = opened.get("argv") or argv
+        else:
+            if _run_dir_nonempty(run_dir_real):
+                return _with_run_fields(
+                    {"ok": False, "reason": "unrunnable", "detail": "run-dir-not-empty-unopened",
+                     "attempts": 0, "forfeited": False, "terminal": True},
+                    run_dir=run_dir_real, argv=argv,
+                )
+            baseline = _worktree_baseline(cwd_real)
+            ok_lease, lease_detail, _token, lease_path = _acquire_worktree_lease(
+                cwd_real, run_dir_real,
+            )
+            if not ok_lease:
+                return _with_run_fields(
+                    {"ok": False, "reason": "unrunnable", "detail": lease_detail,
+                     "attempts": 0, "forfeited": False, "terminal": True},
+                    run_dir=run_dir_real, argv=argv,
+                )
+            ok_open, open_detail = _open_write_run(
+                run_dir_real, engine=engine, argv=argv, cwd=cwd_real,
+                timeout=timeout, retry_timeout=retry_timeout,
+                prompt_path=prompt_path, order_id=order_id, base_sha=base_sha,
+                worktree_baseline=baseline,
+                progress_path=progress_path or os.path.join(run_dir_real, PROGRESS_NAME),
+            )
+            if not ok_open:
+                holder = file_lock.read_holder(lease_path)
+                if holder.get("dispatchToken"):
+                    file_lock.release(lease_path)
+                return _with_run_fields(
+                    {"ok": False, "reason": "unrunnable", "detail": open_detail,
+                     "attempts": 0, "forfeited": False, "terminal": True},
+                    run_dir=run_dir_real, argv=argv,
+                )
+
+        slice_wait = MAX_SYNC_WAIT if max_wait is None else min(max(int(max_wait), 0), MAX_SYNC_WAIT)
+        while True:
+            deadline = time.monotonic() + slice_wait
+            try:
+                result = _supervise(
+                    run_dir_real, run_kind=RUN_KIND_WRITE, deadline=deadline,
+                    run_engine=run_engine,
+                )
+            except Exception as exc:
+                records, _corrupt = _journal_read(run_dir_real)
+                state = _journal_state(records)
+                err = _with_run_fields(
+                    {"ok": False, "reason": "unrunnable",
+                     "detail": "internal-%s" % type(exc).__name__,
+                     "attempts": _highest_attempt(state), "forfeited": False, "terminal": True},
+                    run_dir=run_dir_real, argv=argv,
+                )
+                return _fold_run(run_dir_real, state, err)
+
+            if result.get("terminal"):
+                return result
+            if max_wait is not None:
+                return result
+    finally:
+        records, _corrupt = _journal_read(run_dir_realpath)
+        state = _journal_state(records)
+        terminal = state.get("folded") is not None or state.get("abandoned") is not None
+        _finalize_run(run_dir_realpath, state, terminal=terminal)
+
+
 def dispatch_poll(run_dir):
     """Observational poll — never spawns."""
     try:
@@ -1322,6 +1805,21 @@ def main(argv):
     d.add_argument("--max-wait", type=int, default=None)
     d.add_argument("--order-id", default=None)
 
+    w = sub.add_parser("dispatch-write")
+    w.add_argument("--engine", required=True, choices=("codex", "cursor"))
+    w.add_argument("--model", default=None)
+    w.add_argument("--effort", required=True)
+    w.add_argument("--engine-model", default=None)
+    w.add_argument("--prompt-path", required=True)
+    w.add_argument("--cwd", required=True)
+    w.add_argument("--order-id", default=None)
+    w.add_argument("--base-sha", default=None)
+    w.add_argument("--run-dir", required=True)
+    w.add_argument("--timeout", type=int, default=RETRY_MIN_TIMEOUT)
+    w.add_argument("--retry-timeout", type=int, default=RETRY_MIN_TIMEOUT)
+    w.add_argument("--max-wait", type=int, default=None)
+    w.add_argument("--progress-file", default=None)
+
     p = sub.add_parser("dispatch-poll")
     p.add_argument("--run-dir", required=True)
 
@@ -1339,6 +1837,13 @@ def main(argv):
                               timeout=args.timeout, retry_timeout=args.retry_timeout,
                               progress_path=args.progress_file, run_dir=args.run_dir,
                               max_wait=args.max_wait, order_id=args.order_id)
+    elif args.cmd == "dispatch-write":
+        res = dispatch_write(args.engine, model=args.model, effort=args.effort,
+                             engine_model=args.engine_model, prompt_path=args.prompt_path,
+                             cwd=args.cwd, order_id=args.order_id, base_sha=args.base_sha,
+                             run_dir=args.run_dir, timeout=args.timeout,
+                             retry_timeout=args.retry_timeout, max_wait=args.max_wait,
+                             progress_path=args.progress_file)
     elif args.cmd == "dispatch-poll":
         res = dispatch_poll(args.run_dir)
     elif args.cmd == "dispatch-abandon":
