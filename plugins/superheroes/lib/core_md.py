@@ -798,12 +798,15 @@ def confirm(cwd, *, root=None, now=None):
       - {action: "noop"}       already confirmed (idempotent)
       - {action: "absent"}     no core.md to confirm
       - {action: "behind"}     core.md is a NEWER schema — refuse to rewrite (UFR-3)
-      - {action: "deferred"}   lock contended / store unwritable (UFR-4)"""
+      - {action: "deferred"}   lock contended / store unwritable (UFR-4), or core.md unreadable
+        (includes reason/detail when unreadable — not retryable)"""
     stamp = now or _today()
     existing = read(cwd, root)
     if existing is None:
-        if engine_preferences_for_gate(cwd=cwd, root=root).status == CONFIG_UNREADABLE:
-            return {"action": "deferred", "record": None}
+        gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
+        if gate_cfg.status == CONFIG_UNREADABLE:
+            return {"action": "deferred", "record": None,
+                    "reason": GATE_REASON_UNREADABLE, "detail": gate_cfg.detail}
         return {"action": "absent", "record": None}
     if existing.get("behind"):
         return {"action": "behind", "record": existing}
@@ -818,8 +821,10 @@ def confirm(cwd, *, root=None, now=None):
             return {"action": "deferred", "record": None}
         existing = read(cwd, root)  # re-read under the lock
         if existing is None:
-            if engine_preferences_for_gate(cwd=cwd, root=root).status == CONFIG_UNREADABLE:
-                return {"action": "deferred", "record": None}
+            gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
+            if gate_cfg.status == CONFIG_UNREADABLE:
+                return {"action": "deferred", "record": None,
+                        "reason": GATE_REASON_UNREADABLE, "detail": gate_cfg.detail}
             return {"action": "absent", "record": None}
         # UFR-3: never rewrite a forward-schema core — render_core would downgrade it to
         # SCHEMA_VERSION and drop fields this version doesn't understand. Surface, don't write.

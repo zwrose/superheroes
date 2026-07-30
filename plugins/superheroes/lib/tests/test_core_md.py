@@ -2012,6 +2012,8 @@ def test_confirm_deferred_on_undecodable_core(tmp_path):
     open(core_p, "wb").write(b"\xff broken\n")
     res = CM.confirm(repo, root=store)
     assert res["action"] == "deferred"
+    assert res["reason"] == CM.GATE_REASON_UNREADABLE
+    assert "UTF-8 decode failed" in res["detail"]
 
 
 def test_confirm_absent_when_core_genuinely_missing(tmp_path):

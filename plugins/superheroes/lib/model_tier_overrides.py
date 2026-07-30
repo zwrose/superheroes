@@ -48,6 +48,14 @@ def _gate_refusal_fallback(reason, detail):
     return {"reason": reason, "detail": detail}
 
 
+def _gate_refusal_detail_fallback(exc):
+    """Exception detail string for import-hostile gate paths — mirrors ``core_md.gate_refusal_detail``.
+
+    The runtime path cannot import ``core_md``; test_gate_refusal_fallback_matches_core_md_shape
+    guards drift against ``core_md.gate_refusal_detail``."""
+    return "%s: %s" % (type(exc).__name__, exc)
+
+
 _HEADING = re.compile(r"^\s*##\s+[Mm]odel tiers\s*$")
 _NEXT_HEADING = re.compile(r"^\s*##\s+")
 _ENTRY = re.compile(r"^\s*([A-Za-z][A-Za-z-]*)\s*:\s*(\S+)\s*$")
@@ -187,7 +195,7 @@ def _read_engine_preferences_for_gate(profile_path=None, cwd=None, root=None):
         return cfg.prefs, None
     except Exception as exc:
         return {}, _gate_refusal_fallback(
-            _GATE_REASON_EVALUATION_FAILED_FALLBACK, "%s: %s" % (type(exc).__name__, exc))
+            _GATE_REASON_EVALUATION_FAILED_FALLBACK, _gate_refusal_detail_fallback(exc))
 
 
 def _evaluate_tier_writer_dispatch_gate(profile_path, set_overrides=None, clear_roles=None):
@@ -200,8 +208,10 @@ def _evaluate_tier_writer_dispatch_gate(profile_path, set_overrides=None, clear_
     try:
         candidate_tiers = _candidate_effective_tiers(profile_path, set_overrides, clear_roles)
     except Exception as exc:
+        import core_md
+
         return None, _gate_refusal_fallback(
-            _GATE_REASON_EVALUATION_FAILED_FALLBACK, "%s: %s" % (type(exc).__name__, exc))
+            _GATE_REASON_EVALUATION_FAILED_FALLBACK, core_md.gate_refusal_detail(exc))
     return engine_pref.configured_dispatch_violations(prefs, candidate_tiers), None
 
 

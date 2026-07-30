@@ -319,6 +319,19 @@ def test_dispatch_calibration_cli_carries_marker_on_unreadable(tmp_path, monkeyp
     assert cal[0]["readError"].startswith("core-md-unreadable: ")
 
 
+def test_dispatch_calibration_invalid_utf8_tiers_returns_evaluation_failed_marker(tmp_path):
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
+    profile = os.path.join(repo, ".claude", "superheroes", "review-crew.md")
+    with open(profile, "wb") as fh:
+        fh.write(b"<!-- review-crew: v1 -->\n## Model tiers\n\xff: opus\n")
+    rows = pp.dispatch_calibration(cwd=repo, root=store)
+    assert len(rows) == 1
+    assert rows[0]["role"] == "*"
+    assert rows[0]["engine"] is None
+    assert rows[0]["model"] is None
+    assert rows[0]["readError"].startswith("dispatch-gate-evaluation-failed: UnicodeDecodeError:")
+
+
 # --- configured_cross_vendor_engines -------------------------------------------------------
 
 def test_configured_cross_vendor_engines_default_is_codex_only():

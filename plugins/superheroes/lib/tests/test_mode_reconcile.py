@@ -519,6 +519,28 @@ def test_gather_signals_directory_emits_unreadable(tmp_path, monkeypatch):
     assert any(s["type"] == "core-md-unreadable" for s in sigs)
 
 
+def test_gather_signals_greenfield_git_unavailable_emits_no_unreadable(tmp_path, monkeypatch):
+    import store_core as sc
+
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    monkeypatch.setattr(
+        sc, "run_git_result",
+        lambda cwd, *args: sc.GitResult(None, sc.GIT_UNAVAILABLE, "FileNotFoundError: no git"))
+    sigs = rc.gather_signals(str(tmp_path), root=root)
+    assert not any(s["type"] == "core-md-unreadable" for s in sigs)
+
+
+def test_gather_signals_corrupt_emits_unreadable_with_detail(tmp_path, monkeypatch):
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    repo, root, _ = _gate_core_fixture(tmp_path, "corrupt")
+    sigs = rc.gather_signals(repo, root=root)
+    unreadable = [s for s in sigs if s["type"] == "core-md-unreadable"]
+    assert len(unreadable) == 1
+    assert unreadable[0]["detail"].get("detail")
+
+
 def test_gather_signals_core_md_import_failure_is_fail_open(tmp_path, monkeypatch):
     import builtins
     import sys

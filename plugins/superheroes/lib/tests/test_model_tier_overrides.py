@@ -460,7 +460,9 @@ def test_write_cli_refuses_when_effective_tiers_raises(tmp_path, monkeypatch, ca
 def test_gate_refusal_fallback_matches_core_md_shape():
     import core_md
 
+    exc = RuntimeError("tier read failed")
     assert MTO._gate_refusal_fallback("r", "d") == core_md.gate_refusal("r", "d")
+    assert MTO._gate_refusal_detail_fallback(exc) == core_md.gate_refusal_detail(exc)
     assert MTO._GATE_REASON_EVALUATION_FAILED_FALLBACK == core_md.GATE_REASON_EVALUATION_FAILED
 
 

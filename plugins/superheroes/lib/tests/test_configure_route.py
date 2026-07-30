@@ -160,3 +160,26 @@ def test_route_fix_when_git_unavailable(tmp_path, monkeypatch):
     monkeypatch.setattr(sc, "run_git_result", fake)
     out = crt.route(str(tmp_path), interactive=True, root=root)
     assert out["path"] == "fix"
+
+
+def test_route_fix_when_git_fails_at_layer_lookup(tmp_path, monkeypatch):
+    # E1: git succeeds for gather_signals + core read, then fails when _review_layer_missing
+    # resolves core_path — exercises the except OSError handler (not test_route_fix_when_git_unavailable).
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    cdir = _seed_light_layers(_seed_core(tmp_path))
+
+    real_core_path = core_md.core_path
+    calls = {"n": 0}
+
+    def counting_core_path(cwd, root=None):
+        calls["n"] += 1
+        if calls["n"] >= 4:
+            raise core_md.RepoRootUnavailable("simulated git failure at layer lookup")
+        return real_core_path(cwd, root)
+
+    monkeypatch.setattr(core_md, "core_path", counting_core_path)
+    out = crt.route(str(tmp_path), interactive=True, root=root)
+    assert out["path"] == "fix"
+    assert calls["n"] >= 4
