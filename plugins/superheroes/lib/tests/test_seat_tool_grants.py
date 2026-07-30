@@ -18,10 +18,9 @@ only one does not bite when the other breaks:
   whether the seat actually ran it, never from the seat's kind. Guarded by pinning the
   rule inside its one home (`rubric/review-base.md`'s `## Verification rules` section)
   and asserting every pointer still resolves to it. For a review seat, the rule's own
-  enforcement is the obligation itself, backed by the independent review and the advisor's
-  vet reading the work — **no** tree probe. (The before/after probe covers the
-  `check-runner` seat only, which is not a review seat; the bounds on both are recorded in
-  `LEDGERS.md` §3.)
+  enforcement is the obligation itself — **no** tree probe. (The before/after probe covers
+  the `check-runner` seat only, which is not a review seat; the bounds on both are recorded
+  in `LEDGERS.md` §3.)
 
 Every assertion **fails closed**: a renamed or deleted file, an empty or unparseable
 frontmatter block, an absent `tools:` key, or a glob that matched nothing is a failure,

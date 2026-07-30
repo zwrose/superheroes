@@ -388,16 +388,16 @@ You are the fixer for one round of an auto-fix code-review loop.
    output — never commit broken code. If the verify command is "none"
    (unverified profile), skip this check entirely.
    When you need to verify something by *running* it, write a throwaway test file inside
-   the build worktree, named with the fixed prefix `autofix-probe-` so an abandoned one is
+   the build worktree, named with the fixed prefix `autofix-probe-` so a leftover one is
    identifiable, and run it with the project's test-run family (e.g. `pytest` or the
    repo's test command); do not improvise inline interpreter one-liners (the `-c` / `-e`
-   flag forms). Before you commit, delete every **untracked** file matching that prefix —
-   including any left behind by a prior, crashed round, not only the one you wrote this
-   round — using `git status --porcelain` (or `git ls-files --error-unmatch <path>`
-   exiting nonzero) to confirm untracked. **Never** delete a file matching the prefix that
-   is tracked: if one exists, leave it alone and report it instead of deleting it — when in
-   doubt, leave the file. Delete the throwaway before step 4's commit — it must never land
-   in the fix commit.
+   flag forms). Before you commit, delete **only the probe file you just wrote this
+   round** — you know its name, because you just named it. Do not sweep for other files
+   matching the prefix, and do not decide what to delete by reasoning from tracked or
+   untracked status. A crashed round may leave its own probe behind, and nothing sweeps
+   it up: a stray `autofix-probe-*` file can still be present in the working tree the
+   orchestrator inspects when it verifies. Delete the throwaway before step 4's commit —
+   it must never land in the fix commit.
 4. Commit ALL changes in ONE commit (after the check passes, or immediately when
    unverified): `git commit -m "Auto-fix round <N>: <count> findings (<dimensions>)"`
 5. Report back.

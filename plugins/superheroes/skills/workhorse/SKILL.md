@@ -466,17 +466,18 @@ written throwaway test does exactly that. When a claim needs a run no review sea
    scratch, so an **interrupted** order leaves its captures behind until that scratch is cleared —
    nothing sweeps them, and the order-wide ceiling above bounds one order's captures, not the
    accumulated set of abandoned ones. Dispatch it as a **host subagent** — the host's own dispatch
-   action (`Agent` on Claude, `spawn_agent` on Codex) — so the model gate you run (§7) resolves the
-   **`mechanical`** registry role against the **host's own vendor**, and **never dispatch it to an
-   external engine**; it renders no judgment, so no independence or maker-family constraint applies
-   to it and none should be bolted on. **Where `mechanical` has no sanctioned model on the current
-   host, the route is simply unavailable** — a stated limitation today: the seat is reachable only on
-   hosts whose `mechanical` role resolves. Everywhere else, **fall back to destination 1 (you run it
-   yourself)** — it needs no seat and is **always available** — and **disclose the fallback** wherever
-   you record the dispatch. **Not a gate failure — no dispatch is attempted:** an unavailable
-   check-runner route never blocks verification, because destination 1 always stands (§7's park
-   boundary above). If the seat needs a stronger model to do its job, your command list was
-   under-enumerated — rewrite it, or run it yourself.
+   action (`Agent` on Claude, `spawn_agent` on Codex) — **never to an external engine**; it renders
+   no judgment, so no independence or maker-family constraint applies to it and none should be
+   bolted on. **First, establish whether the `mechanical` role resolves on this host at all.**
+   **Where it does not, the route is simply unavailable** — a stated limitation today: the seat is
+   reachable only on hosts whose `mechanical` role resolves. On that path you make **no dispatch and
+   run no gate** — go straight to **destination 1 (you run it yourself)**, which needs no seat and is
+   **always available** — and **disclose the fallback** wherever you record the dispatch. **Only
+   when the role resolves** do you run the §7 model gate against the **host's own vendor** and obey
+   it in full, park included — that gate governs a dispatch you are actually about to make. State it
+   in that order: the gate is never invoked on a path where no dispatch will be made. If the seat
+   needs a stronger model to do its job, your command list was under-enumerated — rewrite it, or run
+   it yourself.
 
 **Probe the tree before and after every `check-runner` dispatch — this is your discipline, not a
 gate.** Commit the landed work first so the baseline is clean, then capture `git rev-parse HEAD`, the
