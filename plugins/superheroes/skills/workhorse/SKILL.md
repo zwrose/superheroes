@@ -302,8 +302,10 @@ the effective `--model` you will pass (explicit or defaulted) *before dispatchin
 It validates that model against the seat's **registry allowlist** (`lib/model_registry.py`, the single
 model/vendor taxonomy; #510). **Exit 1 = an unlisted model = a park, not a pick:** the gate prints the
 allowlist, and you **park before any work runs** — never treat a model-within-engine choice as "just a
-preference." On exit 0 the gate returns a structured triple — thread `model_id` as an engine
-dispatch's `engine_model`, `effort` as `--effort`, and `dispatch_token` as the CLI argv model;
+preference," and this governs **a dispatch you are going to make**: declining to dispatch and doing the
+work yourself instead is a different act, not what this park rule forbids. On exit 0 the gate
+returns a structured triple — thread `model_id` as an engine dispatch's `engine_model`, `effort` as
+`--effort`, and `dispatch_token` as the CLI argv model;
 putting the composed token where a registry id belongs is the trap that seats a cursor role on
 Claude and loses the model family. Omitting `--effort` **resolves** when the allowlist makes the
 model unambiguous (and picks the lowest ladder rung when it does not), reporting the choice in
@@ -460,16 +462,20 @@ written throwaway test does exactly that. When a claim needs a run no review sea
    trust** — treat its output exactly as you treat an implementer's. The captures are
    **working artifacts, not the durable receipt** — the PR record is: read them, quote what matters
    (**redacted** — secrets, tokens, private URLs, PII), then **remove them once the verification
-   closes**. Dispatch it as a **host subagent** — the host's own dispatch action (`Agent` on Claude,
-   `spawn_agent` on Codex) — so the model gate you run (§7) resolves the **`mechanical`** registry
-   role against the **host's own vendor**, and **never dispatch it to an external engine**; it renders
-   no judgment, so no independence or maker-family constraint applies to it and none should be bolted
-   on. **Where `mechanical` has no sanctioned model on the current host, the route is simply
-   unavailable** — a stated limitation today: the seat is reachable only on hosts whose `mechanical`
-   role resolves. Everywhere else, **fall back to destination 1 (you run it yourself)** — it needs no
-   seat and is **always available** — and **disclose the fallback** wherever you record the dispatch.
-   **Never a park**: an unavailable check-runner route never blocks verification, because destination
-   1 always stands. If the seat needs a stronger model to do its job, your command list was
+   closes**. This is a bound, not a guarantee: the captures live outside the repo in session-scoped
+   scratch, so an **interrupted** order leaves its captures behind until that scratch is cleared —
+   nothing sweeps them, and the order-wide ceiling above bounds one order's captures, not the
+   accumulated set of abandoned ones. Dispatch it as a **host subagent** — the host's own dispatch
+   action (`Agent` on Claude, `spawn_agent` on Codex) — so the model gate you run (§7) resolves the
+   **`mechanical`** registry role against the **host's own vendor**, and **never dispatch it to an
+   external engine**; it renders no judgment, so no independence or maker-family constraint applies
+   to it and none should be bolted on. **Where `mechanical` has no sanctioned model on the current
+   host, the route is simply unavailable** — a stated limitation today: the seat is reachable only on
+   hosts whose `mechanical` role resolves. Everywhere else, **fall back to destination 1 (you run it
+   yourself)** — it needs no seat and is **always available** — and **disclose the fallback** wherever
+   you record the dispatch. **Not a gate failure — no dispatch is attempted:** an unavailable
+   check-runner route never blocks verification, because destination 1 always stands (§7's park
+   boundary above). If the seat needs a stronger model to do its job, your command list was
    under-enumerated — rewrite it, or run it yourself.
 
 **Probe the tree before and after every `check-runner` dispatch — this is your discipline, not a

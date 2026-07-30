@@ -391,9 +391,13 @@ You are the fixer for one round of an auto-fix code-review loop.
    the build worktree, named with the fixed prefix `autofix-probe-` so an abandoned one is
    identifiable, and run it with the project's test-run family (e.g. `pytest` or the
    repo's test command); do not improvise inline interpreter one-liners (the `-c` / `-e`
-   flag forms). Before you commit, delete every file matching that prefix — including any
-   left behind by a prior, crashed round, not only the one you wrote this round. Delete
-   the throwaway before step 4's commit — it must never land in the fix commit.
+   flag forms). Before you commit, delete every **untracked** file matching that prefix —
+   including any left behind by a prior, crashed round, not only the one you wrote this
+   round — using `git status --porcelain` (or `git ls-files --error-unmatch <path>`
+   exiting nonzero) to confirm untracked. **Never** delete a file matching the prefix that
+   is tracked: if one exists, leave it alone and report it instead of deleting it — when in
+   doubt, leave the file. Delete the throwaway before step 4's commit — it must never land
+   in the fix commit.
 4. Commit ALL changes in ONE commit (after the check passes, or immediately when
    unverified): `git commit -m "Auto-fix round <N>: <count> findings (<dimensions>)"`
 5. Report back.

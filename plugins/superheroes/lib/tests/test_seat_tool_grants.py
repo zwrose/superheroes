@@ -17,9 +17,11 @@ only one does not bite when the other breaks:
   claim a run it did not make; whether an empirical statement is a receipt follows from
   whether the seat actually ran it, never from the seat's kind. Guarded by pinning the
   rule inside its one home (`rubric/review-base.md`'s `## Verification rules` section)
-  and asserting every pointer still resolves to it. The rule's own enforcement is the
-  obligation itself plus the orchestrator's before/after probe, with bounds recorded in
-  `LEDGERS.md` §3.
+  and asserting every pointer still resolves to it. For a review seat, the rule's own
+  enforcement is the obligation itself, backed by the independent review and the advisor's
+  vet reading the work — **no** tree probe. (The before/after probe covers the
+  `check-runner` seat only, which is not a review seat; the bounds on both are recorded in
+  `LEDGERS.md` §3.)
 
 Every assertion **fails closed**: a renamed or deleted file, an empty or unparseable
 frontmatter block, an absent `tools:` key, or a glob that matched nothing is a failure,
@@ -454,6 +456,21 @@ def test_ran_marker_token_is_paired_with_its_first_line_anchor():
     `# ran: <command>` line... read the first line of the capture"). That is a genuine,
     non-vacuous pairing to require — not a coincidence of an unrelated "first line"
     landing near an unrelated "# ran: " by chance in a much larger file.
+
+    What this catches, and does not (disclosed, not silently dropped — item 6, #719 round
+    6): it catches the token disappearing, and the positional anchor ("first line")
+    disappearing from a file's receipt clause. It does **not** catch a mutation that keeps
+    both strings in place while inverting the operative relation between them — e.g.
+    changing check-runner.md's operative phrase "prefixed `# ran: `" to "followed by
+    `# ran: `" survives this test, because both strings still co-occur within the window,
+    while the charter requires each capture to **open** with the marker — so producer and
+    consumer would silently disagree on placement with this test green. This is the
+    **third** consecutive rework of this assertion; the recurring class — each round binds
+    to slightly the wrong prose feature and a new gap appears — is a design signal, not a
+    patch target, so it is not strengthened here. The durable fix is the same design
+    change already routed to the advisor for the pointer/home gap above: one shared
+    fragment both sides include, so there is no second copy to bind — not a sharper
+    substring.
     """
     for rel in (os.path.join("agents", "check-runner.md"),
                 os.path.join("skills", "workhorse", "SKILL.md")):
@@ -539,6 +556,12 @@ def test_pointer_resolves_to_the_home_rule(rel):
     could never fail on its own. Nothing in this file pins the home's never-mutate
     prohibition independently of those two already-genuine clauses; that gap ships
     disclosed, not silently dropped, alongside the pointer gap above.
+
+    The same unpinned-restatement gap also covers the receipt-envelope prose, not only
+    this rule's pointers and home (item 5, #719): the order-wide ceiling and
+    cleanup-ownership split are restated in both `skills/workhorse/SKILL.md` §8 and
+    `agents/check-runner.md`, and only the `# ran: ` token is pinned by the tests below —
+    the surrounding protocol prose describing that ceiling and that ownership split is not.
     """
     title, _ = _no_mutation_no_claim_rule()
     ntitle = _norm(title)
