@@ -27,6 +27,7 @@ frontmatter block, an absent `tools:` key, or a glob that matched nothing is a f
 never a vacuous pass. An absent `tools:` key is the sharpest of those — a seat with no
 `tools:` line inherits *every* tool, so "no Bash found, pass" would be exactly backwards.
 """
+import hashlib
 import os
 import re
 
@@ -397,6 +398,112 @@ def test_check_runner_grant_is_a_subset_of_its_own_allowlist():
             extra, tools, sorted(CHECK_RUNNER_ALLOWED_TOOLS)))
 
 
+_NAME_LINE_RE = re.compile(r"^name:\s*(.*)$", re.M)
+
+
+def _parse_frontmatter_name(text, label):
+    """Fail-closed read of a seat's `name:` frontmatter key (item 4, #719).
+
+    Mirrors `_parse_tools`'s delimiter handling (an unopened or unclosed `---` block
+    fails rather than passing), applied to `name:` instead of `tools:`. A seat's
+    registered name is exactly the fact the advisor's probe mutated (setting
+    `check-runner.md`'s `name:` to `code-reviewer`, unguarded) — so a missing,
+    duplicated, or empty `name:` line must fail here, never read as "no name found,
+    skip".
+    """
+    lines = text.split("\n")
+    assert lines and lines[0].strip() == "---", (
+        "%s: frontmatter does not open with a `---` delimiter — cannot read `name:`."
+        % label)
+    block = []
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        block.append(line)
+    else:
+        raise AssertionError(
+            "%s: frontmatter block is never closed by a `---` delimiter — cannot read "
+            "`name:`." % label)
+    block_text = "\n".join(block)
+    matches = _NAME_LINE_RE.findall(block_text)
+    assert len(matches) == 1, (
+        "%s: expected exactly one `name:` line in the frontmatter, found %d. An "
+        "absent or duplicated `name:` must fail here, never pass silently."
+        % (label, len(matches)))
+    name = matches[0].strip()
+    assert name, "%s: `name:` is present but empty." % label
+    return name
+
+
+def test_every_agent_name_matches_its_filename_stem():
+    """Item 4 (#719): every bundled agent's frontmatter `name:` must equal its own
+    filename stem. This is the GENERAL form of the rename class the advisor's probe
+    demonstrated — it set `check-runner.md`'s `name:` to `code-reviewer` and nothing
+    failed. Pinned for all ten agent files (all ten pass today), not only
+    check-runner, so any seat silently re-registering under a different seat's name
+    fails here regardless of which seat it is.
+    """
+    slugs = _agent_slugs()
+    for slug in slugs:
+        text = _read_required(os.path.join(PLUGIN, "agents", slug + ".md"),
+                               "a bundled agent (item 4, #719)")
+        name = _parse_frontmatter_name(text, slug)
+        assert name == slug, (
+            "agents/%s.md declares name: %r, which does not match its own filename "
+            "stem %r. A registered name drifting from its file is exactly the class "
+            "of mutation (#719) that let check-runner register as code-reviewer "
+            "unguarded." % (slug, name, slug))
+
+
+def test_check_runner_registers_as_itself_and_is_absent_from_every_reviewer_roster():
+    """Item 4 (#719): the advisor's probe set `check-runner.md`'s `name:` to
+    `code-reviewer`, and 3,872 lib tests stayed green — an execution-capable seat
+    could register under a review-seat name unguarded.
+    `test_every_agent_name_matches_its_filename_stem` now catches that class
+    generally; this test adds the check-runner-SPECIFIC guarantees the order names:
+    its registered name is exactly `check-runner`, it matches no `*-reviewer`
+    pattern, and it is absent from every panel-roster source this test suite already
+    reads elsewhere — read via those same modules/helpers (never a fresh parser),
+    per CONVENTIONS §11:
+    - `lib/spec_loop_plan.py`'s `DIMENSIONS` (imported directly, as
+      `test_dispatch_tables.py` does).
+    - `lib/round_driver.py`'s reviewer roster (`DIMENSIONS`, imported the same way).
+    - The skill dispatch tables `lib/tests/test_dispatch_tables.py` reads (its own
+      `_table_rows` helper, imported rather than re-implemented) for `review-code`,
+      `review-spec`, and `audit-debt`.
+    Any of these sources failing to import/read is a hard failure, not a skip.
+    """
+    text = _read_required(os.path.join(PLUGIN, "agents", "check-runner.md"),
+                           "the check-runner execution seat (item 4, #719)")
+    name = _parse_frontmatter_name(text, "check-runner")
+    assert name == "check-runner", (
+        "agents/check-runner.md declares name: %r, not `check-runner`." % name)
+    assert not name.endswith("-reviewer"), (
+        "agents/check-runner.md's registered name %r matches the `*-reviewer` "
+        "pattern. check-runner is not a review seat and must never register as one."
+        % name)
+
+    import round_driver
+    import spec_loop_plan
+    assert "check-runner" not in round_driver.DIMENSIONS, (
+        "check-runner is present in round_driver.DIMENSIONS (the code-leg reviewer "
+        "roster). check-runner is not a review seat and must never be dispatched as "
+        "one.")
+    assert "check-runner" not in spec_loop_plan.DIMENSIONS, (
+        "check-runner is present in spec_loop_plan.DIMENSIONS (the spec-leg reviewer "
+        "roster). check-runner is not a review seat and must never be dispatched as "
+        "one.")
+
+    from test_dispatch_tables import _table_rows
+    for skill in ("review-code", "review-spec", "audit-debt"):
+        rows = _table_rows(os.path.join("skills", skill, "SKILL.md"))
+        slugs_in_table = {slug for slug, _findings, _dim in rows}
+        assert "check-runner" not in slugs_in_table, (
+            "skills/%s/SKILL.md's dispatch table lists check-runner as a reviewer "
+            "row. check-runner is not a review seat and must never be dispatched as "
+            "one." % skill)
+
+
 # The receipt envelope's magic string. Both homes must agree on the literal token that
 # ties an output file to a command; this is a CONVENTIONS §11.2 copy-plus-drift TOKEN
 # pin, not a prose-semantics pin — it does not assert the two homes describe the
@@ -495,27 +602,62 @@ def test_ran_marker_token_is_paired_with_its_first_line_anchor():
             % (rel, RAN_MARKER_TOKEN, RAN_MARKER_ANCHOR_WINDOW))
 
 
+# A bolded lead-in of the shape `**...:**` — rule 7's body has exactly two of these, and
+# they are the operative sentences' own headers ("Never change the repository:", "Never
+# claim a run you did not make:"). Measured against today's text (#719 item 3); do not
+# hard-type what the lead-ins SAY — only their COUNT is asserted, so this does not grow
+# into a clause-substring ladder (edge 2, PR #727's lesson).
+_BOLD_LEAD_IN_RE = re.compile(r"\*\*[^*]+?:\*\*")
+
+# The whole operative body of rule 7, pinned by digest (#719 item 3) — computed from
+# today's `review-base.md` via the same `_no_mutation_no_claim_rule` + `_norm` this test
+# uses, so it is reproducible, not guessed. This SUBSUMES the two clause-substring
+# assertions this test used to carry (both clauses sit inside the body this hashes, so
+# dropping either changes the digest) — removing them, rather than adding a third
+# assertion alongside the digest, is how this item CLOSES the clause ladder instead of
+# extending it. A deliberate edit to rule 7's body must update this constant; an
+# unexplained change to it is exactly the drift this guards against.
+RULE_7_BODY_SHA256 = "c16f01da893841aaa9ad3d424e7860d5b2930fb4c14e3fba95ecf0d42322b691"
+
+
 def test_no_mutation_no_claim_rule_lives_in_review_base_verification_rules():
     """Axis 2 — the rule. The never-mutate / never-claim-a-run rule has ONE home:
     verification rule 7 of `rubric/review-base.md`, inside its `## Verification rules`
-    section. Assert it sits there and that its two load-bearing clauses survive, so a
-    rewrite that keeps the title but drops the substance fails.
+    section. Assert it sits there and that its operative body survives, so a rewrite
+    that keeps the title but drops or inverts the substance fails.
+
+    This used to pin two hand-picked clause substrings. #719's advisor mutation probe
+    proved that shape inert against a FULL inversion of the operative sentences (title
+    kept, substance flipped to permissive) — a substring pin only catches the loss of
+    the exact phrases it names, not a rewrite around them. This test now pins the
+    **whole body** instead: a shape check (exactly two bolded `**...:**` lead-ins, the
+    operative sentences' own headers — zero, one, or three is a failure, and this does
+    not hard-type what they say, so it does not become a growing clause ladder) plus a
+    `sha256` digest of the normalized body. The digest strictly subsumes the two old
+    clause assertions (both clauses live inside the hashed body), so removing them here
+    — rather than keeping them alongside the digest — is how this item CLOSES the
+    clause-ladder pattern instead of extending it (edge 2, PR #727's lesson).
     """
     title, body = _no_mutation_no_claim_rule()
     nbody = _norm(body)
-    # Clause 1: a review seat's execution-flavoured statements are analysis, not receipts.
-    assert "is **analysis, not a receipt**" in nbody, (
-        "review-base.md rule 7 (%r) no longer says a review seat's mutation/test/parity "
-        "statement is **analysis, not a receipt**. That clause is the rule's whole "
-        "point: without it the rule reads as a capability note rather than a ban on "
-        "answering in the register of a receipt." % title)
-    # Clause 2: a finding whose proof needs a run is STILL emitted, with the check named.
-    assert ("**still emit the finding**: name the **check** — the exact command, "
-            "mutation, or input that would settle it") in nbody, (
-        "review-base.md rule 7 (%r) no longer says a finding whose proof requires "
-        "execution is STILL emitted with the check named. Dropping that clause turns "
-        "the rule into a reason to stay silent, which the rule itself calls worse than "
-        "either failure it forbids." % title)
+
+    lead_ins = _BOLD_LEAD_IN_RE.findall(nbody)
+    assert len(lead_ins) == 2, (
+        "review-base.md rule 7 (%r) body now contains %d bolded '**...:**' lead-ins "
+        "(expected exactly 2 — the operative sentences' own headers). Zero, one, or "
+        "three-or-more means the operative structure changed; this must fail closed "
+        "rather than guess which lead-ins still matter. Found: %r"
+        % (title, len(lead_ins), lead_ins))
+
+    digest = hashlib.sha256(nbody.encode("utf-8")).hexdigest()
+    assert digest == RULE_7_BODY_SHA256, (
+        "review-base.md rule 7 (%r)'s operative body no longer matches the pinned "
+        "digest (expected %s, got %s). This pins the WHOLE operative body, so an "
+        "inversion, a dropped clause, or a reword all change it. If this is a "
+        "DELIBERATE rule edit, update RULE_7_BODY_SHA256 to the new digest below; if "
+        "you did not intend to change rule 7's substance, this is exactly the drift "
+        "this guard exists to catch. Current normalized body:\n\n%s"
+        % (title, RULE_7_BODY_SHA256, digest, nbody))
 
 
 @pytest.mark.parametrize("rel", POINTER_FILES)
