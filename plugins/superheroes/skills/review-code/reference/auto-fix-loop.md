@@ -387,17 +387,22 @@ You are the fixer for one round of an auto-fix code-review loop.
    retry ONCE. If it still fails, STOP and report CHECK_FAILED with the failing
    output — never commit broken code. If the verify command is "none"
    (unverified profile), skip this check entirely.
-   When you need to verify something by *running* it, write a throwaway test file inside
+   When you need to verify something by *running* it, choose a throwaway test file path inside
    the build worktree, named with the fixed prefix `autofix-probe-` so a leftover one is
-   identifiable, and run it with the project's test-run family (e.g. `pytest` or the
-   repo's test command); do not improvise inline interpreter one-liners (the `-c` / `-e`
-   flag forms). Before you commit, delete **only the probe file you just wrote this
-   round** — you know its name, because you just named it. Do not sweep for other files
-   matching the prefix, and do not decide what to delete by reasoning from tracked or
-   untracked status. A crashed round may leave its own probe behind, and nothing sweeps
-   it up: a stray `autofix-probe-*` file can still be present in the working tree the
-   orchestrator inspects when it verifies. Delete the throwaway before step 4's commit —
-   it must never land in the fix commit.
+   identifiable. **Before writing it, check that the chosen path does not already exist** — a
+   crashed prior round can leave its own probe behind under a predictable name, and an
+   unrelated tracked file could occupy it too. If the name is already taken, pick a different
+   one (e.g. add a unique suffix) rather than overwriting whatever is there. If you cannot
+   establish that your chosen path is new, do not write a probe there and do not delete
+   anything — report it instead. Once the path is confirmed new, write the file and run it
+   with the project's test-run family (e.g. `pytest` or the repo's test command); do not
+   improvise inline interpreter one-liners (the `-c` / `-e` flag forms). Before you commit,
+   delete **only the probe file you just wrote this round** — you know its name, because you
+   just named it and confirmed it was new. Do not sweep for other files matching the prefix,
+   and do not decide what to delete by reasoning from tracked or untracked status. A crashed
+   round may leave its own probe behind, and nothing sweeps it up: a stray `autofix-probe-*`
+   file can still be present in the working tree the orchestrator inspects when it verifies.
+   Delete the throwaway before step 4's commit — it must never land in the fix commit.
 4. Commit ALL changes in ONE commit (after the check passes, or immediately when
    unverified): `git commit -m "Auto-fix round <N>: <count> findings (<dimensions>)"`
 5. Report back.
