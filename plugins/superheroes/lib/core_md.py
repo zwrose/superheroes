@@ -409,7 +409,7 @@ def _evaluate_configured_dispatch_gate(cwd, root, facts, existing):
 
 def _refused_dispatch_gate(violations=None, *, evaluation_error=None, record=None):
     if evaluation_error:
-        reason = evaluation_error.get("reason", "dispatch-gate-evaluation-failed")
+        reason = evaluation_error.get("reason", GATE_REASON_EVALUATION_FAILED)
         detail = evaluation_error.get("detail", "")
         violations = [gate_refusal(reason, detail)]
     return {

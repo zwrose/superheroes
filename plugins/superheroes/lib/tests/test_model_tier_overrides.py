@@ -457,6 +457,57 @@ def test_write_cli_refuses_when_effective_tiers_raises(tmp_path, monkeypatch, ca
     assert "tier read failed" in out["violations"][0]["detail"]
 
 
+def test_gate_refusal_fallback_matches_core_md_shape():
+    import core_md
+
+    assert MTO._gate_refusal_fallback("r", "d") == core_md.gate_refusal("r", "d")
+
+
+def test_gate_refusal_fallback_needs_no_core_md_import(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "core_md":
+            raise ImportError("simulated lazy import failure")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    assert MTO._gate_refusal_fallback("r", "d") == {"reason": "r", "detail": "d"}
+
+
+def test_write_cli_gate_err_passed_through_not_reprojected(tmp_path, monkeypatch, capsys):
+    import builtins
+
+    p = tmp_path / "profile.md"
+    p.write_text("## Model tiers\n", encoding="utf-8")
+    real_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "core_md":
+            raise ImportError("simulated lazy import failure")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    rc = MTO.main([
+        "model_tier_overrides.py",
+        "write",
+        "--profile",
+        str(p),
+        "--set",
+        "reviewer=sonnet",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    expected_violation = {
+        "reason": "dispatch-gate-evaluation-failed",
+        "detail": "ImportError: simulated lazy import failure",
+    }
+    assert rc == 1
+    assert out["violations"][0] == expected_violation
+    assert out["reason"] == out["violations"][0]["reason"]
+
+
 def test_write_cli_lazy_core_md_import_failure_writes_json(tmp_path, monkeypatch, capsys):
     import builtins
 

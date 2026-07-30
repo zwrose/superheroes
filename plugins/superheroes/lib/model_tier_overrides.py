@@ -34,6 +34,20 @@ KNOWN_MODELS = model_registry.known_claude_models()
 
 _LEGACY_ROLE_ALIAS = {"fixer": "code-fixer"}
 
+_GATE_REASON_EVALUATION_FAILED_FALLBACK = "dispatch-gate-evaluation-failed"
+
+
+def _gate_refusal_fallback(reason, detail):
+    """The {"reason", "detail"} gate-refusal payload, built WITHOUT importing ``core_md``.
+
+    ``core_md.gate_refusal`` is the single home for this shape (rider 9 of #699) and every path that
+    can rely on ``core_md`` being importable uses it. These paths cannot: they are the handlers that
+    exist to report that ``core_md`` itself could not be imported or evaluated, so reaching for
+    ``core_md.gate_refusal`` here would raise the very failure they are reporting (it did — see
+    test_gate_refusal_fallback_matches_core_md_shape; if you change one, that test fails."""
+    return {"reason": reason, "detail": detail}
+
+
 _HEADING = re.compile(r"^\s*##\s+[Mm]odel tiers\s*$")
 _NEXT_HEADING = re.compile(r"^\s*##\s+")
 _ENTRY = re.compile(r"^\s*([A-Za-z][A-Za-z-]*)\s*:\s*(\S+)\s*$")
@@ -172,13 +186,12 @@ def _read_engine_preferences_for_gate(profile_path=None, cwd=None, root=None):
             return {}, core_md.gate_refusal(core_md.GATE_REASON_UNREADABLE, cfg.detail)
         return cfg.prefs, None
     except Exception as exc:
-        return {}, core_md.gate_refusal(
-            core_md.GATE_REASON_EVALUATION_FAILED, core_md.gate_refusal_detail(exc))
+        return {}, _gate_refusal_fallback(
+            _GATE_REASON_EVALUATION_FAILED_FALLBACK, "%s: %s" % (type(exc).__name__, exc))
 
 
 def _evaluate_tier_writer_dispatch_gate(profile_path, set_overrides=None, clear_roles=None):
     """Returns ``(violations, evaluation_error)`` — same posture as ``core_md``'s configured gate."""
-    import core_md
     import engine_pref
 
     prefs, gate_err = _read_engine_preferences_for_gate(profile_path=profile_path)
@@ -187,8 +200,8 @@ def _evaluate_tier_writer_dispatch_gate(profile_path, set_overrides=None, clear_
     try:
         candidate_tiers = _candidate_effective_tiers(profile_path, set_overrides, clear_roles)
     except Exception as exc:
-        return None, core_md.gate_refusal(
-            core_md.GATE_REASON_EVALUATION_FAILED, core_md.gate_refusal_detail(exc))
+        return None, _gate_refusal_fallback(
+            _GATE_REASON_EVALUATION_FAILED_FALLBACK, "%s: %s" % (type(exc).__name__, exc))
     return engine_pref.configured_dispatch_violations(prefs, candidate_tiers), None
 
 
@@ -277,14 +290,10 @@ def main(argv):
 
         violations, gate_err = _evaluate_tier_writer_dispatch_gate(profile, updates, clear_roles)
         if gate_err is not None:
-            import core_md
-
             sys.stdout.write(json.dumps({
                 "ok": False,
                 "reason": gate_err["reason"],
-                "violations": [
-                    core_md.gate_refusal(gate_err["reason"], gate_err["detail"]),
-                ],
+                "violations": [gate_err],
             }) + "\n")
             return 1
         if violations:
