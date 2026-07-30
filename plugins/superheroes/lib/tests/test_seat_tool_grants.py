@@ -7,16 +7,19 @@ plus a rule — so per CONVENTIONS §12.1 it ships the detector that would have 
 original escape. The guarantee has two independent failure axes, and a guard that reads
 only one does not bite when the other breaks:
 
-- **the tool grant** — a review seat that acquires `Bash` (or `Edit`) silently becomes
-  able to do the thing the rule forbids. Guarded by deriving the observe-only set from
-  the contents of `agents/`, so a NEW seat added with a shell fails unless its author
-  consciously adds it to `EXECUTION_SEATS`.
-- **the rule** — the prose that tells a seat it may never mutate, and that only a run it
-  actually made — never one it merely claims — is a receipt. A **bundled** seat cannot
-  run anything at all, so its every empirical statement is analysis, not a receipt; an
-  **external** seat may run read-only commands but never one that mutates. Guarded by
-  pinning the rule inside its one home (`rubric/review-base.md`'s `## Verification
-  rules` section) and asserting every pointer still resolves to it.
+- **the tool grant** — a seat's declared `tools:` grant, on the host where that grant is
+  a real constraint. Guarded by deriving the observe-only set from the contents of
+  `agents/`, so a NEW seat added with `Bash` or `Edit` fails unless its author consciously
+  adds it to `EXECUTION_SEATS`. These tests pin the **declared** grant shape — worth
+  pinning because it keeps the intended shape legible and makes an unintended widening
+  visible, not because a grant, by itself, enforces the rule below.
+- **the rule** — a review seat is **obliged** never to change the repository and never to
+  claim a run it did not make; whether an empirical statement is a receipt follows from
+  whether the seat actually ran it, never from the seat's kind. Guarded by pinning the
+  rule inside its one home (`rubric/review-base.md`'s `## Verification rules` section)
+  and asserting every pointer still resolves to it. The rule's own enforcement is the
+  obligation itself plus the orchestrator's before/after probe, with bounds recorded in
+  `LEDGERS.md` §3.
 
 Every assertion **fails closed**: a renamed or deleted file, an empty or unparseable
 frontmatter block, an absent `tools:` key, or a glob that matched nothing is a failure,
@@ -356,6 +359,43 @@ def test_check_runner_grant_is_the_constrained_shape():
             % (withheld, tools))
 
 
+# `check-runner`'s own ALLOWLIST (item 5, #719 round 5) — the same allowlist-not-denylist
+# reasoning as `OBSERVE_ONLY_ALLOWED_TOOLS` above: a two-name denylist of ("Edit", "Write")
+# would pass `Task` (a route to an unconstrained `general-purpose` child — this module
+# names it above as the sharpest omission), `MultiEdit`, or `NotebookEdit` in silence,
+# because none of those tokens equals `"Edit"` or `"Write"`. `check-runner` is exempt from
+# `OBSERVE_ONLY_ALLOWED_TOOLS` (it is on `EXECUTION_SEATS`), so without its own allowlist
+# nothing bounds what else its grant could hold.
+CHECK_RUNNER_ALLOWED_TOOLS = {"Read", "Grep", "Glob", "Bash"}
+
+
+def test_check_runner_grant_is_a_subset_of_its_own_allowlist():
+    """`check-runner`'s granted tools must be a SUBSET of `CHECK_RUNNER_ALLOWED_TOOLS`
+    (`Read`, `Grep`, `Glob`, `Bash`) — an ALLOWLIST, not a denylist of `("Edit", "Write")`.
+    That denylist would not bite on `Task`, `MultiEdit`, or `NotebookEdit`: none of those
+    tokens equals `"Edit"` or `"Write"`, so a seat holding any of them would pass a denylist
+    check while gaining exactly the capability-restoration or edit path the withheld grant
+    exists to keep out. The allowlist form fails a new token by name instead of passing it
+    by omission.
+    """
+    tools = _parse_tools(
+        _read_required(os.path.join(PLUGIN, "agents", "check-runner.md"),
+                       "the check-runner execution seat"),
+        "check-runner")
+    assert "Bash" in tools, (
+        "agents/check-runner.md no longer grants `Bash` (tools: %s). The seat exists to "
+        "RUN the orchestrator's enumerated command list; without a shell it cannot." % tools)
+    extra = sorted(set(tools) - CHECK_RUNNER_ALLOWED_TOOLS)
+    assert not extra, (
+        "agents/check-runner.md grants %s (tools: %s) outside its own ALLOWLIST %s. A "
+        "denylist of (\"Edit\", \"Write\") would miss this — `Task` can dispatch an "
+        "unconstrained `general-purpose` child holding `Bash`+`Edit`+`Write`, and "
+        "`MultiEdit`/`NotebookEdit` edit files without being named `Edit`. If this seat is "
+        "meant to hold that capability, that is a deliberate change to its declared shape "
+        "— widen CHECK_RUNNER_ALLOWED_TOOLS with the reason." % (
+            extra, tools, sorted(CHECK_RUNNER_ALLOWED_TOOLS)))
+
+
 # The receipt envelope's magic string. Both homes must agree on the literal token that
 # ties an output file to a command; this is a CONVENTIONS §11.2 copy-plus-drift TOKEN
 # pin, not a prose-semantics pin — it does not assert the two homes describe the
@@ -386,6 +426,57 @@ def test_ran_marker_token_present_in_both_homes():
             "(check-runner.md) and consumer (workhorse SKILL.md §8 item 3) must agree "
             "on this exact marker or an output file can no longer be tied to a command."
             % (rel, RAN_MARKER_TOKEN))
+
+
+# How close the literal token and its positional anchor must sit to count as the SAME
+# clause (item 6, #719 round 5), measured on today's text: the two are ~70-90 normalized
+# characters apart in both homes. 250 is generous enough to survive a modest rewording of
+# the sentence between them, while still being far narrower than "anywhere in the file" —
+# a stray, unrelated occurrence of either string elsewhere in a multi-thousand-character
+# file will not fall inside it by coincidence.
+RAN_MARKER_ANCHOR_WINDOW = 250
+
+
+def test_ran_marker_token_is_paired_with_its_first_line_anchor():
+    """Strengthens `test_ran_marker_token_present_in_both_homes` (item 6, #719 round 5).
+
+    That test's plain substring check would still pass a mutant that renamed the
+    producer's OPERATIVE prefix (say, to `# executed: `) while the literal string
+    `'# ran: '` kept sitting somewhere in unrelated explanatory prose, and the consumer
+    kept expecting `'# ran: '` — producer and consumer would disagree on the marker that
+    actually ties an output file to a command, yet the file-wide presence check would
+    stay green.
+
+    Checked before writing this: in BOTH homes today, the literal token and the phrase
+    "first line" sit inside the SAME sentence describing the marker's placement
+    (check-runner.md: "The first line of each stdout capture is the command you
+    actually ran... prefixed `# ran: `"; SKILL.md: "Each stdout capture opens with a
+    `# ran: <command>` line... read the first line of the capture"). That is a genuine,
+    non-vacuous pairing to require — not a coincidence of an unrelated "first line"
+    landing near an unrelated "# ran: " by chance in a much larger file.
+    """
+    for rel in (os.path.join("agents", "check-runner.md"),
+                os.path.join("skills", "workhorse", "SKILL.md")):
+        text = _norm(_read_required(
+            os.path.join(PLUGIN, rel),
+            "one of the two `# ran: ` receipt-envelope token homes"))
+        occurrences = [m.start() for m in re.finditer(re.escape(RAN_MARKER_TOKEN), text)]
+        assert occurrences, (
+            "%s: the literal token %r is gone (test_ran_marker_token_present_in_both_homes "
+            "already asserts this; this test cannot pair what is not there)."
+            % (rel, RAN_MARKER_TOKEN))
+        paired = any(
+            "first line" in text[max(0, i - RAN_MARKER_ANCHOR_WINDOW):
+                                   i + RAN_MARKER_ANCHOR_WINDOW]
+            for i in occurrences
+        )
+        assert paired, (
+            "%s: no occurrence of the literal token %r sits within %d characters of the "
+            "phrase 'first line'. Both homes state that phrase as the positional anchor "
+            "for the SAME receipt clause the token belongs to; a token that drifted into "
+            "unrelated prose (while the producer's real operative prefix silently "
+            "changed) would pass the plain presence check but not this pairing."
+            % (rel, RAN_MARKER_TOKEN, RAN_MARKER_ANCHOR_WINDOW))
 
 
 def test_no_mutation_no_claim_rule_lives_in_review_base_verification_rules():

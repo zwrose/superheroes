@@ -432,16 +432,18 @@ implementer work** — a probe's revert (a subagent's `git checkout --`) has wip
 uncommitted work five times across recent waves despite the memory of it, so the commit itself is the
 mechanical tripwire, not the memory of it (the mutation-probe sibling of §6's commit-between-orders rule).
 
-**Proof that requires changing code has exactly three sanctioned destinations, and a review seat is
-never one of them.** A review seat is **obliged** never to change the repository and never to claim a
-run it did not make — the base rubric's verification rule *"A review seat never changes the
-repository, and never claims a run it did not make."* (`rubric/review-base.md`) is the authoritative
-statement, and it is an obligation, **not** something a tool grant enforces (what a seat can do varies
-by host and dispatch shape, so never reason about a seat from its tool list). A review seat may
-legitimately ground a finding by *reading*, and where its dispatch permits a read-only command, by
-running one and quoting it. What it may never do is **change** anything — so asking any review seat
-for a mutation probe, a planted defect, or a written throwaway test is an **orchestrator defect**, and
-it will answer in the register of a receipt. When a claim needs a run no review seat may make:
+**Proof a review seat may not produce — a change to the repository, or a run the seat cannot or must
+not make — has exactly three sanctioned destinations, and a review seat is never one of them.** A
+review seat is **obliged** never to change the repository and never to claim a run it did not make —
+the base rubric's verification rule *"A review seat never changes the repository, and never claims a
+run it did not make."* (`rubric/review-base.md`) is the authoritative statement, and it is an
+obligation, **not** something a tool grant enforces (what a seat can do varies by host and dispatch
+shape, so never reason about a seat from its tool list). A review seat may legitimately ground a
+finding by *reading*, and where its dispatch permits a read-only command, by running one and quoting
+it. What it may never do is **change** anything — so putting a review seat in a position where its
+only compliant answer is *"I could not do this"* (the non-compliant answer being a false receipt) is
+the **orchestrator's error**: asking any review seat for a mutation probe, a planted defect, or a
+written throwaway test does exactly that. When a claim needs a run no review seat may make:
 
 1. **You run it** — the default, and the only place the *decisive* check ever runs.
 2. **A committed test, via an implementer order** — when the proof belongs in the repo as a durable
@@ -449,18 +451,25 @@ it will answer in the register of a receipt. When a claim needs a run no review 
 3. **A `check-runner` seat** (`agents/check-runner.md`) — when a run's sheer volume, noise, or
    duration is the problem. **You** author the exact command list; it runs them and writes each
    command's raw stdout, stderr, and exit code to paths you name **outside** the repo; and **you read
-   those files off disk**. Name a **byte ceiling** per command — its stated purpose is bulky runs, and
-   an unbounded capture can fill the volume. Each stdout capture opens with a `# ran: <command>` line;
-   for **each** command you authored, read the **first line** of the capture **at the path you named
-   for that command** and compare *that line* against *that command* — a `# ran:` line anywhere else
-   in a capture body is output, not a receipt, and is ignored. Its return prose is never the receipt.
-   It buys **context relief, not trust** — treat its output exactly as you treat an implementer's. A
-   capture is **redacted when you quote it** into the PR or any durable record — secrets, tokens,
-   private URLs, PII — the captures themselves are working artifacts outside the repo, not durable
-   receipts in themselves. Dispatch it at the
-   **`mechanical`** registry role (`--role mechanical`) and **never to an external engine**; it
-   renders no judgment, so no independence or maker-family constraint applies to it and none should be
-   bolted on. If the seat needs a stronger model to do its job, your command list was
+   those files off disk**. Name a **byte ceiling** per command **and an order-wide ceiling** across
+   the whole command set — an order may name any number of commands, and nothing else bounds their
+   sum. Each stdout capture opens with a `# ran: <command>` line; for **each** command you authored,
+   read the **first line** of the capture **at the path you named for that command** and compare
+   *that line* against *that command* — a `# ran:` line anywhere else in a capture body is output, not
+   a receipt, and is ignored. Its return prose is never the receipt. It buys **context relief, not
+   trust** — treat its output exactly as you treat an implementer's. The captures are
+   **working artifacts, not the durable receipt** — the PR record is: read them, quote what matters
+   (**redacted** — secrets, tokens, private URLs, PII), then **remove them once the verification
+   closes**. Dispatch it as a **host subagent** — the host's own dispatch action (`Agent` on Claude,
+   `spawn_agent` on Codex) — so the model gate you run (§7) resolves the **`mechanical`** registry
+   role against the **host's own vendor**, and **never dispatch it to an external engine**; it renders
+   no judgment, so no independence or maker-family constraint applies to it and none should be bolted
+   on. **Where `mechanical` has no sanctioned model on the current host, the route is simply
+   unavailable** — a stated limitation today: the seat is reachable only on hosts whose `mechanical`
+   role resolves. Everywhere else, **fall back to destination 1 (you run it yourself)** — it needs no
+   seat and is **always available** — and **disclose the fallback** wherever you record the dispatch.
+   **Never a park**: an unavailable check-runner route never blocks verification, because destination
+   1 always stands. If the seat needs a stronger model to do its job, your command list was
    under-enumerated — rewrite it, or run it yourself.
 
 **Probe the tree before and after every `check-runner` dispatch — this is your discipline, not a

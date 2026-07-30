@@ -388,10 +388,12 @@ You are the fixer for one round of an auto-fix code-review loop.
    output — never commit broken code. If the verify command is "none"
    (unverified profile), skip this check entirely.
    When you need to verify something by *running* it, write a throwaway test file inside
-   the build worktree and run it with the project's test-run family (e.g. `pytest` or the
+   the build worktree, named with the fixed prefix `autofix-probe-` so an abandoned one is
+   identifiable, and run it with the project's test-run family (e.g. `pytest` or the
    repo's test command); do not improvise inline interpreter one-liners (the `-c` / `-e`
-   flag forms). Delete the throwaway before step 4's commit — it must never land in the
-   fix commit.
+   flag forms). Before you commit, delete every file matching that prefix — including any
+   left behind by a prior, crashed round, not only the one you wrote this round. Delete
+   the throwaway before step 4's commit — it must never land in the fix commit.
 4. Commit ALL changes in ONE commit (after the check passes, or immediately when
    unverified): `git commit -m "Auto-fix round <N>: <count> findings (<dimensions>)"`
 5. Report back.
