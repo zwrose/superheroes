@@ -37,14 +37,20 @@ clauses.
    issue's ratified scope and is being handed to the advisor as a follow-up;
 6. the spine's own waiver sentence (``owner-only, risk stated, never a standing grant``) is not
    separately pinned — it uses different wording from every copy paraphrase.
-7. ``_file_section`` is deliberately **fence-blind**: a ````` ``` `````-fenced block inside a
-   guarded section that contains a heading-looking line will **truncate** the section (or, if it
-   repeats the target heading, be counted as a duplicate), so the guard **fails closed** with a
-   spurious CI break rather than a silent pass; this is an **accepted residual** (PR #727,
-   advisor-adjudicated): fence-awareness was implemented and **reverted** because it introduced a
-   silent-pass path, and a real fence parser is not funded against a latent problem; **latency
-   evidence:** all three guarded files carry **zero** ````` ``` ````` lines today; **revisit
-   trigger:** only if a guarded doctrine file ever legitimately needs a fenced block.
+7. ``_file_section`` is deliberately **fence-blind** — fence-awareness was implemented and
+   **reverted** (PR #727, advisor-adjudicated) because it introduced a **worse** silent-pass
+   path: an unclosed fence, or an even-count pair of indented ````` ``` ````` lines, suppressed
+   the section terminator so a later section's content could satisfy a clause. Fence-blindness
+   has **two** latent failure shapes, and they are **not both fail-closed**:
+   - **fail-closed:** a fenced block inside a guarded section whose heading-looking line is at
+     the **same or higher** level truncates the section (or, if it repeats the target heading,
+     is counted as a duplicate) → a loud, recoverable CI break;
+   - **fail-open:** a target heading appearing **only inside a fenced example** is matched, and
+     that example's body is returned — so if the real section were removed, clause checks could
+     pass against the example text.
+   **Latency evidence:** all three guarded files carry **zero** ````` ``` ````` lines today.
+   **Revisit trigger:** if a guarded doctrine file ever legitimately needs a fenced block, this
+   must be reconsidered — the choice then is a real fence parser, not either naive scan.
 
 Copy-holder disposition (§11.2 caveat — adding a copy means extending the table):
 
@@ -775,7 +781,13 @@ def test_negative_home_per_clause_not_row_union():
 
 
 def test_invariant_table_not_mutated_by_test_run():
-    """Running every test in this module must not mutate the live _INVARIANT_TABLE."""
+    """Detect persistent in-place mutation of _INVARIANT_TABLE across the test run.
+
+    Verified to catch mutations from earlier-declared tests and nested mutations inside a
+    row. Limits: cannot observe a mutation fully restored within an invocation, an even
+    number of self-cancelling mutations, or a test that also mutates the import-time
+    snapshot (_INVARIANT_TABLE_AT_IMPORT).
+    """
     current_module = globals()
     test_names = sorted(
         name for name in current_module
