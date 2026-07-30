@@ -87,8 +87,9 @@ are never holding the inventory in working memory.
 | the collector holds an item whose **proposing ordinal is two or more below this vet's ordinal** | an **escalation line** naming that item and stating plainly that **the owner batch is not happening** |
 
 The last row is the tripwire for this design's own load-bearing risk — the fallback quietly becoming
-the path. Each pending item's proposing-vet stamp is what makes its age inspectable, so the escalation
-is raised by the artifact rather than by your memory of having carried it.
+the path. Each pending item's **proposing ordinal** is what makes its age inspectable — a subtraction
+against this vet's ordinal, not a count of anything — so the escalation is raised by a number the
+artifacts carry rather than by your memory of having carried the item.
 
 **Known limit, carried knowingly:** a trigger is weaker than a check. A build record that omits a
 sequential-order run raises no field. You read the diff too, so the trigger is a second chance rather

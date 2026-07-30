@@ -235,7 +235,8 @@ the reviewer and the owner's authorization carry that check instead.**
      pointer:** ask the owner for the issue number and re-record it, because a duplicate orphans
      everything the first one holds. Nothing in the collector is lost while the pointer is — every
      pending item also lives in the receipt of the vet that proposed it, which is what makes recovery a
-     lookup rather than a reconstruction.      **Age is a subtraction over ordinals, never a count of artifacts.** Every vet has a **monotonic
+     lookup rather than a reconstruction.
+     **Age is a subtraction over ordinals, never a count of artifacts.** Every vet has a **monotonic
      ordinal** — one integer per vet, per project — which you keep in your durable memory (duty 8)
      alongside the collector pointer and **also write into each receipt**, so the sequence survives a
      lost memory: the next ordinal is **one more than the highest ordinal appearing in the collector or
@@ -244,8 +245,8 @@ the reviewer and the owner's authorization carry that check instead.**
      owed at **2 or more**. **Do not derive age by counting receipts, comments, or posts** — a corrected
      receipt is **edited in place**, so receipts are neither a monotonic register nor one-per-vet, and
      every counting rule this doctrine tried failed on that (owner-ratified ruling (a), 2026-07-30).
-     **An item the
-     reconciliation surfaces means the primary path failed for that item** — not routine throughput —
+     **An item the reconciliation surfaces means the primary path failed for that item** — not routine
+     throughput —
      and an item **still open two vets after it was proposed** is evidence the owner batch is not
      happening, which the receipt says plainly rather than re-listing as though carrying were normal.
      **The merged-PR backstop gets the same actor and the same trigger:** at vet, grep merged-PR bodies
