@@ -37,6 +37,14 @@ clauses.
    issue's ratified scope and is being handed to the advisor as a follow-up;
 6. the spine's own waiver sentence (``owner-only, risk stated, never a standing grant``) is not
    separately pinned — it uses different wording from every copy paraphrase.
+7. ``_file_section`` is deliberately **fence-blind**: a ````` ``` `````-fenced block inside a
+   guarded section that contains a heading-looking line will **truncate** the section (or, if it
+   repeats the target heading, be counted as a duplicate), so the guard **fails closed** with a
+   spurious CI break rather than a silent pass; this is an **accepted residual** (PR #727,
+   advisor-adjudicated): fence-awareness was implemented and **reverted** because it introduced a
+   silent-pass path, and a real fence parser is not funded against a latent problem; **latency
+   evidence:** all three guarded files carry **zero** ````` ``` ````` lines today; **revisit
+   trigger:** only if a guarded doctrine file ever legitimately needs a fenced block.
 
 Copy-holder disposition (§11.2 caveat — adding a copy means extending the table):
 
@@ -45,6 +53,7 @@ Copy-holder disposition (§11.2 caveat — adding a copy means extending the tab
 - **``skills/workhorse/SKILL.md``** — resolve-upward and not-engaged-never-passes only; deliberately
   excluded from the waiver-bounds row because micro is the showrunner's lane, not an oversight.
 """
+import copy
 import os
 import re
 
@@ -232,33 +241,21 @@ def _heading_level(line):
     return len(match.group(1))
 
 
+# Deliberately fence-blind (blind spot 7): fence-awareness was tried and reverted in PR #727
+# because it introduced a silent-pass path — an unclosed or mis-classified fence suppresses the
+# section terminator and lets a later section's content satisfy a clause; fence-blindness fails
+# closed instead.
 def _file_section(rel, heading, read_text=None):
     """Extract a named section from any plugin file.
 
     Exact stripped-line heading match; section runs to the next heading of same-or-higher
-    level. Raises if the heading is absent or appears more than once. Heading detection
-    ignores lines inside ``` fenced blocks (fence lines themselves are not headings).
+    level. Raises if the heading is absent or appears more than once.
     """
     if read_text is None:
         read_text = _read_plugin
     text = read_text(rel)
     lines = text.splitlines()
-    fence_count = sum(1 for line in lines if line.lstrip().startswith("```"))
-    if fence_count % 2 != 0:
-        raise RuntimeError(
-            f"{rel}: odd number ({fence_count}) of ``` fence markers — "
-            "section boundaries cannot be determined"
-        )
-    in_fence = False
-    indices = []
-    for i, line in enumerate(lines):
-        if line.lstrip().startswith("```"):
-            in_fence = not in_fence
-            continue
-        if in_fence:
-            continue
-        if line.strip() == heading:
-            indices.append(i)
+    indices = [i for i, line in enumerate(lines) if line.strip() == heading]
     if len(indices) == 0:
         raise RuntimeError(f"{rel}: heading {heading!r} not found")
     if len(indices) > 1:
@@ -268,15 +265,8 @@ def _file_section(rel, heading, read_text=None):
     start = indices[0]
     start_level = _heading_level(lines[start])
     end = len(lines)
-    in_fence = False
     for i in range(start + 1, len(lines)):
-        line = lines[i]
-        if line.lstrip().startswith("```"):
-            in_fence = not in_fence
-            continue
-        if in_fence:
-            continue
-        level = _heading_level(line)
+        level = _heading_level(lines[i])
         if level is not None and level <= start_level:
             end = i
             break
@@ -778,71 +768,18 @@ def test_negative_home_per_clause_not_row_union():
         _check_home_clauses(table, read_text)
 
 
-def test_fence_heading_inside_section_does_not_truncates():
-    # Mutant killed: revert `_file_section` to fence-blind scanning and this must fail.
-    synthetic_text = "\n".join([
-        "## Your duties",
-        "before",
-        "```md",
-        "## Example inside a fence",
-        "```",
-        "CLAUSE_AFTER_FENCE",
-        "## Next real section",
-        "later",
-    ])
-
-    def read_text(_rel):
-        return synthetic_text
-
-    result = _file_section("synthetic.md", "## Your duties", read_text)
-    assert "CLAUSE_AFTER_FENCE" in result
-
-
-def test_fence_heading_does_not_count_as_duplicate():
-    # Mutant killed: revert `_file_section` to fence-blind scanning and this must fail.
-    synthetic_text = "\n".join([
-        "## Your duties",
-        "real section content",
-        "```",
-        "## Your duties",
-        "```",
-        "## Next section",
-    ])
-
-    def read_text(_rel):
-        return synthetic_text
-
-    result = _file_section("synthetic.md", "## Your duties", read_text)
-    assert "real section content" in result
-
-
-def test_unbalanced_fence_raises():
-    # Mutant killed: remove the unbalanced-fence refusal and this test must fail.
-    def read_text(_rel):
-        return "## S\na\n```\n"
-
-    with pytest.raises(
-        RuntimeError,
-        match=r"odd number \(1\) of ``` fence markers — section boundaries cannot be determined",
-    ):
-        _file_section("synthetic.md", "## S", read_text)
-
-
-def test_unclosed_fence_cross_section_leak_raises():
-    # Mutant killed: remove the unbalanced-fence refusal and this test must fail.
-    synthetic_text = "\n".join([
-        "## S",
-        "a",
-        "```",
-        "## Other section",
-        "LEAKED_FROM_OTHER",
-    ])
-
-    def read_text(_rel):
-        return synthetic_text
-
-    with pytest.raises(RuntimeError):
-        _file_section("synthetic.md", "## S", read_text)
+def test_invariant_table_not_mutated_by_test_run():
+    """Running every test in this module must not mutate the live _INVARIANT_TABLE."""
+    baseline = copy.deepcopy(_INVARIANT_TABLE)
+    current_module = globals()
+    test_names = sorted(
+        name for name in current_module
+        if name.startswith("test_") and name != "test_invariant_table_not_mutated_by_test_run"
+    )
+    for order in (test_names, list(reversed(test_names))):
+        for name in order:
+            current_module[name]()
+    assert _INVARIANT_TABLE == baseline
 
 
 def test_negative_section_scoped_copy_check_rejects_out_of_section_match():
