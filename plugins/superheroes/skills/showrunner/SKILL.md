@@ -228,13 +228,17 @@ the reviewer and the owner's authorization carry that check instead.**
      moment guaranteed to recur in any project whatever its release model: an active project touches the
      collector as often as PRs are vetted, and a quiet project has nothing accruing.
      **Locating it is part of the duty, and failing to locate it is never `None`.** The collector is one
-     open issue per project; **record its issue pointer in the project's durable advisor record the first
-     time you open or find it**, so the next session resolves it by lookup rather than by search. If you
-     cannot resolve it, the pending field says so as a **disclosed degradation** — never a bare `None`,
-     which is indistinguishable from an empty collector, and never a second collector opened alongside
-     the first. **Age is counted in vets, from the artifacts:** each pending item carries the vet that
+     open issue per project; **record its issue pointer in your durable memory (duty 8) the first time you
+     open or find it**, so the next session resolves it by lookup rather than by search. If you cannot
+     resolve it, the pending field says so as a **disclosed degradation** — never a bare `None`, which is
+     indistinguishable from an empty collector. **Do not open a second collector to escape a lost
+     pointer:** ask the owner for the issue number and re-record it, because a duplicate orphans
+     everything the first one holds. Nothing in the collector is lost while the pointer is — every
+     pending item also lives in the receipt of the vet that proposed it, which is what makes recovery a
+     lookup rather than a reconstruction. **Age is counted in vets, from the artifacts:** each pending item carries the vet that
      proposed it, and vet receipts are themselves greppable by their marker, so the number of vets since
-     an item was proposed is a count of the receipts posted after it **plus the vet you are in** — not a
+     an item was proposed is a count of the receipts posted after **the proposing vet's own receipt**,
+     **plus the vet you are in** — not a
      memory. Count the current vet: your own receipt has not posted yet when you reconcile, so counting
      only already-posted receipts reports one fewer and fires the escalation a vet late. **An item the
      reconciliation surfaces means the primary path failed for that item** — not routine throughput —
