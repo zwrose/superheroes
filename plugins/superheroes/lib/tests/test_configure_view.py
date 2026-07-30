@@ -290,3 +290,43 @@ def test_render_review_panel_seat_pins_none_when_all_rejected(tmp_path):
     assert "Review-panel seat pins:" in screen
     assert "  (none; seats rotate over live vendors)" in screen
     assert "invalid model (must be a non-empty string)" in screen
+
+
+def test_render_shows_show_it_surface_when_declared(tmp_path):
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    cdir = os.path.join(str(tmp_path), ".claude", "superheroes")
+    os.makedirs(cdir, exist_ok=True)
+    body = "**Level:** command\n**What the owner does:** pytest -q"
+    sc.atomic_write(
+        os.path.join(cdir, "core.md"),
+        core_md.render_core(
+            {"verifyCommand": "pytest", "stackTags": ["py"],
+             "threatModel": "single-user", "patterns": "x",
+             "showItSurface": body},
+            "confirmed", "2026-06-27", "2026-06-27",
+        ),
+    )
+    screen = cv.render(str(tmp_path), root=root)
+    assert "### Show-it surface" in screen
+    assert "**Level:** command" in screen
+    assert "pytest -q" in screen
+
+
+def test_render_shows_not_declared_line_when_show_it_absent(tmp_path):
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    cdir = os.path.join(str(tmp_path), ".claude", "superheroes")
+    os.makedirs(cdir, exist_ok=True)
+    sc.atomic_write(
+        os.path.join(cdir, "core.md"),
+        core_md.render_core(
+            {"verifyCommand": "pytest", "stackTags": ["py"],
+             "threatModel": "single-user", "patterns": "x"},
+            "confirmed", "2026-06-27", "2026-06-27",
+        ),
+    )
+    screen = cv.render(str(tmp_path), root=root)
+    assert '(not declared — the presentation level for this project is "none")' in screen

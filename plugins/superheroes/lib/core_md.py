@@ -25,6 +25,10 @@ CONFIG_ABSENT = "absent"
 CONFIG_OK = "ok"
 CONFIG_UNREADABLE = "unreadable"
 GATE_REASON_UNREADABLE = "core-md-unreadable"
+SHOW_IT_REASON_ABSENT = "core-md-absent"
+SHOW_IT_REASON_UNPARSEABLE = "core-md-unparseable"
+SHOW_IT_REASON_PROSE_FORBIDDEN = "show-it-prose-forbidden"
+SHOW_IT_REASON_ROUND_TRIP = "show-it-round-trip-refused"
 
 CoreGateConfig = collections.namedtuple("CoreGateConfig", "prefs status detail")
 
@@ -42,14 +46,20 @@ def render_core(facts, status, created, updated):
         "stackTags": list(facts.get("stackTags") or []),
         "enginePreferences": dict(facts.get("enginePreferences") or {}),
     }
+    show_it = (facts.get("showItSurface") or "").strip()
+    show_it_block = ""
+    if show_it:
+        show_it_block = "## Show-it surface\n\n%s\n\n" % show_it
     return (
         "<!-- superheroes-core: schemaVersion=%d status=%s created=%s updated=%s -->\n\n"
         "## Threat model\n\n%s\n\n"
         "## Canonical patterns\n\n%s\n\n"
+        "%s"
         "```json superheroes-core\n%s\n```\n"
         % (SCHEMA_VERSION, status, created, updated,
            (facts.get("threatModel") or "").strip(),
            (facts.get("patterns") or "").strip(),
+           show_it_block,
            json.dumps(block, indent=2))
     )
 
@@ -106,6 +116,7 @@ def parse_core(text):
         "enginePreferences": dict(prefs) if isinstance(prefs, dict) else {},
         "threatModel": _section(text, "Threat model"),
         "patterns": _section(text, "Canonical patterns"),
+        "showItSurface": _section(text, "Show-it surface"),
         "created": created,
         "updated": updated,
     }
@@ -277,6 +288,7 @@ def read(cwd, root=None):
         "enginePreferences": facts["enginePreferences"],
         "threatModel": facts["threatModel"],
         "patterns": facts["patterns"],
+        "showItSurface": facts["showItSurface"],
         "behind": behind,
         "created": facts["created"],
         "updated": facts["updated"],
@@ -318,6 +330,7 @@ def _diff_proposals(detected, recorded):
     """Per-field proposals where the detected value DIFFERS from the recorded one.
     A detected value equal to or absent (None / empty) is a reuse, not a proposal (FR-6)."""
     proposals = []
+    # Show-it surface is owner-declared prose only — never auto-detected from a repo.
     for field in ("verifyCommand", "stackTags", "threatModel", "patterns", "enginePreferences"):
         det = detected.get(field)
         if det is None or det == "" or det == []:
@@ -439,6 +452,110 @@ def write(cwd, facts, status, *, root=None, now=None):
         record = read(cwd, root)
         clear_pending(cwd, root)
         return {"action": "written", "record": record, "proposals": []}
+
+
+_SHOW_IT_HEADING = re.compile(r"^\s*##\s+Show-it surface\s*$", re.IGNORECASE)
+_TOP_LEVEL_SECTION = re.compile(r"^\s*##\s+")
+_JSON_FENCE_LINE = re.compile(r"^\s*```json superheroes-core\s*$")
+
+
+def _render_show_it_surface_block(prose):
+    body = (prose or "").strip()
+    if not body:
+        return ""
+    return "## Show-it surface\n\n" + body + "\n\n"
+
+
+def _show_it_prose_forbidden(prose):
+    """Prose must not carry its own top-level section or json fence (parse_core safety)."""
+    for line in (prose or "").splitlines():
+        if _TOP_LEVEL_SECTION.match(line) or _JSON_FENCE_LINE.match(line):
+            return True
+    return False
+
+
+def _json_block_regions(text):
+    """Every ```json superheroes-core``` fenced region, including fences (round-trip guard)."""
+    return [m.group(0) for m in _JSON_BLOCK.finditer(text or "")]
+
+
+def _show_it_json_blocks_unchanged(orig_text, new_text):
+    """True when the candidate leaves every json block byte-identical (count + content)."""
+    return _json_block_regions(orig_text) == _json_block_regions(new_text)
+
+
+def replace_show_it_surface_section(text, prose):
+    """Create, replace, or clear only the `## Show-it surface` section; preserve all else."""
+    new_block = _render_show_it_surface_block(prose)
+    lines = (text or "").splitlines(keepends=True)
+    start = None
+    for i, line in enumerate(lines):
+        if _SHOW_IT_HEADING.match(line):
+            start = i
+            break
+    if start is None:
+        if not new_block:
+            return text
+        insert_at = len(lines)
+        for i, line in enumerate(lines):
+            if _JSON_FENCE_LINE.match(line):
+                insert_at = i
+                break
+        return "".join(lines[:insert_at]) + new_block + "".join(lines[insert_at:])
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        if _TOP_LEVEL_SECTION.match(lines[j]) or _JSON_FENCE_LINE.match(lines[j]):
+            end = j
+            break
+    if not new_block:
+        return "".join(lines[:start]) + "".join(lines[end:])
+    return "".join(lines[:start]) + new_block + "".join(lines[end:])
+
+
+def write_show_it_surface(cwd, prose, *, root=None):
+    """Lock-guarded surgical write of the Show-it surface prose section only. Fail-closed on
+    corrupt core, forbidden prose, or a round-trip that would change any other parsed field."""
+    if mode_registry.ensure_project_store(cwd, root) is None:
+        mark_pending(cwd, root, detail={"reason": "store-unwritable"})
+        return {"action": "deferred"}
+    with mode_registry.config_lock(cwd, root) as got:
+        if not got:
+            mark_pending(cwd, root, detail={"reason": "lock-contended"})
+            return {"action": "deferred"}
+        record = read(cwd, root)
+        if record is None:
+            cls = _classify_core_md_at_path(core_path(cwd, root))
+            if cls.status == CONFIG_ABSENT:
+                return {"action": "refused", "reason": SHOW_IT_REASON_ABSENT}
+            return {"action": "refused", "reason": SHOW_IT_REASON_UNPARSEABLE}
+        if record.get("behind"):
+            return {"action": "behind", "record": record}
+        path = core_path(cwd, root)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError:
+            mark_pending(cwd, root, detail={"reason": "store-unwritable"})
+            return {"action": "deferred"}
+        orig = parse_core(text)
+        if orig is None:
+            return {"action": "refused", "reason": SHOW_IT_REASON_UNPARSEABLE}
+        body = prose if prose is not None else ""
+        if body.strip() and _show_it_prose_forbidden(body):
+            return {"action": "refused", "reason": SHOW_IT_REASON_PROSE_FORBIDDEN}
+        new_text = replace_show_it_surface_section(text, body)
+        if new_text == text:
+            return {"action": "noop"}
+        new_parsed = parse_core(new_text)
+        if new_parsed is None or not _show_it_json_blocks_unchanged(text, new_text):
+            return {"action": "refused", "reason": SHOW_IT_REASON_ROUND_TRIP}
+        try:
+            store_core.atomic_write(path, new_text)
+        except OSError:
+            mark_pending(cwd, root, detail={"reason": "store-unwritable"})
+            return {"action": "deferred"}
+        clear_pending(cwd, root)
+        return {"action": "written"}
 
 
 # Recognized headings per hero. Shared-fact headings live in core.md; hero headings → the
@@ -982,7 +1099,8 @@ def confirm(cwd, *, root=None, now=None):
             return {"action": "behind", "record": existing}
         if existing.get("status") == "confirmed":
             return {"action": "noop", "record": existing}
-        facts = {k: existing[k] for k in ("verifyCommand", "stackTags", "threatModel", "patterns")}
+        facts = {k: existing[k] for k in (
+            "verifyCommand", "stackTags", "threatModel", "patterns", "showItSurface")}
         created = existing.get("created") or stamp
         try:
             store_core.atomic_write(core_path(cwd, root),
@@ -1076,6 +1194,9 @@ def main(argv):
     cp = sub.add_parser("confirm")  # FR-18 owner-confirm: core + every present hero layer
     cp.add_argument("--cwd", default=".")
     cp.add_argument("--root", default=None)
+    sip = sub.add_parser("write-show-it")  # Show-it surface prose section only
+    sip.add_argument("--cwd", default=".")
+    sip.add_argument("--root", default=None)
     args = ap.parse_args(argv)
     if args.cmd == "resolve":
         try:
@@ -1103,6 +1224,11 @@ def main(argv):
         try:
             out = write_layer(args.cwd, args.hero, sys.stdin.read(), args.status,
                               root=args.root, rubric_version=args.rubric_version)
+        except Exception:
+            out = {"action": "deferred"}
+    elif args.cmd == "write-show-it":
+        try:
+            out = write_show_it_surface(args.cwd, sys.stdin.read(), root=args.root)
         except Exception:
             out = {"action": "deferred"}
     else:  # confirm

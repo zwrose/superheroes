@@ -1,6 +1,6 @@
 ---
 name: grounding-seat
-description: Internal grounding seat (NOT one of the five risk-domain review lenses). Checks the PR's self-claims — tests-run assertions, the DoD disposition table, "verify passed" — against the actual repo, and emits findings when a self-claim is unsupported. Formalized ahead of live dispatch; its live-dispatch consumer is #510.
+description: Internal grounding seat (NOT one of the five risk-domain review lenses). Checks the PR's self-claims — tests-run assertions, the DoD disposition table, "verify passed" — against the actual repo, and emits findings when a self-claim is unsupported. Formalized ahead of live dispatch; its live-dispatch consumer is #609.
 tools: Read, Grep, Glob, Write
 ---
 

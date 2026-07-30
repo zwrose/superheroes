@@ -16,6 +16,7 @@ are gone with them; no lib/*.js copy-holders remain):
 - Codex translation/effort policy (docs + adapter default) (home: engine_pref.py)
 - Model-registry ids + family vocabulary                (home: model_registry.py)
 - Base-guard refusal reasons                           (home: review_base_guard.py)
+- Omission floor + PR-body marker semantics (§10.7)   (home: CONVENTIONS.md §10.7)
 
 The reviewer-roster and docs-location clusters live in their topical sibling guards
 (test_dispatch_tables.py, test_definition_doc.py).
@@ -297,3 +298,116 @@ def test_retired_model_tokens_absent_from_lib():
     ]
     hits = _scan_retired_tokens(py_paths + doc_paths)
     assert not hits, "retired model token reappeared: %r" % hits
+
+
+# --- Cluster: omission floor (CONVENTIONS §10.7 authoritative home) ----------
+
+def _conventions_section_10_7():
+    text = _read("../../CONVENTIONS.md")
+    m = re.search(
+        r"### 10\.7 PR-body honesty markers.*?(?=\n### |\n## 11\.)",
+        text,
+        re.DOTALL,
+    )
+    assert m, "CONVENTIONS §10.7 section not found (renumbered or moved?)"
+    return m.group(0)
+
+
+def _workhorse_section_11():
+    text = _read("skills/workhorse/SKILL.md")
+    m = re.search(r"## 11\. Hand back the ready PR.*?(?=\n## 12\.)", text, re.DOTALL)
+    assert m, "workhorse SKILL.md §11 not found"
+    return m.group(0)
+
+
+def _review_discipline_ship_phase_honesty():
+    text = _read("rubric/review-discipline.md")
+    m = re.search(r"## Ship-phase honesty.*?(?=\n## )", text, re.DOTALL)
+    assert m, "review-discipline.md Ship-phase honesty section not found"
+    return m.group(0)
+
+
+def _review_code_step_8():
+    text = _read("skills/review-code/SKILL.md")
+    m = re.search(
+        r"8\. \*\*PR-body honesty check.*?(?=\n9\. |\nDetermine the verdict)",
+        text,
+        re.DOTALL,
+    )
+    assert m, "review-code SKILL.md step 8 not found"
+    return m.group(0)
+
+
+def _omission_floor_expectations_from_home(home):
+    """Parse §10.7's three floor rows, marker names, and missing-marker rule (authoritative)."""
+    m = re.search(
+        r"under `## What we're accepting`:\s*\n\n(.*?)\n\nA \*\*missing\*\*",
+        home,
+        re.DOTALL,
+    )
+    assert m, "§10.7 omission floor rows not found (moved or reworded?)"
+    block = m.group(1)
+    rows = re.findall(
+        r"^\d+\.\s+(.+?)(?=^\d+\.\s+|\Z)",
+        block,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert len(rows) == 3, "expected three omission floor rows, got %r" % rows
+    row_terms = []
+    for row in rows:
+        terms = [t.strip() for t in re.findall(r"\*\*([^*]+)\*\*", row)]
+        assert terms, "no bold load-bearing terms in floor row: %r" % row
+        row_terms.append(terms)
+    markers = re.findall(r"(<!-- superheroes:[^>]+ -->)", home)
+    assert set(markers) == {
+        "<!-- superheroes:build-record -->",
+        "<!-- superheroes:degradations -->",
+    }, "unexpected §10.7 marker set: %r" % markers
+    assert re.search(
+        r"A \*\*missing\*\* `<!-- superheroes:build-record -->`.*?review finding",
+        home,
+        re.DOTALL,
+    ), "§10.7 missing-marker-as-finding rule not found"
+    assert re.search(
+        r"marker absence and \*\*None\*\* are different states",
+        home,
+    ), "§10.7 None vs marker-absence rule not found"
+    return row_terms, markers
+
+
+def _assert_omission_floor_matches_home(copy_text, label, home):
+    row_terms, markers = _omission_floor_expectations_from_home(home)
+    lower = copy_text.lower()
+    missing = []
+    for i, terms in enumerate(row_terms, 1):
+        for term in terms:
+            if term.lower() not in lower:
+                missing.append("row%d term %r" % (i, term))
+    for marker in markers:
+        if marker not in copy_text:
+            missing.append("marker %r" % marker)
+    if not re.search(
+        r"missing[\s\S]{0,400}?superheroes:build-record[\s\S]{0,400}?"
+        r"(?:review finding|itself[\s\S]{0,40}?finding|same finding shape)",
+        copy_text,
+        re.IGNORECASE,
+    ):
+        missing.append("missing-marker-as-finding rule")
+    if "none" not in lower or ("absent" not in lower and "absence" not in lower):
+        missing.append("None vs marker absence")
+    assert not missing, (
+        "%s: omission floor substance drift — missing: %r" % (label, missing)
+    )
+
+
+def test_omission_floor_matches_conventions_10_7():
+    """§11: the omission floor and marker semantics in every copy-holder match CONVENTIONS §10.7."""
+    home = _conventions_section_10_7()
+
+    copies = (
+        ("rubric/review-discipline.md (Ship-phase honesty)", _review_discipline_ship_phase_honesty()),
+        ("skills/workhorse/SKILL.md §11", _workhorse_section_11()),
+        ("skills/review-code/SKILL.md step 8", _review_code_step_8()),
+    )
+    for label, text in copies:
+        _assert_omission_floor_matches_home(text, label, home)

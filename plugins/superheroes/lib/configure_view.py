@@ -282,6 +282,13 @@ def render(cwd, *, root=None):
         out.append("")
         out.append("### Threat model")
         out.append((core.get("threatModel") or "(none)").strip())
+        out.append("")
+        out.append("### Show-it surface")
+        show_it = (core.get("showItSurface") or "").strip()
+        if show_it:
+            out.append(show_it)
+        else:
+            out.append('(not declared — the presentation level for this project is "none")')
         prefs = core.get("enginePreferences")
         prefs = prefs if isinstance(prefs, dict) else {}
         out.append("")
