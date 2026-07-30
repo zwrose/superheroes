@@ -148,6 +148,15 @@ def _repo_root(cwd):
     if res.status == store_core.GIT_OK:
         return os.path.realpath(res.out) if res.out else os.path.realpath(cwd)
     if store_core.not_a_repository(res):
+        try:
+            git_ancestor = store_core.git_dot_entry_ancestor(cwd)
+        except OSError as exc:
+            raise RepoRootUnavailable(
+                "cannot determine repository root at %s: %s" % (cwd, exc))
+        if git_ancestor is not None:
+            raise RepoRootUnavailable(
+                "repository root indeterminate at %s: .git present at %s but git declined: %s"
+                % (cwd, git_ancestor, res.detail))
         return os.path.realpath(cwd)
     raise RepoRootUnavailable(
         "git declined rev-parse --show-toplevel at %s: %s" % (cwd, res.detail))

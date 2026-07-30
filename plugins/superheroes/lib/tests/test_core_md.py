@@ -1902,15 +1902,52 @@ def test_repo_root_raises_on_dubious_ownership(tmp_path, monkeypatch):
         CM._repo_root(str(tmp_path))
 
 
-def test_repo_root_raises_on_permission_denied(tmp_path, monkeypatch):
-    class _Perm:
-        returncode = 128
-        stdout = ""
-        stderr = "fatal: cannot open '/fake/.git': Permission denied"
+def test_repo_root_raises_on_unreadable_git_dir(tmp_path):
+    repo = str(tmp_path / "repo")
+    sub = os.path.join(repo, "pkg", "deep")
+    os.makedirs(sub)
+    subprocess.run(["git", "-C", repo, "init", "-q"], check=True)
+    git_dir = os.path.join(repo, ".git")
+    try:
+        os.chmod(git_dir, 0)
+        if os.access(git_dir, os.R_OK):
+            pytest.skip("chmod 000 on .git does not deny access for this user")
+        with pytest.raises(CM.RepoRootUnavailable) as excinfo:
+            CM._repo_root(sub)
+        assert ".git present at" in str(excinfo.value)
+    finally:
+        os.chmod(git_dir, 0o755)
 
-    monkeypatch.setattr("subprocess.run", lambda *a, **kw: _Perm())
-    with pytest.raises(CM.RepoRootUnavailable):
-        CM._repo_root(str(tmp_path))
+
+def test_repo_root_raises_on_dead_gitdir_pointer(tmp_path):
+    import shutil
+
+    repo = str(tmp_path / "repo")
+    sub = os.path.join(repo, "pkg", "deep")
+    os.makedirs(sub)
+    subprocess.run(["git", "-C", repo, "init", "-q"], check=True)
+    shutil.rmtree(os.path.join(repo, ".git"))
+    open(os.path.join(repo, ".git"), "w").write("gitdir: /nonexistent/gitdir\n")
+    with pytest.raises(CM.RepoRootUnavailable) as excinfo:
+        CM._repo_root(sub)
+    assert ".git present at" in str(excinfo.value)
+
+
+def test_repo_root_raises_on_missing_git_head(tmp_path):
+    repo = str(tmp_path / "repo")
+    sub = os.path.join(repo, "pkg", "deep")
+    os.makedirs(sub)
+    subprocess.run(["git", "-C", repo, "init", "-q"], check=True)
+    os.remove(os.path.join(repo, ".git", "HEAD"))
+    with pytest.raises(CM.RepoRootUnavailable) as excinfo:
+        CM._repo_root(sub)
+    assert ".git present at" in str(excinfo.value)
+
+
+def test_repo_root_non_git_directory_returns_realpath_cwd(tmp_path):
+    plain = str(tmp_path / "not-a-repo")
+    os.makedirs(plain)
+    assert CM._repo_root(plain) == os.path.realpath(plain)
 
 
 def test_read_none_when_repo_root_unavailable(tmp_path, monkeypatch):

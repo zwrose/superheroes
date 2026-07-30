@@ -67,6 +67,31 @@ def not_a_repository(res):
     return "not a git repository" in detail or "not a git repo" in detail
 
 
+def git_dot_entry_ancestor(cwd):
+    """Nearest ancestor directory containing a ``.git`` entry, or None.
+
+    Uses ``lstat`` so a dangling ``.git`` symlink or an unreadable-but-present ``.git``
+    directory still counts — only the entry's existence is tested, not readability.
+
+    Returns the ancestor directory path (the parent of ``.git``), not the ``.git`` path
+    itself.  Raises ``OSError`` when ``cwd`` cannot be resolved or the walk cannot
+    complete (untraversable component).
+    """
+    path = os.path.realpath(cwd)
+    while True:
+        try:
+            os.lstat(os.path.join(path, ".git"))
+            return path
+        except FileNotFoundError:
+            pass
+        except OSError:
+            raise
+        parent = os.path.dirname(path)
+        if parent == path:
+            return None
+        path = parent
+
+
 def run_git_result(cwd, *args):
     """`run_git` plus WHY there is no output (issue #699 rider 11).
 
