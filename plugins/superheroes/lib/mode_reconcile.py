@@ -58,13 +58,12 @@ def gather_signals(cwd, root=None):
     # --- #81: core.md calibration drift (all disk-derived; only dismissal is durable) ---
     try:
         import core_md
-        core_p = core_md.core_path(cwd, root)
-        core_exists = os.path.exists(core_p)
         core_rec = core_md.read(cwd, root)
+        core_status = core_md.engine_preferences_for_gate(cwd=cwd, root=root).status
     except Exception:
         # Fail-open: a broken core.md read must never abort the whole signal-gather and
         # suppress the other (registry/doc-policy) signals — degrade this block to "no core.md".
-        core_p, core_exists, core_rec = None, False, None
+        core_status, core_rec = None, None
 
     if core_rec is not None:
         if core_rec.get("behind"):
@@ -74,8 +73,8 @@ def gather_signals(cwd, root=None):
         elif core_rec.get("status") == "provisional":
             sigs.append({"type": "core-md-provisional",
                          "identity": _sig_id("core-md-provisional"), "detail": {}})
-    elif core_exists:
-        # a core.md file is present but did not parse → corrupt (UFR-1); NOT a greenfield.
+    elif core_status == core_md.CONFIG_UNREADABLE:
+        # accessor says core.md is present but unreadable (corrupt, dangling symlink, etc.) — NOT greenfield.
         sigs.append({"type": "core-md-unreadable",
                      "identity": _sig_id("core-md-unreadable"), "detail": {}})
 

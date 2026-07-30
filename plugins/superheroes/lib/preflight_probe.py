@@ -120,31 +120,41 @@ def aggregate(results):
     return {"go": go, "blocking": blocking, "checked": checked, "na": na}
 
 
+def _dispatch_calibration_read_error_marker(reason, detail):
+    return [{"role": "*", "engine": None, "model": None,
+             "readError": core_md.gate_refusal_line(
+                 core_md.gate_refusal(reason, detail))}]
+
+
 def dispatch_calibration(cwd=None, root=None, prefs=None, tiers=None):
     """The OBSERVABILITY readout: the effective engine + model per v2 dispatch role, for the
     build brief + PR provenance. `prefs`/`tiers` are a unit-test seam (no disk); when either is
-    omitted this reads the real project calibration — the RAW enginePreferences (via `core_md.read`,
-    NOT `engine_pref.load_engine_prefs`'s normalized output: an absent `briefCheck` must stay ABSENT
-    so `resolve_engine` applies the codex default, whereas the normalized 'claude' would suppress it)
-    and `model_tier_overrides.effective_tiers`. Never raises — any read failure falls open to an
-    empty readout, exactly like the resolvers it calls."""
+    omitted this reads the real project calibration via ``core_md.engine_preferences_for_gate``
+    (absent/ok/unreadable). On ``CONFIG_OK`` the RAW ``enginePreferences`` from the accessor are
+    used (NOT ``engine_pref.load_engine_prefs``'s normalized output: an absent ``briefCheck`` must
+    stay ABSENT so ``resolve_engine`` applies the codex default, whereas the normalized 'claude'
+    would suppress it). On ``CONFIG_UNREADABLE`` a single marker row carries ``readError`` instead
+    of defaulted rows. Never raises — any read failure returns that marker, not an empty list."""
     try:
         if prefs is None:
-            raw = core_md.read(cwd, root)
-            prefs = (raw or {}).get("enginePreferences")
+            cfg = core_md.engine_preferences_for_gate(cwd=cwd, root=root)
+            if cfg.status == core_md.CONFIG_UNREADABLE:
+                return _dispatch_calibration_read_error_marker(
+                    core_md.GATE_REASON_UNREADABLE, cfg.detail)
+            prefs = cfg.prefs if cfg.status == core_md.CONFIG_OK else {}
             prefs = prefs if isinstance(prefs, dict) else {}
         if tiers is None:
             tiers = model_tier_overrides.effective_tiers(
                 model_tier_overrides.resolve_profile_path(cwd, root))
         return engine_pref.dispatch_calibration_rows(prefs, tiers)
-    except Exception:
-        return []
+    except Exception as exc:
+        return _dispatch_calibration_read_error_marker(type(exc).__name__, exc)
 
 
 def _dispatch_selftest_config(cwd=None, root=None):
     """prefs/tiers bundle for dispatch_selftest leg 5 — reads engine prefs via
-    ``core_md.engine_preferences_for_gate`` (absent/ok/unreadable). ``dispatch_calibration`` has
-    not been migrated; it still uses ``core_md.read`` and treats unreadable as absent."""
+    ``core_md.engine_preferences_for_gate`` (absent/ok/unreadable). ``dispatch_calibration`` uses
+    the same accessor and returns a single ``readError`` marker row when unreadable."""
     cwd = cwd or os.getcwd()
     try:
         cfg = core_md.engine_preferences_for_gate(cwd=cwd, root=root)

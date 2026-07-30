@@ -457,3 +457,64 @@ def test_calibration_not_saved_signal_present_absent_and_ack(tmp_path, monkeypat
     open(cm._pending_path(str(tmp_path), root), "w").write(_j.dumps({"pending": False}))
     assert not any(s["type"] == "calibration-not-saved"
                    for s in rc.gather_signals(str(tmp_path), root=root))
+
+
+# --- gather_signals core-md-unreadable via engine_preferences_for_gate (#699 rider 8) ---
+
+def _gate_core_fixture(tmp_path, shape, *, registry_mode=None):
+    """Seed a repo for accessor-based unreadable-signal tests."""
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    if registry_mode is not None:
+        mr.write_registry(str(tmp_path), registry_mode, "rk", root=root)
+    cal = os.path.join(str(tmp_path), ".claude", "superheroes")
+    os.makedirs(cal, exist_ok=True)
+    core_p = os.path.join(cal, "core.md")
+    if shape == "dangling":
+        os.symlink("/nonexistent/mode-reconcile-dangle-699", core_p)
+    elif shape == "directory":
+        os.mkdir(core_p)
+    elif shape == "corrupt":
+        open(core_p, "w").write("not a core document\n")
+    elif shape == "provisional":
+        _write_core_file(str(tmp_path), status="provisional")
+    return str(tmp_path), root, core_p
+
+
+def test_gather_signals_dangling_symlink_emits_unreadable(tmp_path, monkeypatch):
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    repo, root, core_p = _gate_core_fixture(tmp_path, "dangling")
+    # The old os.path.exists rule missed dangling symlinks — exists follows the link target.
+    assert os.path.exists(core_p) is False
+    sigs = rc.gather_signals(repo, root=root)
+    assert any(s["type"] == "core-md-unreadable" for s in sigs)
+
+
+def test_gather_signals_absent_emits_no_unreadable(tmp_path, monkeypatch):
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    _init_repo(tmp_path)
+    sigs = rc.gather_signals(str(tmp_path), root=str(tmp_path / "store"))
+    assert not any(s["type"] == "core-md-unreadable" for s in sigs)
+
+
+def test_gather_signals_corrupt_emits_unreadable(tmp_path, monkeypatch):
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    repo, root, _ = _gate_core_fixture(tmp_path, "corrupt")
+    sigs = rc.gather_signals(repo, root=root)
+    assert any(s["type"] == "core-md-unreadable" for s in sigs)
+
+
+def test_gather_signals_provisional_not_unreadable(tmp_path, monkeypatch):
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    repo, root, _ = _gate_core_fixture(tmp_path, "provisional")
+    sigs = rc.gather_signals(repo, root=root)
+    assert any(s["type"] == "core-md-provisional" for s in sigs)
+    assert not any(s["type"] == "core-md-unreadable" for s in sigs)
+
+
+def test_gather_signals_directory_emits_unreadable(tmp_path, monkeypatch):
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    repo, root, _ = _gate_core_fixture(tmp_path, "directory")
+    sigs = rc.gather_signals(repo, root=root)
+    assert any(s["type"] == "core-md-unreadable" for s in sigs)
+

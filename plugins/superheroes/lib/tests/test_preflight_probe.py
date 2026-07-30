@@ -249,6 +249,74 @@ def test_dispatch_calibration_prefs_none_reads_raw_and_defaults_brief_check_to_c
     assert by_role["brief-check"]["engine"] == "codex"
 
 
+# --- dispatch_calibration via engine_preferences_for_gate (#699 riders 7+8) -----------------
+
+def test_dispatch_calibration_config_ok_matches_accessor_rows(tmp_path):
+    import engine_pref
+    import model_tier_overrides as mto
+
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
+    tiers = mto.effective_tiers(mto.resolve_profile_path(repo, store))
+    cfg = core_md.engine_preferences_for_gate(cwd=repo, root=store)
+    assert cfg.status == core_md.CONFIG_OK
+    expected = engine_pref.dispatch_calibration_rows(cfg.prefs, tiers)
+    rows = pp.dispatch_calibration(cwd=repo, root=store)
+    assert rows == expected
+
+
+def test_dispatch_calibration_absent_returns_defaults_without_read_error(tmp_path):
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "absent")
+    rows = pp.dispatch_calibration(cwd=repo, root=store)
+    assert len(rows) == 4
+    assert all("readError" not in r for r in rows)
+    by_role = {r["role"]: r for r in rows}
+    assert by_role["brief-check"]["engine"] == "codex"
+
+
+def test_dispatch_calibration_dangling_symlink_returns_marker_row(tmp_path):
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "dangling")
+    rows = pp.dispatch_calibration(cwd=repo, root=store)
+    assert len(rows) == 1
+    assert rows[0]["role"] == "*"
+    assert rows[0]["engine"] is None
+    assert rows[0]["model"] is None
+    assert rows[0]["readError"].startswith("core-md-unreadable: ")
+
+
+def test_dispatch_calibration_corrupt_returns_marker_row(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    cal = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(cal, exist_ok=True)
+    open(os.path.join(cal, "core.md"), "w", encoding="utf-8").write("not parseable core\n")
+    rows = pp.dispatch_calibration(cwd=repo, root=store)
+    assert len(rows) == 1
+    assert rows[0]["role"] == "*"
+    assert rows[0]["engine"] is None
+    assert rows[0]["model"] is None
+    assert rows[0]["readError"].startswith("core-md-unreadable: ")
+
+
+def test_dispatch_calibration_cli_carries_marker_on_unreadable(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(pp, "gh_auth_probe", lambda run=None: {
+        "tool": "gh auth", "ok": True, "exit": 0, "detail": ""})
+    import dispatch_selftest
+
+    monkeypatch.setattr(
+        dispatch_selftest,
+        "probe_result",
+        lambda config=None: {"tool": "dispatch-vocab", "ok": True, "detail": "ok (1 checks)"},
+    )
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "dangling")
+    rc = pp.main(["preflight_probe.py", "run", "--cwd", repo])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    cal = payload["dispatchCalibration"]
+    assert len(cal) == 1
+    assert cal[0]["role"] == "*"
+    assert cal[0]["readError"].startswith("core-md-unreadable: ")
+
+
 # --- configured_cross_vendor_engines -------------------------------------------------------
 
 def test_configured_cross_vendor_engines_default_is_codex_only():
