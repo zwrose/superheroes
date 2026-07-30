@@ -57,10 +57,12 @@ shape is wrong and the thinking wins.
    this PR's follow-ups are dispositioned at *this* vet, before this receipt posts. Then the
    **pending** set under `<!-- superheroes:pending-proposals -->` — only what genuinely could not
    close in this session. Each pending item carries **what it is**, **your recommendation** (so the
-   owner's batch pass is one word rather than a re-derivation), and **which vet proposed it** (so
-   carrying is visible by inspection instead of inferred). **The proposing-vet stamp is never
-   re-dated** when an item is carried forward — it is the only thing that makes an item's age checkable
-   by a later vet rather than remembered. **Never the future tense** — "I'll file X" is not a
+   owner's batch pass is one word rather than a re-derivation), and **the vet ordinal it was proposed
+   at** — a monotonic integer, one per vet, assigned when the item is appended. **State this vet's own
+   ordinal alongside the pending set**, so the sequence is readable from the receipt itself. **An item's
+   ordinal is never re-stamped** when it is carried forward: age is `this vet's ordinal − the item's
+   ordinal`, a subtraction over written numbers rather than a count of artifacts, which is what makes it
+   immune to receipts being edited in place. **Never the future tense** — "I'll file X" is not a
    disposition.
 8. **Open owner calls at merge.** What the owner must decide before or at the click, each stated as a
    consequence rather than a craft question.
@@ -82,7 +84,7 @@ are never holding the inventory in working memory.
 | the issue carries a **show it** call | the show-it check (and the timing consequence duty 4 sets out) |
 | the issue carries a **lane call** | the lane-call backstop, **both directions** |
 | a **prior receipt on this PR is being corrected** | a dated correction, **edited in place** — never a superseding comment |
-| the collector holds an item **proposed two or more vets ago** | an **escalation line** naming that item and stating plainly that **the owner batch is not happening** |
+| the collector holds an item whose **proposing ordinal is two or more below this vet's ordinal** | an **escalation line** naming that item and stating plainly that **the owner batch is not happening** |
 
 The last row is the tripwire for this design's own load-bearing risk — the fallback quietly becoming
 the path. Each pending item's proposing-vet stamp is what makes its age inspectable, so the escalation
@@ -138,7 +140,7 @@ all the age of a carried item, and the loss of an advisor write.
 receipt-integrity catches <…>; window: <…>
 **Dispositions — completed.** <…> | `None`
 <!-- superheroes:pending-proposals -->
-**Pending.** <item — recommendation — proposed at vet of #NNN> | `None`
+**Pending.** this vet's ordinal: <n> · <item — recommendation — proposed at ordinal <n>> | `None`
 **Open owner calls at merge.** <…> | `None`
 
 <triggered fields, each only when its trigger is present in the artifacts>

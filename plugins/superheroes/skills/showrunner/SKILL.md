@@ -216,10 +216,10 @@ the reviewer and the owner's authorization carry that check instead.**
      fallback, not the path:** *"the next vet will pick it up"* is the failure this prevents, not a
      workflow it licenses, so an item goes there only when this session genuinely cannot close it —
      typically one awaiting the owner's word. Each entry carries **what it is**, **your recommendation**,
-     and **which vet proposed it**, and is struck when the owner rules. **That proposing-vet stamp is
-     immutable** — carrying an item forward never rewrites its origin, because the origin is the only
-     thing that makes its age checkable by the next vet rather than remembered; closing or declining an
-     item removes it, but nothing re-dates it. **Nothing fires on its own:** no
+     and **the vet ordinal you stamp on it when you append it** (see the age rule below), and is struck
+     when the owner rules. **That ordinal is immutable** — carrying an item forward never re-stamps it,
+     because the stamped number is the whole basis on which a later vet computes the item's age; closing
+     or declining an item removes it, but nothing re-numbers it. **Nothing fires on its own:** no
      cadence, no release-tied default — not every project cuts releases, so a cut-tied rule would work in
      one project and silently do nothing in another, which is worse because it reads as covered — and no
      scheduled routine.
@@ -235,12 +235,16 @@ the reviewer and the owner's authorization carry that check instead.**
      pointer:** ask the owner for the issue number and re-record it, because a duplicate orphans
      everything the first one holds. Nothing in the collector is lost while the pointer is — every
      pending item also lives in the receipt of the vet that proposed it, which is what makes recovery a
-     lookup rather than a reconstruction. **Age is counted in vets, from the artifacts:** each pending item carries the vet that
-     proposed it, and vet receipts are themselves greppable by their marker, so the number of vets since
-     an item was proposed is a count of the receipts posted after **the proposing vet's own receipt**,
-     **plus the vet you are in** — not a
-     memory. Count the current vet: your own receipt has not posted yet when you reconcile, so counting
-     only already-posted receipts reports one fewer and fires the escalation a vet late. **An item the
+     lookup rather than a reconstruction.      **Age is a subtraction over ordinals, never a count of artifacts.** Every vet has a **monotonic
+     ordinal** — one integer per vet, per project — which you keep in your durable memory (duty 8)
+     alongside the collector pointer and **also write into each receipt**, so the sequence survives a
+     lost memory: the next ordinal is **one more than the highest ordinal appearing in the collector or
+     in the receipts**. Appending an item **stamps the current ordinal** on it, and an item's ordinal is
+     **never re-stamped**. Age is then `this vet's ordinal − the item's ordinal`, and the escalation is
+     owed at **2 or more**. **Do not derive age by counting receipts, comments, or posts** — a corrected
+     receipt is **edited in place**, so receipts are neither a monotonic register nor one-per-vet, and
+     every counting rule this doctrine tried failed on that (owner-ratified ruling (a), 2026-07-30).
+     **An item the
      reconciliation surfaces means the primary path failed for that item** — not routine throughput —
      and an item **still open two vets after it was proposed** is evidence the owner batch is not
      happening, which the receipt says plainly rather than re-listing as though carrying were normal.
