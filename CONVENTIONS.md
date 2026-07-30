@@ -848,16 +848,17 @@ file now also carries **asymmetric** rows for named cross-lane invariants — **
 **not-engaged-never-passes** probe rule, and the **waiver bounds** — where
 `rubric/review-discipline.md` is the authoritative home and the charters hold deliberate
 paraphrases. Those rows are **clause-presence sentinels**, not byte-equality or semantic equality.
-**Both** the home and the copy sides are section-scoped: shared clauses are checked within the
-rubric section that owns each invariant, and each copy-holder is checked within the section that
-owns that invariant in that file. Shared clauses are **first verified present in the home** (§11.3);
-`holder_clauses` pins holder-specific wording where the home states the same bound in different
-words — a narrower, holder-specific guarantee, not home-derived. The guard fails closed if a
-declared heading is missing **or duplicated**. **Residual blind spots:** (1) the home gaining a new
+Each shared clause is checked in **exactly one** named home section; each copy-holder is checked in
+**exactly one** named section in that file. Shared clauses are **first verified present in the home**
+(§11.3); `holder_clauses` pins holder-specific wording where the home states the same bound in
+different words — a narrower, holder-specific guarantee, not home-derived. The guard fails closed if
+a declared heading is missing **or duplicated**. **Residual blind spots:** (1) the home gaining a new
 qualifier, scope, or exception the copies do not mirror; (2) a copy keeping every clause verbatim
 while adding a contradicting exception nearby; (3) matches spanning a boundary after normalization;
-(4) `holder_clauses` being holder-specific, not home-derived. The waiver row's copy-holders are the
-**showrunner** charter only, because micro is the showrunner's lane.
+(4) `holder_clauses` being holder-specific, not home-derived; (5) same-section, different-paragraph
+satisfaction — a clause pinned to a section can still be satisfied by a different paragraph in that
+section; (6) the spine's own waiver sentence is not separately pinned. The waiver row's
+copy-holders are the **showrunner** charter only, because micro is the showrunner's lane.
 
 *Worked example 2 — the reviewer roster (sanctioned-subset invariant).* The set of
 `agents/*-reviewer` files is the single home of the **sanctioned reviewer universe** — now

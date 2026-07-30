@@ -13,13 +13,14 @@ other file's line, not a hand-typed literal).
 This file also guards **asymmetric** rubric→charters cross-lane invariants as **clause-presence**
 sentinels anchored to ``rubric/review-discipline.md``. The charters deliberately paraphrase for
 their audience; a byte-equality assertion would fail today, so each row asserts that load-bearing
-clauses appear in the copy-holder's declared section(s) — presence, not equality.
+clauses appear in the copy-holder's declared section — presence, not equality.
 
 Per §11.3 anti-tautology: shared clause strings are hand-typed, so each is first asserted against
-the authoritative home before it is used as the right-hand side for the copies — re-wording the
-home breaks CI. ``holder_clauses`` are exempt from the home check by construction: they are
-holder-specific pins using that file's own wording where the home states the same bound in
-different words — a deliberate, narrower guarantee than the home-verified shared clauses.
+the authoritative home section that owns it before it is used as the right-hand side for the
+copies — re-wording the home breaks CI. ``holder_clauses`` are exempt from the home check by
+construction: they are holder-specific pins using that file's own wording where the home states
+the same bound in different words — a deliberate, narrower guarantee than the home-verified shared
+clauses.
 
 **Limitations (residual blind spots):**
 
@@ -27,7 +28,15 @@ different words — a deliberate, narrower guarantee than the home-verified shar
 2. a copy that keeps every clause verbatim while adding a contradicting exception nearby
    (substring presence cannot detect an added "unless …");
 3. matches that span a boundary after ``*``-stripping and whitespace collapse;
-4. ``holder_clauses`` being holder-specific, not home-derived.
+4. ``holder_clauses`` being holder-specific, not home-derived;
+5. same-section, different-paragraph satisfaction — a clause is pinned to a section, not to a
+   paragraph or sentence (e.g. ``resolve upward to the full lane or park`` occurs 3× inside
+   ``### What never changes in any lane``, so deleting the probe rule's own post-retry
+   consequence leaves the clause satisfied by other paragraphs and the guard stays green);
+   closing this needs paragraph/sentence anchoring (marker-delimited spans), which is out of this
+   issue's ratified scope and is being handed to the advisor as a follow-up;
+6. the spine's own waiver sentence (``owner-only, risk stated, never a standing grant``) is not
+   separately pinned — it uses different wording from every copy paraphrase.
 
 Copy-holder disposition (§11.2 caveat — adding a copy means extending the table):
 
@@ -73,47 +82,125 @@ _EXPECTED_SHARED_CLAUSE_COUNTS = {
     "waiver-bounds": 3,
 }
 
+_EXPECTED_HOLDER_CLAUSE_COUNTS = {
+    "waiver-bounds": {
+        "skills/showrunner/SKILL.md": 1,
+    },
+}
+
+_EXPECTED_HOME_SECTIONS = {
+    "resolve-upward": {
+        "Default to the full lane; anything unclear resolves upward": "### The spine",
+        "moving down a lane is never": "### The spine",
+        "it requires the owner, per change": "### The spine",
+        "Disclosure alone never authorizes a downgrade": "### The spine",
+        "the full lane at any size": "### The spine",
+    },
+    "not-engaged-never-passes": {
+        "means that review did not happen": "### What never changes in any lane",
+        "re-dispatch once": "### What never changes in any lane",
+        "never a pass": "### What never changes in any lane",
+        "zero is not evidence of engagement": "### What never changes in any lane",
+        "resolve upward to the full lane or park": "### What never changes in any lane",
+    },
+    "waiver-bounds": {
+        "owner-only, per change, never a standing grant": "### Micro — owner authorization",
+        "quiet-failure question": "### Micro — owner authorization",
+        "single named exception": "### Micro — owner authorization",
+    },
+}
+
+_EXPECTED_HOLDER_SECTIONS = {
+    "resolve-upward": {
+        "skills/showrunner/SKILL.md": "## Your duties",
+        "skills/workhorse/SKILL.md": "## Build lanes",
+    },
+    "not-engaged-never-passes": {
+        "skills/showrunner/SKILL.md": "## Your duties",
+        "skills/workhorse/SKILL.md": "## Build lanes",
+    },
+    "waiver-bounds": {
+        "skills/showrunner/SKILL.md": "## Micro — hard-line edit",
+    },
+}
+
 _INVARIANT_TABLE = [
     {
         "name": "resolve-upward",
-        "home_sections": ["### The spine"],
         "clauses": [
-            "Default to the full lane; anything unclear resolves upward",
-            "moving down a lane is never",
-            "it requires the owner, per change",
-            "Disclosure alone never authorizes a downgrade",
-            "the full lane at any size",
+            {
+                "text": "Default to the full lane; anything unclear resolves upward",
+                "home_section": "### The spine",
+            },
+            {
+                "text": "moving down a lane is never",
+                "home_section": "### The spine",
+            },
+            {
+                "text": "it requires the owner, per change",
+                "home_section": "### The spine",
+            },
+            {
+                "text": "Disclosure alone never authorizes a downgrade",
+                "home_section": "### The spine",
+            },
+            {
+                "text": "the full lane at any size",
+                "home_section": "### The spine",
+            },
         ],
         "copy_holder_sections": {
-            "skills/showrunner/SKILL.md": ["## Your duties"],
-            "skills/workhorse/SKILL.md": ["## Build lanes"],
+            "skills/showrunner/SKILL.md": "## Your duties",
+            "skills/workhorse/SKILL.md": "## Build lanes",
         },
     },
     {
         "name": "not-engaged-never-passes",
-        "home_sections": ["### What never changes in any lane"],
         "clauses": [
-            "means that review did not happen",
-            "re-dispatch once",
-            "never a pass",
-            "zero is not evidence of engagement",
-            "resolve upward to the full lane or park",
+            {
+                "text": "means that review did not happen",
+                "home_section": "### What never changes in any lane",
+            },
+            {
+                "text": "re-dispatch once",
+                "home_section": "### What never changes in any lane",
+            },
+            {
+                "text": "never a pass",
+                "home_section": "### What never changes in any lane",
+            },
+            {
+                "text": "zero is not evidence of engagement",
+                "home_section": "### What never changes in any lane",
+            },
+            {
+                "text": "resolve upward to the full lane or park",
+                "home_section": "### What never changes in any lane",
+            },
         ],
         "copy_holder_sections": {
-            "skills/showrunner/SKILL.md": ["## Your duties"],
-            "skills/workhorse/SKILL.md": ["## Build lanes"],
+            "skills/showrunner/SKILL.md": "## Your duties",
+            "skills/workhorse/SKILL.md": "## Build lanes",
         },
     },
     {
         "name": "waiver-bounds",
-        "home_sections": ["### The spine", "### Micro — owner authorization"],
         "clauses": [
-            "owner-only, per change, never a standing grant",
-            "quiet-failure question",
-            "single named exception",
+            {
+                "text": "owner-only, per change, never a standing grant",
+                "home_section": "### Micro — owner authorization",
+            },
+            {
+                "text": "quiet-failure question",
+                "home_section": "### Micro — owner authorization",
+            },
+            {
+                "text": "single named exception",
+                "home_section": "### Micro — owner authorization",
+            },
         ],
         "copy_holder_sections": {
-            "skills/showrunner/SKILL.md": ["## Micro — hard-line edit"],
+            "skills/showrunner/SKILL.md": "## Micro — hard-line edit",
         },
         "holder_clauses": {
             "skills/showrunner/SKILL.md": [
@@ -173,8 +260,8 @@ def _file_section(rel, heading, read_text=None):
     return _normalized("\n".join(lines[start:end]))
 
 
-def _section_union(rel, headings, read_text=None):
-    return " ".join(_file_section(rel, heading, read_text) for heading in headings)
+def _clause_text(clause_entry):
+    return clause_entry["text"]
 
 
 def _validate_invariant_table(table=None):
@@ -200,10 +287,6 @@ def _validate_invariant_table(table=None):
 
     for row in table:
         name = row["name"]
-        if not row.get("home_sections"):
-            raise RuntimeError(
-                f"INVARIANT_TABLE row {name!r}: home_sections must be non-empty"
-            )
         if not row.get("clauses"):
             raise RuntimeError(
                 f"INVARIANT_TABLE row {name!r}: clauses must be non-empty"
@@ -242,18 +325,74 @@ def _validate_invariant_table(table=None):
                 f"expected {expected_count}, got {len(row['clauses'])}"
             )
 
-        for clause in row["clauses"]:
-            if not clause or not clause.strip():
+        expected_home_sections = _EXPECTED_HOME_SECTIONS.get(name)
+        if expected_home_sections is None:
+            raise RuntimeError(
+                f"INVARIANT_TABLE row {name!r}: unexpected invariant name"
+            )
+        clause_texts = []
+        for clause_entry in row["clauses"]:
+            if not isinstance(clause_entry, dict):
+                raise RuntimeError(
+                    f"INVARIANT_TABLE row {name!r}: "
+                    "each clause must be a dict with text and home_section"
+                )
+            clause = clause_entry.get("text")
+            home_section = clause_entry.get("home_section")
+            if not clause or not str(clause).strip():
                 raise RuntimeError(
                     f"INVARIANT_TABLE row {name!r}: "
                     "clause must be non-empty and non-whitespace-only"
                 )
-        if len(row["clauses"]) != len(set(row["clauses"])):
+            if not home_section or not str(home_section).strip():
+                raise RuntimeError(
+                    f"INVARIANT_TABLE row {name!r}: "
+                    "home_section must be non-empty and non-whitespace-only"
+                )
+            expected_section = expected_home_sections.get(clause)
+            if expected_section is None:
+                raise RuntimeError(
+                    f"INVARIANT_TABLE row {name!r}: "
+                    f"unexpected shared clause {clause!r}"
+                )
+            if home_section != expected_section:
+                raise RuntimeError(
+                    f"INVARIANT_TABLE row {name!r}: home_section drift for "
+                    f"{clause!r} — expected {expected_section!r}, "
+                    f"got {home_section!r}"
+                )
+            clause_texts.append(clause)
+        if len(clause_texts) != len(set(clause_texts)):
             raise RuntimeError(
                 f"INVARIANT_TABLE row {name!r}: duplicate shared clause"
             )
 
-        holder_clauses = row.get("holder_clauses") or {}
+        expected_holder_sections = _EXPECTED_HOLDER_SECTIONS.get(name)
+        if expected_holder_sections is None:
+            raise RuntimeError(
+                f"INVARIANT_TABLE row {name!r}: unexpected invariant name"
+            )
+        for rel, section in row["copy_holder_sections"].items():
+            if not section or not str(section).strip():
+                raise RuntimeError(
+                    f"INVARIANT_TABLE row {name!r}: "
+                    f"section for {rel!r} must be non-empty"
+                )
+            expected_section = expected_holder_sections.get(rel)
+            if expected_section is None:
+                raise RuntimeError(
+                    f"INVARIANT_TABLE row {name!r}: "
+                    f"unexpected copy-holder {rel!r}"
+                )
+            if section != expected_section:
+                raise RuntimeError(
+                    f"INVARIANT_TABLE row {name!r}: section drift for "
+                    f"{rel!r} — expected {expected_section!r}, got {section!r}"
+                )
+
+        holder_clauses = row.get("holder_clauses")
+        if holder_clauses is None:
+            holder_clauses = {}
         for rel, clauses in holder_clauses.items():
             if rel not in row["copy_holder_sections"]:
                 raise RuntimeError(
@@ -276,22 +415,20 @@ def _validate_invariant_table(table=None):
                     f"INVARIANT_TABLE row {name!r}: "
                     f"duplicate holder clause for {rel!r}"
                 )
-
-        for rel, sections in row["copy_holder_sections"].items():
-            if not sections:
+        expected_holder_counts = _EXPECTED_HOLDER_CLAUSE_COUNTS.get(name, {})
+        for rel in expected_holders:
+            expected_holder_count = expected_holder_counts.get(rel, 0)
+            actual_holder_count = len(holder_clauses.get(rel, []))
+            if actual_holder_count != expected_holder_count:
                 raise RuntimeError(
-                    f"INVARIANT_TABLE row {name!r}: "
-                    f"sections for {rel!r} must be non-empty"
-                )
-            if len(sections) != len(set(sections)):
-                raise RuntimeError(
-                    f"INVARIANT_TABLE row {name!r}: "
-                    f"duplicate section for {rel!r}"
+                    f"INVARIANT_TABLE row {name!r}: holder-clause count drift "
+                    f"for {rel!r} — expected {expected_holder_count}, "
+                    f"got {actual_holder_count}"
                 )
 
 
 def _check_home_clauses(table, read_text=None):
-    """Assert shared clauses appear in the home sections.
+    """Assert shared clauses appear in their declared home sections.
 
     holder_clauses are intentionally exempt — they pin holder-specific wording, not
     home-derived shared clauses.
@@ -299,38 +436,39 @@ def _check_home_clauses(table, read_text=None):
     if read_text is None:
         read_text = _read_plugin
     for row in table:
-        home_text = _section_union(_HOME, row["home_sections"], read_text)
-        sections = ", ".join(row["home_sections"])
-        for clause in row["clauses"]:
+        for clause_entry in row["clauses"]:
+            clause = _clause_text(clause_entry)
+            home_section = clause_entry["home_section"]
+            home_text = _file_section(_HOME, home_section, read_text)
             if clause not in home_text:
                 raise AssertionError(
                     f"INVARIANT_TABLE row {row['name']!r}: clause no longer appears in "
-                    f"authoritative home ({_HOME}, sections {sections}) — "
+                    f"authoritative home ({_HOME}, section {home_section}) — "
                     f"re-sync the table: {clause!r}"
                 )
 
 
 def _check_copy_holder_clauses(table, read_text=None):
-    """Assert shared and holder clauses appear in each copy-holder's declared sections."""
+    """Assert shared and holder clauses appear in each copy-holder's declared section."""
     if read_text is None:
         read_text = _read_plugin
     for row in table:
         holder_clauses = row.get("holder_clauses") or {}
-        for rel, sections in row["copy_holder_sections"].items():
-            copy_text = _section_union(rel, sections, read_text)
-            section_label = ", ".join(sections)
-            for clause in row["clauses"]:
+        for rel, section in row["copy_holder_sections"].items():
+            copy_text = _file_section(rel, section, read_text)
+            for clause_entry in row["clauses"]:
+                clause = _clause_text(clause_entry)
                 if clause not in copy_text:
                     raise AssertionError(
                         f"INVARIANT_TABLE row {row['name']!r}: clause missing from "
-                        f"{rel} (sections {section_label}) — "
+                        f"{rel} (section {section}) — "
                         f"re-sync against {_HOME}: {clause!r}"
                     )
             for clause in holder_clauses.get(rel, []):
                 if clause not in copy_text:
                     raise AssertionError(
                         f"INVARIANT_TABLE row {row['name']!r}: holder clause missing from "
-                        f"{rel} (sections {section_label}): {clause!r}"
+                        f"{rel} (section {section}): {clause!r}"
                     )
 
 
@@ -415,7 +553,7 @@ def _table_with_home_as_copy_holder():
     for row in _INVARIANT_TABLE:
         updated = dict(row)
         updated["copy_holder_sections"] = dict(row["copy_holder_sections"])
-        updated["copy_holder_sections"][_HOME] = row["home_sections"]
+        updated["copy_holder_sections"][_HOME] = row["clauses"][0]["home_section"]
         table.append(updated)
     return table
 
@@ -447,16 +585,68 @@ def test_negative_roster_home_as_copy_holder():
         _validate_invariant_table(_table_with_home_as_copy_holder())
 
 
+def test_negative_roster_holder_clauses_removed():
+    table = []
+    for row in _INVARIANT_TABLE:
+        if row["name"] != "waiver-bounds":
+            table.append(row)
+            continue
+        updated = dict(row)
+        del updated["holder_clauses"]
+        table.append(updated)
+    with pytest.raises(RuntimeError, match="holder-clause count drift"):
+        _validate_invariant_table(table)
+
+
+def test_negative_roster_holder_clauses_key_typo():
+    table = []
+    for row in _INVARIANT_TABLE:
+        if row["name"] != "waiver-bounds":
+            table.append(row)
+            continue
+        updated = dict(row)
+        updated["holder_clauses"] = {
+            "skills/showrunner/SKILL.md.typo": updated["holder_clauses"][
+                "skills/showrunner/SKILL.md"
+            ],
+        }
+        table.append(updated)
+    with pytest.raises(RuntimeError, match="is not a declared copy-holder"):
+        _validate_invariant_table(table)
+
+
+def test_negative_roster_widened_holder_section():
+    table = []
+    for row in _INVARIANT_TABLE:
+        if row["name"] != "waiver-bounds":
+            table.append(row)
+            continue
+        updated = dict(row)
+        updated["copy_holder_sections"] = dict(row["copy_holder_sections"])
+        updated["copy_holder_sections"]["skills/showrunner/SKILL.md"] = (
+            "## When you're tempted"
+        )
+        table.append(updated)
+    with pytest.raises(RuntimeError, match="section drift"):
+        _validate_invariant_table(table)
+
+
 def test_negative_section_scoped_copy_check_rejects_out_of_section_match():
     """Regression: FAQ prose must not satisfy doctrine-section bounds."""
+    # Mutant killed: revert _check_copy_holder_clauses to whole-file
+    # _normalized(read_text(rel)) and this test must fail.
     synthetic_path = "synthetic/showrunner.md"
+    holder_clause = (
+        "owner-only, per change, never a standing grant; "
+        "the risk must be stated explicitly"
+    )
     synthetic_text = "\n".join([
         "## Micro — hard-line edit",
         "Micro is a named hard-line edit lane.",
         "## When you're tempted",
         (
             "owner-only, per change, never a standing grant; quiet-failure question; "
-            "single named exception; risk stated."
+            f"single named exception; {holder_clause}"
         ),
     ])
     texts = {synthetic_path: synthetic_text}
@@ -468,24 +658,106 @@ def test_negative_section_scoped_copy_check_rejects_out_of_section_match():
 
     table = [{
         "name": "waiver-bounds",
-        "home_sections": ["### The spine", "### Micro — owner authorization"],
         "clauses": [
-            "owner-only, per change, never a standing grant",
-            "quiet-failure question",
-            "single named exception",
+            {
+                "text": "owner-only, per change, never a standing grant",
+                "home_section": "### Micro — owner authorization",
+            },
+            {
+                "text": "quiet-failure question",
+                "home_section": "### Micro — owner authorization",
+            },
+            {
+                "text": "single named exception",
+                "home_section": "### Micro — owner authorization",
+            },
         ],
         "copy_holder_sections": {
-            synthetic_path: ["## Micro — hard-line edit"],
+            synthetic_path: "## Micro — hard-line edit",
         },
         "holder_clauses": {
-            synthetic_path: [
-                "owner-only, per change, never a standing grant; "
-                "the risk must be stated explicitly",
-            ],
+            synthetic_path: [holder_clause],
         },
     }]
-    with pytest.raises(AssertionError, match="clause missing"):
+    with pytest.raises(
+        AssertionError,
+        match=r"clause missing from .+ \(section ## Micro — hard-line edit\)",
+    ):
         _check_copy_holder_clauses(table, read_text)
+
+
+def test_negative_home_clause_absent_from_section_but_present_elsewhere():
+    # Mutant killed: replace _check_home_clauses' _file_section with whole-file
+    # _normalized(read_text(_HOME)) and this test must fail.
+    synthetic_text = "\n".join([
+        "### The spine",
+        "Other spine content.",
+        "### What never changes in any lane",
+        "Lane rules without the probe clause here.",
+        "## Appendix",
+        "means that review did not happen — but only in this appendix.",
+    ])
+
+    def read_text(rel):
+        if rel == _HOME:
+            return synthetic_text
+        return _read_plugin(rel)
+
+    table = [{
+        "name": "not-engaged-never-passes",
+        "clauses": [
+            {
+                "text": "means that review did not happen",
+                "home_section": "### What never changes in any lane",
+            },
+        ],
+        "copy_holder_sections": {
+            "skills/showrunner/SKILL.md": "## Your duties",
+        },
+    }]
+    with pytest.raises(
+        AssertionError,
+        match=(
+            r"clause no longer appears in authoritative home "
+            r"\(rubric/review-discipline\.md, section ### What never changes in any lane\)"
+        ),
+    ):
+        _check_home_clauses(table, read_text)
+
+
+def test_negative_home_clause_absent_entirely():
+    # Mutant killed: delete _check_home_clauses' raise AssertionError block and
+    # this test must fail.
+    synthetic_text = "\n".join([
+        "### What never changes in any lane",
+        "Content with no matching clauses.",
+    ])
+
+    def read_text(rel):
+        if rel == _HOME:
+            return synthetic_text
+        return _read_plugin(rel)
+
+    table = [{
+        "name": "not-engaged-never-passes",
+        "clauses": [
+            {
+                "text": "never a pass",
+                "home_section": "### What never changes in any lane",
+            },
+        ],
+        "copy_holder_sections": {
+            "skills/showrunner/SKILL.md": "## Your duties",
+        },
+    }]
+    with pytest.raises(
+        AssertionError,
+        match=(
+            r"clause no longer appears in authoritative home "
+            r"\(rubric/review-discipline\.md, section ### What never changes in any lane\)"
+        ),
+    ):
+        _check_home_clauses(table, read_text)
 
 
 def test_negative_missing_section_heading_raises():
@@ -525,11 +797,15 @@ def test_negative_empty_section_body_fails_clause_check():
 
     table = [{
         "name": "resolve-upward",
-        "home_sections": ["### The spine"],
-        "clauses": ["moving down a lane is never"],
+        "clauses": [
+            {
+                "text": "moving down a lane is never",
+                "home_section": "### The spine",
+            },
+        ],
         "copy_holder_sections": {
-            synthetic_path: ["## Build lanes"],
+            synthetic_path: "## Build lanes",
         },
     }]
-    with pytest.raises(AssertionError, match="clause missing"):
+    with pytest.raises(AssertionError, match=r"clause missing from .+ \(section ## Build lanes\)"):
         _check_copy_holder_clauses(table, read_text)
