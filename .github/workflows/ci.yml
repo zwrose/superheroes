@@ -24,6 +24,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install Python dependencies (validators + tests)
+        run: python3 -m pip install --upgrade pytest jsonschema pyyaml
+
       - name: Validate marketplace + plugin manifests
         run: python3 .github/scripts/validate_marketplace.py
 
@@ -41,9 +44,6 @@ jobs:
 
       - name: Validate STUB markers carry an issue reference
         run: python3 .github/scripts/validate_stubs.py
-
-      - name: Install pytest
-        run: python3 -m pip install --upgrade pytest jsonschema pyyaml
 
       - name: Install uv (test-pilot block-execution tests)
         uses: astral-sh/setup-uv@v5

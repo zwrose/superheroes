@@ -223,7 +223,10 @@ call (premortem and security lenses own it). The operative rule and the perceiva
 the Showrunner charter; `CONVENTIONS.md` §14 carries the contract framing — this entry is the
 record, not a third copy. **Untested half:** every tier-1 **visual** case — this repo has no
 visual surface, so it is a poor sole witness for that half (the ratified proposal; the review
-named the configure profile as the eventual home for per-owner taste domains).
+named the configure profile as the eventual home for per-owner taste domains). *[Superseded
+2026-07-27 by the #661 ratification: tier 1 / 2 / 3 are now **show it** / **say it** / **nothing to
+see**; operative text in the Showrunner charter; presentation standard in
+`rubric/review-discipline.md`.]*
 
 ### R3 — Covenant merge line repaired; train-driving duty formalized
 

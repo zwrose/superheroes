@@ -46,6 +46,10 @@ Every step thereafter:
 python3 -B "$ROOT_DIR/lib/round_driver.py" next --session-dir "$SESSION_DIR"
 ```
 
+`--diff-path` belongs only on the first `next` of a session (#699 rider 6). A continuation
+`next` that passes it is refused with `diff-path-not-fresh-state` — check raw stdout and the
+driver journal; the driver does not crash.
+
 After fulfilling the emitted action, fold the artifact:
 
 ```bash
