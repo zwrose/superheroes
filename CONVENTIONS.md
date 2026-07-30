@@ -739,6 +739,28 @@ PR-body markers from the retired execution spine survive independently of it:
   are none. Ratification amendment F2: disclosed degradations are **prose** in every PR
   examined, so without a marker the omission floor's third row would be a judgment call
   rather than a mechanism.
+- **Vet-receipt markers** — three markers ratified from #672, **all advisor-authored at vet, after
+  handback**. Two of them live in the vet-receipt **comment**, not the PR body, so this bullet names a
+  **PR-artifact** family rather than extending the body-marker family above; each marker's home and
+  lifecycle is part of the contract:
+  - `<!-- superheroes:vet-receipt -->` — the **first line of the vet-receipt comment**.
+  - `<!-- superheroes:pending-proposals -->` — **inside that same comment**, immediately above the
+    pending disposition set, whose body is either the items or the literal **None**.
+  - `<!-- superheroes:advisor-vet -->` — the only one in the **PR body**: the **append-only** boundary
+    the advisor stamps inside the existing `## Advisor vet` owner-half slot.
+
+  Shape and contents live in `plugins/superheroes/skills/showrunner/reference/vet-receipt.md` — the
+  authoritative home; this bullet names the literals and their locations, and does not restate the
+  receipt's shape.
+
+  **Lifecycle — and why nothing flags their absence.** Unlike every marker above, these are **not a
+  builder obligation and not a review-seat check**: a build's pre-handback `review-code` runs in
+  **branch mode**, before any PR body or vet exists, so a missing vet-receipt marker at review time is
+  the **normal** state and must never be emitted as a finding. Their absence becomes meaningful only
+  **at vet or re-vet**, and only to the advisor. They exist as grep anchors for the **advisor's own**
+  backstops: `pending-proposals` is what makes a carried item's age inspectable (an item proposed two
+  or more vets ago owes an escalation line), and `advisor-vet` is how a body rewrite that re-created
+  the slot heading while dropping the advisor's write gets noticed.
 
 **Omission floor (owner half).** Anything the owner still **carries after merging** appears
 in the PR's owner half, **stated as a consequence**. The checkable floor beneath that
@@ -921,6 +943,37 @@ side's real rules** (e.g. a validator enforcing the foreign schema dialect) plus
 **live round-trip receipt recorded in the PR** — not by asserting the near side's argv
 alone. The review question is: *which test would have failed if this seam were broken
 the way it actually broke?*
+
+### 12.3 A structural guarantee ships a test that bites when it is neutralized
+
+**Every structural guarantee carries a test that fails when the guarantee is neutralized — through
+the real path.** §12.1 requires a detector for a failure that already happened; this requires a **bite
+test** for a guarantee you are *asserting*: disable, bypass, or no-op the mechanism and at least one
+test must go red **without being edited**. A guarantee whose neutralization leaves the suite green is a
+claim without a receipt (promise 4), however emphatic its prose. It is the review question §12.2 asks,
+turned around: not *which test would have failed if this seam broke*, but *which test fails when I
+switch this guarantee off*.
+
+**Provenance:** a ratified fold verifier shipped with no such test — **neutralizing it left 141 focused
+tests green** — and the gap surfaced only in review, not in CI (the #702 arc's review record on PR
+[#710](https://github.com/zwrose/superheroes/pull/710)).
+
+Two ways a bite test looks present and is not:
+
+- **The wrong axis.** A test can bite on something adjacent to the guarantee — presence where the
+  guarantee is about *authority*, a count where it is about *refusal* — and pass the "it went red"
+  check while the guarantee itself stays unprotected. **Name the axis the test bites on and check it is
+  the axis the guarantee claims.**
+- **Neutralizing a precondition instead of a consumer.** Mutate the **consumers** — the production
+  call sites that depend on the guarantee — not a helper the tests already assert as a *precondition*.
+  Breaking such a helper reddens the tests that assert the helper, which proves the helper is asserted
+  and says nothing about whether anything downstream is protected.
+
+Both are §12.2's trap one level up: a suite that stubs the seam verifies the stub, and a probe aimed at
+a precondition verifies the precondition. Like §12.1, this rule lives at whichever tier fits — a CI
+test where the guarantee is code, a **review-rubric question** where it is not — and is enforced the way
+review discipline is: a reviewer citing this § is enough to block a guarantee shipped without its bite
+test.
 
 ---
 

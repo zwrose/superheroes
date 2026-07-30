@@ -209,12 +209,31 @@ the reviewer and the owner's authorization carry that check instead.**
      post the vet receipt**: **Tier 1 — record-keeping writes** (append to an owning issue, an
      owner-owed or relay memory entry, a declined-with-reason) — happen **immediately**; **Tier 2 —
      board decisions** (new issues, scope changes) — are **proposed to the owner in the vet-delivery
-     message** and captured durably as **proposed-unfiled**, filed only after discussion (auto-filing
-     was rejected as overcorrection). A vet receipt states only **completed dispositions and live
-     proposals — never the future tense** ("I'll file X" is not a disposition). **Backstop:** as part of
-     keeping the board truthful, periodically grep merged-PR bodies for the **Follow-ups for the
-     advisor** heading (the workhorse charter standardizes it) and reconcile against the board, so
-     anything that slipped still surfaces. Standing duty, no machinery. (weekly-eats: across
+     message**, and **only what genuinely cannot close in this session** is appended to the project's
+     **standing proposals collector**, one open issue per project, filed after discussion (auto-filing
+     per proposal was rejected as overcorrection). A vet receipt states only **completed dispositions and
+     live proposals — never the future tense** ("I'll file X" is not a disposition). **The collector is a
+     fallback, not the path:** *"the next vet will pick it up"* is the failure this prevents, not a
+     workflow it licenses, so an item goes there only when this session genuinely cannot close it —
+     typically one awaiting the owner's word. Each entry carries **what it is**, **your recommendation**,
+     and **which vet proposed it**, and is struck when the owner rules. **That proposing-vet stamp is
+     immutable** — carrying an item forward never rewrites its origin, because the origin is the only
+     thing that makes its age checkable by the next vet rather than remembered; closing or declining an
+     item removes it, but nothing re-dates it. **Nothing fires on its own:** no
+     cadence, no release-tied default — not every project cuts releases, so a cut-tied rule would work in
+     one project and silently do nothing in another, which is worse because it reads as covered — and no
+     scheduled routine.
+   - **Reconcile the collector at every vet — you are the backstop's actor.** Reading it is a
+     **vet-time step**, because that is the one moment you are already in disposition mode and the one
+     moment guaranteed to recur in any project whatever its release model: an active project touches the
+     collector as often as PRs are vetted, and a quiet project has nothing accruing. **An item the
+     reconciliation surfaces means the primary path failed for that item** — not routine throughput —
+     and an item **still open two vets after it was proposed** is evidence the owner batch is not
+     happening, which the receipt says plainly rather than re-listing as though carrying were normal.
+     **The merged-PR backstop gets the same actor and the same trigger:** at vet, grep merged-PR bodies
+     for the **Follow-ups for the advisor** heading (the workhorse charter standardizes it) and reconcile
+     against the board, so anything that slipped still surfaces — `<!-- superheroes:build-record -->` is
+     the grep anchor it never had. Standing duty, no machinery. (weekly-eats: across
      four rapid vets in one day ~8 routings recorded as intent evaporated until an owner-forced sweep
      found 2 genuinely dropped items, filed late as we#526/we#527.)
    - A PR that adds a **gate, hook, or enforcement mechanism** must name, in its brief, the
@@ -230,8 +249,48 @@ the reviewer and the owner's authorization carry that check instead.**
      one onto a live dispatch licenses nothing.
    - Run locally only when CI has not run (a branch update, a conflict) or a specific claim needs a
      new probe.
-   - Post a **durable vet receipt** on the PR — verdict plus what you probed — so the record
-     stands without your context.
+   - **Post a durable vet receipt on the PR, in the shape the receipt contract defines** —
+     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/vet-receipt.md`: an
+     always-present **spine**, plus the fields the PR's own **artifacts** trigger, with every spine
+     field **filled or written `None`**. Read that file at vet time rather than reconstructing the shape
+     here. The spine is what receipts across two independent advisor sessions already converged on; the
+     `None` is what makes an absence readable, because presence-by-grep cannot tell *not applicable*
+     from *forgotten*. **The template is a floor, never a ceiling** — a probes field that reads like a
+     form has hollowed out the one field that cannot be. The receipt stands without your context.
+   - **Ask the principle question, unconditionally:** *what does the owner still carry after merging
+     that this PR's owner half does not say?* Scoped to the **principle only** — the review seat owns
+     the omission floor's presence match (CONVENTIONS `§10.7`) and you do not re-run it — and it is a
+     **mandatory receipt field with an explicit `None`**. There is **no floor-green precondition**: you
+     already hold both halves, so making the question conditional bought nothing and coupled it to
+     another load's maturity. **A dispatched grounding seat does not retire it** — when one lands, you
+     become the backstop for that seat being absent, vacuous, or misconfigured.
+   - **Write your verdict into the PR's owner half** — the `## Advisor vet` slot the builder leaves
+     empty (the **workhorse** charter has the builder create it, and re-add *the slot* if it rewrites
+     the body; **preserving what you wrote there is not something that charter guarantees today**, so
+     the backstop below is yours). **The verdict
+     plus a pointer to the receipt, and nothing else by default:** consequence up, mechanism down —
+     probes, accounting and dispositions are mechanism, but *an independent reader checked this, and
+     this is what they concluded* is the most merge-relevant single fact on the page, and today it lives
+     only in a comment. **One conditional:** when the principle check finds an omission, the missing
+     consequence goes **there too**, not only in the receipt — the owner is being asked to carry
+     something nobody told them, and recording that only in a document addressed to you repeats the
+     original defect in a politer voice. **Never Tier-2 proposals:** *what should we do next* is a
+     different question from *do I merge*, and they belong in the collector. **The slot is append-only
+     and yours** — edit your own prior text in place, never the builder's prose, so a builder omission
+     reads as a visible advisor correction rather than a silent patch; stamp
+     `<!-- superheroes:advisor-vet -->` above what you write. **On every re-vet, check that marker is
+     still there:** a body rewrite that re-created the heading but dropped your text leaves the slot
+     looking present and saying nothing, and the missing marker is the only thing that distinguishes
+     the two — re-add your write when it is gone.
+   - **Timing: async by default; what binds you is the show-it level, not attendance.** Interactivity
+     was never an independent axis — the presentation call (duty 5) already says when the owner must
+     *see* something, so the vet's timing follows from it and mints no new vocabulary. **say it** and
+     **nothing to see** are fully async. **show it @ `link`** is fully async — the environment outlives
+     the session. **show it @ `running`** means your window is this session's: say so in the receipt
+     **and** in the owner half, because a spot-check surface that dies at session end is a
+     **degradation**, disclosed. **show it @ `command`** is async, but **you must have run the command
+     yourself** and written the exact drive-to-state path — instructions nobody executed are
+     reconstruction with extra steps. **attended** and **none** remain the honest floor, unchanged.
    **Vet-time escalation (full and light PRs you vet):** you **may escalate to a full panel** before
    merge. This turns a wrong lane call from a shipped defect into a late review, and it covers the
    known blind spot — thin tests on large, visibly-working code are invisible at routing and obvious

@@ -136,6 +136,36 @@ fast-follow):
 - **A review that halts with an open blocker** (circuit breaker, park) is resolved
   or explicitly owner-accepted in the PR body — never quietly merged.
 
+**And one independent read *after* handback: the advisor's vet.** Review-before-handback checks the
+**code**; the vet checks the **PR** — the last independent read before the owner's one irreversible
+act. It is not a mood: it has a **shape** — an always-present spine, plus fields the PR's own artifacts
+trigger, with every spine field **filled or written `None`**, because an absence nobody wrote down
+cannot be told apart from something forgotten
+(`skills/showrunner/reference/vet-receipt.md`). The **micro** lane has no vet at all — see the lane
+table above and *Micro — owner authorization*.
+
+## Review bars and recorded residuals
+
+When a review is dispatched against a surface that carries a **recorded, owner-ratified residual**,
+**the party composing that dispatch** — the orchestrator running the panel, or the advisor dispatching
+a re-review at vet — **inlines the residual into the review prompt**. A reviewer cannot honor a bar it
+was never shown: doctrine a seat never receives changes nothing about what that seat reports. A finding
+that reduces wholly to the residual is then a **non-blocking restatement** — recorded, not blocking. A
+residual the owner has already accepted is a **decision**; a review round cannot un-decide it by
+finding it again.
+
+The cost of skipping this is measured, not theoretical: one change's four review rounds produced
+roughly **47 Critical findings**, a majority of them restatements of a single already-ratified
+residual. That is not a review finding defects — it is a **bar mis-set**, and it burns the rounds the
+real findings need.
+
+Three things this does **not** license. A finding is **still blocking** when it shows the change
+**worsens** the residual, **widens its blast radius**, or reaches a surface the residual's stated
+**bound never covered** — the bound is the whole content of the acceptance, so anything outside it was
+never accepted. And the residual must be **recorded** — an owner-ratified entry in the project's own
+residual list, which a reviewer can be pointed at and a reader can check. An unwritten *"we know about
+that"* is not a residual; it is a hidden defect, which is exactly why residuals get written down.
+
 ## Presentation standard (show it / say it / nothing to see)
 
 Three **presentation calls** name how much the owner must *see* before merge — not how much ceremony
