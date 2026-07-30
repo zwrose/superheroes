@@ -694,8 +694,9 @@ def core_facts_are_empty(rec):
     threat model, canonical patterns, or stack tags) — an empty placeholder. Restores the
     READ-ONLY half of the #121 Part D belt that went with migrate_on_read (#724): presence of
     such a record must never be read as a populated calibration when advising an owner whether a
-    legacy profile is safe to remove. Pure; no I/O; never raises."""
-    if rec is None:
+    legacy profile is safe to remove. A non-mapping input is treated as empty (fail-closed toward
+    the cautious advice). Pure; no I/O; never raises."""
+    if rec is None or not isinstance(rec, dict):
         return True
     if rec.get("verifyCommand"):
         return False

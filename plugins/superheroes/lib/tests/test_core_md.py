@@ -735,6 +735,10 @@ def test_core_facts_are_empty_none():
     assert CM.core_facts_are_empty(None) is True
 
 
+def test_core_facts_are_empty_empty_dict():
+    assert CM.core_facts_are_empty({}) is True
+
+
 def test_core_facts_are_empty_placeholder():
     rec = {
         "schemaVersion": CM.SCHEMA_VERSION,
@@ -744,6 +748,34 @@ def test_core_facts_are_empty_placeholder():
         "patterns": "",
     }
     assert CM.core_facts_are_empty(rec) is True
+
+
+def test_core_facts_are_empty_whitespace_only_threat_model():
+    assert CM.core_facts_are_empty({"threatModel": "  "}) is True
+
+
+def test_core_facts_are_empty_verify_command_set():
+    assert CM.core_facts_are_empty({"verifyCommand": "x"}) is False
+
+
+def test_core_facts_are_empty_stack_tags_nonempty():
+    assert CM.core_facts_are_empty({"stackTags": ["py"]}) is False
+
+
+def test_core_facts_are_empty_patterns_set():
+    assert CM.core_facts_are_empty({"patterns": "p"}) is False
+
+
+def test_core_facts_are_empty_non_dict_str():
+    assert CM.core_facts_are_empty("oops") is True
+
+
+def test_core_facts_are_empty_non_dict_zero():
+    assert CM.core_facts_are_empty(0) is True
+
+
+def test_core_facts_are_empty_non_dict_list():
+    assert CM.core_facts_are_empty([]) is True
 
 
 def test_core_facts_are_empty_populated():
