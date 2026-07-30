@@ -1,3 +1,4 @@
+import ast
 import importlib.util
 import json
 import os
@@ -1372,3 +1373,39 @@ def test_supervise_run_kind_mismatch(tmp_path):
     assert res["attempts"] == 0
     records, _ = ED._journal_read(run_dir)
     assert not any(r.get("kind") == "attempt-started" for r in records)
+
+
+def _engine_dispatch_source_path():
+    return os.path.join(_HERE, "..", "engine_dispatch.py")
+
+
+def _subprocess_popen_census():
+    path = _engine_dispatch_source_path()
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=path)
+
+    popen_functions = set()
+    run_engine_files_has_cwd = False
+
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Call):
+                continue
+            func = child.func
+            if not (isinstance(func, ast.Attribute) and func.attr == "Popen"
+                    and isinstance(func.value, ast.Name) and func.value.id == "subprocess"):
+                continue
+            popen_functions.add(node.name)
+            if node.name == "_run_engine_files":
+                run_engine_files_has_cwd = any(kw.arg == "cwd" for kw in child.keywords)
+            break
+
+    return popen_functions, run_engine_files_has_cwd
+
+
+def test_subprocess_popen_census():
+    popen_functions, run_engine_files_has_cwd = _subprocess_popen_census()
+    assert popen_functions == {"_run_engine", "_run_engine_files", "_spawn_attempt"}
+    assert run_engine_files_has_cwd

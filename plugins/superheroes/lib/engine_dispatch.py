@@ -355,6 +355,7 @@ def _cleanup(proc, pgid):
             pass
 
 
+# Injected-seam sentinel; tests call this directly.
 def _run_engine(argv, prompt_bytes, timeout, progress_cb, cwd):
     """Default spawn seam (tests inject a fake). Spawn `argv` in its OWN process group; feed
     prompt_bytes to stdin on a writer thread WHILE draining stdout on a reader thread (no pipe-buffer
@@ -425,28 +426,38 @@ def _run_engine(argv, prompt_bytes, timeout, progress_cb, cwd):
     return bytes(out).decode("utf-8", "ignore"), timed_out, returncode, stderr_tail
 
 
-def _run_engine_files(argv, prompt_path, stdout_path, stderr_path, timeout, progress_path, attempt):
-    """Run-child engine spawn: durable files, never pipes. Never raises to caller."""
+def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path,
+                      stderr_path, timeout, progress_path):
+    """Run-child engine spawn: durable files, never pipes. Never raises to caller.
+
+    Caller must journal engine-launching before invoking. Journals engine-started
+    immediately after Popen returns, then attempt-ended on completion or spawn failure."""
     write_progress = _progress_writer(progress_path)
-    timed_out = False
-    returncode = None
-    stderr_tail = ""
-    signal_num = None
-    refusal = None
     try:
         with open(prompt_path, "rb") as prompt_fh, \
              open(stdout_path, "wb") as out_fh, \
              open(stderr_path, "wb") as err_fh:
             proc = subprocess.Popen(
                 argv, stdin=prompt_fh, stdout=out_fh, stderr=err_fh,
-                start_new_session=True, env=_scrub_env(),
+                cwd=cwd, start_new_session=True, env=_scrub_env(),
             )
     except Exception as exc:
-        return False, None, 127, False, None, ("spawn-failed: %s" % exc)[:_STDERR_TAIL]
+        _journal_append(run_dir_real, {
+            "kind": "attempt-ended", "attempt": attempt,
+            "exit": 127, "timedOut": False, "signal": None,
+            "refusal": ("spawn-failed: %s" % exc)[:_STDERR_TAIL], "at": time.time(),
+        })
+        return
 
     pgid = proc.pid
+    _journal_append(run_dir_real, {
+        "kind": "engine-started", "attempt": attempt,
+        "enginePgid": pgid, "at": time.time(),
+    })
+
     start = time.monotonic()
     last_beat = start
+    timed_out = False
     while True:
         rc = proc.poll()
         now = time.monotonic()
@@ -458,7 +469,6 @@ def _run_engine_files(argv, prompt_path, stdout_path, stderr_path, timeout, prog
                 nbytes = 0
             write_progress(attempt, now - start, nbytes)
         if rc is not None:
-            returncode = rc
             break
         if now - start >= timeout:
             timed_out = True
@@ -469,13 +479,12 @@ def _run_engine_files(argv, prompt_path, stdout_path, stderr_path, timeout, prog
         proc.wait(timeout=2)
     except Exception:
         pass
-    try:
-        with open(stderr_path, "rb") as fh:
-            err = fh.read()
-        stderr_tail = bytes(err)[-_STDERR_TAIL:].decode("utf-8", "ignore")
-    except OSError:
-        pass
-    return True, pgid, returncode, timed_out, signal_num, refusal or stderr_tail if refusal else stderr_tail
+    returncode = proc.returncode
+    _journal_append(run_dir_real, {
+        "kind": "attempt-ended", "attempt": attempt,
+        "exit": returncode, "timedOut": timed_out, "signal": None,
+        "refusal": None, "at": time.time(),
+    })
 
 
 def _attempt_timeout(opened, attempt):
@@ -893,60 +902,10 @@ def _run_child_main(run_dir_real):
         "childPid": os.getpid(), "at": time.time(),
     })
 
-    try:
-        with open(prompt_path, "rb") as prompt_fh, \
-             open(stdout_path, "wb") as out_fh, \
-             open(stderr_path, "wb") as err_fh:
-            proc = subprocess.Popen(
-                argv, stdin=prompt_fh, stdout=out_fh, stderr=err_fh,
-                cwd=cwd, start_new_session=True, env=_scrub_env(),
-            )
-    except Exception as exc:
-        _journal_append(run_dir_real, {
-            "kind": "attempt-ended", "attempt": pending_att,
-            "exit": 127, "timedOut": False, "signal": None,
-            "refusal": "spawn-failed: %s" % exc, "at": time.time(),
-        })
-        return 0
-
-    pgid = proc.pid
-    _journal_append(run_dir_real, {
-        "kind": "engine-started", "attempt": pending_att,
-        "enginePgid": pgid, "at": time.time(),
-    })
-
-    write_progress = _progress_writer(progress_path)
-    start = time.monotonic()
-    last_beat = start
-    timed_out = False
-    while True:
-        rc = proc.poll()
-        now = time.monotonic()
-        if now - last_beat >= HEARTBEAT_INTERVAL:
-            last_beat = now
-            try:
-                nbytes = os.path.getsize(stdout_path)
-            except OSError:
-                nbytes = 0
-            write_progress(pending_att, now - start, nbytes)
-        if rc is not None:
-            break
-        if now - start >= timeout:
-            timed_out = True
-            break
-        time.sleep(0.2)
-
-    _terminate_process_group(pgid)
-    try:
-        proc.wait(timeout=2)
-    except Exception:
-        pass
-    returncode = proc.returncode
-    _journal_append(run_dir_real, {
-        "kind": "attempt-ended", "attempt": pending_att,
-        "exit": returncode, "timedOut": timed_out, "signal": None,
-        "refusal": None, "at": time.time(),
-    })
+    _run_engine_files(
+        run_dir_real, pending_att, argv, cwd,
+        prompt_path, stdout_path, stderr_path, timeout, progress_path,
+    )
     return 0
 
 
