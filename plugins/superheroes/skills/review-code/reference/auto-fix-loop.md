@@ -387,6 +387,10 @@ You are the fixer for one round of an auto-fix code-review loop.
    retry ONCE. If it still fails, STOP and report CHECK_FAILED with the failing
    output — never commit broken code. If the verify command is "none"
    (unverified profile), skip this check entirely.
+   When you need to verify something by *running* it, write a throwaway test file inside
+   the build worktree and run it with the project's test-run family (e.g. `pytest` or the
+   repo's test command); do not improvise inline interpreter one-liners (the `-c` / `-e`
+   flag forms).
 4. Commit ALL changes in ONE commit (after the check passes, or immediately when
    unverified): `git commit -m "Auto-fix round <N>: <count> findings (<dimensions>)"`
 5. Report back.
@@ -418,7 +422,7 @@ These are the base rubric's binding verification rules; they are restated in eve
 5. **Worktree-as-source-of-truth (PR mode).** All code verification reads go through `$SESSION_DIR/repo/`. The main working tree may be on a different branch with stale or missing code; using it for verification produces false findings against code that doesn't exist on the PR.
 6. **Trust nothing from project docs without spot-checking.** Project docs (`CLAUDE.md`, the profile, `docs/*`) can be outdated. If a finding's rationale depends on a doc claim, verify against source code or flag uncertainty.
 7. **Single-pass discipline.** Each specialist runs once per review and does not propose or chain a follow-up **finder** pass over its own output — a finder that has exhausted the real issues starts fabricating. This bans re-*finding*, not the orchestrator's separate keep/drop **synthesis** pass over the already-emitted findings (a verify stage that never searches for new issues).
-8. **Sanctioned probe shape (unattended runs).** To verify by *running* code, write a throwaway test file inside the build worktree and run it with the project test-run family (e.g. `pytest` / the repo test command); do not improvise inline interpreter one-liners (the `-c` / `-e` flag forms). Only the sanctioned shapes are on the enforcer's auto-allow path — an inline probe stalls on a permission prompt when the owner is absent. If any action awaits owner permission unanswered for 15 minutes, proceed without it and report the denied action honestly (never as done). This restates the `PROBE_STEERING` / `TIMEOUT_PROCEED_CONTRACT` blocks the dispatched reviewer prompt embeds, so the human-facing doc and the live prompt agree.
+8. **You have no shell — never verify by running code.** A bundled review seat's tool grant omits `Bash`, and an external review seat runs in a read-only sandbox, so any mutation, test, or parity claim you make is **analysis, not a receipt**: never phrase a finding as if you executed something. When a finding's proof needs a run, still emit it — name the **check** (the exact command, mutation, or input that would settle it) at the confidence your reading supports, and leave execution to the orchestrator. The authoritative statement is the base rubric's verification rule of the same name; this is the pointer, not a second copy. If any action awaits owner permission unanswered for 15 minutes, proceed without it and report the denied action honestly (never as done).
 
 ---
 

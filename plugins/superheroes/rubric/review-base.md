@@ -1,4 +1,4 @@
-<!-- rubric-version: 7 -->
+<!-- rubric-version: 8 -->
 # review-base
 
 The source of truth for review **severity, verification rules, findings format,
@@ -66,6 +66,19 @@ Minor and Nit findings never change the verdict regardless of strictness.
    restates the constant instead of reading the home proves nothing. (In this repo
    the rule is formalized as **CONVENTIONS §11**, with the phase-list drift test as
    its worked example; cite it by number.)
+7. **No review seat verifies by running code.** Every review seat — the five risk-domain
+   lenses and the Grounding seats — holds **no shell**: a bundled seat's tool grant omits
+   `Bash`, and an external seat runs in a read-only sandbox. So a mutation, test, parity,
+   or "I ran it" statement from a review seat is **analysis, not a receipt** — never write
+   a finding in the register of something you executed, and never imply a command was run.
+   When a finding's proof genuinely requires execution, **still emit the finding**: name the
+   **check** — the exact command, mutation, or input that would settle it — and leave its
+   confidence at the level your reading actually supports. Naming the check is the useful
+   act; claiming the run is the defect, and silently dropping the finding is worse than
+   either. Execution belongs to the dispatching orchestrator, which runs it or dispatches a
+   seat that can. Two field occurrences drove this rule: a shell-less seat that could only
+   trace a claim it was asked to prove, and a seat handed a shell that proved the same class
+   of claim by running it.
 
 ## Findings output format (the single schema — agents reference this, never restate it)
 

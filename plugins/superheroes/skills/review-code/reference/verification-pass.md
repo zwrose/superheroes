@@ -81,11 +81,12 @@ attempt must never be globbed and honored.
    - reason: one sentence with quoted evidence. Required for every verdict.
    - severity: optional — the single rubric tier the evidence justifies (Critical/Important/
      Minor/Nit); omit to keep the finding's pre-verification tier.
-   - evidence: for CONFIRMED only — the executed receipt: name the triggering input, cite the
-     line, quote the code or test output that proves the issue is real.
+   - evidence: for CONFIRMED only — name the triggering input, cite the line, and quote the
+     code you read (or an execution output the orchestrator captured and supplied) that
+     proves the issue is real.
 
    Verdict semantics:
-   - CONFIRMED — you found the triggering input and can cite it (executed receipt).
+   - CONFIRMED — you found the triggering input and can cite it.
    - PLAUSIBLE — the concern may be real but you could not fully prove it from the diff/repo.
    - REFUTED — the finding clearly does NOT hold (wrong, not in changed material, already
      handled); reason must explain why.
@@ -94,6 +95,11 @@ attempt must never be globbed and honored.
    - Judge only the findings in this cluster. Do NOT add new findings, merge findings, or
      decide the run's outcome.
    - Every verdict carries quoted evidence in reason (and evidence for CONFIRMED).
+   - **You have no shell.** Never state or imply that you ran anything — quote code you
+     read, or an execution output the orchestrator captured and handed you. A finding whose
+     proof genuinely requires a run you cannot perform stays **PLAUSIBLE**, with the needed
+     check named in `reason` for the orchestrator. (Base rubric: "No review seat verifies by
+     running code.")
 
    ## Output
    Write a JSON array to <absolute round-<N>/verdicts-<cluster-index>.json path — THIS
@@ -191,13 +197,15 @@ findings with a substantive prior justification (quoted in the record); CONFIRME
 
 ## Evidence-or-silence + the advisory disposition
 
-Only a **CONFIRMED** finding — one with an executed receipt in its verification trace — may
+Only a **CONFIRMED** finding — one whose verification trace cites the triggering input — may
 **GATE** the owner during the auto-fix loop (interrupt with `AskUserQuestion`). A **PLAUSIBLE
 Critical never GATEs and never parks**:
 
 1. **Fix if safe** — fold into the fix batch when the fix is mechanical and low-risk.
 2. **Confirming probe** — re-dispatch the verifier (`--role verifier`) for that single
-   finding to seek the triggering input; a CONFIRMED upgrade then becomes GATE-eligible.
+   finding to seek the triggering input in the diff and the repo; a CONFIRMED upgrade then
+   becomes GATE-eligible. Where the triggering input can only be established by *running*
+   something, that run is the orchestrator's — the verifier never performs it.
 3. **Grounded advisory** — record `action: "skip"`, `advisory: true`, with the PLAUSIBLE
    verdict as the verification trace (citable ground truth). It rides the handback disclosed
    through the skipped-blocker channel and never interrupts mid-run.

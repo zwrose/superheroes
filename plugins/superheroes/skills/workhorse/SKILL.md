@@ -295,9 +295,9 @@ dispatch's provenance is explicit and never implicit; the preflight's dispatch-c
 gives you this per role.
 
 **The registry is the model authority — run the gate before every dispatch.** For **each** of the
-three dispatch kinds this charter sanctions — an **implementer order**, a **fix-batch order**, and a
-**hand-rolled fallback dispatch** — you **run the model gate** on the effective `--model` you will
-pass (explicit or defaulted) *before dispatching*:
+four dispatch kinds this charter sanctions — an **implementer order**, a **fix-batch order**, a
+**`check-runner` dispatch**, and a **hand-rolled fallback dispatch** — you **run the model gate** on
+the effective `--model` you will pass (explicit or defaulted) *before dispatching*:
 `python3 -B ${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/dispatch_guard.py check --role <role> --vendor <engine> --model <model> [--effort <effort>]`.
 It validates that model against the seat's **registry allowlist** (`lib/model_registry.py`, the single
 model/vendor taxonomy; #510). **Exit 1 = an unlisted model = a park, not a pick:** the gate prints the
@@ -432,6 +432,34 @@ implementer work** — a probe's revert (a subagent's `git checkout --`) has wip
 uncommitted work five times across recent waves despite the memory of it, so the commit itself is the
 mechanical tripwire, not the memory of it (the mutation-probe sibling of §6's commit-between-orders rule).
 
+**Empirical proof has exactly three sanctioned destinations, and a review seat is never one of
+them.** No review seat holds a shell — the base rubric's verification rule *"No review seat verifies
+by running code."* (`rubric/review-base.md`) is the authoritative statement — so a prompt asking one
+to run, probe, or empirically prove anything is an **orchestrator defect**, not a seat limitation:
+the seat answers in the register of a receipt having run nothing. When a claim genuinely needs to be
+run:
+
+1. **You run it** — the default, and the only place the *decisive* check ever runs.
+2. **A committed test, via an implementer order** — when the proof belongs in the repo as a durable
+   detector rather than a throwaway probe (in this repo, CONVENTIONS `§12.1`).
+3. **A `check-runner` seat** (`agents/check-runner.md`) — when a run's sheer volume, noise, or
+   duration is the problem. **You** author the exact command list; it runs them and writes each
+   command's raw stdout, stderr, and exit code to paths you name **outside** the repo; and **you read
+   those files off disk**. Its return prose is never the receipt. It buys **context relief, not
+   trust** — treat its output exactly as you treat an implementer's. Dispatch it at the
+   **`mechanical`** registry role (`--role mechanical`) and **never to an external engine**; it
+   renders no judgment, so no independence or maker-family constraint applies to it and none should be
+   bolted on. If the seat needs a stronger model to do its job, your command list was
+   under-enumerated — rewrite it, or run it yourself.
+
+**Probe the tree before and after every `check-runner` dispatch — this is your discipline, not a
+gate.** Commit the landed work first so the baseline is clean, then capture `git rev-parse HEAD`, the
+full `git status --porcelain` (**not** `-uno`: a run's untracked output is exactly what you want to
+see), and `git reflog --date=iso HEAD | wc -l`. Any delta afterwards is a **failed verification**,
+not a warning. A dispatch that timed out, or whose child you never joined, is **INDETERMINATE** —
+never clean. What the probe cannot see is recorded as an accepted residual (`LEDGERS.md` §3), not
+claimed as covered.
+
 ## 9. Test-pilot — plan and seed here; execute via a pilot subagent
 
 - **You** do test-pilot **planning and seeding** (invoke `test-pilot-plan`).
@@ -523,7 +551,7 @@ wrap the build record in `<details><summary>Build record</summary>…</details>`
 boundary marker: **in the full lane** the **build brief** plus dispositions table + receipts +
 disclosures; **in the light lane** dispositions table + receipts + disclosures (no brief from §4);
 plus for both lanes a **dispatch provenance** section — each dispatch (the brief-check reviewer, every
-implementer, the pilot, the review-code seats) with the **engine + model** it ran on — each validated
+implementer, every `check-runner`, the pilot, the review-code seats) with the **engine + model** it ran on — each validated
 against the registry allowlist (#600), so the advisor can vet what ran without your context — plus a
 **Follow-ups for the advisor** section — out-of-scope discoveries, deferred work, or issues you noticed
 but cannot file yourself (you never wire the board). List them plainly under that exact heading (write
