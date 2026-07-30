@@ -82,22 +82,49 @@ def gather_signals(cwd, root=None):
     # per-hero legacy-profile drift: presence-only (whether or not core.md parses)
     try:
         legacy_refusal = core_md.legacy_profile_refusal(cwd, root)
-    except Exception:
-        legacy_refusal = None
+    except Exception as exc:
+        legacy_refusal = {
+            "action": "refused",
+            "reason": core_md.LEGACY_PROFILE_REASON,
+            "heroes": [],
+            "paths": [],
+            "remedy": core_md.LEGACY_PROFILE_REMEDY,
+            "detail": {"*": "%s: %s" % (type(exc).__name__, exc)},
+        }
     if legacy_refusal is not None:
         detail_map = legacy_refusal.get("detail") or {}
-        for hero in legacy_refusal.get("heroes") or []:
-            hero_detail = detail_map.get(hero)
-            path = hero_detail if hero_detail in (legacy_refusal.get("paths") or []) else None
+        heroes = legacy_refusal.get("heroes") or []
+        paths = legacy_refusal.get("paths") or []
+        core_facts_empty = core_md.core_facts_are_empty(core_rec)
+        if not heroes:
             sigs.append({
                 "type": core_md.LEGACY_PROFILE_REASON,
-                "identity": _sig_id(core_md.LEGACY_PROFILE_REASON, hero),
+                "identity": _sig_id(core_md.LEGACY_PROFILE_REASON, "*"),
                 "detail": {
+                    "hero": None,
+                    "path": None,
+                    "detail": detail_map.get("*"),
+                    "remedy": core_md.LEGACY_PROFILE_REMEDY,
+                    "coreFactsEmpty": core_facts_empty,
+                },
+            })
+        else:
+            for hero in heroes:
+                hero_detail = detail_map.get(hero)
+                path = hero_detail if hero_detail in paths else None
+                sig_detail = {
                     "hero": hero,
                     "path": path,
                     "remedy": core_md.LEGACY_PROFILE_REMEDY,
-                },
-            })
+                    "coreFactsEmpty": core_facts_empty,
+                }
+                if hero_detail is not None and path is None:
+                    sig_detail["detail"] = hero_detail
+                sigs.append({
+                    "type": core_md.LEGACY_PROFILE_REASON,
+                    "identity": _sig_id(core_md.LEGACY_PROFILE_REASON, hero),
+                    "detail": sig_detail,
+                })
 
     # calibration-not-saved (UFR-4): the machine-local pending marker, read DIRECTLY (no
     # core_md import here — avoids an import cycle; the marker path is owned by mode_registry's

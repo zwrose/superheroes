@@ -102,7 +102,11 @@ def test_legacy_profile_no_core_routes_to_fix(tmp_path):
     (tmp_path / ".claude" / "review-profile.md").write_text("legacy profile\n")
     out = crt.route(str(tmp_path), interactive=True, root=root)
     assert out["path"] == "fix"
-    assert any(s.get("type") == "legacy-profile-unsupported" for s in out["signals"])
+    assert any(s.get("type") == core_md.LEGACY_PROFILE_REASON for s in out["signals"])
+
+
+def test_structural_roster_sources_legacy_constant():
+    assert core_md.LEGACY_PROFILE_REASON in crt._STRUCTURAL
 
 
 def test_stray_legacy_with_core_routes_to_fix(tmp_path):
@@ -116,8 +120,8 @@ def test_stray_legacy_with_core_routes_to_fix(tmp_path):
     (tmp_path / ".claude" / "review-profile.md").write_text("stray legacy\n")
     out = crt.route(str(tmp_path), interactive=True, root=root)
     assert out["path"] == "fix"
-    assert "legacy-profile-unsupported" in " ".join(out["reasons"])
-    assert any(s.get("type") == "legacy-profile-unsupported" for s in out["signals"])
+    assert core_md.LEGACY_PROFILE_REASON in " ".join(out["reasons"])
+    assert any(s.get("type") == core_md.LEGACY_PROFILE_REASON for s in out["signals"])
 
 
 def test_healthy_project_without_stray_legacy_stays_in_view(tmp_path):

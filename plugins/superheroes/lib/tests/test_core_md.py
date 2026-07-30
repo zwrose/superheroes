@@ -731,6 +731,32 @@ def test_resolve_shared_none_when_neither_present(tmp_path):
     assert CM.resolve_shared(repo, root=store) is None
 
 
+def test_core_facts_are_empty_none():
+    assert CM.core_facts_are_empty(None) is True
+
+
+def test_core_facts_are_empty_placeholder():
+    rec = {
+        "schemaVersion": CM.SCHEMA_VERSION,
+        "verifyCommand": None,
+        "stackTags": [],
+        "threatModel": "",
+        "patterns": "",
+    }
+    assert CM.core_facts_are_empty(rec) is True
+
+
+def test_core_facts_are_empty_populated():
+    rec = {
+        "schemaVersion": CM.SCHEMA_VERSION,
+        "verifyCommand": "npm test",
+        "stackTags": ["node"],
+        "threatModel": "multi-tenant",
+        "patterns": "- x: a.ts:1",
+    }
+    assert CM.core_facts_are_empty(rec) is False
+
+
 def test_resolve_shared_refusal_leaves_no_pending_marker(tmp_path):
     # E14: refusal path leaves no calibration-pending marker. Not asserting config_lock:
     # resolve_shared does acquire the lock once via read()'s mode_registry.resolve backfill
@@ -738,10 +764,28 @@ def test_resolve_shared_refusal_leaves_no_pending_marker(tmp_path):
     # path guarantees no migrate, unlink, commit, or mark_pending.
     repo = str(tmp_path)
     store = str(tmp_path / "store")
-    _write_legacy_inrepo(repo, "review-crew")
+    _init_git_repo(repo)
+    legacy_path = _write_legacy_inrepo(repo, "review-crew")
+    subprocess.run(["/usr/bin/git", "-C", repo, "add", legacy_path], check=True)
+    subprocess.run(["/usr/bin/git", "-C", repo, "commit", "-q", "-m", "track legacy"], check=True)
+    head_before = subprocess.check_output(
+        ["/usr/bin/git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
+    legacy_bytes_before = open(legacy_path, "rb").read()
+    porcelain_before = subprocess.check_output(
+        ["/usr/bin/git", "-C", repo, "status", "--porcelain"], text=True)
     got = CM.resolve_shared(repo, root=store)
     assert got is not None and got["action"] == "refused"
     assert not os.path.exists(CM._pending_path(repo, store))
+    assert os.path.isfile(legacy_path)
+    assert open(legacy_path, "rb").read() == legacy_bytes_before
+    head_after = subprocess.check_output(
+        ["/usr/bin/git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
+    assert head_after == head_before
+    porcelain_after = subprocess.check_output(
+        ["/usr/bin/git", "-C", repo, "status", "--porcelain"], text=True)
+    rel_legacy = os.path.relpath(legacy_path, repo)
+    assert rel_legacy not in porcelain_before
+    assert rel_legacy not in porcelain_after
 
 
 _REMOVED_MIGRATION_SYMBOLS = (

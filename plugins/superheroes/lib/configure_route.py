@@ -19,7 +19,7 @@ import mode_registry   # noqa: E402
 # Reconcile signal types that mean "a structural fix is pending" (route to fix, not view).
 _STRUCTURAL = (
     "migration-pending", "disagreement", "doc-policy-provisional",
-    "legacy-profile-unsupported", "core-md-unreadable", "calibration-not-saved",
+    core_md.LEGACY_PROFILE_REASON, "core-md-unreadable", "calibration-not-saved",
 )
 
 

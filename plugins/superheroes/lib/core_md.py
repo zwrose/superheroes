@@ -689,6 +689,25 @@ import argparse
 _HEROES = ("review-crew", "test-pilot", "guardian")
 
 
+def core_facts_are_empty(rec):
+    """True when a core.md record PARSES but carries no real shared facts (no verify command,
+    threat model, canonical patterns, or stack tags) — an empty placeholder. Restores the
+    READ-ONLY half of the #121 Part D belt that went with migrate_on_read (#724): presence of
+    such a record must never be read as a populated calibration when advising an owner whether a
+    legacy profile is safe to remove. Pure; no I/O; never raises."""
+    if rec is None:
+        return True
+    if rec.get("verifyCommand"):
+        return False
+    if (rec.get("threatModel") or "").strip():
+        return False
+    if (rec.get("patterns") or "").strip():
+        return False
+    if rec.get("stackTags"):
+        return False
+    return True
+
+
 def resolve_shared(cwd, *, root=None):
     """The shared facts (FR-2). A legacy single-file profile is NO LONGER migrated on read: when
     core.md supplies the facts the legacy file is simply never consulted, and when it does not,

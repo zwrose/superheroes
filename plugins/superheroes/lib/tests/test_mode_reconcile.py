@@ -344,8 +344,67 @@ def test_legacy_profile_signal_when_detection_exception(tmp_path, monkeypatch):
 
     monkeypatch.setattr(os, "lstat", _lstat)
     sigs = rc.gather_signals(str(tmp_path), root=str(tmp_path / "store"))
-    assert any(s["type"] == "legacy-profile-unsupported"
-               and s["detail"]["hero"] == "review-crew" for s in sigs)
+    legacy = [s for s in sigs if s["type"] == "legacy-profile-unsupported"]
+    assert len(legacy) == 1
+    assert legacy[0]["detail"]["hero"] == "review-crew"
+    assert legacy[0]["detail"]["path"] is None
+    assert "denied for test" in legacy[0]["detail"]["detail"]
+
+
+def test_legacy_profile_signal_on_detection_total_failure(tmp_path, monkeypatch):
+    import core_md as _cm
+
+    _init_repo(tmp_path)
+    monkeypatch.setattr(_cm, "legacy_profile_refusal", lambda *a, **k: {
+        "action": "refused",
+        "reason": _cm.LEGACY_PROFILE_REASON,
+        "heroes": [],
+        "paths": [],
+        "remedy": _cm.LEGACY_PROFILE_REMEDY,
+        "detail": {"*": "RuntimeError: detection exploded"},
+    })
+    sigs = rc.gather_signals(str(tmp_path), root=str(tmp_path / "store"))
+    legacy = [s for s in sigs if s["type"] == "legacy-profile-unsupported"]
+    assert len(legacy) == 1
+    assert legacy[0]["detail"]["hero"] is None
+    assert legacy[0]["detail"]["path"] is None
+    assert legacy[0]["detail"]["detail"] == "RuntimeError: detection exploded"
+
+
+def test_legacy_profile_signal_core_facts_empty(tmp_path, monkeypatch):
+    import core_md as _cm
+
+    _init_repo(tmp_path)
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    (tmp_path / ".claude").mkdir(exist_ok=True)
+    (tmp_path / ".claude" / "review-profile.md").write_text("stray legacy\n")
+    # empty-placeholder core: schemaVersion only, no real facts
+    d = os.path.join(str(tmp_path), ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, "core.md"), "w").write(
+        "<!-- superheroes-core: schemaVersion=2 status=confirmed created=2026-06-26 "
+        "updated=2026-06-26 -->\n\n## Threat model\n\n\n\n## Canonical patterns\n\n\n\n"
+        "```json superheroes-core\n"
+        + json.dumps({"schemaVersion": 2, "verifyCommand": None, "stackTags": []}, indent=2)
+        + "\n```\n")
+    sigs = [s for s in rc.gather_signals(str(tmp_path), root=str(tmp_path / "store"))
+            if s["type"] == _cm.LEGACY_PROFILE_REASON]
+    assert len(sigs) == 1
+    assert sigs[0]["detail"]["coreFactsEmpty"] is True
+
+
+def test_legacy_profile_signal_core_facts_populated(tmp_path, monkeypatch):
+    import core_md as _cm
+
+    _init_repo(tmp_path)
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    _write_core_file(str(tmp_path), status="confirmed")
+    (tmp_path / ".claude").mkdir(exist_ok=True)
+    (tmp_path / ".claude" / "review-profile.md").write_text("stray legacy\n")
+    sigs = [s for s in rc.gather_signals(str(tmp_path), root=str(tmp_path / "store"))
+            if s["type"] == _cm.LEGACY_PROFILE_REASON]
+    assert len(sigs) == 1
+    assert sigs[0]["detail"]["coreFactsEmpty"] is False
 
 
 def test_no_legacy_no_legacy_profile_signal(tmp_path):

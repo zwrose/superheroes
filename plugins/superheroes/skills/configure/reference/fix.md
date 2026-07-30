@@ -13,9 +13,9 @@ An unambiguous format/version update is applied **without prompting** where such
 on-disk transformation at all — older `schemaVersion` is upgraded **in memory only**, never written
 back (UFR-2), and a legacy profile is refused rather than converted (#724). In repo-shared mode the change
 travels with the repo (collaborators receive it); in out-of-repo mode it is made only on the local
-machine. `resolve_shared` is a **pure read** — it returns the shared facts from `core.md`, or the
-named `legacy-profile-unsupported` refusal when `core.md` cannot supply them and a pre-`core.md`
-legacy profile is present. It applies nothing and writes nothing:
+machine. `resolve_shared` returns shared facts from `core.md` or the `legacy-profile-unsupported`
+refusal; it never migrates, unlinks, or commits (detection writes nothing) but is not write-free —
+`read()` inherits `mode_registry.resolve`'s project-store backfill:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -40,13 +40,13 @@ old automatic adoption could clobber a `core.md` and the legacy profile itself (
 
 The remedy is **re-calibration through this skill**, and it has two shapes:
 
-- **legacy profile, no `core.md`** → `configure` routes to **set-up**: write a fresh `core.md`
-  plus the hero layers from detection + the owner's answers. Once `core.md` parses,
-  `resolve_shared` stops refusing.
-- **`core.md` already present, a stray legacy profile still on disk** → `configure` routes to
-  **fix**, driven by the `legacy-profile-unsupported` reconcile signal. Nothing is refused (the
-  facts come from `core.md`); the fix is to tell the owner the stray file is no longer read and let
-  **them** remove or archive it.
+- **legacy profile, no `core.md`** → **fix** (not set-up): legacy is hero evidence so
+  `mode_registry.resolve` backfills a registry; seed `core.md` + hero layers keeping the recorded
+  mode. Once `core.md` parses, `resolve_shared` stops refusing.
+- **`core.md` present + stray legacy** → **fix** via `legacy-profile-unsupported`. When
+  `coreFactsEmpty` is false, tell the owner the stray file is no longer read and they may remove
+  or archive it. When true, name the legacy path as the only populated calibration and require its
+  content into `core.md` + the layer before removal.
 
 **Superheroes never deletes the legacy file** — the owner does. An unreadable or malformed legacy
 profile is reported, left untouched, and asked about rather than guessed at (UFR-9). The refusal
