@@ -14,8 +14,10 @@
 {{#if findings}}
 ### Findings
 
-Bugs and plan/seed problems observed. These are **findings, not fixes** — the
-invoking session routes each one to a fix.
+Bugs, plan/seed problems, and procedure/harness artifacts observed — an
+artifact-classified step is **still reported as a failure**, with its variation
+noted. These are **findings, not fixes** — the invoking session routes each one
+to a fix.
 
 {{#each findings}}
 - {{description}} — {{scrubbed-evidence}}

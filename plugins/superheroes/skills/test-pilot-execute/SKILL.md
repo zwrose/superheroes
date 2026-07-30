@@ -105,8 +105,14 @@ frozen: any problem you hit is a finding, never a re-provisioning.
    (unconfirmed — variation unsafe)** and note the mechanism could not be
    **safely** varied. If variation is not possible, record the finding as
    **app bug (unconfirmed — evidence ceiling)**. If the variation **succeeds**,
-   classify it as a **procedure/harness artifact** (the original failure was
-   pilot-procedure or harness, not app behavior). Otherwise classify it
+   classify by which axis cleared it: **re-resolving by accessible name** ⇒
+   **procedure/harness artifact** (the pilot's targeting was at fault, not app
+   behavior). **Keyboard activation**, when the primary pointer action was
+   correctly targeted ⇒ **app bug** — the control does not respond to pointer
+   input (a pointer-handling / event-handler defect). Reserve
+   **procedure/harness artifact** for variations whose success shows the
+   pilot's own procedure or harness was at fault, not the app's behavior.
+   Otherwise classify it
    (plan/seed problem, or app bug) and capture a scrubbed diagnosis with its
    evidence (console, network, DOM). Then **continue the remaining steps.** You
    never fix code, never edit or re-seed-and-retry the plan, never commit — a
@@ -135,5 +141,5 @@ frozen: any problem you hit is a finding, never a re-provisioning.
 | "It's basically done, I'll check the plan boxes" | Boxes are the human's spot-check. Leave them. |
 | "The console dump is harmless, paste it raw" | Scrub EVERY diagnostic. No raw headers, ever. |
 | "No browser tool — I'll verify via curl instead" | Abort with remediation. curl is not the plan. |
-| "I reproduced it N/N with the same steps — it's an app bug" | N identical-procedure runs test the procedure N times. Vary once (keyboard activation or re-resolve by accessible name) only if no state change occurred — if variation succeeds, classify **procedure/harness artifact**; if impossible, **app bug (unconfirmed — evidence ceiling)**. |
+| "I reproduced it N/N with the same steps — it's an app bug" | N identical-procedure runs test the procedure N times. Vary once (keyboard activation or re-resolve by accessible name) only if no state change occurred — re-resolve success ⇒ **procedure/harness artifact**; keyboard success (correctly targeted pointer) ⇒ **app bug** (pointer-handling defect); if impossible, **app bug (unconfirmed — evidence ceiling)**. |
 | "The control doesn't respond, so the feature is broken" | Scripted clicks miss pointer/mouse-down handlers and `aria-disabled` rows can sort first — re-target by accessible name and drive with a pointer action; if state may have changed, do not re-activate — record **app bug (unconfirmed — variation unsafe)**. |
