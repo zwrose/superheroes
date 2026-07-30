@@ -586,3 +586,99 @@ def test_dispatch_write_cli_effort_optional(tmp_path):
     ]
     code = ED.main(argv)
     assert code == 0
+
+
+# --- process-group liveness + abandon confirmation -----------------------------
+
+
+def test_process_group_alive_zombie_only_is_dead():
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)"],
+        start_new_session=True,
+    )
+    pgid = proc.pid
+    ED._terminate_process_group(pgid)
+    try:
+        assert not ED._process_group_alive(pgid)
+    finally:
+        proc.wait(timeout=2)
+
+
+def test_process_group_alive_live_member():
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)"],
+        start_new_session=True,
+    )
+    try:
+        assert ED._process_group_alive(proc.pid)
+    finally:
+        ED._terminate_process_group(proc.pid)
+        proc.wait(timeout=2)
+
+
+def test_process_group_alive_ps_probe_fail_closed(monkeypatch):
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)"],
+        start_new_session=True,
+    )
+    try:
+        def boom(*_a, **_k):
+            raise OSError("ps unavailable")
+
+        monkeypatch.setattr(ED.subprocess, "run", boom)
+        assert ED._process_group_alive(proc.pid) is True
+    finally:
+        ED._terminate_process_group(proc.pid)
+        proc.wait(timeout=2)
+
+
+def test_process_group_alive_none_and_zero_never_killpg_zero(monkeypatch):
+    calls = []
+    real_killpg = os.killpg
+
+    def track(pgid, sig):
+        calls.append((pgid, sig))
+        return real_killpg(pgid, sig)
+
+    monkeypatch.setattr(os, "killpg", track)
+    assert ED._process_group_alive(None) is False
+    assert ED._process_group_alive(0) is False
+    assert all(c[0] != 0 for c in calls)
+
+
+def test_dispatch_abandon_alive_engine_releases_lease(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)"],
+        start_new_session=True,
+    )
+    try:
+        ED._acquire_worktree_lease(os.path.realpath(wt), run_dir)
+        ED._journal_append(run_dir, {
+            "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
+            "roleKind": "build", "orderId": "abandon-test", "argv": ["codex"],
+            "cwd": os.path.realpath(wt), "timeout": 60, "retryTimeout": 60,
+            "promptPath": os.path.join(run_dir, "prompt.txt"),
+            "viewPath": None, "baseSha": "abc", "supervisorPid": 1, "at": time.time(),
+        })
+        ED._journal_append(run_dir, {
+            "kind": "attempt-started", "attempt": 1, "childPid": proc.pid, "at": time.time(),
+        })
+        ED._journal_append(run_dir, {
+            "kind": "engine-started", "attempt": 1, "enginePgid": proc.pid, "at": time.time(),
+        })
+        lease_path = ED._worktree_lease_path(os.path.realpath(wt))
+        assert os.path.exists(lease_path)
+        res = ED.dispatch_abandon(run_dir)
+        assert res["detail"] == "run-abandoned"
+        assert not os.path.exists(lease_path)
+        records, _ = ED._journal_read(run_dir)
+        assert records[-1]["kind"] == "run-abandoned"
+    finally:
+        ED._terminate_process_group(proc.pid)
+        try:
+            proc.wait(timeout=2)
+        except Exception:
+            pass

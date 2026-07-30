@@ -55,6 +55,7 @@ DEFAULT_SYNC_WAIT = 540          # below the 600 s foreground-conversion boundar
 MAX_SYNC_WAIT = 540              # hard cap: a caller can ask for less, never more
 MAX_ATTEMPTS = 2                 # unchanged semantics: one tight-inline retry
 SUPERVISOR_POLL_INTERVAL = 0.5
+ABANDON_CONFIRM_SECONDS = 10
 JOURNAL_ROOT_ENV = "SUPERHEROES_DISPATCH_JOURNAL_ROOT"
 JOURNAL_ROOT_NAME = "superheroes-dispatch-journal"
 JOURNAL_NAME = "journal.jsonl"
@@ -221,17 +222,48 @@ def _process_alive(pid):
 
 
 def _process_group_alive(pgid):
+    """Zombie-aware process-group liveness; fail closed when ps is ambiguous."""
     if pgid is None:
         return False
     try:
-        os.killpg(int(pgid), 0)
-        return True
-    except Exception:
+        pgid = int(pgid)
+    except (TypeError, ValueError):
         return False
+    if pgid == 0:
+        return False
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    except Exception:
+        return True
+    try:
+        out = subprocess.run(
+            ["ps", "-g", str(pgid), "-o", "state="],
+            capture_output=True, text=True, timeout=2,
+        )
+        if out.returncode != 0:
+            return True
+        states = (out.stdout or "").strip().split()
+        if not states:
+            return True
+        for state in states:
+            if state and not state.startswith(("Z", "z")):
+                return True
+        return False
+    except Exception:
+        return True
 
 
 def _terminate_process_group(pgid):
     if pgid is None:
+        return
+    try:
+        if int(pgid) == 0:
+            return
+    except (TypeError, ValueError):
         return
     for sig in (signal.SIGTERM, signal.SIGKILL):
         try:
@@ -1757,24 +1789,36 @@ def dispatch_abandon(run_dir):
 
         _journal_append(run_dir_real, {"kind": "abandon-requested", "at": time.time()})
 
-        for att in sorted(state.get("attempts", {})):
-            slot = state["attempts"][att]
-            if slot.get("ended") is None:
-                if slot.get("enginePgid") is not None:
-                    _terminate_process_group(slot["enginePgid"])
-                if slot.get("childPid") is not None:
-                    _terminate_pid(slot["childPid"])
+        def _signal_live_attempts(st):
+            for att in sorted(st.get("attempts", {})):
+                slot = st["attempts"][att]
+                if slot.get("ended") is None:
+                    if slot.get("enginePgid") is not None:
+                        _terminate_process_group(slot["enginePgid"])
+                    if slot.get("childPid") is not None:
+                        _terminate_pid(slot["childPid"])
 
-        records, _corrupt = _journal_read(run_dir_real)
-        state = _journal_state(records)
-        alive, _who = _run_live_evidence(state)
-        if alive:
-            return _with_run_fields(
-                {"ok": False, "terminal": True, "reason": "unrunnable",
-                 "detail": "abandon-incomplete", "abandonDetail": "engine-death-unconfirmed",
-                 "attempts": len(state.get("attempts") or {}), "forfeited": False},
-                run_dir=run_dir_real, argv=argv,
-            )
+        _signal_live_attempts(state)
+
+        deadline = time.monotonic() + ABANDON_CONFIRM_SECONDS
+        resignalled = False
+        while True:
+            records, _corrupt = _journal_read(run_dir_real)
+            state = _journal_state(records)
+            alive, _who = _run_live_evidence(state)
+            if not alive:
+                break
+            if time.monotonic() >= deadline:
+                return _with_run_fields(
+                    {"ok": False, "terminal": True, "reason": "unrunnable",
+                     "detail": "abandon-incomplete", "abandonDetail": "engine-death-unconfirmed",
+                     "attempts": len(state.get("attempts") or {}), "forfeited": False},
+                    run_dir=run_dir_real, argv=argv,
+                )
+            if not resignalled:
+                resignalled = True
+                _signal_live_attempts(state)
+            time.sleep(SUPERVISOR_POLL_INTERVAL)
 
         _finalize_run(run_dir_real, state, terminal=True)
         _journal_append(run_dir_real, {
