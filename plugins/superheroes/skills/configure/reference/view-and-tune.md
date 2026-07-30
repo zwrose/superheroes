@@ -21,7 +21,8 @@ import sys; sys.path.insert(0,'$ROOT_DIR/lib'); import configure_view
 print(configure_view.render('.'))"
 ```
 
-One plain-text screen, top to bottom: the project's core facts, the **Dispatch calibration** (the
+One plain-text screen, top to bottom: the project's core facts (including the **Show-it surface**
+declaration when present), the **Dispatch calibration** (the
 effective engine + model for every v2 dispatch role) and its Codex model-pin detail, each hero's
 layer, the pinned patterns, and the **Model tiers** block — "here is everything superheroes knows
 about this project," not a list of files. Any current staleness/drift is shown as a **single,
@@ -84,6 +85,27 @@ action that owns it, leaving the rest of the calibration untouched:
   implementer/pilot) → show the effective map first, then write only the `## Model tiers` block in
   the resolved review-crew profile. This is an optional tune action: if the owner declines, change
   nothing.
+- **Declare or change the Show-it surface** → persist **only** the `## Show-it surface`
+  section in `core.md`, leaving every other section untouched. Clearing it (empty stdin)
+  returns the project to `none`:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  printf '%s\n' '<Level/What-the-owner-does/Notes prose>' | \
+    python3 -B "$ROOT_DIR/lib/core_md.py" write-show-it --cwd .
+  ```
+
+  To clear:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  printf '' | python3 -B "$ROOT_DIR/lib/core_md.py" write-show-it --cwd .
+  ```
+
+  **Read the result, don't assume success.** `write-show-it` returns `{action, reason?}`.
+  Only `written` or `noop` means the Show-it declaration was saved — surface any other
+  `action` (`refused`, `deferred`, `behind`) to the owner with its `reason`; the command
+  exits 0 either way, so check `action`, not exit status.
 
 - **Pin a concrete Codex model for one role** → keep the provider-neutral `## Model tiers` block
   unchanged and write the pin under `core.md`'s `enginePreferences.codexModels`. Valid role keys are
