@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
-"""Deterministic structural validator for published skills (stdlib only).
+"""Deterministic structural validator for published skills.
 
 Run from the repo root in CI, after validate_hosts.py. Enforces the token-shape
 rules for SKILL.md bodies and their one-hop reference files, reading ceilings and
 required description phrases from eval/skills/registry.json and the known-red set
-from eval/skills/baseline.json. Exits non-zero, naming each <rule>: <skill>: <detail>.
+from eval/skills/baseline.json. Frontmatter must be strict YAML (yaml.safe_load);
+PyYAML is required — run under an interpreter that has it installed. Exits non-zero,
+naming each <rule>: <skill>: <detail>.
 """
 import json
 import os
 import sys
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 PLUGINS = os.path.join(REPO, "plugins")
@@ -85,6 +92,38 @@ def check_phrases(skill_key, description, required_phrases):
     ]
 
 
+def check_frontmatter_yaml(skill_key, raw, regex_description):
+    """Validate SKILL.md frontmatter with yaml.safe_load (same block as skills.parse_skill)."""
+    block = skills.frontmatter_block(raw)
+    if block is None:
+        return []
+    try:
+        data = yaml.safe_load(block)
+    except yaml.YAMLError as exc:
+        return [
+            f"frontmatter-yaml: {skill_key}: frontmatter is not valid YAML "
+            f"(quote the description if it contains a bare colon: space): {exc}"
+        ]
+    except Exception as exc:
+        return [f"frontmatter-yaml: {skill_key}: frontmatter YAML load failed: {exc}"]
+    if data is None or not isinstance(data, dict):
+        return [f"frontmatter-yaml: {skill_key}: frontmatter must be a YAML mapping with a description"]
+    if "description" not in data:
+        return [f"frontmatter-yaml: {skill_key}: frontmatter has no description key"]
+    loaded = data["description"]
+    if not isinstance(loaded, str):
+        return [
+            f"frontmatter-yaml: {skill_key}: description must be a string, "
+            f"got {type(loaded).__name__}"
+        ]
+    if loaded != regex_description:
+        return [
+            f"frontmatter-yaml: {skill_key}: yaml.safe_load and skills.parse_skill "
+            f"disagree on the description"
+        ]
+    return []
+
+
 def check_depth(skill_key, text, plugin_dir):
     out = []
     seen = set()
@@ -158,6 +197,7 @@ def gather_violations(plugins_root, registry, red_set, conv_secs, combined_befor
         errors += check_conventions_refs(key, raw, conv_secs)
         errors += check_depth(key, raw, plugin_dir)
         errors += check_phrases(key, description, registry["requiredPhrases"].get(key, []))
+        errors += check_frontmatter_yaml(key, raw, description)
 
     # FR-10: combined description size strictly smaller than the recorded pre-change baseline.
     if combined_before is not None and combined_now >= combined_before:
@@ -168,6 +208,13 @@ def gather_violations(plugins_root, registry, red_set, conv_secs, combined_befor
 
 
 def main(argv=None):
+    if yaml is None:
+        sys.stderr.write(
+            "validate_skills.py requires PyYAML (import yaml failed). "
+            "Run under an interpreter with PyYAML installed "
+            "(e.g. /usr/bin/python3) or: python3 -m pip install pyyaml\n"
+        )
+        return 1
     argparse.ArgumentParser(description="validate skill token-shape").parse_args(argv or [])
     registry = skills.load_registry(REGISTRY)
     if os.path.isfile(BASELINE):

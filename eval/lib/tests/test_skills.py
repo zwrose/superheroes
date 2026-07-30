@@ -1,7 +1,26 @@
 # eval/lib/tests/test_skills.py
+import pytest
+
 import skills
 
 SAMPLE = "---\nname: demo\ndescription: Does a thing. Use when X.\n---\n# Demo\n\nBody line.\n"
+
+
+def test_parse_skill_raises_when_no_leading_frontmatter_block():
+    with pytest.raises(ValueError, match="no leading frontmatter block"):
+        skills.parse_skill("# Demo\n\nNo frontmatter.\n")
+
+
+def test_frontmatter_block_none_vs_empty():
+    assert skills.frontmatter_block("# no block\n") is None
+    assert skills.frontmatter_block("---\n\n---\nbody\n") == ""
+
+
+def test_parse_skill_present_but_empty_frontmatter_block():
+    desc, body = skills.parse_skill("---\n\n---\nbody\n")
+    assert desc == ""
+    assert body == "body\n"
+
 
 def test_parse_skill_splits_description_and_body():
     desc, body = skills.parse_skill(SAMPLE)

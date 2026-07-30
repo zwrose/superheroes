@@ -134,6 +134,16 @@ _NUDGE_TAIL = (
 )
 
 
+def _cache_parent_hint(plugin_root):
+    """Absolute plugin-cache parent for truncation hints; absent on import/call failure."""
+    try:
+        import cache_markers
+        return cache_markers.cache_parent(plugin_root)
+    except Exception as exc:
+        _breadcrumb("Plugin cache hygiene", type(exc).__name__)
+        return None
+
+
 def cache_hygiene(plugin_root):
     """One-line advisor nudge when other plugin-version dirs hold stale `.in_use`
     markers. READ-ONLY — reports, never deletes. '' when nothing is stale (a clean
@@ -223,11 +233,10 @@ def assemble(cwd, transcript_path, plugin_root, host, char_budget=9000):
     hook's stderr (which an owner's agent cannot see)."""
     del _FAILURES[:]                                  # reset the per-assemble failure collector
     try:
-        cache_parent = os.path.dirname(os.path.abspath(plugin_root or "."))
         records = [
             _Rec("Resolved plugin roots", resolved_roots(plugin_root, host),
                  os.path.join(os.path.abspath(plugin_root or "."), "hosts", "%s-tools.md" % host)),
-            _Rec("Plugin cache hygiene", cache_hygiene(plugin_root), cache_parent),
+            _Rec("Plugin cache hygiene", cache_hygiene(plugin_root), _cache_parent_hint(plugin_root)),
             _Rec("Covenant", covenant(cwd, plugin_root),
                  _covenant_doc(plugin_root)),
         ]
