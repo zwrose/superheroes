@@ -243,6 +243,12 @@ def _file_section(rel, heading, read_text=None):
         read_text = _read_plugin
     text = read_text(rel)
     lines = text.splitlines()
+    fence_count = sum(1 for line in lines if line.lstrip().startswith("```"))
+    if fence_count % 2 != 0:
+        raise RuntimeError(
+            f"{rel}: odd number ({fence_count}) of ``` fence markers — "
+            "section boundaries cannot be determined"
+        )
     in_fence = False
     indices = []
     for i, line in enumerate(lines):
@@ -808,6 +814,35 @@ def test_fence_heading_does_not_count_as_duplicate():
 
     result = _file_section("synthetic.md", "## Your duties", read_text)
     assert "real section content" in result
+
+
+def test_unbalanced_fence_raises():
+    # Mutant killed: remove the unbalanced-fence refusal and this test must fail.
+    def read_text(_rel):
+        return "## S\na\n```\n"
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"odd number \(1\) of ``` fence markers — section boundaries cannot be determined",
+    ):
+        _file_section("synthetic.md", "## S", read_text)
+
+
+def test_unclosed_fence_cross_section_leak_raises():
+    # Mutant killed: remove the unbalanced-fence refusal and this test must fail.
+    synthetic_text = "\n".join([
+        "## S",
+        "a",
+        "```",
+        "## Other section",
+        "LEAKED_FROM_OTHER",
+    ])
+
+    def read_text(_rel):
+        return synthetic_text
+
+    with pytest.raises(RuntimeError):
+        _file_section("synthetic.md", "## S", read_text)
 
 
 def test_negative_section_scoped_copy_check_rejects_out_of_section_match():
