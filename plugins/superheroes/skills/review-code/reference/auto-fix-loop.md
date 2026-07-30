@@ -390,9 +390,13 @@ You are the fixer for one round of an auto-fix code-review loop.
    When you need to verify something by *running* it, choose a throwaway test file path inside
    the build worktree, named with the fixed prefix `autofix-probe-` so a leftover one is
    identifiable. **Before writing it, check that the chosen path does not already exist** — a
+   **filesystem** existence check on the path (does a file exist there), not a git query: git
+   does not know about ignored or untracked-but-present files for this purpose, and this repo's
+   gitignored `docs/` holds real owner content a git-flavoured check would miss. A
    crashed prior round can leave its own probe behind under a predictable name, and an
    unrelated tracked file could occupy it too. If the name is already taken, pick a different
-   one (e.g. add a unique suffix) rather than overwriting whatever is there. If you cannot
+   one (e.g. add a unique suffix, still carrying the `autofix-probe-` prefix) rather than
+   overwriting whatever is there. If you cannot
    establish that your chosen path is new, do not write a probe there and do not delete
    anything — report it instead. Once the path is confirmed new, write the file and run it
    with the project's test-run family (e.g. `pytest` or the repo's test command); do not

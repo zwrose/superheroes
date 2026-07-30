@@ -469,8 +469,10 @@ written throwaway test does exactly that. When a claim needs a run no review sea
    action (`Agent` on Claude, `spawn_agent` on Codex) — **never to an external engine**; it renders
    no judgment, so no independence or maker-family constraint applies to it and none should be
    bolted on. **Establish whether the `mechanical` role resolves on this host by running the §7
-   model gate for `--role mechanical` against the host's own vendor** — running the gate is how
-   you learn what is available; it commits you to nothing. Then follow the gate's outcome:
+   model gate for `--role mechanical` against the host's own vendor, omitting `--model`**: it
+   resolves the seat default and reports `effort_source: "seat-default"` when the role resolves;
+   the no-sanctioned-model case prints an **empty `allowlist`**. It is only a query — nothing is
+   dispatched until you dispatch it. Then follow the gate's outcome:
 
    1. **Run the §7 model gate** for `--role mechanical` against the **host's own vendor**.
    2. **Exit 1 because the role has no sanctioned model on that vendor** → the **route is
@@ -480,7 +482,8 @@ written throwaway test does exactly that. When a claim needs a run no review sea
    3. **Exit 1 for any other reason** — you named a model outside the allowlist for a role that
       *does* resolve — → **park**, exactly as §7 says.
    4. **Exit 0** → dispatch the seat as a **host subagent** (`Agent` on Claude, `spawn_agent` on
-      Codex), **never to an external engine**.
+      Codex), **never to an external engine** — and obey §7's exit-0 half, exactly as §7 says:
+      thread the resolved `model_id` and `effort`, and record them in the dispatch-provenance row.
 
    If the seat needs a stronger model to do its job, your command list was under-enumerated —
    rewrite it, or run it yourself.
