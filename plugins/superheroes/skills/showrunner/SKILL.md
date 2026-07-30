@@ -234,7 +234,9 @@ the reviewer and the owner's authorization carry that check instead.**
      which is indistinguishable from an empty collector, and never a second collector opened alongside
      the first. **Age is counted in vets, from the artifacts:** each pending item carries the vet that
      proposed it, and vet receipts are themselves greppable by their marker, so the number of vets since
-     an item was proposed is a count of intervening receipts — not a memory. **An item the
+     an item was proposed is a count of the receipts posted after it **plus the vet you are in** — not a
+     memory. Count the current vet: your own receipt has not posted yet when you reconcile, so counting
+     only already-posted receipts reports one fewer and fires the escalation a vet late. **An item the
      reconciliation surfaces means the primary path failed for that item** — not routine throughput —
      and an item **still open two vets after it was proposed** is evidence the owner batch is not
      happening, which the receipt says plainly rather than re-listing as though carrying were normal.

@@ -470,7 +470,8 @@ def test_vet_receipt_markers_match_conventions_10_7():
     )
 
     # The authoritative home's own `## Markers` section — NOT the whole file: the `## Skeleton`
-    # section below it repeats every literal, so a whole-file scan would pass vacuously.
+    # section below it repeats two of the three literals (advisor-vet lives in the PR body, not the
+    # receipt), so a whole-file scan would pass vacuously for either of those two.
     receipt = _read("skills/showrunner/reference/vet-receipt.md")
     section = re.search(r"^## Markers$\n(.*?)(?=^## )", receipt, re.MULTILINE | re.DOTALL)
     assert section, "vet-receipt.md `## Markers` section not found (moved or renamed?)"
@@ -481,10 +482,20 @@ def test_vet_receipt_markers_match_conventions_10_7():
         % (sorted(in_receipt), sorted(_VET_RECEIPT_MARKERS))
     )
 
-    # The advisor is told to stamp and re-check this exact literal, so its bytes are load-bearing
-    # in the charter too. (Only advisor-vet: the charter does not carry the other two.)
+    # DERIVED, never hand-typed. A literal spelled out here passes the one drift this test exists to
+    # catch: a coordinated rename landing in §10.7, the receipt and the constant but NOT the charter
+    # leaves the charter stale while the assertion happily finds its own stale copy (verified live —
+    # the whole suite passed in exactly that state). So instead: every marker the charter carries must
+    # be one §10.7 names, and the charter must carry at least one of the vet family it tells the
+    # advisor to stamp.
     charter = _read("skills/showrunner/SKILL.md")
-    assert "<!-- superheroes:advisor-vet -->" in charter, (
-        "showrunner/SKILL.md no longer carries the advisor-vet marker literal it tells the "
-        "advisor to stamp and to re-check on every re-vet"
+    charter_markers = set(re.findall(r"(<!-- superheroes:[^>]+ -->)", charter))
+    stale = charter_markers - (in_home | set(_FLOOR_MARKERS))
+    assert not stale, (
+        "showrunner/SKILL.md carries marker literal(s) %r that CONVENTIONS §10.7 does not name — "
+        "a rename reached the home but not the charter" % sorted(stale)
+    )
+    assert charter_markers & in_home, (
+        "showrunner/SKILL.md carries no vet-receipt marker literal at all — it tells the advisor to "
+        "stamp one and to re-check it whenever it next reads the PR body"
     )
