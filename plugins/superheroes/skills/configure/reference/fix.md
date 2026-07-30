@@ -11,7 +11,9 @@ provisional. Apply what is unambiguous silently; surface what needs an owner dec
 A calibration file brought up to date by a single unambiguous transformation (a format/version bump
 with exactly one correct result) is applied **without prompting**. In repo-shared mode the change
 travels with the repo (collaborators receive it); in out-of-repo mode it is made only on the local
-machine. Migrate-on-read is the trigger:
+machine. `resolve_shared` is a **pure read** — it returns the shared facts from `core.md`, or the
+named `legacy-profile-unsupported` refusal when `core.md` cannot supply them and a pre-`core.md`
+legacy profile is present. It applies nothing and writes nothing:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -20,15 +22,34 @@ import sys; sys.path.insert(0,'$ROOT_DIR/lib'); import core_md
 print(core_md.resolve_shared('.'))"
 ```
 
+Probe it: a **fact dict** means nothing to apply here; a dict whose `action` is `refused` means go
+to section 2; **`None`** means greenfield — that is a set-up, not a fix.
+
 If a write cannot complete, the original file is left intact and the failure is surfaced — never a
 partial or corrupt file (UFR-8). Any update needing an owner **choice** is surfaced as a fix below,
 never applied silently.
 
 ## 2 — Adopt a legacy / pre-registry project (FR-15), safely (UFR-9)
 
-`resolve_shared` adopts an older single-hero profile into the current world on read — never a
-destructive re-initialize. If a legacy profile is **unreadable or malformed**, report that it
-cannot be read, **leave the file untouched**, and ask rather than guess (UFR-9).
+A legacy profile is **no longer adopted automatically**. `resolve_shared` returns the named
+refusal `legacy-profile-unsupported`, carrying `paths` (where the legacy file was found) and
+`remedy`. Re-calibration takes minutes, and fail-loud-with-remedy beats silent destruction — the
+old automatic adoption could clobber a `core.md` and the legacy profile itself (issue #724).
+
+The remedy is **re-calibration through this skill**, and it has two shapes:
+
+- **legacy profile, no `core.md`** → `configure` routes to **set-up**: write a fresh `core.md`
+  plus the hero layers from detection + the owner's answers. Once `core.md` parses,
+  `resolve_shared` stops refusing.
+- **`core.md` already present, a stray legacy profile still on disk** → `configure` routes to
+  **fix**, driven by the `legacy-profile-unsupported` reconcile signal. Nothing is refused (the
+  facts come from `core.md`); the fix is to tell the owner the stray file is no longer read and let
+  **them** remove or archive it.
+
+**Superheroes never deletes the legacy file** — the owner does. An unreadable or malformed legacy
+profile is reported, left untouched, and asked about rather than guessed at (UFR-9). The refusal
+reports *presence*, not content: it never reads the file, so a malformed one refuses identically
+to a well-formed one. `configure` does not archive, move, or delete anything on the owner's behalf.
 
 ## 3 — First-push rebind (FR-9) and its recovery (UFR-10)
 
