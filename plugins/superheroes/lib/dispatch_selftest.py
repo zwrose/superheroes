@@ -552,7 +552,13 @@ def run(config=None):
         _leg_engine_adapter(failures, checked)
         _leg_cli(failures, checked)
         _leg_seat_map(failures, checked)
-        if config is not None:
+        if isinstance(config, dict):
+            if config.get("read_error"):
+                _fail(
+                    failures,
+                    "configuration read",
+                    "configuration read failed: %s" % config["read_error"],
+                )
             _leg_configured(config, failures, checked)
     except Exception as exc:
         _fail(failures, "run()", "top-level: %s: %s" % (type(exc).__name__, exc))
