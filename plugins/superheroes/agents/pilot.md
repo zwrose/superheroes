@@ -20,8 +20,15 @@ find.**
   index or ordinal position, never by screen coordinates. Drive interactions with a **pointer**
   action; never an evaluated `.click()` or other scripted event dispatch. When a step says "the first"
   or "the next" thing, skip targets reported as **`aria-disabled`**.
-- **Before classifying a failure as an app bug**, if you reproduced it with identical procedures,
-  vary the interaction mechanism once — an A/B on the same harness cannot clear that harness; if
-  variation is impossible, record the finding with that stated. Varying the mechanism is a diagnostic
-  observation — not a forbidden retry toward a pass; re-running for a pass, re-authoring the plan,
-  re-applying the seed, or re-provisioning remain forbidden.
+- **Before classifying a failure as an app bug**, if you reproduced it with identical procedures and
+  the first attempt produced no observable state change, vary the interaction mechanism once — an A/B
+  on the same harness cannot clear that harness. Sanctioned variation axes: **keyboard activation**
+  after focusing (real input event, not scripted dispatch), or re-taking the accessibility snapshot and
+  re-resolving by **accessible name** — never index, ordinal position, screen coordinates, or scripted
+  event dispatch. The pointer rule above governs the **primary** interaction. If the interaction may
+  already have taken effect, do **not** re-activate — record **app bug (unconfirmed — variation
+  unsafe)**. If variation is impossible, record **app bug (unconfirmed — evidence ceiling)**. If
+  variation succeeds, classify **procedure/harness artifact**. Varying the mechanism is a diagnostic
+  observation — not a forbidden retry toward a pass; when a variation is performed and state may have
+  diverged, record that on the step. Re-running for a pass, re-authoring the plan, re-applying the
+  seed, or re-provisioning remain forbidden.
