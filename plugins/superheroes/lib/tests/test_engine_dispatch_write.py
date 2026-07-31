@@ -20,6 +20,8 @@ def _load():
 
 ED = _load()
 
+import file_lock as _file_lock
+
 _EA = importlib.util.spec_from_file_location(
     "engine_adapter", os.path.join(_HERE, "..", "engine_adapter.py"))
 EA = importlib.util.module_from_spec(_EA)
@@ -440,7 +442,7 @@ def test_malformed_lease_reclaim(tmp_path):
     os.makedirs(os.path.dirname(lease_path), exist_ok=True)
     with open(lease_path, "wb"):
         pass
-    old = time.time() - ED.LEASE_MALFORMED_RECLAIM_SECONDS - 5
+    old = time.time() - _file_lock.MALFORMED_GRACE_SECONDS - 5
     os.utime(lease_path, (old, old))
     fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res = _dispatch_write(tmp_path, fake, cwd=wt)

@@ -30,6 +30,7 @@ from store_core import (
     write_keys_json,
     resolve_global,
     run_git,
+    repo_root,
 )
 
 FILENAMES = {"profile": "review-profile.md", "decisions": "review-decisions.json"}
@@ -44,8 +45,7 @@ def store_root():
 
 
 def _repo_root(cwd):
-    top = run_git(cwd, "rev-parse", "--show-toplevel")
-    return os.path.realpath(top) if top else os.path.realpath(cwd)
+    return repo_root(cwd)
 
 
 def _legacy_global_decisions(cwd, legacy_root):

@@ -127,6 +127,41 @@ def test_execute_aborts_before_delete_when_registry_write_fails(tmp_path, monkey
     assert os.path.exists(os.path.join(str(tmp_path), ".claude", "superheroes", "core.md"))
 
 
+def test_commit_registry_repo_root_unavailable_returns_false(tmp_path, monkeypatch):
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.GLOBAL, "rk", root=root)
+    real_atomic = sc.atomic_write
+
+    def boom(path, text, **kw):
+        if str(path).endswith("registry.json"):
+            raise sc.RepoRootUnavailable("simulated")
+        return real_atomic(path, text, **kw)
+
+    monkeypatch.setattr(sc, "atomic_write", boom)
+    assert mm._commit_registry(str(tmp_path), mr.IN_REPO, "rk", root=root) is False
+
+
+def test_rebind_deferred_when_commit_registry_repo_root_unavailable(tmp_path, monkeypatch):
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.GLOBAL, None, root=root)
+    common = os.path.join(root, "projects", sc.derive_identifiers(str(tmp_path))["gitdir_hash"])
+    os.makedirs(os.path.join(common, "config"), exist_ok=True)
+    subprocess.run(["git", "-C", str(tmp_path), "remote", "add", "origin",
+                    "git@github.com:o/r.git"], check=True)
+    real_atomic = sc.atomic_write
+
+    def boom(path, text, **kw):
+        if str(path).endswith("registry.json"):
+            raise sc.RepoRootUnavailable("simulated")
+        return real_atomic(path, text, **kw)
+
+    monkeypatch.setattr(sc, "atomic_write", boom)
+    res = mm.rebind(str(tmp_path), root=root)
+    assert res["status"] == "deferred"
+
+
 def test_execute_busy_when_lock_held(tmp_path):
     _init_repo(tmp_path, "git@github.com:o/r.git")
     root = str(tmp_path / "store")

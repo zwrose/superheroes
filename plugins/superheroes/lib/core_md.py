@@ -30,12 +30,9 @@ GATE_REASON_UNREADABLE = "core-md-unreadable"
 GATE_REASON_ROOT_UNAVAILABLE = "repo-root-unavailable"
 
 
-class RepoRootUnavailable(Exception):
-    """Git could not be RUN, so the repository root is unknown (issue #699 rider 11).
-
-    Deliberately NOT an OSError: no incidental ``except OSError`` may absorb this into a local
-    story (unreadable core.md, absent file, legacy-profile-unsupported). Callers that need to
-    translate it must catch ``RepoRootUnavailable`` by name."""
+# Lives in store_core (lowest layer); alias kept so existing ``except RepoRootUnavailable``
+# catch sites in this module and siblings keep working without import churn.
+RepoRootUnavailable = store_core.RepoRootUnavailable
 
 
 _GATE_USABLE_STATUSES = frozenset({CONFIG_OK, CONFIG_ABSENT})
@@ -148,25 +145,7 @@ def parse_core(text):
 
 
 def _repo_root(cwd):
-    res = store_core.run_git_result(cwd, "rev-parse", "--show-toplevel")
-    if res.status == store_core.GIT_UNAVAILABLE:
-        raise RepoRootUnavailable(
-            "git could not be run at %s: %s" % (cwd, res.detail))
-    if res.status == store_core.GIT_OK:
-        return os.path.realpath(res.out) if res.out else os.path.realpath(cwd)
-    if store_core.not_a_repository(res):
-        try:
-            git_ancestor = store_core.git_dot_entry_ancestor(cwd)
-        except OSError as exc:
-            raise RepoRootUnavailable(
-                "cannot determine repository root at %s: %s" % (cwd, exc))
-        if git_ancestor is not None:
-            raise RepoRootUnavailable(
-                "repository root indeterminate at %s: .git present at %s but git declined: %s"
-                % (cwd, git_ancestor, res.detail))
-        return os.path.realpath(cwd)
-    raise RepoRootUnavailable(
-        "git declined rev-parse --show-toplevel at %s: %s" % (cwd, res.detail))
+    return store_core.repo_root(cwd)
 
 
 def relocate_file(src, dst):
