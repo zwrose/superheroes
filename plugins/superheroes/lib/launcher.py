@@ -115,13 +115,37 @@ def _append_under_lock(repo_root, record, env=None):
         _release_lock(lock_path)
 
 
-def _read_json_file(path):
+def _parse_json_object(text, duplicate_reason):
+    """Parse a JSON object; refuse duplicate keys with *duplicate_reason*."""
+
+    def _reject_dupes(pairs):
+        seen = {}
+        for key, value in pairs:
+            if key in seen:
+                raise ValueError(duplicate_reason)
+            seen[key] = value
+        return seen
+
+    try:
+        data = json.loads(text, object_pairs_hook=_reject_dupes)
+    except ValueError as exc:
+        if str(exc) == duplicate_reason:
+            return None, duplicate_reason
+        return None, None
+    except TypeError:
+        return None, None
+    if not isinstance(data, dict):
+        return None, None
+    return data, None
+
+
+def _read_json_file(path, duplicate_reason="json-duplicate-key"):
     try:
         with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, ValueError, TypeError):
-        return None
-    return data
+            text = fh.read()
+    except OSError:
+        return None, None
+    return _parse_json_object(text, duplicate_reason)
 
 
 def _fail(reason, **extra):
@@ -177,14 +201,57 @@ def _parse_iso8601(value):
 
 def _ledger_live_state(repo_root, env=None):
     lp = ll.ledger_path(repo_root, env=env)
+    path = lp.get("path")
     if not lp["ok"]:
-        return {"ok": False, "reason": lp["reason"], "live": [], "unreadable": True}
-    read_result = ll.read(lp["path"])
+        if path is None:
+            resolved = ll.resolve_root(repo_root, env=env)
+            repo_id = ll.repo_identity(repo_root)
+            if resolved.get("ok") and repo_id:
+                path = os.path.join(resolved["root"], repo_id, ll.LEDGER_NAME)
+        if path is None or not os.path.exists(path):
+            return {
+                "ok": True,
+                "reason": None,
+                "live": [],
+                "unreadable": False,
+                "unavailable": True,
+            }
+    if path is None:
+        return {
+            "ok": True,
+            "reason": None,
+            "live": [],
+            "unreadable": False,
+            "unavailable": True,
+        }
+    read_result = ll.read(path)
     state = read_result["state"]
     if state not in ("ok", "missing"):
-        return {"ok": False, "reason": "ledger-%s" % state, "live": [], "unreadable": True}
+        return {
+            "ok": False,
+            "reason": "ledger-%s" % state,
+            "live": [],
+            "unreadable": True,
+            "unavailable": False,
+        }
+    if state == "ok":
+        folded = ll.fold(read_result["records"])
+        if not folded["ok"]:
+            return {
+                "ok": False,
+                "reason": folded["reason"],
+                "live": [],
+                "unreadable": True,
+                "unavailable": False,
+            }
     live = ll.live_launches(read_result["records"])
-    return {"ok": True, "reason": None, "live": live, "unreadable": False}
+    return {
+        "ok": True,
+        "reason": None,
+        "live": live,
+        "unreadable": False,
+        "unavailable": False,
+    }
 
 
 def walk_preflight(checks_input, repo_root, env=None, doctrine_loader=None):
@@ -244,9 +311,16 @@ def walk_preflight(checks_input, repo_root, env=None, doctrine_loader=None):
         if state == "fail":
             return _fail("preflight-failed:%s" % check_id)
 
-        if check_id == "disjoint-surfaces" and state == "na":
-            if not ledger_state["ok"] or ledger_state["live"]:
-                return _fail("preflight-disjointness-required")
+        if check_id == "disjoint-surfaces":
+            if state == "na":
+                if (
+                    ledger_state.get("unreadable")
+                    or ledger_state.get("unavailable")
+                    or ledger_state["live"]
+                ):
+                    return _fail("preflight-disjointness-required")
+            elif ledger_state.get("unreadable"):
+                return _fail("preflight-ledger-unreadable")
 
         out_checks.append({
             "id": check_id,
@@ -304,6 +378,18 @@ def _validate_owner_capability(owner, max_run_minutes):
         return {"ok": True, "applicable": False}
     if applicable is not True:
         return _fail("premise-missing-field:ownerCapability")
+    if "cleared" not in owner:
+        return _fail("premise-owner-capability-cleared-missing")
+    cleared = owner.get("cleared")
+    if isinstance(cleared, str):
+        return _fail("premise-owner-capability-cleared-fuzzy")
+    if not isinstance(cleared, list):
+        return _fail("premise-owner-capability-cleared-fuzzy")
+    if not cleared:
+        return _fail("premise-owner-capability-cleared-empty")
+    for item in cleared:
+        if not isinstance(item, str) or not item.strip():
+            return _fail("premise-owner-capability-cleared-item-empty")
     expires = owner.get("expiresAt")
     if expires is None:
         return _fail("premise-owner-capability-expiry-missing")
@@ -340,8 +426,12 @@ def _cross_check_preflight(premise_checks, preflight_checks):
     return None
 
 
-def validate_premise(premise, repo_root, preflight_checks=None, env=None):
-    """Validate premise stamp per contract C7. Never raises."""
+def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=None):
+    """Validate premise stamp per contract C7. Never raises.
+
+    ``maxRunMinutes`` is a premise horizon used to validate
+    ``ownerCapability.expiresAt`` — not an enforced runtime limit.
+    """
     if not isinstance(premise, dict):
         return _fail("premise-missing-field:baseCommit")
 
@@ -373,6 +463,8 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None):
         return _fail("premise-missing-field:batchId")
     if not isinstance(premise["issue"], int) or isinstance(premise["issue"], bool):
         return _fail("premise-missing-field:issue")
+    if issue is not None and premise["issue"] != issue:
+        return _fail("premise-issue-mismatch")
 
     max_run = premise["maxRunMinutes"]
     if not isinstance(max_run, int) or isinstance(max_run, bool) or max_run < 1:
@@ -401,6 +493,7 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None):
         return _fail(mismatch)
 
     stamped = dict(premise)
+    stamped["baseCommit"] = resolved
     stamped["standingExclusions"] = dict(STANDING_EXCLUSIONS)
     return {
         "ok": True,
@@ -440,26 +533,6 @@ def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None):
         "model": token,
         "doctrine": doctrine,
     }
-
-
-def _worktree_baseline(repo_root, env=None):
-    head = _git_scrubbed(repo_root, "rev-parse", "HEAD", env=env)
-    status = _git_scrubbed(repo_root, "status", "--porcelain", env=env)
-    if head is None or status is None or head.returncode != 0 or status.returncode != 0:
-        return None
-    return {
-        "head": (head.stdout or "").strip(),
-        "porcelain": status.stdout or "",
-    }
-
-
-def _worktree_unchanged(repo_root, baseline, env=None):
-    if baseline is None:
-        return False
-    current = _worktree_baseline(repo_root, env=env)
-    if current is None:
-        return False
-    return current["head"] == baseline["head"] and current["porcelain"] == baseline["porcelain"]
 
 
 def _default_spawn(argv, repo_root, out_fh, err_fh, child_env):
@@ -511,6 +584,10 @@ def _record_refused(repo_root, launch_id, stage, reason, env=None):
     return _append_under_lock(repo_root, record, env=env)
 
 
+def _record_park(repo_root, launch_id, evidence, env=None):
+    return ll.record_outcome(repo_root, launch_id, "park", evidence, env=env)
+
+
 def _spawn_attempt(
     repo_root,
     launch_id,
@@ -519,11 +596,10 @@ def _spawn_attempt(
     log_path,
     err_path,
     bash_max_timeout_ms,
-    baseline,
     env=None,
     spawn_fn=None,
 ):
-    """Spawn one attempt; return dict with ok, proc, reason, baseline."""
+    """Spawn one attempt; return dict with ok, proc, reason."""
     spawn = spawn_fn or _default_spawn
     child_env = _scrub_env(env)
     child_env["BASH_MAX_TIMEOUT_MS"] = str(bash_max_timeout_ms)
@@ -533,7 +609,12 @@ def _spawn_attempt(
     except OSError:
         return {"ok": False, "reason": "log-open-failed", "proc": None}
 
-    proc = spawn(argv, repo_root, out_fh, err_fh, child_env)
+    try:
+        proc = spawn(argv, repo_root, out_fh, err_fh, child_env)
+    except OSError:
+        out_fh.close()
+        err_fh.close()
+        return {"ok": False, "reason": "spawn-oserror", "proc": None, "oserror": True}
     out_fh.close()
     err_fh.close()
 
@@ -555,16 +636,20 @@ def _spawn_attempt(
         )
         return {"ok": False, "reason": append_result["reason"], "proc": None, "refused": True}
 
-    return {"ok": True, "proc": proc, "baseline": baseline}
+    return {"ok": True, "proc": proc}
 
 
-def _observe_settle(proc, settle_seconds):
-    deadline = time.monotonic() + settle_seconds
-    while time.monotonic() < deadline:
+def _observe_settle(proc, settle_seconds, deadline=None):
+    settle_deadline = time.monotonic() + settle_seconds
+    while time.monotonic() < settle_deadline:
+        if deadline is not None and time.monotonic() >= deadline:
+            return "deadline"
         rc = proc.poll()
         if rc is not None:
             return rc
         time.sleep(0.1)
+    if deadline is not None and time.monotonic() >= deadline:
+        return "deadline"
     rc = proc.poll()
     return rc
 
@@ -609,7 +694,11 @@ def launch_build(
         return _fail(reason, launchId=launch_id)
 
     premise_result = validate_premise(
-        premise, repo_root, preflight_checks=preflight_result["checks"], env=env,
+        premise,
+        repo_root,
+        preflight_checks=preflight_result["checks"],
+        env=env,
+        issue=issue,
     )
     if not premise_result["ok"]:
         stage = "premise"
@@ -665,14 +754,17 @@ def launch_build(
     err_path = os.path.join(log_dir, "%s.stderr" % launch_id)
 
     attempt = 1
+    child_ever_spawned = False
     while attempt <= max_attempts:
         if time.monotonic() >= deadline:
-            _record_refused(
-                repo_root, launch_id, "retry-deadline-exceeded", "deadline", env=env,
-            )
+            if child_ever_spawned:
+                _record_park(repo_root, launch_id, "deadline", env=env)
+            else:
+                _record_refused(
+                    repo_root, launch_id, "retry-deadline-exceeded", "deadline", env=env,
+                )
             return _fail("retry-deadline-exceeded", launchId=launch_id)
 
-        baseline = _worktree_baseline(repo_root, env=env)
         spawn_result = _spawn_attempt(
             repo_root,
             launch_id,
@@ -681,18 +773,37 @@ def launch_build(
             log_path,
             err_path,
             stamped["bashMaxTimeoutMs"],
-            baseline,
             env=env,
             spawn_fn=spawn_fn,
         )
         if spawn_result.get("refused"):
             return _fail(spawn_result["reason"], launchId=launch_id)
+        if spawn_result.get("oserror"):
+            if attempt >= max_attempts:
+                _record_refused(
+                    repo_root, launch_id, "spawn", "spawn-oserror-exhausted", env=env,
+                )
+                return _fail("spawn-oserror-exhausted", launchId=launch_id)
+            if time.monotonic() >= deadline:
+                _record_refused(
+                    repo_root, launch_id, "retry-deadline-exceeded", "deadline", env=env,
+                )
+                return _fail("retry-deadline-exceeded", launchId=launch_id)
+            delay_idx = min(attempt - 1, len(backoff_seconds) - 1)
+            delay = backoff_seconds[delay_idx]
+            time.sleep(delay)
+            attempt += 1
+            continue
         if not spawn_result["ok"]:
             _record_refused(repo_root, launch_id, "spawn", spawn_result["reason"], env=env)
             return _fail(spawn_result["reason"], launchId=launch_id)
 
+        child_ever_spawned = True
         proc = spawn_result["proc"]
-        rc = _observe_settle(proc, settle_seconds)
+        rc = _observe_settle(proc, settle_seconds, deadline=deadline)
+        if rc == "deadline":
+            _record_park(repo_root, launch_id, "deadline", env=env)
+            return _fail("retry-deadline-exceeded", launchId=launch_id)
         if rc is None:
             return {
                 "ok": True,
@@ -704,48 +815,13 @@ def launch_build(
                 "attempt": attempt,
             }
 
+        evidence = "exit-zero" if rc == 0 else "nonzero-exit:%s" % rc
+        _record_park(repo_root, launch_id, evidence, env=env)
         if rc == 0:
-            _record_refused(
-                repo_root, launch_id, "settle-exit-zero-uncertain", "exit-zero", env=env,
-            )
             return _fail("settle-exit-zero-uncertain", launchId=launch_id)
+        return _fail("settle-nonzero-exit", launchId=launch_id)
 
-        if not _worktree_unchanged(repo_root, baseline, env=env):
-            _record_refused(
-                repo_root,
-                launch_id,
-                "retry-unsafe-worktree-dirtied",
-                "worktree-dirtied",
-                env=env,
-            )
-            return _fail("retry-unsafe-worktree-dirtied", launchId=launch_id)
-
-        if attempt >= max_attempts:
-            _record_refused(repo_root, launch_id, "attempts-exhausted", "max-attempts", env=env)
-            return _fail("attempts-exhausted", launchId=launch_id)
-
-        if time.monotonic() >= deadline:
-            _record_refused(
-                repo_root, launch_id, "retry-deadline-exceeded", "deadline", env=env,
-            )
-            return _fail("retry-deadline-exceeded", launchId=launch_id)
-
-        delay_idx = min(attempt - 1, len(backoff_seconds) - 1)
-        delay = backoff_seconds[delay_idx]
-        retry_record = {
-            "event": "retry",
-            "launchId": launch_id,
-            "ts": time.time(),
-            "schema": ll.SCHEMA,
-            "attempt": attempt,
-            "reason": "nonzero-exit:%s" % rc,
-            "delaySeconds": delay,
-        }
-        _append_under_lock(repo_root, retry_record, env=env)
-        time.sleep(delay)
-        attempt += 1
-
-    return _fail("attempts-exhausted", launchId=launch_id)
+    return _fail("spawn-oserror-exhausted", launchId=launch_id)
 
 
 def _try_reserve_for_refusal(repo_root, launch_id, issue, premise, preflight_result, compose_result, env):
@@ -791,20 +867,29 @@ def record_outcome(repo_root, launch_id, outcome, evidence, env=None):
     return ll.record_outcome(repo_root, launch_id, outcome, evidence, env=env)
 
 
+def declare_batch(repo_root, batch_id, expected_launches, env=None):
+    """Thin pass-through to launch_ledger.declare_batch."""
+    return ll.declare_batch(repo_root, batch_id, expected_launches, env=env)
+
+
 def count_batch(repo_root, batch_id, env=None):
     """Thin pass-through to launch_ledger.count."""
     return ll.count(repo_root, batch_id, env=env)
 
 
 def _cli_preflight(args):
-    checks = _read_json_file(args.checks)
+    checks, dup_reason = _read_json_file(args.checks, duplicate_reason="preflight-duplicate-key")
+    if dup_reason:
+        return _fail(dup_reason)
     if checks is None:
         return _fail("preflight-malformed-input")
     return walk_preflight(checks, args.repo_root)
 
 
 def _cli_compose(args):
-    premise = _read_json_file(args.premise)
+    premise, dup_reason = _read_json_file(args.premise, duplicate_reason="premise-duplicate-key")
+    if dup_reason:
+        return _fail(dup_reason)
     if premise is None:
         return _fail("premise-missing-field:baseCommit")
     premise_result = validate_premise(premise, args.repo_root)
@@ -816,10 +901,14 @@ def _cli_compose(args):
 
 
 def _cli_launch(args):
-    checks = _read_json_file(args.checks)
+    checks, dup_reason = _read_json_file(args.checks, duplicate_reason="preflight-duplicate-key")
+    if dup_reason:
+        return _fail(dup_reason)
     if checks is None:
         return _fail("preflight-malformed-input")
-    premise = _read_json_file(args.premise)
+    premise, dup_reason = _read_json_file(args.premise, duplicate_reason="premise-duplicate-key")
+    if dup_reason:
+        return _fail(dup_reason)
     if premise is None:
         return _fail("premise-missing-field:baseCommit")
     return launch_build(
@@ -838,6 +927,13 @@ def _cli_record_outcome(args):
 
 def _cli_count(args):
     return count_batch(args.repo_root, args.batch)
+
+
+def _cli_declare_batch(args):
+    expected = args.expected
+    if not isinstance(expected, int) or isinstance(expected, bool) or expected < 1:
+        return _fail("batch-expected-invalid")
+    return declare_batch(args.repo_root, args.batch, expected)
 
 
 def main(argv=None):
@@ -879,10 +975,20 @@ def main(argv=None):
     ct.add_argument("--batch", required=True)
     ct.set_defaults(func=_cli_count)
 
+    db = sub.add_parser("declare-batch")
+    db.add_argument("--repo-root", required=True)
+    db.add_argument("--batch", required=True)
+    db.add_argument("--expected", type=int, required=True)
+    db.set_defaults(func=_cli_declare_batch)
+
     args = parser.parse_args(argv)
     result = args.func(args)
     print(json.dumps(result))
-    return 0 if result.get("ok") else 1
+    if not result.get("ok"):
+        return 1
+    if args.command == "count" and result.get("indeterminate"):
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

@@ -239,9 +239,9 @@ def test_disjoint_surfaces_unreadable_ledger(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     root = _ledger_env(tmp_path, monkeypatch)
     path = ll.ledger_path(repo)["path"]
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write("not-json")
+        fh.write("not-json\n")
     checks = _all_checks()
     checks["disjoint-surfaces"] = {"state": "na", "reason": "n/a"}
     result = L.walk_preflight(checks, repo)
@@ -662,8 +662,8 @@ def test_detachment_stdin_devnull(tmp_path, monkeypatch):
 # --- retry / settle branches -------------------------------------------------
 
 
-def test_retry_nonzero_exit_clean_worktree(tmp_path, monkeypatch):
-  # axis: nonzero exit with clean worktree retries
+def test_retry_nonzero_exit_parks_no_retry(tmp_path, monkeypatch):
+  # axis: N2/N3 — nonzero exit after spawn parks; never retries
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
@@ -684,25 +684,27 @@ def test_retry_nonzero_exit_clean_worktree(tmp_path, monkeypatch):
         settle_seconds=0.3,
         backoff_seconds=(0,),
     )
-    assert result["ok"] is True
-    assert calls["n"] == 2
+    assert result["ok"] is False
+    assert result["reason"] == "settle-nonzero-exit"
+    assert calls["n"] == 1
     lp = ll.ledger_path(repo)["path"]
-    retries = [r for r in ll.read(lp)["records"] if r["event"] == "retry"]
-    assert len(retries) == 1
+    records = ll.read(lp)["records"]
+    parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
+    assert len(parks) == 1
+    assert parks[0]["evidence"] == "nonzero-exit:1"
+    retries = [r for r in records if r.get("event") == "retry"]
+    assert retries == []
 
 
-def test_retry_nonzero_exit_dirtied_worktree(tmp_path, monkeypatch):
-  # axis: never retry a launch that may have done work
+def test_nonzero_exit_parks_even_when_worktree_dirty(tmp_path, monkeypatch):
+  # axis: N3 — worktree delta no longer gates retry; parks instead
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
-    calls = {"once": False}
 
     def dirty_spawn(argv, repo_root, out_fh, err_fh, child_env):
         proc = _make_spawn_fn("exit1")(argv, repo_root, out_fh, err_fh, child_env)
-        if not calls["once"]:
-            calls["once"] = True
-            (tmp_path / "repo" / "dirt.txt").write_text("dirty\n")
+        (tmp_path / "repo" / "dirt.txt").write_text("dirty\n")
         return proc
 
     result = L.launch_build(
@@ -715,11 +717,17 @@ def test_retry_nonzero_exit_dirtied_worktree(tmp_path, monkeypatch):
         settle_seconds=0.3,
     )
     assert result["ok"] is False
-    assert result["reason"] == "retry-unsafe-worktree-dirtied"
+    assert result["reason"] == "settle-nonzero-exit"
+    lp = ll.ledger_path(repo)["path"]
+    parks = [
+        r for r in ll.read(lp)["records"]
+        if r.get("event") == "outcome" and r.get("outcome") == "park"
+    ]
+    assert len(parks) == 1
 
 
 def test_settle_exit_zero_uncertain(tmp_path, monkeypatch):
-  # axis: exit zero inside settle window is uncertain
+  # axis: exit zero inside settle window parks
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
@@ -734,47 +742,121 @@ def test_settle_exit_zero_uncertain(tmp_path, monkeypatch):
     )
     assert result["ok"] is False
     assert result["reason"] == "settle-exit-zero-uncertain"
+    lp = ll.ledger_path(repo)["path"]
+    parks = [
+        r for r in ll.read(lp)["records"]
+        if r.get("event") == "outcome" and r.get("outcome") == "park"
+    ]
+    assert len(parks) == 1
+    assert parks[0]["evidence"] == "exit-zero"
 
 
-def test_retry_attempt_cap(tmp_path, monkeypatch):
-  # axis: attempt cap fires
+def test_spawn_oserror_retries_then_succeeds(tmp_path, monkeypatch):
+  # axis: OSError is the only retryable spawn failure
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
+    calls = {"n": 0}
+
+    def oserror_then_sleep(argv, repo_root, out_fh, err_fh, child_env):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("spawn failed")
+        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+
     result = L.launch_build(
         repo,
         656,
         _valid_premise(repo),
         _all_checks(),
         log_dir,
-        spawn_fn=_make_spawn_fn("exit1"),
-        settle_seconds=0.2,
+        spawn_fn=oserror_then_sleep,
+        settle_seconds=0.3,
+        backoff_seconds=(0,),
+    )
+    assert result["ok"] is True
+    assert calls["n"] == 2
+
+
+def test_spawn_oserror_exhausted_refuses(tmp_path, monkeypatch):
+  # axis: spawn OSError on every attempt refuses (no child ever ran)
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    def always_oserror(argv, repo_root, out_fh, err_fh, child_env):
+        raise OSError("spawn failed")
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=always_oserror,
         max_attempts=2,
         backoff_seconds=(0,),
     )
     assert result["ok"] is False
-    assert result["reason"] == "attempts-exhausted"
+    assert result["reason"] == "spawn-oserror-exhausted"
+    lp = ll.ledger_path(repo)["path"]
+    records = ll.read(lp)["records"]
+    refused = [r for r in records if r.get("event") == "refused"]
+    assert any(r.get("stage") == "spawn" for r in refused)
+    started = [r for r in records if r.get("event") == "started"]
+    assert started == []
 
 
-def test_retry_deadline_exceeded(tmp_path, monkeypatch):
-  # axis: total deadline fires before next retry
+def test_retry_deadline_exceeded_before_spawn(tmp_path, monkeypatch):
+  # axis: deadline before any child spawns refuses
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
+
+    def always_oserror(argv, repo_root, out_fh, err_fh, child_env):
+        raise OSError("spawn failed")
+
     result = L.launch_build(
         repo,
         656,
         _valid_premise(repo),
         _all_checks(),
         log_dir,
-        spawn_fn=_make_spawn_fn("exit1"),
-        settle_seconds=0.1,
+        spawn_fn=always_oserror,
         max_attempts=5,
         backoff_seconds=(1,),
         total_deadline_seconds=0,
     )
     assert result["ok"] is False
     assert result["reason"] == "retry-deadline-exceeded"
+    lp = ll.ledger_path(repo)["path"]
+    refused = [r for r in ll.read(lp)["records"] if r.get("event") == "refused"]
+    assert any(r.get("stage") == "retry-deadline-exceeded" for r in refused)
+
+
+def test_deadline_after_spawn_parks(tmp_path, monkeypatch):
+  # axis: deadline after child spawned parks
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=10,
+        total_deadline_seconds=1,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "retry-deadline-exceeded"
+    parks = [
+        r for r in ll.read(ll.ledger_path(repo)["path"])["records"]
+        if r.get("event") == "outcome" and r.get("outcome") == "park"
+    ]
+    assert len(parks) == 1
 
 
 # --- count pass-through ------------------------------------------------------
@@ -788,6 +870,74 @@ def test_count_passthrough_preserves_indeterminate(tmp_path, monkeypatch):
     got = L.count_batch(repo, "missing-batch")
     assert got == expected
     assert got["indeterminate"] is True
+
+
+def test_cli_count_indeterminate_exits_nonzero(tmp_path, monkeypatch):
+  # edge 21: indeterminate count exits non-zero
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    proc = subprocess.run(
+        [sys.executable, _MOD, "count", "--repo-root", repo, "--batch", "missing-batch"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode != 0
+    payload = json.loads(proc.stdout)
+    assert payload["indeterminate"] is True
+
+
+def test_cli_count_resolved_exits_zero(tmp_path, monkeypatch):
+  # edge 22: resolved batch count exits zero
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "resolved-batch"
+    ll.declare_batch(repo, batch, 1)
+    launch_id = "launch-resolved"
+    ll.reserve(repo, {
+        "event": "reserved",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": batch,
+        "repoId": ll.repo_identity(repo),
+        "issue": 656,
+        "surfaces": ["plugins/superheroes/lib"],
+        "premise": {},
+        "preflight": {},
+        "argv": [],
+        "doctrineDigest": "d",
+        "model": "m",
+    })
+    path = ll.ledger_path(repo)["path"]
+    ll.append(path, {
+        "event": "started",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "attempt": 1,
+        "pid": 1,
+        "logPath": "/tmp/out",
+        "errPath": "/tmp/err",
+    })
+    ll.append(path, {
+        "event": "outcome",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "outcome": "handback",
+        "evidence": "done",
+    })
+    proc = subprocess.run(
+        [sys.executable, _MOD, "count", "--repo-root", repo, "--batch", batch],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is True
+    assert payload["indeterminate"] is False
 
 
 # --- CLI shape ---------------------------------------------------------------
@@ -807,3 +957,445 @@ def test_cli_preflight_exit_code(tmp_path):
     payload = json.loads(proc.stdout)
     assert payload["ok"] is True
     assert payload["go"] is True
+
+
+# --- fail-closed edge tests (work order N) -----------------------------------
+
+
+def test_edge1_declare_batch_invalid_expected(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = L.declare_batch(repo, "batch-a", 0)
+    assert result["ok"] is False
+    assert result["reason"] == "batch-expected-invalid"
+    proc = subprocess.run(
+        [
+            sys.executable, _MOD, "declare-batch",
+            "--repo-root", repo, "--batch", "batch-a", "--expected", "0",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False
+    assert payload["reason"] == "batch-expected-invalid"
+
+
+def test_edge2_declare_batch_duplicate_declaration(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "dup-batch"
+    first = L.declare_batch(repo, batch, 1)
+    second = L.declare_batch(repo, batch, 1)
+    assert first["ok"] is True
+    assert second["ok"] is True
+    launch_id = "launch-dup"
+    ll.reserve(repo, {
+        "event": "reserved",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": batch,
+        "repoId": ll.repo_identity(repo),
+        "issue": 656,
+        "surfaces": ["plugins/superheroes/lib"],
+        "premise": {},
+        "preflight": {},
+        "argv": [],
+        "doctrineDigest": "d",
+        "model": "m",
+    })
+    path = ll.ledger_path(repo)["path"]
+    ll.append(path, {
+        "event": "started",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "attempt": 1,
+        "pid": 1,
+        "logPath": "/tmp/out",
+        "errPath": "/tmp/err",
+    })
+    ll.append(path, {
+        "event": "outcome",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "outcome": "handback",
+        "evidence": "done",
+    })
+    count = L.count_batch(repo, batch)
+    assert count["indeterminate"] is True
+    assert count["reason"] == "batch-duplicate-declaration"
+
+
+def test_edge3_spawn_oserror_closes_handles_and_retries(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    calls = {"n": 0}
+    open_handles = []
+
+    real_open = open
+
+    def tracking_open(path, mode="r", *args, **kwargs):
+        fh = real_open(path, mode, *args, **kwargs)
+        if "ab" in mode:
+            open_handles.append(fh)
+        return fh
+
+    def oserror_then_sleep(argv, repo_root, out_fh, err_fh, child_env):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("spawn failed")
+        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+
+    monkeypatch.setattr("builtins.open", tracking_open)
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=oserror_then_sleep,
+        settle_seconds=0.2,
+        backoff_seconds=(0,),
+    )
+    assert result["ok"] is True
+    assert calls["n"] == 2
+    for fh in open_handles:
+        assert fh.closed
+
+
+def test_edge4_spawn_oserror_exhausted_refuses(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    def always_oserror(argv, repo_root, out_fh, err_fh, child_env):
+        raise OSError("spawn failed")
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=always_oserror,
+        max_attempts=2,
+        backoff_seconds=(0,),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "spawn-oserror-exhausted"
+    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    assert not any(r.get("event") == "started" for r in records)
+    assert any(r.get("event") == "refused" for r in records)
+
+
+def test_edge5_nonzero_exit_in_settle_parks(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("exit1"),
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is False
+    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
+    refused = [r for r in records if r.get("event") == "refused"]
+    assert len(parks) == 1
+    assert parks[0]["evidence"] == "nonzero-exit:1"
+    assert refused == []
+
+
+def test_edge6_zero_exit_in_settle_parks(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("exit0"),
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is False
+    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
+    refused = [r for r in records if r.get("event") == "refused"]
+    assert len(parks) == 1
+    assert parks[0]["evidence"] == "exit-zero"
+    assert refused == []
+
+
+def test_edge7_child_alive_after_settle_succeeds(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is True
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_edge8_deadline_parks_if_spawned_refuses_if_not(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    parked = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=10,
+        total_deadline_seconds=1,
+    )
+    assert parked["ok"] is False
+    assert parked["reason"] == "retry-deadline-exceeded"
+    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    assert any(r.get("event") == "started" for r in records)
+    assert any(r.get("event") == "outcome" and r.get("outcome") == "park" for r in records)
+
+    repo2 = _init_repo(tmp_path / "repo2")
+    log_dir2 = str(tmp_path / "logs2")
+
+    def always_oserror(argv, repo_root, out_fh, err_fh, child_env):
+        raise OSError("spawn failed")
+
+    refused = L.launch_build(
+        repo2,
+        656,
+        _valid_premise(repo2),
+        _all_checks(),
+        log_dir2,
+        spawn_fn=always_oserror,
+        max_attempts=5,
+        backoff_seconds=(1,),
+        total_deadline_seconds=0,
+    )
+    assert refused["ok"] is False
+    assert refused["reason"] == "retry-deadline-exceeded"
+    records2 = ll.read(ll.ledger_path(repo2)["path"])["records"]
+    assert any(r.get("event") == "refused" for r in records2)
+    assert not any(r.get("event") == "outcome" for r in records2)
+
+
+def test_edge9_duplicate_key_in_checks_json(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    checks_path = tmp_path / "checks-dup.json"
+    checks_path.write_text('{"quota": {"state": "pass", "reason": ""}, "quota": {"state": "fail", "reason": "x"}}')
+    proc = subprocess.run(
+        [sys.executable, _MOD, "preflight", "--repo-root", repo, "--checks", str(checks_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False
+    assert payload["reason"] == "preflight-duplicate-key"
+
+
+def test_edge10_duplicate_key_in_premise_json(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    premise_path = tmp_path / "premise-dup.json"
+    premise_path.write_text('{"issue": 656, "issue": 657}')
+    proc = subprocess.run(
+        [
+            sys.executable, _MOD, "compose",
+            "--repo-root", repo, "--issue", "656", "--premise", str(premise_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False
+    assert payload["reason"] == "premise-duplicate-key"
+
+
+def test_edge11_owner_capability_cleared_missing(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    future = (datetime.now(timezone.utc) + timedelta(hours=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    premise = _valid_premise(
+        repo,
+        ownerCapability={"applicable": True, "expiresAt": future},
+    )
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is False
+    assert result["reason"] == "premise-owner-capability-cleared-missing"
+
+
+def test_edge12_owner_capability_cleared_string(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    future = (datetime.now(timezone.utc) + timedelta(hours=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    premise = _valid_premise(
+        repo,
+        ownerCapability={"applicable": True, "cleared": "everything", "expiresAt": future},
+    )
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is False
+    assert result["reason"] == "premise-owner-capability-cleared-fuzzy"
+
+
+def test_edge13_owner_capability_cleared_empty_list(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    future = (datetime.now(timezone.utc) + timedelta(hours=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    premise = _valid_premise(
+        repo,
+        ownerCapability={"applicable": True, "cleared": [], "expiresAt": future},
+    )
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is False
+    assert result["reason"] == "premise-owner-capability-cleared-empty"
+
+
+def test_edge14_owner_capability_cleared_whitespace_item(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    future = (datetime.now(timezone.utc) + timedelta(hours=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    premise = _valid_premise(
+        repo,
+        ownerCapability={"applicable": True, "cleared": ["  "], "expiresAt": future},
+    )
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is False
+    assert result["reason"] == "premise-owner-capability-cleared-item-empty"
+
+
+def test_edge15_owner_capability_cleared_valid_list(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo)
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is True
+
+
+def test_edge16_base_commit_head_resolved_in_reservation(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo, baseCommit="HEAD"),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+    )
+    assert result["ok"] is True
+    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    reserved = [r for r in records if r.get("event") == "reserved"][0]
+    assert reserved["premise"]["baseCommit"] == head
+    assert len(reserved["premise"]["baseCommit"]) == 40
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_edge17_issue_mismatch_refused(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo, issue=657),
+        _all_checks(),
+        log_dir,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "premise-issue-mismatch"
+
+
+def test_edge18_corrupt_ledger_fails_preflight_check(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    root = _ledger_env(tmp_path, monkeypatch)
+    path = ll.ledger_path(repo)["path"]
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("not-json\n")
+    result = L.walk_preflight(_all_checks(), repo)
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-ledger-unreadable"
+
+
+def test_edge19_oserror_retry_does_not_ignore_refused_append_failure(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    real_append_under_lock = L._append_under_lock
+    calls = {"n": 0}
+
+    def always_oserror(argv, repo_root, out_fh, err_fh, child_env):
+        raise OSError("spawn failed")
+
+    def failing_refused_append(repo_root, record, env=None):
+        if record.get("event") == "refused" and record.get("stage") == "spawn":
+            calls["n"] += 1
+            return {"ok": False, "reason": "ledger-append-failed"}
+        return real_append_under_lock(repo_root, record, env=env)
+
+    monkeypatch.setattr(L, "_append_under_lock", failing_refused_append)
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=always_oserror,
+        max_attempts=1,
+        backoff_seconds=(0,),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "spawn-oserror-exhausted"
+    assert calls["n"] == 1
+
+
+def test_edge20_log_open_failure_terminalizes_reservation(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    real_open = open
+
+    def fail_open(path, mode="r", *args, **kwargs):
+        if "ab" in mode:
+            raise OSError("permission denied")
+        return real_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", fail_open)
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "log-open-failed"
+    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    refused = [r for r in records if r.get("event") == "refused"]
+    assert any(r.get("stage") == "spawn" and r.get("reason") == "log-open-failed" for r in refused)
+    assert not any(r.get("event") == "started" for r in records)
