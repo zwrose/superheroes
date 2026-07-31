@@ -108,7 +108,7 @@ def _append_under_lock(repo_root, record, env=None):
     if not _acquire_lock(lock_path):
         return {"ok": False, "reason": "lock-unavailable"}
     try:
-        if not ll.append(path, record):
+        if not ll.append(repo_root, record, env=env):
             return {"ok": False, "reason": "ledger-append-failed"}
         return {"ok": True, "reason": None, "path": path}
     finally:
@@ -209,8 +209,7 @@ def _ledger_live_state(repo_root, env=None):
             "unreadable": True,
             "unavailable": False,
         }
-    path = lp["path"]
-    read_result = ll.read(path)
+    read_result = ll.read(repo_root, env=env)
     state = read_result["state"]
     if state not in ("ok", "missing"):
         return {

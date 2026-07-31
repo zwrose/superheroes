@@ -566,8 +566,7 @@ def test_spawn_reserved_before_child(tmp_path, monkeypatch):
     order = []
 
     def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
-        lp = ll.ledger_path(repo_root)
-        records = ll.read(lp["path"])["records"]
+        records = ll.read(repo_root)["records"]
         order.append(("before_spawn", len(records)))
         proc = _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
         order.append(("after_spawn", proc.pid))
@@ -583,8 +582,7 @@ def test_spawn_reserved_before_child(tmp_path, monkeypatch):
         settle_seconds=0.3,
     )
     assert result["ok"] is True
-    lp = ll.ledger_path(repo)["path"]
-    records = ll.read(lp)["records"]
+    records = ll.read(repo)["records"]
     reserved = [r for r in records if r["event"] == "reserved"]
     started = [r for r in records if r["event"] == "started"]
     assert reserved
@@ -603,10 +601,10 @@ def test_started_append_failed_terminates_child(tmp_path, monkeypatch):
 
     real_append = ll.append
 
-    def failing_append(path, record):
+    def failing_append(repo_root, record, env=None):
         if record.get("event") == "started":
             return False
-        return real_append(path, record)
+        return real_append(repo_root, record, env=env)
 
     monkeypatch.setattr(ll, "append", failing_append)
 
@@ -629,8 +627,7 @@ def test_started_append_failed_terminates_child(tmp_path, monkeypatch):
     assert pid is not None
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
-    lp = ll.ledger_path(repo)["path"]
-    records = ll.read(lp)["records"]
+    records = ll.read(repo)["records"]
     parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
     assert any(r.get("evidence") == "started-append-failed" for r in parks)
     refused = [r for r in records if r.get("event") == "refused"]
@@ -695,8 +692,7 @@ def test_retry_nonzero_exit_parks_no_retry(tmp_path, monkeypatch):
     assert result["ok"] is False
     assert result["reason"] == "settle-nonzero-exit"
     assert calls["n"] == 1
-    lp = ll.ledger_path(repo)["path"]
-    records = ll.read(lp)["records"]
+    records = ll.read(repo)["records"]
     parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
     assert len(parks) == 1
     assert parks[0]["evidence"] == "nonzero-exit:1"
@@ -726,9 +722,8 @@ def test_nonzero_exit_parks_even_when_worktree_dirty(tmp_path, monkeypatch):
     )
     assert result["ok"] is False
     assert result["reason"] == "settle-nonzero-exit"
-    lp = ll.ledger_path(repo)["path"]
     parks = [
-        r for r in ll.read(lp)["records"]
+        r for r in ll.read(repo)["records"]
         if r.get("event") == "outcome" and r.get("outcome") == "park"
     ]
     assert len(parks) == 1
@@ -750,9 +745,8 @@ def test_settle_exit_zero_uncertain(tmp_path, monkeypatch):
     )
     assert result["ok"] is False
     assert result["reason"] == "settle-exit-zero-uncertain"
-    lp = ll.ledger_path(repo)["path"]
     parks = [
-        r for r in ll.read(lp)["records"]
+        r for r in ll.read(repo)["records"]
         if r.get("event") == "outcome" and r.get("outcome") == "park"
     ]
     assert len(parks) == 1
@@ -784,8 +778,7 @@ def test_spawn_oserror_retries_then_succeeds(tmp_path, monkeypatch):
     )
     assert result["ok"] is True
     assert calls["n"] == 2
-    lp = ll.ledger_path(repo)["path"]
-    records = ll.read(lp)["records"]
+    records = ll.read(repo)["records"]
     retries = [r for r in records if r.get("event") == "retry"]
     assert len(retries) == 1
     assert retries[0]["attempt"] == 1
@@ -813,8 +806,7 @@ def test_spawn_oserror_exhausted_refuses(tmp_path, monkeypatch):
     )
     assert result["ok"] is False
     assert result["reason"] == "spawn-oserror-exhausted"
-    lp = ll.ledger_path(repo)["path"]
-    records = ll.read(lp)["records"]
+    records = ll.read(repo)["records"]
     refused = [r for r in records if r.get("event") == "refused"]
     assert any(r.get("stage") == "spawn" for r in refused)
     started = [r for r in records if r.get("event") == "started"]
@@ -843,8 +835,7 @@ def test_retry_deadline_exceeded_before_spawn(tmp_path, monkeypatch):
     )
     assert result["ok"] is False
     assert result["reason"] == "retry-deadline-exceeded"
-    lp = ll.ledger_path(repo)["path"]
-    refused = [r for r in ll.read(lp)["records"] if r.get("event") == "refused"]
+    refused = [r for r in ll.read(repo)["records"] if r.get("event") == "refused"]
     assert any(r.get("stage") == "retry-deadline-exceeded" for r in refused)
 
 
@@ -867,7 +858,7 @@ def test_deadline_after_spawn_parks(tmp_path, monkeypatch):
     assert result["ok"] is False
     assert result["reason"] == "retry-deadline-exceeded"
     parks = [
-        r for r in ll.read(ll.ledger_path(repo)["path"])["records"]
+        r for r in ll.read(repo)["records"]
         if r.get("event") == "outcome" and r.get("outcome") == "park"
     ]
     assert len(parks) == 1
@@ -923,8 +914,7 @@ def test_cli_count_resolved_exits_zero(tmp_path, monkeypatch):
         "doctrineDigest": "d",
         "model": "m",
     })
-    path = ll.ledger_path(repo)["path"]
-    ll.append(path, {
+    ll.append(repo, {
         "event": "started",
         "launchId": launch_id,
         "ts": time.time(),
@@ -934,7 +924,7 @@ def test_cli_count_resolved_exits_zero(tmp_path, monkeypatch):
         "logPath": "/tmp/out",
         "errPath": "/tmp/err",
     })
-    ll.append(path, {
+    ll.append(repo, {
         "event": "outcome",
         "launchId": launch_id,
         "ts": time.time(),
@@ -1020,8 +1010,7 @@ def test_edge2_declare_batch_duplicate_declaration(tmp_path, monkeypatch):
         "doctrineDigest": "d",
         "model": "m",
     })
-    path = ll.ledger_path(repo)["path"]
-    ll.append(path, {
+    ll.append(repo, {
         "event": "started",
         "launchId": launch_id,
         "ts": time.time(),
@@ -1031,7 +1020,7 @@ def test_edge2_declare_batch_duplicate_declaration(tmp_path, monkeypatch):
         "logPath": "/tmp/out",
         "errPath": "/tmp/err",
     })
-    ll.append(path, {
+    ll.append(repo, {
         "event": "outcome",
         "launchId": launch_id,
         "ts": time.time(),
@@ -1102,7 +1091,7 @@ def test_edge4_spawn_oserror_exhausted_refuses(tmp_path, monkeypatch):
     )
     assert result["ok"] is False
     assert result["reason"] == "spawn-oserror-exhausted"
-    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    records = ll.read(repo)["records"]
     assert not any(r.get("event") == "started" for r in records)
     assert any(r.get("event") == "refused" for r in records)
 
@@ -1121,7 +1110,7 @@ def test_edge5_nonzero_exit_in_settle_parks(tmp_path, monkeypatch):
         settle_seconds=0.3,
     )
     assert result["ok"] is False
-    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    records = ll.read(repo)["records"]
     parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
     refused = [r for r in records if r.get("event") == "refused"]
     assert len(parks) == 1
@@ -1143,7 +1132,7 @@ def test_edge6_zero_exit_in_settle_parks(tmp_path, monkeypatch):
         settle_seconds=0.3,
     )
     assert result["ok"] is False
-    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    records = ll.read(repo)["records"]
     parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
     refused = [r for r in records if r.get("event") == "refused"]
     assert len(parks) == 1
@@ -1188,7 +1177,7 @@ def test_edge8_deadline_parks_if_spawned_refuses_if_not(tmp_path, monkeypatch):
     )
     assert parked["ok"] is False
     assert parked["reason"] == "retry-deadline-exceeded"
-    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    records = ll.read(repo)["records"]
     assert any(r.get("event") == "started" for r in records)
     assert any(r.get("event") == "outcome" and r.get("outcome") == "park" for r in records)
 
@@ -1211,7 +1200,7 @@ def test_edge8_deadline_parks_if_spawned_refuses_if_not(tmp_path, monkeypatch):
     )
     assert refused["ok"] is False
     assert refused["reason"] == "retry-deadline-exceeded"
-    records2 = ll.read(ll.ledger_path(repo2)["path"])["records"]
+    records2 = ll.read(repo2)["records"]
     assert any(r.get("event") == "refused" for r in records2)
     assert not any(r.get("event") == "outcome" for r in records2)
 
@@ -1319,7 +1308,7 @@ def test_edge16_base_commit_head_resolved_in_reservation(tmp_path, monkeypatch):
         settle_seconds=0.2,
     )
     assert result["ok"] is True
-    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    records = ll.read(repo)["records"]
     reserved = [r for r in records if r.get("event") == "reserved"][0]
     assert reserved["premise"]["baseCommit"] == head
     assert len(reserved["premise"]["baseCommit"]) == 40
@@ -1403,7 +1392,7 @@ def test_log_dir_exists_as_file_refuses_and_terminalizes(tmp_path, monkeypatch):
     )
     assert result["ok"] is False
     assert result["reason"] == "log-dir-create-failed"
-    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    records = ll.read(repo)["records"]
     refused = [r for r in records if r.get("event") == "refused"]
     assert any(
         r.get("launchId") == result["launchId"]
@@ -1430,7 +1419,7 @@ def test_log_dir_parent_readonly_refuses_and_terminalizes(tmp_path, monkeypatch)
         )
         assert result["ok"] is False
         assert result["reason"] == "log-dir-create-failed"
-        records = ll.read(ll.ledger_path(repo)["path"])["records"]
+        records = ll.read(repo)["records"]
         refused = [r for r in records if r.get("event") == "refused"]
         assert any(
             r.get("launchId") == result["launchId"]
@@ -1458,7 +1447,7 @@ def test_log_dir_create_failure_reason_distinct_from_log_open_failed(tmp_path, m
     )
     assert result["reason"] == "log-dir-create-failed"
     assert result["reason"] != "log-open-failed"
-    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    records = ll.read(repo)["records"]
     refused = [r for r in records if r.get("event") == "refused"]
     assert any(r.get("reason") == "log-dir-create-failed" for r in refused)
     assert not any(r.get("reason") == "log-open-failed" for r in refused)
@@ -1485,7 +1474,7 @@ def test_edge20_log_open_failure_terminalizes_reservation(tmp_path, monkeypatch)
     )
     assert result["ok"] is False
     assert result["reason"] == "log-open-failed"
-    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    records = ll.read(repo)["records"]
     refused = [r for r in records if r.get("event") == "refused"]
     assert any(r.get("stage") == "spawn" and r.get("reason") == "log-open-failed" for r in refused)
     assert not any(r.get("event") == "started" for r in records)
@@ -1630,7 +1619,7 @@ def test_c2_edge2_deadline_before_spawn_refuses(tmp_path, monkeypatch):
         total_deadline_seconds=0,
     )
     assert result["ok"] is False
-    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    records = ll.read(repo)["records"]
     refused = [r for r in records if r.get("event") == "refused"]
     assert any(r.get("stage") == "retry-deadline-exceeded" for r in refused)
     assert not any(r.get("event") == "outcome" for r in records)
@@ -1642,10 +1631,10 @@ def test_c2_edge3_started_append_fail_parks_not_refuses(tmp_path, monkeypatch):
     log_dir = str(tmp_path / "logs")
     real_append = ll.append
 
-    def failing_append(path, record):
+    def failing_append(repo_root, record, env=None):
         if record.get("event") == "started":
             return False
-        return real_append(path, record)
+        return real_append(repo_root, record, env=env)
 
     monkeypatch.setattr(ll, "append", failing_append)
     result = L.launch_build(
@@ -1658,7 +1647,7 @@ def test_c2_edge3_started_append_fail_parks_not_refuses(tmp_path, monkeypatch):
         settle_seconds=0.1,
     )
     assert result["ok"] is False
-    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    records = ll.read(repo)["records"]
     parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
     refused = [r for r in records if r.get("event") == "refused"]
     assert len(parks) == 1
@@ -1714,7 +1703,7 @@ def test_c2_edge5_oserror_retry_writes_retry_event(tmp_path, monkeypatch):
         backoff_seconds=(0,),
     )
     assert result["ok"] is True
-    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    records = ll.read(repo)["records"]
     retries = [r for r in records if r.get("event") == "retry"]
     assert len(retries) == 1
     assert retries[0]["delaySeconds"] == 0
@@ -1748,7 +1737,7 @@ def test_c2_edge6_retry_append_failure_terminalizes(tmp_path, monkeypatch):
     )
     assert result["ok"] is False
     assert result["reason"] == "ledger-append-failed"
-    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    records = ll.read(repo)["records"]
     assert not any(r.get("event") == "started" for r in records)
 
 
@@ -1772,7 +1761,7 @@ def test_c2_edge7_final_oserror_refuses(tmp_path, monkeypatch):
     )
     assert result["ok"] is False
     assert result["reason"] == "spawn-oserror-exhausted"
-    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    records = ll.read(repo)["records"]
     assert any(r.get("event") == "refused" for r in records)
     assert not any(r.get("event") == "started" for r in records)
 
@@ -1791,7 +1780,7 @@ def test_c2_edge8_nonzero_exit_parks(tmp_path, monkeypatch):
         settle_seconds=0.3,
     )
     assert result["ok"] is False
-    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    records = ll.read(repo)["records"]
     parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
     assert len(parks) == 1
 
@@ -1810,7 +1799,7 @@ def test_c2_edge9_zero_exit_parks(tmp_path, monkeypatch):
         settle_seconds=0.3,
     )
     assert result["ok"] is False
-    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    records = ll.read(repo)["records"]
     parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
     assert len(parks) == 1
     assert parks[0]["evidence"] == "exit-zero"
@@ -1830,7 +1819,7 @@ def test_c2_edge10_child_alive_after_settle_no_terminal(tmp_path, monkeypatch):
         settle_seconds=0.3,
     )
     assert result["ok"] is True
-    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    records = ll.read(repo)["records"]
     assert not any(r.get("event") == "outcome" for r in records)
     assert not any(r.get("event") == "refused" for r in records)
     try:
