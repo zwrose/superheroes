@@ -14,7 +14,14 @@ import subprocess
 _GIT_GLOBAL_OPTS = frozenset({
     "-p", "--paginate", "--no-pager", "--no-optional-locks",
     "--literal-pathspecs", "--bare",
+    "--icase-pathspecs", "--glob-pathspecs", "--noglob-pathspecs",
 })
+
+_PATHSPEC_MODE_GLOBALS = frozenset({
+    "--literal-pathspecs", "--icase-pathspecs", "--glob-pathspecs", "--noglob-pathspecs",
+})
+
+WHOLE_TREE = object()
 _GIT_GLOBAL_OPT_WITH_VALUE = {
     "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
 }
@@ -428,6 +435,30 @@ _RESTORE_OPTS = {
     "--overlay": 0, "--no-overlay": 0,
 }
 
+_RM_OPTS = {
+    "-f": 0, "--force": 0,
+    "-r": 0, "--cached": 0,
+    "-q": 0, "--quiet": 0,
+}
+
+_SWITCH_OPTS = {
+    "-f": 0, "--force": 0, "--discard-changes": 0,
+    "-c": 1, "-C": 1, "--create": 1,
+    "-q": 0, "--quiet": 0,
+    "--orphan": 1, "--conflict": 1,
+}
+
+_RESET_OPTS = {
+    "--hard": 0, "--soft": 0, "--mixed": 0,
+    "-q": 0, "--quiet": 0,
+}
+
+_CHECKOUT_INDEX_OPTS = {
+    "-f": 0, "--force": 0,
+    "-a": 0, "--all": 0,
+    "-q": 0, "--quiet": 0,
+}
+
 
 def _checkout_path_has_treeish_operand(args):
     """True when checkout-path reads paths from another tree-ish (`git checkout <rev> -- <paths>`)."""
@@ -578,8 +609,11 @@ def _operand_is_existing_path(cwd, operand):
     return os.path.exists(path)
 
 
-def _operand_resolves_as_commit(cwd, operand):
-    result = _run_git(cwd, "rev-parse", "--verify", "--quiet", f"{operand}^{{commit}}")
+def _operand_resolves_as_commit(cwd, operand, forwarded_globals=()):
+    result = _run_git(
+        cwd, "rev-parse", "--verify", "--quiet", f"{operand}^{{commit}}",
+        forwarded_globals=forwarded_globals,
+    )
     return result.returncode == 0
 
 
@@ -824,16 +858,433 @@ def _find_git_dir(cwd):
         return "indeterminate"
 
 
-def _run_git(cwd, *args):
+def _run_git(cwd, *args, forwarded_globals=()):
     env = os.environ.copy()
     env["GIT_OPTIONAL_LOCKS"] = "0"
     return subprocess.run(
-        ["git", "-C", cwd, *args],
+        ["git", "-C", cwd, *forwarded_globals, *args],
         capture_output=True,
         text=True,
         timeout=_GIT_TIMEOUT,
         env=env,
     )
+
+
+def _parse_segment_tokens(segment):
+    """Tokenize a segment, stripping env-assignment prefixes."""
+    tokens = _tokenize_segment(segment)
+    start = 0
+    while start < len(tokens) and "=" in tokens[start] and not tokens[start].startswith("="):
+        key = tokens[start].split("=", 1)[0]
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+            start += 1
+            continue
+        break
+    env_prefix_present = start > 0
+    tokens = _strip_shell_prefixes(tokens[start:])
+    return tokens, env_prefix_present
+
+
+def _extract_forwarded_globals(tokens):
+    """Git global options between `git` and the subcommand, for probe forwarding."""
+    if not tokens or not _is_git_token(tokens[0]):
+        return []
+    globals_list = []
+    i = 1
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok == "--":
+            break
+        if not tok.startswith("-"):
+            break
+        base = tok.split("=", 1)[0]
+        if base in ("-C", "--git-dir", "--work-tree"):
+            break
+        globals_list.append(tok)
+        if base in _GIT_GLOBAL_OPT_WITH_VALUE and "=" not in tok:
+            _, consumed = _option_value(tokens, i)
+            if consumed:
+                globals_list.append(tokens[i + 1])
+            i += 1 + consumed
+        else:
+            i += 1
+    return globals_list
+
+
+def _segment_has_pathspec_mode_global(tokens):
+    """True when a pathspec-mode git global appears before the subcommand."""
+    if not tokens or not _is_git_token(tokens[0]):
+        return False
+    i = 1
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok == "--":
+            break
+        if not tok.startswith("-"):
+            break
+        base = tok.split("=", 1)[0]
+        if base in _PATHSPEC_MODE_GLOBALS:
+            return True
+        if base in _GIT_GLOBAL_OPT_WITH_VALUE:
+            _, consumed = _option_value(tokens, i)
+            i += 1 + consumed
+        else:
+            i += 1
+    return False
+
+
+def _option_known(tok, option_specs):
+    """True when tok is a recognized option in option_specs."""
+    if not tok.startswith("-"):
+        return True
+    flags, _, _ = _expand_clustered_flags(tok, option_specs)
+    for part in flags:
+        if not part.startswith("-"):
+            continue
+        base = part.split("=", 1)[0]
+        if part in option_specs or base in option_specs:
+            continue
+        for key in option_specs:
+            if key.startswith("--") and key == base:
+                continue
+            if key.startswith("--") and key[2:] == base[2:] if base.startswith("--") else False:
+                continue
+        else:
+            for key in option_specs:
+                if part == key or base == key:
+                    break
+                if key.startswith("--") and base.startswith("--") and key[2:] == base[2:]:
+                    break
+            else:
+                return False
+    return True
+
+
+def _has_unknown_option_in_args(args, option_specs):
+    """True when an option token is absent from the subcommand's option table."""
+    pre, _, _ = _args_before_separator(args)
+    i = 0
+    while i < len(pre):
+        tok = pre[i]
+        if not tok.startswith("-"):
+            i += 1
+            continue
+        flags, _, expects_value = _expand_clustered_flags(tok, option_specs)
+        if len(flags) == 1 and not flags[0].startswith("-"):
+            i += 1
+            continue
+        if not _option_known(tok, option_specs):
+            return True
+        i += 2 if expects_value else 1
+    return False
+
+
+def _extract_option_value(pre_args, option_specs, short_flags, long_flags):
+    """Return the value for the first matching short/long option, or None."""
+    long_bases = {lf.split("=", 1)[0] for lf in long_flags}
+    i = 0
+    while i < len(pre_args):
+        tok = pre_args[i]
+        if not tok.startswith("-"):
+            i += 1
+            continue
+        flags, _, expects_value = _expand_clustered_flags(tok, option_specs)
+        for part in flags:
+            base = part.split("=", 1)[0]
+            if part in short_flags or base in long_bases:
+                val, _ = _option_value(pre_args, i)
+                return val
+        i += 2 if expects_value else 1
+    return None
+
+
+def _normalize_scope(scope):
+    """Empty scope lists must never mean probe nothing."""
+    if scope is WHOLE_TREE:
+        return WHOLE_TREE
+    if not scope:
+        return WHOLE_TREE
+    return scope
+
+
+def _scope_status_suffix(scope):
+    """Return ['--', *scope] when scoped, else []."""
+    if scope is WHOLE_TREE:
+        return []
+    return ["--", *scope]
+
+
+def _split_nul(output):
+    """Split NUL-terminated git -z output, dropping trailing empty element."""
+    if not output:
+        return set()
+    parts = output.split("\0")
+    if parts and parts[-1] == "":
+        parts = parts[:-1]
+    return {p for p in parts if p}
+
+
+def _plan_checkout_path(args, probe_cwd, forwarded_globals):
+    pre, has_sep, post = _args_before_separator(args)
+    has_psff = _flag_present(
+        args, (), ("--pathspec-from-file", "--pathspec-from-file-nul"), _CHECKOUT_OPTS,
+    )
+    if _has_unknown_option_in_args(args, _CHECKOUT_OPTS):
+        return {"scope": WHOLE_TREE, "source": "index"}
+    matched, pre_operands = _consume_options(pre, _CHECKOUT_OPTS)
+    treeish_operands = []
+    if has_psff:
+        scope = WHOLE_TREE
+        treeish_operands = pre_operands
+    elif has_sep:
+        if len(pre_operands) > 1:
+            scope = WHOLE_TREE
+        else:
+            scope = post if post else WHOLE_TREE
+            treeish_operands = pre_operands
+    elif len(pre_operands) >= 2:
+        treeish_operands = [pre_operands[0]]
+        scope = pre_operands[1:]
+    elif len(pre_operands) == 1:
+        scope = [pre_operands[0]]
+    else:
+        scope = WHOLE_TREE
+    source = "index"
+    if treeish_operands:
+        candidate = treeish_operands[0]
+        if _operand_resolves_as_commit(probe_cwd, candidate, forwarded_globals):
+            source = candidate
+    return {"scope": _normalize_scope(scope), "source": source}
+
+
+def _plan_restore(args, probe_cwd, forwarded_globals):
+    pre, has_sep, post = _args_before_separator(args)
+    if _has_unknown_option_in_args(args, _RESTORE_OPTS):
+        scope = WHOLE_TREE
+    else:
+        _, operands = _consume_options(pre, _RESTORE_OPTS)
+        scope = operands + post
+        scope = _normalize_scope(scope)
+    source_val = _extract_option_value(pre, _RESTORE_OPTS, ("-s",), ("--source",))
+    source = source_val if source_val else "index"
+    return {"scope": scope, "source": source}
+
+
+def _plan_checkout_force(args, probe_cwd, forwarded_globals):
+    pre, _, _ = _args_before_separator(args)
+    if _has_unknown_option_in_args(args, _CHECKOUT_OPTS):
+        return {"scope": WHOLE_TREE, "source": "HEAD"}
+    _, operands = _consume_options(pre, _CHECKOUT_OPTS)
+    source = operands[0] if operands else "HEAD"
+    return {"scope": WHOLE_TREE, "source": source}
+
+
+def _plan_switch_force(args, probe_cwd, forwarded_globals):
+    pre, _, _ = _args_before_separator(args)
+    if _has_unknown_option_in_args(args, _SWITCH_OPTS):
+        return {"scope": WHOLE_TREE, "source": "HEAD"}
+    _, operands = _consume_options(pre, _SWITCH_OPTS)
+    source = operands[0] if operands else "HEAD"
+    return {"scope": WHOLE_TREE, "source": source}
+
+
+def _plan_reset_hard(args, probe_cwd, forwarded_globals):
+    pre, _, _ = _args_before_separator(args)
+    if _has_unknown_option_in_args(args, _RESET_OPTS):
+        return {"scope": WHOLE_TREE, "source": "HEAD"}
+    _, operands = _consume_options(pre, _RESET_OPTS)
+    source = operands[0] if operands else "HEAD"
+    return {"scope": WHOLE_TREE, "source": source}
+
+
+def _plan_rm_force(args, probe_cwd, forwarded_globals):
+    pre, has_sep, post = _args_before_separator(args)
+    if _has_unknown_option_in_args(args, _RM_OPTS):
+        scope = WHOLE_TREE
+    else:
+        _, operands = _consume_options(pre, _RM_OPTS)
+        scope = operands + post
+        scope = _normalize_scope(scope)
+    return {"scope": scope, "source": None}
+
+
+def _plan_checkout_index_force(args, probe_cwd, forwarded_globals):
+    pre, has_sep, post = _args_before_separator(args)
+    if _has_unknown_option_in_args(args, _CHECKOUT_INDEX_OPTS):
+        scope = WHOLE_TREE
+    elif _flag_present(args, ("-a",), ("--all",), _CHECKOUT_INDEX_OPTS):
+        scope = WHOLE_TREE
+    else:
+        _, operands = _consume_options(pre, _CHECKOUT_INDEX_OPTS)
+        scope = operands + post
+        scope = _normalize_scope(scope)
+    return {"scope": scope, "source": "index"}
+
+
+def _plan_clean_scope(args):
+    pre, has_sep, post = _args_before_separator(args)
+    unknown = _has_unknown_option_in_args(args, _CLEAN_OPTS)
+    _, operands = _consume_options(pre, _CLEAN_OPTS)
+    if unknown:
+        return WHOLE_TREE
+    scope = operands + post
+    return _normalize_scope(scope)
+
+
+def _resolve_probe_plan(action, segment, probe_cwd, forwarded_globals):
+    """Return probe plan dict, or 'indeterminate' when parsing fails."""
+    tokens, env_prefix = _parse_segment_tokens(segment)
+    if not tokens or not _is_git_token(tokens[0]):
+        return "indeterminate"
+    degrade = (
+        env_prefix
+        or "\\" in segment
+        or "$" in segment
+        or _segment_has_pathspec_mode_global(tokens)
+    )
+    parsed = _parse_git_invocation(tokens)
+    if parsed is None:
+        return "indeterminate"
+    args = parsed["args"]
+    if action == "checkout-path":
+        plan = _plan_checkout_path(args, probe_cwd, forwarded_globals)
+    elif action == "restore":
+        plan = _plan_restore(args, probe_cwd, forwarded_globals)
+    elif action == "checkout-force":
+        plan = _plan_checkout_force(args, probe_cwd, forwarded_globals)
+    elif action == "switch-force":
+        plan = _plan_switch_force(args, probe_cwd, forwarded_globals)
+    elif action == "reset-hard":
+        plan = _plan_reset_hard(args, probe_cwd, forwarded_globals)
+    elif action == "rm-force":
+        plan = _plan_rm_force(args, probe_cwd, forwarded_globals)
+    elif action == "checkout-index-force":
+        plan = _plan_checkout_index_force(args, probe_cwd, forwarded_globals)
+    elif action == "clean":
+        plan = {"scope": _plan_clean_scope(args), "source": None}
+    else:
+        return "indeterminate"
+    if degrade:
+        plan["scope"] = WHOLE_TREE
+    plan["scope"] = _normalize_scope(plan["scope"])
+    return plan
+
+
+def _probe_arm_a(probe_cwd, scope, forwarded_globals):
+    """Tracked modifications inside scope."""
+    args = [
+        "status", "--porcelain", "--untracked-files=no", "--ignore-submodules=none",
+        *_scope_status_suffix(scope),
+    ]
+    result = _run_git(probe_cwd, *args, forwarded_globals=forwarded_globals)
+    if result.returncode != 0:
+        return "indeterminate"
+    return len([ln for ln in result.stdout.splitlines() if ln.strip()])
+
+
+def _probe_arm_b(probe_cwd, scope, source, forwarded_globals):
+    """Source-tree writes over untracked/ignored content inside scope."""
+    if source in ("index", None):
+        return 0
+    verify = _run_git(
+        probe_cwd, "rev-parse", "--verify", "--quiet", f"{source}^{{commit}}",
+        forwarded_globals=forwarded_globals,
+    )
+    if verify.returncode != 0:
+        return "indeterminate"
+    if scope is WHOLE_TREE:
+        ls_args = ["ls-tree", "-r", "-z", "--full-tree", "--name-only", source]
+    else:
+        ls_args = [
+            "ls-tree", "-r", "-z", "--full-name", "--name-only", source,
+            "--", *scope,
+        ]
+    result = _run_git(probe_cwd, *ls_args, forwarded_globals=forwarded_globals)
+    if result.returncode != 0:
+        return "indeterminate"
+    destinations = _split_nul(result.stdout)
+    status_args = [
+        "status", "--porcelain", "-z", "--untracked-files=all",
+        "--ignored=matching", "--ignore-submodules=none",
+        *_scope_status_suffix(scope),
+    ]
+    result = _run_git(probe_cwd, *status_args, forwarded_globals=forwarded_globals)
+    if result.returncode != 0:
+        return "indeterminate"
+    untracked_or_ignored = set()
+    for entry in _split_nul(result.stdout):
+        if len(entry) < 2:
+            continue
+        xy = entry[:2]
+        if xy in ("??", "!!"):
+            path = entry[3:] if len(entry) > 3 and entry[2] == " " else entry[2:]
+            untracked_or_ignored.add(path)
+    return len(destinations & untracked_or_ignored)
+
+
+def _check_assume_unchanged_scoped(probe_cwd, scope, forwarded_globals):
+    """Fail-closed when assume-unchanged or skip-worktree bits are invisible to status."""
+    args = ["ls-files", "-v", *_scope_status_suffix(scope)]
+    result = _run_git(probe_cwd, *args, forwarded_globals=forwarded_globals)
+    if result.returncode != 0:
+        return "indeterminate"
+    for line in result.stdout.splitlines():
+        if line and (line[0].islower() or line[0] == "S"):
+            return "indeterminate"
+    return "clean"
+
+
+def _probe_clean(probe_cwd, segment, scope, forwarded_globals):
+    """Clean uses git's own --dry-run with the command's real flags."""
+    tokens, env_prefix = _parse_segment_tokens(segment)
+    degrade = (
+        env_prefix
+        or "\\" in segment
+        or "$" in segment
+        or _segment_has_pathspec_mode_global(tokens)
+    )
+    parsed = _parse_git_invocation(tokens)
+    if parsed is None:
+        return "indeterminate"
+    args = parsed["args"]
+    pre, _, _ = _args_before_separator(args)
+    unknown = _has_unknown_option_in_args(args, _CLEAN_OPTS)
+    if degrade or unknown:
+        scope = WHOLE_TREE
+    scope = _normalize_scope(scope)
+    clean_args = ["clean", "--dry-run"]
+    i = 0
+    while i < len(pre):
+        tok = pre[i]
+        if not tok.startswith("-"):
+            i += 1
+            continue
+        flags, _, expects_value = _expand_clustered_flags(tok, _CLEAN_OPTS)
+        for part in flags:
+            base = part.split("=", 1)[0]
+            if base in ("-d", "-x", "-X", "-f"):
+                clean_args.append(part)
+            elif base in ("-e", "--exclude"):
+                val, _ = _option_value(pre, i)
+                if val is not None:
+                    if "=" in part:
+                        clean_args.append(part)
+                    else:
+                        clean_args.extend([base, val])
+        i += 2 if expects_value else 1
+    suffix = _scope_status_suffix(scope)
+    if suffix:
+        clean_args.extend(suffix)
+    result = _run_git(probe_cwd, *clean_args, forwarded_globals=forwarded_globals)
+    if result.returncode != 0:
+        return "indeterminate"
+    count = len([ln for ln in result.stdout.splitlines() if ln.strip()])
+    if count > 0:
+        return ("at-risk", count)
+    assume = _check_assume_unchanged_scoped(probe_cwd, scope, forwarded_globals)
+    if assume == "indeterminate":
+        return ("indeterminate", 0)
+    return ("clean", 0)
 
 
 def _clean_has_flag(command, flag):
@@ -870,17 +1321,6 @@ def _restore_source_treeish_in_command(command):
         if _restore_match(parsed["args"]) and _restore_has_source_treeish_operand(
             parsed["args"],
         ):
-            return True
-    return False
-
-
-def _has_assume_unchanged_marked_files(cwd):
-    """True when git ls-files -v reports assume-unchanged (lowercase h/s prefix)."""
-    result = _run_git(cwd, "ls-files", "-v")
-    if result.returncode != 0:
-        return "indeterminate"
-    for line in result.stdout.splitlines():
-        if line and line[0] in ("h", "s"):
             return True
     return False
 
@@ -931,70 +1371,48 @@ def at_risk(cwd, action, command):
         return ("not-a-repo", 0)
 
     try:
-        checkout_path_treeish = (
-            action == "checkout-path"
-            and _checkout_path_treeish_in_command(command)
-        )
-        restore_source_treeish = (
-            action == "restore"
-            and _restore_source_treeish_in_command(command)
-        )
-        treeish_untracked_probe = checkout_path_treeish or restore_source_treeish
-        if action in _TRACKED_ONLY_PROBE_ACTIONS and not treeish_untracked_probe:
-            result = _run_git(
-                probe_cwd, "status", "--porcelain",
-                "--untracked-files=no", "--ignore-submodules=none",
-            )
-        elif action == "worktree-remove-force":
-            # Ignored content is declared-reproducible build output; including it here deadlocks
-            # the standard reap path on any worktree that has run the test suite, and the guard
-            # exists to protect uncommitted work, not build artifacts. Tracked modifications
-            # and non-ignored untracked files still deny.
+        tokens, _ = _parse_segment_tokens(command)
+        forwarded_globals = _extract_forwarded_globals(tokens)
+
+        if action == "worktree-remove-force":
             result = _run_git(
                 probe_cwd, "status", "--porcelain",
                 "--untracked-files=normal", "--ignore-submodules=none",
+                forwarded_globals=forwarded_globals,
             )
-        elif action in ("checkout-force", "switch-force"):
-            # checkout-force / switch-force can overwrite ignored paths the target tracks.
-            result = _run_git(
-                probe_cwd, "status", "--porcelain",
-                "--untracked-files=normal", "--ignore-submodules=none",
-                "--ignored=matching",
-            )
-        elif action == "reset-hard":
-            # reset --hard leaves ignored files alone; do not probe them (false denial).
-            result = _run_git(
-                probe_cwd, "status", "--porcelain",
-                "--untracked-files=normal", "--ignore-submodules=none",
-            )
-        elif treeish_untracked_probe:
-            result = _run_git(
-                probe_cwd, "status", "--porcelain",
-                "--untracked-files=normal", "--ignore-submodules=none",
-            )
-        elif action == "clean":
-            clean_args = ["clean", "--dry-run", "-d"]
-            if isinstance(command, str):
-                if _clean_has_flag(command, "-x"):
-                    clean_args.append("-x")
-                if _clean_has_flag(command, "-X"):
-                    clean_args.append("-X")
-            result = _run_git(probe_cwd, *clean_args)
-        else:
+            if result.returncode != 0:
+                return ("indeterminate", 0)
+            count = len([ln for ln in result.stdout.splitlines() if ln.strip()])
+            if count > 0:
+                return ("at-risk", count)
+            return ("clean", 0)
+
+        plan = _resolve_probe_plan(action, command, probe_cwd, forwarded_globals)
+        if plan == "indeterminate":
             return ("indeterminate", 0)
 
-        if result.returncode != 0:
+        if action == "clean":
+            return _probe_clean(probe_cwd, command, plan["scope"], forwarded_globals)
+
+        scope = plan["scope"]
+        source = plan["source"]
+
+        arm_a = _probe_arm_a(probe_cwd, scope, forwarded_globals)
+        if arm_a == "indeterminate":
             return ("indeterminate", 0)
-        lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
-        count = len(lines)
-        if count > 0:
-            return ("at-risk", count)
-        if action in _TRACKED_ONLY_PROBE_ACTIONS and not treeish_untracked_probe:
-            assume_state = _has_assume_unchanged_marked_files(probe_cwd)
-            if assume_state == "indeterminate":
-                return ("indeterminate", 0)
-            if assume_state:
-                return ("indeterminate", 0)
+
+        arm_b = _probe_arm_b(probe_cwd, scope, source, forwarded_globals)
+        if arm_b == "indeterminate":
+            return ("indeterminate", 0)
+
+        total = arm_a + arm_b
+        if total > 0:
+            return ("at-risk", total)
+
+        assume = _check_assume_unchanged_scoped(probe_cwd, scope, forwarded_globals)
+        if assume == "indeterminate":
+            return ("indeterminate", 0)
+
         return ("clean", 0)
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return ("indeterminate", 0)

@@ -615,12 +615,12 @@ def test_classify_unexpected_at_risk_state_denies(tmp_path, monkeypatch):
 # --- submodule probe ---------------------------------------------------------
 
 def test_at_risk_dirty_submodule_denies(tmp_path, monkeypatch):
-    """Both status probe families pass --ignore-submodules=none."""
+    """Every status-probe call site passes --ignore-submodules=none."""
     repo = _init_repo(tmp_path / "repo")
     _commit_file(repo, "f.txt", "x\n")
     calls = []
 
-    def _fake_run(cwd, *args):
+    def _fake_run(cwd, *args, forwarded_globals=()):
         calls.append(args)
         if "status" in args:
             if "--ignore-submodules=none" not in args:
@@ -629,11 +629,40 @@ def test_at_risk_dirty_submodule_denies(tmp_path, monkeypatch):
                 returncode = 0
                 stdout = " M sub\n"
             return _Result()
-        raise AssertionError("unexpected git invocation")
+        if "rev-parse" in args:
+            class _Result:
+                returncode = 0
+                stdout = "abc\n"
+            return _Result()
+        if "ls-tree" in args:
+            class _Result:
+                returncode = 0
+                stdout = ""
+            return _Result()
+        if "ls-files" in args:
+            class _Result:
+                returncode = 0
+                stdout = ""
+            return _Result()
+        raise AssertionError(f"unexpected git invocation: {args}")
 
     monkeypatch.setattr(wg, "_run_git", _fake_run)
-    assert wg.at_risk(repo, "restore", "git restore f.txt") == ("at-risk", 1)
-    assert calls
+    probes = [
+        ("restore", "git restore f.txt"),
+        ("checkout-path", "git checkout -- f.txt"),
+        ("checkout-force", "git checkout -f main"),
+        ("reset-hard", "git reset --hard"),
+        ("worktree-remove-force", "git worktree remove -f ../wt"),
+    ]
+    for action, segment in probes:
+        calls.clear()
+        if action == "worktree-remove-force":
+            wt = str(tmp_path / "wt")
+            _git(repo, "worktree", "add", "-b", "wt-branch", wt)
+            segment = f"git worktree remove -f {wt}"
+        result = wg.at_risk(repo, action, segment)
+        assert result[0] in ("at-risk", "clean", "indeterminate"), action
+        assert calls
 
 
 # --- CENSUS: classify chokepoint corpus --------------------------------------
@@ -936,3 +965,329 @@ def test_find_git_dir_not_a_repository_returns_none(tmp_path):
     if ancestor is not None:
         pytest.skip("tmp_path unexpectedly sits under a real .git ancestor on this machine")
     assert wg._find_git_dir(str(tmp_path)) is None
+
+
+# --- WO-R4a: pathspec-scoped risk probing (#682 round 4) ---------------------
+
+
+def _repo_restore_ignored_build_out(tmp_path, build_out_present=True):
+    """Repo for restore --source over ignored build.out (ratified closure 1)."""
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, ".gitignore", "build.out\n", msg="ignore")
+    _commit_file(repo, "seed.txt", "seed\n")
+    _git(repo, "checkout", "-q", "-b", "other")
+    with open(os.path.join(repo, "build.out"), "w") as f:
+        f.write("tracked on other\n")
+    _git(repo, "add", "-f", "build.out")
+    _git(repo, "commit", "-q", "-m", "other build")
+    _git(repo, "checkout", "-q", "main")
+    if build_out_present:
+        with open(os.path.join(repo, "build.out"), "w") as f:
+            f.write("PRECIOUS IGNORED CONTENT")
+    return repo
+
+
+def test_r4a_restore_source_ignored_build_out_denies(tmp_path, monkeypatch):
+    repo = _repo_restore_ignored_build_out(tmp_path, build_out_present=True)
+    _calibrated(monkeypatch)
+    decision, _ = wg.classify("git restore --source=other build.out", repo)
+    assert decision == "deny"
+
+
+def test_r4a_restore_source_ignored_build_out_absent_allows(tmp_path, monkeypatch):
+    repo = _repo_restore_ignored_build_out(tmp_path, build_out_present=False)
+    _calibrated(monkeypatch)
+    assert wg.classify("git restore --source=other build.out", repo) == ("allow", "")
+
+
+def test_r4a_clean_exclude_keep_only_allows(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "tracked.txt", "x\n")
+    with open(os.path.join(repo, "keep.txt"), "w") as f:
+        f.write("keep me")
+    _calibrated(monkeypatch)
+    assert wg.classify("git clean -fd --exclude=keep.txt", repo) == ("allow", "")
+
+
+def test_r4a_clean_exclude_other_not_excluded_denies(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "tracked.txt", "x\n")
+    with open(os.path.join(repo, "keep.txt"), "w") as f:
+        f.write("keep me")
+    with open(os.path.join(repo, "other.txt"), "w") as f:
+        f.write("remove me")
+    _calibrated(monkeypatch)
+    assert wg.classify("git clean -fd --exclude=keep.txt", repo)[0] == "deny"
+
+
+def _repo_checkout_force_ignored(tmp_path, other_tracks_ignored):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, ".gitignore", "ignored.out\n", msg="ignore")
+    _commit_file(repo, "seed.txt", "seed\n")
+    if other_tracks_ignored:
+        _git(repo, "checkout", "-q", "-b", "other")
+        with open(os.path.join(repo, "ignored.out"), "w") as f:
+            f.write("on other\n")
+        _git(repo, "add", "-f", "ignored.out")
+        _git(repo, "commit", "-q", "-m", "other ignored")
+        _git(repo, "checkout", "-q", "main")
+    else:
+        _git(repo, "branch", "other")
+    with open(os.path.join(repo, "ignored.out"), "w") as f:
+        f.write("local ignored content")
+    return repo
+
+
+def test_r4a_checkout_force_ignored_not_tracked_on_target_allows(tmp_path, monkeypatch):
+    repo = _repo_checkout_force_ignored(tmp_path, other_tracks_ignored=False)
+    _calibrated(monkeypatch)
+    assert wg.classify("git checkout -f other", repo) == ("allow", "")
+    assert wg.classify("git switch -f other", repo) == ("allow", "")
+
+
+def test_r4a_checkout_force_ignored_tracked_on_target_denies(tmp_path, monkeypatch):
+    repo = _repo_checkout_force_ignored(tmp_path, other_tracks_ignored=True)
+    _calibrated(monkeypatch)
+    assert wg.classify("git checkout -f other", repo)[0] == "deny"
+    assert wg.classify("git switch -f other", repo)[0] == "deny"
+
+
+def test_r4a_refusal_count_scoped_to_pathspec(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    for name in ("a.txt", "b.txt", "c.txt"):
+        _commit_file(repo, name, f"{name} content\n", msg=name)
+    with open(os.path.join(repo, "a.txt"), "w") as f:
+        f.write("dirty a")
+    with open(os.path.join(repo, "b.txt"), "w") as f:
+        f.write("dirty b")
+    with open(os.path.join(repo, "c.txt"), "w") as f:
+        f.write("dirty c")
+    _calibrated(monkeypatch)
+    decision, reason = wg.classify("git checkout -- a.txt", repo)
+    assert decision == "deny"
+    assert "discard 1 uncommitted change(s)" in reason
+
+
+def test_r4a_fail_closed_pathspec_from_file_denies(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "tracked.txt", "x\n")
+    _commit_file(repo, "clean.txt", "clean\n", msg="clean")
+    with open(os.path.join(repo, "tracked.txt"), "w") as f:
+        f.write("dirty")
+    with open(os.path.join(repo, "list.txt"), "w") as f:
+        f.write("clean.txt\n")
+    _calibrated(monkeypatch)
+    assert wg.classify("git checkout --pathspec-from-file=list.txt", repo)[0] == "deny"
+
+
+@pytest.mark.parametrize("global_opt", [
+    "--literal-pathspecs",
+    "--icase-pathspecs",
+    "--glob-pathspecs",
+    "--noglob-pathspecs",
+])
+def test_r4a_fail_closed_pathspec_mode_global_denies(tmp_path, monkeypatch, global_opt):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "tracked.txt", "x\n")
+    _commit_file(repo, "clean.txt", "clean\n", msg="clean")
+    with open(os.path.join(repo, "tracked.txt"), "w") as f:
+        f.write("dirty")
+    _calibrated(monkeypatch)
+    decision, _ = wg.classify(f"git {global_opt} checkout -- clean.txt", repo)
+    assert decision == "deny"
+
+
+def test_r4a_fail_closed_unknown_checkout_option_denies(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "tracked.txt", "x\n")
+    _commit_file(repo, "clean.txt", "clean\n", msg="clean")
+    with open(os.path.join(repo, "tracked.txt"), "w") as f:
+        f.write("dirty")
+    _calibrated(monkeypatch)
+    decision, _ = wg.classify("git checkout --some-unknown-option -- clean.txt", repo)
+    assert decision == "deny"
+
+
+def test_r4a_fail_closed_restore_bad_source_denies(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "x\n")
+    _calibrated(monkeypatch)
+    decision, _ = wg.classify("git restore --source=no-such-tree f.txt", repo)
+    assert decision == "deny"
+
+
+def test_r4a_scoping_checkout_clean_path_allows(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "clean.txt", "clean\n")
+    _commit_file(repo, "dirty.txt", "x\n", msg="dirty")
+    with open(os.path.join(repo, "dirty.txt"), "w") as f:
+        f.write("dirty")
+    _calibrated(monkeypatch)
+    assert wg.classify("git checkout -- clean.txt", repo) == ("allow", "")
+
+
+def test_r4a_scoping_rm_force_clean_vs_dirty(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "clean.txt", "clean\n")
+    _commit_file(repo, "dirty.txt", "x\n", msg="dirty")
+    with open(os.path.join(repo, "dirty.txt"), "w") as f:
+        f.write("dirty")
+    _calibrated(monkeypatch)
+    assert wg.classify("git rm -f clean.txt", repo) == ("allow", "")
+    assert wg.classify("git rm -f dirty.txt", repo)[0] == "deny"
+
+
+def test_r4a_reset_hard_other_tracks_untracked_denies(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "seed.txt", "seed\n")
+    _git(repo, "checkout", "-q", "-b", "other")
+    _commit_file(repo, "precious.txt", "on other\n", msg="other precious")
+    _git(repo, "checkout", "-q", "main")
+    with open(os.path.join(repo, "precious.txt"), "w") as f:
+        f.write("UNTRACKED PRECIOUS")
+    _calibrated(monkeypatch)
+    assert wg.classify("git reset --hard other", repo)[0] == "deny"
+
+
+def test_r4a_reset_hard_unrelated_ignored_only_allows(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, ".gitignore", "*.tmp\n", msg="ignore")
+    _commit_file(repo, "tracked.txt", "x\n")
+    with open(os.path.join(repo, "build.tmp"), "w") as f:
+        f.write("ignored only")
+    _calibrated(monkeypatch)
+    assert wg.classify("git reset --hard", repo) == ("allow", "")
+
+
+def test_r4a_subdir_checkout_force_root_path_denies(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "root.txt", "root\n")
+    os.makedirs(os.path.join(repo, "sub"))
+    _git(repo, "checkout", "-q", "-b", "other")
+    _commit_file(repo, "root.txt", "other root\n", msg="other root")
+    _git(repo, "checkout", "-q", "main")
+    with open(os.path.join(repo, "root.txt"), "w") as f:
+        f.write("untracked precious root")
+    sub = os.path.join(repo, "sub")
+    _calibrated(monkeypatch)
+    assert wg.classify("git checkout -f other", sub)[0] == "deny"
+
+
+def test_r4a_subdir_checkout_tree_pathspec_denies(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "seed.txt", "seed\n")
+    sub = os.path.join(repo, "sub")
+    os.makedirs(sub)
+    _git(repo, "checkout", "-q", "-b", "other")
+    with open(os.path.join(sub, "tracked.txt"), "w") as f:
+        f.write("on other\n")
+    _git(repo, "add", "sub/tracked.txt")
+    _git(repo, "commit", "-q", "-m", "other sub")
+    _git(repo, "checkout", "-q", "main")
+    os.makedirs(sub, exist_ok=True)
+    with open(os.path.join(sub, "tracked.txt"), "w") as f:
+        f.write("PRECIOUS UNTRACKED")
+    _calibrated(monkeypatch)
+    assert wg.classify("git checkout other -- tracked.txt", sub)[0] == "deny"
+
+
+def test_r4a_second_destructive_segment_dirty_denies(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "clean.txt", "clean\n")
+    _commit_file(repo, "dirty.txt", "x\n", msg="dirty")
+    with open(os.path.join(repo, "dirty.txt"), "w") as f:
+        f.write("dirty")
+    _calibrated(monkeypatch)
+    decision, reason = wg.classify(
+        "git checkout -- clean.txt && git checkout -- dirty.txt", repo,
+    )
+    assert decision == "deny"
+    assert "discard 1 uncommitted change(s)" in reason
+
+
+def test_r4a_both_destructive_segments_clean_allow(tmp_path, monkeypatch):
+    repo = _clean_repo(tmp_path, monkeypatch)
+    _commit_file(repo, "clean.txt", "clean\n", msg="clean2")
+    _commit_file(repo, "also.txt", "also\n", msg="also")
+    assert wg.classify(
+        "git checkout -- clean.txt && git checkout -- also.txt", repo,
+    ) == ("allow", "")
+
+
+def test_r4a_a1_backslash_segment_denies(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "a b", "committed\n", msg="space name")
+    with open(os.path.join(repo, "a b"), "w") as f:
+        f.write("dirty space")
+    _commit_file(repo, "clean.txt", "clean\n", msg="clean")
+    _calibrated(monkeypatch)
+    assert wg.classify("git checkout -- a\\ b", repo)[0] == "deny"
+    assert wg.classify("git checkout -- clean.txt", repo) == ("allow", "")
+
+
+def test_r4a_a2_env_assignment_denies(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "foo.txt", "x\n")
+    with open(os.path.join(repo, "foo.txt"), "w") as f:
+        f.write("dirty foo")
+    _calibrated(monkeypatch)
+    assert wg.classify("GIT_ICASE_PATHSPECS=1 git checkout -- FOO.TXT", repo)[0] == "deny"
+
+
+def test_r4a_a2_env_assignment_clean_tree_allows(tmp_path, monkeypatch):
+    repo = _clean_repo(tmp_path, monkeypatch)
+    assert wg.classify("GIT_ICASE_PATHSPECS=1 git checkout -- FOO.TXT", repo) == ("allow", "")
+
+
+def test_r4a_a3_no_replace_objects_reset_denies(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "keep.txt", "keep\n")
+    c_commit = subprocess.run(
+        ["git", "-C", repo, "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    _commit_file(repo, "precious.txt", "precious\n", msg="add precious")
+    new_commit = subprocess.run(
+        ["git", "-C", repo, "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    _git(repo, "replace", c_commit, new_commit)
+    with open(os.path.join(repo, "precious.txt"), "w") as f:
+        f.write("UNTRACKED PRECIOUS")
+    _calibrated(monkeypatch)
+    assert wg.classify(
+        f"git --no-replace-objects reset --hard {c_commit}", repo,
+    )[0] == "deny"
+
+
+def test_r4a_a3_core_excludes_file_clean_denies(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "tracked.txt", "x\n")
+    excludes = os.path.join(tmp_path, "excludes")
+    with open(excludes, "w") as f:
+        f.write("precious.txt\n")
+    _git(repo, "config", "core.excludesFile", excludes)
+    with open(os.path.join(repo, "precious.txt"), "w") as f:
+        f.write("would be ignored")
+    _calibrated(monkeypatch)
+    assert wg.classify(
+        "git -c core.excludesFile=/dev/null clean -f -- precious.txt", repo,
+    )[0] == "deny"
+    assert wg.classify("git clean -f -- precious.txt", repo) == ("allow", "")
+
+
+def test_r4a_a4_assume_unchanged_checkout_head_denies(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "tracked.txt", "committed\n")
+    _git(repo, "update-index", "--assume-unchanged", "tracked.txt")
+    with open(os.path.join(repo, "tracked.txt"), "w") as f:
+        f.write("PRECIOUS")
+    _calibrated(monkeypatch)
+    assert wg.classify("git checkout HEAD -- tracked.txt", repo)[0] == "deny"
+    assert wg.classify("git restore tracked.txt", repo)[0] == "deny"
+
+
+def test_r4a_a4_assume_unchanged_control_allows(tmp_path, monkeypatch):
+    repo = _clean_repo(tmp_path, monkeypatch)
+    assert wg.classify("git checkout HEAD -- tracked.txt", repo) == ("allow", "")
+    assert wg.classify("git restore tracked.txt", repo) == ("allow", "")
