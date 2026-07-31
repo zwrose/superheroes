@@ -1,4 +1,5 @@
 import ast
+import fcntl
 import json
 import os
 import stat
@@ -1121,9 +1122,74 @@ def test_c1_edge10_ledger_fifo_refused_without_blocking(tmp_path, monkeypatch):
     os.makedirs(repo_dir, mode=0o700)
     fifo_path = os.path.join(repo_dir, ll.LEDGER_NAME)
     os.mkfifo(fifo_path)
+    start = time.monotonic()
     result = ll.open_ledger(repo, "r")
+    elapsed = time.monotonic() - start
+    assert elapsed < 5.0, "open_ledger blocked on FIFO read path"
     assert result["ok"] is False
     assert result["reason"] == "ledger-file-not-regular"
+
+
+def test_c1_edge10_append_ledger_fifo_refused_without_blocking(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    ledger_root = str(tmp_path / "ledger-root")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, ledger_root)
+    repo_id = ll.repo_identity(repo)
+    os.makedirs(ledger_root, mode=0o700, exist_ok=True)
+    repo_dir = os.path.join(ledger_root, repo_id)
+    os.makedirs(repo_dir, mode=0o700)
+    fifo_path = os.path.join(repo_dir, ll.LEDGER_NAME)
+    os.mkfifo(fifo_path)
+    start = time.monotonic()
+    result = ll.open_ledger(repo, "a")
+    elapsed = time.monotonic() - start
+    assert elapsed < 5.0, "open_ledger blocked on FIFO append path"
+    assert result["ok"] is False
+    assert result["reason"] == "ledger-file-not-regular"
+
+
+def test_c1_open_ledger_clears_nonblock_on_regular_file(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    ledger_root = str(tmp_path / "ledger-root")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, ledger_root)
+    repo_id = ll.repo_identity(repo)
+    os.makedirs(ledger_root, mode=0o700, exist_ok=True)
+    repo_dir = os.path.join(ledger_root, repo_id)
+    os.makedirs(repo_dir, mode=0o700)
+    ledger_file = os.path.join(repo_dir, ll.LEDGER_NAME)
+    with open(ledger_file, "w", encoding="utf-8") as fh:
+        fh.write("")
+    os.chmod(ledger_file, 0o600)
+
+    read_result = ll.open_ledger(repo, "r")
+    assert read_result["ok"] is True, read_result
+    try:
+        flags = fcntl.fcntl(read_result["fh"].fileno(), fcntl.F_GETFL)
+        assert not (flags & os.O_NONBLOCK)
+    finally:
+        read_result["fh"].close()
+
+    append_result = ll.open_ledger(repo, "a")
+    assert append_result["ok"] is True, append_result
+    try:
+        flags = fcntl.fcntl(append_result["fh"].fileno(), fcntl.F_GETFL)
+        assert not (flags & os.O_NONBLOCK)
+        mode = os.stat(ledger_file).st_mode & 0o777
+        assert mode == 0o600
+    finally:
+        append_result["fh"].close()
+
+    repo2 = _init_repo(tmp_path / "repo2")
+    fresh_result = ll.open_ledger(repo2, "a")
+    assert fresh_result["ok"] is True, fresh_result
+    try:
+        flags = fcntl.fcntl(fresh_result["fh"].fileno(), fcntl.F_GETFL)
+        assert not (flags & os.O_NONBLOCK)
+        fresh_path = fresh_result["path"]
+        mode = os.stat(fresh_path).st_mode & 0o777
+        assert mode == 0o600
+    finally:
+        fresh_result["fh"].close()
 
 
 def test_c1_edge11_ledger_file_group_world_accessible_refused(tmp_path, monkeypatch):

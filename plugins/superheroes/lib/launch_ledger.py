@@ -5,6 +5,7 @@ The ledger's whole job is to be unable to report a resolved batch it cannot
 actually see — torn tails, interior corruption, and unresolved members all
 refuse to ground a rate. Never raises to callers.
 """
+import fcntl
 import hashlib
 import json
 import os
@@ -120,6 +121,11 @@ def _close_fd(fd):
             pass
 
 
+def _clear_nonblock(fd):
+    flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+    fcntl.fcntl(fd, fcntl.F_SETFL, flags & ~os.O_NONBLOCK)
+
+
 def _ledger_refusal(reason, root_fd=None, repo_fd=None, ledger_fd=None):
     _close_fd(ledger_fd)
     _close_fd(repo_fd)
@@ -211,7 +217,7 @@ def open_ledger(repo_root, mode, env=None):
             try:
                 ledger_fd = os.open(
                     LEDGER_NAME,
-                    os.O_RDONLY | os.O_NOFOLLOW,
+                    os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
                     dir_fd=repo_fd,
                 )
             except FileNotFoundError:
@@ -228,7 +234,7 @@ def open_ledger(repo_root, mode, env=None):
             try:
                 ledger_fd = os.open(
                     LEDGER_NAME,
-                    os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW,
+                    os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
                     mode=0o600,
                     dir_fd=repo_fd,
                 )
@@ -237,6 +243,13 @@ def open_ledger(repo_root, mode, env=None):
                 ledger_path = os.path.join(root, repo_id, LEDGER_NAME)
                 if os.path.islink(ledger_path):
                     reason = "ledger-file-symlink"
+                else:
+                    try:
+                        st = os.stat(LEDGER_NAME, dir_fd=repo_fd, follow_symlinks=False)
+                        if not stat.S_ISREG(st.st_mode):
+                            reason = "ledger-file-not-regular"
+                    except OSError:
+                        pass
                 return _ledger_refusal(reason, root_fd=root_fd, repo_fd=repo_fd, ledger_fd=ledger_fd)
 
         st = os.fstat(ledger_fd)
@@ -254,6 +267,8 @@ def open_ledger(repo_root, mode, env=None):
                 repo_fd=repo_fd,
                 ledger_fd=ledger_fd,
             )
+
+        _clear_nonblock(ledger_fd)
 
         ledger_path = os.path.join(root, repo_id, LEDGER_NAME)
         if mode == "r":
