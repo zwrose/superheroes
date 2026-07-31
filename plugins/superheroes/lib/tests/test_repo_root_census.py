@@ -138,9 +138,9 @@ def _subtree_has_dirname_walk(subtree):
 def _is_manual_git_ancestor_loop(node):
     if not isinstance(node, (ast.While, ast.For)):
         return False
-    body = node.body + getattr(node, "orelse", [])
-    if _subtree_has_pathlib_parents_walk(body):
+    if _subtree_has_pathlib_parents_walk(node):
         return True
+    body = node.body + getattr(node, "orelse", [])
     return (_subtree_has_git_join(body)
             and _subtree_has_git_entry_test(body)
             and _subtree_has_dirname_walk(body))
@@ -161,7 +161,7 @@ def find_violations(source, filename="<unknown>"):
             })
         if _is_manual_git_ancestor_loop(node):
             detail = "loop joins .git and walks os.path.dirname"
-            if _subtree_has_pathlib_parents_walk(node.body + getattr(node, "orelse", [])):
+            if _subtree_has_pathlib_parents_walk(node):
                 detail = "loop walks pathlib Path.parents and tests a .git entry"
             out.append({
                 "kind": "manual-git-ancestor-walk",
@@ -210,6 +210,23 @@ def test_lib_repo_root_census_no_unallowlisted_violations():
             for v in vs
         )
     )
+
+
+def test_census_flags_pathlib_only_manual_git_walk(tmp_path):
+    """Pathlib-only ancestor walk must be flagged without an os.path rogue in the fixture."""
+    decoy = tmp_path / "pathlib_decoy.py"
+    decoy.write_text(textwrap.dedent("""\
+        from pathlib import Path
+
+        def rogue_repo_root_pathlib(cwd):
+            for parent in Path(cwd).resolve().parents:
+                if (parent / ".git").exists():
+                    return str(parent)
+            return cwd
+    """))
+    violations = census_module(str(decoy))
+    kinds = {v["kind"] for v in violations}
+    assert kinds == {"manual-git-ancestor-walk"}
 
 
 def test_census_flags_synthetic_fall_open_resolver(tmp_path):

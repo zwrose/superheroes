@@ -43,6 +43,10 @@ def _declined_not_a_repository_outcome(res, cwd):
         raise RepoRootUnavailable(
             "cannot determine repository root at %s: %s" % (cwd, exc))
     if git_ancestor is not None:
+        if res.status == GIT_OK:
+            raise RepoRootUnavailable(
+                "repository root indeterminate at %s: .git present at %s but git returned "
+                "empty rev-parse --show-toplevel" % (cwd, git_ancestor))
         raise RepoRootUnavailable(
             "repository root indeterminate at %s: .git present at %s but git declined: %s"
             % (cwd, git_ancestor, res.detail))

@@ -529,15 +529,19 @@ def test_gather_signals_git_unavailable_raises_repo_root_unavailable(tmp_path, m
     monkeypatch.setattr(
         sc, "run_git_result",
         lambda cwd, *args: sc.GitResult(None, sc.GIT_UNAVAILABLE, "FileNotFoundError: no git"))
-    with pytest.raises(sc.RepoRootUnavailable):
+    with pytest.raises(sc.RepoRootUnavailable) as excinfo:
         rc.gather_signals(str(tmp_path), root=root)
+    assert "git could not be run" in str(excinfo.value)
 
 
-def test_gather_signals_git_unavailable_does_not_emit_core_md_unreadable(tmp_path, monkeypatch):
+def test_gather_signals_git_unavailable_on_corrupt_repo_raises_before_unreadable(
+        tmp_path, monkeypatch):
     import store_core as sc
 
     monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
     repo, root, _ = _gate_core_fixture(tmp_path, "corrupt")
+    sigs_ok = rc.gather_signals(repo, root=root)
+    assert any(s["type"] == "core-md-unreadable" for s in sigs_ok)
     monkeypatch.setattr(
         sc, "run_git_result",
         lambda cwd, *args: sc.GitResult(None, sc.GIT_UNAVAILABLE, "FileNotFoundError: no git"))

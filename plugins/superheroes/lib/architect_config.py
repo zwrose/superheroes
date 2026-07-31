@@ -71,7 +71,8 @@ def read_policy(cwd, root=None):
 
 def write_policy(cwd, policy, root=None):
     """Record the doc-policy under the project config lock. Returns the written record,
-    or None if the lock is contended (caller proceeds + surfaces a notice — UFR-1)."""
+    or None if the lock is contended, the project store cannot be ensured, or the
+    repository root is unavailable (caller proceeds + surfaces a notice — UFR-1)."""
     rec = _migrate(policy)
     if rec is None:
         raise ValueError("invalid doc-policy: %r" % (policy,))

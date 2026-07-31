@@ -123,17 +123,40 @@ _NEUTRAL_COLLECTOR_CWD_LOCK = threading.Lock()
 _NEUTRAL_TOOL_CONFIGS = {}
 _NEUTRAL_TOOL_CONFIG_LOCK = threading.Lock()
 
+_GITFILE_MAX_BYTES = 4096
+
+
+def _looks_like_gitfile(git_entry):
+    """True when ``git_entry`` is a regular file whose content parses as a gitfile.
+
+    Parses only the shape ``gitdir: <path>`` (leading/trailing whitespace tolerated).
+    Does not resolve or trust the target path.  Returns False on read/parse failure
+    (indeterminate, not authoritative).  Never spawns."""
+    try:
+        with open(git_entry, "rb") as fh:
+            chunk = fh.read(_GITFILE_MAX_BYTES)
+    except OSError:
+        return False
+    try:
+        line = chunk.decode("utf-8", "surrogateescape").split("\n", 1)[0].strip()
+    except (UnicodeDecodeError, ValueError):
+        return False
+    if not line.lower().startswith("gitdir:"):
+        return False
+    return bool(line[len("gitdir:"):].strip())
+
 
 def _git_dot_at_ancestor_is_authoritative(ancestor):
-    """True when ``ancestor``'s ``.git`` is a real directory or gitfile, not a symlink."""
+    """True when ``ancestor``'s ``.git`` is a real directory or valid gitfile, not a symlink."""
     git_entry = os.path.join(ancestor, ".git")
-    try:
-        st = os.lstat(git_entry)
-    except OSError:
-        raise
+    st = os.lstat(git_entry)
     if stat.S_ISLNK(st.st_mode):
         return False
-    return stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode)
+    if stat.S_ISDIR(st.st_mode):
+        return True
+    if stat.S_ISREG(st.st_mode):
+        return _looks_like_gitfile(git_entry)
+    return False
 
 
 def _git_toplevel(cwd):
