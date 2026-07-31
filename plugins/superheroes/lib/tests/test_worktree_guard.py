@@ -8,6 +8,7 @@ import subprocess
 import pytest
 
 import owner_authority
+import store_core
 import worktree_guard as wg
 
 
@@ -837,3 +838,49 @@ def test_destructive_discard_actions_all_segments(tmp_path):
     )
     assert "restore" in actions
     assert "clean" in actions
+
+
+# --- _find_git_dir delegates to the store_core chokepoint (issue #742) --------
+
+def test_find_git_dir_oserror_from_chokepoint_is_indeterminate(monkeypatch):
+    """The conversion is load-bearing: an OSError from the walk must become
+    'indeterminate', not propagate and not collapse to None. This must fail if
+    _find_git_dir goes back to walking .git ancestors by hand."""
+    def _raise(cwd):
+        raise OSError("untraversable component")
+    monkeypatch.setattr(store_core, "git_dot_entry_ancestor", _raise)
+    assert wg._find_git_dir("/anything") == "indeterminate"
+
+
+def test_find_git_dir_delegates_to_chokepoint(monkeypatch, tmp_path):
+    """_find_git_dir actually calls store_core.git_dot_entry_ancestor and returns
+    whatever it answers — proving the chokepoint is used, not bypassed."""
+    calls = []
+
+    def _stub(cwd):
+        calls.append(cwd)
+        return str(tmp_path)
+
+    monkeypatch.setattr(store_core, "git_dot_entry_ancestor", _stub)
+    result = wg._find_git_dir(str(tmp_path / "sub"))
+    assert result == str(tmp_path)
+    assert calls == [str(tmp_path / "sub")]
+
+
+def test_find_git_dir_import_or_call_failure_is_indeterminate(monkeypatch):
+    """Any exception out of the chokepoint call — not just OSError — fails closed to
+    'indeterminate', never None."""
+    def _raise(cwd):
+        raise ImportError("store_core could not be imported")
+    monkeypatch.setattr(store_core, "git_dot_entry_ancestor", _raise)
+    assert wg._find_git_dir("/anything") == "indeterminate"
+
+
+def test_find_git_dir_not_a_repository_returns_none(tmp_path):
+    """A real directory with no .git ancestor anywhere up to the filesystem root
+    returns None (not 'indeterminate') — the not-a-repository case stays distinct
+    from a genuinely failed probe."""
+    ancestor = store_core.git_dot_entry_ancestor(str(tmp_path))
+    if ancestor is not None:
+        pytest.skip("tmp_path unexpectedly sits under a real .git ancestor on this machine")
+    assert wg._find_git_dir(str(tmp_path)) is None

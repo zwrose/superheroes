@@ -780,21 +780,24 @@ def target_is_resolvable(command):
 
 
 def _find_git_dir(cwd):
-    """Walk cwd and ancestors for a .git entry via lstat. Returns path or None."""
-    path = os.path.abspath(cwd)
-    while True:
-        git_entry = os.path.join(path, ".git")
-        try:
-            os.lstat(git_entry)
-            return git_entry
-        except FileNotFoundError:
-            pass
-        except OSError:
-            return "indeterminate"
-        parent = os.path.dirname(path)
-        if parent == path:
-            return None
-        path = parent
+    """Nearest ancestor ``.git`` entry for cwd — delegates to the store_core chokepoint
+    (issue #742) instead of hand-rolling a ``.git`` ancestor walk.
+
+    Tri-state, never raises:
+    - a truthy ancestor directory path when a ``.git`` entry is found (in cwd or an
+      ancestor) — callers only test this for truthiness, never the value itself;
+    - ``None`` when no ``.git`` entry exists anywhere up to the filesystem root
+      (proven not a repository);
+    - the string ``"indeterminate"`` when the probe could not complete (an
+      untraversable path component, an unresolvable cwd) or the store_core
+      chokepoint could not be imported or called. This module is a safety floor:
+      an unknown answer must never collapse to ``None`` (which means "allow").
+    """
+    try:
+        import store_core
+        return store_core.git_dot_entry_ancestor(cwd)
+    except Exception:
+        return "indeterminate"
 
 
 def _run_git(cwd, *args):
