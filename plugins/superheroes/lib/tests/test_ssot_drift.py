@@ -338,8 +338,32 @@ def _review_code_step_8():
     return m.group(0)
 
 
+# CONVENTIONS §10.7 carries two distinct marker families, and only one of them propagates.
+#
+# The OMISSION FLOOR family is a PR-body contract every copy-holder restates, so §11 drift
+# applies to it: review-discipline.md, workhorse §11 and review-code step 8 must each carry it.
+_FLOOR_MARKERS = frozenset({
+    "<!-- superheroes:build-record -->",
+    "<!-- superheroes:degradations -->",
+})
+# The VET-RECEIPT family (#672 ratified, built in #694) is advisor-authored AT VET, after
+# handback: two of the three live in the vet-receipt comment, not the PR body. It is
+# deliberately NOT propagated to the copy-holders — a build's pre-handback review-code runs in
+# BRANCH mode, before any PR body or vet exists, so requiring these of review-code step 8 would
+# manufacture a finding nothing can satisfy (CONVENTIONS §13: no machinery without a consumer).
+_VET_RECEIPT_MARKERS = frozenset({
+    "<!-- superheroes:vet-receipt -->",
+    "<!-- superheroes:pending-proposals -->",
+    "<!-- superheroes:advisor-vet -->",
+})
+# Closed world over BOTH families: any new marker added to §10.7 fails this test on purpose,
+# forcing a decision about whether it propagates. Never relax this to a subset check.
+_SECTION_10_7_MARKERS = _FLOOR_MARKERS | _VET_RECEIPT_MARKERS
+
+
 def _omission_floor_expectations_from_home(home):
-    """Parse §10.7's three floor rows, marker names, and missing-marker rule (authoritative)."""
+    """Parse §10.7's three floor rows and missing-marker rule from the home, validate the
+    floor marker family against that rule, and return the floor family for copy-holders."""
     m = re.search(
         r"under `## What we're accepting`:\s*\n\n(.*?)\n\nA \*\*missing\*\*",
         home,
@@ -359,10 +383,27 @@ def _omission_floor_expectations_from_home(home):
         assert terms, "no bold load-bearing terms in floor row: %r" % row
         row_terms.append(terms)
     markers = re.findall(r"(<!-- superheroes:[^>]+ -->)", home)
-    assert set(markers) == {
-        "<!-- superheroes:build-record -->",
-        "<!-- superheroes:degradations -->",
-    }, "unexpected §10.7 marker set: %r" % markers
+    assert set(markers) == set(_SECTION_10_7_MARKERS), (
+        "unexpected §10.7 marker set: %r — a new marker must be sorted into "
+        "_FLOOR_MARKERS (propagates to every copy-holder) or _VET_RECEIPT_MARKERS "
+        "(advisor-authored at vet; must not be required of the copy-holders)" % markers
+    )
+    # v12: family membership must be DERIVED from the home, never trusted from the constant.
+    # §10.7's missing-marker rule names exactly the floor family, so moving a literal between
+    # _FLOOR_MARKERS and _VET_RECEIPT_MARKERS now FAILS instead of silently dropping a
+    # copy-holder requirement.
+    rule = re.search(
+        r"A \*\*missing\*\*.*?is \*\*itself\*\* a review finding",
+        home,
+        re.DOTALL,
+    )
+    assert rule, "§10.7 missing-marker rule not found (moved or reworded?)"
+    floor_from_home = set(re.findall(r"(<!-- superheroes:[^>]+ -->)", rule.group(0)))
+    assert floor_from_home == set(_FLOOR_MARKERS), (
+        "§10.7's missing-marker rule names %r but _FLOOR_MARKERS is %r — the floor family "
+        "must be derived from the home, not reclassified in the test" % (
+            sorted(floor_from_home), sorted(_FLOOR_MARKERS))
+    )
     assert re.search(
         r"A \*\*missing\*\* `<!-- superheroes:build-record -->`.*?review finding",
         home,
@@ -372,7 +413,8 @@ def _omission_floor_expectations_from_home(home):
         r"marker absence and \*\*None\*\* are different states",
         home,
     ), "§10.7 None vs marker-absence rule not found"
-    return row_terms, markers
+    # Only the floor family propagates to the copy-holders (see _VET_RECEIPT_MARKERS).
+    return row_terms, sorted(_FLOOR_MARKERS)
 
 
 def _assert_omission_floor_matches_home(copy_text, label, home):
@@ -411,3 +453,49 @@ def test_omission_floor_matches_conventions_10_7():
     )
     for label, text in copies:
         _assert_omission_floor_matches_home(text, label, home)
+
+
+def test_vet_receipt_markers_match_conventions_10_7():
+    """§11 + §12.3: the vet-receipt marker literals agree across every hand-maintained copy.
+
+    These three markers are grep anchors — the advisor's own backstops key on their exact
+    bytes — so a rename in one copy that misses another silently breaks the anchor. §10.7
+    names vet-receipt.md as the authoritative home; this binds the copies to it.
+    """
+    home = _conventions_section_10_7()
+    in_home = set(re.findall(r"(<!-- superheroes:[^>]+ -->)", home)) - set(_FLOOR_MARKERS)
+    assert in_home == set(_VET_RECEIPT_MARKERS), (
+        "CONVENTIONS §10.7 names vet-receipt markers %r but _VET_RECEIPT_MARKERS is %r"
+        % (sorted(in_home), sorted(_VET_RECEIPT_MARKERS))
+    )
+
+    # The authoritative home's own `## Markers` section — NOT the whole file: the `## Skeleton`
+    # section below it repeats two of the three literals (advisor-vet lives in the PR body, not the
+    # receipt), so a whole-file scan would pass vacuously for either of those two.
+    receipt = _read("skills/showrunner/reference/vet-receipt.md")
+    section = re.search(r"^## Markers$\n(.*?)(?=^## )", receipt, re.MULTILINE | re.DOTALL)
+    assert section, "vet-receipt.md `## Markers` section not found (moved or renamed?)"
+    in_receipt = set(re.findall(r"(<!-- superheroes:[^>]+ -->)", section.group(1)))
+    assert in_receipt == set(_VET_RECEIPT_MARKERS), (
+        "vet-receipt.md `## Markers` lists %r but CONVENTIONS §10.7 names %r — the marker "
+        "literals drifted between the home and the section that documents them"
+        % (sorted(in_receipt), sorted(_VET_RECEIPT_MARKERS))
+    )
+
+    # DERIVED, never hand-typed. A literal spelled out here passes the one drift this test exists to
+    # catch: a coordinated rename landing in §10.7, the receipt and the constant but NOT the charter
+    # leaves the charter stale while the assertion happily finds its own stale copy (verified live —
+    # the whole suite passed in exactly that state). So instead: every marker the charter carries must
+    # be one §10.7 names, and the charter must carry at least one of the vet family it tells the
+    # advisor to stamp.
+    charter = _read("skills/showrunner/SKILL.md")
+    charter_markers = set(re.findall(r"(<!-- superheroes:[^>]+ -->)", charter))
+    stale = charter_markers - (in_home | set(_FLOOR_MARKERS))
+    assert not stale, (
+        "showrunner/SKILL.md carries marker literal(s) %r that CONVENTIONS §10.7 does not name — "
+        "a rename reached the home but not the charter" % sorted(stale)
+    )
+    assert charter_markers & in_home, (
+        "showrunner/SKILL.md carries no vet-receipt marker literal at all — it tells the advisor to "
+        "stamp one and to re-check it whenever it next reads the PR body"
+    )
