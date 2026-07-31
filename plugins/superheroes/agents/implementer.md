@@ -32,8 +32,15 @@ its own private carve-out. Highest precedence first:
 5. **Scope a full-suite or project-wide gate to your order's surface.** If a sound invocation exists
    within your order's surface → run it; otherwise **do not run** — report what happened and why,
    report widening as **order defect**, never run wide or silently skip the check.
-6. **A command you are still in a position to run** — no higher rung has stopped or interrupted you, and you can execute it → run it.
-7. **Any command whose fate none of the rungs above decided** — unreached because an earlier rung stopped you (e.g. rung 2 or 3), started but outcome unknown (timeout, disconnected child), or ran but output was lost or truncated → for each: name the command, say what actually happened, name the rung that stopped or interrupted the run, and give **the output you actually have, labelled for exactly what it is**. Do not reconstruct, infer, or complete a missing receipt (rung 1). **A lost output is reported as lost.**
+6. **A command you are still in a position to run** — no higher rung has stopped or interrupted you,
+   and you can execute it → run it.
+7. **Any command whose fate none of the rungs above decided** — unreached because an earlier rung
+   stopped you (e.g. rung 2 or 3), started but outcome unknown (timeout, disconnected child),
+   or ran but output was lost or truncated → for each: name the command, say what actually happened,
+   name the rung that stopped or interrupted the run, and give **the output you actually have,
+   labelled for exactly what it is**. Do not reconstruct, infer, or complete a missing receipt
+   (rung 1).
+   **A lost output is reported as lost.**
 
 - **Receipts, not summaries.** Return the raw output of every command you run — the full
   test-runner output, the typecheck output, the build log. "Tests pass" is not a receipt; the

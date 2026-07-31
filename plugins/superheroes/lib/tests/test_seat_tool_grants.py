@@ -954,7 +954,7 @@ def test_dispatch_mechanics_tree_inspection_bullet_carries_its_load_bearing_elem
         "— the probe must be taken over a COMMITTED tree, never a dirty one, or a prior "
         "order's uncommitted work is exactly what the probe would misattribute.")
 
-    for cmd in ("git rev-parse HEAD", "git status --porcelain"):
+    for cmd in ("git rev-parse HEAD", "git status --porcelain", "git reflog"):
         assert cmd in bullet, (
             "the tree-inspection bullet no longer names `%s` as one of the baseline "
             "signals it captures." % cmd)
@@ -992,11 +992,16 @@ def _implementer_precedence_rung_count():
         "implementer.md: no `- **` bullet found after command precedence — cannot bound "
         "the ladder's end.")
     ladder = after[:bullet_start.start()]
-    rungs = re.findall(r"^\d+\.\s+\*\*", ladder, re.M)
-    assert rungs, (
+    rung_matches = re.findall(r"^(\d+)\.\s+\*\*", ladder, re.M)
+    assert rung_matches, (
         "implementer.md: no numbered rungs found under command precedence — cannot "
         "establish referential-integrity bounds.")
-    return len(rungs)
+    rung_numbers = [int(n) for n in rung_matches]
+    expected = list(range(1, len(rung_numbers) + 1))
+    assert rung_numbers == expected, (
+        "implementer.md: command-precedence ladder rung numbers are not a 1..N sequence "
+        "(got %r)." % rung_numbers)
+    return rung_numbers[-1]
 
 
 def test_implementer_rung_references_are_within_ladder_range():
@@ -1009,8 +1014,14 @@ def test_implementer_rung_references_are_within_ladder_range():
         "the implementer template, home of rung cross-references")
     max_rung = _implementer_precedence_rung_count()
 
-    for match in re.finditer(
-            r"(?i)(?:precedence\s+)?rung(?:s)?\s+(\d+)(?:\s*[–-]\s*(\d+))?", text):
+    matches = list(re.finditer(
+        r"(?i)(?:precedence\s+)?rung(?:s)?\s+(\d+)(?:\s*[–-]\s*(\d+))?", text))
+    assert matches, (
+        "implementer.md: no rung cross-references found — the file is expected to cite "
+        "precedence rungs; zero matches means this guard has gone blind.")
+
+    widest_high = 0
+    for match in matches:
         low = int(match.group(1))
         high = int(match.group(2)) if match.group(2) else low
         assert 1 <= low <= max_rung, (
@@ -1022,3 +1033,9 @@ def test_implementer_rung_references_are_within_ladder_range():
         assert low <= high, (
             "implementer.md: %r has an inverted rung range (%d–%d)." % (
                 match.group(0), low, high))
+        widest_high = max(widest_high, high)
+
+    assert widest_high == max_rung, (
+        "implementer.md: widest rung reference cites rung %d but the ladder has %d rung(s) — "
+        "a rung was likely added and the summary pointer was not updated." % (
+            widest_high, max_rung))
