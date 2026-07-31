@@ -106,14 +106,15 @@ def test_read_miss_schema_version(tmp_path):
     assert lc.read(path, now=1000.0) is None
 
 
-def test_read_miss_legacy_schema_version(tmp_path, monkeypatch):
+def test_read_rejects_pre_711_schema_v1_receipt(tmp_path, monkeypatch):
+    # #711 bumped SCHEMA_VERSION; reverting the constant must not resurrect v1 receipts.
+    assert lc.SCHEMA_VERSION > 1
     monkeypatch.delenv(lc._ENV_TTL, raising=False)
     path = str(tmp_path / "r.json")
     now = 5_000.0
-    legacy_version = lc.SCHEMA_VERSION - 1
     json.dump(
         {
-            "schemaVersion": legacy_version,
+            "schemaVersion": 1,
             "probedAt": now - 10,
             "liveness": _good_liveness(),
             "needed": _good_needed(),
