@@ -186,14 +186,32 @@ def test_indeterminate_message_verbatim():
     assert wg.indeterminate_message("restore") == expected
 
 
-# --- 4. classify: no filesystem access for non-matching command ---------------
+# --- 4. classify: non-matching commands ---------------------------------------
 
-def test_classify_non_matching_skips_filesystem(monkeypatch):
-    def _boom(cwd):
-        raise AssertionError("filesystem probe must not run for non-matching command")
+def test_classify_non_matching_command_allows(monkeypatch):
+    calls = []
 
-    monkeypatch.setattr(owner_authority, "calibration_state", _boom)
-    assert wg.classify("echo hello", "/this/path/does/not/exist") == ("allow", "")
+    def _record(cwd):
+        calls.append(cwd)
+        return "calibrated"
+
+    monkeypatch.setattr(owner_authority, "calibration_state", _record)
+    assert wg.classify("echo hello", "/any/path") == ("allow", "")
+
+
+def test_classify_probes_calibration_even_for_non_matching_command(monkeypatch):
+    """Documents current behavior: calibration_state is consulted for every Bash
+    command, including non-matching ones. Whether that ordering is optimal is an
+    open question for the owner."""
+    calls = []
+
+    def _record(cwd):
+        calls.append(cwd)
+        return "calibrated"
+
+    monkeypatch.setattr(owner_authority, "calibration_state", _record)
+    wg.classify("echo hello", "/any/path")
+    assert len(calls) == 1
 
 
 # --- 5. Fail-closed edges 1–25 ------------------------------------------------
@@ -690,6 +708,8 @@ CENSUS_DENY_DIRTY = [
     ("git reset --hard && env git clean -fd", "dirty"),
     ("env git -c advice.detachedHead=false reset --hard", "dirty"),
     ("env git --git-dir=.git reset --hard", "dirty"),
+    ("git checkout --merge tracked.txt", "dirty"),
+    ("git clean -n `git reset --hard`", "dirty"),
 ]
 
 CENSUS_ALLOW = [
@@ -697,6 +717,8 @@ CENSUS_ALLOW = [
     ("git commit -m 'document the git checkout -- hazard'", "dirty"),
     ("git restore --staged f", "dirty"),
     ("git restore -S f", "dirty"),
+    ("git checkout --detach main", "dirty"),
+    ("git commit -m 'use `git checkout --` carefully'", "dirty"),
     ("git clean -n -d", "dirty"),
     ("git clean -nfe pattern", "dirty"),
     ("git clean -ne '*.pyc'", "dirty"),
@@ -790,6 +812,34 @@ def test_census_deny_treeish_checkout_overwrites_untracked(tmp_path, monkeypatch
     _calibrated(monkeypatch)
     decision, _ = wg.classify("git checkout other -- draft.txt", repo)
     assert decision == "deny"
+
+
+def test_restore_source_treeish_overwrites_untracked_denies(tmp_path, monkeypatch):
+    """#682: `git restore --source=<tree> <path>` clobbers untracked work, like the checkout spelling."""
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "seed.txt", "seed\n")
+    _git(repo, "checkout", "-q", "-b", "other")
+    _commit_file(repo, "draft.txt", "from other\n", msg="other draft")
+    _git(repo, "checkout", "-q", "main")
+    with open(os.path.join(repo, "draft.txt"), "w") as f:
+        f.write("PRECIOUS UNTRACKED WORK")
+    _calibrated(monkeypatch)
+    assert wg.classify("git restore --source=other draft.txt", repo)[0] == "deny"
+
+
+def test_pathspec_from_file_treeish_overwrites_untracked_denies(tmp_path, monkeypatch):
+    """#682: --pathspec-from-file must not disable tree-ish detection."""
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "seed.txt", "seed\n")
+    _git(repo, "checkout", "-q", "-b", "other")
+    _commit_file(repo, "draft.txt", "from other\n", msg="other draft")
+    _git(repo, "checkout", "-q", "main")
+    with open(os.path.join(repo, "draft.txt"), "w") as f:
+        f.write("PRECIOUS UNTRACKED WORK")
+    with open(os.path.join(repo, "paths.txt"), "w") as f:
+        f.write("draft.txt\n")
+    _calibrated(monkeypatch)
+    assert wg.classify("git checkout other --pathspec-from-file=paths.txt", repo)[0] == "deny"
 
 
 def test_census_deny_assume_unchanged_invisible_to_probe(tmp_path, monkeypatch):

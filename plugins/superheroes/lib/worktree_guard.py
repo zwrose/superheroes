@@ -123,6 +123,10 @@ def _split_segments(command):
             flush()
             i += 1
             continue
+        if ch == "`":
+            flush()
+            i += 1
+            continue
         if ch == "|":
             if i + 1 < n and command[i + 1] == "|":
                 flush()
@@ -392,8 +396,6 @@ def _consume_options(pre_args, option_specs):
                         matched.add(key)
                         found = True
                         break
-                if not found and "=" not in part:
-                    advance = max(advance, 2)
         if expects_value:
             advance = max(advance, 2)
         i += advance
@@ -415,15 +417,26 @@ _CLEAN_OPTS = {
     "-x": 0, "-X": 0, "-q": 0, "--quiet": 0,
 }
 
+_RESTORE_OPTS = {
+    "-s": 1, "--source": 1,
+    "-S": 0, "--staged": 0,
+    "-W": 0, "--worktree": 0,
+    "-q": 0, "--quiet": 0,
+    "--ours": 0, "--theirs": 0,
+    "-p": 0, "--patch": 0,
+    "--overlay": 0, "--no-overlay": 0,
+}
+
 
 def _checkout_path_has_treeish_operand(args):
     """True when checkout-path reads paths from another tree-ish (`git checkout <rev> -- <paths>`)."""
     pre, has_sep, post = _args_before_separator(args)
-    if _flag_present(
+    has_pathspec_from_file = _flag_present(
         args, (), ("--pathspec-from-file", "--pathspec-from-file-nul"), _CHECKOUT_OPTS,
-    ):
-        return False
+    )
     _, operands = _consume_options(pre, _CHECKOUT_OPTS)
+    if has_pathspec_from_file:
+        return len(operands) >= 1
     if has_sep:
         return len(operands) > 0
     if len(operands) >= 2:
@@ -463,11 +476,21 @@ def _single_checkout_operand(args):
 
 def _restore_match(args):
     pre, _, _ = _args_before_separator(args)
-    has_staged = _flag_present(args, ("-S",), ("--staged",))
-    has_worktree = _flag_present(args, ("-W",), ("--worktree",))
+    has_staged = _flag_present(args, ("-S",), ("--staged",), _RESTORE_OPTS)
+    has_worktree = _flag_present(args, ("-W",), ("--worktree",), _RESTORE_OPTS)
     if has_staged and not has_worktree:
         return False
     return True
+
+
+def _restore_has_source_treeish_operand(args):
+    """True when restore reads paths from another tree-ish (`git restore --source=<rev> <paths>`)."""
+    pre, _, _ = _args_before_separator(args)
+    has_staged = _flag_present(args, ("-S",), ("--staged",), _RESTORE_OPTS)
+    has_worktree = _flag_present(args, ("-W",), ("--worktree",), _RESTORE_OPTS)
+    if has_staged and not has_worktree:
+        return False
+    return _flag_present(args, ("-s",), ("--source",), _RESTORE_OPTS)
 
 
 def _clean_match(args):
@@ -836,6 +859,20 @@ def _checkout_path_treeish_in_command(command):
     return False
 
 
+def _restore_source_treeish_in_command(command):
+    """True when any parsed restore segment carries a --source tree-ish."""
+    if not isinstance(command, str):
+        return False
+    for parsed in _iter_git_segments(command):
+        if parsed["subcommand"] != "restore":
+            continue
+        if _restore_match(parsed["args"]) and _restore_has_source_treeish_operand(
+            parsed["args"],
+        ):
+            return True
+    return False
+
+
 def _has_assume_unchanged_marked_files(cwd):
     """True when git ls-files -v reports assume-unchanged (lowercase h/s prefix)."""
     result = _run_git(cwd, "ls-files", "-v")
@@ -897,7 +934,12 @@ def at_risk(cwd, action, command):
             action == "checkout-path"
             and _checkout_path_treeish_in_command(command)
         )
-        if action in _TRACKED_ONLY_PROBE_ACTIONS and not checkout_path_treeish:
+        restore_source_treeish = (
+            action == "restore"
+            and _restore_source_treeish_in_command(command)
+        )
+        treeish_untracked_probe = checkout_path_treeish or restore_source_treeish
+        if action in _TRACKED_ONLY_PROBE_ACTIONS and not treeish_untracked_probe:
             result = _run_git(
                 probe_cwd, "status", "--porcelain",
                 "--untracked-files=no", "--ignore-submodules=none",
@@ -924,7 +966,7 @@ def at_risk(cwd, action, command):
                 probe_cwd, "status", "--porcelain",
                 "--untracked-files=normal", "--ignore-submodules=none",
             )
-        elif checkout_path_treeish:
+        elif treeish_untracked_probe:
             result = _run_git(
                 probe_cwd, "status", "--porcelain",
                 "--untracked-files=normal", "--ignore-submodules=none",
@@ -946,7 +988,7 @@ def at_risk(cwd, action, command):
         count = len(lines)
         if count > 0:
             return ("at-risk", count)
-        if action in _TRACKED_ONLY_PROBE_ACTIONS and not checkout_path_treeish:
+        if action in _TRACKED_ONLY_PROBE_ACTIONS and not treeish_untracked_probe:
             assume_state = _has_assume_unchanged_marked_files(probe_cwd)
             if assume_state == "indeterminate":
                 return ("indeterminate", 0)
