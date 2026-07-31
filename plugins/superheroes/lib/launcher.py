@@ -1,0 +1,889 @@
+#!/usr/bin/env python3
+"""Headless builder launcher — preflight walk, premise stamp, composition, detached spawn.
+
+Five CLI verbs over one core. Inspection verbs (preflight, compose) never spawn or write the
+ledger. ``launch`` walks the checklist, validates the premise, and composes in one process before
+reserve and spawn. Never raises to callers."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import secrets
+import signal
+import subprocess
+import sys
+import time
+from datetime import datetime, timedelta, timezone
+
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+
+import launch_doctrine  # noqa: E402
+import launch_ledger as ll  # noqa: E402
+import model_registry  # noqa: E402
+
+STANDING_EXCLUSIONS = {"releasePRsExcluded": True, "forcePush": "never"}
+
+_SETTLE_SECONDS = 20
+_MAX_ATTEMPTS = 3
+_BACKOFF_SECONDS = (5, 15, 45)
+_TOTAL_DEADLINE_SECONDS = 300
+
+_GIT_SCRUB_VARS = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CEILING_DIRECTORIES",
+)
+
+_LOCK_SUFFIX = ".lock"
+_DEFAULT_LOCK_TIMEOUT = 30.0
+
+_VALID_STATES = frozenset({"pass", "fail", "na"})
+_HEX40 = re.compile(r"^[0-9a-fA-F]{40}$")
+
+_WORKHORSE_CMD = "/superheroes:workhorse"
+
+
+def _scrub_env(env=None):
+    base = dict(env if env is not None else os.environ)
+    for key in _GIT_SCRUB_VARS:
+        base.pop(key, None)
+    base.pop(ll.LEDGER_ROOT_ENV, None)
+    return base
+
+
+def _git_scrubbed(repo_root, *args, env=None, timeout=None):
+    try:
+        return subprocess.run(
+            ["git", "-C", repo_root, *args],
+            capture_output=True,
+            text=True,
+            env=_scrub_env(env),
+            timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+
+
+def _lock_path(ledger_file):
+    return ledger_file + _LOCK_SUFFIX
+
+
+def _acquire_lock(lock_path, timeout=_DEFAULT_LOCK_TIMEOUT):
+    import file_lock  # noqa: E402
+
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            file_lock.acquire(lock_path)
+            return True
+        except file_lock.LockHeld:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.05)
+
+
+def _release_lock(lock_path):
+    import file_lock  # noqa: E402
+
+    try:
+        file_lock.release(lock_path)
+    except Exception:
+        pass
+
+
+def _append_under_lock(repo_root, record, env=None):
+    lp = ll.ledger_path(repo_root, env=env)
+    if not lp["ok"]:
+        return {"ok": False, "reason": lp["reason"]}
+    path = lp["path"]
+    lock_path = _lock_path(path)
+    if not _acquire_lock(lock_path):
+        return {"ok": False, "reason": "lock-unavailable"}
+    try:
+        if not ll.append(path, record):
+            return {"ok": False, "reason": "ledger-append-failed"}
+        return {"ok": True, "reason": None, "path": path}
+    finally:
+        _release_lock(lock_path)
+
+
+def _read_json_file(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError, TypeError):
+        return None
+    return data
+
+
+def _fail(reason, **extra):
+    out = {"ok": False, "reason": reason}
+    out.update(extra)
+    return out
+
+
+def _claude_dispatch_tokens():
+    tokens = set()
+    for role in model_registry.roles():
+        for model_id, effort in model_registry.allowlist(role, "claude"):
+            tok = model_registry.dispatch_token("claude", model_id, effort)
+            if tok is not None:
+                tokens.add(tok)
+    return tokens
+
+
+def _default_opus_token(tokens):
+    if "opus" in tokens:
+        return "opus"
+    return None
+
+
+def _resolve_model(model):
+    tokens = _claude_dispatch_tokens()
+    if not tokens:
+        return _fail("model-default-unavailable")
+    if model is None:
+        default = _default_opus_token(tokens)
+        if default is None:
+            return _fail("model-default-unavailable")
+        return {"ok": True, "token": default, "tokens": tokens}
+    if model not in tokens:
+        return _fail("model-not-registry-known")
+    return {"ok": True, "token": model, "tokens": tokens}
+
+
+def _parse_iso8601(value):
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _ledger_live_state(repo_root, env=None):
+    lp = ll.ledger_path(repo_root, env=env)
+    if not lp["ok"]:
+        return {"ok": False, "reason": lp["reason"], "live": [], "unreadable": True}
+    read_result = ll.read(lp["path"])
+    state = read_result["state"]
+    if state not in ("ok", "missing"):
+        return {"ok": False, "reason": "ledger-%s" % state, "live": [], "unreadable": True}
+    live = ll.live_launches(read_result["records"])
+    return {"ok": True, "reason": None, "live": live, "unreadable": False}
+
+
+def walk_preflight(checks_input, repo_root, env=None, doctrine_loader=None):
+    """Walk preflight checks. Never raises."""
+    loader = doctrine_loader or launch_doctrine.load
+    doctrine = loader()
+    if not doctrine.get("ok"):
+        return _fail(doctrine.get("reason") or "doctrine-unreadable")
+
+    if not isinstance(checks_input, dict):
+        return _fail("preflight-malformed-input")
+
+    for owned in launch_doctrine.LAUNCHER_OWNED_CHECKS:
+        if owned in checks_input:
+            return _fail("preflight-launcher-owned-check:%s" % owned)
+
+    known_ids = {cid for cid, _cls in launch_doctrine.PREFLIGHT_CHECKS}
+    for key in checks_input:
+        if key not in known_ids:
+            return _fail("preflight-unknown-check:%s" % key)
+
+    ledger_state = _ledger_live_state(repo_root, env=env)
+
+    out_checks = []
+    for check_id, check_class in launch_doctrine.PREFLIGHT_CHECKS:
+        if check_id == "standing-rulings":
+            out_checks.append({
+                "id": check_id,
+                "class": check_class,
+                "state": "pass",
+                "reason": "",
+                "evidence": doctrine["digest"],
+            })
+            continue
+
+        if check_id not in checks_input:
+            return _fail("preflight-missing-check:%s" % check_id)
+
+        entry = checks_input[check_id]
+        if not isinstance(entry, dict):
+            return _fail("preflight-malformed-input")
+
+        state = entry.get("state")
+        if state not in _VALID_STATES:
+            return _fail("preflight-bad-state:%s" % check_id)
+
+        reason = entry.get("reason")
+        if state == "na":
+            if not isinstance(reason, str) or not reason.strip():
+                return _fail("preflight-na-without-reason:%s" % check_id)
+        else:
+            reason = reason if isinstance(reason, str) else ""
+
+        if check_class == "always" and state == "na":
+            return _fail("preflight-always-check-na:%s" % check_id)
+
+        if state == "fail":
+            return _fail("preflight-failed:%s" % check_id)
+
+        if check_id == "disjoint-surfaces" and state == "na":
+            if not ledger_state["ok"] or ledger_state["live"]:
+                return _fail("preflight-disjointness-required")
+
+        out_checks.append({
+            "id": check_id,
+            "class": check_class,
+            "state": state,
+            "reason": reason,
+            "evidence": entry.get("evidence", "") if isinstance(entry.get("evidence"), str) else "",
+        })
+
+    return {"ok": True, "reason": None, "checks": out_checks, "go": True, "doctrine": doctrine}
+
+
+def _validate_grant_scope(grant):
+    if not isinstance(grant, dict):
+        return _fail("premise-grant-fuzzy")
+    applicable = grant.get("applicable")
+    if applicable is False:
+        reason = grant.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            return _fail("premise-not-applicable-without-reason:grantScope")
+        return {"ok": True, "applicable": False}
+    if applicable is not True:
+        return _fail("premise-grant-fuzzy")
+    kind = grant.get("kind")
+    if kind == "prs":
+        prs = grant.get("prs")
+        if not isinstance(prs, list) or not prs or not all(
+            isinstance(p, int) and not isinstance(p, bool) for p in prs
+        ):
+            return _fail("premise-grant-kind")
+        return {"ok": True, "applicable": True}
+    if kind == "timeBox":
+        until = grant.get("until")
+        if _parse_iso8601(until) is None:
+            return _fail("premise-grant-kind")
+        return {"ok": True, "applicable": True}
+    if kind == "count":
+        count = grant.get("count")
+        if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+            return _fail("premise-grant-kind")
+        return {"ok": True, "applicable": True}
+    if isinstance(kind, str):
+        return _fail("premise-grant-kind")
+    return _fail("premise-grant-fuzzy")
+
+
+def _validate_owner_capability(owner, max_run_minutes):
+    if not isinstance(owner, dict):
+        return _fail("premise-missing-field:ownerCapability")
+    applicable = owner.get("applicable")
+    if applicable is False:
+        reason = owner.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            return _fail("premise-not-applicable-without-reason:ownerCapability")
+        return {"ok": True, "applicable": False}
+    if applicable is not True:
+        return _fail("premise-missing-field:ownerCapability")
+    expires = owner.get("expiresAt")
+    if expires is None:
+        return _fail("premise-owner-capability-expiry-missing")
+    dt = _parse_iso8601(expires)
+    if dt is None:
+        return _fail("premise-owner-capability-expiry-unparseable")
+    horizon = datetime.now(timezone.utc) + timedelta(minutes=max_run_minutes)
+    if dt < horizon:
+        return _fail("premise-owner-capability-expires-before-horizon")
+    return {"ok": True, "applicable": True}
+
+
+def _cross_check_preflight(premise_checks, preflight_checks):
+    """premise_checks: grant/owner applicable flags; preflight_checks: walk output list."""
+    if preflight_checks is None:
+        return None
+    by_id = {c["id"]: c["state"] for c in preflight_checks}
+    grant_applicable = premise_checks.get("grant_applicable")
+    owner_applicable = premise_checks.get("owner_applicable")
+    if grant_applicable is not None:
+        actual = by_id.get("grant-state")
+        if not grant_applicable:
+            if actual != "na":
+                return "premise-check-mismatch:grant-state"
+        elif actual == "na":
+            return "premise-check-mismatch:grant-state"
+    if owner_applicable is not None:
+        actual = by_id.get("owner-capability")
+        if not owner_applicable:
+            if actual != "na":
+                return "premise-check-mismatch:owner-capability"
+        elif actual == "na":
+            return "premise-check-mismatch:owner-capability"
+    return None
+
+
+def validate_premise(premise, repo_root, preflight_checks=None, env=None):
+    """Validate premise stamp per contract C7. Never raises."""
+    if not isinstance(premise, dict):
+        return _fail("premise-missing-field:baseCommit")
+
+    required = (
+        "baseCommit", "surfaces", "batchId", "issue",
+        "maxRunMinutes", "bashMaxTimeoutMs", "grantScope", "ownerCapability",
+    )
+    for field in required:
+        if field not in premise:
+            return _fail("premise-missing-field:%s" % field)
+
+    base = premise["baseCommit"]
+    if not isinstance(base, str) or not base.strip():
+        return _fail("premise-missing-field:baseCommit")
+    proc = _git_scrubbed(repo_root, "rev-parse", "--verify", "%s^{commit}" % base.strip(), env=env)
+    if proc is None or proc.returncode != 0:
+        return _fail("premise-base-commit-unresolved")
+    resolved = (proc.stdout or "").strip()
+    if not _HEX40.match(resolved):
+        return _fail("premise-base-commit-unresolved")
+
+    surfaces = premise["surfaces"]
+    if not isinstance(surfaces, list) or not surfaces or not all(
+        isinstance(s, str) and s.strip() for s in surfaces
+    ):
+        return _fail("premise-surfaces-empty")
+
+    if not isinstance(premise["batchId"], str) or not premise["batchId"].strip():
+        return _fail("premise-missing-field:batchId")
+    if not isinstance(premise["issue"], int) or isinstance(premise["issue"], bool):
+        return _fail("premise-missing-field:issue")
+
+    max_run = premise["maxRunMinutes"]
+    if not isinstance(max_run, int) or isinstance(max_run, bool) or max_run < 1:
+        return _fail("premise-max-run-minutes")
+
+    bash_timeout = premise["bashMaxTimeoutMs"]
+    if not isinstance(bash_timeout, int) or isinstance(bash_timeout, bool) or bash_timeout < 1:
+        return _fail("premise-bash-max-timeout")
+
+    grant_result = _validate_grant_scope(premise["grantScope"])
+    if not grant_result["ok"]:
+        return grant_result
+
+    owner_result = _validate_owner_capability(premise["ownerCapability"], max_run)
+    if not owner_result["ok"]:
+        return owner_result
+
+    mismatch = _cross_check_preflight(
+        {
+            "grant_applicable": grant_result["applicable"],
+            "owner_applicable": owner_result["applicable"],
+        },
+        preflight_checks,
+    )
+    if mismatch:
+        return _fail(mismatch)
+
+    stamped = dict(premise)
+    stamped["standingExclusions"] = dict(STANDING_EXCLUSIONS)
+    return {
+        "ok": True,
+        "reason": None,
+        "premise": stamped,
+        "resolvedBaseCommit": resolved,
+    }
+
+
+def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None):
+    """Compose prompt and argv. Never raises."""
+    loader = doctrine_loader or launch_doctrine.load
+    doctrine = loader()
+    if not doctrine.get("ok"):
+        return _fail(doctrine.get("reason") or "doctrine-unreadable")
+
+    rulings_block = doctrine.get("rulingsBlock") or ""
+    own_line = launch_doctrine.ruling_line(doctrine, "own-worktree")
+    if not own_line:
+        return _fail("compose-ruling-zero-absent")
+
+    prompt = "%s\n\nIssue: #%s\n\n%s" % (_WORKHORSE_CMD, issue, rulings_block)
+    if own_line not in prompt:
+        return _fail("compose-ruling-zero-absent")
+
+    model_result = _resolve_model(model)
+    if not model_result["ok"]:
+        return model_result
+
+    token = model_result["token"]
+    argv = ["claude", "--model", token, "-p", prompt]
+    return {
+        "ok": True,
+        "reason": None,
+        "prompt": prompt,
+        "argv": argv,
+        "model": token,
+        "doctrine": doctrine,
+    }
+
+
+def _worktree_baseline(repo_root, env=None):
+    head = _git_scrubbed(repo_root, "rev-parse", "HEAD", env=env)
+    status = _git_scrubbed(repo_root, "status", "--porcelain", env=env)
+    if head is None or status is None or head.returncode != 0 or status.returncode != 0:
+        return None
+    return {
+        "head": (head.stdout or "").strip(),
+        "porcelain": status.stdout or "",
+    }
+
+
+def _worktree_unchanged(repo_root, baseline, env=None):
+    if baseline is None:
+        return False
+    current = _worktree_baseline(repo_root, env=env)
+    if current is None:
+        return False
+    return current["head"] == baseline["head"] and current["porcelain"] == baseline["porcelain"]
+
+
+def _default_spawn(argv, repo_root, out_fh, err_fh, child_env):
+    return subprocess.Popen(
+        argv,
+        cwd=repo_root,
+        stdin=subprocess.DEVNULL,
+        stdout=out_fh,
+        stderr=err_fh,
+        start_new_session=True,
+        close_fds=True,
+        env=child_env,
+    )
+
+
+def _terminate_and_reap(proc):
+    if proc is None:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except Exception:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    time.sleep(0.2)
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        pass
+
+
+def _record_refused(repo_root, launch_id, stage, reason, env=None):
+    record = {
+        "event": "refused",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "stage": stage,
+        "reason": reason,
+    }
+    return _append_under_lock(repo_root, record, env=env)
+
+
+def _spawn_attempt(
+    repo_root,
+    launch_id,
+    attempt,
+    argv,
+    log_path,
+    err_path,
+    bash_max_timeout_ms,
+    baseline,
+    env=None,
+    spawn_fn=None,
+):
+    """Spawn one attempt; return dict with ok, proc, reason, baseline."""
+    spawn = spawn_fn or _default_spawn
+    child_env = _scrub_env(env)
+    child_env["BASH_MAX_TIMEOUT_MS"] = str(bash_max_timeout_ms)
+    try:
+        out_fh = open(log_path, "ab")
+        err_fh = open(err_path, "ab")
+    except OSError:
+        return {"ok": False, "reason": "log-open-failed", "proc": None}
+
+    proc = spawn(argv, repo_root, out_fh, err_fh, child_env)
+    out_fh.close()
+    err_fh.close()
+
+    started = {
+        "event": "started",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "attempt": attempt,
+        "pid": proc.pid,
+        "logPath": log_path,
+        "errPath": err_path,
+    }
+    append_result = _append_under_lock(repo_root, started, env=env)
+    if not append_result["ok"]:
+        _terminate_and_reap(proc)
+        _record_refused(
+            repo_root, launch_id, "started-append-failed", append_result["reason"], env=env,
+        )
+        return {"ok": False, "reason": append_result["reason"], "proc": None, "refused": True}
+
+    return {"ok": True, "proc": proc, "baseline": baseline}
+
+
+def _observe_settle(proc, settle_seconds):
+    deadline = time.monotonic() + settle_seconds
+    while time.monotonic() < deadline:
+        rc = proc.poll()
+        if rc is not None:
+            return rc
+        time.sleep(0.1)
+    rc = proc.poll()
+    return rc
+
+
+def launch_build(
+    repo_root,
+    issue,
+    premise,
+    checks_input,
+    log_dir,
+    model=None,
+    env=None,
+    doctrine_loader=None,
+    spawn_fn=None,
+    settle_seconds=None,
+    max_attempts=None,
+    backoff_seconds=None,
+    total_deadline_seconds=None,
+):
+    """Full launch flow: preflight, premise, compose, reserve, spawn, settle/retry."""
+    settle_seconds = _SETTLE_SECONDS if settle_seconds is None else settle_seconds
+    max_attempts = _MAX_ATTEMPTS if max_attempts is None else max_attempts
+    backoff_seconds = _BACKOFF_SECONDS if backoff_seconds is None else backoff_seconds
+    total_deadline_seconds = (
+        _TOTAL_DEADLINE_SECONDS if total_deadline_seconds is None else total_deadline_seconds
+    )
+
+    launch_id = "launch-%s" % secrets.token_hex(8)
+    deadline = time.monotonic() + total_deadline_seconds
+
+    preflight_result = walk_preflight(
+        checks_input, repo_root, env=env, doctrine_loader=doctrine_loader,
+    )
+    if not preflight_result["ok"]:
+        stage = "preflight"
+        reason = preflight_result["reason"]
+        reserve_result = _try_reserve_for_refusal(
+            repo_root, launch_id, issue, premise, preflight_result, None, env,
+        )
+        if reserve_result.get("reserved"):
+            _record_refused(repo_root, launch_id, stage, reason, env=env)
+        return _fail(reason, launchId=launch_id)
+
+    premise_result = validate_premise(
+        premise, repo_root, preflight_checks=preflight_result["checks"], env=env,
+    )
+    if not premise_result["ok"]:
+        stage = "premise"
+        reason = premise_result["reason"]
+        reserve_result = _try_reserve_for_refusal(
+            repo_root, launch_id, issue, premise, preflight_result, None, env,
+        )
+        if reserve_result.get("reserved"):
+            _record_refused(repo_root, launch_id, stage, reason, env=env)
+        return _fail(reason, launchId=launch_id)
+
+    compose_result = compose_launch(
+        repo_root, issue, premise_result["premise"], model=model, doctrine_loader=doctrine_loader,
+    )
+    if not compose_result["ok"]:
+        stage = "compose" if compose_result["reason"] != "model-not-registry-known" else "model"
+        if compose_result["reason"] == "model-default-unavailable":
+            stage = "model"
+        reason = compose_result["reason"]
+        reserve_result = _try_reserve_for_refusal(
+            repo_root, launch_id, issue, premise_result["premise"],
+            preflight_result, compose_result, env,
+        )
+        if reserve_result.get("reserved"):
+            _record_refused(repo_root, launch_id, stage, reason, env=env)
+        return _fail(reason, launchId=launch_id)
+
+    stamped = premise_result["premise"]
+    doctrine = compose_result["doctrine"]
+    argv = compose_result["argv"]
+
+    reserved = {
+        "event": "reserved",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": stamped["batchId"],
+        "repoId": ll.repo_identity(repo_root) or "",
+        "issue": issue,
+        "surfaces": stamped["surfaces"],
+        "premise": stamped,
+        "preflight": {"checks": preflight_result["checks"]},
+        "argv": argv,
+        "doctrineDigest": doctrine["digest"],
+        "model": compose_result["model"],
+    }
+    reserve_result = ll.reserve(repo_root, reserved, env=env)
+    if not reserve_result["ok"]:
+        return _fail(reserve_result["reason"], launchId=launch_id)
+
+    os.makedirs(log_dir, mode=0o700, exist_ok=True)
+    log_path = os.path.join(log_dir, "%s.stdout" % launch_id)
+    err_path = os.path.join(log_dir, "%s.stderr" % launch_id)
+
+    attempt = 1
+    while attempt <= max_attempts:
+        if time.monotonic() >= deadline:
+            _record_refused(
+                repo_root, launch_id, "retry-deadline-exceeded", "deadline", env=env,
+            )
+            return _fail("retry-deadline-exceeded", launchId=launch_id)
+
+        baseline = _worktree_baseline(repo_root, env=env)
+        spawn_result = _spawn_attempt(
+            repo_root,
+            launch_id,
+            attempt,
+            argv,
+            log_path,
+            err_path,
+            stamped["bashMaxTimeoutMs"],
+            baseline,
+            env=env,
+            spawn_fn=spawn_fn,
+        )
+        if spawn_result.get("refused"):
+            return _fail(spawn_result["reason"], launchId=launch_id)
+        if not spawn_result["ok"]:
+            _record_refused(repo_root, launch_id, "spawn", spawn_result["reason"], env=env)
+            return _fail(spawn_result["reason"], launchId=launch_id)
+
+        proc = spawn_result["proc"]
+        rc = _observe_settle(proc, settle_seconds)
+        if rc is None:
+            return {
+                "ok": True,
+                "reason": None,
+                "launchId": launch_id,
+                "pid": proc.pid,
+                "logPath": log_path,
+                "errPath": err_path,
+                "attempt": attempt,
+            }
+
+        if rc == 0:
+            _record_refused(
+                repo_root, launch_id, "settle-exit-zero-uncertain", "exit-zero", env=env,
+            )
+            return _fail("settle-exit-zero-uncertain", launchId=launch_id)
+
+        if not _worktree_unchanged(repo_root, baseline, env=env):
+            _record_refused(
+                repo_root,
+                launch_id,
+                "retry-unsafe-worktree-dirtied",
+                "worktree-dirtied",
+                env=env,
+            )
+            return _fail("retry-unsafe-worktree-dirtied", launchId=launch_id)
+
+        if attempt >= max_attempts:
+            _record_refused(repo_root, launch_id, "attempts-exhausted", "max-attempts", env=env)
+            return _fail("attempts-exhausted", launchId=launch_id)
+
+        if time.monotonic() >= deadline:
+            _record_refused(
+                repo_root, launch_id, "retry-deadline-exceeded", "deadline", env=env,
+            )
+            return _fail("retry-deadline-exceeded", launchId=launch_id)
+
+        delay_idx = min(attempt - 1, len(backoff_seconds) - 1)
+        delay = backoff_seconds[delay_idx]
+        retry_record = {
+            "event": "retry",
+            "launchId": launch_id,
+            "ts": time.time(),
+            "schema": ll.SCHEMA,
+            "attempt": attempt,
+            "reason": "nonzero-exit:%s" % rc,
+            "delaySeconds": delay,
+        }
+        _append_under_lock(repo_root, retry_record, env=env)
+        time.sleep(delay)
+        attempt += 1
+
+    return _fail("attempts-exhausted", launchId=launch_id)
+
+
+def _try_reserve_for_refusal(repo_root, launch_id, issue, premise, preflight_result, compose_result, env):
+    """Best-effort reserve so refusal is accounted. Returns {reserved: bool}."""
+    if not isinstance(premise, dict):
+        return {"reserved": False}
+    surfaces = premise.get("surfaces")
+    batch_id = premise.get("batchId")
+    if not surfaces or not batch_id:
+        return {"reserved": False}
+    doctrine = (preflight_result or {}).get("doctrine") or launch_doctrine.load()
+    digest = doctrine.get("digest") if isinstance(doctrine, dict) else None
+    if not digest:
+        loaded = launch_doctrine.load()
+        digest = loaded.get("digest") or ""
+    checks = (preflight_result or {}).get("checks") or []
+    argv = []
+    model_token = ""
+    if compose_result and compose_result.get("ok"):
+        argv = compose_result.get("argv") or []
+        model_token = compose_result.get("model") or ""
+    reserved = {
+        "event": "reserved",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": batch_id,
+        "repoId": ll.repo_identity(repo_root) or "",
+        "issue": issue if isinstance(issue, int) else premise.get("issue", 0),
+        "surfaces": surfaces,
+        "premise": premise,
+        "preflight": {"checks": checks},
+        "argv": argv,
+        "doctrineDigest": digest,
+        "model": model_token,
+    }
+    result = ll.reserve(repo_root, reserved, env=env)
+    return {"reserved": result["ok"]}
+
+
+def record_outcome(repo_root, launch_id, outcome, evidence, env=None):
+    """Thin pass-through to launch_ledger.record_outcome."""
+    return ll.record_outcome(repo_root, launch_id, outcome, evidence, env=env)
+
+
+def count_batch(repo_root, batch_id, env=None):
+    """Thin pass-through to launch_ledger.count."""
+    return ll.count(repo_root, batch_id, env=env)
+
+
+def _cli_preflight(args):
+    checks = _read_json_file(args.checks)
+    if checks is None:
+        return _fail("preflight-malformed-input")
+    return walk_preflight(checks, args.repo_root)
+
+
+def _cli_compose(args):
+    premise = _read_json_file(args.premise)
+    if premise is None:
+        return _fail("premise-missing-field:baseCommit")
+    premise_result = validate_premise(premise, args.repo_root)
+    if not premise_result["ok"]:
+        return premise_result
+    return compose_launch(
+        args.repo_root, args.issue, premise_result["premise"], model=args.model,
+    )
+
+
+def _cli_launch(args):
+    checks = _read_json_file(args.checks)
+    if checks is None:
+        return _fail("preflight-malformed-input")
+    premise = _read_json_file(args.premise)
+    if premise is None:
+        return _fail("premise-missing-field:baseCommit")
+    return launch_build(
+        args.repo_root,
+        args.issue,
+        premise,
+        checks,
+        args.log_dir,
+        model=args.model,
+    )
+
+
+def _cli_record_outcome(args):
+    return record_outcome(args.repo_root, args.launch_id, args.outcome, args.evidence)
+
+
+def _cli_count(args):
+    return count_batch(args.repo_root, args.batch)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="launcher")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    pf = sub.add_parser("preflight")
+    pf.add_argument("--repo-root", required=True)
+    pf.add_argument("--checks", required=True)
+    pf.add_argument("--premise", required=False)
+    pf.add_argument("--batch", required=False)
+    pf.set_defaults(func=_cli_preflight)
+
+    comp = sub.add_parser("compose")
+    comp.add_argument("--repo-root", required=True)
+    comp.add_argument("--issue", type=int, required=True)
+    comp.add_argument("--premise", required=True)
+    comp.add_argument("--model", default=None)
+    comp.set_defaults(func=_cli_compose)
+
+    la = sub.add_parser("launch")
+    la.add_argument("--repo-root", required=True)
+    la.add_argument("--issue", type=int, required=True)
+    la.add_argument("--premise", required=True)
+    la.add_argument("--checks", required=True)
+    la.add_argument("--log-dir", required=True)
+    la.add_argument("--model", default=None)
+    la.set_defaults(func=_cli_launch)
+
+    ro = sub.add_parser("record-outcome")
+    ro.add_argument("--repo-root", required=True)
+    ro.add_argument("--launch-id", required=True)
+    ro.add_argument("--outcome", required=True)
+    ro.add_argument("--evidence", required=True)
+    ro.set_defaults(func=_cli_record_outcome)
+
+    ct = sub.add_parser("count")
+    ct.add_argument("--repo-root", required=True)
+    ct.add_argument("--batch", required=True)
+    ct.set_defaults(func=_cli_count)
+
+    args = parser.parse_args(argv)
+    result = args.func(args)
+    print(json.dumps(result))
+    return 0 if result.get("ok") else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
