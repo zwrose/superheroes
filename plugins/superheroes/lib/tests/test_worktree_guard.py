@@ -449,3 +449,47 @@ def test_at_risk_worktree_remove_force_always_indeterminate(tmp_path):
     assert wg.at_risk(repo, "worktree-remove-force", "git worktree remove -f wt") == (
         "indeterminate", 0,
     )
+
+
+# --- clean probe: --exclude fail-open regression (#682) -----------------------
+
+def test_at_risk_clean_exclude_fail_open_regression(tmp_path):
+    """--exclude=foo is not -X; before the fix this wrongly returned ('clean', 0)."""
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "committed\n")
+    with open(os.path.join(repo, "newwork.txt"), "w") as f:
+        f.write("new")
+    assert wg.at_risk(repo, "clean", "git clean -fd --exclude=foo") == ("at-risk", 1)
+
+
+def test_at_risk_clean_fdx_with_untracked(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "committed\n")
+    with open(os.path.join(repo, "newwork.txt"), "w") as f:
+        f.write("new")
+    assert wg.at_risk(repo, "clean", "git clean -fdx") == ("at-risk", 1)
+
+
+def test_at_risk_clean_fdX_with_ignored_only(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, ".gitignore", "*.tmp\n", msg="ignore")
+    with open(os.path.join(repo, "file.tmp"), "w") as f:
+        f.write("ignored untracked")
+    assert wg.at_risk(repo, "clean", "git clean -fdX") == ("at-risk", 1)
+
+
+def test_at_risk_clean_fdx_nothing_to_remove(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "clean\n")
+    assert wg.at_risk(repo, "clean", "git clean -fdx") == ("clean", 0)
+
+
+def test_at_risk_clean_exclude_does_not_add_X_probe(tmp_path):
+    """--exclude must not make the probe carry -X (assert via behavior, not argv)."""
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, ".gitignore", "*.tmp\n", msg="ignore")
+    with open(os.path.join(repo, "file.tmp"), "w") as f:
+        f.write("ignored untracked")
+    # Only ignored untracked present; real git clean -fd --exclude=foo removes nothing.
+    # If the probe wrongly added -X, dry-run would list file.tmp → at-risk.
+    assert wg.at_risk(repo, "clean", "git clean -fd --exclude=foo") == ("clean", 0)

@@ -555,10 +555,14 @@ def at_risk(cwd, action, command):
         elif action == "clean":
             clean_args = ["clean", "--dry-run", "-d"]
             if isinstance(command, str):
-                if _clean_has_flag(command, "-x") or _clean_has_flag(command, "--ignored"):
+                if _clean_has_flag(command, "-x"):
                     clean_args.append("-x")
-                if _clean_has_flag(command, "-X") or _clean_has_flag(command, "--exclude"):
+                if _clean_has_flag(command, "-X"):
                     clean_args.append("-X")
+                # Do not forward --exclude=<pattern> into the dry run: it is unrelated
+                # to -X (exclude adds a pattern; -X removes only ignored files). Omitting
+                # excludes makes the probe list at least as many candidates as the real
+                # command would delete — fail-closed for this guard.
             result = _run_git(cwd, *clean_args)
         else:
             return ("indeterminate", 0)
