@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.23.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.22.0...superheroes-v0.23.0) (2026-07-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* **superheroes:** remove migrate_on_read — the legacy-profile migration path is deleted, replaced by a named refusal ([#724](https://github.com/zwrose/superheroes/issues/724)) (#730)
+
+### Features
+
+* **superheroes:** orchestration doctrine — LEDGERS §4 + covenant merge-line repair + R1–R5 charter text ([#697](https://github.com/zwrose/superheroes/issues/697)) ([4f1b962](https://github.com/zwrose/superheroes/commit/4f1b96284dacce4945376938b5f4df59e484f107))
+* **superheroes:** PR-body doctrine — owner half + build record, show-it wayfinding, omission floor ([#661](https://github.com/zwrose/superheroes/issues/661) ratified) ([#715](https://github.com/zwrose/superheroes/issues/715)) ([1925eb5](https://github.com/zwrose/superheroes/commit/1925eb5f811025c2c20ae4ad93926a5bdcbaf9bd))
+* **superheroes:** remove migrate_on_read — the legacy-profile migration path is deleted, replaced by a named refusal ([#724](https://github.com/zwrose/superheroes/issues/724)) ([#730](https://github.com/zwrose/superheroes/issues/730)) ([c115e8a](https://github.com/zwrose/superheroes/commit/c115e8a3d04fe0bb1de14c84a28ae16b3e05c94d))
+* **superheroes:** supervised dispatch — write verb, durable journaling, reviewer retrofit (release re-statement of [#726](https://github.com/zwrose/superheroes/issues/726)) ([#740](https://github.com/zwrose/superheroes/issues/740)) ([4fe4d89](https://github.com/zwrose/superheroes/commit/4fe4d89ffb12323d09062c8d98d3ce36d3166ec6))
+* **superheroes:** the check-runner seat + "a review seat never changes the repository, and never claims a run it did not make" ([#719](https://github.com/zwrose/superheroes/issues/719)) ([#731](https://github.com/zwrose/superheroes/issues/731)) ([da90558](https://github.com/zwrose/superheroes/commit/da90558ea778b0ebb41f0c701863130f67f59614))
+* **superheroes:** three-lane build doctrine (full/light/micro) — review-discipline + charters, micro hard-line named ([#709](https://github.com/zwrose/superheroes/issues/709)) ([4e1f0bf](https://github.com/zwrose/superheroes/commit/4e1f0bf20e0f14f31de58626ec0d58ca03d9f6da))
+* **superheroes:** vet-receipt doctrine — spine + triggered fields, owner-half verdict write, collector reconciliation ([#672](https://github.com/zwrose/superheroes/issues/672) ratified) ([#729](https://github.com/zwrose/superheroes/issues/729)) ([ed29199](https://github.com/zwrose/superheroes/commit/ed29199ffdeaee00796d540b82ae6bf1b8a74ba7))
+
+
+### Bug Fixes
+
+* **superheroes:** charter hygiene 8 part B — config-surface fall-opens become named refusals ([#699](https://github.com/zwrose/superheroes/issues/699) riders 7-12) [PARKED — rework tripwire fired] ([#732](https://github.com/zwrose/superheroes/issues/732)) ([2d197b7](https://github.com/zwrose/superheroes/commit/2d197b785e73397dbb305d80954d1c9450591a08))
+* **superheroes:** config gates fail closed on an unreadable core.md — one (prefs, status) accessor ([#701](https://github.com/zwrose/superheroes/issues/701)) ([6249bbf](https://github.com/zwrose/superheroes/commit/6249bbf01eefc1341848ceef05ac67f4f5854b02))
+* **superheroes:** seat_map verify() violations drive the certification shape — per-seat excusal evidence ([#680](https://github.com/zwrose/superheroes/issues/680)) ([#700](https://github.com/zwrose/superheroes/issues/700)) ([e7006ec](https://github.com/zwrose/superheroes/commit/e7006ecbc34cc73b243ad3b8285f50c117d918a7))
+* **superheroes:** test-pilot execution calibration teeth — accessible-name selection, pointer events, aria-disabled, N/N procedure-suspicion ([#728](https://github.com/zwrose/superheroes/issues/728)) ([c48b5f6](https://github.com/zwrose/superheroes/commit/c48b5f6c6806ea72f8c18bd702d322a84079130f))
+
+
+### Chores
+
+* release re-statement of [#726](https://github.com/zwrose/superheroes/issues/726) and [#716](https://github.com/zwrose/superheroes/issues/716) — two commits the release-please parser silently dropped from 0.23.0 ([#739](https://github.com/zwrose/superheroes/issues/739)) ([868dce5](https://github.com/zwrose/superheroes/commit/868dce5b978a729348f7c72b4f506f6128213d71))
+* **superheroes:** charter hygiene 7 — four riders ([#685](https://github.com/zwrose/superheroes/issues/685)) ([#698](https://github.com/zwrose/superheroes/issues/698)) ([e2419ec](https://github.com/zwrose/superheroes/commit/e2419ec142c1183f5dde441f53339cb5cce0e652))
+* **superheroes:** charter hygiene 8 — part A of [#699](https://github.com/zwrose/superheroes/issues/699), riders 1-6 and 13-15 (release re-statement of [#716](https://github.com/zwrose/superheroes/issues/716)) ([#741](https://github.com/zwrose/superheroes/issues/741)) ([6743317](https://github.com/zwrose/superheroes/commit/67433175164f49ffbdc5b3ce89dab752a61fd9e5))
+* **superheroes:** extend the boundary sync guard to the named cross-lane invariants ([#721](https://github.com/zwrose/superheroes/issues/721)) ([#727](https://github.com/zwrose/superheroes/issues/727)) ([62f8855](https://github.com/zwrose/superheroes/commit/62f88552fff5fd82976a0f2f754aaafcb7707660))
+* **superheroes:** PHILOSOPHY amendment — approval/execution distinction (owner-ratified) + covenant note removal + LEDGERS R3 resolution ([#708](https://github.com/zwrose/superheroes/issues/708)) ([0d918cf](https://github.com/zwrose/superheroes/commit/0d918cfca0f43ec0ee2955ff1922936ac7402338))
+* **superheroes:** retire the orphaned pr-body model tier role ([#692](https://github.com/zwrose/superheroes/issues/692)) ([#696](https://github.com/zwrose/superheroes/issues/696)) ([721ca00](https://github.com/zwrose/superheroes/commit/721ca00a8a206e0ceb008c0f2405c894d85d0617))
+
 ## [0.22.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.21.2...superheroes-v0.22.0) (2026-07-27)
 
 
