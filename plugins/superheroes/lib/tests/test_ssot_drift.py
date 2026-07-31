@@ -190,6 +190,50 @@ def test_base_guard_reason_tokens_in_round_driver_doc():
         % [(n, reasons[n]) for n in missing])
 
 
+# --- Cluster: review payload shape tokens (engine_adapter → auto-fix-loop.md) ---
+
+
+def _review_payload_shape_tokens_from_home():
+    import engine_adapter
+
+    return set(engine_adapter.REVIEW_PAYLOAD_SHAPES)
+
+
+def test_review_payload_shape_tokens_in_auto_fix_loop_doc():
+    """§11: auto-fix-loop.md restates the payloadShape `parsed` vocabulary from engine_adapter."""
+    tokens = _review_payload_shape_tokens_from_home()
+    doc = _read("skills/review-code/reference/auto-fix-loop.md")
+    missing = sorted(t for t in tokens if t not in doc)
+    assert not missing, (
+        "auto-fix-loop.md missing payloadShape token(s) from engine_adapter.REVIEW_PAYLOAD_SHAPES: %r"
+        % missing
+    )
+
+
+# --- Cluster: schema refusal tokens (engine_dispatch → auto-fix-loop.md) ---
+
+
+def _schema_refusal_tokens_from_home():
+    import engine_dispatch
+
+    return {
+        "SCHEMA_REFUSAL_MISSING": engine_dispatch.SCHEMA_REFUSAL_MISSING,
+        "SCHEMA_REFUSAL_UNREADABLE": engine_dispatch.SCHEMA_REFUSAL_UNREADABLE,
+        "SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED": engine_dispatch.SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED,
+    }
+
+
+def test_schema_refusal_tokens_in_auto_fix_loop_doc():
+    """§11: auto-fix-loop.md restates the schema-path refusal detail tokens from engine_dispatch."""
+    tokens = _schema_refusal_tokens_from_home()
+    doc = _read("skills/review-code/reference/auto-fix-loop.md")
+    missing = [name for name, token in sorted(tokens.items()) if token not in doc]
+    assert not missing, (
+        "auto-fix-loop.md missing schema refusal token(s) from engine_dispatch.py: %r"
+        % [(n, tokens[n]) for n in missing]
+    )
+
+
 # --- Cluster 4: negative drift scans (concrete model ids must not leak) ------
 
 _CONCRETE_MODEL_TOKENS = (

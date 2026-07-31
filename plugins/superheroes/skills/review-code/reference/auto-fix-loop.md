@@ -182,11 +182,13 @@ never drop a finding or a lens.
 > so a caller reviewing uncommitted work is disclosed rather than silently given the pre-change tree.
 > Every result also carries **`terminal`**, **`argv`** (the exact spawned command), and **`runDir`**.
 >
-> **Result shape — top-level, no wrapper (#687).** `findings`, `investigated`, `engagement`,
-> `terminal`, `argv`, `runDir`, and `sanitizedView` are **top-level keys** of every
-> `dispatch-review` result object. There is no `result` wrapper; parsing `result.findings` reads
-> nothing. A sibling project's orchestrator nearly discarded three good review seats on PR #677 by
-> reading `result.findings` as `0/0`.
+> **Result shape — top-level, no wrapper (#687).** Every `dispatch-review` result object carries
+> **`ok`**, **`terminal`**, **`runDir`**, and **`argv`** at the top level. On a failure it also
+> carries **`reason`** (and usually **`detail`**). Outcome-dependent keys include **`findings`**,
+> **`investigated`**, **`engagement`**, and **`sanitizedView`** — a consumer must **not** read an
+> absent `findings` as "zero findings"; that is the fail-open reading this subsystem exists to
+> prevent. An `unrunnable` refusal carries none of those outcome keys; a terminal forfeit carries no
+> `findings`/`investigated`. There is no `result` wrapper; parsing `result.findings` reads nothing.
 >
 > **`findings`-only transport (#687).** The runner forwards **only** `findings` and `investigated`
 > from the seat's stdout. Every other key the seat emits is dropped. A caller that needs a different
@@ -195,17 +197,21 @@ never drop a finding or a lens.
 > names the engine. Encode the payload **inside `findings` objects** instead, or use the
 > file-writing subagent verifier path that `verification-pass.md` already describes.
 >
-> **`--schema-path` pre-spawn validation (#687).** A schema that does not require a top-level
-> `findings` key is refused `unrunnable` with `attempts: 0` and no engine spawned — `detail` is one
-> of `schema-missing`, `schema-unreadable`, or `schema-not-findings-shaped`. Previously
-> `--schema-path` **forced** a shape the grader then rejected.
+> **`--schema-path` pre-spawn validation (#687).** Before spawn, the runner performs a **structural
+> spot-check** on the schema file: it refuses a schema that **positively forbids or displaces** a
+> top-level `findings` key (`detail` is one of `schema-missing`, `schema-unreadable`, or
+> `schema-not-findings-shaped`) with `attempts: 0` and no engine spawned. A bare `{"type": "object"}`
+> is accepted (it constrains nothing). This is not full JSON Schema validation — it does not require
+> every valid schema to declare `findings`. Previously `--schema-path` **forced** a shape the grader
+> then rejected.
 >
-> **`engagement.read` (#687).** The result's `engagement.read` field is `"engaged"` when the seat
-> demonstrably acted: at least one finding returned, at least one accepted `investigated` path, or
-> `engagement.toolCalls` is not `None` and `>= 1`. Otherwise it is `"unknown"`. The runner **never**
-> reports `"inert"` — absence of positive evidence is not proof of inaction, because a correct
-> payload the transport could not read looks identical to a seat that never ran. Only
-> `seat_canary probe` can justify calling a seat inert.
+> **`engagement.read` (#687).** When the result carries an **`engagement`** block (present only when
+> the attempt produced stdout that was graded — **absent** on a timeout, refusal, nonzero-exit, or
+> missing-stdout forfeit), `engagement.read` is `"engaged"` when the seat demonstrably acted: at least
+> one finding returned, at least one accepted `investigated` path, or `engagement.toolCalls` is not
+> `None` and `>= 1`. Otherwise it is `"unknown"`. The runner **never** reports `"inert"` — absence of
+> positive evidence is not proof of inaction, because a correct payload the transport could not read
+> looks identical to a seat that never ran. Only `seat_canary probe` can justify calling a seat inert.
 >
 > **Tokens are corroborating evidence only — measured (#687).** Engine telemetry (token spend, tool
 > calls, wall time) remains **corroborating evidence only** and can never satisfy the investigation

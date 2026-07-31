@@ -35,12 +35,18 @@ REVIEW_FORFEIT_VACUOUS = "vacuous"
 PAYLOAD_SHAPE_MAX_KEYS = 12
 PAYLOAD_SHAPE_MAX_KEY_LEN = 60
 
+SHAPE_OBJECT_WITHOUT_FINDINGS = "object-without-findings"
+SHAPE_OBJECT_FINDINGS_NOT_A_LIST = "object-findings-not-a-list"
+SHAPE_ARRAY_NOT_ALL_OBJECTS = "array-not-all-objects"
+SHAPE_NO_PARSEABLE_JSON = "no-parseable-json"
+SHAPE_EMPTY_STDOUT = "empty-stdout"
+
 REVIEW_PAYLOAD_SHAPES = (
-    "object-without-findings",      # a JSON object parsed, but it carries no `findings` key
-    "object-findings-not-a-list",   # a JSON object parsed with a `findings` key that is not a list
-    "array-not-all-objects",        # a bare top-level array parsed, but not every element is an object
-    "no-parseable-json",            # stdout was non-empty but held no parseable top-level JSON value
-    "empty-stdout",                 # stdout was empty or whitespace only
+    SHAPE_OBJECT_WITHOUT_FINDINGS,      # a JSON object parsed, but it carries no `findings` key
+    SHAPE_OBJECT_FINDINGS_NOT_A_LIST,   # a JSON object parsed with a `findings` key that is not a list
+    SHAPE_ARRAY_NOT_ALL_OBJECTS,        # a bare top-level array parsed, but not every element is an object
+    SHAPE_NO_PARSEABLE_JSON,            # stdout was non-empty but held no parseable top-level JSON value
+    SHAPE_EMPTY_STDOUT,                 # stdout was empty or whitespace only
 )
 
 # #392: the distinct, honest outcome for a fix whose SUBSTANCE is the history shape (squash to N
@@ -443,16 +449,16 @@ def review_payload_shape(stdout):
     try:
         stdout = _unwrap_stream_envelope(stdout)
         if not isinstance(stdout, str) or not stdout.strip():
-            return {"parsed": "empty-stdout", "topLevelKeys": [], "keysTruncated": False}
+            return {"parsed": SHAPE_EMPTY_STDOUT, "topLevelKeys": [], "keysTruncated": False}
         obj = _last_json_object(stdout)
         if isinstance(obj, dict):
             if "findings" not in obj:
                 top_keys, keys_truncated = _bound_top_level_keys(obj)
-                return {"parsed": "object-without-findings",
+                return {"parsed": SHAPE_OBJECT_WITHOUT_FINDINGS,
                         "topLevelKeys": top_keys, "keysTruncated": keys_truncated}
             findings = obj.get("findings")
             if not isinstance(findings, list):
-                return {"parsed": "object-findings-not-a-list",
+                return {"parsed": SHAPE_OBJECT_FINDINGS_NOT_A_LIST,
                         "topLevelKeys": [], "keysTruncated": False}
             return None
         if obj is None:
@@ -460,11 +466,11 @@ def review_payload_shape(stdout):
             if isinstance(arr, list):
                 if all(isinstance(x, dict) for x in arr):
                     return None
-                return {"parsed": "array-not-all-objects",
+                return {"parsed": SHAPE_ARRAY_NOT_ALL_OBJECTS,
                         "topLevelKeys": [], "keysTruncated": False}
-            return {"parsed": "no-parseable-json",
+            return {"parsed": SHAPE_NO_PARSEABLE_JSON,
                     "topLevelKeys": [], "keysTruncated": False}
-        return {"parsed": "no-parseable-json",
+        return {"parsed": SHAPE_NO_PARSEABLE_JSON,
                 "topLevelKeys": [], "keysTruncated": False}
     except Exception:
         # A diagnostic that cannot diagnose says nothing — never fabricate a parsed label from an

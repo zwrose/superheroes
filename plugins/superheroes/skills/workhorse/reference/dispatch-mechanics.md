@@ -45,12 +45,17 @@ The sanctioned way to dispatch a long-running **external reviewer** seat is `dis
 full stdout and result contract lives in `auto-fix-loop.md` — read that before authoring seat
 prompts; this subsection is the at-dispatch-time summary only.
 
-Every `dispatch-review` result is a **top-level** object: `findings`, `investigated`, `engagement`,
-`terminal`, `argv`, `runDir`, and `sanitizedView` sit at the root. There is no `result` wrapper;
-`result.findings` reads nothing. The runner's transport carries **only** `findings` and
-`investigated` from the seat's stdout — every other key the seat emits is dropped, so verdict-shaped
-or other alternate payloads parse `unreadable`, retry once, and forfeit.
+Every `dispatch-review` result is a **top-level** object. **Always present:** `ok`, `terminal`,
+`runDir`, and `argv`; on a failure, `reason` (and usually `detail`). **Outcome-dependent:**
+`findings`, `investigated`, `engagement`, and `sanitizedView` — do **not** read an absent `findings`
+as "zero findings". An `unrunnable` refusal carries none of the outcome keys; a terminal forfeit
+carries no `findings`/`investigated`. There is no `result` wrapper; `result.findings` reads nothing.
+The runner's transport carries **only** `findings` and `investigated` from the seat's stdout — every
+other key the seat emits is dropped, so verdict-shaped or other alternate payloads parse `unreadable`,
+retry once, and forfeit.
 
+When the result carries an **`engagement`** block (present only when the attempt produced stdout
+that was graded — **absent** on a timeout, refusal, nonzero-exit, or missing-stdout forfeit),
 `engagement.read` is `"engaged"` when the seat demonstrably acted (a finding, an accepted
 `investigated` path, or `engagement.toolCalls >= 1`); otherwise `"unknown"`. The runner **never**
 asserts `"inert"` — absence of positive evidence is not proof of inaction, and only `seat_canary

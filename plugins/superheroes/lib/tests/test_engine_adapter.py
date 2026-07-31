@@ -1214,22 +1214,22 @@ def test_finding_body_quoting_prompt_tail_survives_conditional_strip():
 
 def test_review_payload_shape_empty_stdout():
     assert EA.review_payload_shape("") == {
-        "parsed": "empty-stdout", "topLevelKeys": [], "keysTruncated": False,
+        "parsed": EA.SHAPE_EMPTY_STDOUT, "topLevelKeys": [], "keysTruncated": False,
     }
     assert EA.review_payload_shape("   \n\t") == {
-        "parsed": "empty-stdout", "topLevelKeys": [], "keysTruncated": False,
+        "parsed": EA.SHAPE_EMPTY_STDOUT, "topLevelKeys": [], "keysTruncated": False,
     }
 
 
 def test_review_payload_shape_none_is_empty_stdout():
     assert EA.review_payload_shape(None) == {
-        "parsed": "empty-stdout", "topLevelKeys": [], "keysTruncated": False,
+        "parsed": EA.SHAPE_EMPTY_STDOUT, "topLevelKeys": [], "keysTruncated": False,
     }
 
 
 def test_review_payload_shape_object_without_findings():
     res = EA.review_payload_shape(json.dumps({"error": "crashed", "status": "fail"}))
-    assert res["parsed"] == "object-without-findings"
+    assert res["parsed"] == EA.SHAPE_OBJECT_WITHOUT_FINDINGS
     assert res["topLevelKeys"] == ["error", "status"]
     assert res["keysTruncated"] is False
 
@@ -1237,21 +1237,21 @@ def test_review_payload_shape_object_without_findings():
 def test_review_payload_shape_object_findings_not_a_list():
     res = EA.review_payload_shape(json.dumps({"findings": "oops"}))
     assert res == {
-        "parsed": "object-findings-not-a-list", "topLevelKeys": [], "keysTruncated": False,
+        "parsed": EA.SHAPE_OBJECT_FINDINGS_NOT_A_LIST, "topLevelKeys": [], "keysTruncated": False,
     }
 
 
 def test_review_payload_shape_array_not_all_objects():
     res = EA.review_payload_shape("[1, 2, 3]")
     assert res == {
-        "parsed": "array-not-all-objects", "topLevelKeys": [], "keysTruncated": False,
+        "parsed": EA.SHAPE_ARRAY_NOT_ALL_OBJECTS, "topLevelKeys": [], "keysTruncated": False,
     }
 
 
 def test_review_payload_shape_no_parseable_json():
     res = EA.review_payload_shape("{ not json")
     assert res == {
-        "parsed": "no-parseable-json", "topLevelKeys": [], "keysTruncated": False,
+        "parsed": EA.SHAPE_NO_PARSEABLE_JSON, "topLevelKeys": [], "keysTruncated": False,
     }
 
 
@@ -1272,23 +1272,23 @@ def test_review_payload_shape_valid_bare_array_returns_none():
 
 def test_review_payload_shape_bare_scalar_is_no_parseable_json():
     assert EA.review_payload_shape('"hello"') == {
-        "parsed": "no-parseable-json", "topLevelKeys": [], "keysTruncated": False,
+        "parsed": EA.SHAPE_NO_PARSEABLE_JSON, "topLevelKeys": [], "keysTruncated": False,
     }
     assert EA.review_payload_shape("42") == {
-        "parsed": "no-parseable-json", "topLevelKeys": [], "keysTruncated": False,
+        "parsed": EA.SHAPE_NO_PARSEABLE_JSON, "topLevelKeys": [], "keysTruncated": False,
     }
     assert EA.review_payload_shape("null") == {
-        "parsed": "no-parseable-json", "topLevelKeys": [], "keysTruncated": False,
+        "parsed": EA.SHAPE_NO_PARSEABLE_JSON, "topLevelKeys": [], "keysTruncated": False,
     }
     assert EA.review_payload_shape("true") == {
-        "parsed": "no-parseable-json", "topLevelKeys": [], "keysTruncated": False,
+        "parsed": EA.SHAPE_NO_PARSEABLE_JSON, "topLevelKeys": [], "keysTruncated": False,
     }
 
 
 def test_review_payload_shape_hostile_key_scrubbed():
     secret_key = "Authorization: Bearer sk-EXAMPLEfakenotarealsecret0"
     res = EA.review_payload_shape(json.dumps({secret_key: "value"}))
-    assert res["parsed"] == "object-without-findings"
+    assert res["parsed"] == EA.SHAPE_OBJECT_WITHOUT_FINDINGS
     assert "sk-EXAMPLE" not in res["topLevelKeys"][0]
     assert "[REDACTED]" in res["topLevelKeys"][0]
 
@@ -1296,14 +1296,14 @@ def test_review_payload_shape_hostile_key_scrubbed():
 def test_review_payload_shape_non_string_key_coerced(monkeypatch):
     monkeypatch.setattr(EA, "_last_json_object", lambda _stdout: {1: "x", "ok": "y"})
     res = EA.review_payload_shape('{"ignored": true}')
-    assert res["parsed"] == "object-without-findings"
+    assert res["parsed"] == EA.SHAPE_OBJECT_WITHOUT_FINDINGS
     assert "1" in res["topLevelKeys"]
 
 
 def test_review_payload_shape_keys_truncated_by_count():
     obj = {("k%d" % i): i for i in range(EA.PAYLOAD_SHAPE_MAX_KEYS + 5)}
     res = EA.review_payload_shape(json.dumps(obj))
-    assert res["parsed"] == "object-without-findings"
+    assert res["parsed"] == EA.SHAPE_OBJECT_WITHOUT_FINDINGS
     assert len(res["topLevelKeys"]) == EA.PAYLOAD_SHAPE_MAX_KEYS
     assert res["keysTruncated"] is True
 
@@ -1311,7 +1311,7 @@ def test_review_payload_shape_keys_truncated_by_count():
 def test_review_payload_shape_keys_truncated_by_length():
     long_key = "a" * (EA.PAYLOAD_SHAPE_MAX_KEY_LEN + 20)
     res = EA.review_payload_shape(json.dumps({long_key: 1}))
-    assert res["parsed"] == "object-without-findings"
+    assert res["parsed"] == EA.SHAPE_OBJECT_WITHOUT_FINDINGS
     assert len(res["topLevelKeys"][0]) == EA.PAYLOAD_SHAPE_MAX_KEY_LEN
     assert res["keysTruncated"] is True
 
@@ -1328,6 +1328,23 @@ def test_review_payload_shape_internal_error_returns_none(monkeypatch):
         raise RuntimeError("internal")
     monkeypatch.setattr(EA, "_last_json_object", _boom)
     assert EA.review_payload_shape('{"error": true}') is None
+
+
+def test_review_payload_shape_parsed_values_are_members_of_home():
+    """Every `parsed` label review_payload_shape can return must be in REVIEW_PAYLOAD_SHAPES."""
+    cases = [
+        "",
+        "   ",
+        json.dumps({"error": "x"}),
+        json.dumps({"findings": "oops"}),
+        "[1, 2]",
+        "{ not json",
+        '"hello"',
+    ]
+    for stdout in cases:
+        shape = EA.review_payload_shape(stdout)
+        if shape is not None:
+            assert shape["parsed"] in EA.REVIEW_PAYLOAD_SHAPES, stdout
 
 
 def test_engagement_read_findings_engaged():

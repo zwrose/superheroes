@@ -40,54 +40,6 @@ def _pin_temp_base_to_tmp_path(tmp_path, monkeypatch):
     yield
 
 
-@pytest.fixture(autouse=True)
-def _stub_wo_a_engine_adapter_helpers(monkeypatch):
-    """WO-A helpers may be absent in this worktree — stub per SHARED CONTRACT."""
-    ea = ED.engine_adapter
-    if not hasattr(ea, "engagement_read"):
-        def engagement_read(result):
-            findings = result.get("findings")
-            if findings:
-                return "engaged"
-            investigated = result.get("investigated")
-            if investigated:
-                return "engaged"
-            engagement = result.get("engagement") or {}
-            tool_calls = engagement.get("toolCalls")
-            if tool_calls is not None and tool_calls >= 1:
-                return "engaged"
-            return "unknown"
-
-        monkeypatch.setattr(ea, "engagement_read", engagement_read, raising=False)
-    if not hasattr(ea, "review_payload_shape"):
-        def review_payload_shape(stdout):
-            text = (stdout or "").strip()
-            if not text:
-                return {"parsed": "empty-stdout", "topLevelKeys": [], "keysTruncated": False}
-            try:
-                value = json.loads(text)
-            except (ValueError, TypeError):
-                return {"parsed": "no-parseable-json", "topLevelKeys": [], "keysTruncated": False}
-            if isinstance(value, list):
-                if not all(isinstance(item, dict) for item in value):
-                    return {"parsed": "array-not-all-objects", "topLevelKeys": [], "keysTruncated": False}
-                return None
-            if isinstance(value, dict):
-                if "findings" not in value:
-                    keys = list(value.keys())
-                    return {
-                        "parsed": "object-without-findings",
-                        "topLevelKeys": keys[:12],
-                        "keysTruncated": len(keys) > 12,
-                    }
-                if not isinstance(value.get("findings"), list):
-                    return {"parsed": "object-findings-not-a-list", "topLevelKeys": [], "keysTruncated": False}
-                return None
-            return {"parsed": "no-parseable-json", "topLevelKeys": [], "keysTruncated": False}
-
-        monkeypatch.setattr(ea, "review_payload_shape", review_payload_shape, raising=False)
-
-
 def _never_build_view(_repo):
     raise AssertionError("build_view should not be called")
 
@@ -2408,14 +2360,152 @@ def test_dispatch_review_schema_minimal_object_accepted(tmp_path):
     assert len(fake.calls) == 1
 
 
-def test_dispatch_review_payload_shape_on_unreadable_forfeit(tmp_path, monkeypatch):
+def test_dispatch_review_schema_additional_properties_false_without_findings_refused(tmp_path):
+    """C1: additionalProperties:false with no findings property is refused."""
+    repo_root = _repo(tmp_path)
+    path = _findings_schema(tmp_path, {"type": "object", "additionalProperties": False})
+    fake = FakeRunner([])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
+        schema_path=path, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["reason"] == "unrunnable"
+    assert res["detail"] == ED.SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED
+    assert len(fake.calls) == 0
+
+
+def test_dispatch_review_schema_additional_properties_object_does_not_trigger_clause(tmp_path):
+    """F3: additionalProperties as a schema object does not trigger the false clause."""
+    repo_root = _repo(tmp_path)
+    path = _findings_schema(tmp_path, {
+        "type": "object",
+        "additionalProperties": {"type": "string"},
+    })
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
+        schema_path=path, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    assert len(fake.calls) == 1
+
+
+def test_dispatch_review_schema_padded_path_refused(tmp_path):
+    """C2: a path with trailing whitespace is validated raw — padded path is schema-missing."""
+    repo_root = _repo(tmp_path)
+    path = _findings_schema(tmp_path, {"type": "object"})
+    fake = FakeRunner([])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
+        schema_path=path + " ", run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["detail"] == ED.SCHEMA_REFUSAL_MISSING
+    assert len(fake.calls) == 0
+
+
+def test_dispatch_review_schema_validated_path_matches_argv(tmp_path):
+    """C2: the schema path that passes the gate is the same path in argv."""
+    repo_root = _repo(tmp_path)
+    path = _findings_schema(tmp_path, {"type": "object"})
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
+        schema_path=path, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    argv = res["argv"]
+    schema_in_argv = argv[argv.index("--output-schema") + 1]
+    assert schema_in_argv == path
+
+
+def test_dispatch_review_continuation_ignores_vanished_schema_path(tmp_path):
+    """C3: continuation must not refuse when a re-passed schema file has been deleted."""
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run(tmp_path, run_dir)
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)"],
+        start_new_session=True,
+    )
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": proc.pid, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-started", "attempt": 1, "enginePgid": proc.pid, "at": time.time(),
+    })
+    vanished = tmp_path / "vanished-schema.json"
+    vanished.write_text(json.dumps({"type": "object"}), encoding="utf-8")
+    vanished.unlink()
+    build_view = _fake_build_view(tmp_path)
+    try:
+        res = ED.dispatch_review(
+            "codex", model="sonnet", effort="high",
+            prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
+            schema_path=str(vanished), run_engine=FakeRunner([]),
+            build_view=build_view, run_dir=run_dir,
+            order_id="test-order", max_wait=1,
+        )
+        assert res.get("reason") != "unrunnable" or res.get("detail") not in (
+            ED.SCHEMA_REFUSAL_MISSING,
+            ED.SCHEMA_REFUSAL_UNREADABLE,
+            ED.SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED,
+        )
+    finally:
+        ED._terminate_process_group(proc.pid)
+        proc.wait(timeout=2)
+
+
+def test_run_engine_files_stdout_bytes_is_pre_cap_size(tmp_path, monkeypatch):
+    """F: journalled stdoutBytes must be the pre-cap size, not the capped file size."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    tail_json = json.dumps({"findings": [{"id": "f1", "message": "ok"}]})
+    over = ED.MAX_STDOUT_CAPTURE + 4096
+    script = (
+        "import sys\n"
+        "sys.stdout.write('x' * %d + %r)\n" % (over, tail_json)
+    )
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    monkeypatch.setattr(ED, "MAX_STDOUT_CAPTURE", 8192)
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "codex",
+        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "x",
+        "argv": [sys.executable, "-c", "x"],
+        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "supervisorPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    ED._run_engine_files(
+        run_dir, 1, [sys.executable, "-c", script], run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    capped_size = os.path.getsize(stdout_path)
+    assert capped_size <= 8192
+    records, _ = ED._journal_read(run_dir)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    assert ended["stdoutBytes"] > capped_size
+
+
+def test_dispatch_review_payload_shape_on_unreadable_forfeit(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([
         ('{"verdicts":[]}', False, 0, ""),
         ('{"verdicts":[]}', False, 0, ""),
     ])
-    expected = {"parsed": "object-without-findings", "topLevelKeys": ["verdicts"], "keysTruncated": False}
-    monkeypatch.setattr(ED.engine_adapter, "review_payload_shape", lambda _stdout: expected)
     res = ED.dispatch_review(
         "codex", model="sonnet", effort="high",
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
@@ -2423,14 +2513,15 @@ def test_dispatch_review_payload_shape_on_unreadable_forfeit(tmp_path, monkeypat
     )
     assert res["forfeited"] is True
     assert res["reason"] == "forfeited"
-    assert res["payloadShape"] == expected
+    shape = res["payloadShape"]
+    assert shape["parsed"] == ED.engine_adapter.SHAPE_OBJECT_WITHOUT_FINDINGS
+    assert shape["topLevelKeys"] == ["verdicts"]
 
 
-def test_dispatch_review_payload_shape_absent_on_vacuous_forfeit(tmp_path, monkeypatch):
+def test_dispatch_review_payload_shape_absent_on_vacuous_forfeit(tmp_path):
     repo_root = _repo(tmp_path)
     empty = json.dumps({"findings": []})
     fake = FakeRunner([(empty, False, 0, ""), (empty, False, 0, "")])
-    monkeypatch.setattr(ED.engine_adapter, "review_payload_shape", lambda _stdout: {"parsed": "x"})
     res = ED.dispatch_review(
         "codex", model="sonnet", effort="high",
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
@@ -2474,3 +2565,63 @@ def test_dispatch_review_engagement_read_on_forfeit(tmp_path):
     )
     assert res["forfeited"] is True
     assert res["engagement"]["read"] == "unknown"
+
+
+def test_dispatch_review_timeout_forfeit_has_no_engagement(tmp_path):
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([("", True, 0, ""), ("", True, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["forfeited"] is True
+    assert res.get("engagement") is None
+
+
+def test_dispatch_review_nonzero_exit_forfeit_has_no_engagement(tmp_path):
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([
+        (_VALID_FINDINGS_STDOUT, False, 1, ""),
+        (_VALID_FINDINGS_STDOUT, False, 1, ""),
+    ])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["forfeited"] is True
+    assert res.get("engagement") is None
+
+
+def test_grade_review_attempt_prompt_echo_payload_shape_not_empty_stdout(tmp_path):
+    """Group D: prompt-echo-only stdout must not be diagnosed as empty-stdout."""
+    run_dir = str(tmp_path / "run")
+    repo_root = _repo(tmp_path)
+    prompt_body = "Review this code.\n"
+    fed = _fed_prompt(prompt_body)
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(fed)
+    state = {
+        "opened": {
+            "engine": "codex",
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": fed,
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(fed), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    shape = grade.get("payloadShape")
+    assert shape is not None
+    assert shape["parsed"] != ED.engine_adapter.SHAPE_EMPTY_STDOUT
