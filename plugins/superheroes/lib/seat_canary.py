@@ -81,6 +81,8 @@ def _map_outcome(res):
     if reason == "unrunnable":
         detail = res.get("detail") or reason or "unrunnable"
         return "unrunnable", "not-dispatched: %s" % detail
+    if res.get("terminal") is False:
+        return "unrunnable", "not-dispatched: non-terminal-slice"
     raw = reason or res.get("detail") or "unknown"
     return "unrunnable", "not-dispatched: %s" % raw
 

@@ -66,14 +66,53 @@ frozen: any problem you hit is a finding, never a re-provisioning.
    interactions, verify `expected` via DOM/snapshot reads, watch
    console/network for silent errors. Record per step — what you did, what
    you observed, pass/fail, and the concrete evidence (scrubbed) — in a run
-   log under `<state_dir>/runs/<key>/`. Provisioning is finished: from here
-   the plan and seed are frozen — a plan or seed problem you hit while
-   executing is a finding (step 6), never a re-author, re-apply, or retry.
-6. **On failure, record a finding — never act on it.** Note the failing step,
-   classify it (plan/seed problem, or app bug), and capture a scrubbed
-   diagnosis with its evidence (console, network, DOM). Then **continue the
-   remaining steps.** You never fix code, never edit or re-seed-and-retry the
-   plan, never commit — a failure is a finding the caller acts on.
+   log under `<state_dir>/runs/<key>/`. **Interaction calibration:**
+   - Target controls by **accessible name** using the element reference the
+     browser tool's accessibility snapshot returns — never by **index** or
+     ordinal position, never by **screen coordinates**.
+   - Drive each interaction with a **pointer** action (a real input event) —
+     never an evaluated `.click()` or other **scripted event dispatch**
+     through the browser tool's script-evaluation escape hatch.
+   - When a step says "the first" or "the next" thing, skip targets
+     reported as **`aria-disabled`**.
+
+   Provisioning is finished: from here the plan and seed are frozen — a plan
+   or seed problem you hit while executing is a finding (step 6), never a
+   re-author, re-apply, or retry. **One carve-out:** if the first attempt
+   produced **no observable state change**, you may vary the interaction
+   mechanism once as a diagnostic observation that tests the procedure —
+   record the result either way; that is not a forbidden retry toward a pass.
+   If the interaction may already have taken effect, do **not** re-activate it
+   — record the failure as a finding instead, noting the mechanism could not
+   be **safely** varied. When a variation is performed and app state may
+   nonetheless have diverged from what the plan assumes, record that on the
+   step so later steps are read in that light. Re-running to obtain a pass,
+   re-authoring the plan, re-applying the seed, or re-provisioning remain
+   forbidden outright.
+6. **On failure, record a finding — never act on it.** Note the failing step.
+   Before you classify a failure as an **app bug**, if you reproduced it with
+   N identical procedures and the first attempt produced no observable state
+   change, vary the interaction mechanism once — N identical runs test the
+   procedure N times; an A/B on the same harness cannot clear that harness.
+   **Sanctioned variation axes** (index, ordinal position, screen coordinates,
+   and evaluated `.click()` / scripted event dispatch are **never** admissible):
+   **keyboard activation** of the element after focusing it (a real input
+   event, not scripted dispatch), or re-taking the accessibility snapshot and
+   re-resolving the target by **accessible name**. The pointer requirement
+   above governs the **primary** interaction; a diagnostic variation may use a
+   different real input event. If the interaction may already have taken
+   effect, do **not** re-activate it — record the finding as **app bug
+   (unconfirmed — variation unsafe)** and note the mechanism could not be
+   **safely** varied. If variation is not possible, record the finding as
+   **app bug (unconfirmed — evidence ceiling)**. If the variation **succeeds**,
+   record the asymmetry as evidence on the step — what happened concretely
+   (e.g. pointer action failed N/N; keyboard activation succeeded) — and
+   record the finding as **app bug (unconfirmed — procedure not excluded)**
+   with that asymmetry noted; attribute no cause. Otherwise classify it
+   (plan/seed problem, or app bug) and capture a scrubbed diagnosis with its
+   evidence (console, network, DOM). Then **continue the remaining steps.** You
+   never fix code, never edit or re-seed-and-retry the plan, never commit — a
+   failure is a finding the caller acts on.
 7. **Post results.** Fill `templates/results-comment.md` (verdict: PASSED /
    FAILED / PARTIAL — the observed outcome of the run, not a certification
    that the branch is correct; per-step table; findings with evidence; run
@@ -98,3 +137,5 @@ frozen: any problem you hit is a finding, never a re-provisioning.
 | "It's basically done, I'll check the plan boxes" | Boxes are the human's spot-check. Leave them. |
 | "The console dump is harmless, paste it raw" | Scrub EVERY diagnostic. No raw headers, ever. |
 | "No browser tool — I'll verify via curl instead" | Abort with remediation. curl is not the plan. |
+| "I reproduced it N/N with the same steps — it's an app bug" | N identical-procedure runs test the procedure N times. Vary once (keyboard activation or re-resolve by accessible name) only if no state change occurred — on success, record the asymmetry and label **app bug (unconfirmed — procedure not excluded)**; if impossible, **app bug (unconfirmed — evidence ceiling)**. |
+| "The control doesn't respond, so the feature is broken" | Scripted clicks miss pointer/mouse-down handlers and `aria-disabled` rows can sort first — re-target by accessible name and drive with a pointer action; if state may have changed, do not re-activate — record **app bug (unconfirmed — variation unsafe)**. |

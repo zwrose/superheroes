@@ -204,6 +204,21 @@ def test_investigated_without_findings_engaged():
     assert out["evidence"]["investigated"] == 1
 
 
+def test_non_terminal_running_maps_to_non_terminal_slice():
+    def dispatch(engine, **kwargs):
+        return {
+            "ok": False,
+            "terminal": False,
+            "reason": "running",
+        }
+
+    out = SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+    )
+    assert out["outcome"] == "unrunnable"
+    assert out["detail"] == "not-dispatched: non-terminal-slice"
+
+
 def test_unrunnable_attempts_zero_not_engaged_despite_telemetry():
     def dispatch(engine, **kwargs):
         return {
