@@ -61,6 +61,66 @@ _GIT_IDENTITY = (
 _CATFILE_READ_CHUNK = 1024 * 1024
 SANITIZED_VIEW_MAX_SYMLINK_TARGET_BYTES = 8 * 1024
 
+REVIEW_DIFF_FILE_NAME = "SUPERHEROES_REVIEW_DIFF.patch"
+REVIEW_DIFF_MAX_BYTES = 8 * 1024 * 1024
+_REVIEW_DIFF_PATHSPEC_BATCH_SIZE = 200
+
+_GIT_ROUTING_VARS = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_SYSTEM",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
+    "GIT_EXTERNAL_DIFF",
+)
+
+_DIFF_NAME_FLAGS = (
+    "diff",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    "--no-renames",
+    "--submodule=short",
+    "--name-only",
+    "-z",
+)
+
+_DIFF_PATCH_FLAGS = (
+    "diff",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    "--no-renames",
+    "--submodule=short",
+)
+
+
+def _git_env():
+    env = os.environ.copy()
+    for var in _GIT_ROUTING_VARS:
+        env.pop(var, None)
+    env["GIT_LITERAL_PATHSPECS"] = "1"
+    return env
+
+
+def _git_run(*args, **kwargs):
+    kwargs["env"] = _git_env()
+    return subprocess.run(*args, **kwargs)
+
+
+def _git_popen(*args, **kwargs):
+    kwargs["env"] = _git_env()
+    return subprocess.Popen(*args, **kwargs)
+
+
+def _is_40_hex_sha(value):
+    return len(value) == 40 and all(c in "0123456789abcdef" for c in value.lower())
+
 
 def _ascii_fold(s):
     return "".join(c.lower() if "A" <= c <= "Z" else c for c in s)
@@ -142,9 +202,25 @@ def sanitized_view_notice(view):
         "Repo-local agent and IDE config files were removed on purpose; their absence is NOT a "
         "finding. Do NOT list any stripped path in your investigated array — citing a stripped "
         "path fails the investigation floor and forfeits this seat. "
-        "This view has no git log or git blame (only a single synthetic commit).\n"
+        "This view has no origin/main, no remote, no parent commit, and only a single synthetic "
+        "commit. git diff <ref>, git log, git blame, and git show <ref> cannot work here and "
+        "must not be attempted.\n"
         % head,
     ]
+    diff_path = view.get("diffPath")
+    if diff_path:
+        lines.append(
+            "The change under review is the patch at %s — read it first. It is a generated "
+            "artifact, not repository source; do not review the patch file itself, do not list "
+            "it in your investigated array, and exclude it from repo-wide searches.\n"
+            % diff_path
+        )
+    withheld = view.get("diffWithheldCount") or 0
+    if withheld:
+        lines.append(
+            "%d changed path(s) were withheld from the review patch because they are stripped "
+            "agent/IDE config; their absence is not a finding.\n" % withheld
+        )
     if stripped:
         file_names, dir_names = _canonical_names_from_stripped(stripped)
         labels = file_names + dir_names
@@ -260,7 +336,7 @@ def _sweep_stale_views(tmp_base):
 
 def _git_rev_parse_head(repo_real):
     try:
-        proc = subprocess.run(
+        proc = _git_run(
             ["git", "-C", repo_real, "rev-parse", "HEAD"],
             capture_output=True,
             text=True,
@@ -304,7 +380,7 @@ def _git_ls_tree_census(repo_real, head_sha):
     # full before the post-exit byte-limit check runs; bounding that would need
     # streaming parse and is accepted as out of scope for now.
     try:
-        proc = subprocess.run(
+        proc = _git_run(
             ["git", "-C", repo_real, "ls-tree", "-r", "-z", head_sha],
             capture_output=True,
         )
@@ -366,7 +442,7 @@ class _CatFileBatch:
 
     def __init__(self, repo_real):
         try:
-            self._proc = subprocess.Popen(
+            self._proc = _git_popen(
                 ["git", "-C", repo_real, "cat-file", "--batch"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
@@ -483,7 +559,7 @@ class _CatFileBatchCheck:
 
     def __init__(self, repo_real):
         try:
-            self._proc = subprocess.Popen(
+            self._proc = _git_popen(
                 ["git", "-C", repo_real, "cat-file", "--batch-check"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
@@ -705,7 +781,7 @@ def _init_view_git(view_root):
     )
     for argv in steps:
         try:
-            proc = subprocess.run(argv, capture_output=True)
+            proc = _git_run(argv, capture_output=True)
         except OSError:
             raise SanitizedViewError("sanitized-view-init-failed")
         if proc.returncode != 0:
@@ -715,7 +791,7 @@ def _init_view_git(view_root):
 def _source_is_dirty(repo_real):
     """Tri-state: True if dirty, False if clean, None if the probe could not run."""
     try:
-        proc = subprocess.run(
+        proc = _git_run(
             [
                 "git",
                 "-C",
@@ -750,7 +826,123 @@ def _measure_worktree(view_root):
     return total_bytes, file_count
 
 
-def build_sanitized_view(repo_root):
+def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
+    """Materialize a review patch at the view root (before ``git init``)."""
+    if not diff_base or not diff_base.strip():
+        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+    if diff_base.startswith("-"):
+        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+
+    try:
+        proc = _git_run(
+            [
+                "git",
+                "-C",
+                repo_real,
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                "%s^{commit}" % diff_base,
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+    if proc.returncode != 0 or not proc.stdout.strip():
+        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+    base_sha = proc.stdout.strip()
+    if not _is_40_hex_sha(base_sha):
+        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+
+    try:
+        proc = _git_run(
+            ["git", "-C", repo_real, "merge-base", base_sha, head_sha],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+    if proc.returncode != 0 or not proc.stdout.strip():
+        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+    merge_base = proc.stdout.strip()
+    if not _is_40_hex_sha(merge_base):
+        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+
+    try:
+        proc = _git_run(
+            ["git", "-C", repo_real, *_DIFF_NAME_FLAGS, merge_base, head_sha],
+            capture_output=True,
+        )
+    except OSError:
+        raise SanitizedViewError("sanitized-view-diff-failed")
+    if proc.returncode != 0:
+        raise SanitizedViewError("sanitized-view-diff-failed")
+
+    changed_paths = [
+        p.decode("utf-8", errors="surrogateescape")
+        for p in proc.stdout.split(b"\0")
+        if p
+    ]
+    survivors = []
+    withheld_count = 0
+    for path in changed_paths:
+        if _rel_path_would_be_stripped(path):
+            withheld_count += 1
+        else:
+            survivors.append(path)
+
+    if not survivors and withheld_count > 0:
+        raise SanitizedViewError("sanitized-view-diff-fully-withheld")
+    if not survivors and withheld_count == 0:
+        raise SanitizedViewError("sanitized-view-diff-empty")
+
+    patch_parts = []
+    total_bytes = 0
+    for batch_start in range(0, len(survivors), _REVIEW_DIFF_PATHSPEC_BATCH_SIZE):
+        batch = survivors[batch_start : batch_start + _REVIEW_DIFF_PATHSPEC_BATCH_SIZE]
+        argv = [
+            "git",
+            "-C",
+            repo_real,
+            *_DIFF_PATCH_FLAGS,
+            merge_base,
+            head_sha,
+            "--",
+            *batch,
+        ]
+        try:
+            proc = _git_run(argv, capture_output=True)
+        except OSError:
+            raise SanitizedViewError("sanitized-view-diff-failed")
+        if proc.returncode != 0:
+            raise SanitizedViewError("sanitized-view-diff-failed")
+        chunk = proc.stdout
+        total_bytes += len(chunk)
+        if total_bytes > REVIEW_DIFF_MAX_BYTES:
+            raise SanitizedViewError("sanitized-view-diff-too-large")
+        patch_parts.append(chunk)
+
+    patch_bytes = b"".join(patch_parts)
+    if not patch_bytes:
+        raise SanitizedViewError("sanitized-view-diff-empty")
+
+    patch_path = os.path.join(view_root, REVIEW_DIFF_FILE_NAME)
+    if os.path.exists(patch_path):
+        raise SanitizedViewError("sanitized-view-diff-path-collision")
+
+    with open(patch_path, "wb") as fh:
+        fh.write(patch_bytes)
+
+    return {
+        "diffBase": merge_base,
+        "diffPath": patch_path,
+        "diffBytes": len(patch_bytes),
+        "diffWithheldCount": withheld_count,
+    }
+
+
+def build_sanitized_view(repo_root, *, diff_base=None):
     """Materialize a stripped copy of ``repo_root`` at HEAD from the git tree.
 
     ``sourceDirty`` in the returned dict is ``True`` when tracked files differ
@@ -772,6 +964,17 @@ def build_sanitized_view(repo_root):
 
         head_sha = _git_rev_parse_head(repo_real)
         stripped = _materialize_from_tree(repo_real, head_sha, view_root, started)
+        if diff_base is None:
+            diff_info = {
+                "diffBase": None,
+                "diffPath": None,
+                "diffBytes": None,
+                "diffWithheldCount": None,
+            }
+        else:
+            diff_info = _stage_review_diff(
+                repo_real, head_sha, view_root, diff_base, started
+            )
         _init_view_git(view_root)
 
         build_seconds = time.monotonic() - started
@@ -786,6 +989,7 @@ def build_sanitized_view(repo_root):
             "buildSeconds": build_seconds,
             "bytes": total_bytes,
             "fileCount": file_count,
+            **diff_info,
         }
     except SanitizedViewError:
         if view_root is not None:

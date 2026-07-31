@@ -60,8 +60,8 @@ def _init_repo(path, *, commit=True, files=None):
     return path
 
 
-def _build(repo):
-    return sv.build_sanitized_view(repo)
+def _build(repo, *, diff_base=None):
+    return sv.build_sanitized_view(repo, diff_base=diff_base)
 
 
 def _leftover_view_dirs(tmp_base):
@@ -1380,3 +1380,586 @@ def test_forged_gitlink_hiding_blob_refuses(tmp_path):
     with pytest.raises(sv.SanitizedViewError) as exc:
         _build(repo)
     assert exc.value.detail == "sanitized-view-export-failed"
+
+
+# --- review diff staging (WO-A) ------------------------------------------------
+
+
+def test_subprocess_census_all_git_calls_use_wrappers():
+    import ast
+
+    path = os.path.join(os.path.dirname(sv.__file__), "sanitized_view.py")
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+
+    class Visitor(ast.NodeVisitor):
+        def __init__(self):
+            self.stack = []
+            self.violations = []
+
+        def visit_FunctionDef(self, node):
+            self.stack.append(node.name)
+            self.generic_visit(node)
+            self.stack.pop()
+
+        def visit_Call(self, node):
+            func = node.func
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr in ("run", "Popen")
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "subprocess"
+            ):
+                owner = self.stack[-1] if self.stack else "<module>"
+                if owner not in ("_git_run", "_git_popen"):
+                    self.violations.append(owner)
+            self.generic_visit(node)
+
+    visitor = Visitor()
+    visitor.visit(tree)
+    assert visitor.violations == []
+
+
+def test_diff_base_none_keys_are_none(tmp_path):
+    repo = _init_repo(tmp_path / "no-diff", files={"keep.txt": "k\n"})
+    view = _build(repo)
+    try:
+        assert view["diffBase"] is None
+        assert view["diffPath"] is None
+        assert view["diffBytes"] is None
+        assert view["diffWithheldCount"] is None
+        assert not os.path.exists(
+            os.path.join(view["path"], sv.REVIEW_DIFF_FILE_NAME)
+        )
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+@pytest.mark.parametrize("base", ["", "   ", "\t\n"])
+def test_diff_base_empty_or_whitespace(tmp_path, base):
+    repo = _init_repo(tmp_path / "empty-base", files={"keep.txt": "k\n"})
+    fake_tmp = str(tmp_path / "tmpdir")
+    os.makedirs(fake_tmp)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base)
+    assert exc.value.detail == "sanitized-view-diff-base-unresolved"
+    assert _leftover_view_dirs(fake_tmp) == []
+
+
+def test_diff_base_starts_with_dash(tmp_path):
+    repo = _init_repo(tmp_path / "dash-base", files={"keep.txt": "k\n"})
+    fake_tmp = str(tmp_path / "tmpdir")
+    os.makedirs(fake_tmp)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base="-foo")
+    assert exc.value.detail == "sanitized-view-diff-base-unresolved"
+    assert _leftover_view_dirs(fake_tmp) == []
+
+
+def test_diff_base_unresolvable_ref(tmp_path):
+    repo = _init_repo(tmp_path / "bad-ref", files={"keep.txt": "k\n"})
+    fake_tmp = str(tmp_path / "tmpdir")
+    os.makedirs(fake_tmp)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base="not-a-real-ref-abc123")
+    assert exc.value.detail == "sanitized-view-diff-base-unresolved"
+    assert _leftover_view_dirs(fake_tmp) == []
+
+
+def test_diff_base_non_commit_object(tmp_path):
+    repo = _init_repo(tmp_path / "tree-ref", files={"keep.txt": "k\n"})
+    tree = _git(repo, "rev-parse", "HEAD^{tree}").stdout.strip()
+    fake_tmp = str(tmp_path / "tmpdir")
+    os.makedirs(fake_tmp)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=tree)
+    assert exc.value.detail == "sanitized-view-diff-base-unresolved"
+    assert _leftover_view_dirs(fake_tmp) == []
+
+
+def test_diff_base_unrelated_histories(tmp_path):
+    repo = _init_repo(tmp_path / "unrelated", files={"keep.txt": "v1\n"})
+    first_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "checkout", "--orphan", "other")
+    _git(repo, "rm", "-rf", ".", check=False)
+    with open(os.path.join(repo, "other.txt"), "w", encoding="utf-8") as fh:
+        fh.write("other\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "other",
+    )
+    fake_tmp = str(tmp_path / "tmpdir")
+    os.makedirs(fake_tmp)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=first_sha)
+    assert exc.value.detail == "sanitized-view-diff-base-unresolved"
+    assert _leftover_view_dirs(fake_tmp) == []
+
+
+def test_diff_empty_when_no_changes(tmp_path):
+    repo = _init_repo(tmp_path / "same", files={"keep.txt": "k\n"})
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    fake_tmp = str(tmp_path / "tmpdir")
+    os.makedirs(fake_tmp)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=head)
+    assert exc.value.detail == "sanitized-view-diff-empty"
+    assert _leftover_view_dirs(fake_tmp) == []
+
+
+def test_diff_fully_withheld(tmp_path):
+    repo = _init_repo(tmp_path / "allstripped", files={"keep.txt": "k\n"})
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8") as fh:
+        fh.write("secret config\n")
+    _git(repo, "add", "CLAUDE.md")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "add claude",
+    )
+    fake_tmp = str(tmp_path / "tmpdir")
+    os.makedirs(fake_tmp)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-fully-withheld"
+    assert _leftover_view_dirs(fake_tmp) == []
+
+
+def test_diff_partial_withheld(tmp_path):
+    repo = _init_repo(tmp_path / "partial", files={"keep.txt": "k\n"})
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8") as fh:
+        fh.write("secret\n")
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        assert view["diffWithheldCount"] == 1
+        assert view["diffPath"] is not None
+        assert view["diffBytes"] > 0
+        assert view["diffBase"] == base_sha
+        with open(view["diffPath"], "rb") as fh:
+            patch = fh.read()
+        assert b"changed" in patch
+        assert b"secret" not in patch
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_diff_pathspec_magic_literal_filename(tmp_path):
+    magic_name = ":(top)survives.txt"
+    repo = _init_repo(tmp_path / "magic", files={"keep.txt": "k\n"})
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, magic_name), "w", encoding="utf-8") as fh:
+        fh.write("magic content\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "magic",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        assert os.path.isfile(os.path.join(view["path"], magic_name))
+        with open(view["diffPath"], "rb") as fh:
+            patch = fh.read()
+        assert b"magic content" in patch
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_diff_non_utf8_path_roundtrip(tmp_path):
+    repo = _init_repo(tmp_path / "nonutf8", files={"keep.txt": "k\n"})
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    bad_rel = "weird\xffname.txt"
+    full = os.path.join(repo, bad_rel)
+    with open(full, "wb") as fh:
+        fh.write(b"payload\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "nonutf8",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        assert view["diffBytes"] > 0
+        assert os.path.isfile(os.path.join(view["path"], bad_rel))
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_diff_too_large(tmp_path, monkeypatch):
+    monkeypatch.setattr(sv, "REVIEW_DIFF_MAX_BYTES", 10)
+    repo = _init_repo(tmp_path / "bigdiff", files={"a.txt": "x" * 100 + "\n"})
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "a.txt"), "w", encoding="utf-8") as fh:
+        fh.write("y" * 100 + "\n")
+    _git(repo, "add", "a.txt")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "grow",
+    )
+    fake_tmp = str(tmp_path / "tmpdir")
+    os.makedirs(fake_tmp)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-too-large"
+    assert _leftover_view_dirs(fake_tmp) == []
+
+
+def test_diff_path_collision(tmp_path):
+    repo = _init_repo(
+        tmp_path / "collision",
+        files={
+            sv.REVIEW_DIFF_FILE_NAME: "existing patch file\n",
+            "keep.txt": "k\n",
+        },
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    _git(repo, "add", "keep.txt")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    fake_tmp = str(tmp_path / "tmpdir")
+    os.makedirs(fake_tmp)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-path-collision"
+    assert _leftover_view_dirs(fake_tmp) == []
+
+
+def test_diff_submodule_gitlink_only(tmp_path):
+    inner = _init_repo(tmp_path / "inner", files={"inner.txt": "i\n"})
+    outer = _init_repo(tmp_path / "outer", files={"outer.txt": "o\n"})
+    base_sha = _git(outer, "rev-parse", "HEAD").stdout.strip()
+    proc = subprocess.run(
+        [
+            "git",
+            "-C",
+            outer,
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            inner,
+            "submod",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        pytest.skip("submodule add not supported: %s" % proc.stderr.strip())
+    _git(
+        outer,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "add submodule",
+    )
+    view = sv.build_sanitized_view(outer, diff_base=base_sha)
+    try:
+        with open(view["diffPath"], "rb") as fh:
+            patch = fh.read()
+        assert b"inner.txt" not in patch
+        assert b"Subproject commit" in patch or b"submod" in patch
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_diff_generation_failed(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "fail", files={"a.txt": "a\n"})
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "a.txt"), "w", encoding="utf-8") as fh:
+        fh.write("b\n")
+    _git(repo, "add", "a.txt")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "b",
+    )
+    real_run = sv.subprocess.run
+
+    def fake_run(argv, **kwargs):
+        if (
+            len(argv) >= 5
+            and argv[0] == "git"
+            and "diff" in argv
+            and "--name-only" not in argv
+        ):
+            class R:
+                returncode = 1
+                stdout = b""
+                stderr = b"fail"
+
+            return R()
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(sv.subprocess, "run", fake_run)
+    fake_tmp = str(tmp_path / "tmpdir")
+    os.makedirs(fake_tmp)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-failed"
+    assert _leftover_view_dirs(fake_tmp) == []
+
+
+def test_git_routing_vars_scrubbed(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "gitdir", files={"keep.txt": "k\n"})
+    wrong = tmp_path / "wrong-repo"
+    _init_repo(wrong, files={"wrong.txt": "w\n"})
+    monkeypatch.setenv("GIT_DIR", os.path.join(str(wrong), ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(wrong))
+    view = sv.build_sanitized_view(repo)
+    try:
+        assert os.path.isfile(os.path.join(view["path"], "keep.txt"))
+        assert not os.path.exists(os.path.join(view["path"], "wrong.txt"))
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_diff_rename_from_stripped_path(tmp_path):
+    repo = _init_repo(
+        tmp_path / "rename",
+        files={"CLAUDE.md": "old secret\n", "keep.txt": "k\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    os.remove(os.path.join(repo, "CLAUDE.md"))
+    with open(os.path.join(repo, "DOCS.md"), "w", encoding="utf-8") as fh:
+        fh.write("new public\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "rename",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        with open(view["diffPath"], "rb") as fh:
+            patch = fh.read()
+        assert b"old secret" not in patch
+        assert b"new public" in patch
+        assert view["diffWithheldCount"] >= 1
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_diff_written_after_export_before_git_init(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "order", files={"keep.txt": "k\n"})
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    _git(repo, "add", "keep.txt")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    saw_patch_before_init = {"value": False}
+    real_init = sv._init_view_git
+
+    def init_checks(view_root):
+        patch = os.path.join(view_root, sv.REVIEW_DIFF_FILE_NAME)
+        assert os.path.isfile(patch)
+        assert not os.path.exists(os.path.join(view_root, ".git"))
+        saw_patch_before_init["value"] = True
+        return real_init(view_root)
+
+    monkeypatch.setattr(sv, "_init_view_git", init_checks)
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        assert saw_patch_before_init["value"]
+        status = _git(view["path"], "status", "--porcelain", check=False)
+        assert status.stdout.strip() == ""
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_claude_md_content_not_in_patch(tmp_path):
+    secret = "TOP_SECRET_CLAUDE_CONFIG_TOKEN_XYZ"
+    repo = _init_repo(
+        tmp_path / "leak",
+        files={"CLAUDE.md": secret + "\n", "keep.txt": "k\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    _git(repo, "add", "keep.txt")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        with open(view["diffPath"], "rb") as fh:
+            patch = fh.read()
+        assert secret.encode() not in patch
+        assert b"CLAUDE.md" not in patch
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_notice_explicit_no_git_prohibition_without_diff(tmp_path):
+    repo = _init_repo(tmp_path / "notice-nodiff", files={"keep.txt": "k\n"})
+    view = _build(repo)
+    try:
+        notice = sv.sanitized_view_notice(view)
+        assert "no origin/main" in notice
+        assert "no remote" in notice
+        assert "no parent commit" in notice
+        assert "single synthetic commit" in notice
+        assert "git diff" in notice
+        assert "git log" in notice
+        assert "git blame" in notice
+        assert "git show" in notice
+        assert "must not be attempted" in notice
+        assert "generated artifact" not in notice
+        assert "read it first" not in notice
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_notice_with_diff_artifact_sentences(tmp_path):
+    repo = _init_repo(tmp_path / "notice-diff", files={"keep.txt": "k\n"})
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    _git(repo, "add", "keep.txt")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        notice = sv.sanitized_view_notice(view)
+        assert "no origin/main" in notice
+        assert "must not be attempted" in notice
+        assert view["diffPath"] in notice
+        assert "read it first" in notice
+        assert "generated artifact" in notice
+        assert "do not review the patch file itself" in notice
+        assert "investigated array" in notice
+        assert "repo-wide searches" in notice
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_notice_withheld_count_sentence(tmp_path):
+    repo = _init_repo(tmp_path / "notice-withheld", files={"keep.txt": "k\n"})
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8") as fh:
+        fh.write("secret\n")
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        notice = sv.sanitized_view_notice(view)
+        assert "1 changed path(s) were withheld" in notice
+        assert "stripped agent/IDE config" in notice
+        assert "not a finding" in notice
+    finally:
+        sv.destroy_sanitized_view(view["path"])

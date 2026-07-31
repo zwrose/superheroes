@@ -1074,7 +1074,14 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         engagement = _engagement_with_read(engagement, findings=findings)
         return {"ok": True, "findings": findings, "engagement": engagement}
 
-    ok_inv, accepted, rejected = engine_adapter.spot_check_investigated(res.get("investigated"), cwd)
+    view_meta = opened.get("viewMeta")
+    generated = ()
+    if isinstance(view_meta, dict):
+        diff_path = view_meta.get("diffPath")
+        if isinstance(diff_path, str) and diff_path:
+            generated = (diff_path,)
+    ok_inv, accepted, rejected = engine_adapter.spot_check_investigated(
+        res.get("investigated"), cwd, generated_artifacts=generated)
     if ok_inv:
         engagement = _engagement_with_read(engagement, findings=[], investigated=accepted)
         return {"ok": True, "findings": [], "investigated": accepted, "engagement": engagement}
@@ -1472,6 +1479,10 @@ def _sanitized_view_receipt(view):
         "buildSeconds": view["buildSeconds"],
         "bytes": view["bytes"],
         "fileCount": view["fileCount"],
+        "diffBase": view.get("diffBase"),
+        "diffPath": view.get("diffPath"),
+        "diffBytes": view.get("diffBytes"),
+        "diffWithheldCount": view.get("diffWithheldCount"),
     }
 
 
@@ -1537,7 +1548,7 @@ def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
                     schema_path=None, repo_root=None, timeout=RETRY_MIN_TIMEOUT,
                     retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
                     build_view=sanitized_view.build_sanitized_view,
-                    run_dir=None, max_wait=None, order_id=None):
+                    run_dir=None, max_wait=None, order_id=None, diff_base=None):
     """Reviewer-scoped dispatch in the repository under review (#665). An unresolvable repo root is
     a named refusal (attempts: 0). Never raises: any unexpected internal failure (build_argv,
     the injected run_engine, parse_result) is converted to a structured fall-open result so the
@@ -1547,7 +1558,8 @@ def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
             engine, model=model, effort=effort, engine_model=engine_model, prompt_path=prompt_path,
             schema_path=schema_path, repo_root=repo_root, timeout=timeout,
             retry_timeout=retry_timeout, progress_path=progress_path, run_engine=run_engine,
-            build_view=build_view, run_dir=run_dir, max_wait=max_wait, order_id=order_id)
+            build_view=build_view, run_dir=run_dir, max_wait=max_wait, order_id=order_id,
+            diff_base=diff_base)
     except Exception as exc:
         return {"ok": False, "reason": "unrunnable", "detail": "internal-%s" % type(exc).__name__,
                 "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": []}
@@ -1557,7 +1569,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                           schema_path=None, repo_root=None, timeout=RETRY_MIN_TIMEOUT,
                           retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
                           build_view=sanitized_view.build_sanitized_view,
-                          run_dir=None, max_wait=None, order_id=None):
+                          run_dir=None, max_wait=None, order_id=None, diff_base=None):
     """Reviewer-scoped dispatch in the repository under review (#665). The role is HARD-CODED
     'review' (read-only sandbox) — this API cannot emit a workspace-write dispatch."""
     role_kind = RUN_KIND_REVIEW
@@ -1642,7 +1654,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                         run_dir=run_dir_real or "", argv=[],
                     )
             try:
-                view = build_view(repo_detail)
+                view = build_view(repo_detail, diff_base=diff_base)
             except sanitized_view.SanitizedViewError as exc:
                 return _with_run_fields(
                     {"ok": False, "reason": "unrunnable", "detail": exc.detail,
@@ -2207,6 +2219,7 @@ def main(argv):
     d.add_argument("--run-dir", default=None)
     d.add_argument("--max-wait", type=int, default=None)
     d.add_argument("--order-id", default=None)
+    d.add_argument("--diff-base", default=None)
 
     w = sub.add_parser("dispatch-write")
     w.add_argument("--engine", required=True, choices=("codex", "cursor"))
@@ -2239,7 +2252,8 @@ def main(argv):
                               schema_path=args.schema_path, repo_root=args.repo_root,
                               timeout=args.timeout, retry_timeout=args.retry_timeout,
                               progress_path=args.progress_file, run_dir=args.run_dir,
-                              max_wait=args.max_wait, order_id=args.order_id)
+                              max_wait=args.max_wait, order_id=args.order_id,
+                              diff_base=args.diff_base)
     elif args.cmd == "dispatch-write":
         res = dispatch_write(args.engine, model=args.model, effort=args.effort,
                              engine_model=args.engine_model, prompt_path=args.prompt_path,

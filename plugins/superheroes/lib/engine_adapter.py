@@ -528,13 +528,52 @@ def engagement_read(result):
         return "unknown"
 
 
-def spot_check_investigated(investigated, repo_root):
+def _resolve_generated_artifact_reals(generated_artifacts, repo_root):
+    """Resolve existing generated-artifact paths once; never raises."""
+    artifact_reals = []
+    if generated_artifacts is None:
+        return artifact_reals
+    if isinstance(generated_artifacts, (str, bytes)):
+        return artifact_reals
+    try:
+        entries = iter(generated_artifacts)
+    except TypeError:
+        return artifact_reals
+    for entry in entries:
+        if not isinstance(entry, str) or not entry.strip():
+            continue
+        try:
+            real = os.path.realpath(os.path.join(repo_root, entry))
+            if os.path.exists(real):
+                artifact_reals.append(real)
+        except Exception:
+            pass
+    return artifact_reals
+
+
+def _matches_generated_artifact(real, artifact_reals):
+    """Compare resolved identity, not spelling; never raises."""
+    for art_real in artifact_reals:
+        try:
+            if os.path.samefile(real, art_real):
+                return True
+        except OSError:
+            try:
+                if os.path.realpath(real) == art_real:
+                    return True
+            except Exception:
+                pass
+    return False
+
+
+def spot_check_investigated(investigated, repo_root, *, generated_artifacts=()):
     """(ok, accepted, rejected) — does this seat's investigation record survive a reality check?
 
     A spot check, not an audit: at least one claimed path must resolve inside the repo and exist.
     One verifiable path is enough to distinguish a seat that read the repo from one that read
     nothing; requiring every entry would fail an honest seat that cited a path deleted by the diff.
-    Never raises."""
+    Paths listed in `generated_artifacts` (repo-root-relative) are rejected — they do not count
+    toward the floor. Never raises."""
     accepted = []
     rejected = []
 
@@ -550,6 +589,7 @@ def spot_check_investigated(investigated, repo_root):
 
     root_real = os.path.realpath(repo_root)
     root_prefix = root_real + os.sep
+    artifact_reals = _resolve_generated_artifact_reals(generated_artifacts, repo_root)
 
     for entry in investigated:
         if not isinstance(entry, str) or not entry.strip():
@@ -567,6 +607,9 @@ def spot_check_investigated(investigated, repo_root):
             continue
         if not os.path.isfile(real):
             _reject(entry, "not-a-file")
+            continue
+        if artifact_reals and _matches_generated_artifact(real, artifact_reals):
+            _reject(entry, "generated-artifact")
             continue
         accepted.append(entry)
 
