@@ -111,7 +111,8 @@ discarding or re-dispatching** — "inspect the diff" alone is not a decision ru
   `git status --porcelain` empty, with landed work already committed. This reference makes that
   baseline explicit and strengthens it; related charter obligations are §6 (commit before the next
   order against a worktree) and §8 (commit before a mutation probe). Capture the baseline — same probe
-  as charter §8 `check-runner`: `git rev-parse HEAD` plus that empty `git status --porcelain`. If the
+  as charter §8 `check-runner`: `git rev-parse HEAD`, that empty `git status --porcelain`, and
+  `git reflog --date=iso HEAD | wc -l`. If the
   tree cannot be made clean, use a **fresh worktree** or **park** — never dispatch against a dirty
   baseline, and never treat a delta measured from one as authorship evidence. Against a clean baseline,
   spanning committed/staged/unstaged/untracked: whether **this dispatch** wrote anything at all (**no
@@ -130,14 +131,22 @@ discarding or re-dispatching** — "inspect the diff" alone is not a decision ru
   does not re-derive any of the three. **All three are the orchestrator's to reconstruct**, not just the
   fail-closed edges.
 - **The default when you cannot establish it.** If the orchestrator cannot establish completeness and
-  correctness itself, **re-dispatch is the default, not recovery** — and a re-dispatch first
-  **restores the worktree to the pre-dispatch baseline** (`git -C <build worktree> reset --hard
-  <baseline SHA>` plus `git -C <build worktree> clean -fd` to remove untracked files and
-  directories — **not** `-fdx`, which would also sweep gitignored local-only content such as
-  `docs/` or `.env` that no baseline SHA restores and that are not dispatch output;
-  implementable because the baseline was clean), or uses a fresh worktree,
-  never riding the abandoned attempt. Park when neither is available. Re-dispatching without looking
-  re-does correct work and re-runs the very report that forfeited.
+  correctness itself, **re-dispatch is the default, not recovery** — and a re-dispatch must not ride
+  the abandoned attempt. **Before any same-worktree reset**, confirm termination of the dispatch's
+  process group (via the supervised runner's abandon or terminal receipt); if death cannot be
+  confirmed, use a **fresh worktree** or **park** — never reset. **Default to a fresh worktree**
+  whenever ignored state could matter. Narrow recovery — only when death is confirmed and ignored
+  state demonstrably cannot matter — is `git -C <build worktree> reset --hard <baseline SHA>` plus
+  `git -C <build worktree> clean -fd`. That recipe restores tracked content to the baseline SHA and
+  removes untracked, **non-ignored** files and directories; it does **not** restore ignored paths,
+  which survive both commands and are invisible to `git status --porcelain` (`docs/`, `__pycache__/`,
+  `.pytest_cache/`, `.coverage`, `htmlcov/`, `.venv/`, and the rest of this repo's `.gitignore`), so
+  a re-dispatch on that worktree can inherit leftover ignored state. **Do not** use `-fdx`: it would
+  sweep gitignored local-only content such as `docs/` that no baseline SHA restores and that are not
+  dispatch output — and `-fd` is not safer for every local file: it protects only **ignored** paths;
+  an untracked-but-not-ignored file at the worktree root is removed by `-fd` exactly as `-fdx` would
+  remove it. Park when neither a fresh worktree nor confirmed narrow recovery is available.
+  Re-dispatching without looking re-does correct work and re-runs the very report that forfeited.
 
 Author orders so the forfeit does not fire: keep in-dispatch verification targeted and returns short
 and structured. The implementer template `agents/implementer.md` states this to the implementer

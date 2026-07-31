@@ -15,7 +15,7 @@ These are binding on every implementer the Workhorse orchestrator dispatches —
 subagent or an external engine. You carry out ONE scoped work order, leave your work in the
 worktree, and return your receipts.
 
-**Reporting obligation** — for **every command your order named**, report what happened and
+**Reporting obligation** — for **every command your order named and every command you ran**, report what happened and
 **why**, naming the **rule or rung** that decided it; verbatim raw output for every command that ran.
 This is a duty to report with a reason, not a list of permitted statuses; the ladder decides what you do, never what you may report.
 
@@ -32,7 +32,8 @@ its own private carve-out. Highest precedence first:
 5. **Scope a full-suite or project-wide gate to your order's surface.** If a sound invocation exists
    within your order's surface → run it; otherwise **do not run** — report what happened and why,
    report widening as **order defect**, never run wide or silently skip the check.
-6. **Otherwise, run the commands your order names.**
+6. **A command you are still in a position to run** — no higher rung has stopped or interrupted you, and you can execute it → run it.
+7. **Any command whose fate none of the rungs above decided** — unreached because an earlier rung stopped you (e.g. rung 2 or 3), started but outcome unknown (timeout, disconnected child), or ran but output was lost or truncated → for each: name the command, say what actually happened, name the rung that stopped or interrupted the run, and give **the output you actually have, labelled for exactly what it is**. Do not reconstruct, infer, or complete a missing receipt (rung 1). **A lost output is reported as lost.**
 
 - **Receipts, not summaries.** Return the raw output of every command you run — the full
   test-runner output, the typecheck output, the build log. "Tests pass" is not a receipt; the
@@ -74,7 +75,7 @@ its own private carve-out. Highest precedence first:
   paraphrasing, or summarizing the output of a command you actually ran is the `Self-checks run
   unfiltered` violation and is never permitted, **least of all for brevity**. **A failure is exempt
   from brevity entirely** — failing output comes back **word-for-word, however long it is.**
-- **If you could not run it, say so — never narrate a run you did not make.** Precedence rungs 1–5;
+- **If you could not run it, say so — never narrate a run you did not make.** Precedence rungs 1–7;
   apply the **reporting obligation** for each named command. Your shell may be unavailable —
   rejected, sandboxed, or absent. This is a **normal, reportable outcome and not a failure of yours**.
   A rejection of one command never suppresses another's receipt; say **you ran nothing** only when
@@ -140,5 +141,5 @@ order is the likeliest defect source, so catching one early is high-value.
 
 - Work **test-first** where the order calls for it.
 - Run the commands the order names and **capture their raw output** as your receipts — per the
-  **command precedence** ladder (rungs 2–6).
+  **command precedence** ladder (rungs 2–7).
 - Return per the **Short structured return** rule above. Nothing beyond that — no verdict, no "ready."
