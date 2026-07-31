@@ -592,17 +592,20 @@ def test_spawn_reserved_before_child(tmp_path, monkeypatch):
     assert started[0]["pid"] == order[1][1]
 
 
-def test_started_append_failed_terminates_child(tmp_path, monkeypatch):
-  # axis: no live child without a record
+def test_started_append_failure_reaps_child_and_writes_no_invalid_terminal(tmp_path, monkeypatch):
+    # Old assertion demanded a park the fold reader refuses (outcome without started).
+    # axis: no live child without a record
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
     child_pid = {"pid": None}
+    calls = {"n": 0}
 
     real_append = ll.append
 
     def failing_append(repo_root, record, env=None):
         if record.get("event") == "started":
+            calls["n"] += 1
             return False
         return real_append(repo_root, record, env=env)
 
@@ -623,15 +626,20 @@ def test_started_append_failed_terminates_child(tmp_path, monkeypatch):
         settle_seconds=0.1,
     )
     assert result["ok"] is False
+    assert result["reason"] == "terminalization-failed:ledger-append-failed"
     pid = child_pid["pid"]
     assert pid is not None
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
     records = ll.read(repo)["records"]
-    parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
-    assert any(r.get("evidence") == "started-append-failed" for r in parks)
-    refused = [r for r in records if r.get("event") == "refused"]
-    assert refused == []
+    launch_id = result["launchId"]
+    launch_records = [r for r in records if r.get("launchId") == launch_id]
+    assert not any(r.get("event") == "outcome" for r in launch_records)
+    assert not any(r.get("event") == "started" for r in launch_records)
+    folded = ll.fold(records)
+    assert folded["ok"] is True
+    assert folded["launches"][launch_id]["terminal"] is False
+    assert calls["n"] >= 1
 
 
 def test_detachment_stdin_devnull(tmp_path, monkeypatch):
@@ -1349,7 +1357,7 @@ def test_edge19_oserror_retry_does_not_ignore_refused_append_failure(tmp_path, m
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
-    real_append_under_lock = L._append_under_lock
+    real_append = ll.append
     calls = {"n": 0}
 
     def always_oserror(argv, repo_root, out_fh, err_fh, child_env):
@@ -1358,10 +1366,10 @@ def test_edge19_oserror_retry_does_not_ignore_refused_append_failure(tmp_path, m
     def failing_refused_append(repo_root, record, env=None):
         if record.get("event") == "refused" and record.get("stage") == "spawn":
             calls["n"] += 1
-            return {"ok": False, "reason": "ledger-append-failed"}
-        return real_append_under_lock(repo_root, record, env=env)
+            return False
+        return real_append(repo_root, record, env=env)
 
-    monkeypatch.setattr(L, "_append_under_lock", failing_refused_append)
+    monkeypatch.setattr(ll, "append", failing_refused_append)
     result = L.launch_build(
         repo,
         656,
@@ -1667,14 +1675,16 @@ def test_c2_edge4_terminal_append_failure_surfaces_reason(tmp_path, monkeypatch)
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
 
-    real_append_under_lock = L._append_under_lock
+    real_append = ll.append
+    calls = {"n": 0}
 
     def fail_park_append(repo_root, record, env=None):
         if record.get("event") == "outcome" and record.get("outcome") == "park":
-            return {"ok": False, "reason": "ledger-append-failed"}
-        return real_append_under_lock(repo_root, record, env=env)
+            calls["n"] += 1
+            return False
+        return real_append(repo_root, record, env=env)
 
-    monkeypatch.setattr(L, "_append_under_lock", fail_park_append)
+    monkeypatch.setattr(ll, "append", fail_park_append)
     result = L.launch_build(
         repo,
         656,
@@ -1686,6 +1696,7 @@ def test_c2_edge4_terminal_append_failure_surfaces_reason(tmp_path, monkeypatch)
     )
     assert result["ok"] is False
     assert result["reason"] == "terminalization-failed:ledger-append-failed"
+    assert calls["n"] >= 1
 
 
 def test_c2_edge5_oserror_retry_writes_retry_event(tmp_path, monkeypatch):
