@@ -335,12 +335,36 @@ def test_edge_10_untracked_only_tracked_actions_allow(tmp_path, monkeypatch):
     assert wg.classify("git checkout -- tracked.txt", repo) == ("allow", "")
 
 
-def test_edge_11_untracked_only_force_actions_deny(tmp_path, monkeypatch):
+def test_edge_11_untracked_only_force_actions_allow(tmp_path, monkeypatch):
+    """Force actions allow when only an unrelated untracked file is present.
+
+    Executed against real git (untracked.txt='PRECIOUS' on main):
+      git checkout -f main: rc=0 untracked.txt='PRECIOUS' -> SURVIVED
+      git switch -f main:   rc=0 untracked.txt='PRECIOUS' -> SURVIVED
+      git reset --hard:     rc=0 untracked.txt='PRECIOUS' -> SURVIVED
+    """
     _calibrated(monkeypatch)
     repo = _init_repo(tmp_path / "repo")
     _commit_file(repo, "tracked.txt", "x\n")
     with open(os.path.join(repo, "untracked.txt"), "w") as f:
         f.write("new")
+    decision, _ = wg.classify("git checkout -f main", repo)
+    assert decision == "allow"
+    decision, _ = wg.classify("git switch -f main", repo)
+    assert decision == "allow"
+    decision, _ = wg.classify("git reset --hard", repo)
+    assert decision == "allow"
+
+
+def test_edge_11_untracked_tracked_on_target_force_actions_deny(tmp_path, monkeypatch):
+    """Force actions deny when an untracked path is tracked on the target tree."""
+    _calibrated(monkeypatch)
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "tracked.txt", "x\n")
+    _commit_file(repo, "overlap.txt", "on main\n", msg="overlap on main")
+    _git(repo, "rm", "--cached", "overlap.txt")
+    with open(os.path.join(repo, "overlap.txt"), "w") as f:
+        f.write("local precious")
     decision, _ = wg.classify("git checkout -f main", repo)
     assert decision == "deny"
     decision, _ = wg.classify("git switch -f main", repo)
@@ -427,8 +451,8 @@ def test_edge_19_restore_staged_only_allows(tmp_path, monkeypatch):
 def test_edge_20_restore_staged_and_worktree_denies(tmp_path, monkeypatch):
     _calibrated(monkeypatch)
     repo = _init_repo(tmp_path / "repo")
-    _commit_file(repo, "f.txt", "x\n")
-    with open(os.path.join(repo, "f.txt"), "w") as f:
+    _commit_file(repo, "f", "x\n")
+    with open(os.path.join(repo, "f"), "w") as f:
         f.write("dirty")
     decision, _ = wg.classify("git restore -SW f", repo)
     assert decision == "deny"
@@ -440,7 +464,12 @@ def test_edge_21_restore_dash_dash_staged_pathspec_denies(tmp_path, monkeypatch)
     _calibrated(monkeypatch)
     repo = _init_repo(tmp_path / "repo")
     _commit_file(repo, "f.txt", "x\n")
-    with open(os.path.join(repo, "f.txt"), "w") as f:
+    staged_path = os.path.join(repo, "--staged")
+    with open(staged_path, "w") as f:
+        f.write("clean\n")
+    _git(repo, "add", "--", "--staged")
+    _git(repo, "commit", "-q", "-m", "add --staged")
+    with open(staged_path, "w") as f:
         f.write("dirty")
     decision, _ = wg.classify("git restore -- --staged", repo)
     assert decision == "deny"
@@ -482,7 +511,7 @@ def test_edge_25_compound_commit_then_checkout_denies(tmp_path, monkeypatch):
     _commit_file(repo, "f.txt", "x\n")
     with open(os.path.join(repo, "f.txt"), "w") as f:
         f.write("dirty")
-    decision, _ = wg.classify("git commit -m x && git checkout -- f", repo)
+    decision, _ = wg.classify("git commit -m x && git checkout -- f.txt", repo)
     assert decision == "deny"
 
 
@@ -622,47 +651,42 @@ def test_at_risk_dirty_submodule_denies(tmp_path, monkeypatch):
 
     def _fake_run(cwd, *args, forwarded_globals=()):
         calls.append(args)
+        class _Result:
+            returncode = 0
+            stdout = ""
         if "status" in args:
-            if "--ignore-submodules=none" not in args:
-                raise AssertionError("status probe must pass --ignore-submodules=none")
-            class _Result:
-                returncode = 0
-                stdout = " M sub\n"
+            _Result.stdout = " M sub\n" if "--untracked-files=no" in args else ""
             return _Result()
         if "rev-parse" in args:
-            class _Result:
-                returncode = 0
-                stdout = "abc\n"
+            _Result.stdout = "abc\n"
             return _Result()
-        if "ls-tree" in args:
-            class _Result:
-                returncode = 0
-                stdout = ""
-            return _Result()
-        if "ls-files" in args:
-            class _Result:
-                returncode = 0
-                stdout = ""
-            return _Result()
-        raise AssertionError(f"unexpected git invocation: {args}")
+        return _Result()
 
     monkeypatch.setattr(wg, "_run_git", _fake_run)
     probes = [
+        # _probe_arm_a only (source=index skips arm_b status)
         ("restore", "git restore f.txt"),
         ("checkout-path", "git checkout -- f.txt"),
+        # _probe_arm_a + _probe_arm_b (source=main/HEAD)
         ("checkout-force", "git checkout -f main"),
+        ("switch-force", "git switch -f main"),
         ("reset-hard", "git reset --hard"),
-        ("worktree-remove-force", "git worktree remove -f ../wt"),
+        # at_risk worktree-remove-force direct status
+        ("worktree-remove-force", None),
     ]
     for action, segment in probes:
         calls.clear()
         if action == "worktree-remove-force":
-            wt = str(tmp_path / "wt")
-            _git(repo, "worktree", "add", "-b", "wt-branch", wt)
+            wt = str(tmp_path / f"wt-{action}")
+            _git(repo, "worktree", "add", "-b", f"wt-{action}", wt)
             segment = f"git worktree remove -f {wt}"
-        result = wg.at_risk(repo, action, segment)
-        assert result[0] in ("at-risk", "clean", "indeterminate"), action
-        assert calls
+        wg.at_risk(repo, action, segment)
+        status_calls = [a for a in calls if "status" in a]
+        assert len(status_calls) > 0, f"{action}: no status probe calls recorded"
+        for args in status_calls:
+            assert "--ignore-submodules=none" in args, (
+                f"{action}: status probe missing --ignore-submodules=none: {args}"
+            )
 
 
 # --- CENSUS: classify chokepoint corpus --------------------------------------
@@ -721,7 +745,7 @@ CENSUS_DENY_DIRTY = [
     ("/usr/bin/git reset --hard", "dirty"),
     ("then git clean -fd", "dirty"),
     # one per destructive action name
-    ("git checkout -- f.txt", "dirty"),
+    ("git checkout -- tracked.txt", "dirty"),
     ("git checkout -f main", "dirty"),
     ("git switch -f main", "dirty"),
     ("git restore tracked.txt", "dirty"),
@@ -743,6 +767,7 @@ CENSUS_DENY_DIRTY = [
 ]
 
 CENSUS_ALLOW = [
+    ("git checkout -- f.txt", "dirty"),
     ("git status", "dirty"),
     ("git commit -m 'document the git checkout -- hazard'", "dirty"),
     ("git restore --staged f", "dirty"),
@@ -806,11 +831,11 @@ def test_census_allow_cases(command, tree_state, tmp_path, monkeypatch):
     assert decision == "allow", (command, tree_state, reason)
 
 
-def test_census_ignored_only_checkout_force_denies(tmp_path, monkeypatch):
-    """§7: checkout-force includes ignored entries in the risk probe."""
+def test_census_ignored_only_checkout_force_allows(tmp_path, monkeypatch):
+    """Target branch does not track the ignored file; checkout-force allows."""
     repo = _ignored_only_repo(tmp_path, monkeypatch)
     decision, _ = wg.classify("git checkout -f main", repo)
-    assert decision == "deny"
+    assert decision == "allow"
 
 
 def test_census_ignored_only_reset_hard_allows(tmp_path, monkeypatch):
