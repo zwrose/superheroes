@@ -1,0 +1,278 @@
+#!/usr/bin/env python3
+"""Machine home of the launch doctrine artifact.
+
+Parses ``rubric/launch-doctrine.md`` and the showrunner charter's marked preflight block.
+Every refusal is fail-closed: a caller that cannot parse the doctrine must never proceed as if
+it had. None of these functions raise out of themselves."""
+from __future__ import annotations
+
+import hashlib
+import os
+import re
+
+RULING_IDS = (
+    "own-worktree",
+    "base-moved",
+    "no-force-push",
+    "design-forks",
+    "await-dispatches",
+    "remote-head",
+)
+PREFLIGHT_CHECKS = (
+    ("quota", "always"),
+    ("engine-auth", "always"),
+    ("base-state", "always"),
+    ("disjoint-surfaces", "conditional"),
+    ("workspace-isolation", "always"),
+    ("standing-rulings", "conditional"),
+    ("owner-capability", "conditional"),
+    ("grant-state", "conditional"),
+)
+RULING_INVARIANTS = {"own-worktree": ("OWN worktree", "NEVER the primary checkout")}
+LAUNCHER_OWNED_CHECKS = ("standing-rulings",)
+
+_RULINGS_BEGIN = "<!-- launch-doctrine:rulings:begin -->"
+_RULINGS_END = "<!-- launch-doctrine:rulings:end -->"
+_PREFLIGHT_BEGIN = "<!-- launch-doctrine:preflight:begin -->"
+_PREFLIGHT_END = "<!-- launch-doctrine:preflight:end -->"
+_CHARTER_BEGIN = "<!-- launch-doctrine:preflight-charter:begin -->"
+_CHARTER_END = "<!-- launch-doctrine:preflight-charter:end -->"
+
+_RULING_LINE = re.compile(r"^- `(?P<id>[^`]+)` — (?P<text>.+)$")
+_PREFLIGHT_LINE = re.compile(
+    r"^- `(?P<id>[^`]+)` \((?P<class>always|conditional)\) — (?P<text>.+)$"
+)
+_CHARTER_LINE = re.compile(
+    r"^\s*\d+\. \*\*(?P<label>[^*]+)\*\*"
+    r".*? \(`(?P<id>[^`]+)`, (?P<class>always|conditional)\)"
+    r".*$"
+)
+_CHARTER_ITEM_START = re.compile(r"^\s*\d+\.")
+
+
+def _refuse(reason: str) -> dict:
+    return {
+        "ok": False,
+        "reason": reason,
+        "rulings": [],
+        "checks": [],
+        "rulingsBlock": None,
+        "digest": None,
+    }
+
+
+def _ok(
+    rulings: list[dict],
+    checks: list[dict],
+    rulings_block: str,
+    digest: str,
+) -> dict:
+    return {
+        "ok": True,
+        "reason": None,
+        "rulings": rulings,
+        "checks": checks,
+        "rulingsBlock": rulings_block,
+        "digest": digest,
+    }
+
+
+def doctrine_path(root: str | None = None) -> str:
+    """Absolute path to the launch-doctrine artifact."""
+    if root is None:
+        base = os.path.dirname(os.path.abspath(__file__))
+        return os.path.normpath(os.path.join(base, "..", "rubric", "launch-doctrine.md"))
+    return os.path.normpath(os.path.join(root, "rubric", "launch-doctrine.md"))
+
+
+def _extract_block(text: str, begin: str, end: str, name: str) -> tuple[str | None, str | None]:
+    """Return (body, reason). body excludes delimiter lines."""
+    begin_count = text.count(begin)
+    end_count = text.count(end)
+    if begin_count == 0 or end_count == 0:
+        return None, f"doctrine-missing-block:{name}"
+    if begin_count > 1 or end_count > 1:
+        return None, f"doctrine-duplicate-block:{name}"
+    begin_idx = text.find(begin)
+    end_idx = text.find(end)
+    if end_idx < begin_idx:
+        return None, f"doctrine-missing-block:{name}"
+    body_start = begin_idx + len(begin)
+    if body_start > 0 and text[body_start - 1] == "\n":
+        body_start += 1
+    body_end = end_idx
+    if body_end > 0 and text[body_end - 1] == "\n":
+        body_end -= 1
+    return text[body_start:body_end], None
+
+
+def _line_number(text: str, offset: int) -> int:
+    return text.count("\n", 0, offset) + 1
+
+
+def _parse_rulings_block(text: str, body: str, body_start: int) -> tuple[list[dict] | None, str | None]:
+    rulings: list[dict] = []
+    seen: set[str] = set()
+    for raw_line in body.split("\n"):
+        if not raw_line.strip():
+            continue
+        m = _RULING_LINE.match(raw_line)
+        if not m:
+            offset = text.find(raw_line, body_start)
+            return None, f"doctrine-malformed-line:{_line_number(text, offset)}"
+        rid = m.group("id")
+        rtext = m.group("text")
+        if rid in seen:
+            return None, f"doctrine-duplicate-id:{rid}"
+        seen.add(rid)
+        if not rtext.strip():
+            return None, f"doctrine-empty-text:{rid}"
+        rulings.append({"id": rid, "text": rtext, "line": raw_line})
+    parsed_ids = tuple(r["id"] for r in rulings)
+    if set(parsed_ids) != set(RULING_IDS):
+        return None, "doctrine-ruling-ids-mismatch"
+    if parsed_ids != RULING_IDS:
+        return None, "doctrine-ruling-order"
+    for rid, phrases in RULING_INVARIANTS.items():
+        ruling_text = next(r["text"] for r in rulings if r["id"] == rid)
+        for phrase in phrases:
+            if phrase not in ruling_text:
+                return None, f"doctrine-ruling-invariant-missing:{rid}:{phrase}"
+    return rulings, None
+
+
+def _parse_preflight_block(text: str, body: str, body_start: int) -> tuple[list[dict] | None, str | None]:
+    checks: list[dict] = []
+    for raw_line in body.split("\n"):
+        if not raw_line.strip():
+            continue
+        m = _PREFLIGHT_LINE.match(raw_line)
+        if not m:
+            offset = text.find(raw_line, body_start)
+            return None, f"doctrine-malformed-line:{_line_number(text, offset)}"
+        checks.append(
+            {
+                "id": m.group("id"),
+                "class": m.group("class"),
+                "text": m.group("text"),
+            }
+        )
+    parsed = tuple((c["id"], c["class"]) for c in checks)
+    if parsed != PREFLIGHT_CHECKS:
+        return None, "doctrine-check-mismatch"
+    return checks, None
+
+
+def parse(text: object) -> dict:
+    """Parse doctrine text. Never raises."""
+    if not isinstance(text, str) or not text:
+        return _refuse("doctrine-missing-block:rulings")
+
+    rulings_body, reason = _extract_block(text, _RULINGS_BEGIN, _RULINGS_END, "rulings")
+    if reason is not None:
+        return _refuse(reason)
+
+    preflight_body, reason = _extract_block(text, _PREFLIGHT_BEGIN, _PREFLIGHT_END, "preflight")
+    if reason is not None:
+        return _refuse(reason)
+
+    rulings_begin_idx = text.find(_RULINGS_BEGIN)
+    rulings_end_idx = text.find(_RULINGS_END)
+    rulings_block_start = rulings_begin_idx + len(_RULINGS_BEGIN)
+    if rulings_block_start < len(text) and text[rulings_block_start] == "\n":
+        rulings_block_start += 1
+    rulings_block_end = rulings_end_idx
+    if rulings_block_end > 0 and text[rulings_block_end - 1] == "\n":
+        rulings_block_end -= 1
+    rulings_block = text[rulings_block_start:rulings_block_end]
+
+    rulings, reason = _parse_rulings_block(text, rulings_body, rulings_block_start)
+    if reason is not None:
+        return _refuse(reason)
+
+    preflight_begin_idx = text.find(_PREFLIGHT_BEGIN)
+    preflight_block_start = preflight_begin_idx + len(_PREFLIGHT_BEGIN)
+    if preflight_block_start < len(text) and text[preflight_block_start] == "\n":
+        preflight_block_start += 1
+
+    checks, reason = _parse_preflight_block(text, preflight_body, preflight_block_start)
+    if reason is not None:
+        return _refuse(reason)
+
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return _ok(rulings, checks, rulings_block, digest)
+
+
+def load(path: str | None = None) -> dict:
+    """Load and parse the doctrine artifact. Never raises."""
+    target = doctrine_path() if path is None else path
+    try:
+        with open(target, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return _refuse("doctrine-unreadable")
+    return parse(text)
+
+
+def ruling_line(parsed: dict, ruling_id: str) -> str | None:
+    """Return the exact source line for a ruling id, or None."""
+    if not parsed.get("ok"):
+        return None
+    for ruling in parsed.get("rulings", []):
+        if ruling["id"] == ruling_id:
+            return ruling["line"]
+    return None
+
+
+def _extract_charter_block(text: str) -> tuple[str | None, str | None]:
+    begin_count = text.count(_CHARTER_BEGIN)
+    end_count = text.count(_CHARTER_END)
+    if begin_count == 0 or end_count == 0:
+        return None, "charter-missing-block"
+    if begin_count > 1 or end_count > 1:
+        return None, "charter-duplicate-block"
+    begin_idx = text.find(_CHARTER_BEGIN)
+    end_idx = text.find(_CHARTER_END)
+    if end_idx < begin_idx:
+        return None, "charter-missing-block"
+    body_start = begin_idx + len(_CHARTER_BEGIN)
+    if body_start < len(text) and text[body_start] == "\n":
+        body_start += 1
+    body_end = end_idx
+    if body_end > 0 and text[body_end - 1] == "\n":
+        body_end -= 1
+    return text[body_start:body_end], None
+
+
+def charter_checks(charter_text: object) -> dict:
+    """Parse the charter's marked preflight block. Never raises."""
+    if not isinstance(charter_text, str) or not charter_text:
+        return {"ok": False, "reason": "charter-missing-block", "checks": []}
+
+    body, reason = _extract_charter_block(charter_text)
+    if reason is not None:
+        return {"ok": False, "reason": reason, "checks": []}
+
+    checks: list[dict] = []
+    body_start = charter_text.find(body) if body else 0
+    for raw_line in body.split("\n"):
+        if not raw_line.strip():
+            continue
+        if not _CHARTER_ITEM_START.match(raw_line):
+            continue
+        m = _CHARTER_LINE.match(raw_line)
+        if not m:
+            offset = charter_text.find(raw_line, body_start)
+            return {
+                "ok": False,
+                "reason": f"charter-malformed-line:{_line_number(charter_text, offset)}",
+                "checks": [],
+            }
+        checks.append(
+            {
+                "id": m.group("id"),
+                "class": m.group("class"),
+                "text": m.group("label"),
+            }
+        )
+    return {"ok": True, "reason": None, "checks": checks}
