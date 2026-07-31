@@ -182,6 +182,57 @@ never drop a finding or a lens.
 > so a caller reviewing uncommitted work is disclosed rather than silently given the pre-change tree.
 > Every result also carries **`terminal`**, **`argv`** (the exact spawned command), and **`runDir`**.
 >
+> **Result shape — top-level, no wrapper (#687).** `findings`, `investigated`, `engagement`,
+> `terminal`, `argv`, `runDir`, and `sanitizedView` are **top-level keys** of every
+> `dispatch-review` result object. There is no `result` wrapper; parsing `result.findings` reads
+> nothing. A sibling project's orchestrator nearly discarded three good review seats on PR #677 by
+> reading `result.findings` as `0/0`.
+>
+> **`findings`-only transport (#687).** The runner forwards **only** `findings` and `investigated`
+> from the seat's stdout. Every other key the seat emits is dropped. A caller that needs a different
+> payload shape — verdicts, per-id audit rulings — **cannot** get it through this verb: the result
+> parses as `unreadable`, retries once at full token cost, and returns a forfeit whose disclosure
+> names the engine. Encode the payload **inside `findings` objects** instead, or use the
+> file-writing subagent verifier path that `verification-pass.md` already describes.
+>
+> **`--schema-path` pre-spawn validation (#687).** A schema that does not require a top-level
+> `findings` key is refused `unrunnable` with `attempts: 0` and no engine spawned — `detail` is one
+> of `schema-missing`, `schema-unreadable`, or `schema-not-findings-shaped`. Previously
+> `--schema-path` **forced** a shape the grader then rejected.
+>
+> **`engagement.read` (#687).** The result's `engagement.read` field is `"engaged"` when the seat
+> demonstrably acted: at least one finding returned, at least one accepted `investigated` path, or
+> `engagement.toolCalls` is not `None` and `>= 1`. Otherwise it is `"unknown"`. The runner **never**
+> reports `"inert"` — absence of positive evidence is not proof of inaction, because a correct
+> payload the transport could not read looks identical to a seat that never ran. Only
+> `seat_canary probe` can justify calling a seat inert.
+>
+> **Tokens are corroborating evidence only — measured (#687).** Engine telemetry (token spend, tool
+> calls, wall time) remains **corroborating evidence only** and can never satisfy the investigation
+> floor — the field heuristic that "~23K tokens means vacuous, ~83–175K means real work" is refuted.
+> Through the identical `dispatch-review` path on 2026-07-31 with the calibrated codex reviewer seat
+> at maximal effort:
+>
+> | Dispatch | Outcome | Tokens |
+> |---|---|---|
+> | 15-line docs diff, empty answer invited | clean — `{"findings":[],"investigated":["README.md"]}` | 2,449 |
+> | 20-line fail-open diff | produced a Critical finding | 10,415 |
+> | verdict-shaped contract | forfeited (transport), work was correct | 20,753 |
+> | 1,871-line real diff | 3 findings, ~430 s | 173,229 |
+>
+> A 23K token floor would have discarded the Critical. Cross-path comparison is worse: the
+> preflight's "reply with the single word READY" cost 20,388 tokens because it runs in the real repo
+> cwd where SessionStart hooks load, while `dispatch-review` runs in the sanitized view with
+> `CLAUDE.md` stripped (#684).
+>
+> **`payloadShape` on shape-unreadable forfeit (#687).** When the **last** attempt forfeits because
+> stdout was shape-unreadable, the result may carry `payloadShape`: a mapping with `parsed` (one of
+> `object-without-findings`, `object-findings-not-a-list`, `array-not-all-objects`,
+> `no-parseable-json`, or `empty-stdout`), `topLevelKeys` (a list of strings, populated only when
+> `parsed` is `object-without-findings`), and `keysTruncated` (bool; signals the key list was
+> capped). Diagnosis only — it never changes the fail direction. `payloadShape` is **absent** on a
+> vacuous forfeit and on success.
+>
 > **Originating-verb continuation loop.** Open with `--run-dir` (or omit it for a private temp run dir
 > that loops to terminal). Re-invoke **`dispatch-review`** (never `dispatch-poll`) with the same
 > `--run-dir` and `--max-wait 540` while `.terminal` is false. A non-terminal

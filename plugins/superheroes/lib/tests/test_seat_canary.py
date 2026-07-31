@@ -13,7 +13,16 @@ def _load():
     return mod
 
 
+def _load_engine_adapter():
+    spec = importlib.util.spec_from_file_location(
+        "engine_adapter", os.path.join(_HERE, "..", "engine_adapter.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 SC = _load()
+EA = _load_engine_adapter()
 
 
 def _repo(tmp_path):
@@ -432,3 +441,14 @@ def test_dispatch_exception_still_cleans_temp_file(tmp_path):
     )
     assert created
     assert not os.path.exists(created[0])
+
+
+def test_engaged_from_dispatch_equivalent_to_engagement_read():
+    cases = [
+        {"findings": [{"id": "f"}], "investigated": [], "engagement": {"toolCalls": None}},
+        {"findings": [], "investigated": ["lib/a.py"], "engagement": {"toolCalls": None}},
+        {"findings": [], "investigated": [], "engagement": {"toolCalls": 2}},
+        {"findings": [], "investigated": [], "engagement": {"toolCalls": None}},
+    ]
+    for res in cases:
+        assert SC._engaged_from_dispatch(res) == (EA.engagement_read(res) == "engaged")

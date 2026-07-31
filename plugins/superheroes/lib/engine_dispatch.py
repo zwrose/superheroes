@@ -818,11 +818,18 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     _cap_file_tail(stdout_path, MAX_STDOUT_CAPTURE)
     _cap_file_tail(stderr_path, MAX_STDERR_CAPTURE)
     returncode = proc.returncode
-    _journal_append(run_dir_real, {
+    elapsed = time.monotonic() - start
+    ended_record = {
         "kind": "attempt-ended", "attempt": attempt,
         "exit": returncode, "timedOut": timed_out, "signal": None,
         "refusal": None, "at": time.time(),
-    })
+        "wallSeconds": round(elapsed, 1),
+    }
+    try:
+        ended_record["stdoutBytes"] = os.path.getsize(stdout_path)
+    except OSError:
+        pass
+    _journal_append(run_dir_real, ended_record)
 
 
 def _attempt_timeout(opened, attempt):
@@ -941,6 +948,44 @@ def _spawn_attempt(run_dir_real, state, attempt, *, run_engine=None):
     return True, ""
 
 
+def _engagement_with_read(engagement, *, findings=None, investigated=None):
+    """Attach engagement.read from observed attempt evidence. Never raises."""
+    out = dict(engagement)
+    out["read"] = engine_adapter.engagement_read({
+        "findings": findings,
+        "investigated": investigated,
+        "engagement": engagement,
+    })
+    return out
+
+
+def _validate_review_schema_path(schema_path):
+    """Spot-check that schema_path describes a findings-shaped object — not schema validation."""
+    if schema_path is None:
+        return True, None
+    path = schema_path.strip() if isinstance(schema_path, str) else ""
+    if not path:
+        return False, "schema-missing"
+    if not os.path.isfile(path):
+        return False, "schema-missing"
+    try:
+        with open(path, encoding="utf-8") as fh:
+            root = json.load(fh)
+    except Exception:
+        return False, "schema-unreadable"
+    if not isinstance(root, dict):
+        return False, "schema-not-findings-shaped"
+    if root.get("type") != "object":
+        return False, "schema-not-findings-shaped"
+    properties = root.get("properties")
+    if isinstance(properties, dict) and "findings" not in properties:
+        return False, "schema-not-findings-shaped"
+    required = root.get("required")
+    if isinstance(required, list) and "findings" not in required:
+        return False, "schema-not-findings-shaped"
+    return True, None
+
+
 def _grade_review_attempt(run_dir_real, state, attempt):
     """Grade a completed review attempt from durable stdout files."""
     opened = state["opened"]
@@ -989,19 +1034,29 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     }
 
     res = engine_adapter.parse_result(engine, role_kind, stdout)
+    diagnose_stdout = stdout
     if not (res.get("ok") and res.get("findings")):
         stripped = engine_adapter.strip_echoed_prompt(stdout, fed_prompt)
+        diagnose_stdout = stripped
         res = engine_adapter.parse_result(engine, role_kind, stripped)
     if not res.get("ok"):
-        return {"forfeit": True, "reason": "forfeited", "engagement": engagement}
+        engagement = _engagement_with_read(engagement)
+        result = {"forfeit": True, "reason": "forfeited", "engagement": engagement}
+        shape = engine_adapter.review_payload_shape(diagnose_stdout)
+        if shape is not None:
+            result["payloadShape"] = shape
+        return result
 
     findings = res.get("findings") or []
     if findings:
+        engagement = _engagement_with_read(engagement, findings=findings)
         return {"ok": True, "findings": findings, "engagement": engagement}
 
     ok_inv, accepted, rejected = engine_adapter.spot_check_investigated(res.get("investigated"), cwd)
     if ok_inv:
+        engagement = _engagement_with_read(engagement, findings=[], investigated=accepted)
         return {"ok": True, "findings": [], "investigated": accepted, "engagement": engagement}
+    engagement = _engagement_with_read(engagement, findings=[], investigated=None)
     return {
         "forfeit": True,
         "reason": engine_adapter.REVIEW_FORFEIT_VACUOUS,
@@ -1075,7 +1130,8 @@ def _worktree_dirtied_forfeit(engine):
     }
 
 
-def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None, investigated_rejected=None):
+def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None,
+                            investigated_rejected=None, payload_shape=None):
     if reason == engine_adapter.REVIEW_FORFEIT_VACUOUS:
         return {
             "ok": False,
@@ -1092,7 +1148,7 @@ def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None, inves
                 "degraded vendor mix" % engine
             ),
         }
-    return {
+    result = {
         "ok": False,
         "terminal": True,
         "reason": "forfeited",
@@ -1104,6 +1160,9 @@ def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None, inves
         ),
         "engagement": engagement,
     }
+    if payload_shape is not None:
+        result["payloadShape"] = payload_shape
+    return result
 
 
 def _highest_attempt(state):
@@ -1299,6 +1358,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         engine, reason, MAX_ATTEMPTS,
                         engagement=grade.get("engagement"),
                         investigated_rejected=grade.get("investigatedRejected"),
+                        payload_shape=grade.get("payloadShape"),
                     )
                     view = opened.get("viewMeta")
                     if view:
@@ -1505,6 +1565,15 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
              "attempts": 0, "forfeited": False, "terminal": True},
             run_dir="", argv=[],
         )
+
+    if schema_path is not None:
+        ok_schema, schema_detail = _validate_review_schema_path(schema_path)
+        if not ok_schema:
+            return _with_run_fields(
+                {"ok": False, "reason": "unrunnable", "detail": schema_detail,
+                 "attempts": 0, "forfeited": False, "terminal": True},
+                run_dir="", argv=[],
+            )
 
     view = None
     view_path = None

@@ -88,23 +88,7 @@ def _map_outcome(res):
 
 
 def _engaged_from_dispatch(res):
-    findings = res.get("findings") or []
-    if findings:
-        return True
-    investigated = res.get("investigated") or []
-    if investigated:
-        return True
-    eng = _safe_engagement(res.get("engagement"))
-    # Token spend cannot separate engaged from vacuous, and an absolute floor would classify backwards.
-    # Measured 2026-07-26 on codex 0.144.1 in this repo: a genuinely engaged clean review that read
-    # repo files spent 2,460 tokens, while the field's vacuous seat (issue #666) spent ~23,000 — ten
-    # times more — because prompt ingestion dominates. Engaged runs here ranged 2,460 → 34,857 tokens.
-    # Wall time is equally unusable: an engaged dispatch returned a Critical finding in 8 seconds.
-    # Only *actions* count — findings produced, files provably read, tools invoked.
-    tool_calls = eng.get("toolCalls")
-    if tool_calls is not None and tool_calls >= 1:
-        return True
-    return False
+    return engine_adapter.engagement_read(res) == "engaged"
 
 
 def _evidence_from_dispatch(res):
