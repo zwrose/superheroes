@@ -105,6 +105,9 @@ def test_cross_vendor_no_op_argv_cursor():
     assert pp.cross_vendor_no_op_argv("cursor") == (
         "cursor-agent", "--model", engine_adapter._CURSOR_MODEL, "-p", "--trust",
         "--mode", "plan")
+    builder = engine_adapter.build_argv("cursor", "review", None, {})
+    assert all(flag in builder for flag in ("-p", "--trust", "--mode", "plan"))
+    assert builder[builder.index("--mode") + 1] == "plan"
 
 
 def test_cross_vendor_no_op_argv_unknown_engine():
@@ -142,6 +145,7 @@ def test_cross_vendor_cli_probe_feeds_preamble_on_stdin_codex():
 
     pp.cross_vendor_cli_probe("codex", run=_run)
     assert captured["input"].startswith(engine_dispatch.ANTIHIJACK_PREAMBLE)
+    assert "READY" in captured["input"]
 
 
 def test_cross_vendor_cli_probe_feeds_preamble_on_stdin_cursor():
@@ -155,6 +159,7 @@ def test_cross_vendor_cli_probe_feeds_preamble_on_stdin_cursor():
 
     pp.cross_vendor_cli_probe("cursor", run=_run)
     assert captured["input"].startswith(engine_dispatch.ANTIHIJACK_PREAMBLE)
+    assert "READY" in captured["input"]
 
 
 def test_cross_vendor_cli_probe_unknown_engine_no_stdin_prompt():
@@ -805,8 +810,11 @@ def test_composition_liveness_non_dict_returns_empty():
 def test_composition_liveness_hardened_dispatch_codex():
     import engine_dispatch
 
+    captured = {}
+
     def _run(argv, **kwargs):
         inp = kwargs.get("input", "")
+        captured["input"] = inp
         if not inp.startswith(engine_dispatch.ANTIHIJACK_PREAMBLE):
             return SimpleNamespace(returncode=1, stdout="", stderr="no preamble")
         if argv[-1] != "-":
@@ -816,13 +824,17 @@ def test_composition_liveness_hardened_dispatch_codex():
     needed = {"codex": [("gpt-5.6-sol", "xhigh")]}
     result = pp.composition_liveness(needed, run=_run)
     assert result["codex"]["live"] is True
+    assert "READY" in captured["input"]
 
 
 def test_composition_liveness_hardened_dispatch_cursor():
     import engine_dispatch
 
+    captured = {}
+
     def _run(argv, **kwargs):
         inp = kwargs.get("input", "")
+        captured["input"] = inp
         if not inp.startswith(engine_dispatch.ANTIHIJACK_PREAMBLE):
             return SimpleNamespace(returncode=1, stdout="", stderr="no preamble")
         if any("READY" in str(a).upper() for a in argv):
@@ -832,6 +844,7 @@ def test_composition_liveness_hardened_dispatch_cursor():
     needed = {"cursor": [("cursor-grok-4.5", "high")]}
     result = pp.composition_liveness(needed, run=_run)
     assert result["cursor"]["live"] is True
+    assert "READY" in captured["input"]
 
 
 def _collision_run(argv, **kwargs):

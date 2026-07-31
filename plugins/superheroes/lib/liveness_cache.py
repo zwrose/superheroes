@@ -11,7 +11,10 @@ import tempfile
 
 import mode_registry
 
-SCHEMA_VERSION = 1
+# Bump when probe configuration semantics change so legacy receipts cannot be
+# reused (#711: effort is now enforced per (model, effort) pair; v1 receipts
+# recorded effort the old probe never actually dispatched).
+SCHEMA_VERSION = 2
 DEFAULT_TTL_SECONDS = 600
 _ENV_TTL = "SUPERHEROES_LIVENESS_TTL_SECONDS"
 

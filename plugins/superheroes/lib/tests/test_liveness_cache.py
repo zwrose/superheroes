@@ -106,6 +106,23 @@ def test_read_miss_schema_version(tmp_path):
     assert lc.read(path, now=1000.0) is None
 
 
+def test_read_miss_legacy_schema_version(tmp_path, monkeypatch):
+    monkeypatch.delenv(lc._ENV_TTL, raising=False)
+    path = str(tmp_path / "r.json")
+    now = 5_000.0
+    legacy_version = lc.SCHEMA_VERSION - 1
+    json.dump(
+        {
+            "schemaVersion": legacy_version,
+            "probedAt": now - 10,
+            "liveness": _good_liveness(),
+            "needed": _good_needed(),
+        },
+        open(path, "w"),
+    )
+    assert lc.read(path, now=now) is None
+
+
 def test_read_miss_probed_at_future(tmp_path):
     path = str(tmp_path / "r.json")
     now = 2000.0
