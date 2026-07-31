@@ -584,6 +584,89 @@ def test_parse_exclusions_valid_line():
     assert "4d88419716b7b7054660a7943b061420bd804ed8" in mapping
 
 
+def test_parse_exclusions_wider_column_separator():
+    """Separator must accept \\s{2,}, not exactly two spaces."""
+    orig = "4d88419716b7b7054660a7943b061420bd804ed8"
+    repl = "868dce5b11111111111111111111111111111111"
+    three_spaces = (
+        f"{orig}   {repl}   2026-07-31   parser crash on squash body"
+    )
+    wide_run = (
+        f"{orig}     {repl}     2026-07-31     parser crash on squash body"
+    )
+    for text in (three_spaces, wide_run):
+        mapping, errors = RB.parse_exclusions(text)
+        assert not errors
+        assert mapping[orig] == (repl, "2026-07-31", "parser crash on squash body")
+
+
+_CONFIG_ONLY_TYPE = {
+    "changelog-sections": [
+        {"type": "feat", "section": "Features"},
+        {"type": "spdx", "section": "License"},
+    ],
+    "packages": {
+        "plugins/superheroes": {
+            "component": "superheroes",
+        }
+    },
+}
+_CONFIG_ONLY_PKG = _CONFIG_ONLY_TYPE["packages"]["plugins/superheroes"]
+
+_PKG_OVERRIDE_ROOT = {
+    "changelog-sections": [
+        {"type": "feat", "section": "Features"},
+        {"type": "docs", "section": "Documentation", "hidden": True},
+    ],
+    "packages": {
+        "plugins/superheroes": {
+            "component": "superheroes",
+            "changelog-sections": [
+                {"type": "tooling", "section": "Tooling"},
+                {"type": "docs", "section": "Docs"},
+            ],
+        }
+    },
+}
+_PKG_OVERRIDE_PKG = _PKG_OVERRIDE_ROOT["packages"]["plugins/superheroes"]
+
+
+def test_parseable_types_includes_config_only_type():
+    parse_types = RB.parseable_types(_CONFIG_ONLY_TYPE, _CONFIG_ONLY_PKG)
+    assert "spdx" in parse_types
+    assert "spdx" not in RB.TYPES
+    commits = [_c("sp000001", "spdx(superheroes): refresh SPDX headers")]
+    assert RB.parse_subject(commits[0].subject, parse_types) is not None
+    assert commits[0] in RB.floor_population(commits, parse_types)
+    assert commits[0] in RB.completeness_population(
+        commits, RB.releasing_types(_CONFIG_ONLY_TYPE, _CONFIG_ONLY_PKG), parse_types
+    )
+
+
+def test_package_level_changelog_sections_override():
+    root_parse = RB.parseable_types(_PKG_OVERRIDE_ROOT)
+    root_releasing = RB.releasing_types(_PKG_OVERRIDE_ROOT)
+    pkg_parse = RB.parseable_types(_PKG_OVERRIDE_ROOT, _PKG_OVERRIDE_PKG)
+    pkg_releasing = RB.releasing_types(_PKG_OVERRIDE_ROOT, _PKG_OVERRIDE_PKG)
+
+    assert "tooling" in pkg_parse
+    assert "tooling" not in root_parse
+    assert "docs" not in root_releasing
+    assert "docs" in pkg_releasing
+    assert "tooling" in pkg_releasing
+
+    commits = [
+        _c("tl000001", "tooling(superheroes): refresh lint config"),
+        _c("dc000002", "docs(superheroes): clarify override"),
+    ]
+    assert RB.parse_subject(commits[0].subject, pkg_parse) is not None
+    assert RB.parse_subject(commits[1].subject, pkg_parse) is not None
+    assert commits[0] in RB.floor_population(commits, pkg_parse)
+    assert commits[1] in RB.floor_population(commits, pkg_parse)
+    assert commits[0] in RB.completeness_population(commits, pkg_releasing, pkg_parse)
+    assert commits[1] in RB.completeness_population(commits, pkg_releasing, pkg_parse)
+
+
 def test_belongs_to_package_zero_file():
     c = Commit(sha=_sha("zf000001"), subject="chore: empty", zero_file=True, touches_package=False)
     assert RB.belongs_to_package(c)
