@@ -1,8 +1,9 @@
 # Contents
 
 1. [Dispatch mechanics — long dispatches you own](#dispatch-mechanics--long-dispatches-you-own)
-2. [Supervised write dispatch](#supervised-write-dispatch)
-3. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
+2. [Supervised review dispatch](#supervised-review-dispatch)
+3. [Supervised write dispatch](#supervised-write-dispatch)
+4. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
 
 ---
 
@@ -38,6 +39,36 @@ charter §7 (Channel-conditioned) — not restated here. Mechanics by dispatch k
   shell-detach** — await in-turn when you dispatch; if it genuinely cannot fit the turn, **do not
   dispatch** — park durably on the issue or PR **with the work order ready** (charter §7), or split so
   each dispatch fits one turn.
+
+## Supervised review dispatch
+
+The sanctioned way to dispatch a long-running **external reviewer** seat is `dispatch-review`. The
+full stdout and result contract lives in `auto-fix-loop.md` — read that before authoring seat
+prompts; this subsection is the at-dispatch-time summary only.
+
+Every `dispatch-review` result is a **top-level** object. **Always present:** `ok`, `terminal`,
+`runDir`, and `argv`; on a failure, `reason` (and usually `detail`). **Outcome-dependent:**
+`findings`, `investigated`, `engagement`, and `sanitizedView` — do **not** read an absent `findings`
+as "zero findings". An `unrunnable` refusal carries no `findings` / `investigated` / `engagement`; it
+carries `sanitizedView` **only when raised after the sanitized view was built** — the early refusals
+(`repo-root-*`, `prompt-*`, `run-dir-*`, `schema-*`) precede the view and carry none. A terminal
+forfeit carries no `findings`/`investigated`. There is no `result` wrapper; `result.findings` reads
+nothing.
+The runner's transport carries **only** `findings` and `investigated` from the seat's stdout — every
+other key the seat emits is dropped, so verdict-shaped or other alternate payloads parse `unreadable`,
+retry once, and forfeit.
+
+When the result carries an **`engagement`** block with a non-`null` value (present only when the
+attempt produced stdout that was graded), `engagement.read` is `"engaged"` when the seat
+demonstrably acted (a finding, an accepted `investigated` path, or `engagement.toolCalls >= 1`);
+otherwise `"unknown"`. On a timeout, refusal, nonzero-exit, or missing-stdout forfeit the
+`engagement` key is **present with the value `null`** (there was no graded stdout to measure), so
+`engagement.read` is unavailable — `result.get("engagement", {})` is **unsafe** because the key may
+carry `null`, not merely be missing; consumers must handle a `null` value. The runner **never**
+asserts `"inert"` — absence of positive evidence is not proof of inaction, and only `seat_canary
+probe` can justify calling a seat inert. Token spend does not measure engagement: through the
+calibrated codex reviewer seat, a 2,449-token dispatch was engaged-clean and a 10,415-token
+dispatch produced a Critical finding.
 
 ## Supervised write dispatch
 

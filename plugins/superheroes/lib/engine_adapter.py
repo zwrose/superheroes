@@ -30,6 +30,27 @@ TASK_ID_TRAILER = "Task-Id"
 # never restate the literal.
 REVIEW_FORFEIT_VACUOUS = "vacuous"
 
+# Bounds for the payload-shape diagnostic. These strings come from ENGINE-CONTROLLED JSON and
+# cross the same trust boundary as any other external free text.
+PAYLOAD_SHAPE_MAX_KEYS = 12
+PAYLOAD_SHAPE_MAX_KEY_LEN = 60
+
+SHAPE_OBJECT_WITHOUT_FINDINGS = "object-without-findings"
+SHAPE_OBJECT_FINDINGS_NOT_A_LIST = "object-findings-not-a-list"
+SHAPE_ARRAY_NOT_ALL_OBJECTS = "array-not-all-objects"
+SHAPE_NO_PARSEABLE_JSON = "no-parseable-json"
+SHAPE_EMPTY_STDOUT = "empty-stdout"
+SHAPE_PROMPT_ECHO_ONLY = "prompt-echo-only"
+
+REVIEW_PAYLOAD_SHAPES = (
+    SHAPE_OBJECT_WITHOUT_FINDINGS,      # a JSON object parsed, but it carries no `findings` key
+    SHAPE_OBJECT_FINDINGS_NOT_A_LIST,   # a JSON object parsed with a `findings` key that is not a list
+    SHAPE_ARRAY_NOT_ALL_OBJECTS,        # a bare top-level array parsed, but not every element is an object
+    SHAPE_NO_PARSEABLE_JSON,            # stdout was non-empty but held no parseable top-level JSON value
+    SHAPE_EMPTY_STDOUT,                 # stdout was empty or whitespace only
+    SHAPE_PROMPT_ECHO_ONLY,             # the seat emitted only an echo of its prompt — graded text empty after strip
+)
+
 # #392: the distinct, honest outcome for a fix whose SUBSTANCE is the history shape (squash to N
 # commits, reword, drop a commit) rather than content. Such a fix produces a tree content-identical
 # to pre_sha, so the fold-only invariant (commit_result never discards commits below pre_sha) folds
@@ -401,6 +422,110 @@ def _scrub_investigated(investigated):
             continue
         out.append(_scrub(entry))
     return out
+
+
+def _bound_top_level_keys(obj):
+    """Scrub and bound engine-controlled dict keys for the payload-shape diagnostic."""
+    keys = []
+    keys_truncated = False
+    for i, k in enumerate(obj.keys()):
+        if i >= PAYLOAD_SHAPE_MAX_KEYS:
+            keys_truncated = True
+            break
+        key = _scrub(str(k))
+        if len(key) > PAYLOAD_SHAPE_MAX_KEY_LEN:
+            keys_truncated = True
+            key = key[:PAYLOAD_SHAPE_MAX_KEY_LEN]
+        keys.append(key)
+    return keys, keys_truncated
+
+
+def review_payload_shape(stdout):
+    """Diagnose WHY a review stdout failed the findings parse.
+
+    Returns {"parsed": <one of REVIEW_PAYLOAD_SHAPES>,
+             "topLevelKeys": [str, ...],      # [] unless `parsed` == "object-without-findings"
+             "keysTruncated": bool}
+    Returns None when `stdout` DOES parse as a valid review payload — there is nothing to diagnose.
+    Never raises."""
+    try:
+        stdout = _unwrap_stream_envelope(stdout)
+        if not isinstance(stdout, str) or not stdout.strip():
+            return {"parsed": SHAPE_EMPTY_STDOUT, "topLevelKeys": [], "keysTruncated": False}
+        obj = _last_json_object(stdout)
+        if isinstance(obj, dict):
+            if "findings" not in obj:
+                top_keys, keys_truncated = _bound_top_level_keys(obj)
+                return {"parsed": SHAPE_OBJECT_WITHOUT_FINDINGS,
+                        "topLevelKeys": top_keys, "keysTruncated": keys_truncated}
+            findings = obj.get("findings")
+            if not isinstance(findings, list):
+                return {"parsed": SHAPE_OBJECT_FINDINGS_NOT_A_LIST,
+                        "topLevelKeys": [], "keysTruncated": False}
+            return None
+        if obj is None:
+            arr = _last_json_array(stdout)
+            if isinstance(arr, list):
+                if all(isinstance(x, dict) for x in arr):
+                    return None
+                return {"parsed": SHAPE_ARRAY_NOT_ALL_OBJECTS,
+                        "topLevelKeys": [], "keysTruncated": False}
+            return {"parsed": SHAPE_NO_PARSEABLE_JSON,
+                    "topLevelKeys": [], "keysTruncated": False}
+        return {"parsed": SHAPE_NO_PARSEABLE_JSON,
+                "topLevelKeys": [], "keysTruncated": False}
+    except Exception:
+        # A diagnostic that cannot diagnose says nothing — never fabricate a parsed label from an
+        # internal error (no-parseable-json is a finding about stdout, not a guess after failure).
+        return None
+
+
+def engagement_read(result):
+    """The single home for "did this seat demonstrably act?".
+
+    ACTION-BASED ONLY. Never tokens, never wall time, never stdout size.
+    `result` is a dispatch-result-shaped mapping (it may carry "findings", "investigated",
+    and an "engagement" mapping with "toolCalls").
+
+    Returns "engaged" when there is POSITIVE evidence of action:
+      - at least one finding returned, OR
+      - at least one accepted `investigated` path, OR
+      - engagement.toolCalls is not None and >= 1
+    Otherwise returns "unknown".
+
+    NEVER returns "inert". Absence of positive evidence is NOT proof of inaction — a correct
+    payload the transport could not read (the #687 verdict-shape specimen) looks identical to a
+    seat that never ran. Only `seat_canary probe` can justify asserting inertness.
+    Does not look at `ok` — a forfeited seat that nevertheless returned findings is still
+    "engaged". Never raises."""
+    try:
+        if not isinstance(result, dict):
+            return "unknown"
+        findings = result.get("findings")
+        if isinstance(findings, list) and findings:
+            return "engaged"
+        investigated = result.get("investigated")
+        if isinstance(investigated, list) and investigated:
+            return "engaged"
+        eng = result.get("engagement")
+        if not isinstance(eng, dict):
+            eng = {}
+        # Token spend cannot separate engaged from vacuous, and an absolute floor would classify backwards.
+        # Measured 2026-07-26 on codex 0.144.1 in this repo: a genuinely engaged clean review that read
+        # repo files spent 2,460 tokens, while the field's vacuous seat (issue #666) spent ~23,000 — ten
+        # times more — because prompt ingestion dominates. Engaged runs here ranged 2,460 → 34,857 tokens.
+        # Wall time is equally unusable: an engaged dispatch returned a Critical finding in 8 seconds.
+        # Only *actions* count — findings produced, files provably read, tools invoked.
+        tool_calls = eng.get("toolCalls")
+        if tool_calls is not None:
+            try:
+                if tool_calls >= 1:
+                    return "engaged"
+            except TypeError:
+                pass
+        return "unknown"
+    except Exception:
+        return "unknown"
 
 
 def spot_check_investigated(investigated, repo_root):

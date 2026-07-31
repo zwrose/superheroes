@@ -1206,3 +1206,214 @@ def test_finding_body_quoting_prompt_tail_survives_conditional_strip():
     assert res["ok"] is True
     assert len(res["findings"]) == 1
     assert tail[:80] in res["findings"][0]["body"]
+
+
+# ---------------------------------------------------------------------------
+# #687: review_payload_shape + engagement_read
+
+
+def test_review_payload_shape_empty_stdout():
+    assert EA.review_payload_shape("") == {
+        "parsed": EA.SHAPE_EMPTY_STDOUT, "topLevelKeys": [], "keysTruncated": False,
+    }
+    assert EA.review_payload_shape("   \n\t") == {
+        "parsed": EA.SHAPE_EMPTY_STDOUT, "topLevelKeys": [], "keysTruncated": False,
+    }
+
+
+def test_review_payload_shape_none_is_empty_stdout():
+    assert EA.review_payload_shape(None) == {
+        "parsed": EA.SHAPE_EMPTY_STDOUT, "topLevelKeys": [], "keysTruncated": False,
+    }
+
+
+def test_review_payload_shape_object_without_findings():
+    res = EA.review_payload_shape(json.dumps({"error": "crashed", "status": "fail"}))
+    assert res["parsed"] == EA.SHAPE_OBJECT_WITHOUT_FINDINGS
+    assert res["topLevelKeys"] == ["error", "status"]
+    assert res["keysTruncated"] is False
+
+
+def test_review_payload_shape_object_findings_not_a_list():
+    res = EA.review_payload_shape(json.dumps({"findings": "oops"}))
+    assert res == {
+        "parsed": EA.SHAPE_OBJECT_FINDINGS_NOT_A_LIST, "topLevelKeys": [], "keysTruncated": False,
+    }
+
+
+def test_review_payload_shape_array_not_all_objects():
+    res = EA.review_payload_shape("[1, 2, 3]")
+    assert res == {
+        "parsed": EA.SHAPE_ARRAY_NOT_ALL_OBJECTS, "topLevelKeys": [], "keysTruncated": False,
+    }
+
+
+def test_review_payload_shape_no_parseable_json():
+    res = EA.review_payload_shape("{ not json")
+    assert res == {
+        "parsed": EA.SHAPE_NO_PARSEABLE_JSON, "topLevelKeys": [], "keysTruncated": False,
+    }
+
+
+def test_review_payload_shape_valid_object_returns_none():
+    assert EA.review_payload_shape(json.dumps({"findings": [
+        {"severity": "Minor", "title": "t", "body": "b"}]})) is None
+
+
+def test_review_payload_shape_valid_empty_findings_returns_none():
+    assert EA.review_payload_shape(json.dumps({"findings": []})) is None
+
+
+def test_review_payload_shape_valid_bare_array_returns_none():
+    assert EA.review_payload_shape(json.dumps([
+        {"severity": "Minor", "title": "t", "body": "b"}])) is None
+    assert EA.review_payload_shape("[]") is None
+
+
+def test_review_payload_shape_bare_scalar_is_no_parseable_json():
+    assert EA.review_payload_shape('"hello"') == {
+        "parsed": EA.SHAPE_NO_PARSEABLE_JSON, "topLevelKeys": [], "keysTruncated": False,
+    }
+    assert EA.review_payload_shape("42") == {
+        "parsed": EA.SHAPE_NO_PARSEABLE_JSON, "topLevelKeys": [], "keysTruncated": False,
+    }
+    assert EA.review_payload_shape("null") == {
+        "parsed": EA.SHAPE_NO_PARSEABLE_JSON, "topLevelKeys": [], "keysTruncated": False,
+    }
+    assert EA.review_payload_shape("true") == {
+        "parsed": EA.SHAPE_NO_PARSEABLE_JSON, "topLevelKeys": [], "keysTruncated": False,
+    }
+
+
+def test_review_payload_shape_hostile_key_scrubbed():
+    secret_key = "Authorization: Bearer sk-EXAMPLEfakenotarealsecret0"
+    res = EA.review_payload_shape(json.dumps({secret_key: "value"}))
+    assert res["parsed"] == EA.SHAPE_OBJECT_WITHOUT_FINDINGS
+    assert "sk-EXAMPLE" not in res["topLevelKeys"][0]
+    assert "[REDACTED]" in res["topLevelKeys"][0]
+
+
+def test_review_payload_shape_non_string_key_coerced(monkeypatch):
+    monkeypatch.setattr(EA, "_last_json_object", lambda _stdout: {1: "x", "ok": "y"})
+    res = EA.review_payload_shape('{"ignored": true}')
+    assert res["parsed"] == EA.SHAPE_OBJECT_WITHOUT_FINDINGS
+    assert "1" in res["topLevelKeys"]
+
+
+def test_review_payload_shape_keys_truncated_by_count():
+    obj = {("k%d" % i): i for i in range(EA.PAYLOAD_SHAPE_MAX_KEYS + 5)}
+    res = EA.review_payload_shape(json.dumps(obj))
+    assert res["parsed"] == EA.SHAPE_OBJECT_WITHOUT_FINDINGS
+    assert len(res["topLevelKeys"]) == EA.PAYLOAD_SHAPE_MAX_KEYS
+    assert res["keysTruncated"] is True
+
+
+def test_review_payload_shape_keys_truncated_by_length():
+    long_key = "a" * (EA.PAYLOAD_SHAPE_MAX_KEY_LEN + 20)
+    res = EA.review_payload_shape(json.dumps({long_key: 1}))
+    assert res["parsed"] == EA.SHAPE_OBJECT_WITHOUT_FINDINGS
+    assert len(res["topLevelKeys"][0]) == EA.PAYLOAD_SHAPE_MAX_KEY_LEN
+    assert res["keysTruncated"] is True
+
+
+def test_review_payload_shape_keys_not_truncated_when_within_bounds():
+    obj = {"alpha": 1, "beta": 2}
+    res = EA.review_payload_shape(json.dumps(obj))
+    assert res["keysTruncated"] is False
+    assert res["topLevelKeys"] == ["alpha", "beta"]
+
+
+def test_review_payload_shape_internal_error_returns_none(monkeypatch):
+    def _boom(_stdout):
+        raise RuntimeError("internal")
+    monkeypatch.setattr(EA, "_last_json_object", _boom)
+    assert EA.review_payload_shape('{"error": true}') is None
+
+
+def test_review_payload_shape_parsed_values_are_members_of_home():
+    """Every `parsed` label review_payload_shape can return must be in REVIEW_PAYLOAD_SHAPES."""
+    cases = [
+        "",
+        "   ",
+        json.dumps({"error": "x"}),
+        json.dumps({"findings": "oops"}),
+        "[1, 2]",
+        "{ not json",
+        '"hello"',
+    ]
+    for stdout in cases:
+        shape = EA.review_payload_shape(stdout)
+        if shape is not None:
+            assert shape["parsed"] in EA.REVIEW_PAYLOAD_SHAPES, stdout
+
+
+def test_review_payload_shapes_includes_prompt_echo_only():
+    assert EA.SHAPE_PROMPT_ECHO_ONLY in EA.REVIEW_PAYLOAD_SHAPES
+
+
+def test_engagement_read_findings_engaged():
+    assert EA.engagement_read({"findings": [{"id": "f"}]}) == "engaged"
+
+
+def test_engagement_read_investigated_engaged():
+    assert EA.engagement_read({"investigated": ["a.py"]}) == "engaged"
+
+
+def test_engagement_read_tool_calls_engaged():
+    assert EA.engagement_read({"engagement": {"toolCalls": 1}}) == "engaged"
+
+
+def test_engagement_read_none_unknown():
+    assert EA.engagement_read(None) == "unknown"
+
+
+def test_engagement_read_non_mapping_unknown():
+    assert EA.engagement_read("oops") == "unknown"
+    assert EA.engagement_read([]) == "unknown"
+
+
+def test_engagement_read_missing_engagement_unknown():
+    assert EA.engagement_read({}) == "unknown"
+
+
+def test_engagement_read_engagement_not_mapping_unknown():
+    assert EA.engagement_read({"engagement": "bad"}) == "unknown"
+
+
+def test_engagement_read_zero_tool_calls_not_engaged():
+    assert EA.engagement_read({"engagement": {"toolCalls": 0}}) == "unknown"
+
+
+def test_engagement_read_non_numeric_tool_calls_not_engaged():
+    assert EA.engagement_read({"engagement": {"toolCalls": "five"}}) == "unknown"
+    assert EA.engagement_read({"engagement": {"toolCalls": {}}}) == "unknown"
+
+
+def test_engagement_read_non_list_findings_not_engaged():
+    assert EA.engagement_read({"findings": "oops"}) == "unknown"
+
+
+def test_engagement_read_non_list_investigated_not_engaged():
+    assert EA.engagement_read({"investigated": "a.py"}) == "unknown"
+
+
+def test_engagement_read_forfeit_with_findings_still_engaged():
+    assert EA.engagement_read({
+        "ok": False, "reason": "vacuous",
+        "findings": [{"id": "f"}],
+    }) == "engaged"
+
+
+def test_engagement_read_never_returns_inert():
+    outcomes = set()
+    for res in (
+        {},
+        None,
+        {"engagement": {"toolCalls": 0}},
+        {"findings": [{"id": "f"}]},
+        {"investigated": ["a.py"]},
+        {"engagement": {"toolCalls": 1}},
+    ):
+        outcomes.add(EA.engagement_read(res))
+    assert outcomes <= {"engaged", "unknown"}
+    assert "inert" not in outcomes

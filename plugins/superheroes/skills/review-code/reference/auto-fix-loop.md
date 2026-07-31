@@ -182,6 +182,71 @@ never drop a finding or a lens.
 > so a caller reviewing uncommitted work is disclosed rather than silently given the pre-change tree.
 > Every result also carries **`terminal`**, **`argv`** (the exact spawned command), and **`runDir`**.
 >
+> **Result shape — top-level, no wrapper (#687).** Every `dispatch-review` result object carries
+> **`ok`**, **`terminal`**, **`runDir`**, and **`argv`** at the top level. On a failure it also
+> carries **`reason`** (and usually **`detail`**). Outcome-dependent keys include **`findings`**,
+> **`investigated`**, **`engagement`**, and **`sanitizedView`** — a consumer must **not** read an
+> absent `findings` as "zero findings"; that is the fail-open reading this subsystem exists to
+> prevent. An `unrunnable` refusal carries no `findings` / `investigated` / `engagement`; it carries
+> `sanitizedView` **only when raised after the sanitized view was built** — the early refusals
+> (`repo-root-*`, `prompt-*`, `run-dir-*`, `schema-*`) precede the view and carry none. A terminal
+> forfeit carries no `findings`/`investigated`. There is no `result` wrapper; parsing
+> `result.findings` reads nothing.
+>
+> **`findings`-only transport (#687).** The runner forwards **only** `findings` and `investigated`
+> from the seat's stdout. Every other key the seat emits is dropped. A caller that needs a different
+> payload shape — verdicts, per-id audit rulings — **cannot** get it through this verb: the result
+> parses as `unreadable`, retries once at full token cost, and returns a forfeit whose disclosure
+> names the engine. Encode the payload **inside `findings` objects** instead, or use the
+> file-writing subagent verifier path that `verification-pass.md` already describes.
+>
+> **`--schema-path` pre-spawn validation (#687).** Before spawn, the runner performs a **structural
+> spot-check** on the schema file: it refuses a schema that **positively forbids or displaces** a
+> top-level `findings` key (`detail` is one of `schema-missing`, `schema-unreadable`, or
+> `schema-not-findings-shaped`) with `attempts: 0` and no engine spawned. A bare `{"type": "object"}`
+> is accepted (it constrains nothing). This is not full JSON Schema validation — it does not require
+> every valid schema to declare `findings`. Previously `--schema-path` **forced** a shape the grader
+> then rejected.
+>
+> **`engagement.read` (#687).** When the result carries an **`engagement`** block with a non-`null`
+> value (present only when the attempt produced stdout that was graded), `engagement.read` is
+> `"engaged"` when the seat demonstrably acted: at least
+> one finding returned, at least one accepted `investigated` path, or `engagement.toolCalls` is not
+> `None` and `>= 1`. Otherwise it is `"unknown"`. On a timeout, refusal, nonzero-exit, or
+> missing-stdout forfeit the `engagement` key is **present with the value `null`** (there was no graded
+> stdout to measure), so `engagement.read` is unavailable — `result.get("engagement", {})` is
+> **unsafe** because the key may carry `null`, not merely be missing; consumers must handle a `null`
+> value. The runner **never** reports `"inert"` — absence of positive evidence is not proof of
+> inaction, because a correct payload the transport could not read looks identical to a seat that never
+> ran. Only `seat_canary probe` can justify calling a seat inert.
+>
+> **Tokens are corroborating evidence only — measured (#687).** Engine telemetry (token spend, tool
+> calls, wall time) remains **corroborating evidence only** and can never satisfy the investigation
+> floor — the field heuristic that "~23K tokens means vacuous, ~83–175K means real work" is refuted.
+> Through the identical `dispatch-review` path on 2026-07-31 with the calibrated codex reviewer seat
+> at maximal effort:
+>
+> | Dispatch | Outcome | Tokens |
+> |---|---|---|
+> | 15-line docs diff, empty answer invited | clean — `{"findings":[],"investigated":["README.md"]}` | 2,449 |
+> | 20-line fail-open diff | produced a Critical finding | 10,415 |
+> | verdict-shaped contract | forfeited (transport), work was correct | 20,753 |
+> | 1,871-line real diff | 3 findings, ~430 s | 173,229 |
+>
+> A 23K token floor would have discarded the Critical. Cross-path comparison is worse: the
+> preflight's "reply with the single word READY" cost 20,388 tokens because it runs in the real repo
+> cwd where SessionStart hooks load, while `dispatch-review` runs in the sanitized view with
+> `CLAUDE.md` stripped (#684).
+>
+> **`payloadShape` on shape-unreadable forfeit (#687).** When the **last** attempt forfeits because
+> stdout was shape-unreadable, the result may carry `payloadShape`: a mapping with `parsed` (one of
+> `object-without-findings`, `object-findings-not-a-list`, `array-not-all-objects`,
+> `no-parseable-json`, `empty-stdout`, or `prompt-echo-only`), `topLevelKeys` (a list of strings,
+> populated only when
+> `parsed` is `object-without-findings`), and `keysTruncated` (bool; signals the key list was
+> capped). Diagnosis only — it never changes the fail direction. `payloadShape` is **absent** on a
+> vacuous forfeit and on success.
+>
 > **Originating-verb continuation loop.** Open with `--run-dir` (or omit it for a private temp run dir
 > that loops to terminal). Re-invoke **`dispatch-review`** (never `dispatch-poll`) with the same
 > `--run-dir` and `--max-wait 540` while `.terminal` is false. A non-terminal

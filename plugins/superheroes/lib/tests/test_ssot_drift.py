@@ -190,6 +190,96 @@ def test_base_guard_reason_tokens_in_round_driver_doc():
         % [(n, reasons[n]) for n in missing])
 
 
+# --- Cluster: review payload shape tokens (engine_adapter → auto-fix-loop.md) ---
+
+
+def _review_payload_shape_tokens_from_home():
+    import engine_adapter
+
+    return set(engine_adapter.REVIEW_PAYLOAD_SHAPES)
+
+
+def _review_payload_shape_tokens_from_auto_fix_loop_doc(doc):
+    """The payloadShape `parsed` enumeration in auto-fix-loop.md — scoped to that block only."""
+    m = re.search(
+        r"`parsed`\s*\(one of\s*(.*?)\)\s*,\s*`topLevelKeys`",
+        doc,
+        re.DOTALL,
+    )
+    assert m, (
+        "auto-fix-loop.md: payloadShape `parsed` enumeration not found "
+        "(moved or reworded?)"
+    )
+    tokens = set(re.findall(r"`([^`]+)`", m.group(1)))
+    assert tokens, (
+        "auto-fix-loop.md: payloadShape `parsed` enumeration parsed to zero tokens "
+        "(regex drift or empty enumeration?)"
+    )
+    return tokens
+
+
+def test_review_payload_shape_tokens_in_auto_fix_loop_doc():
+    """§11: auto-fix-loop.md restates the payloadShape `parsed` vocabulary from engine_adapter."""
+    home = _review_payload_shape_tokens_from_home()
+    doc = _read("skills/review-code/reference/auto-fix-loop.md")
+    doc_tokens = _review_payload_shape_tokens_from_auto_fix_loop_doc(doc)
+    missing_from_doc = sorted(home - doc_tokens)
+    extra_in_doc = sorted(doc_tokens - home)
+    assert not missing_from_doc and not extra_in_doc, (
+        "auto-fix-loop.md payloadShape `parsed` vocabulary drift from "
+        "engine_adapter.REVIEW_PAYLOAD_SHAPES — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_from_doc, extra_in_doc)
+    )
+
+
+# --- Cluster: schema refusal tokens (engine_dispatch → auto-fix-loop.md) ---
+
+
+def _schema_refusal_tokens_from_home():
+    import engine_dispatch
+
+    return set((
+        engine_dispatch.SCHEMA_REFUSAL_MISSING,
+        engine_dispatch.SCHEMA_REFUSAL_UNREADABLE,
+        engine_dispatch.SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED,
+    ))
+
+
+def _schema_refusal_tokens_from_auto_fix_loop_doc(doc):
+    """The `--schema-path` refusal `detail` enumeration in auto-fix-loop.md — scoped to that block only."""
+    m = re.search(
+        r"`detail`\s+is one of\s+(.*?)\)\s+with\s+`attempts:",
+        doc,
+        re.DOTALL,
+    )
+    assert m, (
+        "auto-fix-loop.md: schema refusal detail enumeration not found "
+        "(moved or reworded?)"
+    )
+    tokens = set(re.findall(r"`([^`]+)`", m.group(1)))
+    assert tokens, (
+        "auto-fix-loop.md: schema refusal detail enumeration parsed to zero tokens "
+        "(regex drift or empty enumeration?)"
+    )
+    return tokens
+
+
+def test_schema_refusal_tokens_in_auto_fix_loop_doc():
+    """§11: auto-fix-loop.md restates the schema-path refusal detail tokens from engine_dispatch."""
+    home = _schema_refusal_tokens_from_home()
+    doc = _read("skills/review-code/reference/auto-fix-loop.md")
+    doc_tokens = _schema_refusal_tokens_from_auto_fix_loop_doc(doc)
+    missing_from_doc = sorted(home - doc_tokens)
+    extra_in_doc = sorted(doc_tokens - home)
+    assert not missing_from_doc and not extra_in_doc, (
+        "auto-fix-loop.md schema refusal detail vocabulary drift from "
+        "engine_dispatch.py — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_from_doc, extra_in_doc)
+    )
+
+
 # --- Cluster 4: negative drift scans (concrete model ids must not leak) ------
 
 _CONCRETE_MODEL_TOKENS = (

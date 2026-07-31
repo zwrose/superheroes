@@ -81,6 +81,10 @@ MAX_STDOUT_CAPTURE = 8 * 1024 * 1024   # keep only the last 8 MB of engine stdou
 # the runner before it can return the structured forfeit that triggers the Claude fall-open (#563).
 MAX_STDERR_CAPTURE = 64 * 1024
 
+SCHEMA_REFUSAL_MISSING = "schema-missing"
+SCHEMA_REFUSAL_UNREADABLE = "schema-unreadable"
+SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED = "schema-not-findings-shaped"
+
 
 def _scrub_env(env=None):
     """Remove git routing vars and the journal root from a spawn environment."""
@@ -815,14 +819,23 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         proc.wait(timeout=2)
     except Exception:
         pass
+    try:
+        pre_cap_stdout_bytes = os.path.getsize(stdout_path)
+    except OSError:
+        pre_cap_stdout_bytes = None
     _cap_file_tail(stdout_path, MAX_STDOUT_CAPTURE)
     _cap_file_tail(stderr_path, MAX_STDERR_CAPTURE)
     returncode = proc.returncode
-    _journal_append(run_dir_real, {
+    elapsed = time.monotonic() - start
+    ended_record = {
         "kind": "attempt-ended", "attempt": attempt,
         "exit": returncode, "timedOut": timed_out, "signal": None,
         "refusal": None, "at": time.time(),
-    })
+        "wallSeconds": round(elapsed, 1),
+    }
+    if pre_cap_stdout_bytes is not None:
+        ended_record["stdoutBytes"] = pre_cap_stdout_bytes
+    _journal_append(run_dir_real, ended_record)
 
 
 def _attempt_timeout(opened, attempt):
@@ -941,6 +954,47 @@ def _spawn_attempt(run_dir_real, state, attempt, *, run_engine=None):
     return True, ""
 
 
+def _engagement_with_read(engagement, *, findings=None, investigated=None):
+    """Attach engagement.read from observed attempt evidence. Never raises."""
+    out = dict(engagement)
+    out["read"] = engine_adapter.engagement_read({
+        "findings": findings,
+        "investigated": investigated,
+        "engagement": engagement,
+    })
+    return out
+
+
+def _validate_review_schema_path(schema_path):
+    """Spot-check that schema_path describes a findings-shaped object — not schema validation."""
+    if schema_path is None:
+        return True, None
+    if not isinstance(schema_path, str) or not schema_path.strip():
+        return False, SCHEMA_REFUSAL_MISSING
+    path = schema_path
+    if not os.path.isfile(path):
+        return False, SCHEMA_REFUSAL_MISSING
+    try:
+        with open(path, encoding="utf-8") as fh:
+            root = json.load(fh)
+    except Exception:
+        return False, SCHEMA_REFUSAL_UNREADABLE
+    if not isinstance(root, dict):
+        return False, SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED
+    if root.get("type") != "object":
+        return False, SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED
+    properties = root.get("properties")
+    if isinstance(properties, dict) and "findings" not in properties:
+        return False, SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED
+    required = root.get("required")
+    if isinstance(required, list) and "findings" not in required:
+        return False, SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED
+    if root.get("additionalProperties") is False:
+        if not isinstance(properties, dict) or "findings" not in properties:
+            return False, SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED
+    return True, None
+
+
 def _grade_review_attempt(run_dir_real, state, attempt):
     """Grade a completed review attempt from durable stdout files."""
     opened = state["opened"]
@@ -989,19 +1043,42 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     }
 
     res = engine_adapter.parse_result(engine, role_kind, stdout)
+    diagnose_stdout = stdout
+    prompt_echo_only = False
     if not (res.get("ok") and res.get("findings")):
         stripped = engine_adapter.strip_echoed_prompt(stdout, fed_prompt)
+        if stripped and stripped.strip():
+            diagnose_stdout = stripped
+        elif stdout and stdout.strip():
+            prompt_echo_only = True
+        else:
+            diagnose_stdout = stripped
         res = engine_adapter.parse_result(engine, role_kind, stripped)
     if not res.get("ok"):
-        return {"forfeit": True, "reason": "forfeited", "engagement": engagement}
+        engagement = _engagement_with_read(engagement)
+        result = {"forfeit": True, "reason": "forfeited", "engagement": engagement}
+        if prompt_echo_only:
+            result["payloadShape"] = {
+                "parsed": engine_adapter.SHAPE_PROMPT_ECHO_ONLY,
+                "topLevelKeys": [],
+                "keysTruncated": False,
+            }
+        else:
+            shape = engine_adapter.review_payload_shape(diagnose_stdout)
+            if shape is not None:
+                result["payloadShape"] = shape
+        return result
 
     findings = res.get("findings") or []
     if findings:
+        engagement = _engagement_with_read(engagement, findings=findings)
         return {"ok": True, "findings": findings, "engagement": engagement}
 
     ok_inv, accepted, rejected = engine_adapter.spot_check_investigated(res.get("investigated"), cwd)
     if ok_inv:
+        engagement = _engagement_with_read(engagement, findings=[], investigated=accepted)
         return {"ok": True, "findings": [], "investigated": accepted, "engagement": engagement}
+    engagement = _engagement_with_read(engagement, findings=[], investigated=None)
     return {
         "forfeit": True,
         "reason": engine_adapter.REVIEW_FORFEIT_VACUOUS,
@@ -1075,7 +1152,8 @@ def _worktree_dirtied_forfeit(engine):
     }
 
 
-def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None, investigated_rejected=None):
+def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None,
+                            investigated_rejected=None, payload_shape=None):
     if reason == engine_adapter.REVIEW_FORFEIT_VACUOUS:
         return {
             "ok": False,
@@ -1092,7 +1170,7 @@ def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None, inves
                 "degraded vendor mix" % engine
             ),
         }
-    return {
+    result = {
         "ok": False,
         "terminal": True,
         "reason": "forfeited",
@@ -1104,6 +1182,9 @@ def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None, inves
         ),
         "engagement": engagement,
     }
+    if payload_shape is not None:
+        result["payloadShape"] = payload_shape
+    return result
 
 
 def _highest_attempt(state):
@@ -1299,6 +1380,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         engine, reason, MAX_ATTEMPTS,
                         engagement=grade.get("engagement"),
                         investigated_rejected=grade.get("investigatedRejected"),
+                        payload_shape=grade.get("payloadShape"),
                     )
                     view = opened.get("viewMeta")
                     if view:
@@ -1551,6 +1633,14 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 )
 
         if not continuation:
+            if schema_path is not None:
+                ok_schema, schema_detail = _validate_review_schema_path(schema_path)
+                if not ok_schema:
+                    return _with_run_fields(
+                        {"ok": False, "reason": "unrunnable", "detail": schema_detail,
+                         "attempts": 0, "forfeited": False, "terminal": True},
+                        run_dir=run_dir_real or "", argv=[],
+                    )
             try:
                 view = build_view(repo_detail)
             except sanitized_view.SanitizedViewError as exc:
