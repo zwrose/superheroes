@@ -1605,7 +1605,7 @@ def test_diff_path_is_view_root_relative(tmp_path):
 
 
 def test_diff_no_renames_guard_withheld_rename_side(tmp_path):
-    """Without --no-renames, a renamed stripped file can leak under its new name."""
+    """Patch is pathspec-restricted to survivors; --no-renames is defense in depth."""
     sentinel = "RENAME_LEAK_SENTINEL_NO_RENAMES_XYZ"
     repo = _init_repo(
         tmp_path / "rename-leak",
@@ -1629,8 +1629,43 @@ def test_diff_no_renames_guard_withheld_rename_side(tmp_path):
     )
     view = sv.build_sanitized_view(repo, diff_base=base_sha)
     try:
+        # Defense-in-depth flag: removal is not observable in behaviour here.
         assert "--no-renames" in sv._DIFF_NAME_FLAGS
         assert "--no-renames" in sv._DIFF_PATCH_FLAGS
+        assert view["diffWithheldCount"] >= 1
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert sentinel.encode() not in patch
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_diff_pathspec_restricted_rename_guard(tmp_path):
+    """Survivor pathspec set blocks stripped-path content from entering the patch."""
+    sentinel = "STRIPPED_BASE_SECRET_ZZZ"
+    filler = "\n".join("filler line %d" % i for i in range(100)) + "\n"
+    repo = _init_repo(
+        tmp_path / "pathspec-rename",
+        files={"CLAUDE.md": sentinel + filler, "keep.txt": "k\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "mv", "CLAUDE.md", "DOCS.md")
+    with open(os.path.join(repo, "DOCS.md"), "w", encoding="utf-8") as fh:
+        fh.write(filler)
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "high-similarity rename",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
         assert view["diffWithheldCount"] >= 1
         with open(_patch_abs(view), "rb") as fh:
             patch = fh.read()
@@ -1828,6 +1863,182 @@ def test_diff_path_collision(tmp_path):
     assert _leftover_view_dirs(fake_tmp) == []
 
 
+def _assert_no_stripped_paths_in_views(tmp_base):
+    for name in _leftover_view_dirs(tmp_base):
+        view_root = os.path.join(tmp_base, name)
+        for rel in sv._disk_paths_in_view(view_root):
+            assert not sv._rel_path_would_be_stripped(rel), rel
+
+
+def _repo_with_patch_name_collision(tmp_path, *, link_target):
+    repo = _init_repo(
+        tmp_path / "patch-collision",
+        files={"AGENTS.md": "secret config\n", "keep.txt": "k\n"},
+    )
+    patch_link = os.path.join(repo, sv.REVIEW_DIFF_FILE_NAME)
+    if os.path.lexists(patch_link):
+        os.remove(patch_link)
+    os.symlink(link_target, patch_link)
+    _git(repo, "add", sv.REVIEW_DIFF_FILE_NAME)
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "add patch symlink",
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD~1").stdout.strip()
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    _git(repo, "add", "keep.txt")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    return repo, base_sha
+
+
+def test_diff_path_collision_dangling_symlink_to_stripped(tmp_path):
+    repo, base_sha = _repo_with_patch_name_collision(
+        tmp_path, link_target="AGENTS.md"
+    )
+    fake_tmp = str(tmp_path / "tmpdir")
+    os.makedirs(fake_tmp)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-path-collision"
+    assert _leftover_view_dirs(fake_tmp) == []
+    _assert_no_stripped_paths_in_views(fake_tmp)
+
+
+def test_diff_path_collision_live_symlink(tmp_path):
+    repo, base_sha = _repo_with_patch_name_collision(
+        tmp_path, link_target="keep.txt"
+    )
+    fake_tmp = str(tmp_path / "tmpdir")
+    os.makedirs(fake_tmp)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-path-collision"
+    assert _leftover_view_dirs(fake_tmp) == []
+    _assert_no_stripped_paths_in_views(fake_tmp)
+
+
+def test_diff_path_collision_regular_file_at_patch_name(tmp_path):
+    repo = _init_repo(
+        tmp_path / "patch-regular",
+        files={"AGENTS.md": "secret\n", "keep.txt": "k\n"},
+    )
+    patch_path = os.path.join(repo, sv.REVIEW_DIFF_FILE_NAME)
+    with open(patch_path, "w", encoding="utf-8") as fh:
+        fh.write("tracked regular file at patch name\n")
+    _git(repo, "add", sv.REVIEW_DIFF_FILE_NAME)
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "add patch file",
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD~1").stdout.strip()
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    _git(repo, "add", "keep.txt")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    fake_tmp = str(tmp_path / "tmpdir")
+    os.makedirs(fake_tmp)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-path-collision"
+    assert _leftover_view_dirs(fake_tmp) == []
+    _assert_no_stripped_paths_in_views(fake_tmp)
+
+
+def test_diff_timeout(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "slow-diff", files={"keep.txt": "k\n"})
+    repo_real = os.path.realpath(repo)
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    _git(repo, "add", "keep.txt")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    fake_tmp = str(tmp_path / "tmpdir")
+    os.makedirs(fake_tmp)
+    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: fake_tmp)
+    monkeypatch.setattr(sv, "SANITIZED_VIEW_EXPORT_TIMEOUT_SECONDS", 0.1)
+
+    real_popen = subprocess.Popen
+
+    def wrapping_popen(argv, **kwargs):
+        proc = real_popen(argv, **kwargs)
+        if (
+            len(argv) >= 5
+            and argv[0] == "git"
+            and argv[1] == "-C"
+            and os.path.realpath(argv[2]) == repo_real
+            and "diff" in argv
+            and "--name-only" not in argv
+        ):
+            real_wait = proc.wait
+
+            def slow_wait(timeout=None):
+                raise subprocess.TimeoutExpired(argv, timeout or 0.1)
+
+            proc.wait = slow_wait
+        return proc
+
+    monkeypatch.setattr(sv.subprocess, "Popen", wrapping_popen)
+    view_root = None
+    try:
+        view_root = sv.tempfile.mkdtemp(prefix=sv.SANITIZED_VIEW_DIR_PREFIX)
+        sv._materialize_from_tree(repo_real, head_sha, view_root, time.monotonic())
+        with pytest.raises(sv.SanitizedViewError) as exc:
+            sv._stage_review_diff(
+                repo_real, head_sha, view_root, base_sha, time.monotonic()
+            )
+        assert exc.value.detail == "sanitized-view-diff-failed"
+    finally:
+        if view_root is not None:
+            sv.destroy_sanitized_view(view_root)
+    assert _leftover_view_dirs(fake_tmp) == []
+
+
 def test_diff_submodule_gitlink_only(tmp_path):
     inner = _init_repo(tmp_path / "inner", files={"inner.txt": "i\n"})
     outer = _init_repo(tmp_path / "outer", files={"outer.txt": "o\n"})
@@ -1888,14 +2099,18 @@ def test_diff_generation_failed(tmp_path, monkeypatch):
         "b",
     )
     real_run = sv.subprocess.run
+    real_popen = sv.subprocess.Popen
 
-    def fake_run(argv, **kwargs):
-        if (
+    def is_patch_diff(argv):
+        return (
             len(argv) >= 5
             and argv[0] == "git"
             and "diff" in argv
             and "--name-only" not in argv
-        ):
+        )
+
+    def fake_run(argv, **kwargs):
+        if is_patch_diff(argv):
             class R:
                 returncode = 1
                 stdout = b""
@@ -1904,7 +2119,34 @@ def test_diff_generation_failed(tmp_path, monkeypatch):
             return R()
         return real_run(argv, **kwargs)
 
+    def fake_popen(argv, **kwargs):
+        if is_patch_diff(argv):
+
+            class Proc:
+                returncode = 1
+
+                def __init__(self):
+                    self.stdout = open(os.devnull, "rb")
+                    self.stderr = None
+                    self.stdin = None
+
+                def poll(self):
+                    return self.returncode
+
+                def wait(self, timeout=None):
+                    return self.returncode
+
+                def terminate(self):
+                    pass
+
+                def kill(self):
+                    pass
+
+            return Proc()
+        return real_popen(argv, **kwargs)
+
     monkeypatch.setattr(sv.subprocess, "run", fake_run)
+    monkeypatch.setattr(sv.subprocess, "Popen", fake_popen)
     fake_tmp = str(tmp_path / "tmpdir")
     os.makedirs(fake_tmp)
     with pytest.raises(sv.SanitizedViewError) as exc:

@@ -826,6 +826,78 @@ def _measure_worktree(view_root):
     return total_bytes, file_count
 
 
+def _assert_no_stripped_paths_in_view(view_root):
+    """Fail closed when patch staging re-materialized a stripped config path."""
+    for rel in _disk_paths_in_view(view_root):
+        if _rel_path_would_be_stripped(rel):
+            raise SanitizedViewError("sanitized-view-diff-path-collision")
+
+
+def _write_review_patch_file(view_root, patch_bytes):
+    patch_path = os.path.join(view_root, REVIEW_DIFF_FILE_NAME)
+    if os.path.lexists(patch_path):
+        raise SanitizedViewError("sanitized-view-diff-path-collision")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(patch_path, flags, 0o600)
+    except FileExistsError:
+        raise SanitizedViewError("sanitized-view-diff-path-collision")
+    except OSError:
+        raise SanitizedViewError("sanitized-view-diff-path-collision")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(patch_bytes)
+    except Exception:
+        try:
+            os.unlink(patch_path)
+        except OSError:
+            pass
+        raise
+    _assert_no_stripped_paths_in_view(view_root)
+
+
+def _git_diff_batch_output(argv, started, total_bytes):
+    """Stream one pathspec-restricted diff batch; bound bytes and subprocess lifetime."""
+    _check_export_deadline(started)
+    proc = None
+    try:
+        try:
+            proc = _git_popen(
+                argv,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            raise SanitizedViewError("sanitized-view-diff-failed")
+        chunks = []
+        stdout = proc.stdout
+        while True:
+            _check_export_deadline(started)
+            try:
+                data = stdout.read(_CATFILE_READ_CHUNK)
+            except OSError:
+                raise SanitizedViewError("sanitized-view-diff-failed")
+            if not data:
+                break
+            total_bytes += len(data)
+            if total_bytes > REVIEW_DIFF_MAX_BYTES:
+                raise SanitizedViewError("sanitized-view-diff-too-large")
+            chunks.append(data)
+        try:
+            proc.wait(timeout=SANITIZED_VIEW_EXPORT_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            raise SanitizedViewError("sanitized-view-diff-failed")
+        if proc.returncode != 0:
+            raise SanitizedViewError("sanitized-view-diff-failed")
+        return b"".join(chunks), total_bytes
+    except SanitizedViewError:
+        _terminate_process(proc)
+        raise
+    finally:
+        if proc is not None and proc.poll() is not None:
+            _close_process_pipes(proc)
+
+
 def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
     """Materialize a review patch at the view root (before ``git init``)."""
     if not diff_base or not diff_base.strip():
@@ -833,6 +905,7 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
     if diff_base.startswith("-"):
         raise SanitizedViewError("sanitized-view-diff-base-unresolved")
 
+    _check_export_deadline(started)
     try:
         proc = _git_run(
             [
@@ -846,7 +919,10 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
             ],
             capture_output=True,
             text=True,
+            timeout=SANITIZED_VIEW_EXPORT_TIMEOUT_SECONDS,
         )
+    except subprocess.TimeoutExpired:
+        raise SanitizedViewError("sanitized-view-diff-failed")
     except OSError:
         raise SanitizedViewError("sanitized-view-diff-base-unresolved")
     if proc.returncode != 0 or not proc.stdout.strip():
@@ -855,12 +931,16 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
     if not _is_40_hex_sha(base_sha):
         raise SanitizedViewError("sanitized-view-diff-base-unresolved")
 
+    _check_export_deadline(started)
     try:
         proc = _git_run(
             ["git", "-C", repo_real, "merge-base", base_sha, head_sha],
             capture_output=True,
             text=True,
+            timeout=SANITIZED_VIEW_EXPORT_TIMEOUT_SECONDS,
         )
+    except subprocess.TimeoutExpired:
+        raise SanitizedViewError("sanitized-view-diff-failed")
     except OSError:
         raise SanitizedViewError("sanitized-view-diff-base-unresolved")
     if proc.returncode != 0 or not proc.stdout.strip():
@@ -869,11 +949,15 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
     if not _is_40_hex_sha(merge_base):
         raise SanitizedViewError("sanitized-view-diff-base-unresolved")
 
+    _check_export_deadline(started)
     try:
         proc = _git_run(
             ["git", "-C", repo_real, *_DIFF_NAME_FLAGS, merge_base, head_sha],
             capture_output=True,
+            timeout=SANITIZED_VIEW_EXPORT_TIMEOUT_SECONDS,
         )
+    except subprocess.TimeoutExpired:
+        raise SanitizedViewError("sanitized-view-diff-failed")
     except OSError:
         raise SanitizedViewError("sanitized-view-diff-failed")
     if proc.returncode != 0:
@@ -911,28 +995,14 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
             "--",
             *batch,
         ]
-        try:
-            proc = _git_run(argv, capture_output=True)
-        except OSError:
-            raise SanitizedViewError("sanitized-view-diff-failed")
-        if proc.returncode != 0:
-            raise SanitizedViewError("sanitized-view-diff-failed")
-        chunk = proc.stdout
-        total_bytes += len(chunk)
-        if total_bytes > REVIEW_DIFF_MAX_BYTES:
-            raise SanitizedViewError("sanitized-view-diff-too-large")
+        chunk, total_bytes = _git_diff_batch_output(argv, started, total_bytes)
         patch_parts.append(chunk)
 
     patch_bytes = b"".join(patch_parts)
     if not patch_bytes:
         raise SanitizedViewError("sanitized-view-diff-empty")
 
-    patch_path = os.path.join(view_root, REVIEW_DIFF_FILE_NAME)
-    if os.path.exists(patch_path):
-        raise SanitizedViewError("sanitized-view-diff-path-collision")
-
-    with open(patch_path, "wb") as fh:
-        fh.write(patch_bytes)
+    _write_review_patch_file(view_root, patch_bytes)
 
     return {
         "diffBase": merge_base,
