@@ -514,7 +514,36 @@ def test_surfaces_overlap_case_insensitive():
     assert ll.surfaces_overlap(["Plugins/Superheroes"], ["plugins/superheroes/lib"])
 
 
-# --- concurrency (two-process) -----------------------------------------------
+# --- concurrency guarantee ---------------------------------------------------
+# test_reserve_refuses_when_lock_is_held is the deterministic bite test: it
+# fails if reserve proceeds without holding the interprocess lock.
+# test_concurrent_reserve_overlapping_surfaces exercises realistic two-process
+# contention; its timing is hardened but not relied on as the guarantee test.
+
+
+def test_reserve_refuses_when_lock_is_held(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    launch_id = "lock-held-bite"
+    lp = ll.ledger_path(repo)
+    assert lp["ok"] is True
+    lock_path = ll._lock_path(lp["path"])
+    import file_lock
+    file_lock.acquire(lock_path)
+    try:
+        result = ll.reserve(
+            repo,
+            _reserved(launch_id, "bite", ["plugins/superheroes/lib"], repo),
+            lock_timeout=0.1,
+        )
+        assert result["ok"] is False
+        assert result["reason"] == "lock-unavailable"
+        records = ll.read(lp["path"])["records"]
+        reserved = [r for r in records if r.get("event") == "reserved"
+                    and r.get("launchId") == launch_id]
+        assert reserved == []
+    finally:
+        file_lock.release(lock_path)
 
 
 def test_concurrent_reserve_overlapping_surfaces(tmp_path, monkeypatch):
@@ -522,6 +551,7 @@ def test_concurrent_reserve_overlapping_surfaces(tmp_path, monkeypatch):
     ledger_root = str(tmp_path / "ledger")
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, ledger_root)
     mod_path = os.path.join(_LIB, "launch_ledger.py")
+    shared_deadline = time.monotonic() + 1
     child = """
 import json, os, sys, time
 sys.path.insert(0, os.path.dirname(%(mod)r))
@@ -538,9 +568,9 @@ record = {
     "surfaces": ["plugins/superheroes/lib"],
     "premise": {}, "preflight": {}, "argv": [], "doctrineDigest": "d", "model": "m",
 }
-deadline = time.monotonic() + 2
+deadline = %(deadline)r
 while time.monotonic() < deadline:
-    pass
+    time.sleep(0)
 res = ll.reserve(repo, record, lock_timeout=5)
 print(json.dumps(res))
 """ % {
@@ -548,6 +578,7 @@ print(json.dumps(res))
         "_envkey": ll.LEDGER_ROOT_ENV,
         "_envval": ledger_root,
         "repo": repo,
+        "deadline": shared_deadline,
     }
     p1 = subprocess.Popen([sys.executable, "-c", child], stdout=subprocess.PIPE, text=True)
     p2 = subprocess.Popen([sys.executable, "-c", child], stdout=subprocess.PIPE, text=True)
