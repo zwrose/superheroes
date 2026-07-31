@@ -1116,7 +1116,19 @@ def test_implementer_rung_references_are_within_ladder_range():
         assert low <= high, (
             "implementer.md: %r has an inverted rung range (%d–%d)." % (
                 match.group(0), low, high))
+        if match.group(2) is not None and low == 1:
+            assert high == max_rung, (
+                "implementer.md: %r is a whole-ladder pointer (low bound 1) but its "
+                "high bound is %d, not %d — a range starting at 1 must span the full "
+                "ladder." % (match.group(0), high, max_rung))
         widest_high = max(widest_high, high)
+
+    for match in re.finditer(
+            r"(?i)(?:precedence\s+)?rung(?:s)?\s+(\d+)\s+or\s+(\d+)", text):
+        trailing = int(match.group(2))
+        assert 1 <= trailing <= max_rung, (
+            "implementer.md: %r cites rung %d in the coordinated form but the ladder "
+            "has only %d rung(s)." % (match.group(0), trailing, max_rung))
 
     assert widest_high == max_rung, (
         "implementer.md: widest rung reference cites rung %d but the ladder has %d rung(s) — "
