@@ -709,6 +709,7 @@ CENSUS_DENY_DIRTY = [
     ("env git -c advice.detachedHead=false reset --hard", "dirty"),
     ("env git --git-dir=.git reset --hard", "dirty"),
     ("git checkout --merge tracked.txt", "dirty"),
+    ("git checkout --conflict=diff3 -- tracked.txt", "dirty"),
     ("git clean -n `git reset --hard`", "dirty"),
 ]
 
@@ -725,6 +726,7 @@ CENSUS_ALLOW = [
     ("git stash -u", "dirty"),
     ("git checkout main", "dirty"),
     ("git checkout -b new", "dirty"),
+    ("git checkout --orphan newbranch", "dirty"),
     ("git checkout -bfeature", "dirty"),
     ("gitk --all", "dirty"),
     ("git-foo status", "dirty"),

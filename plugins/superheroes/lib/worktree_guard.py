@@ -409,6 +409,7 @@ _CHECKOUT_OPTS = {
     "--recurse-submodules": 0, "--no-recurse-submodules": 0,
     "--progress": 0, "--no-progress": 0, "--overlay": 0, "--no-overlay": 0,
     "--ignore-skip-worktree-bits": 0,
+    "--orphan": 1, "--conflict": 1,
 }
 
 _CLEAN_OPTS = {
