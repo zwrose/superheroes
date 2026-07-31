@@ -201,29 +201,15 @@ def _parse_iso8601(value):
 
 def _ledger_live_state(repo_root, env=None):
     lp = ll.ledger_path(repo_root, env=env)
-    path = lp.get("path")
     if not lp["ok"]:
-        if path is None:
-            resolved = ll.resolve_root(repo_root, env=env)
-            repo_id = ll.repo_identity(repo_root)
-            if resolved.get("ok") and repo_id:
-                path = os.path.join(resolved["root"], repo_id, ll.LEDGER_NAME)
-        if path is None or not os.path.exists(path):
-            return {
-                "ok": True,
-                "reason": None,
-                "live": [],
-                "unreadable": False,
-                "unavailable": True,
-            }
-    if path is None:
         return {
-            "ok": True,
-            "reason": None,
+            "ok": False,
+            "reason": lp["reason"],
             "live": [],
-            "unreadable": False,
-            "unavailable": True,
+            "unreadable": True,
+            "unavailable": False,
         }
+    path = lp["path"]
     read_result = ll.read(path)
     state = read_result["state"]
     if state not in ("ok", "missing"):
@@ -572,20 +558,53 @@ def _terminate_and_reap(proc):
         pass
 
 
-def _record_refused(repo_root, launch_id, stage, reason, env=None):
-    record = {
-        "event": "refused",
-        "launchId": launch_id,
-        "ts": time.time(),
-        "schema": ll.SCHEMA,
-        "stage": stage,
-        "reason": reason,
-    }
-    return _append_under_lock(repo_root, record, env=env)
+def _terminalization_reason(term_result, fallback_reason):
+    if term_result.get("ok"):
+        return fallback_reason
+    tr = term_result.get("reason") or "unknown"
+    return "terminalization-failed:%s" % tr
 
 
-def _record_park(repo_root, launch_id, evidence, env=None):
-    return ll.record_outcome(repo_root, launch_id, "park", evidence, env=env)
+def _terminalize(
+    repo_root,
+    launch_id,
+    child_ever_spawned,
+    reason,
+    evidence=None,
+    proc=None,
+    stage=None,
+    env=None,
+):
+    """The ONLY writer of a terminal ledger event for a launch. Never raises."""
+    try:
+        if proc is not None and proc.poll() is None:
+            _terminate_and_reap(proc)
+        if child_ever_spawned:
+            park_evidence = evidence if evidence is not None else (reason or "unknown")
+            record = {
+                "event": "outcome",
+                "launchId": launch_id,
+                "ts": time.time(),
+                "schema": ll.SCHEMA,
+                "outcome": "park",
+                "evidence": park_evidence,
+            }
+            result = _append_under_lock(repo_root, record, env=env)
+        else:
+            park_stage = stage if stage is not None else "unknown"
+            park_reason = reason if reason is not None else "unknown"
+            record = {
+                "event": "refused",
+                "launchId": launch_id,
+                "ts": time.time(),
+                "schema": ll.SCHEMA,
+                "stage": park_stage,
+                "reason": park_reason,
+            }
+            result = _append_under_lock(repo_root, record, env=env)
+        return {"ok": bool(result.get("ok")), "reason": result.get("reason")}
+    except Exception:
+        return {"ok": False, "reason": "terminalize-failed"}
 
 
 def _spawn_attempt(
@@ -605,8 +624,12 @@ def _spawn_attempt(
     child_env["BASH_MAX_TIMEOUT_MS"] = str(bash_max_timeout_ms)
     try:
         out_fh = open(log_path, "ab")
+    except OSError:
+        return {"ok": False, "reason": "log-open-failed", "proc": None}
+    try:
         err_fh = open(err_path, "ab")
     except OSError:
+        out_fh.close()
         return {"ok": False, "reason": "log-open-failed", "proc": None}
 
     try:
@@ -630,11 +653,17 @@ def _spawn_attempt(
     }
     append_result = _append_under_lock(repo_root, started, env=env)
     if not append_result["ok"]:
-        _terminate_and_reap(proc)
-        _record_refused(
-            repo_root, launch_id, "started-append-failed", append_result["reason"], env=env,
+        term = _terminalize(
+            repo_root,
+            launch_id,
+            True,
+            append_result["reason"],
+            evidence="started-append-failed",
+            proc=proc,
+            env=env,
         )
-        return {"ok": False, "reason": append_result["reason"], "proc": None, "refused": True}
+        fail_reason = _terminalization_reason(term, append_result["reason"])
+        return {"ok": False, "reason": fail_reason, "proc": None, "refused": True}
 
     return {"ok": True, "proc": proc}
 
@@ -690,7 +719,9 @@ def launch_build(
             repo_root, launch_id, issue, premise, preflight_result, None, env,
         )
         if reserve_result.get("reserved"):
-            _record_refused(repo_root, launch_id, stage, reason, env=env)
+            term = _terminalize(repo_root, launch_id, False, reason, stage=stage, env=env)
+            if not term["ok"]:
+                return _fail(_terminalization_reason(term, reason), launchId=launch_id)
         return _fail(reason, launchId=launch_id)
 
     premise_result = validate_premise(
@@ -707,7 +738,9 @@ def launch_build(
             repo_root, launch_id, issue, premise, preflight_result, None, env,
         )
         if reserve_result.get("reserved"):
-            _record_refused(repo_root, launch_id, stage, reason, env=env)
+            term = _terminalize(repo_root, launch_id, False, reason, stage=stage, env=env)
+            if not term["ok"]:
+                return _fail(_terminalization_reason(term, reason), launchId=launch_id)
         return _fail(reason, launchId=launch_id)
 
     compose_result = compose_launch(
@@ -723,7 +756,9 @@ def launch_build(
             preflight_result, compose_result, env,
         )
         if reserve_result.get("reserved"):
-            _record_refused(repo_root, launch_id, stage, reason, env=env)
+            term = _terminalize(repo_root, launch_id, False, reason, stage=stage, env=env)
+            if not term["ok"]:
+                return _fail(_terminalization_reason(term, reason), launchId=launch_id)
         return _fail(reason, launchId=launch_id)
 
     stamped = premise_result["premise"]
@@ -752,8 +787,16 @@ def launch_build(
     try:
         os.makedirs(log_dir, mode=0o700, exist_ok=True)
     except OSError:
-        _record_refused(repo_root, launch_id, "log-dir", "log-dir-create-failed", env=env)
-        return _fail("log-dir-create-failed", launchId=launch_id)
+        term = _terminalize(
+            repo_root,
+            launch_id,
+            False,
+            "log-dir-create-failed",
+            stage="log-dir",
+            env=env,
+        )
+        reason = _terminalization_reason(term, "log-dir-create-failed")
+        return _fail(reason, launchId=launch_id)
     log_path = os.path.join(log_dir, "%s.stdout" % launch_id)
     err_path = os.path.join(log_dir, "%s.stderr" % launch_id)
 
@@ -761,13 +804,17 @@ def launch_build(
     child_ever_spawned = False
     while attempt <= max_attempts:
         if time.monotonic() >= deadline:
-            if child_ever_spawned:
-                _record_park(repo_root, launch_id, "deadline", env=env)
-            else:
-                _record_refused(
-                    repo_root, launch_id, "retry-deadline-exceeded", "deadline", env=env,
-                )
-            return _fail("retry-deadline-exceeded", launchId=launch_id)
+            term = _terminalize(
+                repo_root,
+                launch_id,
+                child_ever_spawned,
+                "deadline",
+                evidence="deadline" if child_ever_spawned else None,
+                stage="retry-deadline-exceeded" if not child_ever_spawned else None,
+                env=env,
+            )
+            reason = _terminalization_reason(term, "retry-deadline-exceeded")
+            return _fail(reason, launchId=launch_id)
 
         spawn_result = _spawn_attempt(
             repo_root,
@@ -784,30 +831,93 @@ def launch_build(
             return _fail(spawn_result["reason"], launchId=launch_id)
         if spawn_result.get("oserror"):
             if attempt >= max_attempts:
-                _record_refused(
-                    repo_root, launch_id, "spawn", "spawn-oserror-exhausted", env=env,
+                term = _terminalize(
+                    repo_root,
+                    launch_id,
+                    False,
+                    "spawn-oserror-exhausted",
+                    stage="spawn",
+                    env=env,
                 )
-                return _fail("spawn-oserror-exhausted", launchId=launch_id)
-            if time.monotonic() >= deadline:
-                _record_refused(
-                    repo_root, launch_id, "retry-deadline-exceeded", "deadline", env=env,
+                reason = _terminalization_reason(term, "spawn-oserror-exhausted")
+                return _fail(reason, launchId=launch_id)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                term = _terminalize(
+                    repo_root,
+                    launch_id,
+                    False,
+                    "deadline",
+                    stage="retry-deadline-exceeded",
+                    env=env,
                 )
-                return _fail("retry-deadline-exceeded", launchId=launch_id)
+                reason = _terminalization_reason(term, "retry-deadline-exceeded")
+                return _fail(reason, launchId=launch_id)
             delay_idx = min(attempt - 1, len(backoff_seconds) - 1)
-            delay = backoff_seconds[delay_idx]
-            time.sleep(delay)
+            delay = min(backoff_seconds[delay_idx], remaining)
+            if delay >= remaining:
+                term = _terminalize(
+                    repo_root,
+                    launch_id,
+                    False,
+                    "deadline",
+                    stage="retry-deadline-exceeded",
+                    env=env,
+                )
+                reason = _terminalization_reason(term, "retry-deadline-exceeded")
+                return _fail(reason, launchId=launch_id)
+            retry_record = {
+                "event": "retry",
+                "launchId": launch_id,
+                "ts": time.time(),
+                "schema": ll.SCHEMA,
+                "attempt": attempt,
+                "reason": "spawn-oserror",
+                "delaySeconds": delay,
+            }
+            retry_append = _append_under_lock(repo_root, retry_record, env=env)
+            if not retry_append["ok"]:
+                term = _terminalize(
+                    repo_root,
+                    launch_id,
+                    False,
+                    retry_append["reason"],
+                    stage="retry-append-failed",
+                    env=env,
+                )
+                reason = _terminalization_reason(term, retry_append["reason"])
+                return _fail(reason, launchId=launch_id)
+            if delay > 0:
+                time.sleep(delay)
             attempt += 1
             continue
         if not spawn_result["ok"]:
-            _record_refused(repo_root, launch_id, "spawn", spawn_result["reason"], env=env)
-            return _fail(spawn_result["reason"], launchId=launch_id)
+            term = _terminalize(
+                repo_root,
+                launch_id,
+                False,
+                spawn_result["reason"],
+                stage="spawn",
+                env=env,
+            )
+            reason = _terminalization_reason(term, spawn_result["reason"])
+            return _fail(reason, launchId=launch_id)
 
         child_ever_spawned = True
         proc = spawn_result["proc"]
         rc = _observe_settle(proc, settle_seconds, deadline=deadline)
         if rc == "deadline":
-            _record_park(repo_root, launch_id, "deadline", env=env)
-            return _fail("retry-deadline-exceeded", launchId=launch_id)
+            term = _terminalize(
+                repo_root,
+                launch_id,
+                True,
+                "retry-deadline-exceeded",
+                evidence="deadline",
+                proc=proc,
+                env=env,
+            )
+            reason = _terminalization_reason(term, "retry-deadline-exceeded")
+            return _fail(reason, launchId=launch_id)
         if rc is None:
             return {
                 "ok": True,
@@ -820,12 +930,20 @@ def launch_build(
             }
 
         evidence = "exit-zero" if rc == 0 else "nonzero-exit:%s" % rc
-        _record_park(repo_root, launch_id, evidence, env=env)
+        term = _terminalize(
+            repo_root,
+            launch_id,
+            True,
+            evidence,
+            evidence=evidence,
+            proc=proc,
+            env=env,
+        )
         if rc == 0:
-            return _fail("settle-exit-zero-uncertain", launchId=launch_id)
-        return _fail("settle-nonzero-exit", launchId=launch_id)
-
-    return _fail("spawn-oserror-exhausted", launchId=launch_id)
+            reason = _terminalization_reason(term, "settle-exit-zero-uncertain")
+            return _fail(reason, launchId=launch_id)
+        reason = _terminalization_reason(term, "settle-nonzero-exit")
+        return _fail(reason, launchId=launch_id)
 
 
 def _try_reserve_for_refusal(repo_root, launch_id, issue, premise, preflight_result, compose_result, env):
@@ -896,7 +1014,7 @@ def _cli_compose(args):
         return _fail(dup_reason)
     if premise is None:
         return _fail("premise-missing-field:baseCommit")
-    premise_result = validate_premise(premise, args.repo_root)
+    premise_result = validate_premise(premise, args.repo_root, issue=args.issue)
     if not premise_result["ok"]:
         return premise_result
     return compose_launch(

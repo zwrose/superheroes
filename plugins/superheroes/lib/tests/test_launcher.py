@@ -1,4 +1,5 @@
 import importlib.util
+import ast
 import json
 import os
 import signal
@@ -73,6 +74,11 @@ def _ledger_env(tmp_path, monkeypatch):
     root = str(tmp_path / "ledger-root")
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, root)
     return root
+
+
+@pytest.fixture(autouse=True)
+def _autouse_isolated_ledger_root(tmp_path, monkeypatch):
+    _ledger_env(tmp_path, monkeypatch)
 
 
 def _all_checks(**overrides):
@@ -625,8 +631,10 @@ def test_started_append_failed_terminates_child(tmp_path, monkeypatch):
         os.kill(pid, 0)
     lp = ll.ledger_path(repo)["path"]
     records = ll.read(lp)["records"]
-    refused = [r for r in records if r["event"] == "refused"]
-    assert any(r["stage"] == "started-append-failed" for r in refused)
+    parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
+    assert any(r.get("evidence") == "started-append-failed" for r in parks)
+    refused = [r for r in records if r.get("event") == "refused"]
+    assert refused == []
 
 
 def test_detachment_stdin_devnull(tmp_path, monkeypatch):
@@ -776,6 +784,12 @@ def test_spawn_oserror_retries_then_succeeds(tmp_path, monkeypatch):
     )
     assert result["ok"] is True
     assert calls["n"] == 2
+    lp = ll.ledger_path(repo)["path"]
+    records = ll.read(lp)["records"]
+    retries = [r for r in records if r.get("event") == "retry"]
+    assert len(retries) == 1
+    assert retries[0]["attempt"] == 1
+    assert retries[0]["reason"] == "spawn-oserror"
 
 
 def test_spawn_oserror_exhausted_refuses(tmp_path, monkeypatch):
@@ -1370,7 +1384,7 @@ def test_edge19_oserror_retry_does_not_ignore_refused_append_failure(tmp_path, m
         backoff_seconds=(0,),
     )
     assert result["ok"] is False
-    assert result["reason"] == "spawn-oserror-exhausted"
+    assert result["reason"].startswith("terminalization-failed:")
     assert calls["n"] == 1
 
 
@@ -1475,3 +1489,445 @@ def test_edge20_log_open_failure_terminalizes_reservation(tmp_path, monkeypatch)
     refused = [r for r in records if r.get("event") == "refused"]
     assert any(r.get("stage") == "spawn" and r.get("reason") == "log-open-failed" for r in refused)
     assert not any(r.get("event") == "started" for r in records)
+
+
+# --- C2 terminalization chokepoint (work order C2) ---------------------------
+
+
+TERMINAL_WRITE_ALLOWLIST = frozenset({
+    "_terminalize",
+    "record_outcome",
+    "_cli_record_outcome",
+})
+
+
+class _TerminalWriterVisitor(ast.NodeVisitor):
+    def __init__(self):
+        self.violations = []
+
+    def visit_Call(self, node):
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr == "record_outcome":
+            self.violations.append("record_outcome")
+        elif isinstance(func, ast.Name) and func.id in ("_record_park", "_record_refused"):
+            self.violations.append(func.id)
+        self.generic_visit(node)
+
+    def visit_Dict(self, node):
+        for key, value in zip(node.keys, node.values):
+            if (
+                isinstance(key, ast.Constant)
+                and key.value == "event"
+                and isinstance(value, ast.Constant)
+                and value.value in ("refused", "outcome")
+            ):
+                self.violations.append("event:%s" % value.value)
+        self.generic_visit(node)
+
+
+def _terminal_writer_functions():
+    with open(_MOD, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=_MOD)
+    violations = {}
+    launch_build_calls = []
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        visitor = _TerminalWriterVisitor()
+        visitor.visit(node)
+        if visitor.violations and node.name not in TERMINAL_WRITE_ALLOWLIST:
+            violations[node.name] = visitor.violations
+        if node.name == "launch_build":
+            for child in ast.walk(node):
+                if (
+                    isinstance(child, ast.Call)
+                    and isinstance(child.func, ast.Name)
+                    and child.func.id in ("_record_park", "_record_refused")
+                ):
+                    launch_build_calls.append(child.func.id)
+    return violations, launch_build_calls
+
+
+def test_c2_census_only_terminalize_writes_terminals():
+    violations, launch_build_calls = _terminal_writer_functions()
+    assert launch_build_calls == [], (
+        "INVARIANT: exactly one function writes a terminal ledger event for a launch; "
+        "launch_build must not call _record_park or _record_refused directly"
+    )
+    assert violations == {}, (
+        "INVARIANT: exactly one function writes a terminal ledger event for a launch; "
+        "violating functions: %s" % violations
+    )
+
+
+def test_c2_edge1_deadline_settle_reaps_before_park(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    order = []
+    child_pid = {"pid": None}
+
+    real_reap = L._terminate_and_reap
+
+    def tracking_reap(proc):
+        order.append(("reap", proc.pid))
+        real_reap(proc)
+
+    monkeypatch.setattr(L, "_terminate_and_reap", tracking_reap)
+
+    real_append_under_lock = L._append_under_lock
+
+    def tracking_append(repo_root, record, env=None):
+        if record.get("event") == "outcome":
+            order.append(("terminal", record.get("outcome")))
+        return real_append_under_lock(repo_root, record, env=env)
+
+    monkeypatch.setattr(L, "_append_under_lock", tracking_append)
+
+    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        proc = _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+        child_pid["pid"] = proc.pid
+        return proc
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=capture_spawn,
+        settle_seconds=10,
+        total_deadline_seconds=1,
+    )
+    assert result["ok"] is False
+    assert child_pid["pid"] is not None
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid["pid"], 0)
+    reap_entries = [e for e in order if e[0] == "reap"]
+    terminal_entries = [e for e in order if e[0] == "terminal"]
+    assert reap_entries
+    assert terminal_entries
+    assert order.index(reap_entries[0]) < order.index(terminal_entries[0])
+
+
+def test_c2_edge2_deadline_before_spawn_refuses(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    def always_oserror(argv, repo_root, out_fh, err_fh, child_env):
+        raise OSError("spawn failed")
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=always_oserror,
+        max_attempts=5,
+        backoff_seconds=(1,),
+        total_deadline_seconds=0,
+    )
+    assert result["ok"] is False
+    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    refused = [r for r in records if r.get("event") == "refused"]
+    assert any(r.get("stage") == "retry-deadline-exceeded" for r in refused)
+    assert not any(r.get("event") == "outcome" for r in records)
+
+
+def test_c2_edge3_started_append_fail_parks_not_refuses(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    real_append = ll.append
+
+    def failing_append(path, record):
+        if record.get("event") == "started":
+            return False
+        return real_append(path, record)
+
+    monkeypatch.setattr(ll, "append", failing_append)
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.1,
+    )
+    assert result["ok"] is False
+    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
+    refused = [r for r in records if r.get("event") == "refused"]
+    assert len(parks) == 1
+    assert refused == []
+
+
+def test_c2_edge4_terminal_append_failure_surfaces_reason(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    real_append_under_lock = L._append_under_lock
+
+    def fail_park_append(repo_root, record, env=None):
+        if record.get("event") == "outcome" and record.get("outcome") == "park":
+            return {"ok": False, "reason": "ledger-append-failed"}
+        return real_append_under_lock(repo_root, record, env=env)
+
+    monkeypatch.setattr(L, "_append_under_lock", fail_park_append)
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("exit1"),
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "terminalization-failed:ledger-append-failed"
+
+
+def test_c2_edge5_oserror_retry_writes_retry_event(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    calls = {"n": 0}
+
+    def oserror_then_sleep(argv, repo_root, out_fh, err_fh, child_env):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("spawn failed")
+        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=oserror_then_sleep,
+        settle_seconds=0.2,
+        backoff_seconds=(0,),
+    )
+    assert result["ok"] is True
+    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    retries = [r for r in records if r.get("event") == "retry"]
+    assert len(retries) == 1
+    assert retries[0]["delaySeconds"] == 0
+
+
+def test_c2_edge6_retry_append_failure_terminalizes(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    real_append_under_lock = L._append_under_lock
+
+    def fail_retry_append(repo_root, record, env=None):
+        if record.get("event") == "retry":
+            return {"ok": False, "reason": "ledger-append-failed"}
+        return real_append_under_lock(repo_root, record, env=env)
+
+    monkeypatch.setattr(L, "_append_under_lock", fail_retry_append)
+
+    def always_oserror(argv, repo_root, out_fh, err_fh, child_env):
+        raise OSError("spawn failed")
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=always_oserror,
+        max_attempts=3,
+        backoff_seconds=(0,),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "ledger-append-failed"
+    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    assert not any(r.get("event") == "started" for r in records)
+
+
+def test_c2_edge7_final_oserror_refuses(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    def always_oserror(argv, repo_root, out_fh, err_fh, child_env):
+        raise OSError("spawn failed")
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=always_oserror,
+        max_attempts=1,
+        backoff_seconds=(0,),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "spawn-oserror-exhausted"
+    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    assert any(r.get("event") == "refused" for r in records)
+    assert not any(r.get("event") == "started" for r in records)
+
+
+def test_c2_edge8_nonzero_exit_parks(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("exit1"),
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is False
+    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
+    assert len(parks) == 1
+
+
+def test_c2_edge9_zero_exit_parks(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("exit0"),
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is False
+    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
+    assert len(parks) == 1
+    assert parks[0]["evidence"] == "exit-zero"
+
+
+def test_c2_edge10_child_alive_after_settle_no_terminal(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is True
+    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    assert not any(r.get("event") == "outcome" for r in records)
+    assert not any(r.get("event") == "refused" for r in records)
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_c2_edge11_backoff_clamped_to_deadline(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    def always_oserror(argv, repo_root, out_fh, err_fh, child_env):
+        raise OSError("spawn failed")
+
+    start = time.monotonic()
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=always_oserror,
+        max_attempts=3,
+        backoff_seconds=(60,),
+        total_deadline_seconds=1,
+    )
+    elapsed = time.monotonic() - start
+    assert elapsed < 5
+    assert result["ok"] is False
+    assert result["reason"] == "retry-deadline-exceeded"
+
+
+def test_c2_edge12_compose_issue_mismatch_refused(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    premise_path = tmp_path / "premise.json"
+    _write_json(premise_path, _valid_premise(repo, issue=657))
+    proc = subprocess.run(
+        [
+            sys.executable, _MOD, "compose",
+            "--repo-root", repo, "--issue", "656", "--premise", str(premise_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False
+    assert payload["reason"] == "premise-issue-mismatch"
+
+
+def test_c2_edge13_partial_log_open_closes_handle(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    open_handles = []
+    real_open = open
+    opens = {"n": 0}
+
+    def tracking_open(path, mode="r", *args, **kwargs):
+        fh = real_open(path, mode, *args, **kwargs)
+        if "ab" in mode:
+            opens["n"] += 1
+            open_handles.append(fh)
+            if opens["n"] == 2:
+                fh.close()
+                raise OSError("second log open failed")
+        return fh
+
+    monkeypatch.setattr("builtins.open", tracking_open)
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "log-open-failed"
+    assert open_handles
+    assert open_handles[0].closed
+
+
+def test_c2_edge14_ledger_path_refused_fails_preflight(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+
+    def refuse_path(repo_root, env=None):
+        return {"ok": False, "path": None, "reason": "ledger-repo-dir-insecure"}
+
+    monkeypatch.setattr(ll, "ledger_path", refuse_path)
+    result = L.walk_preflight(_all_checks(), repo)
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-ledger-unreadable"
+
+
+def test_c2_edge15_census_detects_bypass_outside_terminalize():
+    violations, launch_build_calls = _terminal_writer_functions()
+    assert "_terminalize" not in violations
+    assert "launch_build" not in violations

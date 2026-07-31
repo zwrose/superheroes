@@ -1,7 +1,10 @@
+import ast
 import json
 import os
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 
 import pytest
@@ -39,6 +42,7 @@ def _init_repo(tmp_path):
 
 def _ledger_env(tmp_path, monkeypatch):
     root = str(tmp_path / "ledger-root")
+    os.makedirs(root, mode=0o700, exist_ok=True)
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, root)
     return root
 
@@ -127,22 +131,49 @@ def _walk_strings(obj):
             yield from _walk_strings(v)
 
 
+def _read_path(path):
+    with open(path, "rb") as fh:
+        return ll._parse_ledger_bytes(fh.read())
+
+
+def _append_raw(path, record):
+    parent = os.path.dirname(path)
+    os.makedirs(parent, mode=0o700, exist_ok=True)
+    line = json.dumps(record, separators=(",", ":")) + "\n"
+    with open(path, "ab") as fh:
+        fh.write(line.encode("utf-8"))
+
+
+def _open_fd_count():
+    try:
+        return len(os.listdir("/dev/fd"))
+    except OSError:
+        return 0
+
+
+_LEDGER_OPEN_ALLOWLIST = frozenset({
+    "open_ledger",
+    "_open_ledger_dirs",
+    "_ensure_lock_file",
+})
+
+
 # --- fail-closed edges -------------------------------------------------------
 
 
 def test_read_torn_trailing_line(tmp_path):
     path = str(tmp_path / "ledger.jsonl")
-    ll.append(path, {"event": "reserved", "launchId": "a", "ts": 1.0, "schema": 1,
+    _append_raw(path, {"event": "reserved", "launchId": "a", "ts": 1.0, "schema": 1,
                        "batchId": "b", "repoId": "r", "issue": 1, "surfaces": ["x"],
                        "premise": {}, "preflight": {}, "argv": [], "doctrineDigest": "d",
                        "model": "m"})
-    ll.append(path, {"event": "started", "launchId": "a", "ts": 2.0, "schema": 1,
+    _append_raw(path, {"event": "started", "launchId": "a", "ts": 2.0, "schema": 1,
                      "attempt": 1, "pid": 1, "logPath": "/l", "errPath": "/e"})
     with open(path, "rb") as fh:
         raw = fh.read()
     with open(path, "wb") as fh:
         fh.write(raw.rstrip(b"\n"))
-    result = ll.read(path)
+    result = _read_path(path)
     assert result["state"] == "tornTail"
     assert result["state"] != "ok"
     assert len(result["records"]) == 1
@@ -152,8 +183,8 @@ def test_read_interior_corruption(tmp_path):
     path = str(tmp_path / "ledger.jsonl")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("not-json\n")
-    ll.append(path, {"event": "x"})
-    result = ll.read(path)
+    _append_raw(path, {"event": "x"})
+    result = _read_path(path)
     assert result["state"] == "interiorCorrupt"
 
 
@@ -162,22 +193,26 @@ def test_read_interior_corruption_wins_over_torn_tail(tmp_path):
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("not-json\n")
         fh.write('{"ok":true}')  # no trailing newline
-    result = ll.read(path)
+    result = _read_path(path)
     assert result["state"] == "interiorCorrupt"
 
 
-def test_read_missing_file(tmp_path):
-    result = ll.read(str(tmp_path / "missing.jsonl"))
+def test_read_missing_file(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    result = ll.read(repo)
     assert result["state"] == "missing"
     assert result["records"] == []
 
 
 def test_read_unreadable_file(tmp_path, monkeypatch):
-    path = str(tmp_path / "ledger.jsonl")
-    ll.append(path, {"x": 1})
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.append(repo, {"x": 1})
+    path = _ledger_file(repo, os.environ)
     os.chmod(path, 0o000)
     try:
-        result = ll.read(path)
+        result = ll.read(repo)
         assert result["state"] == "unreadable"
     finally:
         os.chmod(path, 0o600)
@@ -195,13 +230,13 @@ def test_resolve_root_inside_repo(tmp_path, monkeypatch):
 def test_resolve_root_symlink_component(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     real_root = tmp_path / "real-ledger"
-    real_root.mkdir()
+    os.makedirs(real_root, mode=0o700)
     link = tmp_path / "link-ledger"
     link.symlink_to(real_root)
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(link))
     result = ll.resolve_root(repo)
-    assert result["ok"] is False
-    assert result["reason"] == "ledger-root-symlink"
+    assert result["ok"] is True
+    assert result["root"] == os.path.realpath(str(real_root))
 
 
 def test_resolve_root_unusable(tmp_path, monkeypatch):
@@ -225,9 +260,11 @@ def test_resolve_root_repo_identity_unavailable(tmp_path, monkeypatch):
 
 
 def test_append_failure_returns_false(tmp_path, monkeypatch):
-    path = str(tmp_path / "sub" / "ledger.jsonl")
-    os.makedirs(os.path.dirname(path), mode=0o500)
-    assert ll.append(path, {"x": 1}) is False
+    repo = _init_repo(tmp_path / "repo")
+    ledger_root = str(tmp_path / "ledger-root")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, ledger_root)
+    os.makedirs(ledger_root, mode=0o500)
+    assert ll.append(repo, {"x": 1}) is False
 
 
 def test_reserve_surface_overlap(tmp_path, monkeypatch):
@@ -243,12 +280,13 @@ def test_reserve_surface_overlap(tmp_path, monkeypatch):
 
 def test_reserve_lock_unavailable(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
-    lp = ll.ledger_path(repo)
-    lock_path = lp["path"] + ".lock"
-    os.makedirs(os.path.dirname(lock_path), mode=0o700, exist_ok=True)
+    _ledger_env(tmp_path, monkeypatch)
+    lock_result = ll._ensure_lock_file(repo)
+    assert lock_result["ok"] is True
+    lock_path = lock_result["path"]
     import file_lock
     file_lock.acquire(lock_path)
+    os.chmod(lock_path, 0o600)
     try:
         result = ll.reserve(
             repo,
@@ -328,6 +366,10 @@ def test_normalize_surfaces_empty_list(tmp_path):
               "model": "m"}],
             "fold-schema:9",
         ),
+        (
+            [_reserved("a", "b", ["x"], "/tmp"), _started("a"), _refused("a")],
+            "fold-refused-after-started:a",
+        ),
     ],
 )
 def test_fold_violations(records, reason):
@@ -348,9 +390,8 @@ def test_record_outcome_already_terminal(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
     ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
-    path = _ledger_file(repo, os.environ)
-    ll.append(path, _started("l1"))
-    ll.append(path, _outcome("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
     result = ll.record_outcome(repo, "l1", "handback", "again")
     assert result["ok"] is False
     assert result["reason"] == "outcome-already-terminal"
@@ -360,8 +401,7 @@ def test_record_outcome_invalid_value(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
     ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
-    path = _ledger_file(repo, os.environ)
-    ll.append(path, _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
     result = ll.record_outcome(repo, "l1", "bogus", "evidence")
     assert result["ok"] is False
     assert result["reason"] == "outcome-invalid:bogus"
@@ -371,8 +411,7 @@ def test_record_outcome_empty_evidence(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
     ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
-    path = _ledger_file(repo, os.environ)
-    ll.append(path, _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
     result = ll.record_outcome(repo, "l1", "handback", "   ")
     assert result["ok"] is False
     assert result["reason"] == "outcome-evidence-empty"
@@ -388,8 +427,7 @@ def test_round_trip_reserve_started_outcome_count(tmp_path, monkeypatch):
     launch = "launch-1"
     assert _declare(repo, batch, 1)["ok"]
     assert ll.reserve(repo, _reserved(launch, batch, ["plugins/superheroes/lib"], repo))["ok"]
-    path = _ledger_file(repo, os.environ)
-    assert ll.append(path, _started(launch))
+    _append_raw(_ledger_file(repo, os.environ), _started(launch))
     assert ll.record_outcome(repo, launch, "handback", "shipped")["ok"]
     result = ll.count(repo, batch)
     assert result["resolved"] is True
@@ -409,8 +447,8 @@ def test_count_indeterminate_on_torn_tail(tmp_path, monkeypatch):
     _declare(repo, batch, 1)
     ll.reserve(repo, _reserved("l1", batch, ["a"], repo))
     path = _ledger_file(repo, os.environ)
-    ll.append(path, _started("l1"))
-    ll.append(path, _outcome("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
     with open(path, "rb") as fh:
         raw = fh.read()
     with open(path, "wb") as fh:
@@ -429,8 +467,8 @@ def test_count_indeterminate_on_interior_corruption(tmp_path, monkeypatch):
     path = _ledger_file(repo, os.environ)
     with open(path, "a", encoding="utf-8") as fh:
         fh.write("garbage\n")
-    ll.append(path, _started("l1"))
-    ll.append(path, _outcome("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
     result = ll.count(repo, batch)
     assert result["indeterminate"] is True
     assert result["resolved"] is False
@@ -445,7 +483,7 @@ def test_count_indeterminate_on_unresolved_member(tmp_path, monkeypatch):
     ll.reserve(repo, _reserved("l1", batch, ["a"], repo))
     ll.reserve(repo, _reserved("l2", batch, ["b"], repo))
     path = _ledger_file(repo, os.environ)
-    ll.append(path, _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
     ll.record_outcome(repo, "l1", "handback", "done")
     result = ll.count(repo, batch)
     assert result["indeterminate"] is True
@@ -479,7 +517,7 @@ def test_count_flags_zero_park_batch(tmp_path, monkeypatch):
     _declare(repo, batch, 1)
     ll.reserve(repo, _reserved("l1", batch, ["a"], repo))
     path = _ledger_file(repo, os.environ)
-    ll.append(path, _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
     ll.record_outcome(repo, "l1", "handback", "done")
     result = ll.count(repo, batch)
     assert result["resolved"] is True
@@ -495,7 +533,7 @@ def test_count_does_not_flag_when_a_park_exists(tmp_path, monkeypatch):
     _declare(repo, batch, 1)
     ll.reserve(repo, _reserved("l1", batch, ["a"], repo))
     path = _ledger_file(repo, os.environ)
-    ll.append(path, _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
     ll.record_outcome(repo, "l1", "park", "blocked")
     result = ll.count(repo, batch)
     assert result["resolved"] is True
@@ -509,7 +547,7 @@ def test_refused_launch_is_counted(tmp_path, monkeypatch):
     _declare(repo, batch, 1)
     ll.reserve(repo, _reserved("l1", batch, ["a"], repo))
     path = _ledger_file(repo, os.environ)
-    ll.append(path, _refused("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _refused("l1"))
     result = ll.count(repo, batch)
     assert result["resolved"] is True
     assert result["counts"]["refusedToLaunch"] == 1
@@ -522,7 +560,7 @@ def test_no_output_string_says_clean(tmp_path, monkeypatch):
     _declare(repo, batch, 1)
     ll.reserve(repo, _reserved("l1", batch, ["a"], repo))
     path = _ledger_file(repo, os.environ)
-    ll.append(path, _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
     ll.record_outcome(repo, "l1", "handback", "done")
     result = ll.count(repo, batch)
     for s in _walk_strings(result):
@@ -562,14 +600,14 @@ def test_surfaces_overlap_case_insensitive():
 
 def test_reserve_refuses_when_lock_is_held(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    _ledger_env(tmp_path, monkeypatch)
     launch_id = "lock-held-bite"
-    lp = ll.ledger_path(repo)
-    assert lp["ok"] is True
-    lock_path = ll._lock_path(lp["path"])
-    os.makedirs(os.path.dirname(lock_path), mode=0o700, exist_ok=True)
+    lock_result = ll._ensure_lock_file(repo)
+    assert lock_result["ok"] is True
+    lock_path = lock_result["path"]
     import file_lock
     file_lock.acquire(lock_path)
+    os.chmod(lock_path, 0o600)
     try:
         result = ll.reserve(
             repo,
@@ -578,7 +616,7 @@ def test_reserve_refuses_when_lock_is_held(tmp_path, monkeypatch):
         )
         assert result["ok"] is False
         assert result["reason"] == "lock-unavailable"
-        records = ll.read(lp["path"])["records"]
+        records = ll.read(repo)["records"]
         reserved = [r for r in records if r.get("event") == "reserved"
                     and r.get("launchId") == launch_id]
         assert reserved == []
@@ -641,8 +679,7 @@ print(json.dumps(out))
     assert len(other) == 1
     reason = other[0]["reason"]
     assert reason.startswith("surface-overlap:") or reason == "lock-unavailable"
-    path = ll.ledger_path(repo)["path"]
-    records = ll.read(path)["records"]
+    records = ll.read(repo)["records"]
     reserved = [r for r in records if r.get("event") == "reserved"]
     assert len(reserved) == 1
     assert reserved[0]["surfaces"] == ["plugins/superheroes/lib"]
@@ -651,9 +688,11 @@ print(json.dumps(out))
 # --- append/read basics ------------------------------------------------------
 
 
-def test_append_creates_restricted_file(tmp_path):
-    path = str(tmp_path / "nested" / "ledger.jsonl")
-    assert ll.append(path, {"x": 1})
+def test_append_creates_restricted_file(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    assert ll.append(repo, {"x": 1})
+    path = _ledger_file(repo, os.environ)
     mode = os.stat(path).st_mode & 0o777
     assert mode == 0o600
 
@@ -688,7 +727,7 @@ def test_edge1_invalid_utf8_returns_interior_corrupt(tmp_path):
         fh.write(b"\xff\xfe")
         fh.write(valid[-2:])
         fh.write(b"\n")
-    result = ll.read(path)
+    result = _read_path(path)
     assert result["state"] == "interiorCorrupt"
 
 
@@ -701,7 +740,7 @@ def test_edge2_repo_id_dir_symlink_refused(tmp_path, monkeypatch):
     real_dir = os.path.join(ledger_root, "real-target")
     os.makedirs(real_dir, mode=0o700)
     os.symlink(real_dir, os.path.join(ledger_root, repo_id))
-    result = ll.ledger_path(repo)
+    result = ll.open_ledger(repo, "a")
     assert result["ok"] is False
     assert result["reason"] == "ledger-repo-dir-symlink"
 
@@ -718,7 +757,7 @@ def test_edge3_ledger_file_symlink_refused(tmp_path, monkeypatch):
     with open(real_file, "w", encoding="utf-8") as fh:
         fh.write("")
     os.symlink(real_file, os.path.join(repo_dir, ll.LEDGER_NAME))
-    result = ll.ledger_path(repo)
+    result = ll.open_ledger(repo, "a")
     assert result["ok"] is False
     assert result["reason"] == "ledger-file-symlink"
 
@@ -735,7 +774,7 @@ def test_edge4_lock_path_symlink_refused(tmp_path, monkeypatch):
     with open(real_lock, "w", encoding="utf-8") as fh:
         fh.write("")
     os.symlink(real_lock, os.path.join(repo_dir, ll.LEDGER_NAME + ".lock"))
-    result = ll.ledger_path(repo)
+    result = ll._ensure_lock_file(repo)
     assert result["ok"] is False
     assert result["reason"] == "ledger-lock-symlink"
 
@@ -791,8 +830,8 @@ def test_edge9_count_indeterminate_without_batch_declared(tmp_path, monkeypatch)
     batch = "b-nodecl"
     ll.reserve(repo, _reserved("l1", batch, ["a"], repo))
     path = _ledger_file(repo, os.environ)
-    ll.append(path, _started("l1"))
-    ll.append(path, _outcome("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
     result = ll.count(repo, batch)
     assert result["indeterminate"] is True
     assert result["reason"] == "batch-undeclared"
@@ -804,11 +843,11 @@ def test_edge10_count_indeterminate_on_duplicate_declaration(tmp_path, monkeypat
     batch = "b-dup"
     _declare(repo, batch, 1)
     path = _ledger_file(repo, os.environ)
-    ll.append(path, _batch_declared(batch, 1))
+    _append_raw(_ledger_file(repo, os.environ), _batch_declared(batch, 1))
     ll.reserve(repo, _reserved("l1", batch, ["a"], repo))
     path = _ledger_file(repo, os.environ)
-    ll.append(path, _started("l1"))
-    ll.append(path, _outcome("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
     result = ll.count(repo, batch)
     assert result["indeterminate"] is True
     assert result["reason"] == "batch-duplicate-declaration"
@@ -821,8 +860,8 @@ def test_edge11_count_indeterminate_when_reservations_below_declared(tmp_path, m
     _declare(repo, batch, 2)
     ll.reserve(repo, _reserved("l1", batch, ["a"], repo))
     path = _ledger_file(repo, os.environ)
-    ll.append(path, _started("l1"))
-    ll.append(path, _outcome("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
     result = ll.count(repo, batch)
     assert result["indeterminate"] is True
     assert result["reason"] == "batch-reservation-mismatch"
@@ -836,10 +875,10 @@ def test_edge12_count_indeterminate_when_reservations_above_declared(tmp_path, m
     ll.reserve(repo, _reserved("l1", batch, ["a"], repo))
     ll.reserve(repo, _reserved("l2", batch, ["b"], repo))
     path = _ledger_file(repo, os.environ)
-    ll.append(path, _started("l1"))
-    ll.append(path, _outcome("l1"))
-    ll.append(path, _started("l2"))
-    ll.append(path, _outcome("l2"))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _started("l2"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l2"))
     result = ll.count(repo, batch)
     assert result["indeterminate"] is True
     assert result["reason"] == "batch-reservation-mismatch"
@@ -852,8 +891,8 @@ def test_edge13_count_inspect_true_on_zero_park_refusal_refused_to_launch(tmp_pa
     _declare(repo, batch, 1)
     ll.reserve(repo, _reserved("l1", batch, ["a"], repo))
     path = _ledger_file(repo, os.environ)
-    ll.append(path, _started("l1"))
-    ll.append(path, _outcome("l1", outcome="handback"))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1", outcome="handback"))
     result = ll.count(repo, batch)
     assert result["resolved"] is True
     assert result["inspect"] is True
@@ -867,7 +906,7 @@ def test_edge14_count_refused_to_launch_only_not_inspect(tmp_path, monkeypatch):
     _declare(repo, batch, 1)
     ll.reserve(repo, _reserved("l1", batch, ["a"], repo))
     path = _ledger_file(repo, os.environ)
-    ll.append(path, _refused("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _refused("l1"))
     result = ll.count(repo, batch)
     assert result["resolved"] is True
     assert result["inspect"] is False
@@ -880,7 +919,7 @@ def test_edge15_overlap_refusal_names_blocking_launch(tmp_path, monkeypatch):
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
     ll.reserve(repo, _reserved("blocker", "b1", ["plugins/superheroes/lib"], repo))
     path = _ledger_file(repo, os.environ)
-    ll.append(path, _started("blocker"))
+    _append_raw(_ledger_file(repo, os.environ), _started("blocker"))
     result = ll.reserve(repo, _reserved("l2", "b2", ["plugins/superheroes"], repo))
     assert result["ok"] is False
     assert result["reason"] == "surface-overlap:blocker"
@@ -895,7 +934,7 @@ def test_edge16_preexisting_ledger_dir_insecure_refused(tmp_path, monkeypatch):
     repo_id = ll.repo_identity(repo)
     os.makedirs(ledger_root, mode=0o700, exist_ok=True)
     os.makedirs(os.path.join(ledger_root, repo_id), mode=0o755)
-    result = ll.ledger_path(repo)
+    result = ll.open_ledger(repo, "a")
     assert result["ok"] is False
     assert result["reason"] == "ledger-repo-dir-insecure"
 
@@ -912,7 +951,7 @@ def test_edge17_preexisting_ledger_file_insecure_refused(tmp_path, monkeypatch):
     with open(ledger_file, "w", encoding="utf-8") as fh:
         fh.write("")
     os.chmod(ledger_file, 0o644)
-    result = ll.ledger_path(repo)
+    result = ll.open_ledger(repo, "a")
     assert result["ok"] is False
     assert result["reason"] == "ledger-file-insecure"
 
@@ -931,3 +970,309 @@ def test_edge18_fold_retry_without_started_refuses(tmp_path):
     result = ll.fold(records)
     assert result["ok"] is False
     assert result["reason"] == "fold-retry-without-started:a"
+
+
+# --- WO-C1 chokepoint edges 1-20 + census -----------------------------------
+
+
+def _census_violations(source_path, allowlist):
+    with open(source_path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=source_path)
+    violations = []
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        if node.name in allowlist:
+            continue
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Call):
+                continue
+            func = child.func
+            is_open = (
+                isinstance(func, ast.Name) and func.id == "open"
+            ) or (
+                isinstance(func, ast.Attribute) and func.attr == "open"
+            )
+            if is_open:
+                violations.append(node.name)
+                break
+    return violations
+
+
+def test_c1_edge1_default_root_macos_succeeds(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.delenv(ll.LEDGER_ROOT_ENV, raising=False)
+    result = ll.open_ledger(repo, "a")
+    assert result["ok"] is True, result
+    result["fh"].close()
+
+
+def test_c1_edge2_configured_root_symlink_accepted(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    real_root = tmp_path / "real-ledger"
+    os.makedirs(real_root, mode=0o700)
+    link = tmp_path / "link-ledger"
+    link.symlink_to(real_root)
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(link))
+    result = ll.open_ledger(repo, "a")
+    assert result["ok"] is True, result
+    result["fh"].close()
+
+
+def test_c1_edge3_resolved_root_inside_repo_refused(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    inside = os.path.join(repo, "inside-ledger")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, inside)
+    result = ll.open_ledger(repo, "a")
+    assert result["ok"] is False
+    assert result["reason"] == "ledger-root-in-repo"
+
+
+def test_c1_edge4_resolved_root_inside_git_common_dir_refused(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    proc = subprocess.run(
+        ["git", "-C", repo, "rev-parse", "--git-common-dir"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    common = proc.stdout.strip()
+    if not os.path.isabs(common):
+        common = os.path.join(repo, common)
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, common)
+    result = ll.open_ledger(repo, "a")
+    assert result["ok"] is False
+    assert result["reason"] == "ledger-root-in-repo"
+
+
+def test_c1_edge5_resolved_root_group_world_accessible_refused(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    ledger_root = str(tmp_path / "ledger-root")
+    os.makedirs(ledger_root, mode=0o755)
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, ledger_root)
+    result = ll.open_ledger(repo, "a")
+    assert result["ok"] is False
+    assert result["reason"] == "ledger-root-insecure"
+
+
+def test_c1_edge6_repo_id_symlink_refused(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    ledger_root = str(tmp_path / "ledger-root")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, ledger_root)
+    repo_id = ll.repo_identity(repo)
+    os.makedirs(ledger_root, mode=0o700, exist_ok=True)
+    real_dir = os.path.join(ledger_root, "real-target")
+    os.makedirs(real_dir, mode=0o700)
+    os.symlink(real_dir, os.path.join(ledger_root, repo_id))
+    result = ll.open_ledger(repo, "a")
+    assert result["ok"] is False
+    assert result["reason"] == "ledger-repo-dir-symlink"
+
+
+def test_c1_edge7_repo_id_regular_file_refused(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    ledger_root = str(tmp_path / "ledger-root")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, ledger_root)
+    repo_id = ll.repo_identity(repo)
+    os.makedirs(ledger_root, mode=0o700, exist_ok=True)
+    with open(os.path.join(ledger_root, repo_id), "w", encoding="utf-8") as fh:
+        fh.write("not-a-dir")
+    result = ll.open_ledger(repo, "a")
+    assert result["ok"] is False
+    assert result["reason"] in ("ledger-repo-dir-not-directory", "ledger-repo-dir-unusable")
+
+
+def test_c1_edge8_repo_id_group_world_accessible_refused(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    ledger_root = str(tmp_path / "ledger-root")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, ledger_root)
+    repo_id = ll.repo_identity(repo)
+    os.makedirs(ledger_root, mode=0o700, exist_ok=True)
+    os.makedirs(os.path.join(ledger_root, repo_id), mode=0o755)
+    result = ll.open_ledger(repo, "a")
+    assert result["ok"] is False
+    assert result["reason"] == "ledger-repo-dir-insecure"
+
+
+def test_c1_edge9_ledger_file_symlink_refused(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    ledger_root = str(tmp_path / "ledger-root")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, ledger_root)
+    repo_id = ll.repo_identity(repo)
+    os.makedirs(ledger_root, mode=0o700, exist_ok=True)
+    repo_dir = os.path.join(ledger_root, repo_id)
+    os.makedirs(repo_dir, mode=0o700)
+    real_file = os.path.join(tmp_path, "real-ledger.jsonl")
+    with open(real_file, "w", encoding="utf-8") as fh:
+        fh.write("")
+    os.symlink(real_file, os.path.join(repo_dir, ll.LEDGER_NAME))
+    result = ll.open_ledger(repo, "a")
+    assert result["ok"] is False
+    assert result["reason"] == "ledger-file-symlink"
+
+
+def test_c1_edge10_ledger_fifo_refused_without_blocking(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    ledger_root = str(tmp_path / "ledger-root")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, ledger_root)
+    repo_id = ll.repo_identity(repo)
+    os.makedirs(ledger_root, mode=0o700, exist_ok=True)
+    repo_dir = os.path.join(ledger_root, repo_id)
+    os.makedirs(repo_dir, mode=0o700)
+    fifo_path = os.path.join(repo_dir, ll.LEDGER_NAME)
+    os.mkfifo(fifo_path)
+    result = ll.open_ledger(repo, "r")
+    assert result["ok"] is False
+    assert result["reason"] == "ledger-file-not-regular"
+
+
+def test_c1_edge11_ledger_file_group_world_accessible_refused(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    ledger_root = str(tmp_path / "ledger-root")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, ledger_root)
+    repo_id = ll.repo_identity(repo)
+    os.makedirs(ledger_root, mode=0o700, exist_ok=True)
+    repo_dir = os.path.join(ledger_root, repo_id)
+    os.makedirs(repo_dir, mode=0o700)
+    ledger_file = os.path.join(repo_dir, ll.LEDGER_NAME)
+    with open(ledger_file, "w", encoding="utf-8") as fh:
+        fh.write("")
+    os.chmod(ledger_file, 0o644)
+    result = ll.open_ledger(repo, "a")
+    assert result["ok"] is False
+    assert result["reason"] == "ledger-file-insecure"
+
+
+def test_c1_edge12_lock_file_symlink_refused(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    ledger_root = str(tmp_path / "ledger-root")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, ledger_root)
+    repo_id = ll.repo_identity(repo)
+    os.makedirs(ledger_root, mode=0o700, exist_ok=True)
+    repo_dir = os.path.join(ledger_root, repo_id)
+    os.makedirs(repo_dir, mode=0o700)
+    real_lock = os.path.join(tmp_path, "real.lock")
+    with open(real_lock, "w", encoding="utf-8") as fh:
+        fh.write("")
+    os.symlink(real_lock, os.path.join(repo_dir, ll.LEDGER_NAME + ".lock"))
+    result = ll._ensure_lock_file(repo)
+    assert result["ok"] is False
+    assert result["reason"] == "ledger-lock-symlink"
+
+
+def test_c1_edge13_lock_file_group_world_accessible_refused(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    ledger_root = str(tmp_path / "ledger-root")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, ledger_root)
+    repo_id = ll.repo_identity(repo)
+    os.makedirs(ledger_root, mode=0o700, exist_ok=True)
+    repo_dir = os.path.join(ledger_root, repo_id)
+    os.makedirs(repo_dir, mode=0o700)
+    lock_file = os.path.join(repo_dir, ll.LEDGER_NAME + ".lock")
+    with open(lock_file, "w", encoding="utf-8") as fh:
+        fh.write("")
+    os.chmod(lock_file, 0o644)
+    result = ll._ensure_lock_file(repo)
+    assert result["ok"] is False
+    assert result["reason"] == "ledger-lock-insecure"
+
+
+def test_c1_edge14_mode_read_missing_ledger(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    opened = ll.open_ledger(repo, "r")
+    assert opened["ok"] is False
+    assert opened["reason"] == "ledger-missing"
+    assert ll.read(repo)["state"] == "missing"
+
+
+def test_c1_edge15_refusal_paths_close_descriptors(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    ledger_root = str(tmp_path / "ledger-root")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, ledger_root)
+    repo_id = ll.repo_identity(repo)
+    os.makedirs(ledger_root, mode=0o700, exist_ok=True)
+    os.makedirs(os.path.join(ledger_root, repo_id), mode=0o755)
+    before = _open_fd_count()
+    result = ll.open_ledger(repo, "a")
+    after = _open_fd_count()
+    assert result["ok"] is False
+    assert result["reason"] == "ledger-repo-dir-insecure"
+    assert after <= before + 1
+
+
+def test_c1_edge16_malformed_batch_declared_count_indeterminate(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-malformed"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo))
+    path = _ledger_file(repo, os.environ)
+    _append_raw(path, {"event": "batch-declared", "batchId": batch, "schema": ll.SCHEMA})
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["resolved"] is False
+
+
+def test_c1_edge17_batch_declared_after_reservations_count_indeterminate(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-late-decl"
+    path = _ledger_file(repo, os.environ)
+    reserved = _reserved("l1", batch, ["a"], repo)
+    reserved["ts"] = 100.0
+    ll.reserve(repo, reserved)
+    _append_raw(path, {
+        "event": "batch-declared",
+        "batchId": batch,
+        "expectedLaunches": 1,
+        "ts": 200.0,
+        "schema": ll.SCHEMA,
+    })
+    _append_raw(path, _started("l1"))
+    _append_raw(path, _outcome("l1"))
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-declaration-after-reservations"
+
+
+def test_c1_edge18_declare_batch_with_existing_reservations_refused(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-has-res"
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo))
+    result = ll.declare_batch(repo, batch, 1)
+    assert result["ok"] is False
+    assert result["reason"] == "batch-already-has-reservations"
+
+
+def test_c1_edge19_reserved_started_refused_fold_refuses(tmp_path):
+    records = [_reserved("a", "b", ["x"], "/tmp"), _started("a"), _refused("a")]
+    result = ll.fold(records)
+    assert result["ok"] is False
+    assert result["reason"] == "fold-refused-after-started:a"
+
+
+def test_c1_edge20_census_no_ledger_open_outside_accessor():
+    ledger_py = os.path.join(_LIB, "launch_ledger.py")
+    launcher_py = os.path.join(_LIB, "launcher.py")
+    violations = _census_violations(ledger_py, _LEDGER_OPEN_ALLOWLIST)
+    assert not violations, (
+        "INVARIANT: every read/write to the launch ledger must go through open_ledger; "
+        "found open()/os.open() in: %s" % ", ".join(sorted(set(violations)))
+    )
+    with open(launcher_py, encoding="utf-8") as fh:
+        launcher_source = fh.read()
+    assert "LEDGER_NAME" not in launcher_source, (
+        "INVARIANT: launcher.py must not reference LEDGER_NAME; "
+        "reconstruct ledger paths only through launch_ledger.open_ledger"
+    )
+    assert not (
+        "resolve_root" in launcher_source and "repo_identity" in launcher_source
+        and "LEDGER_NAME" in launcher_source
+    ), (
+        "INVARIANT: launcher.py must not reconstruct a ledger path from "
+        "resolve_root + repo_identity"
+    )
