@@ -6,7 +6,6 @@ import subprocess
 import sys
 import textwrap
 import time
-from concurrent import futures
 
 import pytest
 
@@ -81,17 +80,17 @@ def test_live_holder_still_raises(tmp_path):
         lock.acquire(p)
 
 
-def test_crash_at_publish_seam_leaves_no_incomplete_lock(tmp_path):
+def test_crash_during_holder_write_leaves_no_incomplete_lock(tmp_path):
     p = str(tmp_path / "engine.lock")
     script = textwrap.dedent(f"""
-        import os, signal, sys
+        import json, os, signal, sys
         sys.path.insert(0, {repr(_LIB_DIR)})
         import file_lock as lock
 
-        def kill_at_link(src, dst):
+        def kill_at_dump(obj, fp, *args, **kwargs):
             os.kill(os.getpid(), signal.SIGKILL)
 
-        os.link = kill_at_link
+        json.dump = kill_at_dump
         lock.acquire({repr(p)})
     """)
     proc = subprocess.run(
@@ -101,11 +100,13 @@ def test_crash_at_publish_seam_leaves_no_incomplete_lock(tmp_path):
     )
     assert proc.returncode != 0
     if os.path.exists(p):
-        content = open(p).read()
-        assert content.strip()
         holder = lock.read_holder(p)
-        assert isinstance(holder.get("pid"), int)
-        assert isinstance(holder.get("host"), str)
+        assert isinstance(holder.get("pid"), int), (
+            "crash during holder-write published an INCOMPLETE lock file"
+        )
+        assert isinstance(holder.get("host"), str), (
+            "crash during holder-write published an INCOMPLETE lock file"
+        )
     lock.acquire(p)
     assert lock.read_holder(p)["pid"] == os.getpid()
     lock.release(p)
@@ -232,13 +233,24 @@ def test_reclaim_blocked_while_guard_held_raises_lock_held(tmp_path):
 
 def test_concurrent_reclaim_grants_exactly_one_holder(tmp_path):
     p = str(tmp_path / "engine.lock")
-    open(p, "w").close()
-    old = time.time() - lock.MALFORMED_GRACE_SECONDS - 5
-    os.utime(p, (old, old))
+    gate_dir = str(tmp_path / "gate")
+    os.makedirs(gate_dir, exist_ok=True)
+    n_workers = 16
     script = textwrap.dedent(f"""
-        import sys
+        import os, sys, time
         sys.path.insert(0, {repr(_LIB_DIR)})
         import file_lock as lock
+        _real_open = os.open
+        def slow_open(path, flags, mode=0o666):
+            if str(path).endswith(".reclaim"):
+                time.sleep(0.02)
+            return _real_open(path, flags, mode)
+        if os.getpid() % 3 == 0:
+            os.open = slow_open
+        gate = {repr(gate_dir)}
+        open(os.path.join(gate, str(os.getpid())), "w").close()
+        while len(os.listdir(gate)) < {n_workers}:
+            time.sleep(0.001)
         try:
             lock.acquire({repr(p)})
             print("OK")
@@ -246,18 +258,27 @@ def test_concurrent_reclaim_grants_exactly_one_holder(tmp_path):
             print("HELD")
     """)
 
-    def _run():
-        return subprocess.run(
-            [sys.executable, "-c", script],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-
-    with futures.ThreadPoolExecutor(max_workers=2) as pool:
-        r1, r2 = pool.map(lambda _: _run(), range(2))
-    outcomes = sorted(r.stdout.strip() for r in (r1, r2))
-    assert outcomes == ["HELD", "OK"]
+    n_rounds = 8
+    for _ in range(n_rounds):
+        for f in os.listdir(gate_dir):
+            os.unlink(os.path.join(gate_dir, f))
+        open(p, "w").close()
+        old = time.time() - lock.MALFORMED_GRACE_SECONDS - 5
+        os.utime(p, (old, old))
+        procs = [
+            subprocess.Popen(
+                [sys.executable, "-c", script],
+                stdout=subprocess.PIPE,
+                text=True,
+            )
+            for _ in range(n_workers)
+        ]
+        outcomes = []
+        for proc in procs:
+            proc.wait(timeout=10)
+            outcomes.append(proc.stdout.read().strip())
+        assert outcomes.count("OK") == 1, outcomes
+        assert outcomes.count("HELD") == n_workers - 1, outcomes
 
 
 def test_published_lock_mode_matches_umask(tmp_path):
