@@ -172,9 +172,10 @@ roll out across the guardian arc; this is the sweep it runs them in.
 - **An owner-authority gate backs the covenant mechanically.** A hook intercepts
   merge, release, force-push, and workflow-run actions and routes them to the owner — not just a
   promise in a prompt.
-- **A worktree guard refuses silent destruction of uncommitted work.** A second hook
-  intercepts git commands that would irrecoverably discard uncommitted changes and points at
-  recoverable alternatives — commit first, stash, or revert a probe edit with an inverse edit.
+- **A worktree guard refuses silent destruction of uncommitted work — on Claude Code.** A
+  second hook intercepts git commands that would irrecoverably discard uncommitted changes and
+  points at recoverable alternatives — commit first, stash, or revert a probe edit with an
+  inverse edit. Codex has no such hook wired yet.
 
 ## What this is not
 
