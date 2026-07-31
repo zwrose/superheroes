@@ -44,6 +44,10 @@ def _changelog_line(description: str, sha_short: str, full_sha: str | None = Non
     )
 
 
+def _release_changelog(version: str, body: str) -> str:
+    return f"## [{version}](https://github.com/zwrose/superheroes/compare)\n\n{body}\n"
+
+
 def _evaluate(commits, last_version, release_pr=None, exclusions=None, exclusion_errors=None):
     return RB.evaluate(
         commits,
@@ -131,11 +135,14 @@ def test_incident1_version_floor_shape():
     release_pr = {
         "number": 99,
         "proposed_version": "0.21.3",
-        "changelog_text": "\n".join(
-            [
-                _changelog_line("one", "fi000001"),
-                _changelog_line("two", "fi000002"),
-            ]
+        "changelog_text": _release_changelog(
+            "0.21.3",
+            "\n".join(
+                [
+                    _changelog_line("one", "fi000001"),
+                    _changelog_line("two", "fi000002"),
+                ]
+            ),
         ),
     }
     result = _evaluate(commits, "0.21.2", release_pr)
@@ -150,7 +157,7 @@ def test_incident2_changelog_only_shape():
     release_pr = {
         "number": 100,
         "proposed_version": "0.23.0",
-        "changelog_text": _inc2_changelog_present_only(),
+        "changelog_text": _release_changelog("0.23.0", _inc2_changelog_present_only()),
     }
     result = _evaluate(_INC2_COMMITS, "0.22.0", release_pr)
     assert result.ok is False
@@ -171,12 +178,13 @@ def test_incident2_changelog_only_shape():
 def test_incident2_both_acknowledged_with_replacements_present():
     repl1 = _sha("rep00001")
     repl2 = _sha("rep00002")
-    changelog = (
+    changelog = _release_changelog(
+        "0.23.0",
         _inc2_changelog_present_only()
         + "\n"
         + _changelog_line("restated 726", repl1[:7], repl1)
         + "\n"
-        + _changelog_line("restated 716", repl2[:7], repl2)
+        + _changelog_line("restated 716", repl2[:7], repl2),
     )
     exclusions = {
         "4d88419716b7b7054660a7943b061420bd804ed8": (repl1, "2026-07-31", "parser crash"),
@@ -191,10 +199,11 @@ def test_incident2_both_acknowledged_with_replacements_present():
 
 def test_incident2_only_one_acknowledged():
     repl1 = _sha("rep00001")
-    changelog = (
+    changelog = _release_changelog(
+        "0.23.0",
         _inc2_changelog_present_only()
         + "\n"
-        + _changelog_line("restated 726", repl1[:7], repl1)
+        + _changelog_line("restated 726", repl1[:7], repl1),
     )
     exclusions = {
         "4d88419716b7b7054660a7943b061420bd804ed8": (repl1, "2026-07-31", "parser crash"),
@@ -204,7 +213,8 @@ def test_incident2_only_one_acknowledged():
     assert result.ok is False
     joined = "\n".join(result.failures)
     assert "2a6ac6a" in joined
-    assert "4d884197" not in joined or "acknowledged" in "\n".join(result.notices)
+    assert "4d884197" not in joined
+    assert any(n.startswith("acknowledged exclusion:") for n in result.notices)
 
 
 def test_incident2_acknowledged_but_replacement_absent():
@@ -215,7 +225,7 @@ def test_incident2_acknowledged_but_replacement_absent():
     release_pr = {
         "number": 100,
         "proposed_version": "0.23.0",
-        "changelog_text": _inc2_changelog_present_only(),
+        "changelog_text": _release_changelog("0.23.0", _inc2_changelog_present_only()),
     }
     result = _evaluate(_INC2_COMMITS, "0.22.0", release_pr, exclusions=exclusions)
     assert result.ok is False
@@ -240,13 +250,13 @@ def test_nonempty_floor_no_release_pr_fails():
     assert any("no open release PR" in f for f in result.failures)
 
 
-def test_hidden_docs_ci_not_in_populations():
+def test_hidden_docs_ci_not_in_completeness_but_in_floor():
     commits = [
         _c("dc000001", "docs: readme tweak"),
         _c("ci000001", "ci: workflow only"),
     ]
     assert RB.completeness_population(commits, _RELEASING) == []
-    assert RB.floor_population(commits, _RELEASING) == []
+    assert len(RB.floor_population(commits)) == 2
 
 
 def test_feat_touching_only_non_package_files_not_eligible():
@@ -271,15 +281,32 @@ def test_zero_file_feat_restatement_eligible_and_fails_if_missing():
     result = _evaluate(
         commits,
         "0.22.0",
-        {"number": 1, "proposed_version": "0.23.0", "changelog_text": ""},
+        {
+            "number": 1,
+            "proposed_version": "0.23.0",
+            "changelog_text": _release_changelog("0.23.0", ""),
+        },
     )
     assert result.ok is False
 
 
-def test_release_commit_not_eligible():
-    commits = [_c("rc000001", "chore(main): release superheroes 0.23.0 (#705)")]
-    assert RB.completeness_population(commits, _RELEASING) == []
-    assert RB.floor_population(commits, _RELEASING) == []
+def test_release_cut_requires_manifest_touch():
+    cut = Commit(
+        sha=_sha("rc000001"),
+        subject="chore(main): release superheroes 0.23.0 (#705)",
+        touches_package=True,
+        touches_manifest=True,
+    )
+    shaped = Commit(
+        sha=_sha("rc000002"),
+        subject="chore(superheroes): release 9.9.9",
+        touches_package=True,
+        touches_manifest=False,
+    )
+    assert RB.completeness_population([cut], _RELEASING) == []
+    assert RB.floor_population([cut]) == []
+    assert shaped in RB.floor_population([shaped])
+    assert shaped in RB.completeness_population([shaped], _RELEASING)
 
 
 def test_malformed_ledger_line_fails():
@@ -298,9 +325,16 @@ def test_stale_acknowledgement_notice_still_passes():
     orig = _sha("stale001")
     repl = _sha("stale002")
     commits = [_c("ok000001", "fix(superheroes): ok")]
-    changelog = _changelog_line("ok", "ok000001") + "\n" + _changelog_line("restated", "stale00", orig)
+    changelog = _release_changelog(
+        "0.23.1",
+        _changelog_line("ok", "ok000001") + "\n" + _changelog_line("restated", "stale00", orig),
+    )
     exclusions = {orig: (repl, "2026-01-01", "old")}
-    release_pr = {"number": 1, "proposed_version": "0.23.1", "changelog_text": changelog}
+    release_pr = {
+        "number": 1,
+        "proposed_version": "0.23.1",
+        "changelog_text": changelog,
+    }
     result = _evaluate(commits, "0.23.0", release_pr, exclusions=exclusions)
     assert result.ok is True
     assert any("stale acknowledgement" in n for n in result.notices)
@@ -331,7 +365,11 @@ def test_abbrev_only_presence_notice():
         f"* **superheroes:** abbrev match "
         f"([{sha[:7]}](https://github.com/zwrose/superheroes/commit/{sha[:7]}))"
     )
-    release_pr = {"number": 1, "proposed_version": "0.23.1", "changelog_text": changelog}
+    release_pr = {
+        "number": 1,
+        "proposed_version": "0.23.1",
+        "changelog_text": _release_changelog("0.23.1", changelog),
+    }
     result = _evaluate(commits, "0.23.0", release_pr)
     assert result.ok is True
     assert any("abbreviated SHA only" in n for n in result.notices)
@@ -345,11 +383,13 @@ def test_hidden_breaking_raises_floor_not_changelog():
     fix = _c("fx000001", "fix(superheroes): small fix")
     commits = [hidden, fix]
     assert hidden not in RB.completeness_population(commits, _RELEASING)
-    assert hidden in RB.floor_population(commits, _RELEASING)
+    assert hidden in RB.floor_population(commits)
     release_pr = {
         "number": 1,
         "proposed_version": "0.23.1",
-        "changelog_text": _changelog_line("small fix", "fx000001"),
+        "changelog_text": _release_changelog(
+            "0.23.1", _changelog_line("small fix", "fx000001")
+        ),
     }
     result = _evaluate(commits, "0.23.0", release_pr)
     assert result.ok is False
@@ -371,7 +411,11 @@ def test_sha_only_failure_distinguishes_from_absent():
         f"* **superheroes:** unrelated body fragment "
         f"([{sha[:7]}](https://github.com/zwrose/superheroes/commit/{sha}))"
     )
-    release_pr = {"number": 1, "proposed_version": "0.24.0", "changelog_text": changelog}
+    release_pr = {
+        "number": 1,
+        "proposed_version": "0.24.0",
+        "changelog_text": _release_changelog("0.24.0", changelog),
+    }
     result = _evaluate(commits, "0.23.0", release_pr)
     assert result.ok is False
     assert any("none matches this commit's title" in f for f in result.failures)
@@ -482,7 +526,9 @@ def test_body_declares_breaking_notice_not_failure():
     release_pr = {
         "number": 1,
         "proposed_version": "0.24.0",
-        "changelog_text": _changelog_line("title without bang", "bd000001"),
+        "changelog_text": _release_changelog(
+            "0.24.0", _changelog_line("title without bang", "bd000001")
+        ),
     }
     result = _evaluate(commits, "0.23.0", release_pr)
     assert result.ok is True
@@ -517,3 +563,200 @@ def test_belongs_to_package_zero_file():
 def test_changelog_presence_absent():
     presence, _ = RB.changelog_presence(_sha("xx000001"), "desc", "* nothing here")
     assert presence == "absent"
+
+
+# --- E. Review round 1 regression tests ---
+
+
+def test_ack_replacement_only_in_prior_release_section_fails():
+    """Replacement SHA in an older ## [version] section must not suppress failure."""
+    dropped = _sha("drop0001")
+    old_repl = _sha("oldrepl1")
+    commits = [
+        Commit(
+            sha=dropped,
+            subject="feat(superheroes): dropped commit",
+            touches_package=True,
+        )
+    ]
+    changelog = (
+        "## [0.22.0](https://github.com/zwrose/superheroes/compare)\n\n"
+        + _changelog_line("shipped earlier", old_repl[:7], old_repl)
+        + "\n## [0.23.0](https://github.com/zwrose/superheroes/compare)\n\n"
+        + _changelog_line("something else", "oth0001")
+    )
+    exclusions = {dropped: (old_repl, "2026-07-31", "parser crash")}
+    release_pr = {"number": 100, "proposed_version": "0.23.0", "changelog_text": changelog}
+    result = _evaluate(commits, "0.22.0", release_pr, exclusions=exclusions)
+    assert result.ok is False
+    assert any("acknowledgement unsatisfied" in f for f in result.failures)
+
+
+def test_prose_sha_mention_does_not_satisfy_acknowledgement():
+    """A later bullet that mentions a SHA in prose must not suppress acknowledgement."""
+    dropped = _sha("drop0002")
+    repl = _sha("repl0002")
+    mentioner = _sha("ment0002")
+    commits = [
+        Commit(sha=dropped, subject="feat(superheroes): dropped", touches_package=True),
+        Commit(sha=mentioner, subject="fix(superheroes): follow-up", touches_package=True),
+    ]
+    changelog = _release_changelog(
+        "0.23.0",
+        _changelog_line(f"mentions {dropped[:7]} in title", mentioner[:7], mentioner),
+    )
+    exclusions = {dropped: (repl, "2026-07-31", "parser crash")}
+    release_pr = {"number": 1, "proposed_version": "0.23.0", "changelog_text": changelog}
+    result = _evaluate(commits, "0.22.0", release_pr, exclusions=exclusions)
+    assert result.ok is False
+    assert any("acknowledgement unsatisfied" in f for f in result.failures)
+
+
+def test_deps_type_in_floor_population():
+    commits = [_c("dp000001", "deps(superheroes): update dependency")]
+    assert commits[0] in RB.floor_population(commits)
+    assert RB.completeness_population(commits, _RELEASING) == [commits[0]]
+
+
+def test_hidden_body_breaking_on_refactor_counts_for_floor():
+    hidden = Commit(
+        sha=_sha("hb000002"),
+        subject="refactor(superheroes): remove legacy",
+        body="BREAKING CHANGE: API removed",
+        touches_package=True,
+    )
+    assert hidden in RB.floor_population([hidden])
+    assert hidden not in RB.completeness_population([hidden], _RELEASING)
+
+
+def test_release_shaped_title_without_manifest_not_cut():
+    shaped = Commit(
+        sha=_sha("rs000001"),
+        subject="chore(superheroes): release 9.9.9",
+        touches_package=True,
+        touches_manifest=False,
+    )
+    result = _evaluate(
+        [shaped],
+        "0.23.0",
+        release_pr=None,
+    )
+    assert result.ok is False
+    assert any("no open release PR" in f for f in result.failures)
+
+
+def test_gh_read_pins_head_sha(monkeypatch):
+    calls: list[tuple[str, str]] = []
+
+    def fake_read(repo, path, ref, **_kw):
+        calls.append((path, ref))
+        if path.endswith("manifest.json") or path.endswith(".release-please-manifest.json"):
+            return json.dumps({"plugins/superheroes": "0.24.0"})
+        return _release_changelog("0.24.0", _changelog_line("ok", "ok000001"))
+
+    monkeypatch.setattr(RB, "_gh_read_file_content_retry", fake_read)
+    head_sha = "abc123def456" * 3 + "abcd"
+    RB._gh_read_file_content_retry("zwrose/superheroes", ".release-please-manifest.json", head_sha)
+    RB._gh_read_file_content_retry(
+        "zwrose/superheroes", "plugins/superheroes/CHANGELOG.md", head_sha
+    )
+    assert all(ref == head_sha for _path, ref in calls)
+    assert len(calls) == 2
+
+
+def test_notice_uses_github_warning_annotation(monkeypatch, capsys):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    result = RB.EvaluateResult(ok=True, status="pass", notices=["soft signal"])
+    RB._print_report(result)
+    out = capsys.readouterr().out
+    assert "::warning::soft signal" in out
+    assert "notice: soft signal" not in out
+
+
+def test_notice_plain_stdout_locally(monkeypatch, capsys):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    result = RB.EvaluateResult(ok=True, status="pass", notices=["local hint"])
+    RB._print_report(result)
+    out = capsys.readouterr().out
+    assert "notice: local hint" in out
+    assert "::warning::" not in out
+
+
+def test_main_integration_omitted_commit_fails(tmp_path, monkeypatch):
+    import shutil
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    pkg = repo / "plugins" / "superheroes"
+    pkg.mkdir(parents=True)
+    (pkg / "marker.txt").write_text("touch\n")
+    (repo / ".release-please-manifest.json").write_text(
+        json.dumps({"plugins/superheroes": "0.23.0"})
+    )
+    shutil.copy(_CONFIG_PATH, repo / "release-please-config.json")
+    (repo / ".github").mkdir()
+    (repo / ".github" / "release-exclusions.txt").write_text("# empty\n")
+
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "chore: bootstrap"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "tag", "superheroes-v0.23.0"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    (pkg / "marker.txt").write_text("touch2\n")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "deps(superheroes): bump pinned action hash"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+
+    pinned_sha = "deadbeef" * 5
+
+    def fake_gh(args):
+        if args[0].startswith("repos/example/superheroes/pulls"):
+            return [
+                {
+                    "number": 99,
+                    "head": {
+                        "ref": "release-please--branches--main--components--superheroes",
+                        "sha": pinned_sha,
+                    },
+                }
+            ]
+        if "contents/.release-please-manifest.json" in args[0]:
+            return {
+                "content": __import__("base64")
+                .b64encode(json.dumps({"plugins/superheroes": "0.23.1"}).encode())
+                .decode()
+            }
+        if "contents/plugins/superheroes/CHANGELOG.md" in args[0]:
+            body = _release_changelog("0.23.1", "")
+            return {
+                "content": __import__("base64").b64encode(body.encode()).decode()
+            }
+        raise AssertionError(f"unexpected gh api call: {args}")
+
+    monkeypatch.setattr(RB, "_run_gh", fake_gh)
+    exit_code = RB.main(
+        [
+            "--repo",
+            "example/superheroes",
+            "--repo-root",
+            str(repo),
+        ]
+    )
+    assert exit_code == 1

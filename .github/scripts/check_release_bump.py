@@ -29,13 +29,19 @@ _cc_spec = importlib.util.spec_from_file_location(
 _cc_mod = importlib.util.module_from_spec(_cc_spec)
 _cc_spec.loader.exec_module(_cc_mod)
 TYPES: tuple[str, ...] = _cc_mod.TYPES
+# release-please-config.json includes `deps`; the PR-title checker does not.
+_PARSE_TYPES: tuple[str, ...] = tuple(dict.fromkeys((*TYPES, "deps")))
 
 _SUBJECT_CAPTURE_RE = re.compile(
-    r"^(" + "|".join(TYPES) + r")"
+    r"^(" + "|".join(_PARSE_TYPES) + r")"
     r"(?:\(([^()\n]+)\))?"
     r"(!)?"
     r": (.+)$"
 )
+
+_RELEASE_MANIFEST = ".release-please-manifest.json"
+_SECTION_HEADING_RE = re.compile(r"^## \[(\d+\.\d+\.\d+)\]")
+_COMMIT_LINK_RE = re.compile(r"/commit/([^)\s]+)", re.IGNORECASE)
 
 _RELEASE_COMMIT_RE = re.compile(
     r"^chore\([^()\n]+\): release (?:\S+ )?\d+\.\d+\.\d+(?: \(#\d+\))?$"
@@ -65,6 +71,7 @@ class Commit:
     body: str = ""
     touches_package: bool = False
     zero_file: bool = False
+    touches_manifest: bool = False
 
 
 @dataclass
@@ -110,6 +117,11 @@ def is_release_commit(subject: str) -> bool:
     return _RELEASE_COMMIT_RE.match(first) is not None
 
 
+def is_release_cut_commit(commit: Commit) -> bool:
+    """Release-please's own cut commit — title shape plus manifest touch."""
+    return is_release_commit(commit.subject) and commit.touches_manifest
+
+
 def releasing_types(config_dict: dict[str, Any]) -> frozenset[str]:
     sections = config_dict.get("changelog-sections", [])
     return frozenset(
@@ -124,11 +136,12 @@ def belongs_to_package(commit: Commit) -> bool:
 def completeness_population(
     commits: list[Commit], releasing: frozenset[str]
 ) -> list[Commit]:
+    """Non-hidden conventional commits that must appear in the changelog."""
     out: list[Commit] = []
     for c in commits:
         if not belongs_to_package(c):
             continue
-        if is_release_commit(c.subject):
+        if is_release_cut_commit(c):
             continue
         parsed = parse_subject(c.subject)
         if parsed is None:
@@ -140,18 +153,26 @@ def completeness_population(
     return out
 
 
-def floor_population(commits: list[Commit], releasing: frozenset[str]) -> list[Commit]:
-    base = {c.sha: c for c in completeness_population(commits, releasing)}
+def floor_population(commits: list[Commit]) -> list[Commit]:
+    """Every package-belonging conventional commit that drives the version floor."""
+    base: dict[str, Commit] = {}
     for c in commits:
         if not belongs_to_package(c):
             continue
-        if is_release_commit(c.subject):
+        if is_release_cut_commit(c):
+            continue
+        if parse_subject(c.subject) is not None:
+            base[c.sha] = c
+    for c in commits:
+        if not belongs_to_package(c):
+            continue
+        if is_release_cut_commit(c):
             continue
         parsed = parse_subject(c.subject)
         if parsed is None:
             continue
         _, _, breaking, _ = parsed
-        if breaking:
+        if not breaking and body_declares_breaking(c.body):
             base[c.sha] = c
     return list(base.values())
 
@@ -239,13 +260,56 @@ def changelog_bullets(changelog_text: str) -> list[str]:
     return [ln for ln in changelog_text.splitlines() if ln.startswith("* ")]
 
 
-def _bullet_carries_sha(bullet: str, sha: str) -> tuple[bool, bool]:
-    """Return (carries_sha, abbrev_only)."""
+def extract_release_section(changelog_text: str, proposed_version: str) -> str:
+    """Return the changelog body for *proposed_version* only (not prior releases)."""
+    lines = changelog_text.splitlines()
+    captured: list[str] = []
+    in_section = False
+    for line in lines:
+        m = _SECTION_HEADING_RE.match(line)
+        if m:
+            if m.group(1) == proposed_version:
+                in_section = True
+                captured = []
+                continue
+            if in_section:
+                break
+            continue
+        if in_section:
+            captured.append(line)
+    return "\n".join(captured)
+
+
+def _bullet_commit_shas(bullet: str) -> list[str]:
+    return [m.group(1).lower() for m in _COMMIT_LINK_RE.finditer(bullet)]
+
+
+def _link_target_matches_sha(link_sha: str, sha: str) -> tuple[bool, bool]:
+    """Return (matches, abbrev_only) for a /commit/<target> link."""
+    link = link_sha.lower()
     full = sha.lower()
-    abbrev = sha[:7].lower()
-    lower = bullet.lower()
-    has_full = full in lower
-    has_abbrev = re.search(r"\b" + re.escape(abbrev) + r"\b", lower) is not None
+    abbrev = full[:7]
+    if link == full:
+        return True, False
+    if len(link) == 7 and link == abbrev:
+        return True, True
+    return False, False
+
+
+def _bullet_carries_sha(bullet: str, sha: str) -> tuple[bool, bool]:
+    """Return (carries_sha, abbrev_only) using /commit/<sha> link targets only."""
+    link_shas = _bullet_commit_shas(bullet)
+    if not link_shas:
+        return False, False
+    has_full = False
+    has_abbrev = False
+    for link in link_shas:
+        matches, abbrev_only = _link_target_matches_sha(link, sha)
+        if matches:
+            if abbrev_only:
+                has_abbrev = True
+            else:
+                has_full = True
     if not has_full and not has_abbrev:
         return False, False
     return True, has_abbrev and not has_full
@@ -299,7 +363,7 @@ def evaluate(
         result.ok = False
         return result
 
-    floor_pop = floor_population(commits, releasing)
+    floor_pop = floor_population(commits)
     complete_pop = completeness_population(commits, releasing)
     result.floor_population = floor_pop
     result.completeness_population = complete_pop
@@ -310,7 +374,7 @@ def evaluate(
     for c in commits:
         if not belongs_to_package(c):
             continue
-        if is_release_commit(c.subject):
+        if is_release_cut_commit(c):
             continue
         if parse_subject(c.subject) is None:
             result.notices.append(
@@ -323,6 +387,16 @@ def evaluate(
                 f"version floor is derived from titles only; eyeball the proposed bump"
             )
 
+    if complete_pop and release_pr is None:
+        subjects = [f"  {c.sha[:7]} {c.subject}" for c in complete_pop]
+        result.status = "fail"
+        result.failures.append(
+            f"{len(complete_pop)} changelog-visible commits since {tag} but no open "
+            f"release PR:\n" + "\n".join(subjects)
+        )
+        result.ok = False
+        return result
+
     if not floor_pop:
         result.status = "pass"
         result.notices.insert(
@@ -332,17 +406,18 @@ def evaluate(
         return result
 
     if release_pr is None:
-        subjects = [f"  {c.sha[:7]} {c.subject}" for c in floor_pop]
-        result.status = "fail"
-        result.failures.append(
-            f"{len(floor_pop)} eligible commits since {tag} but no open release PR:\n"
-            + "\n".join(subjects)
+        result.status = "pass"
+        result.notices.insert(
+            0,
+            f"{len(floor_pop)} version-floor commits since {tag} but none are "
+            f"changelog-visible — no release PR to validate",
         )
-        result.ok = False
+        result.ok = True
         return result
 
     proposed = release_pr["proposed_version"]
     changelog_text = release_pr.get("changelog_text", "")
+    release_section = extract_release_section(changelog_text, proposed)
     result.proposed_version = proposed
     result.release_pr_number = release_pr.get("number")
 
@@ -361,7 +436,7 @@ def evaluate(
         if parsed is None:
             continue
         _, _, _, desc = parsed
-        presence, abbrev_only = changelog_presence(c.sha, desc, changelog_text)
+        presence, abbrev_only = changelog_presence(c.sha, desc, release_section)
 
         if presence == "entry":
             if abbrev_only:
@@ -373,7 +448,7 @@ def evaluate(
         ack = exclusions.get(c.sha)
         if ack is not None:
             repl_sha, _date, reason = ack
-            repl_presence, _ = changelog_presence(repl_sha, "", changelog_text)
+            repl_presence, _ = changelog_presence(repl_sha, "", release_section)
             if repl_presence != "absent":
                 result.notices.append(
                     f"acknowledged exclusion: {c.sha} — re-stated as {repl_sha} — {reason}"
@@ -404,7 +479,7 @@ def evaluate(
             )
 
     for orig_sha, (repl_sha, _date, reason) in exclusions.items():
-        orig_presence, _ = changelog_presence(orig_sha, "", changelog_text)
+        orig_presence, _ = changelog_presence(orig_sha, "", release_section)
         if orig_presence != "absent":
             result.notices.append(
                 f"stale acknowledgement: {orig_sha} is present in changelog "
@@ -497,6 +572,18 @@ def _load_commits_since_tag(
             ["diff-tree", "--no-commit-id", "--name-only", "-r", sha],
             cwd=repo_root,
         ).splitlines()
+        manifest_files = _run_git(
+            [
+                "diff-tree",
+                "--no-commit-id",
+                "--name-only",
+                "-r",
+                sha,
+                "--",
+                _RELEASE_MANIFEST,
+            ],
+            cwd=repo_root,
+        ).splitlines()
         commits.append(
             Commit(
                 sha=sha,
@@ -504,6 +591,7 @@ def _load_commits_since_tag(
                 body=body,
                 touches_package=bool(pkg_files),
                 zero_file=len(all_files) == 0,
+                touches_manifest=bool(manifest_files),
             )
         )
     return commits
@@ -536,6 +624,7 @@ def _find_release_pr(
             return {
                 "number": pr["number"],
                 "head_ref": pr["head"]["ref"],
+                "head_sha": pr["head"]["sha"],
             }
         if attempt < retries - 1:
             time.sleep(delay_s)
@@ -550,6 +639,71 @@ def _gh_read_file_content(repo: str, path: str, ref: str) -> str:
     return raw
 
 
+def _gh_read_file_content_retry(
+    repo: str,
+    path: str,
+    ref: str,
+    *,
+    retries: int = 3,
+    delay_s: float = 5.0,
+) -> str:
+    last_err: Exception | None = None
+    for attempt in range(retries):
+        try:
+            return _gh_read_file_content(repo, path, ref)
+        except RuntimeError as e:
+            last_err = e
+            if attempt < retries - 1:
+                time.sleep(delay_s)
+    assert last_err is not None
+    raise last_err
+
+
+def _github_actions() -> bool:
+    return os.environ.get("GITHUB_ACTIONS") == "true"
+
+
+def _emit_notice(msg: str) -> None:
+    if _github_actions():
+        escaped = msg.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        print(f"::warning::{escaped}")
+    else:
+        print(f"notice: {msg}")
+
+
+def _append_step_summary(result: EvaluateResult) -> None:
+    if not _github_actions():
+        return
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+    pr_part = (
+        str(result.release_pr_number) if result.release_pr_number is not None else "—"
+    )
+    proposed = result.proposed_version if result.proposed_version is not None else "—"
+    lines = [
+        "## Release-bump tripwire",
+        "",
+        f"- tag: `{result.tag}`",
+        f"- last version: `{result.last_version}`",
+        f"- eligible (floor): {result.eligible_count}",
+        f"- proposed: `{proposed}`",
+        f"- release PR: #{pr_part}",
+        f"- status: **{result.status}**",
+        "",
+    ]
+    if result.failures:
+        lines.append("### Failures")
+        lines.extend(f"- {msg}" for msg in result.failures)
+        lines.append("")
+    if result.notices:
+        lines.append("### Notices")
+        lines.extend(f"- {msg}" for msg in result.notices)
+        lines.append("")
+    with open(summary_path, "a", encoding="utf-8") as fh:
+        fh.write("\n".join(lines))
+
+
 def _print_report(result: EvaluateResult) -> None:
     pr_part = (
         str(result.release_pr_number) if result.release_pr_number is not None else "—"
@@ -562,7 +716,8 @@ def _print_report(result: EvaluateResult) -> None:
     for msg in result.failures:
         print(f"FAIL: {msg}")
     for msg in result.notices:
-        print(f"notice: {msg}")
+        _emit_notice(msg)
+    _append_step_summary(result)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -686,17 +841,18 @@ def main(argv: list[str] | None = None) -> int:
     exclusions, exclusion_errors = parse_exclusions(exclusion_text)
 
     release_pr: dict[str, Any] | None = None
-    floor_pop = floor_population(commits, releasing)
-    if floor_pop:
+    complete_pop = completeness_population(commits, releasing)
+    if complete_pop or floor_population(commits):
         try:
             pr_meta = _find_release_pr(repo, component)
         except RuntimeError as e:
             sys.stderr.write(f"error: {e}\n")
             return 1
         if pr_meta is not None:
+            head_sha = pr_meta["head_sha"]
             try:
-                manifest_text = _gh_read_file_content(
-                    repo, args.manifest, pr_meta["head_ref"]
+                manifest_text = _gh_read_file_content_retry(
+                    repo, args.manifest, head_sha
                 )
                 pr_manifest = json.loads(manifest_text)
                 if args.package not in pr_manifest:
@@ -705,10 +861,10 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 proposed_version = pr_manifest[args.package]
                 parse_version(proposed_version)
-                changelog_text = _gh_read_file_content(
+                changelog_text = _gh_read_file_content_retry(
                     repo,
                     f"{args.package}/{changelog_rel}",
-                    pr_meta["head_ref"],
+                    head_sha,
                 )
                 release_pr = {
                     "number": pr_meta["number"],
