@@ -109,7 +109,9 @@ stated unlock condition is met — cite this ledger instead of re-arguing.
   between sweeps — either reopens both the gate question and the deferred review-time
   option. *(Scoped exception, owner-ratified 2026-07-31: a minimal safety floor on an
   **irreversible local destructive action** — the worktree guard (issue #682), alongside
-  the owner-authority gate (#482) already recorded in §1.1. The banned class is
+  the owner-authority gate (#482) already recorded in §1.1. A third member of this class
+  requires **owner ratification per member, with recorded occurrence evidence** (same bar
+  as this member and the owner-authority gate). The banned class is
   **analysis and architecture enforcement** that belongs in the owner's toolchain — checks
   that *recommend*; a safety floor on an irreversible action is a different job, because
   there is nothing to recommend to once the work is already gone. Evidence: eight recorded

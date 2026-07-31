@@ -19,17 +19,11 @@ _GIT_GLOBAL_OPT_WITH_VALUE = {
     "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
 }
 
-_ACTION_ORDER = (
-    "checkout-path",
-    "checkout-force",
-    "switch-force",
-    "restore",
-    "reset-hard",
-    "clean",
-    "checkout-index-force",
-    "rm-force",
-    "worktree-remove-force",
-)
+_DESTRUCTIVE_SUBCOMMANDS = frozenset({
+    "checkout", "checkout-index", "restore", "reset", "clean", "switch", "rm", "worktree",
+})
+
+_SHELL_PREFIXES = frozenset({"!", "then", "do", "else", "elif"})
 
 _REFUSAL_TEMPLATE = (
     "superheroes worktree guard: this `git {action}` would discard {count} uncommitted "
@@ -46,6 +40,14 @@ _INDETERMINATE_TEMPLATE = (
     "destroy uncommitted work — it may target another worktree, or the repository could "
     "not be inspected — so it is refused (fail-closed). Commit or `git stash -u` your "
     "work first, or revert a probe edit with an inverse Edit rather than a git discard."
+)
+
+_UNPARSED_TEMPLATE = (
+    "superheroes worktree guard: could not confidently parse this command's git "
+    "invocation — it may include a destructive discard subcommand — so it is refused "
+    "(fail-closed) rather than risk wiping uncommitted work. Commit or `git stash -u` "
+    "your work first, or revert a probe edit with an inverse Edit rather than a git "
+    "discard."
 )
 
 _GIT_TIMEOUT = 5
@@ -90,6 +92,9 @@ def _split_segments(command):
             current.append(ch)
             i += 1
             continue
+        if ch == "\\" and i + 1 < n and command[i + 1] == "\n":
+            i += 2
+            continue
         if ch == ";":
             flush()
             i += 1
@@ -102,6 +107,10 @@ def _split_segments(command):
             flush()
             i += 1
             continue
+        if ch == ")":
+            flush()
+            i += 1
+            continue
         if ch == "|":
             if i + 1 < n and command[i + 1] == "|":
                 flush()
@@ -110,9 +119,13 @@ def _split_segments(command):
             flush()
             i += 1
             continue
-        if ch == "&" and i + 1 < n and command[i + 1] == "&":
+        if ch == "&":
+            if i + 1 < n and command[i + 1] == "&":
+                flush()
+                i += 2
+                continue
             flush()
-            i += 2
+            i += 1
             continue
         current.append(ch)
         i += 1
@@ -171,10 +184,19 @@ def _tokenize_segment(segment):
     return tokens
 
 
-def _expand_clustered_flags(flag_token):
+def _expand_clustered_flags(flag_token, option_specs=None):
     """Expand a clustered short-option token like -fd or -SW into single-letter flags."""
     if not flag_token.startswith("-") or flag_token.startswith("--"):
         return [flag_token]
+    if option_specs:
+        for key, need in option_specs.items():
+            if not need:
+                continue
+            if key.startswith("-") and not key.startswith("--") and len(key) == 2:
+                letter = key[1]
+                rest = flag_token[1:]
+                if rest.startswith(letter) and len(rest) > 1:
+                    return [key, rest[1:]]
     letters = flag_token[1:]
     if not letters or not letters.isalpha():
         return [flag_token]
@@ -200,18 +222,17 @@ def _skip_git_globals(tokens):
         tok = tokens[i]
         if tok == "--":
             return i + 1 if i + 1 < len(tokens) else None
-        if tok in _GIT_GLOBAL_OPTS:
+        if not tok.startswith("-"):
+            return i
+        base = tok.split("=", 1)[0]
+        if base in _GIT_GLOBAL_OPTS:
             i += 1
             continue
-        base = tok.split("=", 1)[0]
         if base in _GIT_GLOBAL_OPT_WITH_VALUE:
             _, consumed = _option_value(tokens, i)
             i += 1 + consumed
             continue
-        if tok.startswith("-") and not tok.startswith("--"):
-            # Unknown short global — treat as subcommand boundary.
-            return i
-        return i
+        i += 1
     return None
 
 
@@ -223,11 +244,26 @@ def _parse_git_invocation(tokens):
     subcommand = tokens[sub_idx]
     rest = tokens[sub_idx + 1:]
     return {
-        "globals": tokens[1:sub_idx],
         "subcommand": subcommand,
         "args": rest,
-        "tokens": tokens,
     }
+
+
+def _strip_shell_prefixes(tokens):
+    """Strip leading shell reserved words so `! git` and `{ git` are visible."""
+    while tokens:
+        tok = tokens[0]
+        if tok in _SHELL_PREFIXES:
+            tokens = tokens[1:]
+            continue
+        if tok == "{":
+            tokens = tokens[1:]
+            continue
+        if tok.startswith("{") and len(tok) > 1:
+            tokens = [tok[1:]] + tokens[1:]
+            continue
+        break
+    return tokens
 
 
 def _iter_git_segments(command):
@@ -238,7 +274,6 @@ def _iter_git_segments(command):
         tokens = _tokenize_segment(segment)
         if not tokens:
             continue
-        # Strip leading env assignments (VAR=value).
         start = 0
         while start < len(tokens) and "=" in tokens[start] and not tokens[start].startswith("="):
             key = tokens[start].split("=", 1)[0]
@@ -246,7 +281,7 @@ def _iter_git_segments(command):
                 start += 1
                 continue
             break
-        tokens = tokens[start:]
+        tokens = _strip_shell_prefixes(tokens[start:])
         if tokens and tokens[0] == "git":
             parsed = _parse_git_invocation(tokens)
             if parsed is not None:
@@ -261,19 +296,38 @@ def _args_before_separator(args):
     return args, False, []
 
 
-def _flag_present(args, short_flags, long_flags=()):
+def _flag_present(args, short_flags, long_flags=(), option_specs=None):
     """True if any short/long flag appears before a bare `--`."""
     pre, _, _ = _args_before_separator(args)
     long_bases = {lf.split("=", 1)[0] for lf in long_flags}
-    for tok in pre:
+    specs = option_specs or {}
+    i = 0
+    while i < len(pre):
+        tok = pre[i]
         if not tok.startswith("-"):
+            i += 1
             continue
-        for part in _expand_clustered_flags(tok):
-            if part in short_flags:
-                return True
-            base = part.split("=", 1)[0]
-            if base in long_bases:
-                return True
+        expanded = _expand_clustered_flags(tok, specs)
+        if len(expanded) > 1:
+            for part in expanded:
+                if part in short_flags:
+                    return True
+                base = part.split("=", 1)[0]
+                if base in long_bases:
+                    return True
+            i += 1
+            continue
+        part = expanded[0]
+        base = part.split("=", 1)[0]
+        if part in short_flags or base in long_bases:
+            return True
+        if base in specs and specs[base]:
+            _, consumed = _option_value(pre, i)
+            i += 1 + consumed
+            continue
+        if part.startswith("--") and "=" not in part and base[2:] in {lf[2:] for lf in long_flags if lf.startswith("--")}:
+            return True
+        i += 1
     return False
 
 
@@ -284,7 +338,7 @@ def _consume_options(pre_args, option_specs):
     i = 0
     while i < len(pre_args):
         tok = pre_args[i]
-        expanded = _expand_clustered_flags(tok)
+        expanded = _expand_clustered_flags(tok, option_specs)
         consumed_extra = 0
         if len(expanded) > 1:
             for part in expanded:
@@ -293,6 +347,13 @@ def _consume_options(pre_args, option_specs):
                     spec = option_specs[part]
                     if spec:
                         consumed_extra = max(consumed_extra, spec)
+            i += 1 + consumed_extra
+            continue
+        if len(expanded) == 2 and expanded[0] in option_specs:
+            matched.add(expanded[0])
+            need = option_specs[expanded[0]]
+            if need:
+                operands.append(expanded[1])
             i += 1
             continue
         part = expanded[0]
@@ -330,12 +391,18 @@ _CHECKOUT_OPTS = {
     "--ignore-skip-worktree-bits": 0,
 }
 
+_CLEAN_OPTS = {
+    "-d": 0, "-f": 0, "-i": 0, "-n": 0, "--dry-run": 0,
+    "-e": 1, "--exclude": 1,
+    "-x": 0, "-X": 0, "-q": 0, "--quiet": 0,
+}
+
 
 def _checkout_path_match(args):
     pre, has_sep, post = _args_before_separator(args)
     if has_sep:
         return True
-    if _flag_present(args, (), ("--pathspec-from-file", "--pathspec-from-file-nul")):
+    if _flag_present(args, (), ("--pathspec-from-file", "--pathspec-from-file-nul"), _CHECKOUT_OPTS):
         return True
     _, operands = _consume_options(pre, _CHECKOUT_OPTS)
     if len(operands) >= 2:
@@ -343,6 +410,22 @@ def _checkout_path_match(args):
     if post:
         return True
     return False
+
+
+def _single_checkout_operand(args):
+    """Return the lone operand for `git checkout <one>`, or None."""
+    pre, has_sep, post = _args_before_separator(args)
+    if has_sep or post:
+        return None
+    if _flag_present(args, ("-b", "-B", "-f"), ("--force",), _CHECKOUT_OPTS):
+        if _flag_present(args, ("-f",), ("--force",), _CHECKOUT_OPTS):
+            return None
+        if _flag_present(args, ("-b", "-B"), (), _CHECKOUT_OPTS):
+            return None
+    _, operands = _consume_options(pre, _CHECKOUT_OPTS)
+    if len(operands) == 1:
+        return operands[0]
+    return None
 
 
 def _restore_match(args):
@@ -355,7 +438,11 @@ def _restore_match(args):
 
 
 def _clean_match(args):
-    if _flag_present(args, ("-n",), ("--dry-run",)):
+    if _flag_present(args, (), ("--no-dry-run",), _CLEAN_OPTS):
+        return True
+    pre, _, _ = _args_before_separator(args)
+    matched, _ = _consume_options(pre, _CLEAN_OPTS)
+    if "-n" in matched or "--dry-run" in matched:
         return False
     return True
 
@@ -364,8 +451,8 @@ def _rm_force_match(args):
     return _flag_present(args, ("-f",), ("--force",))
 
 
-def _force_match(args):
-    return _flag_present(args, ("-f",), ("--force",))
+def _force_match(args, option_specs=None):
+    return _flag_present(args, ("-f",), ("--force",), option_specs)
 
 
 def _switch_force_match(args):
@@ -391,8 +478,10 @@ def _segment_action(parsed):
     if sub == "checkout":
         if _checkout_path_match(args):
             return "checkout-path"
-        if _force_match(args):
+        if _force_match(args, _CHECKOUT_OPTS):
             return "checkout-force"
+        if _single_checkout_operand(args) is not None:
+            return "checkout-single"
         return None
     if sub == "switch":
         if _switch_force_match(args):
@@ -425,18 +514,135 @@ def _segment_action(parsed):
     return None
 
 
-def destructive_discard_action(command):
-    """Return a destructive-discard action name, or None.
+def _operand_is_existing_path(cwd, operand):
+    if operand in (".", "./"):
+        return True
+    path = os.path.join(cwd, operand)
+    return os.path.exists(path)
 
-    Scans command-position git segments left-to-right; the first matching action wins.
-    Precedence within a segment follows _ACTION_ORDER. Non-str → None. Never raises."""
-    if not isinstance(command, str):
+
+def _operand_resolves_as_commit(cwd, operand):
+    result = _run_git(cwd, "rev-parse", "--verify", "--quiet", f"{operand}^{{commit}}")
+    return result.returncode == 0
+
+
+def _resolve_single_operand_checkout(cwd, operand):
+    """Resolve single-operand checkout against the repository. Fail-closed."""
+    git_dir = _find_git_dir(cwd)
+    if git_dir == "indeterminate":
+        return "indeterminate"
+    if git_dir is None:
         return None
-    for parsed in _iter_git_segments(command):
-        action = _segment_action(parsed)
-        if action is not None:
-            return action
+    if _operand_is_existing_path(cwd, operand):
+        return "checkout-path"
+    if not _operand_resolves_as_commit(cwd, operand):
+        return "checkout-path"
     return None
+
+
+def _segment_destructive_action(parsed, cwd=None):
+    """Resolve one parsed git invocation to a destructive action, or None if safe."""
+    action = _segment_action(parsed)
+    if action == "checkout-single":
+        operand = _single_checkout_operand(parsed["args"])
+        if operand is None:
+            return None
+        if cwd is None:
+            return None
+        resolved = _resolve_single_operand_checkout(cwd, operand)
+        if resolved == "checkout-path":
+            return "checkout-path"
+        if resolved == "indeterminate":
+            return "checkout-path"
+        return None
+    return action
+
+
+def destructive_discard_actions(command, cwd=None):
+    """Return every destructive-discard action across all command-position git segments."""
+    if not isinstance(command, str):
+        return []
+    actions = []
+    for parsed in _iter_git_segments(command):
+        action = _segment_destructive_action(parsed, cwd)
+        if action is not None:
+            actions.append(action)
+    return actions
+
+
+def _destructive_git_precisely_safe(command, cwd):
+    """True when every parsed destructive git invocation is proven safe by the precise parser."""
+    saw_destructive = False
+    for parsed in _iter_git_segments(command):
+        if parsed["subcommand"] not in _DESTRUCTIVE_SUBCOMMANDS:
+            continue
+        saw_destructive = True
+        if _segment_destructive_action(parsed, cwd) is not None:
+            return False
+    return saw_destructive
+
+
+def destructive_discard_action(command):
+    """Return the first destructive-discard action, or None."""
+    actions = destructive_discard_actions(command)
+    return actions[0] if actions else None
+
+
+def mentions_destructive_git(command):
+    """True when the command text plausibly invokes a destructive git subcommand.
+
+    Deliberately CRUDE and over-inclusive: it exists to catch what the precise parser misses.
+    Quote-aware only to the extent needed to not fire on `git commit -m 'git checkout -- f'`.
+    """
+    if not isinstance(command, str):
+        return False
+    i = 0
+    n = len(command)
+    in_single = False
+    in_double = False
+    while i < n:
+        ch = command[i]
+        if in_single:
+            if ch == "'":
+                in_single = False
+            i += 1
+            continue
+        if in_double:
+            if ch == '"':
+                in_double = False
+            i += 1
+            continue
+        if ch == "'":
+            in_single = True
+            i += 1
+            continue
+        if ch == '"':
+            in_double = True
+            i += 1
+            continue
+        if ch.isalpha() or ch == "-" or (ch == "." and i + 1 < n):
+            start = i
+            while i < n and not command[i].isspace() and command[i] not in ";|&()":
+                i += 1
+            word = command[start:i]
+            if word == "git":
+                j = i
+                while j < n:
+                    while j < n and command[j].isspace():
+                        j += 1
+                    if j >= n or command[j] in ";|&()":
+                        break
+                    tok_start = j
+                    while j < n and not command[j].isspace() and command[j] not in ";|&()":
+                        j += 1
+                    token = command[tok_start:j]
+                    if not token.startswith("-"):
+                        if token in _DESTRUCTIVE_SUBCOMMANDS:
+                            return True
+                        break
+            continue
+        i += 1
+    return False
 
 
 def _segment_has_unresolvable_target(tokens):
@@ -455,6 +661,7 @@ def _segment_has_unresolvable_target(tokens):
     if start < len(tokens) and tokens[start] in ("cd", "pushd"):
         return True
     tokens = tokens[start:]
+    tokens = _strip_shell_prefixes(tokens)
     if tokens and tokens[0] == "git":
         i = 1
         while i < len(tokens):
@@ -464,6 +671,8 @@ def _segment_has_unresolvable_target(tokens):
             base = tok.split("=", 1)[0]
             if base in ("-C", "--git-dir", "--work-tree"):
                 return True
+            if not tok.startswith("-"):
+                return False
             if base in _GIT_GLOBAL_OPTS:
                 i += 1
                 continue
@@ -471,7 +680,7 @@ def _segment_has_unresolvable_target(tokens):
                 _, consumed = _option_value(tokens, i)
                 i += 1 + consumed
                 continue
-            return False
+            i += 1
     return False
 
 
@@ -519,9 +728,34 @@ def _run_git(cwd, *args):
 def _clean_has_flag(command, flag):
     for parsed in _iter_git_segments(command):
         if parsed["subcommand"] == "clean":
-            if _flag_present(parsed["args"], (flag,), (flag,)):
+            pre, _, _ = _args_before_separator(parsed["args"])
+            matched, _ = _consume_options(pre, _CLEAN_OPTS)
+            if flag in matched:
                 return True
     return False
+
+
+def _worktree_remove_target(command):
+    """Resolve the worktree path from a `git worktree remove --force` invocation."""
+    for parsed in _iter_git_segments(command):
+        if parsed["subcommand"] != "worktree":
+            continue
+        args = parsed["args"]
+        if not args or args[0] != "remove":
+            continue
+        rest = args[1:]
+        pre, has_sep, post = _args_before_separator(rest)
+        matched, operands = _consume_options(
+            pre,
+            {"-f": 0, "--force": 0},
+        )
+        if "-f" not in matched and "--force" not in matched:
+            continue
+        if has_sep and post:
+            return post[0]
+        if operands:
+            return operands[-1]
+    return None
 
 
 def at_risk(cwd, action, command):
@@ -530,10 +764,17 @@ def at_risk(cwd, action, command):
         return ("indeterminate", 0)
     if not os.path.isdir(cwd):
         return ("indeterminate", 0)
-    if action == "worktree-remove-force":
-        return ("indeterminate", 0)
 
-    git_dir = _find_git_dir(cwd)
+    probe_cwd = cwd
+    if action == "worktree-remove-force":
+        target = _worktree_remove_target(command)
+        if target is None:
+            return ("indeterminate", 0)
+        probe_cwd = target if os.path.isabs(target) else os.path.join(cwd, target)
+        if not os.path.isdir(probe_cwd):
+            return ("indeterminate", 0)
+
+    git_dir = _find_git_dir(probe_cwd)
     if git_dir == "indeterminate":
         return ("indeterminate", 0)
     if git_dir is None:
@@ -544,12 +785,20 @@ def at_risk(cwd, action, command):
             "checkout-path", "restore", "rm-force", "checkout-index-force",
         ):
             result = _run_git(
-                cwd, "status", "--porcelain",
+                probe_cwd, "status", "--porcelain",
                 "--untracked-files=no", "--ignore-submodules=none",
             )
-        elif action in ("checkout-force", "switch-force", "reset-hard"):
+        elif action in ("checkout-force", "switch-force", "worktree-remove-force"):
+            # checkout-force / switch-force can overwrite ignored paths the target tracks.
             result = _run_git(
-                cwd, "status", "--porcelain",
+                probe_cwd, "status", "--porcelain",
+                "--untracked-files=normal", "--ignore-submodules=none",
+                "--ignored=matching",
+            )
+        elif action == "reset-hard":
+            # reset --hard leaves ignored files alone; do not probe them (false denial).
+            result = _run_git(
+                probe_cwd, "status", "--porcelain",
                 "--untracked-files=normal", "--ignore-submodules=none",
             )
         elif action == "clean":
@@ -559,11 +808,7 @@ def at_risk(cwd, action, command):
                     clean_args.append("-x")
                 if _clean_has_flag(command, "-X"):
                     clean_args.append("-X")
-                # Do not forward --exclude=<pattern> into the dry run: it is unrelated
-                # to -X (exclude adds a pattern; -X removes only ignored files). Omitting
-                # excludes makes the probe list at least as many candidates as the real
-                # command would delete — fail-closed for this guard.
-            result = _run_git(cwd, *clean_args)
+            result = _run_git(probe_cwd, *clean_args)
         else:
             return ("indeterminate", 0)
 
@@ -590,13 +835,14 @@ def indeterminate_message(action):
     return _INDETERMINATE_TEMPLATE.format(action=action)
 
 
+def unparsed_message():
+    """Verbatim fail-closed refusal when the command could not be confidently parsed."""
+    return _UNPARSED_TEMPLATE
+
+
 def classify(command, cwd):
     """('deny'|'allow', reason) for a candidate Bash command. Fails closed on errors."""
     try:
-        action = destructive_discard_action(command)
-        if not action:
-            return ("allow", "")
-
         try:
             import owner_authority
             state = owner_authority.calibration_state(cwd)
@@ -605,15 +851,28 @@ def classify(command, cwd):
         if state == "uncalibrated":
             return ("allow", "")
 
-        if not target_is_resolvable(command):
-            return ("deny", indeterminate_message(action))
+        actions = destructive_discard_actions(command, cwd)
+        if not actions:
+            if mentions_destructive_git(command) and not _destructive_git_precisely_safe(
+                command, cwd,
+            ):
+                return ("deny", unparsed_message())
+            return ("allow", "")
 
-        risk_state, count = at_risk(cwd, action, command)
-        if risk_state == "at-risk":
-            return ("deny", refusal_message(action, count))
-        if risk_state == "indeterminate":
-            return ("deny", indeterminate_message(action))
+        if not target_is_resolvable(command):
+            return ("deny", indeterminate_message(actions[0]))
+
+        for action in actions:
+            risk_state, count = at_risk(cwd, action, command)
+            if risk_state == "at-risk":
+                return ("deny", refusal_message(action, count))
+            if risk_state == "indeterminate":
+                return ("deny", indeterminate_message(action))
+            if risk_state not in ("clean", "not-a-repo"):
+                return ("deny", indeterminate_message(action))
+
         return ("allow", "")
     except Exception:
-        action = destructive_discard_action(command) if isinstance(command, str) else None
-        return ("deny", indeterminate_message(action or "discard"))
+        actions = destructive_discard_actions(command, cwd) if isinstance(command, str) else []
+        action = actions[0] if actions else "discard"
+        return ("deny", indeterminate_message(action))

@@ -84,6 +84,10 @@ def test_issue_682_checkout_revert_wipe_allows_on_clean_tree(tmp_path, monkeypat
     ("git checkout-index -f", "checkout-index-force"),
     ("git rm -f tracked.txt", "rm-force"),
     ("git worktree remove -f ../wt", "worktree-remove-force"),
+    ("git clean -f -e -n", "clean"),
+    ("git clean -f --exclude -n", "clean"),
+    ("git -P checkout -- tracked.txt", "checkout-path"),
+    ("git --noglob-pathspecs reset --hard", "reset-hard"),
 ])
 def test_destructive_discard_action_recognises_each_shape(command, action):
     assert wg.destructive_discard_action(command) == action
@@ -207,10 +211,17 @@ def test_edge_05_git_binary_absent_denies(tmp_path, monkeypatch):
     _commit_file(repo, "f.txt", "x\n")
     with open(os.path.join(repo, "f.txt"), "w") as f:
         f.write("dirty")
-    monkeypatch.setattr(wg.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(
-        FileNotFoundError("git")))
+    calls = []
+
+    def _missing(*a, **k):
+        calls.append(1)
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(wg.subprocess, "run", _missing)
     decision, reason = wg.classify("git checkout -- f.txt", repo)
     assert decision == "deny"
+    assert reason == wg.indeterminate_message("checkout-path")
+    assert len(calls) >= 1
 
 
 def test_edge_06_git_status_timeout_denies(tmp_path, monkeypatch):
@@ -219,13 +230,17 @@ def test_edge_06_git_status_timeout_denies(tmp_path, monkeypatch):
     _commit_file(repo, "f.txt", "x\n")
     with open(os.path.join(repo, "f.txt"), "w") as f:
         f.write("dirty")
+    calls = []
 
     def _timeout(*a, **k):
+        calls.append(1)
         raise subprocess.TimeoutExpired(cmd="git", timeout=5)
 
     monkeypatch.setattr(wg.subprocess, "run", _timeout)
     decision, reason = wg.classify("git checkout -- f.txt", repo)
     assert decision == "deny"
+    assert reason == wg.indeterminate_message("checkout-path")
+    assert len(calls) >= 1
 
 
 def test_edge_07_dangling_git_symlink_denies_not_absent(tmp_path, monkeypatch):
@@ -444,9 +459,31 @@ def test_at_risk_indeterminate_for_bad_cwd():
     assert wg.at_risk("/no/such/dir", "restore", "git restore f") == ("indeterminate", 0)
 
 
-def test_at_risk_worktree_remove_force_always_indeterminate(tmp_path):
+def test_at_risk_worktree_remove_force_clean_target_allows(tmp_path):
     repo = _init_repo(tmp_path / "repo")
-    assert wg.at_risk(repo, "worktree-remove-force", "git worktree remove -f wt") == (
+    _commit_file(repo, "f.txt", "x\n")
+    wt = str(tmp_path / "wt")
+    _git(repo, "worktree", "add", "-b", "wt-branch", wt)
+    assert wg.at_risk(repo, "worktree-remove-force", f"git worktree remove -f {wt}") == (
+        "clean", 0,
+    )
+
+
+def test_at_risk_worktree_remove_force_dirty_target_at_risk(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "x\n")
+    wt = str(tmp_path / "wt")
+    _git(repo, "worktree", "add", "-b", "wt-branch", wt)
+    with open(os.path.join(wt, "f.txt"), "w") as f:
+        f.write("dirty")
+    assert wg.at_risk(repo, "worktree-remove-force", f"git worktree remove -f {wt}") == (
+        "at-risk", 1,
+    )
+
+
+def test_at_risk_worktree_remove_force_unresolvable_path_indeterminate(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    assert wg.at_risk(repo, "worktree-remove-force", "git worktree remove -f") == (
         "indeterminate", 0,
     )
 
@@ -493,3 +530,205 @@ def test_at_risk_clean_exclude_does_not_add_X_probe(tmp_path):
     # Only ignored untracked present; real git clean -fd --exclude=foo removes nothing.
     # If the probe wrongly added -X, dry-run would list file.tmp → at-risk.
     assert wg.at_risk(repo, "clean", "git clean -fd --exclude=foo") == ("clean", 0)
+
+
+# --- unparsed message --------------------------------------------------------
+
+def test_unparsed_message_verbatim():
+    expected = (
+        "superheroes worktree guard: could not confidently parse this command's git "
+        "invocation — it may include a destructive discard subcommand — so it is refused "
+        "(fail-closed) rather than risk wiping uncommitted work. Commit or `git stash -u` "
+        "your work first, or revert a probe edit with an inverse Edit rather than a git "
+        "discard."
+    )
+    assert wg.unparsed_message() == expected
+
+
+# --- unexpected probe state --------------------------------------------------
+
+def test_classify_unexpected_at_risk_state_denies(tmp_path, monkeypatch):
+    _calibrated(monkeypatch)
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "x\n")
+    with open(os.path.join(repo, "f.txt"), "w") as f:
+        f.write("dirty")
+    monkeypatch.setattr(wg, "at_risk", lambda *a, **k: ("bogus-state", 0))
+    decision, reason = wg.classify("git checkout -- f.txt", repo)
+    assert decision == "deny"
+    assert reason == wg.indeterminate_message("checkout-path")
+
+
+# --- submodule probe ---------------------------------------------------------
+
+def test_at_risk_dirty_submodule_denies(tmp_path, monkeypatch):
+    """Both status probe families pass --ignore-submodules=none."""
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "x\n")
+    calls = []
+
+    def _fake_run(cwd, *args):
+        calls.append(args)
+        if "status" in args:
+            if "--ignore-submodules=none" not in args:
+                raise AssertionError("status probe must pass --ignore-submodules=none")
+            class _Result:
+                returncode = 0
+                stdout = " M sub\n"
+            return _Result()
+        raise AssertionError("unexpected git invocation")
+
+    monkeypatch.setattr(wg, "_run_git", _fake_run)
+    assert wg.at_risk(repo, "restore", "git restore f.txt") == ("at-risk", 1)
+    assert calls
+
+
+# --- CENSUS: classify chokepoint corpus --------------------------------------
+# New parser changes are measured against this table, not by adding matcher unit tests.
+
+def _dirty_repo(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "tracked.txt", "x\n")
+    with open(os.path.join(repo, "tracked.txt"), "w") as f:
+        f.write("dirty")
+    with open(os.path.join(repo, "untracked.txt"), "w") as f:
+        f.write("new")
+    _calibrated(monkeypatch)
+    return repo
+
+
+def _clean_repo(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "tracked.txt", "x\n")
+    _calibrated(monkeypatch)
+    return repo
+
+
+def _ignored_only_repo(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, ".gitignore", "*.tmp\n", msg="ignore")
+    _commit_file(repo, "tracked.txt", "x\n")
+    with open(os.path.join(repo, "build.tmp"), "w") as f:
+        f.write("ignored")
+    _calibrated(monkeypatch)
+    return repo
+
+
+CENSUS_DENY_DIRTY = [
+    # §2 every segment, not first match
+    ("git restore tracked.txt && git checkout -f main", "dirty"),
+    ("git rm -f tracked.txt && git clean -fd", "dirty"),
+    ("git restore tracked.txt && git clean -fd", "dirty"),
+    # §3 segment splitting
+    ("(cd sub && git reset --hard)", "dirty"),
+    ("sleep 1 & git reset --hard", "dirty"),
+    ("git checkout \\\n -- README.md", "dirty"),
+    # §4 git global options
+    ("git -P checkout -- tracked.txt", "dirty"),
+    ("git --no-replace-objects checkout -- tracked.txt", "dirty"),
+    ("git --noglob-pathspecs reset --hard", "dirty"),
+    # §5 option values not read as flags
+    ("git clean -f -e -n", "dirty"),
+    ("git clean -f --exclude -n", "dirty"),
+    # §6 single-operand checkout
+    ("git checkout .", "dirty"),
+    ("git checkout README.md", "dirty"),
+    # §1 unparsed / reserved-word shapes
+    ("! git reset --hard", "dirty"),
+    ("then git reset --hard", "dirty"),
+    # one per destructive action name
+    ("git checkout -- f.txt", "dirty"),
+    ("git checkout -f main", "dirty"),
+    ("git switch -f main", "dirty"),
+    ("git restore tracked.txt", "dirty"),
+    ("git reset --hard", "dirty"),
+    ("git clean -fd", "dirty"),
+    ("git checkout-index -f", "dirty"),
+    ("git rm -f tracked.txt", "dirty"),
+    ("git worktree remove -f ../wt", "dirty"),
+]
+
+CENSUS_ALLOW = [
+    ("git status", "dirty"),
+    ("git commit -m 'document the git checkout -- hazard'", "dirty"),
+    ("git restore --staged f", "dirty"),
+    ("git restore -S f", "dirty"),
+    ("git clean -n -d", "dirty"),
+    ("git stash -u", "dirty"),
+    ("git checkout main", "dirty"),
+    ("git checkout -b new", "dirty"),
+    ("git checkout -bfeature", "dirty"),
+    # clean tree destructive forms
+    ("git checkout -- f.txt", "clean"),
+    ("git checkout -f main", "clean"),
+    ("git switch -f main", "clean"),
+    ("git restore tracked.txt", "clean"),
+    ("git reset --hard", "clean"),
+    ("git clean -fd", "clean"),
+    ("git checkout-index -f", "clean"),
+    ("git rm -f tracked.txt", "clean"),
+    # uncalibrated destructive forms
+    ("git checkout -- f.txt", "uncalibrated"),
+    ("git reset --hard", "uncalibrated"),
+    ("git clean -fd", "uncalibrated"),
+]
+
+
+@pytest.mark.parametrize("command,tree_state", CENSUS_DENY_DIRTY)
+def test_census_deny_on_dirty_tree(command, tree_state, tmp_path, monkeypatch):
+    assert tree_state == "dirty"
+    repo = _dirty_repo(tmp_path, monkeypatch)
+    if "README.md" in command:
+        _commit_file(repo, "README.md", "committed\n")
+        with open(os.path.join(repo, "README.md"), "w") as f:
+            f.write("dirty readme")
+    decision, _ = wg.classify(command, repo)
+    assert decision == "deny"
+
+
+@pytest.mark.parametrize("command,tree_state", CENSUS_ALLOW)
+def test_census_allow_cases(command, tree_state, tmp_path, monkeypatch):
+    if tree_state == "dirty":
+        repo = _dirty_repo(tmp_path, monkeypatch)
+    elif tree_state == "clean":
+        repo = _clean_repo(tmp_path, monkeypatch)
+    else:
+        repo = _init_repo(tmp_path / "repo")
+        _commit_file(repo, "tracked.txt", "x\n")
+        with open(os.path.join(repo, "tracked.txt"), "w") as f:
+            f.write("dirty")
+        monkeypatch.setattr(owner_authority, "calibration_state",
+                            lambda cwd: "uncalibrated")
+    decision, reason = wg.classify(command, repo)
+    assert decision == "allow", (command, tree_state, reason)
+
+
+def test_census_ignored_only_checkout_force_denies(tmp_path, monkeypatch):
+    """§7: checkout-force includes ignored entries in the risk probe."""
+    repo = _ignored_only_repo(tmp_path, monkeypatch)
+    decision, _ = wg.classify("git checkout -f main", repo)
+    assert decision == "deny"
+
+
+def test_census_ignored_only_reset_hard_allows(tmp_path, monkeypatch):
+    """§7: reset-hard does not include ignored entries."""
+    repo = _ignored_only_repo(tmp_path, monkeypatch)
+    assert wg.classify("git reset --hard", repo) == ("allow", "")
+
+
+def test_census_unparsed_deny_message(tmp_path, monkeypatch):
+    _calibrated(monkeypatch)
+    repo = _dirty_repo(tmp_path, monkeypatch)
+    decision, reason = wg.classify("env git reset --hard", repo)
+    assert decision == "deny"
+    assert reason == wg.unparsed_message()
+
+
+def test_destructive_discard_actions_all_segments(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "tracked.txt", "x\n")
+    actions = wg.destructive_discard_actions(
+        "git restore tracked.txt && git clean -fd", repo,
+    )
+    assert "restore" in actions
+    assert "clean" in actions
