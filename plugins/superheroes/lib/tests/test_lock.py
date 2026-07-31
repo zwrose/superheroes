@@ -1,6 +1,5 @@
 import json
 import os
-import signal
 import socket
 import subprocess
 import sys
@@ -242,7 +241,8 @@ def test_acquire_succeeds_when_exists_check_lies_once(tmp_path, monkeypatch):
 
     monkeypatch.setattr(os.path, "exists", fake_exists)
     assert lock.acquire(p) is False
-    assert os.path.exists(p)
+    assert real_exists(p)
+    assert lock.read_holder(p)["pid"] == os.getpid()
     lock.release(p)
 
 
@@ -323,7 +323,8 @@ def test_concurrent_reclaim_grants_exactly_one_holder(tmp_path):
         deadline = time.time() + 5
         while len(os.listdir(gate)) < {n_workers}:
             if time.time() >= deadline:
-                break
+                print("BARRIER-TIMEOUT")
+                sys.exit(1)
             time.sleep(0.001)
         try:
             lock.acquire({repr(p)})
@@ -357,7 +358,13 @@ def test_concurrent_reclaim_grants_exactly_one_holder(tmp_path):
                         f"round {round_idx}: worker {worker_idx} timed out; "
                         f"outcomes so far: {outcomes}"
                     )
-                outcomes.append(proc.stdout.read().strip())
+                outcome = proc.stdout.read().strip()
+                if outcome == "BARRIER-TIMEOUT":
+                    pytest.fail(
+                        f"round {round_idx}: worker {worker_idx} hit barrier timeout; "
+                        f"outcomes so far: {outcomes}"
+                    )
+                outcomes.append(outcome)
         finally:
             for proc in procs:
                 if proc.poll() is None:
