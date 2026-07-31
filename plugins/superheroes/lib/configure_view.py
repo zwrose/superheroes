@@ -195,6 +195,8 @@ def collect(cwd, root=None):
     layers = []
     try:
         cal_dir = os.path.dirname(core_md.core_path(cwd, root))
+    except core_md.RepoRootUnavailable:
+        cal_dir = None
     except OSError:
         cal_dir = None
     if cal_dir and os.path.isdir(cal_dir):

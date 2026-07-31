@@ -29,8 +29,10 @@ def _review_layer_missing(cwd, root):
     but is not a .md file — its absence surfaces through the doc-policy-provisional signal.)"""
     try:
         layer = os.path.join(os.path.dirname(core_md.core_path(cwd, root)), "review-crew.md")
-    except OSError:
+    except core_md.RepoRootUnavailable:
         # Git could not be run — repo root unknown; treat layer as missing (route to fix).
+        return True
+    except OSError:
         return True
     return not os.path.isfile(layer)
 

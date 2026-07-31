@@ -613,8 +613,10 @@ unreadable** `core.md` — a non-regular file, a dangling symlink, a file with u
 permissions, or a corrupt file — is **refused at configuration time** by name as
 `core-md-unreadable` rather than treated as absent; `dispatch_selftest.run`
 refuses the same condition when the configuration bundle carries `read_error`.
-A genuinely absent
-`core.md` remains a clean create. A gate that treats an unreadable config as "no config"
+When git cannot be run and the repository root is unknown, the accessor reports
+`root-unavailable` as `repo-root-unavailable` rather than `core-md-unreadable` or
+`legacy-profile-unsupported`. A genuinely absent `core.md` (with a known repo root)
+remains a clean create. A gate that treats an unreadable config as "no config"
 **fails open**, which is the failure this closes. The
 GPT-5.6 tier requires a sufficiently
 new Codex CLI; an unavailable model follows the observable fall-open path to

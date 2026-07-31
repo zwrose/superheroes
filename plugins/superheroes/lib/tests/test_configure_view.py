@@ -359,8 +359,8 @@ def test_collect_and_render_survive_git_unavailable(tmp_path, monkeypatch):
     assert data["layers"] == []
     assert data["core"] is None
     assert data["mode"] == mr.IN_REPO
-    assert data["drift"] is not None
-    assert data["drift"]["count"] >= 1
+    # No drift signal when git cannot resolve repo root (repo-root-unavailable is not a reconcile item).
+    assert data["drift"] is None
     screen = cv.render(str(tmp_path), root=root)
     assert isinstance(screen, str)
     assert "## Core\n(no core calibration yet)" in screen

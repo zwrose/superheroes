@@ -519,6 +519,21 @@ def test_gather_signals_directory_emits_unreadable(tmp_path, monkeypatch):
     assert any(s["type"] == "core-md-unreadable" for s in sigs)
 
 
+def test_gather_signals_greenfield_git_unavailable_no_legacy_signal(tmp_path, monkeypatch):
+    import core_md
+    import store_core as sc
+
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    monkeypatch.setattr(
+        sc, "run_git_result",
+        lambda cwd, *args: sc.GitResult(None, sc.GIT_UNAVAILABLE, "FileNotFoundError: no git"))
+    sigs = rc.gather_signals(str(tmp_path), root=root)
+    assert not any(s["type"] == "core-md-unreadable" for s in sigs)
+    assert not any(s["type"] == core_md.LEGACY_PROFILE_REASON for s in sigs)
+
+
 def test_gather_signals_greenfield_git_unavailable_emits_no_unreadable(tmp_path, monkeypatch):
     import store_core as sc
 

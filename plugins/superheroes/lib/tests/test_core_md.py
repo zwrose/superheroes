@@ -1846,10 +1846,13 @@ import store_core as SC
 
 
 def _git_unavailable(monkeypatch, detail="FileNotFoundError: no git"):
+    real = SC.run_git_result
+
     def fake(cwd, *args):
         if args == ("rev-parse", "--show-toplevel"):
             return SC.GitResult(None, SC.GIT_UNAVAILABLE, detail)
-        return SC.run_git_result(cwd, *args)
+        return real(cwd, *args)
+
     monkeypatch.setattr(SC, "run_git_result", fake)
 
 
@@ -1957,13 +1960,61 @@ def test_read_none_when_repo_root_unavailable(tmp_path, monkeypatch):
     assert CM.read(repo, root=store) is None
 
 
-def test_engine_preferences_unreadable_when_repo_root_unavailable(tmp_path, monkeypatch):
+def test_engine_preferences_root_unavailable_when_git_unavailable(tmp_path, monkeypatch):
     repo = str(tmp_path)
     store = str(tmp_path / "store")
     _git_unavailable(monkeypatch)
     cfg = CM.engine_preferences_for_gate(cwd=repo, root=store)
-    assert cfg.status == CM.CONFIG_UNREADABLE
+    assert cfg.status == CM.CONFIG_ROOT_UNAVAILABLE
     assert cfg.detail
+    assert "RepoRootUnavailable" in cfg.detail
+
+
+def test_write_refused_repo_root_unavailable(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    _git_unavailable(monkeypatch)
+    res = CM.write(
+        repo,
+        {"verifyCommand": "npm test", "stackTags": [], "threatModel": "t", "patterns": ""},
+        "confirmed",
+        root=store,
+    )
+    assert res["action"] == "refused"
+    assert res["violations"][0]["reason"] == CM.GATE_REASON_ROOT_UNAVAILABLE
+
+
+def test_confirm_deferred_repo_root_unavailable(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    _git_unavailable(monkeypatch)
+    res = CM.confirm(repo, root=store)
+    assert res["action"] == "deferred"
+    assert res["reason"] == CM.GATE_REASON_ROOT_UNAVAILABLE
+    assert res["detail"]
+
+
+def test_resolve_shared_repo_root_unavailable_not_legacy_profile(tmp_path, monkeypatch):
+    """Finding 18 (#699): git unavailable + no legacy files must not fabricate legacy-profile."""
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    _git_unavailable(monkeypatch)
+    got = CM.resolve_shared(repo, root=store)
+    assert got is not None
+    assert got["action"] == "refused"
+    assert got["reason"] == CM.GATE_REASON_ROOT_UNAVAILABLE
+    assert got["reason"] != CM.LEGACY_PROFILE_REASON
+    assert got.get("paths", []) == []
+
+
+def test_legacy_profile_refusal_repo_root_unavailable_not_legacy(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    _git_unavailable(monkeypatch)
+    got = CM.legacy_profile_refusal(repo, root=store)
+    assert got is not None
+    assert got["reason"] == CM.GATE_REASON_ROOT_UNAVAILABLE
+    assert got.get("paths", []) == []
 
 
 def test_write_refused_on_toctou_undecodable_after_gate_ok(tmp_path, monkeypatch):
