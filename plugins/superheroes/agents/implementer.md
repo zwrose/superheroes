@@ -16,14 +16,17 @@ subagent or an external engine. You carry out ONE scoped work order, leave your 
 worktree, and return your receipts.
 
 **Reporting obligation** — for **every command your order named and every command you ran**, report what happened and
-**why**, naming the **rule or rung** that decided it; verbatim raw output for every command that ran.
+**why**, naming the **rule or rung** that decided it; verbatim raw output for every command that ran — and where that
+output was lost or truncated, exactly the output you do have, labelled as incomplete, never reconstructed, inferred,
+or completed (rung 1).
 This is a duty to report with a reason, not a list of permitted statuses; the ladder decides what you do, never what you may report.
 
 **Command precedence** — every rule about running a command defers to this ladder; no rule carries
 its own private carve-out. Highest precedence first:
 
 1. **Never claim a run you did not make.** A fabricated receipt is the worst thing you can return.
-2. **A command that ran and failed** → return its output word-for-word and stop.
+2. **A command that ran and failed** → return its output word-for-word and stop (lost or truncated output:
+   **reporting obligation**).
 3. **A command you could not run that your order depends on to establish a premise** — an unmeasured
    tool shape you were told to verify (validity rule 1), an interface shape, anything you would
    otherwise have to guess — → stop and report. Do not proceed on a guess.
@@ -33,11 +36,12 @@ its own private carve-out. Highest precedence first:
    within your order's surface → run it; otherwise **do not run** — report what happened and why,
    report widening as **order defect**, never run wide or silently skip the check.
 6. **A command you are still in a position to run** — no higher rung has stopped or interrupted you,
-   and you can execute it → run it.
+   and you can execute it → run it subject to any condition the order attached to it; if the condition
+   does not hold, do not run it — report under the **reporting obligation**.
 7. **Any command whose fate none of the rungs above decided** — unreached because an earlier rung
    stopped you (e.g. rung 2 or 3), started but outcome unknown (timeout, disconnected child),
    or ran but output was lost or truncated → for each: name the command, say what actually happened,
-   name the rung that stopped or interrupted the run, and give **the output you actually have,
+   name the rung or event that stopped or interrupted the run, and give **the output you actually have,
    labelled for exactly what it is**. Do not reconstruct, infer, or complete a missing receipt
    (rung 1).
    **A lost output is reported as lost.**

@@ -978,6 +978,65 @@ def test_dispatch_mechanics_tree_inspection_bullet_carries_its_load_bearing_elem
         "nothing when no delta is observed.")
 
 
+def _dispatch_mechanics_recovery_bullet():
+    """The dispatch-mechanics reference's recovery bullet.
+
+    Carries the destructive narrow-recovery guidance (`reset --hard`, `clean -fd`, the `-fdx`
+    prohibition, and the confirm-death precondition). Located by a stable anchor (the bullet's
+    opening bold clause) up to the end of the bullet list, so the assertions below are scoped to
+    this bullet itself, not a file-wide substring search.
+    """
+    text = _read_required(
+        os.path.join(PLUGIN, "skills", "workhorse", "reference", "dispatch-mechanics.md"),
+        "dispatch-mechanics.md, home of the recovery bullet")
+    anchor = "- **The default when you cannot establish it.**"
+    start = text.find(anchor)
+    assert start != -1, (
+        "dispatch-mechanics.md: the recovery bullet's opening anchor "
+        "(%r) was not found. This bullet carries the destructive narrow-recovery guidance; "
+        "a guard that cannot locate it protects nothing." % anchor)
+    end_marker = "\n\nAuthor orders"
+    end = text.find(end_marker, start)
+    assert end != -1, (
+        "dispatch-mechanics.md: no end-of-list marker %r found after the recovery anchor — "
+        "cannot bound the bullet's end." % end_marker)
+    bullet = text[start:end]
+    assert bullet.strip(), (
+        "dispatch-mechanics.md: recovery bullet extractor returned empty text.")
+    return bullet
+
+
+def test_dispatch_mechanics_recovery_bullet_carries_its_load_bearing_elements():
+    """dispatch-mechanics.md's recovery bullet carries `reset --hard`, `clean -fd`, the `-fdx`
+    prohibition, and the confirm-death precondition. No test read it before this work order:
+    deleting the confirm-death sentence or flipping `-fd` to `-fdx` would leave every other test
+    in this file green while materially weakening the guarantee. Scoped to the bullet itself via
+    `_dispatch_mechanics_recovery_bullet`, not a file-wide substring search.
+    """
+    raw = _dispatch_mechanics_recovery_bullet()
+    bullet = _norm(raw)
+
+    assert "reset --hard" in bullet and "clean -fd" in bullet, (
+        "the recovery bullet no longer names the narrow-recovery commands (`reset --hard` plus "
+        "`clean -fd`) — without them the advertised same-worktree recovery path is gone.")
+
+    assert "**Do not** use `-fdx`" in bullet, (
+        "the recovery bullet no longer forbids `-fdx` with its load-bearing prohibition — without it "
+        "a rewrite could recommend `-fdx` and sweep gitignored local-only content.")
+
+    assert "engine-death-unconfirmed" in bullet and "engine-launch-uncertain" in bullet, (
+        "the recovery bullet no longer names terminal-but-not-proof runner outcomes — without them "
+        "a terminal receipt could be misread as permission to reset when death is unconfirmed.")
+
+    assert "journal-corrupt" in bullet and "engine_dispatch.py" in bullet, (
+        "the recovery bullet no longer cites the supervised runner as authority for death "
+        "confirmation — without it the precondition can drift looser than the code.")
+
+    assert "fresh worktree" in bullet.lower() and "park" in bullet.lower(), (
+        "the recovery bullet no longer routes unconfirmed death to a fresh worktree or park — "
+        "without that fallback a destructive reset becomes the default escape hatch.")
+
+
 def _implementer_precedence_rung_count():
     """Parse the implementer template's command-precedence ladder to learn rung count."""
     text = _read_required(
@@ -1015,7 +1074,7 @@ def test_implementer_rung_references_are_within_ladder_range():
     max_rung = _implementer_precedence_rung_count()
 
     matches = list(re.finditer(
-        r"(?i)(?:precedence\s+)?rung(?:s)?\s+(\d+)(?:\s*[–-]\s*(\d+))?", text))
+        r"(?i)(?:precedence\s+)?rung(?:s)?\s+(\d+)(?:\s*[–—-]\s*(\d+))?", text))
     assert matches, (
         "implementer.md: no rung cross-references found — the file is expected to cite "
         "precedence rungs; zero matches means this guard has gone blind.")

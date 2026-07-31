@@ -132,13 +132,19 @@ discarding or re-dispatching** — "inspect the diff" alone is not a decision ru
   fail-closed edges.
 - **The default when you cannot establish it.** If the orchestrator cannot establish completeness and
   correctness itself, **re-dispatch is the default, not recovery** — and a re-dispatch must not ride
-  the abandoned attempt. **Before any same-worktree reset**, confirm termination of the dispatch's
-  process group (via the supervised runner's abandon or terminal receipt); if death cannot be
-  confirmed, use a **fresh worktree** or **park** — never reset. **Default to a fresh worktree**
-  whenever ignored state could matter. Narrow recovery — only when death is confirmed and ignored
-  state demonstrably cannot matter — is `git -C <build worktree> reset --hard <baseline SHA>` plus
-  `git -C <build worktree> clean -fd`. That recipe restores tracked content to the baseline SHA and
-  removes untracked, **non-ignored** files and directories; it does **not** restore ignored paths,
+  the abandoned attempt. **Before any same-worktree reset**, the supervised runner
+  (`engine_dispatch.py`) must report that the dispatch's process group is **dead** — not merely that
+  the run is terminal. A terminal receipt alone is insufficient: `dispatch_abandon` can return
+  `terminal: true` with `abandonDetail: engine-death-unconfirmed`; `engine-launch-uncertain` and
+  `journal-corrupt` are likewise terminal without establishing death. Those states — and any other
+  terminal outcome the runner does not treat as confirmed death — route to a **fresh worktree** or
+  **park**, never a reset. **Default to a fresh worktree** whenever ignored state could matter. Narrow
+  recovery — only when the runner has confirmed death and ignored state demonstrably cannot matter —
+  is `git -C <build worktree> reset --hard <baseline SHA>` plus `git -C <build worktree> clean -fd`.
+  That recipe restores tracked content to the baseline SHA and removes untracked, **non-ignored** files
+  and directories; git will **not** remove an untracked nested repository with `-fd` alone (it requires
+  `-ff`), so a nested repo the implementer created survives this step and leaves the worktree dirty —
+  use a **fresh worktree** for that case too. It does **not** restore ignored paths,
   which survive both commands and are invisible to `git status --porcelain` (`docs/`, `__pycache__/`,
   `.pytest_cache/`, `.coverage`, `htmlcov/`, `.venv/`, and the rest of this repo's `.gitignore`), so
   a re-dispatch on that worktree can inherit leftover ignored state. **Do not** use `-fdx`: it would
