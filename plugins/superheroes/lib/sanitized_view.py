@@ -1139,7 +1139,7 @@ def _filter_patch_sections(patch_bytes):
             kept.append(section)
     if not kept:
         return b"", withheld, unrecognized_spans
-    return b"\n".join(kept), withheld, unrecognized_spans
+    return b"".join(kept), withheld, unrecognized_spans
 
 
 def _write_review_patch_file(view_root, patch_bytes):

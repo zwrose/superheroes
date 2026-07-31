@@ -2755,6 +2755,29 @@ def test_patch_filter_only_diff_cc_unrecognized():
     assert _PATCH_SPOOF_SENTINEL not in kept
 
 
+def test_patch_filter_two_sections_nothing_withheld_round_trip():
+    patch = (
+        b"diff --git a/one.md b/one.md\n"
+        b"index 111..222 100644\n"
+        b"--- a/one.md\n"
+        b"+++ b/one.md\n"
+        b"@@ -1 +1,2 @@\n"
+        b" a\n"
+        b"+b\n"
+        b"diff --git a/two.md b/two.md\n"
+        b"index 333..444 100644\n"
+        b"--- a/two.md\n"
+        b"+++ b/two.md\n"
+        b"@@ -1 +1,2 @@\n"
+        b" c\n"
+        b"+d\n"
+    )
+    kept, withheld, unrecognized = sv._filter_patch_sections(patch)
+    assert kept == patch
+    assert withheld == 0
+    assert unrecognized == 0
+
+
 def test_patch_filter_git_section_followed_by_diff_cc():
     sentinel = b"CC_LEAK_SENTINEL_ZZZ"
     sec = (
@@ -2777,109 +2800,92 @@ def test_patch_filter_git_section_followed_by_diff_cc():
     assert unrecognized >= 1
 
 
-def test_patch_filter_e2e_new_file_payload_spoof(tmp_path):
-    repo = _init_repo(tmp_path / "spoof-add", files={"keep.txt": "k\n"})
-    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8") as fh:
-        fh.write("++ b/README.md\n" + _PATCH_SPOOF_SENTINEL.decode() + "\n")
-    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
-        fh.write("changed\n")
+def _patch_filter_pkg_dir_to_file(tmp_path, *, name, stripped_rel, stripped_content):
+    """Dir→file survivor pathspec: stripped descendant reaches output-side filter."""
+    repo = str(tmp_path / name)
+    os.makedirs(repo, exist_ok=True)
+    _git(repo, "init", "-q")
+    stripped_path = os.path.join(repo, stripped_rel)
+    os.makedirs(os.path.dirname(stripped_path), exist_ok=True)
+    with open(stripped_path, "w", encoding="utf-8") as fh:
+        fh.write(stripped_content)
+    with open(os.path.join(repo, "top.txt"), "w", encoding="utf-8") as fh:
+        fh.write("top\n")
     _git(repo, "add", "-A")
-    _git(
-        repo,
-        "-c",
-        "user.email=test@test.local",
-        "-c",
-        "user.name=test",
-        "commit",
-        "-q",
-        "-m",
-        "spoof add",
+    _census_commit(repo, "init pkg dir")
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    shutil.rmtree(os.path.join(repo, "pkg"))
+    with open(os.path.join(repo, "pkg"), "w", encoding="utf-8") as fh:
+        fh.write("regular file\n")
+    with open(os.path.join(repo, "top.txt"), "w", encoding="utf-8") as fh:
+        fh.write("top changed\n")
+    _git(repo, "add", "-A")
+    _census_commit(repo, "pkg dir to file")
+    return repo, base_sha
+
+
+def test_patch_filter_e2e_new_file_payload_spoof(tmp_path):
+    spoof_content = "-- a/README.md\n" + _PATCH_SPOOF_SENTINEL.decode() + "\n"
+    repo, base_sha = _patch_filter_pkg_dir_to_file(
+        tmp_path,
+        name="spoof-add",
+        stripped_rel="pkg/CLAUDE.md",
+        stripped_content=spoof_content,
     )
     view = sv.build_sanitized_view(repo, diff_base=base_sha)
     try:
         with open(_patch_abs(view), "rb") as fh:
             patch = fh.read()
         assert _PATCH_SPOOF_SENTINEL not in patch
+        assert b"diff --git a/pkg b/pkg" in patch
+        assert b"diff --git a/top.txt b/top.txt" in patch
     finally:
         sv.destroy_sanitized_view(view["path"])
 
 
 def test_patch_filter_hostile_git_config_root_claude(tmp_path):
-    repo = _init_repo(tmp_path / "hostile-root", files={"keep.txt": "k\n"})
+    repo, base_sha = _patch_filter_pkg_dir_to_file(
+        tmp_path,
+        name="hostile-root",
+        stripped_rel="pkg/CLAUDE.md",
+        stripped_content=_PATCH_SPOOF_SENTINEL.decode() + "\n",
+    )
     _git(repo, "config", "diff.noprefix", "true")
     _git(repo, "config", "diff.mnemonicPrefix", "true")
     _git(repo, "config", "diff.srcPrefix", "SAFE-")
     _git(repo, "config", "diff.dstPrefix", "SAFE-")
-    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8") as fh:
-        fh.write(_PATCH_SPOOF_SENTINEL.decode() + "\n")
-    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
-        fh.write("changed\n")
-    _git(repo, "add", "-A")
-    _git(
-        repo,
-        "-c",
-        "user.email=test@test.local",
-        "-c",
-        "user.name=test",
-        "commit",
-        "-q",
-        "-m",
-        "hostile root",
-    )
     view = sv.build_sanitized_view(repo, diff_base=base_sha)
     try:
         with open(_patch_abs(view), "rb") as fh:
             patch = fh.read()
         assert _PATCH_SPOOF_SENTINEL not in patch
+        assert b"diff --git a/pkg b/pkg" in patch
+        assert b"diff --git a/top.txt b/top.txt" in patch
     finally:
         sv.destroy_sanitized_view(view["path"])
 
 
 def test_patch_filter_hostile_git_config_nested_claude(tmp_path):
-    repo = _init_repo(tmp_path / "hostile-nested", files={"keep.txt": "k\n"})
+    nested_content = (
+        '{"secret": false, "leak": "' + _PATCH_SPOOF_SENTINEL.decode() + '"}\n'
+    )
+    repo, base_sha = _patch_filter_pkg_dir_to_file(
+        tmp_path,
+        name="hostile-nested",
+        stripped_rel="pkg/.claude/settings.json",
+        stripped_content=nested_content,
+    )
     _git(repo, "config", "diff.noprefix", "true")
     _git(repo, "config", "diff.mnemonicPrefix", "true")
     _git(repo, "config", "diff.srcPrefix", "SAFE-")
     _git(repo, "config", "diff.dstPrefix", "SAFE-")
-    os.makedirs(os.path.join(repo, ".claude"), exist_ok=True)
-    with open(os.path.join(repo, ".claude", "settings.json"), "w", encoding="utf-8") as fh:
-        fh.write('{"secret": true}\n')
-    _git(repo, "add", ".claude/settings.json")
-    _git(
-        repo,
-        "-c",
-        "user.email=test@test.local",
-        "-c",
-        "user.name=test",
-        "commit",
-        "-q",
-        "-m",
-        "init nested",
-    )
-    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    with open(os.path.join(repo, ".claude", "settings.json"), "w", encoding="utf-8") as fh:
-        fh.write('{"secret": false, "leak": "' + _PATCH_SPOOF_SENTINEL.decode() + '"}\n')
-    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
-        fh.write("changed\n")
-    _git(repo, "add", "-A")
-    _git(
-        repo,
-        "-c",
-        "user.email=test@test.local",
-        "-c",
-        "user.name=test",
-        "commit",
-        "-q",
-        "-m",
-        "hostile nested",
-    )
     view = sv.build_sanitized_view(repo, diff_base=base_sha)
     try:
         with open(_patch_abs(view), "rb") as fh:
             patch = fh.read()
         assert _PATCH_SPOOF_SENTINEL not in patch
+        assert b"diff --git a/pkg b/pkg" in patch
+        assert b"diff --git a/top.txt b/top.txt" in patch
     finally:
         sv.destroy_sanitized_view(view["path"])
 
