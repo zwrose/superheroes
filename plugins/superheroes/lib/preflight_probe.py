@@ -67,7 +67,8 @@ def cross_vendor_no_op_argv(engine):
         # The cursor probe must dispatch the project's configured cursor model (the SSOT default
         # in engine_adapter), not a hard-coded id — `cursor-small` was observed unavailable in a
         # live run, which would fail the probe for a project that never dispatches it.
-        return ("cursor-agent", "--model", engine_adapter._CURSOR_MODEL, "-p", "--trust")
+        return ("cursor-agent", "--model", engine_adapter._CURSOR_MODEL, "-p", "--trust",
+                "--mode", "plan")
     return (engine, "--version")
 
 

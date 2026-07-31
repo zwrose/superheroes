@@ -58,13 +58,17 @@ def test_probe_command_never_raises_on_timeout_expired():
 
 
 def test_probe_command_closes_stdin_to_prevent_inherited_pipe_hang():
+    captured = {}
+
     def _run(argv, **kwargs):
+        captured.update(kwargs)
         if "input" not in kwargs:
             raise subprocess.TimeoutExpired(cmd=argv, timeout=120)
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     result = pp.probe_command("t", ["t"], run=_run)
     assert result["ok"] is True
+    assert captured["input"] == ""
 
 
 # --- gh_auth_probe -------------------------------------------------------------------------
@@ -99,7 +103,8 @@ def test_cross_vendor_no_op_argv_cursor():
     # never a hard-coded id — `cursor-small` was observed unavailable in a live run.
     import engine_adapter
     assert pp.cross_vendor_no_op_argv("cursor") == (
-        "cursor-agent", "--model", engine_adapter._CURSOR_MODEL, "-p", "--trust")
+        "cursor-agent", "--model", engine_adapter._CURSOR_MODEL, "-p", "--trust",
+        "--mode", "plan")
 
 
 def test_cross_vendor_no_op_argv_unknown_engine():
@@ -124,6 +129,43 @@ def test_cross_vendor_cli_probe_argv_override():
 
     pp.cross_vendor_cli_probe("codex", run=_run, argv=("codex", "--version"))
     assert captured["argv"] == ["codex", "--version"]
+
+
+def test_cross_vendor_cli_probe_feeds_preamble_on_stdin_codex():
+    import engine_dispatch
+
+    captured = {}
+
+    def _run(argv, **kwargs):
+        captured["input"] = kwargs.get("input", "")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    pp.cross_vendor_cli_probe("codex", run=_run)
+    assert captured["input"].startswith(engine_dispatch.ANTIHIJACK_PREAMBLE)
+
+
+def test_cross_vendor_cli_probe_feeds_preamble_on_stdin_cursor():
+    import engine_dispatch
+
+    captured = {}
+
+    def _run(argv, **kwargs):
+        captured["input"] = kwargs.get("input", "")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    pp.cross_vendor_cli_probe("cursor", run=_run)
+    assert captured["input"].startswith(engine_dispatch.ANTIHIJACK_PREAMBLE)
+
+
+def test_cross_vendor_cli_probe_unknown_engine_no_stdin_prompt():
+    captured = {}
+
+    def _run(argv, **kwargs):
+        captured["input"] = kwargs.get("input", "")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    pp.cross_vendor_cli_probe("mystery", run=_run)
+    assert captured["input"] == ""
 
 
 # --- browser_probe_result ------------------------------------------------------------------
@@ -632,6 +674,12 @@ def test_model_no_op_argv_codex_effort_none_resolves_from_matrix():
     assert "model_reasoning_effort=xhigh" in argv
 
 
+def test_model_no_op_argv_codex_terra_effort_none_resolves_second_tier():
+    argv = pp.model_no_op_argv("codex", "gpt-5.6-terra")
+    assert argv is not None
+    assert "model_reasoning_effort=high" in argv
+
+
 def test_model_no_op_argv_codex_matches_builder():
     import engine_adapter
     argv = pp.model_no_op_argv("codex", "gpt-5.6-sol", "xhigh")
@@ -807,6 +855,13 @@ def test_composition_liveness_same_model_collision_fail_closed_xhigh_first():
     assert result["codex"]["models"]["gpt-5.6-sol"]["ok"] is False
 
 
+def test_composition_liveness_same_model_both_configs_ok_is_live():
+    needed = {"codex": [("gpt-5.6-sol", "high"), ("gpt-5.6-sol", "xhigh")]}
+    result = pp.composition_liveness(needed, run=fake0)
+    assert result["codex"]["live"] is True
+    assert result["codex"]["models"]["gpt-5.6-sol"]["ok"] is True
+
+
 def test_probe_argv_builders_contain_no_positional_prompt():
     import engine_adapter
 
@@ -823,6 +878,8 @@ def test_probe_argv_builders_contain_no_positional_prompt():
         for element in argv:
             assert "READY" not in str(element).upper(), (
                 "%s argv element %r contains READY" % (label, element))
+            assert len(str(element).split()) == 1, (
+                "%s argv element %r is multi-word" % (label, element))
 
 
 def test_live_vendors_for_composition_claude_always_in_live_list():

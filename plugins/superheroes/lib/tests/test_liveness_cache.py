@@ -226,16 +226,27 @@ def test_read_hit_within_ttl(tmp_path, monkeypatch):
 # --- covers ---
 
 
-def test_covers_exact():
+def test_covers_effort_exact_mismatch():
     need = {"codex": [["gpt-5.6-sol", "high"]]}
     rec = {"codex": [["gpt-5.6-sol", None]]}
-    assert lc.covers(rec, need) is True
+    assert lc.covers(rec, need) is False
+    rec_exact = {"codex": [["gpt-5.6-sol", "high"]]}
+    assert lc.covers(rec_exact, need) is True
 
 
 def test_covers_broad_receipt_narrow_need():
-    rec = {"codex": [["a", None], ["b", None], ["c", None]]}
+    rec = {"codex": [["a", None], ["b", "low"], ["c", None]]}
     need = {"codex": [["b", "low"]]}
     assert lc.covers(rec, need) is True
+    rec_no_effort = {"codex": [["a", None], ["b", None], ["c", None]]}
+    need_low = {"codex": [["b", "low"]]}
+    assert lc.covers(rec_no_effort, need_low) is False
+
+
+def test_covers_effort_mismatch_xhigh_vs_high():
+    rec = {"codex": [["gpt-5.6-sol", "xhigh"]]}
+    need = {"codex": [["gpt-5.6-sol", "high"]]}
+    assert lc.covers(rec, need) is False
 
 
 def test_covers_missing_vendor():
