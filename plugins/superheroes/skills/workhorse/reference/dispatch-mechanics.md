@@ -2,6 +2,7 @@
 
 1. [Dispatch mechanics — long dispatches you own](#dispatch-mechanics--long-dispatches-you-own)
 2. [Supervised write dispatch](#supervised-write-dispatch)
+3. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
 
 ---
 
@@ -66,3 +67,32 @@ not compose a separate per-dispatch watchdog** on top of it. **`cwd` must be a l
 implementer path and not review-code's in-place fixer path. `BASH_MAX_TIMEOUT_MS` is a **headless-launch
 premise field owned by [#656](https://github.com/zwrose/superheroes/issues/656)**; this change sets it
 nowhere.
+
+## Engine forfeits and order shape
+
+An external engine can forfeit *after* its files are written. Cursor's `NonRetriableError "Agent
+Looping Detected"` characteristically fires while the engine is producing a long report, with the
+on-disk work already complete and correct — field evidence: three builds in one wave; in one of them
+four of six dispatches forfeited, **every one with correct files on disk**. **Inspect the dispatch
+worktree before you discard or re-dispatch anything** — but "inspect the diff" alone is not a
+decision rule:
+
+- Look at **base→HEAD plus staged, unstaged, and untracked state** — a forfeited engine may have committed, so a bare `git diff` can be empty while the work is complete; untracked new files are invisible to it too.
+- Confirm **every target the work order named** is actually present. Partial work looks like work.
+- **The orchestrator's own gates are what authorize keeping it.** A forfeit with complete work is a
+  **recovery** — verify it yourself exactly as you would verify a clean return. Partial or out-of-scope
+  state is **not** recovered: re-dispatch or park, and never let "inspect first" become "assume work
+  exists" — a forfeit with nothing on disk is simply a failed dispatch.
+- Re-dispatching without looking re-does correct work and re-runs the very report that forfeited.
+
+Author orders so the forfeit does not fire: keep in-dispatch verification targeted and returns short
+and structured. The implementer template `agents/implementer.md` states this to the implementer
+directly, so an order that additionally demands a full-suite run, a pasted diff, or a long verbatim
+report is **overriding the template against its own purpose**.
+
+Never assume the implementer can run anything. An external engine's shell availability is set
+**outside your build** — the engine CLI consults its own permission surface, not your order. It is
+normally available on the sanctioned write path, but two builds in one wave had **every** implementer
+shell call rejected, and that is not yet explained — so it **cannot be inferred from a previous
+build**. Write every external order to be correct when the implementer can run nothing; the
+orchestrator's own re-run is the verification either way, and a corrective round is worth budgeting.

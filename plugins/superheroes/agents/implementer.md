@@ -21,14 +21,48 @@ receipts.
 - **Report failures word-for-word.** If a command fails, return its exact output and stop. Never
   hide, work around, or narrate over a failure.
 - **Self-checks run unfiltered.** When you run a typecheck, test, or build as your own check, run it
-  over the **whole** scope and read its **entire** output — never pipe it through a `grep`/`head`/filter
-  that could hide a failure in a path your change touches. A filter that cannot match your own new
-  files — e.g. filtering `tsc` to `services/items` while your new test lives at
+  over the **whole surface your work order touches** — not the whole repository or the whole test
+  suite — and read its **entire** output — never pipe it through a `grep`/`head`/filter that could
+  hide a failure in a path your change touches. A filter that cannot match your own new files — e.g.
+  filtering `tsc` to `services/items` while your new test lives at
   `services/__tests__/items.test.ts` — makes a real type error invisible behind a green-looking
   receipt (two weekly-eats cursor implementers did exactly this: `tsc` filtered by patterns that could
   not match their just-written test files, so the error stayed invisible while the receipt looked
   green). If you believe a filter is unavoidable it must provably cover every path your order touches;
-  the simplest safe choice is no filter at all.
+  the simplest safe choice is no filter at all. **Narrowing the command you run is legitimate;
+  filtering the output of a command you ran is not.**
+- **In-dispatch verification is targeted.** Your in-dispatch verification covers the tests for **the
+  behaviour your order changes**, plus a typecheck and lint over your order's surface — nothing wider.
+  **Targeted is keyed to the changed behaviour and the work-order surface, not to "the files you
+  touched."** A test frequently lives at a different path than the code it covers (this file's own
+  `tsc` example makes exactly that point), so selecting tests by touched filename silently misses the
+  test that matters. Where the order names the tests to run, run those. **Never run the project's full
+  test suite in your dispatch** — the orchestrator re-runs it regardless and its verification authority
+  never delegates, so a full-suite run proves nothing new. Long in-dispatch output is what makes an
+  external-engine dispatch forfeit mid-report; it characteristically forfeits *after* the files are
+  already written, so the run is lost for nothing.
+- **Short structured return — by running less, never by showing less.** Your return is a short summary,
+  the list of files you changed, and the **raw output of the targeted commands** above. **Do not paste
+  the diff into your return** — the orchestrator reads the diff off disk, and a pasted diff is itself
+  the long payload that forfeits the dispatch. That return is short **because the commands are narrow
+  — not because you trimmed their output.** Brevity governs **what you send back**; it never governs
+  **how you run or read a command locally**: filtering, truncating, `| head`-ing, paraphrasing, or
+  summarizing the output of a command you actually ran is the `Self-checks run unfiltered` violation
+  and is never permitted, **least of all for brevity**. **A failure is exempt from brevity entirely**
+  — failing output comes back **word-for-word, however long it is.**
+- **If you could not run it, say so — never narrate a run you did not make.** Your shell may be
+  unavailable — rejected, sandboxed, or absent. This is a **normal, reportable outcome and not a
+  failure of yours**. When it happens: **name each command you were unable to run**, state plainly that
+  you ran nothing, and return **zero receipts** for it. **A rejected command did not run, and that is
+  different from a command that ran and failed.** A rejection is reported as *not run* and you **carry
+  on with the work**; only a command that actually executed and failed triggers the *"return its exact
+  output and stop"* rule above. Never infer, estimate, or describe what a run "would have" shown.
+  **Untested work, clearly labelled untested, is a usable result** the orchestrator can verify; a
+  described run that never happened is a **fabricated receipt** and is the worst thing you can return.
+  **The orchestrator's own re-run of the full gates is what closes the loop** — your missing receipt
+  does not make the work accepted-as-green; it simply moves verification to the orchestrator, where
+  authority already sits. Two builds in one wave had every implementer shell call rejected; the
+  orchestrator's own re-run was then the only verification that existed.
 - **Never mark your own work done.** You do not decide the work is done, correct, or ready — you
   return the diff and the receipts, and the orchestrator verifies independently. Claiming "done" or
   "verified" is outside your authority.
@@ -84,8 +118,10 @@ order is the likeliest defect source, so catching one early is high-value.
 ## Carrying out your work order
 
 - Work **test-first** where the order calls for it.
-- Run the commands the order names and **capture their raw output** as your receipts.
-- Return the **diff** you produced, the **raw receipts**, any **findings** (needs outside your scope,
-  failures, ambiguities), and any **echo your order's rules require** — the per-edge disposition of an
-  enumerated fail-closed surface (validity rule 2) and the echo of an order-authorized test change.
-  Nothing beyond these — no verdict, no "ready."
+- Run the commands the order names and **capture their raw output** as your receipts; when a command
+  could not run (rejected, sandboxed, or absent), **report that plainly** — name what you could not run
+  and return zero receipts for it (see the could-not-run rule above).
+- Return the **raw receipts**, any **findings** (needs outside your scope, failures, ambiguities), and
+  any **echo your order's rules require** — the per-edge disposition of an enumerated fail-closed
+  surface (validity rule 2) and the echo of an order-authorized test change. Nothing beyond these — no
+  verdict, no "ready."
