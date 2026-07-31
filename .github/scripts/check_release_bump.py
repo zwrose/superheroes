@@ -29,15 +29,8 @@ _cc_spec = importlib.util.spec_from_file_location(
 _cc_mod = importlib.util.module_from_spec(_cc_spec)
 _cc_spec.loader.exec_module(_cc_mod)
 TYPES: tuple[str, ...] = _cc_mod.TYPES
-# release-please-config.json includes `deps`; the PR-title checker does not.
-_PARSE_TYPES: tuple[str, ...] = tuple(dict.fromkeys((*TYPES, "deps")))
 
-_SUBJECT_CAPTURE_RE = re.compile(
-    r"^(" + "|".join(_PARSE_TYPES) + r")"
-    r"(?:\(([^()\n]+)\))?"
-    r"(!)?"
-    r": (.+)$"
-)
+_SUBJECT_RE_CACHE: dict[frozenset[str], re.Pattern[str]] = {}
 
 _RELEASE_MANIFEST = ".release-please-manifest.json"
 _SECTION_HEADING_RE = re.compile(r"^## \[(\d+\.\d+\.\d+)\]")
@@ -51,7 +44,7 @@ _VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 _EXCLUSION_LINE_RE = re.compile(
     r"^([0-9a-f]{40})\s{2,}([0-9a-f]{40})\s{2,}(\d{4}-\d{2}-\d{2})\s{2,}(.+)$"
 )
-_MD_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+_LINK_URL_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
 _EMPHASIS_RE = re.compile(r"[*_]+")
 
 REMEDIATION = (
@@ -102,10 +95,41 @@ class EvaluateResult:
         }
 
 
-def parse_subject(subject: str) -> tuple[str, str | None, bool, str] | None:
+def parseable_types(
+    config_dict: dict[str, Any], pkg_cfg: dict[str, Any] | None = None
+) -> frozenset[str]:
+    """Union PR-title TYPES with every changelog-section type (hidden or not)."""
+    sections: list[dict[str, Any]] | None = None
+    if pkg_cfg is not None:
+        raw = pkg_cfg.get("changelog-sections")
+        if raw is not None:
+            sections = raw
+    if sections is None:
+        sections = config_dict.get("changelog-sections", [])
+    section_types = [s["type"] for s in sections if "type" in s]
+    return frozenset(dict.fromkeys((*TYPES, *section_types)))
+
+
+def _subject_capture_re(parse_types: frozenset[str]) -> re.Pattern[str]:
+    if parse_types not in _SUBJECT_RE_CACHE:
+        extras = [t for t in parse_types if t not in TYPES]
+        ordered = tuple(dict.fromkeys((*TYPES, *extras)))
+        _SUBJECT_RE_CACHE[parse_types] = re.compile(
+            r"^(" + "|".join(ordered) + r")"
+            r"(?:\(([^()\n]+)\))?"
+            r"(!)?"
+            r": (.+)$"
+        )
+    return _SUBJECT_RE_CACHE[parse_types]
+
+
+def parse_subject(
+    subject: str, parse_types: frozenset[str] | None = None
+) -> tuple[str, str | None, bool, str] | None:
     """Parse a Conventional Commit subject into (type, scope, breaking, description)."""
+    types = parse_types if parse_types is not None else frozenset(TYPES)
     first = subject.splitlines()[0] if subject else ""
-    m = _SUBJECT_CAPTURE_RE.match(first)
+    m = _subject_capture_re(types).match(first)
     if not m:
         return None
     typ, scope, bang, desc = m.group(1), m.group(2), m.group(3), m.group(4)
@@ -122,8 +146,16 @@ def is_release_cut_commit(commit: Commit) -> bool:
     return is_release_commit(commit.subject) and commit.touches_manifest
 
 
-def releasing_types(config_dict: dict[str, Any]) -> frozenset[str]:
-    sections = config_dict.get("changelog-sections", [])
+def releasing_types(
+    config_dict: dict[str, Any], pkg_cfg: dict[str, Any] | None = None
+) -> frozenset[str]:
+    sections: list[dict[str, Any]] | None = None
+    if pkg_cfg is not None:
+        raw = pkg_cfg.get("changelog-sections")
+        if raw is not None:
+            sections = raw
+    if sections is None:
+        sections = config_dict.get("changelog-sections", [])
     return frozenset(
         s["type"] for s in sections if s.get("hidden") is not True
     )
@@ -134,7 +166,9 @@ def belongs_to_package(commit: Commit) -> bool:
 
 
 def completeness_population(
-    commits: list[Commit], releasing: frozenset[str]
+    commits: list[Commit],
+    releasing: frozenset[str],
+    parse_types: frozenset[str],
 ) -> list[Commit]:
     """Non-hidden conventional commits that must appear in the changelog."""
     out: list[Commit] = []
@@ -143,7 +177,7 @@ def completeness_population(
             continue
         if is_release_cut_commit(c):
             continue
-        parsed = parse_subject(c.subject)
+        parsed = parse_subject(c.subject, parse_types)
         if parsed is None:
             continue
         typ, _, _, _ = parsed
@@ -153,7 +187,9 @@ def completeness_population(
     return out
 
 
-def floor_population(commits: list[Commit]) -> list[Commit]:
+def floor_population(
+    commits: list[Commit], parse_types: frozenset[str]
+) -> list[Commit]:
     """Every package-belonging conventional commit that drives the version floor."""
     base: dict[str, Commit] = {}
     for c in commits:
@@ -161,14 +197,14 @@ def floor_population(commits: list[Commit]) -> list[Commit]:
             continue
         if is_release_cut_commit(c):
             continue
-        if parse_subject(c.subject) is not None:
+        if parse_subject(c.subject, parse_types) is not None:
             base[c.sha] = c
     for c in commits:
         if not belongs_to_package(c):
             continue
         if is_release_cut_commit(c):
             continue
-        parsed = parse_subject(c.subject)
+        parsed = parse_subject(c.subject, parse_types)
         if parsed is None:
             continue
         _, _, breaking, _ = parsed
@@ -177,12 +213,14 @@ def floor_population(commits: list[Commit]) -> list[Commit]:
     return list(base.values())
 
 
-def bump_severity(floor_pop: list[Commit]) -> str | None:
+def bump_severity(
+    floor_pop: list[Commit], parse_types: frozenset[str]
+) -> str | None:
     has_breaking = False
     has_feat = False
     has_other = False
     for c in floor_pop:
-        parsed = parse_subject(c.subject)
+        parsed = parse_subject(c.subject, parse_types)
         if parsed is None:
             continue
         typ, _, breaking, _ = parsed
@@ -250,7 +288,7 @@ def parse_exclusions(
 
 
 def normalize_entry(text: str) -> str:
-    flat = _MD_LINK_RE.sub(r"\1", text)
+    flat = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
     flat = _EMPHASIS_RE.sub("", flat)
     flat = re.sub(r"\s+", " ", flat).strip()
     return flat.casefold()
@@ -281,7 +319,11 @@ def extract_release_section(changelog_text: str, proposed_version: str) -> str:
 
 
 def _bullet_commit_shas(bullet: str) -> list[str]:
-    return [m.group(1).lower() for m in _COMMIT_LINK_RE.finditer(bullet)]
+    shas: list[str] = []
+    for m in _LINK_URL_RE.finditer(bullet):
+        for cm in _COMMIT_LINK_RE.finditer(m.group(1)):
+            shas.append(cm.group(1).lower())
+    return shas
 
 
 def _link_target_matches_sha(link_sha: str, sha: str) -> tuple[bool, bool]:
@@ -352,6 +394,7 @@ def evaluate(
     exclusions: dict[str, tuple[str, str, str]],
     exclusion_errors: list[str],
     releasing: frozenset[str],
+    parse_types: frozenset[str],
     bump_minor_pre_major: bool,
     tag: str,
 ) -> EvaluateResult:
@@ -363,8 +406,8 @@ def evaluate(
         result.ok = False
         return result
 
-    floor_pop = floor_population(commits)
-    complete_pop = completeness_population(commits, releasing)
+    floor_pop = floor_population(commits, parse_types)
+    complete_pop = completeness_population(commits, releasing, parse_types)
     result.floor_population = floor_pop
     result.completeness_population = complete_pop
     result.eligible_count = len(floor_pop)
@@ -376,26 +419,17 @@ def evaluate(
             continue
         if is_release_cut_commit(c):
             continue
-        if parse_subject(c.subject) is None:
+        parsed = parse_subject(c.subject, parse_types)
+        if parsed is None:
             result.notices.append(
                 f"non-conventional commit subject (excluded from populations): "
                 f"{c.sha[:7]} {c.subject!r}"
             )
-        elif body_declares_breaking(c.body) and "!" not in c.subject.splitlines()[0]:
+        elif body_declares_breaking(c.body) and not parsed[2]:
             result.notices.append(
                 f"body declares BREAKING CHANGE but title lacks '!': {c.sha[:7]} — "
                 f"version floor is derived from titles only; eyeball the proposed bump"
             )
-
-    if complete_pop and release_pr is None:
-        subjects = [f"  {c.sha[:7]} {c.subject}" for c in complete_pop]
-        result.status = "fail"
-        result.failures.append(
-            f"{len(complete_pop)} changelog-visible commits since {tag} but no open "
-            f"release PR:\n" + "\n".join(subjects)
-        )
-        result.ok = False
-        return result
 
     if not floor_pop:
         result.status = "pass"
@@ -406,13 +440,23 @@ def evaluate(
         return result
 
     if release_pr is None:
-        result.status = "pass"
-        result.notices.insert(
-            0,
-            f"{len(floor_pop)} version-floor commits since {tag} but none are "
-            f"changelog-visible — no release PR to validate",
-        )
-        result.ok = True
+        subjects = [f"  {c.sha[:7]} {c.subject}" for c in floor_pop]
+        if complete_pop:
+            result.failures.append(
+                f"{len(floor_pop)} version-floor commits since {tag} but no open "
+                f"release PR:\n" + "\n".join(subjects)
+            )
+        else:
+            result.failures.append(
+                f"{len(floor_pop)} version-floor commits since {tag} — all are "
+                f"changelog-hidden types — but no open release PR was found:\n"
+                + "\n".join(subjects)
+                + "\nIf release-please legitimately opens no PR for a "
+                f"hidden-types-only window, this check should be keyed back to "
+                f"the completeness population."
+            )
+        result.status = "fail"
+        result.ok = False
         return result
 
     proposed = release_pr["proposed_version"]
@@ -421,18 +465,22 @@ def evaluate(
     result.proposed_version = proposed
     result.release_pr_number = release_pr.get("number")
 
-    severity = bump_severity(floor_pop)
+    severity = bump_severity(floor_pop, parse_types)
     current = parse_version(last_version)
     minimum = expected_minimum(current, severity, bump_minor_pre_major)
     if minimum is not None and _version_lt(proposed, minimum):
-        drivers = [f"  {c.sha[:7]} {c.subject}" for c in floor_pop if parse_subject(c.subject)]
+        drivers = [
+            f"  {c.sha[:7]} {c.subject}"
+            for c in floor_pop
+            if parse_subject(c.subject, parse_types)
+        ]
         result.failures.append(
             f"proposed version {proposed} is below minimum {_format_version(minimum)} "
             f"(severity {severity}) — commits driving severity:\n" + "\n".join(drivers)
         )
 
     for c in complete_pop:
-        parsed = parse_subject(c.subject)
+        parsed = parse_subject(c.subject, parse_types)
         if parsed is None:
             continue
         _, _, _, desc = parsed
@@ -601,18 +649,27 @@ def _find_release_pr(
     repo: str,
     component: str,
     *,
+    base_branch: str = "main",
     retries: int = 3,
     delay_s: float = 5.0,
 ) -> dict[str, Any] | None:
-    prefix = "release-please--branches--"
-    suffix = f"--components--{component}"
+    expected_ref = (
+        f"release-please--branches--{base_branch}--components--{component}"
+    )
     for attempt in range(retries):
-        pulls = _run_gh([f"repos/{repo}/pulls?state=open&per_page=100"])
+        try:
+            pulls = _run_gh([f"repos/{repo}/pulls?state=open&per_page=100"])
+        except RuntimeError:
+            if attempt < retries - 1:
+                time.sleep(delay_s)
+                continue
+            raise
         matches = [
             pr
             for pr in pulls
-            if pr.get("head", {}).get("ref", "").startswith(prefix)
-            and pr.get("head", {}).get("ref", "").endswith(suffix)
+            if pr.get("head", {}).get("ref") == expected_ref
+            and pr.get("head", {}).get("repo", {}).get("full_name") == repo
+            and pr.get("base", {}).get("ref") == base_branch
         ]
         if len(matches) > 1:
             nums = [str(m["number"]) for m in matches]
@@ -780,7 +837,13 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     changelog_rel = pkg_cfg.get("changelog-path", "CHANGELOG.md")
     bump_minor_pre_major = bool(pkg_cfg.get("bump-minor-pre-major", False))
-    releasing = releasing_types(config)
+    parse_types = parseable_types(config, pkg_cfg)
+    releasing = releasing_types(config, pkg_cfg)
+    if not releasing:
+        sys.stderr.write(
+            f"error: no non-hidden changelog-sections resolved for {args.package}\n"
+        )
+        return 1
 
     try:
         manifest = _read_json(repo_root / args.manifest)
@@ -841,8 +904,8 @@ def main(argv: list[str] | None = None) -> int:
     exclusions, exclusion_errors = parse_exclusions(exclusion_text)
 
     release_pr: dict[str, Any] | None = None
-    complete_pop = completeness_population(commits, releasing)
-    if complete_pop or floor_population(commits):
+    complete_pop = completeness_population(commits, releasing, parse_types)
+    if complete_pop or floor_population(commits, parse_types):
         try:
             pr_meta = _find_release_pr(repo, component)
         except RuntimeError as e:
@@ -882,6 +945,7 @@ def main(argv: list[str] | None = None) -> int:
         exclusions,
         exclusion_errors,
         releasing,
+        parse_types,
         bump_minor_pre_major,
         tag,
     )

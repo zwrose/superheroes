@@ -60,12 +60,15 @@ def test_runs_release_bump_tripwire():
 
 
 def test_tripwire_fetches_tags_in_same_step():
-    text = _text()
-    assert "git fetch --tags" in text
-    # fetch and check must share the tripwire step's run block
-    tripwire = text.split("Release-bump tripwire")[1]
-    assert "git fetch --tags" in tripwire
-    assert "check_release_bump.py" in tripwire
+    import yaml
+    with open(_WF) as fh:
+        data = yaml.safe_load(fh)
+    steps = data["jobs"]["release-please"]["steps"]
+    tw = next(s for s in steps if "Release-bump tripwire" in (s.get("name") or ""))
+    run = tw.get("run", "")
+    assert "git fetch --tags" in run
+    assert "check_release_bump.py" in run
+    assert tw.get("env", {}).get("GH_TOKEN") == "${{ steps.app-token.outputs.token }}"
 
 
 def test_tripwire_uses_app_token_for_gh():
@@ -99,18 +102,21 @@ def test_tripwire_does_not_continue_on_error():
 
 
 _LEDGER = os.path.join(_ROOT, ".github", "release-exclusions.txt")
-_LEDGER_LINE = re.compile(
-    r"^[0-9a-f]{40}  [0-9a-f]{40}  \d{4}-\d{2}-\d{2}  .+$"
-)
 
 
 def test_release_exclusions_ledger_format():
+    import importlib.util
+    import sys
+
     assert os.path.isfile(_LEDGER), f"missing ledger: {_LEDGER}"
+    _spec = importlib.util.spec_from_file_location(
+        "check_release_bump",
+        os.path.join(_ROOT, ".github", "scripts", "check_release_bump.py"),
+    )
+    crb = importlib.util.module_from_spec(_spec)
+    sys.modules["check_release_bump"] = crb
+    _spec.loader.exec_module(crb)
     with open(_LEDGER) as fh:
-        for lineno, line in enumerate(fh, 1):
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                continue
-            assert _LEDGER_LINE.match(line.rstrip("\n")), (
-                f"malformed ledger line {lineno}: {line!r}"
-            )
+        text = fh.read()
+    _mapping, errors = crb.parse_exclusions(text)
+    assert errors == [], f"ledger parse errors: {errors}"

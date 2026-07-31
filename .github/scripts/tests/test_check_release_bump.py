@@ -17,8 +17,10 @@ Commit = RB.Commit
 _CONFIG_PATH = os.path.join(_HERE, "..", "..", "..", "release-please-config.json")
 with open(_CONFIG_PATH) as _fh:
     _REAL_CONFIG = json.load(_fh)
-_RELEASING = RB.releasing_types(_REAL_CONFIG)
-_BUMP_MINOR_PRE_MAJOR = _REAL_CONFIG["packages"]["plugins/superheroes"]["bump-minor-pre-major"]
+_PKG_CFG = _REAL_CONFIG["packages"]["plugins/superheroes"]
+_PARSE_TYPES = RB.parseable_types(_REAL_CONFIG, _PKG_CFG)
+_RELEASING = RB.releasing_types(_REAL_CONFIG, _PKG_CFG)
+_BUMP_MINOR_PRE_MAJOR = _PKG_CFG["bump-minor-pre-major"]
 
 
 def _sha(short: str) -> str:
@@ -56,6 +58,7 @@ def _evaluate(commits, last_version, release_pr=None, exclusions=None, exclusion
         exclusions or {},
         exclusion_errors or [],
         _RELEASING,
+        _PARSE_TYPES,
         _BUMP_MINOR_PRE_MAJOR,
         f"superheroes-v{last_version}",
     )
@@ -108,7 +111,7 @@ def _inc2_changelog_present_only() -> str:
           continue
       if not RB.belongs_to_package(c):
           continue
-      parsed = RB.parse_subject(c.subject)
+      parsed = RB.parse_subject(c.subject, _PARSE_TYPES)
       if parsed is None:
           continue
       _, _, _, desc = parsed
@@ -255,13 +258,14 @@ def test_hidden_docs_ci_not_in_completeness_but_in_floor():
         _c("dc000001", "docs: readme tweak"),
         _c("ci000001", "ci: workflow only"),
     ]
-    assert RB.completeness_population(commits, _RELEASING) == []
-    assert len(RB.floor_population(commits)) == 2
+    assert RB.completeness_population(commits, _RELEASING, _PARSE_TYPES) == []
+    assert len(RB.floor_population(commits, _PARSE_TYPES)) == 2
 
 
 def test_feat_touching_only_non_package_files_not_eligible():
     commits = [_c("np000001", "feat(superheroes): root only", touches_package=False)]
-    assert RB.completeness_population(commits, _RELEASING) == []
+    assert RB.completeness_population(commits, _RELEASING, _PARSE_TYPES) == []
+    assert RB.floor_population(commits, _PARSE_TYPES) == []
 
 
 def test_zero_file_feat_restatement_eligible_and_fails_if_missing():
@@ -277,7 +281,7 @@ def test_zero_file_feat_restatement_eligible_and_fails_if_missing():
             touches_package=False,
         )
     ]
-    assert RB.completeness_population(commits, _RELEASING)
+    assert RB.completeness_population(commits, _RELEASING, _PARSE_TYPES)
     result = _evaluate(
         commits,
         "0.22.0",
@@ -303,10 +307,10 @@ def test_release_cut_requires_manifest_touch():
         touches_package=True,
         touches_manifest=False,
     )
-    assert RB.completeness_population([cut], _RELEASING) == []
-    assert RB.floor_population([cut]) == []
-    assert shaped in RB.floor_population([shaped])
-    assert shaped in RB.completeness_population([shaped], _RELEASING)
+    assert RB.completeness_population([cut], _RELEASING, _PARSE_TYPES) == []
+    assert RB.floor_population([cut], _PARSE_TYPES) == []
+    assert shaped in RB.floor_population([shaped], _PARSE_TYPES)
+    assert shaped in RB.completeness_population([shaped], _RELEASING, _PARSE_TYPES)
 
 
 def test_malformed_ledger_line_fails():
@@ -382,8 +386,8 @@ def test_hidden_breaking_raises_floor_not_changelog():
     hidden = _c("hb000001", "refactor(superheroes)!: delete legacy path")
     fix = _c("fx000001", "fix(superheroes): small fix")
     commits = [hidden, fix]
-    assert hidden not in RB.completeness_population(commits, _RELEASING)
-    assert hidden in RB.floor_population(commits)
+    assert hidden not in RB.completeness_population(commits, _RELEASING, _PARSE_TYPES)
+    assert hidden in RB.floor_population(commits, _PARSE_TYPES)
     release_pr = {
         "number": 1,
         "proposed_version": "0.23.1",
@@ -396,10 +400,12 @@ def test_hidden_breaking_raises_floor_not_changelog():
     assert any("minimum" in f for f in result.failures)
 
 
-def test_hidden_non_breaking_only_commit_passes():
+def test_hidden_non_breaking_only_no_release_pr_fails():
     commits = [_c("hn000001", "refactor(superheroes): internal cleanup")]
     result = _evaluate(commits, "0.23.0")
-    assert result.ok is True
+    assert result.ok is False
+    assert any("changelog-hidden types" in f for f in result.failures)
+    assert any("no open release PR" in f for f in result.failures)
 
 
 def test_sha_only_failure_distinguishes_from_absent():
@@ -475,12 +481,14 @@ def test_parse_version_rejects_invalid():
 
 def test_parse_subject_real_titles():
     assert RB.parse_subject(
-        "feat(superheroes)!: remove migrate_on_read — the legacy-profile migration path is deleted, replaced by a named refusal (#724) (#730)"
+        "feat(superheroes)!: remove migrate_on_read — the legacy-profile migration path is deleted, replaced by a named refusal (#724) (#730)",
+        _PARSE_TYPES,
     ) == ("feat", "superheroes", True, "remove migrate_on_read — the legacy-profile migration path is deleted, replaced by a named refusal (#724) (#730)")
     assert RB.parse_subject(
-        "feat(superheroes): supervised dispatch — write verb, durable journaling, reviewer retrofit (#702 lean rebuild) (#726)"
+        "feat(superheroes): supervised dispatch — write verb, durable journaling, reviewer retrofit (#702 lean rebuild) (#726)",
+        _PARSE_TYPES,
     )[0:3] == ("feat", "superheroes", False)
-    assert RB.parse_subject("not a conventional commit at all") is None
+    assert RB.parse_subject("not a conventional commit at all", _PARSE_TYPES) is None
 
 
 def test_is_release_commit_real_subjects():
@@ -503,13 +511,13 @@ def test_is_release_commit_real_subjects():
 
 
 def test_incident2_completeness_population_includes_restatement():
-    pop = RB.completeness_population(_INC2_COMMITS, _RELEASING)
+    pop = RB.completeness_population(_INC2_COMMITS, _RELEASING, _PARSE_TYPES)
     assert len(pop) == 17
     assert any(c.sha.startswith("868dce5b") for c in pop)
 
 
 def test_releasing_types_from_config_not_hardcoded():
-    got = RB.releasing_types(_REAL_CONFIG)
+    got = RB.releasing_types(_REAL_CONFIG, _PKG_CFG)
     assert got == frozenset({"feat", "fix", "perf", "deps", "revert", "chore"})
     assert "docs" not in got
 
@@ -534,6 +542,27 @@ def test_body_declares_breaking_notice_not_failure():
     assert result.ok is True
     assert any("body declares BREAKING CHANGE" in n for n in result.notices)
     assert any("eyeball the proposed bump" in n for n in result.notices)
+
+
+def test_body_breaking_with_exclamation_in_title_still_notices():
+    commits = [
+        Commit(
+            sha=_sha("bd000002"),
+            subject="feat(superheroes): remove old API!",
+            body="BREAKING CHANGE: removed API",
+            touches_package=True,
+        )
+    ]
+    release_pr = {
+        "number": 1,
+        "proposed_version": "0.24.0",
+        "changelog_text": _release_changelog(
+            "0.24.0", _changelog_line("remove old API!", "bd000002")
+        ),
+    }
+    result = _evaluate(commits, "0.23.0", release_pr)
+    assert result.ok is True
+    assert any("body declares BREAKING CHANGE" in n for n in result.notices)
 
 
 def test_non_conventional_subject_notice():
@@ -568,6 +597,30 @@ def test_changelog_presence_absent():
 # --- E. Review round 1 regression tests ---
 
 
+def test_extract_release_section_newest_first():
+    """Mirror release-please output: proposed version first, older sections below."""
+    changelog = (
+        "## [0.23.1](https://github.com/zwrose/superheroes/compare)\n\n"
+        "* **superheroes:** proposed bullet\n"
+        "## [0.23.0](https://github.com/zwrose/superheroes/compare)\n\n"
+        "* **superheroes:** older bullet\n"
+        "## [0.22.0](https://github.com/zwrose/superheroes/compare)\n\n"
+        "* **superheroes:** ancient bullet\n"
+    )
+    section = RB.extract_release_section(changelog, "0.23.1")
+    assert "proposed bullet" in section
+    assert "older bullet" not in section
+    assert "ancient bullet" not in section
+
+
+def test_extract_release_section_absent_version():
+    changelog = (
+        "## [0.23.0](https://github.com/zwrose/superheroes/compare)\n\n"
+        "* **superheroes:** only older\n"
+    )
+    assert RB.extract_release_section(changelog, "0.23.1") == ""
+
+
 def test_ack_replacement_only_in_prior_release_section_fails():
     """Replacement SHA in an older ## [version] section must not suppress failure."""
     dropped = _sha("drop0001")
@@ -580,10 +633,10 @@ def test_ack_replacement_only_in_prior_release_section_fails():
         )
     ]
     changelog = (
-        "## [0.22.0](https://github.com/zwrose/superheroes/compare)\n\n"
-        + _changelog_line("shipped earlier", old_repl[:7], old_repl)
-        + "\n## [0.23.0](https://github.com/zwrose/superheroes/compare)\n\n"
+        "## [0.23.0](https://github.com/zwrose/superheroes/compare)\n\n"
         + _changelog_line("something else", "oth0001")
+        + "\n## [0.22.0](https://github.com/zwrose/superheroes/compare)\n\n"
+        + _changelog_line("shipped earlier", old_repl[:7], old_repl)
     )
     exclusions = {dropped: (old_repl, "2026-07-31", "parser crash")}
     release_pr = {"number": 100, "proposed_version": "0.23.0", "changelog_text": changelog}
@@ -599,11 +652,14 @@ def test_prose_sha_mention_does_not_satisfy_acknowledgement():
     mentioner = _sha("ment0002")
     commits = [
         Commit(sha=dropped, subject="feat(superheroes): dropped", touches_package=True),
-        Commit(sha=mentioner, subject="fix(superheroes): follow-up", touches_package=True),
     ]
     changelog = _release_changelog(
         "0.23.0",
-        _changelog_line(f"mentions {dropped[:7]} in title", mentioner[:7], mentioner),
+        _changelog_line(
+            f"context in https://github.com/zwrose/superheroes/commit/{repl}",
+            mentioner[:7],
+            mentioner,
+        ),
     )
     exclusions = {dropped: (repl, "2026-07-31", "parser crash")}
     release_pr = {"number": 1, "proposed_version": "0.23.0", "changelog_text": changelog}
@@ -614,8 +670,8 @@ def test_prose_sha_mention_does_not_satisfy_acknowledgement():
 
 def test_deps_type_in_floor_population():
     commits = [_c("dp000001", "deps(superheroes): update dependency")]
-    assert commits[0] in RB.floor_population(commits)
-    assert RB.completeness_population(commits, _RELEASING) == [commits[0]]
+    assert commits[0] in RB.floor_population(commits, _PARSE_TYPES)
+    assert RB.completeness_population(commits, _RELEASING, _PARSE_TYPES) == [commits[0]]
 
 
 def test_hidden_body_breaking_on_refactor_counts_for_floor():
@@ -625,8 +681,8 @@ def test_hidden_body_breaking_on_refactor_counts_for_floor():
         body="BREAKING CHANGE: API removed",
         touches_package=True,
     )
-    assert hidden in RB.floor_population([hidden])
-    assert hidden not in RB.completeness_population([hidden], _RELEASING)
+    assert hidden in RB.floor_population([hidden], _PARSE_TYPES)
+    assert hidden not in RB.completeness_population([hidden], _RELEASING, _PARSE_TYPES)
 
 
 def test_release_shaped_title_without_manifest_not_cut():
@@ -645,23 +701,187 @@ def test_release_shaped_title_without_manifest_not_cut():
     assert any("no open release PR" in f for f in result.failures)
 
 
-def test_gh_read_pins_head_sha(monkeypatch):
-    calls: list[tuple[str, str]] = []
+def test_gh_read_retry_wrapper_retries_transient_failure(monkeypatch):
+    attempts = {"n": 0}
 
-    def fake_read(repo, path, ref, **_kw):
-        calls.append((path, ref))
-        if path.endswith("manifest.json") or path.endswith(".release-please-manifest.json"):
-            return json.dumps({"plugins/superheroes": "0.24.0"})
-        return _release_changelog("0.24.0", _changelog_line("ok", "ok000001"))
+    def flaky_read(repo, path, ref):
+        attempts["n"] += 1
+        if attempts["n"] < 2:
+            raise RuntimeError("gh api failed (502)")
+        return "ok"
 
-    monkeypatch.setattr(RB, "_gh_read_file_content_retry", fake_read)
-    head_sha = "abc123def456" * 3 + "abcd"
-    RB._gh_read_file_content_retry("zwrose/superheroes", ".release-please-manifest.json", head_sha)
-    RB._gh_read_file_content_retry(
-        "zwrose/superheroes", "plugins/superheroes/CHANGELOG.md", head_sha
+    monkeypatch.setattr(RB, "_gh_read_file_content", flaky_read)
+    assert RB._gh_read_file_content_retry("r/o", "p", "sha", retries=3, delay_s=0) == "ok"
+    assert attempts["n"] == 2
+
+
+def test_main_contents_reads_pin_pr_head_sha(tmp_path, monkeypatch):
+    import shutil
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    pkg = repo / "plugins" / "superheroes"
+    pkg.mkdir(parents=True)
+    (pkg / "marker.txt").write_text("touch\n")
+    (repo / ".release-please-manifest.json").write_text(
+        json.dumps({"plugins/superheroes": "0.23.0"})
     )
-    assert all(ref == head_sha for _path, ref in calls)
-    assert len(calls) == 2
+    shutil.copy(_CONFIG_PATH, repo / "release-please-config.json")
+    (repo / ".github").mkdir()
+    (repo / ".github" / "release-exclusions.txt").write_text("# empty\n")
+
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "chore: bootstrap"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "tag", "superheroes-v0.23.0"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    (pkg / "marker.txt").write_text("touch2\n")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "fix(superheroes): small fix"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    commit_sha = head.stdout.strip()
+
+    pinned_sha = "deadbeef" * 5
+    content_calls: list[str] = []
+
+    def fake_gh(args):
+        if args[0].startswith("repos/example/superheroes/pulls"):
+            return [
+                {
+                    "number": 99,
+                    "head": {
+                        "ref": "release-please--branches--main--components--superheroes",
+                        "sha": pinned_sha,
+                        "repo": {"full_name": "example/superheroes"},
+                    },
+                    "base": {"ref": "main"},
+                }
+            ]
+        if "contents/" in args[0]:
+            content_calls.append(args[0])
+            if "manifest.json" in args[0]:
+                return {
+                    "content": __import__("base64")
+                    .b64encode(json.dumps({"plugins/superheroes": "0.23.1"}).encode())
+                    .decode()
+                }
+            body = _release_changelog(
+                "0.23.1", _changelog_line("small fix", commit_sha[:7], commit_sha)
+            )
+            return {
+                "content": __import__("base64").b64encode(body.encode()).decode()
+            }
+        raise AssertionError(f"unexpected gh api call: {args}")
+
+    monkeypatch.setattr(RB, "_run_gh", fake_gh)
+    exit_code = RB.main(
+        [
+            "--repo",
+            "example/superheroes",
+            "--repo-root",
+            str(repo),
+        ]
+    )
+    assert exit_code == 0
+    assert len(content_calls) == 2
+    for url in content_calls:
+        assert f"ref={pinned_sha}" in url, f"contents read not pinned to PR head: {url}"
+
+
+def test_find_release_pr_rejects_fork_pr():
+    fork_pr = {
+        "number": 1,
+        "head": {
+            "ref": "release-please--branches--main--components--superheroes",
+            "sha": "abc",
+            "repo": {"full_name": "attacker/fork"},
+        },
+        "base": {"ref": "main"},
+    }
+
+    def fake_gh(args):
+        return [fork_pr]
+
+    orig = RB._run_gh
+    RB._run_gh = fake_gh
+    try:
+        assert RB._find_release_pr("zwrose/superheroes", "superheroes", retries=1) is None
+    finally:
+        RB._run_gh = orig
+
+
+def test_empty_releasing_types_config_fails(tmp_path):
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    pkg = repo / "plugins" / "superheroes"
+    pkg.mkdir(parents=True)
+    (pkg / "marker.txt").write_text("x\n")
+    (repo / ".release-please-manifest.json").write_text(
+        json.dumps({"plugins/superheroes": "0.23.0"})
+    )
+    cfg = {
+        "packages": {
+            "plugins/superheroes": {
+                "component": "superheroes",
+                "changelog-sections": [{"type": "docs", "hidden": True}],
+            }
+        }
+    }
+    (repo / "release-please-config.json").write_text(json.dumps(cfg))
+    (repo / ".github").mkdir()
+    (repo / ".github" / "release-exclusions.txt").write_text("# empty\n")
+
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "chore: bootstrap"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "tag", "superheroes-v0.23.0"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+
+    exit_code = RB.main(
+        [
+            "--repo",
+            "example/superheroes",
+            "--repo-root",
+            str(repo),
+        ]
+    )
+    assert exit_code == 1
 
 
 def test_notice_uses_github_warning_annotation(monkeypatch, capsys):
@@ -734,16 +954,20 @@ def test_main_integration_omitted_commit_fails(tmp_path, monkeypatch):
                     "head": {
                         "ref": "release-please--branches--main--components--superheroes",
                         "sha": pinned_sha,
+                        "repo": {"full_name": "example/superheroes"},
                     },
+                    "base": {"ref": "main"},
                 }
             ]
         if "contents/.release-please-manifest.json" in args[0]:
+            assert f"ref={pinned_sha}" in args[0]
             return {
                 "content": __import__("base64")
                 .b64encode(json.dumps({"plugins/superheroes": "0.23.1"}).encode())
                 .decode()
             }
         if "contents/plugins/superheroes/CHANGELOG.md" in args[0]:
+            assert f"ref={pinned_sha}" in args[0]
             body = _release_changelog("0.23.1", "")
             return {
                 "content": __import__("base64").b64encode(body.encode()).decode()
