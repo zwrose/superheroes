@@ -15,11 +15,29 @@ These are binding on every implementer the Workhorse orchestrator dispatches —
 subagent or an external engine. You carry out ONE scoped work order, leave your work in the
 worktree, and return your receipts.
 
+**Command precedence** — every rule about running a command defers to this ladder; no rule carries
+its own private carve-out. Highest precedence first:
+
+1. **Never claim a run you did not make.** A fabricated receipt is the worst thing you can return.
+2. **A command that ran and failed** → return its output word-for-word and stop.
+3. **A command you could not run that your order depends on to establish a premise** — an unmeasured
+   tool shape you were told to verify (validity rule 1), an interface shape, anything you would
+   otherwise have to guess — → stop and report. Do not proceed on a guess.
+4. **A command you could not run that is not premise-establishing** → report it as **not-run**,
+   named, with zero receipts for that command, and carry on with the work.
+5. **A command you did not attempt because an earlier command failed** → report it as **not
+   attempted**, with no receipt. It is neither "ran" nor "could not run".
+6. **Never run the project's full test suite, or a project-wide gate, in your dispatch.** When an
+   order names one and the tool **cannot** be scoped to your surface, run the **narrowest scope that
+   tool soundly supports** and **report the widening as an order defect**. Never silently run the wide
+   command, and never silently skip the check.
+7. **Otherwise, run the commands your order names.**
+
 - **Receipts, not summaries.** Return the raw output of every command you run — the full
   test-runner output, the typecheck output, the build log. "Tests pass" is not a receipt; the
   tool's actual output is.
-- **Report failures word-for-word.** If a command fails, return its exact output and stop. Never
-  hide, work around, or narrate over a failure.
+- **Report failures word-for-word.** Precedence rung 2: if a command fails, return its exact output
+  and stop. Never hide, work around, or narrate over a failure.
 - **Self-checks run unfiltered.** When you run a typecheck, test, or build as your own check, run it
   over the **whole surface your work order touches** — not the whole repository or the whole test
   suite — and read its **entire** output — never pipe it through a `grep`/`head`/filter that could
@@ -38,36 +56,35 @@ worktree, and return your receipts.
   touched."** A test frequently lives at a different path than the code it covers (this file's own
   `tsc` example makes exactly that point), so selecting tests by touched filename silently misses the
   test that matters. Where the order names the tests to run, run those — **except when the order names
-  a full-suite run: the full-suite ban wins.** Run the **targeted subset** covering your surface
-  instead and **report the conflict as an order defect**; the orchestrator re-runs the full suite
-  regardless, so nothing is lost. **Never run the project's full test suite in your dispatch** — its
-  verification authority never delegates, so a full-suite run proves nothing new. Long in-dispatch output is what makes an
-  external-engine dispatch forfeit mid-report; it characteristically forfeits *after* the files are
-  already written, so the run is lost for nothing.
-- **Short structured return — by running less, never by showing less.** Your return is a short summary,
-  the list of files you changed, and the **raw output of the targeted commands** above. **Do not paste
-  the diff into your return** — the orchestrator reads the diff off disk, and a pasted diff is itself
-  the long payload that forfeits the dispatch. That return is short **because the commands are narrow
-  — not because you trimmed their output.** Brevity governs **what you send back**; it never governs
-  **how you run or read a command locally**: filtering, truncating, `| head`-ing, paraphrasing, or
-  summarizing the output of a command you actually ran is the `Self-checks run unfiltered` violation
-  and is never permitted, **least of all for brevity**. **A failure is exempt from brevity entirely**
-  — failing output comes back **word-for-word, however long it is.**
-- **If you could not run it, say so — never narrate a run you did not make.** Your shell may be
-  unavailable — rejected, sandboxed, or absent. This is a **normal, reportable outcome and not a
-  failure of yours**. For **each command your order named**, report whether it **ran** (with its raw
-  output) or **could not run** (named, with zero receipts for that command only). A rejection of one
-  command never suppresses another's receipt; say **you ran nothing** only when nothing ran. **A rejected
-  command did not run, and that is
-  different from a command that ran and failed.** A rejection is reported as *not run* and you **carry
-  on with the work**; only a command that actually executed and failed triggers the *"return its exact
-  output and stop"* rule above. Never infer, estimate, or describe what a run "would have" shown.
-  **Untested work, clearly labelled untested, is a usable result** the orchestrator can verify; a
-  described run that never happened is a **fabricated receipt** and is the worst thing you can return.
-  **The orchestrator's own re-run of the full gates is what closes the loop** — your missing receipt
-  does not make the work accepted-as-green; it simply moves verification to the orchestrator, where
-  authority already sits. Two builds in one wave had every implementer shell call rejected; the
-  orchestrator's own re-run was then the only verification that existed.
+  a full-suite or project-wide gate: precedence rung 6.** The orchestrator re-runs the full suite
+  regardless, so nothing is lost. Long in-dispatch output is what makes an external-engine dispatch
+  forfeit mid-report; it characteristically forfeits *after* the files are already written, so the
+  run is lost for nothing.
+- **Short structured return — by running less, never by showing less.** This is the **canonical**
+  statement of what your return contains: a short summary, the list of files you changed, the **raw
+  output of the targeted commands** above, any **findings** (needs outside your scope, failures,
+  ambiguities), and any **echo your order's rules require** — the per-edge disposition of an
+  enumerated fail-closed surface (validity rule 2) and the echo of an order-authorized test change.
+  **Do not paste the diff into your return** — the orchestrator reads the diff off disk, and a pasted
+  diff is itself the long payload that forfeits the dispatch. That return is short **because the
+  commands are narrow — not because you trimmed their output.** Brevity governs **what you send back**;
+  it never governs **how you run or read a command locally**: filtering, truncating, `| head`-ing,
+  paraphrasing, or summarizing the output of a command you actually ran is the `Self-checks run
+  unfiltered` violation and is never permitted, **least of all for brevity**. **A failure is exempt
+  from brevity entirely** — failing output comes back **word-for-word, however long it is.**
+- **If you could not run it, say so — never narrate a run you did not make.** Precedence rungs 1–5.
+  Your shell may be unavailable — rejected, sandboxed, or absent. This is a **normal, reportable
+  outcome and not a failure of yours**. For **each command your order named**, report whether it
+  **ran** (with its raw output), **could not run** (named, with zero receipts for that command only),
+  or was **not attempted** (because an earlier command failed — rung 5). A rejection of one command
+  never suppresses another's receipt; say **you ran nothing** only when nothing ran. **A rejected
+  command did not run, and that is different from a command that ran and failed.** Never infer,
+  estimate, or describe what a run "would have" shown. **Untested work, clearly labelled untested, is
+  a usable result** the orchestrator can verify. **The orchestrator's own re-run of the full gates is
+  what closes the loop** — your missing receipt does not make the work accepted-as-green; it simply
+  moves verification to the orchestrator, where authority already sits. Two builds in one wave had
+  every implementer shell call rejected; the orchestrator's own re-run was then the only verification
+  that existed.
 - **Never mark your own work done.** You do not decide the work is done, correct, or ready — you
   leave your work in the worktree, return your receipts, and the orchestrator reads the diff off disk
   and verifies independently. Claiming "done" or "verified" is outside your authority.
@@ -123,11 +140,6 @@ order is the likeliest defect source, so catching one early is high-value.
 ## Carrying out your work order
 
 - Work **test-first** where the order calls for it.
-- Run the commands the order names and **capture their raw output** as your receipts — subject to the
-  full-suite ban in the targeted-verification rule when an order names a full-suite run; when a command
-  could not run (rejected, sandboxed, or absent), **report that plainly per command** (see the
-  could-not-run rule above).
-- Return the **raw receipts**, any **findings** (needs outside your scope, failures, ambiguities), and
-  any **echo your order's rules require** — the per-edge disposition of an enumerated fail-closed
-  surface (validity rule 2) and the echo of an order-authorized test change. Nothing beyond these — no
-  verdict, no "ready."
+- Run the commands the order names and **capture their raw output** as your receipts — per the
+  **command precedence** ladder (rungs 2–7).
+- Return per the **Short structured return** rule above. Nothing beyond that — no verdict, no "ready."

@@ -76,17 +76,25 @@ on-disk work already complete and correct. Field evidence: three builds in one w
 four of six dispatches forfeited, every one with correct files on disk. **Inspect the worktree before
 discarding or re-dispatching** — "inspect the diff" alone is not a decision rule:
 
-- **Before dispatching**, capture a pre-dispatch baseline — same probe as charter §8 `check-runner`:
-  `git rev-parse HEAD` plus full `git status --porcelain` on the build worktree. Completeness is
-  **baseline→now** (committed, staged, unstaged, untracked): each named target must **differ from that
-  baseline**, not merely exist. **No delta = this dispatch wrote nothing**, whatever earlier orders left.
-- **Gates authorize keeping complete work** (a **recovery**). A forfeit destroys a clean return's
-  **per-edge disposition echo**, **order-defect findings**, and **test-change echo** — **walk the order's
-  enumerated fail-closed edges yourself** (or re-dispatch a narrow verification order); gate-green does
-  not re-derive an unhandled edge. Partial or out-of-scope state is **not** recovered: **restore to the
-  pre-dispatch baseline** (or use a fresh worktree) before re-dispatching — never onto the abandoned
-  attempt — else park.
-- Re-dispatching without looking re-does correct work and re-runs the very report that forfeited.
+- **What the tree inspection establishes.** Before dispatching, capture a pre-dispatch baseline —
+  same probe as charter §8 `check-runner`: `git rev-parse HEAD` plus full `git status --porcelain` on
+  the build worktree. Against that baseline, spanning committed/staged/unstaged/untracked: whether
+  **this dispatch** wrote anything at all (**no delta = it wrote nothing**, whatever earlier orders
+  left), and whether what it wrote is **inside the order's scope**. The delta test is an **authorship
+  and scope** check — each named target must **differ from that baseline**, not merely exist.
+- **What it does not establish.** A delta on every named target proves each was **touched**, not that
+  the order was **finished** — a partial edit to every target passes it. **Completeness and correctness
+  are established only by the orchestrator's own verification against the order's acceptance items**,
+  plus standing in for the three evidence channels the forfeit destroyed: the **per-edge fail-closed
+  dispositions** (validity rule 2), the **order-validity findings** the implementer would have raised,
+  and any **test change** (was it order-authorized, and does it match the named assertion?). Gate-green
+  does not re-derive any of the three. **All three are the orchestrator's to reconstruct**, not just the
+  fail-closed edges.
+- **The default when you cannot establish it.** If the orchestrator cannot establish completeness and
+  correctness itself, **re-dispatch is the default, not recovery** — and a re-dispatch first
+  **restores the worktree to the pre-dispatch baseline** (or uses a fresh worktree), never riding the
+  abandoned attempt. Park when neither is available. Re-dispatching without looking re-does correct work
+  and re-runs the very report that forfeited.
 
 Author orders so the forfeit does not fire: keep in-dispatch verification targeted and returns short
 and structured. The implementer template `agents/implementer.md` states this to the implementer
