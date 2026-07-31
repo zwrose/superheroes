@@ -1,0 +1,16 @@
+# Acknowledged exclusions from the release-bump tripwire (.github/scripts/check_release_bump.py).
+#
+# Each row records a commit that release-please silently dropped from the changelog
+# and the empty re-statement commit that carried its title back into a release.
+# A row suppresses ONLY the changelog-completeness failure for the original SHA —
+# it never affects the version floor. Suppression applies only when the replacement
+# SHA is itself present in the release PR's changelog (a completed remediation).
+#
+# Add entries through a human remediation PR — never by automation.
+# Rows may share the same Actions run when one pre-cut audit surfaced multiple drops.
+#
+# Format (columns separated by two or more spaces):
+#   <original-sha40>  <replacement-sha40>  <YYYY-MM-DD>  <reason>
+
+4d88419716b7b7054660a7943b061420bd804ed8  4fe4d89ffb12323d09062c8d98d3ce36d3166ec6  2026-07-31  #726 — dropped by the release-please parser crash (Actions run 30597099129); re-stated as #740, shipped in 0.23.0
+2a6ac6a7259146083deb62f18171fd10c9312754  67433175164f49ffbdc5b3ce89dab752a61fd9e5  2026-07-31  #716 — dropped by the release-please parser crash (Actions run 30597099129); re-stated as #741, shipped in 0.23.0

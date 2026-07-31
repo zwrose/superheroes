@@ -57,6 +57,20 @@ def test_probe_command_never_raises_on_timeout_expired():
     assert result["exit"] is None
 
 
+def test_probe_command_closes_stdin_to_prevent_inherited_pipe_hang():
+    captured = {}
+
+    def _run(argv, **kwargs):
+        captured.update(kwargs)
+        if "input" not in kwargs:
+            raise subprocess.TimeoutExpired(cmd=argv, timeout=120)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    result = pp.probe_command("t", ["t"], run=_run)
+    assert result["ok"] is True
+    assert captured["input"] == ""
+
+
 # --- gh_auth_probe -------------------------------------------------------------------------
 
 def test_gh_auth_probe_ok_true():
@@ -81,15 +95,22 @@ def test_cross_vendor_cli_probe_ok_and_tool_label():
 
 def test_cross_vendor_no_op_argv_codex():
     assert pp.cross_vendor_no_op_argv("codex") == (
-        "codex", "exec", "--sandbox", "read-only", "reply with the single word READY")
+        "codex", "exec", "--sandbox", "read-only", "-")
 
 
 def test_cross_vendor_no_op_argv_cursor():
     # The cursor probe threads the project's configured cursor model (engine_adapter's SSOT),
     # never a hard-coded id — `cursor-small` was observed unavailable in a live run.
     import engine_adapter
-    assert pp.cross_vendor_no_op_argv("cursor") == (
-        "cursor-agent", "--model", engine_adapter._CURSOR_MODEL, "-p", "--trust", "reply READY")
+    probe = pp.cross_vendor_no_op_argv("cursor")
+    assert probe == (
+        "cursor-agent", "--model", engine_adapter._CURSOR_MODEL, "-p", "--trust",
+        "--mode", "plan")
+    builder = engine_adapter.build_argv("cursor", "review", None, {})
+    assert builder[builder.index("--mode") + 1] == "plan"
+    # Every read-role token the builder emits is carried by the probe, except the
+    # stream-json output format the probe deliberately omits (it parses no stdout).
+    assert set(builder) - set(probe) == {"--output-format", "stream-json"}
 
 
 def test_cross_vendor_no_op_argv_unknown_engine():
@@ -114,6 +135,52 @@ def test_cross_vendor_cli_probe_argv_override():
 
     pp.cross_vendor_cli_probe("codex", run=_run, argv=("codex", "--version"))
     assert captured["argv"] == ["codex", "--version"]
+
+
+def test_probe_prompt_asks_for_a_single_word_and_nothing_else():
+    # The probe must stay a no-op: an ask that invites WORK turns every compose
+    # into a real dispatch under probe_command's 120s timeout.
+    assert pp.probe_prompt().endswith(
+        "Reply with the single word READY and nothing else.\n")
+
+
+def test_cross_vendor_cli_probe_feeds_preamble_on_stdin_codex():
+    import engine_dispatch
+
+    captured = {}
+
+    def _run(argv, **kwargs):
+        captured["input"] = kwargs.get("input", "")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    pp.cross_vendor_cli_probe("codex", run=_run)
+    assert captured["input"].startswith(engine_dispatch.ANTIHIJACK_PREAMBLE)
+    assert "READY" in captured["input"]
+
+
+def test_cross_vendor_cli_probe_feeds_preamble_on_stdin_cursor():
+    import engine_dispatch
+
+    captured = {}
+
+    def _run(argv, **kwargs):
+        captured["input"] = kwargs.get("input", "")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    pp.cross_vendor_cli_probe("cursor", run=_run)
+    assert captured["input"].startswith(engine_dispatch.ANTIHIJACK_PREAMBLE)
+    assert "READY" in captured["input"]
+
+
+def test_cross_vendor_cli_probe_unknown_engine_no_stdin_prompt():
+    captured = {}
+
+    def _run(argv, **kwargs):
+        captured["input"] = kwargs.get("input", "")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    pp.cross_vendor_cli_probe("mystery", run=_run)
+    assert captured["input"] == ""
 
 
 # --- browser_probe_result ------------------------------------------------------------------
@@ -602,19 +669,39 @@ def test_preflight_run_includes_dispatch_vocab_probe(monkeypatch, capsys):
 # --- composition preflight (#510 WO-3) -------------------------------------------------------
 
 def test_model_no_op_argv_cursor_grok_dispatch_token():
+    import engine_adapter
     argv = pp.model_no_op_argv("cursor", "cursor-grok-4.5", "high")
+    expected = tuple(engine_adapter.build_argv(
+        "cursor", "review", "high", {"engine_model": "cursor-grok-4.5"}))
+    assert argv == expected
     assert argv == (
-        "cursor-agent", "--model", "cursor-grok-4.5-high", "-p", "--trust", "reply READY")
+        "cursor-agent", "--model", "cursor-grok-4.5-high", "-p", "--trust",
+        "--mode", "plan", "--output-format", "stream-json")
 
 
 def test_model_no_op_argv_cursor_bogus_model_returns_none():
     assert pp.model_no_op_argv("cursor", "bogus-model", "high") is None
 
 
-def test_model_no_op_argv_codex_includes_model_flag():
-    assert pp.model_no_op_argv("codex", "gpt-5.6-sol") == (
-        "codex", "exec", "--sandbox", "read-only", "-m", "gpt-5.6-sol",
-        "reply with the single word READY")
+def test_model_no_op_argv_codex_effort_none_resolves_from_matrix():
+    argv = pp.model_no_op_argv("codex", "gpt-5.6-sol")
+    assert argv is not None
+    assert "model_reasoning_effort=xhigh" in argv
+
+
+def test_model_no_op_argv_codex_terra_effort_none_resolves_second_tier():
+    argv = pp.model_no_op_argv("codex", "gpt-5.6-terra")
+    assert argv is not None
+    assert "model_reasoning_effort=high" in argv
+
+
+def test_model_no_op_argv_codex_matches_builder():
+    import engine_adapter
+    argv = pp.model_no_op_argv("codex", "gpt-5.6-sol", "xhigh")
+    expected = tuple(engine_adapter.build_argv(
+        "codex", "review", "xhigh", {"engine_model": "gpt-5.6-sol"}))
+    assert argv == expected
+    assert argv[-1] == "-"
 
 
 def test_model_no_op_argv_codex_bogus_model_returns_none():
@@ -728,6 +815,94 @@ def test_composition_liveness_empty_config_list_not_live():
 def test_composition_liveness_non_dict_returns_empty():
     assert pp.composition_liveness(None) == {}
     assert pp.composition_liveness("not-a-dict") == {}
+
+
+def test_composition_liveness_hardened_dispatch_codex():
+    import engine_dispatch
+
+    captured = {}
+
+    def _run(argv, **kwargs):
+        inp = kwargs.get("input", "")
+        captured["input"] = inp
+        if not inp.startswith(engine_dispatch.ANTIHIJACK_PREAMBLE):
+            return SimpleNamespace(returncode=1, stdout="", stderr="no preamble")
+        if argv[-1] != "-":
+            return SimpleNamespace(returncode=1, stdout="", stderr="not stdin form")
+        return SimpleNamespace(returncode=0, stdout="READY", stderr="")
+
+    needed = {"codex": [("gpt-5.6-sol", "xhigh")]}
+    result = pp.composition_liveness(needed, run=_run)
+    assert result["codex"]["live"] is True
+    assert "READY" in captured["input"]
+
+
+def test_composition_liveness_hardened_dispatch_cursor():
+    import engine_dispatch
+
+    captured = {}
+
+    def _run(argv, **kwargs):
+        inp = kwargs.get("input", "")
+        captured["input"] = inp
+        if not inp.startswith(engine_dispatch.ANTIHIJACK_PREAMBLE):
+            return SimpleNamespace(returncode=1, stdout="", stderr="no preamble")
+        if any("READY" in str(a).upper() for a in argv):
+            return SimpleNamespace(returncode=1, stdout="", stderr="positional prompt")
+        return SimpleNamespace(returncode=0, stdout="READY", stderr="")
+
+    needed = {"cursor": [("cursor-grok-4.5", "high")]}
+    result = pp.composition_liveness(needed, run=_run)
+    assert result["cursor"]["live"] is True
+    assert "READY" in captured["input"]
+
+
+def _collision_run(argv, **kwargs):
+    effort = next((a for a in argv if a.startswith("model_reasoning_effort=")), "")
+    if effort == "model_reasoning_effort=high":
+        return SimpleNamespace(returncode=1, stdout="", stderr="high failed")
+    return SimpleNamespace(returncode=0, stdout="READY", stderr="")
+
+
+def test_composition_liveness_same_model_collision_fail_closed_high_first():
+    needed = {"codex": [("gpt-5.6-sol", "high"), ("gpt-5.6-sol", "xhigh")]}
+    result = pp.composition_liveness(needed, run=_collision_run)
+    assert result["codex"]["live"] is False
+    assert result["codex"]["models"]["gpt-5.6-sol"]["ok"] is False
+
+
+def test_composition_liveness_same_model_collision_fail_closed_xhigh_first():
+    needed = {"codex": [("gpt-5.6-sol", "xhigh"), ("gpt-5.6-sol", "high")]}
+    result = pp.composition_liveness(needed, run=_collision_run)
+    assert result["codex"]["live"] is False
+    assert result["codex"]["models"]["gpt-5.6-sol"]["ok"] is False
+
+
+def test_composition_liveness_same_model_both_configs_ok_is_live():
+    needed = {"codex": [("gpt-5.6-sol", "high"), ("gpt-5.6-sol", "xhigh")]}
+    result = pp.composition_liveness(needed, run=fake0)
+    assert result["codex"]["live"] is True
+    assert result["codex"]["models"]["gpt-5.6-sol"]["ok"] is True
+
+
+def test_probe_argv_builders_contain_no_positional_prompt():
+    import engine_adapter
+
+    builders = [
+        ("cross_vendor", pp.cross_vendor_no_op_argv("codex")),
+        ("cross_vendor", pp.cross_vendor_no_op_argv("cursor")),
+        ("model_no_op", pp.model_no_op_argv("codex", "gpt-5.6-sol", "xhigh")),
+        ("model_no_op", pp.model_no_op_argv("cursor", "cursor-grok-4.5", "high")),
+        ("model_no_op", pp.model_no_op_argv("codex", "gpt-5.6-terra", "high")),
+        ("model_no_op", pp.model_no_op_argv("cursor", "composer-2.5", None)),
+    ]
+    for label, argv in builders:
+        assert argv is not None, "%s returned None" % label
+        for element in argv:
+            assert "READY" not in str(element).upper(), (
+                "%s argv element %r contains READY" % (label, element))
+            assert len(str(element).split()) == 1, (
+                "%s argv element %r is multi-word" % (label, element))
 
 
 def test_live_vendors_for_composition_claude_always_in_live_list():

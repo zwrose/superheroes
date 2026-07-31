@@ -106,6 +106,24 @@ def test_read_miss_schema_version(tmp_path):
     assert lc.read(path, now=1000.0) is None
 
 
+def test_read_rejects_pre_711_schema_v1_receipt(tmp_path, monkeypatch):
+    # #711 bumped SCHEMA_VERSION; reverting the constant must not resurrect v1 receipts.
+    assert lc.SCHEMA_VERSION > 1
+    monkeypatch.delenv(lc._ENV_TTL, raising=False)
+    path = str(tmp_path / "r.json")
+    now = 5_000.0
+    json.dump(
+        {
+            "schemaVersion": 1,
+            "probedAt": now - 10,
+            "liveness": _good_liveness(),
+            "needed": _good_needed(),
+        },
+        open(path, "w"),
+    )
+    assert lc.read(path, now=now) is None
+
+
 def test_read_miss_probed_at_future(tmp_path):
     path = str(tmp_path / "r.json")
     now = 2000.0
@@ -143,8 +161,8 @@ def test_read_miss_json_nan_probed_at(tmp_path, monkeypatch):
     now = 4000.0
     with open(path, "wb") as fh:
         fh.write(
-            b'{"schemaVersion": 1, "probedAt": NaN, "ttl": 600, '
-            b'"needed": {}, "liveness": {}}\n'
+            ('{"schemaVersion": %d, "probedAt": NaN, "ttl": 600, '
+             '"needed": {}, "liveness": {}}\n' % lc.SCHEMA_VERSION).encode("utf-8")
         )
     assert lc.read(path, now=now) is None
 
@@ -226,16 +244,27 @@ def test_read_hit_within_ttl(tmp_path, monkeypatch):
 # --- covers ---
 
 
-def test_covers_exact():
+def test_covers_effort_exact_mismatch():
     need = {"codex": [["gpt-5.6-sol", "high"]]}
     rec = {"codex": [["gpt-5.6-sol", None]]}
-    assert lc.covers(rec, need) is True
+    assert lc.covers(rec, need) is False
+    rec_exact = {"codex": [["gpt-5.6-sol", "high"]]}
+    assert lc.covers(rec_exact, need) is True
 
 
 def test_covers_broad_receipt_narrow_need():
-    rec = {"codex": [["a", None], ["b", None], ["c", None]]}
+    rec = {"codex": [["a", None], ["b", "low"], ["c", None]]}
     need = {"codex": [["b", "low"]]}
     assert lc.covers(rec, need) is True
+    rec_no_effort = {"codex": [["a", None], ["b", None], ["c", None]]}
+    need_low = {"codex": [["b", "low"]]}
+    assert lc.covers(rec_no_effort, need_low) is False
+
+
+def test_covers_effort_mismatch_xhigh_vs_high():
+    rec = {"codex": [["gpt-5.6-sol", "xhigh"]]}
+    need = {"codex": [["gpt-5.6-sol", "high"]]}
+    assert lc.covers(rec, need) is False
 
 
 def test_covers_missing_vendor():

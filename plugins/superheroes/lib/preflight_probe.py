@@ -25,6 +25,7 @@ if _LIB_DIR not in sys.path:
 
 import core_md                 # noqa: E402
 import engine_adapter          # noqa: E402
+import engine_dispatch         # noqa: E402
 import engine_pref            # noqa: E402
 import liveness_cache          # noqa: E402
 import model_registry          # noqa: E402
@@ -32,21 +33,46 @@ import model_tier_overrides    # noqa: E402
 
 DEFAULT_GH_ARGV = ("gh", "auth", "status")
 
+PROBE_ASK = "Reply with the single word READY and nothing else.\n"
+
+
+def probe_prompt():
+    """The hardened probe prompt: the SAME anti-hijack preamble a real review seat carries."""
+    return engine_dispatch.ANTIHIJACK_PREAMBLE + PROBE_ASK
+
+
+_PROBE_TIERS = ("reviewer-deep", "reviewer")
+
+
+def _probe_effort(engine, model, effort):
+    """An omitted codex effort resolves to the effort the registry matrix actually pairs with
+    this model; cursor tolerates None and is left alone."""
+    if effort is not None:
+        return effort
+    if engine != "codex":
+        return None
+    for tier in _PROBE_TIERS:
+        cell = model_registry.matrix_config(tier, "codex")
+        if cell is not None and cell[0] == model:
+            return cell[1] or "high"
+    return "high"
+
 
 def cross_vendor_no_op_argv(engine):
     """The harmless authenticated no-op argv for `engine` (a DEFAULT — the caller may override
     it with an explicit `argv`)."""
     if engine == "codex":
-        return ("codex", "exec", "--sandbox", "read-only", "reply with the single word READY")
+        return ("codex", "exec", "--sandbox", "read-only", "-")
     if engine == "cursor":
         # The cursor probe must dispatch the project's configured cursor model (the SSOT default
         # in engine_adapter), not a hard-coded id — `cursor-small` was observed unavailable in a
         # live run, which would fail the probe for a project that never dispatches it.
-        return ("cursor-agent", "--model", engine_adapter._CURSOR_MODEL, "-p", "--trust", "reply READY")
+        return ("cursor-agent", "--model", engine_adapter._CURSOR_MODEL, "-p", "--trust",
+                "--mode", "plan")
     return (engine, "--version")
 
 
-def probe_command(tool, argv, run=None):
+def probe_command(tool, argv, run=None, *, stdin_text=None):
     """Run `argv` via `run` (default: `subprocess.run`, capturing stdout+stderr as text with a
     120s timeout) and return `{"tool", "ok", "exit", "detail"}`. `ok` is exactly (exit code ==
     0). ANY exception from `run` (OSError, TimeoutExpired, anything at all) is caught here —
@@ -54,7 +80,8 @@ def probe_command(tool, argv, run=None):
     if run is None:
         run = subprocess.run
     try:
-        proc = run(list(argv), capture_output=True, text=True, timeout=120)
+        proc = run(list(argv), capture_output=True, text=True, timeout=120,
+                   input=stdin_text or "")
         exit_code = getattr(proc, "returncode", None)
         stdout = getattr(proc, "stdout", "") or ""
         stderr = getattr(proc, "stderr", "") or ""
@@ -76,7 +103,9 @@ def cross_vendor_cli_probe(engine, run=None, argv=None):
     value (None, a non-str) can never TypeError the label/argv build before reaching the
     guarded `probe_command` — the fail-loud contract holds even for a malformed argument."""
     engine = str(engine)
-    return probe_command("cross-vendor-cli:" + engine, list(argv or cross_vendor_no_op_argv(engine)), run)
+    argv = list(argv or cross_vendor_no_op_argv(engine))
+    stdin_text = probe_prompt() if engine in ("codex", "cursor") else None
+    return probe_command("cross-vendor-cli:" + engine, argv, run, stdin_text=stdin_text)
 
 
 def browser_probe_result(ok, detail=""):
@@ -189,16 +218,13 @@ _BROWSER_NOTE = ("browser live-exercise is a host action — run it per referenc
 def model_no_op_argv(engine, model, effort=None):
     """Per-model harmless no-op argv for composition preflight. Returns None when the model is
     unknown/unroutable (caller marks unavailable — never calls run)."""
-    if engine == "codex":
-        if not model_registry.is_registered("codex", model):
+    if engine in ("codex", "cursor"):
+        effort = _probe_effort(engine, model, effort)
+        result = engine_adapter.build_argv_result(
+            engine, "review", effort, {"engine_model": model})
+        if result.get("reason") or not result.get("argv"):
             return None
-        return ("codex", "exec", "--sandbox", "read-only", "-m", model,
-                "reply with the single word READY")
-    if engine == "cursor":
-        tok = model_registry.dispatch_token("cursor", model, effort)
-        if tok is None:
-            return None
-        return ("cursor-agent", "--model", tok, "-p", "--trust", "reply READY")
+        return tuple(result["argv"])
     return (engine, "--version")
 
 
@@ -237,8 +263,19 @@ def composition_liveness(needed_configs, run=None):
             if argv is None:
                 models[model] = {"ok": False, "detail": "unknown/unroutable model"}
             else:
-                r = probe_command("composition:%s:%s" % (vendor, model), argv, run)
-                models[model] = {"ok": r["ok"], "detail": r["detail"]}
+                r = probe_command("composition:%s:%s" % (vendor, model), argv, run,
+                                  stdin_text=probe_prompt())
+                r_ok = r["ok"]
+                r_detail = r["detail"]
+                entry = {"ok": r_ok, "detail": r_detail}
+                existing = models.get(model)
+                if existing is not None and not existing["ok"]:
+                    entry = existing
+                elif existing is not None and not r_ok:
+                    entry = {"ok": False, "detail": r_detail}
+                elif existing is not None:
+                    entry = existing
+                models[model] = entry
         live = bool(configs) and all(m["ok"] for m in models.values())
         result[vendor] = {"live": live, "models": models}
     return result

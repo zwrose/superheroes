@@ -3,6 +3,7 @@
 1. [Dispatch mechanics — long dispatches you own](#dispatch-mechanics--long-dispatches-you-own)
 2. [Supervised review dispatch](#supervised-review-dispatch)
 3. [Supervised write dispatch](#supervised-write-dispatch)
+4. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
 
 ---
 
@@ -97,3 +98,44 @@ not compose a separate per-dispatch watchdog** on top of it. **`cwd` must be a l
 implementer path and not review-code's in-place fixer path. `BASH_MAX_TIMEOUT_MS` is a **headless-launch
 premise field owned by [#656](https://github.com/zwrose/superheroes/issues/656)**; this change sets it
 nowhere.
+
+## Engine forfeits and order shape
+
+An external engine can forfeit *after* writing files — characteristically with cursor's
+**`NonRetriableError "Agent Looping Detected"`** while the engine is producing a long report, with
+on-disk work already complete and correct. Field evidence: three builds in one wave; in one of them
+four of six dispatches forfeited, every one with correct files on disk. **Inspect the worktree before
+discarding or re-dispatching** — "inspect the diff" alone is not a decision rule:
+
+- **What the tree inspection establishes.** Before dispatching, capture a pre-dispatch baseline —
+  same probe as charter §8 `check-runner`: `git rev-parse HEAD` plus full `git status --porcelain` on
+  the build worktree. Against that baseline, spanning committed/staged/unstaged/untracked: whether
+  **this dispatch** wrote anything at all (**no delta = it wrote nothing**, whatever earlier orders
+  left), and whether what it wrote is **inside the order's scope**. The delta test is an **authorship
+  and scope** check — each named target must **differ from that baseline**, not merely exist.
+- **What it does not establish.** A delta on every named target proves each was **touched**, not that
+  the order was **finished** — a partial edit to every target passes it. **Completeness and correctness
+  are established only by the orchestrator's own verification against the order's acceptance items**,
+  plus standing in for the three evidence channels the forfeit destroyed: the **per-edge fail-closed
+  dispositions** (validity rule 2), the **order-validity findings** the implementer would have raised,
+  and any **test change** (was it order-authorized, and does it match the named assertion?). Gate-green
+  does not re-derive any of the three. **All three are the orchestrator's to reconstruct**, not just the
+  fail-closed edges.
+- **The default when you cannot establish it.** If the orchestrator cannot establish completeness and
+  correctness itself, **re-dispatch is the default, not recovery** — and a re-dispatch first
+  **restores the worktree to the pre-dispatch baseline** (or uses a fresh worktree), never riding the
+  abandoned attempt. Park when neither is available. Re-dispatching without looking re-does correct work
+  and re-runs the very report that forfeited.
+
+Author orders so the forfeit does not fire: keep in-dispatch verification targeted and returns short
+and structured. The implementer template `agents/implementer.md` states this to the implementer
+directly, so an order that additionally demands a full-suite run, a pasted diff, or a long verbatim
+report is **overriding the template against its own purpose**.
+
+Never assume the implementer can run anything — an external engine's shell availability is set
+**outside your build**; the engine CLI consults its own permission surface, not your order. It is
+normally available on the sanctioned write path (so a blocked shell is not the expected state). But
+two builds in one wave had **every** implementer shell call rejected, and that is not yet explained
+— so it cannot be inferred from a previous build. Write every external order to be correct when the
+implementer can run nothing; the orchestrator's own re-run is the verification either way, and a
+corrective round is worth budgeting.

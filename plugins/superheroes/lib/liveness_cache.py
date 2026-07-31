@@ -11,7 +11,10 @@ import tempfile
 
 import mode_registry
 
-SCHEMA_VERSION = 1
+# Bump when probe configuration semantics change so legacy receipts cannot be
+# reused (#711: effort is now enforced per (model, effort) pair; v1 receipts
+# recorded effort the old probe never actually dispatched).
+SCHEMA_VERSION = 2
 DEFAULT_TTL_SECONDS = 600
 _ENV_TTL = "SUPERHEROES_LIVENESS_TTL_SECONDS"
 
@@ -165,29 +168,31 @@ def read(path, *, now):
 
 
 def covers(receipt_needed, needed):
-    """True iff every (vendor, model) in needed appears in receipt_needed (effort ignored)."""
+    """True iff every (vendor, model, effort) in needed appears in receipt_needed."""
     try:
         if not isinstance(receipt_needed, dict) or not isinstance(needed, dict):
             return False
         if not needed:
             return True
 
-        def _models_for_vendor(entries):
-            models = set()
+        def _pairs_for_vendor(entries):
+            pairs = set()
             if not isinstance(entries, (list, tuple)):
                 raise ValueError("bad entries")
             for entry in entries:
                 if not isinstance(entry, (list, tuple)) or len(entry) < 1:
                     raise ValueError("bad entry")
-                models.add(entry[0])
-            return models
+                model = entry[0]
+                effort = entry[1] if len(entry) > 1 else None
+                pairs.add((model, effort))
+            return pairs
 
         for vendor, need_entries in needed.items():
             if vendor not in receipt_needed:
                 return False
-            need_models = _models_for_vendor(need_entries)
-            rec_models = _models_for_vendor(receipt_needed[vendor])
-            if not need_models.issubset(rec_models):
+            need_pairs = _pairs_for_vendor(need_entries)
+            rec_pairs = _pairs_for_vendor(receipt_needed[vendor])
+            if not need_pairs.issubset(rec_pairs):
                 return False
         return True
     except Exception:
