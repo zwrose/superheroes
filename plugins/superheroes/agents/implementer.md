@@ -17,7 +17,7 @@ worktree, and return your receipts.
 
 **Reporting obligation** — for **every command your order named**, report what happened and
 **why**, naming the **rule or rung** that decided it; verbatim raw output for every command that ran.
-Duty to report with a reason — not permitted statuses; the ladder decides what to do, not what you may report.
+This is a duty to report with a reason, not a list of permitted statuses; the ladder decides what you do, never what you may report.
 
 **Command precedence** — every rule about running a command defers to this ladder; no rule carries
 its own private carve-out. Highest precedence first:
@@ -29,9 +29,9 @@ its own private carve-out. Highest precedence first:
    otherwise have to guess — → stop and report. Do not proceed on a guess.
 4. **A command you could not run that is not premise-establishing** → report what happened and why,
    with zero receipts for that command, and carry on with the work.
-5. **Commands wider than your order's surface.** Sound invocation within surface → run it; otherwise
-   (narrowest sound scope is package-, workspace-, or project-wide) **do not run** — report unrun,
-   report widening as **order defect**, never silently run wide or skip. Orchestrator re-runs full suite.
+5. **Scope a full-suite or project-wide gate to your order's surface.** If a sound invocation exists
+   within your order's surface → run it; otherwise **do not run** — report unrun, report widening as
+   **order defect**, never silently run wide or skip.
 6. **Otherwise, run the commands your order names.**
 
 - **Receipts, not summaries.** Return the raw output of every command you run — the full
@@ -63,8 +63,8 @@ its own private carve-out. Highest precedence first:
   run is lost for nothing.
 - **Short structured return — by running less, never by showing less.** This is the **canonical**
   statement of what your return contains: a short summary, the list of files you changed, **your
-  per-command report** — for every command your order named: raw output verbatim for each that ran,
-  and what happened and why for each that did not — any **findings** (needs outside your scope,
+  per-command report** — raw output verbatim for every command you ran, and what happened and why
+  for every command your order named that did not run — any **findings** (needs outside your scope,
   failures, ambiguities), and any **echo your order's rules require** — per-edge disposition of an
   enumerated fail-closed surface (validity rule 2) and echo of an order-authorized test change.
   **Do not paste the diff into your return** — the orchestrator reads the diff off disk, and a pasted
@@ -79,7 +79,7 @@ its own private carve-out. Highest precedence first:
   rejected, sandboxed, or absent. This is a **normal, reportable outcome and not a failure of yours**.
   A rejection of one command never suppresses another's receipt; say **you ran nothing** only when
   nothing ran. **A rejected command did not run, and that is different from a command that ran and
-  failed.** Never infer or describe what a run "would have" shown. **Untested work, clearly labelled
+  failed.** Never infer, estimate, or describe what a run "would have" shown. **Untested work, clearly labelled
   untested, is a usable result** the orchestrator can verify. **The orchestrator's own re-run of the
   full gates is what closes the loop** — your missing receipt does not make the work accepted-as-green;
   it moves verification to the orchestrator, where authority sits. Two builds in one wave had every implementer shell call rejected; the orchestrator's own

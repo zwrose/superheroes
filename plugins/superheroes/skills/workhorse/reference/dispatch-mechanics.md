@@ -115,8 +115,9 @@ discarding or re-dispatching** — "inspect the diff" alone is not a decision ru
   be made clean, use a **fresh worktree** or **park** — never dispatch against a dirty baseline, and
   never treat a delta measured from one as authorship evidence. Against a clean baseline, spanning
   committed/staged/unstaged/untracked: whether **this dispatch** wrote anything at all (**no delta = it
-  wrote nothing** — authorship evidence only; an **INDETERMINATE** dispatch, timeout or child never
-  joined, is never clean regardless of delta), and whether what it wrote is **inside the order's scope**. The delta test is an
+  wrote nothing** — authorship evidence only), and whether what it wrote is **inside the order's scope**.
+  An **INDETERMINATE** dispatch — timeout or child never joined — is never clean regardless of delta.
+  The delta test is an
   **authorship and scope** check — each named target must **differ from that baseline**, not merely
   exist.
 - **What it does not establish.** A delta on every named target proves each was **touched**, not that
