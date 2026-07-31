@@ -862,13 +862,27 @@ nothing (literal renamed, moved, duplicated, or malformed) it raises rather than
 an empty set that would make the equality vacuously pass. A rename of the truth then
 **fails the drift test**, not production.
 
-*Worked example 1 — the cross-charter boundary line.* Both session charters state the
-identical two-sided fact — "Workhorse never merges/releases/bumps versions/wires the
-board/re-scopes silently; Showrunner never builds — except the **micro** lane, a named hard-line edit defined in the showrunner charter." Neither charter is authoritative over
-the other, so `lib/tests/test_charter_boundary_sync.py` is a **symmetric** Pattern-2
-instance: it extracts the marked boundary line from both `skills/showrunner/SKILL.md` and
-`skills/workhorse/SKILL.md`, fails closed if either is missing, and asserts the two are
-byte-identical — editing one charter's boundary breaks CI until the other matches.
+*Worked example 1 — the cross-charter boundary line and cross-lane invariants.* Both session
+charters state the identical two-sided fact — "Workhorse never merges/releases/bumps versions/wires
+the board/re-scopes silently; Showrunner never builds — except the **micro** lane, a named
+hard-line edit defined in the showrunner charter." Neither charter is authoritative over the other,
+so `lib/tests/test_charter_boundary_sync.py` keeps a **symmetric** byte-identical equality check on
+that boundary line between `skills/showrunner/SKILL.md` and `skills/workhorse/SKILL.md`. The same
+file now also carries **asymmetric** rows for named cross-lane invariants — **resolve-upward**, the
+**not-engaged-never-passes** probe rule, and the **waiver bounds** — where
+`rubric/review-discipline.md` is the authoritative home and the charters hold deliberate
+paraphrases. Those rows are **clause-presence sentinels**, not byte-equality or semantic equality.
+Each shared clause is checked in **exactly one** named home section; each copy-holder is checked in
+**exactly one** named section in that file. Shared clauses are **first verified present in the home**
+(§11.3); `holder_clauses` pins holder-specific wording where the home states the same bound in
+different words — a narrower, holder-specific guarantee, not home-derived. The guard fails closed if
+a declared heading is missing **or duplicated**. **Residual blind spots:** (1) the home gaining a new
+qualifier, scope, or exception the copies do not mirror; (2) a copy keeping every clause verbatim
+while adding a contradicting exception nearby; (3) matches spanning a boundary after normalization;
+(4) `holder_clauses` being holder-specific, not home-derived; (5) same-section, different-paragraph
+satisfaction — a clause pinned to a section can still be satisfied by a different paragraph in that
+section; (6) the spine's own waiver sentence is not separately pinned. The waiver row's
+copy-holders are the **showrunner** charter only, because micro is the showrunner's lane.
 
 *Worked example 2 — the reviewer roster (sanctioned-subset invariant).* The set of
 `agents/*-reviewer` files is the single home of the **sanctioned reviewer universe** — now
