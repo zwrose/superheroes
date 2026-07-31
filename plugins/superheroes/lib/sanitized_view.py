@@ -1108,8 +1108,8 @@ def _split_patch_sections(patch_bytes):
     return sections, unrecognized_spans
 
 
-def _section_should_be_withheld(section):
-    """True when a section's derived paths are stripped or cannot be derived safely."""
+def _section_withhold_info(section):
+    """Return (withhold, stripped_paths, underivable) for one patch section."""
     old_path, new_path = _paths_from_diff_section(section)
     lines = section.split(b"\n")
     git_old, git_new = (
@@ -1117,29 +1117,46 @@ def _section_should_be_withheld(section):
         if lines
         else (_DIFF_PATH_UNDERIVABLE, _DIFF_PATH_UNDERIVABLE)
     )
+    stripped_paths = set()
+    underivable = False
     for path in (old_path, new_path, git_old, git_new):
         if path is _DIFF_PATH_UNDERIVABLE or path is None:
-            return True
-        if _rel_path_would_be_stripped(path):
-            return True
-    return False
+            underivable = True
+        elif _rel_path_would_be_stripped(path):
+            stripped_paths.add(path)
+    withhold = underivable or bool(stripped_paths)
+    return withhold, stripped_paths, underivable
+
+
+def _section_should_be_withheld(section):
+    """True when a section's derived paths are stripped or cannot be derived safely."""
+    withhold, _, _ = _section_withhold_info(section)
+    return withhold
 
 
 def _filter_patch_sections(patch_bytes):
-    """Output-side guarantee: drop sections touching stripped or underivable paths."""
+    """Output-side guarantee: drop sections touching stripped or underivable paths.
+
+    Returns ``(kept_bytes, stripped_paths, underivable_section_count,
+    unrecognized_spans)``.
+    """
     if not patch_bytes:
-        return b"", 0, 0
+        return b"", set(), 0, 0
     sections, unrecognized_spans = _split_patch_sections(patch_bytes)
     kept = []
-    withheld = 0
+    stripped_paths = set()
+    underivable_sections = 0
     for section in sections:
-        if _section_should_be_withheld(section):
-            withheld += 1
+        withhold, section_stripped, section_underivable = _section_withhold_info(section)
+        if withhold:
+            stripped_paths.update(section_stripped)
+            if section_underivable and not section_stripped:
+                underivable_sections += 1
         else:
             kept.append(section)
     if not kept:
-        return b"", withheld, unrecognized_spans
-    return b"".join(kept), withheld, unrecognized_spans
+        return b"", stripped_paths, underivable_sections, unrecognized_spans
+    return b"".join(kept), stripped_paths, underivable_sections, unrecognized_spans
 
 
 def _write_review_patch_file(view_root, patch_bytes):
@@ -1303,16 +1320,16 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
         if p
     ]
     survivors = []
-    withheld_count = 0
+    census_stripped_paths = set()
     for path in changed_paths:
         if _rel_path_would_be_stripped(path):
-            withheld_count += 1
+            census_stripped_paths.add(path)
         else:
             survivors.append(path)
 
-    if not survivors and withheld_count > 0:
+    if not survivors and census_stripped_paths:
         raise SanitizedViewError("sanitized-view-diff-fully-withheld")
-    if not survivors and withheld_count == 0:
+    if not survivors and not census_stripped_paths:
         raise SanitizedViewError("sanitized-view-diff-empty")
 
     patch_parts = []
@@ -1334,10 +1351,18 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
         patch_parts.append(chunk)
 
     patch_bytes = b"".join(patch_parts)
-    patch_bytes, output_withheld, unrecognized_spans = _filter_patch_sections(patch_bytes)
+    (
+        patch_bytes,
+        filter_stripped_paths,
+        filter_underivable_sections,
+        unrecognized_spans,
+    ) = _filter_patch_sections(patch_bytes)
     if unrecognized_spans > 0:
         raise SanitizedViewError("sanitized-view-diff-failed")
-    withheld_count += output_withheld
+    withheld_count = (
+        len(census_stripped_paths | filter_stripped_paths)
+        + filter_underivable_sections
+    )
     if not patch_bytes:
         if withheld_count > 0:
             raise SanitizedViewError("sanitized-view-diff-fully-withheld")
