@@ -205,6 +205,28 @@ def test_fresh_acquire_returns_false(tmp_path):
     lock.release(p)
 
 
+def test_acquire_succeeds_when_lock_vanishes_during_not_stale_check(tmp_path, monkeypatch):
+    """Finding 1: lock exists at publish but vanishes before not-stale check must retry, not raise."""
+    p = str(tmp_path / "engine.lock")
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w") as fh:
+        json.dump(
+            {"pid": os.getpid(), "host": socket.gethostname(),
+             "acquiredAt": "2026-01-01T00:00:00Z", "bootId": None},
+            fh,
+        )
+    real_is_stale = lock.is_stale
+
+    def release_then_is_stale(path, ttl=lock.DEFAULT_TTL):
+        lock.release(path)
+        return real_is_stale(path, ttl)
+
+    monkeypatch.setattr(lock, "is_stale", release_then_is_stale)
+    assert lock.acquire(p) is False
+    assert lock.read_holder(p)["pid"] == os.getpid()
+    lock.release(p)
+
+
 def test_acquire_succeeds_when_exists_check_lies_once(tmp_path, monkeypatch):
     """Finding 2: path exists at pre-check but vanishes before is_stale must not raise LockHeld."""
     p = str(tmp_path / "engine.lock")

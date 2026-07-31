@@ -462,9 +462,6 @@ def _acquire_worktree_lease(cwd_real, run_dir_real):
         if file_lock.acquire(lease_path):
             reclaimed = True
     except file_lock.LockHeld:
-        holder = file_lock.read_holder(lease_path)
-        if _worktree_lease_holder_live(holder):
-            return False, "worktree-lease-held", None, lease_path
         return False, "worktree-lease-held", None, lease_path
     token = secrets.token_hex(16)
     holder = file_lock.read_holder(lease_path)

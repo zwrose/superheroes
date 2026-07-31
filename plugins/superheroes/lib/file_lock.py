@@ -185,6 +185,8 @@ def acquire(lock_path, ttl=DEFAULT_TTL):
         except FileExistsError:
             pass
         if not is_stale(lock_path, ttl):
+            if not os.path.exists(lock_path):
+                continue
             raise LockHeld(read_holder(lock_path)) from None
         if _reclaim_stale_lock(lock_path, ttl):
             return True
