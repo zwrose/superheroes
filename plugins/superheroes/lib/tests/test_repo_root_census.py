@@ -20,7 +20,9 @@ if _LIB not in sys.path:
 
 _FLAGGED_GIT_ARGS = frozenset({
     "--show-toplevel",
+    "--show-cdup",
     "--git-common-dir",
+    "--git-dir",
     "--absolute-git-dir",
 })
 
@@ -101,6 +103,21 @@ def _subtree_has_git_join(subtree):
     return False
 
 
+def _subtree_has_pathlib_parents_walk(subtree):
+    for node in _walk_nodes(subtree):
+        if not isinstance(node, ast.For):
+            continue
+        iter_attr = None
+        if isinstance(node.iter, ast.Attribute):
+            iter_attr = node.iter.attr
+        if iter_attr != "parents":
+            continue
+        body = node.body + getattr(node, "orelse", [])
+        if _subtree_has_git_entry_test(body):
+            return True
+    return False
+
+
 def _subtree_has_git_entry_test(subtree):
     for node in _walk_nodes(subtree):
         if not isinstance(node, ast.Call):
@@ -122,6 +139,8 @@ def _is_manual_git_ancestor_loop(node):
     if not isinstance(node, (ast.While, ast.For)):
         return False
     body = node.body + getattr(node, "orelse", [])
+    if _subtree_has_pathlib_parents_walk(body):
+        return True
     return (_subtree_has_git_join(body)
             and _subtree_has_git_entry_test(body)
             and _subtree_has_dirname_walk(body))
@@ -141,10 +160,13 @@ def find_violations(source, filename="<unknown>"):
                 "detail": "call includes %s" % ", ".join(flagged),
             })
         if _is_manual_git_ancestor_loop(node):
+            detail = "loop joins .git and walks os.path.dirname"
+            if _subtree_has_pathlib_parents_walk(node.body + getattr(node, "orelse", [])):
+                detail = "loop walks pathlib Path.parents and tests a .git entry"
             out.append({
                 "kind": "manual-git-ancestor-walk",
                 "lineno": node.lineno,
-                "detail": "loop joins .git and walks os.path.dirname",
+                "detail": detail,
             })
     return out
 
@@ -196,8 +218,9 @@ def test_census_flags_synthetic_fall_open_resolver(tmp_path):
     decoy.write_text(textwrap.dedent("""\
         import os
         import subprocess
+        from pathlib import Path
 
-        def rogue_repo_root(cwd):
+        def rogue_repo_root_cwd(cwd):
             path = os.path.realpath(cwd)
             while True:
                 git_entry = os.path.join(path, ".git")
@@ -212,8 +235,32 @@ def test_census_flags_synthetic_fall_open_resolver(tmp_path):
                 capture_output=True, text=True,
             )
             return out.stdout.strip() or cwd
+
+        def rogue_repo_root_pathlib(cwd):
+            for parent in Path(cwd).resolve().parents:
+                if (parent / ".git").exists():
+                    return str(parent)
+            out = subprocess.run(
+                ["git", "-C", cwd, "rev-parse", "--show-cdup"],
+                capture_output=True, text=True,
+            )
+            return out.stdout.strip() or cwd
+
+        def rogue_repo_root_git_dir(cwd):
+            out = subprocess.run(
+                ["git", "-C", cwd, "rev-parse", "--git-dir"],
+                capture_output=True, text=True,
+            )
+            return out.stdout.strip() or cwd
     """))
     violations = census_module(str(decoy))
     kinds = {v["kind"] for v in violations}
+    flagged_args = set()
+    for v in violations:
+        if v["kind"] == "git-arg-literal":
+            for lit in ("--show-toplevel", "--show-cdup", "--git-dir"):
+                if lit in v["detail"]:
+                    flagged_args.add(lit)
     assert "manual-git-ancestor-walk" in kinds
     assert "git-arg-literal" in kinds
+    assert flagged_args == {"--show-toplevel", "--show-cdup", "--git-dir"}

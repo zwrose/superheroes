@@ -372,7 +372,7 @@ def test_half_registered_entry_self_heals(tmp_path):
     assert rs.read_pointer(root, ident["remote_hash"]) == eid
 
 
-def test_gitdir_uses_pre_231_fallback(tmp_path, monkeypatch):
+def test_gitdir_bare_common_dir_joins_relative_to_cwd_not_absolute_fallback(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "r")
     calls = {"common": 0, "absolute": 0}
     real = sc.run_git_result

@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -79,6 +80,10 @@ _VERSION_RE = re.compile(r"\d+(?:\.\d+)+[0-9A-Za-z.\-+]*")
 # Rejection reason when which() lands on a repo-controlled or relative-PATH binary.
 REJECTION_REPO_LOCAL = "repo-local executable ignored"
 
+# Rejection when the repository boundary cannot be determined safely (ambiguous
+# ``.git`` entry, walk ``OSError``).
+REJECTION_BOUNDARY_INDETERMINATE = "repository boundary indeterminate"
+
 # Absolute PATH fallback when every inherited component was empty, relative, or
 # repo-contained. Must never be "" — CPython treats an empty PATH as "search the
 # child cwd", and that is only safe today because the child cwd is neutral.
@@ -119,22 +124,59 @@ _NEUTRAL_TOOL_CONFIGS = {}
 _NEUTRAL_TOOL_CONFIG_LOCK = threading.Lock()
 
 
+def _git_dot_at_ancestor_is_authoritative(ancestor):
+    """True when ``ancestor``'s ``.git`` is a real directory or gitfile, not a symlink."""
+    git_entry = os.path.join(ancestor, ".git")
+    try:
+        st = os.lstat(git_entry)
+    except OSError:
+        raise
+    if stat.S_ISLNK(st.st_mode):
+        return False
+    return stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode)
+
+
 def _git_toplevel(cwd):
-    """Nearest ancestor with a ``.git`` entry, or realpath(cwd) when none.
+    """Nearest ancestor with an authoritative ``.git`` entry, or realpath(cwd) when none.
 
     Delegates ``.git`` presence to ``store_core.git_dot_entry_ancestor`` (``lstat``,
-    never spawns) so dangling or unreadable ``.git`` entries still bound the repo.
-    On walk ``OSError``, returns the filesystem root so ``resolve()`` rejects every
+    never spawns), but treats symlink or unreadable-type ``.git`` entries as
+    indeterminate — never returned as the boundary; the walk continues upward.
+    Real directories and regular files (gitfile worktrees) are authoritative.
+    When the walk saw indeterminate markers but no authoritative boundary, or on
+    walk ``OSError``, returns the filesystem root so ``resolve()`` rejects every
     PATH hit (fail closed).  Never spawns.
     """
     base = cwd or "."
     try:
-        ancestor = store_core.git_dot_entry_ancestor(base)
+        start = os.path.realpath(base)
     except OSError:
         return os.path.sep
-    if ancestor is not None:
-        return ancestor
-    return os.path.realpath(base)
+
+    saw_indeterminate = False
+    path = start
+    while True:
+        try:
+            ancestor = store_core.git_dot_entry_ancestor(path)
+        except OSError:
+            return os.path.sep
+        if ancestor is None:
+            break
+        try:
+            authoritative = _git_dot_at_ancestor_is_authoritative(ancestor)
+        except OSError:
+            return os.path.sep
+        if authoritative:
+            return ancestor
+        saw_indeterminate = True
+        parent = os.path.dirname(ancestor)
+        if parent == ancestor:
+            break
+        path = parent
+
+    if saw_indeterminate:
+        return os.path.sep
+    return start
 
 
 def _is_under(path, root):
@@ -320,6 +362,14 @@ def resolve(tool, cwd, run=None):
   """
     del run  # resolution never executes anything
     repo_root = _git_toplevel(cwd)
+    if repo_root == os.path.sep:
+        return {
+            "tool": tool,
+            "found": False,
+            "path": None,
+            "source": None,
+            "rejection": REJECTION_BOUNDARY_INDETERMINATE,
+        }
     process_cwd = os.path.realpath(os.getcwd())
     on_path = shutil.which(tool)
     if not on_path:
@@ -468,6 +518,12 @@ def missing_tool_reason(tool, rejection=None):
     """
     cmd = INSTALL_COMMANDS.get(tool)
     if rejection:
+        if rejection == REJECTION_BOUNDARY_INDETERMINATE:
+            return (
+                "%s ignored (%s) — the repository boundary could not be "
+                "determined safely; this lens cannot run here"
+                % (tool, rejection)
+            )
         if not cmd:
             return (
                 "%s ignored (%s) — no install command is recorded for it in "

@@ -38,12 +38,31 @@ def _nested_layout(tmp_path):
     return str(repo), str(nested)
 
 
+_BROKEN_REPO_SHAPES = (
+    "unreadable_git",
+    "dead_gitdir_pointer",
+    "git_unavailable",
+    "external_git_dir_corrupt",
+    "git_dir_nonexistent_work_tree",
+)
+
+
 def _assert_raises_repo_root_unavailable(fn, nested):
-    nested_real = os.path.realpath(nested)
-    with pytest.raises(sc.RepoRootUnavailable):
+    with pytest.raises(sc.RepoRootUnavailable) as excinfo:
         fn()
     # The old fall-open bug keyed off the nested cwd, not the real repo root.
-    assert nested_real != os.path.realpath(os.path.dirname(nested_real))
+    msg = str(excinfo.value)
+    refusal_markers = (
+        ".git present",
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "git could not be run",
+        "git declined",
+        "non-directory path",
+        "nonexistent path",
+        "cannot determine repository root",
+    )
+    assert any(marker in msg for marker in refusal_markers), msg
 
 
 def _apply_unreadable_git(repo):
@@ -117,13 +136,7 @@ def _consumers(nested, registry_root):
     }
 
 
-@pytest.mark.parametrize("shape", [
-    "unreadable_git",
-    "dead_gitdir_pointer",
-    "git_unavailable",
-    "external_git_dir_corrupt",
-    "git_dir_nonexistent_work_tree",
-])
+@pytest.mark.parametrize("shape", _BROKEN_REPO_SHAPES)
 def test_broken_repo_refusal_from_nested_subdirectory(
         tmp_path, monkeypatch, registry_root, shape, request):
     repo, nested = _nested_layout(tmp_path)
@@ -144,13 +157,17 @@ def test_broken_repo_refusal_from_nested_subdirectory(
         _assert_raises_repo_root_unavailable(fn, nested)
 
 
-@pytest.mark.parametrize("shape", [
-    "unreadable_git",
-    "dead_gitdir_pointer",
-    "git_unavailable",
-    "external_git_dir_corrupt",
-    "git_dir_nonexistent_work_tree",
-])
+def test_greenfield_plain_directory_still_returns_realpath_cwd(tmp_path, monkeypatch):
+    """Positive control: unconditional refusal would fail this — genuine greenfield must pass."""
+    plain = str(tmp_path / "plain")
+    os.makedirs(plain)
+    monkeypatch.delenv("GIT_DIR", raising=False)
+    monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+    assert sc.repo_root(plain) == os.path.realpath(plain)
+    assert sc.get_gitdir(plain) == os.path.realpath(plain)
+
+
+@pytest.mark.parametrize("shape", _BROKEN_REPO_SHAPES)
 def test_hero_setup_never_raises_from_nested_subdirectory(
         tmp_path, monkeypatch, registry_root, shape, request):
     repo, nested = _nested_layout(tmp_path)
@@ -164,6 +181,8 @@ def test_hero_setup_never_raises_from_nested_subdirectory(
         _apply_external_git_dir_corrupt(tmp_path, repo, monkeypatch)
     elif shape == "git_dir_nonexistent_work_tree":
         _apply_git_dir_nonexistent_work_tree(tmp_path, repo, monkeypatch)
+    else:
+        raise AssertionError("unknown shape: %r" % (shape,))
 
     # Documented never-raise surface: read_declined / mark_declined (not offerable — it
     # probes layer paths and may propagate RepoRootUnavailable through core_md).

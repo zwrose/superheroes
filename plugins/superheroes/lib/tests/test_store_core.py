@@ -451,6 +451,56 @@ def test_get_gitdir_nonexistent_cwd_with_git_env_raises(tmp_path, monkeypatch):
     assert "GIT_DIR" in str(excinfo.value)
 
 
+def test_get_gitdir_bare_common_dir_raises_on_nonexistent_join(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "r")
+    real = sc.run_git_result
+
+    def fake(cwd, *a):
+        if a == ("rev-parse", "--path-format=absolute", "--git-common-dir"):
+            return sc.GitResult(None, sc.GIT_DECLINED, "unknown option --path-format")
+        if a == ("rev-parse", "--git-common-dir"):
+            return sc.GitResult("../NOPE/.git", sc.GIT_OK, None)
+        if a == ("rev-parse", "--absolute-git-dir"):
+            calls["absolute"] += 1
+            return real(cwd, *a)
+        return real(cwd, *a)
+
+    calls = {"absolute": 0}
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    with pytest.raises(sc.RepoRootUnavailable) as excinfo:
+        sc.get_gitdir(repo)
+    assert calls["absolute"] == 0
+    assert "nonexistent path" in str(excinfo.value)
+
+
+def test_repo_root_nonexistent_cwd_greenfield(tmp_path, monkeypatch):
+    nope = str(tmp_path / "nope" / "missing")
+    monkeypatch.delenv("GIT_DIR", raising=False)
+    monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+    assert sc.repo_root(nope) == os.path.realpath(nope)
+
+
+def test_repo_root_nonexistent_cwd_inside_repo_raises(tmp_path):
+    repo = _init_repo(tmp_path / "r")
+    nope = os.path.join(repo, "deleted", "subdir")
+    with pytest.raises(sc.RepoRootUnavailable) as excinfo:
+        sc.repo_root(nope)
+    assert ".git present" in str(excinfo.value)
+
+
+def test_get_gitdir_matches_control_plane_common_git_dir(tmp_path):
+    import control_plane as cp
+
+    repo = _init_repo(tmp_path / "main")
+    (tmp_path / "main" / "f").write_text("x")
+    _git(repo, "add", "f")
+    _git(repo, "commit", "-qm", "init")
+    wt = str(tmp_path / "wt")
+    _git(repo, "worktree", "add", "-q", wt)
+    for cwd in (repo, wt):
+        assert sc.get_gitdir(cwd) == os.path.realpath(cp._common_git_dir(cwd))
+
+
 def test_core_md_repo_root_unavailable_is_store_core_alias():
     import core_md as cm
     assert cm.RepoRootUnavailable is sc.RepoRootUnavailable

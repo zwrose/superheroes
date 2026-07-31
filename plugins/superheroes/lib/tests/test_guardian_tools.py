@@ -336,7 +336,83 @@ def test_resolve_rejects_repo_local_bin_when_git_is_dangling_symlink(
     out = gt.resolve("jscpd", str(nested))
     assert out["found"] is False
     assert out["path"] is None
+    assert out.get("rejection") == gt.REJECTION_BOUNDARY_INDETERMINATE
+
+
+def test_resolve_rejects_outer_repo_bin_when_nested_dangling_git_symlink(
+        tmp_path, monkeypatch):
+    """Outer real ``.git`` plus nested dangling symlink must not accept outer bin (#742)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    pkg = repo / "pkg"
+    pkg.mkdir()
+    nested = pkg / "src"
+    nested.mkdir()
+    try:
+        os.symlink(
+            "/nonexistent/guardian-742-nested-dangling-git",
+            pkg / ".git",
+        )
+    except OSError as exc:
+        pytest.skip("platform cannot create symlinks: %s" % exc)
+
+    bin_dir = repo / "bin"
+    bin_dir.mkdir()
+    tool = bin_dir / "jscpd"
+    tool.write_text("#!/bin/sh\necho 0.0.0\n")
+    tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
+
+    monkeypatch.setenv("PATH", str(bin_dir))
+    out = gt.resolve("jscpd", str(nested))
+    assert out["found"] is False
+    assert out["path"] is None
     assert out.get("rejection") == gt.REJECTION_REPO_LOCAL
+
+
+def test_git_toplevel_nested_real_git_dir_narrows_boundary(tmp_path):
+    """A real nested ``.git`` directory still narrows the repository boundary."""
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    (outer / ".git").mkdir()
+    nested = outer / "nested"
+    nested.mkdir()
+    (nested / ".git").mkdir()
+    assert gt._git_toplevel(str(nested)) == os.path.realpath(str(nested))
+
+
+def test_resolve_indeterminate_boundary_reports_new_reason(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    nested = repo / "src"
+    nested.mkdir()
+    try:
+        os.symlink("/nonexistent/guardian-742-indeterminate", repo / ".git")
+    except OSError as exc:
+        pytest.skip("platform cannot create symlinks: %s" % exc)
+    ext = _make_external_tool(tmp_path, "jscpd")
+    monkeypatch.setenv("PATH", os.path.dirname(ext))
+    out = gt.resolve("jscpd", str(nested))
+    assert out["found"] is False
+    assert out.get("rejection") == gt.REJECTION_BOUNDARY_INDETERMINATE
+    reason = gt.missing_tool_reason("jscpd", rejection=out.get("rejection"))
+    assert gt.REJECTION_BOUNDARY_INDETERMINATE in reason
+    assert gt.REJECTION_REPO_LOCAL not in reason
+    assert "install it with" not in reason
+
+
+def test_git_toplevel_never_spawns(tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path)
+    nested = tmp_path / "pkg" / "src"
+    nested.mkdir(parents=True)
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("subprocess must not be spawned from _git_toplevel")
+
+    monkeypatch.setattr(gt.subprocess, "run", _boom)
+    monkeypatch.setattr(gt.subprocess, "Popen", _boom)
+    gt._git_toplevel(str(nested))
+    gt._git_toplevel(repo)
 
 
 def test_git_toplevel_returns_repo_root_from_repo_cwd(tmp_path):
@@ -414,14 +490,17 @@ def test_resolve_rejects_all_on_git_toplevel_oserror(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
     ext = _make_external_tool(tmp_path, "jscpd")
     monkeypatch.setenv("PATH", os.path.dirname(ext))
+    realpath = os.path.realpath
 
-    def _raise_oserror(cwd):
-        raise OSError("walk failed")
+    def fake(path):
+        if path == repo:
+            raise OSError("walk failed")
+        return realpath(path)
 
-    monkeypatch.setattr(gt.store_core, "git_dot_entry_ancestor", _raise_oserror)
+    monkeypatch.setattr(gt.os.path, "realpath", fake)
     out = gt.resolve("jscpd", repo)
     assert out["found"] is False
-    assert out.get("rejection") == gt.REJECTION_REPO_LOCAL
+    assert out.get("rejection") == gt.REJECTION_BOUNDARY_INDETERMINATE
 
 
 def test_resolve_ignores_nested_repo_local_bin(tmp_path, monkeypatch):

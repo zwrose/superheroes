@@ -60,6 +60,28 @@ def test_read_policy_corrupt_is_none(tmp_path):
     assert AC.read_policy(str(tmp_path), root=store) is None
 
 
+def test_read_policy_repo_root_unavailable_is_none(tmp_path, monkeypatch):
+    import store_core as sc
+
+    def boom(cwd, *a, **k):
+        raise sc.RepoRootUnavailable("simulated")
+
+    monkeypatch.setattr(AC.mode_registry, "project_store_dir", boom)
+    assert AC.read_policy(str(tmp_path), root=str(tmp_path / "store")) is None
+
+
+def test_write_policy_repo_root_unavailable_is_none(tmp_path, monkeypatch):
+    import store_core as sc
+
+    pol = {"location": "docs/superheroes", "visibility": AC.COMMITTED, "confirmed": True}
+
+    def boom(cwd, *a, **k):
+        raise sc.RepoRootUnavailable("simulated")
+
+    monkeypatch.setattr(AC.mode_registry, "ensure_project_store", boom)
+    assert AC.write_policy(str(tmp_path), pol, root=str(tmp_path / "store")) is None
+
+
 def test_read_policy_rejects_out_of_repo_location(tmp_path):
     # UFR-4: a recorded location that escapes the repo (absolute, or ../) is not honored —
     # it is normalized back to the safe default rather than letting a write land outside.

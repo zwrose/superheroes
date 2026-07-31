@@ -61,7 +61,7 @@ def repo_root(cwd):
             "git could not be run at %s: %s" % (cwd, res.detail))
     if res.status == GIT_OK:
         if not res.out:
-            return os.path.realpath(cwd)
+            return _declined_not_a_repository_outcome(res, cwd)
         resolved = os.path.realpath(res.out)
         if not os.path.isdir(resolved):
             raise RepoRootUnavailable(
@@ -69,6 +69,8 @@ def repo_root(cwd):
                 % (cwd, res.out))
         return resolved
     if not_a_repository(res):
+        return _declined_not_a_repository_outcome(res, cwd)
+    if not os.path.isdir(cwd):
         return _declined_not_a_repository_outcome(res, cwd)
     raise RepoRootUnavailable(
         "git declined rev-parse --show-toplevel at %s: %s" % (cwd, res.detail))
@@ -186,7 +188,12 @@ def get_gitdir(cwd):
     res = run_git_result(cwd, "rev-parse", "--git-common-dir")
     if res.status == GIT_OK and res.out:
         out = res.out if os.path.isabs(res.out) else os.path.join(cwd, res.out)
-        return os.path.realpath(out)
+        resolved = os.path.realpath(out)
+        if not os.path.exists(resolved):
+            raise RepoRootUnavailable(
+                "git rev-parse --git-common-dir at %s named a nonexistent path: %s"
+                % (cwd, out))
+        return resolved
 
     res = run_git_result(cwd, "rev-parse", "--absolute-git-dir")
     if res.status == GIT_OK and res.out:
