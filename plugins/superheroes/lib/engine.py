@@ -493,7 +493,7 @@ def status(paths):
     lp = _lock_path(paths)
     holder = lock.read_holder(lp) if os.path.exists(lp) else None
     return {"ok": True, "command": "status", "entries": entries,
-            "lock": holder, "lockStale": lock.is_stale(lp) if holder else False}
+            "lock": holder, "lockStale": lock.is_stale(lp) if os.path.exists(lp) else False}
 
 
 def unlock(paths):
