@@ -613,6 +613,19 @@ _CONFIG_ONLY_TYPE = {
 }
 _CONFIG_ONLY_PKG = _CONFIG_ONLY_TYPE["packages"]["plugins/superheroes"]
 
+_HIDDEN_CONFIG_ONLY_TYPE = {
+    "changelog-sections": [
+        {"type": "feat", "section": "Features"},
+        {"type": "spdx", "section": "License", "hidden": True},
+    ],
+    "packages": {
+        "plugins/superheroes": {
+            "component": "superheroes",
+        }
+    },
+}
+_HIDDEN_CONFIG_ONLY_PKG = _HIDDEN_CONFIG_ONLY_TYPE["packages"]["plugins/superheroes"]
+
 _PKG_OVERRIDE_ROOT = {
     "changelog-sections": [
         {"type": "feat", "section": "Features"},
@@ -641,6 +654,18 @@ def test_parseable_types_includes_config_only_type():
     assert commits[0] in RB.completeness_population(
         commits, RB.releasing_types(_CONFIG_ONLY_TYPE, _CONFIG_ONLY_PKG), parse_types
     )
+
+
+def test_hidden_config_only_type_parseable_not_releasing():
+    parse_types = RB.parseable_types(_HIDDEN_CONFIG_ONLY_TYPE, _HIDDEN_CONFIG_ONLY_PKG)
+    releasing = RB.releasing_types(_HIDDEN_CONFIG_ONLY_TYPE, _HIDDEN_CONFIG_ONLY_PKG)
+    assert "spdx" in parse_types
+    assert "spdx" not in releasing
+    assert "spdx" not in RB.TYPES
+    commits = [_c("sp000002", "spdx(superheroes): refresh SPDX headers")]
+    assert RB.parse_subject(commits[0].subject, parse_types) is not None
+    assert commits[0] in RB.floor_population(commits, parse_types)
+    assert commits[0] not in RB.completeness_population(commits, releasing, parse_types)
 
 
 def test_package_level_changelog_sections_override():
