@@ -636,6 +636,8 @@ CENSUS_DENY_DIRTY = [
     # §1 unparsed / reserved-word shapes
     ("! git reset --hard", "dirty"),
     ("then git reset --hard", "dirty"),
+    ("/usr/bin/git reset --hard", "dirty"),
+    ("then git clean -fd", "dirty"),
     # one per destructive action name
     ("git checkout -- f.txt", "dirty"),
     ("git checkout -f main", "dirty"),
@@ -658,8 +660,12 @@ CENSUS_ALLOW = [
     ("git checkout main", "dirty"),
     ("git checkout -b new", "dirty"),
     ("git checkout -bfeature", "dirty"),
+    ("gitk --all", "dirty"),
+    ("git-foo status", "dirty"),
+    ("mygit reset --hard", "dirty"),
     # clean tree destructive forms
     ("git checkout -- f.txt", "clean"),
+    ("git checkout -- tracked.txt", "clean"),
     ("git checkout -f main", "clean"),
     ("git switch -f main", "clean"),
     ("git restore tracked.txt", "clean"),
@@ -722,6 +728,33 @@ def test_census_unparsed_deny_message(tmp_path, monkeypatch):
     decision, reason = wg.classify("env git reset --hard", repo)
     assert decision == "deny"
     assert reason == wg.unparsed_message()
+
+
+def test_census_deny_treeish_checkout_overwrites_untracked(tmp_path, monkeypatch):
+    """Tree-ish path checkout replaces untracked work at the same path."""
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "draft.txt", "version from the other branch\n")
+    _git(repo, "branch", "other")
+    _git(repo, "checkout", "-q", "main")
+    os.remove(os.path.join(repo, "draft.txt"))
+    with open(os.path.join(repo, "draft.txt"), "w") as f:
+        f.write("PRECIOUS UNCOMMITTED UNTRACKED WORK")
+    _calibrated(monkeypatch)
+    decision, _ = wg.classify("git checkout other -- draft.txt", repo)
+    assert decision == "deny"
+
+
+def test_census_deny_assume_unchanged_invisible_to_probe(tmp_path, monkeypatch):
+    """assume-unchanged edits are invisible to status; presence of the bit is indeterminate."""
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "tracked.txt", "x\n")
+    _git(repo, "update-index", "--assume-unchanged", "tracked.txt")
+    with open(os.path.join(repo, "tracked.txt"), "w") as f:
+        f.write("edited after assume-unchanged")
+    _calibrated(monkeypatch)
+    decision, reason = wg.classify("git checkout -- tracked.txt", repo)
+    assert decision == "deny"
+    assert reason == wg.indeterminate_message("checkout-path")
 
 
 def test_destructive_discard_actions_all_segments(tmp_path):

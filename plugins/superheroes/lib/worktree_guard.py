@@ -23,7 +23,9 @@ _DESTRUCTIVE_SUBCOMMANDS = frozenset({
     "checkout", "checkout-index", "restore", "reset", "clean", "switch", "rm", "worktree",
 })
 
-_SHELL_PREFIXES = frozenset({"!", "then", "do", "else", "elif"})
+_SHELL_PREFIXES = frozenset({
+    "!", "then", "do", "else", "elif", "(", ";;",
+})
 
 _REFUSAL_TEMPLATE = (
     "superheroes worktree guard: this `git {action}` would discard {count} uncommitted "
@@ -51,6 +53,16 @@ _UNPARSED_TEMPLATE = (
 )
 
 _GIT_TIMEOUT = 5
+
+_TRACKED_ONLY_PROBE_ACTIONS = frozenset({
+    "checkout-path", "restore", "rm-force", "checkout-index-force",
+})
+
+
+def _is_git_token(token):
+    """True when token invokes git by basename (path-spelled or bare), not gitk/git-foo/mygit."""
+    base = os.path.basename(token)
+    return base == "git" or base == "git.exe"
 
 
 def _split_segments(command):
@@ -215,7 +227,7 @@ def _option_value(tokens, idx):
 
 def _skip_git_globals(tokens):
     """Return index of subcommand after leading `git` and global options."""
-    if not tokens or tokens[0] != "git":
+    if not tokens or not _is_git_token(tokens[0]):
         return None
     i = 1
     while i < len(tokens):
@@ -253,13 +265,16 @@ def _strip_shell_prefixes(tokens):
     """Strip leading shell reserved words so `! git` and `{ git` are visible."""
     while tokens:
         tok = tokens[0]
-        if tok in _SHELL_PREFIXES:
+        if tok in _SHELL_PREFIXES or tok.startswith(";;"):
             tokens = tokens[1:]
             continue
         if tok == "{":
             tokens = tokens[1:]
             continue
         if tok.startswith("{") and len(tok) > 1:
+            tokens = [tok[1:]] + tokens[1:]
+            continue
+        if tok.startswith("(") and len(tok) > 1:
             tokens = [tok[1:]] + tokens[1:]
             continue
         break
@@ -282,7 +297,7 @@ def _iter_git_segments(command):
                 continue
             break
         tokens = _strip_shell_prefixes(tokens[start:])
-        if tokens and tokens[0] == "git":
+        if tokens and _is_git_token(tokens[0]):
             parsed = _parse_git_invocation(tokens)
             if parsed is not None:
                 yield parsed
@@ -396,6 +411,21 @@ _CLEAN_OPTS = {
     "-e": 1, "--exclude": 1,
     "-x": 0, "-X": 0, "-q": 0, "--quiet": 0,
 }
+
+
+def _checkout_path_has_treeish_operand(args):
+    """True when checkout-path reads paths from another tree-ish (`git checkout <rev> -- <paths>`)."""
+    pre, has_sep, post = _args_before_separator(args)
+    if _flag_present(
+        args, (), ("--pathspec-from-file", "--pathspec-from-file-nul"), _CHECKOUT_OPTS,
+    ):
+        return False
+    _, operands = _consume_options(pre, _CHECKOUT_OPTS)
+    if has_sep:
+        return len(operands) > 0
+    if len(operands) >= 2:
+        return True
+    return False
 
 
 def _checkout_path_match(args):
@@ -625,7 +655,7 @@ def mentions_destructive_git(command):
             while i < n and not command[i].isspace() and command[i] not in ";|&()":
                 i += 1
             word = command[start:i]
-            if word == "git":
+            if _is_git_token(word):
                 j = i
                 while j < n:
                     while j < n and command[j].isspace():
@@ -662,7 +692,7 @@ def _segment_has_unresolvable_target(tokens):
         return True
     tokens = tokens[start:]
     tokens = _strip_shell_prefixes(tokens)
-    if tokens and tokens[0] == "git":
+    if tokens and _is_git_token(tokens[0]):
         i = 1
         while i < len(tokens):
             tok = tokens[i]
@@ -735,6 +765,31 @@ def _clean_has_flag(command, flag):
     return False
 
 
+def _checkout_path_treeish_in_command(command):
+    """True when any parsed checkout-path segment carries a tree-ish operand."""
+    if not isinstance(command, str):
+        return False
+    for parsed in _iter_git_segments(command):
+        if parsed["subcommand"] != "checkout":
+            continue
+        if _checkout_path_match(parsed["args"]) and _checkout_path_has_treeish_operand(
+            parsed["args"],
+        ):
+            return True
+    return False
+
+
+def _has_assume_unchanged_marked_files(cwd):
+    """True when git ls-files -v reports assume-unchanged (lowercase h/s prefix)."""
+    result = _run_git(cwd, "ls-files", "-v")
+    if result.returncode != 0:
+        return "indeterminate"
+    for line in result.stdout.splitlines():
+        if line and line[0] in ("h", "s"):
+            return True
+    return False
+
+
 def _worktree_remove_target(command):
     """Resolve the worktree path from a `git worktree remove --force` invocation."""
     for parsed in _iter_git_segments(command):
@@ -781,9 +836,11 @@ def at_risk(cwd, action, command):
         return ("not-a-repo", 0)
 
     try:
-        if action in (
-            "checkout-path", "restore", "rm-force", "checkout-index-force",
-        ):
+        checkout_path_treeish = (
+            action == "checkout-path"
+            and _checkout_path_treeish_in_command(command)
+        )
+        if action in _TRACKED_ONLY_PROBE_ACTIONS and not checkout_path_treeish:
             result = _run_git(
                 probe_cwd, "status", "--porcelain",
                 "--untracked-files=no", "--ignore-submodules=none",
@@ -797,6 +854,11 @@ def at_risk(cwd, action, command):
             )
         elif action == "reset-hard":
             # reset --hard leaves ignored files alone; do not probe them (false denial).
+            result = _run_git(
+                probe_cwd, "status", "--porcelain",
+                "--untracked-files=normal", "--ignore-submodules=none",
+            )
+        elif checkout_path_treeish:
             result = _run_git(
                 probe_cwd, "status", "--porcelain",
                 "--untracked-files=normal", "--ignore-submodules=none",
@@ -818,6 +880,12 @@ def at_risk(cwd, action, command):
         count = len(lines)
         if count > 0:
             return ("at-risk", count)
+        if action in _TRACKED_ONLY_PROBE_ACTIONS and not checkout_path_treeish:
+            assume_state = _has_assume_unchanged_marked_files(probe_cwd)
+            if assume_state == "indeterminate":
+                return ("indeterminate", 0)
+            if assume_state:
+                return ("indeterminate", 0)
         return ("clean", 0)
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return ("indeterminate", 0)
