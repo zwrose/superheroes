@@ -70,9 +70,11 @@ nowhere.
 
 ## Engine forfeits and order shape
 
-An external engine can forfeit *after* writing files — often mid-report while on-disk work is already
-complete (four of six dispatches in one wave). **Inspect the worktree before discarding or
-re-dispatching** — "inspect the diff" alone is not a decision rule:
+An external engine can forfeit *after* writing files — characteristically with cursor's
+**`NonRetriableError "Agent Looping Detected"`** while the engine is producing a long report, with
+on-disk work already complete and correct. Field evidence: three builds in one wave; in one of them
+four of six dispatches forfeited, every one with correct files on disk. **Inspect the worktree before
+discarding or re-dispatching** — "inspect the diff" alone is not a decision rule:
 
 - **Before dispatching**, capture a pre-dispatch baseline — same probe as charter §8 `check-runner`:
   `git rev-parse HEAD` plus full `git status --porcelain` on the build worktree. Completeness is
@@ -91,6 +93,10 @@ and structured. The implementer template `agents/implementer.md` states this to 
 directly, so an order that additionally demands a full-suite run, a pasted diff, or a long verbatim
 report is **overriding the template against its own purpose**.
 
-Never assume the implementer can run anything — shell availability is set **outside your build**; two
-builds in one wave had **every** shell call rejected. Write every external order to be correct when the
-implementer can run nothing; the orchestrator's re-run is the verification either way.
+Never assume the implementer can run anything — an external engine's shell availability is set
+**outside your build**; the engine CLI consults its own permission surface, not your order. It is
+normally available on the sanctioned write path (so a blocked shell is not the expected state). But
+two builds in one wave had **every** implementer shell call rejected, and that is not yet explained
+— so it cannot be inferred from a previous build. Write every external order to be correct when the
+implementer can run nothing; the orchestrator's own re-run is the verification either way, and a
+corrective round is worth budgeting.
