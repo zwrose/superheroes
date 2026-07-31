@@ -377,13 +377,56 @@ def test_concurrent_reclaim_grants_exactly_one_holder(tmp_path):
         assert outcomes.count("HELD") == n_workers - 1, outcomes
 
 
-def test_published_lock_mode_matches_umask(tmp_path):
+def test_published_lock_mode_is_owner_only(tmp_path):
     p = str(tmp_path / "engine.lock")
-    umask = os.umask(0)
-    os.umask(umask)
+    original_umask = os.umask(0)
+    os.umask(original_umask)
+    try:
+        for trial_umask in (original_umask, 0):
+            os.umask(trial_umask)
+            lock.acquire(p)
+            try:
+                mode = os.stat(p).st_mode & 0o777
+                assert mode == 0o600
+            finally:
+                lock.release(p)
+    finally:
+        os.umask(original_umask)
+
+
+def test_acquire_and_reclaim_survive_a_restrictive_umask(tmp_path):
+    p = str(tmp_path / "engine.lock")
+    original_umask = os.umask(0o777)
     try:
         lock.acquire(p)
-        mode = os.stat(p).st_mode & 0o777
-        assert mode == (0o644 & ~umask)
-    finally:
+        assert (os.stat(p).st_mode & 0o777) == 0o600
         lock.release(p)
+
+        with open(p, "w") as fh:
+            json.dump(
+                {"pid": 999999, "host": socket.gethostname(),
+                 "acquiredAt": "1970-01-01T00:00:00Z", "bootId": None},
+                fh,
+            )
+        os.chmod(p, 0o600)
+        reclaimed = lock.acquire(p)
+        assert reclaimed is True
+        assert lock.read_holder(p)["pid"] == os.getpid()
+        lock.release(p)
+    finally:
+        os.umask(original_umask)
+
+
+def test_reclaim_guard_mode_is_owner_only(tmp_path):
+    p = str(tmp_path / "engine.lock")
+    with open(p, "w") as fh:
+        json.dump(
+            {"pid": 999999, "host": socket.gethostname(),
+             "acquiredAt": "1970-01-01T00:00:00Z", "bootId": None},
+            fh,
+        )
+    lock.acquire(p)
+    guard_path = p + ".reclaim"
+    assert os.path.exists(guard_path)
+    assert (os.stat(guard_path).st_mode & 0o777) == 0o600
+    lock.release(p)

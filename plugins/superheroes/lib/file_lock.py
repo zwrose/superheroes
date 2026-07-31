@@ -131,6 +131,7 @@ def _publish_lock(lock_path, holder_info):
                 fd = -1
                 json.dump(holder_info, fh)
                 fh.flush()
+                os.fchmod(fh.fileno(), 0o600)
                 os.fsync(fh.fileno())
         finally:
             if fd >= 0:
@@ -138,9 +139,6 @@ def _publish_lock(lock_path, holder_info):
                     os.close(fd)
                 except OSError:
                     pass
-        umask = os.umask(0)
-        os.umask(umask)
-        os.chmod(tmp, 0o644 & ~umask)
         os.link(tmp, lock_path)
     finally:
         try:
@@ -151,8 +149,12 @@ def _publish_lock(lock_path, holder_info):
 
 def _reclaim_stale_lock(lock_path, ttl):
     guard_path = lock_path + ".reclaim"
-    fd = os.open(guard_path, os.O_CREAT | os.O_RDWR, 0o666)
+    fd = os.open(guard_path, os.O_CREAT | os.O_RDWR, 0o600)
     try:
+        try:
+            os.fchmod(fd, 0o600)
+        except OSError:
+            pass
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:

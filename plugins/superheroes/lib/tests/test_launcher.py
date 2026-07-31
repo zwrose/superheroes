@@ -1556,22 +1556,22 @@ def test_c2_edge1_deadline_settle_reaps_before_park(tmp_path, monkeypatch):
     order = []
     child_pid = {"pid": None}
 
-    real_reap = L._terminate_and_reap
+    real_reap = ll._reap_process
 
     def tracking_reap(proc):
         order.append(("reap", proc.pid))
         real_reap(proc)
 
-    monkeypatch.setattr(L, "_terminate_and_reap", tracking_reap)
+    monkeypatch.setattr(ll, "_reap_process", tracking_reap)
 
-    real_append_under_lock = L._append_under_lock
+    real_append = ll.append
 
     def tracking_append(repo_root, record, env=None):
         if record.get("event") == "outcome":
             order.append(("terminal", record.get("outcome")))
-        return real_append_under_lock(repo_root, record, env=env)
+        return real_append(repo_root, record, env=env)
 
-    monkeypatch.setattr(L, "_append_under_lock", tracking_append)
+    monkeypatch.setattr(ll, "append", tracking_append)
 
     def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
         proc = _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
@@ -1632,7 +1632,7 @@ def test_c2_edge3_started_append_fail_parks_not_refuses(tmp_path, monkeypatch):
     real_append = ll.append
 
     def failing_append(repo_root, record, env=None):
-        if record.get("event") == "started":
+        if record.get("event") == "started" and not record.get("repaired"):
             return False
         return real_append(repo_root, record, env=env)
 
@@ -1652,6 +1652,14 @@ def test_c2_edge3_started_append_fail_parks_not_refuses(tmp_path, monkeypatch):
     refused = [r for r in records if r.get("event") == "refused"]
     assert len(parks) == 1
     assert refused == []
+    assert ll.fold(records)["ok"] is True
+    launch_records = [r for r in records if r.get("launchId") == result["launchId"]]
+    events = [r["event"] for r in launch_records]
+    assert events == ["reserved", "started", "outcome"]
+    started_rec = [r for r in launch_records if r["event"] == "started"][0]
+    assert started_rec.get("repaired") is True
+    outcome_rec = [r for r in launch_records if r["event"] == "outcome"][0]
+    assert outcome_rec.get("outcome") == "park"
 
 
 def test_c2_edge4_terminal_append_failure_surfaces_reason(tmp_path, monkeypatch):
@@ -1707,6 +1715,7 @@ def test_c2_edge5_oserror_retry_writes_retry_event(tmp_path, monkeypatch):
     retries = [r for r in records if r.get("event") == "retry"]
     assert len(retries) == 1
     assert retries[0]["delaySeconds"] == 0
+    assert ll.fold(records)["ok"] is True
 
 
 def test_c2_edge6_retry_append_failure_terminalizes(tmp_path, monkeypatch):

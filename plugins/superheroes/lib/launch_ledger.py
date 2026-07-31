@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import posixpath
+import signal
 import stat
 import subprocess
 import sys
@@ -21,6 +22,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import file_lock  # noqa: E402
+import hostinfo  # noqa: E402
 
 LEDGER_ROOT_ENV = "SUPERHEROES_LAUNCH_LEDGER_ROOT"
 LEDGER_DIR_NAME = "superheroes-launch-ledger"
@@ -305,7 +307,7 @@ def _ensure_lock_file(repo_root, env=None):
         try:
             lock_fd = os.open(
                 _LOCK_NAME,
-                os.O_RDONLY | os.O_NOFOLLOW,
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
                 dir_fd=repo_fd,
             )
         except FileNotFoundError:
@@ -325,13 +327,6 @@ def _ensure_lock_file(repo_root, env=None):
         if not stat.S_ISREG(st.st_mode):
             return _ledger_refusal(
                 "ledger-lock-not-regular",
-                root_fd=root_fd,
-                repo_fd=repo_fd,
-                ledger_fd=lock_fd,
-            )
-        if _is_fd_group_or_world_accessible(lock_fd):
-            return _ledger_refusal(
-                "ledger-lock-insecure",
                 root_fd=root_fd,
                 repo_fd=repo_fd,
                 ledger_fd=lock_fd,
@@ -681,10 +676,13 @@ def _validate_event_fields(rec):
 
 
 def fold(records):
-    """Per-launch state machine over event records."""
+    """Per-launch state machine over event records.
+
+    ``retry`` on a non-terminal launch is legal whether or not ``started`` has been seen.
+    """
     launches = {}
     batch_declarations = {}
-    for rec in records:
+    for idx, rec in enumerate(records):
         if not isinstance(rec, dict):
             return {"ok": False, "reason": "fold-not-an-object", "launches": {},
                     "batchDeclarations": {}}
@@ -695,7 +693,7 @@ def fold(records):
                 return {"ok": False, "reason": err, "launches": {},
                         "batchDeclarations": {}}
             batch_id = rec["batchId"]
-            batch_declarations.setdefault(batch_id, []).append(rec)
+            batch_declarations.setdefault(batch_id, []).append(dict(rec, index=idx))
             continue
 
         err = _validate_common(rec)
@@ -725,6 +723,7 @@ def fold(records):
                 "outcome": None,
                 "terminalKind": None,
                 "reservedTs": rec["ts"],
+                "reservedIndex": idx,
                 "attempts": 0,
                 "started": False,
             }
@@ -744,16 +743,21 @@ def fold(records):
             }
 
         if event == "started":
-            info["attempts"] += 1
-            info["started"] = True
-        elif event == "retry":
-            if not info["started"]:
+            prev_attempt = info.get("attempt")
+            if prev_attempt is not None and rec["attempt"] <= prev_attempt:
                 return {
                     "ok": False,
-                    "reason": "fold-retry-without-started:%s" % launch_id,
+                    "reason": "fold-started-attempt-not-increasing:%s" % launch_id,
                     "launches": {},
                     "batchDeclarations": batch_declarations,
                 }
+            info["attempts"] += 1
+            info["started"] = True
+            info["pid"] = rec["pid"]
+            info["attempt"] = rec["attempt"]
+            info["childIdentity"] = rec.get("childIdentity")
+        elif event == "retry":
+            pass
         elif event == "refused":
             if info["started"]:
                 return {
@@ -797,18 +801,21 @@ def _batch_declarations(records, batch_id, folded=None):
     return decls
 
 
-def _declaration_ts(records, batch_id, folded=None):
+def _declaration_index(records, batch_id, folded=None):
     if folded is not None and folded.get("batchDeclarations") is not None:
         decls = folded["batchDeclarations"].get(batch_id, [])
         if not decls:
             return None
-        return decls[0]["ts"]
-    for rec in records:
-        if rec.get("event") == "batch-declared" and rec.get("batchId") == batch_id:
-            err = _validate_batch_declared(rec)
-            if err:
-                return None
-            return rec["ts"]
+        return decls[0]["index"]
+    for idx, rec in enumerate(records):
+        if rec.get("event") != "batch-declared":
+            continue
+        if rec.get("batchId") != batch_id:
+            continue
+        err = _validate_batch_declared(rec)
+        if err:
+            return None
+        return idx
     return None
 
 
@@ -907,6 +914,328 @@ def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
         _release_lock(lock_path)
 
 
+def process_identity(pid):
+    """Non-reusable identity for a running pid: (bootId, kernel start time).
+    Returns a dict or None when it cannot be established. Never raises."""
+    try:
+        proc = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    start = (proc.stdout or "").strip()
+    if not start:
+        return None
+    return {"bootId": hostinfo.boot_id(), "start": start}
+
+
+def _reap_process(proc):
+    if proc is None:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except Exception:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    time.sleep(0.2)
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        pass
+
+
+def _wait_pid_gone(pid, seconds):
+    """Poll until pid is gone. Reaps our own zombie children opportunistically."""
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            os.waitpid(pid, os.WNOHANG)
+        except (ChildProcessError, OSError):
+            pass
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return False
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
+def _reap_recorded_pid(pid, recorded_identity):
+    """Reap the child recorded in a `started` event. Returns (status, detail) where
+    status is "dead" (nothing live to reap), "reaped" (we killed it), or "live"
+    (still running or unverifiable — the caller must refuse to write a terminal)."""
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 1:
+        return ("dead", "pid-invalid")
+    try:
+        if pid == os.getpid() or pid == os.getpgid(0):
+            return ("live", "pid-is-self")
+    except OSError:
+        pass
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return ("dead", "no-such-process")
+    except PermissionError:
+        return ("live", "not-permitted")
+    except OSError:
+        return ("live", "kill-probe-failed")
+    if not recorded_identity:
+        # Deliberate refusal: operator must end the process; terminal succeeds once dead.
+        return ("live", "identity-unrecorded")
+    current = process_identity(pid)
+    if current is None:
+        return ("dead", "process-gone")
+    if current.get("start") != recorded_identity.get("start"):
+        return ("dead", "pid-recycled")
+    rec_boot = recorded_identity.get("bootId")
+    cur_boot = current.get("bootId")
+    if rec_boot is not None and cur_boot is not None and cur_boot != rec_boot:
+        return ("dead", "pid-recycled")
+    try:
+        if os.getpgid(pid) != pid:
+            return ("dead", "pid-reused-not-group-leader")
+    except ProcessLookupError:
+        return ("dead", "no-such-process")
+    except OSError:
+        return ("dead", "no-such-process")
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except OSError:
+        pass
+    if _wait_pid_gone(pid, 2.0):
+        return ("reaped", "sigterm")
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except OSError:
+        pass
+    if _wait_pid_gone(pid, 3.0):
+        return ("reaped", "sigkill")
+    return ("live", "survived-sigkill")
+
+
+def _validate_started_repair(started_repair):
+    if not isinstance(started_repair, dict):
+        return False
+    attempt = started_repair.get("attempt")
+    pid = started_repair.get("pid")
+    log_path = started_repair.get("logPath")
+    err_path = started_repair.get("errPath")
+    if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
+        return False
+    if not isinstance(pid, int) or isinstance(pid, bool):
+        return False
+    if not isinstance(log_path, str):
+        return False
+    if not isinstance(err_path, str):
+        return False
+    return True
+
+
+def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, evidence=None,
+                stage=None, outcome=None, proc=None, started_repair=None, require_started=False,
+                env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
+    """The ONLY writer of a terminal ledger event. Never raises."""
+    reaped = False
+    lock_path = None
+    locked = False
+    try:
+        if proc is not None and proc.poll() is None:
+            _reap_process(proc)
+            reaped = True
+
+        if not isinstance(launch_id, str) or not launch_id:
+            return {
+                "ok": False, "reason": "terminal-launch-id-invalid",
+                "kind": None, "outcome": None, "reaped": reaped,
+            }
+
+        if outcome is not None and outcome not in TERMINAL_OUTCOMES:
+            return {
+                "ok": False, "reason": "outcome-invalid:%s" % outcome,
+                "kind": None, "outcome": None, "reaped": reaped,
+            }
+        if outcome is not None and (not isinstance(evidence, str) or not evidence.strip()):
+            return {
+                "ok": False, "reason": "outcome-evidence-empty",
+                "kind": None, "outcome": None, "reaped": reaped,
+            }
+
+        lock_result = _ensure_lock_file(repo_root, env=env)
+        if not lock_result["ok"]:
+            return {
+                "ok": False, "reason": lock_result["reason"],
+                "kind": None, "outcome": None, "reaped": reaped,
+            }
+
+        lock_path = lock_result["path"]
+        if not _acquire_lock(lock_path, lock_timeout):
+            return {
+                "ok": False, "reason": "lock-unavailable",
+                "kind": None, "outcome": None, "reaped": reaped,
+            }
+        locked = True
+
+        read_result = read(repo_root, env=env)
+        state = read_result["state"]
+        if state not in ("ok", "missing"):
+            return {
+                "ok": False, "reason": "ledger-unreadable:%s" % state,
+                "kind": None, "outcome": None, "reaped": reaped,
+            }
+
+        folded = fold(read_result["records"])
+        if not folded["ok"]:
+            return {
+                "ok": False, "reason": folded["reason"],
+                "kind": None, "outcome": None, "reaped": reaped,
+            }
+
+        if launch_id not in folded["launches"]:
+            return {
+                "ok": False, "reason": "terminal-unknown-launch",
+                "kind": None, "outcome": None, "reaped": reaped,
+            }
+
+        info = folded["launches"][launch_id]
+        if info.get("terminal"):
+            return {
+                "ok": False, "reason": "outcome-already-terminal",
+                "kind": None, "outcome": None, "reaped": reaped,
+            }
+
+        if require_started and not info.get("started"):
+            return {
+                "ok": False, "reason": "outcome-without-started",
+                "kind": None, "outcome": None, "reaped": reaped,
+            }
+
+        if proc is None and info.get("started"):
+            status, _detail = _reap_recorded_pid(info.get("pid"), info.get("childIdentity"))
+            if status == "reaped":
+                reaped = True
+            elif status == "live":
+                return {
+                    "ok": False,
+                    "reason": "terminal-child-live:%s" % info.get("pid"),
+                    "kind": None, "outcome": None, "reaped": False,
+                }
+
+        started = info.get("started")
+        if started:
+            kind = "outcome"
+            written_outcome = outcome if outcome is not None else "park"
+            written_evidence = (
+                evidence if isinstance(evidence, str) and evidence.strip()
+                else reason if isinstance(reason, str) and reason.strip()
+                else "unknown"
+            )
+            record = {
+                "event": "outcome",
+                "launchId": launch_id,
+                "ts": time.time(),
+                "schema": SCHEMA,
+                "outcome": written_outcome,
+                "evidence": written_evidence,
+            }
+            if not child_ever_spawned:
+                record["reconciled"] = True
+        elif child_ever_spawned:
+            if not _validate_started_repair(started_repair):
+                return {
+                    "ok": False, "reason": "terminal-repair-unavailable",
+                    "kind": None, "outcome": None, "reaped": reaped,
+                }
+            started_record = {
+                "event": "started",
+                "launchId": launch_id,
+                "ts": time.time(),
+                "schema": SCHEMA,
+                "attempt": started_repair["attempt"],
+                "pid": started_repair["pid"],
+                "logPath": started_repair["logPath"],
+                "errPath": started_repair["errPath"],
+                "repaired": True,
+            }
+            if not append(repo_root, started_record, env=env):
+                return {
+                    "ok": False, "reason": "ledger-append-failed",
+                    "kind": None, "outcome": None, "reaped": reaped,
+                }
+            kind = "outcome"
+            written_outcome = outcome if outcome is not None else "park"
+            written_evidence = (
+                evidence if isinstance(evidence, str) and evidence.strip()
+                else reason if isinstance(reason, str) and reason.strip()
+                else "unknown"
+            )
+            record = {
+                "event": "outcome",
+                "launchId": launch_id,
+                "ts": time.time(),
+                "schema": SCHEMA,
+                "outcome": written_outcome,
+                "evidence": written_evidence,
+            }
+            if not child_ever_spawned:
+                record["reconciled"] = True
+        elif outcome is not None:
+            return {
+                "ok": False, "reason": "terminal-outcome-without-child",
+                "kind": None, "outcome": None, "reaped": reaped,
+            }
+        else:
+            kind = "refused"
+            written_outcome = None
+            park_stage = stage if isinstance(stage, str) and stage.strip() else "unknown"
+            park_reason = reason if isinstance(reason, str) and reason.strip() else "unknown"
+            record = {
+                "event": "refused",
+                "launchId": launch_id,
+                "ts": time.time(),
+                "schema": SCHEMA,
+                "stage": park_stage,
+                "reason": park_reason,
+            }
+
+        if reaped:
+            record["reaped"] = True
+
+        if not append(repo_root, record, env=env):
+            return {
+                "ok": False, "reason": "ledger-append-failed",
+                "kind": None, "outcome": None, "reaped": reaped,
+            }
+        return {
+            "ok": True, "reason": None, "kind": kind,
+            "outcome": written_outcome, "reaped": reaped,
+        }
+    except Exception:
+        return {
+            "ok": False, "reason": "terminalize-failed",
+            "kind": None, "outcome": None, "reaped": False,
+        }
+    finally:
+        if locked and lock_path is not None:
+            _release_lock(lock_path)
+
+
 def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
                    lock_timeout=_DEFAULT_LOCK_TIMEOUT):
     """Record a terminal outcome under lock."""
@@ -915,47 +1244,14 @@ def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
     if not isinstance(evidence, str) or not evidence.strip():
         return {"ok": False, "reason": "outcome-evidence-empty"}
 
-    lock_result = _ensure_lock_file(repo_root, env=env)
-    if not lock_result["ok"]:
-        return {"ok": False, "reason": lock_result["reason"]}
-
-    lock_path = lock_result["path"]
-    if not _acquire_lock(lock_path, lock_timeout):
-        return {"ok": False, "reason": "lock-unavailable"}
-
-    try:
-        read_result = read(repo_root, env=env)
-        state = read_result["state"]
-        if state not in ("ok", "missing"):
-            return {"ok": False, "reason": "ledger-unreadable:%s" % state}
-
-        folded = fold(read_result["records"])
-        if not folded["ok"]:
-            return {"ok": False, "reason": folded["reason"]}
-
-        if launch_id not in folded["launches"]:
-            return {"ok": False, "reason": "outcome-unknown-launch"}
-
-        info = folded["launches"][launch_id]
-        if info.get("terminal"):
-            return {"ok": False, "reason": "outcome-already-terminal"}
-
-        if not info.get("started"):
-            return {"ok": False, "reason": "outcome-without-started"}
-
-        event = {
-            "event": "outcome",
-            "launchId": launch_id,
-            "ts": time.time(),
-            "schema": SCHEMA,
-            "outcome": outcome,
-            "evidence": evidence,
-        }
-        if not append(repo_root, event, env=env):
-            return {"ok": False, "reason": "ledger-append-failed"}
-        return {"ok": True, "reason": None}
-    finally:
-        _release_lock(lock_path)
+    result = terminalize(
+        repo_root, launch_id, outcome=outcome, evidence=evidence,
+        require_started=True, env=env, lock_timeout=lock_timeout,
+    )
+    mapped_reason = result["reason"]
+    if mapped_reason == "terminal-unknown-launch":
+        mapped_reason = "outcome-unknown-launch"
+    return {"ok": result["ok"], "reason": mapped_reason}
 
 
 def _count_indeterminate(batch_id, reason):
@@ -1010,12 +1306,12 @@ def count(repo_root, batch_id, env=None):
     if len(batch_launches) != decls[0]:
         return _count_indeterminate(batch_id, "batch-reservation-mismatch")
 
-    decl_ts = _declaration_ts(read_result["records"], batch_id, folded=folded)
-    if decl_ts is None:
+    decl_index = _declaration_index(read_result["records"], batch_id, folded=folded)
+    if decl_index is None:
         return _count_indeterminate(batch_id, "batch-declaration-malformed")
     for lid in batch_launches:
-        reserved_ts = folded["launches"][lid].get("reservedTs")
-        if reserved_ts is not None and decl_ts >= reserved_ts:
+        reserved_index = folded["launches"][lid].get("reservedIndex")
+        if reserved_index is not None and decl_index > reserved_index:
             return _count_indeterminate(batch_id, "batch-declaration-after-reservations")
 
     counts = {

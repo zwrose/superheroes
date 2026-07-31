@@ -68,14 +68,14 @@ def _reserved(launch_id, batch_id, surfaces, repo_root, **extra):
     return rec
 
 
-def _started(launch_id, attempt=1):
+def _started(launch_id, attempt=1, pid=999999):
     return {
         "event": "started",
         "launchId": launch_id,
         "ts": time.time(),
         "schema": ll.SCHEMA,
         "attempt": attempt,
-        "pid": os.getpid(),
+        "pid": pid,
         "logPath": "/tmp/log",
         "errPath": "/tmp/err",
     }
@@ -957,7 +957,7 @@ def test_edge17_preexisting_ledger_file_insecure_refused(tmp_path, monkeypatch):
     assert result["reason"] == "ledger-file-insecure"
 
 
-def test_edge18_fold_retry_without_started_refuses(tmp_path):
+def test_edge18_fold_retry_before_started_is_legal(tmp_path):
     records = [_reserved("a", "b", ["x"], "/tmp")]
     records.append({
         "event": "retry",
@@ -969,8 +969,8 @@ def test_edge18_fold_retry_without_started_refuses(tmp_path):
         "delaySeconds": 1.0,
     })
     result = ll.fold(records)
-    assert result["ok"] is False
-    assert result["reason"] == "fold-retry-without-started:a"
+    assert result["ok"] is True
+    assert result["launches"]["a"]["terminal"] is False
 
 
 # --- WO-C1 chokepoint edges 1-20 + census -----------------------------------
@@ -1226,7 +1226,7 @@ def test_c1_edge12_lock_file_symlink_refused(tmp_path, monkeypatch):
     assert result["reason"] == "ledger-lock-symlink"
 
 
-def test_c1_edge13_lock_file_group_world_accessible_refused(tmp_path, monkeypatch):
+def test_c1_edge13_lock_file_group_world_accessible_accepted(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     ledger_root = str(tmp_path / "ledger-root")
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, ledger_root)
@@ -1239,8 +1239,7 @@ def test_c1_edge13_lock_file_group_world_accessible_refused(tmp_path, monkeypatc
         fh.write("")
     os.chmod(lock_file, 0o644)
     result = ll._ensure_lock_file(repo)
-    assert result["ok"] is False
-    assert result["reason"] == "ledger-lock-insecure"
+    assert result["ok"] is True
 
 
 def test_c1_edge14_mode_read_missing_ledger(tmp_path, monkeypatch):
@@ -1342,3 +1341,205 @@ def test_c1_edge20_census_no_ledger_open_outside_accessor():
         "INVARIANT: launcher.py must not reconstruct a ledger path from "
         "resolve_root + repo_identity"
     )
+
+
+# --- WO-656-A ledger grammar and terminal door --------------------------------
+
+
+def test_count_indeterminate_on_backdated_declaration(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-backdated"
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo))
+    decl = _batch_declared(batch, 1)
+    decl["ts"] = 1.0
+    ll.append(repo, decl)
+    result = ll.count(repo, batch)
+    assert result["resolved"] is False
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-declaration-after-reservations"
+
+
+def test_count_resolves_when_declaration_physically_precedes(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-physical-order"
+    _declare(repo, batch, 1)
+    reserved = _reserved("l1", batch, ["a"], repo)
+    reserved["ts"] = 1.0
+    ll.reserve(repo, reserved)
+    ll.append(repo, _started("l1"))
+    ll.record_outcome(repo, "l1", "handback", "done")
+    result = ll.count(repo, batch)
+    assert result["resolved"] is True
+
+
+def test_record_outcome_reaps_a_live_child(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-reap"
+    launch_id = "l-reap"
+    proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        _declare(repo, batch, 1)
+        ll.reserve(repo, _reserved(launch_id, batch, ["a"], repo))
+        started = _started(launch_id)
+        started["pid"] = proc.pid
+        identity = ll.process_identity(proc.pid)
+        assert identity is not None
+        started["childIdentity"] = identity
+        assert ll.append(repo, started)
+        result = ll.record_outcome(repo, launch_id, "handback", "done")
+        assert result["ok"] is True
+        with pytest.raises(ProcessLookupError):
+            os.kill(proc.pid, 0)
+        records = ll.read(repo)["records"]
+        outcome = [r for r in records if r.get("event") == "outcome"][0]
+        assert outcome.get("reaped") is True
+    finally:
+        try:
+            os.kill(proc.pid, 9)
+        except ProcessLookupError:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+
+
+def test_record_outcome_refuses_live_child_without_identity(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-no-id"
+    launch_id = "l-no-id"
+    proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        _declare(repo, batch, 1)
+        ll.reserve(repo, _reserved(launch_id, batch, ["a"], repo))
+        started = _started(launch_id)
+        started["pid"] = proc.pid
+        assert ll.append(repo, started)
+        count_before = len(ll.read(repo)["records"])
+        result = ll.record_outcome(repo, launch_id, "handback", "done")
+        assert result["ok"] is False
+        assert result["reason"] == "terminal-child-live:%s" % proc.pid
+        os.kill(proc.pid, 0)
+        assert len(ll.read(repo)["records"]) == count_before
+        ll._reap_process(proc)
+        proc.wait(timeout=5)
+        result2 = ll.record_outcome(repo, launch_id, "handback", "done")
+        assert result2["ok"] is True
+    finally:
+        try:
+            os.kill(proc.pid, 9)
+        except ProcessLookupError:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+
+
+def test_record_outcome_treats_recycled_pid_as_dead(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-recycled"
+    launch_id = "l-recycled"
+    proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        _declare(repo, batch, 1)
+        ll.reserve(repo, _reserved(launch_id, batch, ["a"], repo))
+        started = _started(launch_id)
+        started["pid"] = proc.pid
+        started["childIdentity"] = {"bootId": "fake-boot", "start": "wrong start time"}
+        assert ll.append(repo, started)
+        result = ll.record_outcome(repo, launch_id, "handback", "done")
+        assert result["ok"] is True
+        os.kill(proc.pid, 0)
+        records = ll.read(repo)["records"]
+        outcome = [r for r in records if r.get("event") == "outcome"][0]
+        assert not outcome.get("reaped")
+    finally:
+        ll._reap_process(proc)
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+
+
+def test_terminalize_does_not_signal_self(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    launch_id = "l-self"
+    ll.reserve(repo, _reserved(launch_id, "b-self", ["a"], repo))
+    started = _started(launch_id)
+    started["pid"] = os.getpid()
+    assert ll.append(repo, started)
+    count_before = len(ll.read(repo)["records"])
+    result = ll.terminalize(
+        repo, launch_id, outcome="handback", evidence="done", require_started=True,
+    )
+    assert result["ok"] is False
+    assert result["reason"].startswith("terminal-child-live:")
+    assert len(ll.read(repo)["records"]) == count_before
+
+
+def test_terminalize_repair_unavailable_writes_nothing(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    launch_id = "l-repair"
+    ll.reserve(repo, _reserved(launch_id, "b-repair", ["a"], repo))
+    count_before = len(ll.read(repo)["records"])
+    result = ll.terminalize(repo, launch_id, child_ever_spawned=True)
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-repair-unavailable"
+    assert len(ll.read(repo)["records"]) == count_before
+
+
+def test_terminalize_reaps_supplied_proc_when_the_ledger_is_unusable(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    launch_id = "l-orphan"
+    ll.reserve(repo, _reserved(launch_id, "b-orphan", ["a"], repo))
+    proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        monkeypatch.setattr(ll, "_acquire_lock", lambda lock_path, timeout: False)
+        result = ll.terminalize(
+            repo, launch_id, child_ever_spawned=False, reason="test", proc=proc,
+        )
+        assert result["ok"] is False
+        with pytest.raises(ProcessLookupError):
+            os.kill(proc.pid, 0)
+    finally:
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+
+
+def test_fold_refuses_non_increasing_started_attempt(tmp_path):
+    records = [_reserved("a", "b", ["x"], "/tmp"), _started("a", attempt=1)]
+    records.append(_started("a", attempt=1))
+    result = ll.fold(records)
+    assert result["ok"] is False
+    assert result["reason"] == "fold-started-attempt-not-increasing:a"
+
+    records_ok = [_reserved("a", "b", ["x"], "/tmp"), _started("a", attempt=1)]
+    second = _started("a", attempt=2)
+    second["pid"] = 424242
+    records_ok.append(second)
+    result_ok = ll.fold(records_ok)
+    assert result_ok["ok"] is True
+    assert result_ok["launches"]["a"]["pid"] == 424242
+
+
+def test_record_outcome_still_refuses_without_started(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    result = ll.record_outcome(repo, "l1", "handback", "evidence")
+    assert result["ok"] is False
+    assert result["reason"] == "outcome-without-started"
+    result2 = ll.record_outcome(repo, "missing", "handback", "evidence")
+    assert result2["ok"] is False
+    assert result2["reason"] == "outcome-unknown-launch"

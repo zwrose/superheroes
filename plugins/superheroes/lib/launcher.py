@@ -11,7 +11,6 @@ import json
 import os
 import re
 import secrets
-import signal
 import subprocess
 import sys
 import time
@@ -533,30 +532,6 @@ def _default_spawn(argv, repo_root, out_fh, err_fh, child_env):
     )
 
 
-def _terminate_and_reap(proc):
-    if proc is None:
-        return
-    try:
-        os.killpg(proc.pid, signal.SIGTERM)
-    except Exception:
-        try:
-            proc.terminate()
-        except Exception:
-            pass
-    time.sleep(0.2)
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except Exception:
-        try:
-            proc.kill()
-        except Exception:
-            pass
-    try:
-        proc.wait(timeout=5)
-    except Exception:
-        pass
-
-
 def _terminalization_reason(term_result, fallback_reason):
     if term_result.get("ok"):
         return fallback_reason
@@ -573,37 +548,21 @@ def _terminalize(
     proc=None,
     stage=None,
     env=None,
+    started_repair=None,
 ):
     """The ONLY writer of a terminal ledger event for a launch. Never raises."""
-    try:
-        if proc is not None and proc.poll() is None:
-            _terminate_and_reap(proc)
-        if child_ever_spawned:
-            park_evidence = evidence if evidence is not None else (reason or "unknown")
-            record = {
-                "event": "outcome",
-                "launchId": launch_id,
-                "ts": time.time(),
-                "schema": ll.SCHEMA,
-                "outcome": "park",
-                "evidence": park_evidence,
-            }
-            result = _append_under_lock(repo_root, record, env=env)
-        else:
-            park_stage = stage if stage is not None else "unknown"
-            park_reason = reason if reason is not None else "unknown"
-            record = {
-                "event": "refused",
-                "launchId": launch_id,
-                "ts": time.time(),
-                "schema": ll.SCHEMA,
-                "stage": park_stage,
-                "reason": park_reason,
-            }
-            result = _append_under_lock(repo_root, record, env=env)
-        return {"ok": bool(result.get("ok")), "reason": result.get("reason")}
-    except Exception:
-        return {"ok": False, "reason": "terminalize-failed"}
+    result = ll.terminalize(
+        repo_root,
+        launch_id,
+        child_ever_spawned=child_ever_spawned,
+        reason=reason,
+        evidence=evidence,
+        stage=stage,
+        proc=proc,
+        started_repair=started_repair,
+        env=env,
+    )
+    return {"ok": bool(result.get("ok")), "reason": result.get("reason")}
 
 
 def _spawn_attempt(
@@ -650,6 +609,9 @@ def _spawn_attempt(
         "logPath": log_path,
         "errPath": err_path,
     }
+    child_identity = ll.process_identity(proc.pid)
+    if child_identity is not None:
+        started["childIdentity"] = child_identity
     append_result = _append_under_lock(repo_root, started, env=env)
     if not append_result["ok"]:
         term = _terminalize(
@@ -660,6 +622,12 @@ def _spawn_attempt(
             evidence="started-append-failed",
             proc=proc,
             env=env,
+            started_repair={
+                "attempt": attempt,
+                "pid": proc.pid,
+                "logPath": log_path,
+                "errPath": err_path,
+            },
         )
         fail_reason = _terminalization_reason(term, append_result["reason"])
         return {"ok": False, "reason": fail_reason, "proc": None, "refused": True}
