@@ -3,6 +3,8 @@ import os
 import subprocess
 import textwrap
 
+import pytest
+
 import engine
 import store
 
@@ -217,3 +219,16 @@ def test_validate_plan_rejects_mismatched_plan_record_slot(tmp_path):
     out = json.loads(r.stdout)
     assert out["ok"] is False
     assert "slot" in out["error"]
+
+
+def test_resolve_paths_repo_root_unavailable_maps_to_engine_error(tmp_path, monkeypatch):
+    import store_core as sc
+
+    repo, env, _ = _setup_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(
+        store, "get_repo_root",
+        lambda cwd: (_ for _ in ()).throw(sc.RepoRootUnavailable("simulated git failure")))
+    with pytest.raises(engine.EngineError) as excinfo:
+        engine._resolve_paths()
+    assert "repository root unavailable" in str(excinfo.value).lower()

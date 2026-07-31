@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -26,6 +27,8 @@ import threading
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
+
+import store_core      # noqa: E402
 
 # AUTHORITATIVE home for collector install guidance (§11: one home per cross-boundary
 # fact). Every degrade message quotes this map; no other module restates a command.
@@ -77,6 +80,10 @@ _VERSION_RE = re.compile(r"\d+(?:\.\d+)+[0-9A-Za-z.\-+]*")
 # Rejection reason when which() lands on a repo-controlled or relative-PATH binary.
 REJECTION_REPO_LOCAL = "repo-local executable ignored"
 
+# Rejection when the repository boundary cannot be determined safely (ambiguous
+# ``.git`` entry, walk ``OSError``).
+REJECTION_BOUNDARY_INDETERMINATE = "repository boundary indeterminate"
+
 # Absolute PATH fallback when every inherited component was empty, relative, or
 # repo-contained. Must never be "" — CPython treats an empty PATH as "search the
 # child cwd", and that is only safe today because the child cwd is neutral.
@@ -116,18 +123,83 @@ _NEUTRAL_COLLECTOR_CWD_LOCK = threading.Lock()
 _NEUTRAL_TOOL_CONFIGS = {}
 _NEUTRAL_TOOL_CONFIG_LOCK = threading.Lock()
 
+_GITFILE_MAX_BYTES = 4096
+
+
+def _looks_like_gitfile(git_entry):
+    """True when ``git_entry`` is a regular file whose content parses as a gitfile.
+
+    Parses only the shape ``gitdir: <path>`` (leading/trailing whitespace tolerated).
+    Does not resolve or trust the target path.  Returns False on read/parse failure
+    (indeterminate, not authoritative).  Never spawns."""
+    try:
+        with open(git_entry, "rb") as fh:
+            chunk = fh.read(_GITFILE_MAX_BYTES)
+    except OSError:
+        return False
+    try:
+        line = chunk.decode("utf-8", "surrogateescape").split("\n", 1)[0].strip()
+    except (UnicodeDecodeError, ValueError):
+        return False
+    if not line.lower().startswith("gitdir:"):
+        return False
+    return bool(line[len("gitdir:"):].strip())
+
+
+def _git_dot_at_ancestor_is_authoritative(ancestor):
+    """True when ``ancestor``'s ``.git`` is a real directory or valid gitfile, not a symlink."""
+    git_entry = os.path.join(ancestor, ".git")
+    st = os.lstat(git_entry)
+    if stat.S_ISLNK(st.st_mode):
+        return False
+    if stat.S_ISDIR(st.st_mode):
+        return True
+    if stat.S_ISREG(st.st_mode):
+        return _looks_like_gitfile(git_entry)
+    return False
+
 
 def _git_toplevel(cwd):
-    """Walk parents for a .git dir/file; fall back to realpath(cwd). Never spawns."""
-    cur = os.path.realpath(cwd or ".")
+    """Nearest ancestor with an authoritative ``.git`` entry, or realpath(cwd) when none.
+
+    Delegates ``.git`` presence to ``store_core.git_dot_entry_ancestor`` (``lstat``,
+    never spawns), but treats symlink or unreadable-type ``.git`` entries as
+    indeterminate — never returned as the boundary; the walk continues upward.
+    Real directories and regular files (gitfile worktrees) are authoritative.
+    When the walk saw indeterminate markers but no authoritative boundary, or on
+    walk ``OSError``, returns the filesystem root so ``resolve()`` rejects every
+    PATH hit (fail closed).  Never spawns.
+    """
+    base = cwd or "."
+    try:
+        start = os.path.realpath(base)
+    except OSError:
+        return os.path.sep
+
+    saw_indeterminate = False
+    path = start
     while True:
-        git_entry = os.path.join(cur, ".git")
-        if os.path.isdir(git_entry) or os.path.isfile(git_entry):
-            return cur
-        parent = os.path.dirname(cur)
-        if parent == cur:
-            return os.path.realpath(cwd or ".")
-        cur = parent
+        try:
+            ancestor = store_core.git_dot_entry_ancestor(path)
+        except OSError:
+            return os.path.sep
+        if ancestor is None:
+            break
+        try:
+            authoritative = _git_dot_at_ancestor_is_authoritative(ancestor)
+        except OSError:
+            return os.path.sep
+        if authoritative:
+            return ancestor
+        saw_indeterminate = True
+        parent = os.path.dirname(ancestor)
+        if parent == ancestor:
+            break
+        path = parent
+
+    if saw_indeterminate:
+        return os.path.sep
+    return start
 
 
 def _is_under(path, root):
@@ -313,6 +385,14 @@ def resolve(tool, cwd, run=None):
   """
     del run  # resolution never executes anything
     repo_root = _git_toplevel(cwd)
+    if repo_root == os.path.sep:
+        return {
+            "tool": tool,
+            "found": False,
+            "path": None,
+            "source": None,
+            "rejection": REJECTION_BOUNDARY_INDETERMINATE,
+        }
     process_cwd = os.path.realpath(os.getcwd())
     on_path = shutil.which(tool)
     if not on_path:
@@ -461,6 +541,12 @@ def missing_tool_reason(tool, rejection=None):
     """
     cmd = INSTALL_COMMANDS.get(tool)
     if rejection:
+        if rejection == REJECTION_BOUNDARY_INDETERMINATE:
+            return (
+                "%s ignored (%s) — the repository boundary could not be "
+                "determined safely; this lens cannot run here"
+                % (tool, rejection)
+            )
         if not cmd:
             return (
                 "%s ignored (%s) — no install command is recorded for it in "
