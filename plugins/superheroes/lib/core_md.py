@@ -38,6 +38,12 @@ class RepoRootUnavailable(Exception):
     translate it must catch ``RepoRootUnavailable`` by name."""
 
 
+_GATE_USABLE_STATUSES = frozenset({CONFIG_OK, CONFIG_ABSENT})
+_GATE_REFUSAL_REASONS = {
+    CONFIG_UNREADABLE: GATE_REASON_UNREADABLE,
+    CONFIG_ROOT_UNAVAILABLE: GATE_REASON_ROOT_UNAVAILABLE,
+}
+
 GATE_REASON_EVALUATION_FAILED = "dispatch-gate-evaluation-failed"
 LEGACY_PROFILE_REASON = "legacy-profile-unsupported"
 LEGACY_PROFILE_REMEDY = (
@@ -400,6 +406,34 @@ def _candidate_engine_preferences(facts, existing):
     merged = dict(recorded)
     merged.update(incoming)
     return merged
+
+
+def gate_config_is_refusal(cfg):
+    """True when ``engine_preferences_for_gate`` status refuses usable configuration.
+
+    ``CONFIG_OK`` and ``CONFIG_ABSENT`` are not refusals; every other registered status is."""
+    return cfg.status not in _GATE_USABLE_STATUSES
+
+
+def gate_config_is_absent(cfg):
+    """True when no core.md is present at the resolved gate path."""
+    return cfg.status == CONFIG_ABSENT
+
+
+def gate_config_usable_prefs(cfg):
+    """Return ``enginePreferences`` when status is ``CONFIG_OK``; ``{}`` otherwise (incl. absent)."""
+    if cfg.status == CONFIG_OK:
+        return cfg.prefs if isinstance(cfg.prefs, dict) else {}
+    return {}
+
+
+def gate_config_refusal(cfg):
+    """Return the ``gate_refusal`` payload for a refusal status, or ``None`` when usable/absent.
+
+    An unregistered status raises ``KeyError`` — fail-closed, never silently treated as usable."""
+    if not gate_config_is_refusal(cfg):
+        return None
+    return gate_refusal(_GATE_REFUSAL_REASONS[cfg.status], cfg.detail)
 
 
 def gate_refusal(reason, detail):

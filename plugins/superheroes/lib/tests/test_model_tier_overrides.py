@@ -414,6 +414,26 @@ def test_read_engine_preferences_unreadable_byte_identity(tmp_path):
     assert err == {"reason": "core-md-unreadable", "detail": cfg.detail}
 
 
+def test_read_engine_preferences_root_unavailable_returns_gate_err(tmp_path, monkeypatch):
+    import store_core as sc
+
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    real = sc.run_git_result
+
+    def fake(cwd, *args):
+        if args == ("rev-parse", "--show-toplevel"):
+            return sc.GitResult(None, sc.GIT_UNAVAILABLE, "FileNotFoundError: no git")
+        return real(cwd, *args)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    prefs, err = MTO._read_engine_preferences_for_gate(cwd=repo, root=store)
+    assert prefs == {}
+    assert err is not None
+    assert err["reason"] == "repo-root-unavailable"
+    assert err["detail"]
+
+
 def test_write_cli_refuses_when_core_beside_profile_corrupt(tmp_path, capsys):
     project = tmp_path / "project"
     cal = project / ".claude" / "superheroes"

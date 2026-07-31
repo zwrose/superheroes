@@ -138,10 +138,11 @@ def dispatch_calibration(cwd=None, root=None, prefs=None, tiers=None):
     try:
         if prefs is None:
             cfg = core_md.engine_preferences_for_gate(cwd=cwd, root=root)
-            if cfg.status == core_md.CONFIG_UNREADABLE:
+            refusal = core_md.gate_config_refusal(cfg)
+            if refusal is not None:
                 return _dispatch_calibration_read_error_marker(
-                    core_md.GATE_REASON_UNREADABLE, cfg.detail)
-            prefs = cfg.prefs if cfg.status == core_md.CONFIG_OK else {}
+                    refusal["reason"], refusal["detail"])
+            prefs = core_md.gate_config_usable_prefs(cfg)
             prefs = prefs if isinstance(prefs, dict) else {}
         if tiers is None:
             tiers = model_tier_overrides.effective_tiers(
@@ -159,14 +160,14 @@ def _dispatch_selftest_config(cwd=None, root=None):
     cwd = cwd or os.getcwd()
     try:
         cfg = core_md.engine_preferences_for_gate(cwd=cwd, root=root)
-        if cfg.status == core_md.CONFIG_ABSENT:
+        if core_md.gate_config_is_absent(cfg):
             return {"prefs": {}, "tiers": {}}
-        if cfg.status == core_md.CONFIG_UNREADABLE:
+        refusal = core_md.gate_config_refusal(cfg)
+        if refusal is not None:
             return {
                 "prefs": {},
                 "tiers": {},
-                "read_error": core_md.gate_refusal_line(
-                    core_md.gate_refusal(core_md.GATE_REASON_UNREADABLE, cfg.detail)),
+                "read_error": core_md.gate_refusal_line(refusal),
             }
         tiers = model_tier_overrides.effective_tiers(
             model_tier_overrides.resolve_profile_path(cwd, root))

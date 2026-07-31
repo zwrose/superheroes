@@ -297,6 +297,30 @@ def test_dispatch_calibration_corrupt_returns_marker_row(tmp_path):
     assert rows[0]["readError"].startswith("core-md-unreadable: ")
 
 
+def _git_unavailable(monkeypatch, detail="FileNotFoundError: no git"):
+    real = sc.run_git_result
+
+    def fake(cwd, *args):
+        if args == ("rev-parse", "--show-toplevel"):
+            return sc.GitResult(None, sc.GIT_UNAVAILABLE, detail)
+        return real(cwd, *args)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+
+
+def test_dispatch_calibration_root_unavailable_returns_marker_not_defaults(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    _git_unavailable(monkeypatch)
+    rows = pp.dispatch_calibration(cwd=repo, root=store)
+    assert len(rows) == 1
+    assert rows[0]["role"] == "*"
+    assert rows[0]["engine"] is None
+    assert rows[0]["model"] is None
+    assert rows[0]["readError"].startswith("repo-root-unavailable: ")
+    assert "readError" in rows[0]
+
+
 def test_dispatch_calibration_cli_carries_marker_on_unreadable(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(pp, "gh_auth_probe", lambda run=None: {
         "tool": "gh auth", "ok": True, "exit": 0, "detail": ""})
@@ -520,6 +544,15 @@ def test_dispatch_selftest_config_unreadable_read_error_byte_identity(tmp_path):
     expected = "core-md-unreadable: " + cfg_cls.detail
     cfg = pp._dispatch_selftest_config(cwd=repo, root=store)
     assert cfg["read_error"] == expected
+
+
+def test_dispatch_selftest_config_root_unavailable_returns_read_error(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    _git_unavailable(monkeypatch)
+    cfg = pp._dispatch_selftest_config(cwd=repo, root=store)
+    assert "read_error" in cfg
+    assert cfg["read_error"].startswith("repo-root-unavailable: ")
 
 
 def test_dispatch_selftest_config_ok_returns_prefs(tmp_path):

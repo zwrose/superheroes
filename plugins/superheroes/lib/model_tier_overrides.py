@@ -190,8 +190,9 @@ def _read_engine_preferences_for_gate(profile_path=None, cwd=None, root=None):
 
         cfg = core_md.engine_preferences_for_gate(
             profile_path=profile_path, cwd=cwd, root=root)
-        if cfg.status == core_md.CONFIG_UNREADABLE:
-            return {}, core_md.gate_refusal(core_md.GATE_REASON_UNREADABLE, cfg.detail)
+        refusal = core_md.gate_config_refusal(cfg)
+        if refusal is not None:
+            return {}, refusal
         return cfg.prefs, None
     except Exception as exc:
         return {}, _gate_refusal_fallback(
