@@ -161,8 +161,8 @@ def test_read_miss_json_nan_probed_at(tmp_path, monkeypatch):
     now = 4000.0
     with open(path, "wb") as fh:
         fh.write(
-            b'{"schemaVersion": 1, "probedAt": NaN, "ttl": 600, '
-            b'"needed": {}, "liveness": {}}\n'
+            ('{"schemaVersion": %d, "probedAt": NaN, "ttl": 600, '
+             '"needed": {}, "liveness": {}}\n' % lc.SCHEMA_VERSION).encode("utf-8")
         )
     assert lc.read(path, now=now) is None
 

@@ -102,12 +102,15 @@ def test_cross_vendor_no_op_argv_cursor():
     # The cursor probe threads the project's configured cursor model (engine_adapter's SSOT),
     # never a hard-coded id — `cursor-small` was observed unavailable in a live run.
     import engine_adapter
-    assert pp.cross_vendor_no_op_argv("cursor") == (
+    probe = pp.cross_vendor_no_op_argv("cursor")
+    assert probe == (
         "cursor-agent", "--model", engine_adapter._CURSOR_MODEL, "-p", "--trust",
         "--mode", "plan")
     builder = engine_adapter.build_argv("cursor", "review", None, {})
-    assert all(flag in builder for flag in ("-p", "--trust", "--mode", "plan"))
     assert builder[builder.index("--mode") + 1] == "plan"
+    # Every read-role token the builder emits is carried by the probe, except the
+    # stream-json output format the probe deliberately omits (it parses no stdout).
+    assert set(builder) - set(probe) == {"--output-format", "stream-json"}
 
 
 def test_cross_vendor_no_op_argv_unknown_engine():
@@ -132,6 +135,13 @@ def test_cross_vendor_cli_probe_argv_override():
 
     pp.cross_vendor_cli_probe("codex", run=_run, argv=("codex", "--version"))
     assert captured["argv"] == ["codex", "--version"]
+
+
+def test_probe_prompt_asks_for_a_single_word_and_nothing_else():
+    # The probe must stay a no-op: an ask that invites WORK turns every compose
+    # into a real dispatch under probe_command's 120s timeout.
+    assert pp.probe_prompt().endswith(
+        "Reply with the single word READY and nothing else.\n")
 
 
 def test_cross_vendor_cli_probe_feeds_preamble_on_stdin_codex():
