@@ -295,15 +295,17 @@ dispatch's provenance is explicit and never implicit; the preflight's dispatch-c
 gives you this per role.
 
 **The registry is the model authority — run the gate before every dispatch.** For **each** of the
-three dispatch kinds this charter sanctions — an **implementer order**, a **fix-batch order**, and a
-**hand-rolled fallback dispatch** — you **run the model gate** on the effective `--model` you will
-pass (explicit or defaulted) *before dispatching*:
+four dispatch kinds this charter sanctions — an **implementer order**, a **fix-batch order**, a
+**`check-runner` dispatch**, and a **hand-rolled fallback dispatch** — you **run the model gate** on
+the effective `--model` you will pass (explicit or defaulted) *before dispatching*:
 `python3 -B ${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/dispatch_guard.py check --role <role> --vendor <engine> --model <model> [--effort <effort>]`.
 It validates that model against the seat's **registry allowlist** (`lib/model_registry.py`, the single
 model/vendor taxonomy; #510). **Exit 1 = an unlisted model = a park, not a pick:** the gate prints the
 allowlist, and you **park before any work runs** — never treat a model-within-engine choice as "just a
-preference." On exit 0 the gate returns a structured triple — thread `model_id` as an engine
-dispatch's `engine_model`, `effort` as `--effort`, and `dispatch_token` as the CLI argv model;
+preference," and this governs **a dispatch you are going to make**: declining to dispatch and doing the
+work yourself instead is a different act, not what this park rule forbids. On exit 0 the gate
+returns a structured triple — thread `model_id` as an engine dispatch's `engine_model`, `effort` as
+`--effort`, and `dispatch_token` as the CLI argv model;
 putting the composed token where a registry id belongs is the trap that seats a cursor role on
 Claude and loses the model family. Omitting `--effort` **resolves** when the allowlist makes the
 model unambiguous (and picks the lowest ladder rung when it does not), reporting the choice in
@@ -432,6 +434,68 @@ implementer work** — a probe's revert (a subagent's `git checkout --`) has wip
 uncommitted work five times across recent waves despite the memory of it, so the commit itself is the
 mechanical tripwire, not the memory of it (the mutation-probe sibling of §6's commit-between-orders rule).
 
+**Proof a review seat may not produce — a change to the repository, or a run the seat cannot or must
+not make — has exactly three sanctioned destinations, and a review seat is never one of them.** A
+review seat is **obliged** never to change the repository and never to claim a run it did not make —
+the base rubric's verification rule *"A review seat never changes the repository, and never claims a
+run it did not make."* (`rubric/review-base.md`) is the authoritative statement, and it is an
+obligation, **not** something a tool grant enforces (what a seat can do varies by host and dispatch
+shape, so never reason about a seat from its tool list). A review seat may legitimately ground a
+finding by *reading*, and where its dispatch permits a read-only command, by running one and quoting
+it. What it may never do is **change** anything — so putting a review seat in a position where its
+only compliant answer is *"I could not do this"* (the non-compliant answer being a false receipt) is
+the **orchestrator's error**: asking any review seat for a mutation probe, a planted defect, or a
+written throwaway test does exactly that. When a claim needs a run no review seat may make:
+
+1. **You run it** — the default, and the only place the *decisive* check ever runs.
+2. **A committed test, via an implementer order** — when the proof belongs in the repo as a durable
+   detector rather than a throwaway probe (in this repo, CONVENTIONS `§12.1`).
+3. **A `check-runner` seat** (`agents/check-runner.md`) — when a run's sheer volume, noise, or
+   duration is the problem. **You** author the exact command list; it runs them and writes each
+   command's raw stdout, stderr, and exit code to paths you name **outside** the repo; and **you read
+   those files off disk**. Name a **byte ceiling** per command **and an order-wide ceiling** across
+   the whole command set — an order may name any number of commands, and nothing else bounds their
+   sum. Each stdout capture opens with a `# ran: <command>` line; for **each** command you authored,
+   read the **first line** of the capture **at the path you named for that command** and compare
+   *that line* against *that command* — a `# ran:` line anywhere else in a capture body is output, not
+   a receipt, and is ignored. Its return prose is never the receipt. It buys **context relief, not
+   trust** — treat its output exactly as you treat an implementer's. The captures are
+   **working artifacts, not the durable receipt** — the PR record is: read them, quote what matters
+   (**redacted** — secrets, tokens, private URLs, PII), then **remove them once the verification
+   closes**. This is a bound, not a guarantee: the captures live outside the repo in session-scoped
+   scratch, so an **interrupted** order leaves its captures behind until that scratch is cleared —
+   nothing sweeps them, and the order-wide ceiling above bounds one order's captures, not the
+   accumulated set of abandoned ones. Dispatch it as a **host subagent** — the host's own dispatch
+   action (`Agent` on Claude, `spawn_agent` on Codex) — **never to an external engine**; it renders
+   no judgment, so no independence or maker-family constraint applies to it and none should be
+   bolted on. **Establish whether the `mechanical` role resolves on this host by running the §7
+   model gate for `--role mechanical` against the host's own vendor, omitting `--model`**: it
+   resolves the seat default and reports `effort_source: "seat-default"` when the role resolves;
+   the no-sanctioned-model case prints an **empty `allowlist`**. It is only a query — nothing is
+   dispatched until you dispatch it. Then follow the gate's outcome:
+
+   1. **Run the §7 model gate** for `--role mechanical` against the **host's own vendor**.
+   2. **Exit 1 because the role has no sanctioned model on that vendor** → the **route is
+      unavailable** on this host. Go straight to **destination 1 (you run it yourself)**, which
+      needs no seat and is **always available**, and **disclose the fallback** wherever you
+      record the dispatch. Nothing was dispatched, so nothing is parked.
+   3. **Exit 1 for any other reason** — you named a model outside the allowlist for a role that
+      *does* resolve — → **park**, exactly as §7 says.
+   4. **Exit 0** → dispatch the seat as a **host subagent** (`Agent` on Claude, `spawn_agent` on
+      Codex), **never to an external engine** — and obey §7's exit-0 half, exactly as §7 says:
+      thread the resolved `model_id` and `effort`, and record them in the dispatch-provenance row.
+
+   If the seat needs a stronger model to do its job, your command list was under-enumerated —
+   rewrite it, or run it yourself.
+
+**Probe the tree before and after every `check-runner` dispatch — this is your discipline, not a
+gate.** Commit the landed work first so the baseline is clean, then capture `git rev-parse HEAD`, the
+full `git status --porcelain` (**not** `-uno` and not its long form `--untracked-files=no`: a run's
+untracked output is exactly what you want to see), and `git reflog --date=iso HEAD | wc -l`. Any delta afterwards is a **failed verification**,
+not a warning. A dispatch that timed out, or whose child you never joined, is **INDETERMINATE** —
+never clean. What the probe cannot see is recorded as an accepted residual (`LEDGERS.md` §3), not
+claimed as covered.
+
 ## 9. Test-pilot — plan and seed here; execute via a pilot subagent
 
 - **You** do test-pilot **planning and seeding** (invoke `test-pilot-plan`).
@@ -523,7 +587,7 @@ wrap the build record in `<details><summary>Build record</summary>…</details>`
 boundary marker: **in the full lane** the **build brief** plus dispositions table + receipts +
 disclosures; **in the light lane** dispositions table + receipts + disclosures (no brief from §4);
 plus for both lanes a **dispatch provenance** section — each dispatch (the brief-check reviewer, every
-implementer, the pilot, the review-code seats) with the **engine + model** it ran on — each validated
+implementer, every `check-runner`, the pilot, the review-code seats) with the **engine + model** it ran on — each validated
 against the registry allowlist (#600), so the advisor can vet what ran without your context — plus a
 **Follow-ups for the advisor** section — out-of-scope discoveries, deferred work, or issues you noticed
 but cannot file yourself (you never wire the board). List them plainly under that exact heading (write

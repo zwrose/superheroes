@@ -418,6 +418,26 @@ You are the fixer for one round of an auto-fix code-review loop.
    retry ONCE. If it still fails, STOP and report CHECK_FAILED with the failing
    output — never commit broken code. If the verify command is "none"
    (unverified profile), skip this check entirely.
+   When you need to verify something by *running* it, choose a throwaway test file path inside
+   the build worktree, named with the fixed prefix `autofix-probe-` so a leftover one is
+   identifiable. **Before writing it, check that the chosen path does not already exist** — a
+   **filesystem** existence check on the path (does a file exist there), not a git query: git
+   does not know about ignored or untracked-but-present files for this purpose, and this repo's
+   gitignored `docs/` holds real owner content a git-flavoured check would miss. A
+   crashed prior round can leave its own probe behind under a predictable name, and an
+   unrelated tracked file could occupy it too. If the name is already taken, pick a different
+   one (e.g. add a unique suffix, still carrying the `autofix-probe-` prefix) rather than
+   overwriting whatever is there. If you cannot
+   establish that your chosen path is new, do not write a probe there and do not delete
+   anything — report it instead. Once the path is confirmed new, write the file and run it
+   with the project's test-run family (e.g. `pytest` or the repo's test command); do not
+   improvise inline interpreter one-liners (the `-c` / `-e` flag forms). Before you commit,
+   delete **only the probe file you just wrote this round** — you know its name, because you
+   just named it and confirmed it was new. Do not sweep for other files matching the prefix,
+   and do not decide what to delete by reasoning from tracked or untracked status. A crashed
+   round may leave its own probe behind, and nothing sweeps it up: a stray `autofix-probe-*`
+   file can still be present in the working tree the orchestrator inspects when it verifies.
+   Delete the throwaway before step 4's commit — it must never land in the fix commit.
 4. Commit ALL changes in ONE commit (after the check passes, or immediately when
    unverified): `git commit -m "Auto-fix round <N>: <count> findings (<dimensions>)"`
 5. Report back.
@@ -440,7 +460,7 @@ Report it under "escalated" with the id and why.
 
 ## Verification Rules (for subagents)
 
-These are the base rubric's binding verification rules; they are restated in every subagent prompt and enforced again at compile time. See the base rubric's "Verification rules" and "In-pass Chain-of-Verification & single-pass discipline" sections for the authoritative statement. Subagents that violate them produce findings that get dropped before the user ever sees them.
+These are the base rubric's binding verification rules, restated in every subagent prompt. Some are additionally checked when findings are compiled and some are not — the compile step in `skills/review-code/SKILL.md` is the authority on exactly what it does, and this paragraph does not restate it. Rule 8 has no compile-time check at all — it is **obligation-only**, exactly as its own text and the `LEDGERS.md` §3 row say: nothing mechanically drops or downgrades a finding for violating it. See the base rubric's "Verification rules" and "In-pass Chain-of-Verification & single-pass discipline" sections for the authoritative statement.
 
 1. **`file:line` citation required.** No citation → finding is dropped at compile time, before presentation.
 2. **Diff-scope rule.** Only `+` and `-` lines of `$SESSION_DIR/round-<N>/diff.txt` are in scope. Context lines (no prefix) and unchanged code in modified files are pre-existing — flagging them is the #1 source of false findings.
@@ -449,7 +469,7 @@ These are the base rubric's binding verification rules; they are restated in eve
 5. **Worktree-as-source-of-truth (PR mode).** All code verification reads go through `$SESSION_DIR/repo/`. The main working tree may be on a different branch with stale or missing code; using it for verification produces false findings against code that doesn't exist on the PR.
 6. **Trust nothing from project docs without spot-checking.** Project docs (`CLAUDE.md`, the profile, `docs/*`) can be outdated. If a finding's rationale depends on a doc claim, verify against source code or flag uncertainty.
 7. **Single-pass discipline.** Each specialist runs once per review and does not propose or chain a follow-up **finder** pass over its own output — a finder that has exhausted the real issues starts fabricating. This bans re-*finding*, not the orchestrator's separate keep/drop **synthesis** pass over the already-emitted findings (a verify stage that never searches for new issues).
-8. **Sanctioned probe shape (unattended runs).** To verify by *running* code, write a throwaway test file inside the build worktree and run it with the project test-run family (e.g. `pytest` / the repo test command); do not improvise inline interpreter one-liners (the `-c` / `-e` flag forms). Only the sanctioned shapes are on the enforcer's auto-allow path — an inline probe stalls on a permission prompt when the owner is absent. If any action awaits owner permission unanswered for 15 minutes, proceed without it and report the denied action honestly (never as done). This restates the `PROBE_STEERING` / `TIMEOUT_PROCEED_CONTRACT` blocks the dispatched reviewer prompt embeds, so the human-facing doc and the live prompt agree.
+8. **Never change the repository, and never claim a run you did not make.** Both are obligations on you, whatever your dispatch happens to permit: what a seat *can* do varies by host and dispatch shape, so do not reason from your tool list. **Never change the repository** — no editing a file, no writing a probe into the tree, no command that alters it; a mutation probe or a planted-defect test belongs to the orchestrator, never to you. **Never claim a run you did not make** — if you ran something, quote the exact command and its output; if you did not, say so. A mutation, test, or parity statement you did not actually run is analysis, not a receipt. When a finding's proof needs a run you must not or cannot make, still emit it — name the **check** (the exact command, mutation, or input that would settle it) at the confidence your evidence supports, and leave that execution to the orchestrator. The authoritative statement is the base rubric's verification rule **"A review seat never changes the repository, and never claims a run it did not make."**; this is the pointer, not a second copy. If any action awaits owner permission unanswered for 15 minutes, proceed without it and report the denied action honestly (never as done).
 
 ---
 

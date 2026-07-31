@@ -81,11 +81,12 @@ attempt must never be globbed and honored.
    - reason: one sentence with quoted evidence. Required for every verdict.
    - severity: optional — the single rubric tier the evidence justifies (Critical/Important/
      Minor/Nit); omit to keep the finding's pre-verification tier.
-   - evidence: for CONFIRMED only — the executed receipt: name the triggering input, cite the
-     line, quote the code or test output that proves the issue is real.
+   - evidence: for CONFIRMED only — name the triggering input, cite the line, and quote what
+     proves the issue is real: the code you read, a read-only command you actually ran (with
+     its output), or an execution output the orchestrator captured and supplied.
 
    Verdict semantics:
-   - CONFIRMED — you found the triggering input and can cite it (executed receipt).
+   - CONFIRMED — you found the triggering input and can cite it.
    - PLAUSIBLE — the concern may be real but you could not fully prove it from the diff/repo.
    - REFUTED — the finding clearly does NOT hold (wrong, not in changed material, already
      handled); reason must explain why.
@@ -94,6 +95,13 @@ attempt must never be globbed and honored.
    - Judge only the findings in this cluster. Do NOT add new findings, merge findings, or
      decide the run's outcome.
    - Every verdict carries quoted evidence in reason (and evidence for CONFIRMED).
+   - **Never change the repository, and never claim a run you did not make.** Quote code
+     you read, a read-only command you actually ran (with its output), or an execution
+     output the orchestrator captured and handed you — and never imply a run you did not
+     make. Never write a probe into the tree: a verdict that needs the code **changed** to
+     establish it stays **PLAUSIBLE**, with the needed check named in `reason` for the
+     orchestrator. (Base rubric: "A review seat never changes the repository, and never
+     claims a run it did not make.")
 
    ## Output
    Write a JSON array to <absolute round-<N>/verdicts-<cluster-index>.json path — THIS
@@ -133,7 +141,7 @@ print(json.dumps(verification.apply_verdicts(merged, verdicts)))
   `{id, file, title, reason, was_blocking_tagged}` (`was_blocking_tagged` preserved when the
   reviewer tagged it Critical/Important).
 - **CONFIRMED** — survivor stamped `verdict: "CONFIRMED"`; CONFIRMED evidence from the verdict
-  overwrites/sets the finding's `evidence` (the executed receipt).
+  overwrites/sets the finding's `evidence` (the verification evidence).
 - **PLAUSIBLE** — survivor stamped `verdict: "PLAUSIBLE"`.
 - **KEEP-ON-UNCERTAIN** — a missing verdict, malformed verdict, or REFUTED without a
   non-empty reason keeps the finding as **PLAUSIBLE** at its pre-verification severity — a
@@ -191,13 +199,15 @@ findings with a substantive prior justification (quoted in the record); CONFIRME
 
 ## Evidence-or-silence + the advisory disposition
 
-Only a **CONFIRMED** finding — one with an executed receipt in its verification trace — may
+Only a **CONFIRMED** finding — one whose verification trace cites the triggering input — may
 **GATE** the owner during the auto-fix loop (interrupt with `AskUserQuestion`). A **PLAUSIBLE
 Critical never GATEs and never parks**:
 
 1. **Fix if safe** — fold into the fix batch when the fix is mechanical and low-risk.
 2. **Confirming probe** — re-dispatch the verifier (`--role verifier`) for that single
-   finding to seek the triggering input; a CONFIRMED upgrade then becomes GATE-eligible.
+   finding to seek the triggering input in the diff and the repo; a CONFIRMED upgrade then
+   becomes GATE-eligible. Where the triggering input can only be established by a **mutation**,
+   that run is the orchestrator's — the verifier never mutates.
 3. **Grounded advisory** — record `action: "skip"`, `advisory: true`, with the PLAUSIBLE
    verdict as the verification trace (citable ground truth). It rides the handback disclosed
    through the skipped-blocker channel and never interrupts mid-run.
