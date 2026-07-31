@@ -477,7 +477,8 @@ def _acquire_worktree_lease(cwd_real, run_dir_real):
             if _worktree_lease_holder_live(holder):
                 return False, "worktree-lease-held", None, lease_path
         try:
-            file_lock.acquire(lease_path)
+            if file_lock.acquire(lease_path):
+                reclaimed = True
             break
         except file_lock.LockHeld:
             holder = file_lock.read_holder(lease_path)
