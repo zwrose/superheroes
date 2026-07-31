@@ -70,20 +70,20 @@ nowhere.
 
 ## Engine forfeits and order shape
 
-An external engine can forfeit *after* its files are written. Cursor's `NonRetriableError "Agent
-Looping Detected"` characteristically fires while the engine is producing a long report, with the
-on-disk work already complete and correct — field evidence: three builds in one wave; in one of them
-four of six dispatches forfeited, **every one with correct files on disk**. **Inspect the dispatch
-worktree before you discard or re-dispatch anything** — but "inspect the diff" alone is not a
-decision rule:
+An external engine can forfeit *after* writing files — often mid-report while on-disk work is already
+complete (four of six dispatches in one wave). **Inspect the worktree before discarding or
+re-dispatching** — "inspect the diff" alone is not a decision rule:
 
-- Look at **base→HEAD plus staged, unstaged, and untracked state** — a forfeited engine may have committed,
-  so a bare `git diff` can be empty while the work is complete; untracked new files are invisible to it too.
-- Confirm **every target the work order named** is actually present. Partial work looks like work.
-- **The orchestrator's own gates are what authorize keeping it.** A forfeit with complete work is a
-  **recovery** — verify it yourself exactly as you would verify a clean return. Partial or out-of-scope
-  state is **not** recovered: re-dispatch or park, and never let "inspect first" become "assume work
-  exists" — a forfeit with nothing on disk is simply a failed dispatch.
+- **Before dispatching**, capture a pre-dispatch baseline — same probe as charter §8 `check-runner`:
+  `git rev-parse HEAD` plus full `git status --porcelain` on the build worktree. Completeness is
+  **baseline→now** (committed, staged, unstaged, untracked): each named target must **differ from that
+  baseline**, not merely exist. **No delta = this dispatch wrote nothing**, whatever earlier orders left.
+- **Gates authorize keeping complete work** (a **recovery**). A forfeit destroys a clean return's
+  **per-edge disposition echo**, **order-defect findings**, and **test-change echo** — **walk the order's
+  enumerated fail-closed edges yourself** (or re-dispatch a narrow verification order); gate-green does
+  not re-derive an unhandled edge. Partial or out-of-scope state is **not** recovered: **restore to the
+  pre-dispatch baseline** (or use a fresh worktree) before re-dispatching — never onto the abandoned
+  attempt — else park.
 - Re-dispatching without looking re-does correct work and re-runs the very report that forfeited.
 
 Author orders so the forfeit does not fire: keep in-dispatch verification targeted and returns short
@@ -91,9 +91,6 @@ and structured. The implementer template `agents/implementer.md` states this to 
 directly, so an order that additionally demands a full-suite run, a pasted diff, or a long verbatim
 report is **overriding the template against its own purpose**.
 
-Never assume the implementer can run anything. An external engine's shell availability is set
-**outside your build** — the engine CLI consults its own permission surface, not your order. It is
-normally available on the sanctioned write path, but two builds in one wave had **every** implementer
-shell call rejected, and that is not yet explained — so it **cannot be inferred from a previous
-build**. Write every external order to be correct when the implementer can run nothing; the
-orchestrator's own re-run is the verification either way, and a corrective round is worth budgeting.
+Never assume the implementer can run anything — shell availability is set **outside your build**; two
+builds in one wave had **every** shell call rejected. Write every external order to be correct when the
+implementer can run nothing; the orchestrator's re-run is the verification either way.
