@@ -749,7 +749,11 @@ def launch_build(
     if not reserve_result["ok"]:
         return _fail(reserve_result["reason"], launchId=launch_id)
 
-    os.makedirs(log_dir, mode=0o700, exist_ok=True)
+    try:
+        os.makedirs(log_dir, mode=0o700, exist_ok=True)
+    except OSError:
+        _record_refused(repo_root, launch_id, "log-dir", "log-dir-create-failed", env=env)
+        return _fail("log-dir-create-failed", launchId=launch_id)
     log_path = os.path.join(log_dir, "%s.stdout" % launch_id)
     err_path = os.path.join(log_dir, "%s.stderr" % launch_id)
 

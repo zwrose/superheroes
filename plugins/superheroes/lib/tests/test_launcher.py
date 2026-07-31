@@ -1374,6 +1374,82 @@ def test_edge19_oserror_retry_does_not_ignore_refused_append_failure(tmp_path, m
     assert calls["n"] == 1
 
 
+def test_log_dir_exists_as_file_refuses_and_terminalizes(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "not-a-dir")
+    with open(log_dir, "w", encoding="utf-8") as fh:
+        fh.write("x")
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "log-dir-create-failed"
+    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    refused = [r for r in records if r.get("event") == "refused"]
+    assert any(
+        r.get("launchId") == result["launchId"]
+        and r.get("stage") == "log-dir"
+        and r.get("reason") == "log-dir-create-failed"
+        for r in refused
+    )
+
+
+def test_log_dir_parent_readonly_refuses_and_terminalizes(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    readonly_parent = tmp_path / "readonly-parent"
+    readonly_parent.mkdir()
+    readonly_parent.chmod(0o500)
+    log_dir = str(readonly_parent / "logs")
+    try:
+        result = L.launch_build(
+            repo,
+            656,
+            _valid_premise(repo),
+            _all_checks(),
+            log_dir,
+        )
+        assert result["ok"] is False
+        assert result["reason"] == "log-dir-create-failed"
+        records = ll.read(ll.ledger_path(repo)["path"])["records"]
+        refused = [r for r in records if r.get("event") == "refused"]
+        assert any(
+            r.get("launchId") == result["launchId"]
+            and r.get("event") == "refused"
+            and r.get("stage") == "log-dir"
+            and r.get("reason") == "log-dir-create-failed"
+            for r in refused
+        )
+    finally:
+        readonly_parent.chmod(0o700)
+
+
+def test_log_dir_create_failure_reason_distinct_from_log_open_failed(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "not-a-dir")
+    with open(log_dir, "w", encoding="utf-8") as fh:
+        fh.write("x")
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+    )
+    assert result["reason"] == "log-dir-create-failed"
+    assert result["reason"] != "log-open-failed"
+    records = ll.read(ll.ledger_path(repo)["path"])["records"]
+    refused = [r for r in records if r.get("event") == "refused"]
+    assert any(r.get("reason") == "log-dir-create-failed" for r in refused)
+    assert not any(r.get("reason") == "log-open-failed" for r in refused)
+
+
 def test_edge20_log_open_failure_terminalizes_reservation(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
