@@ -27,6 +27,8 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import store_core      # noqa: E402
+
 # AUTHORITATIVE home for collector install guidance (§11: one home per cross-boundary
 # fact). Every degrade message quotes this map; no other module restates a command.
 #
@@ -118,16 +120,21 @@ _NEUTRAL_TOOL_CONFIG_LOCK = threading.Lock()
 
 
 def _git_toplevel(cwd):
-    """Walk parents for a .git dir/file; fall back to realpath(cwd). Never spawns."""
-    cur = os.path.realpath(cwd or ".")
-    while True:
-        git_entry = os.path.join(cur, ".git")
-        if os.path.isdir(git_entry) or os.path.isfile(git_entry):
-            return cur
-        parent = os.path.dirname(cur)
-        if parent == cur:
-            return os.path.realpath(cwd or ".")
-        cur = parent
+    """Nearest ancestor with a ``.git`` entry, or realpath(cwd) when none.
+
+    Delegates ``.git`` presence to ``store_core.git_dot_entry_ancestor`` (``lstat``,
+    never spawns) so dangling or unreadable ``.git`` entries still bound the repo.
+    On walk ``OSError``, returns the filesystem root so ``resolve()`` rejects every
+    PATH hit (fail closed).  Never spawns.
+    """
+    base = cwd or "."
+    try:
+        ancestor = store_core.git_dot_entry_ancestor(base)
+    except OSError:
+        return os.path.sep
+    if ancestor is not None:
+        return ancestor
+    return os.path.realpath(base)
 
 
 def _is_under(path, root):

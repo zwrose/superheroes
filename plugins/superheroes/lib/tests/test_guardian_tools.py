@@ -312,6 +312,118 @@ def test_resolve_rejects_relative_path_when_process_cwd_differs(tmp_path, monkey
         os.chdir(old)
 
 
+# --- _git_toplevel / repo-root boundary (issue #742) -----------------------------
+
+def test_resolve_rejects_repo_local_bin_when_git_is_dangling_symlink(
+        tmp_path, monkeypatch):
+    """Dangling ``.git`` symlink must not shrink repo_root to nested cwd (#742)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    nested = repo / "pkg" / "src"
+    nested.mkdir(parents=True)
+    try:
+        os.symlink("/nonexistent/guardian-742-dangling-git", repo / ".git")
+    except OSError as exc:
+        pytest.skip("platform cannot create symlinks: %s" % exc)
+
+    bin_dir = repo / "bin"
+    bin_dir.mkdir()
+    tool = bin_dir / "jscpd"
+    tool.write_text("#!/bin/sh\necho 0.0.0\n")
+    tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
+
+    monkeypatch.setenv("PATH", str(bin_dir))
+    out = gt.resolve("jscpd", str(nested))
+    assert out["found"] is False
+    assert out["path"] is None
+    assert out.get("rejection") == gt.REJECTION_REPO_LOCAL
+
+
+def test_git_toplevel_returns_repo_root_from_repo_cwd(tmp_path):
+    repo = _make_repo(tmp_path)
+    assert gt._git_toplevel(str(repo)) == os.path.realpath(str(repo))
+
+
+def test_git_toplevel_returns_repo_root_from_nested_cwd(tmp_path):
+    _make_repo(tmp_path)
+    nested = tmp_path / "pkg" / "src"
+    nested.mkdir(parents=True)
+    assert gt._git_toplevel(str(nested)) == os.path.realpath(str(tmp_path))
+
+
+def test_git_toplevel_gitfile_linked_worktree(tmp_path):
+    main_git = tmp_path / "main.git"
+    main_git.mkdir()
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    (worktree / ".git").write_text("gitdir: %s\n" % main_git)
+    nested = worktree / "src"
+    nested.mkdir()
+    worktree_real = os.path.realpath(str(worktree))
+    assert gt._git_toplevel(str(worktree)) == worktree_real
+    assert gt._git_toplevel(str(nested)) == worktree_real
+
+
+def test_git_toplevel_unreadable_git_dir_still_finds_root(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git_dir = repo / ".git"
+    git_dir.mkdir()
+    nested = repo / "nested"
+    nested.mkdir()
+    repo_real = os.path.realpath(str(repo))
+    try:
+        git_dir.chmod(0)
+        assert gt._git_toplevel(str(nested)) == repo_real
+    finally:
+        git_dir.chmod(stat.S_IRWXU)
+
+
+def test_git_toplevel_no_git_returns_realpath_cwd(tmp_path):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    nested = plain / "sub"
+    nested.mkdir()
+    assert gt._git_toplevel(str(nested)) == os.path.realpath(str(nested))
+
+
+def test_resolve_external_tool_when_no_git(tmp_path, monkeypatch):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    ext = _make_external_tool(tmp_path, "jscpd")
+    monkeypatch.setenv("PATH", os.path.dirname(ext))
+    out = gt.resolve("jscpd", str(plain))
+    assert out["found"] is True
+    assert out["path"] == os.path.realpath(ext)
+
+
+def test_git_toplevel_none_or_empty_cwd_uses_dot(tmp_path):
+    repo = _make_repo(tmp_path)
+    old = os.getcwd()
+    try:
+        os.chdir(str(tmp_path))
+        expected = os.path.realpath(str(tmp_path))
+        assert gt._git_toplevel(None) == expected
+        assert gt._git_toplevel("") == expected
+        assert gt._git_toplevel(None) == gt._git_toplevel(".")
+    finally:
+        os.chdir(old)
+
+
+def test_resolve_rejects_all_on_git_toplevel_oserror(tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path)
+    ext = _make_external_tool(tmp_path, "jscpd")
+    monkeypatch.setenv("PATH", os.path.dirname(ext))
+
+    def _raise_oserror(cwd):
+        raise OSError("walk failed")
+
+    monkeypatch.setattr(gt.store_core, "git_dot_entry_ancestor", _raise_oserror)
+    out = gt.resolve("jscpd", repo)
+    assert out["found"] is False
+    assert out.get("rejection") == gt.REJECTION_REPO_LOCAL
+
+
 def test_resolve_ignores_nested_repo_local_bin(tmp_path, monkeypatch):
     """Scanning a nested cwd still rejects the repo-root node_modules/.bin."""
     _make_repo(tmp_path)

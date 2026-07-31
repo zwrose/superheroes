@@ -24,6 +24,56 @@ GIT_UNAVAILABLE = "unavailable"  # git could not be run at all — the answer is
 GitResult = collections.namedtuple("GitResult", "out status detail")
 
 
+class RepoRootUnavailable(Exception):
+    """Git could not be RUN, so the repository root is unknown (issue #699 rider 11).
+
+    Deliberately NOT an OSError: no incidental ``except OSError`` may absorb this into a local
+    story (unreadable core.md, absent file, legacy-profile-unsupported). Callers that need to
+    translate it must catch ``RepoRootUnavailable`` by name."""
+
+
+def _declined_not_a_repository_outcome(res, cwd):
+    """Shared fail-closed classification for declined not-a-repository git results.
+
+    Returns ``realpath(cwd)`` only for genuine greenfield (no ``.git`` ancestor,
+    no env pointer). Otherwise raises ``RepoRootUnavailable``."""
+    try:
+        git_ancestor = git_dot_entry_ancestor(cwd)
+    except OSError as exc:
+        raise RepoRootUnavailable(
+            "cannot determine repository root at %s: %s" % (cwd, exc))
+    if git_ancestor is not None:
+        raise RepoRootUnavailable(
+            "repository root indeterminate at %s: .git present at %s but git declined: %s"
+            % (cwd, git_ancestor, res.detail))
+    if os.environ.get("GIT_DIR") or os.environ.get("GIT_WORK_TREE"):
+        raise RepoRootUnavailable(
+            "git declined at %s with GIT_DIR or GIT_WORK_TREE set: %s"
+            % (cwd, res.detail))
+    return os.path.realpath(cwd)
+
+
+def repo_root(cwd):
+    """Fail-closed repository root for ``cwd`` (issue #742)."""
+    res = run_git_result(cwd, "rev-parse", "--show-toplevel")
+    if res.status == GIT_UNAVAILABLE:
+        raise RepoRootUnavailable(
+            "git could not be run at %s: %s" % (cwd, res.detail))
+    if res.status == GIT_OK:
+        if not res.out:
+            return os.path.realpath(cwd)
+        resolved = os.path.realpath(res.out)
+        if not os.path.isdir(resolved):
+            raise RepoRootUnavailable(
+                "git rev-parse --show-toplevel at %s named a non-directory path: %s"
+                % (cwd, res.out))
+        return resolved
+    if not_a_repository(res):
+        return _declined_not_a_repository_outcome(res, cwd)
+    raise RepoRootUnavailable(
+        "git declined rev-parse --show-toplevel at %s: %s" % (cwd, res.detail))
+
+
 def normalize_remote(url):
     """Normalize a remote URL to host/path. None for empty/unparseable.
 
@@ -125,13 +175,30 @@ def get_remote(cwd):
 def get_gitdir(cwd):
     """realpath of the git-common-dir (shared by all worktrees).
 
-    Falls back to --absolute-git-dir for git < 2.31, then to realpath(cwd)
-    for non-git dirs.
+    Three-step chain mirrors ``control_plane._common_git_dir``: absolute common-dir,
+    bare common-dir (joining relative output onto ``cwd``), then absolute-git-dir.
+    On total failure, classifies the terminal result fail-closed (issue #742).
     """
-    out = run_git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
-    if out is None:
-        out = run_git(cwd, "rev-parse", "--absolute-git-dir")
-    return os.path.realpath(out if out is not None else cwd)
+    res = run_git_result(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if res.status == GIT_OK and res.out:
+        return os.path.realpath(res.out)
+
+    res = run_git_result(cwd, "rev-parse", "--git-common-dir")
+    if res.status == GIT_OK and res.out:
+        out = res.out if os.path.isabs(res.out) else os.path.join(cwd, res.out)
+        return os.path.realpath(out)
+
+    res = run_git_result(cwd, "rev-parse", "--absolute-git-dir")
+    if res.status == GIT_OK and res.out:
+        return os.path.realpath(res.out)
+
+    if res.status == GIT_UNAVAILABLE:
+        raise RepoRootUnavailable(
+            "git could not be run at %s: %s" % (cwd, res.detail))
+    if not_a_repository(res):
+        return _declined_not_a_repository_outcome(res, cwd)
+    raise RepoRootUnavailable(
+        "git declined rev-parse --absolute-git-dir at %s: %s" % (cwd, res.detail))
 
 
 def derive_identifiers(cwd):

@@ -128,24 +128,305 @@ def test_get_gitdir_worktrees_share_common_dir(tmp_path):
 
 def test_get_gitdir_pre_231_fallback(tmp_path, monkeypatch):
     """get_gitdir falls back to --absolute-git-dir when --path-format=absolute
-    --git-common-dir returns None (simulating git < 2.31)."""
+    and bare --git-common-dir both decline (simulating git < 2.31)."""
     repo = _init_repo(tmp_path / "r")
-    calls = {"n": 0}
-    real = sc.run_git
+    calls = {"absolute": 0}
+    real = sc.run_git_result
 
     def fake(cwd, *a):
         if a == ("rev-parse", "--path-format=absolute", "--git-common-dir"):
-            return None  # simulate git < 2.31 not supporting the flag
+            return sc.GitResult(None, sc.GIT_DECLINED, "unknown option --path-format")
+        if a == ("rev-parse", "--git-common-dir"):
+            return sc.GitResult(None, sc.GIT_DECLINED, "unknown option")
         if a == ("rev-parse", "--absolute-git-dir"):
-            calls["n"] += 1
+            calls["absolute"] += 1
             return real(cwd, *a)
         return real(cwd, *a)
 
-    monkeypatch.setattr(sc, "run_git", fake)
+    monkeypatch.setattr(sc, "run_git_result", fake)
     gd = sc.get_gitdir(repo)
-    assert calls["n"] == 1            # fell back to --absolute-git-dir exactly once
+    assert calls["absolute"] == 1
     assert os.path.isabs(gd)
     assert gd == os.path.realpath(gd)
+
+
+# ---------------------------------------------------------------------------
+# repo_root / get_gitdir fail-closed chokepoint (issue #742)
+# ---------------------------------------------------------------------------
+
+def test_repo_root_in_git_repo(tmp_path):
+    repo = _init_repo(tmp_path / "r")
+    sub = os.path.join(repo, "sub", "deep")
+    os.makedirs(sub)
+    assert sc.repo_root(repo) == os.path.realpath(repo)
+    assert sc.repo_root(sub) == os.path.realpath(repo)
+
+
+def test_repo_root_non_git_greenfield(tmp_path, monkeypatch):
+    plain = str(tmp_path / "plain")
+    os.makedirs(plain)
+    monkeypatch.delenv("GIT_DIR", raising=False)
+    monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+    assert sc.repo_root(plain) == os.path.realpath(plain)
+
+
+def test_repo_root_raises_on_git_unavailable(tmp_path, monkeypatch):
+    def fake(cwd, *a):
+        return sc.GitResult(None, sc.GIT_UNAVAILABLE, "FileNotFoundError: no git")
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    with pytest.raises(sc.RepoRootUnavailable):
+        sc.repo_root(str(tmp_path))
+
+
+def test_repo_root_ok_empty_output_returns_realpath_cwd(tmp_path, monkeypatch):
+    def fake(cwd, *a):
+        return sc.GitResult("", sc.GIT_OK, None)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    assert sc.repo_root(str(tmp_path)) == os.path.realpath(str(tmp_path))
+
+
+def test_repo_root_raises_on_ok_nonexistent_toplevel(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "r1")
+    nope = str(tmp_path / "NOPE")
+    cwd = str(tmp_path / "plain")
+    os.makedirs(cwd)
+    monkeypatch.setenv("GIT_DIR", os.path.join(repo, ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", nope)
+    with pytest.raises(sc.RepoRootUnavailable):
+        sc.repo_root(cwd)
+    monkeypatch.delenv("GIT_DIR", raising=False)
+    monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+    assert sc.repo_root(cwd) == os.path.realpath(cwd)
+
+
+def test_repo_root_ok_nonexistent_without_env_vars_is_greenfield(tmp_path, monkeypatch):
+    plain = str(tmp_path / "plain")
+    os.makedirs(plain)
+    monkeypatch.delenv("GIT_DIR", raising=False)
+    monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+
+    def fake(cwd, *a):
+        if a == ("rev-parse", "--show-toplevel"):
+            return sc.GitResult(
+                None, sc.GIT_DECLINED, "fatal: not a git repository")
+        return sc.run_git_result(cwd, *a)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    assert sc.repo_root(plain) == os.path.realpath(plain)
+
+
+def test_repo_root_raises_on_ok_file_not_directory(tmp_path, monkeypatch):
+    f = tmp_path / "file.txt"
+    f.write_text("x")
+
+    def fake(cwd, *a):
+        return sc.GitResult(str(f), sc.GIT_OK, None)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    with pytest.raises(sc.RepoRootUnavailable):
+        sc.repo_root(str(tmp_path))
+
+
+def test_repo_root_raises_on_corrupt_git_dir_pointer(tmp_path, monkeypatch):
+    corrupt = tmp_path / "corrupt"
+    corrupt.mkdir()
+    (corrupt / "HEAD").write_text("garbage\n")
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    monkeypatch.setenv("GIT_DIR", str(corrupt))
+    monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+    with pytest.raises(sc.RepoRootUnavailable):
+        sc.repo_root(str(plain))
+
+
+def test_repo_root_raises_when_git_ancestor_present(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "r")
+    sub = tmp_path / "r" / "sub"
+    sub.mkdir()
+
+    def fake(cwd, *a):
+        if a == ("rev-parse", "--show-toplevel"):
+            return sc.GitResult(
+                None, sc.GIT_DECLINED, "fatal: not a git repository")
+        return sc.run_git_result(cwd, *a)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    with pytest.raises(sc.RepoRootUnavailable) as excinfo:
+        sc.repo_root(str(sub))
+    assert ".git present" in str(excinfo.value)
+
+
+def test_repo_root_raises_on_dangling_git_symlink(tmp_path, monkeypatch):
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    os.symlink(str(tmp_path / "missing"), str(outer / ".git"))
+    inner = outer / "inner"
+    inner.mkdir()
+
+    def fake(cwd, *a):
+        if a == ("rev-parse", "--show-toplevel"):
+            return sc.GitResult(
+                None, sc.GIT_DECLINED, "fatal: not a git repository")
+        return sc.run_git_result(cwd, *a)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    with pytest.raises(sc.RepoRootUnavailable):
+        sc.repo_root(str(inner))
+
+
+def test_repo_root_raises_on_ancestor_walk_oserror(tmp_path, monkeypatch):
+    def fake(cwd, *a):
+        if a == ("rev-parse", "--show-toplevel"):
+            return sc.GitResult(
+                None, sc.GIT_DECLINED, "fatal: not a git repository")
+        return sc.run_git_result(cwd, *a)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    monkeypatch.setattr(sc, "git_dot_entry_ancestor",
+                        lambda cwd: (_ for _ in ()).throw(OSError("walk failed")))
+    with pytest.raises(sc.RepoRootUnavailable) as excinfo:
+        sc.repo_root(str(tmp_path))
+    assert "walk failed" in str(excinfo.value)
+
+
+def test_repo_root_raises_when_git_dir_env_set(tmp_path, monkeypatch):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "nowhere"))
+    monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+
+    def fake(cwd, *a):
+        if a == ("rev-parse", "--show-toplevel"):
+            return sc.GitResult(
+                None, sc.GIT_DECLINED, "fatal: not a git repository")
+        return sc.run_git_result(cwd, *a)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    with pytest.raises(sc.RepoRootUnavailable) as excinfo:
+        sc.repo_root(str(plain))
+    assert "GIT_DIR" in str(excinfo.value)
+
+
+def test_repo_root_raises_when_git_work_tree_env_set(tmp_path, monkeypatch):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    monkeypatch.delenv("GIT_DIR", raising=False)
+    monkeypatch.setenv("GIT_WORK_TREE", str(tmp_path / "nowhere"))
+
+    def fake(cwd, *a):
+        if a == ("rev-parse", "--show-toplevel"):
+            return sc.GitResult(
+                None, sc.GIT_DECLINED, "fatal: not a git repository")
+        return sc.run_git_result(cwd, *a)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    with pytest.raises(sc.RepoRootUnavailable) as excinfo:
+        sc.repo_root(str(plain))
+    assert "GIT_WORK_TREE" in str(excinfo.value)
+
+
+def test_repo_root_raises_on_non_not_a_repository_decline(tmp_path, monkeypatch):
+    def fake(cwd, *a):
+        return sc.GitResult(
+            None, sc.GIT_DECLINED, "fatal: detected dubious ownership")
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    with pytest.raises(sc.RepoRootUnavailable):
+        sc.repo_root(str(tmp_path))
+
+
+def test_get_gitdir_raises_on_git_unavailable(tmp_path, monkeypatch):
+    def fake(cwd, *a):
+        return sc.GitResult(None, sc.GIT_UNAVAILABLE, "timeout")
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    with pytest.raises(sc.RepoRootUnavailable):
+        sc.get_gitdir(str(tmp_path))
+
+
+def test_get_gitdir_raises_on_corrupt_git_dir_pointer(tmp_path, monkeypatch):
+    corrupt = tmp_path / "corrupt"
+    corrupt.mkdir()
+    (corrupt / "HEAD").write_text("garbage\n")
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    monkeypatch.setenv("GIT_DIR", str(corrupt))
+    with pytest.raises(sc.RepoRootUnavailable):
+        sc.get_gitdir(str(plain))
+
+
+def test_get_gitdir_raises_when_git_ancestor_present(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "r")
+    sub = tmp_path / "r" / "sub"
+    sub.mkdir()
+    real = sc.run_git_result
+
+    def fake(cwd, *a):
+        if a and a[0] == "rev-parse":
+            return sc.GitResult(
+                None, sc.GIT_DECLINED, "fatal: not a git repository")
+        return real(cwd, *a)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    with pytest.raises(sc.RepoRootUnavailable):
+        sc.get_gitdir(str(sub))
+
+
+def test_get_gitdir_bare_common_dir_joins_relative_to_cwd(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "r")
+    real = sc.run_git_result
+
+    def fake(cwd, *a):
+        if a == ("rev-parse", "--path-format=absolute", "--git-common-dir"):
+            return sc.GitResult(None, sc.GIT_DECLINED, "unknown option --path-format")
+        if a == ("rev-parse", "--git-common-dir"):
+            return sc.GitResult(".git", sc.GIT_OK, None)
+        return real(cwd, *a)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    gd = sc.get_gitdir(repo)
+    assert gd == os.path.realpath(os.path.join(repo, ".git"))
+
+
+def test_get_gitdir_step3_absolute_git_dir(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "r")
+    real = sc.run_git_result
+    expected = real(repo, "rev-parse", "--absolute-git-dir").out
+
+    def fake(cwd, *a):
+        if a == ("rev-parse", "--path-format=absolute", "--git-common-dir"):
+            return sc.GitResult(None, sc.GIT_DECLINED, "usage")
+        if a == ("rev-parse", "--git-common-dir"):
+            return sc.GitResult(None, sc.GIT_DECLINED, "usage")
+        if a == ("rev-parse", "--absolute-git-dir"):
+            return sc.GitResult(expected, sc.GIT_OK, None)
+        return real(cwd, *a)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    assert sc.get_gitdir(repo) == os.path.realpath(expected)
+
+
+def test_get_gitdir_all_fail_greenfield(tmp_path, monkeypatch):
+    plain = str(tmp_path / "plain")
+    os.makedirs(plain)
+    monkeypatch.delenv("GIT_DIR", raising=False)
+    monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+
+    def fake(cwd, *a):
+        if a[0] == "rev-parse":
+            return sc.GitResult(
+                None, sc.GIT_DECLINED, "fatal: not a git repository")
+        return sc.run_git_result(cwd, *a)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    assert sc.get_gitdir(plain) == os.path.realpath(plain)
+
+
+def test_core_md_repo_root_unavailable_is_store_core_alias():
+    import core_md as cm
+    assert cm.RepoRootUnavailable is sc.RepoRootUnavailable
 
 
 # ---------------------------------------------------------------------------
