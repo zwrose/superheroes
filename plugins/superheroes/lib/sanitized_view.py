@@ -936,7 +936,7 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
 
     return {
         "diffBase": merge_base,
-        "diffPath": patch_path,
+        "diffPath": REVIEW_DIFF_FILE_NAME,
         "diffBytes": len(patch_bytes),
         "diffWithheldCount": withheld_count,
     }

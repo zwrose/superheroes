@@ -75,6 +75,11 @@ def _leftover_view_dirs(tmp_base):
         return []
 
 
+def _patch_abs(view):
+    """Absolute path to the staged review patch inside a built view."""
+    return os.path.join(view["path"], view["diffPath"])
+
+
 # --- drift: config surface ----------------------------------------------------
 
 
@@ -1565,10 +1570,148 @@ def test_diff_partial_withheld(tmp_path):
         assert view["diffPath"] is not None
         assert view["diffBytes"] > 0
         assert view["diffBase"] == base_sha
-        with open(view["diffPath"], "rb") as fh:
+        with open(_patch_abs(view), "rb") as fh:
             patch = fh.read()
         assert b"changed" in patch
         assert b"secret" not in patch
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_diff_path_is_view_root_relative(tmp_path):
+    repo = _init_repo(tmp_path / "diffpath", files={"keep.txt": "k\n"})
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    _git(repo, "add", "keep.txt")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        assert view["diffPath"] == sv.REVIEW_DIFF_FILE_NAME
+        assert not os.path.isabs(view["diffPath"])
+        assert os.path.isfile(os.path.join(view["path"], view["diffPath"]))
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_diff_no_renames_guard_withheld_rename_side(tmp_path):
+    """Without --no-renames, a renamed stripped file can leak under its new name."""
+    sentinel = "RENAME_LEAK_SENTINEL_NO_RENAMES_XYZ"
+    repo = _init_repo(
+        tmp_path / "rename-leak",
+        files={"CLAUDE.md": sentinel + "\n", "keep.txt": "k\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "mv", "CLAUDE.md", "DOCS.md")
+    with open(os.path.join(repo, "DOCS.md"), "w", encoding="utf-8") as fh:
+        fh.write("modified after rename\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "rename",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        assert "--no-renames" in sv._DIFF_NAME_FLAGS
+        assert "--no-renames" in sv._DIFF_PATCH_FLAGS
+        assert view["diffWithheldCount"] >= 1
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert sentinel.encode() not in patch
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_diff_submodule_short_guard_against_repo_diff_submodule(tmp_path):
+    """Repo-local diff.submodule=diff expands submodule file content without --submodule=short."""
+    inner = _init_repo(tmp_path / "inner", files={"f.txt": "x\n"})
+    outer = _init_repo(tmp_path / "outer", files={"outer.txt": "o\n"})
+    base_sha = _git(outer, "rev-parse", "HEAD").stdout.strip()
+    proc = subprocess.run(
+        [
+            "git",
+            "-C",
+            outer,
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            inner,
+            "sub",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        pytest.skip("submodule add not supported: %s" % proc.stderr.strip())
+    _git(
+        outer,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "add submodule",
+    )
+    _git(outer, "config", "diff.submodule", "diff")
+    with open(os.path.join(inner, "f.txt"), "w", encoding="utf-8") as fh:
+        fh.write("x\ny\n")
+    _git(inner, "add", "f.txt")
+    _git(
+        inner,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change inner",
+    )
+    inner_head = _git(inner, "rev-parse", "HEAD").stdout.strip()
+    sub_path = os.path.join(outer, "sub")
+    _git(sub_path, "fetch", inner)
+    _git(sub_path, "checkout", inner_head)
+    _git(outer, "add", "sub")
+    _git(
+        outer,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "bump submodule",
+    )
+    view = sv.build_sanitized_view(outer, diff_base=base_sha)
+    try:
+        assert "--submodule=short" in sv._DIFF_NAME_FLAGS
+        assert "--submodule=short" in sv._DIFF_PATCH_FLAGS
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert b"Subproject commit" in patch
+        assert b"+y" not in patch
+        assert b"f.txt" not in patch
     finally:
         sv.destroy_sanitized_view(view["path"])
 
@@ -1594,7 +1737,7 @@ def test_diff_pathspec_magic_literal_filename(tmp_path):
     view = sv.build_sanitized_view(repo, diff_base=base_sha)
     try:
         assert os.path.isfile(os.path.join(view["path"], magic_name))
-        with open(view["diffPath"], "rb") as fh:
+        with open(_patch_abs(view), "rb") as fh:
             patch = fh.read()
         assert b"magic content" in patch
     finally:
@@ -1719,7 +1862,7 @@ def test_diff_submodule_gitlink_only(tmp_path):
     )
     view = sv.build_sanitized_view(outer, diff_base=base_sha)
     try:
-        with open(view["diffPath"], "rb") as fh:
+        with open(_patch_abs(view), "rb") as fh:
             patch = fh.read()
         assert b"inner.txt" not in patch
         assert b"Subproject commit" in patch or b"submod" in patch
@@ -1807,7 +1950,7 @@ def test_diff_rename_from_stripped_path(tmp_path):
     )
     view = sv.build_sanitized_view(repo, diff_base=base_sha)
     try:
-        with open(view["diffPath"], "rb") as fh:
+        with open(_patch_abs(view), "rb") as fh:
             patch = fh.read()
         assert b"old secret" not in patch
         assert b"new public" in patch
@@ -1876,7 +2019,7 @@ def test_claude_md_content_not_in_patch(tmp_path):
     )
     view = sv.build_sanitized_view(repo, diff_base=base_sha)
     try:
-        with open(view["diffPath"], "rb") as fh:
+        with open(_patch_abs(view), "rb") as fh:
             patch = fh.read()
         assert secret.encode() not in patch
         assert b"CLAUDE.md" not in patch

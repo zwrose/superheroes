@@ -1262,10 +1262,13 @@ def test_spot_check_rejects_artifact_by_dotdot_spelling(tmp_path):
 
 
 def test_spot_check_rejects_symlink_to_artifact(tmp_path):
-    """E9: symlink inside the view pointing at the artifact is rejected."""
+    """E9: hard-linked spelling rejected via samefile when realpath strings differ."""
     root, _source, patch = _repo_with_source_and_patch(tmp_path)
     link = os.path.join(root, "via-link")
-    os.symlink(patch, link)
+    os.link(patch, link)
+    inv_real = os.path.realpath(os.path.join(root, "via-link"))
+    art_real = os.path.realpath(os.path.join(root, _PATCH_NAME))
+    assert inv_real != art_real
     ok, accepted, rejected = EA.spot_check_investigated(
         ["via-link"], root, generated_artifacts=(_PATCH_NAME,))
     assert ok is False and accepted == []
