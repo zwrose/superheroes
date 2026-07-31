@@ -33,3 +33,10 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      - name: Release-bump tripwire — no commit silently excluded from the release
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          git fetch --tags --force origin
+          python3 .github/scripts/check_release_bump.py --repo "${{ github.repository }}"
