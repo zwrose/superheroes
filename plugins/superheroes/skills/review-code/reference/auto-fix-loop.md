@@ -180,29 +180,58 @@ never drop a finding or a lens.
 > `strippedCount`, `headSha`, `sourceDirty`, `buildSeconds`, `bytes`, `fileCount`). The view is the
 > **committed** tree at `headSha`; `sourceDirty: true` flags modified tracked files in the source repo
 > so a caller reviewing uncommitted work is disclosed rather than silently given the pre-change tree.
+> Every result also carries **`terminal`**, **`argv`** (the exact spawned command), and **`runDir`**.
+>
+> **Originating-verb continuation loop.** Open with `--run-dir` (or omit it for a private temp run dir
+> that loops to terminal). Re-invoke **`dispatch-review`** (never `dispatch-poll`) with the same
+> `--run-dir` and `--max-wait 540` while `.terminal` is false. A non-terminal
+> `{"reason": "running", "terminal": false}` is **not** a forfeit. `dispatch-poll` is observational
+> and never spawns; `dispatch-abandon` is how a run directory is abandoned. Omitting `--max-wait`
+> loops until terminal in 540 s slices — below the **600 s foreground-conversion boundary on harness
+> 2.1.219**.
 >
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 > python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
 >   --engine "$REVIEWER_ENGINE" --engine-model "$SEAT_ENGINE_MODEL" --effort "$SEAT_EFFORT" \
 >   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
+>   --run-dir "$RUN_DIR" --max-wait 540 \
 >   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
 > ```
 >
 > `$SEAT_ENGINE_MODEL` is the seat's **registry id** and `$SEAT_EFFORT` its effort — **both are
-> required by this runner**; `engine_dispatch` takes `--effort` as a required flag. Every review
-> seat the seat map assigns on cursor carries a real effort, so this is not a limitation in practice.
+> required by this runner**; `engine_dispatch` takes `--effort` as a required flag on
+> `dispatch-review`. Every review seat the seat map assigns on cursor carries a real effort, so this
+> is not a limitation in practice.
 >
 > Read-only sandbox is **hard-coded inside the runner API** — it cannot emit a write dispatch. The
 > seat **may and should** read files and run read-only commands inside the sanitized view to ground
 > its findings (`--repo-root` on the CLI still names the **source** repository; the runner builds the
 > view itself). An unresolvable source repo root is a **named refusal** before any view is built
 > (`repo-root-absent`, `repo-root-missing`, `repo-root-not-a-directory`, `repo-root-not-a-repo`) with
-> `attempts: 0`. The
-> seat prompt should still inline the diff (a self-contained prompt remains the cheapest path); repo
-> access is no longer forbidden. The **fixer / write path is unchanged** — it stays model-driven and
-> host-gated (a Python-spawned subprocess would bypass the host permission-classifier the write authz
-> depends on; CONVENTIONS `§7.5`).
+> `attempts: 0`. The seat prompt should still inline the diff (a self-contained prompt remains the
+> cheapest path); repo access is no longer forbidden.
+>
+> **Host grants (subcommand granularity).** The owner may adopt these grant strings at subcommand
+> granularity (the band states them; it never writes the owner's settings):
+> - `Bash(python3 -B */lib/engine_dispatch.py dispatch-review:*)`
+> - `Bash(python3 -B */lib/engine_dispatch.py dispatch-write:*)`
+> The write grant is deliberately narrower so **write autonomy is revocable on its own**. Host rules
+> match a **prefix**, so that revocability holds only at subcommand granularity — a file-level or
+> bare-`python3` rule would cover both verbs. The path wildcard (`*/lib/engine_dispatch.py`) matches
+> any install location, so the grant discriminates the **subcommand**, not the script's identity —
+> an executable at any matching path would be covered by the same rule; owners who want script
+> identity too should pin the absolute installed plugin path in their own rule. **Absent grant → fail closed:** with no matching grant
+> the dispatch does not run, no engine is spawned, nothing is written, and the caller **parks loudly**
+> — never a soft failure, never a silent fall-open. A `configure` onboarding offer for the rule is
+> deferred to [#549](https://github.com/zwrose/superheroes/issues/549); the owner pastes the rule by
+> hand.
+>
+> **Why the in-place fixer is not a `dispatch-write` consumer.** review-code's auto-fix path
+> deliberately runs in the checked-out branch of the **current checkout** (see
+> `skills/review-code/SKILL.md`'s auto-fix branch guard, which refuses to create a worktree for that
+> path). `dispatch-write` refuses a primary checkout (`cwd-primary-checkout`), so the in-place fixer
+> path is **unchanged** and is **not** a consumer of the write verb. Do not imply otherwise.
 >
 > **Cross-vendor control probe (#668).** For each **distinct cross-vendor vendor** among the
 > panel's seats that ran with zero findings on that vendor's seat(s), run the planted-defect control
@@ -248,9 +277,9 @@ never drop a finding or a lens.
 > a timed-out **fixer** commits no external write and the fix falls open to Claude. A hang becomes a
 > bounded cost, never a stuck loop.
 >
-> **Hand-rolled engine dispatch — stdin form, empty-prompt guard, portable timeout (#563).** When a
-> builder hand-rolls an engine CLI dispatch (exactly when the adapter path fails), three verified
-> rules keep it from wedging:
+> **Hand-rolled engine dispatch — stdin form, empty-prompt guard, portable timeout (#563).** Prefer the
+> supervised runner above; when a builder hand-rolls an engine CLI dispatch (exactly when the adapter
+> path fails), three verified rules keep it from wedging:
 > 1. **Always feed the prompt from a real file over redirected stdin — `codex exec … - < promptfile`
 >    — never an inherited/open stdin.** codex `exec` reads its prompt from stdin when given `-`, no
 >    positional prompt, or even an empty-string positional; if that stdin is an open source that
@@ -261,9 +290,8 @@ never drop a finding or a lens.
 >    PATH` fails closed (emitting `{"ok":false,"reason":"empty-prompt",…}` instead of argv) unless
 >    PATH is a readable regular file with non-whitespace content. The caller MUST redirect **that same
 >    validated file** into the engine's stdin — validating one file and redirecting another (or none)
->    reopens the hang. (The reviewer-scoped dispatch runner of the follow-up work couples validate +
->    redirect in one step, closing the check/use window; a hand-rolled dispatch must couple them by
->    hand.)
+>    reopens the hang. (The supervised runner couples validate + redirect in one step, closing the
+>    check/use window; a hand-rolled dispatch must couple them by hand.)
 > 3. **Bound the run with a portable timeout — macOS has no `timeout(1)`.** Use a perl fork+kill
 >    wrapper and a HIGH ceiling (≥900 s for a real engine run; never a borderline limit), redirecting
 >    engine output to a **file** (never `| tail`, which buffers a stall to look identical to progress):
@@ -276,13 +304,16 @@ never drop a finding or a lens.
 >    (exit 124 = timed out.) Watch the process's **CPU-time column, not elapsed** — an engine CLI can
 >    sit at ~0% CPU for minutes and still be live.
 >
-> **Dispatch-runner scope boundary (#563).** A follow-up productizes an adapter-owned dispatch runner
-> for the **read-only reviewer role only** (auto-retry + liveness as machinery, not builder
-> discipline). The **fix/write path stays model-driven and host-gated**: its authorization depends on
-> the host permission-classifier gating the literal Bash `codex exec`/`cursor-agent` call, and a
-> Python-spawned subprocess would bypass that classification (CONVENTIONS `§7.5` — a completed
-> external result fails closed; engine *selection* fails open). Do not fold the write path into a
-> Python runner without a fresh authz design.
+> **Dispatch-runner scope boundary (#563).** The supervised runner now supervises **both**
+> `dispatch-review` and `dispatch-write`; each is a **distinct subcommand** with its **own** host
+> grant string, so write autonomy is revocable on its own — that **is** the fresh authz design the
+> earlier text here asked for, ratified in [#623](https://github.com/zwrose/superheroes/issues/623)
+> and re-based by [#702](https://github.com/zwrose/superheroes/issues/702). (The paragraph's earlier
+> prohibition against folding the write path into a Python runner is **superseded**.) The host
+> permission classifier still gates the dispatch **at the Bash call** — absent a matching grant
+> nothing spawns and the caller parks loudly. CONVENTIONS `§7.5` still holds and still means what it
+> always meant: engine **selection** fails open when a seat is unavailable, a completed external
+> **result** fails closed. It never said the write path may not be supervised.
 
 After dispatch, wait for all five agents to return. Each writes its findings file to `$SESSION_DIR/round-<round>/`. The orchestrator does not read agent transcripts — only the JSON files.
 
