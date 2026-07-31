@@ -49,11 +49,14 @@ _EMPHASIS_RE = re.compile(r"[*_]+")
 
 REMEDIATION = (
     "Remediation (issue #674): re-state each dropped commit with an empty commit "
-    "carrying a clean conventional title (the #673 pattern), open it as a normal PR, "
-    "and let release-please regenerate the release PR. Never hand-edit version.txt, "
-    "plugin.json, or the manifest. Record each originally-dropped SHA in "
-    ".github/release-exclusions.txt — the re-statement commit is a new commit and never "
-    "restores the original commit's changelog entry."
+    "carrying a clean conventional title (the #673 pattern). Open one normal PR per "
+    "re-statement — squash-merge replaces commit titles with the PR title (the message "
+    "release-please reads), so bundling several re-statements into one PR (#739) "
+    "destroys them; one PR each (#740/#741) is the correct shape. Let release-please "
+    "regenerate the release PR. Never hand-edit version.txt, plugin.json, or the "
+    "manifest. Record each originally-dropped SHA in .github/release-exclusions.txt — "
+    "the re-statement commit is a new commit and never restores the original commit's "
+    "changelog entry."
 )
 
 

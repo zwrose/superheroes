@@ -102,12 +102,16 @@ cited, not filed by us).
 naming the excluded commit(s). The check lives at `.github/scripts/check_release_bump.py`.
 
 **Remediation — the recorded pattern:** land an **empty commit** whose subject re-states the
-dropped commit's clean conventional title (`git commit --allow-empty`), through a normal PR;
-release-please then regenerates the release PR correctly. PR [#673](https://github.com/zwrose/superheroes/pull/673)
-(first incident) and PRs [#740](https://github.com/zwrose/superheroes/pull/740) /
-[#741](https://github.com/zwrose/superheroes/pull/741) (second incident) are the worked
-examples. **Never hand-edit a version** in `version.txt`, either `plugin.json`, or
-`.release-please-manifest.json` — the release PR is the only thing that moves versions.
+dropped commit's clean conventional title (`git commit --allow-empty`), through a normal PR —
+**one PR per re-statement**, because squash-merge here replaces commit titles with the PR title
+(the conventional-commit payload release-please reads). Bundling several re-statements into one PR
+([#739](https://github.com/zwrose/superheroes/pull/739)) collapsed them into a single scope-less
+squash commit. Worked examples: PR [#673](https://github.com/zwrose/superheroes/pull/673) (first
+incident); PRs [#740](https://github.com/zwrose/superheroes/pull/740) and
+[#741](https://github.com/zwrose/superheroes/pull/741) (second incident — the correct shape, one
+PR per re-statement). release-please then regenerates the release PR correctly. **Never hand-edit
+a version** in `version.txt`, either `plugin.json`, or `.release-please-manifest.json` — the
+release PR is the only thing that moves versions.
 
 The re-statement is a *new* commit, so the originally-dropped SHA never appears in the
 changelog (the shipped 0.23.0 changelog carries `4fe4d89` / `6743317`, never the originals).
