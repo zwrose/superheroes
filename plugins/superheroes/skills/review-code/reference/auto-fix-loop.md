@@ -185,7 +185,7 @@ never drop a finding or a lens.
 > | `diffBase` | the resolved **merge-base** sha the patch is against (40 hex chars, or 64 in a SHA-256 repository) |
 > | `diffPath` | `SUPERHEROES_REVIEW_DIFF.patch`, relative to the view root |
 > | `diffBytes` | patch size in bytes |
-> | `diffWithheldCount` | changed paths withheld because they are stripped config |
+> | `diffWithheldCount` | changed paths withheld as stripped config, plus one per patch section whose paths could not be derived safely (underivable sections); unrecognized non-`diff --git` spans refuse the whole dispatch with `sanitized-view-diff-failed` instead of being dropped and counted here |
 >
 > **Six refusals** (all `attempts: 0`, no token spend), joining the existing `sanitized-view-*`
 > family:
@@ -197,7 +197,7 @@ never drop a finding or a lens.
 > | `sanitized-view-diff-fully-withheld` | every changed path was withheld as stripped config — an external seat could not review this change at all |
 > | `sanitized-view-diff-too-large` | the patch exceeds the 8 MiB ceiling |
 > | `sanitized-view-diff-path-collision` | the repository already tracks a file named `SUPERHEROES_REVIEW_DIFF.patch` |
-> | `sanitized-view-diff-failed` | a git subprocess failed or timed out while generating the patch, or the generated patch contained content the filter could not recognize as a `diff --git` section |
+> | `sanitized-view-diff-failed` | a git subprocess failed while generating the patch, or the generated patch contained content the filter could not recognize as a `diff --git` section |
 >
 > **#666 investigation floor.** A seat that cites a **stripped** path in its `investigated` array fails
 > the investigation floor and forfeits vacuously — fail-safe (the seat falls open to Claude), never a

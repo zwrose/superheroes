@@ -1119,6 +1119,13 @@ def _section_withhold_info(section):
     )
     stripped_paths = set()
     underivable = False
+    # Deliberately check all four path spellings: old_path/new_path from ---/+++
+    # headers and git_old/git_new from the diff --git line. _paths_from_diff_section
+    # resolves one winner per side, so on a header-spoofed section it can return the
+    # attacker's path; the diff --git pair is the independent second opinion. A None
+    # (/dev/null) side counts as underivable rather than skipped. Removing any of
+    # the four reopens the header-spoof defect (see
+    # test_patch_filter_modification_both_sides_spoofed_withheld).
     for path in (old_path, new_path, git_old, git_new):
         if path is _DIFF_PATH_UNDERIVABLE or path is None:
             underivable = True
@@ -1126,12 +1133,6 @@ def _section_withhold_info(section):
             stripped_paths.add(path)
     withhold = underivable or bool(stripped_paths)
     return withhold, stripped_paths, underivable
-
-
-def _section_should_be_withheld(section):
-    """True when a section's derived paths are stripped or cannot be derived safely."""
-    withhold, _, _ = _section_withhold_info(section)
-    return withhold
 
 
 def _filter_patch_sections(patch_bytes):
