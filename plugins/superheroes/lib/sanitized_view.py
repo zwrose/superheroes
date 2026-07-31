@@ -118,8 +118,11 @@ def _git_popen(*args, **kwargs):
     return subprocess.Popen(*args, **kwargs)
 
 
-def _is_40_hex_sha(value):
-    return len(value) == 40 and all(c in "0123456789abcdef" for c in value.lower())
+def _is_git_object_id_hex(value):
+  """True when ``value`` is a 40- or 64-char lowercase/uppercase hex object id."""
+  if len(value) not in (40, 64):
+    return False
+  return all(c in "0123456789abcdef" for c in value.lower())
 
 
 def _ascii_fold(s):
@@ -430,6 +433,12 @@ def _check_export_deadline(started):
     # mid-read is not interrupted by the export timeout (accepted bound).
     if time.monotonic() - started > SANITIZED_VIEW_EXPORT_TIMEOUT_SECONDS:
         raise SanitizedViewError("sanitized-view-export-timeout")
+
+
+def _remaining_export_timeout(started):
+    """Seconds left in the export budget (small positive floor)."""
+    remaining = SANITIZED_VIEW_EXPORT_TIMEOUT_SECONDS - (time.monotonic() - started)
+    return max(remaining, 0.001)
 
 
 class _CatFileBatch:
@@ -766,7 +775,7 @@ def _verify_export_complete(
 def _init_view_git(view_root):
     steps = (
         ["git", "-C", view_root, "init", "--quiet", "--template="],
-        ["git", "-C", view_root, "add", "-A"],
+        ["git", "-C", view_root, "add", "-A", "-f"],
         [
             "git",
             "-C",
@@ -833,6 +842,107 @@ def _assert_no_stripped_paths_in_view(view_root):
             raise SanitizedViewError("sanitized-view-diff-path-collision")
 
 
+_DIFF_PATH_UNDERIVABLE = object()
+_DIFF_PATH_STRIPPED_QUOTED = object()
+
+
+def _decode_diff_path_token(token):
+    """Decode one path token from a ``---``/``+++`` line or ``diff --git`` header."""
+    if token == b"/dev/null":
+        return None
+    if token.startswith(b"a/") or token.startswith(b"b/"):
+        token = token[2:]
+    if token.startswith(b'"'):
+        return _DIFF_PATH_STRIPPED_QUOTED
+    try:
+        return token.decode("utf-8", errors="surrogateescape")
+    except Exception:
+        return _DIFF_PATH_UNDERIVABLE
+
+
+def _paths_from_diff_git_header(line):
+    """Return (old_path, new_path) from a ``diff --git`` line, or underivable sentinels."""
+    prefix = b"diff --git "
+    if not line.startswith(prefix):
+        return _DIFF_PATH_UNDERIVABLE, _DIFF_PATH_UNDERIVABLE
+    rest = line[len(prefix) :]
+    parts = rest.split(b" ")
+    if len(parts) < 2:
+        return _DIFF_PATH_UNDERIVABLE, _DIFF_PATH_UNDERIVABLE
+    return _decode_diff_path_token(parts[0]), _decode_diff_path_token(parts[1])
+
+
+def _paths_from_diff_section(section):
+    """Derive both sides' paths from one patch section (fail-closed on ambiguity)."""
+    old_path = None
+    new_path = None
+    has_minus = False
+    has_plus = False
+    lines = section.split(b"\n")
+    for line in lines:
+        if line.startswith(b"--- "):
+            old_path = _decode_diff_path_token(line[4:])
+            has_minus = True
+        elif line.startswith(b"+++ "):
+            new_path = _decode_diff_path_token(line[4:])
+            has_plus = True
+    if has_minus or has_plus:
+        return old_path, new_path
+    if lines:
+        return _paths_from_diff_git_header(lines[0])
+    return _DIFF_PATH_UNDERIVABLE, _DIFF_PATH_UNDERIVABLE
+
+
+def _split_patch_sections(patch_bytes):
+    """Split a unified diff into per-file sections at ``diff --git`` line boundaries."""
+    if not patch_bytes:
+        return []
+    sections = []
+    start = 0
+    while start < len(patch_bytes):
+        if not patch_bytes[start:].startswith(b"diff --git "):
+            next_pos = patch_bytes.find(b"\ndiff --git ", start)
+            if next_pos == -1:
+                break
+            start = next_pos + 1
+            continue
+        next_pos = patch_bytes.find(b"\ndiff --git ", start + 1)
+        if next_pos == -1:
+            sections.append(patch_bytes[start:])
+            break
+        sections.append(patch_bytes[start:next_pos])
+        start = next_pos + 1
+    return sections
+
+
+def _section_should_be_withheld(section):
+    """True when a section's derived paths are stripped or cannot be derived safely."""
+    old_path, new_path = _paths_from_diff_section(section)
+    for path in (old_path, new_path):
+        if path is _DIFF_PATH_UNDERIVABLE or path is _DIFF_PATH_STRIPPED_QUOTED:
+            return True
+        if path is not None and _rel_path_would_be_stripped(path):
+            return True
+    return False
+
+
+def _filter_patch_sections(patch_bytes):
+    """Output-side guarantee: drop sections touching stripped or underivable paths."""
+    sections = _split_patch_sections(patch_bytes)
+    if not sections:
+        return patch_bytes, 0
+    kept = []
+    withheld = 0
+    for section in sections:
+        if _section_should_be_withheld(section):
+            withheld += 1
+        else:
+            kept.append(section)
+    if not kept:
+        return b"", withheld
+    return b"\n".join(kept), withheld
+
+
 def _write_review_patch_file(view_root, patch_bytes):
     patch_path = os.path.join(view_root, REVIEW_DIFF_FILE_NAME)
     if os.path.lexists(patch_path):
@@ -884,7 +994,7 @@ def _git_diff_batch_output(argv, started, total_bytes):
                 raise SanitizedViewError("sanitized-view-diff-too-large")
             chunks.append(data)
         try:
-            proc.wait(timeout=SANITIZED_VIEW_EXPORT_TIMEOUT_SECONDS)
+            proc.wait(timeout=_remaining_export_timeout(started))
         except subprocess.TimeoutExpired:
             raise SanitizedViewError("sanitized-view-diff-failed")
         if proc.returncode != 0:
@@ -906,12 +1016,15 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
         raise SanitizedViewError("sanitized-view-diff-base-unresolved")
 
     _check_export_deadline(started)
+    timeout = _remaining_export_timeout(started)
     try:
         proc = _git_run(
             [
                 "git",
                 "-C",
                 repo_real,
+                "-c",
+                "core.quotePath=false",
                 "rev-parse",
                 "--verify",
                 "--end-of-options",
@@ -919,7 +1032,7 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
             ],
             capture_output=True,
             text=True,
-            timeout=SANITIZED_VIEW_EXPORT_TIMEOUT_SECONDS,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired:
         raise SanitizedViewError("sanitized-view-diff-failed")
@@ -928,16 +1041,17 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
     if proc.returncode != 0 or not proc.stdout.strip():
         raise SanitizedViewError("sanitized-view-diff-base-unresolved")
     base_sha = proc.stdout.strip()
-    if not _is_40_hex_sha(base_sha):
+    if not _is_git_object_id_hex(base_sha):
         raise SanitizedViewError("sanitized-view-diff-base-unresolved")
 
     _check_export_deadline(started)
+    timeout = _remaining_export_timeout(started)
     try:
         proc = _git_run(
             ["git", "-C", repo_real, "merge-base", base_sha, head_sha],
             capture_output=True,
             text=True,
-            timeout=SANITIZED_VIEW_EXPORT_TIMEOUT_SECONDS,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired:
         raise SanitizedViewError("sanitized-view-diff-failed")
@@ -946,15 +1060,25 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
     if proc.returncode != 0 or not proc.stdout.strip():
         raise SanitizedViewError("sanitized-view-diff-base-unresolved")
     merge_base = proc.stdout.strip()
-    if not _is_40_hex_sha(merge_base):
+    if not _is_git_object_id_hex(merge_base):
         raise SanitizedViewError("sanitized-view-diff-base-unresolved")
 
     _check_export_deadline(started)
+    timeout = _remaining_export_timeout(started)
     try:
         proc = _git_run(
-            ["git", "-C", repo_real, *_DIFF_NAME_FLAGS, merge_base, head_sha],
+            [
+                "git",
+                "-C",
+                repo_real,
+                "-c",
+                "core.quotePath=false",
+                *_DIFF_NAME_FLAGS,
+                merge_base,
+                head_sha,
+            ],
             capture_output=True,
-            timeout=SANITIZED_VIEW_EXPORT_TIMEOUT_SECONDS,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired:
         raise SanitizedViewError("sanitized-view-diff-failed")
@@ -962,6 +1086,8 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
         raise SanitizedViewError("sanitized-view-diff-failed")
     if proc.returncode != 0:
         raise SanitizedViewError("sanitized-view-diff-failed")
+    if len(proc.stdout) > SANITIZED_VIEW_EXPORT_MAX_BYTES:
+        raise SanitizedViewError("sanitized-view-diff-too-large")
 
     changed_paths = [
         p.decode("utf-8", errors="surrogateescape")
@@ -989,6 +1115,8 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
             "git",
             "-C",
             repo_real,
+            "-c",
+            "core.quotePath=false",
             *_DIFF_PATCH_FLAGS,
             merge_base,
             head_sha,
@@ -999,7 +1127,11 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
         patch_parts.append(chunk)
 
     patch_bytes = b"".join(patch_parts)
+    patch_bytes, output_withheld = _filter_patch_sections(patch_bytes)
+    withheld_count += output_withheld
     if not patch_bytes:
+        if withheld_count > 0:
+            raise SanitizedViewError("sanitized-view-diff-fully-withheld")
         raise SanitizedViewError("sanitized-view-diff-empty")
 
     _write_review_patch_file(view_root, patch_bytes)

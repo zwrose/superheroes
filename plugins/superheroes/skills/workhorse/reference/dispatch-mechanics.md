@@ -57,8 +57,9 @@ nothing. Optional **`--diff-base <ref>`** stages the reviewed change as
 `SUPERHEROES_REVIEW_DIFF.patch` inside the gitless sanitized view — the machinery external seats need
 because `git diff <ref>` and `git log` cannot work there; the `sanitizedView` receipt then also
 carries `diffBase`, `diffPath`, `diffBytes`, and `diffWithheldCount` (all `null` when the flag is
-omitted). Full contract — refusals, withheld stripped-config paths, investigation-floor rejection —
-is in `auto-fix-loop.md`.
+omitted). On a continuation (`--run-dir` naming an existing run), `--diff-base` is accepted but
+ignored — the live run's view is not rebuilt. Full contract — refusals, withheld stripped-config
+paths, investigation-floor rejection — is in `auto-fix-loop.md`.
 The runner's transport carries **only** `findings` and `investigated` from the seat's stdout — every
 other key the seat emits is dropped, so verdict-shaped or other alternate payloads parse `unreadable`,
 retry once, and forfeit.

@@ -1261,16 +1261,27 @@ def test_spot_check_rejects_artifact_by_dotdot_spelling(tmp_path):
         assert rejected[0]["reason"] == "generated-artifact"
 
 
-def test_spot_check_rejects_symlink_to_artifact(tmp_path):
+def test_spot_check_rejects_hard_link_to_artifact(tmp_path):
     """E9: hard-linked spelling rejected via samefile when realpath strings differ."""
     root, _source, patch = _repo_with_source_and_patch(tmp_path)
-    link = os.path.join(root, "via-link")
+    link = os.path.join(root, "via-hardlink")
     os.link(patch, link)
-    inv_real = os.path.realpath(os.path.join(root, "via-link"))
+    inv_real = os.path.realpath(os.path.join(root, "via-hardlink"))
     art_real = os.path.realpath(os.path.join(root, _PATCH_NAME))
     assert inv_real != art_real
     ok, accepted, rejected = EA.spot_check_investigated(
-        ["via-link"], root, generated_artifacts=(_PATCH_NAME,))
+        ["via-hardlink"], root, generated_artifacts=(_PATCH_NAME,))
+    assert ok is False and accepted == []
+    assert rejected[0]["reason"] == "generated-artifact"
+
+
+def test_spot_check_rejects_symlink_to_artifact(tmp_path):
+    """E9b: genuine symlink spelling rejected via realpath identity."""
+    root, _source, patch = _repo_with_source_and_patch(tmp_path)
+    link = os.path.join(root, "via-symlink")
+    os.symlink(patch, link)
+    ok, accepted, rejected = EA.spot_check_investigated(
+        ["via-symlink"], root, generated_artifacts=(_PATCH_NAME,))
     assert ok is False and accepted == []
     assert rejected[0]["reason"] == "generated-artifact"
 
@@ -1541,3 +1552,90 @@ def test_engagement_read_never_returns_inert():
         outcomes.add(EA.engagement_read(res))
     assert outcomes <= {"engaged", "unknown"}
     assert "inert" not in outcomes
+
+
+def test_sanitized_view_receipt_binds_producer_diff_keys(tmp_path):
+    """Producer build_sanitized_view diff keys must reach _sanitized_view_receipt."""
+    import subprocess as sp
+    import sys
+
+    lib = os.path.join(_HERE, "..")
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    import sanitized_view as sv
+    ed_spec = importlib.util.spec_from_file_location(
+        "engine_dispatch_receipt_bind",
+        os.path.join(lib, "engine_dispatch.py"),
+    )
+    ed = importlib.util.module_from_spec(ed_spec)
+    ed_spec.loader.exec_module(ed)
+
+    repo = tmp_path / "receipt-bind"
+    os.makedirs(repo, exist_ok=True)
+    sp.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    with open(repo / "keep.txt", "w", encoding="utf-8") as fh:
+        fh.write("k\n")
+    sp.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    sp.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "-c",
+            "user.email=test@test.local",
+            "-c",
+            "user.name=test",
+            "commit",
+            "-q",
+            "-m",
+            "init",
+        ],
+        check=True,
+    )
+    base_sha = sp.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    with open(repo / "keep.txt", "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    sp.run(["git", "-C", str(repo), "add", "keep.txt"], check=True)
+    sp.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "-c",
+            "user.email=test@test.local",
+            "-c",
+            "user.name=test",
+            "commit",
+            "-q",
+            "-m",
+            "change",
+        ],
+        check=True,
+    )
+
+    fake_tmp = str(tmp_path / "sanitized-temp-base")
+    os.makedirs(fake_tmp, exist_ok=True)
+    import tempfile as tf
+
+    orig_gettempdir = tf.gettempdir
+    tf.gettempdir = lambda: fake_tmp
+    try:
+        view = sv.build_sanitized_view(str(repo), diff_base=base_sha)
+        receipt = ed._sanitized_view_receipt(view)
+        assert receipt["diffBase"] == view["diffBase"]
+        assert receipt["diffPath"] == view["diffPath"]
+        assert receipt["diffBytes"] == view["diffBytes"]
+        assert receipt["diffWithheldCount"] == view["diffWithheldCount"]
+        assert receipt["diffBase"] is not None
+        assert receipt["diffPath"] is not None
+        assert receipt["diffBytes"] is not None
+        assert receipt["diffWithheldCount"] is not None
+    finally:
+        tf.gettempdir = orig_gettempdir
+        if "view" in locals():
+            sv.destroy_sanitized_view(view["path"])

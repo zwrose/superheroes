@@ -1780,12 +1780,19 @@ def test_diff_pathspec_magic_literal_filename(tmp_path):
 
 
 def test_diff_non_utf8_path_roundtrip(tmp_path):
+    """Invalid UTF-8 filename bytes when the filesystem accepts surrogateescape paths."""
     repo = _init_repo(tmp_path / "nonutf8", files={"keep.txt": "k\n"})
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    bad_rel = "weird\xffname.txt"
+    try:
+        bad_rel = os.fsdecode(b"weird\xffname.txt")
+    except (UnicodeDecodeError, ValueError):
+        pytest.skip("filesystem refuses invalid UTF-8 path bytes")
     full = os.path.join(repo, bad_rel)
-    with open(full, "wb") as fh:
-        fh.write(b"payload\n")
+    try:
+        with open(full, "wb") as fh:
+            fh.write(b"payload\n")
+    except OSError:
+        pytest.skip("filesystem refuses creating paths with invalid UTF-8 bytes")
     _git(repo, "add", "-A")
     _git(
         repo,
@@ -2159,8 +2166,27 @@ def test_git_routing_vars_scrubbed(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "gitdir", files={"keep.txt": "k\n"})
     wrong = tmp_path / "wrong-repo"
     _init_repo(wrong, files={"wrong.txt": "w\n"})
-    monkeypatch.setenv("GIT_DIR", os.path.join(str(wrong), ".git"))
-    monkeypatch.setenv("GIT_WORK_TREE", str(wrong))
+    for var in sv._GIT_ROUTING_VARS:
+        if var == "GIT_DIR":
+            monkeypatch.setenv(var, os.path.join(str(wrong), ".git"))
+        elif var == "GIT_WORK_TREE":
+            monkeypatch.setenv(var, str(wrong))
+        elif var == "GIT_INDEX_FILE":
+            monkeypatch.setenv(var, os.path.join(str(wrong), ".git", "index"))
+        elif var == "GIT_OBJECT_DIRECTORY":
+            monkeypatch.setenv(var, os.path.join(str(wrong), ".git", "objects"))
+        elif var == "GIT_ALTERNATE_OBJECT_DIRECTORIES":
+            monkeypatch.setenv(var, os.path.join(str(wrong), ".git", "objects"))
+        elif var in ("GIT_CONFIG", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"):
+            monkeypatch.setenv(var, os.path.join(str(wrong), ".git", "config"))
+        elif var == "GIT_COMMON_DIR":
+            monkeypatch.setenv(var, os.path.join(str(wrong), ".git"))
+        elif var == "GIT_NAMESPACE":
+            monkeypatch.setenv(var, "wrong")
+        elif var == "GIT_EXTERNAL_DIFF":
+            monkeypatch.setenv(var, "/bin/false")
+        else:
+            monkeypatch.setenv(var, str(wrong))
     view = sv.build_sanitized_view(repo)
     try:
         assert os.path.isfile(os.path.join(view["path"], "keep.txt"))
@@ -2346,5 +2372,294 @@ def test_notice_withheld_count_sentence(tmp_path):
         assert "1 changed path(s) were withheld" in notice
         assert "stripped agent/IDE config" in notice
         assert "not a finding" in notice
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+# --- WO-F3 additions ----------------------------------------------------------
+
+
+def test_is_git_object_id_hex_predicate():
+    assert sv._is_git_object_id_hex("a" * 40)
+    assert sv._is_git_object_id_hex("A" * 64)
+    assert not sv._is_git_object_id_hex("a" * 41)
+    assert not sv._is_git_object_id_hex("g" + "a" * 39)
+
+
+def test_diff_patch_tracked_when_gitignore_matches(tmp_path):
+    repo = _init_repo(
+        tmp_path / "ignorepatch",
+        files={"a.py": "a\n", ".gitignore": "*.patch\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "a.py"), "w", encoding="utf-8") as fh:
+        fh.write("b\n")
+    _git(repo, "add", "a.py")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        ls = _git(view["path"], "ls-files").stdout
+        assert sv.REVIEW_DIFF_FILE_NAME in ls
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_diff_merge_base_not_supplied_tip(tmp_path):
+    repo = _init_repo(tmp_path / "diverge", files={"common.txt": "base\n"})
+    ancestor_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "checkout", "-b", "feature")
+    with open(os.path.join(repo, "feature.txt"), "w", encoding="utf-8") as fh:
+        fh.write("feature change\n")
+    _git(repo, "add", "feature.txt")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "feature",
+    )
+    feature_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "checkout", ancestor_sha)
+    _git(repo, "checkout", "-b", "other")
+    with open(os.path.join(repo, "other.txt"), "w", encoding="utf-8") as fh:
+        fh.write("other change\n")
+    _git(repo, "add", "other.txt")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "other",
+    )
+    other_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    merge_base = _git(repo, "merge-base", other_sha, feature_sha).stdout.strip()
+    assert merge_base == ancestor_sha
+    assert merge_base != other_sha
+    _git(repo, "checkout", "feature")
+    view = sv.build_sanitized_view(repo, diff_base=other_sha)
+    try:
+        assert view["diffBase"] == merge_base
+        assert view["diffBase"] != other_sha
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert b"feature change" in patch
+        assert b"other change" not in patch
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_diff_pathspec_batch_all_paths_in_patch(tmp_path):
+    files = {"keep.txt": "k\n"}
+    for i in range(201):
+        files["files/file_%03d.txt" % i] = "line %d\n" % i
+    repo = _init_repo(tmp_path / "manyfiles", files=files)
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    for i in range(201):
+        path = os.path.join(repo, "files", "file_%03d.txt" % i)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("changed %d\n" % i)
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change all",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        for i in range(201):
+            assert ("file_%03d.txt" % i).encode() in patch
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+_CENSUS_LEAK_SENTINEL = "CENSUS_LEAK_SENTINEL_ZZZ"
+
+
+def _census_commit(repo, message):
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        message,
+    )
+
+
+def _census_pkg_dir_to_file(tmp_path):
+    repo = str(tmp_path / "census-pkg-dir-file")
+    os.makedirs(repo, exist_ok=True)
+    _git(repo, "init", "-q")
+    os.makedirs(os.path.join(repo, "pkg"))
+    with open(os.path.join(repo, "pkg", "CLAUDE.md"), "w", encoding="utf-8") as fh:
+        fh.write(_CENSUS_LEAK_SENTINEL + "\n")
+    with open(os.path.join(repo, "pkg", "mod.py"), "w", encoding="utf-8") as fh:
+        fh.write("mod\n")
+    with open(os.path.join(repo, "top.txt"), "w", encoding="utf-8") as fh:
+        fh.write("top\n")
+    _git(repo, "add", "-A")
+    _census_commit(repo, "init pkg dir")
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    shutil.rmtree(os.path.join(repo, "pkg"))
+    with open(os.path.join(repo, "pkg"), "w", encoding="utf-8") as fh:
+        fh.write("regular file\n")
+    with open(os.path.join(repo, "top.txt"), "w", encoding="utf-8") as fh:
+        fh.write("top changed\n")
+    _git(repo, "add", "-A")
+    _census_commit(repo, "pkg dir to file")
+    return repo, base_sha
+
+
+def _census_pkg_file_to_dir(tmp_path):
+    repo = str(tmp_path / "census-pkg-file-dir")
+    os.makedirs(repo, exist_ok=True)
+    _git(repo, "init", "-q")
+    with open(os.path.join(repo, "pkg"), "w", encoding="utf-8") as fh:
+        fh.write("regular file\n")
+    with open(os.path.join(repo, "top.txt"), "w", encoding="utf-8") as fh:
+        fh.write("top\n")
+    _git(repo, "add", "-A")
+    _census_commit(repo, "init pkg file")
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    os.remove(os.path.join(repo, "pkg"))
+    os.makedirs(os.path.join(repo, "pkg"))
+    with open(os.path.join(repo, "pkg", "CLAUDE.md"), "w", encoding="utf-8") as fh:
+        fh.write(_CENSUS_LEAK_SENTINEL + "\n")
+    with open(os.path.join(repo, "top.txt"), "w", encoding="utf-8") as fh:
+        fh.write("top changed\n")
+    _git(repo, "add", "-A")
+    _census_commit(repo, "pkg file to dir")
+    return repo, base_sha
+
+
+def _census_magic_top_claude(tmp_path):
+    magic_name = ":(top)CLAUDE.md"
+    repo = _init_repo(
+        tmp_path / "census-magic-top",
+        files={"keep.txt": "k\n", "CLAUDE.md": _CENSUS_LEAK_SENTINEL + "\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, magic_name), "w", encoding="utf-8") as fh:
+        fh.write("magic survivor\n")
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    _git(repo, "add", "-A")
+    _census_commit(repo, "magic top claude")
+    return repo, base_sha
+
+
+def _census_high_similarity_rename(tmp_path):
+    filler = "\n".join("filler line %d" % i for i in range(100)) + "\n"
+    repo = _init_repo(
+        tmp_path / "census-rename",
+        files={"CLAUDE.md": _CENSUS_LEAK_SENTINEL + filler, "keep.txt": "k\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "mv", "CLAUDE.md", "DOCS.md")
+    with open(os.path.join(repo, "DOCS.md"), "w", encoding="utf-8") as fh:
+        fh.write(filler)
+    _git(repo, "add", "-A")
+    _census_commit(repo, "high similarity rename")
+    return repo, base_sha
+
+
+def _census_submodule_bump(tmp_path):
+    inner = _init_repo(tmp_path / "census-inner", files={"f.txt": "x\n"})
+    outer = _init_repo(tmp_path / "census-outer", files={"outer.txt": "o\n"})
+    base_sha = _git(outer, "rev-parse", "HEAD").stdout.strip()
+    proc = subprocess.run(
+        [
+            "git",
+            "-C",
+            outer,
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            inner,
+            "sub",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        pytest.skip("submodule add not supported: %s" % proc.stderr.strip())
+    _census_commit(outer, "add submodule")
+    _git(outer, "config", "diff.submodule", "diff")
+    with open(os.path.join(inner, "f.txt"), "w", encoding="utf-8") as fh:
+        fh.write(_CENSUS_LEAK_SENTINEL + "\n")
+    _git(inner, "add", "f.txt")
+    _census_commit(inner, "inner secret")
+    inner_head = _git(inner, "rev-parse", "HEAD").stdout.strip()
+    sub_path = os.path.join(outer, "sub")
+    _git(sub_path, "fetch", inner)
+    _git(sub_path, "checkout", inner_head)
+    _git(outer, "add", "sub")
+    _census_commit(outer, "bump submodule")
+    return outer, base_sha
+
+
+def _census_gemini_rename(tmp_path):
+    filler = "\n".join("gemini filler %d" % i for i in range(80)) + "\n"
+    repo = _init_repo(
+        tmp_path / "census-gemini",
+        files={"GEMINI.md": _CENSUS_LEAK_SENTINEL + filler, "keep.txt": "k\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "mv", "GEMINI.md", "gemini-notes.md")
+    with open(os.path.join(repo, "gemini-notes.md"), "w", encoding="utf-8") as fh:
+        fh.write(filler)
+    _git(repo, "add", "-A")
+    _census_commit(repo, "gemini rename")
+    return repo, base_sha
+
+
+@pytest.mark.parametrize(
+    "setup_fn",
+    [
+        _census_pkg_dir_to_file,
+        _census_pkg_file_to_dir,
+        _census_magic_top_claude,
+        _census_high_similarity_rename,
+        _census_submodule_bump,
+        _census_gemini_rename,
+    ],
+)
+def test_diff_census_no_stripped_sentinel_in_patch(tmp_path, setup_fn):
+    repo, base_sha = setup_fn(tmp_path)
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert _CENSUS_LEAK_SENTINEL.encode() not in patch
     finally:
         sv.destroy_sanitized_view(view["path"])

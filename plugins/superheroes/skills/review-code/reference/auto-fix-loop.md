@@ -170,7 +170,8 @@ never drop a finding or a lens.
 > auto-prepended notice states explicitly that when a patch was staged, the change under review **is**
 > that patch, that it is a **generated artifact rather than repository source**, and that the seat
 > must not review it, must not list it in `investigated`, and should exclude it from repo-wide
-> searches.
+> searches. On a **continuation** (`--run-dir` naming an existing run), `--diff-base` is accepted but
+> ignored — the live run's view is not rebuilt.
 >
 > The staged patch is **rejected from the #666 investigation floor**: a seat whose `investigated` array
 > cites only the patch fails the floor and forfeits vacuously, exactly as if it had cited nothing.
@@ -304,7 +305,7 @@ never drop a finding or a lens.
 > python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
 >   --engine "$REVIEWER_ENGINE" --engine-model "$SEAT_ENGINE_MODEL" --effort "$SEAT_EFFORT" \
 >   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
->   --diff-base "$REVIEW_BASE" \
+>   --diff-base "$BASE_REF" \
 >   --run-dir "$RUN_DIR" --max-wait 540 \
 >   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
 > ```
@@ -321,6 +322,10 @@ never drop a finding or a lens.
 > (`repo-root-absent`, `repo-root-missing`, `repo-root-not-a-directory`, `repo-root-not-a-repo`) with
 > `attempts: 0`. `--diff-base` makes staging the diff **machinery** — the runner stages the change as
 > `SUPERHEROES_REVIEW_DIFF.patch` inside the view so the seat can read it without git history.
+> The value must be the **pinned base commit** the round diff was computed against — not a symbolic
+> ref like `origin/main`, which can drift mid-loop and stage a patch that disagrees with the round
+> diff. An unset shell variable expands to `--diff-base ""`, which the runner refuses as
+> `sanitized-view-diff-base-unresolved` with `attempts: 0` — empty is not the same as omitted.
 > Inlining the diff in the seat prompt remains available and is still reasonable for a small diff,
 > but it is no longer the only way a seat gets the change. Repo access is no longer forbidden.
 >
