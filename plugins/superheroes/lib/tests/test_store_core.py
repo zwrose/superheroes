@@ -424,6 +424,33 @@ def test_get_gitdir_all_fail_greenfield(tmp_path, monkeypatch):
     assert sc.get_gitdir(plain) == os.path.realpath(plain)
 
 
+def test_get_gitdir_nonexistent_cwd_greenfield(tmp_path, monkeypatch):
+    """Nonexistent cwd with no .git ancestor returns realpath(cwd) (issue #742)."""
+    nope = str(tmp_path / "nope" / "missing")
+    monkeypatch.delenv("GIT_DIR", raising=False)
+    monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+    assert sc.get_gitdir(nope) == os.path.realpath(nope)
+
+
+def test_get_gitdir_nonexistent_cwd_inside_repo_raises(tmp_path):
+    """Nonexistent cwd inside a real repo must not fall back to that path."""
+    repo = _init_repo(tmp_path / "r")
+    nope = os.path.join(repo, "deleted", "subdir")
+    with pytest.raises(sc.RepoRootUnavailable) as excinfo:
+        sc.get_gitdir(nope)
+    assert ".git present" in str(excinfo.value)
+
+
+def test_get_gitdir_nonexistent_cwd_with_git_env_raises(tmp_path, monkeypatch):
+    """Nonexistent cwd with GIT_DIR set must fail closed, not greenfield."""
+    nope = str(tmp_path / "nope")
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "nowhere"))
+    monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+    with pytest.raises(sc.RepoRootUnavailable) as excinfo:
+        sc.get_gitdir(nope)
+    assert "GIT_DIR" in str(excinfo.value)
+
+
 def test_core_md_repo_root_unavailable_is_store_core_alias():
     import core_md as cm
     assert cm.RepoRootUnavailable is sc.RepoRootUnavailable

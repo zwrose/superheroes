@@ -16,6 +16,7 @@ import blocks
 import file_lock as lock
 import state
 import store
+import store_core
 
 MANIFEST_SCHEMA_VERSION = 1
 PLAN_RECORD_SCHEMA_VERSION = 1
@@ -515,14 +516,17 @@ def _arg(args, flag, default=None):
 
 def _resolve_paths():
     cwd = os.getcwd()
-    res = store.resolve(cwd, store.store_root())
-    if res["location"] == "none":
-        raise EngineError("no test-pilot profile resolves here; run "
-                          "test-pilot-init first")
-    return {"state_dir": res["state_dir"],
-            "manifests_dir": res["manifests_dir"],
-            "blocks_dir": res["blocks_dir"],
-            "repo_root": store.get_repo_root(cwd)}, res
+    try:
+        res = store.resolve(cwd, store.store_root())
+        if res["location"] == "none":
+            raise EngineError("no test-pilot profile resolves here; run "
+                              "test-pilot-init first")
+        return {"state_dir": res["state_dir"],
+                "manifests_dir": res["manifests_dir"],
+                "blocks_dir": res["blocks_dir"],
+                "repo_root": store.get_repo_root(cwd)}, res
+    except store_core.RepoRootUnavailable as exc:
+        raise EngineError("repository root unavailable: %s" % exc) from exc
 
 
 def main(argv):

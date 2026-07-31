@@ -54,8 +54,7 @@ class Migration:
 
 
 def _repo_root(cwd):
-    out = store_core.run_git(cwd, "rev-parse", "--show-toplevel")
-    return os.path.realpath(out) if out else os.path.realpath(cwd)
+    return store_core.repo_root(cwd)
 
 
 def _in_repo_cal_dir(cwd):

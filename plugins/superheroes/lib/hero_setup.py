@@ -34,7 +34,7 @@ def read_declined(cwd, root=None):
     try:
         with open(_declined_path(cwd, root), encoding="utf-8") as fh:
             data = json.load(fh)
-    except (OSError, ValueError):
+    except (OSError, ValueError, store_core.RepoRootUnavailable):
         return set()
     if not isinstance(data, list):
         return set()
@@ -51,13 +51,13 @@ def mark_declined(cwd, hero, root=None):
     current = read_declined(cwd, root)
     if hero in current:
         return {"declined": sorted(current)}
-    if mode_registry.ensure_project_store(cwd, root) is None:
-        return {"declined": sorted(current), "deferred": True}
-    current.add(hero)
     try:
+        if mode_registry.ensure_project_store(cwd, root) is None:
+            return {"declined": sorted(current), "deferred": True}
+        current.add(hero)
         store_core.atomic_write(_declined_path(cwd, root),
                                 json.dumps(sorted(current), indent=2) + "\n")
-    except OSError:
+    except (OSError, store_core.RepoRootUnavailable):
         return {"declined": sorted(read_declined(cwd, root)), "deferred": True}
     return {"declined": sorted(current)}
 

@@ -197,6 +197,8 @@ def get_gitdir(cwd):
             "git could not be run at %s: %s" % (cwd, res.detail))
     if not_a_repository(res):
         return _declined_not_a_repository_outcome(res, cwd)
+    if not os.path.isdir(cwd):
+        return _declined_not_a_repository_outcome(res, cwd)
     raise RepoRootUnavailable(
         "git declined rev-parse --absolute-git-dir at %s: %s" % (cwd, res.detail))
 
