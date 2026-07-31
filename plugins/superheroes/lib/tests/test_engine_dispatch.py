@@ -1,7 +1,11 @@
+import ast
 import importlib.util
 import json
 import os
 import shutil
+import subprocess
+import sys
+import time
 
 import pytest
 
@@ -26,10 +30,13 @@ _SV.loader.exec_module(_SV_MOD)
 
 @pytest.fixture(autouse=True)
 def _pin_temp_base_to_tmp_path(tmp_path, monkeypatch):
-    """Keep sanitized views off the real system temp directory."""
+    """Keep sanitized views and dispatch journals off the real system temp directory."""
     base = str(tmp_path / "sanitized-temp-base")
     os.makedirs(base, exist_ok=True)
     monkeypatch.setattr(_SV_MOD.tempfile, "gettempdir", lambda: base)
+    journal_root = str(tmp_path / "dispatch-journal-root")
+    os.makedirs(journal_root, exist_ok=True)
+    monkeypatch.setenv(ED.JOURNAL_ROOT_ENV, journal_root)
     yield
 
 
@@ -160,7 +167,7 @@ def test_dispatch_review_repo_root_absent_no_spawn(tmp_path):
     )
     assert res == {
         "ok": False, "reason": "unrunnable", "detail": "repo-root-absent",
-        "attempts": 0, "forfeited": False,
+        "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
     }
     assert "sanitizedView" not in res
     assert len(fake.calls) == 0
@@ -905,7 +912,7 @@ def test_main_dispatch_review_without_repo_root_json_refusal(tmp_path, monkeypat
     res = json.loads(capsys.readouterr().out.strip())
     assert res == {
         "ok": False, "reason": "unrunnable", "detail": "repo-root-absent",
-        "attempts": 0, "forfeited": False,
+        "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
     }
 
 
@@ -1000,7 +1007,7 @@ def test_sanitized_view_build_error_refusal_no_spawn(tmp_path):
     )
     assert res == {
         "ok": False, "reason": "unrunnable", "detail": "sanitized-view-export-failed",
-        "attempts": 0, "forfeited": False,
+        "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
     }
     assert len(fake.calls) == 0
     assert "sanitizedView" not in res
@@ -1187,3 +1194,965 @@ def test_pre_view_repo_root_not_a_repo_no_sanitized_view(tmp_path):
     assert res["detail"] == "repo-root-not-a-repo"
     assert res["attempts"] == 0
     assert "sanitizedView" not in res
+
+
+def _manual_open_review_run(tmp_path, run_dir):
+    """Journal run-opened without spawning — for supervision primitive tests."""
+    repo_root = _repo(tmp_path)
+    build_view = _fake_build_view(tmp_path)
+    view = build_view(os.path.realpath(repo_root))
+    cwd = os.path.realpath(view["path"])
+    built = __import__("engine_adapter").build_argv_result(
+        "codex", "review", "high", {"model": "sonnet", "cwd": cwd},
+    )
+    argv = built["argv"]
+    prompt_path = _valid_prompt(tmp_path)
+    with open(prompt_path, encoding="utf-8") as fh:
+        base = fh.read()
+    fed = ED.ANTIHIJACK_PREAMBLE + _SV_MOD.sanitized_view_notice(view) + base
+    os.makedirs(run_dir, exist_ok=True)
+    ok, detail = ED._open_review_run(
+        run_dir, engine="codex", argv=argv, cwd=cwd,
+        timeout=ED.RETRY_MIN_TIMEOUT, retry_timeout=ED.RETRY_MIN_TIMEOUT,
+        prompt_path=prompt_path, view_path=view["path"], view_meta=view,
+        fed_prompt=fed, order_id="test-order", progress_path=os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert ok, detail
+    return repo_root, view
+
+
+def test_run_lock_serializes_concurrent_spawn(tmp_path, monkeypatch):
+    """A3: two concurrent supervisors cannot both spawn attempt 1."""
+    import subprocess
+    import sys
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_codex = fake_bin / "codex"
+    fake_codex.write_text("#!/usr/bin/env python3\nimport time\ntime.sleep(120)\n", encoding="utf-8")
+    fake_codex.chmod(0o755)
+    path_env = str(fake_bin) + os.pathsep + "/usr/bin" + os.pathsep + "/bin"
+
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    mod_path = os.path.join(_HERE, "..", "engine_dispatch.py")
+    journal_env = os.environ.get(ED.JOURNAL_ROOT_ENV, "")
+    child = r"""
+import json, os, sys, time
+sys.path.insert(0, os.path.dirname(%(mod)r))
+os.environ[%(jenv)r] = %(jval)r
+os.environ["PATH"] = %(path)r
+import importlib.util
+spec = importlib.util.spec_from_file_location("engine_dispatch", %(mod)r)
+ed = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ed)
+deadline = time.monotonic() + 2
+res = ed._supervise(%(run_dir)r, run_kind=ed.RUN_KIND_REVIEW, deadline=deadline)
+print(json.dumps({"detail": res.get("detail"), "attempts": res.get("attempts")}))
+""" % {"mod": mod_path, "jenv": ED.JOURNAL_ROOT_ENV, "jval": json.dumps(journal_env),
+       "run_dir": run_dir, "path": json.dumps(path_env)}
+    p1 = subprocess.Popen([sys.executable, "-c", child], stdout=subprocess.PIPE, text=True)
+    p2 = subprocess.Popen([sys.executable, "-c", child], stdout=subprocess.PIPE, text=True)
+    out1 = p1.communicate(timeout=60)[0]
+    out2 = p2.communicate(timeout=60)[0]
+    details = {json.loads(out1).get("detail"), json.loads(out2).get("detail")}
+    assert "run-locked" in details
+    records, _ = ED._journal_read(run_dir)
+    started = [r for r in records if r.get("kind") == "attempt-started" and r.get("attempt") == 1]
+    assert len(started) == 1
+
+
+def test_journal_torn_tail_discarded_valid_prefix_kept(tmp_path):
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    records_before, _ = ED._journal_read(run_dir)
+    path = ED._journal_path(run_dir)
+    with open(path, "ab") as fh:
+        fh.write(b'{"kind":"run-folded","result":{"ok":true},"at":1.0}')  # no newline
+    records, corrupt = ED._journal_read(run_dir)
+    assert corrupt is False
+    assert records == records_before
+
+
+def test_journal_interior_corruption_fails_closed(tmp_path):
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    path = ED._journal_path(run_dir)
+    with open(path, "ab") as fh:
+        fh.write(b"not-json\n")
+    records, corrupt = ED._journal_read(run_dir)
+    assert corrupt is True
+    res = ED._supervise(
+        run_dir, run_kind=ED.RUN_KIND_REVIEW,
+        deadline=time.monotonic() + 5,
+    )
+    assert res["terminal"] is True
+    assert res["detail"] == "journal-corrupt"
+    started = [r for r in ED._journal_read(run_dir)[0] if r.get("kind") == "attempt-started"]
+    assert started == []
+
+
+def test_journal_root_pointer_survives_env_removal(tmp_path, monkeypatch):
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    pointer = os.path.join(run_dir, "journal-root.txt")
+    assert os.path.isfile(pointer)
+    monkeypatch.delenv(ED.JOURNAL_ROOT_ENV, raising=False)
+    records, _ = ED._journal_read(run_dir)
+    assert any(r.get("kind") == "run-opened" for r in records)
+
+
+def test_run_dir_not_empty_unopened_refused(tmp_path):
+    repo_root = _repo(tmp_path)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "stale.txt").write_text("leftover\n", encoding="utf-8")
+    fake = FakeRunner([])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), run_dir=str(run_dir),
+    )
+    assert res["detail"] == "run-dir-not-empty-unopened"
+    assert res["attempts"] == 0
+    assert len(fake.calls) == 0
+
+
+def test_review_run_dir_inside_repo_root_refused(tmp_path):
+    repo_root = _repo(tmp_path)
+    run_dir = os.path.join(repo_root, "dispatch-run")
+    os.makedirs(run_dir)
+    fake = FakeRunner([])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir,
+    )
+    assert res["detail"] == "run-dir-inside-repo-root"
+    assert res["attempts"] == 0
+    assert len(fake.calls) == 0
+
+
+def test_dispatch_abandon_idempotent_terminal(tmp_path):
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    first = ED.dispatch_abandon(run_dir)
+    second = ED.dispatch_abandon(run_dir)
+    assert first["terminal"] is True
+    assert first["detail"] == "run-abandoned"
+    assert second["detail"] == "run-abandoned"
+    records, _ = ED._journal_read(run_dir)
+    abandoned = [r for r in records if r.get("kind") == "run-abandoned"]
+    assert len(abandoned) == 1
+
+
+def test_dispatch_poll_never_spawns(tmp_path):
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    res = ED.dispatch_poll(run_dir)
+    assert res["reason"] == "running"
+    records, _ = ED._journal_read(run_dir)
+    assert not any(r.get("kind") == "attempt-started" for r in records)
+
+
+def test_supervise_run_not_opened(tmp_path):
+    run_dir = str(tmp_path / "empty-run")
+    os.makedirs(run_dir)
+    res = ED._supervise(
+        run_dir, run_kind=ED.RUN_KIND_REVIEW, deadline=time.monotonic() + 5,
+    )
+    assert res["detail"] == "run-not-opened"
+    assert res["attempts"] == 0
+
+
+def test_supervise_run_kind_mismatch(tmp_path):
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    res = ED._supervise(
+        run_dir, run_kind=ED.RUN_KIND_WRITE, deadline=time.monotonic() + 5,
+    )
+    assert res["detail"] == "run-kind-mismatch"
+    assert res["attempts"] == 0
+    records, _ = ED._journal_read(run_dir)
+    assert not any(r.get("kind") == "attempt-started" for r in records)
+
+
+def _engine_dispatch_source_path():
+    return os.path.join(_HERE, "..", "engine_dispatch.py")
+
+
+def _subprocess_popen_census():
+    path = _engine_dispatch_source_path()
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=path)
+
+    popen_counts = {}
+    run_engine_files_has_cwd = False
+
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        count = 0
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Call):
+                continue
+            func = child.func
+            if not (isinstance(func, ast.Attribute) and func.attr == "Popen"
+                    and isinstance(func.value, ast.Name) and func.value.id == "subprocess"):
+                continue
+            count += 1
+            if node.name == "_run_engine_files":
+                run_engine_files_has_cwd = any(kw.arg == "cwd" for kw in child.keywords)
+        if count:
+            popen_counts[node.name] = count
+
+    return popen_counts, run_engine_files_has_cwd
+
+
+def test_subprocess_popen_census():
+    popen_counts, run_engine_files_has_cwd = _subprocess_popen_census()
+    assert popen_counts == {"_run_engine": 1, "_run_engine_files": 1, "_spawn_attempt": 1}
+    assert run_engine_files_has_cwd
+
+
+def _linked_worktree(tmp_path):
+    main = str(tmp_path / "main")
+    os.makedirs(main, exist_ok=True)
+    subprocess.run(["git", "-C", main, "init", "-q"], check=True)
+    readme = os.path.join(main, "README.md")
+    with open(readme, "w", encoding="utf-8") as fh:
+        fh.write("hello\n")
+    subprocess.run(["git", "-C", main, "add", "README.md"], check=True)
+    subprocess.run(
+        ["git", "-C", main, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "commit", "-qm", "init"],
+        check=True,
+    )
+    wt = str(tmp_path / "wt")
+    subprocess.run(["git", "-C", main, "worktree", "add", "-q", wt], check=True)
+    return wt
+
+
+def _build_ok_stdout():
+    return json.dumps({"ok": True, "signal": "ok", "evidence": {"testFailed": False, "testPassed": True}})
+
+
+# --- WO F1: continuation owns argv/cwd/view; journal before build_view -------------
+
+
+def test_review_continuation_builds_no_second_view(tmp_path):
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run(tmp_path, run_dir)
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)"],
+        start_new_session=True,
+    )
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": proc.pid, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-started", "attempt": 1, "enginePgid": proc.pid, "at": time.time(),
+    })
+    build_view = _fake_build_view(tmp_path)
+    try:
+        first = ED.dispatch_review(
+            "codex", model="sonnet", effort="high",
+            prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
+            run_engine=FakeRunner([]), build_view=build_view, run_dir=run_dir,
+            order_id="test-order", max_wait=1,
+        )
+        assert first.get("terminal") is False
+        assert build_view.meta["build_count"] == 0
+
+        second = ED.dispatch_review(
+            "codex", model="sonnet", effort="high",
+            prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
+            run_engine=FakeRunner([]), build_view=build_view, run_dir=run_dir,
+            order_id="test-order", max_wait=1,
+        )
+        assert second.get("terminal") is False
+        assert build_view.meta["build_count"] == 0
+    finally:
+        ED._terminate_process_group(proc.pid)
+        proc.wait(timeout=2)
+
+
+def test_review_continuation_argv_matches_journal(tmp_path):
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run(tmp_path, run_dir)
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)"],
+        start_new_session=True,
+    )
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": proc.pid, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-started", "attempt": 1, "enginePgid": proc.pid, "at": time.time(),
+    })
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    journalled_argv = opened["argv"]
+    build_view = _fake_build_view(tmp_path)
+    try:
+        res = ED.dispatch_review(
+            "codex", model="sonnet", effort="high",
+            prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
+            run_engine=FakeRunner([]), build_view=build_view, run_dir=run_dir,
+            order_id="test-order", max_wait=1,
+        )
+        assert res["argv"] == journalled_argv
+    finally:
+        ED._terminate_process_group(proc.pid)
+        proc.wait(timeout=2)
+
+
+def test_review_continuation_non_terminal_leaves_no_extra_view(tmp_path):
+    run_dir = str(tmp_path / "run")
+    repo_root, view = _manual_open_review_run(tmp_path, run_dir)
+    view_path = view["path"]
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)"],
+        start_new_session=True,
+    )
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": proc.pid, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-started", "attempt": 1, "enginePgid": proc.pid, "at": time.time(),
+    })
+    build_view = _fake_build_view(tmp_path)
+    try:
+        ED.dispatch_review(
+            "codex", model="sonnet", effort="high",
+            prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
+            run_engine=FakeRunner([]), build_view=build_view, run_dir=run_dir,
+            order_id="test-order", max_wait=1,
+        )
+        assert os.path.isdir(view_path)
+        ED.dispatch_review(
+            "codex", model="sonnet", effort="high",
+            prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
+            run_engine=FakeRunner([]), build_view=build_view, run_dir=run_dir,
+            order_id="test-order", max_wait=1,
+        )
+        assert build_view.meta["build_count"] == 0
+        assert os.path.isdir(view_path)
+    finally:
+        ED._terminate_process_group(proc.pid)
+        proc.wait(timeout=2)
+
+
+def test_review_resume_order_id_mismatch(tmp_path):
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run(tmp_path, run_dir)
+    build_view = _fake_build_view(tmp_path)
+    fake = FakeRunner([])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=build_view, run_dir=run_dir, order_id="order-2", max_wait=0,
+    )
+    assert res["detail"] == "run-dir-reused"
+    assert res["attempts"] == 0
+
+
+# --- WO F1 1b: blocking supervise loop must not busy-spin ----------------------
+
+
+def test_blocking_supervise_loop_bounded_under_held_lock(tmp_path, monkeypatch):
+    import threading
+    import file_lock
+
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run(tmp_path, run_dir)
+    lock_path = os.path.join(run_dir, ED.RUN_LOCK_NAME)
+    file_lock.acquire(lock_path)
+    try:
+        calls = {"n": 0}
+        real_supervise = ED._supervise
+
+        def counting_supervise(*args, **kwargs):
+            calls["n"] += 1
+            return real_supervise(*args, **kwargs)
+
+        monkeypatch.setattr(ED, "_supervise", counting_supervise)
+        monkeypatch.setattr(ED, "SUPERVISOR_POLL_INTERVAL", 0.05)
+
+        def run_dispatch():
+            ED.dispatch_review(
+                "codex", model="sonnet", effort="high",
+                prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
+                run_engine=FakeRunner([]),
+                build_view=_fake_build_view(tmp_path), run_dir=run_dir,
+                order_id="test-order", max_wait=None,
+            )
+
+        t = threading.Thread(target=run_dispatch, daemon=True)
+        t.start()
+        time.sleep(0.3)
+        assert calls["n"] <= 8
+    finally:
+        file_lock.release(lock_path)
+
+
+def test_run_child_waits_for_late_attempt_started(tmp_path, monkeypatch):
+    """Run-child must wait for attempt-started when spawned before the journal record lands."""
+    import threading
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_codex = fake_bin / "codex"
+    fake_codex.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "sys.stdout.write(%r)\n" % _build_ok_stdout(),
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + "/usr/bin" + os.pathsep + "/bin")
+
+    wt = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    baseline = ED._worktree_baseline(os.path.realpath(wt))
+    _EA = importlib.util.spec_from_file_location(
+        "engine_adapter", os.path.join(_HERE, "..", "engine_adapter.py"))
+    EA = importlib.util.module_from_spec(_EA)
+    _EA.loader.exec_module(EA)
+    built = EA.build_argv_result(
+        "codex", "build", "high", {"model": "sonnet", "cwd": os.path.realpath(wt)},
+    )
+    ED._open_write_run(
+        run_dir, engine="codex", argv=built["argv"], cwd=os.path.realpath(wt),
+        timeout=ED.RETRY_MIN_TIMEOUT, retry_timeout=ED.RETRY_MIN_TIMEOUT,
+        prompt_path=_valid_prompt(tmp_path), order_id="race-1", base_sha="abc",
+        worktree_baseline=baseline,
+        progress_path=os.path.join(run_dir, "progress.jsonl"),
+    )
+
+    mod_path = os.path.join(_HERE, "..", "engine_dispatch.py")
+    journal_env = os.environ.get(ED.JOURNAL_ROOT_ENV, "")
+    child = subprocess.Popen(
+        [sys.executable, "-B", mod_path, "run-child", "--run-dir", run_dir],
+        cwd=run_dir, start_new_session=True,
+        env={k: v for k, v in os.environ.items() if k != ED.JOURNAL_ROOT_ENV}
+        | {ED.JOURNAL_ROOT_ENV: journal_env},
+    )
+
+    def _late_journal():
+        time.sleep(0.15)
+        ED._journal_append(run_dir, {
+            "kind": "attempt-started", "attempt": 1,
+            "childPid": child.pid, "at": time.time(),
+        })
+
+    threading.Thread(target=_late_journal, daemon=True).start()
+    rc = child.wait(timeout=30)
+    assert rc == 0
+    records, _ = ED._journal_read(run_dir)
+    kinds = [r.get("kind") for r in records]
+    assert "engine-started" in kinds
+    assert "attempt-ended" in kinds
+
+
+def test_stale_run_lock_reclaimed(tmp_path):
+    """A dead supervisor's run.lock older than RUN_LOCK_TTL is reclaimed on next acquire."""
+    import file_lock
+    import hostinfo
+    import socket
+
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    lock_path = os.path.join(run_dir, ED.RUN_LOCK_NAME)
+    stale_holder = {
+        "pid": 99999999,
+        "host": socket.gethostname(),
+        "acquiredAt": "2000-01-01T00:00:00Z",
+        "bootId": hostinfo.boot_id(),
+        "ttl": ED.RUN_LOCK_TTL,
+    }
+    with open(lock_path, "w", encoding="utf-8") as fh:
+        json.dump(stale_holder, fh)
+
+    file_lock.acquire(lock_path, ttl=ED.RUN_LOCK_TTL)
+    file_lock.release(lock_path)
+
+
+# --- WO F1 2a/2b/2e: abandon, fold durability, poll projection -----------------
+
+
+def test_spawn_attempt_refuses_when_abandon_requested(tmp_path):
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    ED._journal_append(run_dir, {"kind": "abandon-requested", "at": time.time()})
+    state = ED._journal_state(ED._journal_read(run_dir)[0])
+    ok, detail = ED._spawn_attempt(run_dir, state, 1, run_engine=FakeRunner([]))
+    assert not ok
+    assert detail == "abandon-requested"
+    records, _ = ED._journal_read(run_dir)
+    assert not any(r.get("kind") == "attempt-started" for r in records)
+
+
+def test_fold_append_failure_leaves_lease(tmp_path, monkeypatch):
+    wt = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    baseline = ED._worktree_baseline(os.path.realpath(wt))
+    _EA = importlib.util.spec_from_file_location(
+        "engine_adapter", os.path.join(_HERE, "..", "engine_adapter.py"))
+    EA = importlib.util.module_from_spec(_EA)
+    _EA.loader.exec_module(EA)
+    built = EA.build_argv_result(
+        "codex", "build", "high", {"model": "sonnet", "cwd": os.path.realpath(wt)},
+    )
+    ED._acquire_worktree_lease(os.path.realpath(wt), run_dir)
+    ED._open_write_run(
+        run_dir, engine="codex", argv=built["argv"], cwd=os.path.realpath(wt),
+        timeout=ED.RETRY_MIN_TIMEOUT, retry_timeout=ED.RETRY_MIN_TIMEOUT,
+        prompt_path=_valid_prompt(tmp_path), order_id="order-1", base_sha="abc",
+        worktree_baseline=baseline,
+        progress_path=os.path.join(run_dir, "progress.jsonl"),
+    )
+    lease_path = ED._worktree_lease_path(os.path.realpath(wt))
+    assert os.path.exists(lease_path)
+    real_append = ED._journal_append
+
+    def fail_fold(run_dir_real, record):
+        if record.get("kind") == "run-folded":
+            return False
+        return real_append(run_dir_real, record)
+
+    monkeypatch.setattr(ED, "_journal_append", fail_fold)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    result = ED._fold_run(run_dir, state, {"ok": True, "terminal": True, "attempts": 1})
+    assert result["detail"] == "terminal-record-not-durable"
+    assert result["terminal"] is False
+    assert os.path.exists(lease_path)
+
+
+def test_abandon_append_failure_leaves_lease(tmp_path, monkeypatch):
+    wt = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    baseline = ED._worktree_baseline(os.path.realpath(wt))
+    _EA = importlib.util.spec_from_file_location(
+        "engine_adapter", os.path.join(_HERE, "..", "engine_adapter.py"))
+    EA = importlib.util.module_from_spec(_EA)
+    _EA.loader.exec_module(EA)
+    built = EA.build_argv_result(
+        "codex", "build", "high", {"model": "sonnet", "cwd": os.path.realpath(wt)},
+    )
+    ED._acquire_worktree_lease(os.path.realpath(wt), run_dir)
+    ED._open_write_run(
+        run_dir, engine="codex", argv=built["argv"], cwd=os.path.realpath(wt),
+        timeout=ED.RETRY_MIN_TIMEOUT, retry_timeout=ED.RETRY_MIN_TIMEOUT,
+        prompt_path=_valid_prompt(tmp_path), order_id="order-1", base_sha="abc",
+        worktree_baseline=baseline,
+        progress_path=os.path.join(run_dir, "progress.jsonl"),
+    )
+    lease_path = ED._worktree_lease_path(os.path.realpath(wt))
+    assert os.path.exists(lease_path)
+    real_append = ED._journal_append
+
+    def fail_abandon(run_dir_real, record):
+        if record.get("kind") == "run-abandoned":
+            return False
+        return real_append(run_dir_real, record)
+
+    monkeypatch.setattr(ED, "_journal_append", fail_abandon)
+    res = ED.dispatch_abandon(run_dir)
+    assert res["detail"] == "terminal-record-not-durable"
+    assert res["terminal"] is False
+    assert os.path.exists(lease_path)
+
+
+def test_dispatch_poll_projection_excludes_sensitive_fields(tmp_path):
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    res = ED.dispatch_poll(run_dir)
+    raw = json.dumps(res)
+    assert "fedPrompt" not in raw
+    assert "viewMeta" not in raw
+    assert res["poll"]["state"] == "idle"
+    assert res["poll"]["runKind"] == ED.RUN_KIND_REVIEW
+
+
+def test_dispatch_poll_abandoned_state(tmp_path):
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    ED._journal_append(run_dir, {"kind": "run-abandoned", "detail": "abandoned", "at": time.time()})
+    res = ED.dispatch_poll(run_dir)
+    assert res["poll"]["terminal"] is True
+    assert res["poll"]["state"] == "run-abandoned"
+    assert res["detail"] == "run-abandoned"
+
+
+def test_dispatch_poll_not_opened_state(tmp_path):
+    run_dir = str(tmp_path / "empty")
+    os.makedirs(run_dir)
+    res = ED.dispatch_poll(run_dir)
+    assert res["poll"]["terminal"] is True
+    assert res["poll"]["state"] == "run-not-opened"
+    assert res["detail"] == "run-not-opened"
+
+
+def test_run_engine_files_caps_stdout(tmp_path, monkeypatch):
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    tail_json = json.dumps({"ok": True, "signal": "ok", "evidence": {}})
+    over = ED.MAX_STDOUT_CAPTURE + 1024
+    script = (
+        "import sys\n"
+        "sys.stdout.write('x' * %d + %r)\n" % (over, tail_json)
+    )
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
+        "roleKind": "build", "orderId": "x", "argv": ["python3", "-c", "x"],
+        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "supervisorPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.01)
+    ED._run_engine_files(
+        run_dir, 1, [sys.executable, "-c", script], run_dir,
+        prompt_path, stdout_path, stderr_path, 30, os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert os.path.isfile(stdout_path)
+    assert os.path.getsize(stdout_path) <= ED.MAX_STDOUT_CAPTURE
+    tail_text = ED._read_capped_text(stdout_path)
+    assert tail_text.endswith(tail_json)
+    parsed = json.loads(tail_json)
+    assert parsed["ok"] is True
+
+
+def test_review_fold_append_failure_leaves_view(tmp_path, monkeypatch):
+    run_dir = str(tmp_path / "run")
+    repo_root, view = _manual_open_review_run(tmp_path, run_dir)
+    view_path = view["path"]
+    assert os.path.isdir(view_path)
+    real_append = ED._journal_append
+
+    def fail_fold(run_dir_real, record):
+        if record.get("kind") == "run-folded":
+            return False
+        return real_append(run_dir_real, record)
+
+    monkeypatch.setattr(ED, "_journal_append", fail_fold)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    result = ED._fold_run(
+        run_dir, state,
+        {"ok": True, "terminal": True, "attempts": 1, "findings": [], "engagement": {}},
+    )
+    assert result["detail"] == "terminal-record-not-durable"
+    assert result["terminal"] is False
+    assert os.path.isdir(view_path)
+
+
+def _install_terminal_observers(monkeypatch):
+    events = []
+    real_append = ED._journal_append
+    real_finalize = ED._finalize_run
+
+    def obs_append(run_dir_real, record):
+        ok = real_append(run_dir_real, record)
+        if ok and record.get("kind") in ("run-folded", "run-abandoned"):
+            events.append("terminal-append-ok")
+        return ok
+
+    def obs_finalize(state, terminal=False):
+        events.append("cleanup")
+        return real_finalize(state, terminal=terminal)
+
+    monkeypatch.setattr(ED, "_journal_append", obs_append)
+    monkeypatch.setattr(ED, "_finalize_run", obs_finalize)
+    return events
+
+
+def _assert_no_cleanup_before_terminal_append(events):
+    first_terminal = None
+    for i, event in enumerate(events):
+        if event == "terminal-append-ok":
+            if first_terminal is None:
+                first_terminal = i
+        elif event == "cleanup":
+            assert first_terminal is not None, "cleanup before any terminal append"
+            assert i > first_terminal
+
+
+def _linked_worktree(tmp_path):
+    repo = str(tmp_path / "main")
+    _git_init(repo)
+    wt = str(tmp_path / "wt")
+    subprocess.run(["git", "-C", repo, "worktree", "add", "-q", wt], check=True)
+    return wt
+
+
+def _git_init(path):
+    os.makedirs(path, exist_ok=True)
+    subprocess.run(["git", "-C", path, "init", "-q"], check=True)
+    readme = os.path.join(path, "README.md")
+    with open(readme, "w", encoding="utf-8") as fh:
+        fh.write("hello\n")
+    subprocess.run(["git", "-C", path, "add", "README.md"], check=True)
+    subprocess.run(
+        ["git", "-C", path, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-qm", "init"],
+        check=True,
+    )
+
+
+def _build_ok_stdout():
+    return json.dumps({"ok": True, "signal": "ok", "evidence": {"testFailed": False, "testPassed": True}})
+
+
+def _honest_refusal_stdout():
+    return json.dumps({
+        "ok": False, "signal": "plan_wrong",
+        "evidence": {"testFailed": True, "testPassed": False},
+    })
+
+
+@pytest.mark.parametrize("scenario", [
+    "review_success",
+    "review_double_forfeit",
+    "review_vacuous_forfeit",
+    "write_success",
+    "write_honest_refusal",
+    "write_dirtied_retry",
+    "abandon_dead_engine",
+    "abandon_live_engine",
+    "supervise_internal_exception",
+])
+def test_terminal_transition_invariant_no_cleanup_before_durable_record(
+    tmp_path, monkeypatch, scenario,
+):
+    events = _install_terminal_observers(monkeypatch)
+
+    if scenario == "review_success":
+        repo_root = _repo(tmp_path)
+        fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+        res = ED.dispatch_review(
+            "codex", model="sonnet", effort="high",
+            prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+            build_view=_fake_build_view(tmp_path),
+        )
+        assert res["ok"] is True
+    elif scenario == "review_double_forfeit":
+        repo_root = _repo(tmp_path)
+        fake = FakeRunner([("", True, 0, ""), ("", True, 0, "")])
+        res = ED.dispatch_review(
+            "codex", model="sonnet", effort="high",
+            prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+            build_view=_fake_build_view(tmp_path),
+        )
+        assert res.get("forfeited") is True
+    elif scenario == "review_vacuous_forfeit":
+        repo_root = _repo(tmp_path)
+        empty = json.dumps({"findings": []})
+        fake = FakeRunner([(empty, False, 0, ""), (empty, False, 0, "")])
+        res = ED.dispatch_review(
+            "codex", model="sonnet", effort="high",
+            prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+            build_view=_fake_build_view(tmp_path),
+        )
+        assert res["reason"] == "vacuous"
+    elif scenario == "write_success":
+        wt = _linked_worktree(tmp_path)
+        fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+        res = ED.dispatch_write(
+            "codex", model="sonnet", effort="high",
+            prompt_path=_valid_prompt(tmp_path), cwd=wt,
+            run_dir=str(tmp_path / "run-write"), order_id="inv-1", run_engine=fake,
+        )
+        assert res["ok"] is True
+    elif scenario == "write_honest_refusal":
+        wt = _linked_worktree(tmp_path)
+        fake = FakeRunner([(_honest_refusal_stdout(), False, 0, "")])
+        res = ED.dispatch_write(
+            "codex", model="sonnet", effort="high",
+            prompt_path=_valid_prompt(tmp_path), cwd=wt,
+            run_dir=str(tmp_path / "run-refusal"), order_id="inv-2", run_engine=fake,
+        )
+        assert res["reason"] == "plan_wrong"
+    elif scenario == "write_dirtied_retry":
+        wt = _linked_worktree(tmp_path)
+
+        class DirtyTimeoutRunner:
+            def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+                with open(os.path.join(cwd, "dirty.txt"), "w", encoding="utf-8") as fh:
+                    fh.write("x")
+                return "", True, 0, ""
+
+        res = ED.dispatch_write(
+            "codex", model="sonnet", effort="high",
+            prompt_path=_valid_prompt(tmp_path), cwd=wt,
+            run_dir=str(tmp_path / "run-dirty"), order_id="inv-3",
+            run_engine=DirtyTimeoutRunner(), max_wait=120,
+        )
+        assert res["detail"] == "worktree-dirtied-by-attempt"
+    elif scenario == "abandon_dead_engine":
+        run_dir = str(tmp_path / "run-abandon-dead")
+        _manual_open_review_run(tmp_path, run_dir)
+        ED._journal_append(run_dir, {
+            "kind": "attempt-ended", "attempt": 1,
+            "exit": 0, "timedOut": False, "signal": None, "refusal": None, "at": time.time(),
+        })
+        res = ED.dispatch_abandon(run_dir)
+        assert res["detail"] == "run-abandoned"
+    elif scenario == "abandon_live_engine":
+        run_dir = str(tmp_path / "run-abandon-live")
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(120)"],
+            start_new_session=True,
+        )
+        try:
+            _manual_open_review_run(tmp_path, run_dir)
+            ED._journal_append(run_dir, {
+                "kind": "attempt-started", "attempt": 1, "childPid": proc.pid, "at": time.time(),
+            })
+            ED._journal_append(run_dir, {
+                "kind": "engine-started", "attempt": 1, "enginePgid": proc.pid, "at": time.time(),
+            })
+            res = ED.dispatch_abandon(run_dir)
+            assert res["detail"] == "run-abandoned"
+        finally:
+            ED._terminate_process_group(proc.pid)
+            try:
+                proc.wait(timeout=2)
+            except Exception:
+                pass
+    elif scenario == "supervise_internal_exception":
+        repo_root = _repo(tmp_path)
+
+        def boom(*_a, **_k):
+            raise RuntimeError("supervise-boom")
+
+        monkeypatch.setattr(ED, "_supervise", boom)
+        fake = FakeRunner([])
+        res = ED.dispatch_review(
+            "codex", model="sonnet", effort="high",
+            prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+            build_view=_fake_build_view(tmp_path),
+        )
+        assert res["detail"] == "internal-RuntimeError"
+
+    _assert_no_cleanup_before_terminal_append(events)
+    assert "terminal-append-ok" in events
+    assert "cleanup" in events
+
+
+def test_run_engine_files_caps_under_live_writer_stdout_and_stderr(tmp_path, monkeypatch):
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    tail_json = json.dumps({"ok": True, "signal": "ok", "evidence": {}})
+    script = (
+        "import sys, time\n"
+        "for _ in range(25):\n"
+        "    sys.stdout.write('x' * 400000)\n"
+        "    sys.stdout.flush()\n"
+        "    sys.stderr.write('e' * 4000)\n"
+        "    sys.stderr.flush()\n"
+        "    time.sleep(0.02)\n"
+        "sys.stdout.write(%r)\n" % tail_json
+    )
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
+        "roleKind": "build", "orderId": "x", "argv": ["python3", "-c", "x"],
+        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "supervisorPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.01)
+    ED._run_engine_files(
+        run_dir, 1, [sys.executable, "-c", script], run_dir,
+        prompt_path, stdout_path, stderr_path, 30, os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert os.path.getsize(stdout_path) <= ED.MAX_STDOUT_CAPTURE
+    assert os.path.getsize(stderr_path) <= ED.MAX_STDERR_CAPTURE
+    tail_text = ED._read_capped_text(stdout_path)
+    assert tail_text.strip().endswith(tail_json)
+    parsed = json.loads(tail_json)
+    assert parsed["ok"] is True
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade["ok"] is True
+
+
+def test_run_engine_files_caps_only_after_terminate_on_timeout(tmp_path, monkeypatch):
+    """On timeout, _cap_file_tail must not run until after _terminate_process_group."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    script = (
+        "import signal, sys, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "while True:\n"
+        "    sys.stdout.write('x' * 50000)\n"
+        "    sys.stdout.flush()\n"
+        "    sys.stderr.write('e' * 1000)\n"
+        "    sys.stderr.flush()\n"
+    )
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
+        "roleKind": "build", "orderId": "x", "argv": ["python3", "-c", "x"],
+        "cwd": run_dir, "timeout": 1, "retryTimeout": 1,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "supervisorPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    events = []
+    real_cap = ED._cap_file_tail
+    real_terminate = ED._terminate_process_group
+
+    def obs_cap(path, max_bytes):
+        if path == stdout_path:
+            events.append("cap-stdout")
+        elif path == stderr_path:
+            events.append("cap-stderr")
+        else:
+            events.append("cap-other")
+        return real_cap(path, max_bytes)
+
+    def obs_terminate(pgid):
+        events.append("terminate")
+        return real_terminate(pgid)
+
+    monkeypatch.setattr(ED, "_cap_file_tail", obs_cap)
+    monkeypatch.setattr(ED, "_terminate_process_group", obs_terminate)
+    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.01)
+    ED._run_engine_files(
+        run_dir, 1, [sys.executable, "-c", script], run_dir,
+        prompt_path, stdout_path, stderr_path, 1,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    attempt_ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    assert attempt_ended["timedOut"] is True
+    assert "terminate" in events
+    cap_events = [e for e in events if e.startswith("cap-")]
+    assert cap_events, "expected cap events after timeout: %r" % events
+    term_idx = events.index("terminate")
+    first_cap_idx = events.index(cap_events[0])
+    assert term_idx < first_cap_idx, "caps must run after terminate, got %r" % events
