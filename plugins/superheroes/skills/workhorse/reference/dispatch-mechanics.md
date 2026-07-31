@@ -77,7 +77,8 @@ four of six dispatches forfeited, **every one with correct files on disk**. **In
 worktree before you discard or re-dispatch anything** — but "inspect the diff" alone is not a
 decision rule:
 
-- Look at **base→HEAD plus staged, unstaged, and untracked state** — a forfeited engine may have committed, so a bare `git diff` can be empty while the work is complete; untracked new files are invisible to it too.
+- Look at **base→HEAD plus staged, unstaged, and untracked state** — a forfeited engine may have committed,
+  so a bare `git diff` can be empty while the work is complete; untracked new files are invisible to it too.
 - Confirm **every target the work order named** is actually present. Partial work looks like work.
 - **The orchestrator's own gates are what authorize keeping it.** A forfeit with complete work is a
   **recovery** — verify it yourself exactly as you would verify a clean return. Partial or out-of-scope
