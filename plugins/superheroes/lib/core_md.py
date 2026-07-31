@@ -25,7 +25,26 @@ SCHEMA_VERSION = 2
 CONFIG_ABSENT = "absent"
 CONFIG_OK = "ok"
 CONFIG_UNREADABLE = "unreadable"
+CONFIG_ROOT_UNAVAILABLE = "root-unavailable"
 GATE_REASON_UNREADABLE = "core-md-unreadable"
+GATE_REASON_ROOT_UNAVAILABLE = "repo-root-unavailable"
+
+
+class RepoRootUnavailable(Exception):
+    """Git could not be RUN, so the repository root is unknown (issue #699 rider 11).
+
+    Deliberately NOT an OSError: no incidental ``except OSError`` may absorb this into a local
+    story (unreadable core.md, absent file, legacy-profile-unsupported). Callers that need to
+    translate it must catch ``RepoRootUnavailable`` by name."""
+
+
+_GATE_USABLE_STATUSES = frozenset({CONFIG_OK, CONFIG_ABSENT})
+_GATE_REFUSAL_REASONS = {
+    CONFIG_UNREADABLE: GATE_REASON_UNREADABLE,
+    CONFIG_ROOT_UNAVAILABLE: GATE_REASON_ROOT_UNAVAILABLE,
+}
+
+GATE_REASON_EVALUATION_FAILED = "dispatch-gate-evaluation-failed"
 LEGACY_PROFILE_REASON = "legacy-profile-unsupported"
 LEGACY_PROFILE_REMEDY = (
     "run superheroes:configure to re-calibrate this project; "
@@ -129,8 +148,25 @@ def parse_core(text):
 
 
 def _repo_root(cwd):
-    out = store_core.run_git(cwd, "rev-parse", "--show-toplevel")
-    return os.path.realpath(out) if out else os.path.realpath(cwd)
+    res = store_core.run_git_result(cwd, "rev-parse", "--show-toplevel")
+    if res.status == store_core.GIT_UNAVAILABLE:
+        raise RepoRootUnavailable(
+            "git could not be run at %s: %s" % (cwd, res.detail))
+    if res.status == store_core.GIT_OK:
+        return os.path.realpath(res.out) if res.out else os.path.realpath(cwd)
+    if store_core.not_a_repository(res):
+        try:
+            git_ancestor = store_core.git_dot_entry_ancestor(cwd)
+        except OSError as exc:
+            raise RepoRootUnavailable(
+                "cannot determine repository root at %s: %s" % (cwd, exc))
+        if git_ancestor is not None:
+            raise RepoRootUnavailable(
+                "repository root indeterminate at %s: .git present at %s but git declined: %s"
+                % (cwd, git_ancestor, res.detail))
+        return os.path.realpath(cwd)
+    raise RepoRootUnavailable(
+        "git declined rev-parse --show-toplevel at %s: %s" % (cwd, res.detail))
 
 
 def relocate_file(src, dst):
@@ -259,6 +295,8 @@ def engine_preferences_for_gate(*, cwd=None, root=None, profile_path=None):
         in_cls = _classify_core_md_at_path(in_repo)
         gl_cls = _classify_core_md_at_path(global_path)
         return _merge_candidate_gate_configs(in_cls, gl_cls, cwd, root)
+    except RepoRootUnavailable as exc:
+        return CoreGateConfig({}, CONFIG_ROOT_UNAVAILABLE, gate_refusal_detail(exc))
     except Exception as exc:
         return CoreGateConfig(
             {},
@@ -278,7 +316,11 @@ def read(cwd, root=None):
     try:
         with open(core_path(cwd, root), encoding="utf-8") as fh:
             text = fh.read()
-    except OSError:
+    except RepoRootUnavailable:
+        # UFR-1: read() still returns None for absent/corrupt — but repo-root-unknown is NOT
+        # "absent"; authoritative status lives on engine_preferences_for_gate (C2).
+        return None
+    except (OSError, UnicodeDecodeError):
         return None
     facts = parse_core(text)
     if facts is None:
@@ -366,6 +408,51 @@ def _candidate_engine_preferences(facts, existing):
     return merged
 
 
+def gate_config_is_refusal(cfg):
+    """True when ``engine_preferences_for_gate`` status refuses usable configuration.
+
+    ``CONFIG_OK`` and ``CONFIG_ABSENT`` are not refusals; every other registered status is."""
+    return cfg.status not in _GATE_USABLE_STATUSES
+
+
+def gate_config_is_absent(cfg):
+    """True when no core.md is present at the resolved gate path."""
+    return cfg.status == CONFIG_ABSENT
+
+
+def gate_config_usable_prefs(cfg):
+    """Return ``enginePreferences`` when status is ``CONFIG_OK``; ``{}`` otherwise (incl. absent)."""
+    if cfg.status == CONFIG_OK:
+        return cfg.prefs if isinstance(cfg.prefs, dict) else {}
+    return {}
+
+
+def gate_config_refusal(cfg):
+    """Return the ``gate_refusal`` payload for a refusal status, or ``None`` when usable/absent.
+
+    An unregistered status raises ``KeyError`` — fail-closed, never silently treated as usable."""
+    if not gate_config_is_refusal(cfg):
+        return None
+    return gate_refusal(_GATE_REFUSAL_REASONS[cfg.status], cfg.detail)
+
+
+def gate_refusal(reason, detail):
+    """The ONE dict shape for a named configuration-gate refusal: {"reason", "detail"}.
+    Every producer of that payload goes through here so the shape cannot drift (rider 9 of #699)."""
+    return {"reason": reason, "detail": detail}
+
+
+def gate_refusal_detail(exc):
+    """The ONE detail string for an exception-caused gate refusal: "ExcName: message"."""
+    return "%s: %s" % (type(exc).__name__, exc)
+
+
+def gate_refusal_line(payload):
+    """The ONE flattened "reason: detail" form, DERIVED FROM the payload rather than rebuilt, so the
+    dict form and the flattened form can never disagree."""
+    return "%s: %s" % (payload["reason"], payload["detail"])
+
+
 def _evaluate_configured_dispatch_gate(cwd, root, facts, existing):
     """Evaluate fable×external gate. Returns (violations, evaluation_error).
 
@@ -376,8 +463,10 @@ def _evaluate_configured_dispatch_gate(cwd, root, facts, existing):
         import model_tier_overrides
 
         gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
+        if gate_cfg.status == CONFIG_ROOT_UNAVAILABLE:
+            return None, gate_refusal(GATE_REASON_ROOT_UNAVAILABLE, gate_cfg.detail)
         if gate_cfg.status == CONFIG_UNREADABLE:
-            return None, {"reason": GATE_REASON_UNREADABLE, "detail": gate_cfg.detail}
+            return None, gate_refusal(GATE_REASON_UNREADABLE, gate_cfg.detail)
 
         if existing is not None and not _facts_include_engine_preferences(facts):
             return [], None
@@ -386,20 +475,14 @@ def _evaluate_configured_dispatch_gate(cwd, root, facts, existing):
             model_tier_overrides.resolve_profile_path(cwd, root))
         return engine_pref.configured_dispatch_violations(prefs, tiers), None
     except Exception as exc:
-        return None, {
-            "reason": "dispatch-gate-evaluation-failed",
-            "detail": "%s: %s" % (type(exc).__name__, exc),
-        }
+        return None, gate_refusal(GATE_REASON_EVALUATION_FAILED, gate_refusal_detail(exc))
 
 
 def _refused_dispatch_gate(violations=None, *, evaluation_error=None, record=None):
     if evaluation_error:
-        reason = evaluation_error.get("reason", "dispatch-gate-evaluation-failed")
+        reason = evaluation_error.get("reason", GATE_REASON_EVALUATION_FAILED)
         detail = evaluation_error.get("detail", "")
-        violations = [{
-            "reason": reason,
-            "detail": detail,
-        }]
+        violations = [gate_refusal(reason, detail)]
     return {
         "action": "refused",
         "record": record,
@@ -428,9 +511,14 @@ def write(cwd, facts, status, *, root=None, now=None):
             mark_pending(cwd, root, detail={"reason": "lock-contended"})
             return {"action": "deferred", "record": None, "proposals": []}
         gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
+        if gate_cfg.status == CONFIG_ROOT_UNAVAILABLE:
+            return _refused_dispatch_gate(
+                evaluation_error=gate_refusal(GATE_REASON_ROOT_UNAVAILABLE, gate_cfg.detail),
+                record=None,
+            )
         if gate_cfg.status == CONFIG_UNREADABLE:
             return _refused_dispatch_gate(
-                evaluation_error={"reason": GATE_REASON_UNREADABLE, "detail": gate_cfg.detail},
+                evaluation_error=gate_refusal(GATE_REASON_UNREADABLE, gate_cfg.detail),
                 record=None,
             )
         existing = read(cwd, root)
@@ -449,6 +537,10 @@ def write(cwd, facts, status, *, root=None, now=None):
         text = render_core(facts, status, created, stamp)
         try:
             store_core.atomic_write(core_path(cwd, root), text)
+        except RepoRootUnavailable as exc:
+            return {"action": "deferred", "record": None, "proposals": [],
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
         except OSError:
             # Fail-open (UFR-4): honor this function's "never raise, never block" contract —
             # an unwritable store defers (best-effort marker) rather than propagating, exactly
@@ -524,6 +616,10 @@ def write_show_it_surface(cwd, prose, *, root=None):
     if mode_registry.ensure_project_store(cwd, root) is None:
         mark_pending(cwd, root, detail={"reason": "store-unwritable"})
         return {"action": "deferred"}
+    gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
+    if gate_cfg.status == CONFIG_ROOT_UNAVAILABLE:
+        return {"action": "deferred",
+                "reason": GATE_REASON_ROOT_UNAVAILABLE, "detail": gate_cfg.detail}
     with mode_registry.config_lock(cwd, root) as got:
         if not got:
             mark_pending(cwd, root, detail={"reason": "lock-contended"})
@@ -536,7 +632,12 @@ def write_show_it_surface(cwd, prose, *, root=None):
             return {"action": "refused", "reason": SHOW_IT_REASON_UNPARSEABLE}
         if record.get("behind"):
             return {"action": "behind", "record": record}
-        path = core_path(cwd, root)
+        try:
+            path = core_path(cwd, root)
+        except RepoRootUnavailable as exc:
+            return {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
         try:
             with open(path, encoding="utf-8") as fh:
                 text = fh.read()
@@ -656,6 +757,12 @@ def legacy_profile_refusal(cwd, root=None):
                     if hero_path is not None:
                         paths.append(hero_path)
                     detail[hero] = hero_detail
+            except RepoRootUnavailable as exc:
+                return {
+                    "action": "refused",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc),
+                }
             except Exception as exc:
                 heroes_refused.append(hero)
                 detail[hero] = "%s: %s" % (type(exc).__name__, exc)
@@ -668,6 +775,12 @@ def legacy_profile_refusal(cwd, root=None):
             "paths": paths,
             "remedy": LEGACY_PROFILE_REMEDY,
             "detail": detail,
+        }
+    except RepoRootUnavailable as exc:
+        return {
+            "action": "refused",
+            "reason": GATE_REASON_ROOT_UNAVAILABLE,
+            "detail": gate_refusal_detail(exc),
         }
     except Exception as exc:
         return {
@@ -721,6 +834,8 @@ def resolve_shared(cwd, *, root=None):
         return rec
     refusal = legacy_profile_refusal(cwd, root=root)
     if refusal is not None:
+        if refusal.get("reason") == GATE_REASON_ROOT_UNAVAILABLE:
+            return refusal
         refusal = dict(refusal)
         refusal["detail"] = dict(refusal.get("detail") or {})
         refusal["detail"]["coreMd"] = engine_preferences_for_gate(cwd=cwd, root=root).status
@@ -739,7 +854,12 @@ def write_layer(cwd, hero, layer_text, status, *, root=None, now=None, rubric_ve
     with mode_registry.config_lock(cwd, root) as got:
         if not got:
             return {"action": "deferred"}
-        layer_p = _layer_path(cwd, hero, root)
+        try:
+            layer_p = _layer_path(cwd, hero, root)
+        except RepoRootUnavailable as exc:
+            return {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
         try:
             store_core.atomic_write(
                 layer_p, _render_layer(layer_text, hero, status, stamp, rubric_version))
@@ -758,10 +878,18 @@ def confirm(cwd, *, root=None, now=None):
       - {action: "noop"}       already confirmed (idempotent)
       - {action: "absent"}     no core.md to confirm
       - {action: "behind"}     core.md is a NEWER schema — refuse to rewrite (UFR-3)
-      - {action: "deferred"}   lock contended / store unwritable (UFR-4)"""
+      - {action: "deferred"}   lock contended / store unwritable (UFR-4), or core.md unreadable
+        (includes reason/detail when unreadable — not retryable)"""
     stamp = now or _today()
     existing = read(cwd, root)
     if existing is None:
+        gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
+        if gate_cfg.status == CONFIG_ROOT_UNAVAILABLE:
+            return {"action": "deferred", "record": None,
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE, "detail": gate_cfg.detail}
+        if gate_cfg.status == CONFIG_UNREADABLE:
+            return {"action": "deferred", "record": None,
+                    "reason": GATE_REASON_UNREADABLE, "detail": gate_cfg.detail}
         return {"action": "absent", "record": None}
     if existing.get("behind"):
         return {"action": "behind", "record": existing}
@@ -776,6 +904,13 @@ def confirm(cwd, *, root=None, now=None):
             return {"action": "deferred", "record": None}
         existing = read(cwd, root)  # re-read under the lock
         if existing is None:
+            gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
+            if gate_cfg.status == CONFIG_ROOT_UNAVAILABLE:
+                return {"action": "deferred", "record": None,
+                        "reason": GATE_REASON_ROOT_UNAVAILABLE, "detail": gate_cfg.detail}
+            if gate_cfg.status == CONFIG_UNREADABLE:
+                return {"action": "deferred", "record": None,
+                        "reason": GATE_REASON_UNREADABLE, "detail": gate_cfg.detail}
             return {"action": "absent", "record": None}
         # UFR-3: never rewrite a forward-schema core — render_core would downgrade it to
         # SCHEMA_VERSION and drop fields this version doesn't understand. Surface, don't write.
@@ -803,7 +938,12 @@ def confirm_layer(cwd, hero, *, root=None, now=None):
     preserved byte-for-byte (never rewrite a hand-edited layer, FR-11). Fail-open like write_layer.
     Returns {action: "confirmed"|"noop"|"absent"|"deferred"}."""
     stamp = now or _today()
-    layer_p = _layer_path(cwd, hero, root)
+    try:
+        layer_p = _layer_path(cwd, hero, root)
+    except RepoRootUnavailable as exc:
+        return {"action": "deferred",
+                "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                "detail": gate_refusal_detail(exc)}
     if not os.path.isfile(layer_p):
         return {"action": "absent"}
     if mode_registry.ensure_project_store(cwd, root) is None:
@@ -850,7 +990,11 @@ def confirm_all(cwd, *, root=None, now=None):
     # #5). `noop` means the core was already confirmed, so layers may still flip.
     if core_res.get("action") in ("confirmed", "noop"):
         for hero in _HEROES:
-            if os.path.isfile(_layer_path(cwd, hero, root)):
+            try:
+                layer_p = _layer_path(cwd, hero, root)
+            except RepoRootUnavailable:
+                break
+            if os.path.isfile(layer_p):
                 layers[hero] = confirm_layer(cwd, hero, root=root, now=now)
     return {"core": core_res, "layers": layers}
 
@@ -893,22 +1037,39 @@ def main(argv):
             if not isinstance(facts, dict):
                 facts = {}
             out = write(args.cwd, facts, args.status, root=args.root)
+        except RepoRootUnavailable as exc:
+            out = {"action": "deferred", "record": None, "proposals": [],
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
         except Exception:
             out = {"action": "deferred", "record": None, "proposals": []}
     elif args.cmd == "write-layer":
         try:
             out = write_layer(args.cwd, args.hero, sys.stdin.read(), args.status,
                               root=args.root, rubric_version=args.rubric_version)
+        except RepoRootUnavailable as exc:
+            out = {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
         except Exception:
             out = {"action": "deferred"}
     elif args.cmd == "write-show-it":
         try:
             out = write_show_it_surface(args.cwd, sys.stdin.read(), root=args.root)
+        except RepoRootUnavailable as exc:
+            out = {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
         except Exception:
             out = {"action": "deferred"}
     else:  # confirm
         try:
             out = confirm_all(args.cwd, root=args.root)
+        except RepoRootUnavailable as exc:
+            out = {"core": {"action": "deferred",
+                            "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                            "detail": gate_refusal_detail(exc)},
+                   "layers": {}}
         except Exception:
             out = {"core": {"action": "deferred"}, "layers": {}}
     sys.stdout.write(json.dumps(out, indent=2) + "\n")

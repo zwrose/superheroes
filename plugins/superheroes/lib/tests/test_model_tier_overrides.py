@@ -398,6 +398,42 @@ def test_read_engine_preferences_corrupt_core_beside_profile_is_evaluation_failu
     assert err is not None
 
 
+def test_read_engine_preferences_unreadable_byte_identity(tmp_path):
+    project = tmp_path / "project"
+    cal = project / ".claude" / "superheroes"
+    cal.mkdir(parents=True)
+    core_p = cal / "core.md"
+    core_p.write_text("not valid core markdown\n", encoding="utf-8")
+    profile = cal / "review-crew.md"
+    profile.write_text("## Model tiers\n", encoding="utf-8")
+    import core_md
+
+    cfg = core_md._classify_core_md_at_path(str(core_p))
+    prefs, err = MTO._read_engine_preferences_for_gate(profile_path=str(profile))
+    assert prefs == {}
+    assert err == {"reason": "core-md-unreadable", "detail": cfg.detail}
+
+
+def test_read_engine_preferences_root_unavailable_returns_gate_err(tmp_path, monkeypatch):
+    import store_core as sc
+
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    real = sc.run_git_result
+
+    def fake(cwd, *args):
+        if args == ("rev-parse", "--show-toplevel"):
+            return sc.GitResult(None, sc.GIT_UNAVAILABLE, "FileNotFoundError: no git")
+        return real(cwd, *args)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    prefs, err = MTO._read_engine_preferences_for_gate(cwd=repo, root=store)
+    assert prefs == {}
+    assert err is not None
+    assert err["reason"] == "repo-root-unavailable"
+    assert err["detail"]
+
+
 def test_write_cli_refuses_when_core_beside_profile_corrupt(tmp_path, capsys):
     project = tmp_path / "project"
     cal = project / ".claude" / "superheroes"
@@ -439,6 +475,60 @@ def test_write_cli_refuses_when_effective_tiers_raises(tmp_path, monkeypatch, ca
     assert rc == 1
     assert out["reason"] == "dispatch-gate-evaluation-failed"
     assert "tier read failed" in out["violations"][0]["detail"]
+
+
+def test_gate_refusal_fallback_matches_core_md_shape():
+    import core_md
+
+    exc = RuntimeError("tier read failed")
+    assert MTO._gate_refusal_fallback("r", "d") == core_md.gate_refusal("r", "d")
+    assert MTO._gate_refusal_detail_fallback(exc) == core_md.gate_refusal_detail(exc)
+    assert MTO._GATE_REASON_EVALUATION_FAILED_FALLBACK == core_md.GATE_REASON_EVALUATION_FAILED
+
+
+def test_gate_refusal_fallback_needs_no_core_md_import(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "core_md":
+            raise ImportError("simulated lazy import failure")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    assert MTO._gate_refusal_fallback("r", "d") == {"reason": "r", "detail": "d"}
+
+
+def test_write_cli_gate_err_passed_through_not_reprojected(tmp_path, monkeypatch, capsys):
+    import builtins
+
+    p = tmp_path / "profile.md"
+    p.write_text("## Model tiers\n", encoding="utf-8")
+    real_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "core_md":
+            raise ImportError("simulated lazy import failure")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    rc = MTO.main([
+        "model_tier_overrides.py",
+        "write",
+        "--profile",
+        str(p),
+        "--set",
+        "reviewer=sonnet",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    expected_violation = {
+        "reason": "dispatch-gate-evaluation-failed",
+        "detail": "ImportError: simulated lazy import failure",
+    }
+    assert rc == 1
+    assert out["violations"][0] == expected_violation
+    assert out["reason"] == out["violations"][0]["reason"]
 
 
 def test_write_cli_lazy_core_md_import_failure_writes_json(tmp_path, monkeypatch, capsys):

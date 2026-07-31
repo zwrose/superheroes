@@ -139,6 +139,11 @@ print(json.dumps(preflight_probe.dispatch_calibration(cwd='.'), indent=2))
 
 This prints one row per role — `implementer`, `brief-check`, `review-code`, `pilot` — each with
 the resolved `engine` and `model`. Fold it, verbatim or summarized, into the brief and the PR.
+When the readout is a single `role: "*"` marker row carrying `readError`, carry the **refusal
+reason** (the vocabulary token before the colon, e.g. `core-md-unreadable`) and a **workspace-relative
+or redacted** path into the brief and the PR — not the raw absolute `readError` string (it embeds local
+paths and git stderr). Never substitute defaulted engine/model rows, because the preferences were
+never read.
 
 ### B.1 — Seed the composition-liveness receipt (write side, #610 leg 2)
 

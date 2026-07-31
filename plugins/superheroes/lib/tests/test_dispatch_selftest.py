@@ -136,3 +136,57 @@ def test_cursor_build_argv_refuses_third_party_model_ids():
     for model_id in ("opus-5", "gpt-5.6-sol"):
         res = ea.build_argv_result("cursor", "build", "high", {"engine_model": model_id})
         assert res == {"argv": [], "reason": "unregistered-engine-model"}, model_id
+
+
+_READ_ERROR = "core-md-unreadable: boom"
+_READ_ERROR_BUNDLE = {"prefs": {}, "tiers": {}, "read_error": _READ_ERROR}
+
+
+def test_run_refuses_read_error_bundle():
+    result = DST.run(config=_READ_ERROR_BUNDLE)
+    assert result["ok"] is False
+    assert any(_READ_ERROR in f["detail"] for f in result["failures"])
+
+
+def test_run_clean_bundle_without_read_error_still_ok():
+    bundle = {"prefs": {}, "tiers": {}}
+    result = DST.run(config=bundle)
+    assert result["ok"] is True
+
+
+def test_probe_result_read_error_unchanged():
+    pr = DST.probe_result(config=_READ_ERROR_BUNDLE)
+    assert pr["ok"] is False
+    assert pr["detail"] == "configuration read failed: %s" % _READ_ERROR
+
+
+def test_run_none_config_unchanged():
+    result = DST.run(config=None)
+    assert result["ok"] is True
+
+
+def test_run_and_probe_agree_on_falsy_read_error():
+    for read_error in ("", None):
+        bundle = {"prefs": {}, "tiers": {}, "read_error": read_error}
+        run_result = DST.run(config=bundle)
+        probe_result = DST.probe_result(config=bundle)
+        assert run_result["ok"] is True
+        assert probe_result["ok"] is True
+
+
+def test_run_non_dict_config_does_not_raise():
+    result = DST.run(config=["not", "a", "dict"])
+    assert result["ok"] is True
+    assert isinstance(result["failures"], list)
+
+
+def test_run_read_error_and_configured_violation_both_recorded():
+    bundle = {
+        "prefs": {"implementation": "codex"},
+        "tiers": {"implementer": "fable"},
+        "read_error": _READ_ERROR,
+    }
+    result = DST.run(config=bundle)
+    assert result["ok"] is False
+    assert any(_READ_ERROR in f["detail"] for f in result["failures"])
+    assert any(f["detail"] == "fable-on-external-engine" for f in result["failures"])

@@ -56,15 +56,19 @@ def gather_signals(cwd, root=None):
                          "detail": {"location": pol.get("location")}})
 
     # --- #81: core.md calibration drift (all disk-derived; only dismissal is durable) ---
+    core_status, core_rec, config_unreadable, unreadable_detail = None, None, None, None
     try:
         import core_md
-        core_p = core_md.core_path(cwd, root)
-        core_exists = os.path.exists(core_p)
+        config_unreadable = core_md.CONFIG_UNREADABLE
         core_rec = core_md.read(cwd, root)
+        gate_cfg = core_md.engine_preferences_for_gate(cwd=cwd, root=root)
+        core_status = gate_cfg.status
+        if core_status == config_unreadable:
+            unreadable_detail = gate_cfg.detail
     except Exception:
         # Fail-open: a broken core.md read must never abort the whole signal-gather and
         # suppress the other (registry/doc-policy) signals — degrade this block to "no core.md".
-        core_p, core_exists, core_rec = None, False, None
+        core_status, core_rec = None, None
 
     if core_rec is not None:
         if core_rec.get("behind"):
@@ -74,10 +78,11 @@ def gather_signals(cwd, root=None):
         elif core_rec.get("status") == "provisional":
             sigs.append({"type": "core-md-provisional",
                          "identity": _sig_id("core-md-provisional"), "detail": {}})
-    elif core_exists:
-        # a core.md file is present but did not parse → corrupt (UFR-1); NOT a greenfield.
+    elif config_unreadable is not None and core_status == config_unreadable:
+        # accessor says core.md is present but unreadable (corrupt, dangling symlink, etc.) — NOT greenfield.
         sigs.append({"type": "core-md-unreadable",
-                     "identity": _sig_id("core-md-unreadable"), "detail": {}})
+                     "identity": _sig_id("core-md-unreadable"),
+                     "detail": {"detail": unreadable_detail} if unreadable_detail else {}})
 
     # per-hero legacy-profile drift: presence-only (whether or not core.md parses)
     try:
@@ -86,39 +91,42 @@ def gather_signals(cwd, root=None):
         # legacy_profile_refusal never raises; only an unbound core_md reaches here — skip block.
         legacy_refusal = None
     if legacy_refusal is not None:
-        detail_map = legacy_refusal.get("detail") or {}
-        heroes = legacy_refusal.get("heroes") or []
-        paths = legacy_refusal.get("paths") or []
-        core_facts_empty = core_md.core_facts_are_empty(core_rec)
-        if not heroes:
-            sigs.append({
-                "type": core_md.LEGACY_PROFILE_REASON,
-                "identity": _sig_id(core_md.LEGACY_PROFILE_REASON, "*"),
-                "detail": {
-                    "hero": None,
-                    "path": None,
-                    "reason": detail_map.get("*"),
-                    "remedy": core_md.LEGACY_PROFILE_REMEDY,
-                    "coreFactsEmpty": core_facts_empty,
-                },
-            })
+        if legacy_refusal.get("reason") == core_md.GATE_REASON_ROOT_UNAVAILABLE:
+            pass  # repo root unknown — not a legacy profile; do not fabricate that signal.
         else:
-            for hero in heroes:
-                hero_detail = detail_map.get(hero)
-                path = hero_detail if hero_detail in paths else None
-                sig_detail = {
-                    "hero": hero,
-                    "path": path,
-                    "remedy": core_md.LEGACY_PROFILE_REMEDY,
-                    "coreFactsEmpty": core_facts_empty,
-                }
-                if hero_detail is not None and path is None:
-                    sig_detail["reason"] = hero_detail
+            detail_map = legacy_refusal.get("detail") or {}
+            heroes = legacy_refusal.get("heroes") or []
+            paths = legacy_refusal.get("paths") or []
+            core_facts_empty = core_md.core_facts_are_empty(core_rec)
+            if not heroes:
                 sigs.append({
                     "type": core_md.LEGACY_PROFILE_REASON,
-                    "identity": _sig_id(core_md.LEGACY_PROFILE_REASON, hero),
-                    "detail": sig_detail,
+                    "identity": _sig_id(core_md.LEGACY_PROFILE_REASON, "*"),
+                    "detail": {
+                        "hero": None,
+                        "path": None,
+                        "reason": detail_map.get("*"),
+                        "remedy": core_md.LEGACY_PROFILE_REMEDY,
+                        "coreFactsEmpty": core_facts_empty,
+                    },
                 })
+            else:
+                for hero in heroes:
+                    hero_detail = detail_map.get(hero)
+                    path = hero_detail if hero_detail in paths else None
+                    sig_detail = {
+                        "hero": hero,
+                        "path": path,
+                        "remedy": core_md.LEGACY_PROFILE_REMEDY,
+                        "coreFactsEmpty": core_facts_empty,
+                    }
+                    if hero_detail is not None and path is None:
+                        sig_detail["reason"] = hero_detail
+                    sigs.append({
+                        "type": core_md.LEGACY_PROFILE_REASON,
+                        "identity": _sig_id(core_md.LEGACY_PROFILE_REASON, hero),
+                        "detail": sig_detail,
+                    })
 
     # calibration-not-saved (UFR-4): the machine-local pending marker, read DIRECTLY (no
     # core_md import here — avoids an import cycle; the marker path is owned by mode_registry's

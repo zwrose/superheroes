@@ -1047,6 +1047,56 @@ def _gate_core_beside(repo):
     return os.path.join(d, "core.md")
 
 
+def test_gate_refusal_returns_reason_detail_dict():
+    got = CM.gate_refusal("a", "b")
+    assert got == {"reason": "a", "detail": "b"}
+    assert set(got.keys()) == {"reason", "detail"}
+
+
+def test_gate_refusal_line_derived_from_payload():
+    payload = CM.gate_refusal("a", "b")
+    assert CM.gate_refusal_line(payload) == "a: b"
+    payload["detail"] = "c"
+    assert CM.gate_refusal_line(payload) == "a: c"
+    assert CM.gate_refusal_line(CM.gate_refusal("a", "b")) == "a: b"
+
+
+def test_gate_refusal_line_missing_detail_raises_keyerror():
+    with pytest.raises(KeyError):
+        CM.gate_refusal_line({"reason": "only-reason"})
+
+
+def test_gate_refusal_detail_exception_format():
+    assert CM.gate_refusal_detail(ValueError("boom")) == "ValueError: boom"
+    assert CM.gate_refusal_detail(ValueError("")) == "ValueError: "
+
+
+def test_gate_refusal_none_detail_renders_as_none_string():
+    payload = CM.gate_refusal("r", None)
+    assert payload == {"reason": "r", "detail": None}
+    assert CM.gate_refusal_line(payload) == "r: None"
+
+
+def test_write_refused_unreadable_core_violations_byte_identity(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    core_p = _gate_core_beside(repo)
+    open(core_p, "w").write("not a core document\n")
+    cfg = CM._classify_core_md_at_path(core_p)
+    res = CM.write(
+        repo,
+        {"verifyCommand": "npm test", "stackTags": [], "threatModel": "t", "patterns": ""},
+        "confirmed",
+        root=store,
+        now="2026-01-01",
+    )
+    assert res["action"] == "refused"
+    assert res["violations"][0] == {
+        "reason": CM.GATE_REASON_UNREADABLE,
+        "detail": cfg.detail,
+    }
+
+
 def test_gate_accessor_dangling_in_repo_symlink_global_mode_is_unreadable(tmp_path):
     repo = str(tmp_path)
     store = str(tmp_path / "store")
@@ -1172,14 +1222,13 @@ def test_gate_edge11_invalid_utf8(tmp_path):
     assert "UTF-8" in cfg.detail
 
 
-def test_read_raises_on_invalid_utf8_write_refuses_via_gate(tmp_path):
+def test_read_returns_none_on_invalid_utf8_write_refuses_via_gate(tmp_path):
     repo = str(tmp_path)
     store = str(tmp_path / "store")
     core_p = _gate_core_beside(repo)
     with open(core_p, "wb") as fh:
         fh.write(b"\xff broken\n")
-    with pytest.raises(UnicodeDecodeError):
-        CM.read(repo, root=store)
+    assert CM.read(repo, root=store) is None
     res = CM.write(
         repo,
         {"verifyCommand": "npm test", "stackTags": [], "threatModel": "t", "patterns": ""},
@@ -1787,3 +1836,239 @@ def test_cli_write_show_it_from_stdin(tmp_path, capsys, monkeypatch):
     out = json.loads(capsys.readouterr().out)
     assert out["action"] == "written"
     assert CM.read(repo, root=store)["showItSurface"] == _SHOW_IT_BODY
+
+
+# ---------------------------------------------------------------------------
+# issue #699 riders 11 + 12
+# ---------------------------------------------------------------------------
+
+import store_core as SC
+
+
+def _git_unavailable(monkeypatch, detail="FileNotFoundError: no git"):
+    real = SC.run_git_result
+
+    def fake(cwd, *args):
+        if args == ("rev-parse", "--show-toplevel"):
+            return SC.GitResult(None, SC.GIT_UNAVAILABLE, detail)
+        return real(cwd, *args)
+
+    monkeypatch.setattr(SC, "run_git_result", fake)
+
+
+def test_repo_root_raises_on_git_unavailable_file_not_found(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *a, **kw: (_ for _ in ()).throw(FileNotFoundError("no git")),
+    )
+    with pytest.raises(CM.RepoRootUnavailable):
+        CM._repo_root(str(tmp_path))
+
+
+def test_repo_root_raises_on_git_timeout(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *a, **kw: (_ for _ in ()).throw(subprocess.TimeoutExpired("git", 10)),
+    )
+    with pytest.raises(CM.RepoRootUnavailable):
+        CM._repo_root(str(tmp_path))
+
+
+def test_repo_root_declined_non_git_uses_cwd(tmp_path, monkeypatch):
+    class _Declined:
+        returncode = 128
+        stdout = ""
+        stderr = "not a git repository"
+
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: _Declined())
+    assert CM._repo_root(str(tmp_path)) == os.path.realpath(str(tmp_path))
+
+
+def test_repo_root_raises_on_dubious_ownership(tmp_path, monkeypatch):
+    import os as _os
+
+    if _os.environ.get("GIT_TEST_ASSUME_DIFFERENT_OWNER") == "1":
+        repo = tmp_path / "pkg" / "deep"
+        repo.mkdir(parents=True)
+        subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
+        with pytest.raises(CM.RepoRootUnavailable):
+            CM._repo_root(str(repo))
+        return
+
+    class _Dubious:
+        returncode = 128
+        stdout = ""
+        stderr = "fatal: detected dubious ownership in repository at '/fake'"
+
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: _Dubious())
+    with pytest.raises(CM.RepoRootUnavailable):
+        CM._repo_root(str(tmp_path))
+
+
+def test_repo_root_raises_on_unreadable_git_dir(tmp_path):
+    repo = str(tmp_path / "repo")
+    sub = os.path.join(repo, "pkg", "deep")
+    os.makedirs(sub)
+    subprocess.run(["git", "-C", repo, "init", "-q"], check=True)
+    git_dir = os.path.join(repo, ".git")
+    try:
+        os.chmod(git_dir, 0)
+        if os.access(git_dir, os.R_OK):
+            pytest.skip("chmod 000 on .git does not deny access for this user")
+        with pytest.raises(CM.RepoRootUnavailable) as excinfo:
+            CM._repo_root(sub)
+        assert ".git present at" in str(excinfo.value)
+    finally:
+        os.chmod(git_dir, 0o755)
+
+
+def test_repo_root_raises_on_dead_gitdir_pointer(tmp_path):
+    import shutil
+
+    repo = str(tmp_path / "repo")
+    sub = os.path.join(repo, "pkg", "deep")
+    os.makedirs(sub)
+    subprocess.run(["git", "-C", repo, "init", "-q"], check=True)
+    shutil.rmtree(os.path.join(repo, ".git"))
+    open(os.path.join(repo, ".git"), "w").write("gitdir: /nonexistent/gitdir\n")
+    with pytest.raises(CM.RepoRootUnavailable) as excinfo:
+        CM._repo_root(sub)
+    assert ".git present at" in str(excinfo.value)
+
+
+def test_repo_root_raises_on_missing_git_head(tmp_path):
+    repo = str(tmp_path / "repo")
+    sub = os.path.join(repo, "pkg", "deep")
+    os.makedirs(sub)
+    subprocess.run(["git", "-C", repo, "init", "-q"], check=True)
+    os.remove(os.path.join(repo, ".git", "HEAD"))
+    with pytest.raises(CM.RepoRootUnavailable) as excinfo:
+        CM._repo_root(sub)
+    assert ".git present at" in str(excinfo.value)
+
+
+def test_repo_root_non_git_directory_returns_realpath_cwd(tmp_path):
+    plain = str(tmp_path / "not-a-repo")
+    os.makedirs(plain)
+    assert CM._repo_root(plain) == os.path.realpath(plain)
+
+
+def test_read_none_when_repo_root_unavailable(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    _git_unavailable(monkeypatch)
+    assert CM.read(repo, root=store) is None
+
+
+def test_engine_preferences_root_unavailable_when_git_unavailable(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    _git_unavailable(monkeypatch)
+    cfg = CM.engine_preferences_for_gate(cwd=repo, root=store)
+    assert cfg.status == CM.CONFIG_ROOT_UNAVAILABLE
+    assert cfg.detail
+    assert "RepoRootUnavailable" in cfg.detail
+
+
+def test_write_refused_repo_root_unavailable(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    _git_unavailable(monkeypatch)
+    res = CM.write(
+        repo,
+        {"verifyCommand": "npm test", "stackTags": [], "threatModel": "t", "patterns": ""},
+        "confirmed",
+        root=store,
+    )
+    assert res["action"] == "refused"
+    assert res["violations"][0]["reason"] == CM.GATE_REASON_ROOT_UNAVAILABLE
+
+
+def test_confirm_deferred_repo_root_unavailable(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    _git_unavailable(monkeypatch)
+    res = CM.confirm(repo, root=store)
+    assert res["action"] == "deferred"
+    assert res["reason"] == CM.GATE_REASON_ROOT_UNAVAILABLE
+    assert res["detail"]
+
+
+def test_resolve_shared_repo_root_unavailable_not_legacy_profile(tmp_path, monkeypatch):
+    """Finding 18 (#699): git unavailable + no legacy files must not fabricate legacy-profile."""
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    _git_unavailable(monkeypatch)
+    got = CM.resolve_shared(repo, root=store)
+    assert got is not None
+    assert got["action"] == "refused"
+    assert got["reason"] == CM.GATE_REASON_ROOT_UNAVAILABLE
+    assert got["reason"] != CM.LEGACY_PROFILE_REASON
+    assert got.get("paths", []) == []
+
+
+def test_legacy_profile_refusal_repo_root_unavailable_not_legacy(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    _git_unavailable(monkeypatch)
+    got = CM.legacy_profile_refusal(repo, root=store)
+    assert got is not None
+    assert got["reason"] == CM.GATE_REASON_ROOT_UNAVAILABLE
+    assert got.get("paths", []) == []
+
+
+def test_write_refused_on_toctou_undecodable_after_gate_ok(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    core_p = _gate_core_beside(repo)
+    open(core_p, "w", encoding="utf-8").write(_gate_valid_core_text())
+    corrupt_bytes = b"\xff broken\n"
+    real_gate = CM.engine_preferences_for_gate
+    gate_calls = {"n": 0}
+
+    def gate_ok_once(**kwargs):
+        gate_calls["n"] += 1
+        if gate_calls["n"] == 1:
+            return CM.CoreGateConfig({}, CM.CONFIG_OK, None)
+        return real_gate(**kwargs)
+
+    real_read = CM.read
+    read_calls = {"n": 0}
+
+    def corrupt_then_read(cwd, root=None):
+        read_calls["n"] += 1
+        if read_calls["n"] == 1:
+            with open(core_p, "wb") as fh:
+                fh.write(b"\xff broken\n")
+        return real_read(cwd, root)
+
+    monkeypatch.setattr(CM, "engine_preferences_for_gate", gate_ok_once)
+    monkeypatch.setattr(CM, "read", corrupt_then_read)
+    res = CM.write(
+        repo,
+        {"verifyCommand": "npm test", "stackTags": [], "threatModel": "t", "patterns": ""},
+        "confirmed",
+        root=store,
+        now="2026-01-01",
+    )
+    assert res["action"] == "refused"
+    assert res["violations"][0]["reason"] == CM.GATE_REASON_UNREADABLE
+    assert open(core_p, "rb").read() == corrupt_bytes
+
+
+def test_confirm_deferred_on_undecodable_core(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    core_p = _gate_core_beside(repo)
+    open(core_p, "wb").write(b"\xff broken\n")
+    res = CM.confirm(repo, root=store)
+    assert res["action"] == "deferred"
+    assert res["reason"] == CM.GATE_REASON_UNREADABLE
+    assert "UTF-8 decode failed" in res["detail"]
+
+
+def test_confirm_absent_when_core_genuinely_missing(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    res = CM.confirm(repo, root=store)
+    assert res["action"] == "absent"

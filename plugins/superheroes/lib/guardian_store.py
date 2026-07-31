@@ -43,12 +43,16 @@ class UnknownSnapshotVersion(Exception):
 
 
 def guardian_layer_path(cwd, root=None):
-    """Mode-aware path to guardian.md, co-located with core.md."""
+    """Mode-aware path to guardian.md, co-located with core.md.
+
+    May raise ``core_md.RepoRootUnavailable`` when git cannot be run."""
     return core_md.layer_path(cwd, "guardian", root)
 
 
 def guardian_dir(cwd, root=None):
-    """The guardian artifact subdir beside core.md."""
+    """The guardian artifact subdir beside core.md.
+
+    May raise ``core_md.RepoRootUnavailable`` when git cannot be run."""
     return os.path.join(os.path.dirname(core_md.core_path(cwd, root)), "guardian")
 
 
