@@ -108,15 +108,16 @@ four of six dispatches forfeited, every one with correct files on disk. **Inspec
 discarding or re-dispatching** — "inspect the diff" alone is not a decision rule:
 
 - **What the tree inspection establishes.** Before dispatching, the build worktree must be **clean** —
-  `git status --porcelain` empty, with landed work already committed. The charter already requires this
-  (§6: commit before the next order against a worktree; §8: commit before a mutation probe); this makes
-  that obligation explicit for the pre-dispatch baseline. Capture the baseline — same probe as charter
-  §8 `check-runner`: `git rev-parse HEAD` plus that empty `git status --porcelain`. If the tree cannot
-  be made clean, use a **fresh worktree** or **park** — never dispatch against a dirty baseline, and
-  never treat a delta measured from one as authorship evidence. Against a clean baseline, spanning
-  committed/staged/unstaged/untracked: whether **this dispatch** wrote anything at all (**no delta = it
-  wrote nothing** — authorship evidence only), and whether what it wrote is **inside the order's scope**.
-  An **INDETERMINATE** dispatch — timeout or child never joined — is never clean regardless of delta.
+  `git status --porcelain` empty, with landed work already committed. This reference makes that
+  baseline explicit and strengthens it; related charter obligations are §6 (commit before the next
+  order against a worktree) and §8 (commit before a mutation probe). Capture the baseline — same probe
+  as charter §8 `check-runner`: `git rev-parse HEAD` plus that empty `git status --porcelain`. If the
+  tree cannot be made clean, use a **fresh worktree** or **park** — never dispatch against a dirty
+  baseline, and never treat a delta measured from one as authorship evidence. Against a clean baseline,
+  spanning committed/staged/unstaged/untracked: whether **this dispatch** wrote anything at all (**no
+  delta = it wrote nothing** — authorship evidence only), and whether what it wrote is **inside the
+  order's scope**. For an **INDETERMINATE** dispatch — timeout or child never joined — the delta test
+  yields no conclusion: **no delta** does not establish that it wrote nothing.
   The delta test is an
   **authorship and scope** check — each named target must **differ from that baseline**, not merely
   exist.
@@ -130,8 +131,11 @@ discarding or re-dispatching** — "inspect the diff" alone is not a decision ru
   fail-closed edges.
 - **The default when you cannot establish it.** If the orchestrator cannot establish completeness and
   correctness itself, **re-dispatch is the default, not recovery** — and a re-dispatch first
-  **restores the worktree to the pre-dispatch baseline** (`git reset --hard <baseline SHA>` plus
-  removing untracked files — implementable because the baseline was clean), or uses a fresh worktree,
+  **restores the worktree to the pre-dispatch baseline** (`git -C <build worktree> reset --hard
+  <baseline SHA>` plus `git -C <build worktree> clean -fd` to remove untracked files and
+  directories — **not** `-fdx`, which would also sweep gitignored local-only content such as
+  `docs/` or `.env` that no baseline SHA restores and that are not dispatch output;
+  implementable because the baseline was clean), or uses a fresh worktree,
   never riding the abandoned attempt. Park when neither is available. Re-dispatching without looking
   re-does correct work and re-runs the very report that forfeited.
 

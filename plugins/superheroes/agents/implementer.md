@@ -30,8 +30,8 @@ its own private carve-out. Highest precedence first:
 4. **A command you could not run that is not premise-establishing** → report what happened and why,
    with zero receipts for that command, and carry on with the work.
 5. **Scope a full-suite or project-wide gate to your order's surface.** If a sound invocation exists
-   within your order's surface → run it; otherwise **do not run** — report unrun, report widening as
-   **order defect**, never silently run wide or skip.
+   within your order's surface → run it; otherwise **do not run** — report what happened and why,
+   report widening as **order defect**, never run wide or silently skip the check.
 6. **Otherwise, run the commands your order names.**
 
 - **Receipts, not summaries.** Return the raw output of every command you run — the full
@@ -63,10 +63,10 @@ its own private carve-out. Highest precedence first:
   run is lost for nothing.
 - **Short structured return — by running less, never by showing less.** This is the **canonical**
   statement of what your return contains: a short summary, the list of files you changed, **your
-  per-command report** — raw output verbatim for every command you ran, and what happened and why
-  for every command your order named that did not run — any **findings** (needs outside your scope,
-  failures, ambiguities), and any **echo your order's rules require** — per-edge disposition of an
-  enumerated fail-closed surface (validity rule 2) and echo of an order-authorized test change.
+  per-command report as the Reporting obligation above defines it**, any **findings** (needs outside
+  your scope, failures, ambiguities), and any **echo your order's rules require** — per-edge
+  disposition of an enumerated fail-closed surface (validity rule 2) and echo of an order-authorized
+  test change.
   **Do not paste the diff into your return** — the orchestrator reads the diff off disk, and a pasted
   diff is itself the long payload that forfeits the dispatch. That return is short **because the
   commands are narrow — not because you trimmed their output.** Brevity governs **what you send back**;
@@ -74,7 +74,7 @@ its own private carve-out. Highest precedence first:
   paraphrasing, or summarizing the output of a command you actually ran is the `Self-checks run
   unfiltered` violation and is never permitted, **least of all for brevity**. **A failure is exempt
   from brevity entirely** — failing output comes back **word-for-word, however long it is.**
-- **If you could not run it, say so — never narrate a run you did not make.** Precedence rungs 1–4;
+- **If you could not run it, say so — never narrate a run you did not make.** Precedence rungs 1–5;
   apply the **reporting obligation** for each named command. Your shell may be unavailable —
   rejected, sandboxed, or absent. This is a **normal, reportable outcome and not a failure of yours**.
   A rejection of one command never suppresses another's receipt; say **you ran nothing** only when

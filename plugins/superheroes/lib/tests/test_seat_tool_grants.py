@@ -908,3 +908,117 @@ def test_workhorse_tree_probe_paragraph_carries_its_load_bearing_elements():
     assert "INDETERMINATE" in para, (
         "the tree-probe paragraph no longer says a timed-out or unjoined dispatch is "
         "INDETERMINATE — without it such a dispatch could be misread as clean.")
+
+
+def _dispatch_mechanics_tree_inspection_bullet():
+    """The dispatch-mechanics reference's tree-inspection bullet (FIX-2 item 8).
+
+    This bullet is a second full statement of the same three load-bearing elements as the
+    Workhorse charter's before/after tree-probe paragraph. Located by a stable anchor
+    (the bullet's opening bold clause) up to the next sibling bullet, so the assertions
+    below are scoped to this bullet itself, not a file-wide substring search.
+    """
+    text = _read_required(
+        os.path.join(PLUGIN, "skills", "workhorse", "reference", "dispatch-mechanics.md"),
+        "dispatch-mechanics.md, home of the tree-inspection bullet")
+    anchor = "- **What the tree inspection establishes.**"
+    start = text.find(anchor)
+    assert start != -1, (
+        "dispatch-mechanics.md: the tree-inspection bullet's opening anchor "
+        "(%r) was not found. This bullet is the second copy of the charter's "
+        "load-bearing tree probe; a guard that cannot locate it protects nothing." % anchor)
+    end_marker = "\n- **What it does not establish.**"
+    end = text.find(end_marker, start)
+    assert end != -1, (
+        "dispatch-mechanics.md: no sibling bullet `- **What it does not establish.**` "
+        "found after the tree-inspection anchor — cannot bound the bullet's end.")
+    bullet = text[start:end]
+    assert bullet.strip(), (
+        "dispatch-mechanics.md: tree-inspection bullet extractor returned empty text.")
+    return bullet
+
+
+def test_dispatch_mechanics_tree_inspection_bullet_carries_its_load_bearing_elements():
+    """dispatch-mechanics.md's tree-inspection bullet is a second full statement of the
+    charter's three load-bearing probe elements. No test read it before this one (FIX-2
+    item 8): changing `--porcelain` to `-uno` or deleting the INDETERMINATE rule in
+    that copy would leave every other test in this file green while materially weakening
+    the guarantee this branch ships. Scoped to the bullet itself via
+    `_dispatch_mechanics_tree_inspection_bullet`, not a file-wide substring search.
+    """
+    raw = _dispatch_mechanics_tree_inspection_bullet()
+    bullet = _norm(raw)
+
+    assert "landed work already committed" in bullet, (
+        "the tree-inspection bullet no longer states the committed-baseline requirement "
+        "— the probe must be taken over a COMMITTED tree, never a dirty one, or a prior "
+        "order's uncommitted work is exactly what the probe would misattribute.")
+
+    for cmd in ("git rev-parse HEAD", "git status --porcelain"):
+        assert cmd in bullet, (
+            "the tree-inspection bullet no longer names `%s` as one of the baseline "
+            "signals it captures." % cmd)
+
+    assert "git status --porcelain" in bullet
+    assert "git status -uno" not in bullet and "git status --porcelain -uno" not in bullet, (
+        "the tree-inspection bullet's git-status INVOCATION now uses `-uno` — the "
+        "specific weakening the Test seat named: `-uno` hides untracked output, which "
+        "is exactly what a shell-based mutation (a planted file, a probe left behind) "
+        "would produce.")
+    assert ("git status --untracked-files=no" not in bullet
+            and "git status --porcelain --untracked-files=no" not in bullet), (
+        "the tree-inspection bullet's git-status INVOCATION now uses the long form "
+        "`--untracked-files=no` — the same weakening as `-uno`: it hides untracked "
+        "output, which is exactly what a shell-based mutation (a planted file, a probe "
+        "left behind) would produce.")
+
+    assert "INDETERMINATE" in bullet, (
+        "the tree-inspection bullet no longer says a timed-out or unjoined dispatch is "
+        "INDETERMINATE — without it such a dispatch could be misread as having written "
+        "nothing when no delta is observed.")
+
+
+def _implementer_precedence_rung_count():
+    """Parse the implementer template's command-precedence ladder to learn rung count."""
+    text = _read_required(
+        os.path.join(PLUGIN, "agents", "implementer.md"),
+        "the implementer template, home of the command-precedence ladder")
+    ladder_start = text.find("**Command precedence**")
+    assert ladder_start != -1, (
+        "implementer.md: `**Command precedence**` anchor not found — cannot parse ladder.")
+    after = text[ladder_start:]
+    bullet_start = re.search(r"\n- \*\*", after)
+    assert bullet_start is not None, (
+        "implementer.md: no `- **` bullet found after command precedence — cannot bound "
+        "the ladder's end.")
+    ladder = after[:bullet_start.start()]
+    rungs = re.findall(r"^\d+\.\s+\*\*", ladder, re.M)
+    assert rungs, (
+        "implementer.md: no numbered rungs found under command precedence — cannot "
+        "establish referential-integrity bounds.")
+    return len(rungs)
+
+
+def test_implementer_rung_references_are_within_ladder_range():
+    """The ladder renumbering (7 rungs → 6) required three manual pointer edits; nothing
+    caught the next one going wrong (FIX-2 item 9). Asserts referentially only — numbers
+    in range, never on wording — so the guard survives any future rewrite of the prose.
+    """
+    text = _read_required(
+        os.path.join(PLUGIN, "agents", "implementer.md"),
+        "the implementer template, home of rung cross-references")
+    max_rung = _implementer_precedence_rung_count()
+
+    for match in re.finditer(
+            r"(?i)(?:precedence\s+)?rung(?:s)?\s+(\d+)(?:\s*[–-]\s*(\d+))?", text):
+        low = int(match.group(1))
+        high = int(match.group(2)) if match.group(2) else low
+        assert 1 <= low <= max_rung, (
+            "implementer.md: %r cites rung %d but the ladder has only %d rung(s)." % (
+                match.group(0), low, max_rung))
+        assert 1 <= high <= max_rung, (
+            "implementer.md: %r cites rung %d but the ladder has only %d rung(s)." % (
+                match.group(0), high, max_rung))
+        assert low <= high, (
+            "implementer.md: %r has an inverted rung range (%d–%d)." % (
+                match.group(0), low, high))
