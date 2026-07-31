@@ -116,9 +116,10 @@ discarding or re-dispatching** — "inspect the diff" alone is not a decision ru
   tree cannot be made clean, use a **fresh worktree** or **park** — never dispatch against a dirty
   baseline, and never treat a delta measured from one as authorship evidence. Against a clean baseline,
   spanning committed/staged/unstaged/untracked: whether **this dispatch** wrote anything at all (**no
-  delta = it wrote nothing** — authorship evidence only), and whether what it wrote is **inside the
-  order's scope**. For an **INDETERMINATE** dispatch — timeout or child never joined — the delta test
-  yields no conclusion: **no delta** does not establish that it wrote nothing.
+  delta = it wrote nothing the probe can see** — ignored paths are outside it; see **default to a
+  fresh worktree** below when they could matter — authorship evidence only), and whether what it wrote
+  is **inside the order's scope**. For an **INDETERMINATE** dispatch — timeout or child never joined —
+  the delta test yields no conclusion: **no delta** does not establish that it wrote nothing.
   The delta test is an
   **authorship and scope** check — each named target must **differ from that baseline**, not merely
   exist.

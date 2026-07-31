@@ -954,7 +954,8 @@ def test_dispatch_mechanics_tree_inspection_bullet_carries_its_load_bearing_elem
         "— the probe must be taken over a COMMITTED tree, never a dirty one, or a prior "
         "order's uncommitted work is exactly what the probe would misattribute.")
 
-    for cmd in ("git rev-parse HEAD", "git status --porcelain", "git reflog"):
+    for cmd in ("git rev-parse HEAD", "git status --porcelain",
+                "git reflog --date=iso HEAD | wc -l"):
         assert cmd in bullet, (
             "the tree-inspection bullet no longer names `%s` as one of the baseline "
             "signals it captures." % cmd)
@@ -983,8 +984,8 @@ def _dispatch_mechanics_recovery_bullet():
 
     Carries the destructive narrow-recovery guidance (`reset --hard`, `clean -fd`, the `-fdx`
     prohibition, and the confirm-death precondition). Located by a stable anchor (the bullet's
-    opening bold clause) up to the end of the bullet list, so the assertions below are scoped to
-    this bullet itself, not a file-wide substring search.
+    opening bold clause) up to the earlier of the next sibling bullet or the end of the bullet list,
+    so the assertions below are scoped to this bullet itself, not a file-wide substring search.
     """
     text = _read_required(
         os.path.join(PLUGIN, "skills", "workhorse", "reference", "dispatch-mechanics.md"),
@@ -995,11 +996,16 @@ def _dispatch_mechanics_recovery_bullet():
         "dispatch-mechanics.md: the recovery bullet's opening anchor "
         "(%r) was not found. This bullet carries the destructive narrow-recovery guidance; "
         "a guard that cannot locate it protects nothing." % anchor)
-    end_marker = "\n\nAuthor orders"
-    end = text.find(end_marker, start)
-    assert end != -1, (
-        "dispatch-mechanics.md: no end-of-list marker %r found after the recovery anchor — "
-        "cannot bound the bullet's end." % end_marker)
+    sibling_marker = "\n- **"
+    end_of_list_marker = "\n\nAuthor orders"
+    sibling_end = text.find(sibling_marker, start + len(anchor))
+    list_end = text.find(end_of_list_marker, start)
+    end_candidates = [i for i in (sibling_end, list_end) if i != -1]
+    assert end_candidates, (
+        "dispatch-mechanics.md: no next-sibling bullet (%r) or end-of-list marker %r found "
+        "after the recovery anchor — cannot bound the bullet's end."
+        % (sibling_marker, end_of_list_marker))
+    end = min(end_candidates)
     bullet = text[start:end]
     assert bullet.strip(), (
         "dispatch-mechanics.md: recovery bullet extractor returned empty text.")
@@ -1016,21 +1022,39 @@ def test_dispatch_mechanics_recovery_bullet_carries_its_load_bearing_elements():
     raw = _dispatch_mechanics_recovery_bullet()
     bullet = _norm(raw)
 
-    assert "reset --hard" in bullet and "clean -fd" in bullet, (
-        "the recovery bullet no longer names the narrow-recovery commands (`reset --hard` plus "
-        "`clean -fd`) — without them the advertised same-worktree recovery path is gone.")
+    assert "reset --hard" in bullet, (
+        "the recovery bullet no longer names the narrow-recovery command `reset --hard` — "
+        "without it the advertised same-worktree recovery path is gone.")
+    assert re.search(r"clean -fd(?![a-zA-Z])", bullet), (
+        "the recovery bullet no longer invokes `clean -fd` as a boundary-delimited command — "
+        "without it the advertised same-worktree recovery path is gone.")
+    assert "clean -fdx" not in bullet, (
+        "the recovery bullet now invokes `clean -fdx` — that would sweep gitignored local-only "
+        "content the narrow-recovery path must not touch.")
 
     assert "**Do not** use `-fdx`" in bullet, (
         "the recovery bullet no longer forbids `-fdx` with its load-bearing prohibition — without it "
         "a rewrite could recommend `-fdx` and sweep gitignored local-only content.")
 
-    assert "engine-death-unconfirmed" in bullet and "engine-launch-uncertain" in bullet, (
-        "the recovery bullet no longer names terminal-but-not-proof runner outcomes — without them "
-        "a terminal receipt could be misread as permission to reset when death is unconfirmed.")
+    runner_tokens = ("engine-death-unconfirmed", "engine-launch-uncertain", "journal-corrupt")
+    for token in runner_tokens:
+        assert token in bullet, (
+            "the recovery bullet no longer names terminal-but-not-proof runner outcome %r — "
+            "without it a terminal receipt could be misread as permission to reset when death "
+            "is unconfirmed." % token)
 
-    assert "journal-corrupt" in bullet and "engine_dispatch.py" in bullet, (
+    assert "engine_dispatch.py" in bullet, (
         "the recovery bullet no longer cites the supervised runner as authority for death "
         "confirmation — without it the precondition can drift looser than the code.")
+
+    engine_dispatch = _read_required(
+        os.path.join(PLUGIN, "lib", "engine_dispatch.py"),
+        "engine_dispatch.py, emitter of the runner detail tokens the recovery bullet names")
+    for token in runner_tokens:
+        assert token in engine_dispatch, (
+            "cross-boundary contract broken: recovery bullet names runner detail %r but "
+            "engine_dispatch.py no longer emits it — doc and code can drift green together."
+            % token)
 
     assert "fresh worktree" in bullet.lower() and "park" in bullet.lower(), (
         "the recovery bullet no longer routes unconfirmed death to a fresh worktree or park — "

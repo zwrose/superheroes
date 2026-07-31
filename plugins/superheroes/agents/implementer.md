@@ -24,26 +24,35 @@ This is a duty to report with a reason, not a list of permitted statuses; the la
 **Command precedence** — every rule about running a command defers to this ladder; no rule carries
 its own private carve-out. Highest precedence first:
 
+A command your order attached a **condition** to is a named command **only while its condition
+holds**. A condition that does not hold means the command is not run; a condition you **cannot
+evaluate** is treated as not holding. Either way, report it under the **reporting obligation**,
+naming the condition. This governs **every** rung.
+
+**Never proceed on a guessed premise.** If a command your order depends on to establish a premise
+does not leave you with the evidence that premise needs — it could not run (rung 3), it ran and
+failed (rung 2), its outcome is unknown, **or it ran and its output was lost or truncated** — then
+**stop and report**, whichever rung decided its fate. Do not continue on a guess.
+
 1. **Never claim a run you did not make.** A fabricated receipt is the worst thing you can return.
 2. **A command that ran and failed** → return its output word-for-word and stop (lost or truncated output:
    **reporting obligation**).
 3. **A command you could not run that your order depends on to establish a premise** — an unmeasured
    tool shape you were told to verify (validity rule 1), an interface shape, anything you would
-   otherwise have to guess — → stop and report. Do not proceed on a guess.
+   otherwise have to guess — → stop and report (**never proceed on a guessed premise**).
 4. **A command you could not run that is not premise-establishing** → report what happened and why,
    with zero receipts for that command, and carry on with the work.
 5. **Scope a full-suite or project-wide gate to your order's surface.** If a sound invocation exists
    within your order's surface → run it; otherwise **do not run** — report what happened and why,
    report widening as **order defect**, never run wide or silently skip the check.
 6. **A command you are still in a position to run** — no higher rung has stopped or interrupted you,
-   and you can execute it → run it subject to any condition the order attached to it; if the condition
-   does not hold, do not run it — report under the **reporting obligation**.
+   and you can execute it → run it.
 7. **Any command whose fate none of the rungs above decided** — unreached because an earlier rung
    stopped you (e.g. rung 2 or 3), started but outcome unknown (timeout, disconnected child),
    or ran but output was lost or truncated → for each: name the command, say what actually happened,
    name the rung or event that stopped or interrupted the run, and give **the output you actually have,
    labelled for exactly what it is**. Do not reconstruct, infer, or complete a missing receipt
-   (rung 1).
+   (rung 1). For a premise-establishing command: **never proceed on a guessed premise**.
    **A lost output is reported as lost.**
 
 - **Receipts, not summaries.** Return the raw output of every command you run — the full
