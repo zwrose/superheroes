@@ -1,8 +1,12 @@
 # plugins/superheroes/lib/tests/test_core_md.py
 """Conformance: shared core.md calibration brain (CONVENTIONS §2.1/§2.2/§4.2/§4.4)."""
+import contextlib
 import importlib.util
+import io
 import json
 import os
+import re
+import subprocess
 import sys
 
 import pytest
@@ -350,56 +354,6 @@ def test_write_deferred_marks_pending_then_written_clears_it(tmp_path, monkeypat
     assert not os.path.exists(CM._pending_path(repo, store))  # cleared on success
 
 
-_REVIEW_PROFILE = """<!-- review-profile · managed by review-crew · schema 1 -->
-schema: 1
-status: stable
-
-## Project
-node app
-
-## Threat model
-multi-tenant
-
-## Verify
-command: npm test
-
-## Scope exclusions
-- none
-
-## Focus hints
-- security: authz
-
-## Canonical patterns
-- auth: src/auth.ts:10
-
-## Conventions
-See CLAUDE.md.
-"""
-
-_TEST_PILOT_PROFILE = """# test-pilot profile — app
-
-<!-- provenance: plugin-version=0.2.0 profile-version=1 status=stable created=2026-06-26 updated=2026-06-26 -->
-
-## App launch
-- Dev command: `npm run dev`
-
-## Auth strategy
-test-user credentials
-
-## Seed surfaces
-- DB: env DB_URL
-
-## Browser tool order
-chrome-devtools
-
-## Machine-readable config
-
-```json test-pilot-config
-{"schemaVersion": 1, "baseUrl": "http://localhost:3000"}
-```
-"""
-
-
 _CORE_FACTS = {"verifyCommand": "npm test", "stackTags": ["node"],
                "threatModel": "single-user", "patterns": "- x: a.ts:1"}
 
@@ -514,7 +468,8 @@ def test_cli_confirm_flips_core(tmp_path, capsys):
 def test_confirm_does_not_downgrade_a_newer_schema_core(tmp_path):
     # #121 Part A / UFR-3: confirm() must NEVER rewrite a forward-schema (behind) core — that
     # would downgrade schemaVersion and drop fields the running version doesn't understand. write()
-    # and migrate_on_read() both refuse to rewrite a behind record; confirm() must too.
+    # and migrate_on_read() (removed in #724) both refused to rewrite a behind record; confirm()
+    # must too.
     repo = str(tmp_path)
     store = str(tmp_path / "store")
     _write_core(repo, CM.SCHEMA_VERSION + 1, status="provisional")  # newer schema, provisional
@@ -525,461 +480,377 @@ def test_confirm_does_not_downgrade_a_newer_schema_core(tmp_path):
     assert open(core_p).read() == before  # file untouched — not downgraded, not re-rendered
 
 
-def test_classify_standard_review_profile():
-    assert CM.classify(_REVIEW_PROFILE, "review-crew") == "standard"
+# ---------------------------------------------------------------------------
+# Issue #724 — legacy profile detection + refusal (migrate_on_read removed)
+# ---------------------------------------------------------------------------
+
+def _init_git_repo(repo):
+    subprocess.run(["git", "-C", repo, "init", "-q"], check=True)
 
 
-def test_classify_standard_test_pilot_profile():
-    assert CM.classify(_TEST_PILOT_PROFILE, "test-pilot") == "standard"
+def _legacy_inrepo_path(repo, hero):
+    sub = CM.mode_registry._HERO_LEGACY_INREPO[hero]
+    return os.path.join(repo, sub)
 
 
-def test_classify_ambiguous_when_shared_fact_unlocatable():
-    # FR-9: the verify command sits under a heading the system does not recognize → ambiguous.
-    hand_edited = _REVIEW_PROFILE.replace("## Verify", "## How we check")
-    assert CM.classify(hand_edited, "review-crew") == "ambiguous"
+def _write_legacy_inrepo(repo, hero, text="legacy profile\n"):
+    path = _legacy_inrepo_path(repo, hero)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "w").write(text)
+    return path
 
 
-def test_split_review_profile_routes_shared_and_layer():
-    core_facts, layer = CM.split_profile(_REVIEW_PROFILE, "review-crew")
-    assert core_facts["verifyCommand"] == "npm test"
-    assert core_facts["threatModel"] == "multi-tenant"
-    assert "src/auth.ts:10" in core_facts["patterns"]
-    # hero sections land in the layer, shared ones do not
-    assert "## Scope exclusions" in layer
-    assert "## Focus hints" in layer
-    assert "## Threat model" not in layer
-    assert "## Verify" not in layer
-
-
-def test_split_test_pilot_carries_machine_block_verbatim():
-    core_facts, layer = CM.split_profile(_TEST_PILOT_PROFILE, "test-pilot")
-    # the hero machine block survives byte-for-byte in the layer
-    assert "```json test-pilot-config" in layer
-    assert '"baseUrl": "http://localhost:3000"' in layer
-    assert "## App launch" in layer
-    assert "## Auth strategy" in layer
-
-
-def test_split_preserves_unrecognized_section_verbatim():
-    extra = _REVIEW_PROFILE + "\n## Weird custom section\n\nkeep me exactly\n"
-    _core, layer = CM.split_profile(extra, "review-crew")
-    assert "## Weird custom section" in layer
-    assert "keep me exactly" in layer
-
-
-def _hero_layer_path(repo, hero):
-    return os.path.join(repo, ".claude", "superheroes", hero + ".md")
-
-
-def _legacy_review_path(repo):
-    d = os.path.join(repo, ".claude")
-    os.makedirs(d, exist_ok=True)
-    return os.path.join(d, "review-profile.md")
-
-
-def _seed_legacy_global_profile(repo, hero_root):
-    """Seed a legacy review-profile.md in the review-crew global store (not unified layer)."""
+def _seed_global_legacy(tmp_path, repo, hero, monkeypatch, text="legacy profile\n"):
     import store_core as sc
+    if hero == "review-crew":
+        g = str(tmp_path / "review_global")
+        import review_store
+        monkeypatch.setattr(review_store, "store_root", lambda: g)
+    else:
+        g = str(tmp_path / "tp_global")
+        monkeypatch.setenv("TEST_PILOT_STORE_ROOT", g)
     ident = sc.derive_identifiers(repo)
     eid = ident["gitdir_hash"]
-    entry = os.path.join(hero_root, "entries", eid)
+    entry = os.path.join(g, "entries", eid)
     os.makedirs(entry, exist_ok=True)
-    if not os.path.exists(os.path.join(entry, "keys.json")):
-        sc.write_keys_json(entry, ident)
-    sc.write_pointer(hero_root, ident["gitdir_hash"], eid)
+    fname = CM.mode_registry._HERO_GLOBAL_FILENAME[hero]
+    prof = os.path.join(entry, fname)
+    open(prof, "w").write(text)
+    sc.write_pointer(g, ident["gitdir_hash"], eid)
     if ident["remote_hash"]:
-        sc.write_pointer(hero_root, ident["remote_hash"], eid)
-    return os.path.join(entry, "review-profile.md")
+        sc.write_pointer(g, ident["remote_hash"], eid)
+    return prof
 
 
-def test_migrate_global_standard_splits_and_retires_legacy(tmp_path):
-    # Global mode (no repo root override / nongit): write core.md + layer, remove legacy.
+def _tree_snapshot(roots):
+    snap = {}
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for dirpath, dirnames, filenames in os.walk(root):
+            for name in dirnames:
+                p = os.path.join(dirpath, name)
+                snap[p] = ("dir", os.path.getmtime(p))
+            for name in filenames:
+                p = os.path.join(dirpath, name)
+                snap[p] = ("file", os.path.getsize(p), os.path.getmtime(p))
+    return snap
+
+
+def test_legacy_profile_refusal_inrepo_review_crew_and_test_pilot(tmp_path):
+  # E1: in-repo legacy regular files for both heroes.
     repo = str(tmp_path)
     store = str(tmp_path / "store")
-    legacy = _legacy_review_path(repo)
-    open(legacy, "w").write(_REVIEW_PROFILE)
-    res = CM.migrate_on_read(repo, "review-crew", root=store)
-    assert res["action"] == "migrated"
-    # core.md exists and carries the shared facts
-    got = CM.read(repo, root=store)
-    assert got is not None and got["verifyCommand"] == "npm test"
-    # the hero layer exists and carries hero content
-    layer = open(_hero_layer_path(repo, "review-crew")).read()
-    assert "## Scope exclusions" in layer
-    # legacy removed (retired only after both new files exist)
-    assert not os.path.exists(legacy)
+    _init_git_repo(repo)
+    review_path = _write_legacy_inrepo(repo, "review-crew")
+    tp_path = _write_legacy_inrepo(repo, "test-pilot")
+    refusal = CM.legacy_profile_refusal(repo, root=store)
+    assert refusal is not None
+    assert refusal["reason"] == CM.LEGACY_PROFILE_REASON
+    assert refusal["action"] == "refused"
+    assert "review-crew" in refusal["heroes"]
+    assert "test-pilot" in refusal["heroes"]
+    assert review_path in refusal["paths"]
+    assert tp_path in refusal["paths"]
+    assert refusal["detail"]["review-crew"] == review_path
+    assert refusal["detail"]["test-pilot"] == tp_path
 
 
-def test_migrate_noop_when_no_legacy(tmp_path):
+def test_legacy_profile_refusal_global_only(tmp_path, monkeypatch):
+  # E1: global legacy regular file when no in-repo copy exists.
     repo = str(tmp_path)
     store = str(tmp_path / "store")
-    assert CM.migrate_on_read(repo, "review-crew", root=store)["action"] == "noop"
+    _init_git_repo(repo)
+    global_path = _seed_global_legacy(tmp_path, repo, "review-crew", monkeypatch)
+    refusal = CM.legacy_profile_refusal(repo, root=store)
+    assert refusal is not None
+    assert refusal["reason"] == CM.LEGACY_PROFILE_REASON
+    assert "review-crew" in refusal["heroes"]
+    assert global_path in refusal["paths"]
 
 
-def test_migrate_ambiguous_no_write(tmp_path):
-    # FR-9: ambiguous profile → no write, legacy untouched, action ambiguous.
+def test_legacy_profile_refusal_dangling_symlink(tmp_path):
+  # E2: dangling symlink at a legacy path is a refusal.
     repo = str(tmp_path)
     store = str(tmp_path / "store")
-    legacy = _legacy_review_path(repo)
-    open(legacy, "w").write(_REVIEW_PROFILE.replace("## Verify", "## How we check"))
-    res = CM.migrate_on_read(repo, "review-crew", root=store)
-    assert res["action"] == "ambiguous"
-    assert CM.read(repo, root=store) is None
-    assert os.path.exists(legacy)  # untouched
+    path = _legacy_inrepo_path(repo, "review-crew")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    os.symlink("/no/such/legacy-dangle-724", path)
+    refusal = CM.legacy_profile_refusal(repo, root=store)
+    assert refusal is not None
+    assert "review-crew" in refusal["heroes"]
+    assert path in refusal["paths"]
 
 
-def test_migrate_noop_when_core_already_present(tmp_path):
-    # A usable core.md already exists → do not re-migrate even if a legacy file lingers absent.
+def test_legacy_profile_refusal_directory(tmp_path):
+  # E3: directory at a legacy path is a refusal.
     repo = str(tmp_path)
     store = str(tmp_path / "store")
-    _write_core(repo, CM.SCHEMA_VERSION)  # from Task 3 helper
-    assert CM.migrate_on_read(repo, "review-crew", root=store)["action"] == "noop"
+    path = _legacy_inrepo_path(repo, "test-pilot")
+    os.makedirs(path, exist_ok=True)
+    refusal = CM.legacy_profile_refusal(repo, root=store)
+    assert refusal is not None
+    assert "test-pilot" in refusal["heroes"]
+    assert path in refusal["paths"]
 
 
-def test_migrate_global_mode_legacy_profile_is_found_and_migrated(tmp_path, monkeypatch):
-    # FR-8: a GLOBAL-mode legacy profile lives under review-crew's own store (NOT in the repo)
-    # — _legacy_path must resolve it via the hero resolver, so global-mode migration is reachable.
-    repo = str(tmp_path / "repo")
-    os.makedirs(repo, exist_ok=True)
-    store = str(tmp_path / "store")
-    hero_root = str(tmp_path / "review_store")  # review-crew's own global store root
-    # seed a global review-crew profile (hermetic: point review_store.store_root at hero_root)
-    import review_store
-    monkeypatch.setattr(review_store, "store_root", lambda: hero_root)
-    prof_path = _seed_legacy_global_profile(repo, hero_root)
-    open(prof_path, "w").write(_REVIEW_PROFILE)
-    # _legacy_path resolves the global profile path (NOT the in-repo .claude/review-profile.md)
-    legacy = CM._legacy_path(repo, "review-crew")
-    assert legacy == prof_path
-    assert os.path.isfile(legacy)
-    res = CM.migrate_on_read(repo, "review-crew", root=store)
-    assert res["action"] == "migrated"
-    assert CM.read(repo, root=store)["verifyCommand"] == "npm test"
-    assert not os.path.exists(legacy)  # global legacy retired
-
-
-import subprocess
-
-
-def _git(repo, *args):
-    return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
-
-
-def _git_repo(tmp_path):
-    repo = str(tmp_path / "repo")
-    os.makedirs(repo)
-    _git(repo, "init", "-q")
-    _git(repo, "config", "user.email", "t@t")
-    _git(repo, "config", "user.name", "t")
-    return repo
-
-
-def _force_in_repo(repo, store):
-    import mode_registry as mr
-    mr.write_registry(repo, mr.IN_REPO, None, root=store)
-
-
-def test_migrate_in_repo_commits_only_calibration_paths(tmp_path):
-    repo = _git_repo(tmp_path)
-    store = str(tmp_path / "store")
-    _force_in_repo(repo, store)
-    # a tracked, committed legacy profile (git commit --only records no deletion for an untracked one)
-    legacy = _legacy_review_path(repo)
-    open(legacy, "w").write(_REVIEW_PROFILE)
-    _git(repo, "add", ".claude/review-profile.md")
-    _git(repo, "commit", "-q", "-m", "seed legacy")
-    # an unrelated staged change + an unrelated working-tree change must NOT be swept
-    open(os.path.join(repo, "unrelated.txt"), "w").write("staged change")
-    _git(repo, "add", "unrelated.txt")
-    open(os.path.join(repo, "other.txt"), "w").write("worktree change")
-    # ALSO stage an edit to a NAMED calibration path (the legacy profile): `git commit --only`
-    # must commit the migrator's working-tree state (its DELETION), never this staged content.
-    open(legacy, "a").write("\n<!-- staged-but-uncommitted edit to a named path -->\n")
-    _git(repo, "add", ".claude/review-profile.md")
-
-    res = CM.migrate_on_read(repo, "review-crew", root=store)
-    assert res["action"] == "migrated"
-
-    # the migration commit names ONLY the calibration paths
-    changed = _git(repo, "show", "--name-status", "--format=", "HEAD").stdout.split()
-    names = set(changed)
-    assert ".claude/superheroes/core.md" in names
-    assert ".claude/superheroes/review-crew.md" in names
-    assert ".claude/review-profile.md" in names  # deletion recorded
-    assert "unrelated.txt" not in names
-    assert "other.txt" not in names
-    # the unrelated change is still staged (not committed)
-    assert "unrelated.txt" in _git(repo, "diff", "--cached", "--name-only").stdout
-    # --only ignored the staged modify and recorded the legacy DELETION (not a modification)
-    legacy_line = [l for l in _git(repo, "show", "--name-status", "--format=", "HEAD").stdout.splitlines()
-                   if "review-profile.md" in l]
-    assert legacy_line and legacy_line[0].split()[0] == "D"
-
-
-def test_migrate_in_repo_records_legacy_deletion(tmp_path):
-    repo = _git_repo(tmp_path)
-    store = str(tmp_path / "store")
-    _force_in_repo(repo, store)
-    legacy = _legacy_review_path(repo)
-    open(legacy, "w").write(_REVIEW_PROFILE)
-    _git(repo, "add", ".claude/review-profile.md")
-    _git(repo, "commit", "-q", "-m", "seed legacy")
-    CM.migrate_on_read(repo, "review-crew", root=store)
-    status = _git(repo, "show", "--name-status", "--format=", "HEAD").stdout
-    assert "D\t.claude/review-profile.md" in status or "D .claude/review-profile.md" in status
-
-
-def test_resume_both_files_present_completes_retirement(tmp_path):
-    # UFR-5/FR-11: a prior run wrote both new files but a still-present legacy lingers →
-    # on re-entry, do NOT re-split; complete retirement (unlink legacy) and report completed.
+def test_legacy_profile_refusal_none_when_no_legacy(tmp_path):
+  # E4: no legacy anywhere → None.
     repo = str(tmp_path)
     store = str(tmp_path / "store")
-    legacy = _legacy_review_path(repo)
-    open(legacy, "w").write(_REVIEW_PROFILE)
-    # pre-place both new files (as a prior interrupted run would have)
-    d = os.path.join(repo, ".claude", "superheroes")
-    os.makedirs(d, exist_ok=True)
-    CM_facts = {"verifyCommand": "npm test", "stackTags": [], "threatModel": "x", "patterns": ""}
-    open(os.path.join(d, "core.md"), "w").write(
-        CM.render_core(CM_facts, "provisional", "2026-06-26", "2026-06-26"))
-    open(os.path.join(d, "review-crew.md"), "w").write(
-        CM._render_layer("## Scope exclusions\n- none\n", "review-crew", "provisional", "2026-06-26"))
-    res = CM.migrate_on_read(repo, "review-crew", root=store)
-    assert res["action"] == "completed"
-    assert not os.path.exists(legacy)  # retired
-    # and a subsequent read is a plain noop
-    assert CM.migrate_on_read(repo, "review-crew", root=store)["action"] == "noop"
+    assert CM.legacy_profile_refusal(repo, root=store) is None
 
 
-def test_migrate_in_repo_with_out_of_repo_legacy_commits_and_records(tmp_path, monkeypatch):
-    # #121 Part E: IN_REPO registry but the legacy lives in review-crew's GLOBAL store (out-of-repo,
-    # a realistic mixed state). The commit must land core+layer (not fail on an out-of-repo
-    # pathspec) and report `migrated` HONESTLY — never a false `migrated` with calibration left
-    # staged-but-uncommitted in the developer's index.
-    repo = _git_repo(tmp_path)
-    store = str(tmp_path / "store")
-    _force_in_repo(repo, store)
-    open(os.path.join(repo, "README"), "w").write("x\n")  # give the repo a HEAD
-    _git(repo, "add", "README")
-    _git(repo, "commit", "-q", "-m", "init")
-    hero_root = str(tmp_path / "review_store")
-    import review_store
-    monkeypatch.setattr(review_store, "store_root", lambda: hero_root)
-    prof_path = _seed_legacy_global_profile(repo, hero_root)
-    open(prof_path, "w").write(_REVIEW_PROFILE)
-    legacy = CM._legacy_path(repo, "review-crew")
-    assert legacy == prof_path  # out-of-repo (global hero store)
-    res = CM.migrate_on_read(repo, "review-crew", root=store)
-    assert res["action"] == "migrated"
-    # the migration commit actually landed core+layer in HEAD
-    names = set(_git(repo, "show", "--name-status", "--format=", "HEAD").stdout.split())
-    assert ".claude/superheroes/core.md" in names
-    assert ".claude/superheroes/review-crew.md" in names
-    # out-of-repo legacy retired (plain unlink, not a git pathspec)
-    assert not os.path.exists(prof_path)
-    # NO false success: nothing left staged-but-uncommitted
-    staged = _git(repo, "diff", "--cached", "--name-only").stdout
-    assert ".claude/superheroes" not in staged
-
-
-def test_resume_empty_placeholder_rescues_rich_legacy(tmp_path):
-    # Part D / #121 (DATA LOSS): the destination core + layer exist only as EMPTY placeholders
-    # (a botched/interrupted set-up) while a RICH legacy still holds the only copy of the real
-    # threat model + patterns. The RESUME branch must NOT retire the legacy and keep the empty
-    # core — it re-derives losslessly from the legacy, THEN retires it.
+def test_legacy_profile_refusal_lstat_permission_error(tmp_path, monkeypatch):
+  # E5: os.lstat PermissionError → present-indeterminate refusal with exception text.
     repo = str(tmp_path)
     store = str(tmp_path / "store")
-    legacy = _legacy_review_path(repo)
-    open(legacy, "w").write(_REVIEW_PROFILE)  # rich: verify npm test, threat multi-tenant, patterns
-    d = os.path.join(repo, ".claude", "superheroes")
-    os.makedirs(d, exist_ok=True)
-    empty = {"verifyCommand": "", "stackTags": [], "threatModel": "", "patterns": ""}
-    open(os.path.join(d, "core.md"), "w").write(
-        CM.render_core(empty, "provisional", "2026-06-26", "2026-06-26"))
-    open(os.path.join(d, "review-crew.md"), "w").write(
-        CM._render_layer("", "review-crew", "provisional", "2026-06-26"))  # empty body
-    res = CM.migrate_on_read(repo, "review-crew", root=store)
-    # the rich content was rescued into the destination — not lost
-    got = CM.read(repo, root=store)
-    assert got is not None
-    assert got["verifyCommand"] == "npm test"
-    assert "multi-tenant" in got["threatModel"]
-    layer = open(_hero_layer_path(repo, "review-crew")).read()
-    assert "## Scope exclusions" in layer
-    # legacy retired only AFTER its content was secured
-    assert not os.path.exists(legacy)
-    assert res["action"] in ("migrated", "completed")
+    path = _write_legacy_inrepo(repo, "review-crew")
+    real_lstat = os.lstat
+
+    def _lstat(p, *a, **k):
+        if os.path.abspath(p) == os.path.abspath(path):
+            raise PermissionError("access denied for test")
+        return real_lstat(p, *a, **k)
+
+    monkeypatch.setattr(os, "lstat", _lstat)
+    refusal = CM.legacy_profile_refusal(repo, root=store)
+    assert refusal is not None
+    assert "review-crew" in refusal["heroes"]
+    assert "PermissionError" in refusal["detail"]["review-crew"]
 
 
-def test_resume_empty_placeholder_refuses_to_destroy_ambiguous_legacy(tmp_path):
-    # Part D / #121: an ambiguous (non-auto-derivable) legacy must NEVER be silently deleted over
-    # an empty placeholder — surface it for hand-reconcile, legacy preserved.
+def test_legacy_profile_refusal_global_probe_failure(tmp_path, monkeypatch):
+  # E6: global-leg probe failure with no in-repo legacy → refusal, not None.
     repo = str(tmp_path)
     store = str(tmp_path / "store")
-    legacy = _legacy_review_path(repo)
-    open(legacy, "w").write(_REVIEW_PROFILE.replace("## Verify", "## How we check"))  # ambiguous
-    d = os.path.join(repo, ".claude", "superheroes")
-    os.makedirs(d, exist_ok=True)
-    empty = {"verifyCommand": "", "stackTags": [], "threatModel": "", "patterns": ""}
-    open(os.path.join(d, "core.md"), "w").write(
-        CM.render_core(empty, "provisional", "2026-06-26", "2026-06-26"))
-    open(os.path.join(d, "review-crew.md"), "w").write(
-        CM._render_layer("", "review-crew", "provisional", "2026-06-26"))
-    res = CM.migrate_on_read(repo, "review-crew", root=store)
-    assert res["action"] == "ambiguous"
-    assert os.path.exists(legacy)  # NOT destroyed
+    _init_git_repo(repo)
+
+    def _boom(*a, **k):
+        raise RuntimeError("global probe failed")
+
+    monkeypatch.setattr(CM.store_core, "resolve_global", _boom)
+    refusal = CM.legacy_profile_refusal(repo, root=store)
+    assert refusal is not None
+    assert refusal["action"] == "refused"
+    assert "review-crew" in refusal["heroes"]
+    assert refusal["detail"]["review-crew"].startswith("RuntimeError:")
 
 
-def test_resume_core_present_layer_absent_rederives(tmp_path):
-    # UFR-5: a crash between (1) and (2) left core.md but no layer → re-derive the split from
-    # the still-present legacy profile (never lose the layer).
+def test_legacy_profile_refusal_guardian_not_in_roster(tmp_path):
+  # E7: guardian (no _HERO_LEGACY_INREPO entry) contributes no candidates.
     repo = str(tmp_path)
     store = str(tmp_path / "store")
-    legacy = _legacy_review_path(repo)
-    open(legacy, "w").write(_REVIEW_PROFILE)
-    d = os.path.join(repo, ".claude", "superheroes")
-    os.makedirs(d, exist_ok=True)
-    open(os.path.join(d, "core.md"), "w").write(
-        CM.render_core({"verifyCommand": "npm test", "stackTags": [], "threatModel": "x",
-                        "patterns": ""}, "provisional", "2026-06-26", "2026-06-26"))
-    # layer is ABSENT
-    assert not os.path.exists(_hero_layer_path(repo, "review-crew"))
-    res = CM.migrate_on_read(repo, "review-crew", root=store)
-    assert res["action"] in ("migrated", "completed")
-    layer = open(_hero_layer_path(repo, "review-crew")).read()
-    assert "## Scope exclusions" in layer  # re-derived, not lost
-    assert not os.path.exists(legacy)
+    assert "guardian" not in CM.mode_registry._HERO_LEGACY_INREPO
+    refusal = CM.legacy_profile_refusal(repo, root=store)
+    assert refusal is None or "guardian" not in (refusal.get("heroes") or [])
 
 
-def test_kill_after_core_before_layer_leaves_legacy_recoverable(tmp_path, monkeypatch):
-    # UFR-5: crash after core.md write, before layer write → legacy still present (recoverable).
+def test_legacy_profile_refusal_inrepo_when_global_none(tmp_path, monkeypatch):
+  # E8: resolve_global returns None → in-repo candidate still evaluated.
     repo = str(tmp_path)
     store = str(tmp_path / "store")
-    legacy = _legacy_review_path(repo)
-    open(legacy, "w").write(_REVIEW_PROFILE)
-    real_write = CM.store_core.atomic_write
-
-    def _boom(path, text, *a, **k):
-        # Target the LAYER write specifically (store setup + core.md succeed; the layer fails)
-        # — key on the path, not a fragile call counter (meta.json/registry.json are written
-        # first by store setup + the mode backfill, so a "first call = core.md" assumption is
-        # wrong). This still exercises the exact core→layer crash boundary the test intends.
-        if path.endswith("review-crew.md"):
-            raise OSError("killed before layer")
-        return real_write(path, text, *a, **k)
-
-    monkeypatch.setattr(CM.store_core, "atomic_write", _boom)
-    res = CM.migrate_on_read(repo, "review-crew", root=store)
-    assert res["action"] == "deferred"
-    assert os.path.exists(legacy)  # legacy never removed → fully recoverable
+    path = _write_legacy_inrepo(repo, "review-crew")
+    monkeypatch.setattr(CM.store_core, "resolve_global", lambda *a, **k: None)
+    refusal = CM.legacy_profile_refusal(repo, root=store)
+    assert refusal is not None
+    assert path in refusal["paths"]
 
 
-def test_unlink_failure_defers_legacy_preserved(tmp_path, monkeypatch):
-    # UFR-5: the unlink step (3) fails → deferred, legacy still present, no half-state.
-    # (Ordering is write→write→unlink→commit, so this is the unlink boundary, not a
-    # "post-commit" one — there is no kill-after-commit-before-unlink window.)
+def test_legacy_profile_refusal_outer_exception_fail_closed(tmp_path, monkeypatch):
+  # E9: exception inside the function body → refusal with heroes/paths empty, detail has '*'.
     repo = str(tmp_path)
     store = str(tmp_path / "store")
-    legacy = _legacy_review_path(repo)
-    open(legacy, "w").write(_REVIEW_PROFILE)
-    monkeypatch.setattr(CM.os, "unlink", lambda p: (_ for _ in ()).throw(OSError("unlink failed")))
-    res = CM.migrate_on_read(repo, "review-crew", root=store)
-    assert res["action"] == "deferred"
-    assert os.path.exists(legacy)
+
+    class _BoomDict(dict):
+        def __iter__(self):
+            raise RuntimeError("iteration exploded")
+
+    monkeypatch.setattr(CM.mode_registry, "_HERO_LEGACY_INREPO", _BoomDict())
+    refusal = CM.legacy_profile_refusal(repo, root=store)
+    assert refusal is not None
+    assert refusal["heroes"] == []
+    assert refusal["paths"] == []
+    assert "*" in refusal["detail"]
+    assert "iteration exploded" in refusal["detail"]["*"]
 
 
-def test_inrepo_fresh_migrate_commit_failure_defers_then_retry_records(tmp_path, monkeypatch):
-    # FR-8/UFR-4/UFR-5 (round-2 review-tasks finding): an in-repo fresh migration whose COMMIT
-    # fails must NOT be left silently uncommitted — it returns `deferred` + a
-    # calibration-not-saved marker, and the NEXT read RETRIES the outstanding commit until
-    # `_migration_recorded` confirms it landed.
-    repo = _git_repo(tmp_path)
-    store = str(tmp_path / "store")
-    _force_in_repo(repo, store)
-    legacy = _legacy_review_path(repo)
-    open(legacy, "w").write(_REVIEW_PROFILE)
-    _git(repo, "add", ".claude/review-profile.md")
-    _git(repo, "commit", "-q", "-m", "seed legacy")
-    core_p = os.path.join(repo, ".claude", "superheroes", "core.md")
-    real_run_git = CM.store_core.run_git
-
-    def _fail_commit(repo_root, *a):
-        if a and a[0] == "commit":
-            return None  # simulate a nonzero git exit on commit only
-        return real_run_git(repo_root, *a)
-
-    monkeypatch.setattr(CM.store_core, "run_git", _fail_commit)
-    r1 = CM.migrate_on_read(repo, "review-crew", root=store)
-    assert r1["action"] == "deferred"                      # commit failed → NOT a silent success
-    assert os.path.isfile(core_p) and not os.path.exists(legacy)  # split landed on disk
-    pending = CM._pending_path(repo, store)
-    assert os.path.isfile(pending)                         # calibration-not-saved marker set
-    # retry with git working → the outstanding commit is recorded and the marker cleared
-    monkeypatch.setattr(CM.store_core, "run_git", real_run_git)
-    r2 = CM.migrate_on_read(repo, "review-crew", root=store)
-    assert r2["action"] in ("completed", "migrated")
-    assert CM._migration_recorded(repo, core_p, legacy)
-    assert not os.path.isfile(pending)
-
-
-def test_migrate_deferred_when_lock_contended(tmp_path, monkeypatch):
-    # UFR-4: contended lock → deferred, legacy untouched, no raise.
+def test_legacy_profile_refusal_writes_nothing(tmp_path):
+  # E10: legacy_profile_refusal is detection-only — no store or .claude writes.
     repo = str(tmp_path)
     store = str(tmp_path / "store")
-    legacy = _legacy_review_path(repo)
-    open(legacy, "w").write(_REVIEW_PROFILE)
-    from contextlib import contextmanager
-
-    @contextmanager
-    def _contended(cwd, root=None):
-        yield False
-
-    monkeypatch.setattr(CM.mode_registry, "config_lock", _contended)
-    res = CM.migrate_on_read(repo, "review-crew", root=store)
-    assert res["action"] == "deferred"
-    assert os.path.exists(legacy)
+    _write_legacy_inrepo(repo, "review-crew")
+    claude_dir = os.path.join(repo, ".claude")
+    before = _tree_snapshot([store, claude_dir])
+    CM.legacy_profile_refusal(repo, root=store)
+    after = _tree_snapshot([store, claude_dir])
+    assert before == after
 
 
-def test_resume_completed_branch_git_failure_yields_deferred(tmp_path, monkeypatch):
-    # UFR-4: in the `completed` (retire-only) branch, a FORCED git failure must yield
-    # `deferred`, NOT a false `completed` — run_git returns None on any nonzero exit.
-    repo = _git_repo(tmp_path)
-    store = str(tmp_path / "store")
-    _force_in_repo(repo, store)  # in-repo so the retirement commit path runs
-    legacy = _legacy_review_path(repo)
-    open(legacy, "w").write(_REVIEW_PROFILE)
-    _git(repo, "add", ".claude/review-profile.md")
-    _git(repo, "commit", "-q", "-m", "seed legacy")
-    # pre-place both new files (a prior interrupted run) so the resume rule takes the
-    # `completed` branch and tries to record the legacy deletion.
-    d = os.path.join(repo, ".claude", "superheroes")
-    os.makedirs(d, exist_ok=True)
-    open(os.path.join(d, "core.md"), "w").write(
-        CM.render_core({"verifyCommand": "npm test", "stackTags": [], "threatModel": "x",
-                        "patterns": ""}, "provisional", "2026-06-26", "2026-06-26"))
-    open(os.path.join(d, "review-crew.md"), "w").write(
-        CM._render_layer("## Scope exclusions\n- none\n", "review-crew", "provisional", "2026-06-26"))
-    # force ONLY the retirement commit to fail; delegate every other git call to the real one
-    real_run_git = CM.store_core.run_git
-
-    def _fail_commit(repo_root, *a):
-        if a and a[0] == "commit":
-            return None  # simulate a nonzero git exit
-        return real_run_git(repo_root, *a)
-
-    monkeypatch.setattr(CM.store_core, "run_git", _fail_commit)
-    res = CM.migrate_on_read(repo, "review-crew", root=store)
-    assert res["action"] == "deferred"  # NOT "completed"
-
-
-def test_resolve_shared_migrates_then_reads(tmp_path):
+def test_resolve_shared_prefers_core_over_legacy(tmp_path):
+  # E11: parseable core.md + legacy present → shared facts, no refusal action.
     repo = str(tmp_path)
     store = str(tmp_path / "store")
-    legacy = _legacy_review_path(repo)
-    open(legacy, "w").write(_REVIEW_PROFILE)
+    _write_core(repo, CM.SCHEMA_VERSION, status="confirmed", verify="pnpm test")
+    _write_legacy_inrepo(repo, "review-crew")
     got = CM.resolve_shared(repo, root=store)
-    assert got is not None and got["verifyCommand"] == "npm test"
-    assert not os.path.exists(legacy)  # migration fired
+    assert got is not None
+    assert got["verifyCommand"] == "pnpm test"
+    assert "action" not in got
+
+
+def test_resolve_shared_refusal_core_absent(tmp_path):
+  # E12: no core.md, legacy present → refusal with coreMd absent.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    _write_legacy_inrepo(repo, "review-crew")
+    got = CM.resolve_shared(repo, root=store)
+    assert got is not None
+    assert got["action"] == "refused"
+    assert got["detail"]["coreMd"] == CM.CONFIG_ABSENT
+
+
+def test_resolve_shared_refusal_core_unreadable(tmp_path):
+  # E12: corrupt core.md + legacy present → refusal with coreMd unreadable.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, "core.md"), "w").write("not parseable core\n")
+    _write_legacy_inrepo(repo, "review-crew")
+    got = CM.resolve_shared(repo, root=store)
+    assert got is not None
+    assert got["action"] == "refused"
+    assert got["detail"]["coreMd"] == CM.CONFIG_UNREADABLE
+
+
+def test_resolve_shared_none_when_neither_present(tmp_path):
+  # E13: neither core.md nor legacy → None.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    assert CM.resolve_shared(repo, root=store) is None
+
+
+def test_core_facts_are_empty_none():
+    assert CM.core_facts_are_empty(None) is True
+
+
+def test_core_facts_are_empty_empty_dict():
+    assert CM.core_facts_are_empty({}) is True
+
+
+def test_core_facts_are_empty_placeholder():
+    rec = {
+        "schemaVersion": CM.SCHEMA_VERSION,
+        "verifyCommand": None,
+        "stackTags": [],
+        "threatModel": "",
+        "patterns": "",
+    }
+    assert CM.core_facts_are_empty(rec) is True
+
+
+def test_core_facts_are_empty_whitespace_only_threat_model():
+    assert CM.core_facts_are_empty({"threatModel": "  "}) is True
+
+
+def test_core_facts_are_empty_verify_command_set():
+    assert CM.core_facts_are_empty({"verifyCommand": "x"}) is False
+
+
+def test_core_facts_are_empty_stack_tags_nonempty():
+    assert CM.core_facts_are_empty({"stackTags": ["py"]}) is False
+
+
+def test_core_facts_are_empty_patterns_set():
+    assert CM.core_facts_are_empty({"patterns": "p"}) is False
+
+
+def test_core_facts_are_empty_non_dict_str():
+    assert CM.core_facts_are_empty("oops") is True
+
+
+def test_core_facts_are_empty_non_dict_zero():
+    assert CM.core_facts_are_empty(0) is True
+
+
+def test_core_facts_are_empty_non_dict_list():
+    assert CM.core_facts_are_empty([]) is True
+
+
+def test_core_facts_are_empty_populated():
+    rec = {
+        "schemaVersion": CM.SCHEMA_VERSION,
+        "verifyCommand": "npm test",
+        "stackTags": ["node"],
+        "threatModel": "multi-tenant",
+        "patterns": "- x: a.ts:1",
+    }
+    assert CM.core_facts_are_empty(rec) is False
+
+
+def test_resolve_shared_refusal_leaves_no_pending_marker(tmp_path):
+    # E14: refusal path leaves no calibration-pending marker. Not asserting config_lock:
+    # resolve_shared does acquire the lock once via read()'s mode_registry.resolve backfill
+    # (predates #724; base migrate_on_read took the lock and could unlink/commit). The refusal
+    # path guarantees no migrate, unlink, commit, or mark_pending.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    _init_git_repo(repo)
+    legacy_path = _write_legacy_inrepo(repo, "review-crew")
+    subprocess.run(["git", "-C", repo, "add", legacy_path], check=True)
+    subprocess.run(["git", "-C", repo, "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-q", "-m", "track legacy"], check=True)
+    head_before = subprocess.check_output(
+        ["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
+    legacy_bytes_before = open(legacy_path, "rb").read()
+    porcelain_before = subprocess.check_output(
+        ["git", "-C", repo, "status", "--porcelain"], text=True)
+    got = CM.resolve_shared(repo, root=store)
+    assert got is not None and got["action"] == "refused"
+    assert not os.path.exists(CM._pending_path(repo, store))
+    assert os.path.isfile(legacy_path)
+    assert open(legacy_path, "rb").read() == legacy_bytes_before
+    head_after = subprocess.check_output(
+        ["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
+    assert head_after == head_before
+    porcelain_after = subprocess.check_output(
+        ["git", "-C", repo, "status", "--porcelain"], text=True)
+    rel_legacy = os.path.relpath(legacy_path, repo)
+    assert rel_legacy not in porcelain_before
+    assert rel_legacy not in porcelain_after
+
+
+_REMOVED_MIGRATION_SYMBOLS = (
+    "migrate_on_read", "classify", "split_profile", "_split_sections", "_headings",
+    "_migration_recorded", "_record_migration_commit", "_commit_pathspec",
+    "_present_calibration_paths", "_legacy_in_repo", "_facts_are_empty", "_in_repo_mode",
+    "_same_file", "_legacy_path",
+)
+
+
+def test_migration_symbols_removed():
+    for name in _REMOVED_MIGRATION_SYMBOLS:
+        assert not hasattr(CM, name)
+
+
+def test_core_md_cli_has_no_migrate_subcommand(capsys):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf), pytest.raises(SystemExit):
+        CM.main(["--help"])
+    assert "migrate" not in buf.getvalue()
+
+
+def test_core_md_cli_migrate_rejected(tmp_path):
+    with pytest.raises(SystemExit) as exc:
+        CM.main(["migrate", "--cwd", str(tmp_path), "--root", str(tmp_path / "store"),
+                 "--hero", "review-crew"])
+    assert exc.value.code != 0
+
+
+def test_core_md_source_has_no_git_commit_calls():
+    src = open(os.path.join(_LIB, "core_md.py"), encoding="utf-8").read()
+    assert not re.search(r'run_git\s*\([^)]*["\']commit["\']', src)
 
 
 def test_resolve_shared_none_on_bare_greenfield(tmp_path):
@@ -1003,17 +874,6 @@ def test_cli_resolve_greenfield_emits_nulls(tmp_path, capsys):
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
     assert out["verifyCommand"] is None and out["status"] is None
-
-
-def test_cli_migrate_runs(tmp_path, capsys):
-    repo = str(tmp_path)
-    store = str(tmp_path / "store")
-    legacy = _legacy_review_path(repo)
-    open(legacy, "w").write(_REVIEW_PROFILE)
-    rc = CM.main(["migrate", "--cwd", repo, "--root", store, "--hero", "review-crew"])
-    assert rc == 0
-    out = json.loads(capsys.readouterr().out)
-    assert out["action"] == "migrated"
 
 
 def test_cli_write_creates_core_from_stdin(tmp_path, capsys, monkeypatch):
@@ -1048,54 +908,6 @@ def test_cli_write_layer_creates_layer_from_stdin(tmp_path, capsys, monkeypatch)
     assert "review-crew: schemaVersion=" in layer  # wrapped in the §2.2 layer provenance line
 
 
-def test_content_completeness_review_profile_roundtrip(tmp_path):
-    # Loss-free guarantee (justifies removing the legacy file): every shared fact lands in
-    # core.md; every recognized hero section survives in the layer; an unrecognized section
-    # survives verbatim.
-    repo = str(tmp_path)
-    store = str(tmp_path / "store")
-    legacy = _legacy_review_path(repo)
-    profile = _REVIEW_PROFILE + "\n## Weird custom\n\nverbatim please\n"
-    open(legacy, "w").write(profile)
-    assert CM.migrate_on_read(repo, "review-crew", root=store)["action"] == "migrated"
-    core = CM.read(repo, root=store)
-    assert core["verifyCommand"] == "npm test"
-    assert core["threatModel"] == "multi-tenant"
-    assert "src/auth.ts:10" in core["patterns"]
-    layer = open(_hero_layer_path(repo, "review-crew")).read()
-    assert "## Scope exclusions" in layer
-    assert "## Focus hints" in layer
-    assert "## Weird custom" in layer and "verbatim please" in layer
-
-
-def test_content_completeness_test_pilot_machine_block_byte_identical(tmp_path):
-    repo = str(tmp_path)
-    store = str(tmp_path / "store")
-    d = os.path.join(repo, ".claude", "test-pilot")
-    os.makedirs(d, exist_ok=True)
-    legacy = os.path.join(d, "profile.md")
-    open(legacy, "w").write(_TEST_PILOT_PROFILE)
-    assert CM.migrate_on_read(repo, "test-pilot", root=store)["action"] == "migrated"
-    layer = open(_hero_layer_path(repo, "test-pilot")).read()
-    assert "```json test-pilot-config" in layer
-    assert '"baseUrl": "http://localhost:3000"' in layer
-
-
-def test_fr11_edited_layer_survives_reread(tmp_path):
-    # FR-11: a layer hand-edited AFTER migration is not overwritten on the next read.
-    repo = str(tmp_path)
-    store = str(tmp_path / "store")
-    legacy = _legacy_review_path(repo)
-    open(legacy, "w").write(_REVIEW_PROFILE)
-    CM.migrate_on_read(repo, "review-crew", root=store)
-    layer_p = _hero_layer_path(repo, "review-crew")
-    edited = open(layer_p).read() + "\n## My hand edit\n\nkeep this\n"
-    open(layer_p, "w").write(edited)
-    # next read: noop (both files present, legacy gone) → layer untouched
-    assert CM.migrate_on_read(repo, "review-crew", root=store)["action"] == "noop"
-    assert open(layer_p).read() == edited
-
-
 def test_write_defers_when_core_write_fails(tmp_path, monkeypatch):
     # code-001 fail-open: an OSError writing core.md → `deferred` + a best-effort pending
     # marker, never a propagated exception (the function's "never raise, never block" contract).
@@ -1115,53 +927,11 @@ def test_write_defers_when_core_write_fails(tmp_path, monkeypatch):
     assert os.path.isfile(CM._pending_path(repo, store))  # UFR-4 marker set
 
 
-def test_migrate_unknown_hero_is_noop(tmp_path):
-    # code-002: an unknown hero has no legacy profile → noop, never a TypeError from a None
-    # pathspec reaching _migration_recorded/run_git.
-    repo = str(tmp_path)
-    store = str(tmp_path / "store")
-    assert CM.migrate_on_read(repo, "bogus-hero", root=store)["action"] == "noop"
-
-
 def test_relocate_file_copies_then_unlinks_atomically(tmp_path):
     src = tmp_path / "a.txt"; src.write_text("hello")
     dst = tmp_path / "sub" / "b.txt"
     CM.relocate_file(str(src), str(dst))
     assert dst.read_text() == "hello" and not src.exists()
-
-
-def test_resume_placeholder_with_out_of_repo_legacy_rescues_and_commits(tmp_path, monkeypatch):
-    # #121 Part F: IN_REPO registry, EMPTY placeholder core+layer, and a RICH legacy in the GLOBAL
-    # (out-of-repo) store. The RESUME branch must rescue the content (Part D) AND commit it without
-    # passing the out-of-repo legacy to git (Part E) — the rich global profile is never destroyed
-    # over a placeholder, and the migration is recorded, not left dirty.
-    repo = _git_repo(tmp_path)
-    store = str(tmp_path / "store")
-    _force_in_repo(repo, store)
-    open(os.path.join(repo, "README"), "w").write("x\n")
-    _git(repo, "add", "README")
-    _git(repo, "commit", "-q", "-m", "init")
-    hero_root = str(tmp_path / "review_store")
-    import review_store
-    monkeypatch.setattr(review_store, "store_root", lambda: hero_root)
-    prof_path = _seed_legacy_global_profile(repo, hero_root)
-    open(prof_path, "w").write(_REVIEW_PROFILE)
-    d = os.path.join(repo, ".claude", "superheroes")
-    os.makedirs(d, exist_ok=True)
-    empty = {"verifyCommand": "", "stackTags": [], "threatModel": "", "patterns": ""}
-    open(os.path.join(d, "core.md"), "w").write(
-        CM.render_core(empty, "provisional", "2026-06-26", "2026-06-26"))
-    open(os.path.join(d, "review-crew.md"), "w").write(
-        CM._render_layer("", "review-crew", "provisional", "2026-06-26"))
-    CM.migrate_on_read(repo, "review-crew", root=store)
-    got = CM.read(repo, root=store)
-    assert got["verifyCommand"] == "npm test"          # rescued, not lost
-    assert "multi-tenant" in got["threatModel"]
-    assert "## Scope exclusions" in open(_hero_layer_path(repo, "review-crew")).read()
-    assert not os.path.exists(prof_path)               # rich global legacy retired safely
-    names = set(_git(repo, "show", "--name-status", "--format=", "HEAD").stdout.split())
-    assert ".claude/superheroes/core.md" in names      # committed, not left dirty
-    assert ".claude/superheroes" not in _git(repo, "diff", "--cached", "--name-only").stdout
 
 
 def test_render_layer_always_ends_with_one_newline(tmp_path):
@@ -1245,297 +1015,10 @@ def test_confirm_all_does_not_flip_layers_when_core_not_confirmed(tmp_path):
     assert "status=confirmed" not in open(lp).read()
 
 
-def test_resume_ambiguous_over_placeholder_marks_pending(tmp_path):
-    # /code-review #9: refusing to retire an ambiguous legacy over a placeholder must drop a
-    # calibration-pending marker so mode_reconcile surfaces it for hand-reconcile.
-    repo = str(tmp_path)
-    store = str(tmp_path / "store")
-    legacy = _legacy_review_path(repo)
-    open(legacy, "w").write(_REVIEW_PROFILE.replace("## Verify", "## How we check"))  # ambiguous
-    d = os.path.join(repo, ".claude", "superheroes")
-    os.makedirs(d, exist_ok=True)
-    empty = {"verifyCommand": "", "stackTags": [], "threatModel": "", "patterns": ""}
-    open(os.path.join(d, "core.md"), "w").write(
-        CM.render_core(empty, "provisional", "2026-06-26", "2026-06-26"))
-    open(os.path.join(d, "review-crew.md"), "w").write(
-        CM._render_layer("", "review-crew", "provisional", "2026-06-26"))
-    res = CM.migrate_on_read(repo, "review-crew", root=store)
-    assert res["action"] == "ambiguous"
-    assert os.path.exists(legacy)                       # preserved
-    assert os.path.isfile(CM._pending_path(repo, store))  # surfaced as calibration-not-saved
-
-
-def test_resume_rescue_preserves_confirmed_status_and_created(tmp_path):
-    # /code-review #10: rescuing an empty placeholder must NOT downgrade a confirmed status or
-    # reset the created date.
-    repo = str(tmp_path)
-    store = str(tmp_path / "store")
-    legacy = _legacy_review_path(repo)
-    open(legacy, "w").write(_REVIEW_PROFILE)
-    d = os.path.join(repo, ".claude", "superheroes")
-    os.makedirs(d, exist_ok=True)
-    empty = {"verifyCommand": "", "stackTags": [], "threatModel": "", "patterns": ""}
-    open(os.path.join(d, "core.md"), "w").write(
-        CM.render_core(empty, "confirmed", "2026-06-01", "2026-06-01"))
-    open(os.path.join(d, "review-crew.md"), "w").write(
-        CM._render_layer("", "review-crew", "confirmed", "2026-06-01"))
-    CM.migrate_on_read(repo, "review-crew", root=store)
-    got = CM.read(repo, root=store)
-    assert got["verifyCommand"] == "npm test"   # rescued
-    assert got["status"] == "confirmed"          # NOT downgraded
-    assert got["created"] == "2026-06-01"        # preserved
-
-
-# ---------------------------------------------------------------------------
-# #428 — migrate_on_read committed a pure DELETION of the tracked calibration
-# LAYER (.claude/superheroes/test-pilot.md) with no replacement, losing a
-# migrated project's calibration. Two-part defense: (1) the migration commit
-# never records a deletion of core/layer; (2) _legacy_path never returns the
-# unified layer as a "legacy" migration source (the trigger).
-# ---------------------------------------------------------------------------
-
-_TP_LAYER_BODY = (
-    "## App launch\n\nnpm run dev\n\n"
-    "## Machine-readable config\n\n"
-    "```json test-pilot-config\n"
-    '{"schemaVersion": 1, "baseUrl": "http://localhost:3000"}\n'
-    "```\n"
-)
-
-
-def _write_migrated_test_pilot(repo, *, status="confirmed", stamp="2026-07-01"):
-    """A MIGRATED test-pilot project: core.md + the unified test-pilot.md layer (with the
-    test-pilot-config block store.resolve() keys on), NO legacy profile.md. Returns the layer path."""
-    d = os.path.join(repo, ".claude", "superheroes")
-    os.makedirs(d, exist_ok=True)
-    core_facts = {"verifyCommand": "npm test", "stackTags": ["node"],
-                  "threatModel": "xss", "patterns": "hooks"}
-    open(os.path.join(d, "core.md"), "w").write(
-        CM.render_core(core_facts, status, stamp, stamp))
-    layer_p = os.path.join(d, "test-pilot.md")
-    open(layer_p, "w").write(CM._render_layer(_TP_LAYER_BODY, "test-pilot", status, stamp))
-    return layer_p
-
-
-def test_migrated_layer_is_never_a_legacy_migration_source(tmp_path, monkeypatch):
-    # #428 direction 2 (trigger): a migrated project's unified layer must NEVER be treated as a
-    # legacy profile. store.resolve() returns profileSource=="layer" with the layer in `profile`;
-    # _legacy_path must NOT hand that back (its #123 contract: "never the unified layer").
-    repo = str(tmp_path / "repo")
-    os.makedirs(repo)
-    monkeypatch.setenv("TEST_PILOT_STORE_ROOT", str(tmp_path / "tp_store"))
-    layer_p = _write_migrated_test_pilot(repo)
-    # sanity: store.resolve DOES surface the layer (that overload is correct for the engine)
-    import store as tp_store
-    res = tp_store.resolve(repo, tp_store.store_root())
-    assert res["profileSource"] == "layer"
-    assert os.path.realpath(res["profile"]) == os.path.realpath(layer_p)
-    # but _legacy_path must not return the layer — it returns the (non-existent) legacy path,
-    # so resolve_shared's `os.path.isfile(legacy)` gate is False and migration never fires.
-    legacy = CM._legacy_path(repo, "test-pilot")
-    assert os.path.realpath(legacy) != os.path.realpath(layer_p)
-    assert not os.path.isfile(legacy)
-
-
-def test_migrate_migrated_test_pilot_is_noop_never_deletes_layer(tmp_path, monkeypatch):
-    # #428 THE reproducer: an in-repo worktree cut from a migrated main (core.md + tracked
-    # test-pilot.md layer, NO legacy profile.md). migrate_on_read must be a NOOP — it must NOT
-    # unlink the layer, and must NOT commit a deletion of it.
-    repo = _git_repo(tmp_path)
-    store = str(tmp_path / "store")
-    _force_in_repo(repo, store)
-    monkeypatch.setenv("TEST_PILOT_STORE_ROOT", str(tmp_path / "tp_store"))
-    layer_p = _write_migrated_test_pilot(repo)
-    _git(repo, "add", ".claude/superheroes/core.md", ".claude/superheroes/test-pilot.md")
-    _git(repo, "commit", "-q", "-m", "migrate (prior run)")
-    head_before = _git(repo, "rev-parse", "HEAD").stdout.strip()
-
-    res = CM.migrate_on_read(repo, "test-pilot", root=store)
-
-    assert res["action"] == "noop"
-    # the layer is still on disk AND still tracked — no destructive deletion
-    assert os.path.isfile(layer_p)
-    assert _git(repo, "ls-files", "--", ".claude/superheroes/test-pilot.md").stdout.strip()
-    # HEAD did not advance with a phantom "migrate" deletion commit
-    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == head_before
-    # idempotent: a second read is still a clean noop, layer intact
-    assert CM.migrate_on_read(repo, "test-pilot", root=store)["action"] == "noop"
-    assert os.path.isfile(layer_p)
-    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == head_before
-
-
-def test_migrate_belt_refuses_when_legacy_is_the_layer(tmp_path, monkeypatch):
-    # #428 direction 1 (belt, independent of the trigger fix): even if a resolver regressed and
-    # handed the LAYER path back as "legacy", migrate_on_read must refuse — a calibration
-    # core/layer is never its own legacy. No unlink, no deletion commit.
-    repo = _git_repo(tmp_path)
-    store = str(tmp_path / "store")
-    _force_in_repo(repo, store)
-    layer_p = _write_migrated_test_pilot(repo)
-    _git(repo, "add", ".claude/superheroes/core.md", ".claude/superheroes/test-pilot.md")
-    _git(repo, "commit", "-q", "-m", "migrate (prior run)")
-    head_before = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    # simulate the regression: _legacy_path returns the layer itself
-    monkeypatch.setattr(CM, "_legacy_path", lambda cwd, hero: layer_p)
-
-    res = CM.migrate_on_read(repo, "test-pilot", root=store)
-
-    assert res["action"] == "noop"
-    assert os.path.isfile(layer_p)  # NOT unlinked
-    assert _git(repo, "ls-files", "--", ".claude/superheroes/test-pilot.md").stdout.strip()
-    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == head_before
-
-
-def test_commit_pathspec_excludes_absent_calibration_paths(tmp_path):
-    # #428 direction 1 (unit): the migration commit pathspec / add-set must include core/layer
-    # ONLY when present+non-empty. An ABSENT (tracked-but-missing) layer must never have its
-    # DELETION staged/committed by the migration — and a present-but-EMPTY one is equally not
-    # a calibration ADD (the >0 boundary).
-    repo = _git_repo(tmp_path)
-    d = os.path.join(repo, ".claude", "superheroes")
-    os.makedirs(d)
-    core_p = os.path.join(d, "core.md")
-    layer_p = os.path.join(d, "test-pilot.md")
-    open(core_p, "w").write(CM.render_core(
-        {"verifyCommand": "npm test", "stackTags": [], "threatModel": "x", "patterns": ""},
-        "provisional", "2026-07-01", "2026-07-01"))
-    # layer_p is ABSENT
-    present = CM._present_calibration_paths(core_p, layer_p)
-    assert core_p in present
-    assert layer_p not in present
-    # present-but-ZERO-BYTE is not "populated" either (kills the >0 → >=0 mutant)
-    open(layer_p, "w").close()
-    assert layer_p not in CM._present_calibration_paths(core_p, layer_p)
-    os.unlink(layer_p)
-    # a distinct TRACKED in-repo legacy deletion is still recorded; an absent layer is not
-    legacy = os.path.join(repo, ".claude", "test-pilot", "profile.md")
-    os.makedirs(os.path.dirname(legacy))
-    open(legacy, "w").write("# legacy\n")
-    _git(repo, "add", ".claude/test-pilot/profile.md")
-    _git(repo, "commit", "-q", "-m", "seed legacy")
-    spec = CM._commit_pathspec(repo, core_p, layer_p, legacy)
-    assert core_p in spec
-    assert layer_p not in spec        # absent → never a deletion in the pathspec
-    assert legacy in spec             # distinct tracked in-repo legacy deletion still recorded
-
-
-def test_commit_pathspec_excludes_phantom_untracked_legacy(tmp_path):
-    # #428 review (code round 1): _legacy_path returns an in-repo ANCHORED path even when no
-    # legacy ever existed. A never-tracked pathspec entry makes `git commit --only` abort the
-    # WHOLE commit ("did not match any files"), so core/layer would never land. The pathspec
-    # must include the legacy only when it is genuinely tracked.
-    repo = _git_repo(tmp_path)
-    d = os.path.join(repo, ".claude", "superheroes")
-    os.makedirs(d)
-    core_p = os.path.join(d, "core.md")
-    layer_p = os.path.join(d, "test-pilot.md")
-    open(core_p, "w").write("x\n")
-    open(layer_p, "w").write("y\n")
-    phantom = os.path.join(repo, ".claude", "test-pilot", "profile.md")  # never created/tracked
-    spec = CM._commit_pathspec(repo, core_p, layer_p, phantom)
-    assert phantom not in spec
-    assert spec == [core_p, layer_p]
-
-
-def test_resume_outstanding_commit_with_no_legacy_ever_lands(tmp_path, monkeypatch):
-    # #428 review (code round 1, integration): in-repo core+layer written on disk but never
-    # committed, and NO legacy profile ever existed. The outstanding-commit resume must land
-    # the split — with the phantom anchored legacy in the pathspec the whole commit aborted
-    # and every read deferred forever.
-    repo = _git_repo(tmp_path)
-    store = str(tmp_path / "store")
-    _force_in_repo(repo, store)
-    monkeypatch.setenv("TEST_PILOT_STORE_ROOT", str(tmp_path / "tp_store"))
-    _git(repo, "commit", "-q", "--allow-empty", "-m", "init")
-    layer_p = _write_migrated_test_pilot(repo)  # writes core.md + layer, commits nothing
-
-    res = CM.migrate_on_read(repo, "test-pilot", root=store)
-
-    assert res["action"] == "completed"
-    assert _git(repo, "ls-files", "--", ".claude/superheroes/core.md").stdout.strip()
-    assert _git(repo, "ls-files", "--", ".claude/superheroes/test-pilot.md").stdout.strip()
-    assert os.path.isfile(layer_p)
-    assert not os.path.isfile(CM._pending_path(repo, store))
-
-
-def test_record_migration_commit_nothing_to_add_refuses(tmp_path):
-    # #428 direction 1 (unit lock on the belt): with NEITHER core nor layer present+populated
-    # there is nothing legitimate to record — _record_migration_commit must refuse (deferred +
-    # calibration-not-saved marker), never commit a purely destructive migration.
-    repo = _git_repo(tmp_path)
-    store = str(tmp_path / "store")
-    _force_in_repo(repo, store)
-    d = os.path.join(repo, ".claude", "superheroes")
-    os.makedirs(d)
-    core_p = os.path.join(d, "core.md")         # ABSENT
-    layer_p = os.path.join(d, "test-pilot.md")  # ABSENT
-    legacy = os.path.join(repo, ".claude", "test-pilot", "profile.md")
-    os.makedirs(os.path.dirname(legacy))
-    open(legacy, "w").write("# legacy\n")
-    _git(repo, "add", ".claude/test-pilot/profile.md")
-    _git(repo, "commit", "-q", "-m", "seed legacy")
-    head_before = _git(repo, "rev-parse", "HEAD").stdout.strip()
-
-    res = CM._record_migration_commit(repo, repo, "test-pilot", core_p, layer_p, legacy, store)
-
-    assert res == {"action": "deferred"}
-    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == head_before  # no commit landed
-    assert _git(repo, "ls-files", "--", ".claude/test-pilot/profile.md").stdout.strip()  # not retired
-    marker = json.load(open(CM._pending_path(repo, store)))
-    assert marker["detail"]["reason"] == "migrate-nothing-to-add"
-
-
-def test_migration_recorded_requires_present_layer_tracked(tmp_path, monkeypatch):
-    # #428 review (premortem round 1): the convergence predicate must not be layer-blind. A
-    # commit that landed core.md + legacy retirement but DROPPED the layer must read as NOT
-    # recorded (so the next read retries and heals), while an absent layer imposes no
-    # requirement (a deliberately deleted layer must not retry forever).
-    repo = _git_repo(tmp_path)
-    store = str(tmp_path / "store")
-    _force_in_repo(repo, store)
-    monkeypatch.setenv("TEST_PILOT_STORE_ROOT", str(tmp_path / "tp_store"))
-    layer_p = _write_migrated_test_pilot(repo)
-    core_p = os.path.join(repo, ".claude", "superheroes", "core.md")
-    legacy = os.path.join(repo, ".claude", "test-pilot", "profile.md")  # never existed
-    # core committed, layer present+populated but UNTRACKED → not recorded
-    _git(repo, "add", ".claude/superheroes/core.md")
-    _git(repo, "commit", "-q", "-m", "core only")
-    assert CM._migration_recorded(repo, core_p, legacy, layer_p=layer_p) is False
-    # the next read HEALS it: the outstanding-commit resume commits the dropped layer
-    res = CM.migrate_on_read(repo, "test-pilot", root=store)
-    assert res["action"] == "completed"
-    assert _git(repo, "ls-files", "--", ".claude/superheroes/test-pilot.md").stdout.strip()
-    assert CM._migration_recorded(repo, core_p, legacy, layer_p=layer_p) is True
-    # an ABSENT layer imposes no tracked requirement (recorded stays true after a deliberate,
-    # committed retirement of the layer)
-    _git(repo, "rm", "-q", ".claude/superheroes/test-pilot.md")
-    _git(repo, "commit", "-q", "-m", "retire layer on purpose")
-    assert CM._migration_recorded(repo, core_p, legacy, layer_p=layer_p) is True
-    # a present-but-ZERO-BYTE layer likewise imposes no requirement — the oracle's presence
-    # boundary must match _present_calibration_paths' (>0), or an empty layer would be
-    # required-tracked yet never added: an unrecoverable retry-forever state
-    open(layer_p, "w").close()
-    assert CM._migration_recorded(repo, core_p, legacy, layer_p=layer_p) is True
-
-
-def test_commit_pathspec_never_records_legacy_that_is_the_layer(tmp_path):
-    # #428 direction 1 (unit): if `legacy` coincides with core_p/layer_p, it must NOT be appended
-    # as a deletion (a core/layer is never its own legacy).
-    repo = _git_repo(tmp_path)
-    d = os.path.join(repo, ".claude", "superheroes")
-    os.makedirs(d)
-    core_p = os.path.join(d, "core.md")
-    layer_p = os.path.join(d, "test-pilot.md")
-    open(core_p, "w").write("x\n")
-    open(layer_p, "w").write("y\n")
-    spec = CM._commit_pathspec(repo, core_p, layer_p, layer_p)  # legacy == layer
-    assert spec.count(layer_p) == 1  # present once as the ADD, never doubled as a deletion
-
-
 def test_store_create_does_not_mint_legacy_profile_md(tmp_path):
     # #428 direction 2 corollary: store.create() must not materialize a legacy profile.md on disk
     # (it returns the path but never writes the file). Locks the non-minting invariant so a future
-    # change can't reintroduce the migrate_on_read trigger.
+    # change can't reintroduce the migrate_on_read trigger (removed in #724).
     import store as tp_store
     repo = str(tmp_path / "repo")
     os.makedirs(repo)
@@ -1545,113 +1028,6 @@ def test_store_create_does_not_mint_legacy_profile_md(tmp_path):
     assert c["profileSource"] == "profile-md"  # genuinely un-migrated: legacy scaffold target
     assert c["profile"].endswith(os.path.join(".claude", "test-pilot", "profile.md"))
     assert not os.path.exists(c["profile"])  # path returned, file NOT minted
-
-
-def test_migrate_real_test_pilot_legacy_still_migrates_and_commits(tmp_path, monkeypatch):
-    # #428 must NOT break the legitimate migration: a REAL in-repo legacy profile.md (tracked, no
-    # prior core/layer) still splits into core.md + test-pilot.md, commits them, and records the
-    # legacy DELETION.
-    repo = _git_repo(tmp_path)
-    store = str(tmp_path / "store")
-    _force_in_repo(repo, store)
-    monkeypatch.setenv("TEST_PILOT_STORE_ROOT", str(tmp_path / "tp_store"))
-    legacy_dir = os.path.join(repo, ".claude", "test-pilot")
-    os.makedirs(legacy_dir)
-    legacy = os.path.join(legacy_dir, "profile.md")
-    open(legacy, "w").write(
-        "<!-- test-pilot -->\n\n## App launch\n\nnpm run dev\n\n"
-        "## Machine-readable config\n\n```json test-pilot-config\n"
-        '{"schemaVersion": 1, "baseUrl": "http://localhost:3000"}\n```\n')
-    _git(repo, "add", ".claude/test-pilot/profile.md")
-    _git(repo, "commit", "-q", "-m", "seed legacy test-pilot profile")
-
-    # _legacy_path returns the REAL legacy (anchored in-repo), not the layer
-    assert os.path.realpath(CM._legacy_path(repo, "test-pilot")) == os.path.realpath(legacy)
-    res = CM.migrate_on_read(repo, "test-pilot", root=store)
-    assert res["action"] == "migrated"
-    # core.md + layer written and committed; legacy deletion recorded
-    names = set(_git(repo, "show", "--name-status", "--format=", "HEAD").stdout.split())
-    assert ".claude/superheroes/core.md" in names
-    assert ".claude/superheroes/test-pilot.md" in names
-    # the legacy profile.md's removal is recorded (git may report it as a delete or, since it
-    # shares the config block with the layer, as a rename — either way it is no longer tracked)
-    assert not _git(repo, "ls-files", "--", ".claude/test-pilot/profile.md").stdout.strip()
-    assert not os.path.exists(legacy)
-    # and the layer carries the test-pilot-config block (real calibration, not an empty deletion)
-    assert "test-pilot-config" in open(os.path.join(repo, ".claude", "superheroes", "test-pilot.md")).read()
-
-
-def test_migration_recorded_means_landed_in_head_not_staged(tmp_path, monkeypatch):
-    # #428 round-2 review: RECORDED means landed in HEAD. `git add` succeeded + commit failed
-    # leaves the split staged-but-uncommitted; an index-based oracle would call that recorded
-    # and (with an out-of-repo legacy, which has no legacy leg to rescue it) silently drop the
-    # retry. The oracle must say NOT recorded until the commit itself lands.
-    repo = _git_repo(tmp_path)
-    store = str(tmp_path / "store")
-    _force_in_repo(repo, store)
-    monkeypatch.setenv("TEST_PILOT_STORE_ROOT", str(tmp_path / "tp_store"))
-    _git(repo, "commit", "-q", "--allow-empty", "-m", "init")
-    layer_p = _write_migrated_test_pilot(repo)
-    core_p = os.path.join(repo, ".claude", "superheroes", "core.md")
-    legacy = str(tmp_path / "outside" / "profile.md")  # OUT-OF-REPO legacy (no rescue leg)
-    _git(repo, "add", ".claude/superheroes/core.md", ".claude/superheroes/test-pilot.md")
-    # staged only — no commit yet
-    assert CM._migration_recorded(repo, core_p, legacy, layer_p=layer_p) is False
-    _git(repo, "commit", "-q", "-m", "land the split")
-    assert CM._migration_recorded(repo, core_p, legacy, layer_p=layer_p) is True
-
-
-def test_outstanding_commit_retries_even_when_layer_absent(tmp_path, monkeypatch):
-    # #428 round-2 review: the no-legacy under-lock leg must not dead-end (noop + marker
-    # cleared) over an OUTSTANDING commit when the layer file is absent. It retries the
-    # commit with the present paths only — never a layer deletion.
-    repo = _git_repo(tmp_path)
-    store = str(tmp_path / "store")
-    _force_in_repo(repo, store)
-    monkeypatch.setenv("TEST_PILOT_STORE_ROOT", str(tmp_path / "tp_store"))
-    _git(repo, "commit", "-q", "--allow-empty", "-m", "init")
-    d = os.path.join(repo, ".claude", "superheroes")
-    os.makedirs(d)
-    core_p = os.path.join(d, "core.md")
-    open(core_p, "w").write(CM.render_core(
-        {"verifyCommand": "npm test", "stackTags": ["node"], "threatModel": "x",
-         "patterns": "y"}, "provisional", "2026-07-01", "2026-07-01"))
-    # layer ABSENT, legacy never existed, core present-but-uncommitted = outstanding
-
-    res = CM.migrate_on_read(repo, "test-pilot", root=store)
-
-    assert res["action"] == "completed"
-    assert _git(repo, "ls-files", "--", ".claude/superheroes/core.md").stdout.strip()
-    # no phantom layer or legacy deletion was recorded by the retry
-    names = set(_git(repo, "show", "--name-status", "--format=", "HEAD").stdout.split())
-    assert "D" not in names
-    assert ".claude/superheroes/test-pilot.md" not in names
-
-
-def test_migrate_global_test_pilot_legacy_is_found_and_migrated(tmp_path, monkeypatch):
-    # #428 round-2 test review: the POSITIVE leg of _legacy_path's rewritten test-pilot branch.
-    # A REAL global-store legacy profile.md (profileSource == "profile-md") must still be found
-    # via store.resolve and migrated — only the unified layer is barred as a migration source.
-    # (Mirrors review-crew's global-mode analog; kills a delete-the-branch mutant.)
-    repo = str(tmp_path / "repo")
-    os.makedirs(repo)
-    store = str(tmp_path / "store")
-    monkeypatch.setenv("TEST_PILOT_STORE_ROOT", str(tmp_path / "tp_store"))
-    import store as tp_store
-    c = tp_store.create(repo, "global", tp_store.store_root())
-    assert c["profileSource"] == "profile-md"  # fresh: global-entry legacy scaffold path
-    open(c["profile"], "w").write(
-        "<!-- test-pilot -->\n\n## App launch\n\nnpm run dev\n\n"
-        "## Machine-readable config\n\n```json test-pilot-config\n"
-        '{"schemaVersion": 1, "baseUrl": "http://localhost:3000"}\n```\n')
-    legacy = CM._legacy_path(repo, "test-pilot")
-    assert os.path.realpath(legacy) == os.path.realpath(c["profile"])
-    res = CM.migrate_on_read(repo, "test-pilot", root=store)
-    assert res["action"] == "migrated"
-    assert not os.path.exists(c["profile"])          # global legacy retired
-    assert CM.read(repo, root=store) is not None      # core written
-    layer_p = CM.layer_path(repo, "test-pilot", store)
-    assert "test-pilot-config" in open(layer_p).read()  # calibration landed in the layer
 
 
 def _gate_valid_core_text(prefs=None):
@@ -1956,47 +1332,6 @@ def test_write_readable_still_reuses_gate_676(tmp_path):
     CM.write(repo, facts, "confirmed", root=store, now="2026-01-01")
     res = CM.write(repo, facts, "confirmed", root=store, now="2026-01-02")
     assert res["action"] == "reused"
-
-
-def test_migrate_legacy_with_undecodable_core_raises_and_preserves_files(tmp_path):
-    repo = str(tmp_path)
-    store = str(tmp_path / "store")
-    legacy = _legacy_review_path(repo)
-    open(legacy, "w").write(_REVIEW_PROFILE)
-    core_p = _gate_core_beside(repo)
-    payload = b"<!-- x -->\n\xff\xfe not utf8\n"
-    with open(core_p, "wb") as fh:
-        fh.write(payload)
-    with pytest.raises(UnicodeDecodeError):
-        CM.migrate_on_read(repo, "review-crew", root=store)
-    with open(core_p, "rb") as fh:
-        assert fh.read() == payload
-    assert os.path.isfile(legacy)
-
-
-def test_migrate_no_core_still_migrates_legacy(tmp_path):
-    repo = str(tmp_path)
-    store = str(tmp_path / "store")
-    legacy = _legacy_review_path(repo)
-    open(legacy, "w").write(_REVIEW_PROFILE)
-    res = CM.migrate_on_read(repo, "review-crew", root=store)
-    assert res["action"] == "migrated"
-    assert CM.read(repo, root=store) is not None
-    assert not os.path.exists(legacy)
-
-
-def test_migrate_healthy_core_layer_and_legacy_still_resumes(tmp_path):
-    repo = str(tmp_path)
-    store = str(tmp_path / "store")
-    legacy = _legacy_review_path(repo)
-    open(legacy, "w").write(_REVIEW_PROFILE)
-    _write_core(repo, CM.SCHEMA_VERSION, status="confirmed")
-    layer_p = _hero_layer_path(repo, "review-crew")
-    open(layer_p, "w").write(
-        CM._render_layer("## Scope exclusions\n\nnone", "review-crew", "confirmed", "2026-06-26"))
-    res = CM.migrate_on_read(repo, "review-crew", root=store)
-    assert res["action"] in ("completed", "noop")
-    assert not os.path.exists(legacy)
 
 
 def test_gate_global_candidate_dangling_symlink_unreadable(tmp_path):

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Resolve review-crew calibration from the unified layout (core.md + hero layer).
 
-The unified layout is canonical after configure (#81). Legacy `.claude/review-profile.md`
-remains a migration source only — consumers read core.md + `.claude/superheroes/review-crew.md`
-(or their global equivalents in the control-plane project store).
+The unified layout is canonical after configure (#81). Legacy `.claude/review-profile.md` is
+no longer a migration source; it remains resolvable as a calibration path, and its presence
+produces the legacy-profile-unsupported refusal from core_md.resolve_shared. Consumers read
+core.md + `.claude/superheroes/review-crew.md` (or their global equivalents in the
+control-plane project store).
 """
 import os
 import sys

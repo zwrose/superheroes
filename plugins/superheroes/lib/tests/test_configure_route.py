@@ -92,6 +92,49 @@ def test_staleness_drift_stays_in_view(tmp_path, monkeypatch):
     assert out["path"] == "view"
 
 
+def test_legacy_profile_no_core_routes_to_fix(tmp_path):
+    # E19: a legacy profile is hero evidence, so mode_registry.resolve backfills a registry
+    # and the greenfield branch does not fire; fix is the correct route and carries the
+    # legacy-profile-unsupported signal.
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "review-profile.md").write_text("legacy profile\n")
+    out = crt.route(str(tmp_path), interactive=True, root=root)
+    assert out["path"] == "fix"
+    assert any(s.get("type") == core_md.LEGACY_PROFILE_REASON for s in out["signals"])
+
+
+def test_structural_roster_sources_legacy_constant():
+    assert core_md.LEGACY_PROFILE_REASON in crt._STRUCTURAL
+
+
+def test_stray_legacy_with_core_routes_to_fix(tmp_path):
+    # E20: confirmed core + registry + light layers + stray legacy profile routes to fix
+    # via the _STRUCTURAL roster (not the incomplete-set-up branch). The sibling control
+    # test_healthy_project_without_stray_legacy_stays_in_view proves the mechanism.
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    _seed_light_layers(_seed_core(tmp_path, status="confirmed"))
+    (tmp_path / ".claude" / "review-profile.md").write_text("stray legacy\n")
+    out = crt.route(str(tmp_path), interactive=True, root=root)
+    assert out["path"] == "fix"
+    assert core_md.LEGACY_PROFILE_REASON in " ".join(out["reasons"])
+    assert any(s.get("type") == core_md.LEGACY_PROFILE_REASON for s in out["signals"])
+
+
+def test_healthy_project_without_stray_legacy_stays_in_view(tmp_path):
+    # Control for test_stray_legacy_with_core_routes_to_fix: same healthy fixture, no stray
+    # legacy profile — must stay in view so the structural signal is load-bearing.
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    _seed_light_layers(_seed_core(tmp_path, status="confirmed"))
+    out = crt.route(str(tmp_path), interactive=True, root=root)
+    assert out["path"] == "view"
+
+
 def test_work_in_flight_always_false_v2(tmp_path):
     # v2 has no lease store — the spine's ref_lock (and the common-dir control-plane leases it
     # tracked) was retired with the execution spine (#478). work_in_flight fails OPEN: no

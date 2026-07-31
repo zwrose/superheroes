@@ -2,7 +2,8 @@
 """Resolve the native review-code phase's per-project config (FR-3 / FR-7): the project verify
 command and the leaf model tiers, from the resolved review-crew profile. Pure config resolution —
 no loop-decision logic. Fail-open: a missing/unreadable profile yields verify 'none' and the
-band-default tiers (a wrong/absent tier is a cost concern, never a safety one). stdlib only."""
+band-default tiers (a wrong/absent tier is a cost concern, never a safety one); a refused
+calibration is surfaced via calibrationRefusal rather than silently ignored. stdlib only."""
 import argparse
 import json
 import os
@@ -72,9 +73,16 @@ def resolve(cwd, root=None):
     verify_mode = None
     profile = None
     overrides = {}
+    refusal = None
     try:
         shared = core_md.resolve_shared(cwd, root=root)
-        if shared and shared.get("verifyCommand"):
+        if isinstance(shared, dict) and shared.get("action") == "refused":
+            refusal = {
+                "reason": shared.get("reason"),
+                "paths": shared.get("paths") or [],
+                "remedy": shared.get("remedy"),
+            }
+        elif shared and shared.get("verifyCommand"):
             verify = shared["verifyCommand"]
     except Exception:
         verify = None
@@ -99,7 +107,12 @@ def resolve(cwd, root=None):
         tiers = resolve_tiers(overrides)
     except Exception:
         tiers = resolve_tiers({})
-    return {"verifyCommand": verify, "verifyMode": verify_mode, "tiers": tiers}
+    return {
+        "verifyCommand": verify,
+        "verifyMode": verify_mode,
+        "tiers": tiers,
+        "calibrationRefusal": refusal,
+    }
 
 
 def main(argv):

@@ -125,9 +125,10 @@ def resolve(cwd, root):
     store) → none. `profileSource` names the winner: `profile-md` | `layer` | `none`.
 
     Legacy profile.md wins when present so un-migrated projects keep working byte-identically;
-    the layer is the new primary for projects the calibration migration moved (#412 —
-    `core_md migrate --hero test-pilot` deletes profile.md after copying the same
-    `test-pilot-config` block into the layer). blocks_dir/manifests_dir follow the mode the
+    the layer is the new primary for migrated projects (#412 — profile.md copied into the
+    layer). The core_md migration path that deleted profile.md was removed (#724); a legacy
+    profile.md now produces a named refusal via core_md.resolve_shared. blocks_dir/manifests_dir
+    follow the mode the
     winning source physically lives in. plans_dir/state_dir ALWAYS point into the global
     entry (machine-local)."""
     repo_root = get_repo_root(cwd)
@@ -206,10 +207,10 @@ def create(cwd, location, root):
     # #428: a MIGRATED project's calibration lives in the unified layer — create() must
     # point callers (test-pilot-init Step 6 writes the profile at this path) AT THE LAYER,
     # never back at the legacy .claude/test-pilot/profile.md. Re-minting the legacy file on
-    # a migrated project re-arms core_md.migrate_on_read inside build worktrees — the exact
-    # chain that committed a destructive layer deletion (weekly-eats 9dad0f6). Only a
-    # genuinely un-migrated project (no layer with a config block) still scaffolds at the
-    # legacy path, byte-identical to before.
+    # a migrated project used to re-arm core_md.migrate_on_read (removed #724) — the chain
+    # that committed a destructive layer deletion (weekly-eats 9dad0f6). A legacy profile.md
+    # now produces a named refusal instead. Only a genuinely un-migrated project (no layer with
+    # a config block) still scaffolds at the legacy path, byte-identical to before.
     # A still-present legacy — in EITHER location — keeps resolve()'s legacy-first
     # precedence (in-repo profile.md → global-entry profile.md → layers): create() must
     # never point a writer at the layer while the engine would keep reading a legacy.

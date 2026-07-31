@@ -101,8 +101,10 @@ trade-offs AND a recommendation derived from what you detected.
    --status confirmed` (use `provisional` on a headless run) to write the band-wide `core.md`,
    and pipe test-pilot's own sections (its `json test-pilot-config` block + prose) into
    `core_md.py write-layer --hero test-pilot --status <s>` so they land in the `test-pilot.md`
-   layer (FR-3). On reconcile of a pre-existing profile, run `core_md migrate --hero test-pilot`
-   then `core_md resolve` (CONVENTIONS §2.1 / §2.2). Never hand-format core.md — the lib owns
+   layer (FR-3). On reconcile of a pre-existing profile, the legacy `profile.md` is not adopted —
+   `resolve_shared` returns the `legacy-profile-unsupported` refusal pointing at
+   `superheroes:configure` — no shared facts to read yet; re-calibrate through configure first
+   (`core_md resolve` only after `core.md` exists; CONVENTIONS §2.1 / §2.2). Never hand-format core.md — the lib owns
    the format and the config lock. `write --status confirmed` is the CREATE path only; confirming
    a pre-existing **provisional** core/layer goes through `core_md.py confirm` (reached from
    `superheroes:configure`), which `write` cannot do on an existing file (it returns `reused`).

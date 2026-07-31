@@ -191,17 +191,18 @@ fi
 
 When `decide-location` returns `ask`, present the in-repo-vs-global `AskUserQuestion` and use the answer as `$LOC`. When `$LOCATION` was `none`, run review-init inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4) before the re-resolve above. Headless runs get a provisional profile from detected defaults.
 
-**Read the verify story from core calibration** via `review_code_config.py` (uses `$CORE`'s `verifyCommand`, else legacy `$PROFILE`'s `## Verify`). Sets `VERIFY_CMD` for the verify gate and fixer:
+**Read the verify story from core calibration** via `review_code_config.py` — `$CORE`'s `verifyCommand`, else legacy `$PROFILE`'s `## Verify`. Sets `VERIFY_CMD` for the verify gate and fixer:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 VERIFY_JSON=$(python3 -B "$ROOT_DIR/lib/review_code_config.py" 2>/dev/null) || VERIFY_JSON='{}'
 VERIFY_CMD=$(printf '%s' "$VERIFY_JSON" | jq -r '.verifyCommand // empty')
 VERIFY_MODE=$(printf '%s' "$VERIFY_JSON" | jq -r '.verifyMode // empty')
+REFUSAL=$(printf '%s' "$VERIFY_JSON" | jq -r '.calibrationRefusal.remedy // empty')
 [ "$VERIFY_CMD" = "none" ] && VERIFY_CMD=""
 ```
 
-When `VERIFY_MODE` is `unverified`, skip the verify gate. When `VERIFY_MODE` is `review-only`, degrade to one pass + presentation.
+When `REFUSAL` is non-empty, `core.md` calibration was not read and the legacy profile is unsupported — state that, quote the remedy, and note the legacy profile may still have supplied `VERIFY_CMD` and per-role tier overrides; say which values differ from band defaults rather than asserting they all came from the legacy file. When `VERIFY_MODE` is `unverified`, skip the verify gate. When `VERIFY_MODE` is `review-only`, degrade to one pass + presentation.
 
 **Refresh dispatch paths before specialists.** Re-run the `calibration_resolve.py` jq block above once after bootstrap.
 

@@ -79,28 +79,46 @@ def gather_signals(cwd, root=None):
         sigs.append({"type": "core-md-unreadable",
                      "identity": _sig_id("core-md-unreadable"), "detail": {}})
 
-    # per-hero legacy-profile drift: ambiguous-pending (no usable core.md) or stray (core.md exists)
-    for hero in mr._HERO_LEGACY_INREPO:
-        try:
-            legacy = core_md._legacy_path(cwd, hero) if core_p is not None else None
-        except Exception:
-            legacy = None
-        if not legacy or not os.path.isfile(legacy):
-            continue
-        if core_rec is not None:
-            sigs.append({"type": "migration-incomplete",
-                         "identity": _sig_id("migration-incomplete", hero),
-                         "detail": {"hero": hero}})
-            continue
-        try:
-            with open(legacy, encoding="utf-8") as fh:
-                klass = core_md.classify(fh.read(), hero)
-        except OSError:
-            klass = "ambiguous"
-        if klass == "ambiguous":
-            sigs.append({"type": "legacy-migration-ambiguous",
-                         "identity": _sig_id("legacy-migration-ambiguous", hero),
-                         "detail": {"hero": hero}})
+    # per-hero legacy-profile drift: presence-only (whether or not core.md parses)
+    try:
+        legacy_refusal = core_md.legacy_profile_refusal(cwd, root)
+    except Exception:
+        # legacy_profile_refusal never raises; only an unbound core_md reaches here — skip block.
+        legacy_refusal = None
+    if legacy_refusal is not None:
+        detail_map = legacy_refusal.get("detail") or {}
+        heroes = legacy_refusal.get("heroes") or []
+        paths = legacy_refusal.get("paths") or []
+        core_facts_empty = core_md.core_facts_are_empty(core_rec)
+        if not heroes:
+            sigs.append({
+                "type": core_md.LEGACY_PROFILE_REASON,
+                "identity": _sig_id(core_md.LEGACY_PROFILE_REASON, "*"),
+                "detail": {
+                    "hero": None,
+                    "path": None,
+                    "reason": detail_map.get("*"),
+                    "remedy": core_md.LEGACY_PROFILE_REMEDY,
+                    "coreFactsEmpty": core_facts_empty,
+                },
+            })
+        else:
+            for hero in heroes:
+                hero_detail = detail_map.get(hero)
+                path = hero_detail if hero_detail in paths else None
+                sig_detail = {
+                    "hero": hero,
+                    "path": path,
+                    "remedy": core_md.LEGACY_PROFILE_REMEDY,
+                    "coreFactsEmpty": core_facts_empty,
+                }
+                if hero_detail is not None and path is None:
+                    sig_detail["reason"] = hero_detail
+                sigs.append({
+                    "type": core_md.LEGACY_PROFILE_REASON,
+                    "identity": _sig_id(core_md.LEGACY_PROFILE_REASON, hero),
+                    "detail": sig_detail,
+                })
 
     # calibration-not-saved (UFR-4): the machine-local pending marker, read DIRECTLY (no
     # core_md import here — avoids an import cycle; the marker path is owned by mode_registry's

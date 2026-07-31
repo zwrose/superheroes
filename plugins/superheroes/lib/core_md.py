@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # plugins/superheroes/lib/core_md.py
-"""Shared core.md calibration brain (CONVENTIONS §2.1/§2.2/§4.2/§4.4) + the legacy-profile
-migrator. Stdlib-only, mirrors architect_config.py. The format (parse/render) and pure read
-are side-effect-free; write/migrate_on_read are lock-guarded (mode_registry.config_lock) and
-fail-open (return a `deferred` action, never raise, never block)."""
+"""Shared core.md calibration brain (CONVENTIONS §2.1/§2.2/§4.2/§4.4). Stdlib-only, mirrors
+architect_config.py. The format (parse/render) and pure read are side-effect-free;
+write/write_layer/confirm*/write_show_it_surface are the lock-guarded fail-open writers
+(mode_registry.config_lock; return a `deferred` action, never raise, never block). The
+legacy-profile migration path was removed in favour of a named refusal (issue #724)."""
 import collections
 import datetime
 import json
@@ -25,6 +26,11 @@ CONFIG_ABSENT = "absent"
 CONFIG_OK = "ok"
 CONFIG_UNREADABLE = "unreadable"
 GATE_REASON_UNREADABLE = "core-md-unreadable"
+LEGACY_PROFILE_REASON = "legacy-profile-unsupported"
+LEGACY_PROFILE_REMEDY = (
+    "run superheroes:configure to re-calibrate this project; "
+    "the pre-core.md single-file profile is no longer read"
+)
 SHOW_IT_REASON_ABSENT = "core-md-absent"
 SHOW_IT_REASON_UNPARSEABLE = "core-md-unparseable"
 SHOW_IT_REASON_PROSE_FORBIDDEN = "show-it-prose-forbidden"
@@ -558,131 +564,6 @@ def write_show_it_surface(cwd, prose, *, root=None):
         return {"action": "written"}
 
 
-# Recognized headings per hero. Shared-fact headings live in core.md; hero headings → the
-# layer. Anything not listed (and not a recognized shared/hero heading) is an "extra" section
-# carried verbatim into the layer — it does not by itself make a profile ambiguous.
-_SHARED_HEADINGS = {
-    "review-crew": {"project", "threat model", "verify", "canonical patterns"},
-    "test-pilot": set(),  # test-pilot's profile carries no shared prose; its facts live in its json block
-}
-# The shared facts that MUST be locatable for a `standard` classification.
-_REQUIRED_SHARED = {
-    "review-crew": {"threat model", "verify"},
-    "test-pilot": set(),  # verify/stack come from the test-pilot-config json block when present
-}
-_HERO_HEADINGS = {
-    "review-crew": {"scope exclusions", "focus hints", "conventions"},
-    "test-pilot": {"app launch", "auth strategy", "seed surfaces", "browser tool order",
-                   "machine-readable config"},
-}
-
-_HEADING_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
-
-
-def _headings(text):
-    return [m.group(1).strip().lower() for m in _HEADING_RE.finditer(text or "")]
-
-
-def classify(profile_text, hero):
-    """`standard` (all required shared facts locatable under recognized headings, and every
-    other section is a recognized hero section or an extra section bearing on no shared fact)
-    or `ambiguous` (a shared fact unlocatable, or a section genuinely ambiguous). Conservative:
-    anything that is not clearly placeable is `ambiguous` so content never lands in the wrong
-    layer (FR-8/FR-9 boundary)."""
-    heads = set(_headings(profile_text))
-    required = _REQUIRED_SHARED.get(hero, set())
-    if not required.issubset(heads):
-        return "ambiguous"  # a required shared fact has no recognized heading
-    return "standard"
-
-
-_VERIFY_CMD_RE = re.compile(r"^command:\s*(.+?)\s*$", re.MULTILINE)
-
-
-def _split_sections(text):
-    """Split a profile into (preamble, [(heading_lower, raw_block), ...]) where each raw_block
-    is the heading line + its body verbatim, up to the next `## ` heading."""
-    lines = text.splitlines(keepends=True)
-    preamble, sections, cur_head, cur = [], [], None, []
-    for line in lines:
-        m = re.match(r"^##\s+(.+?)\s*$", line)
-        if m:
-            if cur_head is not None:
-                sections.append((cur_head, "".join(cur)))
-            elif cur:
-                preamble.extend(cur)
-            cur_head, cur = m.group(1).strip().lower(), [line]
-        else:
-            cur.append(line)
-    if cur_head is not None:
-        sections.append((cur_head, "".join(cur)))
-    else:
-        preamble.extend(cur)
-    return "".join(preamble), sections
-
-
-def split_profile(profile_text, hero):
-    """Content-preserving split → (core_facts, layer_text). Shared facts (verify/threat/
-    patterns/stack) go to core_facts; recognized hero sections + any hero machine block go to
-    the layer verbatim; any unrecognized section is carried into the layer verbatim (FR-8)."""
-    shared = _SHARED_HEADINGS.get(hero, set())
-    _preamble, sections = _split_sections(profile_text)
-    core_facts = {"verifyCommand": None, "stackTags": [], "threatModel": "", "patterns": ""}
-    layer_blocks = []
-    for head, block in sections:
-        if head in shared:
-            body = block.split("\n", 1)[1] if "\n" in block else ""
-            body = body.strip()
-            if head == "verify":
-                m = _VERIFY_CMD_RE.search(block)
-                core_facts["verifyCommand"] = m.group(1).strip() if m else None
-            elif head == "threat model":
-                core_facts["threatModel"] = body
-            elif head == "canonical patterns":
-                core_facts["patterns"] = body
-            # "project" prose informs stackTags loosely; left empty here (detection fills it)
-            continue
-        layer_blocks.append(block.rstrip("\n"))
-    # carry any hero machine block (already inside its `## Machine-readable config` section, so
-    # it rides along verbatim in layer_blocks above).
-    layer_text = "\n\n".join(b for b in layer_blocks if b.strip()) + "\n"
-    return core_facts, layer_text
-
-
-def _legacy_path(cwd, hero):
-    """The hero's pre-existing single-file LEGACY profile path only (#123 — never the unified
-    layer). In-repo legacy wins over global legacy (matches review_store in-repo-first order)."""
-    sub = mode_registry._HERO_LEGACY_INREPO.get(hero)
-    if sub is None:
-        return None
-    anchored = os.path.join(_repo_root(cwd), sub)
-    if os.path.isfile(anchored):
-        return anchored
-    try:
-        if hero == "review-crew":
-            import review_store
-            g = store_core.resolve_global(cwd, review_store.store_root(), heal=False)
-            if g is not None:
-                legacy = os.path.join(g["dir"], review_store.FILENAMES["profile"])
-                if os.path.isfile(legacy):
-                    return legacy
-        elif hero == "test-pilot":
-            import store as test_pilot_store
-            res = test_pilot_store.resolve(cwd, test_pilot_store.store_root())
-            # Only a REAL single-file legacy profile.md is a migration source — NEVER the unified
-            # layer. store.resolve() overloads `profile` to also point at the layer
-            # (profileSource == "layer") so the ENGINE can read calibration from it; returning
-            # that here made migrate_on_read treat the layer itself as a legacy to RETIRE — it
-            # unlinked the layer and committed its DELETION (#428 data-loss). Gate on
-            # profileSource so this honors the #123 contract ("never the unified layer").
-            if (res.get("exists") and res.get("profileSource") == "profile-md"
-                    and res.get("profile")):
-                return res["profile"]
-    except Exception:
-        pass  # fail-open: return the in-repo anchored path for isfile checks
-    return anchored
-
-
 def layer_path(cwd, hero, root=None):
     """Mode-aware path to a hero layer file, co-located with core.md."""
     return os.path.join(os.path.dirname(core_path(cwd, root)), hero + ".md")
@@ -702,97 +583,6 @@ def _render_layer(layer_text, hero, status, stamp, rubric_version=None):
     return rendered if rendered.endswith("\n") else rendered + "\n"
 
 
-def _in_repo_mode(cwd, root):
-    """True when this migration must commit (in-repo): the resolved mode is in-repo AND the
-    project is a git repo. A nongit/global project never commits."""
-    if mode_registry.resolve(cwd, root)["mode"] != mode_registry.IN_REPO:
-        return False
-    return store_core.run_git(cwd, "rev-parse", "--show-toplevel") is not None
-
-
-def _legacy_in_repo(repo_root, legacy):
-    """True when the legacy profile lives INSIDE the repo work tree — i.e. its retirement is a
-    git-trackable DELETION. A global-mode (out-of-repo) legacy is retired by a plain unlink, so it
-    must NOT be handed to `git commit` as a pathspec — an out-of-repo pathspec fails the whole
-    commit and leaves core/layer staged-but-uncommitted (#121 Part E)."""
-    if not legacy:
-        return False
-    return os.path.realpath(legacy).startswith(os.path.realpath(repo_root) + os.sep)
-
-
-def _present_calibration_paths(core_p, layer_p):
-    """The migration commit's ADD set: core.md and the hero layer, but ONLY when each is PRESENT
-    and NON-EMPTY in the worktree. A tracked core/layer that is ABSENT from this worktree must
-    NEVER have its DELETION staged or committed by the migration — the migration's job is to ADD
-    the split, never to delete a layer (#428 data-loss). A freshly-written split has both
-    present+populated, so the legitimate migration is unaffected."""
-    out = []
-    for p in (core_p, layer_p):
-        try:
-            if p and os.path.isfile(p) and os.path.getsize(p) > 0:
-                out.append(p)
-        except OSError:
-            pass
-    return out
-
-
-def _same_file(a, b):
-    """True when two paths denote the same file on disk (realpath-normalized)."""
-    return bool(a) and bool(b) and os.path.realpath(a) == os.path.realpath(b)
-
-
-def _commit_pathspec(repo_root, core_p, layer_p, legacy, present=None):
-    """The paths `git commit --only` records for a migration: the PRESENT+POPULATED core + layer
-    (never a DELETION of an absent tracked core/layer — #428), plus the legacy DELETION only when
-    the legacy is in-repo (#121 Part E), TRACKED (a phantom never-committed path in the pathspec
-    fails the WHOLE commit — git aborts on an unmatched pathspec, so core/layer would never land),
-    and a genuinely distinct file (a core/layer is never its own legacy, so it is never recorded
-    as its own deletion). `present` lets a caller reuse an already-computed add set."""
-    paths = list(present) if present is not None else _present_calibration_paths(core_p, layer_p)
-    if (_legacy_in_repo(repo_root, legacy)
-            and not (_same_file(legacy, core_p) or _same_file(legacy, layer_p))
-            and store_core.run_git(repo_root, "ls-files", "--", legacy)):
-        paths.append(legacy)
-    return paths
-
-
-def _record_migration_commit(cwd, repo, hero, core_p, layer_p, legacy, root):
-    """Stage + commit the migration split via `git commit --only`: add the present+populated
-    core/layer, and record the in-repo legacy DELETION. Returns None on success, or a
-    `deferred`-result dict on refusal/failure. NEVER commits a DELETION of an absent core/layer
-    (#428): only present+populated calibration files are added, and if NEITHER is present there
-    is nothing legitimate to record — refuse (calibration-not-saved) rather than commit a purely
-    destructive migration."""
-    add_paths = _present_calibration_paths(core_p, layer_p)
-    if not add_paths:
-        # No present+populated calibration to ADD → committing would record only deletions.
-        mark_pending(cwd, root, detail={"hero": hero, "reason": "migrate-nothing-to-add"})
-        return {"action": "deferred"}
-    msg = "chore(superheroes): migrate %s profile to core.md + layer" % hero
-    # stage the (possibly untracked) new files so `commit --only` knows them; an in-repo legacy is
-    # recorded via the pathspec so its working-tree DELETION is what --only captures (an out-of-repo
-    # legacy is excluded — Part E — and was already removed by os.unlink).
-    store_core.run_git(repo, "add", "--", *add_paths)
-    store_core.run_git(repo, "commit", "--only", "-m", msg, "--",
-                       *_commit_pathspec(repo, core_p, layer_p, legacy, present=add_paths))
-    if not _migration_recorded(repo, core_p, legacy, layer_p=layer_p):
-        mark_pending(cwd, root, detail={"hero": hero, "reason": "migrate-commit-failed"})
-        return {"action": "deferred"}
-    return None
-
-
-def _facts_are_empty(rec):
-    """An EMPTY PLACEHOLDER core: it parses, but carries no real shared facts (no verify command,
-    threat model, patterns, or stack). Presence of such a record must never be mistaken for a
-    populated calibration when deciding whether a legacy profile is safe to retire (#121 Part D)."""
-    if rec is None:
-        return True
-    return not ((rec.get("verifyCommand") or "").strip()
-                or (rec.get("threatModel") or "").strip()
-                or (rec.get("patterns") or "").strip()
-                or rec.get("stackTags"))
-
-
 def _layer_is_empty(layer_p):
     """True when the layer file is absent or carries only its provenance line (no body sections)."""
     try:
@@ -806,242 +596,136 @@ def _layer_is_empty(layer_p):
     return "\n".join(lines).strip() == ""
 
 
-def migrate_on_read(cwd, hero, *, root=None, now=None):
-    """Convert a hero's legacy profile to core.md + a layer, all-or-nothing, under the lock,
-    with the convergent resume rule (UFR-5/FR-11). Returns
-    {action: migrated|completed|ambiguous|deferred|noop}. A `deferred` return leaves a
-    best-effort PENDING MARKER (UFR-4 calibration-not-saved signal); a successful
-    migrated/completed clears it."""
-    stamp = now or _today()
-    legacy = _legacy_path(cwd, hero)
-    if legacy is None:
-        # Unknown hero — no legacy profile to migrate. Guard before `legacy` reaches
-        # `_migration_recorded`/`run_git` (a None pathspec would raise TypeError). The CLI is
-        # allowlisted via choices=_HEROES; this guards the direct Python API too.
-        return {"action": "noop"}
-    core_p = core_path(cwd, root)
-    layer_p = _layer_path(cwd, hero, root)
-    # DATA-LOSS BELT (#428): a calibration core/layer is NEVER its own legacy. If `legacy`
-    # resolves to the same file as core.md or the hero layer, this is not a migration source —
-    # retiring it would unlink the live layer and commit its DELETION. Refuse before any
-    # unlink/commit. (Direction 2 keeps _legacy_path from ever returning the layer; this belt
-    # holds even if a resolver regresses.)
-    if _same_file(legacy, core_p) or _same_file(legacy, layer_p):
-        return {"action": "noop"}
-    legacy_present = bool(legacy) and os.path.isfile(legacy)
-    core_present = read(cwd, root) is not None
-    layer_present = os.path.isfile(layer_p)
-    # Nothing to migrate when there is no legacy profile — the core is already established or
-    # this is a bare greenfield. EXCEPTION: an in-repo split that landed on disk but whose
-    # commit is still OUTSTANDING (a prior run wrote+unlinked, then the commit failed) must
-    # fall through to the under-lock retry, not short-circuit to noop (the round-3 finding).
-    if not legacy_present and (core_present or not os.path.exists(core_p)):
-        recorded_here = False
-        if core_present and _in_repo_mode(cwd, root):
-            recorded_here = _migration_recorded(_repo_root(cwd), core_p, legacy,
-                                                layer_p=layer_p)
-            outstanding = not recorded_here
-        else:
-            outstanding = False
-        if not outstanding:
-            if recorded_here:
-                # VERIFIED recorded: drop any stale calibration-not-saved marker orphaned by
-                # a crash between a successful migration commit and its clear_pending (#428
-                # round-2 review) — otherwise this shortcut returns noop forever and the
-                # false marker never clears.
-                clear_pending(cwd, root)
-            return {"action": "noop"}
-    if mode_registry.ensure_project_store(cwd, root) is None:
-        mark_pending(cwd, root, detail={"hero": hero, "reason": "store-unwritable"})
-        return {"action": "deferred"}
-    with mode_registry.config_lock(cwd, root) as got:
-        if not got:
-            mark_pending(cwd, root, detail={"hero": hero, "reason": "lock-contended"})
-            return {"action": "deferred", "reason": "lock-contended"}
-        # re-read state under the lock
-        core_present = read(cwd, root) is not None
-        layer_present = os.path.isfile(layer_p)
-        legacy_present = bool(legacy) and os.path.isfile(legacy)
-        # RESUME: both new files present ⇒ authoritative ⇒ complete retirement, never re-split
-        # (FR-11 — preserves a hand-edited layer).
-        if core_present and layer_present:
-            did_work = False
-            # Remove a still-present legacy file (a prior run wrote both new files but did not
-            # finish retiring the legacy).
-            if legacy_present:
-                # DATA-LOSS GUARD (#121 Part D): "present" is not "populated". A prior interrupted
-                # set-up can leave the new core/layer as EMPTY PLACEHOLDERS while the legacy still
-                # holds the only copy of the real threat model + patterns — retiring it here would
-                # lose that content. Before unlinking, RESCUE any empty placeholder from the legacy
-                # (lossless populate-then-retire); a non-empty / hand-edited piece is left untouched
-                # (FR-11). A rich legacy that cannot be safely re-derived (ambiguous) is NOT retired
-                # over a placeholder — surfaced for hand-reconcile instead of silently destroyed.
-                core_rec_now = read(cwd, root)
-                core_empty = _facts_are_empty(core_rec_now)
-                layer_empty = _layer_is_empty(layer_p)
-                if core_empty or layer_empty:
-                    try:
-                        with open(legacy, encoding="utf-8") as fh:
-                            legacy_text = fh.read()
-                    except OSError:
-                        mark_pending(cwd, root, detail={"hero": hero, "reason": "legacy-unreadable"})
-                        return {"action": "deferred"}
-                    if classify(legacy_text, hero) != "standard":
-                        # never destroy an un-derivable legacy over a placeholder; surface it as a
-                        # calibration-not-saved marker so the owner can hand-reconcile (/code-review #9).
-                        mark_pending(cwd, root, detail={"hero": hero, "reason": "ambiguous-legacy"})
-                        return {"action": "ambiguous"}
-                    core_facts, layer_text = split_profile(legacy_text, hero)
-                    # Preserve the placeholder's own status + created: rescuing content must never
-                    # downgrade a confirmed core or reset its creation date (/code-review #10).
-                    prev_status = (core_rec_now or {}).get("status") or "provisional"
-                    prev_created = (core_rec_now or {}).get("created") or stamp
-                    try:
-                        if core_empty:
-                            store_core.atomic_write(
-                                core_p, render_core(core_facts, prev_status, prev_created, stamp))
-                        if layer_empty:
-                            store_core.atomic_write(
-                                layer_p, _render_layer(layer_text, hero, prev_status, stamp))
-                    except OSError:
-                        mark_pending(cwd, root, detail={"hero": hero, "reason": "write-failed"})
-                        return {"action": "deferred", "reason": "write-failed"}
-                    did_work = True
-                try:
-                    os.unlink(legacy)
-                except OSError:
-                    mark_pending(cwd, root, detail={"hero": hero, "reason": "unlink-failed"})
-                    return {"action": "deferred"}
-                did_work = True
-            # In in-repo mode the split must be RECORDED as a commit (FR-8). A prior run may
-            # have failed to commit the adds and/or the legacy deletion — RETRY until recorded,
-            # using git's own tracking state (not run_git's ambiguous None) to decide.
-            if _in_repo_mode(cwd, root):
-                repo = _repo_root(cwd)
-                if not _migration_recorded(repo, core_p, legacy, layer_p=layer_p):
-                    problem = _record_migration_commit(
-                        cwd, repo, hero, core_p, layer_p, legacy, root)
-                    if problem is not None:
-                        return problem
-                    did_work = True
-            clear_pending(cwd, root)
-            return {"action": "completed" if did_work else "noop"}
-        # core present, layer absent (crash between 1 and 2): re-derive from the still-present legacy.
-        # otherwise: a fresh standard migration. Both need the legacy profile.
-        if not legacy_present:
-            # No legacy to (re)split — but never dead-end over an OUTSTANDING commit (#428
-            # round-2 review): a prior run's split may still be unrecorded here (e.g. the layer
-            # was externally removed after a failed commit). Mirror the resume branch's retry —
-            # _record_migration_commit only ever ADDS present+populated paths (never a core/layer
-            # deletion) and refuses when nothing is present, so this can't re-open #428.
-            # `core_present` (core PARSES, re-read under the lock) gates the retry: a prior
-            # run's split always parses (render_core's own output), while hand-authored WIP or
-            # a corrupt core.md is NOT a migration artifact — committing it under a migration
-            # message would be new destructive-adjacent behavior; keep the baseline noop.
-            if _in_repo_mode(cwd, root) and core_present:
-                repo = _repo_root(cwd)
-                if not _migration_recorded(repo, core_p, legacy, layer_p=layer_p):
-                    problem = _record_migration_commit(
-                        cwd, repo, hero, core_p, layer_p, legacy, root)
-                    if problem is not None:
-                        return problem
-                    clear_pending(cwd, root)
-                    return {"action": "completed"}
-            clear_pending(cwd, root)
-            return {"action": "noop"}
-        try:
-            with open(legacy, encoding="utf-8") as fh:
-                legacy_text = fh.read()
-        except OSError:
-            mark_pending(cwd, root, detail={"hero": hero, "reason": "legacy-unreadable"})
-            return {"action": "deferred"}
-        if classify(legacy_text, hero) != "standard":
-            return {"action": "ambiguous"}
-        core_facts, layer_text = split_profile(legacy_text, hero)
-        try:
-            store_core.atomic_write(core_p, render_core(core_facts, "provisional", stamp, stamp))
-            store_core.atomic_write(layer_p, _render_layer(layer_text, hero, "provisional", stamp))
-            os.unlink(legacy)
-        except OSError:
-            mark_pending(cwd, root, detail={"hero": hero, "reason": "write-failed"})
-            return {"action": "deferred", "reason": "write-failed"}
-        if _in_repo_mode(cwd, root):
-            repo = _repo_root(cwd)
-            problem = _record_migration_commit(cwd, repo, hero, core_p, layer_p, legacy, root)
-            if problem is not None:
-                return problem
-        clear_pending(cwd, root)
-        return {"action": "migrated"}
+def _legacy_candidates(cwd, hero, root=None):
+    """Both legacy single-file profile paths for a hero — in-repo and global — enumerated
+    WITHOUT healing. Detection must never repair a store pointer, so the global leg passes
+    heal=False. Mirrors mode_registry.hero_evidence's legacy leg exactly (same tables, same
+    heal=False), so there is ONE shape for 'where a legacy profile could be', not a new one.
+    Only ever names a LEGACY filename, so it can never return the unified hero layer (#428)."""
+    sub = mode_registry._HERO_LEGACY_INREPO.get(hero)
+    if sub is None:
+        return []
+    out = [os.path.join(_repo_root(cwd), sub)]
+    g = store_core.resolve_global(
+        cwd, mode_registry._hero_global_root(hero), heal=False)
+    if g is not None:
+        out.append(os.path.join(g["dir"], mode_registry._HERO_GLOBAL_FILENAME[hero]))
+    return out
 
 
-def _migration_recorded(repo_root, core_p, legacy, layer_p=None):
-    """In in-repo mode the split is fully recorded iff core.md is TRACKED and the legacy
-    path is NO LONGER tracked (its deletion is committed). `run_git ls-files` returns the
-    path when tracked, "" otherwise — distinguishing a real commit landing from run_git's
-    ambiguous None (any nonzero exit), so a failed/outstanding commit is RETRIED on the next
-    read rather than silently dropped (FR-8). Defined after migrate_on_read; Python late-binds
-    the module-level name, so the call order is fine.
+def _legacy_presence(path):
+    """(present, error_detail) for one candidate path, via os.lstat.
 
-    When `layer_p` is given, a PRESENT+POPULATED hero layer must ALSO be tracked before the
-    split counts as recorded — otherwise a commit that dropped the layer (while landing
-    core.md + the legacy retirement) would be declared done and the layer would sit untracked
-    forever with no retry and no calibration-not-saved marker (#428 review). An absent layer
-    imposes no requirement: requiring a deleted-on-purpose layer to be tracked would retry
-    forever, and committing an absent layer is exactly the deletion #428 forbids.
+    lstat does NOT follow symlinks, so a dangling symlink and a directory both read as PRESENT —
+    something unexpected sitting at a legacy path must never be concluded 'absent'. Only
+    FileNotFoundError means absent; any other OSError is PRESENT-indeterminate with its text
+    returned, because a state we could not read is never a clean bill of health."""
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return False, None
+    except OSError as exc:
+        return True, "%s: %s" % (type(exc).__name__, exc)
+    return True, None
 
-    RECORDED means LANDED IN HEAD, not merely staged: the core/layer legs probe
-    `ls-tree HEAD` rather than `ls-files` (the index), because a `git add` that succeeded
-    followed by a `commit` that failed leaves the split staged-but-uncommitted — an
-    index-based oracle would report that as recorded and (on the out-of-repo-legacy leg)
-    silently drop the retry (#428 round-2 review). An unborn HEAD errors → falsey → not
-    recorded → retried, which converges once the migration commit itself creates HEAD.
 
-    An OUT-OF-REPO legacy (global-mode profile) has no git deletion to record — and `ls-files`
-    on a path outside the repo always errors (run_git → None → falsey), which the old
-    `not legacy_tracked` leg misread as 'deletion committed'. So for an out-of-repo legacy the
-    split is recorded iff core.md (and any present layer) is in HEAD (#121 Part E)."""
-    core_recorded = bool(store_core.run_git(
-        repo_root, "ls-tree", "--name-only", "HEAD", "--", core_p))
-    if not core_recorded:
-        return False
-    if layer_p is not None:
-        try:
-            layer_present = os.path.isfile(layer_p) and os.path.getsize(layer_p) > 0
-        except OSError:
-            layer_present = True  # unreadable is NOT absent: stay unrecorded and retry later
-        if layer_present and not store_core.run_git(
-                repo_root, "ls-tree", "--name-only", "HEAD", "--", layer_p):
-            return False
-    if not _legacy_in_repo(repo_root, legacy):
-        return True  # out-of-repo legacy: nothing for git to record beyond the adds
-    legacy_probe = store_core.run_git(repo_root, "ls-files", "--", legacy)
-    if legacy_probe is None:
-        # Probe FAILED (run_git error), which is not the same as "untracked": fail closed —
-        # stay unrecorded and retry — instead of declaring the uncommitted legacy deletion
-        # recorded and clearing the marker (#428 round-2 review). An untracked in-repo legacy
-        # is exit 0 + empty output, so this never misfires on the happy path.
-        return False
-    return not legacy_probe
+def legacy_profile_refusal(cwd, root=None):
+    """Named refusal when a hero still carries a pre-core.md single-file legacy profile.
+
+    Returns None when no hero does. Detection only — this never reads, rewrites, unlinks, or
+    commits a legacy profile, and never writes anything at all (issue #724: the migration path
+    was removed because its only observed behaviour was destructive). Never raises."""
+    try:
+        heroes_refused = []
+        paths = []
+        detail = {}
+        for hero in mode_registry._HERO_LEGACY_INREPO:
+            try:
+                refused = False
+                hero_path = None
+                hero_detail = None
+                for candidate in _legacy_candidates(cwd, hero, root):
+                    present, err = _legacy_presence(candidate)
+                    if present:
+                        refused = True
+                        hero_path = candidate
+                        hero_detail = err if err else candidate
+                        break
+                if refused:
+                    heroes_refused.append(hero)
+                    if hero_path is not None:
+                        paths.append(hero_path)
+                    detail[hero] = hero_detail
+            except Exception as exc:
+                heroes_refused.append(hero)
+                detail[hero] = "%s: %s" % (type(exc).__name__, exc)
+        if not heroes_refused:
+            return None
+        return {
+            "action": "refused",
+            "reason": LEGACY_PROFILE_REASON,
+            "heroes": heroes_refused,
+            "paths": paths,
+            "remedy": LEGACY_PROFILE_REMEDY,
+            "detail": detail,
+        }
+    except Exception as exc:
+        return {
+            "action": "refused",
+            "reason": LEGACY_PROFILE_REASON,
+            "heroes": [],
+            "paths": [],
+            "remedy": LEGACY_PROFILE_REMEDY,
+            "detail": {"*": "%s: %s" % (type(exc).__name__, exc)},
+        }
 
 
 import argparse
 
-# Unified-layer hero roster for migrate/confirm/write-layer and configure's offerable set.
+# Unified-layer hero roster for confirm/write-layer and configure's offerable set.
 # Deliberately NOT mirrored in mode_registry's per-hero dicts: guardian has no legacy profile
-# (_HERO_LEGACY_INREPO has no entry → _legacy_path is a no-op), and mode_registry._hero_global_root
-# falls through to test-pilot's store for unknown names — adding guardian there would mis-route it.
+# (_HERO_LEGACY_INREPO has no entry), and mode_registry._hero_global_root falls through to
+# test-pilot's store for unknown names — adding guardian there would mis-route it.
 _HEROES = ("review-crew", "test-pilot", "guardian")
 
 
+def core_facts_are_empty(rec):
+    """True when a core.md record PARSES but carries no real shared facts (no verify command,
+    threat model, canonical patterns, or stack tags) — an empty placeholder. Restores the
+    READ-ONLY half of the #121 Part D belt that went with migrate_on_read (#724): presence of
+    such a record must never be read as a populated calibration when advising an owner whether a
+    legacy profile is safe to remove. A non-mapping input is treated as empty (fail-closed toward
+    the cautious advice). Pure; no I/O; never raises."""
+    if rec is None or not isinstance(rec, dict):
+        return True
+    if rec.get("verifyCommand"):
+        return False
+    if (rec.get("threatModel") or "").strip():
+        return False
+    if (rec.get("patterns") or "").strip():
+        return False
+    if rec.get("stackTags"):
+        return False
+    return True
+
+
 def resolve_shared(cwd, *, root=None):
-    """The shared facts WITH migrate-on-read (the FR-2 + FR-8 entry point — the ONLY migration
-    trigger). For each hero whose legacy profile is present, attempt migrate_on_read, then read.
-    Returns the fact dict, or None when core.md is still absent (caller detects, UFR-1)."""
-    for hero in _HEROES:
-        legacy = _legacy_path(cwd, hero)
-        if legacy and os.path.isfile(legacy):
-            migrate_on_read(cwd, hero, root=root)
-    return read(cwd, root)
+    """The shared facts (FR-2). A legacy single-file profile is NO LONGER migrated on read: when
+    core.md supplies the facts the legacy file is simply never consulted, and when it does not,
+    a legacy profile is a named refusal pointing at superheroes:configure (issue #724). Never
+    migrates, unlinks, or commits, and the detection half writes nothing — but it calls read(),
+    which inherits mode_registry.resolve's pre-existing project-store backfill, so it is not
+    write-free."""
+    rec = read(cwd, root)
+    if rec is not None:
+        return rec
+    refusal = legacy_profile_refusal(cwd, root=root)
+    if refusal is not None:
+        refusal = dict(refusal)
+        refusal["detail"] = dict(refusal.get("detail") or {})
+        refusal["detail"]["coreMd"] = engine_preferences_for_gate(cwd=cwd, root=root).status
+        return refusal
+    return None
 
 
 def write_layer(cwd, hero, layer_text, status, *, root=None, now=None, rubric_version=None):
@@ -1177,10 +861,6 @@ def main(argv):
     rp = sub.add_parser("resolve")
     rp.add_argument("--cwd", default=".")
     rp.add_argument("--root", default=None)
-    mp = sub.add_parser("migrate")
-    mp.add_argument("--cwd", default=".")
-    mp.add_argument("--root", default=None)
-    mp.add_argument("--hero", choices=_HEROES, required=True)
     wp = sub.add_parser("write")  # FR-5 create path: shared facts → core.md
     wp.add_argument("--cwd", default=".")
     wp.add_argument("--root", default=None)
@@ -1207,11 +887,6 @@ def main(argv):
                "stackTags": rec["stackTags"] if rec else [],
                "status": rec["status"] if rec else None,
                "behind": rec["behind"] if rec else False}
-    elif args.cmd == "migrate":
-        try:
-            out = migrate_on_read(args.cwd, args.hero, root=args.root)
-        except Exception:
-            out = {"action": "deferred"}
     elif args.cmd == "write":
         try:
             facts = json.loads(sys.stdin.read() or "{}")

@@ -134,7 +134,7 @@ def write_registry(cwd, mode, remote_key, root=None, allow_migration=False, now=
         return rec
 
 
-# Legacy single-file profile paths — migration source only (_legacy_path in core_md).
+# Legacy single-file profile locations — used for detection (core_md._legacy_candidates, legacy-profile-unsupported refusal; hero_evidence mode-detection probe).
 _HERO_LEGACY_INREPO = {
     "review-crew": os.path.join(".claude", "review-profile.md"),
     "test-pilot": os.path.join(".claude", "test-pilot", "profile.md"),

@@ -177,9 +177,11 @@ apply as before. Confirming a pre-existing **provisional** core/layer is a separ
 `core_md.py confirm` (reached from `superheroes:configure`'s fix flow), which re-renders the core
 and surgically flips each layer, preserving `created`/`nudge-ack` and bumping `updated` (FR-18).
 
-On **reconcile** (a pre-existing legacy profile), call `core_md migrate --hero review-crew`
-first (adopts a standard legacy profile automatically — FR-8), then `core_md resolve` for the
-shared facts; settle any ambiguous/provisional state through the single coalesced reconcile
+On **reconcile** (a pre-existing legacy profile), nothing is adopted automatically —
+`core_md.resolve_shared` returns the `legacy-profile-unsupported` refusal, surfaced to the owner
+with its `remedy` and routed to `superheroes:configure` — there are no shared facts to read yet;
+the owner must re-calibrate through configure first (`core_md resolve` is only meaningful after
+`core.md` exists). Settle any ambiguous/provisional state through the single coalesced reconcile
 nudge (already surfaced in Step 2). See CONVENTIONS §2.1 (layout) and §2.2 (format).
 
 ## Step 5 — Reconcile (profile already exists)
