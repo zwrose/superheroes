@@ -172,16 +172,49 @@ def class1_census_violations(source_path):
     return violations
 
 
+# Modules known to import launch_ledger today; population must include them
+# or the derived census has collapsed (wrong path, bad scan, changed layout).
+_CLASS1_REQUIRED_BASENAMES = ("launcher.py",)
+
+
 def class1_census_modules():
     modules = []
-    for name in ("launcher.py",):
-        modules.append(os.path.join(_LIB, name))
+    for root, dirs, files in os.walk(_LIB):
+        # Exclude tests/ — test modules legitimately open the ledger by name
+        # to corrupt, truncate, or plant symlinks; censusing them would
+        # produce false positives that would push someone to weaken the census.
+        dirs[:] = [d for d in dirs if d != "tests"]
+        for name in files:
+            if not name.endswith(".py"):
+                continue
+            if name == "launch_ledger.py":
+                continue
+            modules.append(os.path.join(root, name))
+    modules.sort()
     return modules
 
 
+def _validate_class1_population(modules):
+    if not modules:
+        raise RuntimeError(
+            "Class-1 census population collapsed: derived zero modules from %s "
+            "(expected every .py under lib/ except launch_ledger.py and tests/)"
+            % _LIB
+        )
+    basenames = {os.path.basename(p) for p in modules}
+    missing = [n for n in _CLASS1_REQUIRED_BASENAMES if n not in basenames]
+    if missing:
+        raise RuntimeError(
+            "Class-1 census population collapsed: derived population missing "
+            "known launch_ledger consumer(s): %s" % ", ".join(missing)
+        )
+
+
 def run_class1_census():
+    modules = class1_census_modules()
+    _validate_class1_population(modules)
     all_violations = []
-    for path in class1_census_modules():
+    for path in modules:
         all_violations.extend(class1_census_violations(path))
     return all_violations
 
