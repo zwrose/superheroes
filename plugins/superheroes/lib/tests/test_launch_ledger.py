@@ -515,10 +515,12 @@ def test_surfaces_overlap_case_insensitive():
 
 
 # --- concurrency guarantee ---------------------------------------------------
-# test_reserve_refuses_when_lock_is_held is the deterministic bite test: it
-# fails if reserve proceeds without holding the interprocess lock.
-# test_concurrent_reserve_overlapping_surfaces exercises realistic two-process
-# contention; its timing is hardened but not relied on as the guarantee test.
+# test_reserve_refuses_when_lock_is_held is the deterministic bite test for the
+# lock guarantee: it fails if reserve proceeds without holding the interprocess
+# lock. test_concurrent_reserve_overlapping_surfaces is a realistic-conditions
+# test for two-process contention; the waited assertions exist because this
+# test previously passed while synchronizing nothing (per-process monotonic
+# clocks are not comparable across processes).
 
 
 def test_reserve_refuses_when_lock_is_held(tmp_path, monkeypatch):
@@ -551,7 +553,7 @@ def test_concurrent_reserve_overlapping_surfaces(tmp_path, monkeypatch):
     ledger_root = str(tmp_path / "ledger")
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, ledger_root)
     mod_path = os.path.join(_LIB, "launch_ledger.py")
-    shared_deadline = time.monotonic() + 1
+    shared_deadline = time.time() + 1
     child = """
 import json, os, sys, time
 sys.path.insert(0, os.path.dirname(%(mod)r))
@@ -569,10 +571,18 @@ record = {
     "premise": {}, "preflight": {}, "argv": [], "doctrineDigest": "d", "model": "m",
 }
 deadline = %(deadline)r
-while time.monotonic() < deadline:
-    time.sleep(0)
+waited = time.time() < deadline
+wait_seconds = 0.0
+if waited:
+    wait_start = time.time()
+    while time.time() < deadline:
+        time.sleep(0)
+    wait_seconds = time.time() - wait_start
 res = ll.reserve(repo, record, lock_timeout=5)
-print(json.dumps(res))
+out = dict(res)
+out["waited"] = waited
+out["waitSeconds"] = wait_seconds
+print(json.dumps(out))
 """ % {
         "mod": mod_path,
         "_envkey": ll.LEDGER_ROOT_ENV,
@@ -584,6 +594,8 @@ print(json.dumps(res))
     p2 = subprocess.Popen([sys.executable, "-c", child], stdout=subprocess.PIPE, text=True)
     out1 = json.loads(p1.communicate(timeout=30)[0])
     out2 = json.loads(p2.communicate(timeout=30)[0])
+    assert out1["waited"] is True, out1
+    assert out2["waited"] is True, out2
     results = [out1, out2]
     ok_count = sum(1 for r in results if r.get("ok"))
     assert ok_count == 1
