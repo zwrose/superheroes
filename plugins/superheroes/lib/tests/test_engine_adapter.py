@@ -1347,6 +1347,10 @@ def test_review_payload_shape_parsed_values_are_members_of_home():
             assert shape["parsed"] in EA.REVIEW_PAYLOAD_SHAPES, stdout
 
 
+def test_review_payload_shapes_includes_prompt_echo_only():
+    assert EA.SHAPE_PROMPT_ECHO_ONLY in EA.REVIEW_PAYLOAD_SHAPES
+
+
 def test_engagement_read_findings_engaged():
     assert EA.engagement_read({"findings": [{"id": "f"}]}) == "engaged"
 

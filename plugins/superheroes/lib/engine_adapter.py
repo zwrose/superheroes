@@ -40,6 +40,7 @@ SHAPE_OBJECT_FINDINGS_NOT_A_LIST = "object-findings-not-a-list"
 SHAPE_ARRAY_NOT_ALL_OBJECTS = "array-not-all-objects"
 SHAPE_NO_PARSEABLE_JSON = "no-parseable-json"
 SHAPE_EMPTY_STDOUT = "empty-stdout"
+SHAPE_PROMPT_ECHO_ONLY = "prompt-echo-only"
 
 REVIEW_PAYLOAD_SHAPES = (
     SHAPE_OBJECT_WITHOUT_FINDINGS,      # a JSON object parsed, but it carries no `findings` key
@@ -47,6 +48,7 @@ REVIEW_PAYLOAD_SHAPES = (
     SHAPE_ARRAY_NOT_ALL_OBJECTS,        # a bare top-level array parsed, but not every element is an object
     SHAPE_NO_PARSEABLE_JSON,            # stdout was non-empty but held no parseable top-level JSON value
     SHAPE_EMPTY_STDOUT,                 # stdout was empty or whitespace only
+    SHAPE_PROMPT_ECHO_ONLY,             # the seat emitted only an echo of its prompt — graded text empty after strip
 )
 
 # #392: the distinct, honest outcome for a fix whose SUBSTANCE is the history shape (squash to N

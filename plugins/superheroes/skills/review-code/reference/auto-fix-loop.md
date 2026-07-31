@@ -187,8 +187,11 @@ never drop a finding or a lens.
 > carries **`reason`** (and usually **`detail`**). Outcome-dependent keys include **`findings`**,
 > **`investigated`**, **`engagement`**, and **`sanitizedView`** — a consumer must **not** read an
 > absent `findings` as "zero findings"; that is the fail-open reading this subsystem exists to
-> prevent. An `unrunnable` refusal carries none of those outcome keys; a terminal forfeit carries no
-> `findings`/`investigated`. There is no `result` wrapper; parsing `result.findings` reads nothing.
+> prevent. An `unrunnable` refusal carries no `findings` / `investigated` / `engagement`; it carries
+> `sanitizedView` **only when raised after the sanitized view was built** — the early refusals
+> (`repo-root-*`, `prompt-*`, `run-dir-*`, `schema-*`) precede the view and carry none. A terminal
+> forfeit carries no `findings`/`investigated`. There is no `result` wrapper; parsing
+> `result.findings` reads nothing.
 >
 > **`findings`-only transport (#687).** The runner forwards **only** `findings` and `investigated`
 > from the seat's stdout. Every other key the seat emits is dropped. A caller that needs a different
@@ -205,13 +208,17 @@ never drop a finding or a lens.
 > every valid schema to declare `findings`. Previously `--schema-path` **forced** a shape the grader
 > then rejected.
 >
-> **`engagement.read` (#687).** When the result carries an **`engagement`** block (present only when
-> the attempt produced stdout that was graded — **absent** on a timeout, refusal, nonzero-exit, or
-> missing-stdout forfeit), `engagement.read` is `"engaged"` when the seat demonstrably acted: at least
+> **`engagement.read` (#687).** When the result carries an **`engagement`** block with a non-`null`
+> value (present only when the attempt produced stdout that was graded), `engagement.read` is
+> `"engaged"` when the seat demonstrably acted: at least
 > one finding returned, at least one accepted `investigated` path, or `engagement.toolCalls` is not
-> `None` and `>= 1`. Otherwise it is `"unknown"`. The runner **never** reports `"inert"` — absence of
-> positive evidence is not proof of inaction, because a correct payload the transport could not read
-> looks identical to a seat that never ran. Only `seat_canary probe` can justify calling a seat inert.
+> `None` and `>= 1`. Otherwise it is `"unknown"`. On a timeout, refusal, nonzero-exit, or
+> missing-stdout forfeit the `engagement` key is **present with the value `null`** (there was no graded
+> stdout to measure), so `engagement.read` is unavailable — `result.get("engagement", {})` is
+> **unsafe** because the key may carry `null`, not merely be missing; consumers must handle a `null`
+> value. The runner **never** reports `"inert"` — absence of positive evidence is not proof of
+> inaction, because a correct payload the transport could not read looks identical to a seat that never
+> ran. Only `seat_canary probe` can justify calling a seat inert.
 >
 > **Tokens are corroborating evidence only — measured (#687).** Engine telemetry (token spend, tool
 > calls, wall time) remains **corroborating evidence only** and can never satisfy the investigation
@@ -234,7 +241,8 @@ never drop a finding or a lens.
 > **`payloadShape` on shape-unreadable forfeit (#687).** When the **last** attempt forfeits because
 > stdout was shape-unreadable, the result may carry `payloadShape`: a mapping with `parsed` (one of
 > `object-without-findings`, `object-findings-not-a-list`, `array-not-all-objects`,
-> `no-parseable-json`, or `empty-stdout`), `topLevelKeys` (a list of strings, populated only when
+> `no-parseable-json`, `empty-stdout`, or `prompt-echo-only`), `topLevelKeys` (a list of strings,
+> populated only when
 > `parsed` is `object-without-findings`), and `keysTruncated` (bool; signals the key list was
 > capped). Diagnosis only — it never changes the fail direction. `payloadShape` is **absent** on a
 > vacuous forfeit and on success.

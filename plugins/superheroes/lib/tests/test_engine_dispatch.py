@@ -2594,11 +2594,14 @@ def test_dispatch_review_nonzero_exit_forfeit_has_no_engagement(tmp_path):
     assert res.get("engagement") is None
 
 
-def test_grade_review_attempt_prompt_echo_payload_shape_not_empty_stdout(tmp_path):
-    """Group D: prompt-echo-only stdout must not be diagnosed as empty-stdout."""
+def test_grade_review_attempt_prompt_echo_payload_shape_prompt_echo_only(tmp_path):
+    """Prompt-echo-only stdout (echo contains findings contract) yields prompt-echo-only."""
     run_dir = str(tmp_path / "run")
     repo_root = _repo(tmp_path)
-    prompt_body = "Review this code.\n"
+    prompt_body = (
+        "Review this code.\n"
+        "Respond with JSON: {\"findings\": []}\n"
+    )
     fed = _fed_prompt(prompt_body)
     os.makedirs(run_dir, exist_ok=True)
     stdout_path = os.path.join(run_dir, "attempt-1.stdout")
@@ -2624,4 +2627,36 @@ def test_grade_review_attempt_prompt_echo_payload_shape_not_empty_stdout(tmp_pat
     assert grade.get("forfeit") is True
     shape = grade.get("payloadShape")
     assert shape is not None
-    assert shape["parsed"] != ED.engine_adapter.SHAPE_EMPTY_STDOUT
+    assert shape["parsed"] == ED.engine_adapter.SHAPE_PROMPT_ECHO_ONLY
+
+
+def test_grade_review_attempt_empty_stdout_payload_shape_empty_stdout(tmp_path):
+    """Genuinely empty raw stdout still yields empty-stdout."""
+    run_dir = str(tmp_path / "run")
+    repo_root = _repo(tmp_path)
+    fed = _fed_prompt("Review this code.\n")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write("   \n\t")
+    state = {
+        "opened": {
+            "engine": "codex",
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": fed,
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": 4, "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    shape = grade.get("payloadShape")
+    assert shape is not None
+    assert shape["parsed"] == ED.engine_adapter.SHAPE_EMPTY_STDOUT

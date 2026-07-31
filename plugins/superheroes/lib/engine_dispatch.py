@@ -1044,21 +1044,29 @@ def _grade_review_attempt(run_dir_real, state, attempt):
 
     res = engine_adapter.parse_result(engine, role_kind, stdout)
     diagnose_stdout = stdout
+    prompt_echo_only = False
     if not (res.get("ok") and res.get("findings")):
         stripped = engine_adapter.strip_echoed_prompt(stdout, fed_prompt)
         if stripped and stripped.strip():
             diagnose_stdout = stripped
         elif stdout and stdout.strip():
-            diagnose_stdout = stdout
+            prompt_echo_only = True
         else:
             diagnose_stdout = stripped
         res = engine_adapter.parse_result(engine, role_kind, stripped)
     if not res.get("ok"):
         engagement = _engagement_with_read(engagement)
         result = {"forfeit": True, "reason": "forfeited", "engagement": engagement}
-        shape = engine_adapter.review_payload_shape(diagnose_stdout)
-        if shape is not None:
-            result["payloadShape"] = shape
+        if prompt_echo_only:
+            result["payloadShape"] = {
+                "parsed": engine_adapter.SHAPE_PROMPT_ECHO_ONLY,
+                "topLevelKeys": [],
+                "keysTruncated": False,
+            }
+        else:
+            shape = engine_adapter.review_payload_shape(diagnose_stdout)
+            if shape is not None:
+                result["payloadShape"] = shape
         return result
 
     findings = res.get("findings") or []
