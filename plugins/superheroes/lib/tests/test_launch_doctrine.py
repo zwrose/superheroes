@@ -265,16 +265,31 @@ def test_reworded_ruling_zero_refuses():
     assert result["reason"].startswith("doctrine-ruling-invariant-missing:own-worktree:")
 
 
-# Bite: negated ruling keeps one phrase but inverts meaning — invariant check limitation
+# Bite: reworded ruling (different words, same intent) — must refuse exact-text pin
+def test_reworded_ruling_text_refuses():
+    text = _mutate_once(
+        _read_doctrine(),
+        "- `own-worktree` — build in your OWN worktree, NEVER the primary checkout.",
+        "- `own-worktree` — work in your OWN worktree, NEVER the primary checkout.",
+    )
+    result = LD.parse(text)
+    assert result["ok"] is False
+    assert result["reason"] == "doctrine-ruling-text-mismatch:own-worktree"
+
+
+# Bite: negated ruling keeps old substrings but inverts meaning — must refuse exact-text pin
 def test_negated_ruling_zero_refuses():
     text = _mutate_once(
         _read_doctrine(),
         "- `own-worktree` — build in your OWN worktree, NEVER the primary checkout.",
-        "- `own-worktree` — build in the primary checkout, not your OWN worktree.",
+        (
+            "- `own-worktree` — use the primary checkout; OWN worktree and "
+            "NEVER the primary checkout are obsolete."
+        ),
     )
     result = LD.parse(text)
     assert result["ok"] is False
-    assert result["reason"].startswith("doctrine-ruling-invariant-missing:own-worktree:")
+    assert result["reason"] == "doctrine-ruling-text-mismatch:own-worktree"
 
 
 # Bite: reordered rulings — must refuse with doctrine-ruling-order
@@ -300,6 +315,30 @@ def test_removed_ruling_refuses():
     result = LD.parse(text)
     assert result["ok"] is False
     assert result["reason"] == "doctrine-ruling-ids-mismatch"
+
+
+# Bite: extra ruling id not in pinned set — must refuse with doctrine-ruling-ids-mismatch
+def test_extra_ruling_id_refuses():
+    text = _mutate_once(
+        _read_doctrine(),
+        "<!-- launch-doctrine:rulings:end -->",
+        "- `extra-ruling` — this id is not in the pinned set.\n<!-- launch-doctrine:rulings:end -->",
+    )
+    result = LD.parse(text)
+    assert result["ok"] is False
+    assert result["reason"] == "doctrine-ruling-ids-mismatch"
+
+
+# Bite: leading/trailing whitespace inside ruling text — must refuse verbatim pin
+def test_ruling_text_whitespace_refuses():
+    text = _mutate_once(
+        _read_doctrine(),
+        "- `own-worktree` — build in your OWN worktree, NEVER the primary checkout.",
+        "- `own-worktree` — build in your OWN worktree, NEVER the primary checkout. ",
+    )
+    result = LD.parse(text)
+    assert result["ok"] is False
+    assert result["reason"] == "doctrine-ruling-text-mismatch:own-worktree"
 
 
 def test_charter_and_artifact_agree():

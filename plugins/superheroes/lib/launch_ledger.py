@@ -49,6 +49,7 @@ _RETRY_FIELDS = ("attempt", "reason", "delaySeconds")
 _REFUSED_FIELDS = ("stage", "reason")
 _OUTCOME_FIELDS = ("outcome", "evidence")
 _COMMON_FIELDS = ("event", "launchId", "ts", "schema")
+_BATCH_DECLARED_FIELDS = ("batchId", "expectedLaunches")
 
 _INSPECT_REASON = (
     "zero parks and zero refusals is a signal to inspect, never a clean sheet"
@@ -101,6 +102,57 @@ def _root_has_symlink(path):
     if parent == path:
         return False
     return _root_has_symlink(parent)
+
+
+def _is_group_or_world_accessible(path):
+    try:
+        mode = os.stat(path).st_mode & 0o777
+        return bool(mode & 0o077)
+    except OSError:
+        return True
+
+
+def _validate_ledger_paths(root, repo_id):
+    """Refuse symlink escapes and insecure pre-existing ledger paths."""
+    repo_dir = os.path.join(root, repo_id)
+    ledger_file = os.path.join(repo_dir, LEDGER_NAME)
+    lock_file = _lock_path(ledger_file)
+
+    checks = (
+        ("repo-dir", repo_dir, os.path.isdir, True),
+        ("file", ledger_file, os.path.isfile, True),
+        ("lock", lock_file, os.path.isfile, False),
+    )
+    for label, path, is_type, check_insecure in checks:
+        if os.path.islink(path):
+            return {"ok": False, "reason": "ledger-%s-symlink" % label}
+        if os.path.exists(path):
+            try:
+                real = os.path.realpath(path)
+            except OSError:
+                return {"ok": False, "reason": "ledger-path-unusable"}
+            if not _path_inside(root, real):
+                return {"ok": False, "reason": "ledger-path-escapes-root"}
+            if check_insecure and is_type(path) and _is_group_or_world_accessible(path):
+                return {"ok": False, "reason": "ledger-%s-insecure" % label}
+
+    return {"ok": True, "reason": None}
+
+
+def _prepare_ledger_parent(ledger_file):
+    """Create the repo-id directory with secure mode before file_lock touches it."""
+    parent = os.path.dirname(ledger_file)
+    if os.path.islink(parent):
+        return False
+    if os.path.exists(parent):
+        if _is_group_or_world_accessible(parent):
+            return False
+        return True
+    try:
+        os.makedirs(parent, mode=0o700, exist_ok=True)
+    except OSError:
+        return False
+    return not _is_group_or_world_accessible(parent)
 
 
 def _lock_path(ledger_file):
@@ -190,6 +242,9 @@ def resolve_root(repo_root, env=None):
     if not os.path.isdir(root) or not os.access(root, os.W_OK):
         return {"ok": False, "root": None, "reason": "ledger-root-unusable"}
 
+    if _is_group_or_world_accessible(root):
+        return {"ok": False, "root": None, "reason": "ledger-root-insecure"}
+
     return {"ok": True, "root": root, "reason": None}
 
 
@@ -200,6 +255,11 @@ def ledger_path(repo_root, env=None):
     repo_id = repo_identity(repo_root)
     if repo_id is None:
         return {"ok": False, "path": None, "reason": "ledger-repo-identity-unavailable"}
+
+    layout = _validate_ledger_paths(resolved["root"], repo_id)
+    if not layout["ok"]:
+        return {"ok": False, "path": None, "reason": layout["reason"]}
+
     path = os.path.join(resolved["root"], repo_id, LEDGER_NAME)
     return {"ok": True, "path": path, "reason": None}
 
@@ -208,7 +268,11 @@ def append(path, record):
     """Append one JSON line with flush+fsync. False on OSError; never raises."""
     try:
         parent = os.path.dirname(path)
+        if os.path.exists(parent) and _is_group_or_world_accessible(parent):
+            return False
         os.makedirs(parent, mode=0o700, exist_ok=True)
+        if os.path.exists(parent) and _is_group_or_world_accessible(parent):
+            return False
         line = json.dumps(record, separators=(",", ":")) + "\n"
         if not os.path.exists(path):
             fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
@@ -217,6 +281,8 @@ def append(path, record):
                 fh.flush()
                 os.fsync(fh.fileno())
         else:
+            if _is_group_or_world_accessible(path):
+                return False
             with open(path, "a", encoding="utf-8") as fh:
                 fh.write(line)
                 fh.flush()
@@ -240,7 +306,11 @@ def read(path):
         return {"state": "ok", "records": []}
 
     torn = raw[-1:] != b"\n"
-    text = raw.decode("utf-8", "replace")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return {"state": "interiorCorrupt", "records": []}
+
     lines = text.split("\n")
     if torn:
         lines.pop()
@@ -267,8 +337,14 @@ def read(path):
     return {"state": "ok", "records": records}
 
 
+def _canonical_surface(repo_real, norm):
+    full = os.path.realpath(os.path.join(repo_real, norm.replace("/", os.sep)))
+    rel = os.path.relpath(full, repo_real)
+    return posixpath.normpath(rel.replace(os.sep, "/"))
+
+
 def normalize_surfaces(repo_root, surfaces):
-    """Normalize repo-relative surfaces; refuse absolute or escaping paths."""
+    """Normalize repo-relative surfaces to canonical paths; refuse escapes."""
     if not surfaces:
         return {"ok": False, "surfaces": [], "reason": "surfaces-empty"}
     if not isinstance(surfaces, (list, tuple)):
@@ -297,7 +373,7 @@ def normalize_surfaces(repo_root, surfaces):
         full = os.path.realpath(os.path.join(repo_real, norm.replace("/", os.sep)))
         if not _path_inside(repo_real, full):
             return {"ok": False, "surfaces": [], "reason": "surface-escapes-repo"}
-        out.append(norm)
+        out.append(_canonical_surface(repo_real, norm))
 
     return {"ok": True, "surfaces": sorted(set(out)), "reason": None}
 
@@ -397,6 +473,9 @@ def fold(records):
     for rec in records:
         if not isinstance(rec, dict):
             return {"ok": False, "reason": "fold-not-an-object", "launches": {}}
+        if rec.get("event") == "batch-declared":
+            continue
+
         err = _validate_common(rec)
         if err:
             return {"ok": False, "reason": err, "launches": {}}
@@ -422,6 +501,7 @@ def fold(records):
                 "terminalKind": None,
                 "reservedTs": rec["ts"],
                 "attempts": 0,
+                "started": False,
             }
             continue
 
@@ -438,15 +518,88 @@ def fold(records):
 
         if event == "started":
             info["attempts"] += 1
+            info["started"] = True
+        elif event == "retry":
+            if not info["started"]:
+                return {
+                    "ok": False,
+                    "reason": "fold-retry-without-started:%s" % launch_id,
+                    "launches": {},
+                }
         elif event == "refused":
             info["terminal"] = True
             info["terminalKind"] = "refused"
         elif event == "outcome":
+            if not info["started"]:
+                return {
+                    "ok": False,
+                    "reason": "fold-outcome-without-started:%s" % launch_id,
+                    "launches": {},
+                }
             info["terminal"] = True
             info["terminalKind"] = "outcome"
             info["outcome"] = rec["outcome"]
 
     return {"ok": True, "reason": None, "launches": launches}
+
+
+def _batch_declarations(records, batch_id):
+    decls = []
+    for rec in records:
+        if rec.get("event") != "batch-declared":
+            continue
+        if rec.get("schema") != SCHEMA:
+            continue
+        if rec.get("batchId") != batch_id:
+            continue
+        expected = rec.get("expectedLaunches")
+        if not isinstance(expected, int) or isinstance(expected, bool) or expected < 1:
+            continue
+        if not _is_number(rec.get("ts")):
+            continue
+        decls.append(expected)
+    return decls
+
+
+def declare_batch(repo_root, batch_id, expected_launches, env=None,
+                  lock_timeout=_DEFAULT_LOCK_TIMEOUT):
+    """Record expected launch cardinality for a batch before any reserve."""
+    if not isinstance(batch_id, str) or not batch_id.strip():
+        return {"ok": False, "reason": "batch-id-empty"}
+    if (not isinstance(expected_launches, int) or isinstance(expected_launches, bool)
+            or expected_launches < 1):
+        return {"ok": False, "reason": "batch-expected-invalid"}
+
+    lp = ledger_path(repo_root, env=env)
+    if not lp["ok"]:
+        return {"ok": False, "reason": lp["reason"]}
+
+    path = lp["path"]
+    if not _prepare_ledger_parent(path):
+        return {"ok": False, "reason": "ledger-repo-dir-insecure"}
+
+    lock_path = _lock_path(path)
+    if not _acquire_lock(lock_path, lock_timeout):
+        return {"ok": False, "reason": "lock-unavailable"}
+
+    try:
+        read_result = read(path)
+        state = read_result["state"]
+        if state not in ("ok", "missing"):
+            return {"ok": False, "reason": "ledger-unreadable:%s" % state}
+
+        event = {
+            "event": "batch-declared",
+            "batchId": batch_id,
+            "expectedLaunches": expected_launches,
+            "ts": time.time(),
+            "schema": SCHEMA,
+        }
+        if not append(path, event):
+            return {"ok": False, "reason": "ledger-append-failed"}
+        return {"ok": True, "reason": None}
+    finally:
+        _release_lock(lock_path)
 
 
 def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
@@ -456,6 +609,9 @@ def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
         return {"ok": False, "reason": lp["reason"], "path": None}
 
     path = lp["path"]
+    if not _prepare_ledger_parent(path):
+        return {"ok": False, "reason": "ledger-repo-dir-insecure", "path": None}
+
     lock_path = _lock_path(path)
     if not _acquire_lock(lock_path, lock_timeout):
         return {"ok": False, "reason": "lock-unavailable", "path": None}
@@ -482,6 +638,8 @@ def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
                 return {
                     "ok": False,
                     "reason": "surface-overlap:%s" % launch_id,
+                    "blockingLaunchId": launch_id,
+                    "blockingSurfaces": list(existing),
                     "path": None,
                 }
 
@@ -507,6 +665,9 @@ def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
         return {"ok": False, "reason": "outcome-evidence-empty"}
 
     path = lp["path"]
+    if not _prepare_ledger_parent(path):
+        return {"ok": False, "reason": "ledger-repo-dir-insecure"}
+
     lock_path = _lock_path(path)
     if not _acquire_lock(lock_path, lock_timeout):
         return {"ok": False, "reason": "lock-unavailable"}
@@ -527,6 +688,9 @@ def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
         info = folded["launches"][launch_id]
         if info.get("terminal"):
             return {"ok": False, "reason": "outcome-already-terminal"}
+
+        if not info.get("started"):
+            return {"ok": False, "reason": "outcome-without-started"}
 
         event = {
             "event": "outcome",
@@ -585,6 +749,14 @@ def count(repo_root, batch_id, env=None):
     if not batch_launches:
         return _count_indeterminate(batch_id, "batch-empty")
 
+    decls = _batch_declarations(read_result["records"], batch_id)
+    if len(decls) == 0:
+        return _count_indeterminate(batch_id, "batch-undeclared")
+    if len(decls) > 1:
+        return _count_indeterminate(batch_id, "batch-duplicate-declaration")
+    if len(batch_launches) != decls[0]:
+        return _count_indeterminate(batch_id, "batch-reservation-mismatch")
+
     counts = {
         "handback": 0,
         "park": 0,
@@ -609,7 +781,9 @@ def count(repo_root, batch_id, env=None):
             if outcome in counts:
                 counts[outcome] += 1
 
-    inspect = counts["park"] + counts["refusal"] == 0
+    inspect = (
+        counts["park"] + counts["refusal"] + counts["refusedToLaunch"] == 0
+    )
     return {
         "ok": True,
         "batchId": batch_id,

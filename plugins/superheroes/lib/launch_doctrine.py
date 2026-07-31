@@ -28,6 +28,20 @@ PREFLIGHT_CHECKS = (
     ("owner-capability", "conditional"),
     ("grant-state", "conditional"),
 )
+RULING_TEXT = {
+    "own-worktree": "build in your OWN worktree, NEVER the primary checkout.",
+    "base-moved": "if your base merges mid-build, rebase onto main, retarget, and disclose.",
+    "no-force-push": "never force-push (it is gated); use a fresh branch if history must move.",
+    "design-forks": (
+        "design forks inside ratified scope are your call with disclosure; "
+        "park only genuinely consequential ones."
+    ),
+    "await-dispatches": (
+        "await every dispatch in-turn; background-and-poll is fine when a dispatch "
+        "cannot fit the foreground cap — the failure is ending a turn with a dispatch unawaited."
+    ),
+    "remote-head": "verify the REMOTE head against your receipts before declaring the PR ready.",
+}
 RULING_INVARIANTS = {"own-worktree": ("OWN worktree", "NEVER the primary checkout")}
 LAUNCHER_OWNED_CHECKS = ("standing-rulings",)
 
@@ -138,6 +152,10 @@ def _parse_rulings_block(text: str, body: str, body_start: int) -> tuple[list[di
         for phrase in phrases:
             if phrase not in ruling_text:
                 return None, f"doctrine-ruling-invariant-missing:{rid}:{phrase}"
+    for ruling in rulings:
+        rid = ruling["id"]
+        if ruling["text"] != RULING_TEXT[rid]:
+            return None, f"doctrine-ruling-text-mismatch:{rid}"
     return rulings, None
 
 

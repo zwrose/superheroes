@@ -438,6 +438,18 @@ the reviewer and the owner's authorization carry that check instead.**
    8. **Grant state** (`grant-state`, conditional) — whether one exists, its scope, and its exclusions; **failing** means no
       grant, or work outside the grant's enumerated scope.
 <!-- launch-doctrine:preflight-charter:end -->
+   **Invoke the launcher — never hand-compose a launch.** Run
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/launcher.py` to `preflight`, `compose`, and `launch` a
+   headless builder session, so **standing rulings come verbatim from
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/launch-doctrine.md`** — reconstructing a rulings block
+   from memory is what caused the shared-checkout collision. Supply the **eight checks above as data**;
+   the tool records each and the go/no-go. **`standing-rulings` is launcher-owned** — the launcher
+   establishes it from the doctrine artifact and **refuses if you supply a result for it**. **Declare a
+   batch before its launches**; **record every terminal outcome** with `record-outcome` — handback, park,
+   refusal, or died — because an unrecorded outcome makes the batch unreadable rather than clean. **After
+   a batch, run `count`** and read it honestly: **`indeterminate` means the record cannot see the whole
+   batch and must be resolved, not waved through**; a fully-resolved batch with **zero parks and zero
+   refusals is a signal to inspect, never a clean sheet**.
    **Scale with the batch:** checks **1–3 and 5** (quota, engine auth, base state, workspace
    isolation) are cheap mechanical checks that **always run**; **4, 6, 7, and 8** only when the work
    needs them. Every check is recorded **ran** or **N/A** in the dispatch durable record — an N/A
