@@ -52,3 +52,71 @@ def test_all_third_party_actions_pinned_to_sha():
             continue
         ref = m.group(1).split("@", 1)[1] if "@" in m.group(1) else ""
         assert re.fullmatch(r"[0-9a-f]{40}", ref), f"not SHA-pinned: {m.group(1)}"
+
+
+def test_runs_release_bump_tripwire():
+    text = _text()
+    assert ".github/scripts/check_release_bump.py" in text
+
+
+def test_tripwire_fetches_tags_in_same_step():
+    import yaml
+    with open(_WF) as fh:
+        data = yaml.safe_load(fh)
+    steps = data["jobs"]["release-please"]["steps"]
+    tw = next(s for s in steps if "Release-bump tripwire" in (s.get("name") or ""))
+    run = tw.get("run", "")
+    assert "git fetch --tags" in run
+    assert "check_release_bump.py" in run
+    assert tw.get("env", {}).get("GH_TOKEN") == "${{ steps.app-token.outputs.token }}"
+
+
+def test_tripwire_uses_app_token_for_gh():
+    text = _text()
+    assert "GH_TOKEN: ${{ steps.app-token.outputs.token }}" in text
+
+
+def test_tripwire_runs_after_release_please():
+    import yaml
+    with open(_WF) as fh:
+        data = yaml.safe_load(fh)
+    steps = data["jobs"]["release-please"]["steps"]
+    rp_idx = next(
+        i for i, s in enumerate(steps)
+        if str(s.get("uses", "")).startswith("googleapis/release-please-action@")
+    )
+    tw_idx = next(
+        i for i, s in enumerate(steps)
+        if "Release-bump tripwire" in (s.get("name") or "")
+    )
+    assert tw_idx > rp_idx
+
+
+def test_tripwire_does_not_continue_on_error():
+    import yaml
+    with open(_WF) as fh:
+        data = yaml.safe_load(fh)
+    steps = data["jobs"]["release-please"]["steps"]
+    tw = next(s for s in steps if "Release-bump tripwire" in (s.get("name") or ""))
+    assert "continue-on-error" not in tw
+
+
+_LEDGER = os.path.join(_ROOT, ".github", "release-exclusions.txt")
+
+
+def test_release_exclusions_ledger_format():
+    import importlib.util
+    import sys
+
+    assert os.path.isfile(_LEDGER), f"missing ledger: {_LEDGER}"
+    _spec = importlib.util.spec_from_file_location(
+        "check_release_bump",
+        os.path.join(_ROOT, ".github", "scripts", "check_release_bump.py"),
+    )
+    crb = importlib.util.module_from_spec(_spec)
+    sys.modules["check_release_bump"] = crb
+    _spec.loader.exec_module(crb)
+    with open(_LEDGER) as fh:
+        text = fh.read()
+    _mapping, errors = crb.parse_exclusions(text)
+    assert errors == [], f"ledger parse errors: {errors}"

@@ -90,6 +90,45 @@ token and confirm two things against an existing release:
 
 Verify the tag + GitHub Release appear as expected before relying on the automation.
 
+## Troubleshooting — a commit silently excluded from the release
+
+Release-please's conventional-commit parser can crash on a squash-commit **body** (this repo
+bakes PR bodies into commit messages by deliberate owner ruling). The affected commit is then
+silently dropped from both version calculation and the changelog while the workflow still reports
+success — a known upstream bug ([googleapis/release-please#2564](https://github.com/googleapis/release-please/issues/2564),
+cited, not filed by us).
+
+**How you find out:** the release workflow's tripwire step fails within minutes of the merge,
+naming the excluded commit(s). The check lives at `.github/scripts/check_release_bump.py`.
+
+**Remediation — the recorded pattern:** land an **empty commit** whose subject re-states the
+dropped commit's clean conventional title (`git commit --allow-empty`), through a normal PR —
+**one PR per re-statement**, because squash-merge here replaces commit titles with the PR title
+(the conventional-commit payload release-please reads). Bundling several re-statements into one PR
+([#739](https://github.com/zwrose/superheroes/pull/739)) collapsed them into a single scope-less
+squash commit. Worked examples: PR [#673](https://github.com/zwrose/superheroes/pull/673) (first
+incident); PRs [#740](https://github.com/zwrose/superheroes/pull/740) and
+[#741](https://github.com/zwrose/superheroes/pull/741) (second incident — the correct shape, one
+PR per re-statement). release-please then regenerates the release PR correctly. **Never hand-edit
+a version** in `version.txt`, either `plugin.json`, or `.release-please-manifest.json` — the
+release PR is the only thing that moves versions.
+
+The re-statement is a *new* commit, so the originally-dropped SHA never appears in the
+changelog (the shipped 0.23.0 changelog carries `4fe4d89` / `6743317`, never the originals).
+Record the pair — original SHA **and** replacement SHA — in `.github/release-exclusions.txt`
+so the tripwire stays green on the remediated state and the incident stays on the record. A row
+**only** suppresses the alarm once the **replacement commit is actually in the release**; the
+ledger is a record of completed remediation, never a way to wave one off.
+
+**One limit:** the expected bump is derived from commit **titles** only. A `BREAKING CHANGE:`
+footer that lives in a commit **body** does not raise the floor — bodies are both the upstream
+crash surface and, because this repo bakes PR bodies into commit messages, a false-alarm surface.
+Such a commit is reported as a notice instead, so the case is visible rather than silently
+absorbed.
+
+The same check is runnable locally (`python3 .github/scripts/check_release_bump.py`) for a
+pre-cut audit — that manual run is how the second incident was caught.
+
 ## Recovery
 
 A failed release run is visible in the Actions tab and is safely re-runnable; re-running
