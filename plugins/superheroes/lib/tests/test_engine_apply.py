@@ -1,6 +1,7 @@
 import json
 import os
 import textwrap
+import time
 
 import pytest
 
@@ -153,6 +154,16 @@ def test_clean_and_status_and_orphans(tmp_path):
     assert r["cleaned"] == ["a"]
     assert not os.path.exists(os.path.join(str(tmp_path), "a.marker"))
     assert engine.status(paths)["entries"] == []
+
+
+def test_status_reports_stranded_malformed_lock_stale(tmp_path):
+    paths = _paths(tmp_path)
+    lp = engine._lock_path(paths)
+    os.makedirs(os.path.dirname(lp), exist_ok=True)
+    open(lp, "w").close()
+    old = time.time() - lock_mod.MALFORMED_GRACE_SECONDS - 5
+    os.utime(lp, (old, old))
+    assert engine.status(paths)["lockStale"] is True
 
 
 def test_unlock_releases_stale_lock(tmp_path):
