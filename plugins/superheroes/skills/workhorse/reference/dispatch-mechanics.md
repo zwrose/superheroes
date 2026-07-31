@@ -107,12 +107,18 @@ on-disk work already complete and correct. Field evidence: three builds in one w
 four of six dispatches forfeited, every one with correct files on disk. **Inspect the worktree before
 discarding or re-dispatching** — "inspect the diff" alone is not a decision rule:
 
-- **What the tree inspection establishes.** Before dispatching, capture a pre-dispatch baseline —
-  same probe as charter §8 `check-runner`: `git rev-parse HEAD` plus full `git status --porcelain` on
-  the build worktree. Against that baseline, spanning committed/staged/unstaged/untracked: whether
-  **this dispatch** wrote anything at all (**no delta = it wrote nothing**, whatever earlier orders
-  left), and whether what it wrote is **inside the order's scope**. The delta test is an **authorship
-  and scope** check — each named target must **differ from that baseline**, not merely exist.
+- **What the tree inspection establishes.** Before dispatching, the build worktree must be **clean** —
+  `git status --porcelain` empty, with landed work already committed. The charter already requires this
+  (§6: commit before the next order against a worktree; §8: commit before a mutation probe); this makes
+  that obligation explicit for the pre-dispatch baseline. Capture the baseline — same probe as charter
+  §8 `check-runner`: `git rev-parse HEAD` plus that empty `git status --porcelain`. If the tree cannot
+  be made clean, use a **fresh worktree** or **park** — never dispatch against a dirty baseline, and
+  never treat a delta measured from one as authorship evidence. Against a clean baseline, spanning
+  committed/staged/unstaged/untracked: whether **this dispatch** wrote anything at all (**no delta = it
+  wrote nothing** — authorship evidence only; an **INDETERMINATE** dispatch, timeout or child never
+  joined, is never clean regardless of delta), and whether what it wrote is **inside the order's scope**. The delta test is an
+  **authorship and scope** check — each named target must **differ from that baseline**, not merely
+  exist.
 - **What it does not establish.** A delta on every named target proves each was **touched**, not that
   the order was **finished** — a partial edit to every target passes it. **Completeness and correctness
   are established only by the orchestrator's own verification against the order's acceptance items**,
@@ -123,9 +129,10 @@ discarding or re-dispatching** — "inspect the diff" alone is not a decision ru
   fail-closed edges.
 - **The default when you cannot establish it.** If the orchestrator cannot establish completeness and
   correctness itself, **re-dispatch is the default, not recovery** — and a re-dispatch first
-  **restores the worktree to the pre-dispatch baseline** (or uses a fresh worktree), never riding the
-  abandoned attempt. Park when neither is available. Re-dispatching without looking re-does correct work
-  and re-runs the very report that forfeited.
+  **restores the worktree to the pre-dispatch baseline** (`git reset --hard <baseline SHA>` plus
+  removing untracked files — implementable because the baseline was clean), or uses a fresh worktree,
+  never riding the abandoned attempt. Park when neither is available. Re-dispatching without looking
+  re-does correct work and re-runs the very report that forfeited.
 
 Author orders so the forfeit does not fire: keep in-dispatch verification targeted and returns short
 and structured. The implementer template `agents/implementer.md` states this to the implementer
