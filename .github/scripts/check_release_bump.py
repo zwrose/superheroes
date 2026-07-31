@@ -38,7 +38,7 @@ _SUBJECT_CAPTURE_RE = re.compile(
 )
 
 _RELEASE_COMMIT_RE = re.compile(
-    r"^chore(\([^()\n]+\))?: release .+ \d+\.\d+\.\d+"
+    r"^chore\([^()\n]+\): release (?:\S+ )?\d+\.\d+\.\d+(?: \(#\d+\))?$"
 )
 _BODY_BREAKING_RE = re.compile(r"^BREAKING[ -]CHANGE:", re.MULTILINE)
 _VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
@@ -245,7 +245,7 @@ def _bullet_carries_sha(bullet: str, sha: str) -> tuple[bool, bool]:
     abbrev = sha[:7].lower()
     lower = bullet.lower()
     has_full = full in lower
-    has_abbrev = abbrev in lower
+    has_abbrev = re.search(r"\b" + re.escape(abbrev) + r"\b", lower) is not None
     if not has_full and not has_abbrev:
         return False, False
     return True, has_abbrev and not has_full
@@ -320,7 +320,7 @@ def evaluate(
         elif body_declares_breaking(c.body) and "!" not in c.subject.splitlines()[0]:
             result.notices.append(
                 f"body declares BREAKING CHANGE but title lacks '!': {c.sha[:7]} — "
-                f"version floor is derived from titles only; eyebrow the proposed bump"
+                f"version floor is derived from titles only; eyeball the proposed bump"
             )
 
     if not floor_pop:

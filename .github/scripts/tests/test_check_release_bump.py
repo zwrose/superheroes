@@ -259,7 +259,10 @@ def test_zero_file_feat_restatement_eligible_and_fails_if_missing():
     commits = [
         Commit(
             sha=sha,
-            subject="feat(superheroes): release re-statement of dropped commit (#739)",
+            subject=(
+                "chore: release re-statement of #726 and #716 — two commits the "
+                "release-please parser silently dropped from 0.23.0 (#739)"
+            ),
             zero_file=True,
             touches_package=False,
         )
@@ -301,6 +304,22 @@ def test_stale_acknowledgement_notice_still_passes():
     result = _evaluate(commits, "0.23.0", release_pr, exclusions=exclusions)
     assert result.ok is True
     assert any("stale acknowledgement" in n for n in result.notices)
+
+
+def test_abbrev_sha_no_false_match_inside_full_sha():
+    """7-char prefix must not match as substring inside another commit's full SHA."""
+    sha_a = "0123456789abcdef0123456789abcdef01234567"
+    sha_b = "cdef012" + "0" * 33
+    assert sha_b[:7] == "cdef012"
+    assert "cdef012" in sha_a
+    bullet = (
+        f"* **superheroes:** other commit "
+        f"([{sha_a}](https://github.com/zwrose/superheroes/commit/{sha_a}))"
+    )
+    # Bare substring would falsely match; word-boundary matching must not.
+    assert "cdef012" in bullet.lower()
+    carries, _ = RB._bullet_carries_sha(bullet, sha_b)
+    assert carries is False
 
 
 def test_abbrev_only_presence_notice():
@@ -420,10 +439,29 @@ def test_parse_subject_real_titles():
     assert RB.parse_subject("not a conventional commit at all") is None
 
 
-def test_is_release_commit():
-    assert RB.is_release_commit("chore(main): release superheroes 0.23.0 (#705)")
-    assert RB.is_release_commit("chore: release superheroes 0.1.0")
-    assert not RB.is_release_commit("chore(superheroes): extend boundary (#721)")
+def test_is_release_commit_real_subjects():
+    """Table over measured release-please cut vs non-cut subjects from repo history."""
+    cut_subjects = [
+        "chore(main): release superheroes 0.23.0 (#705)",
+        "chore(main): release superheroes 0.22.0 (#669)",
+        "chore(main): release superheroes 0.21.2 (#645)",
+    ]
+    non_cut_subjects = [
+        "feat(superheroes): supervised dispatch — write verb, durable journaling, reviewer retrofit (release re-statement of #726) (#740)",
+        "chore(superheroes): charter hygiene 8 — part A of #699, riders 1-6 and 13-15 (release re-statement of #716) (#741)",
+        "chore: release re-statement of #726 and #716 — two commits the release-please parser silently dropped from 0.23.0 (#739)",
+        "feat(superheroes)!: Claude 5 model refresh + cursor first-party family merge (release re-statement of #653) (#673)",
+    ]
+    for subject in cut_subjects:
+        assert RB.is_release_commit(subject), f"expected cut: {subject!r}"
+    for subject in non_cut_subjects:
+        assert not RB.is_release_commit(subject), f"expected non-cut: {subject!r}"
+
+
+def test_incident2_completeness_population_includes_restatement():
+    pop = RB.completeness_population(_INC2_COMMITS, _RELEASING)
+    assert len(pop) == 17
+    assert any(c.sha.startswith("868dce5b") for c in pop)
 
 
 def test_releasing_types_from_config_not_hardcoded():
@@ -449,6 +487,7 @@ def test_body_declares_breaking_notice_not_failure():
     result = _evaluate(commits, "0.23.0", release_pr)
     assert result.ok is True
     assert any("body declares BREAKING CHANGE" in n for n in result.notices)
+    assert any("eyeball the proposed bump" in n for n in result.notices)
 
 
 def test_non_conventional_subject_notice():
