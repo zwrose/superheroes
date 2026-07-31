@@ -1,5 +1,6 @@
 # new file: test_mode_reconcile.py
 import json, os, subprocess
+import pytest
 import mode_registry as mr
 import mode_reconcile as rc
 
@@ -519,8 +520,7 @@ def test_gather_signals_directory_emits_unreadable(tmp_path, monkeypatch):
     assert any(s["type"] == "core-md-unreadable" for s in sigs)
 
 
-def test_gather_signals_greenfield_git_unavailable_no_legacy_signal(tmp_path, monkeypatch):
-    import core_md
+def test_gather_signals_git_unavailable_raises_repo_root_unavailable(tmp_path, monkeypatch):
     import store_core as sc
 
     monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
@@ -529,22 +529,24 @@ def test_gather_signals_greenfield_git_unavailable_no_legacy_signal(tmp_path, mo
     monkeypatch.setattr(
         sc, "run_git_result",
         lambda cwd, *args: sc.GitResult(None, sc.GIT_UNAVAILABLE, "FileNotFoundError: no git"))
-    sigs = rc.gather_signals(str(tmp_path), root=root)
-    assert not any(s["type"] == "core-md-unreadable" for s in sigs)
-    assert not any(s["type"] == core_md.LEGACY_PROFILE_REASON for s in sigs)
+    with pytest.raises(sc.RepoRootUnavailable) as excinfo:
+        rc.gather_signals(str(tmp_path), root=root)
+    assert "git could not be run" in str(excinfo.value)
 
 
-def test_gather_signals_greenfield_git_unavailable_emits_no_unreadable(tmp_path, monkeypatch):
+def test_gather_signals_git_unavailable_on_corrupt_repo_raises_before_unreadable(
+        tmp_path, monkeypatch):
     import store_core as sc
 
     monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
-    _init_repo(tmp_path)
-    root = str(tmp_path / "store")
+    repo, root, _ = _gate_core_fixture(tmp_path, "corrupt")
+    sigs_ok = rc.gather_signals(repo, root=root)
+    assert any(s["type"] == "core-md-unreadable" for s in sigs_ok)
     monkeypatch.setattr(
         sc, "run_git_result",
         lambda cwd, *args: sc.GitResult(None, sc.GIT_UNAVAILABLE, "FileNotFoundError: no git"))
-    sigs = rc.gather_signals(str(tmp_path), root=root)
-    assert not any(s["type"] == "core-md-unreadable" for s in sigs)
+    with pytest.raises(sc.RepoRootUnavailable):
+        rc.gather_signals(repo, root=root)
 
 
 def test_gather_signals_corrupt_emits_unreadable_with_detail(tmp_path, monkeypatch):

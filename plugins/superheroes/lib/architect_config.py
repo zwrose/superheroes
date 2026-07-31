@@ -60,6 +60,8 @@ def read_policy(cwd, root=None):
             rec = json.load(fh)
     except (OSError, ValueError):
         return None
+    except store_core.RepoRootUnavailable:
+        return None
     migrated = _migrate(rec)
     if migrated is None:
         return None
@@ -69,17 +71,21 @@ def read_policy(cwd, root=None):
 
 def write_policy(cwd, policy, root=None):
     """Record the doc-policy under the project config lock. Returns the written record,
-    or None if the lock is contended (caller proceeds + surfaces a notice — UFR-1)."""
+    or None if the lock is contended, the project store cannot be ensured, or the
+    repository root is unavailable (caller proceeds + surfaces a notice — UFR-1)."""
     rec = _migrate(policy)
     if rec is None:
         raise ValueError("invalid doc-policy: %r" % (policy,))
-    if mode_registry.ensure_project_store(cwd, root) is None:
-        return None
-    with mode_registry.config_lock(cwd, root) as got:
-        if not got:
+    try:
+        if mode_registry.ensure_project_store(cwd, root) is None:
             return None
-        store_core.atomic_write(policy_path(cwd, root), json.dumps(rec, indent=2))
-        return rec
+        with mode_registry.config_lock(cwd, root) as got:
+            if not got:
+                return None
+            store_core.atomic_write(policy_path(cwd, root), json.dumps(rec, indent=2))
+            return rec
+    except store_core.RepoRootUnavailable:
+        return None
 
 
 def _gitignore_covers(repo_root, location):
