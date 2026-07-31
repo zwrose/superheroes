@@ -46,6 +46,8 @@ def _read_holder_state(lock_path):
             raw = fh.read()
     except OSError:
         return "read_error", None
+    except UnicodeError:
+        return "unusable", None
     if not raw or not raw.strip():
         return "unusable", None
     try:
@@ -61,9 +63,13 @@ def _holder_fields_unusable(holder):
     pid = holder.get("pid")
     if pid is None:
         return True
+    if isinstance(pid, bool):
+        return True
     try:
-        int(pid)
+        pid_int = int(pid)
     except (TypeError, ValueError, OverflowError):
+        return True
+    if pid_int <= 0 or pid_int > 2**31 - 1:
         return True
     host = holder.get("host")
     if host is None or not isinstance(host, str):
@@ -166,20 +172,26 @@ def _reclaim_stale_lock(lock_path, ttl):
         os.close(fd)
 
 
+ACQUIRE_RETRY_LIMIT = 3
+
+
 def acquire(lock_path, ttl=DEFAULT_TTL):
     """Acquire the lock. Returns True if a stale lock was reclaimed, else False."""
     os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
-    if not os.path.exists(lock_path):
+    for _ in range(ACQUIRE_RETRY_LIMIT):
         try:
             _publish_lock(lock_path, _holder_info())
             return False
         except FileExistsError:
             pass
-    if not is_stale(lock_path, ttl):
+        if not is_stale(lock_path, ttl):
+            raise LockHeld(read_holder(lock_path)) from None
+        if _reclaim_stale_lock(lock_path, ttl):
+            return True
+        if not os.path.exists(lock_path):
+            continue
         raise LockHeld(read_holder(lock_path)) from None
-    if not _reclaim_stale_lock(lock_path, ttl):
-        raise LockHeld(read_holder(lock_path)) from None
-    return True
+    raise LockHeld(read_holder(lock_path)) from None
 
 
 def release(lock_path):

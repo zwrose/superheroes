@@ -199,6 +199,55 @@ def test_nonexistent_lock_path_is_not_stale(tmp_path):
     assert lock.is_stale(p) is False
 
 
+def test_fresh_acquire_returns_false(tmp_path):
+    p = str(tmp_path / "engine.lock")
+    assert lock.acquire(p) is False
+    lock.release(p)
+
+
+def test_acquire_succeeds_when_exists_check_lies_once(tmp_path, monkeypatch):
+    """Finding 2: path exists at pre-check but vanishes before is_stale must not raise LockHeld."""
+    p = str(tmp_path / "engine.lock")
+    calls = 0
+    real_exists = os.path.exists
+
+    def fake_exists(path):
+        nonlocal calls
+        if path == p:
+            calls += 1
+            return calls == 1
+        return real_exists(path)
+
+    monkeypatch.setattr(os.path, "exists", fake_exists)
+    assert lock.acquire(p) is False
+    assert os.path.exists(p)
+    lock.release(p)
+
+
+def test_invalid_utf8_past_grace_is_stale_not_raised(tmp_path):
+    p = str(tmp_path / "engine.lock")
+    with open(p, "wb") as fh:
+        fh.write(b"\xff\xfe invalid utf8")
+    old = time.time() - lock.MALFORMED_GRACE_SECONDS - 5
+    os.utime(p, (old, old))
+    assert lock.is_stale(p) is True
+
+
+def test_out_of_range_pid_past_grace_is_stale(tmp_path):
+    p = str(tmp_path / "engine.lock")
+    cases = [0, -1, True, 1000000000000]
+    for pid in cases:
+        sub = str(tmp_path / f"pid-{pid!r}.lock")
+        json.dump(
+            {"pid": pid, "host": socket.gethostname(),
+             "acquiredAt": "1970-01-01T00:00:00Z"},
+            open(sub, "w"),
+        )
+        old = time.time() - lock.MALFORMED_GRACE_SECONDS - 5
+        os.utime(sub, (old, old))
+        assert lock.is_stale(sub) is True, f"pid={pid!r}"
+
+
 def test_reclaim_blocked_while_guard_held_raises_lock_held(tmp_path):
     import fcntl
 
@@ -249,7 +298,10 @@ def test_concurrent_reclaim_grants_exactly_one_holder(tmp_path):
             os.open = slow_open
         gate = {repr(gate_dir)}
         open(os.path.join(gate, str(os.getpid())), "w").close()
+        deadline = time.time() + 5
         while len(os.listdir(gate)) < {n_workers}:
+            if time.time() >= deadline:
+                break
             time.sleep(0.001)
         try:
             lock.acquire({repr(p)})
@@ -259,7 +311,7 @@ def test_concurrent_reclaim_grants_exactly_one_holder(tmp_path):
     """)
 
     n_rounds = 8
-    for _ in range(n_rounds):
+    for round_idx in range(n_rounds):
         for f in os.listdir(gate_dir):
             os.unlink(os.path.join(gate_dir, f))
         open(p, "w").close()
@@ -274,9 +326,24 @@ def test_concurrent_reclaim_grants_exactly_one_holder(tmp_path):
             for _ in range(n_workers)
         ]
         outcomes = []
-        for proc in procs:
-            proc.wait(timeout=10)
-            outcomes.append(proc.stdout.read().strip())
+        try:
+            for worker_idx, proc in enumerate(procs):
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pytest.fail(
+                        f"round {round_idx}: worker {worker_idx} timed out; "
+                        f"outcomes so far: {outcomes}"
+                    )
+                outcomes.append(proc.stdout.read().strip())
+        finally:
+            for proc in procs:
+                if proc.poll() is None:
+                    proc.kill()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
         assert outcomes.count("OK") == 1, outcomes
         assert outcomes.count("HELD") == n_workers - 1, outcomes
 

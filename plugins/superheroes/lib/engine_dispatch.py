@@ -429,23 +429,6 @@ def _refresh_worktree_lease_engine(lease_path, engine_pgid):
         pass
 
 
-def _try_reclaim_malformed_lease(lease_path):
-    try:
-        st = os.stat(lease_path)
-    except OSError:
-        return False
-    holder = file_lock.read_holder(lease_path)
-    if holder and holder.get("pid"):
-        return False
-    if time.time() - st.st_mtime < LEASE_MALFORMED_RECLAIM_SECONDS:
-        return False
-    try:
-        os.unlink(lease_path)
-    except OSError:
-        return False
-    return True
-
-
 def _release_worktree_lease(state):
     """Terminal lease release (via _finalize_run) — releases iff the on-disk token matches the
     journal. Acquisition rollback and open-failure paths call file_lock.release directly."""
@@ -469,25 +452,20 @@ def _release_worktree_lease(state):
 def _acquire_worktree_lease(cwd_real, run_dir_real):
     lease_path = _worktree_lease_path(cwd_real)
     reclaimed = False
-    for attempt in range(2):
-        if _lease_blocks_acquisition(lease_path):
+    if _lease_blocks_acquisition(lease_path):
+        return False, "worktree-lease-held", None, lease_path
+    if os.path.exists(lease_path) and file_lock.is_stale(lease_path):
+        holder = file_lock.read_holder(lease_path)
+        if _worktree_lease_holder_live(holder):
             return False, "worktree-lease-held", None, lease_path
-        if os.path.exists(lease_path) and file_lock.is_stale(lease_path):
-            holder = file_lock.read_holder(lease_path)
-            if _worktree_lease_holder_live(holder):
-                return False, "worktree-lease-held", None, lease_path
-        try:
-            if file_lock.acquire(lease_path):
-                reclaimed = True
-            break
-        except file_lock.LockHeld:
-            holder = file_lock.read_holder(lease_path)
-            if _worktree_lease_holder_live(holder):
-                return False, "worktree-lease-held", None, lease_path
-            if attempt == 0 and _try_reclaim_malformed_lease(lease_path):
-                reclaimed = True
-                continue
+    try:
+        if file_lock.acquire(lease_path):
+            reclaimed = True
+    except file_lock.LockHeld:
+        holder = file_lock.read_holder(lease_path)
+        if _worktree_lease_holder_live(holder):
             return False, "worktree-lease-held", None, lease_path
+        return False, "worktree-lease-held", None, lease_path
     token = secrets.token_hex(16)
     holder = file_lock.read_holder(lease_path)
     holder["dispatchToken"] = token
