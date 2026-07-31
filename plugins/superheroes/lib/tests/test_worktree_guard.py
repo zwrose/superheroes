@@ -94,7 +94,6 @@ def test_destructive_discard_action_recognises_each_shape(command, action):
 
 
 @pytest.mark.parametrize("command", [
-    "git checkout main",
     "git checkout -b feat",
     "git checkout -B feat",
     "git switch main",
@@ -117,6 +116,41 @@ def test_destructive_discard_action_recognises_each_shape(command, action):
 ])
 def test_destructive_discard_action_none_for_safe(command):
     assert wg.destructive_discard_action(command) is None
+
+
+def test_single_operand_branch_switch_not_destructive_with_cwd(tmp_path):
+    """An ordinary branch switch is not a discard — proven against a real repo, not no-cwd."""
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "x\n")
+    _git(repo, "branch", "other")
+    assert wg.destructive_discard_actions("git checkout other", repo) == []
+
+
+def test_no_cwd_single_operand_checkout_fails_closed(monkeypatch):
+    """#682 round 3: the module must not contradict its own fail-closed contract."""
+    _calibrated(monkeypatch)
+    for command in ("git checkout .", "git checkout -- f.txt", "git reset --hard"):
+        decision, _ = wg.classify(command, None)
+        assert decision == "deny", command
+
+
+def test_compound_clean_probe_is_scoped_to_its_own_segment(tmp_path, monkeypatch):
+    """#682 round 3: a safe later segment's flags must not weaken the probe for an earlier one."""
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, ".gitignore", "*.log\n", msg="ignore")
+    with open(os.path.join(repo, "precious.txt"), "w") as f:
+        f.write("UNCOMMITTED WORK")
+    _calibrated(monkeypatch)
+    assert wg.classify("git clean -fd", repo)[0] == "deny"
+    assert wg.classify("git clean -fd && git clean -nX", repo)[0] == "deny"
+
+
+def test_segment_accounting_mixed_command():
+    """segment_accounting classifies each segment independently."""
+    records = wg.segment_accounting("env git reset --hard && git clean -n")
+    kinds = {record["segment"]: record["kind"] for record in records}
+    assert kinds["env git reset --hard"] == "unaccounted"
+    assert kinds["git clean -n"] == "safe"
 
 
 def test_destructive_discard_action_none_for_non_string():
@@ -648,6 +682,13 @@ CENSUS_DENY_DIRTY = [
     ("git checkout-index -f", "dirty"),
     ("git rm -f tracked.txt", "dirty"),
     ("git worktree remove -f ../wt", "dirty"),
+    ("git clean -fen", "dirty"),
+    ("git clean -fe n", "dirty"),
+    ("env git reset --hard && git clean -n", "dirty"),
+    ("command git checkout -- tracked.txt && git reset --soft HEAD", "dirty"),
+    ("git reset --hard && env git clean -fd", "dirty"),
+    ("env git -c advice.detachedHead=false reset --hard", "dirty"),
+    ("env git --git-dir=.git reset --hard", "dirty"),
 ]
 
 CENSUS_ALLOW = [
@@ -656,6 +697,8 @@ CENSUS_ALLOW = [
     ("git restore --staged f", "dirty"),
     ("git restore -S f", "dirty"),
     ("git clean -n -d", "dirty"),
+    ("git clean -nfe pattern", "dirty"),
+    ("git clean -ne '*.pyc'", "dirty"),
     ("git stash -u", "dirty"),
     ("git checkout main", "dirty"),
     ("git checkout -b new", "dirty"),
@@ -731,12 +774,16 @@ def test_census_unparsed_deny_message(tmp_path, monkeypatch):
 
 
 def test_census_deny_treeish_checkout_overwrites_untracked(tmp_path, monkeypatch):
-    """Tree-ish path checkout replaces untracked work at the same path."""
+    """Tree-ish path checkout replaces UNTRACKED work at the same path.
+
+    draft.txt is committed only on `other`; on `main` it is untracked, so the tracked-only probe
+    cannot see it and only the tree-ish arm can. Without the tree-ish fix this test allows.
+    """
     repo = _init_repo(tmp_path / "repo")
-    _commit_file(repo, "draft.txt", "version from the other branch\n")
-    _git(repo, "branch", "other")
+    _commit_file(repo, "seed.txt", "seed\n")
+    _git(repo, "checkout", "-q", "-b", "other")
+    _commit_file(repo, "draft.txt", "version from the other branch\n", msg="other draft")
     _git(repo, "checkout", "-q", "main")
-    os.remove(os.path.join(repo, "draft.txt"))
     with open(os.path.join(repo, "draft.txt"), "w") as f:
         f.write("PRECIOUS UNCOMMITTED UNTRACKED WORK")
     _calibrated(monkeypatch)
@@ -755,6 +802,31 @@ def test_census_deny_assume_unchanged_invisible_to_probe(tmp_path, monkeypatch):
     decision, reason = wg.classify("git checkout -- tracked.txt", repo)
     assert decision == "deny"
     assert reason == wg.indeterminate_message("checkout-path")
+
+
+def test_at_risk_worktree_remove_force_ignored_only_target_is_clean(tmp_path):
+    """#682 round 3: a worktree that has merely run pytest must stay force-removable."""
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, ".gitignore", "__pycache__/\n", msg="ignore")
+    wt = str(tmp_path / "wt")
+    _git(repo, "worktree", "add", "-b", "wt-branch", wt)
+    os.makedirs(os.path.join(wt, "__pycache__"), exist_ok=True)
+    with open(os.path.join(wt, "__pycache__", "x.pyc"), "w") as f:
+        f.write("bytecode")
+    assert wg.at_risk(repo, "worktree-remove-force", f"git worktree remove -f {wt}") == ("clean", 0)
+
+
+def test_at_risk_worktree_remove_force_untracked_only_target_at_risk(tmp_path):
+    """The ignored-file arm must not become a tracked-only probe: untracked work still denies."""
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "x\n")
+    wt = str(tmp_path / "wt")
+    _git(repo, "worktree", "add", "-b", "wt-branch", wt)
+    with open(os.path.join(wt, "draft.txt"), "w") as f:
+        f.write("UNTRACKED WORK IN THE WORKTREE")
+    assert wg.at_risk(repo, "worktree-remove-force", f"git worktree remove -f {wt}") == (
+        "at-risk", 1,
+    )
 
 
 def test_destructive_discard_actions_all_segments(tmp_path):

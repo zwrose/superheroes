@@ -196,23 +196,52 @@ def _tokenize_segment(segment):
     return tokens
 
 
-def _expand_clustered_flags(flag_token, option_specs=None):
-    """Expand a clustered short-option token like -fd or -SW into single-letter flags."""
-    if not flag_token.startswith("-") or flag_token.startswith("--"):
-        return [flag_token]
-    if option_specs:
-        for key, need in option_specs.items():
-            if not need:
-                continue
-            if key.startswith("-") and not key.startswith("--") and len(key) == 2:
-                letter = key[1]
-                rest = flag_token[1:]
-                if rest.startswith(letter) and len(rest) > 1:
-                    return [key, rest[1:]]
-    letters = flag_token[1:]
-    if not letters or not letters.isalpha():
-        return [flag_token]
-    return ["-" + c for c in letters]
+def _expand_clustered_flags(token, option_specs=None):
+    """Return (flags, inline_value, expects_value).
+
+    flags         — the option tokens this argument contributes, in order
+    inline_value  — a value carried INSIDE the token (the cluster remainder following a
+                    value-taking short option), or None
+    expects_value — True when the final flag takes a value that was NOT supplied inline, so the
+                    caller must consume the NEXT argv token as that value
+    """
+    if not token.startswith("-"):
+        return ([token], None, False)
+    if token.startswith("--"):
+        expects = False
+        if option_specs and "=" not in token:
+            base = token.split("=", 1)[0]
+            if base in option_specs and option_specs[base]:
+                expects = True
+            else:
+                for key, need in option_specs.items():
+                    if key.startswith("--") and key == base and need:
+                        expects = True
+                        break
+        return ([token], None, expects)
+    letters = token[1:]
+    if not letters:
+        return ([token], None, False)
+    specs = option_specs or {}
+    if not specs:
+        if not letters.isalpha():
+            return ([token], None, False)
+        return (["-" + c for c in letters], None, False)
+    flags = []
+    i = 0
+    while i < len(letters):
+        c = letters[i]
+        if not c.isalpha():
+            return ([token], None, False)
+        opt = f"-{c}"
+        flags.append(opt)
+        if opt in specs and specs[opt]:
+            rest = letters[i + 1:]
+            if rest:
+                return (flags, rest, False)
+            return (flags, None, True)
+        i += 1
+    return (flags, None, False)
 
 
 def _option_value(tokens, idx):
@@ -322,27 +351,17 @@ def _flag_present(args, short_flags, long_flags=(), option_specs=None):
         if not tok.startswith("-"):
             i += 1
             continue
-        expanded = _expand_clustered_flags(tok, specs)
-        if len(expanded) > 1:
-            for part in expanded:
-                if part in short_flags:
-                    return True
-                base = part.split("=", 1)[0]
-                if base in long_bases:
-                    return True
+        flags, _inline_value, expects_value = _expand_clustered_flags(tok, specs)
+        for part in flags:
+            if part in short_flags:
+                return True
+            base = part.split("=", 1)[0]
+            if base in long_bases:
+                return True
+        if expects_value:
+            i += 2
+        else:
             i += 1
-            continue
-        part = expanded[0]
-        base = part.split("=", 1)[0]
-        if part in short_flags or base in long_bases:
-            return True
-        if base in specs and specs[base]:
-            _, consumed = _option_value(pre, i)
-            i += 1 + consumed
-            continue
-        if part.startswith("--") and "=" not in part and base[2:] in {lf[2:] for lf in long_flags if lf.startswith("--")}:
-            return True
-        i += 1
     return False
 
 
@@ -353,47 +372,31 @@ def _consume_options(pre_args, option_specs):
     i = 0
     while i < len(pre_args):
         tok = pre_args[i]
-        expanded = _expand_clustered_flags(tok, option_specs)
-        consumed_extra = 0
-        if len(expanded) > 1:
-            for part in expanded:
-                if part in option_specs:
-                    matched.add(part)
-                    spec = option_specs[part]
-                    if spec:
-                        consumed_extra = max(consumed_extra, spec)
-            i += 1 + consumed_extra
-            continue
-        if len(expanded) == 2 and expanded[0] in option_specs:
-            matched.add(expanded[0])
-            need = option_specs[expanded[0]]
-            if need:
-                operands.append(expanded[1])
+        flags, _inline_value, expects_value = _expand_clustered_flags(tok, option_specs)
+        if len(flags) == 1 and not flags[0].startswith("-"):
+            operands.append(flags[0])
             i += 1
             continue
-        part = expanded[0]
-        base = part.split("=", 1)[0]
-        if base in option_specs:
-            matched.add(base)
-            need = option_specs[base]
-            if need and "=" not in part:
-                consumed_extra = need
-        elif part.startswith("--"):
-            name = base[2:]
-            for key, need in option_specs.items():
-                if key.startswith("--") and key[2:] == name:
-                    matched.add(key)
-                    if need and "=" not in part:
-                        consumed_extra = need
-                    break
-            else:
-                if "=" not in part:
-                    consumed_extra = 1
-        elif part.startswith("-"):
-            pass
-        else:
-            operands.append(part)
-        i += 1 + consumed_extra
+        advance = 1
+        for part in flags:
+            base = part.split("=", 1)[0]
+            if part in option_specs:
+                matched.add(part)
+            elif base in option_specs:
+                matched.add(base)
+            elif part.startswith("--"):
+                name = base[2:]
+                found = False
+                for key in option_specs:
+                    if key.startswith("--") and key[2:] == name:
+                        matched.add(key)
+                        found = True
+                        break
+                if not found and "=" not in part:
+                    advance = max(advance, 2)
+        if expects_value:
+            advance = max(advance, 2)
+        i += advance
     return matched, operands
 
 
@@ -578,7 +581,7 @@ def _segment_destructive_action(parsed, cwd=None):
         if operand is None:
             return None
         if cwd is None:
-            return None
+            return "checkout-path"
         resolved = _resolve_single_operand_checkout(cwd, operand)
         if resolved == "checkout-path":
             return "checkout-path"
@@ -588,28 +591,62 @@ def _segment_destructive_action(parsed, cwd=None):
     return action
 
 
+def segment_accounting(command, cwd=None):
+    """Account for every command-position segment. Returns one record per segment:
+
+    {"segment": <the segment text>, "kind": "safe"|"destructive"|"unaccounted", "action": <str|None>}
+
+    kind is:
+      "destructive"  — parsed as a git invocation whose subcommand is destructive AND whose
+                       resolved action is not None. "action" carries that action name.
+      "unaccounted"  — the crude scanner sees a destructive git mention in this segment, but the
+                       segment was not parsed into a git invocation with a destructive subcommand.
+                       "action" is None. THIS IS THE FAIL-CLOSED VERDICT.
+      "safe"         — everything else: no destructive mention, or parsed and proven harmless.
+    """
+    if not isinstance(command, str):
+        return []
+    records = []
+    for segment in _split_segments(command):
+        tokens = _tokenize_segment(segment)
+        if not tokens:
+            continue
+        start = 0
+        while start < len(tokens) and "=" in tokens[start] and not tokens[start].startswith("="):
+            key = tokens[start].split("=", 1)[0]
+            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+                start += 1
+                continue
+            break
+        tokens = _strip_shell_prefixes(tokens[start:])
+        parsed = _parse_git_invocation(tokens) if tokens and _is_git_token(tokens[0]) else None
+        mentions = _segment_mentions_destructive_git(segment)
+        if parsed is not None and parsed["subcommand"] in _DESTRUCTIVE_SUBCOMMANDS:
+            action = _segment_destructive_action(parsed, cwd)
+            if action is not None:
+                records.append({
+                    "segment": segment,
+                    "kind": "destructive",
+                    "action": action,
+                })
+            else:
+                records.append({"segment": segment, "kind": "safe", "action": None})
+        elif mentions:
+            records.append({"segment": segment, "kind": "unaccounted", "action": None})
+        else:
+            records.append({"segment": segment, "kind": "safe", "action": None})
+    return records
+
+
 def destructive_discard_actions(command, cwd=None):
     """Return every destructive-discard action across all command-position git segments."""
     if not isinstance(command, str):
         return []
-    actions = []
-    for parsed in _iter_git_segments(command):
-        action = _segment_destructive_action(parsed, cwd)
-        if action is not None:
-            actions.append(action)
-    return actions
-
-
-def _destructive_git_precisely_safe(command, cwd):
-    """True when every parsed destructive git invocation is proven safe by the precise parser."""
-    saw_destructive = False
-    for parsed in _iter_git_segments(command):
-        if parsed["subcommand"] not in _DESTRUCTIVE_SUBCOMMANDS:
-            continue
-        saw_destructive = True
-        if _segment_destructive_action(parsed, cwd) is not None:
-            return False
-    return saw_destructive
+    return [
+        record["action"]
+        for record in segment_accounting(command, cwd)
+        if record["kind"] == "destructive"
+    ]
 
 
 def destructive_discard_action(command):
@@ -618,20 +655,16 @@ def destructive_discard_action(command):
     return actions[0] if actions else None
 
 
-def mentions_destructive_git(command):
-    """True when the command text plausibly invokes a destructive git subcommand.
-
-    Deliberately CRUDE and over-inclusive: it exists to catch what the precise parser misses.
-    Quote-aware only to the extent needed to not fire on `git commit -m 'git checkout -- f'`.
-    """
-    if not isinstance(command, str):
+def _segment_mentions_destructive_git(text):
+    """Crude per-segment scan for destructive git subcommand mentions."""
+    if not isinstance(text, str):
         return False
     i = 0
-    n = len(command)
+    n = len(text)
     in_single = False
     in_double = False
     while i < n:
-        ch = command[i]
+        ch = text[i]
         if in_single:
             if ch == "'":
                 in_single = False
@@ -652,27 +685,48 @@ def mentions_destructive_git(command):
             continue
         if ch.isalpha() or ch == "-" or (ch == "." and i + 1 < n):
             start = i
-            while i < n and not command[i].isspace() and command[i] not in ";|&()":
+            while i < n and not text[i].isspace() and text[i] not in ";|&()":
                 i += 1
-            word = command[start:i]
+            word = text[start:i]
             if _is_git_token(word):
                 j = i
                 while j < n:
-                    while j < n and command[j].isspace():
+                    while j < n and text[j].isspace():
                         j += 1
-                    if j >= n or command[j] in ";|&()":
+                    if j >= n or text[j] in ";|&()":
                         break
                     tok_start = j
-                    while j < n and not command[j].isspace() and command[j] not in ";|&()":
+                    while j < n and not text[j].isspace() and text[j] not in ";|&()":
                         j += 1
-                    token = command[tok_start:j]
+                    token = text[tok_start:j]
                     if not token.startswith("-"):
                         if token in _DESTRUCTIVE_SUBCOMMANDS:
                             return True
                         break
+                    base = token.split("=", 1)[0]
+                    if base in _GIT_GLOBAL_OPT_WITH_VALUE and "=" not in token:
+                        while j < n and text[j].isspace():
+                            j += 1
+                        if j >= n or text[j] in ";|&()":
+                            break
+                        tok_start = j
+                        while j < n and not text[j].isspace() and text[j] not in ";|&()":
+                            j += 1
+                        continue
             continue
         i += 1
     return False
+
+
+def mentions_destructive_git(command):
+    """True when the command text plausibly invokes a destructive git subcommand.
+
+    Deliberately CRUDE and over-inclusive: it exists to catch what the precise parser misses.
+    Quote-aware only to the extent needed to not fire on `git commit -m 'git checkout -- f'`.
+    """
+    if not isinstance(command, str):
+        return False
+    return any(_segment_mentions_destructive_git(seg) for seg in _split_segments(command))
 
 
 def _segment_has_unresolvable_target(tokens):
@@ -845,7 +899,16 @@ def at_risk(cwd, action, command):
                 probe_cwd, "status", "--porcelain",
                 "--untracked-files=no", "--ignore-submodules=none",
             )
-        elif action in ("checkout-force", "switch-force", "worktree-remove-force"):
+        elif action == "worktree-remove-force":
+            # Ignored content is declared-reproducible build output; including it here deadlocks
+            # the standard reap path on any worktree that has run the test suite, and the guard
+            # exists to protect uncommitted work, not build artifacts. Tracked modifications
+            # and non-ignored untracked files still deny.
+            result = _run_git(
+                probe_cwd, "status", "--porcelain",
+                "--untracked-files=normal", "--ignore-submodules=none",
+            )
+        elif action in ("checkout-force", "switch-force"):
             # checkout-force / switch-force can overwrite ignored paths the target tracks.
             result = _run_git(
                 probe_cwd, "status", "--porcelain",
@@ -919,19 +982,21 @@ def classify(command, cwd):
         if state == "uncalibrated":
             return ("allow", "")
 
-        actions = destructive_discard_actions(command, cwd)
+        records = segment_accounting(command, cwd)
+        if any(record["kind"] == "unaccounted" for record in records):
+            return ("deny", unparsed_message())
+        actions = [record["action"] for record in records if record["kind"] == "destructive"]
         if not actions:
-            if mentions_destructive_git(command) and not _destructive_git_precisely_safe(
-                command, cwd,
-            ):
-                return ("deny", unparsed_message())
             return ("allow", "")
 
         if not target_is_resolvable(command):
             return ("deny", indeterminate_message(actions[0]))
 
-        for action in actions:
-            risk_state, count = at_risk(cwd, action, command)
+        for record in records:
+            if record["kind"] != "destructive":
+                continue
+            action = record["action"]
+            risk_state, count = at_risk(cwd, action, record["segment"])
             if risk_state == "at-risk":
                 return ("deny", refusal_message(action, count))
             if risk_state == "indeterminate":
