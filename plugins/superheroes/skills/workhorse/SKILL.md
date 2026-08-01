@@ -400,8 +400,8 @@ repeat.)
   was launched by the advisor's launcher — stamp the builder liveness heartbeat at each state change:
   entering a phase, before and after a dispatch, on park, on handback. The contract lives in
   CONVENTIONS §15 — path, fields, states, and verbs there; do not restate them here. Stamp with
-  `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/heartbeat.py" stamp --repo-root <repo-root> --state <state> --phase <phase>`
-  (`SUPERHEROES_LAUNCH_ID` supplies `--launch-id` when unset). When `SUPERHEROES_LAUNCH_ID` is **absent**, the session was
+  `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/heartbeat.py" stamp --repo-root <repo-root> --state <state> --phase <phase> --stale-after <seconds-until-next-stamp>`
+  (`SUPERHEROES_LAUNCH_ID` supplies `--launch-id` when unset); pick `--stale-after` for the phase you are entering — your own promise about when you will stamp again. When `SUPERHEROES_LAUNCH_ID` is **absent**, the session was
   **not** launched by the advisor's launcher: **not advisor-managed, no heartbeat coverage** — that
   is **not** permission to invent an id, and **not** a build failure. A directly-invoked workhorse
   session is a normal case, not an error. **Ordering:** `parked` and `handback` are stamped **only

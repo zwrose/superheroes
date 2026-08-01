@@ -481,7 +481,7 @@ the reviewer and the owner's authorization carry that check instead.**
    carries the builder's half.
    **Scheduled heartbeat sweep (wave orchestration duty).** An advisor **orchestrating a wave owes a
    scheduled heartbeat sweep** that resumes stalled lanes — not a one-off rescue when something feels
-   wrong. Run `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/heartbeat.py sweep --repo-root <repo-root>`,
+   wrong. Run `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/heartbeat.py" sweep --repo-root <repo-root>`,
    read the classes, and **act**: resume or investigate. `stale`
    means the lane outran **its own promise** (`staleAfterSeconds` the builder stamped); `unknown`
    means the signal could not be read and is **actionable, not clean**; `terminal` on a launch the

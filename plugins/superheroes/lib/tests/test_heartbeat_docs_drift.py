@@ -70,6 +70,6 @@ def test_showrunner_charter_matches_heartbeat_constants():
     duty = m.group(0)
     tokens = (
         sorted(cls for cls in hb.SWEEP_CLASSES if cls != "fresh")
-        + ["staleAfterSeconds", "heartbeat.py sweep", "record-outcome"]
+        + ["staleAfterSeconds", "lib/heartbeat.py", "sweep", "--repo-root", "record-outcome"]
     )
     _assert_tokens_present(duty, "skills/showrunner/SKILL.md duty-9", tokens)

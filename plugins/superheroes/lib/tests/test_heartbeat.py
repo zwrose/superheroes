@@ -361,7 +361,7 @@ def test_edge_07e_missing_ledger_refuses_sweep(tmp_path, monkeypatch):
     result = hb.sweep(repo)
     assert result["ok"] is False
     assert result["reason"] == hb.REASON_LEDGER_UNREADABLE
-    assert "launches" not in result or result.get("launches") != []
+    assert "launches" not in result
 
 
 @pytest.mark.parametrize("launch_id", ["../../evil", "a/b"])
@@ -497,10 +497,22 @@ def test_heartbeat_root_env_override(tmp_path, monkeypatch):
 
 def test_heartbeat_root_override_refuses_in_repo(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    monkeypatch.setenv(hb.HEARTBEAT_ROOT_ENV, repo)
+    inside = os.path.join(repo, "inside-heartbeat")
+    monkeypatch.setenv(hb.HEARTBEAT_ROOT_ENV, inside)
     result = hb.resolve_root(repo)
     assert result["ok"] is False
     assert result["reason"] == hb.REASON_ROOT_UNRESOLVED
+
+
+def test_heartbeat_root_override_repo_identity_unavailable(tmp_path, monkeypatch):
+    not_repo = str(tmp_path / "plain")
+    os.makedirs(not_repo)
+    custom_root = str(tmp_path / "custom-heartbeat-root")
+    os.makedirs(custom_root, mode=0o700)
+    monkeypatch.setenv(hb.HEARTBEAT_ROOT_ENV, custom_root)
+    result = hb.resolve_root(not_repo)
+    assert result["ok"] is False
+    assert result["reason"] == hb.REASON_REPO_IDENTITY_UNAVAILABLE
 
 
 def test_heartbeat_root_override_refuses_insecure(tmp_path, monkeypatch):
@@ -530,8 +542,12 @@ def test_heartbeat_root_override_creates_mode_0700_dirs(tmp_path, monkeypatch):
     repo_id = ll.repo_identity(repo)
     repo_dir = os.path.join(custom_root, repo_id)
     beats_dir = os.path.join(repo_dir, hb.HEARTBEATS_DIR_NAME)
-    assert (os.stat(repo_dir).st_mode & 0o777) == 0o700
-    assert (os.stat(beats_dir).st_mode & 0o777) == 0o700
+    original_umask = os.umask(0)
+    try:
+        assert (os.stat(repo_dir).st_mode & 0o777) == 0o700
+        assert (os.stat(beats_dir).st_mode & 0o777) == 0o700
+    finally:
+        os.umask(original_umask)
 
 
 def test_read_heartbeat_refuses_symlink(tmp_path, monkeypatch):
