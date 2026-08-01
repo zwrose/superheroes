@@ -95,7 +95,7 @@ your channel.
 **stdout channel** — external, sandboxed seats that cannot write a file. Your
 final stdout is a single JSON object and nothing after it:
 
-`{"findings": [ … ], "investigated": ["repo/relative/path", …]}`
+`{"findings": [{"id": "code-001", "severity": "Important", "dimension": "Code", "title": "…", "file": "src/orders.py", "line": 21, "body": "…", "confidence": "High"}], "investigated": ["src/orders.py"]}`
 
 Wrap the finding array below as the `findings` value. List in `investigated`
 every repo-relative path you actually read to ground the review. An empty
@@ -107,8 +107,11 @@ that never ran.
 at the path the dispatching skill names. Write `[]` when you have nothing to
 flag — do not skip the file.
 
-If you are told to use the file channel but cannot write, deliver on stdout in
-the stdout-channel shape above and say so there.
+The dispatching skill must name a channel the seat can actually use — that is
+the real prevention. If you are nevertheless told to use the file channel but
+cannot write, deliver on stdout in the stdout-channel shape above as a last
+resort so the failure is visible rather than silent; collection still reads
+the named file path, so this fallback is not automatic recovery.
 
 Delivery is part of the review, not a step after it. Findings that do not
 arrive in the contract shape for your channel do not exist — the orchestrator

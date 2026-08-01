@@ -200,8 +200,8 @@ nudge (already surfaced in Step 2). See CONVENTIONS §2.1 (layout) and §2.2 (fo
    `dep-set`, changed `default-branch`/`forge`, newly-covered-by-CLAUDE.md items
    to drop from the profile, etc.
    **Detect `rubric-version` drift.** Read the engine's current rubric-version
-   (Step 1: the `<!-- rubric-version: N -->` line of `review-base.md` — currently
-   **8**). If the profile's `rubric-version` is **lower** than the engine's, flag
+   (Step 1: the `<!-- rubric-version: N -->` line of `review-base.md`). If the profile's
+   `rubric-version` is **lower** than the engine's, flag
    it as drift in the proposed-changes diff ("rubric-version M→N: the review rubric
    has advanced; recalibrating") and update it on write (step 7). This is the same
    signal `repo_doctor.py` surfaces as a staleness nudge during a review — reconcile
