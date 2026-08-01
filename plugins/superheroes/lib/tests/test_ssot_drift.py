@@ -664,36 +664,38 @@ def test_showrunner_charter_carries_builder_dispatch_tier_doctrine():
     """§11: the loaded advisor surface must carry the builder-dispatch tier rule keyed to
     model_registry.FABLE_NEVER_DEFAULT — builder launches default to opus; fable is never a launch
     default. A failure means the rule drifted out of the charter the advisor actually loads."""
-    # axis: the rule is present in BOTH loaded locations (duty-9 orchestration passage and the
-    # tempted-table tier row); partial drift in either location alone must fail this guard.
+    # axis: both loaded regions (duty-9 orchestration passage and tempted-table tier row) must name
+    # engine_pref.BUILDER_DISPATCH_TIER_DEFAULT and each registry-refused launch tier; partial drift
+    # in either region alone must fail this guard.
+    import engine_pref
     import model_registry
 
     assert model_registry.FABLE_NEVER_DEFAULT is True
+    default_tier = engine_pref.BUILDER_DISPATCH_TIER_DEFAULT
+    refused_tiers = set(model_registry.known_claude_models()) - set(
+        model_registry.claude_dispatch_tokens()
+    )
+    assert refused_tiers, "expected at least one registry-refused launch tier"
 
     orchestration = _showrunner_orchestration_duty().lower()
     tempted_row = _showrunner_tempted_tier_row().lower()
 
-    # Substantive phrases — tolerate rewording of punctuation and bolding within each region.
     for label, region in (
         ("duty 9 orchestration passage", orchestration),
         ("tempted-table tier row", tempted_row),
     ):
-        assert "never a launch default" in region, (
-            "showrunner/SKILL.md %s missing the fable-never-default clause — "
-            "advisor sessions will not see that fable is refused as a builder launch tier"
-            % label
+        assert default_tier in region, (
+            "showrunner/SKILL.md %s missing the %s builder-launch default — "
+            "advisor sessions may let launches inherit the account default tier"
+            % (label, default_tier)
         )
-
-    # orchestration carries the operative launch statement; the tempted row restates it in the
-    # excuse/reality pair — both must name the opus builder-launch default independently.
-    assert re.search(
-        r"headless builder launches run on[^.\n]{0,60}opus[^.\n]{0,40}tier",
-        orchestration,
-    ), (
-        "showrunner/SKILL.md duty 9 orchestration passage missing the opus builder-launch default — "
-        "advisor sessions may let launches inherit the account default tier at dispatch"
-    )
-    assert "opus" in tempted_row, (
-        "showrunner/SKILL.md tempted-table tier row missing the opus builder-launch default — "
-        "advisor sessions may let launches inherit the account default tier via the excuse table"
-    )
+        for refused in sorted(refused_tiers):
+            assert refused in region, (
+                "showrunner/SKILL.md %s missing the refused launch tier %r — "
+                "advisor sessions will not see that %s is refused as a builder launch tier"
+                % (label, refused, refused)
+            )
+            assert "never a launch default" in region, (
+                "showrunner/SKILL.md %s missing the never-a-launch-default clause for %s"
+                % (label, refused)
+            )

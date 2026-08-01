@@ -2309,6 +2309,31 @@ def test_write_builder_dispatch_tier_refused_invalid_tier_byte_identical(
     assert after == before
 
 
+def test_write_builder_dispatch_tier_refused_duplicate_key_byte_identical(tmp_path):
+    # axis: profile_structural_refusal blocks the write before the lock splice — duplicate-key
+    # fixture (not multiple-blocks, which the len(blocks) check would refuse anyway).
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.mode_registry.ensure_project_store(repo, store)
+    path = _gate_core_beside(repo)
+    block = (
+        '{\n  "schemaVersion": 2,\n  "verifyCommand": "npm test",\n  "stackTags": [],\n'
+        '  "enginePreferences": {\n    "reviewer": "claude",\n    "reviewer": "codex"\n  }\n}'
+    )
+    open(path, "w", encoding="utf-8").write(
+        "<!-- superheroes-core: schemaVersion=2 status=confirmed "
+        "created=2026-01-01 updated=2026-01-01 -->\n\n"
+        "## Threat model\n\nt\n\n## Canonical patterns\n\n\n"
+        "```json superheroes-core\n%s\n```\n" % block
+    )
+    before = open(path, encoding="utf-8").read()
+    res = CM.write_builder_dispatch_tier(repo, "sonnet", root=store)
+    assert res["action"] == "refused"
+    assert res["reason"] == "duplicate-core-key:reviewer"
+    after = open(path, encoding="utf-8").read()
+    assert after == before
+
+
 def test_write_builder_dispatch_tier_refused_absent_core(tmp_path):
     repo = str(tmp_path)
     store = str(tmp_path / "store")

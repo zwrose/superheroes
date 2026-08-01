@@ -122,6 +122,71 @@ def test_render_shows_builder_dispatch_tier_fable_rejected(tmp_path):
     assert "⚠" in screen
 
 
+def test_render_builder_dispatch_agrees_with_launch_on_structural_ambiguity(tmp_path):
+    # axis: calibration screen uses load_builder_dispatch_tier — same path as headless launch.
+    import core_md as cm
+    import engine_pref as ep
+
+    root = _seed_core_and_layer(
+        tmp_path, engine_preferences={"builderDispatchTier": "sonnet"},
+    )
+    path = cm.core_path(str(tmp_path), root)
+    text = open(path, encoding="utf-8").read()
+    extra = "\n```json superheroes-core\n{\"schemaVersion\": 2}\n```\n"
+    open(path, "w", encoding="utf-8").write(text + extra)
+    loaded = ep.load_builder_dispatch_tier(str(tmp_path), root=root)
+    assert loaded["source"] == "unreadable-default"
+    assert loaded["tier"] == "opus"
+    assert loaded["reason"].startswith("multiple-core-blocks:")
+    screen = cv.render(str(tmp_path), root=root)
+    assert "sonnet (configured)" not in screen
+    assert "builder dispatch (headless launch) — claude — opus (unreadable-default)" in screen
+    classifier_prefix = loaded["reason"].split(":", 1)[0]
+    core_md_path = loaded["reason"].split(":", 1)[1]
+    assert classifier_prefix in screen
+    assert core_md_path not in screen
+
+
+def test_render_builder_dispatch_reason_shows_classifier_not_path(tmp_path):
+    # axis: fail-closed reason on screen shows classifier prefix only — no absolute core.md path.
+    import core_md as cm
+    import engine_pref as ep
+
+    root = _seed_core_and_layer(
+        tmp_path, engine_preferences={"builderDispatchTier": "sonnet"},
+    )
+    path = cm.core_path(str(tmp_path), root)
+    text = open(path, encoding="utf-8").read()
+    extra = "\n```json superheroes-core\n{\"schemaVersion\": 2}\n```\n"
+    open(path, "w", encoding="utf-8").write(text + extra)
+    loaded = ep.load_builder_dispatch_tier(str(tmp_path), root=root)
+    assert loaded["source"] == "unreadable-default"
+    assert loaded["reason"].startswith("multiple-core-blocks:")
+    core_md_path = loaded["reason"].split(":", 1)[1]
+    screen = cv.render(str(tmp_path), root=root)
+    assert "multiple-core-blocks" in screen
+    assert core_md_path not in screen
+
+
+def test_render_shows_builder_dispatch_when_core_absent(tmp_path, monkeypatch):
+    # axis: builder row visible when core is None — the case where launch-tier disclosure matters most.
+    import store_core as sc
+
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    real_run_git = sc.run_git_result
+
+    def fake(cwd, *args):
+        if args == ("rev-parse", "--show-toplevel"):
+            return sc.GitResult(None, sc.GIT_UNAVAILABLE, "FileNotFoundError: no git")
+        return real_run_git(cwd, *args)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    screen = cv.render(str(tmp_path), root=root)
+    assert "## Core\n(no core calibration yet)" in screen
+    assert "builder dispatch (headless launch) — claude — opus" in screen
+
+
 def test_render_builder_dispatch_tier_survives_read_error(tmp_path, monkeypatch):
     import engine_pref
 
