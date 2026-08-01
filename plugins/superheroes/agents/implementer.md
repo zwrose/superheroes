@@ -21,8 +21,9 @@ output was lost or truncated, exactly the output you do have, labelled as incomp
 or completed (rung 1).
 This is a duty to report with a reason, not a list of permitted statuses; the ladder decides what you do, never what you may report.
 
-**Command precedence** — every rule about running a command defers to this ladder; no rule carries
-its own private carve-out. Highest precedence first:
+**Command precedence** — every rule about running a command defers to this ladder; the ladder is
+total, and every exemption to it is stated inside it — no rule outside the ladder carries its own
+private carve-out. Highest precedence first:
 
 **Never proceed on a guessed premise.** If a command your order depends on to establish a premise
 does not leave you with the evidence that premise needs — it could not run (rung 3), it ran and
@@ -112,7 +113,10 @@ not already stopped you.
   only as a **targeted, reversible edit**; restore **only by the inverse edit** — never
   `git checkout --`, `git restore`, `git reset`, or `git stash`, which have destroyed uncommitted
   work in the field. **Bite-proof red and green captures** are bounded — at most **32 KiB** per element
-  and **128 KiB** across the whole return; an over-ceiling bite-proof capture is written to a path
+  and **128 KiB** across the whole return for a **passing** green half and for the red half of a proof;
+  a **green half that fails** is a rung-2 failure and its output comes back word-for-word, however long —
+  because a failed restore is the one outcome nobody may summarize. An over-ceiling bite-proof capture
+  is written to a path
   **outside the repository** that the return names, with the first and last lines quoted inline, so
   the orchestrator reads the rest off disk. Where the proof cannot
   honestly be produced, the return carries one of the three disclosure shapes instead of silence —
@@ -126,8 +130,8 @@ not already stopped you.
   paraphrasing, or summarizing the output of a command you actually ran is the `Self-checks run
   unfiltered` violation and is never permitted, **least of all for brevity**. **A failure is exempt
   from brevity entirely** — an **ordinary failing command's** output comes back **word-for-word,
-  however long it is**; the bite-proof capture ceiling above governs only bite-proof red and green
-  halves, not rung-2 failing output from any other command.
+  however long it is**; the bite-proof capture ceiling above governs only the red half and a **passing**
+  green half, not a **failing** green half or rung-2 failing output from any other command.
 - **If you could not run it, say so — never narrate a run you did not make.** Precedence rungs 1–7;
   apply the **reporting obligation** for each named command. Your shell may be unavailable —
   rejected, sandboxed, or absent. This is a **normal, reportable outcome and not a failure of yours**.

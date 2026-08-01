@@ -60,8 +60,7 @@ emphatic its name.
 
 **Raw captures are bounded:** at most **32 KiB per element** and **128 KiB across the whole
 record**. Overflow is written to session-scoped scratch **outside the repository** that the record
-names; the party carrying the record into the durable record removes captures once verification
-closes (an interrupted run leaves them behind as an accepted residual); the reader fetches overflow off disk, not through the return. Receipts carried into the durable record are
+names; the party carrying the record into the durable record removes captures once verification closes (an interrupted run leaves them behind as an accepted residual); the reader fetches overflow off disk, not through the return. Receipts carried into the durable record are
 **redacted** — secrets, tokens, private URLs, PII — and the redaction is said out loud.
 
 **Bounded volume shape:** when a detector guards many elements, the record may group them into
@@ -140,11 +139,10 @@ production.
 - **The orchestrator at verification** — **re-runs the proof itself** (verification never delegates),
   carries the receipts into the build record, and **accepts or rejects each disclosure and records
   which** — **no party accepts its own disclosure**; where the same actor typed the change and
-  verifies, the record says so, and the disclosure stands unadjudicated until a second, independent
-  reader accepts it; an accepted disclosure names the check that confirmed the proof is genuinely unavailable
-  (for instance: it attempted the neutralization and observed no red). **The four vacuity traps are
+  verifies, the disclosure travels to the **next independent reader of the record** — the advisor's
+  vet where a project has one, otherwise the owner before the merge decision — and until then the
+  record **states plainly that the disclosure is unadjudicated**, which is a permitted terminal state for the build, not a blocker: what is forbidden is recording it as *accepted* by the party that
+  wrote it; an accepted disclosure names the check that confirmed the proof is genuinely unavailable (for instance: it attempted the neutralization and observed no red). **The four vacuity traps are
   not disclosable** — a one-representative or whole-document check is a defect to fix, not a caveat
   to write.
-- **The review seat** — flags the **absence** of an axis line, or of an owed disclosure, **in the
-  diff it was given**. It never runs a proof — a review seat never changes the repository — and it
-  never asserts that a receipt is missing, because the build record is not among its inputs.
+- **The review seat** — flags the **absence** of an axis line, or of an owed disclosure, **in the diff it was given**. It never runs a proof — a review seat never changes the repository — and it never asserts that a receipt is missing, because the build record is not among its inputs.
