@@ -59,8 +59,9 @@ emphatic its name.
 - **raw green** — output after restore.
 
 **Raw captures are bounded:** at most **32 KiB per element** and **128 KiB across the whole
-record**. Overflow is written to a path **outside the repository** that the record names; the
-reader fetches it off disk, not through the return. Receipts carried into the durable record are
+record**. Overflow is written to session-scoped scratch **outside the repository** that the record
+names; the party carrying the record into the durable record removes captures once verification
+closes (an interrupted run leaves them behind as an accepted residual); the reader fetches overflow off disk, not through the return. Receipts carried into the durable record are
 **redacted** — secrets, tokens, private URLs, PII — and the redaction is said out loud.
 
 **Bounded volume shape:** when a detector guards many elements, the record may group them into
@@ -138,7 +139,9 @@ production.
   instead of silence; a **dispatched implementer** never marks its own work done.
 - **The orchestrator at verification** — **re-runs the proof itself** (verification never delegates),
   carries the receipts into the build record, and **accepts or rejects each disclosure and records
-  which**; an accepted disclosure names the check that confirmed the proof is genuinely unavailable
+  which** — **no party accepts its own disclosure**; where the same actor typed the change and
+  verifies, the record says so, and the disclosure stands unadjudicated until a second, independent
+  reader accepts it; an accepted disclosure names the check that confirmed the proof is genuinely unavailable
   (for instance: it attempted the neutralization and observed no red). **The four vacuity traps are
   not disclosable** — a one-representative or whole-document check is a defect to fix, not a caveat
   to write.

@@ -29,7 +29,8 @@ does not leave you with the evidence that premise needs — it could not run (ru
 failed (rung 2), its outcome is unknown, **or it ran and its output was lost or truncated**, **or
 its condition could not be evaluated** — then **stop and report**, whichever rung decided its fate.
 Do not continue on a guess. This dominates conditionality below; conditionality never licenses
-proceeding on a guessed premise.
+proceeding on a guessed premise. A **bite-proof red run** is not a missing premise — its failure
+*is* the evidence the premise needs — see **Bite-proof red run is not a rung-2 failure** below.
 
 **Unscopable wide-gate order defect.** When your order names a full-suite or project-wide gate that
 cannot be scoped to your order's surface, report widening as **order defect** — always, even when
@@ -104,14 +105,16 @@ not already stopped you.
   test change, and the **bite-proof record for every detector your order adds or changes** — **per
   guarded element**: the element and the axis it claims, the exact neutralization applied, the
   detector's own **red** output word-for-word (run the detector alone — a narrowed command, e.g. the
-  single test node — never a filtered suite log), the restore, the **green** output, and a
-  post-restore `git status --porcelain` so the orchestrator can see the tree came back. Neutralize
+  single test node — never a filtered suite log), the restore, the **green** output, and **the
+  restored lines quoted back** — the same targeted, reversible edit shown undone — as the restore
+  receipt; a post-restore `git status --porcelain` is a supplementary check showing which paths
+  the dispatch touched, not the restore receipt itself. Neutralize
   only as a **targeted, reversible edit**; restore **only by the inverse edit** — never
   `git checkout --`, `git restore`, `git reset`, or `git stash`, which have destroyed uncommitted
-  work in the field. Per-element and whole-return captures are bounded — at most **32 KiB** per element
-  and **128 KiB** across the whole return; an over-ceiling
-  capture is written to a path **outside the repository** that the return names, with the first and
-  last lines quoted inline, so the orchestrator reads the rest off disk. Where the proof cannot
+  work in the field. **Bite-proof red and green captures** are bounded — at most **32 KiB** per element
+  and **128 KiB** across the whole return; an over-ceiling bite-proof capture is written to a path
+  **outside the repository** that the return names, with the first and last lines quoted inline, so
+  the orchestrator reads the rest off disk. Where the proof cannot
   honestly be produced, the return carries one of the three disclosure shapes instead of silence —
   **`Unprovable as placed`**, **`Unreachable through this entry point`**, or **`Unrunnable here`**
   (`rubric/bite-proof.md` is the plugin's own reference; the orchestrator supplies it if you need
@@ -122,7 +125,9 @@ not already stopped you.
   it never governs **how you run or read a command locally**: filtering, truncating, `| head`-ing,
   paraphrasing, or summarizing the output of a command you actually ran is the `Self-checks run
   unfiltered` violation and is never permitted, **least of all for brevity**. **A failure is exempt
-  from brevity entirely** — failing output comes back **word-for-word, however long it is.**
+  from brevity entirely** — an **ordinary failing command's** output comes back **word-for-word,
+  however long it is**; the bite-proof capture ceiling above governs only bite-proof red and green
+  halves, not rung-2 failing output from any other command.
 - **If you could not run it, say so — never narrate a run you did not make.** Precedence rungs 1–7;
   apply the **reporting obligation** for each named command. Your shell may be unavailable —
   rejected, sandboxed, or absent. This is a **normal, reportable outcome and not a failure of yours**.
@@ -189,8 +194,10 @@ order is the likeliest defect source, so catching one early is high-value.
    validator, a CI check — the order should name the bite-proof it expects: the guarded element, the
    neutralization to apply, and the detector expected to go red. If it does not, **flag the gap** —
    and still produce the proof, per the **Short structured return rule above** (`rubric/bite-proof.md`
-   is the plugin's own reference; the orchestrator supplies it if you need it), naming the
-   neutralization you chose — which must lie **inside your order's surface**. If the consumer that
+   is the plugin's own reference; the orchestrator supplies it if you need it): **N guarded elements
+   owe N neutralizations and N reds; if you group them, group by distinct failure mode, name each
+   class's representative element, and list any element in no class as unproven** — naming the
+   neutralization you chose, which must lie **inside your order's surface**. If the consumer that
    must be mutated sits outside it, that is **stop and report** under the existing scope rule —
    flag it as the order defect it is, so the orchestrator can re-order, and do not wander. An order
    that names an existing test as "the proof" without a neutralization has not named a bite-proof.
