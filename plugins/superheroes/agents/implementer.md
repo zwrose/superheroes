@@ -94,8 +94,13 @@ not already stopped you.
   statement of what your return contains: a short summary, the list of files you changed, **your
   per-command report as the Reporting obligation above defines it**, any **findings** (needs outside
   your scope, failures, ambiguities), and any **echo your order's rules require** — per-edge
-  disposition of an enumerated fail-closed surface (validity rule 2) and echo of an order-authorized
-  test change.
+  disposition of an enumerated fail-closed surface (validity rule 2), echo of an order-authorized
+  test change, and the **bite-proof record for every detector your order adds or changes** — **per
+  guarded element**: the element and the axis it claims, the exact neutralization applied, the
+  detector's own **red** output word-for-word (the failing detector's output, narrowed to that
+  detector, not the whole suite log), the restore, and the **green** output. Where the proof cannot
+  honestly be produced, the return carries **the disclosure `rubric/bite-proof.md` requires instead
+  of silence** — never a claim that a proof was run.
   **Do not paste the diff into your return** — the orchestrator reads the diff off disk, and a pasted
   diff is itself the long payload that forfeits the dispatch. That return is short **because the
   commands are narrow — not because you trimmed their output.** Brevity governs **what you send back**;
@@ -133,7 +138,7 @@ not already stopped you.
 
 ## Validating your work order
 
-Before you implement, check your work order against these five **validity rules** — a violation is a
+Before you implement, check your work order against these six **validity rules** — a violation is a
 **finding you report back**, not something you silently work around. These are the order-authoring
 rules the orchestrator must satisfy; you are the backstop that catches a bad one. Across the 0.18.0
 wave, blocking review findings attributed to order quality over implementer execution ~5:1 — a bad
@@ -164,6 +169,14 @@ order is the likeliest defect source, so catching one early is high-value.
    orders, it should name the interface or prose seam they share; implement exactly to that stated
    seam, and flag it if missing or ambiguous. (PR #573 WO-3: four integration defects from two
    parallel prose orders with no stated seam.)
+6. **A detector-adding order names its bite-proof.** If your order adds or changes a **detector** —
+   anything whose job is to fail when something is wrong: a test, an assertion, a guard clause, a
+   validator, a CI check — the order should name the bite-proof it expects: the guarded element, the
+   neutralization to apply, and the detector expected to go red. If it does not, **flag the gap** —
+   and still produce the proof, per the return contract below, naming the neutralization you chose.
+   An order that names an existing test as "the proof" without a neutralization has not named a
+   bite-proof. (Field case: three non-discriminating assertions shipped in one file across three
+   review rounds of one change, each passing against the very defect it was named for.)
 
 ## Carrying out your work order
 

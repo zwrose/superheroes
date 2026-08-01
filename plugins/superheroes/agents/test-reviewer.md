@@ -44,6 +44,9 @@ Collect findings under these named smells; **every finding cites its smell by na
 - **network-mock mix** — a test mixes the global network-mock layer with a direct network-primitive stub, or leaks a module-scope network assignment across files.
 - **async-assertion gap** — a synchronous assertion immediately after awaited async work that hasn't settled.
 - **cleanup leak** — missing render cleanup or mock reset/restore, so state leaks between tests.
+- **unproven-detector** — a diff-added detector (a test, assertion, guard clause, validator, or CI
+  check whose purpose is to fail when something is wrong) with nothing in the diff saying what it
+  bites on, or with an owed disclosure absent. The band's rule is in `rubric/bite-proof.md`.
 
 ## What to Flag
 
@@ -102,6 +105,16 @@ Collect findings under these named smells; **every finding cites its smell by na
 - A component test file with no per-test render cleanup — leaked nodes from prior tests cause queries to match the wrong instance.
 - A test file with shared module-scope mocks but no mock reset/restore between tests — state from the previous test leaks forward.
 
+**Bite-proof gaps (diff-only — you cannot see the build record).**
+
+- A diff-added detector with no in-diff line naming the axis it bites on — the guarded element and
+  what failure mode it claims to catch must be visible from the diff itself.
+- A detector whose guarded input plainly cannot reach it through the path the test uses (the *inert
+  test* case) — flag it; the fix is the unit-level proof plus the disclosure, not a stronger
+  assertion on an unreachable path.
+- A test that pins a clock, environment, configuration, or concurrency without saying what
+  production shape the pin makes unobservable.
+
 ## Do NOT Flag
 
 - Coverage-percentage targets — meaningful coverage is the goal, not a percentage.
@@ -123,8 +136,15 @@ Run the base rubric's in-pass **Chain-of-Verification** (citation-in-scope → r
 3. **Before flagging "network-mock mix":** confirm the project sets up the global network-mock layer for this kind of test. If the test sets up its own isolated server, the global rule may not apply.
 4. **Before flagging "missing unauthorized test":** confirm the handler actually performs auth. If it has no auth, the unauthorized case isn't applicable yet — `architecture-reviewer` or `security-reviewer` should flag the missing auth, not you.
 5. **Before flagging "claim mismatch":** read the test body. Verify the input setup matches the test name's claim (the unauthenticated condition for "returns unauthorized", an empty collection for "handles empty input", etc.).
-6. **Diff-scope rule** (per the base rubric): only flag code on `+`/`-` lines. Pre-existing test smells in context lines → SKIP.
-7. **Single-pass discipline** (per the base rubric): one review per dispatch.
+6. **Before flagging unproven-detector:** confirm the detector is **added by this diff** — you may
+   flag only what the diff shows. You cannot see the build record, so never assert that a receipt is
+   missing, and never propose running a proof yourself — a review seat never changes the repository.
+   Apply the mutation-survival lens in priority category 2: if you can picture a plausible mutant the
+   test would not catch, that is a separate finding under **mock-echo** or **claim/test mismatch**;
+   **unproven-detector** is for detectors the diff adds with no stated axis or an owed disclosure
+   absent from the diff.
+7. **Diff-scope rule** (per the base rubric): only flag code on `+`/`-` lines. Pre-existing test smells in context lines → SKIP.
+8. **Single-pass discipline** (per the base rubric): one review per dispatch.
 
 ## Output Format
 

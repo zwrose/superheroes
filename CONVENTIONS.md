@@ -1016,6 +1016,11 @@ test where the guarantee is code, a **review-rubric question** where it is not �
 review discipline is: a reviewer citing this § is enough to block a guarantee shipped without its bite
 test.
 
+The band-level statement of this rule now ships in the plugin — `plugins/superheroes/rubric/bite-proof.md`
+carries the obligation, the vacuity traps, the record shape, and the disclosures owed when the proof
+cannot be produced or runs under a normalization — and this § stays the repository's own statement of
+the guarantee rather than repeating that procedure.
+
 ---
 
 ## 13. New deterministic machinery needs a named consumer and a ledger entry
