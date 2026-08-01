@@ -2192,6 +2192,84 @@ def test_review_diff_file_named_like_binary_marker_is_not_opaque(tmp_path):
         sv.destroy_sanitized_view(view["path"])
 
 
+def test_review_diff_dir_to_file_transition_withheld_child_is_skipped(tmp_path):
+    repo = str(tmp_path / "review-pkg-dir-file")
+    os.makedirs(repo, exist_ok=True)
+    _git(repo, "init", "-q")
+    os.makedirs(os.path.join(repo, "pkg"))
+    with open(os.path.join(repo, "pkg", "CLAUDE.md"), "w", encoding="utf-8") as fh:
+        fh.write("secret baseline\n")
+    with open(os.path.join(repo, "pkg", "x.txt"), "w", encoding="utf-8") as fh:
+        fh.write("x baseline\n")
+    with open(os.path.join(repo, "other.txt"), "w", encoding="utf-8") as fh:
+        fh.write("other baseline\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "init pkg dir",
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    shutil.rmtree(os.path.join(repo, "pkg"))
+    with open(os.path.join(repo, "pkg"), "w", encoding="utf-8") as fh:
+        fh.write("regular file\n")
+    with open(os.path.join(repo, "other.txt"), "w", encoding="utf-8") as fh:
+        fh.write("other changed\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "pkg dir to file",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert b"diff --git a/other.txt b/other.txt" in patch
+        assert b"diff --git a/pkg b/pkg" in patch
+        assert b"diff --git a/pkg/x.txt b/pkg/x.txt" in patch
+        assert b"CLAUDE.md" not in patch
+        assert b"secret" not in patch
+        assert view["diffWithheldCount"] == 1
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_review_diff_withheld_section_outside_survivor_prefix_refuses():
+    # Reconciler-level guard for a shape the current pathspec set cannot emit.
+    patch = (
+        b"diff --git a/safe.py b/safe.py\n"
+        b"index 111..222 100644\n"
+        b"--- a/safe.py\n"
+        b"+++ b/safe.py\n"
+        b"@@ -1 +1 @@\n"
+        b" changed\n"
+        b"diff --git a/CLAUDE.md b/CLAUDE.md\n"
+        b"index 111..222 100644\n"
+        b"--- a/CLAUDE.md\n"
+        b"+++ b/CLAUDE.md\n"
+        b"@@ -1 +1 @@\n"
+        b" secret\n"
+    )
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._reconcile_review_patch(
+            patch, survivors=["safe.py"], withheld=["CLAUDE.md"]
+        )
+    assert exc.value.detail == "sanitized-view-diff-unaccounted"
+
+
 def test_diff_too_large(tmp_path, monkeypatch):
     monkeypatch.setattr(sv, "REVIEW_DIFF_MAX_BYTES", 10)
     repo = _init_repo(tmp_path / "bigdiff", files={"a.txt": "x" * 100 + "\n"})

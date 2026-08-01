@@ -1317,7 +1317,21 @@ def _reconcile_review_patch(patch_bytes, survivors, withheld):
         if underivable:
             raise SanitizedViewError("sanitized-view-diff-unaccounted")
         if withhold:
-            if stripped_paths and stripped_paths.issubset(withheld_set):
+            # Pathspec prefix expansion on a directory→file transition can
+            # legitimately emit diff sections for census-withheld descendants of
+            # a survivor pathspec (e.g. pkg/CLAUDE.md when survivor is pkg); a
+            # withheld path outside every survivor prefix cannot come from our
+            # pathspec set. See test_review_diff_dir_to_file_transition_
+            # withheld_child_is_skipped and
+            # test_review_diff_withheld_section_outside_survivor_prefix_refuses.
+            if (
+                stripped_paths
+                and stripped_paths.issubset(withheld_set)
+                and all(
+                    any(p.startswith(s + "/") for s in survivors_set)
+                    for p in stripped_paths
+                )
+            ):
                 continue
             raise SanitizedViewError("sanitized-view-diff-unaccounted")
         path = _section_resolved_path_raw(section)
