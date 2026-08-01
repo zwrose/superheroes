@@ -2,6 +2,8 @@
 import os
 import pytest
 
+from skill_surface import surface_text
+
 _SKILLS = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "skills")
 
@@ -14,8 +16,7 @@ ROOTDIR_SKILLS = ["test-pilot-plan", "test-pilot-execute"]
 
 
 def _skill(name):
-    with open(os.path.join(_SKILLS, name, "SKILL.md"), encoding="utf-8") as fh:
-        return fh.read()
+    return surface_text(name)
 
 
 # NOTE: Both test functions below are STRUCTURAL string-presence checks only.

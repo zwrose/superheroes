@@ -14,6 +14,8 @@ police descriptive prose, which legitimately still mentions the literals.
 import os
 import re
 
+from skill_surface import linked_reference_files
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILLS = os.path.normpath(os.path.join(HERE, "..", "..", "skills"))
 
@@ -55,10 +57,16 @@ def _section(text, heading, next_heading=None):
 def test_rule1_no_path_literal_inside_fences():
     offenders = []
     for skill in ALL_SKILLS:
-        for lineno, line in _lines_in_fences(_read(skill)):
-            for lit in PATH_LITERALS:
-                if lit in line:
-                    offenders.append(f"{skill}/SKILL.md:{lineno}: {lit}")
+        sources = [(os.path.join(SKILLS, skill, "SKILL.md"), f"{skill}/SKILL.md")]
+        for ref_path in linked_reference_files(skill):
+            sources.append((ref_path, f"{skill}/{os.path.relpath(ref_path, os.path.join(SKILLS, skill))}"))
+        for path, label in sources:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+            for lineno, line in _lines_in_fences(text):
+                for lit in PATH_LITERALS:
+                    if lit in line:
+                        offenders.append(f"{label}:{lineno}: {lit}")
     assert not offenders, "path literal inside a fence:\n" + "\n".join(offenders)
 
 

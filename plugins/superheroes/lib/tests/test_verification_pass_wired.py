@@ -9,6 +9,8 @@ for the continuation gate.
 """
 import os
 
+from skill_surface import surface_text
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 SKILL = os.path.join(ROOT, "skills", "review-code", "SKILL.md")
@@ -39,7 +41,7 @@ def test_skill_compile_invokes_verification():
 
 
 def test_skill_resolves_the_verifier_tier_not_the_session_model():
-    text = _read(SKILL)
+    text = surface_text("review-code")
     # Model resolved via the verifier tier (--role verifier), not the session model.
     assert "--role verifier" in text and "VERIFIER_MODEL" in text
 

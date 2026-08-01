@@ -26,3 +26,17 @@ Records every pre-change instruction unit relocated out of
 - Before: 784 lines. After: 499 lines.
 - `auto-fix-loop.md` is 259 lines (>100), opens with `<!-- auto-fix-loop-version: 1 -->` and a `## Contents` TOC (FR-6 satisfied).
 - `review-crew/review-code` removed from `eval/skills/baseline.json` `knownRedCeilings`.
+
+## Relocation wave 2 (#646)
+
+| Block | Origin heading (SKILL.md) | Origin lines (before) | Destination |
+| ----- | ------------------------- | --------------------- | ----------- |
+| Session artifact table | `## Session Directory` (table) | 50–69 | `plugins/superheroes/skills/review-code/reference/setup.md` § Session artifacts |
+| Setup resolution fences | `### 1. Setup` (resolution blocks) | 79–207 | `plugins/superheroes/skills/review-code/reference/setup.md` § Setup resolution — run these in order |
+
+### Notes
+
+- Both blocks moved byte-exact except the two `reference-depth` path-token rewrites: line 79 `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-base.md` → `$ROOT_DIR/rubric/review-base.md`; line 113 `from \`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/.claude-plugin/plugin.json\`` → `from \`$ROOT_DIR/.claude-plugin/plugin.json\``.
+- Before: 512 lines. After: 367 lines (measured).
+- `reference/setup.md` opens with a `## Contents` TOC.
+- Registry ceiling moved 515 → 400.
