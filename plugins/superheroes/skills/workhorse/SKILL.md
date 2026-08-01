@@ -479,12 +479,15 @@ mechanical tripwire, not the memory of it (the mutation-probe sibling of §6's c
 obligation, the four ways a bite-proof is vacuous, the record shape, and the disclosures owed when
 the proof cannot be produced or runs under a normalization — lives in
 `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/bite-proof.md`. **Read it when a build adds one.**
-The implementer produces the proof; **you re-run it yourself** — verification authority never
-delegates, exactly as this section's first sentence already says — and **carry the red and green
-receipts into the build record**, per guarded element, using the mutation mechanics above (targeted
-revertible edit through the host's edit action; commit the landed work first). **A bite-proof
-claimed without its record is a claim without a receipt** — and a green run alone is equally
-consistent with a detector that cannot fail.
+The implementer produces the proof — **in a lane where you type the change, you produce it yourself,
+to the same record shape**; **you re-run it yourself** — verification authority never delegates,
+exactly as this section's first sentence already says — and **carry the red and green receipts into
+the build record**, per guarded element (**redacted** — secrets, tokens, private URLs, PII — and say
+you did), using the mutation mechanics above (targeted revertible edit through the host's edit
+action; commit the landed work first). At verification, **accept or reject each disclosure and record
+which** — an accepted disclosure names the check that confirmed the proof is genuinely unavailable.
+**A bite-proof claimed without its record is a claim without a receipt** — and a green run alone is
+equally consistent with a detector that cannot fail.
 
 **Proof a review seat may not produce — a change to the repository, or a run the seat cannot or must
 not make — has exactly three sanctioned destinations, and a review seat is never one of them.** A
@@ -646,10 +649,10 @@ wrap the build record in `<details><summary>Build record</summary>…</details>`
 **pure owner-side gain**: an agent reading `gh pr view --json body` gets identical raw markdown.
 
 **The build record** — everything §11 already required, **unchanged and unshrunk**, relocated below the
-boundary marker: **in the full lane** the **build brief** plus dispositions table + receipts +
-bite-proof records for every detector the build added or changed + disclosures; **in the light lane**
-dispositions table + receipts + bite-proof records for every detector the build added or changed +
-disclosures (no brief from §4);
+boundary marker: **in the full lane** the **build brief** plus dispositions table + receipts; **in the
+light lane** dispositions table + receipts (no brief from §4); **for both lanes** bite-proof records
+for every detector the build added or changed (write **None — this build added or changed no
+detector** when there are none) + disclosures;
 plus for both lanes a **dispatch provenance** section — each dispatch (the brief-check reviewer, every
 implementer, every `check-runner`, the pilot, the review-code seats) with the **engine + model** it ran on — each validated
 against the registry allowlist (#600), so the advisor can vet what ran without your context — plus a
