@@ -17,6 +17,7 @@ are gone with them; no lib/*.js copy-holders remain):
 - Model-registry ids + family vocabulary                (home: model_registry.py)
 - Base-guard refusal reasons                           (home: review_base_guard.py)
 - Omission floor + PR-body marker semantics (§10.7)   (home: CONVENTIONS.md §10.7)
+- `configRead` CLI field set                             (home: preflight_probe.py)
 
 The reviewer-roster and docs-location clusters live in their topical sibling guards
 (test_dispatch_tables.py, test_definition_doc.py).
@@ -228,6 +229,48 @@ def test_review_payload_shape_tokens_in_auto_fix_loop_doc():
     assert not missing_from_doc and not extra_in_doc, (
         "auto-fix-loop.md payloadShape `parsed` vocabulary drift from "
         "engine_adapter.REVIEW_PAYLOAD_SHAPES — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_from_doc, extra_in_doc)
+    )
+
+
+# --- Cluster: configRead CLI field set (preflight_probe → preflight.md §B) ---
+
+
+def _config_read_fields_from_home():
+    import preflight_probe
+
+    return set(preflight_probe.CONFIG_READ_FIELDS)
+
+
+def _config_read_fields_from_preflight_doc(doc):
+    """The `configRead` field enumeration in preflight.md §B — scoped to that paragraph only."""
+    m = re.search(
+        r"`configRead`\s+object\s+[—-]\s*`\{([^}]+)\}`",
+        doc,
+    )
+    assert m, (
+        "preflight.md: configRead field enumeration not found "
+        "(moved or reworded?)"
+    )
+    tokens = {t.strip() for t in m.group(1).split(",")}
+    assert tokens, (
+        "preflight.md: configRead field enumeration parsed to zero tokens "
+        "(regex drift or empty enumeration?)"
+    )
+    return tokens
+
+
+def test_config_read_fields_in_preflight_doc():
+    """§11: preflight.md §B restates the `configRead` field vocabulary from preflight_probe."""
+    home = _config_read_fields_from_home()
+    doc = _read("skills/configure/reference/preflight.md")
+    doc_tokens = _config_read_fields_from_preflight_doc(doc)
+    missing_from_doc = sorted(home - doc_tokens)
+    extra_in_doc = sorted(doc_tokens - home)
+    assert not missing_from_doc and not extra_in_doc, (
+        "preflight.md configRead field vocabulary drift from "
+        "preflight_probe.CONFIG_READ_FIELDS — "
         "missing from doc: %r; present in doc but not in home: %r"
         % (missing_from_doc, extra_in_doc)
     )
