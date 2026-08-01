@@ -216,7 +216,6 @@ never drop a finding or a lens.
 > | `sanitized-view-diff-failed` | a git subprocess failed while resolving ancestry or generating the patch (spawn error, non-zero exit, timeout) — command failure only |
 > | `sanitized-view-diff-unaccounted` | an unrecognized non-`diff --git` span, a duplicate path within one census tree, a changed census entry that survived the stripped policy but has no rendered section, a rendered section for a path the census does not contain, or a duplicate rendered section for the same path |
 > | `sanitized-view-diff-opaque` | a rendered section whose content is opaque — `Binary files … differ` (or `GIT binary patch`) instead of hunks |
-> | `sanitized-view-tempbase-inside-repo` | the process temp directory or an ancestry scratch directory would be created inside the reviewed repository |
 >
 > **#666 investigation floor.** A seat that cites a **stripped** path in its `investigated` array fails
 > the investigation floor and forfeits vacuously — fail-safe (the seat falls open to Claude), never a
