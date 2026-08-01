@@ -633,14 +633,14 @@ def test_build_argv_must_not_regress_measured_invariants():
 
 
 def test_engine_reviewer_stdout_contract_is_stated_in_dispatch_reference():
-    # #196: the stdout shape contract must live where orchestrators read it when composing the
-    # engine-dispatch prompt — not only in this parser's source. Structural pin so the prose
-    # contract can't silently vanish and let orchestrators re-guess the shape per run.
+    # #196: the rubric is the contract's home; this pin keeps the reference stating the complete
+    # shape where an orchestrator composes the dispatch prompt — strengthened from the old incomplete
+    # findings-only substring so a seat that omits investigated forfeits vacuously.
     ref = os.path.join(_HERE, "..", "..", "skills", "review-code", "reference", "auto-fix-loop.md")
     with open(ref, encoding="utf-8") as fh:
         text = fh.read()
     # the canonical required shape, verbatim
-    assert '{"findings": [...]}' in text
+    assert '{"findings": [...], "investigated": [...]}' in text
     # and the tolerated bare-array note (kept in sync with parse_result's #196 tolerance)
     assert "bare" in text and "array" in text
 

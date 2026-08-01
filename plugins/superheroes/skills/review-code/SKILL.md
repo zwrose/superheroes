@@ -349,13 +349,13 @@ Launch the round's scheduled specialists (round 1: all five) in a **single messa
 | test-reviewer                | test                          | Test          |
 | premortem-reviewer           | premortem                     | Failure-Mode  |
 
-After dispatch, wait for all five agents to return. Each writes its findings file to `$SESSION_DIR/round-<round>/`. The orchestrator does not read agent transcripts — only the JSON files.
+After dispatch, wait for all five agents to return. A file-channel seat's findings are read from `$SESSION_DIR/round-<round>/findings-<agent>.json`; a stdout-channel seat's findings come from the terminal `dispatch-review` result, which the orchestrator folds. The orchestrator does not read agent transcripts — only those structured outputs.
 
 ### 4. Compile + Dedupe (main context)
 
 On the **read-only paths** (`--post`, `--review-only`), the orchestrator compiles in main context. On the **auto-fix loop**, the same mechanical steps run inside `round_driver.py` when panel/scoped findings are submitted — obey the driver's `next`/`submit` instead of reimplementing compile by hand.
 
-Read the five `$SESSION_DIR/round-<round>/findings-*.json` files (read-only path only). Apply, in order:
+Collect findings (read-only path only) from file-channel seats at `$SESSION_DIR/round-<round>/findings-*.json` and from stdout-channel seats via their folded `dispatch-review` results. Apply, in order:
 
 1. **Citation check.** Drop any finding with `file == null` or `line == null`.
 2. **Diff-scope verification.** Parse `$SESSION_DIR/round-<round>/diff.txt` for `+`/`-` anchor lines (same hunk-walking as `resolve_diff_lines.py`). Drop out-of-scope findings.
