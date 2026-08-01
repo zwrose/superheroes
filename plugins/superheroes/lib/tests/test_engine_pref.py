@@ -1243,6 +1243,60 @@ def test_resolve_builder_dispatch_tier_read_error_wins_over_valid_tier():
     assert got["reason"] == "boom"
 
 
+def test_resolve_builder_dispatch_tier_invalid_builder_dispatch_tier_marker():
+    got = EP.resolve_builder_dispatch_tier({
+        "invalidBuilderDispatchTier": {
+            "value": "fable",
+            "reason": "fable-never-a-launch-default",
+        },
+    })
+    assert (got["tier"], got["source"]) == ("opus", "invalid-config-default")
+    assert got["reason"] == "fable-never-a-launch-default"
+
+
+def test_resolve_builder_dispatch_tier_read_error_wins_over_invalid_marker():
+    got = EP.resolve_builder_dispatch_tier({
+        "readError": "boom",
+        "invalidBuilderDispatchTier": {
+            "value": "fable",
+            "reason": "fable-never-a-launch-default",
+        },
+    })
+    assert (got["tier"], got["source"]) == ("opus", "unreadable-default")
+    assert got["reason"] == "boom"
+
+
+def test_resolve_builder_dispatch_tier_normalized_fable_round_trip():
+    raw = {"builderDispatchTier": "fable"}
+    normalized = EP._normalize_engine_preferences_block(raw)
+    got = EP.resolve_builder_dispatch_tier(normalized)
+    assert got["source"] == "invalid-config-default"
+    assert got["tier"] == "opus"
+    assert got["reason"] == "fable-never-a-launch-default"
+
+
+def test_resolve_builder_dispatch_tier_normalized_unsanctioned_round_trip():
+    raw = {"builderDispatchTier": "turbo"}
+    normalized = EP._normalize_engine_preferences_block(raw)
+    got = EP.resolve_builder_dispatch_tier(normalized)
+    assert got["source"] == "invalid-config-default"
+    assert got["tier"] == "opus"
+    assert got["reason"] == "builder-tier-not-sanctioned:turbo"
+
+
+def test_resolve_builder_dispatch_tier_malformed_invalid_marker_falls_through():
+    got = EP.resolve_builder_dispatch_tier({"invalidBuilderDispatchTier": "not-a-dict"})
+    assert (got["tier"], got["source"]) == ("opus", "default")
+
+
+def test_resolve_builder_dispatch_tier_invalid_marker_missing_reason():
+    got = EP.resolve_builder_dispatch_tier({
+        "invalidBuilderDispatchTier": {"value": "fable"},
+    })
+    assert (got["tier"], got["source"]) == ("opus", "invalid-config-default")
+    assert isinstance(got["reason"], str) and got["reason"]
+
+
 def test_normalize_engine_preferences_block_builder_dispatch_tier_valid(tmp_path):
     repo = str(tmp_path)
     _write_core_with_prefs(repo, {"builderDispatchTier": "sonnet"})

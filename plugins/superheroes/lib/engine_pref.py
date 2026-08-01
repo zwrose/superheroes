@@ -133,6 +133,18 @@ def resolve_builder_dispatch_tier(prefs):
             "source": "unreadable-default",
             "reason": str(read_error),
         }
+    invalid_builder = prefs.get("invalidBuilderDispatchTier")
+    if isinstance(invalid_builder, dict):
+        reason = invalid_builder.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            reason = "invalid-builder-dispatch-tier"
+        else:
+            reason = str(reason)
+        return {
+            "tier": default,
+            "source": "invalid-config-default",
+            "reason": reason,
+        }
     classified = classify_builder_dispatch_tier(prefs.get(BUILDER_DISPATCH_TIER_KEY))
     state = classified["state"]
     if state == "unset":

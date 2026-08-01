@@ -557,22 +557,14 @@ def test_compose_configured_sonnet_from_core_md(tmp_path):
     assert result["modelResolution"]["source"] == "configured"
 
 
-def test_compose_configured_fable_falls_back_to_opus(tmp_path, monkeypatch):
+def test_compose_configured_fable_falls_back_to_opus(tmp_path):
     repo = _init_repo(tmp_path / "repo")
-    import engine_pref as ep
-
-    def _fable_tier(_cwd, root=None):
-        return {
-            "tier": "opus",
-            "source": "invalid-config-default",
-            "reason": "fable-never-a-launch-default",
-        }
-
-    monkeypatch.setattr(ep, "load_builder_dispatch_tier", _fable_tier)
+    _write_core_with_builder_tier(repo, {"builderDispatchTier": "fable"})
     premise = _valid_premise(repo)
     result = L.compose_launch(repo, 656, premise)
     assert result["ok"] is True
     assert "opus" in result["argv"]
+    assert "fable" not in result["argv"]
     assert result["modelResolution"]["source"] == "invalid-config-default"
     assert result["modelResolution"]["reason"] == "fable-never-a-launch-default"
 
