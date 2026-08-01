@@ -2,7 +2,9 @@
 
 Bites on: a consumer that stops pointing at ``rubric/bite-proof.md``, and a home heading that is
 renamed, removed, or reordered. Does **not** prove the doctrine's prose is correct, that anyone
-obeys it, or that a bite-proof was actually recorded for any given change.
+obeys it, or that a bite-proof was actually recorded for any given change. The consumer pointer
+check is per document, not per occurrence — a consumer that keeps one pointer and drops another still
+passes, because the guarded claim is only that the document points at the home at all.
 """
 import os
 
@@ -96,6 +98,29 @@ def _text_without_heading(text, heading):
     return mutated
 
 
+def _text_with_swapped_adjacent_headings(text, heading_a, heading_b):
+    idx_in_list = _HEADINGS.index(heading_a)
+    assert _HEADINGS[idx_in_list + 1] == heading_b, (
+        f"mutation setup: {heading_a!r} and {heading_b!r} must be adjacent in cited order"
+    )
+    lines = text.splitlines()
+    idx_a = lines.index(heading_a)
+    idx_b = lines.index(heading_b)
+    mutated_lines = lines.copy()
+    mutated_lines[idx_a], mutated_lines[idx_b] = mutated_lines[idx_b], mutated_lines[idx_a]
+    mutated = "\n".join(mutated_lines)
+    if text.endswith("\n"):
+        mutated += "\n"
+    assert mutated != text, (
+        f"mutation setup: swap of {heading_a!r} and {heading_b!r} left {_HOME} unchanged"
+    )
+    mutated_line_set = mutated.splitlines()
+    assert heading_a in mutated_line_set and heading_b in mutated_line_set, (
+        f"mutation setup: swap of {heading_a!r} and {heading_b!r} removed a heading from {_HOME}"
+    )
+    return mutated
+
+
 @pytest.mark.parametrize("rel", _CONSUMER_PATHS, ids=_CONSUMER_PATHS)
 def test_consumer_points_at_bite_proof_home(rel):
     _check_consumer_pointer(_read(rel), rel)
@@ -124,3 +149,12 @@ def test_negative_home_heading_missing(heading):
     mutated = _text_without_heading(original, heading)
     with pytest.raises(AssertionError, match=heading):
         _check_home_heading(mutated, heading)
+
+
+def test_negative_home_headings_swapped_obligation_and_four_ways():
+    heading_a = _HEADINGS[0]
+    heading_b = _HEADINGS[1]
+    original = _read(_HOME)
+    mutated = _text_with_swapped_adjacent_headings(original, heading_a, heading_b)
+    with pytest.raises(AssertionError, match="out of order"):
+        _check_home_heading_order(mutated)
