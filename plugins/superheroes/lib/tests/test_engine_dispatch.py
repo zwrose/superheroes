@@ -1216,6 +1216,7 @@ def _manual_open_review_run(tmp_path, run_dir):
         timeout=ED.RETRY_MIN_TIMEOUT, retry_timeout=ED.RETRY_MIN_TIMEOUT,
         prompt_path=prompt_path, view_path=view["path"], view_meta=view,
         fed_prompt=fed, order_id="test-order", progress_path=os.path.join(run_dir, "progress.jsonl"),
+        repo_root=os.path.realpath(repo_root),
     )
     assert ok, detail
     return repo_root, view
@@ -1908,6 +1909,7 @@ def _git_init(path):
         ["git", "-C", path, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-qm", "init"],
         check=True,
     )
+    return path
 
 
 def _build_ok_stdout():
@@ -2843,3 +2845,237 @@ def test_journal_state_legacy_attempt_ended_keys_grade_unchanged(tmp_path):
     state = ED._journal_state(records)
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
+
+
+# --- #747 WO-4b: forfeit-with-engaged-artifact + ledger wiring ---
+
+_DO = importlib.util.spec_from_file_location(
+    "dispatch_outcome", os.path.join(_HERE, "..", "dispatch_outcome.py"))
+_DO_MOD = importlib.util.module_from_spec(_DO)
+_DO.loader.exec_module(_DO_MOD)
+
+_FL = importlib.util.spec_from_file_location(
+    "forfeit_ledger", os.path.join(_HERE, "..", "forfeit_ledger.py"))
+_FL_MOD = importlib.util.module_from_spec(_FL)
+_FL.loader.exec_module(_FL_MOD)
+
+_LL = importlib.util.spec_from_file_location(
+    "launch_ledger", os.path.join(_HERE, "..", "launch_ledger.py"))
+_LL_MOD = importlib.util.module_from_spec(_LL)
+_LL.loader.exec_module(_LL_MOD)
+
+_EA_WO4B = importlib.util.spec_from_file_location(
+    "engine_adapter", os.path.join(_HERE, "..", "engine_adapter.py"))
+_EA_WO4B_MOD = importlib.util.module_from_spec(_EA_WO4B)
+_EA_WO4B.loader.exec_module(_EA_WO4B_MOD)
+
+
+def _ledger_env(tmp_path, monkeypatch):
+    root = str(tmp_path / "forfeit-ledger-root")
+    os.makedirs(root, mode=0o700, exist_ok=True)
+    monkeypatch.setenv(_FL_MOD.LEDGER_ROOT_ENV, root)
+    return root
+
+
+def _manual_open_review_run_git(tmp_path, run_dir, repo_root):
+    build_view = _fake_build_view(tmp_path)
+    view = build_view(os.path.realpath(repo_root))
+    cwd = os.path.realpath(view["path"])
+    built = __import__("engine_adapter").build_argv_result(
+        "codex", "review", "high", {"model": "sonnet", "cwd": cwd},
+    )
+    argv = built["argv"]
+    prompt_path = _valid_prompt(tmp_path)
+    with open(prompt_path, encoding="utf-8") as fh:
+        base = fh.read()
+    fed = ED.ANTIHIJACK_PREAMBLE + _SV_MOD.sanitized_view_notice(view) + base
+    os.makedirs(run_dir, exist_ok=True)
+    ok, detail = ED._open_review_run(
+        run_dir, engine="codex", argv=argv, cwd=cwd,
+        timeout=ED.RETRY_MIN_TIMEOUT, retry_timeout=ED.RETRY_MIN_TIMEOUT,
+        prompt_path=prompt_path, view_path=view["path"], view_meta=view,
+        fed_prompt=fed, order_id="test-order", progress_path=os.path.join(run_dir, "progress.jsonl"),
+        repo_root=os.path.realpath(repo_root),
+    )
+    assert ok, detail
+    return repo_root, view
+
+
+def _artifact_pad(text):
+    out = text
+    while len(out.encode("utf-8")) < _EA_WO4B_MOD.ARTIFACT_MIN_RESIDUE_BYTES + 20:
+        out += " Additional review context padding."
+    return out
+
+
+def _poster_child_attempt1_stdout():
+    cites = [
+        "src/app/widget.ts:42", "src/lib/util.ts:7", "src/app/model.ts:15",
+        "tests/widget.test.ts:88", "src/app/view.ts:3",
+    ]
+    lines = ["Review of the widget module identified several concerns."]
+    lines += ["- %s: null check missing" % c for c in cites[:3]]
+    lines += ["Also noted %s and %s in related files." % (cites[3], cites[4])]
+    return _artifact_pad("\n".join(lines))
+
+
+def test_poster_child_engaged_artifact_forfeit_plain_path(tmp_path):
+    """axis: which outcome is minted — poster-child regression (attempt-1 engaged, attempt-2 unreadable)."""
+    repo_root = _git_init(str(tmp_path / "repo"))
+    prose = _poster_child_attempt1_stdout()
+    fake = FakeRunner([
+        (prose, True, 0, ""),
+        ("short echo only", False, 0, ""),
+    ])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is False
+    assert res["forfeited"] is True
+    assert res["reason"] == _DO_MOD.REASON_FORFEIT_ENGAGED_ARTIFACT
+    assert res["salvage"]["attempt"] == 1
+    assert "findings" not in res
+    assert "not credited" in res["disclosure"].lower()
+    assert "independently verified" in res["disclosure"].lower()
+
+
+def test_engaged_artifact_forfeit_from_vacuous_path(tmp_path):
+    """axis: which outcome is minted — vacuous terminal upgraded when earlier attempt engaged."""
+    repo_root = _git_init(str(tmp_path / "repo-vac"))
+    prose = _poster_child_attempt1_stdout()
+    empty = json.dumps({"findings": []})
+    fake = FakeRunner([
+        (prose, False, 0, ""),
+        (empty, False, 0, ""),
+    ])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["reason"] == _DO_MOD.REASON_FORFEIT_ENGAGED_ARTIFACT
+    assert res["salvage"]["attempt"] == 1
+
+
+def test_forfeit_without_engaged_artifact_unchanged(tmp_path):
+    repo_root = _git_init(str(tmp_path / "repo-plain"))
+    fake = FakeRunner([("", True, 0, ""), ("echo", False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["reason"] == _DO_MOD.REASON_FORFEITED
+    assert "salvage" not in res
+
+
+def test_fold_ledger_forfeited_transport_class(tmp_path, monkeypatch):
+    repo_root = _git_init(str(tmp_path / "repo-ledger"))
+    _ledger_env(tmp_path, monkeypatch)
+    prose = _poster_child_attempt1_stdout()
+    fake = FakeRunner([
+        (prose, False, 0, ""),
+        ('{"verdicts":[]}', False, 0, ""),
+    ])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ledger"]["written"] is True
+    rows, _ = _FL_MOD.read(repo_root)
+    assert len(rows) == 1
+    assert rows[0]["attribution"]["class"] == _DO_MOD.ATTRIBUTION_TRANSPORT
+
+
+def test_fold_ledger_success_thin_row(tmp_path, monkeypatch):
+    repo_root = _git_init(str(tmp_path / "repo-success"))
+    _ledger_env(tmp_path, monkeypatch)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    assert res["ledger"]["written"] is True
+    rows, _ = _FL_MOD.read(repo_root)
+    assert len(rows) == 1
+    assert rows[0]["ok"] is True
+    thin = rows[0]["attempts"][0]
+    assert thin["attempt"] == 1
+    assert thin["exit"] == 0
+    assert thin["timedOut"] is False
+    assert "wallSeconds" not in thin
+
+
+def test_fold_ledger_idempotent_per_run_id(tmp_path, monkeypatch):
+    run_dir = str(tmp_path / "run-idem")
+    repo_root = _git_init(str(tmp_path / "repo-idem"))
+    _ledger_env(tmp_path, monkeypatch)
+    _manual_open_review_run_git(tmp_path, run_dir, repo_root)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    result = {
+        "ok": True, "terminal": True, "attempts": 1,
+        "findings": [{"id": "f1", "message": "x"}],
+        "engagement": {"read": "engaged"},
+    }
+    ED._append_fold_ledger(run_dir, state, result)
+    ED._append_fold_ledger(run_dir, state, result)
+    rows, _ = _FL_MOD.read(repo_root)
+    assert len(rows) == 1
+
+
+def test_fold_ledger_no_repo_root_written_false(tmp_path, monkeypatch):
+    run_dir = str(tmp_path / "run-noroot")
+    _ledger_env(tmp_path, monkeypatch)
+    os.makedirs(run_dir, exist_ok=True)
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "codex",
+        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "x",
+        "argv": [], "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": os.path.join(run_dir, "prompt.txt"),
+        "supervisorPid": 1, "at": time.time(),
+    })
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    result = {"ok": False, "terminal": True, "reason": "forfeited", "forfeited": True, "attempts": 0}
+    receipt = ED._append_fold_ledger(run_dir, state, result)
+    assert receipt["written"] is False
+    assert receipt["why"] == "repo-root-absent-from-run-opened"
+
+
+def test_fold_ledger_append_failure_fail_soft(tmp_path, monkeypatch):
+    repo_root = _git_init(str(tmp_path / "repo-failsoft"))
+    _ledger_env(tmp_path, monkeypatch)
+    prose = _poster_child_attempt1_stdout()
+    fake = FakeRunner([
+        (prose, True, 0, ""),
+        ("short", False, 0, ""),
+    ])
+
+    def boom(*_a, **_k):
+        raise RuntimeError("ledger-boom")
+
+    monkeypatch.setattr(ED.forfeit_ledger, "append", boom)
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["reason"] == _DO_MOD.REASON_FORFEIT_ENGAGED_ARTIFACT
+    assert res["ledger"]["written"] is False
+    assert res["ledger"]["why"] == "ledger-internal-error"
+
+
+def test_run_opened_records_repo_root_and_id(tmp_path):
+    run_dir = str(tmp_path / "run-meta")
+    repo_root = _git_init(str(tmp_path / "repo-opened"))
+    _manual_open_review_run_git(tmp_path, run_dir, repo_root)
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    assert opened["repoRoot"] == os.path.realpath(repo_root)
+    assert opened["repoId"] == _LL_MOD.repo_identity(opened["repoRoot"])

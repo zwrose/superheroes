@@ -1126,6 +1126,7 @@ def _fold_panel(state, config, artifact):
     unverified = []
     missing_dims = []
     vacuous_dims = []
+    engaged_artifact_dims = []
     for dim in _panel_dimensions(config):
         seat = seats.get(dim) if isinstance(seats, dict) else None
         findings = _usable_findings(seat)
@@ -1140,6 +1141,9 @@ def _fold_panel(state, config, artifact):
                         isinstance(reason, str)
                         and reason == engine_adapter.REVIEW_FORFEIT_VACUOUS):
                     vacuous_dims.append(dim)
+                elif isinstance(reason, str) and (
+                        reason == dispatch_outcome.REASON_FORFEIT_ENGAGED_ARTIFACT):
+                    engaged_artifact_dims.append(dim)
             if seat.get("receiptMissing") or seat.get("receiptStale"):
                 status = "missing"
         elif not isinstance(seat, list):
@@ -1164,6 +1168,13 @@ def _fold_panel(state, config, artifact):
                   "%d seat(s) returned no findings and no verifiable investigation record (%s) — "
                   "classed as never-ran; certification cannot rest on them"
                   % (len(vacuous_dims), ", ".join(vacuous_dims)))
+    if engaged_artifact_dims:
+        _record_round(state, "engagedArtifactSeats", list(engaged_artifact_dims))
+        _decision(state, "seat-engaged-artifact",
+                  "%d seat(s) produced a review our transport could not carry (%s) — they do "
+                  "not count toward certification; salvaged artifacts are available for "
+                  "independent verification"
+                  % (len(engaged_artifact_dims), ", ".join(engaged_artifact_dims)))
     # Cross-vendor liveness canary — per-vendor judgement via canary_liveness (pure).
     _sm_for_canary = state.get("seatMap") if isinstance(state.get("seatMap"), dict) else seat_map
     canary_panel_gap = False

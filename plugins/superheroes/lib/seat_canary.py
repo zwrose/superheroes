@@ -77,6 +77,10 @@ def _map_outcome(res):
     reason = res.get("reason")
     if reason == engine_adapter.REVIEW_FORFEIT_VACUOUS:
         return engine_adapter.REVIEW_FORFEIT_VACUOUS, (res.get("disclosure") or "vacuous-forfeit")
+    if reason == dispatch_outcome.REASON_FORFEIT_ENGAGED_ARTIFACT:
+        # axis: dispatched-and-engaged vs not-dispatched — not unrunnable.
+        return dispatch_outcome.REASON_FORFEIT_ENGAGED_ARTIFACT, (
+            res.get("disclosure") or dispatch_outcome.REASON_FORFEIT_ENGAGED_ARTIFACT)
     if reason == dispatch_outcome.REASON_FORFEITED:
         return dispatch_outcome.REASON_FORFEITED, (
             res.get("disclosure") or dispatch_outcome.REASON_FORFEITED)
@@ -154,6 +158,9 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
         outcome, detail_hint = _map_outcome(res)
         if outcome == dispatch_outcome.REASON_UNRUNNABLE:
             engaged = False
+        elif outcome == dispatch_outcome.REASON_FORFEIT_ENGAGED_ARTIFACT:
+            # Fail-closed: artifact engaged but delivery failed — probe cannot score passed.
+            engaged = False
         else:
             engaged = _engaged_from_dispatch(res)
 
@@ -165,6 +172,9 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
                 detail = detail_hint or "vacuous-forfeit"
             elif outcome == dispatch_outcome.REASON_FORFEITED:
                 detail = detail_hint or dispatch_outcome.REASON_FORFEITED
+            elif outcome == dispatch_outcome.REASON_FORFEIT_ENGAGED_ARTIFACT:
+                detail = detail_hint or (
+                    "engaged artifact, delivery failed — re-dispatch required")
             elif outcome == "ok":
                 detail = "no-engagement-evidence"
 

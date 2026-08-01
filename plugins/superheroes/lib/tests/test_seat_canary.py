@@ -452,3 +452,37 @@ def test_engaged_from_dispatch_equivalent_to_engagement_read():
     ]
     for res in cases:
         assert SC._engaged_from_dispatch(res) == (EA.engagement_read(res) == "engaged")
+
+
+def test_map_outcome_engaged_artifact_not_unrunnable():
+    """axis: dispatched-and-engaged vs not-dispatched — honest member, not unrunnable fall-through."""
+    res = {
+        "ok": False,
+        "reason": "forfeit-with-engaged-artifact",
+        "forfeited": True,
+        "disclosure": "transport failed",
+        "salvage": {"attempt": 1},
+    }
+    outcome, detail = SC._map_outcome(res)
+    assert outcome == "forfeit-with-engaged-artifact"
+    assert detail == "transport failed"
+    assert "not-dispatched" not in detail
+
+
+def test_run_canary_engaged_artifact_not_engaged():
+    def dispatch(engine, **kwargs):
+        return {
+            "ok": False,
+            "reason": "forfeit-with-engaged-artifact",
+            "forfeited": True,
+            "disclosure": "seat produced review; not credited",
+            "salvage": {"attempt": 1, "excerpt": "review prose"},
+            "engagement": {"read": "engaged", "toolCalls": 5},
+        }
+
+    out = SC.run_canary(
+        "codex", engine_model="m", effort="high", repo_root="/r", dispatch=dispatch,
+    )
+    assert out["outcome"] == "forfeit-with-engaged-artifact"
+    assert out["engaged"] is False
+    assert "not credited" in out["detail"]

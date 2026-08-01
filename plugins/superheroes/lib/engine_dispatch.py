@@ -37,6 +37,8 @@ if _LIB_DIR not in sys.path:
 import dispatch_outcome  # noqa: E402  outcome vocabulary chokepoint (#747)
 import engine_adapter  # noqa: E402  build_argv, parse_result, prompt_path_ok — the pure core
 import file_lock  # noqa: E402
+import forfeit_ledger  # noqa: E402  durable forfeit ledger (#747 WO-3)
+import launch_ledger  # noqa: E402  repo_identity for run-opened (#747 WO-4b)
 import sanitized_view  # noqa: E402
 
 # The adopted mode-7 hardening (#563) and sanitized review cwd (#684): a dispatched one-shot reviewer
@@ -571,6 +573,266 @@ def _terminal_record_not_durable(run_dir_real, state, result):
     )
 
 
+def _repo_root_and_id(repo_root):
+    """Validated repo root + stable repoId digest; never raises."""
+    if not repo_root or not isinstance(repo_root, str):
+        return None, None
+    try:
+        real = os.path.realpath(repo_root.strip())
+    except OSError:
+        return None, None
+    repo_id = launch_ledger.repo_identity(real)
+    return real, repo_id
+
+
+def _repository_root_from_git_cwd(cwd_real, timeout=None):
+    """Repository root (not worktree leaf) for ledger keying; None on failure. Never raises."""
+    try:
+        common = _git_scrubbed(cwd_real, "rev-parse", "--git-common-dir", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None
+    if common.returncode != 0:
+        return None
+    common_path = (common.stdout or "").strip()
+    if not common_path:
+        return None
+    if not os.path.isabs(common_path):
+        common_path = os.path.join(cwd_real, common_path)
+    try:
+        common_real = os.path.realpath(common_path)
+    except OSError:
+        return None
+    if os.path.basename(common_real) == ".git":
+        return os.path.dirname(common_real)
+    try:
+        top = _git_scrubbed(cwd_real, "rev-parse", "--show-toplevel", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None
+    if top.returncode == 0 and (top.stdout or "").strip():
+        return os.path.realpath((top.stdout or "").strip())
+    return None
+
+
+def _read_stdout_for_artifact_scan(path):
+    """Read attempt stdout for engaged-artifact scan; None when unreadable. Never raises."""
+    try:
+        with open(path, encoding="utf-8", errors="ignore") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def _scan_review_engaged_candidates(run_dir_real, state):
+    """Scan every attempt-ended stdout for engaged review artifacts (#747 WO-4b).
+
+    axis: which outcome is minted — all attempts, not only the graded last attempt.
+    """
+    opened = state.get("opened") or {}
+    fed_prompt = opened.get("fedPrompt", "")
+    candidates = []
+    for att in sorted(state.get("attempts") or {}):
+        slot = state["attempts"][att]
+        if slot.get("ended") is None:
+            continue
+        stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % att)
+        stdout = _read_stdout_for_artifact_scan(stdout_path)
+        if stdout is None:
+            continue
+        shape = engine_adapter.review_artifact_shape(stdout, fed_prompt)
+        if not shape.get("engaged"):
+            continue
+        salvage = engine_adapter.salvage_from_artifact(stdout, fed_prompt)
+        candidates.append({
+            "attempt": att,
+            "stdoutPath": stdout_path,
+            "shape": shape,
+            "salvage": salvage,
+            "citations": shape.get("citations") or 0,
+        })
+    return candidates
+
+
+def _select_best_engaged_candidate(candidates):
+    """Highest citation count; ties broken by later attempt. Never raises."""
+    if not candidates:
+        return None, []
+    best = max(candidates, key=lambda c: (c["citations"], c["attempt"]))
+    also = [
+        {"attempt": c["attempt"], "stdoutPath": c["stdoutPath"]}
+        for c in candidates
+        if c["attempt"] != best["attempt"]
+    ]
+    return best, also
+
+
+def _engaged_artifact_disclosure(engine):
+    return (
+        "%s reviewer seat produced a review, but our transport did not carry it to a "
+        "gradeable result — this seat is not credited toward certification. Any finding "
+        "taken from the salvaged artifact must be independently verified before use; "
+        "disclose this degraded vendor mix in the PR" % engine
+    )
+
+
+def _salvage_block_from_candidate(best, also):
+    salvage_out = {
+        "attempt": best["attempt"],
+        "stdoutPath": best["stdoutPath"],
+        "shape": best["shape"],
+    }
+    for key in ("findings", "structured", "requiresManualRead", "excerptBytes", "excerpt"):
+        val = best["salvage"].get(key)
+        if val is not None:
+            salvage_out[key] = val
+    if also:
+        salvage_out["alsoEngaged"] = also
+    return salvage_out
+
+
+def _maybe_upgrade_review_terminal_forfeit(run_dir_real, state, terminal, engine):
+    """Mint forfeit-with-engaged-artifact when any attempt stdout is engaged (#747 WO-4b).
+
+    axis: which outcome is minted — engaged artifact upgrades forfeited/vacuous terminal only.
+  Write runs never mint this outcome — build salvage is work-on-disk doctrine."""
+    if not terminal.get("forfeited"):
+        return terminal
+    candidates = _scan_review_engaged_candidates(run_dir_real, state)
+    if not candidates:
+        return terminal
+    best, also = _select_best_engaged_candidate(candidates)
+    if best is None:
+        return terminal
+    out = dict(terminal)
+    out["reason"] = dispatch_outcome.REASON_FORFEIT_ENGAGED_ARTIFACT
+    out["salvage"] = _salvage_block_from_candidate(best, also)
+    out["disclosure"] = _engaged_artifact_disclosure(engine)
+    return out
+
+
+def _ledger_attempt_records(state, run_dir_real, *, thin=False):
+    """Per-attempt telemetry from journal slots for the forfeit ledger."""
+    records = []
+    for att in sorted(state.get("attempts") or {}):
+        slot = state["attempts"][att]
+        ended = slot.get("ended") or {}
+        if thin:
+            records.append({
+                "attempt": att,
+                "exit": ended.get("exit"),
+                "timedOut": ended.get("timedOut"),
+            })
+            continue
+        rec = {"attempt": att}
+        for key in (
+            "exit", "timedOut", "signal", "signalSource", "refusal", "at",
+            "wallSeconds", "capSeconds", "stdoutBytes", "stderrBytes",
+            "silenceSeconds", "lastActivityAt", "activityStream",
+            "dispatchPath", "promptBytes",
+        ):
+            if key in ended:
+                rec[key] = ended[key]
+        superseded = slot.get("endedSuperseded")
+        if isinstance(superseded, dict):
+            rec["endedSuperseded"] = True
+        records.append(rec)
+    return records
+
+
+def _ledger_evidence(run_dir_real, state, opened):
+    stdout_paths = []
+    stderr_paths = []
+    for att in sorted(state.get("attempts") or {}):
+        stdout_paths.append(os.path.join(run_dir_real, "attempt-%d.stdout" % att))
+        stderr_paths.append(os.path.join(run_dir_real, "attempt-%d.stderr" % att))
+    return {
+        "stdoutPaths": stdout_paths,
+        "stderrPaths": stderr_paths,
+        "journalPath": _journal_path(run_dir_real),
+        "promptPath": opened.get("promptPath"),
+    }
+
+
+def _ledger_stages(result, state, run_dir_real, opened):
+    """engaged vs delivered — never collapsed (#747 WO-4b)."""
+    stages = {"engaged": None, "delivered": None}
+    run_kind = opened.get("runKind")
+    if run_kind == RUN_KIND_REVIEW:
+        candidates = _scan_review_engaged_candidates(run_dir_real, state)
+        if candidates:
+            stages["engaged"] = True
+        elif result.get("engagement"):
+            stages["engaged"] = engine_adapter.engagement_read(result) == "engaged"
+        delivered = False
+        if result.get("ok") and isinstance(result.get("findings"), list):
+            delivered = True
+        elif result.get("ok") and result.get("investigated"):
+            delivered = True
+        stages["delivered"] = delivered
+    else:
+        if result.get("ok"):
+            stages["delivered"] = True
+            stages["engaged"] = True
+        else:
+            stages["delivered"] = False
+            stages["engaged"] = None
+    return stages
+
+
+def _build_ledger_row(run_dir_real, state, result):
+    opened = state.get("opened") or {}
+    reason = result.get("reason")
+    ok = result.get("ok")
+    is_success = ok is True and reason is None
+    attempts = result.get("attempts")
+    if attempts is None:
+        attempts = _highest_attempt(state)
+    attempt_records = _ledger_attempt_records(
+        state, run_dir_real, thin=is_success,
+    )
+    stages = _ledger_stages(result, state, run_dir_real, opened)
+    evidence = _ledger_evidence(run_dir_real, state, opened)
+    detail = result.get("detail") or result.get("disclosure")
+    row = forfeit_ledger.build_row(
+        run_dir=run_dir_real,
+        order_id=opened.get("orderId"),
+        engine=opened.get("engine"),
+        engine_model=opened.get("engineModel"),
+        run_kind=opened.get("runKind"),
+        reason=reason,
+        detail=detail,
+        attempt_count=attempts,
+        attempts=attempt_records,
+        stages=stages,
+        engagement=result.get("engagement"),
+        evidence=evidence,
+        ok=ok,
+    )
+    salvage = result.get("salvage")
+    if isinstance(salvage, dict):
+        ledger_salvage = dict(salvage)
+        ledger_salvage["detected"] = True
+        row["salvage"] = ledger_salvage
+    return row
+
+
+def _append_fold_ledger(run_dir_real, state, result):
+    """Append one ledger row at fold; fail-soft — never changes dispatch outcome."""
+    try:
+        opened = state.get("opened") or {}
+        repo_root = opened.get("repoRoot")
+        if not repo_root:
+            return {"written": False, "path": None, "why": "repo-root-absent-from-run-opened"}
+        row = _build_ledger_row(run_dir_real, state, result)
+        append_result = forfeit_ledger.append(repo_root, row)
+        return {
+            "written": append_result.get("written", False),
+            "path": append_result.get("path"),
+            "why": append_result.get("why"),
+        }
+    except Exception:
+        return {"written": False, "path": None, "why": "ledger-internal-error"}
+
+
 def _terminate_run(run_dir_real, state, *, record_kind, result, abandon_detail=None):
     """The ONLY path to a terminal run. Journals terminal record, verifies append, then
     finalizes (release lease, destroy view). Returns the terminal result, or a named
@@ -579,6 +841,10 @@ def _terminate_run(run_dir_real, state, *, record_kind, result, abandon_detail=N
     argv = list(opened.get("argv") or result.get("argv") or [])
 
     if record_kind == "run-folded":
+        # axis: one ledger append per terminal fold — before view teardown captures evidence paths.
+        ledger_receipt = _append_fold_ledger(run_dir_real, state, result)
+        result = dict(result)
+        result["ledger"] = ledger_receipt
         record = {"kind": "run-folded", "result": result, "at": time.time()}
     elif record_kind == "run-abandoned":
         record = {
@@ -1503,6 +1769,9 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         investigated_rejected=grade.get("investigatedRejected"),
                         payload_shape=grade.get("payloadShape"),
                     )
+                    terminal = _maybe_upgrade_review_terminal_forfeit(
+                        run_dir_real, state, terminal, engine,
+                    )
                     view = opened.get("viewMeta")
                     if view:
                         terminal = _attach_sanitized_view(terminal, view)
@@ -1612,8 +1881,9 @@ def _attach_sanitized_view(result, view):
 
 def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
                      prompt_path, view_path, view_meta, fed_prompt, order_id,
-                     progress_path):
+                     progress_path, repo_root=None):
     journal_root = _journal_root_for_run_dir(run_dir_real)
+    repo_root_real, repo_id = _repo_root_and_id(repo_root)
     try:
         os.makedirs(run_dir_real, mode=0o700, exist_ok=True)
         with open(os.path.join(run_dir_real, "journal-root.txt"), "w", encoding="utf-8") as fh:
@@ -1647,6 +1917,8 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "viewMeta": view_meta,
         "baseSha": view_meta.get("headSha"),
         "fedPrompt": fed_prompt,
+        "repoRoot": repo_root_real,
+        "repoId": repo_id,
         "supervisorPid": os.getpid(),
         "at": time.time(),
     }
@@ -1803,6 +2075,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 prompt_path=prompt_path, view_path=view_path, view_meta=view,
                 fed_prompt=fed_prompt, order_id=order_id,
                 progress_path=progress_path or os.path.join(run_dir_real, PROGRESS_NAME),
+                repo_root=repo_detail,
             )
             if not ok_open:
                 err = _attach_sanitized_view(_with_run_fields(
@@ -1841,7 +2114,9 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 if view and result.get("ok") and "sanitizedView" not in result:
                     result = _attach_sanitized_view(result, view)
                 elif view and not result.get("ok") and result.get("reason") in (
-                    dispatch_outcome.REASON_FORFEITED, engine_adapter.REVIEW_FORFEIT_VACUOUS,
+                    dispatch_outcome.REASON_FORFEITED,
+                    dispatch_outcome.REASON_FORFEIT_ENGAGED_ARTIFACT,
+                    engine_adapter.REVIEW_FORFEIT_VACUOUS,
                 ) and "sanitizedView" not in result:
                     result = _attach_sanitized_view(result, view)
                 return result
@@ -1865,8 +2140,10 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 
 
 def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
-                    prompt_path, order_id, base_sha, worktree_baseline, progress_path):
+                    prompt_path, order_id, base_sha, worktree_baseline, progress_path,
+                    repo_root=None):
     journal_root = _journal_root_for_run_dir(run_dir_real)
+    repo_root_real, repo_id = _repo_root_and_id(repo_root)
     try:
         os.makedirs(run_dir_real, mode=0o700, exist_ok=True)
         with open(os.path.join(run_dir_real, "journal-root.txt"), "w", encoding="utf-8") as fh:
@@ -1899,6 +2176,8 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "viewPath": None,
         "baseSha": base_sha,
         "worktreeBaseline": worktree_baseline,
+        "repoRoot": repo_root_real,
+        "repoId": repo_id,
         "supervisorPid": os.getpid(),
         "at": time.time(),
     }
@@ -2058,6 +2337,7 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
                 prompt_path=prompt_path, order_id=order_id, base_sha=base_sha,
                 worktree_baseline=baseline,
                 progress_path=progress_path or os.path.join(run_dir_real, PROGRESS_NAME),
+                repo_root=_repository_root_from_git_cwd(cwd_real, timeout=preflight_timeout),
             )
             if not ok_open:
                 holder = file_lock.read_holder(lease_path)
