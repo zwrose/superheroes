@@ -54,8 +54,7 @@ class Migration:
 
 
 def _repo_root(cwd):
-    out = store_core.run_git(cwd, "rev-parse", "--show-toplevel")
-    return os.path.realpath(out) if out else os.path.realpath(cwd)
+    return store_core.repo_root(cwd)
 
 
 def _in_repo_cal_dir(cwd):
@@ -119,15 +118,15 @@ def _commit_registry(cwd, target, remote_key, root=None):
     """Write registry.json RAW under a lock the CALLER already holds — never via the
     self-locking mode_registry.write_registry (nested config_lock → None). Preserves an
     existing createdAt. Returns True, or False on an unwritable store (UFR-6 abort signal)."""
-    existing = mode_registry.read_registry(cwd, root)
-    created = (existing["createdAt"] if existing and isinstance(existing.get("createdAt"), str)
-               and existing.get("createdAt") else _utc_now())
-    rec = {"schemaVersion": mode_registry.SCHEMA_VERSION, "storageMode": target,
-           "remoteKey": remote_key, "createdAt": created}
     try:
+        existing = mode_registry.read_registry(cwd, root)
+        created = (existing["createdAt"] if existing and isinstance(existing.get("createdAt"), str)
+                   and existing.get("createdAt") else _utc_now())
+        rec = {"schemaVersion": mode_registry.SCHEMA_VERSION, "storageMode": target,
+               "remoteKey": remote_key, "createdAt": created}
         store_core.atomic_write(mode_registry.registry_path(cwd, root), json.dumps(rec, indent=2))
         return True
-    except OSError:
+    except (OSError, store_core.RepoRootUnavailable):
         return False
 
 

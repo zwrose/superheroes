@@ -421,12 +421,14 @@ truncated to **16 hex** (`short_hash`).
 
 - **`<remote-key>`** = `short_hash(normalize_remote(origin))`, where `normalize_remote`
   lowercases the host and strips scheme/userinfo/port and a trailing `.git`.
-- **`<common-dir-key>`** = `short_hash(realpath(git rev-parse --path-format=absolute --git-common-dir))`
-  — shared across a clone's linked worktrees. Serves as the **no-remote config-key
-  fallback** (§2.4). `--path-format=absolute` is required: a bare `--git-common-dir` is
-  a relative `.git` from the main checkout, which `realpath` would resolve against the
-  process cwd; the fallback for git < 2.31 joins the relative result onto the target
-  cwd, else `--absolute-git-dir`, else `realpath(cwd)`.
+- **`<common-dir-key>`** = `short_hash(realpath(git-common-dir))` — shared across a clone's
+  linked worktrees. Serves as the **no-remote config-key fallback** (§2.4). Resolution is
+  fail-closed in `store_core.get_gitdir`: `--path-format=absolute --git-common-dir` first;
+  for git < 2.31 the bare `--git-common-dir` result is joined onto the target `cwd` (never
+  `realpath`'d against the process cwd); then `--absolute-git-dir`. A nonexistent joined
+  path raises `RepoRootUnavailable` (never hashed). Genuine greenfield (no `.git` ancestor,
+  no `GIT_DIR`/`GIT_WORK_TREE`) alone returns `realpath(cwd)`; broken or indeterminate
+  shapes raise `RepoRootUnavailable`.
 - **`<config-key>`** (the project-store key) = `<remote-key>` when a remote exists,
   else `<common-dir-key>`. On first push, `init` rebinds `<common-dir-key>` →
   `<remote-key>` (§2.4).
@@ -678,7 +680,10 @@ ever skips re-proving recent liveness, and never converts a failure into a pass.
 workspace-write, confined to the builder's own worktree, with **no remote authority** —
 the band owns every push / PR / merge, mechanically backstopped by the owner-authority
 gate (a minimal PreToolUse hook, `LEDGERS.md` §1.1) that prompts the owner before any
-merge/release/force-push shape, and never bypassed by an external engine. All external
+merge/release/force-push shape, and never bypassed by an external engine; a second
+Claude Code hook (`LEDGERS.md` §1.1) denies git commands that would irrecoverably
+discard uncommitted worktree content — the checkout-revert wipe class every implementer
+and mutation-probe path can trigger. All external
 free-text is secret-scrubbed at the adapter boundary (`engine_adapter.parse_result`) so
 every downstream surface — including a `/review-code --post` PR comment — is clean. The
 merge authorization is the owner's to grant; the band shows it and never applies it.
@@ -1035,7 +1040,11 @@ The restored owner-authority gate (`LEDGERS.md` §1.1 — a minimal PreToolUse h
 mechanically enforcing the never-merge/never-release line) is the live example of a
 divergence that earned its entry: it names its consumer (every session, via the
 covenant's hardest line), states the platform primitive it awaits (plugin-shippable
-native permission rules), and carries the trigger that retires it.
+native permission rules), and carries the trigger that retires it. The worktree guard
+(`LEDGERS.md` §1.1 — a minimal PreToolUse hook on Claude Code that denies git commands
+that would silently destroy uncommitted work) also satisfies both: its consumer is every
+Claude Code build session's revert/mutation-probe path (workhorse charter §8) and every
+implementer subagent, since plugin hooks fire inside subagents.
 
 This rule is enforced the same way review discipline is: at review, a reviewer citing
 this section is enough to block a hook or gate that skipped either step.

@@ -26,6 +26,7 @@ from store_core import (
     resolve_global,
     atomic_write,
     run_git,
+    repo_root,
 )
 
 SLOT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
@@ -57,11 +58,11 @@ def artifact_key(branch, slot=None):
 
 
 def get_repo_root(cwd):
-    """Return the git worktree top-level for cwd (fallback: cwd itself)."""
-    out = run_git(cwd, "rev-parse", "--show-toplevel")
-    if out:
-        return os.path.realpath(out)
-    return os.path.realpath(cwd)
+    """Return the git worktree top-level for cwd.
+
+    Raises RepoRootUnavailable when the root cannot be determined fail-closed.
+    Returns realpath(cwd) only for genuine greenfield (no .git ancestor)."""
+    return repo_root(cwd)
 
 
 def store_root():

@@ -372,23 +372,27 @@ def test_half_registered_entry_self_heals(tmp_path):
     assert rs.read_pointer(root, ident["remote_hash"]) == eid
 
 
-def test_gitdir_uses_pre_231_fallback(tmp_path, monkeypatch):
+def test_gitdir_bare_common_dir_joins_relative_to_cwd_not_absolute_fallback(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "r")
-    calls = {"n": 0}
-    real = sc.run_git
+    calls = {"common": 0, "absolute": 0}
+    real = sc.run_git_result
 
     def fake(cwd, *a):
         if a == ("rev-parse", "--path-format=absolute", "--git-common-dir"):
-            return None  # simulate git < 2.31 not supporting the flag
+            return sc.GitResult(None, sc.GIT_DECLINED, "unknown option --path-format")
+        if a == ("rev-parse", "--git-common-dir"):
+            calls["common"] += 1
+            return sc.GitResult(".git", sc.GIT_OK, None)
         if a == ("rev-parse", "--absolute-git-dir"):
-            calls["n"] += 1
+            calls["absolute"] += 1
             return real(cwd, *a)
         return real(cwd, *a)
 
-    monkeypatch.setattr(sc, "run_git", fake)
+    monkeypatch.setattr(sc, "run_git_result", fake)
     gd = sc.get_gitdir(repo)
-    assert calls["n"] == 1            # fell back
-    assert os.path.isabs(gd)
+    assert calls["common"] == 1
+    assert calls["absolute"] == 0
+    assert gd == os.path.realpath(os.path.join(repo, ".git"))
 
 
 def test_resolve_global_falls_back_to_live_entry_when_preferred_dangles(tmp_path):
