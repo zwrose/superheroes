@@ -30,3 +30,11 @@ Editing any line inside them changes what `lib/launch_doctrine.py` accepts.
 - `owner-capability` (conditional) — Owner-capability preconditions cleared, with a stated duration
 - `grant-state` (conditional) — Grant state
 <!-- launch-doctrine:preflight:end -->
+
+**Wave live canary (documentation only — not parsed).** A wave preflight includes one cheap live
+probe per engine (~3s): the dispatch selftest validates configuration, not engine liveness, so green
+config checks can coexist with dead engines. This paragraph is **documentation for advisors reading
+the doctrine for intent** — it is **not** a parsed invariant and is **not** delivered to the builder
+through the composed launch prompt (`compose_launch` sends the child only the parsed `rulingsBlock`;
+do not assume this line reaches a builder). The load-bearing statement of this duty lives in the
+showrunner charter's orchestration duty 9.

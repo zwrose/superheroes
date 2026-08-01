@@ -479,7 +479,21 @@ the reviewer and the owner's authorization carry that check instead.**
    failure, later. If owner capability is discovered mid-run, **park durably** on the **issue or PR** — somewhere
    the advisor will read without being told to look — never improvise a channel; the builder charter
    carries the builder's half.
-
+   **Scheduled heartbeat sweep (wave orchestration duty).** An advisor **orchestrating a wave owes a
+   scheduled heartbeat sweep** that resumes stalled lanes — not a one-off rescue when something feels
+   wrong. Run `heartbeat.py sweep`, read the classes, and **act**: resume or investigate. `stale`
+   means the lane outran **its own promise** (`staleAfterSeconds` the builder stamped); `unknown`
+   means the signal could not be read and is **actionable, not clean**; `terminal` on a launch the
+   ledger still reports live is **actionable pending `record-outcome`**, never a resolved lane. The
+   sweep **reports; it never asserts a lane is dead** — a heartbeat cannot prove death — and it never
+   resumes anything on its own; **you** act on what it reports. Ground this in the field evidence:
+   six lanes, zero handbacks by morning on harness 2.1.219, recovered only by an advisor sweep.
+   **Wave-preflight live canary (strengthens `engine-auth`, not a ninth check).** A wave preflight
+   includes **one cheap live probe per engine** (~3s). The dispatch selftest validates
+   **configuration, not engine liveness** — `lib/dispatch_selftest.py` is explicitly a config-time
+   round-trip that never touches disk — so **780 green config checks were able to coexist undetected
+   with a 3-of-4 live-review failure rate**. This strengthens what the existing `engine-auth` check
+   must mean in a wave; it does **not** add a ninth check to the eight-check list above.
 ## When you're tempted
 
 | Excuse | Reality |
