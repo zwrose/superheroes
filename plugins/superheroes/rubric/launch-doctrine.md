@@ -82,9 +82,13 @@ handoff — both halves run, neither replaces the other.
 
 Map a builder to its transcript by grepping the **first 4KB** of each transcript file for the
 **issue token** the launch prompt carries. The token match must be **unique before you pin** — more
-than one match is a signal to disambiguate, not to pick one; use the launch record's per-launch
-**pid** and **logPath** (recorded in the launch ledger at dispatch) as the durable disambiguator.
-Once uniquely matched, **pin that file path** and use it for the rest of the run. **Never
+than one match is a signal to disambiguate, not to pick one. The launch ledger records each dispatch's
+**pid** and **logPath** at start — **pid** identifies the **process**, not the transcript; it is the
+right handle for the liveness read in the next sub-section. **logPath** is the child process's stdout
+log, not a transcript identifier. The launcher records **no transcript identifier** — when the token
+match is not unique, disambiguate by **reading the candidates' content** (which one carries this
+build's actual work), not by recency — and **never** by taking the newest file. Once uniquely matched,
+**pin that file path** and use it for the rest of the run. **Never
 re-discover** a builder's transcript by taking the newest file — **a dead launch attempt leaves a
 stub**, and newest-first hands you the stub while the live retry runs elsewhere. Because a resumed
 session appends to its original file, "look for a new transcript" is wrong for the resume case too.

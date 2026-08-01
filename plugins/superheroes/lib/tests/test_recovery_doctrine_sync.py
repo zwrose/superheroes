@@ -86,6 +86,12 @@ _COPY_HOLDER_SECTIONS = {
 
 # Shared copy-holder clauses: home-derived; each must appear in home_section before holder check.
 _SHARED_COPY_HOLDER_CLAUSES = {
+    "skills/showrunner/SKILL.md": [
+        {
+            "text": "both halves run, neither replaces the other",
+            "home_section": "### Sweep for unpushed work before adopting",
+        },
+    ],
     "skills/workhorse/SKILL.md": [
         {
             "text": "integrated",
@@ -173,9 +179,34 @@ def _check_home_clauses(read_text=None):
                 )
 
 
+def _validate_copy_holder_key_sets():
+    declared = frozenset(_COPY_HOLDER_SECTIONS)
+    for rel in _HOLDER_CLAUSES:
+        if rel not in declared:
+            raise AssertionError(
+                f"unknown charter key in _HOLDER_CLAUSES: {rel!r} "
+                f"(declared charters: {sorted(declared)!r})"
+            )
+    for rel in _SHARED_COPY_HOLDER_CLAUSES:
+        if rel not in declared:
+            raise AssertionError(
+                f"unknown charter key in _SHARED_COPY_HOLDER_CLAUSES: {rel!r} "
+                f"(declared charters: {sorted(declared)!r})"
+            )
+    for rel in declared:
+        holder_count = len(_HOLDER_CLAUSES.get(rel, []))
+        shared_count = len(_SHARED_COPY_HOLDER_CLAUSES.get(rel, []))
+        if holder_count + shared_count == 0:
+            raise AssertionError(
+                f"charter {rel!r} has no clauses pinned in _HOLDER_CLAUSES "
+                f"or _SHARED_COPY_HOLDER_CLAUSES"
+            )
+
+
 def _check_copy_holder_clauses(read_text=None):
     if read_text is None:
         read_text = _read_plugin
+    _validate_copy_holder_key_sets()
     for rel, section in _COPY_HOLDER_SECTIONS.items():
         copy_text = _file_section(rel, section, read_text)
         for entry in _SHARED_COPY_HOLDER_CLAUSES.get(rel, []):

@@ -484,8 +484,8 @@ the reviewer and the owner's authorization carry that check instead.**
    than reconstructing a takeover from memory, which is exactly what this doctrine exists to stop.
    **Before composing a successor's launch, sweep what the dead build left unpushed** — enumerate
    its worktrees and branches, reconcile against the pushed tip, and record what you found for
-   handoff; the adopting builder re-runs that sweep at intake and reconciles against your handoff.
-   Both halves run; neither replaces the other. The calls that are the advisor's: whether a
+   handoff; the adopting builder re-runs that sweep at intake and reconciles against your handoff —
+   both halves run, neither replaces the other. The calls that are the advisor's: whether a
    takeover is a **resume** (same instance and account
    only) or an **adoption** (a fresh session from durable artifacts, and **the only path across
    instances or accounts**); **pinning** each builder's transcript by its issue token instead of
