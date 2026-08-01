@@ -1971,7 +1971,9 @@ def test_review_diff_pathspec_batches_stay_within_argv_budget(tmp_path, monkeypa
     merge_base = head_sha
     survivors = ["keep.txt", "x" * 200 + ".txt"] + ["path%d.txt" % i for i in range(300)]
     monkeypatch.setattr(sv, "_REVIEW_DIFF_ARGV_MAX_BYTES", 2048)
-    batches = sv._batch_review_diff_pathspecs(repo, merge_base, head_sha, survivors)
+    batches = sv._batch_review_diff_pathspecs(
+        repo, merge_base, head_sha, survivors, time.monotonic()
+    )
     assert len(batches) > 1
     for batch in batches:
         argv = [
@@ -2384,7 +2386,9 @@ def test_review_diff_descendant_pathspecs_collapse_to_ancestor(tmp_path, monkeyp
     changed = sv._changed_tree_entries(repo, merge_base, head_sha, started)
     survivors = [p for p in changed if not sv._rel_path_would_be_stripped(p)]
     monkeypatch.setattr(sv, "_effective_review_diff_argv_budget", lambda: 0)
-    batches = sv._batch_review_diff_pathspecs(repo, merge_base, head_sha, survivors)
+    batches = sv._batch_review_diff_pathspecs(
+        repo, merge_base, head_sha, survivors, started
+    )
     all_pathspecs = [path for batch in batches for path in batch]
     assert "pkg" in all_pathspecs
     assert "pkg/x.txt" not in all_pathspecs
@@ -2396,6 +2400,55 @@ def test_review_diff_descendant_pathspecs_collapse_to_ancestor(tmp_path, monkeyp
             assert _diff_git_section_count(patch, path) == 1
     finally:
         sv.destroy_sanitized_view(view["path"])
+
+
+def test_collapse_descendant_pathspecs_adversarial_sibling_prefixes():
+    started = time.monotonic()
+    assert set(sv._collapse_descendant_pathspecs(["a", "a-b", "a/c"], started)) == {
+        "a",
+        "a-b",
+    }
+    assert set(
+        sv._collapse_descendant_pathspecs(["a/c", "a-b", "a"], started)
+    ) == {"a", "a-b"}
+    assert set(
+        sv._collapse_descendant_pathspecs(
+            ["pkg", "pkg/x", "pkg/y/z", "pkgx"], started
+        )
+    ) == {"pkg", "pkgx"}
+    assert set(sv._collapse_descendant_pathspecs(["a/b", "a/bc"], started)) == {
+        "a/b",
+        "a/bc",
+    }
+    assert set(sv._collapse_descendant_pathspecs(["a", "a"], started)) == {"a"}
+    assert sv._collapse_descendant_pathspecs([], started) == []
+
+
+def test_collapse_descendant_pathspecs_enforces_export_deadline():
+    started = time.monotonic() - sv.SANITIZED_VIEW_EXPORT_TIMEOUT_SECONDS - 1
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._collapse_descendant_pathspecs(["a", "a-b", "a/c", "pkg/x"], started)
+    assert exc.value.detail == "sanitized-view-export-timeout"
+
+
+def test_review_diff_collapse_no_git_subprocess_after_deadline(
+    tmp_path, monkeypatch,
+):
+    repo = _init_repo(tmp_path / "collapse-deadline", files={"a.txt": "a\n"})
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    merge_base = head_sha
+    started = time.monotonic() - sv.SANITIZED_VIEW_EXPORT_TIMEOUT_SECONDS - 1
+
+    def git_spawned_after_deadline(*args, **kwargs):
+        raise AssertionError("git spawned after deadline")
+
+    monkeypatch.setattr(sv, "_git_popen", git_spawned_after_deadline)
+    monkeypatch.setattr(sv, "_git_run", git_spawned_after_deadline)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._batch_review_diff_pathspecs(
+            repo, merge_base, head_sha, ["a", "b"], started
+        )
+    assert exc.value.detail == "sanitized-view-export-timeout"
 
 
 def test_review_diff_withheld_section_outside_survivor_prefix_refuses():

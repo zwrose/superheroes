@@ -697,9 +697,13 @@ predicate are withheld from that patch by the same rule that strips the tree. Th
 not satisfy the #666 investigation floor — citing only that artifact forfeits vacuously. A view that
 cannot be built is a named refusal with `attempts: 0` and no spawn; there is no fallback to the raw
 checkout. The census of changed paths is authoritative: it comes from direct two-tree enumeration,
-not from `git diff` output or rendered patch text, and every changed entry is rendered,
-policy-withheld, or refused before spawn — repo-local config overrides remain defence in depth, not
-the proof of authority. Until a follow-up issue lands, opaque or unaccounted patch content refuses
+not from `git diff` output or rendered patch text, and every changed recursively enumerated
+non-tree entry — blob/file, symlink or gitlink — must be rendered, policy-withheld, or refused
+before spawn. The merge-base is resolved outside the reviewed repository's git directory (scratch
+repository linked only through the object store, with every inherited `GIT_*` variable dropped), so
+ancestry overlays cannot shrink the changed set and dispatch refuses when authoritative ancestry
+cannot be established; empty directory additions and removals are tree-only and outside this
+contract. Repo-local config overrides remain defence in depth, not the proof of authority. Until a follow-up issue lands, opaque or unaccounted patch content refuses
 with `sanitized-view-diff-opaque`, `sanitized-view-diff-unaccounted`, or (for git command failure)
 `sanitized-view-diff-failed`; that result is never a clean review and there is no automatic fallback.
 

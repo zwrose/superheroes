@@ -185,13 +185,19 @@ never drop a finding or a lens.
 > | `diffBase` | the resolved **merge-base** sha the patch is against (40 hex chars, or 64 in a SHA-256 repository) |
 > | `diffPath` | `SUPERHEROES_REVIEW_DIFF.patch`, relative to the view root |
 > | `diffBytes` | patch size in bytes |
-> | `diffWithheldCount` | **only** the changed tree entries the stripped-config policy withheld; underivable, unrecognized, unaccounted, and opaque content **refuse the dispatch** rather than being counted here — this is what keeps the reviewer-facing "the absence is not a finding" statement true |
+> | `diffWithheldCount` | **only** the changed non-tree entries the stripped-config policy withheld; underivable, unrecognized, unaccounted, and opaque content **refuse the dispatch** rather than being counted here — this is what keeps the reviewer-facing "the absence is not a finding" statement true |
 >
 > The census of changed paths comes from direct two-tree enumeration (`git ls-tree` on the
 > merge-base and head), not from patch presentation — `git diff`, rendered patch text, or a list of
-> presently-known dangerous configuration keys. Every changed tree entry is **rendered** as a
-> reviewable patch section, **policy-withheld** by the stripped-config policy and counted in
-> `diffWithheldCount`, or **refused** before any external engine spawns. Until a follow-up issue
+> presently-known dangerous configuration keys. Every changed recursively enumerated **non-tree**
+> entry — blob/file, symlink or gitlink — must be **rendered**, **policy-withheld**, or **refused**
+> before any external engine spawns. The merge-base the census is taken against is resolved outside
+> the reviewed repository's git directory — in a scratch repository linked only by its object store,
+> under an environment with every inherited `GIT_*` variable dropped — so repository-controlled
+> ancestry overlays cannot select a base that omits a genuine change, and dispatch **refuses** when
+> authoritative ancestry cannot be established. An empty directory added or removed in a commit is a
+> tree-only change carrying no file, symlink or gitlink content, `git diff` renders nothing for it
+> either, and it is therefore outside this contract. Until a follow-up issue
 > lands, opaque or unaccounted content returns a named terminal refusal (`attempts: 0`) that is
 > never interpreted as zero findings or a clean review; there is no automatic fallback, and that
 > absence is an explicitly accepted availability limitation.
@@ -201,7 +207,7 @@ never drop a finding or a lens.
 >
 > | token | when |
 > |---|---|
-> | `sanitized-view-diff-base-unresolved` | the base is empty, begins with `-`, does not resolve to a commit, or shares no merge base with head |
+> | `sanitized-view-diff-base-unresolved` | the base is empty, begins with `-`, does not resolve to a commit, shares no merge base with head, the repository's object store cannot be located, the scratch ancestry repository cannot be created, or the merge-base cannot be established from it |
 > | `sanitized-view-diff-empty` | a base was requested and the resulting patch is empty with nothing withheld |
 > | `sanitized-view-diff-fully-withheld` | every changed path was withheld as stripped config — an external seat could not review this change at all |
 > | `sanitized-view-diff-too-large` | the patch exceeds the 8 MiB ceiling, or census `ls-tree` stdout exceeds the export byte ceiling |

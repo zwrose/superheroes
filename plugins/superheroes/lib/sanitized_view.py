@@ -1419,22 +1419,42 @@ def _review_diff_argv_prefix(repo_real, merge_base, head_sha):
     ]
 
 
-def _collapse_descendant_pathspecs(pathspecs):
-    """Drop pathspecs that are descendants of another pathspec in the vector."""
-    collapsed = []
-    for i, path in enumerate(pathspecs):
-        if any(
-            i != j and path.startswith(ancestor + "/")
-            for j, ancestor in enumerate(pathspecs)
-        ):
+_COLLAPSE_DEADLINE_CHECK_INTERVAL = 4096
+
+
+def _collapse_descendant_pathspecs(pathspecs, started):
+    """Drop pathspecs that are descendants of another pathspec in the vector.
+
+    Sorted by path *segments* so that every descendant of a path follows it in one
+    contiguous run: raw string order interleaves siblings (``a`` < ``a-b`` < ``a/c``
+    by bytes, but ``a`` < ``a/c`` < ``a-b`` by segments), which would break a single
+    scan. One pass with an ancestor stack then replaces the previous all-pairs
+    comparison, taking the step from O(n^2) to a sort plus O(n).
+
+    ``started`` is the export clock. The deadline is checked before the sort, after
+    the sort, and periodically through the scan, so this step cannot run past the
+    export budget and then spawn a git subprocess anyway.
+    """
+    _check_export_deadline(started)
+    ordered = sorted(set(pathspecs), key=lambda path: path.split("/"))
+    _check_export_deadline(started)
+    kept = []
+    ancestors = []
+    for index, path in enumerate(ordered):
+        if index % _COLLAPSE_DEADLINE_CHECK_INTERVAL == 0:
+            _check_export_deadline(started)
+        while ancestors and not path.startswith(ancestors[-1] + "/"):
+            ancestors.pop()
+        if ancestors:
             continue
-        collapsed.append(path)
-    return collapsed
+        kept.append(path)
+        ancestors.append(path)
+    return kept
 
 
-def _batch_review_diff_pathspecs(repo_real, merge_base, head_sha, pathspecs):
+def _batch_review_diff_pathspecs(repo_real, merge_base, head_sha, pathspecs, started):
     """Batch pathspecs so each emitted argv stays within the effective byte budget."""
-    pathspecs = _collapse_descendant_pathspecs(pathspecs)
+    pathspecs = _collapse_descendant_pathspecs(pathspecs, started)
     prefix = _review_diff_argv_prefix(repo_real, merge_base, head_sha)
     prefix_bytes = _argv_byte_size(prefix)
     budget = _effective_review_diff_argv_budget()
@@ -1668,7 +1688,7 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
     patch_parts = []
     total_bytes = 0
     for batch in _batch_review_diff_pathspecs(
-        repo_real, merge_base, head_sha, survivors
+        repo_real, merge_base, head_sha, survivors, started
     ):
         argv = [
             *_review_diff_argv_prefix(repo_real, merge_base, head_sha),
