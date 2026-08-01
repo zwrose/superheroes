@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
 
+# Two pushes landing close together must not run the release job concurrently (#762).
+# cancel-in-progress stays false: an in-progress release run is never killed; a newer
+# push queues behind it instead.
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
