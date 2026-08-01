@@ -34,7 +34,7 @@ def main(argv):
         if not isinstance(prefs, dict):
             prefs = engine_pref.degenerate_engine_prefs()
     except Exception:
-        prefs = _LAST_RESORT_PREFS
+        prefs = dict(_LAST_RESORT_PREFS)
     sys.stdout.write(json.dumps(prefs) + "\n")
     return 0
 

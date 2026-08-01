@@ -484,8 +484,17 @@ def test_confirm_does_not_downgrade_a_newer_schema_core(tmp_path):
 # Issue #724 — legacy profile detection + refusal (migrate_on_read removed)
 # ---------------------------------------------------------------------------
 
-def _init_git_repo(repo):
-    subprocess.run(["git", "-C", repo, "init", "-q"], check=True)
+def _init_git_repo(path, remote=None):
+    path = str(path)
+    subprocess.run(["git", "init", "-q", path], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "-C", path, "config", "user.email", "t@t.t"], check=True,
+                     capture_output=True, text=True)
+    subprocess.run(["git", "-C", path, "config", "user.name", "t"], check=True,
+                     capture_output=True, text=True)
+    if remote:
+        subprocess.run(["git", "-C", path, "remote", "add", "origin", remote], check=True,
+                         capture_output=True, text=True)
+    return path
 
 
 def _legacy_inrepo_path(repo, hero):
@@ -2088,19 +2097,6 @@ def _git_subprocess_counter(monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", wrapped)
     return count
-
-
-def _init_git_repo(path, remote=None):
-    path = str(path)
-    subprocess.run(["git", "init", "-q", path], check=True, capture_output=True, text=True)
-    subprocess.run(["git", "-C", path, "config", "user.email", "t@t.t"], check=True,
-                     capture_output=True, text=True)
-    subprocess.run(["git", "-C", path, "config", "user.name", "t"], check=True,
-                     capture_output=True, text=True)
-    if remote:
-        subprocess.run(["git", "-C", path, "remote", "add", "origin", remote], check=True,
-                         capture_output=True, text=True)
-    return path
 
 
 def test_gate_refusal_detail_census_one_formatter():

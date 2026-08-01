@@ -1090,17 +1090,30 @@ def test_cli_compose_liveness_writes_receipt(tmp_path, monkeypatch, capsys):
 def test_readout_config_ok(tmp_path):
     repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
     snap = pp.readout_config(cwd=repo, root=store)
-    assert snap["status"] == "ok"
+    assert snap["status"] == core_md.CONFIG_OK
+    assert snap["reason"] is None
     assert snap["readError"] is None
     assert snap["prefs"] == {"reviewer": "cursor"}
+    assert isinstance(snap["tiers"], dict)
 
 
 def test_readout_config_absent(tmp_path):
     repo, store = _selftest_repo_with_core_shape(tmp_path, "absent")
     snap = pp.readout_config(cwd=repo, root=store)
-    assert snap["status"] == "absent"
+    assert snap["status"] == core_md.CONFIG_ABSENT
+    assert snap["reason"] is None
     assert snap["readError"] is None
     assert snap["prefs"] == {}
+
+
+def test_readout_config_status_tokens_match_constants(tmp_path):
+    """Emitted status values must stay aligned with core_md constants."""
+    repo_ok, store_ok = _selftest_repo_with_core_shape(tmp_path, "ok")
+    snap_ok = pp.readout_config(cwd=repo_ok, root=store_ok)
+    assert snap_ok["status"] == core_md.CONFIG_OK
+    repo_absent, store_absent = _selftest_repo_with_core_shape(tmp_path / "absent", "absent")
+    snap_absent = pp.readout_config(cwd=repo_absent, root=store_absent)
+    assert snap_absent["status"] == core_md.CONFIG_ABSENT
 
 
 def test_readout_config_dangling_symlink(tmp_path):
@@ -1117,6 +1130,7 @@ def test_readout_config_git_unavailable(tmp_path, monkeypatch):
     _git_unavailable(monkeypatch)
     snap = pp.readout_config(cwd=repo, root=store)
     assert snap["readError"].startswith("repo-root-unavailable: ")
+    assert snap["reason"] == core_md.GATE_REASON_ROOT_UNAVAILABLE
     assert snap["prefs"] == {}
 
 
@@ -1129,6 +1143,7 @@ def test_readout_config_gate_config_refusal_raises_fail_closed(tmp_path, monkeyp
     monkeypatch.setattr(pp.core_md, "engine_preferences_for_gate", fake_gate)
     snap = pp.readout_config(cwd=repo, root=store)
     assert snap["readError"].startswith("dispatch-gate-evaluation-failed: ")
+    assert snap["reason"] == core_md.GATE_REASON_EVALUATION_FAILED
     assert snap["prefs"] == {}
 
 
@@ -1136,14 +1151,10 @@ def test_run_one_snapshot_self_consistent(tmp_path, monkeypatch, capsys):
     repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
     calls = []
     ok_cfg = core_md.CoreGateConfig({}, core_md.CONFIG_OK, None)
-    unread_cfg = core_md.CoreGateConfig({}, core_md.CONFIG_UNREADABLE, "simulated transition")
-    real = core_md.engine_preferences_for_gate
 
     def counting_gate(**kw):
         calls.append(1)
-        if len(calls) == 1:
-            return ok_cfg
-        return unread_cfg
+        return ok_cfg
 
     monkeypatch.setattr(pp.core_md, "engine_preferences_for_gate", counting_gate)
     monkeypatch.setattr(pp, "gh_auth_probe", lambda run=None: {
@@ -1155,8 +1166,21 @@ def test_run_one_snapshot_self_consistent(tmp_path, monkeypatch, capsys):
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
     assert len(calls) == 1
-    if payload["configRead"]["readError"] is not None:
-        assert payload["aggregate"]["go"] is not True
+
+
+def test_run_unreadable_config_self_consistent(tmp_path, monkeypatch, capsys):
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "dangling")
+    monkeypatch.setattr(pp, "gh_auth_probe", lambda run=None: {
+        "tool": "gh auth", "ok": True, "exit": 0, "detail": ""})
+    monkeypatch.setattr(pp, "cross_vendor_cli_probe", lambda engine, run=None, argv=None: {
+        "tool": "cross-vendor-cli:" + engine, "ok": True, "exit": 0, "detail": ""})
+
+    rc = pp.main(["preflight_probe.py", "run", "--cwd", repo])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["configRead"]["reason"] is not None
+    assert payload["configRead"]["readError"] is not None
+    assert payload["aggregate"]["go"] is not True
 
 
 def test_run_readable_project_config_read_ok(tmp_path, monkeypatch, capsys):
@@ -1176,7 +1200,8 @@ def test_run_readable_project_config_read_ok(tmp_path, monkeypatch, capsys):
     rc = pp.main(["preflight_probe.py", "run", "--cwd", repo])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["configRead"] == {"status": "ok", "readError": None}
+    assert payload["configRead"] == {
+        "status": core_md.CONFIG_OK, "reason": None, "readError": None}
     assert set(payload.keys()) == {
         "probes", "dispatchCalibration", "aggregate", "browserNote", "crossVendorEngines",
         "configRead"}
@@ -1202,7 +1227,8 @@ def test_compose_liveness_unreadable_core_config_read_and_note(tmp_path, monkeyp
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["configRead"]["readError"] is not None
-    unread_notes = [n for n in payload["notes"] if n.get("constraint") == "core-md-unreadable"]
+    assert payload["configRead"]["reason"] == core_md.GATE_REASON_UNREADABLE
+    unread_notes = [n for n in payload["notes"] if n.get("constraint") == core_md.GATE_REASON_UNREADABLE]
     assert len(unread_notes) == 1
 
 
@@ -1221,5 +1247,6 @@ def test_compose_liveness_readable_core_no_unreadable_note(tmp_path, monkeypatch
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["configRead"]["readError"] is None
-    unread_notes = [n for n in payload["notes"] if n.get("constraint") == "core-md-unreadable"]
+    assert payload["configRead"]["reason"] is None
+    unread_notes = [n for n in payload["notes"] if n.get("constraint") == core_md.GATE_REASON_UNREADABLE]
     assert unread_notes == []

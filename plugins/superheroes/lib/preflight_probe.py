@@ -160,30 +160,71 @@ def _dispatch_calibration_read_error_marker_from_line(read_error_line):
 
 
 def readout_config(cwd=None, root=None):
-    """The ONE door every CLI readout uses to read enginePreferences.
+    """Single snapshot of engine preferences + effective model tiers for this module's CLI readouts.
 
-    Returns {"prefs": dict, "status": str, "readError": str|None} — one snapshot of the project's
-    configuration, taken through the same #676 accessor ``dispatch_calibration`` uses. Callers
-    thread this ONE snapshot to every consumer in a single run so two readouts of the same run can
-    never disagree about whether the configuration was readable. Never raises."""
+    Returns ``{"prefs", "status", "reason", "readError", "tiers"}`` — one snapshot of the
+    project's configuration, taken through the same #676 accessor ``dispatch_calibration`` uses.
+    Callers thread this snapshot to every consumer in a single ``main()`` invocation so two
+    readouts of the same run can never disagree about whether the configuration was readable.
+
+    This is the one door for readouts **in this module** (`run`, ``compose-liveness``). Other
+    snippets (e.g. ``skills/configure/reference/preflight.md`` §B and ``review-code``) still read
+    prefs through ``core_md.read()`` — a known gap outside this module. Never raises."""
+    cwd = cwd or os.getcwd()
+    eval_failed = {
+        "prefs": {},
+        "status": core_md.CONFIG_UNREADABLE,
+        "reason": core_md.GATE_REASON_EVALUATION_FAILED,
+        "readError": None,
+        "tiers": {},
+    }
+    try:
+        tiers = model_tier_overrides.effective_tiers(
+            model_tier_overrides.resolve_profile_path(cwd, root))
+    except Exception as exc:
+        eval_failed["readError"] = core_md.gate_refusal_line(
+            core_md.gate_refusal(
+                core_md.GATE_REASON_EVALUATION_FAILED,
+                core_md.gate_refusal_detail(exc)))
+        return eval_failed
     try:
         cfg = core_md.engine_preferences_for_gate(cwd=cwd, root=root)
         if core_md.gate_config_is_absent(cfg):
-            return {"prefs": {}, "status": "absent", "readError": None}
+            return {
+                "prefs": {},
+                "status": core_md.CONFIG_ABSENT,
+                "reason": None,
+                "readError": None,
+                "tiers": tiers,
+            }
         if not core_md.gate_config_is_refusal(cfg):
             prefs = core_md.gate_config_usable_prefs(cfg)
-            return {"prefs": prefs, "status": "ok", "readError": None}
+            return {
+                "prefs": prefs,
+                "status": core_md.CONFIG_OK,
+                "reason": None,
+                "readError": None,
+                "tiers": tiers,
+            }
         refusal = core_md.gate_config_refusal(cfg)
         read_error = core_md.gate_refusal_line(refusal)
-        return {"prefs": {}, "status": cfg.status, "readError": read_error}
+        return {
+            "prefs": {},
+            "status": cfg.status,
+            "reason": refusal["reason"],
+            "readError": read_error,
+            "tiers": tiers,
+        }
     except Exception as exc:
         return {
             "prefs": {},
             "status": core_md.CONFIG_UNREADABLE,
+            "reason": core_md.GATE_REASON_EVALUATION_FAILED,
             "readError": core_md.gate_refusal_line(
                 core_md.gate_refusal(
                     core_md.GATE_REASON_EVALUATION_FAILED,
                     core_md.gate_refusal_detail(exc))),
+            "tiers": tiers,
         }
 
 
@@ -213,8 +254,12 @@ def dispatch_calibration(cwd=None, root=None, prefs=None, tiers=None, snapshot=N
                 prefs = core_md.gate_config_usable_prefs(cfg)
                 prefs = prefs if isinstance(prefs, dict) else {}
         if tiers is None:
-            tiers = model_tier_overrides.effective_tiers(
-                model_tier_overrides.resolve_profile_path(cwd, root))
+            if snapshot is not None:
+                tiers = snapshot.get("tiers")
+                tiers = tiers if isinstance(tiers, dict) else {}
+            else:
+                tiers = model_tier_overrides.effective_tiers(
+                    model_tier_overrides.resolve_profile_path(cwd, root))
         return engine_pref.dispatch_calibration_rows(prefs, tiers)
     except Exception as exc:
         return _dispatch_calibration_read_error_marker(
@@ -236,8 +281,8 @@ def _dispatch_selftest_config(cwd=None, root=None, snapshot=None):
                     "tiers": {},
                     "read_error": snapshot["readError"],
                 }
-            tiers = model_tier_overrides.effective_tiers(
-                model_tier_overrides.resolve_profile_path(cwd, root))
+            tiers = snapshot.get("tiers")
+            tiers = tiers if isinstance(tiers, dict) else {}
             prefs = snapshot.get("prefs")
             prefs = prefs if isinstance(prefs, dict) else {}
             return {"prefs": prefs, "tiers": tiers}
@@ -443,7 +488,7 @@ def main(argv):
         )
         if snap["readError"] is not None:
             notes.append({
-                "constraint": "core-md-unreadable",
+                "constraint": snap["reason"],
                 "reason": snap["readError"],
             })
         sys.stdout.write(json.dumps({
@@ -451,7 +496,11 @@ def main(argv):
             "cachePath": cache_path,
             "crossVendorEngines": configured,
             "notes": notes,
-            "configRead": {"status": snap["status"], "readError": snap["readError"]},
+            "configRead": {
+                "status": snap["status"],
+                "reason": snap["reason"],
+                "readError": snap["readError"],
+            },
         }) + "\n")
         return 0
 
@@ -476,7 +525,11 @@ def main(argv):
             "aggregate": aggregate(probes),
             "browserNote": _BROWSER_NOTE,
             "crossVendorEngines": cross_vendor_engines,
-            "configRead": {"status": snap["status"], "readError": snap["readError"]},
+            "configRead": {
+                "status": snap["status"],
+                "reason": snap["reason"],
+                "readError": snap["readError"],
+            },
         }
         sys.stdout.write(json.dumps(out) + "\n")
         return 0

@@ -422,7 +422,11 @@ def gate_refusal(reason, detail):
 
 
 def gate_refusal_detail(exc, *, at=None, verb="at"):
-    """The ONE detail string for an exception-caused gate refusal.
+    """The type-name-carrying detail string for an exception-caused gate refusal.
+
+    Formats the exception's class name into the detail. Operation-specific strings that omit the
+    exception type (e.g. ``"lstat failed at %s: %s"`` and ``"UTF-8 decode failed at %s: %s"``
+    in ``_classify_core_md_at_path``) are deliberately outside this helper.
 
     ``gate_refusal_detail(exc)``                        -> "ExcName: message"
     ``gate_refusal_detail(exc, at=path)``               -> "ExcName at path: message"
