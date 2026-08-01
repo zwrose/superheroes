@@ -1280,3 +1280,87 @@ def test_skill_mode_assigned_in_setup_fences():
         text = fh.read()
     assert "MODE=pr" in text, f"MODE=pr not found in shipped {skill_path}"
     assert "MODE=branch" in text, f"MODE=branch not found in shipped {skill_path}"
+
+
+def extract_review_path_fence(skill_md_path=None):
+    """Return the ```bash block after the REVIEW_PATH top-level-flow anchor."""
+    path = skill_md_path or _review_code_skill_md_path()
+    with open(path, encoding="utf-8") as fh:
+        lines = fh.readlines()
+
+    anchor_idx = None
+    for i, line in enumerate(lines):
+        if line.startswith("Decide the **top-level flow**"):
+            anchor_idx = i
+            break
+    if anchor_idx is None:
+        raise ValueError(
+            "SKILL.md: anchor paragraph 'Decide the **top-level flow**' not found"
+        )
+
+    in_fence = False
+    bash_lines = []
+    for line in lines[anchor_idx + 1 :]:
+        if line.strip() == "```bash":
+            in_fence = True
+            continue
+        if in_fence:
+            if line.strip() == "```":
+                if not bash_lines:
+                    raise ValueError("SKILL.md: REVIEW_PATH fenced bash block is empty")
+                break
+            bash_lines.append(line)
+
+    if not in_fence:
+        raise ValueError(
+            "SKILL.md: no ```bash fenced block found after REVIEW_PATH anchor"
+        )
+
+    block = "".join(bash_lines).rstrip("\n")
+    if not block.strip():
+        raise ValueError("SKILL.md: REVIEW_PATH fenced bash block is empty")
+    return block
+
+
+def _run_review_path_fence(block, *, invocation=None, unset_invocation=False):
+    env = {k: v for k, v in os.environ.items() if k != "INVOCATION"}
+    if not unset_invocation:
+        env["INVOCATION"] = invocation if invocation is not None else ""
+    script = block + '\necho "$REVIEW_PATH"'
+    result = subprocess.run(
+        ["/bin/sh", "-c", script],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise AssertionError(
+            "REVIEW_PATH fence exited %d: stdout=%r stderr=%r"
+            % (result.returncode, result.stdout, result.stderr)
+        )
+    return result.stdout.strip()
+
+
+def test_skill_review_path_assigned_in_setup_fences():
+    """meta.json path was always ''; issue #646; same class as $MODE fix in #667."""
+    block = extract_review_path_fence()
+    for literal in ("REVIEW_PATH=post", "REVIEW_PATH=review-only", "REVIEW_PATH=loop"):
+        assert literal in block, f"missing {literal!r} in shipped REVIEW_PATH fence"
+
+    cases = [
+        ("pr 123 --post", "post", False),
+        ("--review-only", "review-only", False),
+        ("", "loop", False),
+        (None, "loop", True),
+        ('branch --focus "some notes"', "loop", False),
+    ]
+    for invocation, expected, unset in cases:
+        got = _run_review_path_fence(
+            block,
+            invocation=invocation,
+            unset_invocation=unset,
+        )
+        label = "unset" if unset else repr(invocation)
+        assert got == expected, (
+            "INVOCATION=%s: expected REVIEW_PATH=%r, got %r" % (label, expected, got)
+        )

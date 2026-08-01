@@ -57,6 +57,17 @@ The full artifact table — every path, the component that writes it, and its pu
 
 Decide mode (auto-detected or explicit, per `## Invocation`). Create the session directory.
 
+Decide the **top-level flow** in the same breath and record it in `$REVIEW_PATH`, the way `$MODE` records the PR/branch mode below. `meta.json` carries it so a cold-resumed orchestrator knows which flow to continue:
+
+```bash
+# The orchestrator sets INVOCATION to the raw argument string this skill was invoked with, before this block runs.
+case "${INVOCATION:-}" in
+  *--post*)        REVIEW_PATH=post ;;         # read-only GitHub posting
+  *--review-only*) REVIEW_PATH=review-only ;;  # read-only terminal presentation
+  *)               REVIEW_PATH=loop ;;         # default: the auto-fix loop
+esac
+```
+
 **Resolve the run's inputs before dispatching anything.** In order: the base rubric path, the escalation-guard wrapper and repo root, the calibration paths, the plugin and rubric versions, the model tiers, the per-role engine, the panel seat map, then the staleness self-check, the profile bootstrap, the verify story, and the post-bootstrap refresh of the dispatch paths. The exact commands, the variable each one sets, and the tier→model dispatch mapping are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/setup.md` § Setup resolution — read it and run the blocks in the order given.
 
 Everything below depends on the variables that file sets: `$ROOT_DIR`, `$RUBRIC`, `$ESC_WRAPPER`, `$REPO_ROOT`, `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`, `$PLUGIN_VERSION`, `$RUBRIC_VERSION`, `$REVIEWER_MODEL`, `$DEEP_MODEL`, `$MECH_MODEL`, `$SYNTH_MODEL`, `$VERIFIER_MODEL`, `$FIXER_MODEL`, `$EP`, `$REVIEWER_ENGINE`, `$IMPL_ENGINE`, `$CONFIGURED`, `$AUTHOR_FAMILY`, `$SEAT_PINS`, `$PINS_ARGS`, `$PROBE_MODE`, `$SEAT_MAP`, `$DOCTOR_JSON`, `$VERIFY_JSON`, `$VERIFY_CMD`, `$VERIFY_MODE`, `$REFUSAL`. A step below that reads one of these without that file having been run is a fail-closed bug, not a default.
