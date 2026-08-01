@@ -25,10 +25,12 @@ import model_registry  # noqa: E402  (band-wide model taxonomy; same-tree siblin
 # build_state_cli git-log parser both reference this so the convention cannot fork.
 TASK_ID_TRAILER = "Task-Id"
 
-# Single home for the vacuous forfeit reason token (CONVENTIONS §11 Pattern 1). The dispatch
-# runner produces it; round_driver and seat_canary compare against it — consumers import this,
-# never restate the literal.
-REVIEW_FORFEIT_VACUOUS = "vacuous"
+# Re-export vacuous forfeit reason from dispatch_outcome (CONVENTIONS §11 Pattern 1). The
+# dispatch runner produces it; round_driver and seat_canary compare against it — consumers
+# import this name, never restate the literal.
+import dispatch_outcome  # noqa: E402  (stdlib-only chokepoint; must not import engine_adapter)
+
+REVIEW_FORFEIT_VACUOUS = dispatch_outcome.REASON_VACUOUS
 
 # Bounds for the payload-shape diagnostic. These strings come from ENGINE-CONTROLLED JSON and
 # cross the same trust boundary as any other external free text.

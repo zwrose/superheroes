@@ -11,6 +11,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import dispatch_outcome  # noqa: E402
 import engine_adapter  # noqa: E402
 import engine_dispatch  # noqa: E402
 
@@ -76,15 +77,16 @@ def _map_outcome(res):
     reason = res.get("reason")
     if reason == engine_adapter.REVIEW_FORFEIT_VACUOUS:
         return engine_adapter.REVIEW_FORFEIT_VACUOUS, (res.get("disclosure") or "vacuous-forfeit")
-    if reason == "forfeited":
-        return "forfeited", (res.get("disclosure") or "forfeited")
-    if reason == "unrunnable":
-        detail = res.get("detail") or reason or "unrunnable"
-        return "unrunnable", "not-dispatched: %s" % detail
+    if reason == dispatch_outcome.REASON_FORFEITED:
+        return dispatch_outcome.REASON_FORFEITED, (
+            res.get("disclosure") or dispatch_outcome.REASON_FORFEITED)
+    if reason == dispatch_outcome.REASON_UNRUNNABLE:
+        detail = res.get("detail") or reason or dispatch_outcome.REASON_UNRUNNABLE
+        return dispatch_outcome.REASON_UNRUNNABLE, "not-dispatched: %s" % detail
     if res.get("terminal") is False:
-        return "unrunnable", "not-dispatched: non-terminal-slice"
+        return dispatch_outcome.REASON_UNRUNNABLE, "not-dispatched: non-terminal-slice"
     raw = reason or res.get("detail") or "unknown"
-    return "unrunnable", "not-dispatched: %s" % raw
+    return dispatch_outcome.REASON_UNRUNNABLE, "not-dispatched: %s" % raw
 
 
 def _engaged_from_dispatch(res):
@@ -135,7 +137,7 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
             return {
                 "engine": engine,
                 "model": engine_model,
-                "outcome": "unrunnable",
+                "outcome": dispatch_outcome.REASON_UNRUNNABLE,
                 "engaged": False,
                 "evidence": {
                     "findings": 0,
@@ -150,19 +152,19 @@ def run_canary(engine, *, engine_model, effort, repo_root, dispatch=None, timeou
             }
 
         outcome, detail_hint = _map_outcome(res)
-        if outcome == "unrunnable":
+        if outcome == dispatch_outcome.REASON_UNRUNNABLE:
             engaged = False
         else:
             engaged = _engaged_from_dispatch(res)
 
         detail = ""
         if not engaged:
-            if outcome == "unrunnable":
+            if outcome == dispatch_outcome.REASON_UNRUNNABLE:
                 detail = detail_hint
             elif outcome == engine_adapter.REVIEW_FORFEIT_VACUOUS:
                 detail = detail_hint or "vacuous-forfeit"
-            elif outcome == "forfeited":
-                detail = detail_hint or "forfeited"
+            elif outcome == dispatch_outcome.REASON_FORFEITED:
+                detail = detail_hint or dispatch_outcome.REASON_FORFEITED
             elif outcome == "ok":
                 detail = "no-engagement-evidence"
 
