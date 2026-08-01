@@ -21,22 +21,6 @@ if [ "$CURRENT_BRANCH" != "$PR_BRANCH" ]; then
 fi
 """
 
-SHARED_CONTRACT_GUARD = """\
-CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-UPSTREAM_REF=$(git rev-parse --symbolic-full-name '@{upstream}' 2>/dev/null) || UPSTREAM_REF=""
-LOCAL_HEAD=$(git rev-parse HEAD)
-case "$PR_BRANCH" in ""|null) echo "Auto-fix: pr.json has no head branch — refusing (fail closed)."; exit 1;; esac
-case "$HEAD_SHA"   in ""|null) echo "Auto-fix: pr.json has no head SHA — refusing (fail closed)."; exit 1;; esac
-if [ "$CURRENT_BRANCH" != "$PR_BRANCH" ] \\
-   && ! { [ "$UPSTREAM_REF" = "refs/remotes/origin/$PR_BRANCH" ] && [ "$LOCAL_HEAD" = "$HEAD_SHA" ]; }; then
-  echo "Auto-fix needs the PR's branch '$PR_BRANCH' (currently on '$CURRENT_BRANCH')."
-  echo "An ADOPTED build also qualifies, but only when BOTH hold: upstream is 'refs/remotes/origin/$PR_BRANCH' (found '${UPSTREAM_REF:-none}') AND HEAD is the PR head '$HEAD_SHA' (found '$LOCAL_HEAD')."
-  echo "Otherwise check out the branch, or re-run with --post (read-only GitHub) or --review-only (read-only terminal)."
-  exit 1
-fi
-"""
-
-
 def _git_env():
     return {
         "GIT_AUTHOR_NAME": "Test User",
@@ -221,15 +205,6 @@ def _setup_branch_null(world):
     _git(world["work_dir"], "checkout", "-B", "null", world["head_sha"])
 
 
-def _refusal_output(stdout, stderr):
-    return _combined_output(stdout, stderr)
-
-
-def _guard_has_fail_closed_edges(block):
-    """True when the guard refuses empty/null PR_BRANCH or HEAD_SHA."""
-    return "pr.json has no head branch" in block
-
-
 # --- extractor fail-closed ---------------------------------------------------
 
 
@@ -283,7 +258,7 @@ def test_state_1_on_pr_branch_accept(git_world, shipped_guard):
         git_world["pr_branch"],
         git_world["head_sha"],
     )
-    assert code == 0, _refusal_output(out, err)
+    assert code == 0, _combined_output(out, err)
 
 
 def test_state_2_adopted_accept(git_world, shipped_guard):
@@ -294,7 +269,7 @@ def test_state_2_adopted_accept(git_world, shipped_guard):
         git_world["pr_branch"],
         git_world["head_sha"],
     )
-    assert code == 0, _refusal_output(out, err)
+    assert code == 0, _combined_output(out, err)
 
 
 def test_state_3_adopted_extra_commit_refuse(git_world, shipped_guard):
@@ -306,8 +281,17 @@ def test_state_3_adopted_extra_commit_refuse(git_world, shipped_guard):
         git_world["head_sha"],
     )
     assert code == 1
-    text = _refusal_output(out, err)
-    assert git_world["pr_branch"] in text or "adopted" in text.lower()
+    text = _combined_output(out, err)
+    assert "An ADOPTED build also qualifies" in text
+    current_head = subprocess.run(
+        ["git", "-C", git_world["work_dir"], "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={**os.environ, **_git_env()},
+    ).stdout.strip()
+    assert f"(found '{current_head}')" in text
+    assert current_head != git_world["head_sha"]
 
 
 def test_state_4_wrong_upstream_refuse(git_world, shipped_guard):
@@ -319,8 +303,8 @@ def test_state_4_wrong_upstream_refuse(git_world, shipped_guard):
         git_world["head_sha"],
     )
     assert code == 1
-    text = _refusal_output(out, err)
-    assert "upstream" in text.lower() or git_world["pr_branch"] in text
+    text = _combined_output(out, err)
+    assert "found 'refs/remotes/origin/other-branch'" in text
 
 
 def test_state_5_no_upstream_refuse(git_world, shipped_guard):
@@ -332,8 +316,8 @@ def test_state_5_no_upstream_refuse(git_world, shipped_guard):
         git_world["head_sha"],
     )
     assert code == 1
-    text = _refusal_output(out, err)
-    assert "upstream" in text.lower() or "none" in text.lower() or git_world["pr_branch"] in text
+    text = _combined_output(out, err)
+    assert "found 'none'" in text
 
 
 def test_state_6_detached_head_refuse(git_world, shipped_guard):
@@ -345,8 +329,9 @@ def test_state_6_detached_head_refuse(git_world, shipped_guard):
         git_world["head_sha"],
     )
     assert code == 1
-    text = _refusal_output(out, err)
-    assert git_world["pr_branch"] in text or "HEAD" in text
+    text = _combined_output(out, err)
+    assert "An ADOPTED build also qualifies" in text
+    assert "currently on 'HEAD'" in text
 
 
 @pytest.mark.parametrize(
@@ -369,18 +354,9 @@ def test_state_7_pr_branch_empty_or_null_refuse(
         pr_branch_env,
         git_world["head_sha"],
     )
-    on_null_branch = setup_fn is _setup_branch_null
-    if on_null_branch and pr_branch_env == "null":
-        expected = 1 if _guard_has_fail_closed_edges(shipped_guard) else 0
-    else:
-        expected = 1
-    assert code == expected
-    if expected == 1:
-        text = _refusal_output(out, err)
-        if "no head branch" in text:
-            assert "fail closed" in text
-        else:
-            assert "PR branch" in text or git_world["pr_branch"] in text
+    assert code == 1
+    text = _combined_output(out, err)
+    assert "no head branch" in text or "An ADOPTED build also qualifies" in text
 
 
 @pytest.mark.parametrize(
@@ -396,12 +372,10 @@ def test_state_8_head_sha_empty_or_null_refuse(git_world, shipped_guard, head_sh
         git_world["pr_branch"],
         head_sha_env,
     )
-    expected = 1 if _guard_has_fail_closed_edges(shipped_guard) else 0
-    assert code == expected
-    if expected == 1:
-        text = _refusal_output(out, err)
-        assert "no head SHA" in text
-        assert "fail closed" in text
+    assert code == 1
+    text = _combined_output(out, err)
+    assert "no head SHA" in text
+    assert "fail closed" in text
 
 
 # --- anti-inertness: legacy guard must refuse adopted state (#769) -----------
@@ -422,43 +396,6 @@ def test_legacy_guard_refuses_adopted_state_proves_harness_discriminates(git_wor
         git_world["head_sha"],
     )
     assert code == 1
-    text = _refusal_output(out, err)
+    text = _combined_output(out, err)
     assert "PR branch" in text
     assert "adopted-x" in text
-
-
-# --- shared-contract green-path helper (used by throwaway script) --------------
-
-
-def run_all_states(block, tmp_path_factory):
-    """Drive all eight state-table cases against a guard block; for external scripts."""
-    import tempfile
-    from pathlib import Path
-
-    cases = [
-        ("state_1", _setup_on_pr_branch, lambda w: w["pr_branch"], lambda w: w["head_sha"], 0),
-        ("state_2", _setup_adopted, lambda w: w["pr_branch"], lambda w: w["head_sha"], 0),
-        ("state_3", _setup_adopted_extra_commit, lambda w: w["pr_branch"], lambda w: w["head_sha"], 1),
-        ("state_4", _setup_wrong_upstream, lambda w: w["pr_branch"], lambda w: w["head_sha"], 1),
-        ("state_5", _setup_no_upstream, lambda w: w["pr_branch"], lambda w: w["head_sha"], 1),
-        ("state_6", _setup_detached, lambda w: w["pr_branch"], lambda w: w["head_sha"], 1),
-        ("state_7a", _setup_on_pr_branch, lambda w: "", lambda w: w["head_sha"], 1),
-        ("state_7b", _setup_on_pr_branch, lambda w: "null", lambda w: w["head_sha"], 1),
-        ("state_7c", _setup_branch_null, lambda w: "", lambda w: w["head_sha"], 1),
-        ("state_7d", _setup_branch_null, lambda w: "null", lambda w: w["head_sha"], 1),
-        ("state_8a", _setup_on_pr_branch, lambda w: w["pr_branch"], lambda w: "", 1),
-        ("state_8b", _setup_on_pr_branch, lambda w: w["pr_branch"], lambda w: "null", 1),
-    ]
-
-    results = []
-    with tempfile.TemporaryDirectory() as td:
-        base = Path(td)
-        for name, setup, pr_fn, sha_fn, expect in cases:
-            world = build_git_fixture(base / name)
-            setup(world)
-            code, out, err = run_guard(
-                block, world["work_dir"], pr_fn(world), sha_fn(world)
-            )
-            results.append((name, code, expect, _refusal_output(out, err)))
-
-    return results

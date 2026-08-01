@@ -233,7 +233,9 @@ gh api "repos/$REPO/pulls/$PR_NUMBER/comments" \
 git fetch origin "$PR_BRANCH"
 git worktree add --detach "$SESSION_DIR/repo" "$HEAD_SHA"   # --post / --review-only ONLY
 ```
+
 **Auto-fix branch guard (PR mode, default loop only).** Before entering the loop, the orchestrator must be in one of two accepted states so fix commits land where they belong: **standing on the PR's branch**, or **an adopted build** whose upstream is `origin/<PR branch>` and whose `HEAD` is exactly the PR head (`$HEAD_SHA`). The second case is safe because the upstream leg proves this local branch **is** the PR's branch adopted (not a coincidental fork), and the SHA leg proves you are standing on the PR's actual state rather than a stale copy.
+
 ```bash
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 UPSTREAM_REF=$(git rev-parse --symbolic-full-name '@{upstream}' 2>/dev/null) || UPSTREAM_REF=""
@@ -248,8 +250,11 @@ if [ "$CURRENT_BRANCH" != "$PR_BRANCH" ] \
   exit 1
 fi
 ```
+
 If the guard fails (detached HEAD, an unrelated branch, or you're reviewing someone else's PR), STOP — do not create the detached worktree and do not enter the loop. A **stale** adopted branch — right upstream, wrong `HEAD` — refuses too; missing `pr.json` metadata (`$PR_BRANCH` or `$HEAD_SHA` empty or `null`) refuses fail-closed. Tell the user to use `--post` or `--review-only`. The detached `git worktree add --detach` step above is for the `--post`/`--review-only` PR paths ONLY, never for the auto-fix path. The auto-fix loop **never pushes**; an adopted build must push its fix commits itself with an explicit refspec — `git push origin HEAD:$PR_BRANCH` — because a bare `git push` from an adopted branch fails under git's default `push.default=simple` when the local branch name differs from its upstream (`fatal: The upstream branch of your current branch does not match the name of your current branch.`).
+
 **Branch mode:**
+
 ```bash
 BRANCH=$(git rev-parse --abbrev-ref HEAD); MODE=branch
 HEAD_SHA=$(git rev-parse HEAD)
