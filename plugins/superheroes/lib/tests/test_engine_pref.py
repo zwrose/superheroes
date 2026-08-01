@@ -1375,3 +1375,21 @@ def test_load_builder_dispatch_tier_fail_closed_when_profile_structural_refusal_
     assert tier["source"] == "unreadable-default"
     assert tier["source"] != "default"
     assert isinstance(tier.get("reason"), str) and tier["reason"]
+
+
+def test_load_builder_dispatch_tier_fail_closed_on_structural_refusal_multiple_blocks(tmp_path):
+    # axis: a structurally ambiguous profile makes the DISK read fail closed to opus,
+    # and carries the structural reason through.
+    import core_md as cm
+
+    repo = str(tmp_path)
+    store = os.path.join(repo, "store")
+    _write_core_with_prefs(repo, {})
+    path = cm.core_path(repo, store)
+    text = open(path, encoding="utf-8").read()
+    extra = "\n```json superheroes-core\n{\"schemaVersion\": 2}\n```\n"
+    open(path, "w", encoding="utf-8").write(text + extra)
+    tier = EP.load_builder_dispatch_tier(repo, root=store)
+    assert tier["tier"] == "opus"
+    assert tier["source"] == "unreadable-default"
+    assert tier["reason"].startswith("multiple-core-blocks:")

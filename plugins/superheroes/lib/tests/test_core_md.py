@@ -2367,3 +2367,28 @@ def test_cli_write_builder_tier_empty_stdin_clears(tmp_path, capsys, monkeypatch
     out = json.loads(capsys.readouterr().out)
     assert out["action"] == "written"
     assert "builderDispatchTier" not in CM.read(repo, root=store)["enginePreferences"]
+
+
+def test_write_builder_dispatch_tier_refused_round_trip_sibling_divergence(tmp_path, monkeypatch):
+    # axis: when the spliced candidate would change anything other than
+    # enginePreferences.builderDispatchTier, the write is REFUSED and the file on disk is left
+    # byte-identical.
+    repo, store = _write_core_for_builder_tests(tmp_path, prefs=_BUILDER_SIBLING_PREFS)
+    path = CM.core_path(repo, store)
+    before_bytes = open(path, "rb").read()
+    real_splice = CM._splice_single_json_block
+
+    def _splice_with_extra_pref_key(text, new_body):
+        candidate = real_splice(text, new_body)
+        if candidate is None:
+            return None
+        block = json.loads(CM._JSON_BLOCK.search(candidate).group(1))
+        prefs = block.setdefault("enginePreferences", {})
+        prefs["pilot"] = "codex"
+        modified_body = json.dumps(block, indent=2)
+        return real_splice(candidate, modified_body)
+
+    monkeypatch.setattr(CM, "_splice_single_json_block", _splice_with_extra_pref_key)
+    res = CM.write_builder_dispatch_tier(repo, "sonnet", root=store)
+    assert res == {"action": "refused", "reason": CM.BUILDER_DISPATCH_REASON_ROUND_TRIP}
+    assert open(path, "rb").read() == before_bytes
