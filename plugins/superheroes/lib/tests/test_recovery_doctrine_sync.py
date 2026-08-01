@@ -46,14 +46,14 @@ _HOME_CLAUSES = {
         "appends to its original transcript file",
         "the pushed branch at a named sha",
         "adoption is the only path",
-        "every claim inherited from the dead session is unverified until re-run",
+        "claim inherited from the dead session is unverified until re-run",
     ],
     "### Sweep for unpushed work before adopting": [
         "never pushed",
         "integrated",
         "subsumed",
         "contested",
-        "an adoption that records no sweep is an adoption that has not looked",
+        "adoption that records no sweep is an adoption that has not looked",
     ],
     "### Pin the transcript; never re-discover it": [
         "first 4KB",
@@ -67,7 +67,7 @@ _HOME_CLAUSES = {
         "mtime",
         "stdout log is not a liveness signal",
         "buffers its output to exit",
-        "never identify a worker by a global process match",
+        "identify a worker by a global process match",
     ],
     "### Suspect quota before you suspect a defect": [
         "unexplained early exit",
@@ -84,10 +84,10 @@ _COPY_HOLDER_SECTIONS = {
 _COPY_HOLDER_CLAUSES = {
     "skills/showrunner/SKILL.md": [
         "rubric/launch-doctrine.md",
-        "adoption",
+        "the branch and the sha it adopted",
         "the only path across instances or accounts",
         "suspected quota death",
-        "an adoption is a launch",
+        "adoption is a launch",
     ],
     "skills/workhorse/SKILL.md": [
         "rubric/launch-doctrine.md",
@@ -233,16 +233,16 @@ def test_negative_home_clause_absent_from_section():
 
 
 def test_negative_copy_holder_clause_missing_from_section():
-    synthetic_path = "synthetic/showrunner.md"
+    showrunner_path = "skills/showrunner/SKILL.md"
     synthetic_text = "\n".join([
         "## Your duties",
         "Other duties without recovery pointers.",
         "## When you're tempted",
-        "an adoption is a launch — but only outside declared section",
+        "adoption is a launch — but only outside declared section",
     ])
 
     def read_text(rel):
-        if rel == synthetic_path:
+        if rel == showrunner_path:
             return synthetic_text
         return _read_plugin(rel)
 

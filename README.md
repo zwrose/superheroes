@@ -88,7 +88,8 @@ a mechanical per-merge checkpoint exists.
 
 ## Workhorse — the builder session
 
-**Takes one routed issue to a ready PR.** A disposable session, one active builder per issue: it writes a
+**Takes one routed issue to a ready PR.** A disposable session, one active
+builder per issue: it writes a
 short **build brief** (shape, contracts & state, reuse plan, hard seams, rejected
 alternatives, consequential flags), gets it checked pre-code by a fresh reviewer at
 comparable tier and from another vendor, then builds test-first with tiered subagents in small diffs,
