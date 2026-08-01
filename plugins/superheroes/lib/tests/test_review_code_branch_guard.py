@@ -220,6 +220,33 @@ def _setup_adopted_extra_commit(world):
     _git(world["work_dir"], "commit", "-m", "extra commit", tmp_path=world["tmp_path"])
 
 
+def _setup_spoofed_upstream(world):
+    """Local branch whose @{upstream} renders as origin/<pr_branch> but tracks '.'."""
+    branch_name = "spoofed-upstream"
+    _git(
+        world["work_dir"],
+        "checkout",
+        "-B",
+        branch_name,
+        world["head_sha"],
+        tmp_path=world["tmp_path"],
+    )
+    _git(
+        world["work_dir"],
+        "config",
+        f"branch.{branch_name}.remote",
+        ".",
+        tmp_path=world["tmp_path"],
+    )
+    _git(
+        world["work_dir"],
+        "config",
+        f"branch.{branch_name}.merge",
+        f"refs/remotes/origin/{world['pr_branch']}",
+        tmp_path=world["tmp_path"],
+    )
+
+
 def _setup_wrong_upstream(world):
     other = "other-branch"
     _git(
@@ -470,6 +497,55 @@ def test_state_4_wrong_upstream_refuse(git_world, shipped_guard):
     assert code == 1
     text = _combined_output(out, err)
     assert "found 'refs/heads/other-branch'" in text
+
+
+def test_state_4b_spoofed_upstream_symbolic_refuse(git_world, shipped_guard):
+    """Issue #769: rendered @{upstream} is spoofable by a branch tracking a local ref.
+
+    A branch with remote '.' and merge refs/remotes/origin/<pr_branch> makes
+    git rev-parse --symbolic-full-name '@{upstream}' print refs/remotes/origin/<pr_branch>
+    while tracking a local ref — so the guard reads branch.<name>.remote /
+    branch.<name>.merge instead.
+    """
+    _setup_spoofed_upstream(git_world)
+    pr_branch = git_world["pr_branch"]
+    branch_name = "spoofed-upstream"
+    upstream = subprocess.run(
+        [
+            "git",
+            *_GIT_ISOLATION_FLAGS,
+            "-C",
+            git_world["work_dir"],
+            "rev-parse",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=_sanitized_git_env(git_world["tmp_path"]),
+    ).stdout.strip()
+    assert upstream == f"refs/remotes/origin/{pr_branch}"
+
+    # Remote '.' is the sole rejecting leg; merge must match the adopted ref shape.
+    _git(
+        git_world["work_dir"],
+        "config",
+        f"branch.{branch_name}.merge",
+        f"refs/heads/{pr_branch}",
+        tmp_path=git_world["tmp_path"],
+    )
+
+    code, out, err = run_guard(
+        shipped_guard,
+        git_world["work_dir"],
+        pr_branch,
+        git_world["head_sha"],
+        tmp_path=git_world["tmp_path"],
+    )
+    assert code == 1
+    text = _combined_output(out, err)
+    assert "found '.'" in text
 
 
 def test_state_5_no_upstream_refuse(git_world, shipped_guard):
