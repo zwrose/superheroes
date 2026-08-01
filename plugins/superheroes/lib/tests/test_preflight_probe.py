@@ -561,8 +561,14 @@ def test_dispatch_selftest_config_fails_closed_on_corrupt_core(tmp_path):
 
 
 def test_dispatch_selftest_config_clean_when_no_core(tmp_path):
+    import model_tier_overrides
+
     cfg = pp._dispatch_selftest_config(cwd=str(tmp_path))
-    assert cfg == {"prefs": {}, "tiers": {}}
+    # Absent core.md no longer skips the tier read (#752 rider 7).
+    assert cfg["prefs"] == {}
+    assert "read_error" not in cfg
+    assert cfg["tiers"] == model_tier_overrides.effective_tiers(None)
+    assert cfg["tiers"] != {}
     import dispatch_selftest
 
     pr = dispatch_selftest.probe_result(config=cfg)
@@ -1315,7 +1321,6 @@ def test_dispatch_selftest_config_absent_core_reads_real_tiers(tmp_path):
     profile = os.path.join(repo, ".claude", "superheroes", "review-crew.md")
     with open(profile, "w", encoding="utf-8") as fh:
         fh.write("<!-- review-crew: v1 -->\n## Model tiers\nreviewer-deep: opus\n")
-    import model_tier_overrides as mto
 
     cfg = pp._dispatch_selftest_config(cwd=repo, root=store)
     assert cfg["prefs"] == {}
