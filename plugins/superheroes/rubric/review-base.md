@@ -1,4 +1,4 @@
-<!-- rubric-version: 8 -->
+<!-- rubric-version: 9 -->
 # review-base
 
 The source of truth for review **severity, verification rules, findings format,
@@ -86,8 +86,33 @@ Minor and Nit findings never change the verdict regardless of strictness.
 
 ## Findings output format (the single schema — agents reference this, never restate it)
 
-Every agent emits a JSON array at the path the dispatching skill specifies. This
-is the one authoritative schema; agents must not redefine the fields inline.
+The JSON array below is the one authoritative schema; you must not redefine the
+fields inline. How you deliver it is channel-keyed — the dispatching skill names
+your channel.
+
+### Delivery channels
+
+**stdout channel** — external, sandboxed seats that cannot write a file. Your
+final stdout is a single JSON object and nothing after it:
+
+`{"findings": [ … ], "investigated": ["repo/relative/path", …]}`
+
+Wrap the finding array below as the `findings` value. List in `investigated`
+every repo-relative path you actually read to ground the review. An empty
+`findings` array counts as clean only when `investigated` lists paths that
+check out; empty findings with no verifiable investigation record is a seat
+that never ran.
+
+**file channel** — in-process seats that can write. Emit the JSON array below
+at the path the dispatching skill names. Write `[]` when you have nothing to
+flag — do not skip the file.
+
+If you are told to use the file channel but cannot write, deliver on stdout in
+the stdout-channel shape above and say so there.
+
+Delivery is part of the review, not a step after it. Findings that do not
+arrive in the contract shape for your channel do not exist — the orchestrator
+reads the channel, never your reasoning.
 
 ```json
 [

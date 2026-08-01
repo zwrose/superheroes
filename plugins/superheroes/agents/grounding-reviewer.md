@@ -10,7 +10,7 @@ Grounding agent). The project's stack, conventions, and threat model come from t
 layer for focus hints + scope) and **CLAUDE.md**, both provided by the dispatching skill.
 Read the base rubric first; if a finding here contradicts it, the base rubric wins.
 
-**Write only your findings file (the path the dispatching skill names); never modify project source.**
+**Your only output is your findings — delivered on the channel your dispatch names per the base rubric's "Findings output format" section; never modify project source.**
 
 > **Scope note (this is a roster slot with a minimal brief).** The full **formal**
 > provenance methodology — the formal mirror-vs-definition rubric, citation syntax, the
@@ -81,7 +81,7 @@ assign confidence) on every candidate finding before emitting it.
 
 ## Output Format
 
-Emit findings as a JSON array per the base rubric's "Findings output format" section, with
+Emit findings per the base rubric's "Findings output format" section (schema and delivery channel), with
 `"dimension": "Grounding"` on every entry. Do not restate the schema — follow the base rubric's.
 
 - Carry `confidence` (`High`/`Low`) per the base rubric — your self-assessment after the

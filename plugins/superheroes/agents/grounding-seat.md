@@ -11,8 +11,7 @@ context**: you check the **claims the PR makes about itself** against the repo, 
 emit a finding when a self-claim is not supported by what the repo actually contains.
 Read the base rubric first; if a finding here contradicts it, the base rubric wins.
 
-**Write only your findings file (the path the dispatching skill names); never modify
-project source.**
+**Your only output is your findings — delivered on the channel your dispatch names per the base rubric's "Findings output format" section; never modify project source.**
 
 ## Model tier (binding)
 
@@ -52,7 +51,7 @@ itself; the repo does not support X."*
 ## Severity, format, verification
 
 Follow the **base rubric** for severity tiers, the findings JSON schema (you emit
-findings like the other seats — one JSON array at the path the dispatching skill names),
+findings like the other seats — schema and delivery channel per the base rubric's "Findings output format" section),
 the verification rules, and the in-pass Chain-of-Verification. Do not restate them here.
 Ground the DoD/stub markers you check against **CONVENTIONS §10.7** (PR-body honesty
 markers). Cite `file:line` (or the PR-body row) on every finding, carry `confidence`, and

@@ -81,13 +81,13 @@ justification); a CONFIRMED finding survives stamped
 `position == null`) still count.
 
 ## Output
-Write findings to $SESSION_DIR/round-<round>/findings-<agent>.json as a JSON
-array per the base rubric's "Findings output format" section. Set `tradeoff:
+Delivery is per the base rubric's "Findings output format" section. Set `tradeoff:
 true` only when a finding has multiple valid fix approaches (a judgment call);
 omit it otherwise (see the base rubric's "Triage rubric"). Set `dimension` to
 "<dimension>" on every entry. Severity caps from the base rubric apply (Nits at
-most 5 reported per agent). If you have nothing to flag, write an empty array
-(`[]`) — do not skip writing the file.
+most 5 reported per agent).
+<file channel> Write the JSON array to $SESSION_DIR/round-<round>/findings-<agent>.json — write `[]` rather than skipping the file when you have nothing to flag.
+<stdout channel> Emit `{"findings": [...], "investigated": [...]}` as your final stdout with nothing after it; do not write a findings file (read-only sandbox — nothing reads one).
 ```
 
 ## Mechanical focus flags
@@ -110,7 +110,7 @@ addition that never replaces the `--focus` notes and never removes or down-scope
 nothing. The detector is grep-grounded and has no authority: it can only add emphasis,
 never drop a finding or a lens.
 
-> **External-engine reviewers — stdout shape contract (#38, #196, #666).** When `$REVIEWER_ENGINE` is
+> **External-engine reviewers — stdout channel grading mechanics (#38, #196, #666).** When `$REVIEWER_ENGINE` is
 > `codex` or `cursor`, a specialist is dispatched through `engine_adapter.py` (read-only sandbox)
 > instead of a named subagent, and it returns its findings on **stdout** rather than writing the
 > findings file. Its final stdout MUST be a single JSON object `{"findings": [...]}` (the same array
@@ -128,8 +128,8 @@ never drop a finding or a lens.
 > floor. Emit the canonical object; the parser also **tolerates a bare top-level array** `[...]` of
 > finding objects as of #196, but anything else (prose with no parseable JSON object/array, an empty
 > stream, an array of non-objects) parses as `unreadable`, which forfeits the slot to a Claude re-run (UFR-7) and silently
-> doubles the round's cost. State this shape verbatim in the dispatch prompt so orchestrators stop
-> re-guessing it per run.
+> doubles the round's cost. The contract shape lives in the base rubric's "Findings output format"
+> section; the dispatch prompt's `## Output` block names the seat's channel — no per-run restatement needed.
 
 > **Reviewer-seat dispatch runs through the dispatch RUNNER (#563 DoD 2/4) — reviewer role ONLY.**
 > When `$REVIEWER_ENGINE` is `codex` or `cursor`, dispatch each read-only reviewer seat through
