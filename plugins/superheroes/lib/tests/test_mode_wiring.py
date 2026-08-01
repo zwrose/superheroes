@@ -1,5 +1,6 @@
 # Structural check that I2 wired the heroes into the registry record + coalesced nudge.
 import os
+import re
 import pytest
 
 from skill_surface import surface_text
@@ -33,8 +34,9 @@ def test_ask_branch_records_greenfield_pick(name):
 @pytest.mark.parametrize("name", NUDGE_SKILLS)
 def test_run_surfaces_coalesced_nudge(name):
     body = _skill(name)
-    assert "mode_reconcile.py" in body and "signals" in body, \
-        f"{name} must surface the coalesced reconcile nudge via mode_reconcile signals (FR-7/8)"
+    assert "mode_reconcile.py" in body and re.search(
+        r'mode_reconcile\.py"?\s+signals\b', body
+    ), f"{name} must surface the coalesced reconcile nudge via mode_reconcile signals (FR-7/8)"
 
 
 @pytest.mark.parametrize("name", ROOTDIR_SKILLS)

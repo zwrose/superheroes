@@ -8,6 +8,7 @@ wiring silently drops out of the SKILL/reference — the same discipline as `tes
 for the continuation gate.
 """
 import os
+import re
 
 from skill_surface import surface_text
 
@@ -43,7 +44,9 @@ def test_skill_compile_invokes_verification():
 def test_skill_resolves_the_verifier_tier_not_the_session_model():
     text = surface_text("review-code")
     # Model resolved via the verifier tier (--role verifier), not the session model.
-    assert "--role verifier" in text and "VERIFIER_MODEL" in text
+    assert re.search(r"VERIFIER_MODEL=.*--role\s+verifier", text), (
+        "surface must assign VERIFIER_MODEL via --role verifier"
+    )
 
 
 def test_three_state_verdict_tokens_present_in_skill_and_reference():
