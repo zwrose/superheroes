@@ -264,13 +264,19 @@ def test_load_engine_prefs_surfaces_positive_timeout_override(tmp_path, monkeypa
     # #309 owner channel end to end: a positive-int enginePreferences.timeout is surfaced by
     # load_engine_prefs so resolve_timeout(prefs, role) honors it; a bool/non-positive is dropped.
     import core_md
-    monkeypatch.setattr(core_md, "read", lambda *a, **k: {"enginePreferences": {"timeout": 1800}})
+    monkeypatch.setattr(
+        core_md, "engine_preferences_for_gate",
+        lambda **k: core_md.CoreGateConfig({"timeout": 1800}, core_md.CONFIG_OK, None))
     prefs = EP.load_engine_prefs(str(tmp_path))
     assert prefs.get("timeout") == 1800
     assert EP.resolve_timeout(prefs, "review") == 1800
-    monkeypatch.setattr(core_md, "read", lambda *a, **k: {"enginePreferences": {"timeout": True}})
+    monkeypatch.setattr(
+        core_md, "engine_preferences_for_gate",
+        lambda **k: core_md.CoreGateConfig({"timeout": True}, core_md.CONFIG_OK, None))
     assert "timeout" not in EP.load_engine_prefs(str(tmp_path))
-    monkeypatch.setattr(core_md, "read", lambda *a, **k: {"enginePreferences": {}})
+    monkeypatch.setattr(
+        core_md, "engine_preferences_for_gate",
+        lambda **k: core_md.CoreGateConfig({}, core_md.CONFIG_OK, None))
     assert "timeout" not in EP.load_engine_prefs(str(tmp_path))
 
 
@@ -305,13 +311,19 @@ def test_load_engine_prefs_surfaces_positive_idle_override(tmp_path, monkeypatch
     # #309 owner stall-monitor channel end to end: a positive-int enginePreferences.idleTimeout is
     # surfaced by load_engine_prefs so resolve_idle(prefs, role) honors it; a bool/non-positive is dropped.
     import core_md
-    monkeypatch.setattr(core_md, "read", lambda *a, **k: {"enginePreferences": {"idleTimeout": 90}})
+    monkeypatch.setattr(
+        core_md, "engine_preferences_for_gate",
+        lambda **k: core_md.CoreGateConfig({"idleTimeout": 90}, core_md.CONFIG_OK, None))
     prefs = EP.load_engine_prefs(str(tmp_path))
     assert prefs.get("idleTimeout") == 90
     assert EP.resolve_idle(prefs, "review") == 90
-    monkeypatch.setattr(core_md, "read", lambda *a, **k: {"enginePreferences": {"idleTimeout": True}})
+    monkeypatch.setattr(
+        core_md, "engine_preferences_for_gate",
+        lambda **k: core_md.CoreGateConfig({"idleTimeout": True}, core_md.CONFIG_OK, None))
     assert "idleTimeout" not in EP.load_engine_prefs(str(tmp_path))
-    monkeypatch.setattr(core_md, "read", lambda *a, **k: {"enginePreferences": {"idleTimeout": -1}})
+    monkeypatch.setattr(
+        core_md, "engine_preferences_for_gate",
+        lambda **k: core_md.CoreGateConfig({"idleTimeout": -1}, core_md.CONFIG_OK, None))
     assert "idleTimeout" not in EP.load_engine_prefs(str(tmp_path))
 
 
@@ -425,6 +437,82 @@ def test_load_engine_prefs_greenfield_is_degenerate(tmp_path):
     # no core.md at all → degenerate (fail-open, never raises)
     assert EP.load_engine_prefs(str(tmp_path), root=str(tmp_path / "store")) == \
         EP.degenerate_engine_prefs()
+
+
+def _make_core_unreadable(repo, store):
+    """Write briefCheck:claude core.md then make the path unreadable (chmod 000)."""
+    import stat
+    import core_md
+    _write_core_with_prefs_at(repo, store, {"briefCheck": "claude"})
+    core_p = core_md.core_path(repo, store)
+    os.chmod(core_p, 0)
+    return core_p
+
+
+def test_load_engine_prefs_unreadable_preserves_brief_check_claude_opt_out(tmp_path):
+    """#752 regression: unreadable config must not escalate briefCheck to codex."""
+    import stat
+    repo = str(tmp_path)
+    store = os.path.join(repo, "store")
+    core_p = _make_core_unreadable(repo, store)
+    try:
+        got = EP.load_engine_prefs(repo, root=store)
+        assert got["briefCheck"] == "claude"
+        assert "readError" in got
+    finally:
+        os.chmod(core_p, stat.S_IWUSR | stat.S_IRUSR)
+
+
+def test_load_engine_prefs_absent_greenfield_no_read_error(tmp_path):
+    got = EP.load_engine_prefs(str(tmp_path), root=str(tmp_path / "store"))
+    assert got["briefCheck"] == "codex"
+    assert "readError" not in got
+
+
+def test_load_engine_prefs_unreadable_all_roles_claude_with_read_error(tmp_path):
+    import stat
+    repo = str(tmp_path / "unreadable")
+    store = os.path.join(repo, "store")
+    core_p = _make_core_unreadable(repo, store)
+    try:
+        got = EP.load_engine_prefs(repo, root=store)
+        for role in EP.ENGINE_ROLE_KEYS:
+            assert got[role] == "claude", role
+        assert got["readError"].startswith("core-md-unreadable: ")
+    finally:
+        os.chmod(core_p, stat.S_IWUSR | stat.S_IRUSR)
+
+
+def test_load_engine_prefs_root_unavailable_non_escalating(tmp_path, monkeypatch):
+    import store_core as sc
+
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    real = sc.run_git_result
+
+    def fake(cwd, *args):
+        if args == ("rev-parse", "--show-toplevel"):
+            return sc.GitResult(None, sc.GIT_UNAVAILABLE, "FileNotFoundError: no git")
+        return real(cwd, *args)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    got = EP.load_engine_prefs(repo, root=store)
+    for role in EP.ENGINE_ROLE_KEYS:
+        assert got[role] == "claude", role
+    assert got["readError"].startswith("repo-root-unavailable: ")
+
+
+def test_load_engine_prefs_gate_config_refusal_keyerror_non_escalating(tmp_path, monkeypatch):
+    import core_md
+
+    monkeypatch.setattr(
+        core_md, "engine_preferences_for_gate",
+        lambda **k: core_md.CoreGateConfig({}, "unregistered-status", "detail"))
+    got = EP.load_engine_prefs(str(tmp_path))
+    for role in EP.ENGINE_ROLE_KEYS:
+        assert got[role] == "claude", role
+    assert "readError" in got
+    assert got["briefCheck"] != "codex"
 
 
 def test_load_engine_prefs_store_base_none_vs_repo_root_regression(tmp_path, monkeypatch):

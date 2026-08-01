@@ -90,6 +90,19 @@ def degenerate_engine_prefs():
     return {**{k: _PREF_KEY_DEFAULT_ENGINE[k] for k in ENGINE_ROLE_KEYS}, "effort": {}}
 
 
+def refusal_engine_prefs(read_error=None):
+    """Non-escalating enginePreferences when core.md could not be read.
+
+    Every role is forced to claude so no preference is routed onto an external engine on the
+    strength of a config we failed to read. An optional ``readError`` lets callers distinguish this
+    from a clean greenfield absent config. Returns a FRESH dict each call."""
+    out = {k: "claude" for k in ENGINE_ROLE_KEYS}
+    out["effort"] = {}
+    if read_error is not None:
+        out["readError"] = read_error
+    return out
+
+
 # When the brief-check reviewer must fall back to a Claude reviewer (codex unavailable), it runs at
 # this tier — a tier UP from the sonnet implementer, never session-inherited. Disclosed at dispatch.
 _brief_check_claude_model, _brief_check_claude_effort = model_registry.matrix_config(
@@ -363,24 +376,10 @@ def resolve_idle(overrides=None, role_kind=None):
     return DEFAULT_IDLE_SECONDS
 
 
-def load_engine_prefs(cwd, root=None):
-    """Read core.md's enginePreferences via core_md.read; normalize each role to a valid engine
-    (else that key's fail-open default via resolve_engine_pref_key); surface the optional FR-9
-    `effort` sub-map (a dict, else {}) and the optional #309 `timeout` owner override (a positive
-    int, else omitted — resolve_timeout then falls to the role ceiling); validated `codexModels` /
-    `invalidCodexModels` and `seatPins` / `invalidSeatPins` when present; absent block / None /
-    any error → degenerate_engine_prefs(). Never raises."""
-    degenerate = degenerate_engine_prefs()
-    try:
-        import core_md
-        rec = core_md.read(cwd, root)
-    except Exception:
-        return degenerate
-    if not isinstance(rec, dict):
-        return degenerate
-    prefs = rec.get("enginePreferences")
+def _normalize_engine_preferences_block(prefs):
+    """Normalize a raw enginePreferences dict into load_engine_prefs output shape."""
     if not isinstance(prefs, dict):
-        return degenerate
+        prefs = {}
     effort = prefs.get("effort")
     out = {"reviewer": resolve_engine_pref_key("reviewer", prefs),
            "implementation": resolve_engine_pref_key("implementation", prefs),
@@ -453,3 +452,30 @@ def load_engine_prefs(cwd, root=None):
     if isinstance(idle_timeout, int) and not isinstance(idle_timeout, bool) and idle_timeout > 0:
         out["idleTimeout"] = idle_timeout
     return out
+
+
+def load_engine_prefs(cwd, root=None):
+    """Read core.md's enginePreferences via ``core_md.engine_preferences_for_gate``; normalize each
+    role to a valid engine (else that key's fail-open default via resolve_engine_pref_key); surface
+    the optional FR-9 `effort` sub-map (a dict, else {}) and the optional #309 `timeout` owner
+    override (a positive int, else omitted — resolve_timeout then falls to the role ceiling);
+    validated `codexModels` / `invalidCodexModels` and `seatPins` / `invalidSeatPins` when
+    present. Genuinely absent config → ``degenerate_engine_prefs()`` (documented defaults). A gate
+    refusal (unreadable, root-unavailable, …) → ``refusal_engine_prefs()`` (all-claude, non-
+    escalating) plus ``readError``. Never raises."""
+    try:
+        import core_md
+        cfg = core_md.engine_preferences_for_gate(cwd=cwd, root=root)
+        if core_md.gate_config_is_absent(cfg):
+            return degenerate_engine_prefs()
+        if core_md.gate_config_is_refusal(cfg):
+            try:
+                refusal = core_md.gate_config_refusal(cfg)
+                read_error = core_md.gate_refusal_line(refusal)
+            except KeyError:
+                read_error = "unknown-refusal: unregistered gate status %r" % (cfg.status,)
+            return refusal_engine_prefs(read_error)
+        prefs = core_md.gate_config_usable_prefs(cfg)
+        return _normalize_engine_preferences_block(prefs)
+    except Exception:
+        return refusal_engine_prefs()
