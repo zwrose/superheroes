@@ -2105,6 +2105,55 @@ def test_public_append_refuses_terminal_records(tmp_path, monkeypatch):
     assert len(ll.read(repo)["records"]) == count_before + 1
 
 
+def test_fold_records_every_started_pid(tmp_path):
+    records = [_reserved("a", "b", ["x"], "/tmp")]
+    records.append(_started("a", attempt=1, pid=424241))
+    records.append(_started("a", attempt=2, pid=424242))
+    result = ll.fold(records)
+    assert result["ok"] is True
+    info = result["launches"]["a"]
+    assert info["pid"] == 424242
+    assert info["pids"] == [424241, 424242]
+
+
+def test_terminalize_probes_every_started_attempt(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-multi-started"
+    launch_id = "l-multi-started"
+    live_proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    dead_proc = subprocess.Popen(["sleep", "0.1"], start_new_session=True)
+    dead_proc.wait(timeout=5)
+    try:
+        _declare(repo, batch, 1)
+        ll.reserve(repo, _reserved(launch_id, batch, ["a"], repo))
+        started1 = _started(launch_id, attempt=1)
+        started1["pid"] = live_proc.pid
+        assert ll.append(repo, started1)
+        started2 = _started(launch_id, attempt=2)
+        started2["pid"] = dead_proc.pid
+        assert ll.append(repo, started2)
+        count_before = len(ll.read(repo)["records"])
+        result = ll.record_outcome(repo, launch_id, "handback", "done")
+        assert result["ok"] is False
+        assert result["reason"] == "terminal-child-live:%s" % live_proc.pid
+        assert len(ll.read(repo)["records"]) == count_before
+        os.kill(live_proc.pid, 0)
+        ll._reap_process(live_proc)
+        live_proc.wait(timeout=5)
+        result2 = ll.record_outcome(repo, launch_id, "handback", "done")
+        assert result2["ok"] is True
+    finally:
+        try:
+            os.kill(live_proc.pid, 9)
+        except ProcessLookupError:
+            pass
+        try:
+            live_proc.wait(timeout=5)
+        except Exception:
+            pass
+
+
 def test_terminalize_still_writes_its_terminal(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)

@@ -813,6 +813,10 @@ def fold(records):
             info["started"] = True
             info["pid"] = rec["pid"]
             info["attempt"] = rec["attempt"]
+            pids = list(info.get("pids", []))
+            if rec["pid"] not in pids:
+                pids.append(rec["pid"])
+            info["pids"] = pids
         elif event == "retry":
             pass
         elif event in TERMINAL_EVENTS:
@@ -1021,6 +1025,17 @@ def _reap_process(proc):
         pass
 
 
+def _started_pids_to_probe(info):
+    """Pids of every started attempt for liveness probing; backward-compatible."""
+    pids = info.get("pids")
+    if pids:
+        return pids
+    pid = info.get("pid")
+    if pid is not None:
+        return [pid]
+    return []
+
+
 def _child_group_is_live(pid):
     """True when the recorded pid or its process group still has live members.
 
@@ -1170,12 +1185,16 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
                 "kind": None, "outcome": None, "reaped": reaped,
             }
 
-        if info.get("started") and _child_group_is_live(info.get("pid")):
-            return {
-                "ok": False,
-                "reason": "terminal-child-live:%s" % info.get("pid"),
-                "kind": None, "outcome": None, "reaped": reaped,
-            }
+        if info.get("started"):
+            # One _child_group_is_live per recorded attempt, each with bounded
+            # settle — all inside the lock. At most one started per launch today.
+            for pid in _started_pids_to_probe(info):
+                if _child_group_is_live(pid):
+                    return {
+                        "ok": False,
+                        "reason": "terminal-child-live:%s" % pid,
+                        "kind": None, "outcome": None, "reaped": reaped,
+                    }
 
         records = list(read_result["records"])
         started = info.get("started")

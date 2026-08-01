@@ -28,6 +28,7 @@ _TERMINAL_WRITE_ALLOWLIST = {
 # that acquire the ledger lock before appending and release it in finally.
 _CLASS3_APPEND_ALLOWLIST = {
     "launch_ledger.py": frozenset({
+        "append",             # validated pass-through to _append_raw; callers censused
         "append_under_lock",  # holds lock around append(repo_root, ...)
         "declare_batch",      # holds lock around append(repo_root, ...)
         "reserve",            # holds lock around append(repo_root, ...)
@@ -614,7 +615,7 @@ class _Class3AppendVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node):
         func = node.func
-        if isinstance(func, ast.Attribute) and func.attr == "append":
+        if isinstance(func, ast.Attribute) and func.attr in ("append", "_append_raw"):
             if _is_ledger_module_expr(func.value, self.ledger_module_ids):
                 self.violations.append(
                     "%s: append() on ledger module (clause: raw append only under lock)"
@@ -622,7 +623,7 @@ class _Class3AppendVisitor(ast.NodeVisitor):
                 )
         elif (
             isinstance(func, ast.Name)
-            and func.id == "append"
+            and func.id in ("append", "_append_raw")
             and os.path.basename(self.source_path) == "launch_ledger.py"
         ):
             self.violations.append(
@@ -959,6 +960,56 @@ def test_class3_matcher_catches_raw_append_inside_the_ledger_module():
     )
     good_violations = class3_census_violations_from_source(good_source, ledger_path)
     assert good_violations == [], good_violations
+
+
+def test_class3_matcher_catches_append_raw_inside_the_ledger_module():
+    """_append_raw is the primitive Class-3 exists to gate; renames must not blind it."""
+    ledger_path = os.path.join(_LIB, "launch_ledger.py")
+    bad_source = (
+        "def rogue_inside_ledger(repo_root, record):\n"
+        "    _append_raw(repo_root, record)\n"
+    )
+    bad_violations = class3_census_violations_from_source(bad_source, ledger_path)
+    assert bad_violations, bad_violations
+    assert any("rogue_inside_ledger" in v for v in bad_violations), bad_violations
+
+    good_source = (
+        "def terminalize(repo_root, launch_id):\n"
+        "    _append_raw(repo_root, record)\n"
+    )
+    good_violations = class3_census_violations_from_source(good_source, ledger_path)
+    assert good_violations == [], good_violations
+
+
+def _ledger_append_writer_functions(tree):
+    """Module-level functions that call bare append() or _append_raw() in launch_ledger.py."""
+    writers = set()
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Call):
+                continue
+            func = child.func
+            if isinstance(func, ast.Name) and func.id in ("append", "_append_raw"):
+                writers.add(node.name)
+    return writers
+
+
+def test_class3_every_ledger_append_writer_is_matched_or_allowlisted():
+    """Rename-proof: every module-level ledger writer is censused or explicitly exempt."""
+    with open(_LEDGER_PY, encoding="utf-8") as fh:
+        source = fh.read()
+    tree = _parse_source(source, _LEDGER_PY)
+    writers = _ledger_append_writer_functions(tree)
+    allowlist = _CLASS3_APPEND_ALLOWLIST.get("launch_ledger.py", frozenset())
+    # _append_raw is the primitive itself — it writes via open_ledger, not via append.
+    writers.discard("_append_raw")
+    uncovered = sorted(writers - allowlist)
+    assert uncovered == [], (
+        "module-level functions calling append/_append_raw must be allowlisted "
+        "or caught by Class-3: %s" % ", ".join(uncovered)
+    )
 
 
 def test_class3_matcher_catches_an_aliased_ledger_module():
