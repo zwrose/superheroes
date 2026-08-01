@@ -2,8 +2,7 @@
 
 This file is the **one home** for the bite-proof rule. Charters and skills point here rather
 than restating it. A **detector** is anything whose job is to fail when something is wrong: a
-test, an assertion, a guard clause, a validator, a CI check, a lint rule, a review-rubric
-question.
+test, an assertion, a guard clause, a validator, a CI check, a lint rule, a review-rubric question.
 
 ## The obligation
 
@@ -14,8 +13,7 @@ question.
 3. **Restore** the neutralization.
 4. Show it **green** again.
 
-The proof runs with the **detector unedited**. A detector edited to make itself go red proves
-nothing.
+The proof runs with the **detector unedited**. A detector edited to make itself go red proves nothing.
 
 A green run is equally consistent with *the code is right* and *this detector cannot fail*. Only
 the red run tells them apart. This is the covenant's fourth promise — **claim nothing you did not
@@ -60,7 +58,9 @@ emphatic its name.
 
 **Raw captures are bounded:** at most **32 KiB per element** and **128 KiB across the whole
 record**. Overflow is written to session-scoped scratch **outside the repository** that the record
-names; the party carrying the record into the durable record removes captures once verification closes (an interrupted run leaves them behind as an accepted residual); the reader fetches overflow off disk, not through the return. Receipts carried into the durable record are
+names; the party carrying the record into the durable record removes captures once verification closes
+(an interrupted run leaves them behind as an accepted residual); the reader fetches overflow off disk,
+not through the return. Receipts carried into the durable record are
 **redacted** — secrets, tokens, private URLs, PII — and the redaction is said out loud.
 
 **Bounded volume shape:** when a detector guards many elements, the record may group them into
@@ -68,8 +68,7 @@ names; the party carrying the record into the durable record removes captures on
 produces**, each class's **representative element named**, and the classes must **cover every
 guarded element**, with any element in no class **listed as unproven**. A class is a **failure
 mode**, never a convenience bucket; **"there were a lot of them" is not a class**. This does not
-weaken trap 3 — trap 3 forbids an *unnamed* representative standing for elements nobody
-enumerated.
+weaken trap 3 — trap 3 forbids an *unnamed* representative standing for elements nobody enumerated.
 
 **Where each part lives, and why the split matters:**
 
@@ -111,8 +110,7 @@ hardware this environment lacks. This shape is about the **run**, not the code: 
 honest handoff, not an excuse. **Required disclosure:** **what refused or blocked the run**, quoted;
 **the exact command and the environment that could run it**; **the substitute evidence actually
 produced** — for example an A/B of the new detector against the base revision of the guarded file —
-**with the cases it does not discriminate named explicitly**; and **who owns the outstanding
-receipt**.
+**with the cases it does not discriminate named explicitly**; and **who owns the outstanding receipt**.
 
 ## When the proof runs under a normalization
 
@@ -141,8 +139,12 @@ production.
   which** — **no party accepts its own disclosure**; where the same actor typed the change and
   verifies, the disclosure travels to the **next independent reader of the record** — the advisor's
   vet where a project has one, otherwise the owner before the merge decision — and until then the
-  record **states plainly that the disclosure is unadjudicated**, which is a permitted terminal state for the build, not a blocker: what is forbidden is recording it as *accepted* by the party that
-  wrote it; an accepted disclosure names the check that confirmed the proof is genuinely unavailable (for instance: it attempted the neutralization and observed no red). **The four vacuity traps are
+  record **states plainly that the disclosure is unadjudicated**, which is a permitted terminal state for
+  the build, not a blocker: what is forbidden is recording it as *accepted* by the party that
+  wrote it; an accepted disclosure names the check that confirmed the proof is genuinely unavailable (for
+  instance: it attempted the neutralization and observed no red). **The four vacuity traps are
   not disclosable** — a one-representative or whole-document check is a defect to fix, not a caveat
   to write.
-- **The review seat** — flags the **absence** of an axis line, or of an owed disclosure, **in the diff it was given**. It never runs a proof — a review seat never changes the repository — and it never asserts that a receipt is missing, because the build record is not among its inputs.
+- **The review seat** — flags the **absence** of an axis line, or of an owed disclosure, **in the
+  diff it was given**. It never runs a proof — a review seat never changes the repository — and it
+  never asserts that a receipt is missing, because the build record is not among its inputs.
