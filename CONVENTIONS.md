@@ -698,7 +698,7 @@ PRs excluded, force-push never). That record carries R1's mechanical park/refusa
 — it reports **indeterminate** rather than a rate whenever it cannot see the whole batch; zero
 parks is a signal to inspect, never a clean sheet. The Showrunner advisor invokes the launcher
 per launch; the eight dispatch-preflight checks live in the charter §9 and the artifact, bound
-by a drift test — cite those homes, do not duplicate them here.
+by a drift test — cite those homes, do not duplicate them here. The recovery half — adopt-rather-than-resume across instances or accounts, the unpushed-work sweep, transcript pinning, liveness reads, and quota-death suspicion — lives in `rubric/launch-doctrine.md` § Recovery, with the two session charters as enumerated copy-holders guarded by a drift test.
 
 **Sanitized review view (#684).** External **review** seats (codex/cursor via `dispatch-review`)
 run against a disposable sanitized export of the named repo root — machinery inside the runner, not

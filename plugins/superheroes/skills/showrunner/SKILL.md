@@ -442,6 +442,20 @@ the reviewer and the owner's authorization carry that check instead.**
    8. **Grant state** (`grant-state`, conditional) — whether one exists, its scope, and its exclusions; **failing** means no
       grant, or work outside the grant's enumerated scope.
 <!-- launch-doctrine:preflight-charter:end -->
+   The other half of launch doctrine lives in the same artifact — read
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/launch-doctrine.md` § Recovery and follow it rather
+   than reconstructing a takeover from memory, which is exactly what this doctrine exists to stop.
+   The calls that are the advisor's: whether a takeover is a **resume** (same instance and account
+   only) or an **adoption** (a fresh session from durable artifacts, and **the only path across
+   instances or accounts**); **pinning** each builder's transcript by its issue token instead of
+   re-discovering it newest-first; reading **liveness** from a double-confirmed process check plus
+   pinned-transcript freshness, never from a `-p` session's buffered stdout and never from a global
+   process match; and treating an unexplained early exit as a **suspected quota death** on the
+   account the builder burned until that is ruled out. **An adoption is a launch** — it carries the
+   standing rulings and records its preflight like any other, and its dispatch record names the
+   **branch and the sha it adopted**; and **record the dead builder's terminal outcome** with
+   `record-outcome` before its successor launches, because an unrecorded death makes the batch
+   `indeterminate` and the successor's own outcome cannot repair it.
    **Invoke the launcher — never hand-compose a launch.** Run
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/launcher.py` to `preflight`, `compose`, and `launch` a
    headless builder session, so **standing rulings come verbatim from
@@ -497,3 +511,4 @@ the reviewer and the owner's authorization carry that check instead.**
 | "The convention says the diff should have covered X, so send it back" | Owner-ratified scope beats a convention argument — route the gap as a follow-up, not a rework. |
 | "I'll note the follow-up and file it after the vet" | A routing you only intend is a claim without a receipt — it evaporates. Disposition the PR's follow-ups **before** the vet receipt posts (Tier-1 writes now; Tier-2 proposed to the owner); receipts never use the future tense. |
 | "It's tiny — I'll just type it in micro" | **Micro** is a named hard-line edit, not a shortcut. The advisor IS the maker — no advisor vet for that PR; one **non-Anthropic** reviewer plus per-change owner authorization; pass the quiet-failure question or get an explicit waiver with the risk stated; say what could go wrong before the owner decides. |
+| "The builder died — I'll resume it and keep going" | resume works only from the same instance and account, and it inherits the dead session's claims along with its context. Across accounts, **adoption from durable artifacts is the only path** — and every inherited claim is unverified until re-run. |

@@ -67,7 +67,7 @@ may add a one-line bootstrap note asking the advisor to propose a manual cleanup
 ## Two heroes run your sessions; four serve inside them
 
 **Showrunner** and **Workhorse** are the two session types you actually launch — one
-long-lived advisor per project, one disposable builder per issue. **The Architect**,
+long-lived advisor per project, one active builder per issue. **The Architect**,
 **Review Crew**, **Test-Pilot**, and **Guardian** serve inside those sessions.
 
 ## Showrunner — the advisor session
@@ -88,7 +88,7 @@ a mechanical per-merge checkpoint exists.
 
 ## Workhorse — the builder session
 
-**Takes one routed issue to a ready PR.** A disposable session, one per issue: it writes a
+**Takes one routed issue to a ready PR.** One active builder per issue: it writes a
 short **build brief** (shape, contracts & state, reuse plan, hard seams, rejected
 alternatives, consequential flags), gets it checked pre-code by a fresh reviewer at
 comparable tier and from another vendor, then builds test-first with tiered subagents in small diffs,

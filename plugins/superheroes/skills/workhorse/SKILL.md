@@ -139,6 +139,19 @@ The issue's **owner-ratified scope** beats a general convention argument — you
 convention that argues for more than the issue ratified is a follow-up for the advisor, never a
 silent widening of this diff.
 
+**Adoption intake — when you are taking over a build that stopped.** A launch that hands you an
+existing branch instead of a clean base is still an intake, and it carries two extra duties before
+any work resumes. **First, sweep for work the dead build never pushed** — its worktrees and branches
+hold commits that were never pushed and edits that were never committed, and no PR list or `gh`
+query will show them to you; enumerate them, reconcile against the pushed tip, and adjudicate every
+piece of residue as **integrated**, **subsumed**, or **contested**, in the open, in your first
+durable post, never dropped by omission. **Second, treat every claim you inherit as unverified until
+you re-run it yourself** — a prior session's commit message, PR body, or comment is an input to your
+verification (§8), never a substitute for it; that a receipt was *claimed* is not evidence it was
+*earned*. Point at the full doctrine —
+`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/launch-doctrine.md` § Recovery — and state that **the
+advisor makes the resume-or-adopt call, not you**.
+
 Discovery is the last owner-interactive step. After the go-ahead you set up the workspace and run
 the preflight (§2–§3) as a **checkout while the owner is still here** — the preflight is not
 autonomous work, it is what you do *before* going autonomous. Then **everything else after intake — in the full lane the brief and pre-code check, then the build;
@@ -683,3 +696,4 @@ curation stay with the advisor.
 | "The implementer botched it — escalate to a stronger engine." | Attribution first. In the 0.18.0 wave, order quality outweighed execution ~5:1. A defect the order under-specified (a missing fail-closed edge, an unnamed target file) is an **order** defect — rewrite the order at the same rung, don't blame the engine. |
 | "I'll kick off the implementer and wrap up my turn." | Default: await in-turn (block or background-and-poll inside the turn). Harness-tracked background work dies with the turn; only a **shell/CLI** detach-and-park (charter §7 Channel-conditioned) outlives the turn — a **native subagent has no detach** — and it still ends in a durable park on the issue or PR, not a silent handoff. |
 | "It's committed locally — the PR is ready." | "Ready" requires the **remote** head containing every commit your receipts claim (`git rev-parse origin/<branch>` vs local HEAD). A local-only fix is a claim without a receipt. |
+| "The dead session's PR body says the tests passed — that's my receipt" | it is an inherited claim, not a receipt. Re-run it yourself, and sweep its worktrees for work it never pushed before you build on the pushed tip. |
