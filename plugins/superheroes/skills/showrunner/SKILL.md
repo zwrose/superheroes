@@ -494,6 +494,7 @@ the reviewer and the owner's authorization carry that check instead.**
    round-trip that never touches disk — so **780 green config checks were able to coexist undetected
    with a 3-of-4 live-review failure rate**. This strengthens what the existing `engine-auth` check
    must mean in a wave; it does **not** add a ninth check to the eight-check list above.
+
 ## When you're tempted
 
 | Excuse | Reality |

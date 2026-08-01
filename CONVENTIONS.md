@@ -1122,6 +1122,9 @@ canonical ruling record is `LEDGERS.md` §4.
 **Record fields:** `schema` (`1`), `launchId`, `issue`, `state`, `phase`, `lastDispatch`, `ts`,
 `staleAfterSeconds`, `note`.
 
+**`lastDispatch` sub-schema** (optional; `null` when absent): `kind`, `engine`, `model`, `runId`
+(non-empty strings), `startedAt` (non-empty ISO-8601 UTC string, e.g. `2026-08-01T14:00:00Z`).
+
 **States:** `working`, `awaiting-dispatch`, `blocked`, `parked`, `handback`. **Terminal:**
 `parked`, `handback`.
 

@@ -156,7 +156,7 @@ def _validate_last_dispatch(value):
     for field in ("kind", "engine", "model", "runId"):
         if not isinstance(value[field], str) or not value[field]:
             return False, "heartbeat-last-dispatch-invalid"
-    if not _is_finite_number(value["startedAt"]):
+    if not isinstance(value["startedAt"], str) or not value["startedAt"]:
         return False, "heartbeat-last-dispatch-invalid"
     return True, None
 
@@ -246,14 +246,28 @@ def _classify_record(record, *, launch_id, now):
     }
 
 
+def _unknown_classification(launch_id, reason):
+    return _ok(
+        launchId=launch_id,
+        class_="unknown",
+        state=None,
+        phase=None,
+        lastDispatch=None,
+        ageSeconds=None,
+        staleAfterSeconds=None,
+        note=None,
+        reason=reason,
+    )
+
+
 def _read_file_classification(repo_root, launch_id, *, env=None, now=None):
     if now is None:
         now = time.time()
     if not _validate_launch_id(launch_id):
-        return _fail(REASON_LAUNCH_ID_INVALID)
+        return _unknown_classification(launch_id, REASON_LAUNCH_ID_INVALID)
     path_result = heartbeat_path(repo_root, launch_id, env=env)
     if not path_result["ok"]:
-        return _fail(path_result["reason"])
+        return _unknown_classification(launch_id, path_result["reason"])
     path = path_result["path"]
     if not os.path.isfile(path):
         return _ok(
@@ -416,9 +430,12 @@ def sweep(repo_root, *, env=None, now=None):
     entries = []
     for launch_id in ledger["live"]:
         classified = _read_file_classification(repo_root, launch_id, env=env, now=now)
+        entry_class = classified.get("class_") or classified.get("class")
+        if entry_class not in SWEEP_CLASSES:
+            entry_class = "unknown"
         entry = {
             "launchId": launch_id,
-            "class": classified.get("class_") or classified.get("class"),
+            "class": entry_class,
             "state": classified.get("state"),
             "phase": classified.get("phase"),
             "lastDispatch": classified.get("lastDispatch"),

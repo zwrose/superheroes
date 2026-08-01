@@ -546,3 +546,110 @@ def test_cli_read_prints_json(tmp_path, monkeypatch, capsys):
     assert rc == 0
     assert out["ok"] is True
     assert out["class"] == "fresh"
+
+
+# --- F1: sweep always emits in-contract classes --------------------------------
+
+
+def test_sweep_invalid_launch_id_classifies_unknown_not_none(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    valid_id = "launch-deadbeef"
+    invalid_id = "launch-a.b"
+    ll.declare_batch(repo, "batch-invalid", 2)
+    for launch_id in (valid_id, invalid_id):
+        ll.append(repo, _reserved(launch_id, "batch-invalid", ["x"], repo))
+        ll.append(repo, _started(launch_id))
+    result = hb.sweep(repo, now=1_000_000.0)
+    assert result["ok"] is True
+    for entry in result["launches"]:
+        assert entry["class"] in hb.SWEEP_CLASSES, entry
+    invalid_entry = next(e for e in result["launches"] if e["launchId"] == invalid_id)
+    assert invalid_entry["class"] == "unknown"
+    assert invalid_entry["class"] is not None
+    assert invalid_entry["reason"] == hb.REASON_LAUNCH_ID_INVALID
+
+
+# --- F2: lastDispatch.startedAt is ISO-8601 UTC string -------------------------
+
+
+def _last_dispatch(**overrides):
+    base = {
+        "kind": "implementer",
+        "engine": "cursor",
+        "model": "composer-2.5",
+        "runId": "r1",
+        "startedAt": "2026-08-01T14:00:00Z",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_last_dispatch_iso_started_at_accepted(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    now = 1_000_000.0
+    result = hb.stamp(
+        repo,
+        state="working",
+        phase="dispatch",
+        launch_id="iso-lane",
+        last_dispatch=_last_dispatch(),
+        now=now,
+    )
+    assert result["ok"] is True
+    read_back = hb.read_heartbeat(repo, "iso-lane", now=now)
+    assert read_back["class"] == "fresh"
+    assert read_back["lastDispatch"]["startedAt"] == "2026-08-01T14:00:00Z"
+
+
+def test_last_dispatch_numeric_started_at_refused(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = hb.stamp(
+        repo,
+        state="working",
+        phase="dispatch",
+        launch_id="numeric-lane",
+        last_dispatch=_last_dispatch(startedAt=1_000_000.0),
+        now=1_000_000.0,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "heartbeat-last-dispatch-invalid"
+    path = hb.heartbeat_path(repo, "numeric-lane")
+    assert not os.path.isfile(path["path"])
+
+
+def test_cli_stamp_rejects_numeric_last_dispatch_started_at(tmp_path, monkeypatch, capsys):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setenv(hb.LAUNCH_ID_ENV, "cli-iso")
+    ld = json.dumps(_last_dispatch(startedAt=1_000_000.0))
+    rc = hb.main([
+        "stamp",
+        "--repo-root", repo,
+        "--state", "working",
+        "--phase", "cli",
+        "--last-dispatch", ld,
+    ])
+    out = json.loads(capsys.readouterr().out.strip())
+    assert rc == 1
+    assert out["ok"] is False
+    assert out["reason"] == "heartbeat-last-dispatch-invalid"
+
+
+def test_cli_stamp_accepts_iso_last_dispatch_started_at(tmp_path, monkeypatch, capsys):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setenv(hb.LAUNCH_ID_ENV, "cli-iso-ok")
+    ld = json.dumps(_last_dispatch())
+    rc = hb.main([
+        "stamp",
+        "--repo-root", repo,
+        "--state", "working",
+        "--phase", "cli",
+        "--last-dispatch", ld,
+    ])
+    out = json.loads(capsys.readouterr().out.strip())
+    assert rc == 0
+    assert out["ok"] is True
