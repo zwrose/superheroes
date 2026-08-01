@@ -280,9 +280,10 @@ that worktree**, so a later order's `git checkout --` can never wipe a prior ord
 **Subagents always run flat/synchronous** — never a background agent that spawns another background
 agent (the notification chain breaks).
 
-**Author every order to the five work-order validity rules in `agents/implementer.md`** — measured-or-marked
+**Author every order to the six work-order validity rules in `agents/implementer.md`** — measured-or-marked
 tool output, fail-closed edges enumerated (and echoed back), complete target enumeration keyed to the
-finding, no cosmetic reopen of a verified surface, and a stated shared contract for parallel siblings.
+finding, no cosmetic reopen of a verified surface, a stated shared contract for parallel siblings,
+and an order that adds or changes a detector names the bite-proof it expects.
 Across the 0.18.0 wave, blocking review findings attributed to **order quality over implementer
 execution ~5:1**, so a well-authored order is your cheapest defect prevention. The rules live in one
 place (the implementer template); the implementer is the backstop that flags a violating order, and
@@ -474,6 +475,20 @@ implementer work** — a probe's revert (a subagent's `git checkout --`) has wip
 uncommitted work five times across recent waves despite the memory of it, so the commit itself is the
 mechanical tripwire, not the memory of it (the mutation-probe sibling of §6's commit-between-orders rule).
 
+**A new or changed detector ships with a recorded bite-proof.** The canonical statement — the
+obligation, the four ways a bite-proof is vacuous, the record shape, and the disclosures owed when
+the proof cannot be produced or runs under a normalization — lives in
+`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/bite-proof.md`. **Read it when a build adds one.**
+The implementer produces the proof — **in a lane where you type the change, you produce it yourself,
+to the same record shape**; **you re-run it yourself** — verification authority never delegates,
+exactly as this section's first sentence already says — and **carry the red and green receipts into
+the build record**, per guarded element (**redacted** — secrets, tokens, private URLs, PII — and say
+you did), using the mutation mechanics above (targeted revertible edit through the host's edit
+action; commit the landed work first). At verification, **accept or reject each disclosure and record
+which** — an accepted disclosure names the check that confirmed the proof is genuinely unavailable.
+**A bite-proof claimed without its record is a claim without a receipt** — and a green run alone is
+equally consistent with a detector that cannot fail.
+
 **Proof a review seat may not produce — a change to the repository, or a run the seat cannot or must
 not make — has exactly three sanctioned destinations, and a review seat is never one of them.** A
 review seat is **obliged** never to change the repository and never to claim a run it did not make —
@@ -634,8 +649,10 @@ wrap the build record in `<details><summary>Build record</summary>…</details>`
 **pure owner-side gain**: an agent reading `gh pr view --json body` gets identical raw markdown.
 
 **The build record** — everything §11 already required, **unchanged and unshrunk**, relocated below the
-boundary marker: **in the full lane** the **build brief** plus dispositions table + receipts +
-disclosures; **in the light lane** dispositions table + receipts + disclosures (no brief from §4);
+boundary marker: **in the full lane** the **build brief** plus dispositions table + receipts; **in the
+light lane** dispositions table + receipts (no brief from §4); **for both lanes** bite-proof records
+for every detector the build added or changed (write **None — this build added or changed no
+detector** when there are none) + disclosures;
 plus for both lanes a **dispatch provenance** section — each dispatch (the brief-check reviewer, every
 implementer, every `check-runner`, the pilot, the review-code seats) with the **engine + model** it ran on — each validated
 against the registry allowlist (#600), so the advisor can vet what ran without your context — plus a
@@ -723,3 +740,4 @@ curation stay with the advisor.
 | "I'll kick off the implementer and wrap up my turn." | Default: await in-turn (block or background-and-poll inside the turn). Harness-tracked background work dies with the turn; only a **shell/CLI** detach-and-park (charter §7 Channel-conditioned) outlives the turn — a **native subagent has no detach** — and it still ends in a durable park on the issue or PR, not a silent handoff. |
 | "It's committed locally — the PR is ready." | "Ready" requires the **remote** head containing every commit your receipts claim (`git rev-parse origin/<branch>` vs local HEAD). A local-only fix is a claim without a receipt. |
 | "The dead session's PR body says the tests passed — that's my receipt" | It is an inherited claim, not a receipt. Re-run it yourself, and sweep its worktrees for work it never pushed before you build on the pushed tip. |
+| "The new test passes — that proves the guard works." | A green run is equally consistent with *the code is right* and *this detector cannot fail*. Neutralize the guarded thing, show the detector red **with the detector unedited**, restore, show it green — **per guarded element**, not one representative — and put the receipts in the build record (`rubric/bite-proof.md`). |
