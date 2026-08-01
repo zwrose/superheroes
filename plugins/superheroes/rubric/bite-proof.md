@@ -135,7 +135,7 @@ production.
   detector expected to go red.
 - **Whoever types the change** — **produces** the proof and returns it in the record shape above,
   per guarded element; where the proof cannot be produced, returns the disclosure this file requires
-  instead of silence. It never marks its own work done.
+  instead of silence; a **dispatched implementer** never marks its own work done.
 - **The orchestrator at verification** — **re-runs the proof itself** (verification never delegates),
   carries the receipts into the build record, and **accepts or rejects each disclosure and records
   which**; an accepted disclosure names the check that confirmed the proof is genuinely unavailable

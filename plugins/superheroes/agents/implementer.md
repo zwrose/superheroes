@@ -108,7 +108,8 @@ not already stopped you.
   post-restore `git status --porcelain` so the orchestrator can see the tree came back. Neutralize
   only as a **targeted, reversible edit**; restore **only by the inverse edit** — never
   `git checkout --`, `git restore`, `git reset`, or `git stash`, which have destroyed uncommitted
-  work in the field. Per-element and whole-return captures have a byte ceiling; an over-ceiling
+  work in the field. Per-element and whole-return captures are bounded — at most **32 KiB** per element
+  and **128 KiB** across the whole return; an over-ceiling
   capture is written to a path **outside the repository** that the return names, with the first and
   last lines quoted inline, so the orchestrator reads the rest off disk. Where the proof cannot
   honestly be produced, the return carries one of the three disclosure shapes instead of silence —
