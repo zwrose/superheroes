@@ -21,6 +21,7 @@ if [ "$CURRENT_BRANCH" != "$PR_BRANCH" ]; then
 fi
 """
 
+
 def _git_env():
     return {
         "GIT_AUTHOR_NAME": "Test User",

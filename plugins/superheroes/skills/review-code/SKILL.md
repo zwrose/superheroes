@@ -237,17 +237,13 @@ git worktree add --detach "$SESSION_DIR/repo" "$HEAD_SHA"   # --post / --review-
 **Auto-fix branch guard (PR mode, default loop only).** Before entering the loop, the orchestrator must be in one of two accepted states so fix commits land where they belong: **standing on the PR's branch**, or **an adopted build** whose upstream is `origin/<PR branch>` and whose `HEAD` is exactly the PR head (`$HEAD_SHA`). The second case is safe because the upstream leg proves this local branch **is** the PR's branch adopted (not a coincidental fork), and the SHA leg proves you are standing on the PR's actual state rather than a stale copy.
 
 ```bash
-CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD); LOCAL_HEAD=$(git rev-parse HEAD)
 UPSTREAM_REF=$(git rev-parse --symbolic-full-name '@{upstream}' 2>/dev/null) || UPSTREAM_REF=""
-LOCAL_HEAD=$(git rev-parse HEAD)
 case "$PR_BRANCH" in ""|null) echo "Auto-fix: pr.json has no head branch — refusing (fail closed)."; exit 1;; esac
 case "$HEAD_SHA"   in ""|null) echo "Auto-fix: pr.json has no head SHA — refusing (fail closed)."; exit 1;; esac
-if [ "$CURRENT_BRANCH" != "$PR_BRANCH" ] \
-   && ! { [ "$UPSTREAM_REF" = "refs/remotes/origin/$PR_BRANCH" ] && [ "$LOCAL_HEAD" = "$HEAD_SHA" ]; }; then
-  echo "Auto-fix needs the PR's branch '$PR_BRANCH' (currently on '$CURRENT_BRANCH')."
-  echo "An ADOPTED build also qualifies, but only when BOTH hold: upstream is 'refs/remotes/origin/$PR_BRANCH' (found '${UPSTREAM_REF:-none}') AND HEAD is the PR head '$HEAD_SHA' (found '$LOCAL_HEAD')."
-  echo "Otherwise check out the branch, or re-run with --post (read-only GitHub) or --review-only (read-only terminal)."
-  exit 1
+if [ "$CURRENT_BRANCH" != "$PR_BRANCH" ] && ! { [ "$UPSTREAM_REF" = "refs/remotes/origin/$PR_BRANCH" ] && [ "$LOCAL_HEAD" = "$HEAD_SHA" ]; }; then
+  echo "Auto-fix needs the PR's branch '$PR_BRANCH' (currently on '$CURRENT_BRANCH'). An ADOPTED build also qualifies, but only when BOTH hold: upstream is 'refs/remotes/origin/$PR_BRANCH' (found '${UPSTREAM_REF:-none}') AND HEAD is the PR head '$HEAD_SHA' (found '$LOCAL_HEAD')."
+  echo "Otherwise check out the branch, or re-run with --post (read-only GitHub) or --review-only (read-only terminal)."; exit 1
 fi
 ```
 
