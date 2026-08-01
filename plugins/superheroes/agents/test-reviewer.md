@@ -44,9 +44,12 @@ Collect findings under these named smells; **every finding cites its smell by na
 - **network-mock mix** — a test mixes the global network-mock layer with a direct network-primitive stub, or leaks a module-scope network assignment across files.
 - **async-assertion gap** — a synchronous assertion immediately after awaited async work that hasn't settled.
 - **cleanup leak** — missing render cleanup or mock reset/restore, so state leaks between tests.
-- **unproven-detector** — a diff-added detector (a test, assertion, guard clause, validator, or CI
+- **unproven-detector** — a diff-added detector (a test function, guard clause, validator, or CI
   check whose purpose is to fail when something is wrong) with nothing in the diff saying what it
-  bites on, or with an owed disclosure absent. The band's rule is in `rubric/bite-proof.md`.
+  bites on, or with an owed disclosure absent. The axis line is owed **once per detector unit** —
+  not per assertion inside one — and a file- or suite-level line naming what the file bites on
+  satisfies it for every detector in that file. Everything needed to apply this smell is in this
+  file; `rubric/bite-proof.md` is the plugin's own reference.
 
 ## What to Flag
 
@@ -112,8 +115,10 @@ Collect findings under these named smells; **every finding cites its smell by na
 - A detector whose guarded input plainly cannot reach it through the path the test uses (the *inert
   test* case) — flag it; the fix is the unit-level proof plus the disclosure, not a stronger
   assertion on an unreachable path.
-- A test that pins a clock, environment, configuration, or concurrency without saying what
-  production shape the pin makes unobservable.
+- A test that pins a clock, environment, configuration, or concurrency **when the pin plausibly
+  hides the failure mode the test claims to catch** (a pinned clock in a timing or interleaving
+  test, a pinned concurrency in a race test, a pinned environment in a test whose claim is
+  environment-dependent) without saying what production shape the pin makes unobservable.
 
 ## Do NOT Flag
 
@@ -125,6 +130,9 @@ Collect findings under these named smells; **every finding cites its smell by na
 - Component logic or architecture concerns — `architecture-reviewer`'s domain.
 - Security claims about the code being tested (e.g., "this route looks vulnerable") — `security-reviewer`'s domain.
 - Convention drift in production code (error constants, exports, required directives) — `code-reviewer`'s domain. A `test-reviewer` finding is about the _test_, not the source under test.
+- Isolation fixtures that exist to make a test hermetic rather than to normalize away the guarded
+  behaviour — a tmp path, a test-only env root, or similar scaffolding that hides no production
+  shape.
 - Anything in the base rubric's global "Do NOT Flag" list or the profile's scope exclusions.
 
 ## Verification Rules
@@ -137,12 +145,13 @@ Run the base rubric's in-pass **Chain-of-Verification** (citation-in-scope → r
 4. **Before flagging "missing unauthorized test":** confirm the handler actually performs auth. If it has no auth, the unauthorized case isn't applicable yet — `architecture-reviewer` or `security-reviewer` should flag the missing auth, not you.
 5. **Before flagging "claim mismatch":** read the test body. Verify the input setup matches the test name's claim (the unauthenticated condition for "returns unauthorized", an empty collection for "handles empty input", etc.).
 6. **Before flagging unproven-detector:** confirm the detector is **added by this diff** — you may
-   flag only what the diff shows. You cannot see the build record, so never assert that a receipt is
-   missing, and never propose running a proof yourself — a review seat never changes the repository.
-   Apply the mutation-survival lens in priority category 2: if you can picture a plausible mutant the
-   test would not catch, that is a separate finding under **mock-echo** or **claim/test mismatch**;
-   **unproven-detector** is for detectors the diff adds with no stated axis or an owed disclosure
-   absent from the diff.
+   flag only what the diff shows. Check the **in-diff disclosure at the detector** — its presence
+   and whether it carries its required fields — and never the build record, which is not among your
+   inputs. Never assert that a receipt is missing, and never propose running a proof yourself — a
+   review seat never changes the repository. Apply the mutation-survival lens in priority category 2:
+   if you can picture a plausible mutant the test would not catch, that is a separate finding under
+   **mock-echo** or **claim/test mismatch**; **unproven-detector** is for detectors the diff adds
+   with no stated axis or an owed disclosure absent from the diff.
 7. **Diff-scope rule** (per the base rubric): only flag code on `+`/`-` lines. Pre-existing test smells in context lines → SKIP.
 8. **Single-pass discipline** (per the base rubric): one review per dispatch.
 

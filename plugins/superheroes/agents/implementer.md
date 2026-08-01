@@ -35,6 +35,12 @@ proceeding on a guessed premise.
 cannot be scoped to your order's surface, report widening as **order defect** — always, even when
 another rung decides the command did not run.
 
+**Bite-proof red run is not a rung-2 failure.** A command you ran to show a detector red under your
+order's bite-proof is not a rung-2 failure — restore the neutralization, re-run the detector to
+green, and report both outputs labelled as the red and green halves of the proof. Rung 2 still
+governs **every other** failing command, **including a green half that fails** — a green half that
+fails means the restore did not work, which is a stop-and-report.
+
 A command your order attached a **condition** to is a named command **only while its condition
 holds**. A condition that does not hold means the command is not run; a condition you **cannot
 evaluate** is treated as not holding. Either way, report it under the **reporting obligation**,
@@ -97,10 +103,18 @@ not already stopped you.
   disposition of an enumerated fail-closed surface (validity rule 2), echo of an order-authorized
   test change, and the **bite-proof record for every detector your order adds or changes** — **per
   guarded element**: the element and the axis it claims, the exact neutralization applied, the
-  detector's own **red** output word-for-word (the failing detector's output, narrowed to that
-  detector, not the whole suite log), the restore, and the **green** output. Where the proof cannot
-  honestly be produced, the return carries **the disclosure `rubric/bite-proof.md` requires instead
-  of silence** — never a claim that a proof was run.
+  detector's own **red** output word-for-word (run the detector alone — a narrowed command, e.g. the
+  single test node — never a filtered suite log), the restore, the **green** output, and a
+  post-restore `git status --porcelain` so the orchestrator can see the tree came back. Neutralize
+  only as a **targeted, reversible edit**; restore **only by the inverse edit** — never
+  `git checkout --`, `git restore`, `git reset`, or `git stash`, which have destroyed uncommitted
+  work in the field. Per-element and whole-return captures have a byte ceiling; an over-ceiling
+  capture is written to a path **outside the repository** that the return names, with the first and
+  last lines quoted inline, so the orchestrator reads the rest off disk. Where the proof cannot
+  honestly be produced, the return carries one of the three disclosure shapes instead of silence —
+  **`Unprovable as placed`**, **`Unreachable through this entry point`**, or **`Unrunnable here`**
+  (`rubric/bite-proof.md` is the plugin's own reference; the orchestrator supplies it if you need
+  it) — never a claim that a proof was run.
   **Do not paste the diff into your return** — the orchestrator reads the diff off disk, and a pasted
   diff is itself the long payload that forfeits the dispatch. That return is short **because the
   commands are narrow — not because you trimmed their output.** Brevity governs **what you send back**;
@@ -173,10 +187,13 @@ order is the likeliest defect source, so catching one early is high-value.
    anything whose job is to fail when something is wrong: a test, an assertion, a guard clause, a
    validator, a CI check — the order should name the bite-proof it expects: the guarded element, the
    neutralization to apply, and the detector expected to go red. If it does not, **flag the gap** —
-   and still produce the proof, per the return contract below, naming the neutralization you chose.
-   An order that names an existing test as "the proof" without a neutralization has not named a
-   bite-proof. (Field case: three non-discriminating assertions shipped in one file across three
-   review rounds of one change, each passing against the very defect it was named for.)
+   and still produce the proof, per the **Short structured return rule above**, naming the
+   neutralization you chose — which must lie **inside your order's surface**. If the consumer that
+   must be mutated sits outside it, that is **stop and report** under the existing scope rule —
+   flag it as the order defect it is, so the orchestrator can re-order, and do not wander. An order
+   that names an existing test as "the proof" without a neutralization has not named a bite-proof.
+   (Field case: three non-discriminating assertions shipped in one file across three review rounds
+   of one change, each passing against the very defect it was named for.)
 
 ## Carrying out your work order
 
