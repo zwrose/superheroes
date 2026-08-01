@@ -116,9 +116,10 @@ Three markers, **all written by the advisor at vet time**, after handback:
   immediately above what you write there. The slot is **append-only and yours**: you edit your own
   prior text in place, never the builder's prose. **What this marker detects is the hidden case:** a
   body rewrite that **re-creates the heading but drops your text** leaves the slot looking present and
-  saying nothing, and the absent marker is the only thing that tells that apart from a slot you have
-  not written yet. (A rewrite that drops the heading entirely is visible without it.) Re-add your write
-  when the marker is gone.
+  saying nothing — that is a slot whose text was dropped, distinct from one you have not written yet.
+  (A rewrite that drops the heading entirely is visible without it.) The marker alone is **not
+  sufficient**: a slot can be marker-present and text-stale. The showrunner charter's **duty 4**
+  backstop is where the check and remedy live — follow that, not a marker-keyed rule here.
 
 **No review seat checks these at review time.** A build's pre-handback review runs in branch mode,
 before a PR body or a vet exists, so their absence during a review is the normal state and is never a

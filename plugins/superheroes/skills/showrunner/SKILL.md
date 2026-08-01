@@ -284,9 +284,9 @@ the reviewer and the owner's authorization carry that check instead.**
      another load's maturity. **A dispatched grounding seat does not retire it** — when one lands, you
      become the backstop for that seat being absent, vacuous, or misconfigured.
    - **Write your verdict into the PR's owner half** — the `## Advisor vet` slot the builder leaves
-     empty (the **workhorse** charter has the builder create it, and re-add *the slot* if it rewrites
-     the body; **preserving what you wrote there is not something that charter guarantees today**, so
-     the backstop below is yours). **The verdict
+     empty (the **workhorse** charter has the builder create it, and **the workhorse charter's §11
+     governs what a builder must preserve when it rewrites the body**; that guarantee is prose with
+     no mechanical check, so the backstop below is still yours). **The verdict
      plus a pointer to the receipt, and nothing else by default:** consequence up, mechanism down —
      probes, accounting and dispositions are mechanism, but *an independent reader checked this, and
      this is what they concluded* is the most merge-relevant single fact on the page, and today it lives
@@ -300,10 +300,14 @@ the reviewer and the owner's authorization carry that check instead.**
      `<!-- superheroes:advisor-vet -->` above what you write. **Post the receipt first, then write the
      owner half that points at it** — in that order, a failure between the two leaves a receipt with no
      pointer (visible, and recoverable by writing the pointer), never a verdict pointing at a receipt
-     that does not exist. **Check the marker whenever you next read this PR's body — a re-vet, a
-     re-review, or the read before you hand it back to the owner — not only at a formal re-vet:** a body rewrite that re-created the heading but dropped your text leaves the slot
-     looking present and saying nothing, and the missing marker is the only thing that distinguishes
-     the two — re-add your write when it is gone.
+     that does not exist. **Check the slot whenever you next read this PR's body — a re-vet, a
+     re-review, or the read before you hand it back to the owner — not only at a formal re-vet:**
+     compare its text against what you actually wrote — your **most recent** vet receipt comment is
+     your canonical copy, not merely whether the marker is there. Two distinct losses: a body rewrite that
+     re-created the heading but dropped your text (marker gone — the case a marker check already
+     caught), and a rewrite that carried an older copy of your write forward over a newer one (marker
+     present, text stale — invisible to a marker check, which is why presence alone is not enough).
+     Re-write your text and re-stamp the marker when either is missing or stale.
    - **Timing: async by default; what binds you is the show-it level, not attendance.** Interactivity
      was never an independent axis — the presentation call (duty 5) already says when the owner must
      *see* something, so the vet's timing follows from it and mints no new vocabulary. **say it** and
