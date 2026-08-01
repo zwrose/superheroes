@@ -20,6 +20,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import engine_pref  # noqa: E402
 import launch_doctrine  # noqa: E402
 import launch_ledger as ll  # noqa: E402
 import model_registry  # noqa: E402
@@ -112,33 +113,49 @@ def _fail(reason, **extra):
 
 
 def _claude_dispatch_tokens():
-    tokens = set()
-    for role in model_registry.roles():
-        for model_id, effort in model_registry.allowlist(role, "claude"):
-            tok = model_registry.dispatch_token("claude", model_id, effort)
-            if tok is not None:
-                tokens.add(tok)
-    return tokens
+    return model_registry.claude_dispatch_tokens()
 
 
-def _default_opus_token(tokens):
-    if "opus" in tokens:
-        return "opus"
-    return None
-
-
-def _resolve_model(model):
+def _resolve_model(model, repo_root):
+    """Resolve the launch model token + where it came from. Never raises."""
     tokens = _claude_dispatch_tokens()
     if not tokens:
         return _fail("model-default-unavailable")
-    if model is None:
-        default = _default_opus_token(tokens)
-        if default is None:
-            return _fail("model-default-unavailable")
-        return {"ok": True, "token": default, "tokens": tokens}
-    if model not in tokens:
-        return _fail("model-not-registry-known")
-    return {"ok": True, "token": model, "tokens": tokens}
+    if model is not None:
+        if model not in tokens:
+            return _fail("model-not-registry-known")
+        return {
+            "ok": True,
+            "token": model,
+            "tokens": tokens,
+            "resolution": {"tier": model, "source": "explicit", "reason": None},
+        }
+    loaded = engine_pref.load_builder_dispatch_tier(repo_root)
+    tier = loaded["tier"]
+    if tier in tokens:
+        return {
+            "ok": True,
+            "token": tier,
+            "tokens": tokens,
+            "resolution": {
+                "tier": tier,
+                "source": loaded["source"],
+                "reason": loaded["reason"],
+            },
+        }
+    fallback = engine_pref.BUILDER_DISPATCH_TIER_DEFAULT
+    if fallback not in tokens:
+        return _fail("model-default-unavailable")
+    return {
+        "ok": True,
+        "token": fallback,
+        "tokens": tokens,
+        "resolution": {
+            "tier": fallback,
+            "source": "invalid-config-default",
+            "reason": "model-not-registry-known:%s" % tier,
+        },
+    }
 
 
 def _parse_iso8601(value):
@@ -461,11 +478,12 @@ def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None):
     if own_line not in prompt:
         return _fail("compose-ruling-zero-absent")
 
-    model_result = _resolve_model(model)
+    model_result = _resolve_model(model, repo_root)
     if not model_result["ok"]:
         return model_result
 
     token = model_result["token"]
+    resolution = model_result["resolution"]
     argv = ["claude", "--model", token, "-p", prompt]
     return {
         "ok": True,
@@ -473,6 +491,11 @@ def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None):
         "prompt": prompt,
         "argv": argv,
         "model": token,
+        "modelResolution": {
+            "tier": resolution["tier"],
+            "source": resolution["source"],
+            "reason": resolution["reason"],
+        },
         "doctrine": doctrine,
     }
 
@@ -687,6 +710,8 @@ def launch_build(
     doctrine = compose_result["doctrine"]
     argv = compose_result["argv"]
 
+    resolution = compose_result["modelResolution"]
+    model_reason = resolution["reason"]
     reserved = {
         "event": "reserved",
         "launchId": launch_id,
@@ -701,6 +726,8 @@ def launch_build(
         "argv": argv,
         "doctrineDigest": doctrine["digest"],
         "model": compose_result["model"],
+        "modelSource": resolution["source"],
+        "modelReason": model_reason if model_reason is not None else "",
     }
     reserve_result = ll.reserve(repo_root, reserved, env=env)
     if not reserve_result["ok"]:
@@ -849,6 +876,8 @@ def launch_build(
                 "logPath": log_path,
                 "errPath": err_path,
                 "attempt": attempt,
+                "model": compose_result["model"],
+                "modelResolution": compose_result["modelResolution"],
             }
 
         evidence = "exit-zero" if rc == 0 else "nonzero-exit:%s" % rc
@@ -884,9 +913,15 @@ def _try_reserve_for_refusal(repo_root, launch_id, issue, premise, preflight_res
     checks = (preflight_result or {}).get("checks") or []
     argv = []
     model_token = ""
+    model_source = ""
+    model_reason = ""
     if compose_result and compose_result.get("ok"):
         argv = compose_result.get("argv") or []
         model_token = compose_result.get("model") or ""
+        resolution = compose_result.get("modelResolution") or {}
+        model_source = resolution.get("source", "")
+        reason = resolution.get("reason")
+        model_reason = reason if reason is not None else ""
     reserved = {
         "event": "reserved",
         "launchId": launch_id,
@@ -901,6 +936,8 @@ def _try_reserve_for_refusal(repo_root, launch_id, issue, premise, preflight_res
         "argv": argv,
         "doctrineDigest": digest,
         "model": model_token,
+        "modelSource": model_source,
+        "modelReason": model_reason,
     }
     result = ll.reserve(repo_root, reserved, env=env)
     return {"reserved": result["ok"]}

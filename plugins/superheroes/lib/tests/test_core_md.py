@@ -2202,3 +2202,168 @@ def test_profile_structural_refusal_none_when_no_core_md(tmp_path):
     repo = str(tmp_path)
     store = str(tmp_path / "store")
     assert CM.profile_structural_refusal(repo, root=store) is None
+
+
+# ---------------------------------------------------------------------------
+# issue #755 — write_builder_dispatch_tier surgical writer
+# ---------------------------------------------------------------------------
+
+_BUILDER_SIBLING_PREFS = {
+    "reviewer": "codex",
+    "implementation": "cursor",
+    "codexModels": {"build": "gpt-4"},
+}
+
+
+def _write_core_for_builder_tests(tmp_path, prefs=None, show_it=None):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    facts = dict(_CORE_FACTS)
+    if prefs is not None:
+        facts["enginePreferences"] = dict(prefs)
+    if show_it is not None:
+        facts["showItSurface"] = show_it
+    CM.write(repo, facts, "confirmed", root=store, now="2026-06-26")
+    return repo, store
+
+
+def test_write_builder_dispatch_tier_written_and_parses(tmp_path):
+    repo, store = _write_core_for_builder_tests(tmp_path)
+    res = CM.write_builder_dispatch_tier(repo, "sonnet", root=store)
+    assert res["action"] == "written"
+    got = CM.read(repo, root=store)
+    assert got["enginePreferences"]["builderDispatchTier"] == "sonnet"
+
+
+def test_write_builder_dispatch_tier_sibling_preservation(tmp_path):
+    repo, store = _write_core_for_builder_tests(tmp_path, prefs=_BUILDER_SIBLING_PREFS)
+    res = CM.write_builder_dispatch_tier(repo, "sonnet", root=store)
+    assert res["action"] == "written"
+    got = CM.read(repo, root=store)
+    prefs = got["enginePreferences"]
+    assert prefs["builderDispatchTier"] == "sonnet"
+    assert prefs["reviewer"] == "codex"
+    assert prefs["implementation"] == "cursor"
+    assert prefs["codexModels"] == {"build": "gpt-4"}
+
+
+def test_write_builder_dispatch_tier_prose_preservation(tmp_path):
+    repo, store = _write_core_for_builder_tests(tmp_path, show_it=_SHOW_IT_BODY)
+    path = CM.core_path(repo, store)
+    before = open(path, encoding="utf-8").read()
+    threat_before = CM._section(before, "Threat model")
+    patterns_before = CM._section(before, "Canonical patterns")
+    show_it_before = CM._section(before, "Show-it surface")
+    res = CM.write_builder_dispatch_tier(repo, "sonnet", root=store)
+    assert res["action"] == "written"
+    after = open(path, encoding="utf-8").read()
+    assert CM._section(after, "Threat model") == threat_before
+    assert CM._section(after, "Canonical patterns") == patterns_before
+    assert CM._section(after, "Show-it surface") == show_it_before
+
+
+def test_write_builder_dispatch_tier_noop_when_unchanged(tmp_path):
+    repo, store = _write_core_for_builder_tests(
+        tmp_path, prefs={"builderDispatchTier": "sonnet"})
+    CM.write_builder_dispatch_tier(repo, "sonnet", root=store)
+    res = CM.write_builder_dispatch_tier(repo, "sonnet", root=store)
+    assert res["action"] == "noop"
+
+
+def test_write_builder_dispatch_tier_clear_removes_key_preserves_siblings(tmp_path):
+    repo, store = _write_core_for_builder_tests(
+        tmp_path, prefs=dict(_BUILDER_SIBLING_PREFS, builderDispatchTier="sonnet"))
+    res = CM.write_builder_dispatch_tier(repo, None, root=store)
+    assert res["action"] == "written"
+    got = CM.read(repo, root=store)
+    assert "builderDispatchTier" not in got["enginePreferences"]
+    assert got["enginePreferences"]["reviewer"] == "codex"
+    assert got["enginePreferences"]["implementation"] == "cursor"
+    assert got["enginePreferences"]["codexModels"] == {"build": "gpt-4"}
+
+
+def test_write_builder_dispatch_tier_clear_noop_when_already_absent(tmp_path):
+    repo, store = _write_core_for_builder_tests(tmp_path, prefs=_BUILDER_SIBLING_PREFS)
+    res = CM.write_builder_dispatch_tier(repo, None, root=store)
+    assert res["action"] == "noop"
+
+
+@pytest.mark.parametrize("tier,reason", [
+    ("fable", "fable-never-a-launch-default"),
+    ("nonsense", "builder-tier-not-sanctioned:nonsense"),
+    (True, "builder-tier-not-a-string"),
+    (5, "builder-tier-not-a-string"),
+    ({}, "builder-tier-not-a-string"),
+    ("   ", "builder-tier-empty"),
+])
+def test_write_builder_dispatch_tier_refused_invalid_tier_byte_identical(
+        tmp_path, tier, reason):
+    repo, store = _write_core_for_builder_tests(
+        tmp_path, prefs=dict(_BUILDER_SIBLING_PREFS, builderDispatchTier="opus"))
+    path = CM.core_path(repo, store)
+    before = open(path, encoding="utf-8").read()
+    res = CM.write_builder_dispatch_tier(repo, tier, root=store)
+    assert res["action"] == "refused"
+    assert res["reason"] == reason
+    after = open(path, encoding="utf-8").read()
+    assert after == before
+
+
+def test_write_builder_dispatch_tier_refused_absent_core(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.mode_registry.ensure_project_store(repo, store)
+    res = CM.write_builder_dispatch_tier(repo, "sonnet", root=store)
+    assert res["action"] == "refused"
+    assert res["reason"] == CM.BUILDER_DISPATCH_REASON_ABSENT
+
+
+def test_write_builder_dispatch_tier_behind_refuses(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    facts = dict(_CORE_FACTS)
+    text = CM.render_core(facts, "confirmed", "2026-06-26", "2026-06-26")
+    text = text.replace(
+        '"schemaVersion": %d' % CM.SCHEMA_VERSION,
+        '"schemaVersion": %d' % (CM.SCHEMA_VERSION + 1),
+        1,
+    )
+    text = text.replace(
+        "schemaVersion=%d" % CM.SCHEMA_VERSION,
+        "schemaVersion=%d" % (CM.SCHEMA_VERSION + 1),
+        1,
+    )
+    CM.mode_registry.ensure_project_store(repo, store)
+    path = CM.core_path(repo, store)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "w").write(text)
+    before = open(path, encoding="utf-8").read()
+    res = CM.write_builder_dispatch_tier(repo, "sonnet", root=store)
+    assert res["action"] == "behind"
+    after = open(path, encoding="utf-8").read()
+    assert after == before
+
+
+def test_cli_write_builder_tier_from_stdin(tmp_path, capsys, monkeypatch):
+    import io
+
+    repo, store = _write_core_for_builder_tests(tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO("sonnet"))
+    rc = CM.main(["write-builder-tier", "--cwd", repo, "--root", store])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["action"] == "written"
+    assert CM.read(repo, root=store)["enginePreferences"]["builderDispatchTier"] == "sonnet"
+
+
+def test_cli_write_builder_tier_empty_stdin_clears(tmp_path, capsys, monkeypatch):
+    import io
+
+    repo, store = _write_core_for_builder_tests(
+        tmp_path, prefs={"builderDispatchTier": "sonnet"})
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    rc = CM.main(["write-builder-tier", "--cwd", repo, "--root", store])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["action"] == "written"
+    assert "builderDispatchTier" not in CM.read(repo, root=store)["enginePreferences"]

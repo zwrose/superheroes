@@ -632,3 +632,22 @@ def test_vet_receipt_markers_match_conventions_10_7():
         "showrunner/SKILL.md carries no vet-receipt marker literal at all — it tells the advisor to "
         "stamp one and to re-check it whenever it next reads the PR body"
     )
+
+
+def test_showrunner_charter_carries_builder_dispatch_tier_doctrine():
+    """§11: the loaded advisor surface must carry the builder-dispatch tier rule keyed to
+    model_registry.FABLE_NEVER_DEFAULT — builder launches default to opus; fable is never a launch
+    default. A failure means the rule drifted out of the charter the advisor actually loads."""
+    import model_registry
+
+    assert model_registry.FABLE_NEVER_DEFAULT is True
+    text = _read("skills/showrunner/SKILL.md").lower()
+    # Substantive phrases — tolerate rewording of punctuation and bolding.
+    assert "never a launch default" in text, (
+        "showrunner/SKILL.md missing the fable-never-default clause — "
+        "advisor sessions will not see that fable is refused as a builder launch tier"
+    )
+    assert "headless builder" in text and "opus" in text, (
+        "showrunner/SKILL.md missing the opus builder-launch default — "
+        "advisor sessions may let launches inherit the account default tier"
+    )

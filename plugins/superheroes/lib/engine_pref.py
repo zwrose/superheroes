@@ -162,11 +162,10 @@ def load_builder_dispatch_tier(cwd, root=None):
         prefs = load_engine_prefs(cwd, root)
         return resolve_builder_dispatch_tier(prefs)
     except Exception as exc:
-        import core_md
         return {
             "tier": default,
             "source": "unreadable-default",
-            "reason": "builder-tier-load-failed: %s" % core_md.gate_refusal_detail(exc),
+            "reason": "builder-tier-load-failed: %s" % ("%s: %s" % (type(exc).__name__, exc)),
         }
 
 
@@ -578,6 +577,5 @@ def load_engine_prefs(cwd, root=None):
         prefs = core_md.gate_config_usable_prefs(cfg)
         return _normalize_engine_preferences_block(prefs)
     except Exception as exc:
-        import core_md
         return refusal_engine_prefs(
-            "engine-pref-load-failed: %s" % core_md.gate_refusal_detail(exc))
+            "engine-pref-load-failed: %s" % ("%s: %s" % (type(exc).__name__, exc)))
