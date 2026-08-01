@@ -425,17 +425,31 @@ the reviewer and the owner's authorization carry that check instead.**
    preflight**. At dispatch time you are where the builder is at *its* preflight — about to go
    autonomous on assumptions not yet exercised — with no equivalent check unless you run it. **Eight
    checks:**
-   1. **Account and quota headroom** — a mid-batch weekly-limit death killed a launch outright.
-   2. **Engine and CLI authentication** — relaunch practice, not policy, until this makes it policy.
-   3. **Base state matches the premise** — merged, green (stale-retarget premise; stacked-base
+<!-- launch-doctrine:preflight-charter:begin -->
+   1. **Account and quota headroom** (`quota`, always) — a mid-batch weekly-limit death killed a launch outright.
+   2. **Engine and CLI authentication** (`engine-auth`, always) — relaunch practice, not policy, until this makes it policy.
+   3. **Base state matches the premise** (`base-state`, always) — merged, green (stale-retarget premise; stacked-base
       collapses).
-   4. **Surfaces genuinely disjoint**, if launching in parallel — claimed disjointness was wrong once.
-   5. **Workspace isolation, one per build** — the shared-checkout collision.
-   6. **Standing rulings present verbatim**, not reconstructed from memory — that collision's direct
+   4. **Surfaces genuinely disjoint**, if launching in parallel (`disjoint-surfaces`, conditional) — claimed disjointness was wrong once.
+   5. **Workspace isolation, one per build** (`workspace-isolation`, always) — the shared-checkout collision.
+   6. **Standing rulings present verbatim**, not reconstructed from memory (`standing-rulings`, conditional) — that collision's direct
       cause.
-   7. **Owner-capability preconditions cleared, with a stated duration** (see below).
-   8. **Grant state** — whether one exists, its scope, and its exclusions; **failing** means no
+   7. **Owner-capability preconditions cleared, with a stated duration** (`owner-capability`, conditional) (see below).
+   8. **Grant state** (`grant-state`, conditional) — whether one exists, its scope, and its exclusions; **failing** means no
       grant, or work outside the grant's enumerated scope.
+<!-- launch-doctrine:preflight-charter:end -->
+   **Invoke the launcher — never hand-compose a launch.** Run
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/launcher.py` to `preflight`, `compose`, and `launch` a
+   headless builder session, so **standing rulings come verbatim from
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/launch-doctrine.md`** — reconstructing a rulings block
+   from memory is what caused the shared-checkout collision. Supply the **eight checks above as data**;
+   the tool records each and the go/no-go. **`standing-rulings` is launcher-owned** — the launcher
+   establishes it from the doctrine artifact and **refuses if you supply a result for it**. **Declare a
+   batch before its launches**; **record every terminal outcome** with `record-outcome` — handback, park,
+   refusal, or died — because an unrecorded outcome makes the batch unreadable rather than clean. **After
+   a batch, run `count`** and read it honestly: **`indeterminate` means the record cannot see the whole
+   batch and must be resolved, not waved through**; a fully-resolved batch with **zero parks and zero
+   refusals is a signal to inspect, never a clean sheet**.
    **Scale with the batch:** checks **1–3 and 5** (quota, engine auth, base state, workspace
    isolation) are cheap mechanical checks that **always run**; **4, 6, 7, and 8** only when the work
    needs them. Every check is recorded **ran** or **N/A** in the dispatch durable record — an N/A
