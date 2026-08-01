@@ -140,19 +140,17 @@ convention that argues for more than the issue ratified is a follow-up for the a
 silent widening of this diff.
 
 **Adoption intake — when you are taking over a build that stopped.** A launch that hands you an
-existing branch instead of a clean base is still an intake, and it carries two extra duties before
-any work resumes. **First, sweep for work the dead build never pushed** — its worktrees and branches
-hold commits that were never pushed and edits that were never committed, and no PR list or `gh`
-query will show them to you; enumerate them, reconcile against the pushed tip, and adjudicate every
-piece of residue as **integrated**, **subsumed**, or **contested** in your first durable post —
-carry the adjudication and its reasoning, not verbatim residue content; anything quoted is redacted
-the same way the launch-prompt rule above requires (secrets, tokens, private URLs, PII), and the
-redaction is stated — never dropped by omission. **Second, treat every claim you inherit as unverified until
-you re-run it yourself** — a prior session's commit message, PR body, or comment is an input to your
-verification (§8), never a substitute for it; that a receipt was *claimed* is not evidence it was
-*earned*. Point at the full doctrine —
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/launch-doctrine.md` § Recovery — and state that **the
-advisor makes the resume-or-adopt call, not you**.
+existing branch instead of a clean base is still an intake, with two extra duties before any work
+resumes. **First, sweep for work the dead build never pushed** — its worktrees and branches hold
+commits and edits no PR list or `gh` query will show; enumerate them, reconcile against the pushed
+tip, and adjudicate every piece of residue as **integrated**, **subsumed**, or **contested** in your
+first durable post — carry the adjudication and its reasoning, not verbatim residue content
+(anything quoted is redacted per the launch-prompt rule above, and the redaction is stated — never
+dropped by omission). **Second, treat every claim you inherit as unverified until you re-run it
+yourself** — a prior session's commit message, PR body, or comment is an input to your verification
+(§8), never a substitute for it; that a receipt was *claimed* is not evidence it was *earned*. The
+full doctrine is `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/launch-doctrine.md` § Recovery — and
+**the advisor makes the resume-or-adopt call, not you**.
 
 Discovery is the last owner-interactive step. After the go-ahead you set up the workspace and run
 the preflight (§2–§3) as a **checkout while the owner is still here** — the preflight is not
@@ -173,10 +171,9 @@ autonomous with a mismatched root.
 
 **Second, before your first write — assert you are in your own build worktree.** `git rev-parse --show-toplevel`
 must resolve to a dedicated build worktree, **never the primary checkout** and never a tree another live session
-controls; if it does not, create one (`git worktree add`) and switch to it before writing anything. A shared tree
-is how a sibling session's `git checkout` wiped a sibling's uncommitted work twice on 2026-07-25 (#629/#630) — this
-check puts the guarantee where it survives a launch-prompt omission, complementing (not replacing) the playbook's
-standing rulings.
+controls; if it does not, create one (`git worktree add`) and switch to it before writing anything (#629/#630: a
+shared tree let one session's `git checkout` wipe a sibling's uncommitted work twice — this check puts the
+guarantee where it survives a launch-prompt omission, complementing the playbook's standing rulings).
 
 Your own worktree + branch off the issue's base, and **bring the app up** the way test-pilot will
 run it (dev server, any login/seed the app needs to be usable). **No running app (a plugin, library,
@@ -197,13 +194,11 @@ approval is in place, only by using it:
   every approval and credential it needs to reach *all* the app before test-pilot depends on it — an
   auth wall it can't pass is exactly what would stall you mid-run.
 - **The cross-vendor CLI** — one harmless authenticated call.
-- **`gh`** — confirm sign-in **and exercise one real `gh` write**, not just a read. Auto-mode
-  permission classification gates `gh` **writes** (issue/PR comments, edits) **separately from
-  reads**, so a green `gh auth status` (a read) does not prove a `gh issue comment` (a write) will
-  clear mid-run — and a write blocked hours into a headless run is a lost intake receipt, not a
-  caught failure (weekly-eats we#498/we#499; #526 permission-surface evidence). The concrete write
-  probe and its mechanics live with the checklist in the preflight reference (§A.3) — don't restate
-  them here.
+- **`gh`** — confirm sign-in **and exercise one real `gh` write**, not just a read: auto-mode
+  permission classification gates `gh` **writes separately from reads**, so a green `gh auth status`
+  does not prove a `gh issue comment` will clear mid-run — and a write blocked hours into a headless
+  run is a lost intake receipt, not a caught failure (we#498/we#499; #526). The concrete write probe
+  lives with the checklist in the preflight reference (§A.3) — don't restate it here.
 
 **When the build has no running app** (a plugin/library/docs change with no browser-drivable
 surface), the browser/test-pilot live-exercise probe is **N/A** — there is nothing to drive. Run the
@@ -254,14 +249,13 @@ fold its findings in, or dispute each with a reason. Post the dispositions.
 
 **Only a terminal forfeit licenses that Claude fallback.** The substitution is earned when the
 cross-vendor dispatch **terminally forfeits** — its structural timeout fired, or it returned no final
-output at all — and **not before**: a *risk* of forfeit (a tight step budget, an engine you expect to run
-slow) is **not** a forfeit. Anything short of the terminal condition **parks or runs the retry
-ladder** (re-dispatch per the #563 retry sequence), never a pre-emptive swap — a quiet substitute-on-risk erodes the cross-vendor guarantee if
-sessions learn it. This is distinct from the engine-*unavailability* fallback of CONVENTIONS `§7.5` (an
-engine not configured or available at all — a selection event recorded there); here a *configured*
-reviewer must actually forfeit before Claude stands in. (weekly-eats we#520 swapped the configured
-codex reviewer for Claude citing step-budget *risk* — disclosed and independence-preserving, but a
-preemptive swap the terminal-forfeit rule forbids.)
+output at all — and **not before**: a *risk* of forfeit (a tight step budget, an engine you expect to
+run slow) is **not** a forfeit; anything short of the terminal condition **parks or runs the retry
+ladder** (the #563 sequence), never a pre-emptive swap — a quiet substitute-on-risk erodes the
+cross-vendor guarantee if sessions learn it (we#520 was exactly that swap, disclosed but forbidden).
+This is distinct from the engine-*unavailability* fallback of CONVENTIONS `§7.5` (an engine not
+configured or available at all — a selection event recorded there); here a *configured* reviewer must
+actually forfeit before Claude stands in.
 
 **Never kill a configured reviewer dispatch before its structural timeout** — the timeout is the
 tripwire, not your read of intermediate signals. A memory recalls context; it is never a standing
@@ -328,11 +322,10 @@ model unambiguous (and picks the lowest ladder rung when it does not), reporting
 `effort_source` — never a silent guess. **Record the resolved `model_id` and `effort`** (or the
 `dispatch_token`, which encodes both where the vendor supports it) in the dispatch-provenance
 table — not a bare model string that drops the effort. **Running the gate is your discipline, not
-an automatic trigger** — the workhorse is prose-driven, so the gate is the mechanical *check* and
-you are the one who must run it; a skipped gate leaves the dispatch's provenance row without a
-validated model, which is how the advisor spots it. It **supersedes the interim memory rule** that
-pinned engines but let model-within-engine slide — the WE#511 escape, a codex-family model
-dispatched through `cursor-agent`. The registry, not a session's judgment, decides what may run.
+an automatic trigger** — a skipped gate leaves the dispatch's provenance row without a validated
+model, which is how the advisor spots it. The registry, not a session's judgment, decides what may
+run (WE#511 — a codex-family model dispatched through `cursor-agent` — is exactly the escape this
+closes).
 **Cursor is first-party-only** (CONVENTIONS `§7.5`): when a work order routes to the cursor
 CLI, only cursor's registry-listed first-party models may run — never Claude, never GPT, never
 any third-party model through cursor; the registry allowlist enforces it and `dispatch_guard` is
@@ -374,43 +367,24 @@ to a design signal. Say what the seam problem looks like.
 a turn with an engine in flight unless you use the sanctioned detach-and-park fallback in the
 Channel-conditioned section below.** A headless build session (`claude -p`) is not re-woken by the host's
 background-run or wakeup tools — those descriptions and success messages lie in headless mode — so
-ending a turn hoping something resumes it is a park dressed as a handoff; mechanism and evidence for
-what survives a turn ending are in Channel-conditioned below, not here. Independent dispatches may run **concurrently**
-(§6), but every one is **awaited in-turn** — block on it, or **background it and poll inside this
-turn** (see dispatch-mechanics) — and you **await them all before the turn ends** unless the dispatch
-truly cannot fit and you execute that fallback. (The #574 build background-dispatched its implementer
-and ended its turn; that path orphaned mid-flight, recovered only via `--resume` — not a model to
-repeat.)
+ending a turn hoping something resumes it is a park dressed as a handoff. Independent dispatches may
+run **concurrently** (§6), but every one is **awaited in-turn** — block on it, or **background it and
+poll inside this turn** (see dispatch-mechanics) — and you **await them all before the turn ends**
+unless the dispatch truly cannot fit and you execute that fallback.
 
 **Channel-conditioned — what survives a turn ending (read with the rule above).**
 
-- **Default unchanged: await in-turn.** Poll in-turn with tool calls until every dispatch resolves;
-  nearly always the right answer — nothing here licenses ending a turn because waiting is tedious.
-- **Two physics, not one.** **Harness-tracked background work** (a background task the harness
-  manages) **dies when the turn ends** — a probe wrote a start marker at t+8s, the session exited at
-  t+15s, and the completion marker never appeared (harness 2.1.219, three runs); no completion, no
-  orphan process; treating it like durable work is how builds orphan. **Shell-detached children with
-  durable on-disk output survive the exit, keep working, and are recoverable** when the advisor
-  resumes — proven twice mid-flight (brief-check builds): session exited, detached child completed to
-  disk, resumed session recovered with zero work lost. Earlier readings that those recoveries were
-  luck or that engines "were already finished" are **refuted**; the charter corrects its own record.
-  Sessions that believed a waiter mechanism were **believing their tools** — background-run, wakeup
-  scheduling, and its success message all promise re-wake that never fires headless; the rule must
-  name mechanism, not only repeat prohibition.
-- **Never arm-and-sleep as the sole wait strategy.** The load-bearing wait is a **bounded poll loop
-  on artifact files** — done-sentinel paths, progress captures, heartbeat records — not a background
-  task you hope will re-wake you. A wake notification is an **optimization, never the mechanism you
-  depend on**. On harness 2.1.219, with the spawning agent dormant, a background task's completion
-  notification reaches the **root session**, not the builder — the builder is never woken and the
-  advisor becomes an accidental message broker. A six-lane overnight wave proved it: builders' own
-  review seats woke the advisor instead of the builder, all six lanes stalled for hours on finished
-  soaks and green gates, zero handbacks by morning, recovered only when the advisor swept and resumed
-  each lane.
-- **The induction trap.** Wake-on-completion **does** work early in a session while the parent still
-  holds an active task — so a builder that verified re-wake once has evidence about the **active-task
-  regime only**, and **none at all** about the **dormant-parent regime** where it fails. Trusting
-  "re-wake proven earlier this session" into the dormant-parent regime is the trap; both halves were
-  observed on 2.1.219.
+- **Two physics, not one.** **Harness-tracked background work dies when the turn ends** — no
+  completion, no orphan process; treating it like durable work is how builds orphan (#574).
+  **Shell-detached children with durable on-disk output survive the exit, keep working, and are
+  recoverable** when the advisor resumes. And **never arm-and-sleep as the sole wait strategy**: a
+  wake notification is an **optimization, never the mechanism you depend on** — with the spawning
+  agent dormant it reaches the **root session**, not you, and a builder that saw a re-wake work
+  early in a session has evidence about the active-task regime only (the induction trap). The
+  load-bearing wait is a **bounded poll loop on artifact files** — done-sentinel paths, progress
+  captures, heartbeat records. The harness-pinned evidence — the probe runs, the two proven
+  detached-child recoveries, the six-lane overnight stall, the induction trap — lives in
+  dispatch-mechanics § Turn survival; the rule stands on it.
 - **Stamp duty (launcher-issued lanes only).** When `SUPERHEROES_LAUNCH_ID` is present — the session
   was launched by the advisor's launcher — stamp the builder liveness heartbeat at each state change:
   entering a phase, before and after a dispatch, on park, on handback. The contract lives in
@@ -433,31 +407,26 @@ repeat.)
   run, not a result** — fail closed.
 - **It ends in a park, not a handoff.** End with a **durable park** — what is running, where output
   is, what the advisor must do — **on the issue or the PR** (where the advisor will find it without
-  being told to look), not in a session transcript or scratch file — never a turn that ends hoping
-  re-wake; an outcome that outruns any plausible resolution time is a park, not unbounded in-turn poll.
-- **Owner-capability needs surfacing mid-run: park durably, never improvise a channel.** A running
-  headless session is deaf — park durably with receipts; never improvise a notification path or
-  assume someone is watching.
+  being told to look), never a session transcript or scratch file; an outcome that outruns any
+  plausible resolution time is a park, not unbounded in-turn poll. **Owner-capability needs
+  surfacing mid-run park the same way** — a running headless session is deaf; never improvise a
+  notification channel or assume someone is watching.
 
-**This generalizes beyond dispatches — a headless session (`claude -p`) does not end a turn on a
-pending external outcome except via the same detach-and-park fallback when waiting truly cannot fit.**
-The same trap catches a harness-tracked background waiter (#600 — fired despite dual warnings), a
-post-handback CI watch (#608), and any outcome that resolves outside your turn (#526 evidence trail):
-**poll synchronously in-turn** with tool calls until it resolves, or **park durably** (or detach-and-park
-when the work must outlive the turn) — never end a turn to "wait" on something that will not re-wake
-you and is not a detached child you stamped to disk.
+**This generalizes beyond dispatches — a headless session (`claude -p`) does not end a turn on any
+pending external outcome except via the same detach-and-park fallback when waiting truly cannot fit**
+— the same trap catches a background waiter (#600), a post-handback CI watch (#608), and anything
+else that resolves outside your turn (#526 evidence trail): **poll synchronously in-turn** until it
+resolves, or **park durably**.
 
-**Long dispatches you own get room to finish and a stuck/runaway monitor.** For an **engine CLI run
-you invoke yourself**: **never a borderline limit you expect to just barely clear**; **stay in-turn
-until it resolves** (background-and-poll) or **detach-and-park** when it truly cannot fit — never end
-on harness-tracked background work. For a **native subagent dispatch there is no detach** — the
-harness owns the lifecycle. **Await it in-turn** when you dispatch; if a dispatch genuinely cannot fit
-the turn, **do not dispatch it** — **park durably** on the issue or PR **with the work order ready to
-go** (the advisor, or a resumed turn that can wait it out, dispatches then), or **split the work** so
-each dispatch is awaitable in one turn. The **concrete mechanics differ by
-dispatch kind** — the foreground Bash cap and why you background-and-poll instead of raising a
-timeout, the output-file-not-`| tail` stall signal, the CPU-vs-elapsed liveness read, and the
-native-subagent lifecycle — so **read `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/workhorse/reference/dispatch-mechanics.md` at dispatch time**, before you invoke a long dispatch.
+**Long dispatches you own get room to finish and a stuck/runaway monitor** — **never a borderline
+limit you expect to just barely clear**. For a **native subagent dispatch there is no detach** — the
+harness owns the lifecycle: **await it in-turn**, and if it genuinely cannot fit the turn, **do not
+dispatch it** — **park durably** on the issue or PR **with the work order ready to go**, or **split
+the work** so each dispatch is awaitable in one turn. The **concrete mechanics differ by dispatch
+kind** — the foreground Bash cap and why you background-and-poll instead of raising a timeout, the
+output-file-not-`| tail` stall signal, the CPU-vs-elapsed liveness read — so **read
+`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/workhorse/reference/dispatch-mechanics.md` at dispatch
+time**, before you invoke a long dispatch.
 
 A **skill-owned dispatch keeps its own structural-timeout contract** (e.g. `review-code`'s loop bounds
 each engine dispatch itself and forbids a per-dispatch watchdog) — don't override it with this rule.
@@ -475,58 +444,41 @@ uncommitted work five times across recent waves despite the memory of it, so the
 mechanical tripwire, not the memory of it (the mutation-probe sibling of §6's commit-between-orders rule).
 
 **Proof a review seat may not produce — a change to the repository, or a run the seat cannot or must
-not make — has exactly three sanctioned destinations, and a review seat is never one of them.** A
-review seat is **obliged** never to change the repository and never to claim a run it did not make —
-the base rubric's verification rule *"A review seat never changes the repository, and never claims a
-run it did not make."* (`rubric/review-base.md`) is the authoritative statement, and it is an
-obligation, **not** something a tool grant enforces (what a seat can do varies by host and dispatch
-shape, so never reason about a seat from its tool list). A review seat may legitimately ground a
-finding by *reading*, and where its dispatch permits a read-only command, by running one and quoting
-it. What it may never do is **change** anything — so putting a review seat in a position where its
-only compliant answer is *"I could not do this"* (the non-compliant answer being a false receipt) is
-the **orchestrator's error**: asking any review seat for a mutation probe, a planted defect, or a
-written throwaway test does exactly that. When a claim needs a run no review seat may make:
+not make — has exactly three sanctioned destinations, and a review seat is never one of them.** The
+base rubric's verification rule — *"A review seat never changes the repository, and never claims a
+run it did not make."* (`rubric/review-base.md`) — is the authoritative statement, and it is an
+obligation, **not** something a tool grant enforces (never reason about a seat from its tool list).
+A seat may ground a finding by *reading*, and where its dispatch permits a read-only command, by
+running one and quoting it; putting a seat where its only compliant answer is *"I could not do
+this"* (the non-compliant answer being a false receipt) is the **orchestrator's error** — never ask
+any review seat for a mutation probe, a planted defect, or a written throwaway test. When a claim
+needs a run no review seat may make:
 
 1. **You run it** — the default, and the only place the *decisive* check ever runs.
 2. **A committed test, via an implementer order** — when the proof belongs in the repo as a durable
    detector rather than a throwaway probe (in this repo, CONVENTIONS `§12.1`).
-3. **A `check-runner` seat** (`agents/check-runner.md`) — when a run's sheer volume, noise, or
-   duration is the problem. **You** author the exact command list; it runs them and writes each
-   command's raw stdout, stderr, and exit code to paths you name **outside** the repo; and **you read
-   those files off disk**. Name a **byte ceiling** per command **and an order-wide ceiling** across
-   the whole command set — an order may name any number of commands, and nothing else bounds their
-   sum. Each stdout capture opens with a `# ran: <command>` line; for **each** command you authored,
-   read the **first line** of the capture **at the path you named for that command** and compare
-   *that line* against *that command* — a `# ran:` line anywhere else in a capture body is output, not
-   a receipt, and is ignored. Its return prose is never the receipt. It buys **context relief, not
-   trust** — treat its output exactly as you treat an implementer's. The captures are
-   **working artifacts, not the durable receipt** — the PR record is: read them, quote what matters
-   (**redacted** — secrets, tokens, private URLs, PII), then **remove them once the verification
-   closes**. This is a bound, not a guarantee: the captures live outside the repo in session-scoped
-   scratch, so an **interrupted** order leaves its captures behind until that scratch is cleared —
-   nothing sweeps them, and the order-wide ceiling above bounds one order's captures, not the
-   accumulated set of abandoned ones. Dispatch it as a **host subagent** — the host's own dispatch
-   action (`Agent` on Claude, `spawn_agent` on Codex) — **never to an external engine**; it renders
-   no judgment, so no independence or maker-family constraint applies to it and none should be
-   bolted on. **Establish whether the `mechanical` role resolves on this host by running the §7
-   model gate for `--role mechanical` against the host's own vendor, omitting `--model`**: it
-   resolves the seat default and reports `effort_source: "seat-default"` when the role resolves;
-   the no-sanctioned-model case prints an **empty `allowlist`**. It is only a query — nothing is
-   dispatched until you dispatch it. Then follow the gate's outcome:
-
-   1. **Run the §7 model gate** for `--role mechanical` against the **host's own vendor**.
-   2. **Exit 1 because the role has no sanctioned model on that vendor** → the **route is
-      unavailable** on this host. Go straight to **destination 1 (you run it yourself)**, which
-      needs no seat and is **always available**, and **disclose the fallback** wherever you
-      record the dispatch. Nothing was dispatched, so nothing is parked.
-   3. **Exit 1 for any other reason** — you named a model outside the allowlist for a role that
-      *does* resolve — → **park**, exactly as §7 says.
-   4. **Exit 0** → dispatch the seat as a **host subagent** (`Agent` on Claude, `spawn_agent` on
-      Codex), **never to an external engine** — and obey §7's exit-0 half, exactly as §7 says:
-      thread the resolved `model_id` and `effort`, and record them in the dispatch-provenance row.
-
-   If the seat needs a stronger model to do its job, your command list was under-enumerated —
-   rewrite it, or run it yourself.
+3. **A `check-runner` seat** (`agents/check-runner.md` — the seat's side of the contract lives
+   there) — when a run's sheer volume, noise, or duration is the problem. It buys **context relief,
+   not trust** — treat its output exactly as an implementer's. **You** author the exact command
+   list, with a **byte ceiling per command and an order-wide ceiling** (nothing else bounds the
+   sum); it writes each command's raw stdout, stderr, and exit code to paths you name **outside**
+   the repo; and **you read those files off disk** — its return prose is never the receipt. For
+   **each** command you authored, read the **first line** of the capture **at the path you named for
+   that command** and compare *that line* against *that command* — each opens `# ran: <command>`,
+   and a `# ran:` line anywhere else in a body is output, not a receipt. The captures are **working
+   artifacts, not the durable receipt** — the PR record is: quote what matters (**redacted** —
+   secrets, tokens, private URLs, PII), then **remove them once the verification closes** (an
+   interrupted order leaves its captures in session scratch until cleared — a bound, not a
+   guarantee). **Resolve the seat's model through the §7 gate** — `--role mechanical` against the
+   **host's own vendor**, omitting `--model` (a query only; it resolves the seat default,
+   `effort_source: "seat-default"`). **Exit 1 with an empty `allowlist`** — no sanctioned model for
+   the role on this vendor — means the **route is unavailable**: go straight to destination 1, which
+   is always available, and **disclose the fallback**; exit 1 for any other reason **parks**, and
+   exit 0 dispatches — as a **host subagent** (`Agent` on Claude, `spawn_agent` on Codex), **never
+   to an external engine** (it renders no judgment, so no independence or maker-family constraint
+   applies) — threading and recording the resolved `model_id` and `effort` exactly as §7 says. If
+   the seat needs a stronger model to do its job, your command list was under-enumerated — rewrite
+   it, or run it yourself.
 
 **Probe the tree before and after every `check-runner` dispatch — this is your discipline, not a
 gate.** Commit the landed work first so the baseline is clean, then capture `git rev-parse HEAD`, the
@@ -557,16 +509,15 @@ until no blocking findings remain, or you **honestly park on an open blocker**. 
 cap economics inside that loop are `review-code`'s own contract; **the delta-grading in §12 does not
 apply here** — every pre-handback full-lane review is the full loop.
 
-**Light lane:** **one independent cross-vendor reviewer** — not the full panel loop — **outside the
-maker family**, carrying the **mandatory planted-defect control probe** on every such review (Build
-lanes; probe must come back **engaged** — as bounded in `review-discipline.md`). **Review fixes stay
-orchestrator-typed** — you apply them in this session. If the work genuinely needs an **implementer
-dispatch**, that is **escalation to the full lane** (implementer-dispatch rule and escalation
-bridge above). An escalated build **records every maker family in dispatch provenance**; panel
-composition excludes only **one** author family, so any **additional** maker family is a
-**disclosed independence limitation** on that PR — call it out in the PR body for the advisor to weigh
-at vet. Prefer keeping an escalated light build to **one** maker family where possible. Re-review
-to convergence on that single-seat model, or **honestly park on an open blocker**.
+**Light lane:** **one independent cross-vendor reviewer** — not the full panel loop — exactly as
+Build lanes specifies (outside the maker family, mandatory planted-defect control probe, engaged or
+that review did not happen). **Review fixes stay orchestrator-typed** — you apply them in this
+session; work that genuinely needs an **implementer dispatch** is **escalation to the full lane**
+(escalation bridge above). An escalated build **records every maker family in dispatch provenance**;
+panel composition excludes only **one** author family, so any **additional** maker family is a
+**disclosed independence limitation** — call it out in the PR body for the advisor to weigh at vet,
+and prefer keeping an escalated light build to **one** maker family where possible. Re-review to
+convergence on that single-seat model, or **honestly park on an open blocker**.
 
 Record how
 you handled each finding in a **dispositions table** — a short table of each finding and what you
@@ -613,17 +564,15 @@ format.
   the ranking here.
 - **`## Advisor vet`** — an empty slot the builder creates; the advisor writes into it. **Shape and
   contents** live in `skills/showrunner/reference/vet-receipt.md` (CONVENTIONS `§10.7` names that
-  home); **when it is written** is the showrunner charter's own duty.
-  If you rewrite the PR body later, **carry the slot's existing text forward byte-for-byte** —
-  advisor-authored content in the PR body is never yours to edit, reflow, summarize, shorten, or drop.
-  Re-creating the heading over an advisor write you deleted satisfies "re-add the slot" and **is the
-  defect, not compliance with the rule**. The advisor stamps a marker immediately above what it writes
-  there, and an absent marker is the only thing that tells a silently emptied slot apart from one the
-  advisor has not written yet — so dropping the text takes the detection signal with it. **Re-read the
-  slot immediately before you submit the body rewrite** — not when you start editing. **After writing,
-  confirm the slot still carries the advisor's actual text** — not merely that something is there. **If
-  the advisor wrote or extended the slot while you were editing, the newer advisor text wins** — carry
-  that forward, never your older copy.
+  home); **when it is written** is the showrunner charter's own duty. If you rewrite the PR body
+  later, **carry the slot's existing text forward byte-for-byte** — advisor-authored content is
+  never yours to edit, reflow, summarize, shorten, or drop, and re-creating the heading over an
+  advisor write you deleted **is the defect, not compliance with the rule** (the advisor's marker
+  above its text is the only signal telling a silently emptied slot from one not yet written —
+  dropping the text takes the detection signal with it). **Re-read the slot immediately before you
+  submit the body rewrite, confirm afterwards that it still carries the advisor's actual text — not
+  merely that something is there — and if the advisor wrote or extended the slot while you were
+  editing, the newer advisor text wins.**
 
 The advisor makes the **show it** / **say it** / **nothing to see** call when the issue is routed; that
 call is **revisable during the build**. A builder who discovers a perceivable surface mid-build
@@ -718,7 +667,7 @@ curation stay with the advisor.
 | "One more patch and this surface is finally right." | A third rework of the same surface in one build is the park tripwire, not another patch. Name the seam problem instead. |
 | "That reviewer dispatch has been quiet too long, I'll kill it and re-dispatch." | The structural timeout is the tripwire for a configured reviewer dispatch, not your read of silence. A memory recalls context — it is not a standing kill order. |
 | "Main moved under the order I sent — the implementer should have coped." | The order's premises bind you, the dispatcher. Amend the order when the world moves; parking on a stale premise is correct behavior. |
-| "This dispatch will finish quickly — the default timeout is fine." | A long dispatch **you own** gets room to finish — **backgrounded and polled**, never squeezed under the 600 s foreground-conversion boundary on harness 2.1.219 (a larger foreground `timeout` converts to background; the turn ending kills converted runs) — and a stuck/runaway monitor (a skill-owned dispatch keeps its own timeout contract). Four 0.18.0 sessions died as **turn-end kills of converted runs** mid-dispatch — see `dispatch-mechanics.md`. Never a borderline limit. |
+| "This dispatch will finish quickly — the default timeout is fine." | A long dispatch **you own** gets room to finish — **backgrounded and polled**, never squeezed under the foreground-conversion boundary (a larger foreground `timeout` converts to background; the turn ending kills converted runs — four 0.18.0 sessions died that way; mechanics in `dispatch-mechanics.md`) — and a stuck/runaway monitor. Never a borderline limit. |
 | "The implementer botched it — escalate to a stronger engine." | Attribution first. In the 0.18.0 wave, order quality outweighed execution ~5:1. A defect the order under-specified (a missing fail-closed edge, an unnamed target file) is an **order** defect — rewrite the order at the same rung, don't blame the engine. |
 | "I'll kick off the implementer and wrap up my turn." | Default: await in-turn (block or background-and-poll inside the turn). Harness-tracked background work dies with the turn; only a **shell/CLI** detach-and-park (charter §7 Channel-conditioned) outlives the turn — a **native subagent has no detach** — and it still ends in a durable park on the issue or PR, not a silent handoff. |
 | "It's committed locally — the PR is ready." | "Ready" requires the **remote** head containing every commit your receipts claim (`git rev-parse origin/<branch>` vs local HEAD). A local-only fix is a claim without a receipt. |
