@@ -2053,3 +2053,72 @@ def test_record_outcome_still_refuses_without_started(tmp_path, monkeypatch):
     result2 = ll.record_outcome(repo, "missing", "handback", "evidence")
     assert result2["ok"] is False
     assert result2["reason"] == "outcome-unknown-launch"
+
+
+# --- WO-656-K1 runtime guarantees --------------------------------------------
+
+
+def test_child_group_is_live_detects_a_non_leader_pid(tmp_path, monkeypatch):
+    proc = subprocess.Popen(["sleep", "30"])
+    try:
+        assert os.getpgid(proc.pid) != proc.pid
+        assert ll._child_group_is_live(proc.pid) is True
+
+        repo = _init_repo(tmp_path / "repo")
+        _ledger_env(tmp_path, monkeypatch)
+        batch = "b-non-leader"
+        launch_id = "l-non-leader"
+        _declare(repo, batch, 1)
+        ll.reserve(repo, _reserved(launch_id, batch, ["a"], repo))
+        started = _started(launch_id)
+        started["pid"] = proc.pid
+        assert ll.append(repo, started)
+        count_before = len(ll.read(repo)["records"])
+        result = ll.record_outcome(repo, launch_id, "handback", "done")
+        assert result["ok"] is False
+        assert result["reason"] == "terminal-child-live:%s" % proc.pid
+        assert len(ll.read(repo)["records"]) == count_before
+        os.kill(proc.pid, 0)
+    finally:
+        try:
+            os.kill(proc.pid, 9)
+        except ProcessLookupError:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+
+
+def test_public_append_refuses_terminal_records(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    ll.append(repo, _started("l1"))
+    count_before = len(ll.read(repo)["records"])
+
+    assert ll.append(repo, _outcome("l1")) is False
+    assert ll.append(repo, _refused("l1")) is False
+    assert len(ll.read(repo)["records"]) == count_before
+
+    assert ll.append(repo, _started("l1", attempt=2, pid=424242)) is True
+    assert len(ll.read(repo)["records"]) == count_before + 1
+
+
+def test_terminalize_still_writes_its_terminal(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-terminal-door"
+    launch_id = "l-terminal-door"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved(launch_id, batch, ["a"], repo))
+    ll.append(repo, _started(launch_id))
+    count_before = len(ll.read(repo)["records"])
+    result = ll.terminalize(
+        repo, launch_id, outcome="handback", evidence="done", require_started=True,
+    )
+    assert result["ok"] is True
+    records = ll.read(repo)["records"]
+    assert len(records) == count_before + 1
+    assert records[-1]["event"] == "outcome"
+    assert records[-1]["outcome"] == "handback"

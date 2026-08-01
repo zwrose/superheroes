@@ -7,6 +7,11 @@ import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.realpath(os.path.join(_HERE, ".."))
+if _LIB not in sys.path:
+    sys.path.insert(0, _LIB)
+
+import launch_ledger  # noqa: E402
+
 _LAUNCHER_PY = os.path.join(_LIB, "launcher.py")
 _LEDGER_PY = os.path.join(_LIB, "launch_ledger.py")
 
@@ -15,7 +20,7 @@ _LEDGER_PATH_CONSTANTS = frozenset({
     "LEDGER_NAME",
     "LEDGER_DIR_NAME",
 })
-_TERMINAL_EVENT_KINDS = frozenset({"outcome", "refused"})
+_TERMINAL_EVENT_KINDS = frozenset(launch_ledger.TERMINAL_EVENTS)
 _TERMINAL_WRITE_ALLOWLIST = {
     "launch_ledger.py": frozenset({"terminalize"}),
 }
@@ -544,7 +549,9 @@ def class2_census_violations_from_source(source, source_path):
         visitor = _TerminalWriterVisitor()
         for stmt in node.body:
             visitor.visit(stmt)
-        if visitor.violations and node.name not in allowlist:
+        if visitor.violations:
+            if _is_module_level_function(tree, node) and node.name in allowlist:
+                continue
             violations[key] = visitor.violations
 
     if basename == "launcher.py":
@@ -633,6 +640,10 @@ def _module_level_function_names(tree):
     }
 
 
+def _is_module_level_function(tree, node):
+    return node in tree.body
+
+
 def _validate_class3_append_allowlist(tree, basename):
     allowlist = _CLASS3_APPEND_ALLOWLIST.get(basename, frozenset())
     if not allowlist:
@@ -655,7 +666,7 @@ def class3_census_violations_from_source(source, source_path):
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        if node.name in allowlist:
+        if _is_module_level_function(tree, node) and node.name in allowlist:
             continue
         visitor = _Class3AppendVisitor(source_path, ledger_module_ids)
         for stmt in node.body:
@@ -1009,6 +1020,29 @@ def test_class1_matcher_two_ledger_import_aliases():
     path = os.path.join(_LIB, "fake_bypass.py")
     violations = class1_census_violations_from_source(source, path)
     assert any("aliased ledger pathname" in v for v in violations), violations
+
+
+def test_class2_and_class3_catch_a_nested_rogue_terminalize():
+    """A method named terminalize must not inherit the module-level allowlist."""
+    source = (
+        "from launch_ledger import append\n"
+        "\n"
+        "def terminalize(repo_root, launch_id):\n"
+        "    pass\n"
+        "\n"
+        "class Rogue:\n"
+        "    def terminalize(self, repo_root, launch_id):\n"
+        "        record = {'event': 'outcome', 'launchId': launch_id}\n"
+        "        append(repo_root, record)\n"
+    )
+    path = os.path.join(_LIB, "launch_ledger.py")
+    c2_violations, _ = class2_census_violations_from_source(source, path)
+    c3_violations = class3_census_violations_from_source(source, path)
+    c2_key = "launch_ledger.py::terminalize"
+    c3_key = "launch_ledger.py::terminalize"
+    assert c2_key in c2_violations, c2_violations
+    assert "event:outcome" in c2_violations[c2_key], c2_violations
+    assert any(c3_key in v for v in c3_violations), c3_violations
 
 
 if __name__ == "__main__":

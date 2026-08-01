@@ -33,6 +33,7 @@ LEDGER_NAME = "launch-ledger.jsonl"
 SCHEMA = 1
 EVENT_KINDS = ("reserved", "started", "retry", "refused", "outcome")
 TERMINAL_OUTCOMES = ("handback", "park", "refusal", "died")
+TERMINAL_EVENTS = ("outcome", "refused")
 WHOLE_REPO = ":whole-repo:"
 
 _LOCK_SUFFIX = ".lock"
@@ -386,7 +387,7 @@ def append_under_lock(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TI
     Terminal events (``outcome``, ``refused``) must use ``terminalize`` — this
     is not that door.
     """
-    if isinstance(record, dict) and record.get("event") in ("outcome", "refused"):
+    if isinstance(record, dict) and record.get("event") in TERMINAL_EVENTS:
         return {
             "ok": False,
             "reason": "append-terminal-must-use-terminalize",
@@ -536,8 +537,8 @@ def _parse_ledger_bytes(raw):
     return {"state": "ok", "records": records}
 
 
-def append(repo_root, record, env=None):
-    """Append one JSON line with flush+fsync. False on failure; never raises."""
+def _append_raw(repo_root, record, env=None):
+    """Module-internal append primitive. False on failure; never raises."""
     opened = open_ledger(repo_root, "a", env=env)
     if not opened["ok"]:
         return False
@@ -555,6 +556,17 @@ def append(repo_root, record, env=None):
             fh.close()
         except OSError:
             pass
+
+
+def append(repo_root, record, env=None):
+    """Append one JSON line with flush+fsync. False on failure; never raises.
+
+    Terminal events (``outcome``, ``refused``) must use ``terminalize`` — this
+    is not that door.
+    """
+    if isinstance(record, dict) and record.get("event") in TERMINAL_EVENTS:
+        return False
+    return _append_raw(repo_root, record, env=env)
 
 
 def read(repo_root, env=None):
@@ -692,10 +704,8 @@ def _validate_event_fields(rec):
         fields = _STARTED_FIELDS
     elif event == "retry":
         fields = _RETRY_FIELDS
-    elif event == "refused":
-        fields = _REFUSED_FIELDS
-    elif event == "outcome":
-        fields = _OUTCOME_FIELDS
+    elif event in TERMINAL_EVENTS:
+        fields = _REFUSED_FIELDS if event == "refused" else _OUTCOME_FIELDS
     else:
         return "fold-unknown-event:%s" % event
 
@@ -805,27 +815,28 @@ def fold(records):
             info["attempt"] = rec["attempt"]
         elif event == "retry":
             pass
-        elif event == "refused":
-            if info["started"]:
-                return {
-                    "ok": False,
-                    "reason": "fold-refused-after-started:%s" % launch_id,
-                    "launches": {},
-                    "batchDeclarations": batch_declarations,
-                }
-            info["terminal"] = True
-            info["terminalKind"] = "refused"
-        elif event == "outcome":
-            if not info["started"]:
-                return {
-                    "ok": False,
-                    "reason": "fold-outcome-without-started:%s" % launch_id,
-                    "launches": {},
-                    "batchDeclarations": batch_declarations,
-                }
-            info["terminal"] = True
-            info["terminalKind"] = "outcome"
-            info["outcome"] = rec["outcome"]
+        elif event in TERMINAL_EVENTS:
+            if event == "refused":
+                if info["started"]:
+                    return {
+                        "ok": False,
+                        "reason": "fold-refused-after-started:%s" % launch_id,
+                        "launches": {},
+                        "batchDeclarations": batch_declarations,
+                    }
+                info["terminal"] = True
+                info["terminalKind"] = "refused"
+            else:
+                if not info["started"]:
+                    return {
+                        "ok": False,
+                        "reason": "fold-outcome-without-started:%s" % launch_id,
+                        "launches": {},
+                        "batchDeclarations": batch_declarations,
+                    }
+                info["terminal"] = True
+                info["terminalKind"] = "outcome"
+                info["outcome"] = rec["outcome"]
 
     return {"ok": True, "reason": None, "launches": launches,
             "batchDeclarations": batch_declarations}
@@ -1011,7 +1022,7 @@ def _reap_process(proc):
 
 
 def _child_group_is_live(pid):
-    """True when any process remains in the recorded child's process group.
+    """True when the recorded pid or its process group still has live members.
 
     Signal 0 is an existence probe, never a real signal: this function must never
     change another process's state. Every uncertain answer is True, because the
@@ -1029,17 +1040,32 @@ def _child_group_is_live(pid):
         return True
     deadline = time.monotonic() + settle_seconds
     while True:
+        proc_alive = False
+        group_alive = False
         try:
-            os.killpg(pid, 0)
+            os.kill(pid, 0)
+            proc_alive = True
         except ProcessLookupError:
-            return False
+            pass
         except PermissionError:
             return True
         except OSError:
             return True
-        if time.monotonic() >= deadline:
+        try:
+            os.killpg(pid, 0)
+            group_alive = True
+        except ProcessLookupError:
+            pass
+        except PermissionError:
             return True
-        time.sleep(0.05)
+        except OSError:
+            return True
+        if proc_alive or group_alive:
+            if time.monotonic() >= deadline:
+                return True
+            time.sleep(0.05)
+        else:
+            return False
 
 
 def _validate_started_repair(started_repair):
@@ -1235,7 +1261,7 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
                 "kind": None, "outcome": None, "reaped": reaped,
             }
 
-        if not append(repo_root, record, env=env):
+        if not _append_raw(repo_root, record, env=env):
             return {
                 "ok": False, "reason": "ledger-append-failed",
                 "kind": None, "outcome": None, "reaped": reaped,
