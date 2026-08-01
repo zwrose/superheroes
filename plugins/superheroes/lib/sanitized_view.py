@@ -82,7 +82,13 @@ _GIT_ROUTING_VARS = (
     "GIT_REPLACE_REF_BASE",
 )
 
-_DIFF_CONFIG_OVERRIDES = (
+# Reader-wide pin on every source-repository command that peels a commit (head
+# export, head census, review-diff census, diff-base verify, patch, merge-base).
+# A commit-graph file lives in the object directory we alternate to; the
+# guarantee is conditional on git honoring this control.
+_COMMIT_GRAPH_OFF = ("-c", "core.commitGraph=false")
+
+_DIFF_CONFIG_OVERRIDES = _COMMIT_GRAPH_OFF + (
     "-c",
     "core.quotePath=false",
     "-c",
@@ -95,7 +101,7 @@ _DIFF_CONFIG_OVERRIDES = (
 
 # Belt-and-braces for census paths; -z already suppresses quoting. Patch-presentation
 # keys from _DIFF_CONFIG_OVERRIDES deliberately do not appear here.
-_CENSUS_CONFIG_OVERRIDES = ("-c", "core.quotePath=false")
+_CENSUS_CONFIG_OVERRIDES = _COMMIT_GRAPH_OFF + ("-c", "core.quotePath=false")
 
 _DIFF_PATCH_FLAGS = (
     "diff",
@@ -113,14 +119,7 @@ _DIFF_READ_POLL_SECONDS = 1.0
 
 _ANCESTRY_SCRATCH_PREFIX = "superheroes-ancestry-"
 
-# Pins for our own reader. core.commitGraph defaults on since git 2.24, and a
-# commit-graph file lives inside the object directory we alternate to — so unlike
-# the git-directory overlays, commit-graph data is NOT structurally excluded by
-# scratch isolation. This documented control is what excludes it, and the
-# resulting guarantee is conditional on the git executable honoring it.
-_ANCESTRY_CONFIG_OVERRIDES = (
-    "-c",
-    "core.commitGraph=false",
+_ANCESTRY_CONFIG_OVERRIDES = _COMMIT_GRAPH_OFF + (
     "-c",
     "core.useReplaceRefs=false",
 )
@@ -158,10 +157,10 @@ def _is_git_object_id_hex(value):
 def _require_pinned_commit_oid(value):
     """Return the pinned commit object id in ``value``, or refuse.
 
-    A revision expression (``HEAD~5``, ``main^``), a branch name, a tag, or an
-    option-like value is refused **before any repository-local git command runs**.
-    Resolving one walks ancestry inside the reviewed repository, where graft and
-    replace metadata apply, so a hostile repository could steer that step.
+    An ordinary symbolic or revision expression (``HEAD~5``, ``main^``) is
+    refused **before any repository-local git command runs**. A **hex-shaped**
+    candidate passes this gate but is necessarily verified later, in the
+    repository, and must round-trip to itself after ``^{commit}`` peeling.
     review-code already resolves and pins the remote base commit before calling
     in; this only mechanizes that long-standing caller premise.
     """
@@ -415,7 +414,7 @@ def _sweep_stale_views(tmp_base):
 def _git_rev_parse_head(repo_real):
     try:
         proc = _git_run(
-            ["git", "-C", repo_real, "rev-parse", "HEAD"],
+            ["git", "-C", repo_real, *_COMMIT_GRAPH_OFF, "rev-parse", "HEAD"],
             capture_output=True,
             text=True,
         )
@@ -459,7 +458,7 @@ def _git_ls_tree_census(repo_real, head_sha):
     # streaming parse and is accepted as out of scope for now.
     try:
         proc = _git_run(
-            ["git", "-C", repo_real, "ls-tree", "-r", "-z", head_sha],
+            ["git", "-C", repo_real, *_COMMIT_GRAPH_OFF, "ls-tree", "-r", "-z", head_sha],
             capture_output=True,
         )
     except OSError:
@@ -604,6 +603,7 @@ def _reviewed_repo_ancestry_git_argv(repo_real, *args):
         "git",
         "-C",
         repo_real,
+        *_COMMIT_GRAPH_OFF,
         "-c",
         "safe.directory=%s" % repo_real,
         *args,
@@ -615,6 +615,21 @@ _CAPABILITY_UNSUPPORTED = object()
 _SHALLOW_ANSWERS = frozenset({"true", "false"})
 
 _OBJECT_FORMAT_ANSWERS = frozenset({"sha1", "sha256"})
+
+_CAPABILITY_PROBE_FLAGS = {
+    "shallow": "--is-shallow-repository",
+    "object_format": "--show-object-format",
+}
+
+
+def _capability_query(repo_real, started, probe):
+    """Run one capability probe; execution and classification are one step."""
+    flag = _CAPABILITY_PROBE_FLAGS[probe]
+    accepted = _SHALLOW_ANSWERS if probe == "shallow" else _OBJECT_FORMAT_ANSWERS
+    proc = _ancestry_run(
+        _reviewed_repo_ancestry_git_argv(repo_real, "rev-parse", flag), started
+    )
+    return _classify_capability_output(proc, accepted)
 
 
 def _classify_capability_output(proc, accepted):
@@ -687,13 +702,7 @@ def _repo_object_format(repo_real, started):
     an unsafe one: a repository whose real format this build cannot name still
     fails closed downstream, when ``merge-base`` cannot parse its object ids.
     """
-    proc = _ancestry_run(
-        _reviewed_repo_ancestry_git_argv(
-            repo_real, "rev-parse", "--show-object-format"
-        ),
-        started,
-    )
-    fmt = _classify_capability_output(proc, _OBJECT_FORMAT_ANSWERS)
+    fmt = _capability_query(repo_real, started, "object_format")
     if fmt is _CAPABILITY_UNSUPPORTED or fmt == "sha1":
         return None
     return fmt
@@ -711,9 +720,9 @@ def _authoritative_merge_base(repo_real, base_sha, head_sha, started):
     **Commit-graph, stated separately.** Scratch isolation does not cover it. A
     commit-graph file lives inside the *object* directory the alternate exposes,
     so that data does reach the scratch repository; it is excluded instead by the
-    documented ``-c core.commitGraph=false`` control (``_ANCESTRY_CONFIG_OVERRIDES``),
-    an accepted, owner-ratified part of this boundary. That half of the guarantee
-    is **conditional** on the git executable honoring the control. This is not a
+    documented ``-c core.commitGraph=false`` reader-wide pin applied by every
+    commit-peeling source-repository command. That half of the guarantee is
+    **conditional** on the git executable honoring the control. This is not a
     claim that every ancestry overlay is structurally inaccessible, and the
     boundary is not "only oid -> bytes".
 
@@ -725,13 +734,7 @@ def _authoritative_merge_base(repo_real, base_sha, head_sha, started):
     ``test_subprocess_ancestry_git_calls_route_through_ancestry_run``.
     ``base_sha`` is a pinned commit object id, enforced before any repo-local git.
     """
-    proc = _ancestry_run(
-        _reviewed_repo_ancestry_git_argv(
-            repo_real, "rev-parse", "--is-shallow-repository"
-        ),
-        started,
-    )
-    shallow = _classify_capability_output(proc, _SHALLOW_ANSWERS)
+    shallow = _capability_query(repo_real, started, "shallow")
     if shallow is _CAPABILITY_UNSUPPORTED:
         # This caller's unsupported policy: a shallow state this git cannot
         # report is not "not shallow". Refusing here is before the census, the
@@ -1783,9 +1786,10 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
     """Materialize a review patch at the view root (before ``git init``).
 
     ``diff_base`` must be a **pinned commit object id** — 40 hex characters, or 64
-    in a SHA-256 repository. ``build_sanitized_view`` already enforced that at the
-    public ingress; this second call is defense in depth for any direct caller,
-    and it runs before this function's own ``rev-parse``.
+    in a SHA-256 repository. ``build_sanitized_view`` already enforced hex shape
+    at the public ingress; this second call is defense in depth for any direct
+    caller. Hex shape is not identity: after ``^{commit}`` peeling the resolved
+    oid must round-trip to the caller's input.
     """
     diff_base = _require_pinned_commit_oid(diff_base)
 
@@ -1815,6 +1819,12 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
         raise SanitizedViewError("sanitized-view-diff-base-unresolved")
     base_sha = proc.stdout.strip()
     if not _is_git_object_id_hex(base_sha):
+        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+
+    # Hex shape is not identity. A 64-hex branch name in a sha1 repository and an
+    # annotated-tag object id both resolve through ^{commit} to some *other* commit;
+    # only a candidate that round-trips to itself is the pinned base the caller named.
+    if base_sha.lower() != diff_base.lower():
         raise SanitizedViewError("sanitized-view-diff-base-unresolved")
 
     merge_base = _authoritative_merge_base(repo_real, base_sha, head_sha, started)

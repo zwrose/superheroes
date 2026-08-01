@@ -715,8 +715,9 @@ before spawn. The merge-base is resolved outside the reviewed repository's git d
 repository linked only through the object store, with every inherited `GIT_*` variable dropped), so
 git-directory ancestry overlays — grafts, replace refs, shallow metadata, config — cannot shrink the
 changed set. **Commit-graph data is the stated exception**: it lives in the object directory the
-alternate exposes and is excluded instead by the documented `-c core.commitGraph=false` control, so
-that half of the guarantee is conditional on the git executable honoring it. Dispatch refuses when
+alternate exposes and is excluded instead by the documented `-c core.commitGraph=false` reader-wide pin
+on every commit-peeling source-repository command, so that half of the guarantee is conditional on
+the git executable honoring it. Dispatch refuses when
 authoritative ancestry cannot be established, and any shallow-state answer other than exact
 `true`/`false` is itself a refusal; empty directory additions and removals are tree-only and outside
 this contract. Repo-local config overrides remain defence in depth, not the proof of authority. Until a follow-up issue lands, opaque or unaccounted patch content refuses

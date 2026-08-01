@@ -1927,19 +1927,19 @@ def test_review_diff_attribute_suppressed_source_refuses_opaque(tmp_path, monkey
     fake_tmp = str(tmp_path / "tmpdir")
     os.makedirs(fake_tmp)
     monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: fake_tmp)
+    patch_writes = []
+    real_write = sv._write_review_patch_file
+
+    def recording_write(*args, **kwargs):
+        patch_writes.append((args, kwargs))
+        return real_write(*args, **kwargs)
+
+    monkeypatch.setattr(sv, "_write_review_patch_file", recording_write)
     with pytest.raises(sv.SanitizedViewError) as exc:
         sv.build_sanitized_view(repo, diff_base=base_sha)
     assert exc.value.detail == "sanitized-view-diff-opaque"
     assert _leftover_view_dirs(fake_tmp) == []
-    for name in _leftover_view_dirs(fake_tmp):
-        view_root = os.path.join(fake_tmp, name)
-        patch_path = os.path.join(view_root, sv.REVIEW_DIFF_FILE_NAME)
-        assert not os.path.lexists(patch_path)
-        for root, _dirs, files in os.walk(view_root):
-            for fname in files:
-                if fname == sv.REVIEW_DIFF_FILE_NAME:
-                    with open(os.path.join(root, fname), "rb") as fh:
-                        assert b"SECRET = 3" not in fh.read()
+    assert patch_writes == []
 
 
 def test_review_diff_opaque_refusal_precedes_engine_spawn(tmp_path, monkeypatch):
@@ -4616,7 +4616,7 @@ def test_capability_output_classifier_is_exact_match_only(
 
 
 def test_ancestry_capability_queries_route_through_classifier():
-    """No ancestry --show-*/--is-* probe may hand-read its own output."""
+    """Capability flag literals and classifier calls may appear only in _capability_query."""
     import ast
 
     path = os.path.join(os.path.dirname(sv.__file__), "sanitized_view.py")
@@ -4638,6 +4638,9 @@ def test_ancestry_capability_queries_route_through_classifier():
 
     class FunctionVisitor(ast.NodeVisitor):
         def visit_FunctionDef(self, node):
+            if node.name == "_capability_query":
+                self.generic_visit(node)
+                return
             flags = set()
             classifier_calls = False
             for child in ast.walk(node):
@@ -4648,8 +4651,8 @@ def test_ancestry_capability_queries_route_through_classifier():
                     func = child.func
                     if isinstance(func, ast.Name) and func.id == "_classify_capability_output":
                         classifier_calls = True
-            if flags and not classifier_calls:
-                offenders.append((node.name, sorted(flags)))
+            if flags or classifier_calls:
+                offenders.append((node.name, sorted(flags), classifier_calls))
             self.generic_visit(node)
 
         def visit_AsyncFunctionDef(self, node):
@@ -4657,7 +4660,8 @@ def test_ancestry_capability_queries_route_through_classifier():
 
     FunctionVisitor().visit(tree)
     assert offenders == [], (
-        "ancestry capability probes without _classify_capability_output: %s" % offenders
+        "capability flags or _classify_capability_output outside _capability_query: %s"
+        % offenders
     )
 
     expected_flags = {"--show-object-format", "--is-shallow-repository"}
@@ -4698,6 +4702,101 @@ def test_stage_review_diff_refuses_unpinned_base_before_any_git(
         )
     assert exc.value.detail == "sanitized-view-diff-base-unresolved"
     assert spawned == []
+
+
+def test_commit_peeling_paths_pin_commit_graph_off(tmp_path, monkeypatch):
+    repo, B, _H, _D = _graft_decoy_fixture(tmp_path / "graph-pin")
+    recorded = []
+    real_run, real_popen, real_ancestry = sv._git_run, sv._git_popen, sv._ancestry_run
+
+    def classify(argv):
+        if "merge-base" in argv:
+            return "merge-base"
+        if "diff" in argv and "--no-ext-diff" in argv:
+            return "diff"
+        if "ls-tree" in argv:
+            return "ls-tree-census" if "core.quotePath=false" in argv else "ls-tree-export"
+        if "rev-parse" in argv:
+            if "--verify" in argv:
+                return "rev-parse-verify"
+            if "HEAD" in argv and "--is-shallow-repository" not in argv:
+                return "rev-parse-head"
+        return None
+
+    def has_pin(argv):
+        return any(
+            argv[i] == "-c" and argv[i + 1] == "core.commitGraph=false"
+            for i in range(len(argv) - 1)
+        )
+
+    monkeypatch.setattr(sv, "_git_run", lambda *a, **k: (recorded.append(list(a[0])), real_run(*a, **k))[1])
+    monkeypatch.setattr(sv, "_git_popen", lambda *a, **k: (recorded.append(list(a[0])), real_popen(*a, **k))[1])
+    monkeypatch.setattr(sv, "_ancestry_run", lambda argv, s, cwd=None: (recorded.append(list(argv)), real_ancestry(argv, s, cwd=cwd))[1])
+    view = sv.build_sanitized_view(repo, diff_base=B)
+    try:
+        required = {"rev-parse-head", "ls-tree-export", "ls-tree-census", "rev-parse-verify", "merge-base", "diff"}
+        seen = {classify(a) for a in recorded}
+        assert not required - {k for k in seen if k}
+        for argv in recorded:
+            if classify(argv):
+                assert has_pin(argv)
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_capability_consumers_follow_classifier_not_raw_stdout(tmp_path, monkeypatch):
+    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "cap-flow")
+
+    def proc(stdout):
+        class P:
+            returncode, stderr = 0, ""
+        P.stdout = stdout
+        return P()
+
+    monkeypatch.setattr(sv, "_ancestry_run", lambda a, s, cwd=None: proc("false\n"))
+    monkeypatch.setattr(sv, "_classify_capability_output", lambda p, a: "true")
+    with pytest.raises(sv.SanitizedViewError, match="sanitized-view-diff-base-shallow"):
+        sv._authoritative_merge_base(repo, B, H, time.monotonic())
+    monkeypatch.setattr(sv, "_ancestry_run", lambda a, s, cwd=None: proc("sha256\n"))
+    monkeypatch.setattr(sv, "_classify_capability_output", lambda p, a: sv._CAPABILITY_UNSUPPORTED)
+    assert sv._repo_object_format(repo, time.monotonic()) is None
+    monkeypatch.setattr(sv, "_ancestry_run", lambda a, s, cwd=None: proc("false\n"))
+    with pytest.raises(sv.SanitizedViewError, match="sanitized-view-diff-base-unresolved"):
+        sv._authoritative_merge_base(repo, B, H, time.monotonic())
+
+
+def _stage_review_diff_must_not_reach(monkeypatch):
+    called = []
+    stub = lambda *a, **k: (called.append(True), (_ for _ in ()).throw(AssertionError("must not run")))[1]
+    for name in ("_authoritative_merge_base", "_changed_tree_entries", "_batch_review_diff_pathspecs", "_git_diff_batch_output"):
+        monkeypatch.setattr(sv, name, stub)
+    return called
+
+
+def test_stage_review_diff_refuses_64_hex_branch_name_resolving_elsewhere(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "hex-branch", files={"a.txt": "a\n"})
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    open(os.path.join(repo, "a.txt"), "w").write("b\n")
+    _git(repo, "add", "a.txt")
+    _git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "h")
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "branch", "a" * 64, base_sha)
+    called = _stage_review_diff_must_not_reach(monkeypatch)
+    with pytest.raises(sv.SanitizedViewError, match="sanitized-view-diff-base-unresolved"):
+        sv._stage_review_diff(repo, head_sha, str(tmp_path / "v"), "a" * 64, time.monotonic())
+    assert called == []
+
+
+def test_stage_review_diff_refuses_annotated_tag_oid_peeling_elsewhere(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "annot-tag", files={"a.txt": "a\n"})
+    commit_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "tag", "-a", "v1", "-m", "r", commit_sha)
+    tag_oid = _git(repo, "rev-parse", "v1").stdout.strip()
+    assert _git(repo, "cat-file", "-t", tag_oid).stdout.strip() == "tag"
+    called = _stage_review_diff_must_not_reach(monkeypatch)
+    with pytest.raises(sv.SanitizedViewError, match="sanitized-view-diff-base-unresolved"):
+        sv._stage_review_diff(repo, commit_sha, str(tmp_path / "v"), tag_oid, time.monotonic())
+    assert called == []
 
 
 @pytest.mark.parametrize("oid_len", [40, 64])
