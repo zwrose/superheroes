@@ -233,22 +233,23 @@ gh api "repos/$REPO/pulls/$PR_NUMBER/comments" \
 git fetch origin "$PR_BRANCH"
 git worktree add --detach "$SESSION_DIR/repo" "$HEAD_SHA"   # --post / --review-only ONLY
 ```
-
-**Auto-fix branch guard (PR mode, default loop only).** Before entering the loop, the orchestrator must be standing on the PR's own branch so fix commits land where they belong:
-
+**Auto-fix branch guard (PR mode, default loop only).** Before entering the loop, the orchestrator must be in one of two accepted states so fix commits land where they belong: **standing on the PR's branch**, or **an adopted build** whose upstream is `origin/<PR branch>` and whose `HEAD` is exactly the PR head (`$HEAD_SHA`). The second case is safe because the upstream leg proves this local branch **is** the PR's branch adopted (not a coincidental fork), and the SHA leg proves you are standing on the PR's actual state rather than a stale copy.
 ```bash
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-if [ "$CURRENT_BRANCH" != "$PR_BRANCH" ]; then
-  echo "Auto-fix needs PR branch '$PR_BRANCH' checked out (currently on '$CURRENT_BRANCH')."
-  echo "Check out the branch, or re-run with --post (read-only GitHub) or --review-only (read-only terminal)."
+UPSTREAM_REF=$(git rev-parse --symbolic-full-name '@{upstream}' 2>/dev/null) || UPSTREAM_REF=""
+LOCAL_HEAD=$(git rev-parse HEAD)
+case "$PR_BRANCH" in ""|null) echo "Auto-fix: pr.json has no head branch — refusing (fail closed)."; exit 1;; esac
+case "$HEAD_SHA"   in ""|null) echo "Auto-fix: pr.json has no head SHA — refusing (fail closed)."; exit 1;; esac
+if [ "$CURRENT_BRANCH" != "$PR_BRANCH" ] \
+   && ! { [ "$UPSTREAM_REF" = "refs/remotes/origin/$PR_BRANCH" ] && [ "$LOCAL_HEAD" = "$HEAD_SHA" ]; }; then
+  echo "Auto-fix needs the PR's branch '$PR_BRANCH' (currently on '$CURRENT_BRANCH')."
+  echo "An ADOPTED build also qualifies, but only when BOTH hold: upstream is 'refs/remotes/origin/$PR_BRANCH' (found '${UPSTREAM_REF:-none}') AND HEAD is the PR head '$HEAD_SHA' (found '$LOCAL_HEAD')."
+  echo "Otherwise check out the branch, or re-run with --post (read-only GitHub) or --review-only (read-only terminal)."
   exit 1
 fi
 ```
-
-If the guard fails (detached HEAD, or you're reviewing someone else's PR), STOP — do not create the detached worktree and do not enter the loop. Tell the user to use `--post` or `--review-only`. The detached `git worktree add --detach` step above is for the `--post`/`--review-only` PR paths ONLY, never for the auto-fix path.
-
+If the guard fails (detached HEAD, an unrelated branch, or you're reviewing someone else's PR), STOP — do not create the detached worktree and do not enter the loop. A **stale** adopted branch — right upstream, wrong `HEAD` — refuses too; missing `pr.json` metadata (`$PR_BRANCH` or `$HEAD_SHA` empty or `null`) refuses fail-closed. Tell the user to use `--post` or `--review-only`. The detached `git worktree add --detach` step above is for the `--post`/`--review-only` PR paths ONLY, never for the auto-fix path. The auto-fix loop **never pushes**; an adopted build must push its fix commits itself with an explicit refspec — `git push origin HEAD:$PR_BRANCH` — because a bare `git push` from an adopted branch fails under git's default `push.default=simple` when the local branch name differs from its upstream (`fatal: The upstream branch of your current branch does not match the name of your current branch.`).
 **Branch mode:**
-
 ```bash
 BRANCH=$(git rev-parse --abbrev-ref HEAD); MODE=branch
 HEAD_SHA=$(git rev-parse HEAD)
