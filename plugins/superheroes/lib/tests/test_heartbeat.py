@@ -165,6 +165,24 @@ def test_edge_02_unreadable_corrupt_file(tmp_path, monkeypatch):
     result = hb.read_heartbeat(repo, launch_id, now=1_000_000.0)
     assert result["class"] == "unknown"
     assert result["class"] != "fresh"
+    assert result["reason"] == "heartbeat-corrupt"
+
+
+def test_edge_02c_unreadable_file(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    launch_id = "unreadable-lane"
+    _declare_and_reserve(repo, launch_id, monkeypatch, tmp_path)
+    path = hb.heartbeat_path(repo, launch_id)["path"]
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(_base_record(launch_id), fh)
+    os.chmod(path, 0o000)
+    try:
+        result = hb.read_heartbeat(repo, launch_id, now=1_000_000.0)
+    finally:
+        os.chmod(path, 0o600)
+    assert result["class"] == "unknown"
+    assert result["reason"] == "heartbeat-unreadable"
 
 
 def test_edge_02b_non_object_json(tmp_path, monkeypatch):
@@ -202,10 +220,16 @@ def test_edge_04_future_ts_no_tolerance(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "bad_ts",
-    [float("nan"), float("inf"), float("-inf"), True, False],
+    "bad_ts,expected_reason",
+    [
+        (float("nan"), "heartbeat-corrupt"),
+        (float("inf"), "heartbeat-corrupt"),
+        (float("-inf"), "heartbeat-corrupt"),
+        (True, "heartbeat-ts-invalid"),
+        (False, "heartbeat-ts-invalid"),
+    ],
 )
-def test_edge_05_non_finite_ts(tmp_path, monkeypatch, bad_ts):
+def test_edge_05_non_finite_ts(tmp_path, monkeypatch, bad_ts, expected_reason):
     repo = _init_repo(tmp_path / "repo")
     launch_id = "bad-ts"
     _declare_and_reserve(repo, launch_id, monkeypatch, tmp_path)
@@ -213,13 +237,40 @@ def test_edge_05_non_finite_ts(tmp_path, monkeypatch, bad_ts):
     result = hb.read_heartbeat(repo, launch_id, now=1_000_000.0)
     assert result["class"] == "unknown"
     assert result["class"] != "fresh"
+    assert result["reason"] == expected_reason
+
+
+def test_stamp_refuses_non_finite_now(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = hb.stamp(
+        repo,
+        state="working",
+        phase="p",
+        launch_id="nan-lane",
+        now=float("nan"),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "heartbeat-ts-invalid"
+    assert not os.path.isfile(hb.heartbeat_path(repo, "nan-lane")["path"])
 
 
 @pytest.mark.parametrize(
-    "bad_stale",
-    [float("nan"), float("inf"), True, False, "300", -1, 0, 86401],
+    "bad_stale,expected_reason",
+    [
+        (float("nan"), "heartbeat-corrupt"),
+        (float("inf"), "heartbeat-corrupt"),
+        (True, "heartbeat-stale-after-invalid"),
+        (False, "heartbeat-stale-after-invalid"),
+        ("300", "heartbeat-stale-after-invalid"),
+        (-1, "heartbeat-stale-after-invalid"),
+        (0, "heartbeat-stale-after-invalid"),
+        (86401, "heartbeat-stale-after-invalid"),
+    ],
 )
-def test_edge_05_non_finite_or_invalid_stale_after(tmp_path, monkeypatch, bad_stale):
+def test_edge_05_non_finite_or_invalid_stale_after(
+    tmp_path, monkeypatch, bad_stale, expected_reason,
+):
     repo = _init_repo(tmp_path / "repo")
     launch_id = "bad-stale"
     _declare_and_reserve(repo, launch_id, monkeypatch, tmp_path)
@@ -229,6 +280,7 @@ def test_edge_05_non_finite_or_invalid_stale_after(tmp_path, monkeypatch, bad_st
     result = hb.read_heartbeat(repo, launch_id, now=1_000_000.0)
     assert result["class"] == "unknown"
     assert result["class"] != "fresh"
+    assert result["reason"] == expected_reason
 
 
 def test_edge_06_invalid_state(tmp_path, monkeypatch):
@@ -239,6 +291,17 @@ def test_edge_06_invalid_state(tmp_path, monkeypatch):
     result = hb.read_heartbeat(repo, launch_id, now=1_000_000.0)
     assert result["class"] == "unknown"
     assert result["class"] != "fresh"
+
+
+@pytest.mark.parametrize("bad_state", [[], {}, 1])
+def test_edge_06b_non_string_state_never_raises(tmp_path, monkeypatch, bad_state):
+    repo = _init_repo(tmp_path / "repo")
+    launch_id = "typed-state"
+    _declare_and_reserve(repo, launch_id, monkeypatch, tmp_path)
+    _write_heartbeat_file(repo, launch_id, _base_record(launch_id, state=bad_state))
+    result = hb.read_heartbeat(repo, launch_id, now=1_000_000.0)
+    assert result["class"] == "unknown"
+    assert result["reason"] == "heartbeat-state-invalid"
 
 
 def test_edge_07_ledger_unreadable(tmp_path, monkeypatch):
@@ -290,6 +353,15 @@ def test_edge_07d_ledger_fold_invalid(tmp_path, monkeypatch):
     result = hb.sweep(repo)
     assert result["ok"] is False
     assert result["reason"] == hb.REASON_LEDGER_UNREADABLE
+
+
+def test_edge_07e_missing_ledger_refuses_sweep(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = hb.sweep(repo)
+    assert result["ok"] is False
+    assert result["reason"] == hb.REASON_LEDGER_UNREADABLE
+    assert "launches" not in result or result.get("launches") != []
 
 
 @pytest.mark.parametrize("launch_id", ["../../evil", "a/b"])
@@ -381,6 +453,9 @@ def test_stamp_and_read_round_trip(tmp_path, monkeypatch):
     assert result["ok"] is True
     mode = os.stat(result["path"]).st_mode & 0o777
     assert mode == 0o600
+    beats_dir = os.path.dirname(result["path"])
+    dir_mode = os.stat(beats_dir).st_mode & 0o777
+    assert dir_mode == 0o700
     read_back = hb.read_heartbeat(repo, "lane-rt", now=now + 1)
     assert read_back["class"] == "fresh"
     assert read_back["state"] == "working"
@@ -418,6 +493,61 @@ def test_heartbeat_root_env_override(tmp_path, monkeypatch):
     )
     assert result["ok"] is True
     assert result["path"].startswith(custom_root)
+
+
+def test_heartbeat_root_override_refuses_in_repo(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(hb.HEARTBEAT_ROOT_ENV, repo)
+    result = hb.resolve_root(repo)
+    assert result["ok"] is False
+    assert result["reason"] == hb.REASON_ROOT_UNRESOLVED
+
+
+def test_heartbeat_root_override_refuses_insecure(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    insecure_root = str(tmp_path / "insecure-heartbeat-root")
+    os.makedirs(insecure_root, mode=0o755)
+    monkeypatch.setenv(hb.HEARTBEAT_ROOT_ENV, insecure_root)
+    result = hb.resolve_root(repo)
+    assert result["ok"] is False
+    assert result["reason"] == hb.REASON_ROOT_UNRESOLVED
+
+
+def test_heartbeat_root_override_creates_mode_0700_dirs(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    custom_root = str(tmp_path / "custom-heartbeat-root")
+    os.makedirs(custom_root, mode=0o700)
+    monkeypatch.setenv(hb.HEARTBEAT_ROOT_ENV, custom_root)
+    monkeypatch.delenv(ll.LEDGER_ROOT_ENV, raising=False)
+    result = hb.stamp(
+        repo,
+        state="working",
+        phase="child",
+        launch_id="mode-lane",
+        now=1_000_000.0,
+    )
+    assert result["ok"] is True
+    repo_id = ll.repo_identity(repo)
+    repo_dir = os.path.join(custom_root, repo_id)
+    beats_dir = os.path.join(repo_dir, hb.HEARTBEATS_DIR_NAME)
+    assert (os.stat(repo_dir).st_mode & 0o777) == 0o700
+    assert (os.stat(beats_dir).st_mode & 0o777) == 0o700
+
+
+def test_read_heartbeat_refuses_symlink(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    launch_id = "symlink-lane"
+    _declare_and_reserve(repo, launch_id, monkeypatch, tmp_path)
+    path = hb.heartbeat_path(repo, launch_id)["path"]
+    parent = os.path.dirname(path)
+    os.makedirs(parent, mode=0o700, exist_ok=True)
+    real_file = os.path.join(parent, "real.json")
+    with open(real_file, "w", encoding="utf-8") as fh:
+        json.dump(_base_record(launch_id), fh)
+    os.symlink(real_file, path)
+    result = hb.read_heartbeat(repo, launch_id, now=1_000_000.0)
+    assert result["class"] == "unknown"
+    assert result["reason"] == "heartbeat-unreadable"
 
 
 def test_sweep_empty_when_no_live_launches(tmp_path, monkeypatch):
@@ -617,6 +747,23 @@ def test_last_dispatch_numeric_started_at_refused(tmp_path, monkeypatch):
     assert result["ok"] is False
     assert result["reason"] == "heartbeat-last-dispatch-invalid"
     path = hb.heartbeat_path(repo, "numeric-lane")
+    assert not os.path.isfile(path["path"])
+
+
+def test_last_dispatch_malformed_started_at_refused(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = hb.stamp(
+        repo,
+        state="working",
+        phase="dispatch",
+        launch_id="bad-iso-lane",
+        last_dispatch=_last_dispatch(startedAt="not-a-timestamp"),
+        now=1_000_000.0,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "heartbeat-last-dispatch-invalid"
+    path = hb.heartbeat_path(repo, "bad-iso-lane")
     assert not os.path.isfile(path["path"])
 
 

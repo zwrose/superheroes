@@ -10,9 +10,11 @@ import json
 import math
 import os
 import re
+import stat
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -72,6 +74,48 @@ def _path_inside(parent, child):
     return child == parent or child.startswith(parent + os.sep)
 
 
+def _is_iso8601_utc(value):
+    if not isinstance(value, str) or not value:
+        return False
+    text = value.strip()
+    if not text.endswith("Z"):
+        return False
+    try:
+        dt = datetime.fromisoformat(text[:-1] + "+00:00")
+    except ValueError:
+        return False
+    return dt.tzinfo is not None
+
+
+def _validate_resolved_root(repo_root, root, env):
+    if not ll._has_git_entry(repo_root):
+        return False
+    if ll.repo_identity(repo_root) is None:
+        return False
+    repo_real = os.path.realpath(repo_root)
+    proc = ll._git_scrubbed(repo_root, "rev-parse", "--git-common-dir", env=env)
+    if proc is None or proc.returncode != 0:
+        return False
+    common = (proc.stdout or "").strip()
+    if not os.path.isabs(common):
+        common = os.path.join(repo_root, common)
+    try:
+        common_real = os.path.realpath(common)
+    except OSError:
+        return False
+    if _path_inside(repo_real, root) or _path_inside(common_real, root):
+        return False
+    try:
+        os.makedirs(root, mode=0o700, exist_ok=True)
+    except OSError:
+        return False
+    if not os.path.isdir(root) or not os.access(root, os.W_OK):
+        return False
+    if ll._is_group_or_world_accessible(root):
+        return False
+    return True
+
+
 def _fail(reason, **extra):
     out = {"ok": False, "reason": reason}
     out.update(extra)
@@ -93,6 +137,10 @@ def resolve_root(repo_root, env=None):
         try:
             root = os.path.realpath(os.path.abspath(override))
         except OSError:
+            return _fail(REASON_ROOT_UNRESOLVED, root=None)
+        if not _validate_resolved_root(repo_root, root, env):
+            if ll.repo_identity(repo_root) is None:
+                return _fail(REASON_REPO_IDENTITY_UNAVAILABLE, root=None)
             return _fail(REASON_ROOT_UNRESOLVED, root=None)
         return _ok(root=root)
     resolved = ll.resolve_root(repo_root, env=env)
@@ -141,7 +189,58 @@ def _heartbeat_dir(repo_root, env=None):
     if repo_id is None:
         return _fail(REASON_REPO_IDENTITY_UNAVAILABLE, dir=None)
     directory = os.path.join(resolved["root"], repo_id, HEARTBEATS_DIR_NAME)
-    return _ok(dir=directory, root=resolved["root"])
+    return _ok(dir=directory, root=resolved["root"], repo_id=repo_id)
+
+
+def _ensure_heartbeat_store(repo_root, env=None):
+    """Create validated heartbeat store dirs with 0o700 on every level. Never raises."""
+    dir_result = _heartbeat_dir(repo_root, env=env)
+    if not dir_result["ok"]:
+        return dir_result
+    root = dir_result["root"]
+    repo_id = dir_result["repo_id"]
+    root_fd = None
+    repo_fd = None
+    try:
+        root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+        if ll._is_fd_group_or_world_accessible(root_fd):
+            return _fail(REASON_ROOT_UNRESOLVED, dir=None)
+        try:
+            os.mkdir(repo_id, mode=0o700, dir_fd=root_fd)
+        except FileExistsError:
+            pass
+        except OSError:
+            return _fail(REASON_WRITE_FAILED, dir=None)
+        try:
+            repo_fd = os.open(
+                repo_id,
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY,
+                dir_fd=root_fd,
+            )
+        except OSError:
+            return _fail(REASON_WRITE_FAILED, dir=None)
+        if ll._is_fd_group_or_world_accessible(repo_fd):
+            return _fail(REASON_ROOT_UNRESOLVED, dir=None)
+        try:
+            os.mkdir(HEARTBEATS_DIR_NAME, mode=0o700, dir_fd=repo_fd)
+        except FileExistsError:
+            pass
+        except OSError:
+            return _fail(REASON_WRITE_FAILED, dir=None)
+    except OSError:
+        return _fail(REASON_WRITE_FAILED, dir=None)
+    finally:
+        if repo_fd is not None:
+            try:
+                os.close(repo_fd)
+            except OSError:
+                pass
+        if root_fd is not None:
+            try:
+                os.close(root_fd)
+            except OSError:
+                pass
+    return _ok(dir=dir_result["dir"])
 
 
 def _validate_last_dispatch(value):
@@ -156,7 +255,8 @@ def _validate_last_dispatch(value):
     for field in ("kind", "engine", "model", "runId"):
         if not isinstance(value[field], str) or not value[field]:
             return False, "heartbeat-last-dispatch-invalid"
-    if not isinstance(value["startedAt"], str) or not value["startedAt"]:
+    started_at = value["startedAt"]
+    if not _is_iso8601_utc(started_at):
         return False, "heartbeat-last-dispatch-invalid"
     return True, None
 
@@ -173,7 +273,7 @@ def _validate_record(record, *, launch_id, now):
     if issue is not None and (not isinstance(issue, int) or isinstance(issue, bool)):
         return False, "heartbeat-issue-invalid"
     state = record.get("state")
-    if state not in STATES:
+    if not isinstance(state, str) or state not in STATES:
         return False, "heartbeat-state-invalid"
     phase = record.get("phase")
     if not isinstance(phase, str) or not (_PHASE_MIN_LEN <= len(phase) <= _PHASE_MAX_LEN):
@@ -197,13 +297,25 @@ def _validate_record(record, *, launch_id, now):
 
 
 def _load_record(path):
+    fd = None
     try:
-        with open(path, encoding="utf-8") as fh:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return None, "heartbeat-unreadable"
+        with os.fdopen(fd, encoding="utf-8") as fh:
+            fd = None
             raw = json.load(fh, parse_constant=_reject_constant)
     except OSError:
         return None, "heartbeat-unreadable"
     except (ValueError, json.JSONDecodeError):
         return None, "heartbeat-corrupt"
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
     if not isinstance(raw, dict):
         return None, "heartbeat-not-an-object"
     return raw, None
@@ -365,17 +477,12 @@ def stamp(
         return _fail(path_result["reason"])
     path = path_result["path"]
 
-    dir_result = _heartbeat_dir(repo_root, env=env)
-    if not dir_result["ok"]:
-        return _fail(dir_result["reason"])
-    directory = dir_result["dir"]
+    store_result = _ensure_heartbeat_store(repo_root, env=env)
+    if not store_result["ok"]:
+        return _fail(store_result["reason"])
+    directory = store_result["dir"]
     if not _path_inside(directory, path):
         return _fail(REASON_LAUNCH_ID_INVALID)
-
-    try:
-        os.makedirs(directory, mode=0o700, exist_ok=True)
-    except OSError:
-        return _fail(REASON_WRITE_FAILED)
 
     text = json.dumps(record, sort_keys=True) + "\n"
     tmp = None
@@ -411,7 +518,7 @@ def _ledger_live_launches(repo_root, env=None):
     if state not in ("ok", "missing"):
         return _fail(REASON_LEDGER_UNREADABLE, live=[])
     if state == "missing":
-        return _ok(live=[])
+        return _fail(REASON_LEDGER_UNREADABLE, live=[])
     folded = ll.fold(read_result["records"])
     if not folded["ok"]:
         return _fail(REASON_LEDGER_UNREADABLE, live=[])

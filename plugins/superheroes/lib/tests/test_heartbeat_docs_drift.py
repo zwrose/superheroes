@@ -61,6 +61,15 @@ def test_workhorse_charter_matches_heartbeat_constants():
 
 def test_showrunner_charter_matches_heartbeat_constants():
     text = _read_plugin("skills/showrunner/SKILL.md")
-    # Showrunner documents actionable sweep classes in prose; `fresh` delegates to §15.
-    tokens = sorted(cls for cls in hb.SWEEP_CLASSES if cls != "fresh")
-    _assert_tokens_present(text, "skills/showrunner/SKILL.md", tokens)
+    m = re.search(
+        r"\*\*Scheduled heartbeat sweep.*?(?=\n\s*\*\*Wave-preflight)",
+        text,
+        re.DOTALL,
+    )
+    assert m, "showrunner duty-9 heartbeat sweep paragraph not found"
+    duty = m.group(0)
+    tokens = (
+        sorted(cls for cls in hb.SWEEP_CLASSES if cls != "fresh")
+        + ["staleAfterSeconds", "heartbeat.py sweep", "record-outcome"]
+    )
+    _assert_tokens_present(duty, "skills/showrunner/SKILL.md duty-9", tokens)
