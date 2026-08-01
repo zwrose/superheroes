@@ -1326,7 +1326,7 @@ def _run_review_path_fence(block, *, invocation=None, unset_invocation=False):
     env = {k: v for k, v in os.environ.items() if k != "INVOCATION"}
     if not unset_invocation:
         env["INVOCATION"] = invocation if invocation is not None else ""
-    script = block + '\necho "$REVIEW_PATH"'
+    script = 'set -u\n' + block + '\necho "$REVIEW_PATH"'
     result = subprocess.run(
         ["/bin/sh", "-c", script],
         env=env,
@@ -1342,6 +1342,7 @@ def _run_review_path_fence(block, *, invocation=None, unset_invocation=False):
 
 
 def test_skill_review_path_assigned_in_setup_fences():
+    # axis: shipped REVIEW_PATH fence assigns and routes each invocation shape (arm precedence, unset default)
     """meta.json path was always ''; issue #646; same class as $MODE fix in #667."""
     block = extract_review_path_fence()
     for literal in ("REVIEW_PATH=post", "REVIEW_PATH=review-only", "REVIEW_PATH=loop"):
@@ -1353,6 +1354,7 @@ def test_skill_review_path_assigned_in_setup_fences():
         ("", "loop", False),
         (None, "loop", True),
         ('branch --focus "some notes"', "loop", False),
+        ("pr 123 --post --review-only", "post", False),
     ]
     for invocation, expected, unset in cases:
         got = _run_review_path_fence(

@@ -55,6 +55,7 @@ def _section(text, heading, next_heading=None):
 
 
 def test_rule1_no_path_literal_inside_fences():
+    # axis: no path literal inside fenced blocks on skill surface (SKILL.md + linked references)
     offenders = []
     for skill in ALL_SKILLS:
         sources = [(os.path.join(SKILLS, skill, "SKILL.md"), f"{skill}/SKILL.md")]
