@@ -44,7 +44,11 @@ def test_skill_compile_invokes_verification():
 def test_skill_resolves_the_verifier_tier_not_the_session_model():
     text = surface_text("review-code")
     # Model resolved via the verifier tier (--role verifier), not the session model.
-    assert re.search(r"VERIFIER_MODEL=.*--role\s+verifier", text), (
+    assert re.search(
+        r"^[ \t]*VERIFIER_MODEL=[^\n]*--role[ \t]+verifier",
+        text,
+        re.MULTILINE,
+    ), (
         "surface must assign VERIFIER_MODEL via --role verifier"
     )
 

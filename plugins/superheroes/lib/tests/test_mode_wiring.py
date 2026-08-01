@@ -35,7 +35,9 @@ def test_ask_branch_records_greenfield_pick(name):
 def test_run_surfaces_coalesced_nudge(name):
     body = _skill(name)
     assert "mode_reconcile.py" in body and re.search(
-        r'mode_reconcile\.py"?\s+signals\b', body
+        r'^[ \t]*NUDGE_MSG=[^\n]*mode_reconcile\.py"?[ \t]+signals\b',
+        body,
+        re.MULTILINE,
     ), f"{name} must surface the coalesced reconcile nudge via mode_reconcile signals (FR-7/8)"
 
 
