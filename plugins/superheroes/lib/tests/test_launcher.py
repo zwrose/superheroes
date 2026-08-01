@@ -1,5 +1,4 @@
 import importlib.util
-import ast
 import json
 import os
 import signal
@@ -1490,63 +1489,11 @@ def test_edge20_log_open_failure_terminalizes_reservation(tmp_path, monkeypatch)
 
 # --- C2 terminalization chokepoint (work order C2) ---------------------------
 
-
-TERMINAL_WRITE_ALLOWLIST = frozenset({
-    "_terminalize",
-    "record_outcome",
-    "_cli_record_outcome",
-})
-
-
-class _TerminalWriterVisitor(ast.NodeVisitor):
-    def __init__(self):
-        self.violations = []
-
-    def visit_Call(self, node):
-        func = node.func
-        if isinstance(func, ast.Attribute) and func.attr == "record_outcome":
-            self.violations.append("record_outcome")
-        elif isinstance(func, ast.Name) and func.id in ("_record_park", "_record_refused"):
-            self.violations.append(func.id)
-        self.generic_visit(node)
-
-    def visit_Dict(self, node):
-        for key, value in zip(node.keys, node.values):
-            if (
-                isinstance(key, ast.Constant)
-                and key.value == "event"
-                and isinstance(value, ast.Constant)
-                and value.value in ("refused", "outcome")
-            ):
-                self.violations.append("event:%s" % value.value)
-        self.generic_visit(node)
-
-
-def _terminal_writer_functions():
-    with open(_MOD, encoding="utf-8") as fh:
-        tree = ast.parse(fh.read(), filename=_MOD)
-    violations = {}
-    launch_build_calls = []
-    for node in tree.body:
-        if not isinstance(node, ast.FunctionDef):
-            continue
-        visitor = _TerminalWriterVisitor()
-        visitor.visit(node)
-        if visitor.violations and node.name not in TERMINAL_WRITE_ALLOWLIST:
-            violations[node.name] = visitor.violations
-        if node.name == "launch_build":
-            for child in ast.walk(node):
-                if (
-                    isinstance(child, ast.Call)
-                    and isinstance(child.func, ast.Name)
-                    and child.func.id in ("_record_park", "_record_refused")
-                ):
-                    launch_build_calls.append(child.func.id)
-    return violations, launch_build_calls
+from test_launch_chokepoint_census import class2_census_violations  # noqa: E402
 
 
 def test_c2_census_only_terminalize_writes_terminals():
-    violations, launch_build_calls = _terminal_writer_functions()
+    violations, launch_build_calls = class2_census_violations(_MOD)
     assert launch_build_calls == [], (
         "INVARIANT: exactly one function writes a terminal ledger event for a launch; "
         "launch_build must not call _record_park or _record_refused directly"
@@ -1937,6 +1884,6 @@ def test_c2_edge14_ledger_path_refused_fails_preflight(tmp_path, monkeypatch):
 
 
 def test_c2_edge15_census_detects_bypass_outside_terminalize():
-    violations, launch_build_calls = _terminal_writer_functions()
-    assert "_terminalize" not in violations
-    assert "launch_build" not in violations
+    violations, launch_build_calls = class2_census_violations(_MOD)
+    assert "launcher.py::_terminalize" not in violations
+    assert "launcher.py::launch_build" not in violations

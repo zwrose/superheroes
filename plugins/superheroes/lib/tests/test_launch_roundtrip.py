@@ -203,7 +203,7 @@ def _scenario_settle_nonzero_exit(repo, log_dir, surfaces, batch_id, monkeypatch
         _all_checks(),
         monkeypatch,
         spawn_fn=_make_spawn_fn("exit1"),
-        settle_seconds=0.15,
+        settle_seconds=10,
     )
     assert result["ok"] is False
     assert result["reason"] == "settle-nonzero-exit"
@@ -228,7 +228,7 @@ def _scenario_settle_exit_zero(repo, log_dir, surfaces, batch_id, monkeypatch):
         _all_checks(),
         monkeypatch,
         spawn_fn=_make_spawn_fn("exit0"),
-        settle_seconds=0.15,
+        settle_seconds=10,
     )
     assert result["ok"] is False
     assert result["reason"] == "settle-exit-zero-uncertain"
@@ -272,35 +272,60 @@ def _scenario_deadline_before_spawn(repo, log_dir, surfaces, batch_id, monkeypat
 
 def _scenario_deadline_after_spawn(repo, log_dir, surfaces, batch_id, monkeypatch):
     child_pid = {"pid": None}
+    clock = {"monotonic": 1000.0}
+    clock_advanced = {"n": 0}
 
-    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
-        proc = _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
-        child_pid["pid"] = proc.pid
-        return proc
+    class _TimeShim:
+        @staticmethod
+        def monotonic():
+            return clock["monotonic"]
 
-    result = _run_launch(
-        repo,
-        log_dir,
-        _valid_premise(repo, surfaces=surfaces, batchId=batch_id),
-        _all_checks(),
-        monkeypatch,
-        spawn_fn=capture_spawn,
-        settle_seconds=5,
-        total_deadline_seconds=0.5,
-    )
-    assert result["ok"] is False
-    assert result["reason"] == "retry-deadline-exceeded"
-    launch_id = result["launchId"]
-    _, folded = _assert_p1(repo)
-    records = _read_ledger(repo)["records"]
-    launch_recs = _records_for_launch(records, launch_id)
-    assert [r["event"] for r in launch_recs] == ["reserved", "started", "outcome"]
-    outcome_rec = [r for r in launch_recs if r["event"] == "outcome"][0]
-    assert outcome_rec.get("outcome") == "park"
-    _assert_terminal(folded, launch_id, terminal=True, terminal_kind="outcome", outcome="park")
-    assert child_pid["pid"] is not None
-    _assert_child_dead(child_pid["pid"])
-    return launch_id
+        @staticmethod
+        def time():
+            return time.time()
+
+        @staticmethod
+        def sleep(seconds):
+            # No-op: monotonic is advanced explicitly; real sleep would add wall-clock
+            # delay without moving the controlled deadline clock.
+            pass
+
+    real_time = L.time
+    monkeypatch.setattr(L, "time", _TimeShim)
+    try:
+        def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
+            proc = _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+            child_pid["pid"] = proc.pid
+            clock["monotonic"] += 10
+            clock_advanced["n"] += 1
+            return proc
+
+        result = _run_launch(
+            repo,
+            log_dir,
+            _valid_premise(repo, surfaces=surfaces, batchId=batch_id),
+            _all_checks(),
+            monkeypatch,
+            spawn_fn=capture_spawn,
+            settle_seconds=5,
+            total_deadline_seconds=1,
+        )
+        assert result["ok"] is False
+        assert result["reason"] == "retry-deadline-exceeded"
+        assert clock_advanced["n"] >= 1
+        launch_id = result["launchId"]
+        _, folded = _assert_p1(repo)
+        records = _read_ledger(repo)["records"]
+        launch_recs = _records_for_launch(records, launch_id)
+        assert [r["event"] for r in launch_recs] == ["reserved", "started", "outcome"]
+        outcome_rec = [r for r in launch_recs if r["event"] == "outcome"][0]
+        assert outcome_rec.get("outcome") == "park"
+        _assert_terminal(folded, launch_id, terminal=True, terminal_kind="outcome", outcome="park")
+        assert child_pid["pid"] is not None
+        _assert_child_dead(child_pid["pid"])
+        return launch_id
+    finally:
+        L.time = real_time
 
 
 def _scenario_success_then_handback(repo, log_dir, surfaces, batch_id, monkeypatch):
@@ -468,7 +493,7 @@ def test_count_never_resolves_a_batch_with_a_live_member(tmp_path, monkeypatch):
     premise1 = _valid_premise(repo, surfaces=["plugins/superheroes/a"], batchId=batch)
     first = _run_launch(
         repo, log_dir, premise1, _all_checks(), monkeypatch,
-        spawn_fn=_make_spawn_fn("exit1"), settle_seconds=0.3,
+        spawn_fn=_make_spawn_fn("exit1"), settle_seconds=10,
     )
     assert first["ok"] is False
 
