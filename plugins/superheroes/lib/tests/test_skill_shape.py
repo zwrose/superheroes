@@ -1,10 +1,13 @@
 import os
+import re
 
 
 def test_review_base_has_doc_severity_addendum():
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
     text = open(os.path.join(root, "plugins/superheroes/rubric/review-base.md"), encoding="utf-8").read()
-    assert "<!-- rubric-version: 8 -->" in text
+    match = re.search(r"<!-- rubric-version:\s*(\d+)\s*-->", text)
+    assert match is not None, "rubric-version marker is missing or malformed"
+    assert int(match.group(1)) >= 8, f"rubric-version {match.group(1)} is below the addendum floor of 8"
     assert "## Document-review severity" in text
     # docType-gated, states the plan-vs-tasks asymmetry and the fail-closed rule
     assert "docType" in text and "plan" in text and "tasks" in text
