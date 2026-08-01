@@ -188,7 +188,8 @@ order is the likeliest defect source, so catching one early is high-value.
    anything whose job is to fail when something is wrong: a test, an assertion, a guard clause, a
    validator, a CI check — the order should name the bite-proof it expects: the guarded element, the
    neutralization to apply, and the detector expected to go red. If it does not, **flag the gap** —
-   and still produce the proof, per the **Short structured return rule above**, naming the
+   and still produce the proof, per the **Short structured return rule above** (`rubric/bite-proof.md`
+   is the plugin's own reference; the orchestrator supplies it if you need it), naming the
    neutralization you chose — which must lie **inside your order's surface**. If the consumer that
    must be mutated sits outside it, that is **stop and report** under the existing scope rule —
    flag it as the order defect it is, so the orchestrator can re-order, and do not wander. An order
