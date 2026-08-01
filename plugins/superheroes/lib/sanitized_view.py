@@ -114,8 +114,10 @@ _DIFF_READ_POLL_SECONDS = 1.0
 _ANCESTRY_SCRATCH_PREFIX = "superheroes-ancestry-"
 
 # Pins for our own reader. core.commitGraph defaults on since git 2.24, and a
-# commit-graph file lives inside the object directory we alternate to, so it is
-# disabled explicitly rather than trusted.
+# commit-graph file lives inside the object directory we alternate to — so unlike
+# the git-directory overlays, commit-graph data is NOT structurally excluded by
+# scratch isolation. This documented control is what excludes it, and the
+# resulting guarantee is conditional on the git executable honoring it.
 _ANCESTRY_CONFIG_OVERRIDES = (
     "-c",
     "core.commitGraph=false",
@@ -151,6 +153,24 @@ def _is_git_object_id_hex(value):
   if len(value) not in (40, 64):
     return False
   return all(c in "0123456789abcdef" for c in value.lower())
+
+
+def _require_pinned_commit_oid(value):
+    """Return the pinned commit object id in ``value``, or refuse.
+
+    A revision expression (``HEAD~5``, ``main^``), a branch name, a tag, or an
+    option-like value is refused **before any repository-local git command runs**.
+    Resolving one walks ancestry inside the reviewed repository, where graft and
+    replace metadata apply, so a hostile repository could steer that step.
+    review-code already resolves and pins the remote base commit before calling
+    in; this only mechanizes that long-standing caller premise.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+    value = value.strip()
+    if value.startswith("-") or not _is_git_object_id_hex(value):
+        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+    return value
 
 
 def _ascii_fold(s):
@@ -590,6 +610,43 @@ def _reviewed_repo_ancestry_git_argv(repo_real, *args):
     ]
 
 
+_CAPABILITY_UNSUPPORTED = object()
+
+_SHALLOW_ANSWERS = frozenset({"true", "false"})
+
+_OBJECT_FORMAT_ANSWERS = frozenset({"sha1", "sha256"})
+
+
+def _classify_capability_output(proc, accepted):
+    """Classify one ancestry ``git rev-parse`` capability-query result by exact match.
+
+    This is the module's single interpreter of capability-query output, and it
+    renders no policy of its own: it returns the exact accepted token, or the
+    ``_CAPABILITY_UNSUPPORTED`` sentinel. Each caller declares the values it
+    accepts and decides for itself what its own unsupported case means.
+
+    Everything that is not an exact accepted answer collapses to the sentinel — a
+    non-zero exit, empty output, output that is not exactly one line, and any
+    single-line value outside ``accepted``. That last case is the one that
+    matters most: ``git rev-parse`` echoes an option it does not recognise and
+    still exits 0, so a git predating the queried option answers with the flag
+    itself. "This git cannot tell us" is never the same as an answer.
+    """
+    if proc.returncode != 0:
+        return _CAPABILITY_UNSUPPORTED
+    raw = proc.stdout
+    if not isinstance(raw, str):
+        return _CAPABILITY_UNSUPPORTED
+    # Exactly the accepted token, plus at most git's single terminating newline.
+    # Nothing else is normalized away: padded, cased, or multi-line output is an
+    # answer this git did not give, not a lenient spelling of one.
+    if raw.endswith("\n"):
+        raw = raw[:-1]
+    if raw not in accepted:
+        return _CAPABILITY_UNSUPPORTED
+    return raw
+
+
 def _repo_object_directory(repo_real, started):
     """Absolute path of the repository's object store.
 
@@ -620,20 +677,24 @@ def _repo_object_directory(repo_real, started):
 
 
 def _repo_object_format(repo_real, started):
-    """Object format name, or None when git is too old to report one (then sha1)."""
+    """Object format name, or None when this git cannot report one (then sha1).
+
+    Accepted answers are declared here; the unsupported policy is this caller's
+    own and is deliberately **not** a refusal. Falling back to ``None`` inits the
+    scratch repository at git's default sha1, which preserves the intentional
+    compatibility path for a git predating ``--show-object-format`` (it echoes
+    the flag back and exits 0). That stays a safe success and must never become
+    an unsafe one: a repository whose real format this build cannot name still
+    fails closed downstream, when ``merge-base`` cannot parse its object ids.
+    """
     proc = _ancestry_run(
         _reviewed_repo_ancestry_git_argv(
             repo_real, "rev-parse", "--show-object-format"
         ),
         started,
     )
-    if proc.returncode != 0:
-        return None
-    fmt = proc.stdout.strip()
-    # git rev-parse echoes an option it does not recognise and still exits 0, so a
-    # git predating --show-object-format answers with the flag itself. That is
-    # "this git cannot tell us", not a hostile answer: fall back to sha1.
-    if not fmt or fmt == "sha1" or not fmt.isalnum() or len(fmt) > 16:
+    fmt = _classify_capability_output(proc, _OBJECT_FORMAT_ANSWERS)
+    if fmt is _CAPABILITY_UNSUPPORTED or fmt == "sha1":
         return None
     return fmt
 
@@ -641,21 +702,28 @@ def _repo_object_format(repo_real, started):
 def _authoritative_merge_base(repo_real, base_sha, head_sha, started):
     """Merge-base resolved outside the reviewed repository's git directory.
 
-    Ancestry overlays a repository can carry — graft metadata, replacement refs, a
-    commit-graph — all live in that repository's git directory. The object store
-    holds only oid->bytes. Resolving ancestry in a scratch repository this process
-    creates, whose sole link to the repo under review is an
-    ``objects/info/alternates`` pointer, therefore puts every such ancestry overlay
-    structurally out of reach, without enumerating any of them. Content-side config
-    and attributes remain in the reviewed repository's domain and are handled by
-    pinned ``-c`` overrides and the ``sanitized-view-diff-opaque`` refusal.
+    **Scratch isolation.** Overlays living in a repository's *git directory* —
+    grafts, replacement refs, shallow metadata, repository config — are out of
+    reach by construction: ancestry resolves in a bare scratch repository this
+    process creates, linked to the repo under review only by an
+    ``objects/info/alternates`` pointer. Nothing enumerates them.
 
-    Trust boundary, stated: the object store's oid->bytes mapping is the trust root
-    already shared by the census, the patch generation and the view materialization.
-    This function does not defend against an object store that serves wrong bytes for
-    an oid, and does not claim to. The guarantee is conditional on every reviewed-
-    repository ancestry walk routing through ``_ancestry_run`` — see
+    **Commit-graph, stated separately.** Scratch isolation does not cover it. A
+    commit-graph file lives inside the *object* directory the alternate exposes,
+    so that data does reach the scratch repository; it is excluded instead by the
+    documented ``-c core.commitGraph=false`` control (``_ANCESTRY_CONFIG_OVERRIDES``),
+    an accepted, owner-ratified part of this boundary. That half of the guarantee
+    is **conditional** on the git executable honoring the control. This is not a
+    claim that every ancestry overlay is structurally inaccessible, and the
+    boundary is not "only oid -> bytes".
+
+    Also outside the claim: an object store that serves wrong bytes for an oid.
+    Content-side config and attributes stay in the reviewed repository's domain,
+    handled by pinned ``-c`` overrides and ``sanitized-view-diff-opaque``. The
+    guarantee is conditional on every reviewed-repository ancestry walk routing
+    through ``_ancestry_run`` — see
     ``test_subprocess_ancestry_git_calls_route_through_ancestry_run``.
+    ``base_sha`` is a pinned commit object id, enforced before any repo-local git.
     """
     proc = _ancestry_run(
         _reviewed_repo_ancestry_git_argv(
@@ -663,7 +731,13 @@ def _authoritative_merge_base(repo_real, base_sha, head_sha, started):
         ),
         started,
     )
-    if proc.returncode == 0 and proc.stdout.strip() == "true":
+    shallow = _classify_capability_output(proc, _SHALLOW_ANSWERS)
+    if shallow is _CAPABILITY_UNSUPPORTED:
+        # This caller's unsupported policy: a shallow state this git cannot
+        # report is not "not shallow". Refusing here is before the census, the
+        # patch, and any external spawn.
+        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+    if shallow == "true":
         raise SanitizedViewError("sanitized-view-diff-base-shallow")
     objects_dir = _repo_object_directory(repo_real, started)
     object_format = _repo_object_format(repo_real, started)
@@ -1706,11 +1780,14 @@ def _git_diff_batch_output(argv, started, total_bytes):
 
 
 def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
-    """Materialize a review patch at the view root (before ``git init``)."""
-    if not diff_base or not diff_base.strip():
-        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
-    if diff_base.startswith("-"):
-        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+    """Materialize a review patch at the view root (before ``git init``).
+
+    ``diff_base`` must be a **pinned commit object id** — 40 hex characters, or 64
+    in a SHA-256 repository. ``build_sanitized_view`` already enforced that at the
+    public ingress; this second call is defense in depth for any direct caller,
+    and it runs before this function's own ``rev-parse``.
+    """
+    diff_base = _require_pinned_commit_oid(diff_base)
 
     _check_export_deadline(started)
     timeout = _remaining_export_timeout(started)
@@ -1788,6 +1865,8 @@ def build_sanitized_view(repo_root, *, diff_base=None):
     from HEAD, ``False`` when they match, and ``None`` when git status could not
     be run.
     """
+    if diff_base is not None:
+        diff_base = _require_pinned_commit_oid(diff_base)
     repo_real = os.path.realpath(repo_root)
     tmp_base = tempfile.gettempdir()
     if path_is_under_repo(tmp_base, repo_real):

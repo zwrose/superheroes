@@ -159,9 +159,12 @@ never drop a finding or a lens.
 > even when the diff under review touches them — the dispatch prompt should name stripped paths so the
 > seat knows why a read failed.
 >
-> **`--diff-base <ref>` (optional).** Omitted → behaviour is exactly as today: nothing is staged and the
-> four receipt keys below are `null`. Supplied → the runner resolves the ref **in the source
-> repository** (which has git), resolves the **merge base** of that ref and the view's `headSha`,
+> **`--diff-base <commit-oid>` (optional).** Omitted → behaviour is exactly as today: nothing is staged
+> and the four receipt keys below are `null`. Supplied → the value must be a **pinned commit object id**
+> (40 hex characters, or 64 in a SHA-256 repository); a revision expression, branch name or tag is
+> refused as `sanitized-view-diff-base-unresolved` **before any repository-local git command runs**.
+> The runner verifies that commit **in the source repository** (which has git), resolves the **merge
+> base** of that commit and the view's `headSha`,
 > generates the merge-base→head patch, and stages it inside the view at the view-root-relative path
 > `SUPERHEROES_REVIEW_DIFF.patch`. The patch is written **after** export verification and **before**
 > the view's synthetic commit, so the view is committed clean rather than dirty. Changed paths that
@@ -207,7 +210,7 @@ never drop a finding or a lens.
 >
 > | token | when |
 > |---|---|
-> | `sanitized-view-diff-base-unresolved` | the base is empty, begins with `-`, does not resolve to a commit, shares no merge base with head, the repository's object store cannot be located, the scratch ancestry repository cannot be created, or the merge-base cannot be established from it |
+> | `sanitized-view-diff-base-unresolved` | the base is empty, begins with `-`, is not a pinned 40-/64-hex commit object id, does not resolve to a commit, shares no merge base with head, the repository's shallow state cannot be determined from its git, the repository's object store cannot be located, the scratch ancestry repository cannot be created, or the merge-base cannot be established from it |
 > | `sanitized-view-diff-base-shallow` | the reviewed repository is a shallow clone, so the genuine merge-base cannot be established from its object store; fetch full history (for example `fetch-depth: 0` or `git fetch --unshallow`) and dispatch again |
 > | `sanitized-view-diff-empty` | a base was requested and the resulting patch is empty with nothing withheld |
 > | `sanitized-view-diff-fully-withheld` | every changed path was withheld as stripped config — an external seat could not review this change at all |
@@ -340,9 +343,11 @@ never drop a finding or a lens.
 > (`repo-root-absent`, `repo-root-missing`, `repo-root-not-a-directory`, `repo-root-not-a-repo`) with
 > `attempts: 0`. `--diff-base` makes staging the diff **machinery** — the runner stages the change as
 > `SUPERHEROES_REVIEW_DIFF.patch` inside the view so the seat can read it without git history.
-> The value must be the **pinned base commit** the round diff was computed against — not a symbolic
-> ref like `origin/main`, which can drift mid-loop and stage a patch that disagrees with the round
-> diff. An unset shell variable expands to `--diff-base ""`, which the runner refuses as
+> The value must be the **pinned base commit object id** the round diff was computed against — not a
+> symbolic ref like `origin/main`, which can drift mid-loop and stage a patch that disagrees with the
+> round diff. This is now **mechanized**: anything that is not a 40-/64-hex commit object id is refused
+> before any repository-local git command runs. An unset shell variable expands to `--diff-base ""`,
+> which the runner refuses as
 > `sanitized-view-diff-base-unresolved` with `attempts: 0` — empty is not the same as omitted.
 > Inlining the diff in the seat prompt remains available and is still reasonable for a small diff,
 > but it is no longer the only way a seat gets the change. Repo access is no longer forbidden.

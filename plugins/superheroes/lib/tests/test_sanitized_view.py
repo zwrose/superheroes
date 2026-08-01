@@ -4501,3 +4501,247 @@ def test_review_diff_ancestry_merge_base_argv_pins_config(monkeypatch, tmp_path)
     # Implementation-coupled assertion protecting a security pin, not behavioural proof.
     assert "core.commitGraph=false" in merge_argv
     assert "core.useReplaceRefs=false" in merge_argv
+
+
+@pytest.mark.parametrize(
+    "returncode,stdout,expected",
+    [
+        (0, "true\n", "sanitized-view-diff-base-shallow"),
+        (0, "false\n", None),
+        (1, "", "sanitized-view-diff-base-unresolved"),
+        (128, "true\n", "sanitized-view-diff-base-unresolved"),
+        (0, "", "sanitized-view-diff-base-unresolved"),
+        (0, "--is-shallow-repository\n", "sanitized-view-diff-base-unresolved"),
+        (0, "false\nfalse\n", "sanitized-view-diff-base-unresolved"),
+        (0, "TRUE\n", "sanitized-view-diff-base-unresolved"),
+        (0, "not-a-boolean\n", "sanitized-view-diff-base-unresolved"),
+    ],
+)
+def test_review_diff_ancestry_shallow_probe_fails_closed(
+    tmp_path, monkeypatch, returncode, stdout, expected
+):
+    """Only exact `false` proceeds; every other shallow answer is a named refusal."""
+    case_path = tmp_path / f"shallow-probe-{returncode}-{stdout!r}"
+    repo, B, H, _D = _graft_decoy_fixture(case_path)
+    real_run = sv._ancestry_run
+
+    def standin(argv, started, *, cwd=None):
+        if "--is-shallow-repository" in argv:
+            class Proc:
+                pass
+            proc = Proc()
+            proc.returncode = returncode
+            proc.stdout = stdout
+            proc.stderr = ""
+            return proc
+        return real_run(argv, started, cwd=cwd)
+
+    monkeypatch.setattr(sv, "_ancestry_run", standin)
+    if expected is None:
+        result = sv._authoritative_merge_base(repo, B, H, time.monotonic())
+        assert result == B
+    else:
+        with pytest.raises(sv.SanitizedViewError) as exc:
+            sv._authoritative_merge_base(repo, B, H, time.monotonic())
+        assert exc.value.detail == expected
+
+
+def test_review_diff_ancestry_old_git_shallow_echo_refuses_before_census_or_patch(
+    tmp_path, monkeypatch
+):
+    """The named old-git case: refusal lands before census, patch generation, or spawn."""
+    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "old-git-shallow-echo")
+    called = []
+    real_run = sv._ancestry_run
+
+    def ancestry_standin(argv, started, *, cwd=None):
+        if "--is-shallow-repository" in argv:
+            class Proc:
+                returncode = 0
+                stdout = "--is-shallow-repository"
+                stderr = ""
+            return Proc()
+        return real_run(argv, started, cwd=cwd)
+
+    def must_not_run(*args, **kwargs):
+        called.append(args)
+        raise AssertionError("must not run")
+
+    monkeypatch.setattr(sv, "_ancestry_run", ancestry_standin)
+    monkeypatch.setattr(sv, "_changed_tree_entries", must_not_run)
+    monkeypatch.setattr(sv, "_batch_review_diff_pathspecs", must_not_run)
+    monkeypatch.setattr(sv, "_git_diff_batch_output", must_not_run)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=B)
+    assert exc.value.detail == "sanitized-view-diff-base-unresolved"
+    assert called == []
+    for root, _dirs, files in os.walk(tmp_path):
+        for fname in files:
+            assert fname != sv.REVIEW_DIFF_FILE_NAME
+
+
+@pytest.mark.parametrize(
+    "returncode,stdout,accepted,expected_token",
+    [
+        (0, "true\n", ("true", "false"), "true"),
+        (0, "false", ("true", "false"), "false"),
+        (0, "  false  \n", ("true", "false"), None),
+        (0, "sha256\n", ("sha1", "sha256"), "sha256"),
+        (0, "true\n", ("sha1", "sha256"), None),
+        (1, "true\n", ("true", "false"), None),
+        (0, "", ("true", "false"), None),
+        (0, "\n", ("true", "false"), None),
+        (0, "true\nfalse\n", ("true", "false"), None),
+        (0, "--is-shallow-repository\n", ("true", "false"), None),
+        (0, "--show-object-format\n", ("sha1", "sha256"), None),
+        (0, "truex\n", ("true", "false"), None),
+        (0, "TRUE\n", ("true", "false"), None),
+    ],
+)
+def test_capability_output_classifier_is_exact_match_only(
+    returncode, stdout, accepted, expected_token
+):
+    """The classifier returns an exact accepted token or the unsupported sentinel."""
+    class Proc:
+        pass
+    proc = Proc()
+    proc.returncode = returncode
+    proc.stdout = stdout
+    proc.stderr = ""
+    result = sv._classify_capability_output(proc, frozenset(accepted))
+    if expected_token is None:
+        assert result is sv._CAPABILITY_UNSUPPORTED
+    else:
+        assert result == expected_token
+
+
+def test_ancestry_capability_queries_route_through_classifier():
+    """No ancestry --show-*/--is-* probe may hand-read its own output."""
+    import ast
+
+    path = os.path.join(os.path.dirname(sv.__file__), "sanitized_view.py")
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+
+    offenders = []
+    module_flags = set()
+
+    class FlagCollector(ast.NodeVisitor):
+        def visit_Constant(self, node):
+            if isinstance(node.value, str) and (
+                node.value.startswith("--show-") or node.value.startswith("--is-")
+            ):
+                module_flags.add(node.value)
+            self.generic_visit(node)
+
+    FlagCollector().visit(tree)
+
+    class FunctionVisitor(ast.NodeVisitor):
+        def visit_FunctionDef(self, node):
+            flags = set()
+            classifier_calls = False
+            for child in ast.walk(node):
+                if isinstance(child, ast.Constant) and isinstance(child.value, str):
+                    if child.value.startswith("--show-") or child.value.startswith("--is-"):
+                        flags.add(child.value)
+                if isinstance(child, ast.Call):
+                    func = child.func
+                    if isinstance(func, ast.Name) and func.id == "_classify_capability_output":
+                        classifier_calls = True
+            if flags and not classifier_calls:
+                offenders.append((node.name, sorted(flags)))
+            self.generic_visit(node)
+
+        def visit_AsyncFunctionDef(self, node):
+            self.visit_FunctionDef(node)
+
+    FunctionVisitor().visit(tree)
+    assert offenders == [], (
+        "ancestry capability probes without _classify_capability_output: %s" % offenders
+    )
+
+    expected_flags = {"--show-object-format", "--is-shallow-repository"}
+    assert module_flags == expected_flags, (
+        "a new ancestry capability query was added and must be routed through "
+        "_classify_capability_output and added to this census deliberately: "
+        "found %s, expected %s" % (sorted(module_flags), sorted(expected_flags))
+    )
+
+
+@pytest.mark.parametrize(
+    "bad_base",
+    [
+        "HEAD", "HEAD~5", "HEAD^", "main", "main^", "origin/main", "v1.0", "@",
+        "-HEAD", "--upload-pack=evil", "   ", "deadbeef",
+        "0" * 39, "0" * 41, "0" * 63, "0" * 65, "g" + "0" * 39,
+    ],
+)
+def test_stage_review_diff_refuses_unpinned_base_before_any_git(
+    tmp_path, monkeypatch, bad_base
+):
+    """A base that is not a pinned commit OID refuses before any git command runs."""
+    spawned = []
+
+    def must_not_run(*args, **kwargs):
+        spawned.append(args)
+        raise AssertionError("git must not run")
+
+    monkeypatch.setattr(sv, "_git_run", must_not_run)
+    monkeypatch.setattr(sv, "_ancestry_run", must_not_run)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._stage_review_diff(
+            str(tmp_path),
+            "a" * 40,
+            str(tmp_path / "view"),
+            bad_base,
+            time.monotonic(),
+        )
+    assert exc.value.detail == "sanitized-view-diff-base-unresolved"
+    assert spawned == []
+
+
+@pytest.mark.parametrize("oid_len", [40, 64])
+def test_stage_review_diff_pinned_oid_reaches_resolution(tmp_path, monkeypatch, oid_len):
+    """SHA-1- and SHA-256-shaped object ids pass the gate and reach rev-parse."""
+    recorded = []
+    base = "a1" * (oid_len // 2)
+
+    def recorder(*args, **kwargs):
+        recorded.append(args[0] if args else kwargs)
+        raise sv.SanitizedViewError("sentinel-reached")
+
+    monkeypatch.setattr(sv, "_git_run", recorder)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._stage_review_diff(
+            str(tmp_path),
+            "b" * 40,
+            str(tmp_path / "view"),
+            base,
+            time.monotonic(),
+        )
+    assert exc.value.detail == "sentinel-reached"
+    assert len(recorded) == 1
+    argv = recorded[0]
+    assert "rev-parse" in argv
+    assert "%s^{commit}" % base in argv
+
+
+@pytest.mark.parametrize("bad_base", ["HEAD~5", "main", "origin/main", "-HEAD"])
+def test_build_sanitized_view_refuses_unpinned_base_before_head_resolution(
+    tmp_path, monkeypatch, bad_base
+):
+    """The public ingress refuses before HEAD resolution or tree materialization."""
+    repo, _B, _H, _D = _graft_decoy_fixture(tmp_path / f"ingress-{bad_base}")
+    spawned = []
+
+    def must_not_run(*args, **kwargs):
+        spawned.append(args)
+        raise AssertionError("must not run")
+
+    monkeypatch.setattr(sv, "_git_rev_parse_head", must_not_run)
+    monkeypatch.setattr(sv, "_materialize_from_tree", must_not_run)
+    monkeypatch.setattr(sv, "_git_run", must_not_run)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=bad_base)
+    assert exc.value.detail == "sanitized-view-diff-base-unresolved"
+    assert spawned == []

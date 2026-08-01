@@ -2194,7 +2194,10 @@ def main(argv):
     d.add_argument("--run-dir", default=None)
     d.add_argument("--max-wait", type=int, default=None)
     d.add_argument("--order-id", default=None)
-    d.add_argument("--diff-base", default=None)
+    d.add_argument("--diff-base", default=None, metavar="<commit-oid>",
+                   help="pinned commit object id (40 hex, or 64 in a SHA-256 repository) "
+                        "to stage the merge-base->head review patch against; a revision "
+                        "expression, branch name or tag is refused")
 
     w = sub.add_parser("dispatch-write")
     w.add_argument("--engine", required=True, choices=("codex", "cursor"))
