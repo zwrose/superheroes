@@ -302,12 +302,12 @@ the reviewer and the owner's authorization carry that check instead.**
      pointer (visible, and recoverable by writing the pointer), never a verdict pointing at a receipt
      that does not exist. **Check the slot whenever you next read this PR's body — a re-vet, a
      re-review, or the read before you hand it back to the owner — not only at a formal re-vet:**
-     compare its text against what you actually wrote — your **vet receipt comment is your canonical
-     copy**, not merely whether the marker is there. Two distinct losses: a body rewrite that
+     compare its text against what you actually wrote — your **most recent** vet receipt comment is
+     your canonical copy, not merely whether the marker is there. Two distinct losses: a body rewrite that
      re-created the heading but dropped your text (marker gone — the case a marker check already
      caught), and a rewrite that carried an older copy of your write forward over a newer one (marker
      present, text stale — invisible to a marker check, which is why presence alone is not enough).
-     Re-write your text when it is gone or stale.
+     Re-write your text and re-stamp the marker when either is missing or stale.
    - **Timing: async by default; what binds you is the show-it level, not attendance.** Interactivity
      was never an independent axis — the presentation call (duty 5) already says when the owner must
      *see* something, so the vet's timing follows from it and mints no new vocabulary. **say it** and
