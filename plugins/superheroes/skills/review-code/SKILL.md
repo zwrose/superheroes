@@ -355,7 +355,7 @@ After dispatch, wait for all five agents to return. A file-channel seat's findin
 
 On the **read-only paths** (`--post`, `--review-only`), the orchestrator compiles in main context. On the **auto-fix loop**, the same mechanical steps run inside `round_driver.py` when panel/scoped findings are submitted — obey the driver's `next`/`submit` instead of reimplementing compile by hand.
 
-Collect findings from file-channel seats at `$SESSION_DIR/round-<round>/findings-*.json` and from stdout-channel seats via their folded `dispatch-review` results. Apply, in order:
+(read-only path only) Collect findings from file-channel seats at `$SESSION_DIR/round-<round>/findings-*.json` and from stdout-channel seats via their folded `dispatch-review` results. Apply, in order:
 
 1. **Citation check.** Drop any finding with `file == null` or `line == null`.
 2. **Diff-scope verification.** Parse `$SESSION_DIR/round-<round>/diff.txt` for `+`/`-` anchor lines (same hunk-walking as `resolve_diff_lines.py`). Drop out-of-scope findings.
