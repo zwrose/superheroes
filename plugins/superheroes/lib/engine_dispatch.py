@@ -34,6 +34,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import dispatch_outcome  # noqa: E402  outcome vocabulary chokepoint (#747)
 import engine_adapter  # noqa: E402  build_argv, parse_result, prompt_path_ok — the pure core
 import file_lock  # noqa: E402
 import sanitized_view  # noqa: E402
@@ -549,7 +550,7 @@ def _terminal_record_not_durable(run_dir_real, state, result):
     if attempts is None:
         attempts = _highest_attempt(state)
     return _with_run_fields(
-        {"ok": False, "terminal": False, "reason": "unrunnable",
+        {"ok": False, "terminal": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
          "detail": "terminal-record-not-durable",
          "attempts": attempts, "forfeited": False},
         run_dir=run_dir_real, argv=opened.get("argv") or result.get("argv") or [],
@@ -581,7 +582,7 @@ def _terminate_run(run_dir_real, state, *, record_kind, result, abandon_detail=N
 
     if record_kind == "run-abandoned":
         return _with_run_fields(
-            {"ok": False, "terminal": True, "reason": "unrunnable",
+            {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
              "detail": "run-abandoned",
              "attempts": len(state.get("attempts") or {}), "forfeited": False},
             run_dir=run_dir_real, argv=argv,
@@ -599,7 +600,7 @@ def _with_run_fields(result, *, run_dir, argv):
     out["runDir"] = run_dir
     out["argv"] = list(argv or [])
     if "terminal" not in out:
-        out["terminal"] = out.get("reason") != "running"
+        out["terminal"] = out.get("reason") != dispatch_outcome.REASON_RUNNING
     return out
 
 
@@ -983,11 +984,11 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     stderr_path = os.path.join(run_dir_real, "attempt-%d.stderr" % attempt)
 
     if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
-        return {"forfeit": True, "reason": "forfeited"}
+        return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
     stdout = _read_capped_text(stdout_path)
     if not stdout and not os.path.exists(stdout_path):
-        return {"forfeit": True, "reason": "forfeited"}
+        return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
     try:
         with open(stderr_path, encoding="utf-8", errors="ignore") as fh:
@@ -1031,7 +1032,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         res = engine_adapter.parse_result(engine, role_kind, stripped)
     if not res.get("ok"):
         engagement = _engagement_with_read(engagement)
-        result = {"forfeit": True, "reason": "forfeited", "engagement": engagement}
+        result = {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED, "engagement": engagement}
         if prompt_echo_only:
             result["payloadShape"] = {
                 "parsed": engine_adapter.SHAPE_PROMPT_ECHO_ONLY,
@@ -1072,11 +1073,11 @@ def _grade_write_attempt(run_dir_real, state, attempt):
     stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
 
     if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
-        return {"forfeit": True, "reason": "forfeited"}
+        return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
     stdout = _read_capped_text(stdout_path)
     if not stdout and not os.path.exists(stdout_path):
-        return {"forfeit": True, "reason": "forfeited"}
+        return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
     res = engine_adapter.parse_result(engine, role_kind, stdout)
     if res.get("ok") is True:
@@ -1086,7 +1087,7 @@ def _grade_write_attempt(run_dir_real, state, attempt):
             "evidence": res.get("evidence", {}),
         }
     if res.get("reason") == "unreadable":
-        return {"forfeit": True, "reason": "forfeited"}
+        return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
     return {
         "ok": False,
         "terminal_refusal": True,
@@ -1100,7 +1101,7 @@ def _write_terminal_forfeit(engine, attempts):
     return {
         "ok": False,
         "terminal": True,
-        "reason": "forfeited",
+        "reason": dispatch_outcome.REASON_FORFEITED,
         "attempts": attempts,
         "forfeited": True,
         "disclosure": (
@@ -1114,7 +1115,7 @@ def _worktree_dirtied_forfeit(engine):
     return {
         "ok": False,
         "terminal": True,
-        "reason": "forfeited",
+        "reason": dispatch_outcome.REASON_FORFEITED,
         "detail": "worktree-dirtied-by-attempt",
         "attempts": 1,
         "forfeited": True,
@@ -1148,7 +1149,7 @@ def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None,
     result = {
         "ok": False,
         "terminal": True,
-        "reason": "forfeited",
+        "reason": dispatch_outcome.REASON_FORFEITED,
         "attempts": attempts,
         "forfeited": True,
         "disclosure": (
@@ -1176,7 +1177,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
         state = _journal_state(records)
         opened = state.get("opened") or {}
         return _with_run_fields(
-            {"ok": False, "terminal": False, "reason": "running", "detail": "run-locked",
+            {"ok": False, "terminal": False, "reason": dispatch_outcome.REASON_RUNNING, "detail": "run-locked",
              "attempts": _highest_attempt(state), "forfeited": False},
             run_dir=run_dir_real, argv=opened.get("argv") or [],
         )
@@ -1187,7 +1188,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
             if interior_corrupt:
                 state = _journal_state(records)
                 return _fold_run(run_dir_real, state, _with_run_fields(
-                    {"ok": False, "terminal": True, "reason": "unrunnable",
+                    {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                      "detail": "journal-corrupt", "attempts": 0, "forfeited": False},
                     run_dir=run_dir_real, argv=(state.get("opened") or {}).get("argv") or [],
                 ))
@@ -1201,7 +1202,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
 
             if state.get("abandoned") is not None:
                 return _with_run_fields(
-                    {"ok": False, "terminal": True, "reason": "unrunnable",
+                    {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                      "detail": "run-abandoned", "attempts": len(state.get("attempts") or {}),
                      "forfeited": False},
                     run_dir=run_dir_real, argv=argv,
@@ -1209,21 +1210,21 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
 
             if opened is None:
                 return _with_run_fields(
-                    {"ok": False, "terminal": True, "reason": "unrunnable",
+                    {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                      "detail": "run-not-opened", "attempts": 0, "forfeited": False},
                     run_dir=run_dir_real, argv=[],
                 )
 
             if opened.get("runKind") != run_kind:
                 return _with_run_fields(
-                    {"ok": False, "terminal": True, "reason": "unrunnable",
+                    {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                      "detail": "run-kind-mismatch", "attempts": 0, "forfeited": False},
                     run_dir=run_dir_real, argv=argv,
                 )
 
             if time.monotonic() >= deadline:
                 return _with_run_fields(
-                    {"ok": False, "terminal": False, "reason": "running",
+                    {"ok": False, "terminal": False, "reason": dispatch_outcome.REASON_RUNNING,
                      "attempts": _highest_attempt(state), "forfeited": False},
                     run_dir=run_dir_real, argv=argv,
                 )
@@ -1240,7 +1241,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     alive, _who = _run_live_evidence(state)
                     if not alive:
                         return _fold_run(run_dir_real, state, _with_run_fields(
-                            {"ok": False, "terminal": True, "reason": "unrunnable",
+                            {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                              "detail": "engine-launch-uncertain", "attempts": att,
                              "forfeited": False,
                              "disclosure": (
@@ -1276,7 +1277,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     )
                     if not ok_spawn:
                         return _fold_run(run_dir_real, state, _with_run_fields(
-                            {"ok": False, "terminal": True, "reason": "unrunnable",
+                            {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                              "detail": detail, "attempts": 0, "forfeited": False},
                             run_dir=run_dir_real, argv=argv,
                         ))
@@ -1324,7 +1325,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     )
                     return _fold_run(run_dir_real, state, result)
 
-                reason = grade.get("reason", "forfeited")
+                reason = grade.get("reason", dispatch_outcome.REASON_FORFEITED)
                 if latest < MAX_ATTEMPTS:
                     if run_kind == RUN_KIND_WRITE:
                         baseline = opened.get("worktreeBaseline")
@@ -1342,7 +1343,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                             time.sleep(SUPERVISOR_POLL_INTERVAL)
                             continue
                         return _fold_run(run_dir_real, state, _with_run_fields(
-                            {"ok": False, "terminal": True, "reason": "unrunnable",
+                            {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                              "detail": detail, "attempts": latest, "forfeited": False},
                             run_dir=run_dir_real, argv=argv,
                         ))
@@ -1524,7 +1525,7 @@ def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
             retry_timeout=retry_timeout, progress_path=progress_path, run_engine=run_engine,
             build_view=build_view, run_dir=run_dir, max_wait=max_wait, order_id=order_id)
     except Exception as exc:
-        return {"ok": False, "reason": "unrunnable", "detail": "internal-%s" % type(exc).__name__,
+        return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "internal-%s" % type(exc).__name__,
                 "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": []}
 
 
@@ -1540,7 +1541,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
     ok, repo_detail = _validate_repo_root(repo_root)
     if not ok:
         return _with_run_fields(
-            {"ok": False, "reason": "unrunnable", "detail": repo_detail,
+            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": repo_detail,
              "attempts": 0, "forfeited": False, "terminal": True},
             run_dir="", argv=[],
         )
@@ -1548,7 +1549,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
     ok, why = engine_adapter.prompt_path_ok(prompt_path)
     if not ok:
         return _with_run_fields(
-            {"ok": False, "reason": "unrunnable", "detail": "prompt-%s" % why,
+            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "prompt-%s" % why,
              "attempts": 0, "forfeited": False, "terminal": True},
             run_dir="", argv=[],
         )
@@ -1558,7 +1559,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
             base_prompt = fh.read()
     except Exception:
         return _with_run_fields(
-            {"ok": False, "reason": "unrunnable", "detail": "prompt-unreadable",
+            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "prompt-unreadable",
              "attempts": 0, "forfeited": False, "terminal": True},
             run_dir="", argv=[],
         )
@@ -1574,14 +1575,14 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
             ok_rd, rd_detail = _validate_run_dir(run_dir)
             if not ok_rd:
                 return _with_run_fields(
-                    {"ok": False, "reason": "unrunnable", "detail": rd_detail,
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": rd_detail,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir or "", argv=[],
                 )
             run_dir_real = rd_detail
             if _path_inside(repo_detail, run_dir_real):
                 return _with_run_fields(
-                    {"ok": False, "reason": "unrunnable", "detail": "run-dir-inside-repo-root",
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-inside-repo-root",
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=[],
                 )
@@ -1591,7 +1592,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
             if opened is not None:
                 if order_id is not None and opened.get("orderId") != order_id:
                     return _with_run_fields(
-                        {"ok": False, "reason": "unrunnable", "detail": "run-dir-reused",
+                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-reused",
                          "attempts": 0, "forfeited": False, "terminal": True},
                         run_dir=run_dir_real, argv=opened.get("argv") or [],
                     )
@@ -1601,7 +1602,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 view_path = opened.get("viewPath")
             elif _run_dir_nonempty(run_dir_real):
                 return _with_run_fields(
-                    {"ok": False, "reason": "unrunnable",
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                      "detail": "run-dir-not-empty-unopened",
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=[],
@@ -1612,7 +1613,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 ok_schema, schema_detail = _validate_review_schema_path(schema_path)
                 if not ok_schema:
                     return _with_run_fields(
-                        {"ok": False, "reason": "unrunnable", "detail": schema_detail,
+                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": schema_detail,
                          "attempts": 0, "forfeited": False, "terminal": True},
                         run_dir=run_dir_real or "", argv=[],
                     )
@@ -1620,7 +1621,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 view = build_view(repo_detail)
             except sanitized_view.SanitizedViewError as exc:
                 return _with_run_fields(
-                    {"ok": False, "reason": "unrunnable", "detail": exc.detail,
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": exc.detail,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir="", argv=[],
                 )
@@ -1632,7 +1633,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
             built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
             if built["reason"] is not None:
                 err = _attach_sanitized_view(_with_run_fields(
-                    {"ok": False, "reason": "unrunnable",
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                      "detail": "engine-config:%s" % built["reason"],
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real or "", argv=[],
@@ -1659,7 +1660,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
             )
             if not ok_open:
                 err = _attach_sanitized_view(_with_run_fields(
-                    {"ok": False, "reason": "unrunnable", "detail": open_detail,
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": open_detail,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=argv,
                 ), view)
@@ -1681,7 +1682,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 records, _corrupt = _journal_read(run_dir_real)
                 state = _journal_state(records)
                 err = _with_run_fields(
-                    {"ok": False, "reason": "unrunnable",
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                      "detail": "internal-%s" % type(exc).__name__,
                      "attempts": _highest_attempt(state), "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=argv,
@@ -1694,7 +1695,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 if view and result.get("ok") and "sanitizedView" not in result:
                     result = _attach_sanitized_view(result, view)
                 elif view and not result.get("ok") and result.get("reason") in (
-                    "forfeited", engine_adapter.REVIEW_FORFEIT_VACUOUS,
+                    dispatch_outcome.REASON_FORFEITED, engine_adapter.REVIEW_FORFEIT_VACUOUS,
                 ) and "sanitizedView" not in result:
                     result = _attach_sanitized_view(result, view)
                 return result
@@ -1703,7 +1704,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
             time.sleep(SUPERVISOR_POLL_INTERVAL)
     except Exception as exc:
         err = _with_run_fields(
-            {"ok": False, "reason": "unrunnable",
+            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
              "detail": "internal-%s" % type(exc).__name__,
              "attempts": 0, "forfeited": False, "terminal": True},
             run_dir=run_dir_real or "", argv=argv,
@@ -1776,7 +1777,7 @@ def dispatch_write(engine, *, model, effort=None, engine_model=None, prompt_path
             run_engine=run_engine, run_dir=run_dir, max_wait=max_wait,
         )
     except Exception as exc:
-        return {"ok": False, "reason": "unrunnable", "detail": "internal-%s" % type(exc).__name__,
+        return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "internal-%s" % type(exc).__name__,
                 "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": []}
 
 
@@ -1792,7 +1793,7 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
     ok, cwd_detail = _validate_linked_build_cwd(cwd, timeout=preflight_timeout)
     if not ok:
         return _with_run_fields(
-            {"ok": False, "reason": "unrunnable", "detail": cwd_detail,
+            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": cwd_detail,
              "attempts": 0, "forfeited": False, "terminal": True},
             run_dir="", argv=[],
         )
@@ -1801,7 +1802,7 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
     ok, why = engine_adapter.prompt_path_ok(prompt_path)
     if not ok:
         return _with_run_fields(
-            {"ok": False, "reason": "unrunnable", "detail": "prompt-%s" % why,
+            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "prompt-%s" % why,
              "attempts": 0, "forfeited": False, "terminal": True},
             run_dir="", argv=[],
         )
@@ -1810,7 +1811,7 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
     built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
     if built["reason"] is not None:
         return _with_run_fields(
-            {"ok": False, "reason": "unrunnable",
+            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
              "detail": "engine-config:%s" % built["reason"],
              "attempts": 0, "forfeited": False, "terminal": True},
             run_dir="", argv=[],
@@ -1819,7 +1820,7 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
 
     if run_dir is None:
         return _with_run_fields(
-            {"ok": False, "reason": "unrunnable", "detail": "run-dir-absent",
+            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-absent",
              "attempts": 0, "forfeited": False, "terminal": True},
             run_dir="", argv=argv,
         )
@@ -1831,7 +1832,7 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
                 os.makedirs(run_dir, mode=0o700, exist_ok=True)
             except OSError as exc:
                 return _with_run_fields(
-                    {"ok": False, "reason": "unrunnable",
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                      "detail": "run-dir-setup-failed:%s" % type(exc).__name__,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir or "", argv=argv,
@@ -1839,7 +1840,7 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
             ok_rd, rd_detail = _validate_run_dir(run_dir)
         if not ok_rd:
             return _with_run_fields(
-                {"ok": False, "reason": "unrunnable", "detail": rd_detail,
+                {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": rd_detail,
                  "attempts": 0, "forfeited": False, "terminal": True},
                 run_dir=run_dir or "", argv=argv,
             )
@@ -1847,7 +1848,7 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
 
     if _path_inside(cwd_real, run_dir_real):
         return _with_run_fields(
-            {"ok": False, "reason": "unrunnable", "detail": "run-dir-inside-cwd",
+            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-inside-cwd",
              "attempts": 0, "forfeited": False, "terminal": True},
             run_dir=run_dir_real, argv=argv,
         )
@@ -1857,7 +1858,7 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
             head = _git_scrubbed(cwd_real, "rev-parse", "HEAD", timeout=preflight_timeout)
         except subprocess.TimeoutExpired:
             return _with_run_fields(
-                {"ok": False, "reason": "unrunnable", "detail": "git-preflight-timeout",
+                {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "git-preflight-timeout",
                  "attempts": 0, "forfeited": False, "terminal": True},
                 run_dir=run_dir_real, argv=argv,
             )
@@ -1871,13 +1872,13 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
         if opened is not None:
             if os.path.realpath(opened.get("cwd", "")) != cwd_real:
                 return _with_run_fields(
-                    {"ok": False, "reason": "unrunnable", "detail": "cwd-authorization-mismatch",
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "cwd-authorization-mismatch",
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=opened.get("argv") or argv,
                 )
             if order_id is not None and opened.get("orderId") != order_id:
                 return _with_run_fields(
-                    {"ok": False, "reason": "unrunnable", "detail": "run-dir-reused",
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-reused",
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=opened.get("argv") or argv,
                 )
@@ -1885,14 +1886,14 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
         else:
             if _run_dir_nonempty(run_dir_real):
                 return _with_run_fields(
-                    {"ok": False, "reason": "unrunnable", "detail": "run-dir-not-empty-unopened",
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-not-empty-unopened",
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=argv,
                 )
             baseline = _worktree_baseline(cwd_real, timeout=preflight_timeout)
             if baseline is None and preflight_timeout is not None:
                 return _with_run_fields(
-                    {"ok": False, "reason": "unrunnable", "detail": "git-preflight-timeout",
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "git-preflight-timeout",
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=argv,
                 )
@@ -1901,7 +1902,7 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
             )
             if not ok_lease:
                 return _with_run_fields(
-                    {"ok": False, "reason": "unrunnable", "detail": lease_detail,
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": lease_detail,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=argv,
                 )
@@ -1917,7 +1918,7 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
                 if holder.get("dispatchToken"):
                     file_lock.release(lease_path)
                 return _with_run_fields(
-                    {"ok": False, "reason": "unrunnable", "detail": open_detail,
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": open_detail,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=argv,
                 )
@@ -1934,7 +1935,7 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
                 records, _corrupt = _journal_read(run_dir_real)
                 state = _journal_state(records)
                 err = _with_run_fields(
-                    {"ok": False, "reason": "unrunnable",
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                      "detail": "internal-%s" % type(exc).__name__,
                      "attempts": _highest_attempt(state), "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=argv,
@@ -1986,7 +1987,7 @@ def dispatch_poll(run_dir):
         ok, detail = _validate_run_dir(run_dir)
         if not ok:
             return _with_run_fields(
-                {"ok": False, "terminal": True, "reason": "unrunnable", "detail": detail,
+                {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": detail,
                  "attempts": 0, "forfeited": False},
                 run_dir=run_dir or "", argv=[],
             )
@@ -1997,7 +1998,7 @@ def dispatch_poll(run_dir):
         projection = _poll_projection(state)
         if interior_corrupt:
             return _with_run_fields(
-                {"ok": False, "terminal": True, "reason": "unrunnable",
+                {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                  "detail": "journal-corrupt", "attempts": 0, "forfeited": False,
                  "poll": projection},
                 run_dir=detail, argv=argv,
@@ -2010,27 +2011,27 @@ def dispatch_poll(run_dir):
         poll_state = projection.get("state", "running")
         if poll_state == "run-abandoned":
             return _with_run_fields(
-                {"ok": False, "terminal": True, "reason": "unrunnable",
+                {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                  "detail": "run-abandoned", "attempts": highest, "forfeited": False,
                  "poll": projection},
                 run_dir=detail, argv=argv,
             )
         if poll_state == "run-not-opened":
             return _with_run_fields(
-                {"ok": False, "terminal": True, "reason": "unrunnable",
+                {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                  "detail": "run-not-opened", "attempts": 0, "forfeited": False,
                  "poll": projection},
                 run_dir=detail, argv=argv,
             )
         return _with_run_fields(
             {"ok": False, "terminal": projection.get("terminal", False),
-             "reason": "running" if poll_state in ("running", "idle", "abandon-requested") else poll_state,
+             "reason": dispatch_outcome.REASON_RUNNING if poll_state in ("running", "idle", "abandon-requested") else poll_state,
              "attempts": highest, "forfeited": False, "poll": projection},
             run_dir=detail, argv=argv,
         )
     except Exception as exc:
         return _with_run_fields(
-            {"ok": False, "terminal": True, "reason": "unrunnable",
+            {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
              "detail": "internal-%s" % type(exc).__name__,
              "attempts": 0, "forfeited": False},
             run_dir=run_dir or "", argv=[],
@@ -2066,7 +2067,7 @@ def dispatch_abandon(run_dir):
         ok, detail = _validate_run_dir(run_dir)
         if not ok:
             return _with_run_fields(
-                {"ok": False, "terminal": True, "reason": "unrunnable", "detail": detail,
+                {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": detail,
                  "attempts": 0, "forfeited": False},
                 run_dir=run_dir or "", argv=[],
             )
@@ -2076,7 +2077,7 @@ def dispatch_abandon(run_dir):
         if interior_corrupt:
             state = _journal_state(records)
             return _with_run_fields(
-                {"ok": False, "terminal": True, "reason": "unrunnable",
+                {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                  "detail": "journal-corrupt", "attempts": 0, "forfeited": False},
                 run_dir=run_dir_real, argv=(state.get("opened") or {}).get("argv") or [],
             )
@@ -2086,7 +2087,7 @@ def dispatch_abandon(run_dir):
 
         if state.get("abandoned") is not None:
             return _with_run_fields(
-                {"ok": False, "terminal": True, "reason": "unrunnable",
+                {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                  "detail": "run-abandoned", "attempts": len(state.get("attempts") or {}),
                  "forfeited": False},
                 run_dir=run_dir_real, argv=argv,
@@ -2105,7 +2106,7 @@ def dispatch_abandon(run_dir):
             state = _journal_state(records)
             if _launching_uncertain(state):
                 return _with_run_fields(
-                    {"ok": False, "terminal": True, "reason": "unrunnable",
+                    {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                      "detail": "abandon-incomplete", "abandonDetail": "engine-death-unconfirmed",
                      "attempts": len(state.get("attempts") or {}), "forfeited": False},
                     run_dir=run_dir_real, argv=argv,
@@ -2115,7 +2116,7 @@ def dispatch_abandon(run_dir):
                 break
             if time.monotonic() >= deadline:
                 return _with_run_fields(
-                    {"ok": False, "terminal": True, "reason": "unrunnable",
+                    {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                      "detail": "abandon-incomplete", "abandonDetail": "engine-death-unconfirmed",
                      "attempts": len(state.get("attempts") or {}), "forfeited": False},
                     run_dir=run_dir_real, argv=argv,
@@ -2130,7 +2131,7 @@ def dispatch_abandon(run_dir):
             file_lock.acquire(lock_path, ttl=RUN_LOCK_TTL)
         except file_lock.LockHeld:
             return _with_run_fields(
-                {"ok": False, "terminal": False, "reason": "running",
+                {"ok": False, "terminal": False, "reason": dispatch_outcome.REASON_RUNNING,
                  "detail": "run-locked",
                  "attempts": _highest_attempt(state), "forfeited": False},
                 run_dir=run_dir_real, argv=argv,
@@ -2142,7 +2143,7 @@ def dispatch_abandon(run_dir):
             argv = (state.get("opened") or {}).get("argv") or argv
             if state.get("abandoned") is not None:
                 return _with_run_fields(
-                    {"ok": False, "terminal": True, "reason": "unrunnable",
+                    {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                      "detail": "run-abandoned",
                      "attempts": len(state.get("attempts") or {}), "forfeited": False},
                     run_dir=run_dir_real, argv=argv,
@@ -2157,7 +2158,7 @@ def dispatch_abandon(run_dir):
                 pass
     except Exception as exc:
         return _with_run_fields(
-            {"ok": False, "terminal": True, "reason": "unrunnable",
+            {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
              "detail": "internal-%s" % type(exc).__name__,
              "attempts": 0, "forfeited": False},
             run_dir=run_dir or "", argv=[],
@@ -2229,7 +2230,7 @@ def main(argv):
     elif args.cmd == "run-child":
         raise SystemExit(_run_child_main(os.path.realpath(args.run_dir)))
     else:
-        res = {"ok": False, "terminal": True, "reason": "unrunnable",
+        res = {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                "detail": "unknown-command", "attempts": 0, "forfeited": False,
                "runDir": "", "argv": []}
     sys.stdout.write(json.dumps(res) + "\n")

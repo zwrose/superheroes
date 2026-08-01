@@ -49,6 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import audits  # noqa: E402
 import circuit_breaker  # noqa: E402
 import delta_surface  # noqa: E402
+import dispatch_outcome  # noqa: E402
 import engine_adapter  # noqa: E402
 import loop_plan_common  # noqa: E402
 import model_registry  # noqa: E402
@@ -930,11 +931,8 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None):
 
 _PANEL_VENDORS = tuple(model_registry.VENDORS)  # SSOT — never a hand-maintained copy (#563/§11)
 
-_DISPATCH_NOT_RUN_REASONS = frozenset({
-    engine_adapter.REVIEW_FORFEIT_VACUOUS,
-    "forfeited",
-    "unrunnable",
-})
+# Derived from dispatch_outcome.py — the single home for not-run reason tokens (#747).
+_DISPATCH_NOT_RUN_REASONS = dispatch_outcome.NOT_RUN_REASONS
 
 
 def _fell_open_rows(seat_map, ran_manifest, seat_status):

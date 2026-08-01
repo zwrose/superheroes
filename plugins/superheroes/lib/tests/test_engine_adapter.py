@@ -61,6 +61,15 @@ def test_review_forfeit_vacuous_token_single_home_no_literal_drift():
                     % (basename, i))
 
 
+def test_review_forfeit_vacuous_is_dispatch_outcome_reason_vacuous():
+    """Identity drift guard: re-literalisation in engine_adapter must fail."""
+    spec = importlib.util.spec_from_file_location(
+        "dispatch_outcome", os.path.join(_HERE, "..", "dispatch_outcome.py"))
+    dispatch_outcome = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dispatch_outcome)
+    assert EA.REVIEW_FORFEIT_VACUOUS is dispatch_outcome.REASON_VACUOUS
+
+
 def test_vacuous_drift_guard_catches_historical_fold_line_shape():
     """Match-granular guard must flag bare reason token beside .get('vacuous')."""
     import re
