@@ -5,9 +5,20 @@ THIS boot (a recycled PID after a reboot is not the same process). darwin:
 is obtainable — callers MUST treat None as 'cannot corroborate' and degrade, never
 as a match (design §8.1)."""
 import subprocess
+import time
+
+_UNSET = object()
+_boot_id_cache = _UNSET
+_boot_id_fail_until = 0.0
+_NEGATIVE_CACHE_SECONDS = 60
 
 
 def boot_id():
+    global _boot_id_cache, _boot_id_fail_until
+    if _boot_id_cache is not _UNSET:
+        return _boot_id_cache
+    if time.monotonic() < _boot_id_fail_until:
+        return None
     # Linux: /proc/stat carries `btime <epoch>`.
     try:
         with open("/proc/stat", encoding="utf-8") as fh:
@@ -15,7 +26,8 @@ def boot_id():
                 if line.startswith("btime "):
                     parts = line.split()
                     if len(parts) >= 2:
-                        return "btime:" + parts[1]
+                        _boot_id_cache = "btime:" + parts[1]
+                        return _boot_id_cache
     except OSError:
         pass
     # darwin/BSD: sysctl kern.boottime -> "{ sec = 171..., usec = ... } ..."
@@ -23,7 +35,9 @@ def boot_id():
         r = subprocess.run(["sysctl", "-n", "kern.boottime"],
                            capture_output=True, text=True, timeout=5)
         if r.returncode == 0 and r.stdout.strip():
-            return "boottime:" + r.stdout.strip()
+            _boot_id_cache = "boottime:" + r.stdout.strip()
+            return _boot_id_cache
     except (OSError, subprocess.SubprocessError):
         pass
+    _boot_id_fail_until = time.monotonic() + _NEGATIVE_CACHE_SECONDS
     return None

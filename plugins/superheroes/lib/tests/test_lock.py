@@ -1,3 +1,4 @@
+import errno
 import json
 import os
 import socket
@@ -377,13 +378,234 @@ def test_concurrent_reclaim_grants_exactly_one_holder(tmp_path):
         assert outcomes.count("HELD") == n_workers - 1, outcomes
 
 
-def test_published_lock_mode_matches_umask(tmp_path):
+def test_published_lock_mode_is_owner_only(tmp_path):
     p = str(tmp_path / "engine.lock")
-    umask = os.umask(0)
-    os.umask(umask)
+    original_umask = os.umask(0)
+    os.umask(original_umask)
+    try:
+        for trial_umask in (original_umask, 0):
+            os.umask(trial_umask)
+            lock.acquire(p)
+            try:
+                mode = os.stat(p).st_mode & 0o777
+                assert mode == 0o600
+            finally:
+                lock.release(p)
+    finally:
+        os.umask(original_umask)
+
+
+def test_acquire_and_reclaim_survive_a_restrictive_umask(tmp_path):
+    p = str(tmp_path / "engine.lock")
+    original_umask = os.umask(0o777)
     try:
         lock.acquire(p)
-        mode = os.stat(p).st_mode & 0o777
-        assert mode == (0o644 & ~umask)
-    finally:
+        assert (os.stat(p).st_mode & 0o777) == 0o600
         lock.release(p)
+
+        with open(p, "w") as fh:
+            json.dump(
+                {"pid": 999999, "host": socket.gethostname(),
+                 "acquiredAt": "1970-01-01T00:00:00Z", "bootId": None},
+                fh,
+            )
+        os.chmod(p, 0o600)
+        reclaimed = lock.acquire(p)
+        assert reclaimed is True
+        assert lock.read_holder(p)["pid"] == os.getpid()
+        lock.release(p)
+    finally:
+        os.umask(original_umask)
+
+
+def test_read_holder_state_refuses_a_fifo_without_blocking(tmp_path):
+    p = str(tmp_path / "engine.lock")
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    os.mkfifo(p)
+    start = time.monotonic()
+    status, holder = lock._read_holder_state(p)
+    elapsed = time.monotonic() - start
+    assert elapsed < 5.0, "_read_holder_state blocked on FIFO"
+    assert status == "unusable"
+    assert holder is None
+    start = time.monotonic()
+    assert lock.read_holder(p) == {}
+    elapsed = time.monotonic() - start
+    assert elapsed < 5.0, "read_holder blocked on FIFO"
+
+
+def test_symlinked_lock_is_reclaimable_after_grace(tmp_path):
+    p = str(tmp_path / "engine.lock")
+    target = str(tmp_path / "holder-target.json")
+    json.dump(
+        {"pid": 999999, "host": socket.gethostname(),
+         "acquiredAt": "1970-01-01T00:00:00Z", "bootId": None},
+        open(target, "w"),
+    )
+    os.symlink(target, p)
+    old = time.time() - lock.MALFORMED_GRACE_SECONDS - 5
+    os.utime(p, (old, old), follow_symlinks=False)
+    status, holder = lock._read_holder_state(p)
+    assert status == "unusable"
+    assert holder is None
+    assert lock.is_stale(p) is True
+    reclaimed = lock.acquire(p)
+    assert reclaimed is True
+    assert lock.read_holder(p)["pid"] == os.getpid()
+    assert os.path.exists(target)
+    assert not os.path.islink(p)
+    lock.release(p)
+
+
+def test_directory_at_lock_path_refuses_instead_of_raising(tmp_path):
+    p = str(tmp_path / "engine.lock")
+    os.makedirs(p)
+    old = time.time() - lock.MALFORMED_GRACE_SECONDS - 5
+    os.utime(p, (old, old))
+    with pytest.raises(lock.LockHeld):
+        lock.acquire(p)
+    assert os.path.isdir(p)
+
+
+def test_reclaim_guard_refuses_a_symlinked_guard(tmp_path):
+    p = str(tmp_path / "engine.lock")
+    open(p, "w").close()
+    old = time.time() - lock.MALFORMED_GRACE_SECONDS - 5
+    os.utime(p, (old, old))
+    sentinel = str(tmp_path / "sentinel")
+    open(sentinel, "w").close()
+    os.chmod(sentinel, 0o644)
+    sentinel_mode_before = os.stat(sentinel).st_mode & 0o777
+    os.symlink(sentinel, p + ".reclaim")
+    with pytest.raises(lock.LockHeld):
+        lock.acquire(p)
+    assert (os.stat(sentinel).st_mode & 0o777) == sentinel_mode_before
+
+
+def test_dangling_symlink_lock_is_reclaimable_after_grace(tmp_path):
+    p = str(tmp_path / "engine.lock")
+    missing = str(tmp_path / "does-not-exist.json")
+    os.symlink(missing, p)
+    # Age the link's own mtime (not the target's — there is no target).
+    old = time.time() - lock.MALFORMED_GRACE_SECONDS - 5
+    os.utime(p, (old, old), follow_symlinks=False)
+    assert lock.is_stale(p) is True
+    reclaimed = lock.acquire(p)
+    assert reclaimed is True
+    assert lock.read_holder(p)["pid"] == os.getpid()
+    lock.release(p)
+
+
+def test_acquire_raises_only_lock_held_when_publish_fails(tmp_path, monkeypatch):
+    p = str(tmp_path / "engine.lock")
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w") as fh:
+        json.dump(
+            {"pid": os.getpid(), "host": socket.gethostname(),
+             "acquiredAt": "2026-01-01T00:00:00Z", "bootId": None},
+            fh,
+        )
+
+    def raise_enospc(*_args, **_kwargs):
+        raise OSError(errno.ENOSPC, "no space")
+
+    original_publish = lock._publish_lock
+    monkeypatch.setattr(lock, "_publish_lock", raise_enospc)
+    with pytest.raises(lock.LockHeld):
+        lock.acquire(p)
+
+    def raise_eacces(*_args, **_kwargs):
+        raise OSError(errno.EACCES, "permission denied")
+
+    monkeypatch.setattr(lock, "_publish_lock", original_publish)
+    monkeypatch.setattr(lock.os, "makedirs", raise_eacces)
+    with pytest.raises(lock.LockHeld):
+        lock.acquire(p)
+
+
+def test_boot_id_is_probed_once(monkeypatch):
+    import hostinfo
+
+    calls = 0
+    real_open = open
+
+    def fake_open(path, *args, **kwargs):
+        if path == "/proc/stat":
+            raise FileNotFoundError()
+        return real_open(path, *args, **kwargs)
+
+    def fake_run(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        class Result:
+            returncode = 0
+            stdout = "{ sec = 1, usec = 0 }"
+        return Result()
+
+    monkeypatch.setattr("builtins.open", fake_open)
+    monkeypatch.setattr(hostinfo.subprocess, "run", fake_run)
+    monkeypatch.setattr(hostinfo, "_boot_id_cache", hostinfo._UNSET)
+    monkeypatch.setattr(hostinfo, "_boot_id_fail_until", 0.0)
+    assert hostinfo.boot_id() == "boottime:{ sec = 1, usec = 0 }"
+    assert hostinfo.boot_id() == "boottime:{ sec = 1, usec = 0 }"
+    assert calls == 1
+
+
+def test_boot_id_negative_cache_on_failure(monkeypatch):
+    import hostinfo
+
+    calls = 0
+    real_open = open
+
+    def fake_open(path, *args, **kwargs):
+        if path == "/proc/stat":
+            raise FileNotFoundError()
+        return real_open(path, *args, **kwargs)
+
+    def fake_run(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        class Result:
+            returncode = 1
+            stdout = ""
+        return Result()
+
+    monkeypatch.setattr("builtins.open", fake_open)
+    monkeypatch.setattr(hostinfo.subprocess, "run", fake_run)
+    monkeypatch.setattr(hostinfo, "_boot_id_cache", hostinfo._UNSET)
+    monkeypatch.setattr(hostinfo, "_boot_id_fail_until", 0.0)
+    assert hostinfo.boot_id() is None
+    assert hostinfo.boot_id() is None
+    assert calls == 1
+
+    monkeypatch.setattr(hostinfo, "_boot_id_fail_until", 0.0)
+    assert hostinfo.boot_id() is None
+    assert calls == 2
+
+
+def test_acquire_gethostname_oserror_raises_lock_held(tmp_path, monkeypatch):
+    p = str(tmp_path / "engine.lock")
+    lock.acquire(p)
+    lock.release(p)
+
+    def raise_gaierror(*_args, **_kwargs):
+        raise OSError("gethostname failed")
+
+    monkeypatch.setattr(lock.socket, "gethostname", raise_gaierror)
+    with pytest.raises(lock.LockHeld):
+        lock.acquire(p)
+
+
+def test_reclaim_guard_mode_is_owner_only(tmp_path):
+    p = str(tmp_path / "engine.lock")
+    with open(p, "w") as fh:
+        json.dump(
+            {"pid": 999999, "host": socket.gethostname(),
+             "acquiredAt": "1970-01-01T00:00:00Z", "bootId": None},
+            fh,
+        )
+    lock.acquire(p)
+    guard_path = p + ".reclaim"
+    assert os.path.exists(guard_path)
+    assert (os.stat(guard_path).st_mode & 0o777) == 0o600
+    lock.release(p)

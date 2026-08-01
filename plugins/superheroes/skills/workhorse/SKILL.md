@@ -572,9 +572,19 @@ format.
   — not a silent **None** on the floor's third row. The ranked entry-point levels and the
   presentation standard live in `rubric/review-discipline.md` — cite that home rather than restating
   the ranking here.
-- **`## Advisor vet`** — an empty slot the builder creates; the advisor writes into it. Contents and
-  timing are owned elsewhere (**#672**). If you rewrite the PR body later, **re-add the slot rather
-  than dropping it**.
+- **`## Advisor vet`** — an empty slot the builder creates; the advisor writes into it. **Shape and
+  contents** live in `skills/showrunner/reference/vet-receipt.md` (CONVENTIONS `§10.7` names that
+  home); **when it is written** is the showrunner charter's own duty.
+  If you rewrite the PR body later, **carry the slot's existing text forward byte-for-byte** —
+  advisor-authored content in the PR body is never yours to edit, reflow, summarize, shorten, or drop.
+  Re-creating the heading over an advisor write you deleted satisfies "re-add the slot" and **is the
+  defect, not compliance with the rule**. The advisor stamps a marker immediately above what it writes
+  there, and an absent marker is the only thing that tells a silently emptied slot apart from one the
+  advisor has not written yet — so dropping the text takes the detection signal with it. **Re-read the
+  slot immediately before you submit the body rewrite** — not when you start editing. **After writing,
+  confirm the slot still carries the advisor's actual text** — not merely that something is there. **If
+  the advisor wrote or extended the slot while you were editing, the newer advisor text wins** — carry
+  that forward, never your older copy.
 
 The advisor makes the **show it** / **say it** / **nothing to see** call when the issue is routed; that
 call is **revisable during the build**. A builder who discovers a perceivable surface mid-build
@@ -640,9 +650,10 @@ completed review-code loop is behind you), never the pre-handback review (§10, 
 | a fix **inside an already-reviewed surface** | scoped single-reviewer pass on the diff-since-last-review |
 | new surface/behavior, or anything that invalidates a prior review conclusion | full `review-code` loop again |
 
-Keep the PR body correct as you go. When you are **blocked on the owner** — a consequential flag, an
-ambiguous route, a decision you cannot make — **park honestly with receipts**: what is done, what is
-blocked, what you need. A truthful park beats a false ship.
+Keep the PR body correct as you go. Every body edit in this post-handback loop is exactly where §11's
+preserve-verbatim rule for the advisor's vet write already applies. When you are **blocked on the
+owner** — a consequential flag, an ambiguous route, a decision you cannot make — **park honestly with
+receipts**: what is done, what is blocked, what you need. A truthful park beats a false ship.
 
 ## Memory
 
