@@ -193,7 +193,21 @@ def _journal_state(records):
             att = rec.get("attempt")
             if att is not None:
                 slot = state["attempts"].setdefault(att, {"childPid": None, "enginePgid": None, "ended": None})
-                slot["ended"] = rec
+                existing = slot.get("ended")
+                if existing is None:
+                    slot["ended"] = rec
+                else:
+                    # PR #783: a real attempt-ended always wins over attempt-died-unrecorded;
+                    # between two real records the first wins; discarded records land in endedSuperseded.
+                    existing_synth = existing.get("refusal") == "attempt-died-unrecorded"
+                    new_synth = rec.get("refusal") == "attempt-died-unrecorded"
+                    if existing_synth and not new_synth:
+                        slot["endedSuperseded"] = existing
+                        slot["ended"] = rec
+                    elif not existing_synth and new_synth:
+                        slot["endedSuperseded"] = rec
+                    else:
+                        slot["endedSuperseded"] = rec
         elif kind == "run-folded":
             state["folded"] = rec.get("result")
         elif kind == "run-abandoned":
@@ -727,12 +741,87 @@ def _run_engine(argv, prompt_bytes, timeout, progress_cb, cwd):
     return bytes(out).decode("utf-8", "ignore"), timed_out, returncode, stderr_tail
 
 
+def _dispatch_path_from_opened(opened):
+    """Derive dispatchPath from run-opened; never inspect the filesystem."""
+    if not opened:
+        return "repo"
+    if opened.get("viewPath"):
+        return "sanitized-view"
+    if opened.get("runKind") == RUN_KIND_WRITE:
+        return "build-worktree"
+    return "repo"
+
+
+def _signal_from_returncode(rc):
+    if rc is not None and rc < 0:
+        return -rc
+    return None
+
+
+def _signal_source(timed_out, natural_rc):
+    if timed_out:
+        return "runner-timeout"
+    if natural_rc is not None and natural_rc < 0:
+        return "engine"
+    return None
+
+
+def _sample_stream_sizes(stdout_path, stderr_path):
+    stdout_sz = 0
+    stderr_sz = 0
+    try:
+        stdout_sz = os.path.getsize(stdout_path)
+    except OSError:
+        pass
+    try:
+        stderr_sz = os.path.getsize(stderr_path)
+    except OSError:
+        pass
+    return stdout_sz, stderr_sz
+
+
+def _fold_stream_activity(stdout_path, stderr_path, prev_stdout, prev_stderr,
+                          last_activity_at, activity_stream):
+    """Final post-reap sample (BC-7): fold mtime/size growth into activity telemetry."""
+    end_epoch = time.time()
+    for path, stream, prev in (
+        (stdout_path, "stdout", prev_stdout),
+        (stderr_path, "stderr", prev_stderr),
+    ):
+        try:
+            sz = os.path.getsize(path)
+            mtime = os.path.getmtime(path)
+        except OSError:
+            continue
+        if sz > prev:
+            tick_moment = last_activity_at or 0
+            candidates = [mtime, tick_moment]
+            if last_activity_at is None:
+                candidates.append(end_epoch)
+            moment = max(candidates)
+            last_activity_at = moment
+            activity_stream = stream
+    if last_activity_at is None:
+        return None, None, activity_stream
+    silence = end_epoch - last_activity_at
+    if silence < 0:
+        silence = 0.0
+    return last_activity_at, silence, activity_stream
+
+
 def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path,
                       stderr_path, timeout, progress_path):
     """Run-child engine spawn: durable files, never pipes. Never raises to caller.
 
     Caller must journal engine-launching before invoking. Journals engine-started
     immediately after Popen returns, then attempt-ended on completion or spawn failure."""
+    records, _corrupt = _journal_read(run_dir_real)
+    opened = _journal_state(records).get("opened")
+    dispatch_path = _dispatch_path_from_opened(opened)
+    try:
+        prompt_bytes = os.path.getsize(prompt_path)
+    except OSError:
+        prompt_bytes = None
     write_progress = _progress_writer(progress_path)
     try:
         with open(prompt_path, "rb") as prompt_fh:
@@ -774,17 +863,32 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     start = time.monotonic()
     last_beat = start
     timed_out = False
+    natural_rc = None
+    # lastActivityAt is accurate to the poll interval (HEARTBEAT_INTERVAL / sleep), not to the byte.
+    last_activity_at = None
+    activity_stream = None
+    prev_stdout = 0
+    prev_stderr = 0
     while True:
         rc = proc.poll()
         now = time.monotonic()
         if now - last_beat >= HEARTBEAT_INTERVAL:
             last_beat = now
+            stdout_sz, stderr_sz = _sample_stream_sizes(stdout_path, stderr_path)
+            if stdout_sz > prev_stdout:
+                last_activity_at = time.time()
+                activity_stream = "stdout"
+            if stderr_sz > prev_stderr:
+                last_activity_at = time.time()
+                activity_stream = "stderr"
+            prev_stdout = stdout_sz
+            prev_stderr = stderr_sz
             try:
-                nbytes = os.path.getsize(stdout_path)
-            except OSError:
-                nbytes = 0
-            write_progress(attempt, now - start, nbytes)
+                write_progress(attempt, now - start, stdout_sz, stderr_sz)
+            except Exception:
+                pass
         if rc is not None:
+            natural_rc = rc
             break
         if now - start >= timeout:
             timed_out = True
@@ -795,22 +899,47 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         proc.wait(timeout=2)
     except Exception:
         pass
+    stdout_sz, stderr_sz = _sample_stream_sizes(stdout_path, stderr_path)
+    last_activity_at, silence_seconds, activity_stream = _fold_stream_activity(
+        stdout_path, stderr_path, prev_stdout, prev_stderr,
+        last_activity_at, activity_stream,
+    )
     try:
         pre_cap_stdout_bytes = os.path.getsize(stdout_path)
     except OSError:
         pre_cap_stdout_bytes = None
+    try:
+        pre_cap_stderr_bytes = os.path.getsize(stderr_path)
+    except OSError:
+        pre_cap_stderr_bytes = None
     _cap_file_tail(stdout_path, MAX_STDOUT_CAPTURE)
     _cap_file_tail(stderr_path, MAX_STDERR_CAPTURE)
     returncode = proc.returncode
     elapsed = time.monotonic() - start
     ended_record = {
         "kind": "attempt-ended", "attempt": attempt,
-        "exit": returncode, "timedOut": timed_out, "signal": None,
+        "exit": returncode, "timedOut": timed_out,
+        "signal": _signal_from_returncode(returncode),
+        "signalSource": _signal_source(timed_out, natural_rc),
         "refusal": None, "at": time.time(),
         "wallSeconds": round(elapsed, 1),
+        "capSeconds": timeout,
+        "dispatchPath": dispatch_path,
     }
+    if prompt_bytes is not None:
+        ended_record["promptBytes"] = prompt_bytes
     if pre_cap_stdout_bytes is not None:
         ended_record["stdoutBytes"] = pre_cap_stdout_bytes
+    if pre_cap_stderr_bytes is not None:
+        ended_record["stderrBytes"] = pre_cap_stderr_bytes
+    if last_activity_at is not None:
+        ended_record["lastActivityAt"] = last_activity_at
+        ended_record["silenceSeconds"] = silence_seconds
+        ended_record["activityStream"] = activity_stream
+    else:
+        ended_record["lastActivityAt"] = None
+        ended_record["silenceSeconds"] = None
+        ended_record["activityStream"] = None
     _journal_append(run_dir_real, ended_record)
 
 
@@ -846,8 +975,8 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     }):
         return False, "journal-append-failed"
 
-    def cb(elapsed, nbytes, _a=attempt):
-        write_progress(_a, elapsed, nbytes)
+    def cb(elapsed, stdout_bytes, stderr_bytes=0, _a=attempt):
+        write_progress(_a, elapsed, stdout_bytes, stderr_bytes)
 
     t0 = time.monotonic()
     stdout, timed_out, rc, stderr_tail = run_engine(argv, prompt_bytes, timeout, cb, cwd)
@@ -866,14 +995,26 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     refusal = None
     if rc == 127 and stderr_tail.startswith("spawn-failed:"):
         refusal = stderr_tail
-    _journal_append(run_dir_real, {
+    dispatch_path = _dispatch_path_from_opened(opened)
+    ended = {
         "kind": "attempt-ended", "attempt": attempt,
-        "exit": rc, "timedOut": timed_out, "signal": None,
+        "exit": rc, "timedOut": timed_out,
+        "signal": _signal_from_returncode(rc),
+        "signalSource": _signal_source(timed_out, rc if not timed_out else None),
         "refusal": refusal, "at": time.time(),
         "wallSeconds": round(elapsed, 1),
         "stdoutBytes": len(stdout or ""),
+        "stderrBytes": len(stderr_tail or ""),
         "stderrTail": stderr_tail,
-    })
+        "capSeconds": timeout,
+        "promptBytes": len(prompt_bytes),
+        "dispatchPath": dispatch_path,
+        "lastActivityAt": None,
+        "silenceSeconds": None,
+        "activityStream": None,
+        "activitySource": "injected-seam",
+    }
+    _journal_append(run_dir_real, ended)
     return True, ""
 
 
@@ -1268,7 +1409,11 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     "exit": None, "timedOut": False, "signal": None,
                     "refusal": "attempt-died-unrecorded", "at": time.time(),
                 }
-                _journal_append(run_dir_real, ended_rec)
+                records, _corrupt = _journal_read(run_dir_real)
+                recheck = _journal_state(records)
+                recheck_slot = (recheck.get("attempts") or {}).get(att)
+                if recheck_slot is None or recheck_slot.get("ended") is None:
+                    _journal_append(run_dir_real, ended_rec)
                 break
             else:
                 if not attempts:
@@ -1411,7 +1556,7 @@ def _run_child_main(run_dir_real):
 
     _journal_append(run_dir_real, {
         "kind": "engine-launching", "attempt": pending_att,
-        "childPid": os.getpid(), "at": time.time(),
+        "childPid": os.getpid(), "argv": list(argv), "at": time.time(),
     })
 
     _run_engine_files(
@@ -1422,16 +1567,17 @@ def _run_child_main(run_dir_real):
 
 
 def _progress_writer(progress_path):
-    """Return a write(attempt, elapsed, nbytes) that appends ONE newline-delimited JSON heartbeat.
+    """Return a write(attempt, elapsed, stdout_bytes, stderr_bytes) that appends ONE heartbeat.
     Telemetry failure never invalidates a review (fail-soft: swallow write errors)."""
-    def write(attempt, elapsed, nbytes):
+    def write(attempt, elapsed, stdout_bytes, stderr_bytes=0):
         if not progress_path:
             return
         try:
             with open(progress_path, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps({"alive": True, "attempt": attempt,
                                      "elapsed_s": round(elapsed, 1),
-                                     "stdout_bytes": nbytes}) + "\n")
+                                     "stdout_bytes": stdout_bytes,
+                                     "stderr_bytes": stderr_bytes}) + "\n")
                 fh.flush()
         except Exception:
             pass

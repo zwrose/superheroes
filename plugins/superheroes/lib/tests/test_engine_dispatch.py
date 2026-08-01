@@ -2660,3 +2660,186 @@ def test_grade_review_attempt_empty_stdout_payload_shape_empty_stdout(tmp_path):
     shape = grade.get("payloadShape")
     assert shape is not None
     assert shape["parsed"] == ED.engine_adapter.SHAPE_EMPTY_STDOUT
+
+
+# --- WO-2 (#747): per-attempt telemetry + terminal-record supersede (PR #783) ---
+
+
+def _wo2_open_run(run_dir, prompt_path, **opened_overrides):
+    opened = {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "codex",
+        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "wo2",
+        "argv": [sys.executable, "-c", "x"],
+        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "supervisorPid": 1, "at": time.time(),
+    }
+    opened.update(opened_overrides)
+    ED._journal_append(run_dir, opened)
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1, "childPid": 1,
+        "argv": opened["argv"], "at": time.time(),
+    })
+
+
+def _wo2_run_engine(run_dir, script, timeout=30, heartbeat=None, monkeypatch=None):
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    _wo2_open_run(run_dir, prompt_path)
+    if monkeypatch is not None and heartbeat is not None:
+        monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", heartbeat)
+    ED._run_engine_files(
+        run_dir, 1, [sys.executable, "-c", script], run_dir,
+        prompt_path, stdout_path, stderr_path, timeout,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    return ended, stdout_path, stderr_path
+
+
+def test_run_engine_files_telemetry_stdout_activity(tmp_path, monkeypatch):
+    """axis: which stream is observed for activity sampling (stdout participation)."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    script = (
+        "import sys, time\n"
+        "sys.stdout.write('a')\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(0.12)\n"
+        "sys.stdout.write('b')\n"
+    )
+    ended, _, _ = _wo2_run_engine(run_dir, script, monkeypatch=monkeypatch, heartbeat=0.05)
+    assert ended["exit"] == 0
+    assert ended.get("signal") is None
+    assert ended.get("signalSource") is None
+    assert ended.get("activityStream") == "stdout"
+    assert ended.get("silenceSeconds") is not None
+    assert ended["silenceSeconds"] < 0.5
+
+
+def test_run_engine_files_telemetry_stderr_activity(tmp_path, monkeypatch):
+    """axis: which stream is observed for activity sampling (stderr participation)."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    script = "import sys\nsys.stderr.write('codex-progress')\n"
+    ended, _, stderr_path = _wo2_run_engine(run_dir, script, monkeypatch=monkeypatch)
+    assert ended.get("activityStream") == "stderr"
+    assert ended.get("stderrBytes", 0) > 0
+    assert os.path.getsize(stderr_path) > 0
+
+
+def test_run_engine_files_telemetry_sigkill(tmp_path, monkeypatch):
+    """axis: attribution of kill (engine-side signal death vs runner timeout)."""
+    import signal
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    script = (
+        "import os, signal\n"
+        "os.kill(os.getpid(), signal.SIGKILL)\n"
+    )
+    ended, _, _ = _wo2_run_engine(run_dir, script, monkeypatch=monkeypatch, heartbeat=0.05)
+    assert ended["exit"] < 0
+    assert ended.get("signal") == signal.SIGKILL
+    assert ended.get("signalSource") == "engine"
+
+
+def test_run_engine_files_telemetry_timeout(tmp_path, monkeypatch):
+    """axis: attribution of kill (runner-timeout on cap)."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    script = "import time\ntime.sleep(2)\n"
+    ended, _, _ = _wo2_run_engine(
+        run_dir, script, timeout=0.15, heartbeat=0.05, monkeypatch=monkeypatch,
+    )
+    assert ended.get("timedOut") is True
+    assert ended.get("capSeconds") == 0.15
+    assert ended.get("signalSource") == "runner-timeout"
+
+
+def test_run_engine_files_telemetry_answer_at_exit_stdout(tmp_path, monkeypatch):
+    """axis: timing accuracy of silenceSeconds (post-exit final sample, stdout)."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.5)
+    script = "import sys\nsys.stdout.write('final')\n"
+    ended, _, _ = _wo2_run_engine(run_dir, script, monkeypatch=monkeypatch)
+    assert ended.get("silenceSeconds") is not None
+    assert ended["silenceSeconds"] < 0.25
+
+
+def test_run_engine_files_telemetry_answer_at_exit_stderr(tmp_path, monkeypatch):
+    """axis: timing accuracy of silenceSeconds (post-exit final sample, stderr)."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.5)
+    script = "import sys\nsys.stderr.write('final')\n"
+    ended, _, _ = _wo2_run_engine(run_dir, script, monkeypatch=monkeypatch)
+    assert ended.get("silenceSeconds") is not None
+    assert ended["silenceSeconds"] < 0.25
+
+
+def test_journal_state_real_attempt_ended_wins_over_synthetic_second():
+    """axis: which attempt-ended record wins (real over synthetic, not mere presence)."""
+    records = [
+        {"kind": "attempt-ended", "attempt": 1, "exit": 0, "refusal": None, "at": 1.0},
+        {"kind": "attempt-ended", "attempt": 1, "refusal": "attempt-died-unrecorded", "at": 2.0},
+    ]
+    state = ED._journal_state(records)
+    slot = state["attempts"][1]
+    assert slot["ended"]["exit"] == 0
+    assert slot["endedSuperseded"]["refusal"] == "attempt-died-unrecorded"
+
+
+def test_journal_state_real_attempt_ended_wins_over_synthetic_first():
+    """axis: which attempt-ended record wins (real over synthetic when real arrives second)."""
+    records = [
+        {"kind": "attempt-ended", "attempt": 1, "refusal": "attempt-died-unrecorded", "at": 1.0},
+        {"kind": "attempt-ended", "attempt": 1, "exit": 0, "refusal": None, "at": 2.0},
+    ]
+    state = ED._journal_state(records)
+    slot = state["attempts"][1]
+    assert slot["ended"]["exit"] == 0
+    assert slot["endedSuperseded"]["refusal"] == "attempt-died-unrecorded"
+
+
+def test_journal_state_two_real_attempt_ended_first_wins():
+    """axis: which attempt-ended record wins (first real when both are real)."""
+    records = [
+        {"kind": "attempt-ended", "attempt": 1, "exit": 0, "refusal": None, "at": 1.0},
+        {"kind": "attempt-ended", "attempt": 1, "exit": 1, "refusal": None, "at": 2.0},
+    ]
+    state = ED._journal_state(records)
+    slot = state["attempts"][1]
+    assert slot["ended"]["exit"] == 0
+    assert slot["endedSuperseded"]["exit"] == 1
+
+
+def test_journal_state_legacy_attempt_ended_keys_grade_unchanged(tmp_path):
+    """axis: no-raise on 0.23.0-era attempt-ended keys during fold and grade."""
+    run_dir = str(tmp_path / "run")
+    repo_root = _repo(tmp_path)
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(_VALID_FINDINGS_STDOUT)
+    records = [
+        {
+            "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "codex",
+            "roleKind": ED.RUN_KIND_REVIEW, "orderId": "legacy",
+            "argv": [sys.executable, "-c", "x"], "cwd": repo_root,
+            "timeout": 30, "retryTimeout": 30,
+            "promptPath": os.path.join(run_dir, "prompt.txt"),
+            "baseSha": "abc", "supervisorPid": 1, "at": time.time(),
+        },
+        {
+            "kind": "attempt-ended", "attempt": 1,
+            "exit": 0, "timedOut": False, "signal": None, "refusal": None,
+            "at": time.time(),
+        },
+    ]
+    state = ED._journal_state(records)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
