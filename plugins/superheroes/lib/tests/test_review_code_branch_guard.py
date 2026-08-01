@@ -28,6 +28,7 @@ _GIT_ENV_STRIP = frozenset(
         "GIT_CONFIG_GLOBAL",
         "GIT_CONFIG_SYSTEM",
         "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_PARAMETERS",
         "GIT_COMMON_DIR",
         "GIT_CEILING_DIRECTORIES",
     }
@@ -299,6 +300,44 @@ def _setup_detached(world):
     )
 
 
+def _setup_detached_with_head_branch_config(world):
+    """Detached at head_sha with branch.HEAD.remote/merge set (Finding 1 regression)."""
+    _setup_detached(world)
+    _git(
+        world["work_dir"],
+        "config",
+        "branch.HEAD.remote",
+        "origin",
+        tmp_path=world["tmp_path"],
+    )
+    _git(
+        world["work_dir"],
+        "config",
+        "branch.HEAD.merge",
+        f"refs/heads/{world['pr_branch']}",
+        tmp_path=world["tmp_path"],
+    )
+
+
+def _setup_detached_with_empty_branch_config(world):
+    """Detached at head_sha with branch..remote/merge set (empty subsection)."""
+    _setup_detached(world)
+    _git(
+        world["work_dir"],
+        "config",
+        "branch..remote",
+        "origin",
+        tmp_path=world["tmp_path"],
+    )
+    _git(
+        world["work_dir"],
+        "config",
+        "branch..merge",
+        f"refs/heads/{world['pr_branch']}",
+        tmp_path=world["tmp_path"],
+    )
+
+
 def _setup_branch_null(world):
     """Create a local branch literally named 'null' at head_sha."""
     _git(
@@ -365,28 +404,66 @@ def test_extractor_raises_when_bash_fence_empty(tmp_path):
 
 def test_extractor_returns_shipped_block():
     block = extract_branch_guard()
-    assert "CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)" in block
+    assert "CURRENT_BRANCH=$(git symbolic-ref --quiet --short HEAD)" in block
     assert 'TRACK_REMOTE=$(git config --get "branch.$CURRENT_BRANCH.remote")' in block
 
 
-def test_auto_fix_loop_row_describes_both_acceptance_legs():
-    with open(AUTO_FIX_LOOP_MD, encoding="utf-8") as fh:
-        text = fh.read()
+def _acceptance_leg_tokens_from_guard_home(block):
+    """Derive pinned acceptance-leg anchors from the shipped guard bash block."""
+    tokens = []
+    if '[ "$TRACK_REMOTE" = origin ]' in block:
+        tokens.append(("track_remote", "origin"))
+    if 'refs/heads/$PR_BRANCH' in block:
+        tokens.append(("track_merge", "refs/heads"))
+    if '[ "$LOCAL_HEAD" = "$HEAD_SHA" ]' in block:
+        tokens.append(("head_at_pr", "HEAD_SHA"))
+    if '"$CURRENT_BRANCH" != "$PR_BRANCH"' in block:
+        tokens.append(("name_match", "PR_BRANCH"))
+    if not tokens:
+        raise ValueError("guard home: zero acceptance-leg tokens derived")
+    return tokens
+
+
+def _auto_fix_loop_row_text(doc):
     match = re.search(
         r"^\| Auto-fixing a PR you don't have checked out\s+\|(.+?)\|\s*$",
-        text,
+        doc,
         re.MULTILINE,
     )
     assert match is not None, (
         "auto-fix-loop.md: Common-Mistakes row "
         "'Auto-fixing a PR you don't have checked out' not found"
     )
-    row_text = match.group(1)
-    assert "adopted" in row_text.lower(), (
-        "auto-fix-loop.md row must mention the adopted-build acceptance leg"
-    )
-    assert "headRefOid" in row_text or "HEAD" in row_text, (
-        "auto-fix-loop.md row must name the headRefOid/HEAD condition"
+    return match.group(1)
+
+
+def _row_carries_acceptance_token(row_text, leg_name, token):
+    if token == "origin":
+        return "origin" in row_text
+    if token == "refs/heads":
+        return "refs/heads" in row_text
+    if token == "HEAD_SHA":
+        return "headRefOid" in row_text and "`HEAD`" in row_text
+    if token == "PR_BRANCH":
+        return "current branch" in row_text.lower() or "PR's branch" in row_text
+    raise AssertionError("unknown acceptance token %r for leg %r" % (token, leg_name))
+
+
+def test_auto_fix_loop_row_describes_both_acceptance_legs():
+    """§11: auto-fix-loop.md row restates each acceptance leg from the shipped guard."""
+    home_block = extract_branch_guard()
+    home_tokens = _acceptance_leg_tokens_from_guard_home(home_block)
+    with open(AUTO_FIX_LOOP_MD, encoding="utf-8") as fh:
+        doc = fh.read()
+    row_text = _auto_fix_loop_row_text(doc)
+    missing = [
+        (leg, token)
+        for leg, token in home_tokens
+        if not _row_carries_acceptance_token(row_text, leg, token)
+    ]
+    assert not missing, (
+        "auto-fix-loop.md row missing acceptance leg(s) from shipped guard — %r"
+        % missing
     )
 
 
@@ -500,7 +577,7 @@ def test_state_4_wrong_upstream_refuse(git_world, shipped_guard):
 
 
 def test_state_4b_spoofed_upstream_symbolic_refuse(git_world, shipped_guard):
-    """Issue #769: rendered @{upstream} is spoofable by a branch tracking a local ref.
+    """Issue #769: rendered @{upstream} is spoofable — guard must refuse the real path.
 
     A branch with remote '.' and merge refs/remotes/origin/<pr_branch> makes
     git rev-parse --symbolic-full-name '@{upstream}' print refs/remotes/origin/<pr_branch>
@@ -509,7 +586,6 @@ def test_state_4b_spoofed_upstream_symbolic_refuse(git_world, shipped_guard):
     """
     _setup_spoofed_upstream(git_world)
     pr_branch = git_world["pr_branch"]
-    branch_name = "spoofed-upstream"
     upstream = subprocess.run(
         [
             "git",
@@ -527,7 +603,23 @@ def test_state_4b_spoofed_upstream_symbolic_refuse(git_world, shipped_guard):
     ).stdout.strip()
     assert upstream == f"refs/remotes/origin/{pr_branch}"
 
-    # Remote '.' is the sole rejecting leg; merge must match the adopted ref shape.
+    code, out, err = run_guard(
+        shipped_guard,
+        git_world["work_dir"],
+        pr_branch,
+        git_world["head_sha"],
+        tmp_path=git_world["tmp_path"],
+    )
+    assert code == 1
+    text = _combined_output(out, err)
+    assert "An ADOPTED build also qualifies" in text
+
+
+def test_state_4c_spoofed_upstream_tracked_remote_isolation_refuse(git_world, shipped_guard):
+    """Isolates the TRACK_REMOTE leg: remote '.' with merge corrected to refs/heads/<pr>."""
+    _setup_spoofed_upstream(git_world)
+    pr_branch = git_world["pr_branch"]
+    branch_name = "spoofed-upstream"
     _git(
         git_world["work_dir"],
         "config",
@@ -574,7 +666,37 @@ def test_state_6_detached_head_refuse(git_world, shipped_guard):
     assert code == 1
     text = _combined_output(out, err)
     assert "An ADOPTED build also qualifies" in text
-    assert "currently on 'HEAD'" in text
+    assert "currently on '<detached HEAD>'" in text
+
+
+def test_state_6b_detached_head_with_branch_head_config_refuse(git_world, shipped_guard):
+    """Detached at PR head with branch.HEAD.* set must still refuse (Finding 1)."""
+    _setup_detached_with_head_branch_config(git_world)
+    code, out, err = run_guard(
+        shipped_guard,
+        git_world["work_dir"],
+        git_world["pr_branch"],
+        git_world["head_sha"],
+        tmp_path=git_world["tmp_path"],
+    )
+    assert code == 1
+    text = _combined_output(out, err)
+    assert "An ADOPTED build also qualifies" in text
+
+
+def test_state_6c_detached_head_with_empty_subsection_config_refuse(git_world, shipped_guard):
+    """Detached at PR head with branch..* set must still refuse (empty subsection)."""
+    _setup_detached_with_empty_branch_config(git_world)
+    code, out, err = run_guard(
+        shipped_guard,
+        git_world["work_dir"],
+        git_world["pr_branch"],
+        git_world["head_sha"],
+        tmp_path=git_world["tmp_path"],
+    )
+    assert code == 1
+    text = _combined_output(out, err)
+    assert "An ADOPTED build also qualifies" in text
 
 
 @pytest.mark.parametrize(

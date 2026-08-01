@@ -237,12 +237,12 @@ git worktree add --detach "$SESSION_DIR/repo" "$HEAD_SHA"   # --post / --review-
 **Auto-fix branch guard (PR mode, default loop only).** Before entering the loop, the orchestrator must be in one of two accepted states so fix commits land where they belong: **standing on the PR's branch** (name match only — **no** `HEAD` freshness check, so a behind checkout still passes), or **an adopted build** (invoke `review-code pr <N>` — auto-detection matches `--head` by branch name, so a renamed local branch never reaches this guard on a bare invocation) tracking remote `origin` with merge ref `refs/heads/<PR branch>` (read from `branch.<name>.remote` / `branch.<name>.merge`, not `@{upstream}` — spoofable by a local-tracking ref) and `HEAD` exactly `$HEAD_SHA`. The fenced block below is extracted by `plugins/superheroes/lib/tests/test_review_code_branch_guard.py` (first `bash` fence after this paragraph). Adopted path only: the config leg proves tracking **`origin`'s** branch of that name with `HEAD` at the PR head — assuming the PR head lives in `origin` (same as `git fetch origin "$PR_BRANCH"` above); a fork PR whose head name collides with an `origin` branch is not distinguished. The SHA leg refuses a stale adopted copy and does **not** apply to the name path.
 
 ```bash
-CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD); LOCAL_HEAD=$(git rev-parse HEAD)
+CURRENT_BRANCH=$(git symbolic-ref --quiet --short HEAD); LOCAL_HEAD=$(git rev-parse HEAD)
 TRACK_REMOTE=$(git config --get "branch.$CURRENT_BRANCH.remote"); TRACK_MERGE=$(git config --get "branch.$CURRENT_BRANCH.merge")
 case "$PR_BRANCH" in ""|null) echo "Auto-fix: pr.json has no head branch — refusing (fail closed)."; exit 1;; esac
 case "$HEAD_SHA"   in ""|null) echo "Auto-fix: pr.json has no head SHA — refusing (fail closed)."; exit 1;; esac
-if [ "$CURRENT_BRANCH" != "$PR_BRANCH" ] && ! { [ "$TRACK_REMOTE" = origin ] && [ "$TRACK_MERGE" = "refs/heads/$PR_BRANCH" ] && [ "$LOCAL_HEAD" = "$HEAD_SHA" ]; }; then
-  echo "Auto-fix needs the PR's branch '$PR_BRANCH' (currently on '$CURRENT_BRANCH'). An ADOPTED build also qualifies, but only when ALL hold: this branch tracks remote 'origin' (found '${TRACK_REMOTE:-none}') and merge ref 'refs/heads/$PR_BRANCH' (found '${TRACK_MERGE:-none}'), AND HEAD is the PR head '$HEAD_SHA' (found '$LOCAL_HEAD')."
+if [ "$CURRENT_BRANCH" != "$PR_BRANCH" ] && ! { [ -n "$CURRENT_BRANCH" ] && [ "$TRACK_REMOTE" = origin ] && [ "$TRACK_MERGE" = "refs/heads/$PR_BRANCH" ] && [ "$LOCAL_HEAD" = "$HEAD_SHA" ]; }; then
+  echo "Auto-fix needs the PR's branch '$PR_BRANCH' (currently on '${CURRENT_BRANCH:-<detached HEAD>}'). An ADOPTED build also qualifies, but only when ALL hold: this branch tracks remote 'origin' (found '${TRACK_REMOTE:-none}') and merge ref 'refs/heads/$PR_BRANCH' (found '${TRACK_MERGE:-none}'), AND HEAD is the PR head '$HEAD_SHA' (found '$LOCAL_HEAD')."
   echo "Otherwise check out the branch, or re-run with --post (read-only GitHub) or --review-only (read-only terminal)."; exit 1
 fi
 ```
