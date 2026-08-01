@@ -1421,7 +1421,7 @@ def test_subprocess_census_all_git_calls_use_wrappers():
                 and func.value.id == "subprocess"
             ):
                 owner = self.stack[-1] if self.stack else "<module>"
-                if owner not in ("_git_run", "_git_popen"):
+                if owner not in ("_git_run", "_git_popen", "_ancestry_run"):
                     self.violations.append(owner)
             self.generic_visit(node)
 
@@ -4016,3 +4016,171 @@ def test_diff_stall_after_partial_write(tmp_path, monkeypatch):
         if view_root is not None:
             sv.destroy_sanitized_view(view_root)
     assert _leftover_view_dirs(fake_tmp) == []
+
+
+# --- ancestry hermetic merge-base -------------------------------------------
+
+
+def _leftover_ancestry_dirs(tmp_base):
+    try:
+        return [
+            name
+            for name in os.listdir(tmp_base)
+            if name.startswith(sv._ANCESTRY_SCRATCH_PREFIX)
+        ]
+    except OSError:
+        return []
+
+
+def _graft_decoy_fixture(repo_path):
+    """Repo with graft metadata steering merge-base to orphan decoy commit D."""
+    repo = _init_repo(
+        repo_path,
+        files={
+            "hidden.txt": "hidden base\n",
+            "visible.txt": "visible base\n",
+        },
+    )
+    B = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "hidden.txt"), "w", encoding="utf-8") as fh:
+        fh.write("hidden head\n")
+    with open(os.path.join(repo, "visible.txt"), "w", encoding="utf-8") as fh:
+        fh.write("visible head\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "head",
+    )
+    H = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "checkout", "--orphan", "decoy")
+    _git(repo, "rm", "-rf", ".", check=False)
+    with open(os.path.join(repo, "hidden.txt"), "w", encoding="utf-8") as fh:
+        fh.write("hidden head\n")
+    with open(os.path.join(repo, "visible.txt"), "w", encoding="utf-8") as fh:
+        fh.write("visible decoy\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "decoy",
+    )
+    D = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "checkout", "--detach", H)
+    grafts_dir = os.path.join(repo, ".git", "info")
+    os.makedirs(grafts_dir, exist_ok=True)
+    with open(os.path.join(grafts_dir, "grafts"), "w", encoding="utf-8") as fh:
+        fh.write("%s %s\n" % (B, D))
+        fh.write("%s %s\n" % (H, D))
+    _git(repo, "config", "advice.graftFileDeprecated", "false")
+    return repo, B, H, D
+
+
+def test_review_diff_ancestry_ignores_repo_graft_metadata(tmp_path):
+    repo, B, H, D = _graft_decoy_fixture(tmp_path / "graft-repo")
+    assert _git(repo, "merge-base", B, H).stdout.strip() == D
+    assert sv._authoritative_merge_base(repo, B, H, time.monotonic()) == B
+    view = None
+    try:
+        view = sv.build_sanitized_view(repo, diff_base=B)
+        assert view["diffBase"] == B
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert b"diff --git a/hidden.txt b/hidden.txt" in patch
+        assert b"diff --git a/visible.txt b/visible.txt" in patch
+        assert b"hidden head" in patch
+        assert view["diffWithheldCount"] == 0
+    finally:
+        if view is not None:
+            sv.destroy_sanitized_view(view["path"])
+
+
+def test_review_diff_ancestry_ignores_inherited_graft_file_env(tmp_path, monkeypatch):
+    repo, B, H, D = _graft_decoy_fixture(tmp_path / "env-graft-repo")
+    graft_file = tmp_path / "external-grafts"
+    graft_file.write_text("%s %s\n%s %s\n" % (B, D, H, D), encoding="utf-8")
+    monkeypatch.setenv("GIT_GRAFT_FILE", str(graft_file))
+    env = os.environ.copy()
+    proc = subprocess.run(
+        ["git", "-C", repo, "merge-base", B, H],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert proc.stdout.strip() == D
+    assert sv._authoritative_merge_base(repo, B, H, time.monotonic()) == B
+    view = None
+    try:
+        view = sv.build_sanitized_view(repo, diff_base=B)
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert b"diff --git a/hidden.txt b/hidden.txt" in patch
+        assert b"diff --git a/visible.txt b/visible.txt" in patch
+        assert b"hidden head" in patch
+        assert view["diffWithheldCount"] == 0
+    finally:
+        if view is not None:
+            sv.destroy_sanitized_view(view["path"])
+
+
+def test_review_diff_ancestry_env_drops_every_git_variable(monkeypatch):
+    monkeypatch.setenv("GIT_GRAFT_FILE", "/nope")
+    monkeypatch.setenv("GIT_DIR", "/nope")
+    monkeypatch.setenv("GIT_SOMETHING_NOT_YET_INVENTED", "/nope")
+    monkeypatch.setenv("SUPERHEROES_TEST_SURVIVOR", "yes")
+    env = sv._ancestry_env()
+    git_keys = {k for k in env if k.startswith("GIT_")}
+    assert git_keys == {
+        "GIT_NO_REPLACE_OBJECTS",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_SYSTEM",
+    }
+    assert env["GIT_NO_REPLACE_OBJECTS"] == "1"
+    assert env["LC_ALL"] == "C"
+    assert env["LANGUAGE"] == ""
+    assert env["SUPERHEROES_TEST_SURVIVOR"] == "yes"
+
+
+def test_review_diff_ancestry_scratch_directory_is_removed(tmp_path):
+    tmp_base = sv.tempfile.gettempdir()
+    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "scratch-reap")
+    view = None
+    try:
+        view = _build(repo, diff_base=B)
+        assert _leftover_ancestry_dirs(tmp_base) == []
+    finally:
+        if view is not None:
+            sv.destroy_sanitized_view(view["path"])
+    repo2 = _init_repo(tmp_path / "unrelated-reap", files={"keep.txt": "v1\n"})
+    first_sha = _git(repo2, "rev-parse", "HEAD").stdout.strip()
+    _git(repo2, "checkout", "--orphan", "other")
+    _git(repo2, "rm", "-rf", ".", check=False)
+    with open(os.path.join(repo2, "other.txt"), "w", encoding="utf-8") as fh:
+        fh.write("other\n")
+    _git(repo2, "add", "-A")
+    _git(
+        repo2,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "other",
+    )
+    with pytest.raises(sv.SanitizedViewError):
+        _build(repo2, diff_base=first_sha)
+    assert _leftover_ancestry_dirs(tmp_base) == []

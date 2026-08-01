@@ -111,6 +111,18 @@ _DIFF_PATCH_FLAGS = (
 
 _DIFF_READ_POLL_SECONDS = 1.0
 
+_ANCESTRY_SCRATCH_PREFIX = "superheroes-ancestry-"
+
+# Pins for our own reader. core.commitGraph defaults on since git 2.24, and a
+# commit-graph file lives inside the object directory we alternate to, so it is
+# disabled explicitly rather than trusted.
+_ANCESTRY_CONFIG_OVERRIDES = (
+    "-c",
+    "core.commitGraph=false",
+    "-c",
+    "core.useReplaceRefs=false",
+)
+
 
 def _git_env():
     env = os.environ.copy()
@@ -501,6 +513,162 @@ def _remaining_export_timeout(started):
     """Seconds left in the export budget (small positive floor)."""
     remaining = SANITIZED_VIEW_EXPORT_TIMEOUT_SECONDS - (time.monotonic() - started)
     return max(remaining, 0.001)
+
+
+def _ancestry_env():
+    """Environment for ancestry resolution, built by rule rather than by denylist.
+
+    Every inherited ``GIT_*`` variable is dropped — including ones this module has
+    never heard of — and only process-owned values are added back. A denylist of
+    dangerous names is exactly what this boundary must not depend on.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env["GIT_NO_REPLACE_OBJECTS"] = "1"
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_CONFIG_SYSTEM"] = os.devnull
+    env["LC_ALL"] = "C"
+    env["LANGUAGE"] = ""
+    return env
+
+
+def _ancestry_run(argv, started, *, cwd=None):
+    """Run one ancestry git command under the hermetic environment and the deadline."""
+    _check_export_deadline(started)
+    try:
+        return subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=_remaining_export_timeout(started),
+            env=_ancestry_env(),
+            cwd=cwd,
+        )
+    except subprocess.TimeoutExpired:
+        raise SanitizedViewError("sanitized-view-diff-failed")
+    except OSError:
+        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+
+
+def _repo_object_directory(repo_real, started):
+    """Absolute path of the repository's object store.
+
+    ``rev-parse --git-path objects`` (git 2.5+) yields the *common* object directory
+    from a linked worktree; it may be relative to the repository root, so it is
+    joined and realpath'd here rather than requiring ``--path-format=absolute``
+    (git 2.31+).
+    """
+    proc = _ancestry_run(
+        ["git", "-C", repo_real, "rev-parse", "--git-path", "objects"], started
+    )
+    if proc.returncode != 0:
+        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+    raw = proc.stdout.strip()
+    if not raw:
+        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+    objects_dir = raw if os.path.isabs(raw) else os.path.join(repo_real, raw)
+    objects_dir = os.path.realpath(objects_dir)
+    # The alternates file is newline-delimited; a path containing a newline cannot
+    # be expressed in it, so refuse rather than write a file git will misread.
+    if "\n" in objects_dir or "\r" in objects_dir:
+        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+    if not os.path.isdir(objects_dir):
+        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+    return objects_dir
+
+
+def _repo_object_format(repo_real, started):
+    """Object format name, or None when git is too old to report one (then sha1)."""
+    proc = _ancestry_run(
+        ["git", "-C", repo_real, "rev-parse", "--show-object-format"], started
+    )
+    if proc.returncode != 0:
+        return None
+    fmt = proc.stdout.strip()
+    # Conservative: only a recognised non-default format is forwarded to git init.
+    if fmt in ("sha1", ""):
+        return None
+    if not fmt.isalnum():
+        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+    return fmt
+
+
+def _authoritative_merge_base(repo_real, base_sha, head_sha, started):
+    """Merge-base resolved outside the reviewed repository's git directory.
+
+    Ancestry overlays a repository can carry — graft metadata, replacement refs, a
+    commit-graph, config, attributes — all live in that repository's git directory.
+    The object store holds only oid->bytes. Resolving ancestry in a scratch
+    repository this process creates, whose sole link to the repo under review is an
+    ``objects/info/alternates`` pointer, therefore puts every such overlay
+    structurally out of reach, without enumerating any of them.
+
+    Trust boundary, stated: the object store's oid->bytes mapping is the trust root
+    already shared by the census, the patch generation and the view materialization.
+    This function does not defend against an object store that serves wrong bytes for
+    an oid, and does not claim to.
+    """
+    objects_dir = _repo_object_directory(repo_real, started)
+    object_format = _repo_object_format(repo_real, started)
+
+    tmp_base = tempfile.gettempdir()
+    if path_is_under_repo(tmp_base, repo_real):
+        raise SanitizedViewError("sanitized-view-tempbase-inside-repo")
+
+    scratch_parent = None
+    try:
+        scratch_parent = tempfile.mkdtemp(prefix=_ANCESTRY_SCRATCH_PREFIX)
+        if path_is_under_repo(scratch_parent, repo_real):
+            raise SanitizedViewError("sanitized-view-tempbase-inside-repo")
+        # An empty template directory keeps any init.templateDir content out of the
+        # scratch repository.
+        template_dir = os.path.join(scratch_parent, "template")
+        scratch_git_dir = os.path.join(scratch_parent, "ancestry.git")
+        os.makedirs(template_dir)
+
+        init_argv = [
+            "git",
+            "init",
+            "-q",
+            "--bare",
+            "--template=%s" % template_dir,
+        ]
+        if object_format is not None:
+            init_argv.append("--object-format=%s" % object_format)
+        init_argv.append(scratch_git_dir)
+        proc = _ancestry_run(init_argv, started, cwd=scratch_parent)
+        if proc.returncode != 0:
+            raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+
+        alternates = os.path.join(scratch_git_dir, "objects", "info", "alternates")
+        try:
+            os.makedirs(os.path.dirname(alternates), exist_ok=True)
+            with open(alternates, "w", encoding="utf-8") as fh:
+                fh.write(objects_dir + "\n")
+        except OSError:
+            raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+
+        proc = _ancestry_run(
+            [
+                "git",
+                "--git-dir=%s" % scratch_git_dir,
+                *_ANCESTRY_CONFIG_OVERRIDES,
+                "merge-base",
+                "--end-of-options",
+                base_sha,
+                head_sha,
+            ],
+            started,
+            cwd=scratch_parent,
+        )
+        if proc.returncode != 0 or not proc.stdout.strip():
+            raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+        merge_base = proc.stdout.strip()
+        if not _is_git_object_id_hex(merge_base):
+            raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+        return merge_base
+    finally:
+        if scratch_parent is not None:
+            shutil.rmtree(scratch_parent, ignore_errors=True)
 
 
 class _CatFileBatch:
@@ -1486,24 +1654,7 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
     if not _is_git_object_id_hex(base_sha):
         raise SanitizedViewError("sanitized-view-diff-base-unresolved")
 
-    _check_export_deadline(started)
-    timeout = _remaining_export_timeout(started)
-    try:
-        proc = _git_run(
-            ["git", "-C", repo_real, "merge-base", base_sha, head_sha],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
-        raise SanitizedViewError("sanitized-view-diff-failed")
-    except OSError:
-        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
-    if proc.returncode != 0 or not proc.stdout.strip():
-        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
-    merge_base = proc.stdout.strip()
-    if not _is_git_object_id_hex(merge_base):
-        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+    merge_base = _authoritative_merge_base(repo_real, base_sha, head_sha, started)
 
     changed = _changed_tree_entries(repo_real, merge_base, head_sha, started)
     withheld = [p for p in changed if _rel_path_would_be_stripped(p)]
