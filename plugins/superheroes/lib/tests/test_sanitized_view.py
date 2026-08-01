@@ -1430,6 +1430,48 @@ def test_subprocess_census_all_git_calls_use_wrappers():
     assert visitor.violations == []
 
 
+def test_subprocess_ancestry_git_calls_route_through_ancestry_run():
+    import ast
+
+    path = os.path.join(os.path.dirname(sv.__file__), "sanitized_view.py")
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+
+    ancestry_verbs = frozenset({"merge-base", "rev-list", "log", "describe"})
+    violations = []
+
+    class Visitor(ast.NodeVisitor):
+        def __init__(self):
+            self.stack = []
+
+        def visit_FunctionDef(self, node):
+            self.stack.append(node.name)
+            self.generic_visit(node)
+            self.stack.pop()
+
+        def visit_Call(self, node):
+            func = node.func
+            if (
+                isinstance(func, ast.Name)
+                and func.id in ("_git_run", "_git_popen")
+                and node.args
+                and isinstance(node.args[0], ast.List)
+            ):
+                owner = self.stack[-1] if self.stack else "<module>"
+                for elt in node.args[0].elts:
+                    if not isinstance(elt, ast.Constant) or not isinstance(
+                        elt.value, str
+                    ):
+                        continue
+                    token = elt.value
+                    if token in ancestry_verbs or ".." in token:
+                        violations.append(owner)
+            self.generic_visit(node)
+
+    Visitor().visit(tree)
+    assert violations == [], "ancestry verbs in _git_run/_git_popen: %s" % violations
+
+
 def test_diff_base_none_keys_are_none(tmp_path):
     repo = _init_repo(tmp_path / "no-diff", files={"keep.txt": "k\n"})
     view = _build(repo)
@@ -2404,24 +2446,34 @@ def test_review_diff_descendant_pathspecs_collapse_to_ancestor(tmp_path, monkeyp
 
 def test_collapse_descendant_pathspecs_adversarial_sibling_prefixes():
     started = time.monotonic()
-    assert set(sv._collapse_descendant_pathspecs(["a", "a-b", "a/c"], started)) == {
+    assert sv._collapse_descendant_pathspecs(["a", "a-b", "a/c"], started) == [
         "a",
         "a-b",
-    }
-    assert set(
-        sv._collapse_descendant_pathspecs(["a/c", "a-b", "a"], started)
-    ) == {"a", "a-b"}
-    assert set(
-        sv._collapse_descendant_pathspecs(
-            ["pkg", "pkg/x", "pkg/y/z", "pkgx"], started
-        )
-    ) == {"pkg", "pkgx"}
-    assert set(sv._collapse_descendant_pathspecs(["a/b", "a/bc"], started)) == {
+    ]
+    assert sv._collapse_descendant_pathspecs(["a/c", "a-b", "a"], started) == [
+        "a",
+        "a-b",
+    ]
+    assert sv._collapse_descendant_pathspecs(
+        ["pkg", "pkg/x", "pkg/y/z", "pkgx"], started
+    ) == ["pkg", "pkgx"]
+    assert sv._collapse_descendant_pathspecs(["a/b", "a/bc"], started) == [
         "a/b",
         "a/bc",
-    }
-    assert set(sv._collapse_descendant_pathspecs(["a", "a"], started)) == {"a"}
+    ]
+    assert sv._collapse_descendant_pathspecs(["a", "a"], started) == ["a"]
     assert sv._collapse_descendant_pathspecs([], started) == []
+
+
+def test_collapse_descendant_pathspecs_checks_deadline_at_every_stage(monkeypatch):
+    calls = []
+    monkeypatch.setattr(sv, "_COLLAPSE_DEADLINE_CHECK_INTERVAL", 1)
+    monkeypatch.setattr(
+        sv, "_check_export_deadline", lambda started: calls.append(started)
+    )
+    paths = ["p%d" % i for i in range(5)]
+    sv._collapse_descendant_pathspecs(paths, time.monotonic())
+    assert len(calls) == len(paths) + 2
 
 
 def test_collapse_descendant_pathspecs_enforces_export_deadline():
@@ -2431,23 +2483,50 @@ def test_collapse_descendant_pathspecs_enforces_export_deadline():
     assert exc.value.detail == "sanitized-view-export-timeout"
 
 
-def test_review_diff_collapse_no_git_subprocess_after_deadline(
+def test_review_diff_collapse_deadline_wins_before_patch_git_spawn(
     tmp_path, monkeypatch,
 ):
-    repo = _init_repo(tmp_path / "collapse-deadline", files={"a.txt": "a\n"})
-    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    merge_base = head_sha
-    started = time.monotonic() - sv.SANITIZED_VIEW_EXPORT_TIMEOUT_SECONDS - 1
+    """Deadline during collapse must win before any patch-batch git subprocess."""
+    repo = _init_repo(
+        tmp_path / "collapse-deadline-build",
+        files={("p%d.txt" % i): "v\n" for i in range(6)},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "p0.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "head",
+    )
+    deadline_calls = {"n": 0}
+    real_check = sv._check_export_deadline
+    real_popen = sv._git_popen
+    # Expire during collapse (calls 26–29) after census/ancestry, before diff at call 30.
+    expire_after = 28
 
-    def git_spawned_after_deadline(*args, **kwargs):
-        raise AssertionError("git spawned after deadline")
+    def counting_deadline(started):
+        deadline_calls["n"] += 1
+        if deadline_calls["n"] > expire_after:
+            raise sv.SanitizedViewError("sanitized-view-export-timeout")
+        real_check(started)
 
+    def git_spawned_after_deadline(argv, **kwargs):
+        if "diff" in argv:
+            raise AssertionError("git spawned after deadline")
+        return real_popen(argv, **kwargs)
+
+    monkeypatch.setattr(sv, "_check_export_deadline", counting_deadline)
     monkeypatch.setattr(sv, "_git_popen", git_spawned_after_deadline)
-    monkeypatch.setattr(sv, "_git_run", git_spawned_after_deadline)
     with pytest.raises(sv.SanitizedViewError) as exc:
-        sv._batch_review_diff_pathspecs(
-            repo, merge_base, head_sha, ["a", "b"], started
-        )
+        sv.build_sanitized_view(repo, diff_base=base_sha)
     assert exc.value.detail == "sanitized-view-export-timeout"
 
 
@@ -4085,7 +4164,7 @@ def _leftover_ancestry_dirs(tmp_base):
         return []
 
 
-def _graft_decoy_fixture(repo_path):
+def _graft_decoy_fixture(repo_path, *, plant_repo_grafts=True):
     """Repo with graft metadata steering merge-base to orphan decoy commit D."""
     repo = _init_repo(
         repo_path,
@@ -4132,12 +4211,13 @@ def _graft_decoy_fixture(repo_path):
     )
     D = _git(repo, "rev-parse", "HEAD").stdout.strip()
     _git(repo, "checkout", "--detach", H)
-    grafts_dir = os.path.join(repo, ".git", "info")
-    os.makedirs(grafts_dir, exist_ok=True)
-    with open(os.path.join(grafts_dir, "grafts"), "w", encoding="utf-8") as fh:
-        fh.write("%s %s\n" % (B, D))
-        fh.write("%s %s\n" % (H, D))
-    _git(repo, "config", "advice.graftFileDeprecated", "false")
+    if plant_repo_grafts:
+        grafts_dir = os.path.join(repo, ".git", "info")
+        os.makedirs(grafts_dir, exist_ok=True)
+        with open(os.path.join(grafts_dir, "grafts"), "w", encoding="utf-8") as fh:
+            fh.write("%s %s\n" % (B, D))
+            fh.write("%s %s\n" % (H, D))
+        _git(repo, "config", "advice.graftFileDeprecated", "false")
     return repo, B, H, D
 
 
@@ -4161,9 +4241,18 @@ def test_review_diff_ancestry_ignores_repo_graft_metadata(tmp_path):
 
 
 def test_review_diff_ancestry_ignores_inherited_graft_file_env(tmp_path, monkeypatch):
-    repo, B, H, D = _graft_decoy_fixture(tmp_path / "env-graft-repo")
+    repo, B, H, D = _graft_decoy_fixture(
+        tmp_path / "env-graft-repo", plant_repo_grafts=False
+    )
     graft_file = tmp_path / "external-grafts"
     graft_file.write_text("%s %s\n%s %s\n" % (B, D, H, D), encoding="utf-8")
+    proc = subprocess.run(
+        ["git", "-C", repo, "merge-base", B, H],
+        capture_output=True,
+        text=True,
+        env=os.environ.copy(),
+    )
+    assert proc.stdout.strip() == B
     monkeypatch.setenv("GIT_GRAFT_FILE", str(graft_file))
     env = os.environ.copy()
     proc = subprocess.run(
@@ -4201,18 +4290,36 @@ def test_review_diff_ancestry_env_drops_every_git_variable(monkeypatch):
         "GIT_CONFIG_SYSTEM",
     }
     assert env["GIT_NO_REPLACE_OBJECTS"] == "1"
+    assert env["GIT_CONFIG_GLOBAL"] == os.devnull
+    assert env["GIT_CONFIG_SYSTEM"] == os.devnull
     assert env["LC_ALL"] == "C"
     assert env["LANGUAGE"] == ""
     assert env["SUPERHEROES_TEST_SURVIVOR"] == "yes"
 
 
-def test_review_diff_ancestry_scratch_directory_is_removed(tmp_path):
+def test_review_diff_ancestry_scratch_directory_is_removed(tmp_path, monkeypatch):
     tmp_base = sv.tempfile.gettempdir()
+    created = []
+
+    real_mkdtemp = sv.tempfile.mkdtemp
+
+    def recording_mkdtemp(*args, **kwargs):
+        path = real_mkdtemp(*args, **kwargs)
+        if kwargs.get("prefix") == sv._ANCESTRY_SCRATCH_PREFIX or (
+            args and args[0] == sv._ANCESTRY_SCRATCH_PREFIX
+        ):
+            created.append(path)
+        return path
+
+    monkeypatch.setattr(sv.tempfile, "mkdtemp", recording_mkdtemp)
     repo, B, H, _D = _graft_decoy_fixture(tmp_path / "scratch-reap")
     view = None
     try:
         view = _build(repo, diff_base=B)
+        assert len(created) >= 1
         assert _leftover_ancestry_dirs(tmp_base) == []
+        for path in created:
+            assert not os.path.exists(path)
     finally:
         if view is not None:
             sv.destroy_sanitized_view(view["path"])
@@ -4234,6 +4341,163 @@ def test_review_diff_ancestry_scratch_directory_is_removed(tmp_path):
         "-m",
         "other",
     )
-    with pytest.raises(sv.SanitizedViewError):
+    with pytest.raises(sv.SanitizedViewError) as exc:
         _build(repo2, diff_base=first_sha)
+    assert exc.value.detail == "sanitized-view-diff-base-unresolved"
     assert _leftover_ancestry_dirs(tmp_base) == []
+
+
+def test_sweep_stale_views_reaps_aged_ancestry_scratch(tmp_path, monkeypatch):
+    base = tmp_path / "fake-tmp"
+    base.mkdir()
+    aged = base / (sv._ANCESTRY_SCRATCH_PREFIX + "old")
+    aged.mkdir()
+    fresh = base / (sv._ANCESTRY_SCRATCH_PREFIX + "fresh")
+    fresh.mkdir()
+    stale_time = time.time() - sv.SANITIZED_VIEW_STALE_AGE_SECONDS - 120
+    os.utime(aged, (stale_time, stale_time))
+    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: str(base))
+    sv._sweep_stale_views(str(base))
+    assert not aged.exists()
+    assert fresh.exists()
+
+
+def test_review_diff_ancestry_resolves_in_linked_worktree(tmp_path):
+    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "linked-wt")
+    linked = str(tmp_path / "linked-checkout")
+    os.makedirs(linked, exist_ok=True)
+    _git(repo, "worktree", "add", "--detach", linked, H)
+    assert os.path.isfile(os.path.join(linked, ".git"))
+    assert sv._authoritative_merge_base(linked, B, H, time.monotonic()) == B
+    view = None
+    try:
+        view = sv.build_sanitized_view(linked, diff_base=B)
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert b"diff --git a/hidden.txt b/hidden.txt" in patch
+        assert b"diff --git a/visible.txt b/visible.txt" in patch
+        assert view["diffWithheldCount"] == 0
+    finally:
+        if view is not None:
+            sv.destroy_sanitized_view(view["path"])
+        _git(repo, "worktree", "remove", "--force", linked, check=False)
+
+
+def test_review_diff_ancestry_object_directory_probe_nonzero(tmp_path, monkeypatch):
+    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "objdir-fail")
+    real_run = sv._ancestry_run
+
+    def standin(argv, started, *, cwd=None):
+        if "--git-path" in argv and "objects" in argv:
+            class Proc:
+                returncode = 1
+                stdout = ""
+                stderr = "fail"
+            return Proc()
+        return real_run(argv, started, cwd=cwd)
+
+    monkeypatch.setattr(sv, "_ancestry_run", standin)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._authoritative_merge_base(repo, B, H, time.monotonic())
+    assert exc.value.detail == "sanitized-view-diff-base-unresolved"
+
+
+def test_review_diff_ancestry_object_directory_not_a_directory(tmp_path, monkeypatch):
+    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "objdir-nodir")
+    real_run = sv._ancestry_run
+    bogus = os.path.join(repo, "not-objects-dir")
+    with open(bogus, "w", encoding="utf-8") as fh:
+        fh.write("x\n")
+
+    def standin(argv, started, *, cwd=None):
+        if "--git-path" in argv and "objects" in argv:
+            class Proc:
+                returncode = 0
+                stdout = bogus
+                stderr = ""
+            return Proc()
+        return real_run(argv, started, cwd=cwd)
+
+    monkeypatch.setattr(sv, "_ancestry_run", standin)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._authoritative_merge_base(repo, B, H, time.monotonic())
+    assert exc.value.detail == "sanitized-view-diff-base-unresolved"
+
+
+def test_review_diff_ancestry_scratch_init_nonzero(tmp_path, monkeypatch):
+    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "init-fail")
+    real_run = sv._ancestry_run
+
+    def standin(argv, started, *, cwd=None):
+        if argv and argv[0] == "git" and "init" in argv:
+            class Proc:
+                returncode = 1
+                stdout = ""
+                stderr = "fail"
+            return Proc()
+        return real_run(argv, started, cwd=cwd)
+
+    monkeypatch.setattr(sv, "_ancestry_run", standin)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._authoritative_merge_base(repo, B, H, time.monotonic())
+    assert exc.value.detail == "sanitized-view-diff-base-unresolved"
+
+
+def test_review_diff_ancestry_old_git_object_format_echo_succeeds(tmp_path, monkeypatch):
+    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "old-git-fmt")
+    real_run = sv._ancestry_run
+
+    def standin(argv, started, *, cwd=None):
+        if "--show-object-format" in argv:
+            class Proc:
+                returncode = 0
+                stdout = "--show-object-format"
+                stderr = ""
+            return Proc()
+        return real_run(argv, started, cwd=cwd)
+
+    monkeypatch.setattr(sv, "_ancestry_run", standin)
+    assert sv._authoritative_merge_base(repo, B, H, time.monotonic()) == B
+    view = None
+    try:
+        view = sv.build_sanitized_view(repo, diff_base=B)
+        assert view["diffWithheldCount"] == 0
+    finally:
+        if view is not None:
+            sv.destroy_sanitized_view(view["path"])
+
+
+def test_review_diff_ancestry_shallow_refusal(tmp_path, monkeypatch):
+    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "shallow")
+    real_run = sv._ancestry_run
+
+    def standin(argv, started, *, cwd=None):
+        if "--is-shallow-repository" in argv:
+            class Proc:
+                returncode = 0
+                stdout = "true"
+                stderr = ""
+            return Proc()
+        return real_run(argv, started, cwd=cwd)
+
+    monkeypatch.setattr(sv, "_ancestry_run", standin)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._authoritative_merge_base(repo, B, H, time.monotonic())
+    assert exc.value.detail == "sanitized-view-diff-base-shallow"
+
+
+def test_review_diff_ancestry_merge_base_argv_pins_config(monkeypatch, tmp_path):
+    repo, B, H, _D = _graft_decoy_fixture(tmp_path / "argv-pins")
+    recorded = []
+    real_run = sv._ancestry_run
+
+    def recorder(argv, started, *, cwd=None):
+        recorded.append(list(argv))
+        return real_run(argv, started, cwd=cwd)
+
+    monkeypatch.setattr(sv, "_ancestry_run", recorder)
+    sv._authoritative_merge_base(repo, B, H, time.monotonic())
+    merge_argv = next(a for a in recorded if "merge-base" in a)
+    # Implementation-coupled assertion protecting a security pin, not behavioural proof.
+    assert "core.commitGraph=false" in merge_argv
+    assert "core.useReplaceRefs=false" in merge_argv

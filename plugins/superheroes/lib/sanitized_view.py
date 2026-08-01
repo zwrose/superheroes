@@ -324,15 +324,37 @@ def destroy_sanitized_view(path):
     return not os.path.exists(real)
 
 
+def _owned_ancestry_scratch_realpath(path):
+    """Resolved path when authorized to reap a stale ancestry scratch dir; None otherwise."""
+    try:
+        real = os.path.realpath(path)
+        if not os.path.basename(real).startswith(_ANCESTRY_SCRATCH_PREFIX):
+            return None
+        tmp_base = tempfile.gettempdir()
+        tmp_base_real = os.path.realpath(tmp_base)
+        is_temp_base = False
+        try:
+            is_temp_base = os.path.samefile(real, tmp_base_real)
+        except OSError:
+            is_temp_base = real == tmp_base_real
+        if is_temp_base:
+            return None
+        if not path_is_confidently_under(real, tmp_base):
+            return None
+        return real
+    except Exception:
+        return None
+
+
 def _sweep_stale_views(tmp_base):
-    """Remove old owned sanitized-view directories (best-effort; never raises).
+    """Remove old owned sanitized-view and ancestry-scratch directories (best-effort).
 
     ``tmp_base`` selects what is **listed** (the caller's checked enumeration base).
-    ``_owned_view_realpath`` alone authorizes deletion; its containment root is
-    ``tempfile.gettempdir()``, so an entry is deleted only when it is an owned view
-    under **that** root — which is why a base disjoint from ``gettempdir()`` deletes
-    nothing. Age and directory kind are additional sweep-only conditions on top of
-    that predicate.
+    ``_owned_view_realpath`` and ``_owned_ancestry_scratch_realpath`` authorize
+    deletion; their containment root is ``tempfile.gettempdir()``, so an entry is
+    deleted only when it is an owned directory under **that** root — which is why a
+    base disjoint from ``gettempdir()`` deletes nothing. Age and directory kind are
+    additional sweep-only conditions on top of that predicate.
     """
     try:
         names = os.listdir(tmp_base)
@@ -341,7 +363,9 @@ def _sweep_stale_views(tmp_base):
     scanned = 0
     now = time.time()
     for name in names:
-        if not name.startswith(SANITIZED_VIEW_DIR_PREFIX):
+        is_view = name.startswith(SANITIZED_VIEW_DIR_PREFIX)
+        is_ancestry = name.startswith(_ANCESTRY_SCRATCH_PREFIX)
+        if not is_view and not is_ancestry:
             continue
         if scanned >= SANITIZED_VIEW_STALE_SCAN_LIMIT:
             break
@@ -349,7 +373,10 @@ def _sweep_stale_views(tmp_base):
         full = os.path.join(tmp_base, name)
         if os.path.islink(full):
             continue
-        real = _owned_view_realpath(full)
+        if is_view:
+            real = _owned_view_realpath(full)
+        else:
+            real = _owned_ancestry_scratch_realpath(full)
         if real is None:
             continue
         try:
@@ -539,14 +566,28 @@ def _ancestry_run(argv, started, *, cwd=None):
             argv,
             capture_output=True,
             text=True,
+            encoding=sys.getfilesystemencoding(),
+            errors="surrogateescape",
             timeout=_remaining_export_timeout(started),
             env=_ancestry_env(),
             cwd=cwd,
         )
     except subprocess.TimeoutExpired:
         raise SanitizedViewError("sanitized-view-diff-failed")
-    except OSError:
+    except (OSError, UnicodeError):
         raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+
+
+def _reviewed_repo_ancestry_git_argv(repo_real, *args):
+    """Argv prefix for ancestry probes run against the reviewed repository."""
+    return [
+        "git",
+        "-C",
+        repo_real,
+        "-c",
+        "safe.directory=%s" % repo_real,
+        *args,
+    ]
 
 
 def _repo_object_directory(repo_real, started):
@@ -558,7 +599,8 @@ def _repo_object_directory(repo_real, started):
     (git 2.31+).
     """
     proc = _ancestry_run(
-        ["git", "-C", repo_real, "rev-parse", "--git-path", "objects"], started
+        _reviewed_repo_ancestry_git_argv(repo_real, "rev-parse", "--git-path", "objects"),
+        started,
     )
     if proc.returncode != 0:
         raise SanitizedViewError("sanitized-view-diff-base-unresolved")
@@ -569,7 +611,8 @@ def _repo_object_directory(repo_real, started):
     objects_dir = os.path.realpath(objects_dir)
     # The alternates file is newline-delimited; a path containing a newline cannot
     # be expressed in it, so refuse rather than write a file git will misread.
-    if "\n" in objects_dir or "\r" in objects_dir:
+    objects_dir_bytes = os.fsencode(objects_dir)
+    if b"\n" in objects_dir_bytes or b"\r" in objects_dir_bytes:
         raise SanitizedViewError("sanitized-view-diff-base-unresolved")
     if not os.path.isdir(objects_dir):
         raise SanitizedViewError("sanitized-view-diff-base-unresolved")
@@ -579,16 +622,19 @@ def _repo_object_directory(repo_real, started):
 def _repo_object_format(repo_real, started):
     """Object format name, or None when git is too old to report one (then sha1)."""
     proc = _ancestry_run(
-        ["git", "-C", repo_real, "rev-parse", "--show-object-format"], started
+        _reviewed_repo_ancestry_git_argv(
+            repo_real, "rev-parse", "--show-object-format"
+        ),
+        started,
     )
     if proc.returncode != 0:
         return None
     fmt = proc.stdout.strip()
-    # Conservative: only a recognised non-default format is forwarded to git init.
-    if fmt in ("sha1", ""):
+    # git rev-parse echoes an option it does not recognise and still exits 0, so a
+    # git predating --show-object-format answers with the flag itself. That is
+    # "this git cannot tell us", not a hostile answer: fall back to sha1.
+    if not fmt or fmt == "sha1" or not fmt.isalnum() or len(fmt) > 16:
         return None
-    if not fmt.isalnum():
-        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
     return fmt
 
 
@@ -596,17 +642,29 @@ def _authoritative_merge_base(repo_real, base_sha, head_sha, started):
     """Merge-base resolved outside the reviewed repository's git directory.
 
     Ancestry overlays a repository can carry — graft metadata, replacement refs, a
-    commit-graph, config, attributes — all live in that repository's git directory.
-    The object store holds only oid->bytes. Resolving ancestry in a scratch
-    repository this process creates, whose sole link to the repo under review is an
-    ``objects/info/alternates`` pointer, therefore puts every such overlay
-    structurally out of reach, without enumerating any of them.
+    commit-graph — all live in that repository's git directory. The object store
+    holds only oid->bytes. Resolving ancestry in a scratch repository this process
+    creates, whose sole link to the repo under review is an
+    ``objects/info/alternates`` pointer, therefore puts every such ancestry overlay
+    structurally out of reach, without enumerating any of them. Content-side config
+    and attributes remain in the reviewed repository's domain and are handled by
+    pinned ``-c`` overrides and the ``sanitized-view-diff-opaque`` refusal.
 
     Trust boundary, stated: the object store's oid->bytes mapping is the trust root
     already shared by the census, the patch generation and the view materialization.
     This function does not defend against an object store that serves wrong bytes for
-    an oid, and does not claim to.
+    an oid, and does not claim to. The guarantee is conditional on every reviewed-
+    repository ancestry walk routing through ``_ancestry_run`` — see
+    ``test_subprocess_ancestry_git_calls_route_through_ancestry_run``.
     """
+    proc = _ancestry_run(
+        _reviewed_repo_ancestry_git_argv(
+            repo_real, "rev-parse", "--is-shallow-repository"
+        ),
+        started,
+    )
+    if proc.returncode == 0 and proc.stdout.strip() == "true":
+        raise SanitizedViewError("sanitized-view-diff-base-shallow")
     objects_dir = _repo_object_directory(repo_real, started)
     object_format = _repo_object_format(repo_real, started)
 
@@ -616,14 +674,20 @@ def _authoritative_merge_base(repo_real, base_sha, head_sha, started):
 
     scratch_parent = None
     try:
-        scratch_parent = tempfile.mkdtemp(prefix=_ANCESTRY_SCRATCH_PREFIX)
+        try:
+            scratch_parent = tempfile.mkdtemp(prefix=_ANCESTRY_SCRATCH_PREFIX)
+        except OSError:
+            raise SanitizedViewError("sanitized-view-diff-base-unresolved")
         if path_is_under_repo(scratch_parent, repo_real):
             raise SanitizedViewError("sanitized-view-tempbase-inside-repo")
         # An empty template directory keeps any init.templateDir content out of the
         # scratch repository.
         template_dir = os.path.join(scratch_parent, "template")
         scratch_git_dir = os.path.join(scratch_parent, "ancestry.git")
-        os.makedirs(template_dir)
+        try:
+            os.makedirs(template_dir)
+        except OSError:
+            raise SanitizedViewError("sanitized-view-diff-base-unresolved")
 
         init_argv = [
             "git",
@@ -642,9 +706,9 @@ def _authoritative_merge_base(repo_real, base_sha, head_sha, started):
         alternates = os.path.join(scratch_git_dir, "objects", "info", "alternates")
         try:
             os.makedirs(os.path.dirname(alternates), exist_ok=True)
-            with open(alternates, "w", encoding="utf-8") as fh:
-                fh.write(objects_dir + "\n")
-        except OSError:
+            with open(alternates, "wb") as fh:
+                fh.write(os.fsencode(objects_dir) + b"\n")
+        except (OSError, ValueError, UnicodeError):
             raise SanitizedViewError("sanitized-view-diff-base-unresolved")
 
         proc = _ancestry_run(
@@ -1429,7 +1493,9 @@ def _collapse_descendant_pathspecs(pathspecs, started):
     contiguous run: raw string order interleaves siblings (``a`` < ``a-b`` < ``a/c``
     by bytes, but ``a`` < ``a/c`` < ``a-b`` by segments), which would break a single
     scan. One pass with an ancestor stack then replaces the previous all-pairs
-    comparison, taking the step from O(n^2) to a sort plus O(n).
+    comparison, taking the step from O(n^2) to a sort plus O(n). The ``ancestors``
+    list is bounded at one element because the ``continue`` skips the push whenever
+    an ancestor is already kept.
 
     ``started`` is the export clock. The deadline is checked before the sort, after
     the sort, and periodically through the scan, so this step cannot run past the
