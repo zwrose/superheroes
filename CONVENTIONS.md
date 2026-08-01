@@ -706,8 +706,27 @@ Recovery, with the two session charters as enumerated copy-holders guarded by a 
 
 **Sanitized review view (#684).** External **review** seats (codex/cursor via `dispatch-review`)
 run against a disposable sanitized export of the named repo root — machinery inside the runner, not
-orchestrator discipline. A view that cannot be built is a named refusal with `attempts: 0` and no
-spawn; there is no fallback to the raw checkout.
+orchestrator discipline. The runner can stage the reviewed change as a patch inside the view via
+optional `--diff-base <commit-oid>` (a pinned commit object id) (merge-base→head in the source repo, written to
+`SUPERHEROES_REVIEW_DIFF.patch` before the view's synthetic commit); paths matching the stripped-config
+predicate are withheld from that patch by the same rule that strips the tree. The staged patch does
+not satisfy the #666 investigation floor — citing only that artifact forfeits vacuously. A view that
+cannot be built is a named refusal with `attempts: 0` and no spawn; there is no fallback to the raw
+checkout. The census of changed paths is authoritative: it comes from direct two-tree enumeration,
+not from `git diff` output or rendered patch text, and every changed recursively enumerated
+non-tree entry — blob/file, symlink or gitlink — must be rendered, policy-withheld, or refused
+before spawn. The merge-base is resolved outside the reviewed repository's git directory (scratch
+repository linked only through the object store, with every inherited `GIT_*` variable dropped), so
+git-directory ancestry overlays — grafts, replace refs, shallow metadata, config — cannot shrink the
+changed set. **Commit-graph data is the stated exception**: it lives in the object directory the
+alternate exposes and is excluded instead by the documented `-c core.commitGraph=false` reader-wide pin
+on every commit-peeling source-repository command, so that half of the guarantee is conditional on
+the git executable honoring it. Dispatch refuses when
+authoritative ancestry cannot be established, and any shallow-state answer other than exact
+`true`/`false` is itself a refusal; empty directory additions and removals are tree-only and outside
+this contract. Repo-local config overrides remain defence in depth, not the proof of authority. Until a follow-up issue lands, opaque or unaccounted patch content refuses
+with `sanitized-view-diff-opaque`, `sanitized-view-diff-unaccounted`, or (for git command failure)
+`sanitized-view-diff-failed`; that result is never a clean review and there is no automatic fallback.
 
 **Dispatch vocabulary contract.** Three token shapes stay distinct:
 
@@ -999,22 +1018,20 @@ switch this guarantee off*.
 tests green** — and the gap surfaced only in review, not in CI (the #702 arc's review record on PR
 [#710](https://github.com/zwrose/superheroes/pull/710)).
 
-Two ways a bite test looks present and is not:
+The vacuity traps — when a bite test looks present and is not — live in one home: the plugin's `## Four
+ways a bite-proof is vacuous` section in `plugins/superheroes/rubric/bite-proof.md`.
 
-- **The wrong axis.** A test can bite on something adjacent to the guarantee — presence where the
-  guarantee is about *authority*, a count where it is about *refusal* — and pass the "it went red"
-  check while the guarantee itself stays unprotected. **Name the axis the test bites on and check it is
-  the axis the guarantee claims.**
-- **Neutralizing a precondition instead of a consumer.** Mutate the **consumers** — the production
-  call sites that depend on the guarantee — not a helper the tests already assert as a *precondition*.
-  Breaking such a helper reddens the tests that assert the helper, which proves the helper is asserted
-  and says nothing about whether anything downstream is protected.
-
-Both are §12.2's trap one level up: a suite that stubs the seam verifies the stub, and a probe aimed at
-a precondition verifies the precondition. Like §12.1, this rule lives at whichever tier fits — a CI
+The vacuity traps are §12.2's trap one level up: a suite that stubs the seam verifies the stub, and a
+probe aimed at a precondition verifies the precondition. Like §12.1, this rule lives at whichever tier fits — a CI
 test where the guarantee is code, a **review-rubric question** where it is not — and is enforced the way
 review discipline is: a reviewer citing this § is enough to block a guarantee shipped without its bite
 test.
+
+The band-level statement of this rule now ships in the plugin — `plugins/superheroes/rubric/bite-proof.md`
+carries the obligation, the vacuity traps, the record shape, and the disclosures owed when the proof
+cannot be produced or runs under a normalization — and this § stays the repository's own statement of
+the guarantee rather than repeating that procedure. §12.3 is **this repository's structural-guarantee
+case** of the band rule, and the band rule's scope is **wider** — every new or changed detector.
 
 ---
 

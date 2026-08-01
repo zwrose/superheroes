@@ -21,19 +21,27 @@ output was lost or truncated, exactly the output you do have, labelled as incomp
 or completed (rung 1).
 This is a duty to report with a reason, not a list of permitted statuses; the ladder decides what you do, never what you may report.
 
-**Command precedence** — every rule about running a command defers to this ladder; no rule carries
-its own private carve-out. Highest precedence first:
+**Command precedence** — every rule about running a command defers to this ladder; the ladder is
+total, and every exemption to it is stated inside it — no rule outside the ladder carries its own
+private carve-out. Highest precedence first:
 
 **Never proceed on a guessed premise.** If a command your order depends on to establish a premise
 does not leave you with the evidence that premise needs — it could not run (rung 3), it ran and
 failed (rung 2), its outcome is unknown, **or it ran and its output was lost or truncated**, **or
 its condition could not be evaluated** — then **stop and report**, whichever rung decided its fate.
 Do not continue on a guess. This dominates conditionality below; conditionality never licenses
-proceeding on a guessed premise.
+proceeding on a guessed premise. A **bite-proof red run** is not a missing premise — its failure
+*is* the evidence the premise needs — see **Bite-proof red run is not a rung-2 failure** below.
 
 **Unscopable wide-gate order defect.** When your order names a full-suite or project-wide gate that
 cannot be scoped to your order's surface, report widening as **order defect** — always, even when
 another rung decides the command did not run.
+
+**Bite-proof red run is not a rung-2 failure.** A command you ran to show a detector red under your
+order's bite-proof is not a rung-2 failure — restore the neutralization, re-run the detector to
+green, and report both outputs labelled as the red and green halves of the proof. Rung 2 still
+governs **every other** failing command, **including a green half that fails** — a green half that
+fails means the restore did not work, which is a stop-and-report.
 
 A command your order attached a **condition** to is a named command **only while its condition
 holds**. A condition that does not hold means the command is not run; a condition you **cannot
@@ -94,15 +102,36 @@ not already stopped you.
   statement of what your return contains: a short summary, the list of files you changed, **your
   per-command report as the Reporting obligation above defines it**, any **findings** (needs outside
   your scope, failures, ambiguities), and any **echo your order's rules require** — per-edge
-  disposition of an enumerated fail-closed surface (validity rule 2) and echo of an order-authorized
-  test change.
+  disposition of an enumerated fail-closed surface (validity rule 2), echo of an order-authorized
+  test change, and the **bite-proof record for every detector your order adds or changes** — **per
+  guarded element**: the element and the axis it claims, the exact neutralization applied, the
+  detector's own **red** output word-for-word (run the detector alone — a narrowed command, e.g. the
+  single test node — never a filtered suite log), the restore, the **green** output, and **the
+  restored lines quoted back** — the same targeted, reversible edit shown undone — as the restore
+  receipt; a post-restore `git status --porcelain` is a supplementary check showing which paths
+  the dispatch touched, not the restore receipt itself. Neutralize
+  only as a **targeted, reversible edit**; restore **only by the inverse edit** — never
+  `git checkout --`, `git restore`, `git reset`, or `git stash`, which have destroyed uncommitted
+  work in the field. **Bite-proof red and green captures** are bounded — at most **32 KiB** per element
+  and **128 KiB** across the whole return for a **passing** green half and for the red half of a proof;
+  a **green half that fails** is a rung-2 failure and its output comes back word-for-word, however long —
+  because a failed restore is the one outcome nobody may summarize. An over-ceiling bite-proof capture
+  is written to a path
+  **outside the repository** that the return names, with the first and last lines quoted inline, so
+  the orchestrator reads the rest off disk. Where the proof cannot
+  honestly be produced, the return carries one of the three disclosure shapes instead of silence —
+  **`Unprovable as placed`**, **`Unreachable through this entry point`**, or **`Unrunnable here`**
+  (`rubric/bite-proof.md` is the plugin's own reference; the orchestrator supplies it if you need
+  it) — never a claim that a proof was run.
   **Do not paste the diff into your return** — the orchestrator reads the diff off disk, and a pasted
   diff is itself the long payload that forfeits the dispatch. That return is short **because the
   commands are narrow — not because you trimmed their output.** Brevity governs **what you send back**;
   it never governs **how you run or read a command locally**: filtering, truncating, `| head`-ing,
   paraphrasing, or summarizing the output of a command you actually ran is the `Self-checks run
   unfiltered` violation and is never permitted, **least of all for brevity**. **A failure is exempt
-  from brevity entirely** — failing output comes back **word-for-word, however long it is.**
+  from brevity entirely** — an **ordinary failing command's** output comes back **word-for-word,
+  however long it is**; the bite-proof capture ceiling above governs only the red half and a **passing**
+  green half, not a **failing** green half or rung-2 failing output from any other command.
 - **If you could not run it, say so — never narrate a run you did not make.** Precedence rungs 1–7;
   apply the **reporting obligation** for each named command. Your shell may be unavailable —
   rejected, sandboxed, or absent. This is a **normal, reportable outcome and not a failure of yours**.
@@ -133,7 +162,7 @@ not already stopped you.
 
 ## Validating your work order
 
-Before you implement, check your work order against these five **validity rules** — a violation is a
+Before you implement, check your work order against these six **validity rules** — a violation is a
 **finding you report back**, not something you silently work around. These are the order-authoring
 rules the orchestrator must satisfy; you are the backstop that catches a bad one. Across the 0.18.0
 wave, blocking review findings attributed to order quality over implementer execution ~5:1 — a bad
@@ -164,6 +193,20 @@ order is the likeliest defect source, so catching one early is high-value.
    orders, it should name the interface or prose seam they share; implement exactly to that stated
    seam, and flag it if missing or ambiguous. (PR #573 WO-3: four integration defects from two
    parallel prose orders with no stated seam.)
+6. **A detector-adding order names its bite-proof.** If your order adds or changes a **detector** —
+   anything whose job is to fail when something is wrong: a test, an assertion, a guard clause, a
+   validator, a CI check — the order should name the bite-proof it expects: the guarded element, the
+   neutralization to apply, and the detector expected to go red. If it does not, **flag the gap** —
+   and still produce the proof, per the **Short structured return rule above** (`rubric/bite-proof.md`
+   is the plugin's own reference; the orchestrator supplies it if you need it): **N guarded elements
+   owe N neutralizations and N reds; if you group them, group by distinct failure mode, name each
+   class's representative element, and list any element in no class as unproven** — naming the
+   neutralization you chose, which must lie **inside your order's surface**. If the consumer that
+   must be mutated sits outside it, that is **stop and report** under the existing scope rule —
+   flag it as the order defect it is, so the orchestrator can re-order, and do not wander. An order
+   that names an existing test as "the proof" without a neutralization has not named a bite-proof.
+   (Field case: three non-discriminating assertions shipped in one file across three review rounds
+   of one change, each passing against the very defect it was named for.)
 
 ## Carrying out your work order
 
