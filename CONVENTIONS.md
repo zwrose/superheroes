@@ -1002,8 +1002,8 @@ tests green** — and the gap surfaced only in review, not in CI (the #702 arc's
 The vacuity traps — when a bite test looks present and is not — live in one home: the plugin's `## Four
 ways a bite-proof is vacuous` section in `plugins/superheroes/rubric/bite-proof.md`.
 
-Both are §12.2's trap one level up: a suite that stubs the seam verifies the stub, and a probe aimed at
-a precondition verifies the precondition. Like §12.1, this rule lives at whichever tier fits — a CI
+The vacuity traps are §12.2's trap one level up: a suite that stubs the seam verifies the stub, and a
+probe aimed at a precondition verifies the precondition. Like §12.1, this rule lives at whichever tier fits — a CI
 test where the guarantee is code, a **review-rubric question** where it is not — and is enforced the way
 review discipline is: a reviewer citing this § is enough to block a guarantee shipped without its bite
 test.
