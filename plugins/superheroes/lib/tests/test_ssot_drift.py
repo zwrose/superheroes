@@ -294,7 +294,7 @@ def _sanitized_view_diff_refusal_tokens_from_home():
 def _sanitized_view_diff_refusal_tokens_from_auto_fix_loop_doc(doc):
     """The six-row diff refusal table in auto-fix-loop.md — scoped to that block only."""
     m = re.search(
-        r"\*\*Six refusals\*\*.*?\n>\n> \| token \| when \|\n> \|---\|---\|\n(.*?)\n>\n",
+        r"\*\*Diff refusals\*\*.*?\n>\n> \| token \| when \|\n> \|---\|---\|\n(.*?)\n>\n",
         doc,
         re.DOTALL,
     )

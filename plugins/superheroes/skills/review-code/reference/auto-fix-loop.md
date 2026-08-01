@@ -185,9 +185,18 @@ never drop a finding or a lens.
 > | `diffBase` | the resolved **merge-base** sha the patch is against (40 hex chars, or 64 in a SHA-256 repository) |
 > | `diffPath` | `SUPERHEROES_REVIEW_DIFF.patch`, relative to the view root |
 > | `diffBytes` | patch size in bytes |
-> | `diffWithheldCount` | changed paths withheld as stripped config, plus one per patch section whose paths could not be derived safely (underivable sections); unrecognized non-`diff --git` spans refuse the whole dispatch with `sanitized-view-diff-failed` instead of being dropped and counted here |
+> | `diffWithheldCount` | **only** the changed tree entries the stripped-config policy withheld; underivable, unrecognized, unaccounted, and opaque content **refuse the dispatch** rather than being counted here — this is what keeps the reviewer-facing "the absence is not a finding" statement true |
 >
-> **Six refusals** (all `attempts: 0`, no token spend), joining the existing `sanitized-view-*`
+> The census of changed paths comes from direct two-tree enumeration (`git ls-tree` on the
+> merge-base and head), not from patch presentation — `git diff`, rendered patch text, or a list of
+> presently-known dangerous configuration keys. Every changed tree entry is **rendered** as a
+> reviewable patch section, **policy-withheld** by the stripped-config policy and counted in
+> `diffWithheldCount`, or **refused** before any external engine spawns. Until a follow-up issue
+> lands, opaque or unaccounted content returns a named terminal refusal (`attempts: 0`) that is
+> never interpreted as zero findings or a clean review; there is no automatic fallback, and that
+> absence is an explicitly accepted availability limitation.
+>
+> **Diff refusals** (all `attempts: 0`, no token spend), joining the existing `sanitized-view-*`
 > family:
 >
 > | token | when |
@@ -197,7 +206,9 @@ never drop a finding or a lens.
 > | `sanitized-view-diff-fully-withheld` | every changed path was withheld as stripped config — an external seat could not review this change at all |
 > | `sanitized-view-diff-too-large` | the patch exceeds the 8 MiB ceiling |
 > | `sanitized-view-diff-path-collision` | the repository already tracks a file named `SUPERHEROES_REVIEW_DIFF.patch` |
-> | `sanitized-view-diff-failed` | a git subprocess failed while generating the patch, or the generated patch contained content the filter could not recognize as a `diff --git` section |
+> | `sanitized-view-diff-failed` | a git subprocess failed while generating the patch (spawn error, non-zero exit, timeout) — command failure only |
+> | `sanitized-view-diff-unaccounted` | an unrecognized non-`diff --git` span, a changed census entry that survived the stripped policy but has no rendered section, or a rendered section for a path the census does not contain |
+> | `sanitized-view-diff-opaque` | a rendered section whose content is opaque — `Binary files … differ` (or `GIT binary patch`) instead of hunks |
 >
 > **#666 investigation floor.** A seat that cites a **stripped** path in its `investigated` array fails
 > the investigation floor and forfeits vacuously — fail-safe (the seat falls open to Claude), never a

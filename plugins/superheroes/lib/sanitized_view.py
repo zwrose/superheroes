@@ -64,7 +64,8 @@ SANITIZED_VIEW_MAX_SYMLINK_TARGET_BYTES = 8 * 1024
 
 REVIEW_DIFF_FILE_NAME = "SUPERHEROES_REVIEW_DIFF.patch"
 REVIEW_DIFF_MAX_BYTES = 8 * 1024 * 1024
-_REVIEW_DIFF_PATHSPEC_BATCH_SIZE = 200
+_REVIEW_DIFF_ARGV_MAX_BYTES = 128 * 1024
+_REVIEW_DIFF_ARGV_MARGIN = 8 * 1024
 
 _GIT_ROUTING_VARS = (
     "GIT_DIR",
@@ -78,17 +79,7 @@ _GIT_ROUTING_VARS = (
     "GIT_COMMON_DIR",
     "GIT_NAMESPACE",
     "GIT_EXTERNAL_DIFF",
-)
-
-_DIFF_NAME_FLAGS = (
-    "diff",
-    "--no-ext-diff",
-    "--no-textconv",
-    "--no-color",
-    "--no-renames",
-    "--submodule=short",
-    "--name-only",
-    "-z",
+    "GIT_REPLACE_REF_BASE",
 )
 
 _DIFF_CONFIG_OVERRIDES = (
@@ -109,6 +100,7 @@ _DIFF_PATCH_FLAGS = (
     "--no-color",
     "--no-renames",
     "--submodule=short",
+    "--ignore-submodules=none",
     "--src-prefix=a/",
     "--dst-prefix=b/",
 )
@@ -121,6 +113,10 @@ def _git_env():
     for var in _GIT_ROUTING_VARS:
         env.pop(var, None)
     env["GIT_LITERAL_PATHSPECS"] = "1"
+    env["GIT_NO_REPLACE_OBJECTS"] = "1"
+    env["LC_ALL"] = "C"
+    env["LANGUAGE"] = ""
+    env["GIT_NO_LAZY_FETCH"] = "1"
     return env
 
 
@@ -410,6 +406,52 @@ def _git_ls_tree_census(repo_real, head_sha):
     if len(proc.stdout) > SANITIZED_VIEW_EXPORT_MAX_BYTES:
         raise SanitizedViewError("sanitized-view-export-too-large")
     return _parse_ls_tree_z(proc.stdout)
+
+
+def _git_tree_entries(repo_real, sha, started):
+    """Authoritative tree enumerator for review-diff census (path -> mode, type, oid)."""
+    _check_export_deadline(started)
+    timeout = _remaining_export_timeout(started)
+    try:
+        proc = _git_run(
+            [
+                "git",
+                "-C",
+                repo_real,
+                *_DIFF_CONFIG_OVERRIDES,
+                "ls-tree",
+                "-r",
+                "-z",
+                sha,
+            ],
+            capture_output=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        raise SanitizedViewError("sanitized-view-diff-failed")
+    except OSError:
+        raise SanitizedViewError("sanitized-view-diff-failed")
+    if proc.returncode != 0:
+        raise SanitizedViewError("sanitized-view-diff-failed")
+    if len(proc.stdout) > SANITIZED_VIEW_EXPORT_MAX_BYTES:
+        raise SanitizedViewError("sanitized-view-diff-too-large")
+    entries = {}
+    for mode, obj_type, oid, path in _parse_ls_tree_z(proc.stdout):
+        if path in entries:
+            raise SanitizedViewError("sanitized-view-diff-unaccounted")
+        entries[path] = (mode, obj_type, oid)
+    return entries
+
+
+def _changed_tree_entries(repo_real, base_sha, head_sha, started):
+    """Return sorted paths whose (mode, type, oid) differ between two commits."""
+    base_map = _git_tree_entries(repo_real, base_sha, started)
+    head_map = _git_tree_entries(repo_real, head_sha, started)
+    all_paths = set(base_map) | set(head_map)
+    changed = [
+        p for p in sorted(all_paths) if base_map.get(p) != head_map.get(p)
+    ]
+    return changed
 
 
 def _close_process_pipes(proc):
@@ -1160,6 +1202,139 @@ def _filter_patch_sections(patch_bytes):
     return b"".join(kept), stripped_paths, underivable_sections, unrecognized_spans
 
 
+def _argv_byte_size(argv):
+    """Sum NUL-terminated UTF-8 byte lengths for one argv vector."""
+    total = 0
+    for arg in argv:
+        total += len(arg.encode("utf-8", errors="surrogateescape")) + 1
+    return total
+
+
+def _effective_review_diff_argv_budget():
+    """Derive argv budget from host limits minus inherited git environment.
+
+    Measured on the build host: ``getconf ARG_MAX`` is 1048576 and ``env | wc -c``
+    is 4916, but neither is guaranteed on a user's machine.
+    """
+    budget = _REVIEW_DIFF_ARGV_MAX_BYTES
+    try:
+        arg_max = os.sysconf("SC_ARG_MAX")
+    except (AttributeError, ValueError, OSError):
+        arg_max = None
+    if arg_max is not None and arg_max > 0:
+        env = _git_env()
+        env_bytes = sum(len(k) + len(v) + 2 for k, v in env.items())
+        derived = arg_max - env_bytes - _REVIEW_DIFF_ARGV_MARGIN
+        budget = min(budget, derived)
+    return budget
+
+
+def _review_diff_argv_prefix(repo_real, merge_base, head_sha):
+    return [
+        "git",
+        "-C",
+        repo_real,
+        *_DIFF_CONFIG_OVERRIDES,
+        *_DIFF_PATCH_FLAGS,
+        merge_base,
+        head_sha,
+        "--",
+    ]
+
+
+def _batch_review_diff_pathspecs(repo_real, merge_base, head_sha, pathspecs):
+    """Batch pathspecs so each emitted argv stays within the effective byte budget."""
+    prefix = _review_diff_argv_prefix(repo_real, merge_base, head_sha)
+    prefix_bytes = _argv_byte_size(prefix)
+    budget = _effective_review_diff_argv_budget()
+    # Floor so at least one pathspec can be attempted; never zero or negative.
+    min_budget = prefix_bytes + 1
+    if budget < min_budget:
+        budget = min_budget
+    batches = []
+    current = []
+    current_path_bytes = 0
+    for path in pathspecs:
+        path_bytes = len(path.encode("utf-8", errors="surrogateescape")) + 1
+        if not current:
+            # A single path whose bytes plus the prefix exceed the budget is emitted
+            # alone rather than dropped — git will fail loudly if the OS rejects it.
+            current = [path]
+            current_path_bytes = path_bytes
+        elif prefix_bytes + current_path_bytes + path_bytes <= budget:
+            current.append(path)
+            current_path_bytes += path_bytes
+        else:
+            batches.append(current)
+            current = [path]
+            current_path_bytes = path_bytes
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _section_is_opaque(section):
+    """True when the pre-hunk header marks binary/opaque content (line-anchored)."""
+    at_idx = section.find(b"@@")
+    header_region = section if at_idx == -1 else section[:at_idx]
+    for line in header_region.split(b"\n"):
+        if line.startswith(b"Binary files ") and line.endswith(b" differ"):
+            return True
+        if line.startswith(b"GIT binary patch"):
+            return True
+    return False
+
+
+def _section_resolved_path_raw(section):
+    """Resolve the single path for a section without applying withhold policy."""
+    old_path, new_path = _paths_from_diff_section(section)
+    lines = section.split(b"\n")
+    git_old, git_new = (
+        _paths_from_diff_git_header(lines[0])
+        if lines
+        else (_DIFF_PATH_UNDERIVABLE, _DIFF_PATH_UNDERIVABLE)
+    )
+    paths = set()
+    for path in (old_path, new_path, git_old, git_new):
+        if path is not None and path is not _DIFF_PATH_UNDERIVABLE:
+            paths.add(path)
+    if len(paths) != 1:
+        return None
+    return paths.pop()
+
+
+def _reconcile_review_patch(patch_bytes, survivors, withheld):
+    """Reconcile patch sections against the census survivor set; return kept bytes."""
+    survivors_set = set(survivors)
+    withheld_set = set(withheld)
+    sections, unrecognized_spans = _split_patch_sections(patch_bytes)
+    if unrecognized_spans > 0:
+        raise SanitizedViewError("sanitized-view-diff-unaccounted")
+    kept_sections = []
+    rendered_paths = set()
+    for section in sections:
+        withhold, stripped_paths, underivable = _section_withhold_info(section)
+        if underivable:
+            raise SanitizedViewError("sanitized-view-diff-unaccounted")
+        if withhold:
+            if stripped_paths and stripped_paths.issubset(withheld_set):
+                continue
+            raise SanitizedViewError("sanitized-view-diff-unaccounted")
+        path = _section_resolved_path_raw(section)
+        if path is None or path not in survivors_set:
+            raise SanitizedViewError("sanitized-view-diff-unaccounted")
+        kept_sections.append(section)
+        rendered_paths.add(path)
+    missing = set(survivors) - rendered_paths
+    if missing:
+        raise SanitizedViewError("sanitized-view-diff-unaccounted")
+    if any(_section_is_opaque(section) for section in kept_sections):
+        raise SanitizedViewError("sanitized-view-diff-opaque")
+    if not kept_sections:
+        return b""
+    return b"".join(kept_sections)
+
+
 def _write_review_patch_file(view_root, patch_bytes):
     patch_path = os.path.join(view_root, REVIEW_DIFF_FILE_NAME)
     if os.path.lexists(patch_path):
@@ -1290,83 +1465,33 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
     if not _is_git_object_id_hex(merge_base):
         raise SanitizedViewError("sanitized-view-diff-base-unresolved")
 
-    _check_export_deadline(started)
-    timeout = _remaining_export_timeout(started)
-    try:
-        proc = _git_run(
-            [
-                "git",
-                "-C",
-                repo_real,
-                *_DIFF_CONFIG_OVERRIDES,
-                *_DIFF_NAME_FLAGS,
-                merge_base,
-                head_sha,
-            ],
-            capture_output=True,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
-        raise SanitizedViewError("sanitized-view-diff-failed")
-    except OSError:
-        raise SanitizedViewError("sanitized-view-diff-failed")
-    if proc.returncode != 0:
-        raise SanitizedViewError("sanitized-view-diff-failed")
-    if len(proc.stdout) > SANITIZED_VIEW_EXPORT_MAX_BYTES:
-        raise SanitizedViewError("sanitized-view-diff-too-large")
+    changed = _changed_tree_entries(repo_real, merge_base, head_sha, started)
+    withheld = [p for p in changed if _rel_path_would_be_stripped(p)]
+    survivors = [p for p in changed if not _rel_path_would_be_stripped(p)]
 
-    changed_paths = [
-        p.decode("utf-8", errors="surrogateescape")
-        for p in proc.stdout.split(b"\0")
-        if p
-    ]
-    survivors = []
-    census_stripped_paths = set()
-    for path in changed_paths:
-        if _rel_path_would_be_stripped(path):
-            census_stripped_paths.add(path)
-        else:
-            survivors.append(path)
-
-    if not survivors and census_stripped_paths:
-        raise SanitizedViewError("sanitized-view-diff-fully-withheld")
-    if not survivors and not census_stripped_paths:
+    if not changed:
         raise SanitizedViewError("sanitized-view-diff-empty")
+    if not survivors:
+        raise SanitizedViewError("sanitized-view-diff-fully-withheld")
 
     patch_parts = []
     total_bytes = 0
-    for batch_start in range(0, len(survivors), _REVIEW_DIFF_PATHSPEC_BATCH_SIZE):
-        batch = survivors[batch_start : batch_start + _REVIEW_DIFF_PATHSPEC_BATCH_SIZE]
+    for batch in _batch_review_diff_pathspecs(
+        repo_real, merge_base, head_sha, survivors
+    ):
         argv = [
-            "git",
-            "-C",
-            repo_real,
-            *_DIFF_CONFIG_OVERRIDES,
-            *_DIFF_PATCH_FLAGS,
-            merge_base,
-            head_sha,
-            "--",
+            *_review_diff_argv_prefix(repo_real, merge_base, head_sha),
             *batch,
         ]
         chunk, total_bytes = _git_diff_batch_output(argv, started, total_bytes)
         patch_parts.append(chunk)
 
     patch_bytes = b"".join(patch_parts)
-    (
-        patch_bytes,
-        filter_stripped_paths,
-        filter_underivable_sections,
-        unrecognized_spans,
-    ) = _filter_patch_sections(patch_bytes)
-    if unrecognized_spans > 0:
-        raise SanitizedViewError("sanitized-view-diff-failed")
-    withheld_count = (
-        len(census_stripped_paths | filter_stripped_paths)
-        + filter_underivable_sections
-    )
+    # Defence in depth: output-side filter still runs; reconciliation is authoritative.
+    _filter_patch_sections(patch_bytes)
+    patch_bytes = _reconcile_review_patch(patch_bytes, survivors, withheld)
+
     if not patch_bytes:
-        if withheld_count > 0:
-            raise SanitizedViewError("sanitized-view-diff-fully-withheld")
         raise SanitizedViewError("sanitized-view-diff-empty")
 
     _write_review_patch_file(view_root, patch_bytes)
@@ -1375,7 +1500,7 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
         "diffBase": merge_base,
         "diffPath": REVIEW_DIFF_FILE_NAME,
         "diffBytes": len(patch_bytes),
-        "diffWithheldCount": withheld_count,
+        "diffWithheldCount": len(withheld),
     }
 
 

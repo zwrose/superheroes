@@ -1630,7 +1630,6 @@ def test_diff_no_renames_guard_withheld_rename_side(tmp_path):
     view = sv.build_sanitized_view(repo, diff_base=base_sha)
     try:
         # Defense-in-depth flag: removal is not observable in behaviour here.
-        assert "--no-renames" in sv._DIFF_NAME_FLAGS
         assert "--no-renames" in sv._DIFF_PATCH_FLAGS
         assert view["diffWithheldCount"] >= 1
         with open(_patch_abs(view), "rb") as fh:
@@ -1740,7 +1739,6 @@ def test_diff_submodule_short_guard_against_repo_diff_submodule(tmp_path):
     )
     view = sv.build_sanitized_view(outer, diff_base=base_sha)
     try:
-        assert "--submodule=short" in sv._DIFF_NAME_FLAGS
         assert "--submodule=short" in sv._DIFF_PATCH_FLAGS
         with open(_patch_abs(view), "rb") as fh:
             patch = fh.read()
@@ -1809,6 +1807,387 @@ def test_diff_non_utf8_path_roundtrip(tmp_path):
     try:
         assert view["diffBytes"] > 0
         assert os.path.isfile(os.path.join(view["path"], bad_rel))
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def _hostile_diff_controls_fixture(tmp_path):
+    """Measured fixture: -diff attribute, gitlink, diff.ignoreSubmodules=all."""
+    repo = str(tmp_path / "hostile-diff-controls")
+    os.makedirs(repo, exist_ok=True)
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "a@b.c")
+    _git(repo, "config", "user.name", "t")
+    with open(os.path.join(repo, ".gitattributes"), "w", encoding="utf-8") as fh:
+        fh.write("src.py -diff\n")
+    with open(os.path.join(repo, "src.py"), "w", encoding="utf-8") as fh:
+        fh.write("x = 1\n")
+    with open(os.path.join(repo, "file.txt"), "w", encoding="utf-8") as fh:
+        fh.write("hello\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        "160000,1111111111111111111111111111111111111111,sub2",
+    )
+    _git(repo, "commit", "-qm", "base")
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "src.py"), "w", encoding="utf-8") as fh:
+        fh.write("x = 2\nSECRET = 3\n")
+    with open(os.path.join(repo, "file.txt"), "w", encoding="utf-8") as fh:
+        fh.write("world\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        "160000,2222222222222222222222222222222222222222,sub2",
+    )
+    _git(repo, "commit", "-qm", "head")
+    _git(repo, "config", "diff.ignoreSubmodules", "all")
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    return repo, base_sha, head_sha
+
+
+def test_review_diff_tree_census_ignores_repo_diff_controls(tmp_path):
+    repo, base_sha, head_sha = _hostile_diff_controls_fixture(tmp_path)
+    merge_base = _git(repo, "merge-base", base_sha, head_sha).stdout.strip()
+    started = time.monotonic()
+    changed = sv._changed_tree_entries(repo, merge_base, head_sha, started)
+    assert set(changed) == {"file.txt", "src.py", "sub2"}
+
+
+def test_review_diff_census_unaccounted_gitlink_refuses(tmp_path, monkeypatch):
+    repo, base_sha, _head_sha = _hostile_diff_controls_fixture(tmp_path)
+    fake_tmp = str(tmp_path / "tmpdir")
+    os.makedirs(fake_tmp)
+    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: fake_tmp)
+    patch_flags = tuple(
+        f for f in sv._DIFF_PATCH_FLAGS if f != "--ignore-submodules=none"
+    )
+    monkeypatch.setattr(sv, "_DIFF_PATCH_FLAGS", patch_flags)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-unaccounted"
+    assert _leftover_view_dirs(fake_tmp) == []
+
+
+def test_review_diff_attribute_suppressed_source_refuses_opaque(tmp_path, monkeypatch):
+    repo, base_sha, _head_sha = _hostile_diff_controls_fixture(tmp_path)
+    fake_tmp = str(tmp_path / "tmpdir")
+    os.makedirs(fake_tmp)
+    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: fake_tmp)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-opaque"
+    assert _leftover_view_dirs(fake_tmp) == []
+    for name in _leftover_view_dirs(fake_tmp):
+        view_root = os.path.join(fake_tmp, name)
+        patch_path = os.path.join(view_root, sv.REVIEW_DIFF_FILE_NAME)
+        assert not os.path.lexists(patch_path)
+        for root, _dirs, files in os.walk(view_root):
+            for fname in files:
+                if fname == sv.REVIEW_DIFF_FILE_NAME:
+                    with open(os.path.join(root, fname), "rb") as fh:
+                        assert b"SECRET = 3" not in fh.read()
+
+
+def test_review_diff_opaque_refusal_precedes_engine_spawn(tmp_path, monkeypatch):
+    repo, base_sha, _head_sha = _hostile_diff_controls_fixture(tmp_path)
+    fake_tmp = str(tmp_path / "tmpdir")
+    os.makedirs(fake_tmp)
+    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: fake_tmp)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-opaque"
+    assert _leftover_view_dirs(fake_tmp) == []
+
+
+def test_review_diff_hunkless_mode_change_is_rendered_not_opaque(tmp_path):
+    repo = _init_repo(tmp_path / "mode-only", files={"exec.sh": "#!/bin/sh\n"})
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    mode_path = os.path.join(repo, "exec.sh")
+    os.chmod(mode_path, 0o755)
+    _git(repo, "add", "exec.sh")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "mode",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert b"diff --git a/exec.sh b/exec.sh" in patch
+        assert b"new mode 100755" in patch or b"old mode" in patch
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_review_diff_empty_file_addition_is_rendered_not_opaque(tmp_path):
+    repo = _init_repo(tmp_path / "empty-add", files={"keep.txt": "k\n"})
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    empty_path = os.path.join(repo, "empty.txt")
+    with open(empty_path, "wb"):
+        pass
+    _git(repo, "add", "empty.txt")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "empty",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert b"diff --git a/empty.txt b/empty.txt" in patch
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_review_diff_pathspec_batches_stay_within_argv_budget(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "argv-budget", files={"keep.txt": "k\n"})
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    merge_base = head_sha
+    survivors = ["keep.txt", "x" * 200 + ".txt"] + ["path%d.txt" % i for i in range(300)]
+    monkeypatch.setattr(sv, "_REVIEW_DIFF_ARGV_MAX_BYTES", 2048)
+    batches = sv._batch_review_diff_pathspecs(repo, merge_base, head_sha, survivors)
+    assert len(batches) > 1
+    for batch in batches:
+        argv = [
+            *sv._review_diff_argv_prefix(repo, merge_base, head_sha),
+            *batch,
+        ]
+        argv_bytes = sv._argv_byte_size(argv)
+        assert (
+            argv_bytes <= sv._REVIEW_DIFF_ARGV_MAX_BYTES
+            or len(batch) == 1
+        )
+
+
+def test_review_diff_command_failure_is_distinct_from_unaccounted(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "cmd-fail", files={"keep.txt": "k\n"})
+    repo_real = os.path.realpath(repo)
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    _git(repo, "add", "keep.txt")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    def failing_batch(argv, started, total_bytes):
+        raise sv.SanitizedViewError("sanitized-view-diff-failed")
+
+    monkeypatch.setattr(sv, "_git_diff_batch_output", failing_batch)
+    view_root = sv.tempfile.mkdtemp(prefix=sv.SANITIZED_VIEW_DIR_PREFIX)
+    patch_path = os.path.join(view_root, sv.REVIEW_DIFF_FILE_NAME)
+    try:
+        sv._materialize_from_tree(repo_real, head_sha, view_root, time.monotonic())
+        with pytest.raises(sv.SanitizedViewError) as exc:
+            sv._stage_review_diff(
+                repo_real, head_sha, view_root, base_sha, time.monotonic()
+            )
+        assert exc.value.detail == "sanitized-view-diff-failed"
+        assert not os.path.lexists(patch_path)
+    finally:
+        sv.destroy_sanitized_view(view_root)
+
+
+def test_review_diff_non_utf8_path_reconciles(tmp_path):
+    """Changed file with invalid UTF-8 name bytes (surrogateescape seam)."""
+    repo = _init_repo(tmp_path / "nonutf8-reconcile", files={"keep.txt": "k\n"})
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    try:
+        bad_rel = os.fsdecode(b"caf\xe9.txt")
+    except (UnicodeDecodeError, ValueError):
+        pytest.skip("filesystem refuses invalid UTF-8 path bytes")
+    full = os.path.join(repo, bad_rel)
+    try:
+        with open(full, "wb") as fh:
+            fh.write(b"payload\n")
+    except OSError:
+        pytest.skip("filesystem refuses creating paths with invalid UTF-8 bytes")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "nonutf8",
+    )
+    with open(full, "wb") as fh:
+        fh.write(b"changed payload\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change nonutf8",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        assert view["diffBytes"] > 0
+        assert os.path.isfile(os.path.join(view["path"], bad_rel))
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_review_diff_duplicate_tree_entry_refuses(tmp_path):
+    repo = _init_repo(tmp_path / "dup-tree", files={"keep.txt": "k\n"})
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    b1 = subprocess.run(
+        ["git", "-C", repo, "hash-object", "-w", "--stdin"],
+        input=b"one\n",
+        capture_output=True,
+        check=True,
+    ).stdout.strip().decode()
+    b2 = subprocess.run(
+        ["git", "-C", repo, "hash-object", "-w", "--stdin"],
+        input=b"two\n",
+        capture_output=True,
+        check=True,
+    ).stdout.strip().decode()
+    tree_input = "100644 blob %s\tdup.txt\n100644 blob %s\tdup.txt\n" % (b1, b2)
+    tree_sha = subprocess.run(
+        ["git", "-C", repo, "mktree"],
+        input=tree_input,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    parent = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    commit_sha = subprocess.run(
+        [
+            "git",
+            "-C",
+            repo,
+            "commit-tree",
+            tree_sha,
+            "-p",
+            parent,
+            "-m",
+            "dup",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    started = time.monotonic()
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._git_tree_entries(repo, commit_sha, started)
+    assert exc.value.detail == "sanitized-view-diff-unaccounted"
+
+
+def test_review_diff_census_ignores_replace_refs(tmp_path):
+    repo = _init_repo(tmp_path / "replace-refs", files={"real.txt": "real\n"})
+    real_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "decoy.txt"), "w", encoding="utf-8") as fh:
+        fh.write("decoy\n")
+    _git(repo, "add", "decoy.txt")
+    decoy_sha = subprocess.run(
+        [
+            "git",
+            "-C",
+            repo,
+            "-c",
+            "user.email=test@test.local",
+            "-c",
+            "user.name=test",
+            "commit-tree",
+            subprocess.run(
+                ["git", "-C", repo, "write-tree"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip(),
+            "-p",
+            real_sha,
+            "-m",
+            "decoy",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    _git(repo, "replace", real_sha, decoy_sha)
+    started = time.monotonic()
+    entries = sv._git_tree_entries(repo, real_sha, started)
+    assert "real.txt" in entries
+    assert "decoy.txt" not in entries
+
+
+def test_review_diff_file_named_like_binary_marker_is_not_opaque(tmp_path):
+    magic_name = "Binary files a and b differ"
+    repo = _init_repo(tmp_path / "binary-name", files={"keep.txt": "k\n"})
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, magic_name), "w", encoding="utf-8") as fh:
+        fh.write("line one\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "add magic name",
+    )
+    with open(os.path.join(repo, magic_name), "w", encoding="utf-8") as fh:
+        fh.write("line two\n")
+    _git(repo, "add", magic_name)
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change magic name",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert b"line two" in patch
+        assert b"diff --git" in patch
     finally:
         sv.destroy_sanitized_view(view["path"])
 
@@ -2964,7 +3343,7 @@ def test_patch_filter_e2e_add_side_payload_spoof(tmp_path):
         sv.destroy_sanitized_view(view["path"])
 
 
-def test_patch_filter_e2e_modified_both_sides_payload_spoof(tmp_path):
+def test_stage_review_diff_e2e_census_excludes_modified_stripped_config_from_patch(tmp_path):
     repo = _init_repo(
         tmp_path / "spoof-modified",
         files={"CLAUDE.md": "baseline\n", "keep.txt": "k\n"},
@@ -3003,7 +3382,7 @@ def test_patch_filter_e2e_modified_both_sides_payload_spoof(tmp_path):
         sv.destroy_sanitized_view(view["path"])
 
 
-def test_patch_filter_e2e_addition_surviving_side_payload_spoof(tmp_path):
+def test_stage_review_diff_e2e_census_excludes_added_stripped_config_from_patch(tmp_path):
     repo = _init_repo(tmp_path / "spoof-add-root", files={"keep.txt": "k\n"})
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     spoof_content = (
@@ -3034,7 +3413,7 @@ def test_patch_filter_e2e_addition_surviving_side_payload_spoof(tmp_path):
         sv.destroy_sanitized_view(view["path"])
 
 
-def test_patch_filter_e2e_deletion_surviving_side_payload_spoof(tmp_path):
+def test_stage_review_diff_e2e_census_excludes_deleted_stripped_config_from_patch(tmp_path):
     repo = _init_repo(
         tmp_path / "spoof-delete-root",
         files={
@@ -3254,7 +3633,7 @@ def test_stage_review_diff_unrecognized_span_refused(tmp_path, monkeypatch):
             sv._stage_review_diff(
                 repo_real, head_sha, view_root, base_sha, time.monotonic()
             )
-        assert exc.value.detail == "sanitized-view-diff-failed"
+        assert exc.value.detail == "sanitized-view-diff-unaccounted"
         assert not os.path.lexists(patch_path)
     finally:
         sv.destroy_sanitized_view(view_root)

@@ -693,7 +693,12 @@ optional `--diff-base <ref>` (merge-base→head in the source repo, written to
 predicate are withheld from that patch by the same rule that strips the tree. The staged patch does
 not satisfy the #666 investigation floor — citing only that artifact forfeits vacuously. A view that
 cannot be built is a named refusal with `attempts: 0` and no spawn; there is no fallback to the raw
-checkout.
+checkout. The census of changed paths is authoritative: it comes from direct two-tree enumeration,
+not from `git diff` output or rendered patch text, and every changed entry is rendered,
+policy-withheld, or refused before spawn — repo-local config overrides remain defence in depth, not
+the proof of authority. Until a follow-up issue lands, opaque or unaccounted patch content refuses
+with `sanitized-view-diff-opaque`, `sanitized-view-diff-unaccounted`, or (for git command failure)
+`sanitized-view-diff-failed`; that result is never a clean review and there is no automatic fallback.
 
 **Dispatch vocabulary contract.** Three token shapes stay distinct:
 
