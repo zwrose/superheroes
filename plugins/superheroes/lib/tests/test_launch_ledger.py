@@ -1686,7 +1686,7 @@ def test_append_under_lock_refuses_outcome_without_started(tmp_path, monkeypatch
     count_before = len(ll.read(repo)["records"])
     result = ll.append_under_lock(repo, _outcome(launch_id))
     assert result["ok"] is False
-    assert result["reason"] == "fold-outcome-without-started:%s" % launch_id
+    assert result["reason"] == "append-terminal-must-use-terminalize"
     assert len(ll.read(repo)["records"]) == count_before
 
 
@@ -1730,12 +1730,131 @@ def test_append_under_lock_refuses_torn_ledger(tmp_path, monkeypatch):
 def test_append_under_lock_accepts_missing_ledger(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
-    launch_id = "fresh"
-    ll.reserve(repo, _reserved(launch_id, "b1", ["a"], repo))
+    assert ll.read(repo)["state"] == "missing"
     count_before = len(ll.read(repo)["records"])
-    result = ll.append_under_lock(repo, _started(launch_id))
+    result = ll.append_under_lock(repo, _batch_declared("b-fresh", 1))
     assert result["ok"] is True
     assert len(ll.read(repo)["records"]) == count_before + 1
+    assert ll.read(repo)["state"] == "ok"
+
+
+def test_terminalize_refuses_when_the_reader_would_reject_its_own_record(
+    tmp_path, monkeypatch,
+):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    launch_id = "l-fold-reject"
+    batch = "b-fold-reject"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved(launch_id, batch, ["a"], repo))
+    ll.append(repo, _started(launch_id))
+    count_before = len(ll.read(repo)["records"])
+
+    original_fold = ll.fold
+    baseline_len = count_before
+
+    def rejecting_fold(records):
+        if len(records) > baseline_len:
+            return {
+                "ok": False,
+                "reason": "fold-reject-extension",
+                "launches": {},
+                "batchDeclarations": {},
+            }
+        return original_fold(records)
+
+    monkeypatch.setattr(ll, "fold", rejecting_fold)
+    result = ll.terminalize(
+        repo, launch_id, outcome="handback", evidence="done", require_started=True,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "fold-reject-extension"
+    assert len(ll.read(repo)["records"]) == count_before
+
+
+def test_declare_batch_refuses_when_the_reader_would_reject_its_own_record(
+    tmp_path, monkeypatch,
+):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    count_before = len(ll.read(repo)["records"])
+    assert ll.read(repo)["state"] == "missing"
+
+    original_fold = ll.fold
+    baseline_len = count_before
+
+    def rejecting_fold(records):
+        if len(records) > baseline_len:
+            return {
+                "ok": False,
+                "reason": "fold-reject-extension",
+                "launches": {},
+                "batchDeclarations": {},
+            }
+        return original_fold(records)
+
+    monkeypatch.setattr(ll, "fold", rejecting_fold)
+    result = ll.declare_batch(repo, "b-new", 1)
+    assert result["ok"] is False
+    assert result["reason"] == "fold-reject-extension"
+    assert len(ll.read(repo)["records"]) == count_before
+
+
+def test_append_under_lock_refuses_a_terminal_record(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-terminal-guard"
+    launch_id = "l-terminal-guard"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved(launch_id, batch, ["a"], repo))
+    ll.append(repo, _started(launch_id))
+    count_before = len(ll.read(repo)["records"])
+
+    result_outcome = ll.append_under_lock(repo, _outcome(launch_id))
+    assert result_outcome["ok"] is False
+    assert result_outcome["reason"] == "append-terminal-must-use-terminalize"
+
+    result_refused = ll.append_under_lock(repo, _refused(launch_id))
+    assert result_refused["ok"] is False
+    assert result_refused["reason"] == "append-terminal-must-use-terminalize"
+
+    assert len(ll.read(repo)["records"]) == count_before
+    count_result = ll.count(repo, batch)
+    assert count_result["indeterminate"] is True
+    assert count_result["resolved"] is False
+
+
+def test_append_under_lock_cannot_resolve_a_live_child(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-live-guard"
+    launch_id = "l-live-guard"
+    proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        _declare(repo, batch, 1)
+        ll.reserve(repo, _reserved(launch_id, batch, ["a"], repo))
+        started = _started(launch_id)
+        started["pid"] = proc.pid
+        ll.append(repo, started)
+
+        result = ll.append_under_lock(repo, _outcome(launch_id))
+        assert result["ok"] is False
+        assert result["reason"] == "append-terminal-must-use-terminalize"
+
+        count_result = ll.count(repo, batch)
+        assert count_result["indeterminate"] is True
+        assert count_result["resolved"] is False
+
+        os.kill(proc.pid, 0)
+    finally:
+        try:
+            os.kill(proc.pid, 9)
+        except ProcessLookupError:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
 
 
 def test_reserve_refuses_a_record_the_reader_would_reject(tmp_path, monkeypatch):

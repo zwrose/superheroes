@@ -381,7 +381,17 @@ def _release_lock(lock_path):
 
 
 def append_under_lock(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
-    """Append a ledger record under the canonical lock gate. Never raises."""
+    """Append a ledger record under the canonical lock gate. Never raises.
+
+    Terminal events (``outcome``, ``refused``) must use ``terminalize`` — this
+    is not that door.
+    """
+    if isinstance(record, dict) and record.get("event") in ("outcome", "refused"):
+        return {
+            "ok": False,
+            "reason": "append-terminal-must-use-terminalize",
+            "path": None,
+        }
     lock_result = _ensure_lock_file(repo_root, env=env)
     if not lock_result["ok"]:
         return {"ok": False, "reason": lock_result["reason"], "path": None}
@@ -894,6 +904,9 @@ def declare_batch(repo_root, batch_id, expected_launches, env=None,
             "ts": time.time(),
             "schema": SCHEMA,
         }
+        folded_with_event = fold(read_result["records"] + [event])
+        if not folded_with_event["ok"]:
+            return {"ok": False, "reason": folded_with_event["reason"]}
         if not append(repo_root, event, env=env):
             return {"ok": False, "reason": "ledger-append-failed"}
         return {"ok": True, "reason": None}
@@ -1138,6 +1151,7 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
                 "kind": None, "outcome": None, "reaped": reaped,
             }
 
+        records = list(read_result["records"])
         started = info.get("started")
         if started or child_ever_spawned:
             if child_ever_spawned and not started:
@@ -1163,11 +1177,18 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
                     "errPath": started_repair["errPath"],
                     "repaired": True,
                 }
+                folded_repair = fold(records + [started_record])
+                if not folded_repair["ok"]:
+                    return {
+                        "ok": False, "reason": folded_repair["reason"],
+                        "kind": None, "outcome": None, "reaped": reaped,
+                    }
                 if not append(repo_root, started_record, env=env):
                     return {
                         "ok": False, "reason": "ledger-append-failed",
                         "kind": None, "outcome": None, "reaped": reaped,
                     }
+                records.append(started_record)
             kind = "outcome"
             written_outcome = outcome if outcome is not None else "park"
             written_evidence = (
@@ -1206,6 +1227,13 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
 
         if reaped:
             record["reaped"] = True
+
+        folded_terminal = fold(records + [record])
+        if not folded_terminal["ok"]:
+            return {
+                "ok": False, "reason": folded_terminal["reason"],
+                "kind": None, "outcome": None, "reaped": reaped,
+            }
 
         if not append(repo_root, record, env=env):
             return {
