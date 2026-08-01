@@ -484,8 +484,17 @@ def test_confirm_does_not_downgrade_a_newer_schema_core(tmp_path):
 # Issue #724 — legacy profile detection + refusal (migrate_on_read removed)
 # ---------------------------------------------------------------------------
 
-def _init_git_repo(repo):
-    subprocess.run(["git", "-C", repo, "init", "-q"], check=True)
+def _init_git_repo(path, remote=None):
+    path = str(path)
+    subprocess.run(["git", "init", "-q", path], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "-C", path, "config", "user.email", "t@t.t"], check=True,
+                     capture_output=True, text=True)
+    subprocess.run(["git", "-C", path, "config", "user.name", "t"], check=True,
+                     capture_output=True, text=True)
+    if remote:
+        subprocess.run(["git", "-C", path, "remote", "add", "origin", remote], check=True,
+                         capture_output=True, text=True)
+    return path
 
 
 def _legacy_inrepo_path(repo, hero):
@@ -1069,6 +1078,8 @@ def test_gate_refusal_line_missing_detail_raises_keyerror():
 def test_gate_refusal_detail_exception_format():
     assert CM.gate_refusal_detail(ValueError("boom")) == "ValueError: boom"
     assert CM.gate_refusal_detail(ValueError("")) == "ValueError: "
+    assert CM.gate_refusal_detail(OSError("e"), at="/p") == "OSError at /p: e"
+    assert CM.gate_refusal_detail(OSError("e"), at="/p", verb="opening") == "OSError opening /p: e"
 
 
 def test_gate_refusal_none_detail_renders_as_none_string():
@@ -2072,3 +2083,43 @@ def test_confirm_absent_when_core_genuinely_missing(tmp_path):
     store = str(tmp_path / "store")
     res = CM.confirm(repo, root=store)
     assert res["action"] == "absent"
+
+
+def _git_subprocess_counter(monkeypatch):
+    count = {"n": 0}
+    real = subprocess.run
+
+    def wrapped(*args, **kwargs):
+        cmd = args[0] if args else None
+        if cmd and isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "git":
+            count["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", wrapped)
+    return count
+
+
+def test_gate_refusal_detail_census_one_formatter():
+    """One formatter, no hand-rolled copies — type(exc).__name__ must live only in gate_refusal_detail."""
+    path = os.path.join(_LIB, "core_md.py")
+    with open(path, encoding="utf-8") as fh:
+        src = fh.read()
+    assert src.count("type(exc).__name__") == 1
+
+
+def test_confirm_degraded_path_bounded_git_calls(tmp_path, monkeypatch):
+    repo = _init_git_repo(tmp_path / "repo", remote="git@github.com:org/repo.git")
+    store = str(tmp_path / "store")
+    counter = _git_subprocess_counter(monkeypatch)
+    res = CM.confirm(repo, root=store)
+    assert res["action"] == "absent"
+    assert counter["n"] <= 6
+
+
+def test_confirm_all_bounded_git_calls(tmp_path, monkeypatch):
+    repo = _init_git_repo(tmp_path / "repo", remote="git@github.com:org/repo.git")
+    store = str(tmp_path / "store")
+    counter = _git_subprocess_counter(monkeypatch)
+    res = CM.confirm_all(repo, root=store)
+    assert res == {"core": {"action": "absent", "record": None}, "layers": {}}
+    assert counter["n"] <= 6
