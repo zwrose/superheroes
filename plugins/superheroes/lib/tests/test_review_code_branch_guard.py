@@ -350,6 +350,93 @@ def _setup_branch_null(world):
     )
 
 
+def _setup_head_symbolic_to_tag(world, tag_name="v-pr-head"):
+    """HEAD symbolic to a tag with adopted-looking branch.<tag>.* config."""
+    _git(world["work_dir"], "tag", tag_name, world["head_sha"], tmp_path=world["tmp_path"])
+    _git(
+        world["work_dir"],
+        "symbolic-ref",
+        "HEAD",
+        f"refs/tags/{tag_name}",
+        tmp_path=world["tmp_path"],
+    )
+    _git(
+        world["work_dir"],
+        "config",
+        f"branch.{tag_name}.remote",
+        "origin",
+        tmp_path=world["tmp_path"],
+    )
+    _git(
+        world["work_dir"],
+        "config",
+        f"branch.{tag_name}.merge",
+        f"refs/heads/{world['pr_branch']}",
+        tmp_path=world["tmp_path"],
+    )
+
+
+def _setup_head_symbolic_to_remote_tracking(world):
+    """HEAD symbolic to origin/<pr_branch> with adopted-looking config."""
+    pr_branch = world["pr_branch"]
+    remote_branch = f"origin/{pr_branch}"
+    _git(
+        world["work_dir"],
+        "symbolic-ref",
+        "HEAD",
+        f"refs/remotes/origin/{pr_branch}",
+        tmp_path=world["tmp_path"],
+    )
+    _git(
+        world["work_dir"],
+        "config",
+        f"branch.{remote_branch}.remote",
+        "origin",
+        tmp_path=world["tmp_path"],
+    )
+    _git(
+        world["work_dir"],
+        "config",
+        f"branch.{remote_branch}.merge",
+        f"refs/heads/{pr_branch}",
+        tmp_path=world["tmp_path"],
+    )
+
+
+def _setup_adopted_fork_remote(world, branch_name="adopted-fork"):
+    """Adopted-looking branch tracking remote 'fork' instead of 'origin'."""
+    _git(
+        world["work_dir"],
+        "checkout",
+        "-B",
+        branch_name,
+        world["head_sha"],
+        tmp_path=world["tmp_path"],
+    )
+    _git(
+        world["work_dir"],
+        "remote",
+        "add",
+        "fork",
+        world["bare"],
+        tmp_path=world["tmp_path"],
+    )
+    _git(
+        world["work_dir"],
+        "config",
+        f"branch.{branch_name}.remote",
+        "fork",
+        tmp_path=world["tmp_path"],
+    )
+    _git(
+        world["work_dir"],
+        "config",
+        f"branch.{branch_name}.merge",
+        f"refs/heads/{world['pr_branch']}",
+        tmp_path=world["tmp_path"],
+    )
+
+
 def _setup_pr_branch_name_only_moved_head(world):
     """On PR branch by name, no tracking config, HEAD one commit ahead."""
     pr_branch = world["pr_branch"]
@@ -404,24 +491,38 @@ def test_extractor_raises_when_bash_fence_empty(tmp_path):
 
 def test_extractor_returns_shipped_block():
     block = extract_branch_guard()
-    assert "CURRENT_BRANCH=$(git symbolic-ref --quiet --short HEAD)" in block
+    assert "CURRENT_BRANCH=$(git symbolic-ref --quiet HEAD)" in block
+    assert 'case "$CURRENT_BRANCH" in refs/heads/?*)' in block
     assert 'TRACK_REMOTE=$(git config --get "branch.$CURRENT_BRANCH.remote")' in block
+
+
+_MANDATORY_ACCEPTANCE_PATTERNS = (
+    ("name_match", "PR_BRANCH", '"$CURRENT_BRANCH" != "$PR_BRANCH"'),
+    ("track_remote", "origin", '[ "$TRACK_REMOTE" = origin ]'),
+    ("track_merge", "refs/heads", 'refs/heads/$PR_BRANCH'),
+    ("head_at_pr", "HEAD_SHA", '[ "$LOCAL_HEAD" = "$HEAD_SHA" ]'),
+)
 
 
 def _acceptance_leg_tokens_from_guard_home(block):
     """Derive pinned acceptance-leg anchors from the shipped guard bash block."""
-    tokens = []
-    if '[ "$TRACK_REMOTE" = origin ]' in block:
-        tokens.append(("track_remote", "origin"))
-    if 'refs/heads/$PR_BRANCH' in block:
-        tokens.append(("track_merge", "refs/heads"))
-    if '[ "$LOCAL_HEAD" = "$HEAD_SHA" ]' in block:
-        tokens.append(("head_at_pr", "HEAD_SHA"))
-    if '"$CURRENT_BRANCH" != "$PR_BRANCH"' in block:
-        tokens.append(("name_match", "PR_BRANCH"))
-    if not tokens:
+    derived = [
+        (leg_name, token)
+        for leg_name, token, pattern in _MANDATORY_ACCEPTANCE_PATTERNS
+        if pattern in block
+    ]
+    if not derived:
         raise ValueError("guard home: zero acceptance-leg tokens derived")
-    return tokens
+    missing = [
+        (leg_name, pattern)
+        for leg_name, _token, pattern in _MANDATORY_ACCEPTANCE_PATTERNS
+        if pattern not in block
+    ]
+    if missing:
+        raise ValueError(
+            "guard home: missing mandatory acceptance-leg pattern(s) — %r" % missing
+        )
+    return [(leg_name, token) for leg_name, token, _ in _MANDATORY_ACCEPTANCE_PATTERNS]
 
 
 def _auto_fix_loop_row_text(doc):
@@ -697,6 +798,53 @@ def test_state_6c_detached_head_with_empty_subsection_config_refuse(git_world, s
     assert code == 1
     text = _combined_output(out, err)
     assert "An ADOPTED build also qualifies" in text
+
+
+def test_state_6d_head_symbolic_to_tag_with_adopted_config_refuse(git_world, shipped_guard):
+    """HEAD symbolic to a tag with adopted-looking branch.<tag>.* must refuse."""
+    _setup_head_symbolic_to_tag(git_world)
+    code, out, err = run_guard(
+        shipped_guard,
+        git_world["work_dir"],
+        git_world["pr_branch"],
+        git_world["head_sha"],
+        tmp_path=git_world["tmp_path"],
+    )
+    assert code == 1
+    text = _combined_output(out, err)
+    assert "An ADOPTED build also qualifies" in text
+
+
+def test_state_6e_head_symbolic_to_remote_tracking_with_adopted_config_refuse(
+    git_world, shipped_guard
+):
+    """HEAD symbolic to origin/<pr> with adopted-looking config must refuse."""
+    _setup_head_symbolic_to_remote_tracking(git_world)
+    code, out, err = run_guard(
+        shipped_guard,
+        git_world["work_dir"],
+        git_world["pr_branch"],
+        git_world["head_sha"],
+        tmp_path=git_world["tmp_path"],
+    )
+    assert code == 1
+    text = _combined_output(out, err)
+    assert "An ADOPTED build also qualifies" in text
+
+
+def test_state_4d_adopted_fork_remote_refuse(git_world, shipped_guard):
+    """Adopted-looking branch whose tracking remote is 'fork' must refuse."""
+    _setup_adopted_fork_remote(git_world)
+    code, out, err = run_guard(
+        shipped_guard,
+        git_world["work_dir"],
+        git_world["pr_branch"],
+        git_world["head_sha"],
+        tmp_path=git_world["tmp_path"],
+    )
+    assert code == 1
+    text = _combined_output(out, err)
+    assert "found 'fork'" in text
 
 
 @pytest.mark.parametrize(
