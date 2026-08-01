@@ -479,6 +479,24 @@ the reviewer and the owner's authorization carry that check instead.**
    failure, later. If owner capability is discovered mid-run, **park durably** on the **issue or PR** — somewhere
    the advisor will read without being told to look — never improvise a channel; the builder charter
    carries the builder's half.
+   The other half of launch doctrine lives in the same artifact — read
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/launch-doctrine.md` § Recovery and follow it rather
+   than reconstructing a takeover from memory, which is exactly what this doctrine exists to stop.
+   **Before composing a successor's launch, sweep what the dead build left unpushed** — enumerate
+   its worktrees and branches, reconcile against the pushed tip, and record what you found for
+   handoff; the adopting builder re-runs that sweep at intake and reconciles against your handoff —
+   both halves run, neither replaces the other. The calls that are the advisor's: whether a
+   takeover is a **resume** (same instance and account
+   only) or an **adoption** (a fresh session from durable artifacts, and **the only path across
+   instances or accounts**); **pinning** each builder's transcript by its issue token instead of
+   re-discovering it newest-first; reading **liveness** from a double-confirmed process check plus
+   pinned-transcript freshness, never from a `-p` session's buffered stdout and never from a global
+   process match; and treating an unexplained early exit as a **suspected quota death** on the
+   account the builder burned until that is ruled out. **An adoption is a launch** — it carries the
+   standing rulings and records its preflight like any other, and its dispatch record names the
+   **branch and the sha it adopted**; and **record the dead builder's terminal outcome** with
+   `record-outcome` before its successor launches, because an unrecorded death makes the batch
+   `indeterminate` and the successor's own outcome cannot repair it.
    **Scheduled heartbeat sweep (wave orchestration duty).** An advisor **orchestrating a wave owes a
    scheduled heartbeat sweep** that resumes stalled lanes — not a one-off rescue when something feels
    wrong. Run `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/heartbeat.py" sweep --repo-root <repo-root>`,
@@ -513,3 +531,4 @@ the reviewer and the owner's authorization carry that check instead.**
 | "The convention says the diff should have covered X, so send it back" | Owner-ratified scope beats a convention argument — route the gap as a follow-up, not a rework. |
 | "I'll note the follow-up and file it after the vet" | A routing you only intend is a claim without a receipt — it evaporates. Disposition the PR's follow-ups **before** the vet receipt posts (Tier-1 writes now; Tier-2 proposed to the owner); receipts never use the future tense. |
 | "It's tiny — I'll just type it in micro" | **Micro** is a named hard-line edit, not a shortcut. The advisor IS the maker — no advisor vet for that PR; one **non-Anthropic** reviewer plus per-change owner authorization; pass the quiet-failure question or get an explicit waiver with the risk stated; say what could go wrong before the owner decides. |
+| "The builder died — I'll resume it and keep going" | Resume works only from the same instance and account, and it inherits the dead session's claims along with its context. Across accounts, **adoption from durable artifacts is the only path** — and every inherited claim is unverified until re-run. |
