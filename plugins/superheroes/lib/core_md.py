@@ -195,7 +195,7 @@ def _classify_core_md_at_path(path):
         return CoreGateConfig(
             {},
             CONFIG_UNREADABLE,
-            "%s at %s: %s" % (type(exc).__name__, path, exc),
+            gate_refusal_detail(exc, at=path),
         )
 
     if not stat.S_ISREG(st.st_mode):
@@ -218,7 +218,7 @@ def _classify_core_md_at_path(path):
         return CoreGateConfig(
             {},
             CONFIG_UNREADABLE,
-            "%s opening %s: %s" % (type(exc).__name__, path, exc),
+            gate_refusal_detail(exc, at=path, verb="opening"),
         )
     except UnicodeDecodeError as exc:
         return CoreGateConfig(
@@ -280,8 +280,8 @@ def engine_preferences_for_gate(*, cwd=None, root=None, profile_path=None):
         return CoreGateConfig(
             {},
             CONFIG_UNREADABLE,
-            "gate evaluation failed before core.md could be classified: %s: %s"
-            % (type(exc).__name__, exc),
+            "gate evaluation failed before core.md could be classified: "
+            + gate_refusal_detail(exc),
         )
 
 
@@ -421,9 +421,17 @@ def gate_refusal(reason, detail):
     return {"reason": reason, "detail": detail}
 
 
-def gate_refusal_detail(exc):
-    """The ONE detail string for an exception-caused gate refusal: "ExcName: message"."""
-    return "%s: %s" % (type(exc).__name__, exc)
+def gate_refusal_detail(exc, *, at=None, verb="at"):
+    """The ONE detail string for an exception-caused gate refusal.
+
+    ``gate_refusal_detail(exc)``                        -> "ExcName: message"
+    ``gate_refusal_detail(exc, at=path)``               -> "ExcName at path: message"
+    ``gate_refusal_detail(exc, at=path, verb="opening")`` -> "ExcName opening path: message"
+    """
+    exc_name = type(exc).__name__
+    if at is None:
+        return "%s: %s" % (exc_name, exc)
+    return "%s %s %s: %s" % (exc_name, verb, at, exc)
 
 
 def gate_refusal_line(payload):
@@ -442,6 +450,9 @@ def _evaluate_configured_dispatch_gate(cwd, root, facts, existing):
         import model_tier_overrides
 
         gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
+        # Deliberately a second gate read: closes the gate→read TOCTOU window so a core.md that
+        # was valid at write()'s first gate but unreadable by the time read() runs fails closed
+        # instead of falling through to create/clobber.
         if gate_cfg.status == CONFIG_ROOT_UNAVAILABLE:
             return None, gate_refusal(GATE_REASON_ROOT_UNAVAILABLE, gate_cfg.detail)
         if gate_cfg.status == CONFIG_UNREADABLE:
@@ -705,7 +716,7 @@ def _legacy_presence(path):
     except FileNotFoundError:
         return False, None
     except OSError as exc:
-        return True, "%s: %s" % (type(exc).__name__, exc)
+        return True, gate_refusal_detail(exc)
     return True, None
 
 
@@ -744,7 +755,7 @@ def legacy_profile_refusal(cwd, root=None):
                 }
             except Exception as exc:
                 heroes_refused.append(hero)
-                detail[hero] = "%s: %s" % (type(exc).__name__, exc)
+                detail[hero] = gate_refusal_detail(exc)
         if not heroes_refused:
             return None
         return {
@@ -768,7 +779,7 @@ def legacy_profile_refusal(cwd, root=None):
             "heroes": [],
             "paths": [],
             "remedy": LEGACY_PROFILE_REMEDY,
-            "detail": {"*": "%s: %s" % (type(exc).__name__, exc)},
+            "detail": {"*": gate_refusal_detail(exc)},
         }
 
 
@@ -859,29 +870,9 @@ def confirm(cwd, *, root=None, now=None):
       - {action: "behind"}     core.md is a NEWER schema — refuse to rewrite (UFR-3)
       - {action: "deferred"}   lock contended / store unwritable (UFR-4), or core.md unreadable
         (includes reason/detail when unreadable — not retryable)"""
-    stamp = now or _today()
-    existing = read(cwd, root)
-    if existing is None:
-        gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
-        if gate_cfg.status == CONFIG_ROOT_UNAVAILABLE:
-            return {"action": "deferred", "record": None,
-                    "reason": GATE_REASON_ROOT_UNAVAILABLE, "detail": gate_cfg.detail}
-        if gate_cfg.status == CONFIG_UNREADABLE:
-            return {"action": "deferred", "record": None,
-                    "reason": GATE_REASON_UNREADABLE, "detail": gate_cfg.detail}
-        return {"action": "absent", "record": None}
-    if existing.get("behind"):
-        return {"action": "behind", "record": existing}
-    if existing.get("status") == "confirmed":
-        return {"action": "noop", "record": existing}
-    if mode_registry.ensure_project_store(cwd, root) is None:
-        mark_pending(cwd, root, detail={"reason": "store-unwritable"})
-        return {"action": "deferred", "record": None}
-    with mode_registry.config_lock(cwd, root) as got:
-        if not got:
-            mark_pending(cwd, root, detail={"reason": "lock-contended"})
-            return {"action": "deferred", "record": None}
-        existing = read(cwd, root)  # re-read under the lock
+    with store_core.repo_identity_memo():
+        stamp = now or _today()
+        existing = read(cwd, root)
         if existing is None:
             gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
             if gate_cfg.status == CONFIG_ROOT_UNAVAILABLE:
@@ -891,24 +882,45 @@ def confirm(cwd, *, root=None, now=None):
                 return {"action": "deferred", "record": None,
                         "reason": GATE_REASON_UNREADABLE, "detail": gate_cfg.detail}
             return {"action": "absent", "record": None}
-        # UFR-3: never rewrite a forward-schema core — render_core would downgrade it to
-        # SCHEMA_VERSION and drop fields this version doesn't understand. Surface, don't write.
         if existing.get("behind"):
             return {"action": "behind", "record": existing}
         if existing.get("status") == "confirmed":
             return {"action": "noop", "record": existing}
-        facts = {k: existing[k] for k in (
-            "verifyCommand", "stackTags", "threatModel", "patterns", "showItSurface")}
-        created = existing.get("created") or stamp
-        try:
-            store_core.atomic_write(core_path(cwd, root),
-                                    render_core(facts, "confirmed", created, stamp))
-        except OSError:
+        if mode_registry.ensure_project_store(cwd, root) is None:
             mark_pending(cwd, root, detail={"reason": "store-unwritable"})
             return {"action": "deferred", "record": None}
-        record = read(cwd, root)
-        clear_pending(cwd, root)
-        return {"action": "confirmed", "record": record}
+        with mode_registry.config_lock(cwd, root) as got:
+            if not got:
+                mark_pending(cwd, root, detail={"reason": "lock-contended"})
+                return {"action": "deferred", "record": None}
+            existing = read(cwd, root)  # re-read under the lock
+            if existing is None:
+                gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
+                if gate_cfg.status == CONFIG_ROOT_UNAVAILABLE:
+                    return {"action": "deferred", "record": None,
+                            "reason": GATE_REASON_ROOT_UNAVAILABLE, "detail": gate_cfg.detail}
+                if gate_cfg.status == CONFIG_UNREADABLE:
+                    return {"action": "deferred", "record": None,
+                            "reason": GATE_REASON_UNREADABLE, "detail": gate_cfg.detail}
+                return {"action": "absent", "record": None}
+            # UFR-3: never rewrite a forward-schema core — render_core would downgrade it to
+            # SCHEMA_VERSION and drop fields this version doesn't understand. Surface, don't write.
+            if existing.get("behind"):
+                return {"action": "behind", "record": existing}
+            if existing.get("status") == "confirmed":
+                return {"action": "noop", "record": existing}
+            facts = {k: existing[k] for k in (
+                "verifyCommand", "stackTags", "threatModel", "patterns", "showItSurface")}
+            created = existing.get("created") or stamp
+            try:
+                store_core.atomic_write(core_path(cwd, root),
+                                        render_core(facts, "confirmed", created, stamp))
+            except OSError:
+                mark_pending(cwd, root, detail={"reason": "store-unwritable"})
+                return {"action": "deferred", "record": None}
+            record = read(cwd, root)
+            clear_pending(cwd, root)
+            return {"action": "confirmed", "record": record}
 
 
 def confirm_layer(cwd, hero, *, root=None, now=None):
@@ -962,20 +974,21 @@ def confirm_all(cwd, *, root=None, now=None):
     """FR-18 owner-confirm for the WHOLE calibration: the shared core + every present hero layer.
     The entry point the configure fix-path calls once the owner confirms. Returns
     {core: <confirm result>, layers: {hero: <confirm_layer result>}}."""
-    core_res = confirm(cwd, root=root, now=now)
-    layers = {}
-    # Only flip layers when the shared core is (now) confirmed — a deferred/behind/absent core must
-    # not leave layers advertising 'confirmed' over an unconfirmed core, a split state (/code-review
-    # #5). `noop` means the core was already confirmed, so layers may still flip.
-    if core_res.get("action") in ("confirmed", "noop"):
-        for hero in _HEROES:
-            try:
-                layer_p = _layer_path(cwd, hero, root)
-            except RepoRootUnavailable:
-                break
-            if os.path.isfile(layer_p):
-                layers[hero] = confirm_layer(cwd, hero, root=root, now=now)
-    return {"core": core_res, "layers": layers}
+    with store_core.repo_identity_memo():
+        core_res = confirm(cwd, root=root, now=now)
+        layers = {}
+        # Only flip layers when the shared core is (now) confirmed — a deferred/behind/absent core must
+        # not leave layers advertising 'confirmed' over an unconfirmed core, a split state (/code-review
+        # #5). `noop` means the core was already confirmed, so layers may still flip.
+        if core_res.get("action") in ("confirmed", "noop"):
+            for hero in _HEROES:
+                try:
+                    layer_p = _layer_path(cwd, hero, root)
+                except RepoRootUnavailable:
+                    break
+                if os.path.isfile(layer_p):
+                    layers[hero] = confirm_layer(cwd, hero, root=root, now=now)
+        return {"core": core_res, "layers": layers}
 
 
 def main(argv):

@@ -389,17 +389,12 @@ def test_dispatch_calibration_root_unavailable_returns_marker_not_defaults(tmp_p
 
 
 def test_dispatch_calibration_cli_carries_marker_on_unreadable(tmp_path, monkeypatch, capsys):
+    # Coverage/anti-stub test: passes at the base commit too — pins behavior the dispatch_selftest
+    # stub was masking, not a regression test for the one-snapshot readout work.
     monkeypatch.setattr(pp, "gh_auth_probe", lambda run=None: {
         "tool": "gh auth", "ok": True, "exit": 0, "detail": ""})
     monkeypatch.setattr(pp, "cross_vendor_cli_probe", lambda engine, run=None, argv=None: {
         "tool": "cross-vendor-cli:" + engine, "ok": True, "exit": 0, "detail": ""})
-    import dispatch_selftest
-
-    monkeypatch.setattr(
-        dispatch_selftest,
-        "probe_result",
-        lambda config=None: {"tool": "dispatch-vocab", "ok": True, "detail": "ok (1 checks)"},
-    )
     repo, store = _selftest_repo_with_core_shape(tmp_path, "dangling")
     rc = pp.main(["preflight_probe.py", "run", "--cwd", repo])
     assert rc == 0
@@ -408,6 +403,10 @@ def test_dispatch_calibration_cli_carries_marker_on_unreadable(tmp_path, monkeyp
     assert len(cal) == 1
     assert cal[0]["role"] == "*"
     assert cal[0]["readError"].startswith("core-md-unreadable: ")
+    assert payload["aggregate"]["go"] is False
+    vocab = [p for p in payload["probes"] if p["tool"] == "dispatch-vocab"]
+    assert len(vocab) == 1
+    assert vocab[0]["ok"] is False
 
 
 def test_dispatch_calibration_invalid_utf8_tiers_returns_evaluation_failed_marker(tmp_path):
@@ -472,7 +471,8 @@ def test_cli_run_prints_json_with_expected_keys(monkeypatch, capsys):
     out = capsys.readouterr().out
     payload = json.loads(out)
     assert set(payload.keys()) == {
-        "probes", "dispatchCalibration", "aggregate", "browserNote", "crossVendorEngines"}
+        "probes", "dispatchCalibration", "aggregate", "browserNote", "crossVendorEngines",
+        "configRead"}
     assert payload["aggregate"]["go"] is True
     assert len(payload["probes"]) == 3
     tools = {p["tool"] for p in payload["probes"]}
@@ -494,8 +494,11 @@ def test_cli_run_without_engine_derives_configured_engines(tmp_path, monkeypatch
         "probe_result",
         lambda config=None: {"tool": "dispatch-vocab", "ok": True, "detail": "ok (1 checks)"},
     )
-    monkeypatch.setattr(pp.core_md, "read", lambda *a, **k: {
-        "enginePreferences": {"implementation": "cursor", "briefCheck": "claude"}})
+    monkeypatch.setattr(
+        pp.core_md, "engine_preferences_for_gate",
+        lambda **kw: core_md.CoreGateConfig(
+            {"implementation": "cursor", "briefCheck": "claude"},
+            core_md.CONFIG_OK, None))
 
     rc = pp.main(["preflight_probe.py", "run", "--cwd", str(tmp_path)])
 
@@ -517,8 +520,11 @@ def test_cli_run_without_engine_all_claude_probes_none(monkeypatch, capsys):
         "probe_result",
         lambda config=None: {"tool": "dispatch-vocab", "ok": True, "detail": "ok (1 checks)"},
     )
-    monkeypatch.setattr(pp.core_md, "read", lambda *a, **k: {
-        "enginePreferences": {"briefCheck": "claude"}})
+    monkeypatch.setattr(
+        pp.core_md, "engine_preferences_for_gate",
+        lambda **kw: core_md.CoreGateConfig(
+            {"briefCheck": "claude"},
+            core_md.CONFIG_OK, None))
 
     rc = pp.main(["preflight_probe.py", "run"])
 
@@ -1076,3 +1082,144 @@ def test_cli_compose_liveness_writes_receipt(tmp_path, monkeypatch, capsys):
     assert "cachePath" in payload
     assert payload["cachePath"] == str(cache_file)
     assert cache_file.is_file()
+
+
+# --- readout_config (#752 riders 7 + 27a) --------------------------------------------------
+
+
+def test_readout_config_ok(tmp_path):
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
+    snap = pp.readout_config(cwd=repo, root=store)
+    assert snap["status"] == "ok"
+    assert snap["readError"] is None
+    assert snap["prefs"] == {"reviewer": "cursor"}
+
+
+def test_readout_config_absent(tmp_path):
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "absent")
+    snap = pp.readout_config(cwd=repo, root=store)
+    assert snap["status"] == "absent"
+    assert snap["readError"] is None
+    assert snap["prefs"] == {}
+
+
+def test_readout_config_dangling_symlink(tmp_path):
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "dangling")
+    snap = pp.readout_config(cwd=repo, root=store)
+    assert snap["status"] == "unreadable"
+    assert snap["readError"].startswith("core-md-unreadable: ")
+    assert snap["prefs"] == {}
+
+
+def test_readout_config_git_unavailable(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    _git_unavailable(monkeypatch)
+    snap = pp.readout_config(cwd=repo, root=store)
+    assert snap["readError"].startswith("repo-root-unavailable: ")
+    assert snap["prefs"] == {}
+
+
+def test_readout_config_gate_config_refusal_raises_fail_closed(tmp_path, monkeypatch):
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
+
+    def fake_gate(**kw):
+        return core_md.CoreGateConfig({}, "future-unknown-status", "detail")
+
+    monkeypatch.setattr(pp.core_md, "engine_preferences_for_gate", fake_gate)
+    snap = pp.readout_config(cwd=repo, root=store)
+    assert snap["readError"].startswith("dispatch-gate-evaluation-failed: ")
+    assert snap["prefs"] == {}
+
+
+def test_run_one_snapshot_self_consistent(tmp_path, monkeypatch, capsys):
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
+    calls = []
+    ok_cfg = core_md.CoreGateConfig({}, core_md.CONFIG_OK, None)
+    unread_cfg = core_md.CoreGateConfig({}, core_md.CONFIG_UNREADABLE, "simulated transition")
+    real = core_md.engine_preferences_for_gate
+
+    def counting_gate(**kw):
+        calls.append(1)
+        if len(calls) == 1:
+            return ok_cfg
+        return unread_cfg
+
+    monkeypatch.setattr(pp.core_md, "engine_preferences_for_gate", counting_gate)
+    monkeypatch.setattr(pp, "gh_auth_probe", lambda run=None: {
+        "tool": "gh auth", "ok": True, "exit": 0, "detail": ""})
+    monkeypatch.setattr(pp, "cross_vendor_cli_probe", lambda engine, run=None, argv=None: {
+        "tool": "cross-vendor-cli:" + engine, "ok": True, "exit": 0, "detail": ""})
+
+    rc = pp.main(["preflight_probe.py", "run", "--cwd", repo])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert len(calls) == 1
+    if payload["configRead"]["readError"] is not None:
+        assert payload["aggregate"]["go"] is not True
+
+
+def test_run_readable_project_config_read_ok(tmp_path, monkeypatch, capsys):
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
+    monkeypatch.setattr(pp, "gh_auth_probe", lambda run=None: {
+        "tool": "gh auth", "ok": True, "exit": 0, "detail": ""})
+    monkeypatch.setattr(pp, "cross_vendor_cli_probe", lambda engine, run=None, argv=None: {
+        "tool": "cross-vendor-cli:" + engine, "ok": True, "exit": 0, "detail": ""})
+    import dispatch_selftest
+
+    monkeypatch.setattr(
+        dispatch_selftest,
+        "probe_result",
+        lambda config=None: {"tool": "dispatch-vocab", "ok": True, "detail": "ok (1 checks)"},
+    )
+
+    rc = pp.main(["preflight_probe.py", "run", "--cwd", repo])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["configRead"] == {"status": "ok", "readError": None}
+    assert set(payload.keys()) == {
+        "probes", "dispatchCalibration", "aggregate", "browserNote", "crossVendorEngines",
+        "configRead"}
+    assert isinstance(payload["probes"], list)
+    assert isinstance(payload["dispatchCalibration"], list)
+    assert isinstance(payload["aggregate"], dict)
+    assert isinstance(payload["browserNote"], str)
+    assert isinstance(payload["crossVendorEngines"], list)
+
+
+def test_compose_liveness_unreadable_core_config_read_and_note(tmp_path, monkeypatch, capsys):
+    import liveness_cache
+
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "dangling")
+    cache_file = tmp_path / "state" / "composition-liveness.json"
+    monkeypatch.setattr(liveness_cache, "receipt_path", lambda cwd=None, root=None: str(cache_file))
+    monkeypatch.setattr(pp, "composition_liveness", lambda needed, run=None: {
+        "codex": {"live": True, "models": {}},
+        "claude": {"live": True, "models": {}},
+    })
+
+    rc = pp.main(["preflight_probe.py", "compose-liveness", "--cwd", repo])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["configRead"]["readError"] is not None
+    unread_notes = [n for n in payload["notes"] if n.get("constraint") == "core-md-unreadable"]
+    assert len(unread_notes) == 1
+
+
+def test_compose_liveness_readable_core_no_unreadable_note(tmp_path, monkeypatch, capsys):
+    import liveness_cache
+
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
+    cache_file = tmp_path / "state" / "composition-liveness.json"
+    monkeypatch.setattr(liveness_cache, "receipt_path", lambda cwd=None, root=None: str(cache_file))
+    monkeypatch.setattr(pp, "composition_liveness", lambda needed, run=None: {
+        "codex": {"live": True, "models": {}},
+        "claude": {"live": True, "models": {}},
+    })
+
+    rc = pp.main(["preflight_probe.py", "compose-liveness", "--cwd", repo])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["configRead"]["readError"] is None
+    unread_notes = [n for n in payload["notes"] if n.get("constraint") == "core-md-unreadable"]
+    assert unread_notes == []

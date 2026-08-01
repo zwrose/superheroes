@@ -9,6 +9,7 @@ constants, kind-keyed resolve/create, artifact_key, etc.).
 Stdlib-only; no third-party dependencies.
 """
 import collections
+import contextlib
 import hashlib
 import json
 import os
@@ -16,6 +17,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 
 GIT_OK = "ok"
 GIT_DECLINED = "declined"        # git ran and exited non-zero — an authoritative "no"
@@ -57,8 +59,74 @@ def _declined_not_a_repository_outcome(res, cwd):
     return os.path.realpath(cwd)
 
 
+_repo_identity_memo_local = threading.local()
+
+
+def _active_repo_identity_memo():
+    stack = getattr(_repo_identity_memo_local, "stack", None)
+    if stack:
+        return stack[-1]
+    return None
+
+
+@contextlib.contextmanager
+def repo_identity_memo():
+    """Memoize repository IDENTITY lookups for the duration of a ``with`` block.
+
+    Caches ``repo_root(cwd)`` and ``derive_identifiers(cwd)`` per ``cwd`` — including a raised
+    ``RepoRootUnavailable``, so a failing lookup fails identically every time inside the block
+    instead of silently re-probing. Repo identity cannot change inside one lock-guarded config
+    operation, so caching it is safe; MUTABLE git state is deliberately NOT cached — the memo sits
+    at the identity functions, never at ``run_git_result``, so ``status --porcelain`` and
+    ``rev-parse HEAD`` are untouched.
+
+    An identity derived while git was UNAVAILABLE is NOT cached: ``get_remote`` collapses
+    "no origin" and "git could not run" to the same ``None``, so caching the latter would pin a
+    project to the wrong store key. Unauthoritative lookups re-derive every call, exactly as they do
+    without the memo.
+
+    Reentrant (a nested ``with`` reuses the outer memo) and thread-local (concurrent threads never
+    share a cache). Outside any block, every function behaves exactly as it does today."""
+    stack = getattr(_repo_identity_memo_local, "stack", None)
+    if stack is None:
+        stack = []
+        _repo_identity_memo_local.stack = stack
+    if stack:
+        yield
+        return
+    state = {
+        "root": {},
+        "root_exc": {},
+        "ident": {},
+        "ident_exc": {},
+    }
+    stack.append(state)
+    try:
+        yield
+    finally:
+        stack.pop()
+
+
 def repo_root(cwd):
     """Fail-closed repository root for ``cwd`` (issue #742)."""
+    memo = _active_repo_identity_memo()
+    if memo is not None:
+        if cwd in memo["root"]:
+            return memo["root"][cwd]
+        if cwd in memo["root_exc"]:
+            raise memo["root_exc"][cwd]
+    try:
+        resolved = _repo_root_uncached(cwd)
+    except RepoRootUnavailable as exc:
+        if memo is not None:
+            memo["root_exc"][cwd] = exc
+        raise
+    if memo is not None:
+        memo["root"][cwd] = resolved
+    return resolved
+
+
+def _repo_root_uncached(cwd):
     res = run_git_result(cwd, "rev-parse", "--show-toplevel")
     if res.status == GIT_UNAVAILABLE:
         raise RepoRootUnavailable(
@@ -173,9 +241,19 @@ def run_git(cwd, *args):
     return run_git_result(cwd, *args).out
 
 
+def get_remote_result(cwd):
+    """``get_remote`` plus WHY there is no remote — (normalized_remote, status).
+
+    ``status`` is the ``run_git_result`` status: ``GIT_OK``/``GIT_DECLINED`` are authoritative
+    answers a caller may cache; ``GIT_UNAVAILABLE`` means git never ran, so the "no remote" is
+    unknown, not negative, and must never be memoized as fact."""
+    res = run_git_result(cwd, "remote", "get-url", "origin")
+    return normalize_remote(res.out), res.status
+
+
 def get_remote(cwd):
     """Normalized origin URL, or None."""
-    return normalize_remote(run_git(cwd, "remote", "get-url", "origin"))
+    return get_remote_result(cwd)[0]
 
 
 def get_gitdir(cwd):
@@ -216,14 +294,28 @@ def get_gitdir(cwd):
 
 def derive_identifiers(cwd):
     """Return dict with remote, gitdir, remote_hash, gitdir_hash for cwd."""
-    remote = get_remote(cwd)
-    gitdir = get_gitdir(cwd)
-    return {
-        "remote": remote,
-        "gitdir": gitdir,
-        "remote_hash": short_hash(remote) if remote else None,
-        "gitdir_hash": short_hash(gitdir),
-    }
+    memo = _active_repo_identity_memo()
+    if memo is not None:
+        if cwd in memo["ident"]:
+            return memo["ident"][cwd]
+        if cwd in memo["ident_exc"]:
+            raise memo["ident_exc"][cwd]
+    try:
+        remote, remote_status = get_remote_result(cwd)
+        gitdir = get_gitdir(cwd)
+        ident = {
+            "remote": remote,
+            "gitdir": gitdir,
+            "remote_hash": short_hash(remote) if remote else None,
+            "gitdir_hash": short_hash(gitdir),
+        }
+    except RepoRootUnavailable as exc:
+        if memo is not None:
+            memo["ident_exc"][cwd] = exc
+        raise
+    if memo is not None and remote_status != GIT_UNAVAILABLE:
+        memo["ident"][cwd] = ident
+    return ident
 
 
 def atomic_write(path, text, tmp_prefix=".store-core."):

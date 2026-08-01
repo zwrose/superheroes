@@ -79,6 +79,17 @@ _PREF_KEY_DEFAULT_ENGINE = {
     if pref_key in ENGINE_ROLE_KEYS
 }
 
+
+def degenerate_engine_prefs():
+    """The all-defaults enginePreferences result — the ONE home for 'nothing configured'.
+
+    Derived from ``_PREF_KEY_DEFAULT_ENGINE`` so it can never drift from what
+    ``resolve_engine_pref_key``/``resolve_engine`` actually return: every role key resolves to its
+    own default (``briefCheck`` → codex, the rest → claude), plus an empty ``effort`` map. Returns a
+    FRESH dict each call — callers mutate it."""
+    return {**{k: _PREF_KEY_DEFAULT_ENGINE[k] for k in ENGINE_ROLE_KEYS}, "effort": {}}
+
+
 # When the brief-check reviewer must fall back to a Claude reviewer (codex unavailable), it runs at
 # this tier — a tier UP from the sonnet implementer, never session-inherited. Disclosed at dispatch.
 _brief_check_claude_model, _brief_check_claude_effort = model_registry.matrix_config(
@@ -171,8 +182,9 @@ def configured_dispatch_violations(prefs, tiers):
 def dispatch_calibration_rows(prefs, tiers):
     """The effective (engine, model) per v2 dispatch role — the ONE source both the configure view
     and the preflight readout format. `prefs` MUST be the RAW enginePreferences dict (NOT
-    load_engine_prefs output: an absent `briefCheck` must stay ABSENT so resolve_engine applies the
-    codex default; a normalized 'claude' would suppress it). `tiers` is the effective model-tier map.
+    load_engine_prefs output: the loader normalizes/validates role keys and may surface derived
+    fields such as ``invalidCodexModels``; raw absence vs explicit owner values must be preserved
+    for honest calibration). `tiers` is the effective model-tier map.
     Honest per-engine provenance: each `model` cell is the registry-sanctioned seat model for that
     role on the resolved engine (Claude tier, resolved Codex model, or per-role cursor dispatch
     token via `_effective_model`) — never the Claude tier misreported as what an external engine ran.
@@ -351,18 +363,14 @@ def resolve_idle(overrides=None, role_kind=None):
     return DEFAULT_IDLE_SECONDS
 
 
-def _normalize(engine):
-    return engine if isinstance(engine, str) and engine in ENGINES else "claude"
-
-
 def load_engine_prefs(cwd, root=None):
     """Read core.md's enginePreferences via core_md.read; normalize each role to a valid engine
-    (else 'claude'); surface the optional FR-9 `effort` sub-map (a dict, else {}) and the optional
-    #309 `timeout` owner override (a positive int, else omitted — resolve_timeout then falls to the
-    role ceiling); validated `codexModels` / `invalidCodexModels` and `seatPins` / `invalidSeatPins`
-    when present; absent block / None / any error → both 'claude' + empty effort. Never raises."""
-    degenerate = {"reviewer": "claude", "implementation": "claude",
-                  "briefCheck": "claude", "pilot": "claude", "effort": {}}
+    (else that key's fail-open default via resolve_engine_pref_key); surface the optional FR-9
+    `effort` sub-map (a dict, else {}) and the optional #309 `timeout` owner override (a positive
+    int, else omitted — resolve_timeout then falls to the role ceiling); validated `codexModels` /
+    `invalidCodexModels` and `seatPins` / `invalidSeatPins` when present; absent block / None /
+    any error → degenerate_engine_prefs(). Never raises."""
+    degenerate = degenerate_engine_prefs()
     try:
         import core_md
         rec = core_md.read(cwd, root)
@@ -374,10 +382,10 @@ def load_engine_prefs(cwd, root=None):
     if not isinstance(prefs, dict):
         return degenerate
     effort = prefs.get("effort")
-    out = {"reviewer": _normalize(prefs.get("reviewer")),
-           "implementation": _normalize(prefs.get("implementation")),
-           "briefCheck": _normalize(prefs.get("briefCheck")),
-           "pilot": _normalize(prefs.get("pilot")),
+    out = {"reviewer": resolve_engine_pref_key("reviewer", prefs),
+           "implementation": resolve_engine_pref_key("implementation", prefs),
+           "briefCheck": resolve_engine_pref_key("briefCheck", prefs),
+           "pilot": resolve_engine_pref_key("pilot", prefs),
            "effort": dict(effort) if isinstance(effort, dict) else {}}
     codex_models = prefs.get("codexModels")
     if isinstance(codex_models, dict):

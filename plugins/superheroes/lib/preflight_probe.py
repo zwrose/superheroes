@@ -155,7 +155,39 @@ def _dispatch_calibration_read_error_marker(reason, detail):
                  core_md.gate_refusal(reason, detail))}]
 
 
-def dispatch_calibration(cwd=None, root=None, prefs=None, tiers=None):
+def _dispatch_calibration_read_error_marker_from_line(read_error_line):
+    return [{"role": "*", "engine": None, "model": None, "readError": read_error_line}]
+
+
+def readout_config(cwd=None, root=None):
+    """The ONE door every CLI readout uses to read enginePreferences.
+
+    Returns {"prefs": dict, "status": str, "readError": str|None} — one snapshot of the project's
+    configuration, taken through the same #676 accessor ``dispatch_calibration`` uses. Callers
+    thread this ONE snapshot to every consumer in a single run so two readouts of the same run can
+    never disagree about whether the configuration was readable. Never raises."""
+    try:
+        cfg = core_md.engine_preferences_for_gate(cwd=cwd, root=root)
+        if core_md.gate_config_is_absent(cfg):
+            return {"prefs": {}, "status": "absent", "readError": None}
+        if not core_md.gate_config_is_refusal(cfg):
+            prefs = core_md.gate_config_usable_prefs(cfg)
+            return {"prefs": prefs, "status": "ok", "readError": None}
+        refusal = core_md.gate_config_refusal(cfg)
+        read_error = core_md.gate_refusal_line(refusal)
+        return {"prefs": {}, "status": cfg.status, "readError": read_error}
+    except Exception as exc:
+        return {
+            "prefs": {},
+            "status": core_md.CONFIG_UNREADABLE,
+            "readError": core_md.gate_refusal_line(
+                core_md.gate_refusal(
+                    core_md.GATE_REASON_EVALUATION_FAILED,
+                    core_md.gate_refusal_detail(exc))),
+        }
+
+
+def dispatch_calibration(cwd=None, root=None, prefs=None, tiers=None, snapshot=None):
     """The OBSERVABILITY readout: the effective engine + model per v2 dispatch role, for the
     build brief + PR provenance. `prefs`/`tiers` are a unit-test seam (no disk); when either is
     omitted this reads the real project calibration via ``core_md.engine_preferences_for_gate``
@@ -166,13 +198,20 @@ def dispatch_calibration(cwd=None, root=None, prefs=None, tiers=None):
     of defaulted rows. Never raises — any read failure returns that marker, not an empty list."""
     try:
         if prefs is None:
-            cfg = core_md.engine_preferences_for_gate(cwd=cwd, root=root)
-            refusal = core_md.gate_config_refusal(cfg)
-            if refusal is not None:
-                return _dispatch_calibration_read_error_marker(
-                    refusal["reason"], refusal["detail"])
-            prefs = core_md.gate_config_usable_prefs(cfg)
-            prefs = prefs if isinstance(prefs, dict) else {}
+            if snapshot is not None:
+                if snapshot.get("readError") is not None:
+                    return _dispatch_calibration_read_error_marker_from_line(
+                        snapshot["readError"])
+                prefs = snapshot.get("prefs")
+                prefs = prefs if isinstance(prefs, dict) else {}
+            else:
+                cfg = core_md.engine_preferences_for_gate(cwd=cwd, root=root)
+                refusal = core_md.gate_config_refusal(cfg)
+                if refusal is not None:
+                    return _dispatch_calibration_read_error_marker(
+                        refusal["reason"], refusal["detail"])
+                prefs = core_md.gate_config_usable_prefs(cfg)
+                prefs = prefs if isinstance(prefs, dict) else {}
         if tiers is None:
             tiers = model_tier_overrides.effective_tiers(
                 model_tier_overrides.resolve_profile_path(cwd, root))
@@ -182,11 +221,35 @@ def dispatch_calibration(cwd=None, root=None, prefs=None, tiers=None):
             core_md.GATE_REASON_EVALUATION_FAILED, core_md.gate_refusal_detail(exc))
 
 
-def _dispatch_selftest_config(cwd=None, root=None):
+def _dispatch_selftest_config(cwd=None, root=None, snapshot=None):
     """prefs/tiers bundle for dispatch_selftest leg 5 — reads engine prefs via
     ``core_md.engine_preferences_for_gate`` (absent/ok/unreadable). ``dispatch_calibration`` uses
     the same accessor and returns a single ``readError`` marker row when unreadable."""
     cwd = cwd or os.getcwd()
+    if snapshot is not None:
+        try:
+            if snapshot["status"] == core_md.CONFIG_ABSENT:
+                return {"prefs": {}, "tiers": {}}
+            if snapshot.get("readError") is not None:
+                return {
+                    "prefs": {},
+                    "tiers": {},
+                    "read_error": snapshot["readError"],
+                }
+            tiers = model_tier_overrides.effective_tiers(
+                model_tier_overrides.resolve_profile_path(cwd, root))
+            prefs = snapshot.get("prefs")
+            prefs = prefs if isinstance(prefs, dict) else {}
+            return {"prefs": prefs, "tiers": tiers}
+        except Exception as exc:
+            return {
+                "prefs": {},
+                "tiers": {},
+                "read_error": core_md.gate_refusal_line(
+                    core_md.gate_refusal(
+                        core_md.GATE_REASON_EVALUATION_FAILED,
+                        core_md.gate_refusal_detail(exc))),
+            }
     try:
         cfg = core_md.engine_preferences_for_gate(cwd=cwd, root=root)
         if core_md.gate_config_is_absent(cfg):
@@ -356,8 +419,8 @@ def main(argv):
     if args.cmd == "compose-liveness":
         import time
 
-        prefs = (core_md.read(args.cwd) or {}).get("enginePreferences") or {}
-        prefs = prefs if isinstance(prefs, dict) else {}
+        snap = readout_config(args.cwd)
+        prefs = snap["prefs"]
         configured = configured_cross_vendor_engines(prefs)
         needed_override = None
         if args.pins:
@@ -378,36 +441,42 @@ def main(argv):
             cache_path=cache_path,
             now=now,
         )
+        if snap["readError"] is not None:
+            notes.append({
+                "constraint": "core-md-unreadable",
+                "reason": snap["readError"],
+            })
         sys.stdout.write(json.dumps({
             "live": live,
             "cachePath": cache_path,
             "crossVendorEngines": configured,
             "notes": notes,
+            "configRead": {"status": snap["status"], "readError": snap["readError"]},
         }) + "\n")
         return 0
 
     if args.cmd == "run":
         import dispatch_selftest  # noqa: E402 — lazy: breaks seat_map → preflight_probe → dispatch_selftest → seat_map
 
+        snap = readout_config(args.cwd)
         probes = [
             gh_auth_probe(),
-            dispatch_selftest.probe_result(config=_dispatch_selftest_config(args.cwd)),
+            dispatch_selftest.probe_result(
+                config=_dispatch_selftest_config(args.cwd, snapshot=snap)),
         ]
         if args.engine:
             cross_vendor_engines = [args.engine]
         else:
-            raw = core_md.read(args.cwd)
-            prefs = (raw or {}).get("enginePreferences")
-            prefs = prefs if isinstance(prefs, dict) else {}
-            cross_vendor_engines = configured_cross_vendor_engines(prefs)
+            cross_vendor_engines = configured_cross_vendor_engines(snap["prefs"])
         for engine in cross_vendor_engines:
             probes.append(cross_vendor_cli_probe(engine))
         out = {
             "probes": probes,
-            "dispatchCalibration": dispatch_calibration(cwd=args.cwd),
+            "dispatchCalibration": dispatch_calibration(cwd=args.cwd, snapshot=snap),
             "aggregate": aggregate(probes),
             "browserNote": _BROWSER_NOTE,
             "crossVendorEngines": cross_vendor_engines,
+            "configRead": {"status": snap["status"], "readError": snap["readError"]},
         }
         sys.stdout.write(json.dumps(out) + "\n")
         return 0

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Startup pipe: print core.md's enginePreferences as JSON for the JS spine to load once
 into globalThis.__SR_ENGINE_PREFS (mirrors model_tier_overrides.py's startup pattern).
-Belt-and-suspenders fail-open: ANY failure prints both 'claude'. Exit 0 always."""
+Belt-and-suspenders fail-open: ANY failure prints a usable all-defaults map (briefCheck → codex,
+the other role keys → claude). Exit 0 always."""
 import argparse
 import json
 import os
@@ -11,21 +12,29 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+# Mirror of engine_pref.degenerate_engine_prefs() — used only when import engine_pref fails.
+# Pinned by test_engine_pref_load_last_resort_matches_degenerate_engine_prefs.
+_LAST_RESORT_PREFS = {
+    "reviewer": "claude",
+    "implementation": "claude",
+    "briefCheck": "codex",
+    "pilot": "claude",
+    "effort": {},
+}
+
 
 def main(argv):
     ap = argparse.ArgumentParser(prog="engine_pref_load")
     ap.add_argument("--cwd", default=".")
     ap.add_argument("--root", default=None)
     args = ap.parse_args(argv[1:])
-    degenerate = {"reviewer": "claude", "implementation": "claude",
-                  "briefCheck": "claude", "pilot": "claude", "effort": {}}
     try:
         import engine_pref
         prefs = engine_pref.load_engine_prefs(args.cwd, args.root)
         if not isinstance(prefs, dict):
-            prefs = degenerate
+            prefs = engine_pref.degenerate_engine_prefs()
     except Exception:
-        prefs = degenerate
+        prefs = _LAST_RESORT_PREFS
     sys.stdout.write(json.dumps(prefs) + "\n")
     return 0
 
