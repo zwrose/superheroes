@@ -587,11 +587,13 @@ class _Class3AppendVisitor(ast.NodeVisitor):
 
     Recognises module spellings from _collect_ledger_module_aliases (defaults
     ll and launch_ledger, plus import launch_ledger as <name> aliases).
+    Inside launch_ledger.py itself, bare ``append(...)`` calls are also matched
+    (the module does not import itself, so every internal append is a Name call).
     Does not catch append reached through a local variable — only qualified
-    module.append spellings.
-    Boundary: ``from launch_ledger import append`` followed by bare
-    ``append(...)`` is not matched — only attribute access on a recognised
-    module spelling is covered.
+    module.append spellings and the launch_ledger.py bare-name exception above.
+    Boundary: ``from launch_ledger import append`` followed by bare ``append(...)``
+    in other modules is not matched — only attribute access on a recognised
+    module spelling is covered there.
     append_under_lock is intentionally invisible here: the attribute name is not
     append, and that helper holds the ledger lock by construction — the invariant
     is raw lock-free append, not every append-shaped entry point.
@@ -611,6 +613,15 @@ class _Class3AppendVisitor(ast.NodeVisitor):
                     "%s: append() on ledger module (clause: raw append only under lock)"
                     % _lineno(self.source_path, node)
                 )
+        elif (
+            isinstance(func, ast.Name)
+            and func.id == "append"
+            and os.path.basename(self.source_path) == "launch_ledger.py"
+        ):
+            self.violations.append(
+                "%s: append() on ledger module (clause: raw append only under lock)"
+                % _lineno(self.source_path, node)
+            )
         self.generic_visit(node)
 
 
@@ -925,7 +936,7 @@ def test_class3_matcher_catches_raw_append_inside_the_ledger_module():
     ledger_path = os.path.join(_LIB, "launch_ledger.py")
     bad_source = (
         "def rogue_inside_ledger(repo_root, record):\n"
-        "    ll.append(repo_root, record)\n"
+        "    append(repo_root, record)\n"
     )
     bad_violations = class3_census_violations_from_source(bad_source, ledger_path)
     assert bad_violations, bad_violations
@@ -933,7 +944,7 @@ def test_class3_matcher_catches_raw_append_inside_the_ledger_module():
 
     good_source = (
         "def reserve(repo_root, record):\n"
-        "    ll.append(repo_root, record)\n"
+        "    append(repo_root, record)\n"
     )
     good_violations = class3_census_violations_from_source(good_source, ledger_path)
     assert good_violations == [], good_violations

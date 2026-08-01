@@ -4,6 +4,10 @@
 The ledger's whole job is to be unable to report a resolved batch it cannot
 actually see — torn tails, interior corruption, and unresolved members all
 refuse to ground a rate. Never raises to callers.
+
+Every locked writer validates its candidate record against the reader
+(read → fold(records + [candidate])) before appending; that invariant keeps
+one grammar across reserve, append_under_lock, declare_batch, and terminalize.
 """
 import fcntl
 import hashlib
@@ -389,6 +393,15 @@ def append_under_lock(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TI
     if not _acquire_lock(lock_path, lock_timeout):
         return {"ok": False, "reason": "lock-unavailable", "path": None}
     try:
+        read_result = read(repo_root, env=env)
+        state = read_result["state"]
+        if state not in ("ok", "missing"):
+            return {"ok": False, "reason": "ledger-unreadable:%s" % state, "path": None}
+
+        folded = fold(read_result["records"] + [record])
+        if not folded["ok"]:
+            return {"ok": False, "reason": folded["reason"], "path": None}
+
         if not append(repo_root, record, env=env):
             return {"ok": False, "reason": "ledger-append-failed", "path": None}
         return {"ok": True, "reason": None, "path": path}
@@ -890,6 +903,8 @@ def declare_batch(repo_root, batch_id, expected_launches, env=None,
 
 def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
     """Reserve a launch under lock with overlap detection."""
+    if not isinstance(record, dict):
+        return {"ok": False, "reason": "fold-not-an-object", "path": None}
     launch_id = record.get("launchId")
     if not isinstance(launch_id, str) or not launch_id:
         return {"ok": False, "reason": "reserve-launch-id-invalid", "path": None}
@@ -916,6 +931,13 @@ def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
         if not folded["ok"]:
             return {"ok": False, "reason": folded["reason"], "path": None}
 
+        if launch_id in folded["launches"]:
+            return {
+                "ok": False,
+                "reason": "reserve-duplicate-launch-id:%s" % launch_id,
+                "path": None,
+            }
+
         norm = normalize_surfaces(repo_root, record.get("surfaces", []))
         if not norm["ok"]:
             return {"ok": False, "reason": norm["reason"], "path": None}
@@ -932,13 +954,6 @@ def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
                     "blockingSurfaces": list(existing),
                     "path": None,
                 }
-
-        if launch_id in folded["launches"]:
-            return {
-                "ok": False,
-                "reason": "reserve-duplicate-launch-id:%s" % launch_id,
-                "path": None,
-            }
 
         to_write = dict(record)
         to_write["surfaces"] = new_surfaces

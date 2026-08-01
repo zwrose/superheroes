@@ -631,7 +631,9 @@ def test_concurrent_reserve_overlapping_surfaces(tmp_path, monkeypatch):
     ledger_root = str(tmp_path / "ledger")
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, ledger_root)
     mod_path = os.path.join(_LIB, "launch_ledger.py")
-    shared_deadline = time.time() + 1
+    gate_dir = str(tmp_path / "gate")
+    os.makedirs(gate_dir, exist_ok=True)
+    n_workers = 2
     child = """
 import json, os, sys, time
 sys.path.insert(0, os.path.dirname(%(mod)r))
@@ -648,36 +650,56 @@ record = {
     "surfaces": ["plugins/superheroes/lib"],
     "premise": {}, "preflight": {}, "argv": [], "doctrineDigest": "d", "model": "m",
 }
-deadline = %(deadline)r
-waited = time.time() < deadline
-wait_seconds = 0.0
-if waited:
-    wait_start = time.time()
-    while time.time() < deadline:
-        time.sleep(0)
-    wait_seconds = time.time() - wait_start
+gate = %(gate)r
+open(os.path.join(gate, str(os.getpid())), "w").close()
+deadline = time.time() + 5
+while len(os.listdir(gate)) < %(n_workers)d:
+    if time.time() >= deadline:
+        print("BARRIER-TIMEOUT")
+        sys.exit(1)
+    time.sleep(0.001)
 res = ll.reserve(repo, record, lock_timeout=5)
-out = dict(res)
-out["waited"] = waited
-out["waitSeconds"] = wait_seconds
-print(json.dumps(out))
+print(json.dumps(res))
 """ % {
         "mod": mod_path,
         "_envkey": ll.LEDGER_ROOT_ENV,
         "_envval": ledger_root,
         "repo": repo,
-        "deadline": shared_deadline,
+        "gate": gate_dir,
+        "n_workers": n_workers,
     }
-    p1 = subprocess.Popen([sys.executable, "-c", child], stdout=subprocess.PIPE, text=True)
-    p2 = subprocess.Popen([sys.executable, "-c", child], stdout=subprocess.PIPE, text=True)
-    out1 = json.loads(p1.communicate(timeout=30)[0])
-    out2 = json.loads(p2.communicate(timeout=30)[0])
-    assert out1["waited"] is True, out1
-    assert out2["waited"] is True, out2
-    results = [out1, out2]
-    ok_count = sum(1 for r in results if r.get("ok"))
+    procs = [
+        subprocess.Popen([sys.executable, "-c", child], stdout=subprocess.PIPE, text=True)
+        for _ in range(n_workers)
+    ]
+    outcomes = []
+    try:
+        for worker_idx, proc in enumerate(procs):
+            try:
+                proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                pytest.fail(
+                    "concurrent reserve: worker %d timed out; outcomes so far: %s"
+                    % (worker_idx, outcomes)
+                )
+            outcome = proc.stdout.read().strip()
+            if outcome == "BARRIER-TIMEOUT":
+                pytest.fail(
+                    "concurrent reserve: worker %d hit barrier timeout; "
+                    "outcomes so far: %s" % (worker_idx, outcomes)
+                )
+            outcomes.append(json.loads(outcome))
+    finally:
+        for proc in procs:
+            if proc.poll() is None:
+                proc.kill()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+    ok_count = sum(1 for r in outcomes if r.get("ok"))
     assert ok_count == 1
-    other = [r for r in results if not r.get("ok")]
+    other = [r for r in outcomes if not r.get("ok")]
     assert len(other) == 1
     reason = other[0]["reason"]
     assert reason.startswith("surface-overlap:") or reason == "lock-unavailable"
@@ -1598,6 +1620,122 @@ def test_reserve_refuses_a_duplicate_launch_id(tmp_path, monkeypatch):
     assert r3["reason"] == "reserve-duplicate-launch-id:%s" % launch_id2
     assert len(ll.read(repo2)["records"]) == count_terminal
     assert ll.fold(ll.read(repo2)["records"])["ok"] is True
+
+
+def test_reserve_refuses_non_dict_record(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    for bad in (None, [], "str"):
+        result = ll.reserve(repo, bad)
+        assert result["ok"] is False
+        assert result["reason"] == "fold-not-an-object"
+        assert result["path"] is None
+
+
+def test_reserve_duplicate_live_launch_identical_surfaces(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    surfaces = ["plugins/superheroes/lib"]
+    launch_id = "live-dup"
+    assert ll.reserve(repo, _reserved(launch_id, "b1", surfaces, repo))["ok"]
+    count_after_first = len(ll.read(repo)["records"])
+    r2 = ll.reserve(repo, _reserved(launch_id, "b2", surfaces, repo))
+    assert r2["ok"] is False
+    assert r2["reason"] == "reserve-duplicate-launch-id:%s" % launch_id
+    assert len(ll.read(repo)["records"]) == count_after_first
+
+
+def test_append_under_lock_accepts_valid_started(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    launch_id = "started-ok"
+    ll.reserve(repo, _reserved(launch_id, "b1", ["a"], repo))
+    count_before = len(ll.read(repo)["records"])
+    result = ll.append_under_lock(repo, _started(launch_id))
+    assert result["ok"] is True
+    assert len(ll.read(repo)["records"]) == count_before + 1
+    assert ll.fold(ll.read(repo)["records"])["ok"] is True
+
+
+def test_append_under_lock_refuses_bad_started_fields(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    launch_id = "bad-started"
+    ll.reserve(repo, _reserved(launch_id, "b1", ["a"], repo))
+    count_before = len(ll.read(repo)["records"])
+    bad_pid = _started(launch_id)
+    bad_pid["pid"] = 1
+    result = ll.append_under_lock(repo, bad_pid)
+    assert result["ok"] is False
+    assert result["reason"] == "fold-bad-field:started:pid"
+    assert len(ll.read(repo)["records"]) == count_before
+
+    bad_attempt = _started(launch_id)
+    bad_attempt["attempt"] = 0
+    result2 = ll.append_under_lock(repo, bad_attempt)
+    assert result2["ok"] is False
+    assert result2["reason"] == "fold-bad-field:started:attempt"
+    assert len(ll.read(repo)["records"]) == count_before
+
+
+def test_append_under_lock_refuses_outcome_without_started(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    launch_id = "no-started"
+    ll.reserve(repo, _reserved(launch_id, "b1", ["a"], repo))
+    count_before = len(ll.read(repo)["records"])
+    result = ll.append_under_lock(repo, _outcome(launch_id))
+    assert result["ok"] is False
+    assert result["reason"] == "fold-outcome-without-started:%s" % launch_id
+    assert len(ll.read(repo)["records"]) == count_before
+
+
+def test_append_under_lock_refuses_non_dict(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = ll.append_under_lock(repo, None)
+    assert result["ok"] is False
+    assert result["reason"] == "fold-not-an-object"
+
+
+def test_append_under_lock_refuses_unknown_launch(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    count_before = len(ll.read(repo)["records"])
+    result = ll.append_under_lock(repo, _started("orphan"))
+    assert result["ok"] is False
+    assert result["reason"] == "fold-orphan-event:orphan"
+    assert len(ll.read(repo)["records"]) == count_before
+
+
+def test_append_under_lock_refuses_torn_ledger(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    launch_id = "torn-a"
+    ll.reserve(repo, _reserved(launch_id, "b1", ["x"], repo))
+    path = _ledger_file(repo, os.environ)
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    with open(path, "wb") as fh:
+        fh.write(raw.rstrip(b"\n"))
+    torn_read = ll.read(repo)
+    assert torn_read["state"] == "tornTail"
+    count_before = len(torn_read["records"])
+    result = ll.append_under_lock(repo, _started(launch_id))
+    assert result["ok"] is False
+    assert result["reason"] == "ledger-unreadable:tornTail"
+    assert len(ll.read(repo)["records"]) == count_before
+
+
+def test_append_under_lock_accepts_missing_ledger(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    launch_id = "fresh"
+    ll.reserve(repo, _reserved(launch_id, "b1", ["a"], repo))
+    count_before = len(ll.read(repo)["records"])
+    result = ll.append_under_lock(repo, _started(launch_id))
+    assert result["ok"] is True
+    assert len(ll.read(repo)["records"]) == count_before + 1
 
 
 def test_reserve_refuses_a_record_the_reader_would_reject(tmp_path, monkeypatch):

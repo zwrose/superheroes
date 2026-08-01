@@ -211,19 +211,22 @@ def acquire(lock_path, ttl=DEFAULT_TTL):
         raise LockHeld({}) from None
     for _ in range(ACQUIRE_RETRY_LIMIT):
         try:
-            _publish_lock(lock_path, _holder_info())
-            return False
-        except OSError:
-            pass
-        if not is_stale(lock_path, ttl):
+            try:
+                _publish_lock(lock_path, _holder_info())
+                return False
+            except OSError:
+                pass
+            if not is_stale(lock_path, ttl):
+                if not os.path.lexists(lock_path):
+                    continue
+                raise LockHeld(read_holder(lock_path)) from None
+            if _reclaim_stale_lock(lock_path, ttl):
+                return True
             if not os.path.lexists(lock_path):
                 continue
             raise LockHeld(read_holder(lock_path)) from None
-        if _reclaim_stale_lock(lock_path, ttl):
-            return True
-        if not os.path.lexists(lock_path):
-            continue
-        raise LockHeld(read_holder(lock_path)) from None
+        except OSError:
+            raise LockHeld(read_holder(lock_path)) from None
     raise LockHeld(read_holder(lock_path)) from None
 
 

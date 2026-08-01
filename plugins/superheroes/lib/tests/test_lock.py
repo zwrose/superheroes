@@ -509,6 +509,7 @@ def test_acquire_raises_only_lock_held_when_publish_fails(tmp_path, monkeypatch)
     def raise_enospc(*_args, **_kwargs):
         raise OSError(errno.ENOSPC, "no space")
 
+    original_publish = lock._publish_lock
     monkeypatch.setattr(lock, "_publish_lock", raise_enospc)
     with pytest.raises(lock.LockHeld):
         lock.acquire(p)
@@ -516,7 +517,7 @@ def test_acquire_raises_only_lock_held_when_publish_fails(tmp_path, monkeypatch)
     def raise_eacces(*_args, **_kwargs):
         raise OSError(errno.EACCES, "permission denied")
 
-    monkeypatch.setattr(lock, "_publish_lock", lock._publish_lock)
+    monkeypatch.setattr(lock, "_publish_lock", original_publish)
     monkeypatch.setattr(lock.os, "makedirs", raise_eacces)
     with pytest.raises(lock.LockHeld):
         lock.acquire(p)
@@ -543,10 +544,56 @@ def test_boot_id_is_probed_once(monkeypatch):
 
     monkeypatch.setattr("builtins.open", fake_open)
     monkeypatch.setattr(hostinfo.subprocess, "run", fake_run)
-    hostinfo._boot_id_cache = hostinfo._UNSET
+    monkeypatch.setattr(hostinfo, "_boot_id_cache", hostinfo._UNSET)
+    monkeypatch.setattr(hostinfo, "_boot_id_fail_until", 0.0)
     assert hostinfo.boot_id() == "boottime:{ sec = 1, usec = 0 }"
     assert hostinfo.boot_id() == "boottime:{ sec = 1, usec = 0 }"
     assert calls == 1
+
+
+def test_boot_id_negative_cache_on_failure(monkeypatch):
+    import hostinfo
+
+    calls = 0
+    real_open = open
+
+    def fake_open(path, *args, **kwargs):
+        if path == "/proc/stat":
+            raise FileNotFoundError()
+        return real_open(path, *args, **kwargs)
+
+    def fake_run(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        class Result:
+            returncode = 1
+            stdout = ""
+        return Result()
+
+    monkeypatch.setattr("builtins.open", fake_open)
+    monkeypatch.setattr(hostinfo.subprocess, "run", fake_run)
+    monkeypatch.setattr(hostinfo, "_boot_id_cache", hostinfo._UNSET)
+    monkeypatch.setattr(hostinfo, "_boot_id_fail_until", 0.0)
+    assert hostinfo.boot_id() is None
+    assert hostinfo.boot_id() is None
+    assert calls == 1
+
+    monkeypatch.setattr(hostinfo, "_boot_id_fail_until", 0.0)
+    assert hostinfo.boot_id() is None
+    assert calls == 2
+
+
+def test_acquire_gethostname_oserror_raises_lock_held(tmp_path, monkeypatch):
+    p = str(tmp_path / "engine.lock")
+    lock.acquire(p)
+    lock.release(p)
+
+    def raise_gaierror(*_args, **_kwargs):
+        raise OSError("gethostname failed")
+
+    monkeypatch.setattr(lock.socket, "gethostname", raise_gaierror)
+    with pytest.raises(lock.LockHeld):
+        lock.acquire(p)
 
 
 def test_reclaim_guard_mode_is_owner_only(tmp_path):
