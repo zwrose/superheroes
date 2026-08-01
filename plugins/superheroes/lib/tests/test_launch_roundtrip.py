@@ -60,11 +60,39 @@ def _assert_child_dead(pid):
         os.kill(pid, 0)
 
 
+def _assert_child_alive(pid):
+    os.kill(pid, 0)
+
+
 def _kill_child(pid):
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
         pass
+
+
+def _kill_process_group_and_wait(pid, timeout=3.0):
+    """SIGKILL the launcher process group and poll until pid is gone."""
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            return
+        except ProcessLookupError:
+            return
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.05)
+    pytest.fail(
+        "child pid %s did not die within %s seconds after SIGKILL" % (pid, timeout),
+    )
 
 
 def _run_launch(repo, log_dir, premise, checks, monkeypatch, **kwargs):
@@ -333,7 +361,7 @@ def _scenario_deadline_after_spawn(repo, log_dir, surfaces, batch_id, monkeypatc
         L.time = real_time
 
 
-def _scenario_success_then_handback(repo, log_dir, surfaces, batch_id, monkeypatch):
+def _scenario_live_child_refuses_then_handback(repo, log_dir, surfaces, batch_id, monkeypatch):
     result = _run_launch(
         repo,
         log_dir,
@@ -351,6 +379,13 @@ def _scenario_success_then_handback(repo, log_dir, surfaces, batch_id, monkeypat
         _assert_terminal(folded, launch_id, terminal=False)
         records = read_result["records"]
         assert _events_for_launch(records, launch_id) == ["reserved", "started"]
+        refused = ll.record_outcome(repo, launch_id, "handback", "shipped")
+        assert refused["ok"] is False
+        assert refused["reason"] == "terminal-child-live:%s" % pid
+        records = _read_ledger(repo)["records"]
+        assert _events_for_launch(records, launch_id) == ["reserved", "started"]
+        _assert_child_alive(pid)
+        _kill_process_group_and_wait(pid)
         assert ll.record_outcome(repo, launch_id, "handback", "shipped")["ok"]
         _, folded = _assert_p1(repo)
         records = _read_ledger(repo)["records"]
@@ -413,7 +448,7 @@ PART2_SCENARIOS = [
     _scenario_settle_exit_zero,
     _scenario_deadline_before_spawn,
     _scenario_deadline_after_spawn,
-    _scenario_success_then_handback,
+    _scenario_live_child_refuses_then_handback,
     _scenario_surface_overlap_refusal,
 ]
 
@@ -434,7 +469,7 @@ PART2_SCENARIOS = [
         "settle-exit-zero",
         "deadline-before-spawn",
         "deadline-after-spawn",
-        "success-then-handback",
+        "live-child-refuses-then-handback",
         "surface-overlap-refusal",
     ],
 )
@@ -515,6 +550,7 @@ def test_count_never_resolves_a_batch_with_a_live_member(tmp_path, monkeypatch):
         assert count_live["resolved"] is False
         assert count_live["reason"] == "batch-unresolved:%s" % second["launchId"]
 
+        _kill_process_group_and_wait(pid)
         assert ll.record_outcome(repo, second["launchId"], "handback", "done")["ok"]
 
         count_done = ll.count(repo, batch)
