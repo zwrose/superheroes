@@ -238,3 +238,22 @@ def test_matcher_catches_attribution_literal():
     violations = census_violations_from_source(source, path)
     assert violations, violations
     assert any("our-transport-contract" in v for v in violations), violations
+
+
+_DISPATCH_MECHANICS = os.path.join(
+    _LIB, "..", "skills", "workhorse", "reference", "dispatch-mechanics.md",
+)
+
+
+def test_dispatch_mechanics_names_every_terminal_reason():
+    """axis: every outcome member is actually named in dispatch-mechanics.md — presence, not mere existence."""
+    with open(_DISPATCH_MECHANICS, encoding="utf-8") as fh:
+        doc = fh.read()
+    missing = [
+        reason for reason in sorted(dispatch_outcome.ALL_REASONS - {dispatch_outcome.REASON_RUNNING})
+        if reason not in doc
+    ]
+    assert missing == [], (
+        "dispatch-mechanics.md missing outcome member(s): %s (file: %s)"
+        % (", ".join(missing), _DISPATCH_MECHANICS)
+    )

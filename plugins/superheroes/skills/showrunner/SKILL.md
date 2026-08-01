@@ -200,6 +200,15 @@ the reviewer and the owner's authorization carry that check instead.**
      you when a build's defects point at order quality rather than the engine. An **owner-half
      omission caught at vet** attributes to the **orchestrator's own integration/assembly**, so
      systematic under-statement surfaces as a **rate** rather than an anecdote.
+   - **Record the forfeit accounting.** From
+     `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/forfeit_ledger.py" report --repo-root
+     <repo-root>`, read the standing summary per attribution class per window — **name the window**
+     the same way the order-quality bullet does. Track the **attribution mix** — caller-error,
+     our-transport-contract, our-environment, engine-side, unknown — under the ratified posture that
+     a forfeit is **presumed self-inflicted until attributed**, and treat **unknown as a queue, not a
+     bucket**. **Salvage usage trending to zero is the success metric**; a rising salvage rate is a
+     signal to inspect caps and transport, never a clean sheet. Standing accounting, not machinery —
+     the same framing the order-quality bullet uses.
    - **Vet dispatch provenance against engine doctrine** (CONVENTIONS `§7.5`): a provenance row
      showing a non-first-party model dispatched through the cursor CLI, or a fable tier on an
      external engine, is a **defect to catch at vet** — not a builder judgment call to accept.

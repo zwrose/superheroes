@@ -61,6 +61,15 @@ events — do not collapse them:**
    maker). No same-family fallback at kickoff and no Claude stand-in mid-run — unavailable
    or forfeited reviewers **resolve upward to the full lane or park** in both cases.
 
+**Salvage valve (`forfeit-with-engaged-artifact`).** A `forfeit-with-engaged-artifact` is a
+**forfeit** — the three-case rule above runs exactly as written; this outcome does not add a fourth
+case and does not license a stand-in that the existing rules do not already license. **Findings only,
+never the seat** — the seat is not credited toward panel composition; each claim taken from the
+salvaged artifact is **independently verified** by the session that accepts it, and the degradation
+is disclosed in the PR body, because a timeout can truncate stdout so you can verify what an artifact
+contains but never what it never reached. **Salvage usage trending to zero is the success metric** — a
+high salvage rate **indicts our caps and our transport; it does not vindicate salvage.**
+
 That one reviewer carries a **mandatory planted-defect control probe on every light or
 micro review** — the control that makes single-seat review trustworthy. The probe must
 come back **engaged**. A probe that returns **not engaged** — for any reason — means **that
