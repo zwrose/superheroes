@@ -72,12 +72,19 @@ def test_rule1_no_path_literal_inside_fences():
 
 
 def test_rule2_no_literal_existence_test_in_review_skills():
+    # axis: no literal .claude/review-profile.md existence test on review skill surface (SKILL.md + linked references)
     pat = re.compile(r"\[\s*!?\s*-f\s+\.claude/review-profile\.md\s*\]")
     offenders = []
     for skill in REVIEW_SKILLS:
-        for i, line in enumerate(_read(skill).splitlines(), 1):
-            if pat.search(line):
-                offenders.append(f"{skill}/SKILL.md:{i}")
+        sources = [(os.path.join(SKILLS, skill, "SKILL.md"), f"{skill}/SKILL.md")]
+        for ref_path in linked_reference_files(skill):
+            sources.append((ref_path, f"{skill}/{os.path.relpath(ref_path, os.path.join(SKILLS, skill))}"))
+        for path, label in sources:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+            for i, line in enumerate(text.splitlines(), 1):
+                if pat.search(line):
+                    offenders.append(f"{label}:{i}")
     assert not offenders, "literal existence test still present:\n" + "\n".join(offenders)
 
 
