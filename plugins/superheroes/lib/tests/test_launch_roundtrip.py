@@ -637,14 +637,14 @@ def _hand_outcome(launch_id):
     }
 
 
-def _hand_started(launch_id):
+def _hand_started(launch_id, pid=4242):
     return {
         "event": "started",
         "launchId": launch_id,
         "ts": time.time(),
         "schema": ll.SCHEMA,
         "attempt": 1,
-        "pid": 1,
+        "pid": pid,
         "logPath": "/tmp/log",
         "errPath": "/tmp/err",
     }
@@ -673,3 +673,9 @@ def test_fold_rejects_a_hand_written_bad_sequence():
     result2 = ll.fold(refused_after_started)
     assert result2["ok"] is False
     assert result2["reason"] == "fold-refused-after-started:b"
+
+    for bad_pid in (1, 0, -1):
+        bad_started = [_hand_reserved("c"), _hand_started("c", pid=bad_pid)]
+        result_pid = ll.fold(bad_started)
+        assert result_pid["ok"] is False
+        assert result_pid["reason"] == "fold-bad-field:started:pid"

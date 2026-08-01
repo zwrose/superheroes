@@ -1837,11 +1837,28 @@ def test_c2_edge11_backoff_clamped_to_deadline(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
+    clock = {"monotonic": 1000.0}
+    slept_seconds = []
+
+    class _TimeShim:
+        @staticmethod
+        def monotonic():
+            return clock["monotonic"]
+
+        @staticmethod
+        def time():
+            return time.time()
+
+        @staticmethod
+        def sleep(seconds):
+            slept_seconds.append(seconds)
+            clock["monotonic"] += seconds
+
+    monkeypatch.setattr(L, "time", _TimeShim)
 
     def always_oserror(argv, repo_root, out_fh, err_fh, child_env):
         raise OSError("spawn failed")
 
-    start = time.monotonic()
     result = L.launch_build(
         repo,
         656,
@@ -1853,8 +1870,8 @@ def test_c2_edge11_backoff_clamped_to_deadline(tmp_path, monkeypatch):
         backoff_seconds=(60,),
         total_deadline_seconds=1,
     )
-    elapsed = time.monotonic() - start
-    assert elapsed < 5
+    assert all(delay < 60 for delay in slept_seconds)
+    assert sum(slept_seconds) <= 1
     assert result["ok"] is False
     assert result["reason"] == "retry-deadline-exceeded"
 
