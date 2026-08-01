@@ -421,6 +421,57 @@ def gate_refusal(reason, detail):
     return {"reason": reason, "detail": detail}
 
 
+def profile_structural_refusal(cwd=None, root=None):
+    """Structural soundness of the project's core.md candidates — the fail-closed guard for a
+    configuration value whose WRONG value is costly rather than merely inconvenient (#755).
+
+    Returns None when every EXISTING candidate is structurally unambiguous, else a reason string
+    naming the first problem found. Never raises.
+
+    `parse_core` takes the FIRST `superheroes-core` block and uses a plain `json.loads` (last
+    duplicate key wins). That is fine for a knob whose fallback is free; it is not fine for a
+    launch tier, where an ambiguous profile must fail closed rather than pick a value out of a
+    file we cannot fully trust."""
+    try:
+        cwd = cwd or os.getcwd()
+        in_repo, global_path = _core_candidates(cwd, root)
+        for path in (in_repo, global_path):
+            if not os.path.exists(path):
+                continue
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    text = fh.read()
+            except (OSError, UnicodeDecodeError):
+                return "core-md-unreadable:%s" % path
+            blocks = _JSON_BLOCK.findall(text)
+            if len(blocks) > 1:
+                return "multiple-core-blocks:%s" % path
+            if not blocks:
+                continue
+            dup_key = [None]
+
+            def _reject_dupes(pairs):
+                seen = {}
+                for key, value in pairs:
+                    if key in seen:
+                        dup_key[0] = key
+                        raise ValueError("duplicate-core-key")
+                    seen[key] = value
+                return seen
+
+            try:
+                json.loads(blocks[0], object_pairs_hook=_reject_dupes)
+            except ValueError as exc:
+                if dup_key[0] is not None:
+                    return "duplicate-core-key:%s" % dup_key[0]
+                # corrupt block — upstream's job, not this guard's
+            except TypeError:
+                pass
+        return None
+    except Exception as exc:
+        return "core-md-structural-check-failed: %s" % gate_refusal_detail(exc)
+
+
 def gate_refusal_detail(exc, *, at=None, verb="at"):
     """The type-name-carrying detail string for an exception-caused gate refusal.
 

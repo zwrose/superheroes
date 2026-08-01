@@ -2123,3 +2123,82 @@ def test_confirm_all_bounded_git_calls(tmp_path, monkeypatch):
     res = CM.confirm_all(repo, root=store)
     assert res == {"core": {"action": "absent", "record": None}, "layers": {}}
     assert counter["n"] <= 6
+
+
+def test_profile_structural_refusal_none_for_normal_single_block_core(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.write(repo, dict(_CORE_FACTS), "confirmed", root=store, now="2026-06-26")
+    assert CM.profile_structural_refusal(repo, root=store) is None
+
+
+def test_profile_structural_refusal_multiple_core_blocks(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.write(repo, dict(_CORE_FACTS), "confirmed", root=store, now="2026-06-26")
+    path = CM.core_path(repo, root=store)
+    text = open(path, encoding="utf-8").read()
+    extra = "\n```json superheroes-core\n{\"schemaVersion\": 2}\n```\n"
+    open(path, "w", encoding="utf-8").write(text + extra)
+    reason = CM.profile_structural_refusal(repo, root=store)
+    assert reason is not None
+    assert reason.startswith("multiple-core-blocks:")
+    assert path in reason
+
+
+def test_profile_structural_refusal_duplicate_top_level_key(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    path = _gate_core_beside(repo)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    block = (
+        '{\n  "schemaVersion": 2,\n  "verifyCommand": "npm test",\n'
+        '  "stackTags": [],\n  "verifyCommand": "dup"\n}'
+    )
+    open(path, "w", encoding="utf-8").write(
+        "<!-- superheroes-core: schemaVersion=2 status=confirmed "
+        "created=2026-01-01 updated=2026-01-01 -->\n\n"
+        "## Threat model\n\nt\n\n## Canonical patterns\n\n\n"
+        "```json superheroes-core\n%s\n```\n" % block
+    )
+    reason = CM.profile_structural_refusal(repo, root=store)
+    assert reason == "duplicate-core-key:verifyCommand"
+
+
+def test_profile_structural_refusal_duplicate_nested_engine_preferences_key(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    path = _gate_core_beside(repo)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    block = (
+        '{\n  "schemaVersion": 2,\n  "verifyCommand": "npm test",\n  "stackTags": [],\n'
+        '  "enginePreferences": {\n    "reviewer": "claude",\n    "reviewer": "codex"\n  }\n}'
+    )
+    open(path, "w", encoding="utf-8").write(
+        "<!-- superheroes-core: schemaVersion=2 status=confirmed "
+        "created=2026-01-01 updated=2026-01-01 -->\n\n"
+        "## Threat model\n\nt\n\n## Canonical patterns\n\n\n"
+        "```json superheroes-core\n%s\n```\n" % block
+    )
+    reason = CM.profile_structural_refusal(repo, root=store)
+    assert reason == "duplicate-core-key:reviewer"
+
+
+def test_profile_structural_refusal_none_for_corrupt_block(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    path = _gate_core_beside(repo)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "w", encoding="utf-8").write(
+        "<!-- superheroes-core: schemaVersion=2 status=confirmed "
+        "created=2026-01-01 updated=2026-01-01 -->\n\n"
+        "## Threat model\n\nt\n\n## Canonical patterns\n\n\n"
+        "```json superheroes-core\n{ not json\n```\n"
+    )
+    assert CM.profile_structural_refusal(repo, root=store) is None
+
+
+def test_profile_structural_refusal_none_when_no_core_md(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    assert CM.profile_structural_refusal(repo, root=store) is None
