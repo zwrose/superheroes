@@ -497,6 +497,22 @@ the reviewer and the owner's authorization carry that check instead.**
    **branch and the sha it adopted**; and **record the dead builder's terminal outcome** with
    `record-outcome` before its successor launches, because an unrecorded death makes the batch
    `indeterminate` and the successor's own outcome cannot repair it.
+   **Scheduled heartbeat sweep (wave orchestration duty).** An advisor **orchestrating a wave owes a
+   scheduled heartbeat sweep** that resumes stalled lanes — not a one-off rescue when something feels
+   wrong. Run `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/heartbeat.py" sweep --repo-root <repo-root>`,
+   read the classes, and **act**: resume or investigate. `stale`
+   means the lane outran **its own promise** (`staleAfterSeconds` the builder stamped); `unknown`
+   means the signal could not be read and is **actionable, not clean**; `terminal` on a launch the
+   ledger still reports live is **actionable pending `record-outcome`**, never a resolved lane. The
+   sweep **reports; it never asserts a lane is dead** — a heartbeat cannot prove death — and it never
+   resumes anything on its own; **you** act on what it reports. Ground this in the field evidence:
+   six lanes, zero handbacks by morning on harness 2.1.219, recovered only by an advisor sweep.
+   **Wave-preflight live canary (strengthens `engine-auth`, not a ninth check).** A wave preflight
+   includes **one cheap live probe per engine** (~3s). The dispatch selftest validates
+   **configuration, not engine liveness** — `lib/dispatch_selftest.py` is explicitly a config-time
+   round-trip that never touches disk — so **780 green config checks were able to coexist undetected
+   with a 3-of-4 live-review failure rate**. This strengthens what the existing `engine-auth` check
+   must mean in a wave; it does **not** add a ninth check to the eight-check list above.
 
 ## When you're tempted
 

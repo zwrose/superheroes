@@ -14,6 +14,7 @@ _MOD = os.path.join(_HERE, "..", "launcher.py")
 _LD_MOD = os.path.join(_HERE, "..", "launch_doctrine.py")
 
 import launch_ledger as ll  # noqa: E402
+import heartbeat as hb  # noqa: E402
 
 
 def _load_launcher():
@@ -1964,6 +1965,56 @@ def test_append_under_lock_survives_a_raising_acquire(tmp_path, monkeypatch):
     result = L._append_under_lock(repo, record)
     assert result["ok"] is False
     assert result["reason"] == "lock-unavailable"
+
+
+def test_spawn_attempt_exports_heartbeat_env_without_ledger_root(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    ledger_root = _ledger_env(tmp_path, monkeypatch)
+    launch_id = "spawn-env-lane"
+    ll.declare_batch(repo, "batch-spawn-env", 1)
+    ll.append(repo, {
+        "event": "reserved",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": "batch-spawn-env",
+        "repoId": ll.repo_identity(repo),
+        "issue": 656,
+        "surfaces": ["plugins/superheroes/lib"],
+        "premise": {},
+        "preflight": {},
+        "argv": [],
+        "doctrineDigest": "abc",
+        "model": "test",
+    })
+    captured = {}
+
+    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        captured.update(child_env)
+        class _Proc:
+            pid = 424242
+
+        out_fh.close()
+        err_fh.close()
+        return _Proc()
+
+    log_dir = str(tmp_path / "logs")
+    os.makedirs(log_dir)
+    result = L._spawn_attempt(
+        repo,
+        launch_id,
+        1,
+        ["claude", "-p", "test"],
+        os.path.join(log_dir, "out.log"),
+        os.path.join(log_dir, "err.log"),
+        900000,
+        env={ll.LEDGER_ROOT_ENV: ledger_root},
+        spawn_fn=capture_spawn,
+    )
+    assert result["ok"] is True
+    assert captured.get(hb.LAUNCH_ID_ENV) == launch_id
+    assert captured.get(hb.HEARTBEAT_ROOT_ENV) == ledger_root
+    assert ll.LEDGER_ROOT_ENV not in captured
 
 
 def test_append_under_lock_refuses_a_fifo_lock_without_blocking(tmp_path, monkeypatch):

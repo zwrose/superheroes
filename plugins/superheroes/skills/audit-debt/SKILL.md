@@ -282,11 +282,9 @@ For each finding, estimate effort:
 - "Big-job" (multi-session): restructure a feature, migrate a data store, replace a dependency
 
 ## Output
-Write findings to $SESSION_DIR/findings-<agent>.json as a JSON array per the
-base rubric's "Findings output format" section, with an additional "effort"
+**File channel** (per the base rubric's "Findings output format" section): write the JSON array to $SESSION_DIR/findings-<agent>.json, with an additional "effort"
 field: "Quick" | "Medium" | "Big-job". Set `dimension` to "<dimension>" on
-every entry. If you have nothing to flag, write `[]` — do not skip writing the
-file.
+every entry. Write `[]` when you have nothing to flag — do not skip the file.
 ```
 
 Per-agent substitutions:

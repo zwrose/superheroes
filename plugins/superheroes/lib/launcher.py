@@ -20,6 +20,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import heartbeat as hb  # noqa: E402
 import launch_doctrine  # noqa: E402
 import launch_ledger as ll  # noqa: E402
 import model_registry  # noqa: E402
@@ -537,6 +538,10 @@ def _spawn_attempt(
     """Spawn one attempt; return dict with ok, proc, reason."""
     spawn = spawn_fn or _default_spawn
     child_env = _scrub_env(env)
+    child_env[hb.LAUNCH_ID_ENV] = launch_id
+    resolved = ll.resolve_root(repo_root, env=env)
+    if resolved["ok"]:
+        child_env[hb.HEARTBEAT_ROOT_ENV] = resolved["root"]
     child_env["BASH_MAX_TIMEOUT_MS"] = str(bash_max_timeout_ms)
     try:
         out_fh = open(log_path, "ab")

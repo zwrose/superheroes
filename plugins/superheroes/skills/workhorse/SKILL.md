@@ -397,6 +397,30 @@ repeat.)
   Sessions that believed a waiter mechanism were **believing their tools** — background-run, wakeup
   scheduling, and its success message all promise re-wake that never fires headless; the rule must
   name mechanism, not only repeat prohibition.
+- **Never arm-and-sleep as the sole wait strategy.** The load-bearing wait is a **bounded poll loop
+  on artifact files** — done-sentinel paths, progress captures, heartbeat records — not a background
+  task you hope will re-wake you. A wake notification is an **optimization, never the mechanism you
+  depend on**. On harness 2.1.219, with the spawning agent dormant, a background task's completion
+  notification reaches the **root session**, not the builder — the builder is never woken and the
+  advisor becomes an accidental message broker. A six-lane overnight wave proved it: builders' own
+  review seats woke the advisor instead of the builder, all six lanes stalled for hours on finished
+  soaks and green gates, zero handbacks by morning, recovered only when the advisor swept and resumed
+  each lane.
+- **The induction trap.** Wake-on-completion **does** work early in a session while the parent still
+  holds an active task — so a builder that verified re-wake once has evidence about the **active-task
+  regime only**, and **none at all** about the **dormant-parent regime** where it fails. Trusting
+  "re-wake proven earlier this session" into the dormant-parent regime is the trap; both halves were
+  observed on 2.1.219.
+- **Stamp duty (launcher-issued lanes only).** When `SUPERHEROES_LAUNCH_ID` is present — the session
+  was launched by the advisor's launcher — stamp the builder liveness heartbeat at each state change:
+  entering a phase, before and after a dispatch, on park, on handback. The contract lives in
+  CONVENTIONS §15 — path, fields, states, and verbs there; do not restate them here. Stamp with
+  `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/heartbeat.py" stamp --repo-root <repo-root> --state <state> --phase <phase> --stale-after <seconds-until-next-stamp>`
+  (`SUPERHEROES_LAUNCH_ID` supplies `--launch-id` when unset); pick `--stale-after` for the phase you are entering — your own promise about when you will stamp again. When `SUPERHEROES_LAUNCH_ID` is **absent**, the session was
+  **not** launched by the advisor's launcher: **not advisor-managed, no heartbeat coverage** — that
+  is **not** permission to invent an id, and **not** a build failure. A directly-invoked workhorse
+  session is a normal case, not an error. **Ordering:** `parked` and `handback` are stamped **only
+  after** the durable issue/PR evidence exists, never before.
 - **The sanctioned fallback** when a **shell/CLI dispatch you invoke yourself** cannot fit the turn
   (not a native subagent — §7 long-dispatch rule): detach with durable output, then hand recovery to
   the advisor — redirect output to **files, never pipes** (a pipe buffer dies with the reader; a piped

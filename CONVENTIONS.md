@@ -47,6 +47,7 @@ original numbers so existing citations stay valid.
 12. [Verification contracts](#12-verification-contracts-fix-ships-its-detector-real-seam-tests)
 13. [New deterministic machinery needs a named consumer and a ledger entry](#13-new-deterministic-machinery-needs-a-named-consumer-and-a-ledger-entry)
 14. [Owner involvement before the merge click](#14-owner-involvement-before-the-merge-click)
+15. [Builder liveness heartbeat](#15-builder-liveness-heartbeat)
 
 ---
 
@@ -1120,3 +1121,49 @@ poor sole witness for that half.
 
 **Provenance.** Ratified 2026-07-26 from the build-dispatch discovery (issue #526); the
 canonical ruling record is `LEDGERS.md` §4.
+
+---
+
+## 15. Builder liveness heartbeat
+
+> **Cross-boundary contract** (§11). The builder stamps semantic liveness; the advisor's wave sweep
+> reads it. `plugins/superheroes/lib/heartbeat.py`'s module constants are **authoritative**; prose
+> copies in charters and this section are pinned to them by a drift test.
+
+**Producer:** the workhorse builder (`skills/workhorse/SKILL.md` — stamp duty in §7).
+**Consumer:** the showrunner's scheduled heartbeat sweep (`skills/showrunner/SKILL.md` duty 9).
+
+**Path:** `<root>/<repoId>/heartbeats/<launchId>.json`, `0700` directories, `0600` files.
+
+**Root resolution:** `SUPERHEROES_HEARTBEAT_ROOT` (launcher-exported, already resolved), else
+`launch_ledger.resolve_root()`.
+
+**Lane identity:** `SUPERHEROES_LAUNCH_ID` (launcher-exported) or `--launch-id`; grammar
+`^[A-Za-z0-9_-]{1,64}$`.
+
+**Record fields:** `schema` (`1`), `launchId`, `issue`, `state`, `phase`, `lastDispatch`, `ts`,
+`staleAfterSeconds`, `note`.
+
+**`lastDispatch` sub-schema** (optional; `null` when absent): `kind`, `engine`, `model`, `runId`
+(non-empty strings), `startedAt` (non-empty ISO-8601 UTC string, e.g. `2026-08-01T14:00:00Z`).
+
+**States:** `working`, `awaiting-dispatch`, `blocked`, `parked`, `handback`. **Terminal:**
+`parked`, `handback`.
+
+**Sweep classes:** `fresh`, `stale`, `terminal`, `unknown`.
+
+**Verbs:** `stamp`, `read`, `sweep`.
+
+**Semantic core.** The builder stamps `staleAfterSeconds` — its own promise about when it will next
+stamp. A lane is late only when it has outrun **the promise it made itself** — semantic liveness, not
+another mtime watchdog. A builder inside a nine-minute dispatch is not a false alarm. The corpus holds
+**3 watchdog design failures and 3 false alarms** from mtime and process-table signals.
+
+**Fail-closed direction.** A missing, unreadable, corrupt, schema-skewed, non-finite or **future-dated**
+heartbeat classifies `unknown`, never `fresh`. A ledger failure makes the sweep **refuse at the top
+level** rather than return an empty, healthy-looking result. The sweep **never asserts that a lane is
+dead** — a heartbeat cannot prove death.
+
+**Accepted storage bound.** The store keeps **one small JSON file per launch, retained indefinitely**
+— nothing reaps them, and the sweep ignores launches the ledger no longer reports live, so those
+files have no continuing consumer. This is a knowingly accepted accumulation, not an oversight.

@@ -12,7 +12,7 @@
 
 ## Specialist Dispatch Prompt Template
 
-Each specialist receives the same prompt template, parameterized by reviewer name, dimension label, and findings filename. Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`), `$CORE` (threat model + canonical patterns), and `$LAYER` (scope, focus, conventions). When both point at the same legacy file, read all sections from that path. Subagents do not inherit shell vars.
+Each specialist receives the same prompt template, parameterized by reviewer name, dimension label, findings filename, and delivery channel. Before dispatch, keep **exactly one** of the two mutually-exclusive channel lines in the `## Output` block and delete the other — keyed on the seat's assigned vendor: a `claude` seat is file-channel; a `codex`/`cursor` seat is stdout-channel (read-only sandbox). Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`), `$CORE` (threat model + canonical patterns), and `$LAYER` (scope, focus, conventions). When both point at the same legacy file, read all sections from that path. Subagents do not inherit shell vars.
 
 ```
 You are reviewing <mode> for repo <repo>, target <pr-or-branch>.
@@ -81,13 +81,13 @@ justification); a CONFIRMED finding survives stamped
 `position == null`) still count.
 
 ## Output
-Write findings to $SESSION_DIR/round-<round>/findings-<agent>.json as a JSON
-array per the base rubric's "Findings output format" section. Set `tradeoff:
+Delivery is per the base rubric's "Findings output format" section. Set `tradeoff:
 true` only when a finding has multiple valid fix approaches (a judgment call);
 omit it otherwise (see the base rubric's "Triage rubric"). Set `dimension` to
 "<dimension>" on every entry. Severity caps from the base rubric apply (Nits at
-most 5 reported per agent). If you have nothing to flag, write an empty array
-(`[]`) — do not skip writing the file.
+most 5 reported per agent).
+<file channel only — delete the stdout channel line> Write the JSON array to $SESSION_DIR/round-<round>/findings-<agent>.json — write `[]` rather than skipping the file when you have nothing to flag.
+<stdout channel only — delete the file channel line> Emit `{"findings": [...], "investigated": [...]}` as your final stdout with nothing after it; do not write a findings file (read-only sandbox — nothing reads one).
 ```
 
 ## Mechanical focus flags
@@ -110,26 +110,24 @@ addition that never replaces the `--focus` notes and never removes or down-scope
 nothing. The detector is grep-grounded and has no authority: it can only add emphasis,
 never drop a finding or a lens.
 
-> **External-engine reviewers — stdout shape contract (#38, #196, #666).** When `$REVIEWER_ENGINE` is
+> **External-engine reviewers — stdout channel grading mechanics (#38, #196, #666).** When `$REVIEWER_ENGINE` is
 > `codex` or `cursor`, a specialist is dispatched through `engine_adapter.py` (read-only sandbox)
 > instead of a named subagent, and it returns its findings on **stdout** rather than writing the
-> findings file. Its final stdout MUST be a single JSON object `{"findings": [...]}` (the same array
-> the subagent would have written, wrapped once as the `findings` value) **and** an **`investigated`**
-> array listing every repo-relative path the seat actually read to ground its review — full canonical
-> shape: `{"findings": [...], "investigated": ["repo/relative/path", ...]}` — **nothing printed
-> after the object is best practice** (`engine_adapter.parse_result` scans stdout for the **last
-> top-level JSON value**, so incidental trailing prose after a valid object is tolerated). An **empty** `findings` array is accepted as *clean* **only** when
-> `investigated` lists at least one path that survives the runner's spot-check (the path must resolve
-> inside the sanitized review view root and exist on disk). A seat that returns empty findings with no verifiable
-> `investigated` record is a **vacuous forfeit** — a named cause (`reason: "vacuous"` from
-> `dispatch-review`): treated as a seat that **never ran**, not as a clean review; the orchestrator
-> submits the folded seat with `vacuous: true` (or `reason: "vacuous"`). Engine telemetry (token spend,
-> tool calls, wall time) is **corroborating evidence only** and can never satisfy that investigation
-> floor. Emit the canonical object; the parser also **tolerates a bare top-level array** `[...]` of
-> finding objects as of #196, but anything else (prose with no parseable JSON object/array, an empty
-> stream, an array of non-objects) parses as `unreadable`, which forfeits the slot to a Claude re-run (UFR-7) and silently
-> doubles the round's cost. State this shape verbatim in the dispatch prompt so orchestrators stop
-> re-guessing it per run.
+> findings file. The contract shape lives in the base rubric's "Findings output format" section; the
+> dispatch prompt's `## Output` block names the seat's channel — this block is how the runner grades
+> what the rubric already specified. `engine_adapter.parse_result` scans stdout for the **last
+> top-level JSON value**, so incidental trailing prose after a valid object is tolerated. An **empty**
+> `findings` array is accepted as *clean* **only** when `investigated` lists at least one path that
+> survives the runner's spot-check (the path must resolve inside the sanitized review view root and
+> exist on disk). A seat that returns empty findings with no verifiable `investigated` record is a
+> **vacuous forfeit** — a named cause (`reason: "vacuous"` from `dispatch-review`): treated as a seat
+> that **never ran**, not as a clean review; the orchestrator submits the folded seat with
+> `vacuous: true` (or `reason: "vacuous"`). Engine telemetry (token spend, tool calls, wall time) is
+> **corroborating evidence only** and can never satisfy that investigation floor. The parser also
+> **tolerates a bare top-level array** `[...]` of finding objects as of #196, but anything else
+> (prose with no parseable JSON object/array, an empty stream, an array of non-objects) parses as
+> `unreadable`, which forfeits the slot to a Claude re-run (UFR-7) and silently doubles the round's
+> cost.
 
 > **Reviewer-seat dispatch runs through the dispatch RUNNER (#563 DoD 2/4) — reviewer role ONLY.**
 > When `$REVIEWER_ENGINE` is `codex` or `cursor`, dispatch each read-only reviewer seat through
@@ -455,7 +453,10 @@ never drop a finding or a lens.
 > always meant: engine **selection** fails open when a seat is unavailable, a completed external
 > **result** fails closed. It never said the write path may not be supervised.
 
-After dispatch, wait for all five agents to return. Each writes its findings file to `$SESSION_DIR/round-<round>/`. The orchestrator does not read agent transcripts — only the JSON files.
+After dispatch, wait for all five agents to return. A file-channel seat's findings are read from
+`$SESSION_DIR/round-<round>/findings-<agent>.json`; a stdout-channel seat's findings come from the
+terminal `dispatch-review` result, which the orchestrator folds. The orchestrator does not read agent
+transcripts — only those structured outputs.
 
 ---
 
