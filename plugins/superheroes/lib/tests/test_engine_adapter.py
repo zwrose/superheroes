@@ -1426,3 +1426,260 @@ def test_engagement_read_never_returns_inert():
         outcomes.add(EA.engagement_read(res))
     assert outcomes <= {"engaged", "unknown"}
     assert "inert" not in outcomes
+
+
+# ---------------------------------------------------------------------------
+# #747 WO-4a: review_artifact_shape + salvage_from_artifact
+
+
+def _artifact_pad(text, min_bytes=EA.ARTIFACT_MIN_RESIDUE_BYTES + 20):
+    out = text
+    while len(out.encode("utf-8")) < min_bytes:
+        out += " Additional review context padding."
+    return out
+
+
+def _artifact_corpus_poster_child_1():
+    cites = ["src/app/widget.ts:42", "src/lib/util.ts:7", "src/app/model.ts:15",
+             "tests/widget.test.ts:88", "src/app/view.ts:3"]
+    lines = ["Review of the widget module identified several concerns."]
+    lines += ["- %s: null check missing" % c for c in cites[:3]]
+    lines += ["Also noted %s and %s in related files." % (cites[3], cites[4])]
+    return _artifact_pad("\n".join(lines))
+
+
+def _artifact_corpus_poster_child_2():
+    cites = ["src/core/handler.ts:12", "src/core/router.ts:44", "src/api/route.ts:9"]
+    lines = ["Shorter follow-up review after fixes."]
+    lines += ["- %s: still racy" % c for c in cites[:2]]
+    lines += ["Cross-check %s before merge." % cites[2]]
+    return _artifact_pad("\n".join(lines))
+
+
+def _artifact_corpus_brief_check():
+    cites = ["src/a.ts:%d" % i for i in range(1, 10)]
+    lines = ["Brief check across the service layer."]
+    lines += ["- %s: style" % c for c in cites[:3]]
+    lines += ["References: " + ", ".join(cites)]
+    return _artifact_pad("\n".join(lines))
+
+
+def _artifact_corpus_clean_prose_701():
+  lines = ["### Findings", "", "The change looks broadly sound but needs polish."]
+  lines += ["- missing edge case for empty input"]
+  lines += ["- error message could be clearer"]
+  lines += ["- consider extracting helper"]
+  lines += ["- naming inconsistency in tests"]
+  lines += ["- docstring drift on public API"]
+  lines += ["- logging level too noisy"]
+  lines += ["- follow-up ticket for perf"]
+  lines += ["", "### Investigation record", "", "Read the diff and nearby callers."]
+  return _artifact_pad("\n".join(lines))
+
+
+def _artifact_corpus_investigation_record():
+  lines = ["INVESTIGATION RECORD", ""]
+  lines += ["- checked auth middleware"]
+  lines += ["- traced request path"]
+  lines += ["- verified test coverage"]
+  lines += ["- read config defaults"]
+  lines += ["- compared with prior PR"]
+  lines += ["- inspected error handling"]
+  lines += ["- reviewed logging"]
+  lines += ["- scanned for secrets"]
+  lines += ["- validated schema"]
+  lines += ["- noted TODO markers"]
+  lines += ["- checked imports"]
+  lines += ["- reviewed types"]
+  lines += ["- scanned callers"]
+  lines += ["- read related docs"]
+  lines += ["- checked feature flag"]
+  lines += ["- verified rollback path"]
+  lines += ["- noted migration risk"]
+  lines += ["- confirmed owner intent"]
+  lines += ["- no blocking issues found"]
+  return _artifact_pad("\n".join(lines))
+
+
+def _artifact_corpus_approve_with_reasoning():
+  lines = ["## Verdict", "", "Approve with minor notes.", "", "## Findings"]
+  lines += ["- doc nit"]
+  lines += ["- test name"]
+  lines += ["- comment clarity"]
+  lines += ["- optional refactor"]
+  return _artifact_pad("\n".join(lines))
+
+
+def _artifact_corpus_json_control():
+    return json.dumps({"ok": True, "findings": [
+        {"severity": "Minor", "title": "t", "body": "b"}]})
+
+
+@pytest.mark.parametrize("stdout,expected_basis", [
+    (_artifact_corpus_poster_child_1(), ["citations", "enumerations"]),
+    (_artifact_corpus_poster_child_2(), ["citations", "enumerations"]),
+    (_artifact_corpus_brief_check(), ["citations", "enumerations"]),
+    (_artifact_corpus_clean_prose_701(), ["enumerations", "sections"]),
+    (_artifact_corpus_investigation_record(), ["enumerations", "sections"]),
+    (_artifact_corpus_approve_with_reasoning(), ["enumerations", "sections"]),
+])
+def test_review_artifact_shape_corpus_specimens_engaged(stdout, expected_basis):
+    shape = EA.review_artifact_shape(stdout, "fed prompt not echoed here")
+    assert shape["engaged"] is True
+    assert shape["basis"] == expected_basis
+    assert shape["residueBytes"] >= EA.ARTIFACT_MIN_RESIDUE_BYTES
+
+
+def test_review_artifact_shape_json_control_not_engaged():
+    stdout = _artifact_corpus_json_control()
+    shape = EA.review_artifact_shape(stdout, "")
+    assert shape["engaged"] is False
+    assert shape["basis"] is None
+
+
+def test_review_artifact_shape_empty_stdout():
+    assert EA.review_artifact_shape("", "prompt")["engaged"] is False
+    assert EA.review_artifact_shape("", "prompt")["residueBytes"] == 0
+
+
+def test_review_artifact_shape_whitespace_only_stdout():
+    shape = EA.review_artifact_shape("   \n\t", "prompt")
+    assert shape["engaged"] is False
+    assert shape["residueBytes"] == 0
+
+
+def test_review_artifact_shape_echo_only_residue_empty():
+    prompt = "review this diff carefully\n- src/a.ts:1\n1. first step"
+    assert EA.review_artifact_shape(prompt, prompt)["engaged"] is False
+
+
+def test_review_artifact_shape_one_line_engine_error_under_floor():
+    shape = EA.review_artifact_shape("error: model not found", "")
+    assert shape["engaged"] is False
+    assert shape["residueBytes"] < EA.ARTIFACT_MIN_RESIDUE_BYTES
+
+
+def test_review_artifact_shape_flat_prose_no_signals():
+    prose = " ".join(["flat"] * 80)  # ~400 bytes, no cites/enums/sections
+    shape = EA.review_artifact_shape(prose, "")
+    assert shape["engaged"] is False
+    assert shape["citations"] == 0
+    assert shape["enumerations"] == 0
+    assert shape["sections"] == []
+
+
+def test_review_artifact_shape_rejects_partial_prompt_echo():
+    # axis: rejection before signals — prompt-echo residue must not score
+    middle = (
+        "Please review:\n- src/prompt/file.ts:99\n1. step one\n2. step two\n"
+        + "Reviewer instructions continue here. " * 8
+    )
+    assert len(middle.encode("utf-8")) >= EA.ARTIFACT_MIN_RESIDUE_BYTES
+    fed = "HEADER\n" + middle + "\nTRAILER"
+    fragment = middle
+    assert fragment in fed
+    shape = EA.review_artifact_shape(fragment, fed)
+    assert shape["engaged"] is False
+    assert shape["citations"] >= 1
+    assert shape["enumerations"] >= 2
+
+
+def test_review_artifact_shape_rg_output_one_signal_only():
+    lines = ["%s/file%d.ts:%d:match" % ("src", i, i) for i in range(20)]
+    stdout = "\n".join(lines)
+    shape = EA.review_artifact_shape(stdout, "")
+    assert shape["engaged"] is False
+    assert shape["citations"] >= 1
+    assert shape["enumerations"] == 0
+    assert shape["sections"] == []
+
+
+def test_review_artifact_shape_rejects_traceback():
+    # axis: rejection before signals — traceback/stack-dump must not score
+    tb = "Traceback (most recent call last):\n  File \"src/a.py\", line 1, in <module>\n"
+    tb += "    raise RuntimeError('boom')\n" + "- src/a.py:1 note\n" * 5
+    shape = EA.review_artifact_shape(_artifact_pad(tb), "")
+    assert shape["engaged"] is False
+
+
+def test_review_artifact_shape_plan_only_stream_log_not_engaged():
+    events = [
+        {"type": "tool_call", "call_id": "c1", "name": "read", "args": {"path": "src/a.ts"}},
+        {"type": "tool_call", "call_id": "c2", "name": "grep", "args": {"pattern": "foo"}},
+    ]
+    stream = "\n".join(json.dumps(e) for e in events)
+    inner = stream + "\nPlanning next steps across src/a.ts:1 and src/b.ts:2."
+    envelope = json.dumps({"type": "result", "result": inner})
+    shape = EA.review_artifact_shape(envelope, "dispatch prompt")
+    assert shape["engaged"] is False
+
+
+def test_review_artifact_shape_residue_byte_floor():
+    # axis: ARTIFACT_MIN_RESIDUE_BYTES floor independent of signal count
+    core = "- src/a.ts:1 issue\n- src/b.ts:2 issue\n### Findings\n"
+    below = core + "x" * (EA.ARTIFACT_MIN_RESIDUE_BYTES - len(core.encode("utf-8")) - 5)
+    above = core + "x" * (EA.ARTIFACT_MIN_RESIDUE_BYTES - len(core.encode("utf-8")) + 5)
+    assert EA.review_artifact_shape(below, "")["engaged"] is False
+    assert EA.review_artifact_shape(above, "")["engaged"] is True
+
+
+def test_review_artifact_shape_requires_two_of_three_signals():
+    # axis: how many review signals are required (two-of-three, not one-of-three)
+    cites_only = "\n".join("src/f%d.ts:%d" % (i, i) for i in range(30))
+    cites_only = _artifact_pad(cites_only)
+    shape_one = EA.review_artifact_shape(cites_only, "")
+    assert shape_one["engaged"] is False
+    assert shape_one["citations"] >= 1
+    assert shape_one["enumerations"] == 0
+    assert shape_one["sections"] == []
+    with_enum = cites_only + "\n- first note\n- second note"
+    assert EA.review_artifact_shape(with_enum, "")["engaged"] is True
+
+
+def test_review_artifact_shape_none_stdout_not_engaged():
+    shape = EA.review_artifact_shape(None, "prompt")
+    assert shape["engaged"] is False
+    assert shape["residueBytes"] == 0
+
+
+def test_review_artifact_shape_empty_fed_prompt_still_grades():
+    stdout = _artifact_corpus_poster_child_1()
+    assert EA.review_artifact_shape(stdout, None)["engaged"] is True
+    assert EA.review_artifact_shape(stdout, "")["engaged"] is True
+
+
+def test_review_artifact_shape_stray_bracket_array_parse_and_engaged():
+    # Deliberately unchanged: parse_result still treats bare [] as clean zero findings;
+    # follow-up routes that false-clean seam through salvage/outcome minting.
+    prose = _artifact_pad("### Findings\n\n[]\n\n- real issue at src/x.ts:1\n- second point")
+    parsed = EA.parse_result("codex", "review", EA.strip_echoed_prompt(prose, ""))
+    assert parsed["ok"] is True
+    assert parsed["findings"] == []
+    assert EA.review_artifact_shape(prose, "")["engaged"] is True
+
+
+def test_salvage_from_artifact_structured_json():
+    stdout = json.dumps({"findings": [
+        {"severity": "Minor", "title": "t", "body": "b", "file": "a.py", "line": 1}]})
+    salvage = EA.salvage_from_artifact(stdout, "")
+    assert salvage["structured"] is True
+    assert salvage["requiresManualRead"] is False
+    assert len(salvage["findings"]) == 1
+    assert salvage["excerpt"]
+
+
+def test_salvage_from_artifact_prose_manual_read():
+    stdout = _artifact_corpus_clean_prose_701()
+    salvage = EA.salvage_from_artifact(stdout, "")
+    assert salvage["structured"] is False
+    assert salvage["requiresManualRead"] is True
+    assert salvage["findings"] == []
+    assert salvage["excerpt"]
+    assert salvage["excerptBytes"] <= EA.ARTIFACT_EXCERPT_BYTES
+
+
+def test_salvage_from_artifact_excerpt_capped():
+    stdout = "x" * (EA.ARTIFACT_EXCERPT_BYTES + 500)
+    salvage = EA.salvage_from_artifact(stdout, "")
+    assert salvage["excerptBytes"] == EA.ARTIFACT_EXCERPT_BYTES
+    assert len(salvage["excerpt"].encode("utf-8")) <= EA.ARTIFACT_EXCERPT_BYTES + 4

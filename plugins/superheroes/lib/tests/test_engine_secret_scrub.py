@@ -44,3 +44,16 @@ def test_external_build_evidence_carries_no_freetext():
     assert parsed["ok"] is True
     assert set(parsed["evidence"].keys()) <= {"testFailed", "testPassed"}
     assert _SECRET not in json.dumps(parsed["evidence"])
+
+
+def test_salvage_from_artifact_scrubs_secret_in_prose_excerpt():
+    # axis: secret containment on salvage excerpt and structured findings
+    prose = (
+        "Review notes with leaked credential %s in the narrative.\n"
+        "- src/a.ts:1 token visible\n- src/b.ts:2 rotate immediately"
+    ) % _SECRET
+    prose = prose + "\n" + ("padding " * 40)
+    salvage = engine_adapter.salvage_from_artifact(prose, "")
+    assert _SECRET not in salvage["excerpt"]
+    assert "[REDACTED]" in salvage["excerpt"]
+    assert _SECRET not in json.dumps(salvage["findings"])
