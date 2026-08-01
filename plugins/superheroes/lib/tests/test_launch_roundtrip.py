@@ -119,7 +119,10 @@ def _scenario_preflight_refusal(repo, log_dir, surfaces, batch_id, monkeypatch):
     checks = _all_checks()
     checks["engine-auth"] = {"state": "fail", "reason": "no auth"}
     premise = _valid_premise(repo, surfaces=surfaces, batchId=batch_id)
-    result = _run_launch(repo, log_dir, premise, checks, monkeypatch)
+    result = _run_launch(
+        repo, log_dir, premise, checks, monkeypatch,
+        spawn_fn=_make_spawn_fn("sleep"),
+    )
     assert result["ok"] is False
     launch_id = result["launchId"]
     _, folded = _assert_p1(repo)
@@ -489,7 +492,10 @@ def test_count_rejects_a_physically_late_declaration(tmp_path, monkeypatch):
     log_dir = str(tmp_path / "logs")
     batch = "b-late-decl"
     premise = _valid_premise(repo, batchId=batch)
-    result = _run_launch(repo, log_dir, premise, _all_checks(), monkeypatch)
+    result = _run_launch(
+        repo, log_dir, premise, _all_checks(), monkeypatch,
+        spawn_fn=_make_spawn_fn("sleep"),
+    )
     assert result["ok"] is True
     try:
         _kill_child(result["pid"])
