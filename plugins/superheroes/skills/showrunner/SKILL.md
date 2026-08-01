@@ -284,9 +284,9 @@ the reviewer and the owner's authorization carry that check instead.**
      another load's maturity. **A dispatched grounding seat does not retire it** — when one lands, you
      become the backstop for that seat being absent, vacuous, or misconfigured.
    - **Write your verdict into the PR's owner half** — the `## Advisor vet` slot the builder leaves
-     empty (the **workhorse** charter has the builder create it and **carry its contents forward
-     verbatim** across a body rewrite; that guarantee is prose with no mechanical check, so the
-     backstop below is still yours). **The verdict
+     empty (the **workhorse** charter has the builder create it, and **the workhorse charter's §11
+     governs what a builder must preserve when it rewrites the body**; that guarantee is prose with
+     no mechanical check, so the backstop below is still yours). **The verdict
      plus a pointer to the receipt, and nothing else by default:** consequence up, mechanism down —
      probes, accounting and dispositions are mechanism, but *an independent reader checked this, and
      this is what they concluded* is the most merge-relevant single fact on the page, and today it lives
