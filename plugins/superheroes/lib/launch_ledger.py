@@ -442,6 +442,44 @@ def repo_identity(repo_root):
     return hashlib.sha256(real.encode("utf-8")).hexdigest()
 
 
+def _candidate_root_validation_reason(repo_root, root, env=None):
+    """Return a refusal reason token, or None when root is usable. Never raises."""
+    if env is None:
+        env = os.environ
+    repo_real = os.path.realpath(repo_root)
+    proc = _git_scrubbed(repo_root, "rev-parse", "--git-common-dir", env=env)
+    if proc is None or proc.returncode != 0:
+        return "ledger-repo-identity-unavailable"
+    common = (proc.stdout or "").strip()
+    if not os.path.isabs(common):
+        common = os.path.join(repo_root, common)
+    try:
+        common_real = os.path.realpath(common)
+    except OSError:
+        return "ledger-repo-identity-unavailable"
+
+    if _path_inside(repo_real, root) or _path_inside(common_real, root):
+        return "ledger-root-in-repo"
+
+    try:
+        os.makedirs(root, mode=0o700, exist_ok=True)
+    except OSError:
+        return "ledger-root-unusable"
+
+    if not os.path.isdir(root) or not os.access(root, os.W_OK):
+        return "ledger-root-unusable"
+
+    if _is_group_or_world_accessible(root):
+        return "ledger-root-insecure"
+
+    return None
+
+
+def validate_candidate_root(repo_root, root, env=None):
+    """True when `root` is a usable store root for `repo_root`. Never raises."""
+    return _candidate_root_validation_reason(repo_root, root, env=env) is None
+
+
 def resolve_root(repo_root, env=None):
     """Resolve ledger root outside the repo; refuse in-repo paths."""
     if env is None:
@@ -458,31 +496,9 @@ def resolve_root(repo_root, env=None):
     except OSError:
         return {"ok": False, "root": None, "reason": "ledger-root-unusable"}
 
-    repo_real = os.path.realpath(repo_root)
-    proc = _git_scrubbed(repo_root, "rev-parse", "--git-common-dir", env=env)
-    if proc is None or proc.returncode != 0:
-        return {"ok": False, "root": None, "reason": "ledger-repo-identity-unavailable"}
-    common = (proc.stdout or "").strip()
-    if not os.path.isabs(common):
-        common = os.path.join(repo_root, common)
-    try:
-        common_real = os.path.realpath(common)
-    except OSError:
-        return {"ok": False, "root": None, "reason": "ledger-repo-identity-unavailable"}
-
-    if _path_inside(repo_real, root) or _path_inside(common_real, root):
-        return {"ok": False, "root": None, "reason": "ledger-root-in-repo"}
-
-    try:
-        os.makedirs(root, mode=0o700, exist_ok=True)
-    except OSError:
-        return {"ok": False, "root": None, "reason": "ledger-root-unusable"}
-
-    if not os.path.isdir(root) or not os.access(root, os.W_OK):
-        return {"ok": False, "root": None, "reason": "ledger-root-unusable"}
-
-    if _is_group_or_world_accessible(root):
-        return {"ok": False, "root": None, "reason": "ledger-root-insecure"}
+    reason = _candidate_root_validation_reason(repo_root, root, env=env)
+    if reason is not None:
+        return {"ok": False, "root": None, "reason": reason}
 
     return {"ok": True, "root": root, "reason": None}
 
