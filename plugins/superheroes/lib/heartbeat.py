@@ -92,28 +92,7 @@ def _validate_resolved_root(repo_root, root, env):
         return False
     if ll.repo_identity(repo_root) is None:
         return False
-    repo_real = os.path.realpath(repo_root)
-    proc = ll._git_scrubbed(repo_root, "rev-parse", "--git-common-dir", env=env)
-    if proc is None or proc.returncode != 0:
-        return False
-    common = (proc.stdout or "").strip()
-    if not os.path.isabs(common):
-        common = os.path.join(repo_root, common)
-    try:
-        common_real = os.path.realpath(common)
-    except OSError:
-        return False
-    if _path_inside(repo_real, root) or _path_inside(common_real, root):
-        return False
-    try:
-        os.makedirs(root, mode=0o700, exist_ok=True)
-    except OSError:
-        return False
-    if not os.path.isdir(root) or not os.access(root, os.W_OK):
-        return False
-    if ll._is_group_or_world_accessible(root):
-        return False
-    return True
+    return ll.validate_candidate_root(repo_root, root, env=env)
 
 
 def _fail(reason, **extra):
