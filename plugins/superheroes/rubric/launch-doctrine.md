@@ -4,7 +4,9 @@ This document is the standing doctrine for headless builder launches and recover
 a dispatch must carry verbatim, the eight-check dispatch preflight every launch records before it
 goes autonomous, and the recovery doctrine for taking over a build that stopped. Advisors read it
 for intent; `lib/launch_doctrine.py` parses the two marked blocks below fail-closed — not the
-recovery prose.
+recovery prose. A whole-file SHA-256 digest of this artifact is still recorded on every dispatch
+as `doctrineDigest` — editing recovery prose changes that digest even though it is not
+machine-parsed.
 
 The rulings block exists because reconstructing those lines from memory is what caused the
 shared-checkout collision — `own-worktree` is first because that ruling is the one that collision
@@ -67,17 +69,25 @@ Before any new order goes out, sweep the dead build's worktrees and branches —
 each one's local head and working tree, reconcile against what is actually pushed — then adjudicate
 every piece of residue explicitly as **integrated** (already contained in the pushed tip),
 **subsumed** (superseded by later work — name what superseded it), or **contested** (real work that
-is neither, decided in the open before the build moves on, never dropped by omission). **An
-adoption that records no sweep is an adoption that has not looked.**
+is neither, decided in the open before the build moves on, never dropped by omission). Residue that
+is not already contained in the pushed tip is **made durable before the build moves on** — pushed
+to a retrievable branch (or otherwise preserved) and named in the durable post by its sha. When the
+dead build **pushed nothing at all**, there is no tip to adopt: preserve the worktree's work first,
+then adopt from what you preserved. **An adoption that records no sweep is an adoption that has not
+looked.** The advisor runs this sweep before composing the successor's launch and records what it
+found for handoff; the adopting builder re-runs the sweep at intake and reconciles against that
+handoff — both halves run, neither replaces the other.
 
 ### Pin the transcript; never re-discover it
 
 Map a builder to its transcript by grepping the **first 4KB** of each transcript file for the
-**issue token** the launch prompt carries. Once matched, **pin that file path** and use it for the
-rest of the run. **Never re-discover** a builder's transcript by taking the newest file — **a dead
-launch attempt leaves a stub**, and newest-first hands you the stub while the live retry runs
-elsewhere. Because a resumed session appends to its original file, "look for a new transcript" is
-wrong for the resume case too.
+**issue token** the launch prompt carries. The token match must be **unique before you pin** — more
+than one match is a signal to disambiguate, not to pick one; use the launch record's per-launch
+**pid** and **logPath** (recorded in the launch ledger at dispatch) as the durable disambiguator.
+Once uniquely matched, **pin that file path** and use it for the rest of the run. **Never
+re-discover** a builder's transcript by taking the newest file — **a dead launch attempt leaves a
+stub**, and newest-first hands you the stub while the live retry runs elsewhere. Because a resumed
+session appends to its original file, "look for a new transcript" is wrong for the resume case too.
 
 ### Read liveness from the right signals
 

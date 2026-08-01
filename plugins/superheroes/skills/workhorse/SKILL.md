@@ -144,8 +144,10 @@ existing branch instead of a clean base is still an intake, and it carries two e
 any work resumes. **First, sweep for work the dead build never pushed** — its worktrees and branches
 hold commits that were never pushed and edits that were never committed, and no PR list or `gh`
 query will show them to you; enumerate them, reconcile against the pushed tip, and adjudicate every
-piece of residue as **integrated**, **subsumed**, or **contested**, in the open, in your first
-durable post, never dropped by omission. **Second, treat every claim you inherit as unverified until
+piece of residue as **integrated**, **subsumed**, or **contested** in your first durable post —
+carry the adjudication and its reasoning, not verbatim residue content; anything quoted is redacted
+the same way the launch-prompt rule above requires (secrets, tokens, private URLs, PII), and the
+redaction is stated — never dropped by omission. **Second, treat every claim you inherit as unverified until
 you re-run it yourself** — a prior session's commit message, PR body, or comment is an input to your
 verification (§8), never a substitute for it; that a receipt was *claimed* is not evidence it was
 *earned*. Point at the full doctrine —
