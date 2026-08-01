@@ -206,7 +206,10 @@ above).
      (new issues, scope changes) are **proposed to the owner in the vet-delivery message**, and
      **only what genuinely cannot close in this session** — typically an item awaiting the owner's
      word — is appended to the project's **standing proposals collector**, one open issue per
-     project, filed after discussion (auto-filing per proposal was rejected as overcorrection). A
+     project, filed after discussion (auto-filing per proposal was rejected as overcorrection).
+     Each entry carries **what it is**, **your recommendation**, and **the vet ordinal stamped on
+     it when it is appended**, and is **struck when the owner rules** — closing or declining an
+     item **removes it from the collector**; nothing re-numbers what remains. A
      vet receipt states only **completed dispositions and live proposals — never the future tense**.
      **The collector is a fallback, not the path** — *"the next vet will pick it up"* is the failure
      this prevents, not a workflow it licenses — and **nothing fires on its own**: no cadence, no
