@@ -2124,6 +2124,10 @@ def test_review_diff_duplicate_tree_entry_refuses(tmp_path):
             "git",
             "-C",
             repo,
+            "-c",
+            "user.email=test@test.local",
+            "-c",
+            "user.name=test",
             "commit-tree",
             tree_sha,
             "-p",
@@ -2379,7 +2383,11 @@ def test_review_diff_descendant_pathspecs_collapse_to_ancestor(tmp_path, monkeyp
     started = time.monotonic()
     changed = sv._changed_tree_entries(repo, merge_base, head_sha, started)
     survivors = [p for p in changed if not sv._rel_path_would_be_stripped(p)]
-    monkeypatch.setattr(sv, "_REVIEW_DIFF_ARGV_MAX_BYTES", 512)
+    monkeypatch.setattr(sv, "_effective_review_diff_argv_budget", lambda: 0)
+    batches = sv._batch_review_diff_pathspecs(repo, merge_base, head_sha, survivors)
+    all_pathspecs = [path for batch in batches for path in batch]
+    assert "pkg" in all_pathspecs
+    assert "pkg/x.txt" not in all_pathspecs
     view = sv.build_sanitized_view(repo, diff_base=base_sha)
     try:
         with open(_patch_abs(view), "rb") as fh:
