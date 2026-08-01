@@ -146,11 +146,12 @@ paths and git stderr). Never substitute defaulted engine/model rows, because the
 never read.
 
 The `run` and `compose-liveness` subcommands also emit a top-level `configRead` object —
-`{status, reason, readError}` — recording whether engine preferences were actually read for that
-invocation. A non-null `reason` means the project's engine preferences were **not** read and any
-`crossVendorEngines` list in the same output is defaulted rather than configured. Fold the **reason
-token** and a **workspace-relative or redacted** path into the brief and the PR — not the raw
-absolute `readError` string.
+`{status, reason, readError, tiersError}` — recording whether configuration was actually read for
+that invocation. `status`, `reason`, and `readError` describe the **core.md** read only;
+`tiersError` describes the **model-tier** read only — the two are independent. A non-null `reason`
+means the project's engine preferences were **not** read and any `crossVendorEngines` list in the
+same output is defaulted rather than configured. Fold the **reason token** and a **workspace-relative
+or redacted** path into the brief and the PR — not the raw absolute `readError` string.
 
 ### B.1 — Seed the composition-liveness receipt (write side, #610 leg 2)
 

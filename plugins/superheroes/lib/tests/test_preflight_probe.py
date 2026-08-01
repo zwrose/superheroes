@@ -1201,7 +1201,7 @@ def test_run_readable_project_config_read_ok(tmp_path, monkeypatch, capsys):
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["configRead"] == {
-        "status": core_md.CONFIG_OK, "reason": None, "readError": None}
+        "status": core_md.CONFIG_OK, "reason": None, "readError": None, "tiersError": None}
     assert set(payload.keys()) == {
         "probes", "dispatchCalibration", "aggregate", "browserNote", "crossVendorEngines",
         "configRead"}
@@ -1250,3 +1250,134 @@ def test_compose_liveness_readable_core_no_unreadable_note(tmp_path, monkeypatch
     assert payload["configRead"]["reason"] is None
     unread_notes = [n for n in payload["notes"] if n.get("constraint") == core_md.GATE_REASON_UNREADABLE]
     assert unread_notes == []
+
+
+def _seed_invalid_utf8_tiers(repo):
+    profile = os.path.join(repo, ".claude", "superheroes", "review-crew.md")
+    with open(profile, "wb") as fh:
+        fh.write(b"<!-- review-crew: v1 -->\n## Model tiers\n\xff: opus\n")
+
+
+def test_readout_config_ok_core_invalid_utf8_tiers_separate_errors(tmp_path):
+    """Regression #752: tiers failure must not overwrite core.md read status."""
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
+    _seed_invalid_utf8_tiers(repo)
+    snap = pp.readout_config(cwd=repo, root=store)
+    assert snap["status"] == core_md.CONFIG_OK
+    assert snap["reason"] is None
+    assert snap["readError"] is None
+    assert snap["prefs"] == {"reviewer": "cursor"}
+    assert snap["tiersError"].startswith("dispatch-gate-evaluation-failed: ")
+
+
+def test_run_ok_core_invalid_utf8_tiers_config_read_and_engines(tmp_path, monkeypatch, capsys):
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
+    _seed_invalid_utf8_tiers(repo)
+    monkeypatch.setattr(pp, "gh_auth_probe", lambda run=None: {
+        "tool": "gh auth", "ok": True, "exit": 0, "detail": ""})
+    monkeypatch.setattr(pp, "cross_vendor_cli_probe", lambda engine, run=None, argv=None: {
+        "tool": "cross-vendor-cli:" + engine, "ok": True, "exit": 0, "detail": ""})
+    import dispatch_selftest
+
+    monkeypatch.setattr(
+        dispatch_selftest,
+        "probe_result",
+        lambda config=None: {"tool": "dispatch-vocab", "ok": True, "detail": "ok (1 checks)"},
+    )
+
+    rc = pp.main(["preflight_probe.py", "run", "--cwd", repo])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["configRead"]["status"] == "ok"
+    assert payload["configRead"]["reason"] is None
+    assert payload["configRead"]["tiersError"] is not None
+    assert payload["configRead"]["tiersError"].startswith("dispatch-gate-evaluation-failed: ")
+    assert payload["crossVendorEngines"] == pp.configured_cross_vendor_engines({"reviewer": "cursor"})
+
+
+def test_dispatch_selftest_config_tiers_error_snapshot_yields_read_error():
+    snap = {
+        "prefs": {"reviewer": "cursor"},
+        "status": core_md.CONFIG_OK,
+        "reason": None,
+        "readError": None,
+        "tiers": {},
+        "tiersError": "dispatch-gate-evaluation-failed: UnicodeDecodeError: bad",
+    }
+    cfg = pp._dispatch_selftest_config(snapshot=snap)
+    assert cfg["read_error"] == snap["tiersError"]
+
+
+def test_dispatch_calibration_tiers_error_snapshot_yields_marker_row():
+    snap = {
+        "prefs": {"reviewer": "cursor"},
+        "status": core_md.CONFIG_OK,
+        "reason": None,
+        "readError": None,
+        "tiers": {},
+        "tiersError": "dispatch-gate-evaluation-failed: UnicodeDecodeError: bad",
+    }
+    rows = pp.dispatch_calibration(snapshot=snap)
+    assert len(rows) == 1
+    assert rows[0]["role"] == "*"
+    assert rows[0]["engine"] is None
+    assert rows[0]["model"] is None
+    assert rows[0]["readError"] == snap["tiersError"]
+
+
+def test_snapshot_missing_tiers_keys_does_not_crash_consumers():
+    snap = {
+        "prefs": {"reviewer": "cursor"},
+        "status": core_md.CONFIG_OK,
+        "reason": None,
+        "readError": None,
+    }
+    cfg = pp._dispatch_selftest_config(snapshot=snap)
+    assert cfg == {"prefs": {"reviewer": "cursor"}, "tiers": {}}
+    rows = pp.dispatch_calibration(snapshot=snap)
+    assert len(rows) == 4
+
+
+def test_readout_config_unreadable_core_tiers_error_independent(tmp_path):
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "dangling")
+    snap = pp.readout_config(cwd=repo, root=store)
+    assert snap["status"] == "unreadable"
+    assert snap["readError"].startswith("core-md-unreadable: ")
+    assert snap["prefs"] == {}
+    assert snap.get("tiersError") is None
+    assert isinstance(snap["tiers"], dict)
+
+
+def test_readout_config_both_read_and_tiers_errors_independent(tmp_path):
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "dangling")
+    _seed_invalid_utf8_tiers(repo)
+    snap = pp.readout_config(cwd=repo, root=store)
+    assert snap["readError"].startswith("core-md-unreadable: ")
+    assert snap["tiersError"].startswith("dispatch-gate-evaluation-failed: ")
+
+
+def test_dispatch_calibration_both_errors_core_wins_for_marker(tmp_path):
+    snap = {
+        "prefs": {},
+        "status": "unreadable",
+        "reason": core_md.GATE_REASON_UNREADABLE,
+        "readError": "core-md-unreadable: dangling",
+        "tiers": {},
+        "tiersError": "dispatch-gate-evaluation-failed: bad tiers",
+    }
+    rows = pp.dispatch_calibration(snapshot=snap)
+    assert len(rows) == 1
+    assert rows[0]["readError"] == "core-md-unreadable: dangling"
+
+
+def test_dispatch_selftest_config_both_errors_core_wins_for_read_error():
+    snap = {
+        "prefs": {},
+        "status": "unreadable",
+        "reason": core_md.GATE_REASON_UNREADABLE,
+        "readError": "core-md-unreadable: dangling",
+        "tiers": {},
+        "tiersError": "dispatch-gate-evaluation-failed: bad tiers",
+    }
+    cfg = pp._dispatch_selftest_config(snapshot=snap)
+    assert cfg["read_error"] == "core-md-unreadable: dangling"
