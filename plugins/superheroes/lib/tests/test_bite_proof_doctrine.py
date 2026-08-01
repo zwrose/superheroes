@@ -10,6 +10,10 @@ headings.
 - clauses restated in ``skills/workhorse/SKILL.md`` and ``agents/test-reviewer.md`` are **not**
   guarded;
 - the clause and pointer rosters are **hand-maintained**;
+- heading **order and position** in the home are unguarded — headings are matched as whole-document
+  line membership — and that is deliberate, because no consumer cites relative order;
+- unlike the pointer roster, which has a completeness walker, the **heading and clause rosters have
+  none** — a new heading or a new restated clause is silently unguarded until someone adds it;
 - the guard proves nothing about whether the doctrine is correct, obeyed, or actually recorded for
   any change.
 """
@@ -192,7 +196,10 @@ def _text_without_one_pointer_in_section(text, rel, section_heading):
         f"mutation setup: {_POINTER!r} missing in {rel} section {section_heading!r} (count={count})"
     )
     new_section = section_text.replace(_POINTER, "rubric/bite-proof-DRIFT.md", 1)
-    assert _POINTER not in new_section or new_section.count(_POINTER) == count - 1
+    assert new_section.count(_POINTER) == count - 1, (
+        f"mutation setup: expected {_POINTER!r} count {count - 1} in {rel} section "
+        f"{section_heading!r}, found {new_section.count(_POINTER)}"
+    )
     new_lines = lines[:start] + new_section.splitlines() + lines[end:]
     mutated = "\n".join(new_lines) + ("\n" if text.endswith("\n") else "")
     assert mutated != text
@@ -238,25 +245,40 @@ def _plant_clause_elsewhere_in_home(text, home_section, clause, plant_section):
     return "\n".join(new_lines) + ("\n" if text.endswith("\n") else "")
 
 
-def _walk_pointer_carrying_md_files():
+def _sections_with_pointer(rel, text):
+    if _POINTER not in text:
+        return set()
+    lines = text.splitlines()
+    found = set()
+    for line in lines:
+        heading = line.strip()
+        if _heading_level(line) != 2:
+            continue
+        start, end = _section_span(lines, heading, rel)
+        if _POINTER in "\n".join(lines[start:end]):
+            found.add((rel, heading))
+    return found
+
+
+def _walk_pointer_carrying_sections():
     found = set()
     for root, _dirs, files in os.walk(PLUGIN):
         for name in files:
             if name.endswith(".md"):
                 rel = os.path.relpath(os.path.join(root, name), PLUGIN)
-                if _POINTER in _read(rel):
-                    found.add(rel)
+                if rel not in _POINTER_ROSTER_EXCLUDED:
+                    found |= _sections_with_pointer(rel, _read(rel))
     with open(os.path.join(REPO_ROOT, "CONVENTIONS.md"), encoding="utf-8") as fh:
-        if _POINTER in fh.read():
-            found.add("../../CONVENTIONS.md")
+        text = fh.read()
+        if _POINTER in text:
+            found |= _sections_with_pointer("../../CONVENTIONS.md", text)
     return found
 
 
-def _check_pointer_roster_complete(found_files):
-    roster_files = frozenset(rel for rel, _, _ in _CONSUMER_ROSTER)
-    expected = found_files - _POINTER_ROSTER_EXCLUDED
-    if expected != roster_files:
-        missing, extra = sorted(roster_files - expected), sorted(expected - roster_files)
+def _check_pointer_roster_complete(found_sections):
+    roster_sections = frozenset((rel, section) for rel, section, _ in _CONSUMER_ROSTER)
+    if found_sections != roster_sections:
+        missing, extra = sorted(roster_sections - found_sections), sorted(found_sections - roster_sections)
         raise AssertionError(
             f"pointer roster drift: missing={missing!r}, unrostered={extra!r} — extend roster"
         )
@@ -274,6 +296,7 @@ def test_section_span_includes_deeper_subheading():
         "## Sibling",
     ]).splitlines()
     start, end = _section_span(lines, "## Parent", "synthetic")
+    assert lines[start] == "## Parent"
     body = "\n".join(lines[start:end])
     assert "### Child" in body
     assert "child body" in body
@@ -321,7 +344,7 @@ def test_clause_present_in_home_and_copy_holder(row):
 
 
 def test_pointer_roster_is_complete():
-    _check_pointer_roster_complete(_walk_pointer_carrying_md_files())
+    _check_pointer_roster_complete(_walk_pointer_carrying_sections())
 
 
 @pytest.mark.parametrize("rel,section,expected_count", _CONSUMER_ROSTER, ids=[f"{r}::{s}" for r, s, _ in _CONSUMER_ROSTER])
@@ -384,6 +407,40 @@ def test_negative_clause_planted_elsewhere_in_home(row):
 
 
 def test_negative_pointer_roster_unrostered_file():
-    roster = frozenset(rel for rel, _, _ in _CONSUMER_ROSTER)
+    roster = frozenset((rel, section) for rel, section, _ in _CONSUMER_ROSTER)
     with pytest.raises(AssertionError, match="unrostered"):
-        _check_pointer_roster_complete(roster | {"synthetic/unrostered.md"})
+        _check_pointer_roster_complete(roster | {("synthetic/unrostered.md", "## Synthetic")})
+
+
+def test_negative_pointer_in_unrostered_section_of_rostered_file():
+    rel, section, _ = _CONSUMER_ROSTER[0]
+    with pytest.raises(AssertionError, match="unrostered"):
+        _check_pointer_roster_complete(
+            _walk_pointer_carrying_sections() | {(rel, "## Unrostered section")}
+        )
+
+
+def test_negative_consumer_pointer_over_count_in_section():
+    synthetic = "\n".join([
+        "## Section A",
+        f"{_POINTER} first pointer",
+        f"and again: {_POINTER}",
+    ])
+    with pytest.raises(AssertionError, match=_POINTER):
+        _check_consumer_pointer_in_section(synthetic, "synthetic.md", "## Section A", 1)
+
+
+@pytest.mark.parametrize("row", _CLAUSE_ROWS, ids=[r["clause"] for r in _CLAUSE_ROWS])
+def test_negative_clause_planted_elsewhere_in_copy_holder(row):
+    plant_section = (
+        "## The rules" if row["copy_holder_section"] != "## The rules" else "## Validating your work order"
+    )
+    synthetic_text = "\n".join([
+        row["copy_holder_section"],
+        "Section body without the clause.",
+        plant_section,
+        f"{row['clause']} — planted outside {row['copy_holder_section']}.",
+    ])
+    read_text = lambda rel: synthetic_text if rel == row["copy_holder"] else _read(rel)
+    with pytest.raises(AssertionError, match=re.escape(row["copy_holder_section"])):
+        _check_clause_sync(row, read_text)
