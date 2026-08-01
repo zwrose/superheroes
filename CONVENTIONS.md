@@ -688,6 +688,18 @@ free-text is secret-scrubbed at the adapter boundary (`engine_adapter.parse_resu
 every downstream surface — including a `/review-code --post` PR comment — is clean. The
 merge authorization is the owner's to grant; the band shows it and never applies it.
 
+**Headless builder launch contract.** A headless builder launch is composed through
+`lib/launcher.py` from the versioned doctrine artifact (`rubric/launch-doctrine.md`, parsed
+fail-closed by `lib/launch_doctrine.py`) — never reconstructed from session memory
+(LEDGERS.md §4 seat ruling B). The launcher stamps the premise durably at dispatch in
+`lib/launch_ledger.py`: base commit, surfaces, enumerated grant scope, owner-capability
+preconditions with a stated horizon, and the standing exclusions it applies itself (release
+PRs excluded, force-push never). That record carries R1's mechanical park/refusal accounting
+— it reports **indeterminate** rather than a rate whenever it cannot see the whole batch; zero
+parks is a signal to inspect, never a clean sheet. The Showrunner advisor invokes the launcher
+per launch; the eight dispatch-preflight checks live in the charter §9 and the artifact, bound
+by a drift test — cite those homes, do not duplicate them here.
+
 **Sanitized review view (#684).** External **review** seats (codex/cursor via `dispatch-review`)
 run against a disposable sanitized export of the named repo root — machinery inside the runner, not
 orchestrator discipline. A view that cannot be built is a named refusal with `attempts: 0` and no

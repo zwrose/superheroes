@@ -53,6 +53,14 @@ ALLOWLIST = {
         "Review dispatch metadata binding (meta.repoRoot vs checkout toplevel); never "
         "derives a calibration/config store key."
     ),
+    "launch_ledger.py": (
+        "Ledger directory layout: `_has_git_entry` is a cheap is-this-a-repo precheck "
+        "(named refusal `ledger-repo-identity-unavailable` on failure, never a fallback "
+        "path); `repo_identity` and `resolve_root` call `rev-parse --git-common-dir` "
+        "through `_git_scrubbed` (strips GIT_DIR, GIT_WORK_TREE, and related vars) to "
+        "hash a per-repo ledger directory name under a temp root. Never derives a "
+        "calibration/config store key."
+    ),
 }
 
 

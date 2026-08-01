@@ -5,10 +5,12 @@ pid is dead-on-this-boot, OR when its bootId no longer matches (the host
 rebooted, so the recorded pid is meaningless). A LIVE holder still raises LockHeld.
 """
 import calendar
+import errno
 import fcntl
 import json
 import os
 import socket
+import stat
 import tempfile
 import time
 
@@ -31,23 +33,35 @@ def _holder_info():
 
 
 def read_holder(lock_path):
-    try:
-        with open(lock_path) as fh:
-            parsed = json.load(fh)
-    except (OSError, ValueError):
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+    status, holder = _read_holder_state(lock_path)
+    return holder if status == "ok" else {}
 
 
 def _read_holder_state(lock_path):
     """Distinguish read failure from successfully read but unusable content."""
+    fd = -1
     try:
-        with open(lock_path) as fh:
+        fd = os.open(lock_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return "unusable", None
+        with os.fdopen(fd) as fh:
+            fd = -1
             raw = fh.read()
-    except OSError:
+    except OSError as e:
+        # ELOOP: symlink refused by O_NOFOLLOW — unlink removes the link, not its
+        # target, so reclaim is safe. EACCES/EPERM: cannot read a real lock file
+        # we may be obliged to respect; fail closed as held, not malformed.
+        if e.errno in (errno.ELOOP, errno.ENXIO):
+            return "unusable", None
         return "read_error", None
     except UnicodeError:
         return "unusable", None
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
     if not raw or not raw.strip():
         return "unusable", None
     try:
@@ -79,7 +93,7 @@ def _holder_fields_unusable(holder):
 
 def _malformed_past_grace(lock_path, now=None):
     try:
-        st = os.stat(lock_path)
+        st = os.lstat(lock_path)
     except OSError:
         return False
     now = time.time() if now is None else now
@@ -97,7 +111,7 @@ def _expired(acquired_at, ttl, now=None):
 def is_stale(lock_path, ttl=DEFAULT_TTL, now=None):
     """Stale iff (bootId mismatch) OR (expired by TTL AND pid dead-on-this-host)
     OR (malformed holder past grace window)."""
-    if not os.path.exists(lock_path):
+    if not os.path.lexists(lock_path):
         return False
     status, holder = _read_holder_state(lock_path)
     if status == "read_error":
@@ -131,6 +145,7 @@ def _publish_lock(lock_path, holder_info):
                 fd = -1
                 json.dump(holder_info, fh)
                 fh.flush()
+                os.fchmod(fh.fileno(), 0o600)
                 os.fsync(fh.fileno())
         finally:
             if fd >= 0:
@@ -138,9 +153,6 @@ def _publish_lock(lock_path, holder_info):
                     os.close(fd)
                 except OSError:
                     pass
-        umask = os.umask(0)
-        os.umask(umask)
-        os.chmod(tmp, 0o644 & ~umask)
         os.link(tmp, lock_path)
     finally:
         try:
@@ -151,8 +163,20 @@ def _publish_lock(lock_path, holder_info):
 
 def _reclaim_stale_lock(lock_path, ttl):
     guard_path = lock_path + ".reclaim"
-    fd = os.open(guard_path, os.O_CREAT | os.O_RDWR, 0o666)
     try:
+        fd = os.open(guard_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    except OSError:
+        return False
+    try:
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return False
+            try:
+                os.fchmod(fd, 0o600)
+            except OSError:
+                pass
+        except OSError:
+            return False
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
@@ -163,9 +187,11 @@ def _reclaim_stale_lock(lock_path, ttl):
             os.unlink(lock_path)
         except FileNotFoundError:
             pass
+        except OSError:
+            return False
         try:
             _publish_lock(lock_path, _holder_info())
-        except FileExistsError:
+        except OSError:
             return False
         return True
     finally:
@@ -176,23 +202,31 @@ ACQUIRE_RETRY_LIMIT = 3
 
 
 def acquire(lock_path, ttl=DEFAULT_TTL):
-    """Acquire the lock. Returns True if a stale lock was reclaimed, else False."""
-    os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
+    """Acquire the lock. Returns True if a stale lock was reclaimed, else False.
+
+    Raises only LockHeld — never propagates OSError from publish or directory setup."""
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
+    except OSError:
+        raise LockHeld({}) from None
     for _ in range(ACQUIRE_RETRY_LIMIT):
         try:
-            _publish_lock(lock_path, _holder_info())
-            return False
-        except FileExistsError:
-            pass
-        if not is_stale(lock_path, ttl):
-            if not os.path.exists(lock_path):
+            try:
+                _publish_lock(lock_path, _holder_info())
+                return False
+            except OSError:
+                pass
+            if not is_stale(lock_path, ttl):
+                if not os.path.lexists(lock_path):
+                    continue
+                raise LockHeld(read_holder(lock_path)) from None
+            if _reclaim_stale_lock(lock_path, ttl):
+                return True
+            if not os.path.lexists(lock_path):
                 continue
             raise LockHeld(read_holder(lock_path)) from None
-        if _reclaim_stale_lock(lock_path, ttl):
-            return True
-        if not os.path.exists(lock_path):
-            continue
-        raise LockHeld(read_holder(lock_path)) from None
+        except OSError:
+            raise LockHeld(read_holder(lock_path)) from None
     raise LockHeld(read_holder(lock_path)) from None
 
 
