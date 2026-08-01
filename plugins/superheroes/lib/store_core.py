@@ -9,6 +9,7 @@ constants, kind-keyed resolve/create, artifact_key, etc.).
 Stdlib-only; no third-party dependencies.
 """
 import collections
+import contextlib
 import hashlib
 import json
 import os
@@ -16,6 +17,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 
 GIT_OK = "ok"
 GIT_DECLINED = "declined"        # git ran and exited non-zero — an authoritative "no"
@@ -31,6 +33,12 @@ class RepoRootUnavailable(Exception):
     story (unreadable core.md, absent file, legacy-profile-unsupported). Callers that need to
     translate it must catch ``RepoRootUnavailable`` by name."""
 
+    def __init__(self, message, *, git_status=None):
+        super().__init__(message)
+        # None (default) means origin unknown — never memo-cache. GIT_UNAVAILABLE means git
+        # could not be run (transient); GIT_DECLINED means git ran and the refusal is authoritative.
+        self.git_status = git_status
+
 
 def _declined_not_a_repository_outcome(res, cwd):
     """Shared fail-closed classification for declined not-a-repository git results.
@@ -41,28 +49,108 @@ def _declined_not_a_repository_outcome(res, cwd):
         git_ancestor = git_dot_entry_ancestor(cwd)
     except OSError as exc:
         raise RepoRootUnavailable(
-            "cannot determine repository root at %s: %s" % (cwd, exc))
+            "cannot determine repository root at %s: %s" % (cwd, exc),
+            git_status=GIT_DECLINED)
     if git_ancestor is not None:
         if res.status == GIT_OK:
             raise RepoRootUnavailable(
                 "repository root indeterminate at %s: .git present at %s but git returned "
-                "empty rev-parse --show-toplevel" % (cwd, git_ancestor))
+                "empty rev-parse --show-toplevel" % (cwd, git_ancestor),
+                git_status=GIT_DECLINED)
         raise RepoRootUnavailable(
             "repository root indeterminate at %s: .git present at %s but git declined: %s"
-            % (cwd, git_ancestor, res.detail))
+            % (cwd, git_ancestor, res.detail),
+            git_status=GIT_DECLINED)
     if os.environ.get("GIT_DIR") or os.environ.get("GIT_WORK_TREE"):
         raise RepoRootUnavailable(
             "git declined at %s with GIT_DIR or GIT_WORK_TREE set: %s"
-            % (cwd, res.detail))
+            % (cwd, res.detail),
+            git_status=GIT_DECLINED)
     return os.path.realpath(cwd)
+
+
+_repo_identity_memo_local = threading.local()
+
+
+def _active_repo_identity_memo():
+    stack = getattr(_repo_identity_memo_local, "stack", None)
+    if stack:
+        return stack[-1]
+    return None
+
+
+def _memo_cacheable_repo_exc(exc):
+    """True only when ``exc.git_status`` is set explicitly and is not ``GIT_UNAVAILABLE``."""
+    status = exc.git_status
+    return status is not None and status != GIT_UNAVAILABLE
+
+
+@contextlib.contextmanager
+def repo_identity_memo():
+    """Memoize repository IDENTITY lookups for the duration of a ``with`` block.
+
+    Caches ``repo_root(cwd)`` and ``derive_identifiers(cwd)`` per ``cwd`` — including an
+    authoritative ``RepoRootUnavailable`` (``git_status`` is ``GIT_DECLINED``), so a deterministic
+    refusal fails identically every time inside the block instead of silently re-probing. Repo
+    identity cannot change inside one lock-guarded config operation, so caching authoritative
+    refusals is safe; MUTABLE git state is deliberately NOT cached — the memo sits at the identity
+    functions, never at ``run_git_result``, so ``status --porcelain`` and ``rev-parse HEAD`` are
+    untouched.
+
+    An identity derived while git was UNAVAILABLE is NOT cached — neither successful values nor
+  raised exceptions: ``get_remote`` collapses "no origin" and "git could not run" to the same
+    ``None``, so caching the latter would pin a project to the wrong store key, and caching a
+    transient timeout would replay it after git recovers. Exceptions with no ``git_status`` are
+    treated the same way (not cacheable). Unauthoritative lookups re-derive every call, exactly as
+    they do without the memo.
+
+    Reentrant (a nested ``with`` reuses the outer memo) and thread-local (concurrent threads never
+    share a cache). Outside any block, every function behaves exactly as it does today."""
+    stack = getattr(_repo_identity_memo_local, "stack", None)
+    if stack is None:
+        stack = []
+        _repo_identity_memo_local.stack = stack
+    if stack:
+        yield
+        return
+    state = {
+        "root": {},
+        "root_exc": {},
+        "ident": {},
+        "ident_exc": {},
+    }
+    stack.append(state)
+    try:
+        yield
+    finally:
+        stack.pop()
 
 
 def repo_root(cwd):
     """Fail-closed repository root for ``cwd`` (issue #742)."""
+    memo = _active_repo_identity_memo()
+    if memo is not None:
+        if cwd in memo["root"]:
+            return memo["root"][cwd]
+        if cwd in memo["root_exc"]:
+            raise memo["root_exc"][cwd]
+    try:
+        resolved = _repo_root_uncached(cwd)
+    except RepoRootUnavailable as exc:
+        if memo is not None and _memo_cacheable_repo_exc(exc):
+            memo["root_exc"][cwd] = exc
+        raise
+    if memo is not None:
+        memo["root"][cwd] = resolved
+    return resolved
+
+
+def _repo_root_uncached(cwd):
     res = run_git_result(cwd, "rev-parse", "--show-toplevel")
     if res.status == GIT_UNAVAILABLE:
         raise RepoRootUnavailable(
-            "git could not be run at %s: %s" % (cwd, res.detail))
+            "git could not be run at %s: %s" % (cwd, res.detail),
+            git_status=GIT_UNAVAILABLE)
     if res.status == GIT_OK:
         if not res.out:
             return _declined_not_a_repository_outcome(res, cwd)
@@ -70,14 +158,16 @@ def repo_root(cwd):
         if not os.path.isdir(resolved):
             raise RepoRootUnavailable(
                 "git rev-parse --show-toplevel at %s named a non-directory path: %s"
-                % (cwd, res.out))
+                % (cwd, res.out),
+                git_status=GIT_DECLINED)
         return resolved
     if not_a_repository(res):
         return _declined_not_a_repository_outcome(res, cwd)
     if not os.path.isdir(cwd):
         return _declined_not_a_repository_outcome(res, cwd)
     raise RepoRootUnavailable(
-        "git declined rev-parse --show-toplevel at %s: %s" % (cwd, res.detail))
+        "git declined rev-parse --show-toplevel at %s: %s" % (cwd, res.detail),
+        git_status=GIT_DECLINED)
 
 
 def normalize_remote(url):
@@ -173,9 +263,19 @@ def run_git(cwd, *args):
     return run_git_result(cwd, *args).out
 
 
+def get_remote_result(cwd):
+    """``get_remote`` plus WHY there is no remote — (normalized_remote, status).
+
+    ``status`` is the ``run_git_result`` status: ``GIT_OK``/``GIT_DECLINED`` are authoritative
+    answers a caller may cache; ``GIT_UNAVAILABLE`` means git never ran, so the "no remote" is
+    unknown, not negative, and must never be memoized as fact."""
+    res = run_git_result(cwd, "remote", "get-url", "origin")
+    return normalize_remote(res.out), res.status
+
+
 def get_remote(cwd):
     """Normalized origin URL, or None."""
-    return normalize_remote(run_git(cwd, "remote", "get-url", "origin"))
+    return get_remote_result(cwd)[0]
 
 
 def get_gitdir(cwd):
@@ -196,7 +296,8 @@ def get_gitdir(cwd):
         if not os.path.exists(resolved):
             raise RepoRootUnavailable(
                 "git rev-parse --git-common-dir at %s named a nonexistent path: %s"
-                % (cwd, out))
+                % (cwd, out),
+                git_status=GIT_DECLINED)
         return resolved
 
     res = run_git_result(cwd, "rev-parse", "--absolute-git-dir")
@@ -205,25 +306,41 @@ def get_gitdir(cwd):
 
     if res.status == GIT_UNAVAILABLE:
         raise RepoRootUnavailable(
-            "git could not be run at %s: %s" % (cwd, res.detail))
+            "git could not be run at %s: %s" % (cwd, res.detail),
+            git_status=GIT_UNAVAILABLE)
     if not_a_repository(res):
         return _declined_not_a_repository_outcome(res, cwd)
     if not os.path.isdir(cwd):
         return _declined_not_a_repository_outcome(res, cwd)
     raise RepoRootUnavailable(
-        "git declined rev-parse --absolute-git-dir at %s: %s" % (cwd, res.detail))
+        "git declined rev-parse --absolute-git-dir at %s: %s" % (cwd, res.detail),
+        git_status=GIT_DECLINED)
 
 
 def derive_identifiers(cwd):
     """Return dict with remote, gitdir, remote_hash, gitdir_hash for cwd."""
-    remote = get_remote(cwd)
-    gitdir = get_gitdir(cwd)
-    return {
-        "remote": remote,
-        "gitdir": gitdir,
-        "remote_hash": short_hash(remote) if remote else None,
-        "gitdir_hash": short_hash(gitdir),
-    }
+    memo = _active_repo_identity_memo()
+    if memo is not None:
+        if cwd in memo["ident"]:
+            return memo["ident"][cwd]
+        if cwd in memo["ident_exc"]:
+            raise memo["ident_exc"][cwd]
+    try:
+        remote, remote_status = get_remote_result(cwd)
+        gitdir = get_gitdir(cwd)
+        ident = {
+            "remote": remote,
+            "gitdir": gitdir,
+            "remote_hash": short_hash(remote) if remote else None,
+            "gitdir_hash": short_hash(gitdir),
+        }
+    except RepoRootUnavailable as exc:
+        if memo is not None and _memo_cacheable_repo_exc(exc):
+            memo["ident_exc"][cwd] = exc
+        raise
+    if memo is not None and remote_status != GIT_UNAVAILABLE:
+        memo["ident"][cwd] = ident
+    return ident
 
 
 def atomic_write(path, text, tmp_prefix=".store-core."):

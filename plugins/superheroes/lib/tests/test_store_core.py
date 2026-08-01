@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 
 import pytest
 
@@ -752,3 +753,242 @@ def test_not_a_repository_false_on_other_declined():
     assert sc.not_a_repository(res) is False
     assert sc.not_a_repository(sc.GitResult(None, sc.GIT_UNAVAILABLE, "x")) is False
     assert sc.not_a_repository(sc.GitResult("/repo", sc.GIT_OK, None)) is False
+
+
+# ---------------------------------------------------------------------------
+# issue #752 — repo_identity_memo / get_remote_result
+# ---------------------------------------------------------------------------
+
+def _git_subprocess_counter(monkeypatch):
+    count = {"n": 0}
+    real = subprocess.run
+
+    def wrapped(*args, **kwargs):
+        cmd = args[0] if args else None
+        if cmd and isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "git":
+            count["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", wrapped)
+    return count
+
+
+def test_repo_identity_memo_caches_repo_root(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "r", remote="git@github.com:org/repo.git")
+    counter = _git_subprocess_counter(monkeypatch)
+    with sc.repo_identity_memo():
+        first = sc.repo_root(repo)
+        after_first = counter["n"]
+        second = sc.repo_root(repo)
+        after_second = counter["n"]
+    assert first == second
+    assert after_second == after_first
+
+
+def test_repo_identity_memo_caches_derive_identifiers(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "r", remote="git@github.com:org/repo.git")
+    counter = _git_subprocess_counter(monkeypatch)
+    with sc.repo_identity_memo():
+        first = sc.derive_identifiers(repo)
+        after_first = counter["n"]
+        second = sc.derive_identifiers(repo)
+        after_second = counter["n"]
+    assert first == second
+    assert after_second == after_first
+
+
+def test_repo_identity_memo_caches_repo_root_unavailable_exception(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "r", remote="git@github.com:org/repo.git")
+    calls = {"n": 0}
+    real = sc.run_git_result
+
+    def fake(cwd, *args):
+        if args == ("rev-parse", "--show-toplevel"):
+            calls["n"] += 1
+            return sc.GitResult(None, sc.GIT_DECLINED, "fatal: bad config")
+        return real(cwd, *args)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    with sc.repo_identity_memo():
+        exc1 = None
+        try:
+            sc.repo_root(repo)
+        except sc.RepoRootUnavailable as exc:
+            exc1 = exc
+        n1 = calls["n"]
+        exc2 = None
+        try:
+            sc.repo_root(repo)
+        except sc.RepoRootUnavailable as exc:
+            exc2 = exc
+        n2 = calls["n"]
+    assert exc1 is not None and exc2 is not None
+    assert exc1 is exc2
+    assert n2 == n1
+
+
+def test_repo_identity_memo_does_not_cache_git_unavailable_repo_root_exc(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    calls = {"n": 0}
+    real = sc.run_git_result
+
+    def fake(cwd, *args):
+        if args == ("rev-parse", "--show-toplevel"):
+            calls["n"] += 1
+            return sc.GitResult(None, sc.GIT_UNAVAILABLE, "x")
+        return real(cwd, *args)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    with sc.repo_identity_memo():
+        for _ in range(2):
+            with pytest.raises(sc.RepoRootUnavailable):
+                sc.repo_root(repo)
+    assert calls["n"] == 2
+
+
+def test_repo_identity_memo_caches_authoritative_ident_exc(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "r", remote="git@github.com:org/repo.git")
+    calls = {"n": 0}
+
+    def boom(cwd):
+        calls["n"] += 1
+        raise sc.RepoRootUnavailable("authoritative ident refusal", git_status=sc.GIT_DECLINED)
+
+    monkeypatch.setattr(sc, "get_gitdir", boom)
+    with sc.repo_identity_memo():
+        for _ in range(2):
+            with pytest.raises(sc.RepoRootUnavailable):
+                sc.derive_identifiers(repo)
+    assert calls["n"] == 1
+
+
+def test_repo_identity_memo_does_not_cache_git_unavailable_ident_exc(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "r", remote="git@github.com:org/repo.git")
+    calls = {"n": 0}
+
+    def boom(cwd):
+        calls["n"] += 1
+        raise sc.RepoRootUnavailable("git unavailable", git_status=sc.GIT_UNAVAILABLE)
+
+    monkeypatch.setattr(sc, "get_gitdir", boom)
+    with sc.repo_identity_memo():
+        for _ in range(2):
+            with pytest.raises(sc.RepoRootUnavailable):
+                sc.derive_identifiers(repo)
+    assert calls["n"] == 2
+
+
+def test_repo_identity_memo_reentrant_survives_inner_exit(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "r", remote="git@github.com:org/repo.git")
+    counter = _git_subprocess_counter(monkeypatch)
+    with sc.repo_identity_memo():
+        first = sc.repo_root(repo)
+        after_first = counter["n"]
+        with sc.repo_identity_memo():
+            assert sc.repo_root(repo) == first
+        after_inner = counter["n"]
+        assert sc.repo_root(repo) == first
+        after_outer = counter["n"]
+    assert after_inner == after_first
+    assert after_outer == after_first
+
+
+def test_repo_identity_memo_thread_isolation(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "r", remote="git@github.com:org/repo.git")
+    counter = _git_subprocess_counter(monkeypatch)
+    worker_results = {}
+    worker_errors = []
+
+    def worker():
+        try:
+            worker_results["memo"] = sc._active_repo_identity_memo() is None
+            worker_results["ident"] = sc.derive_identifiers(repo)
+            worker_results["git_calls"] = counter["n"]
+        except BaseException as exc:
+            worker_errors.append(exc)
+
+    with sc.repo_identity_memo():
+        sc.derive_identifiers(repo)
+        after_main = counter["n"]
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join()
+    assert not worker_errors
+    assert worker_results["memo"] is True
+    assert worker_results["ident"]["remote"] == "github.com/org/repo"
+    assert worker_results["git_calls"] > after_main
+
+
+def test_repo_identity_memo_no_change_outside_block(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "r", remote="git@github.com:org/repo.git")
+    counter = _git_subprocess_counter(monkeypatch)
+    with sc.repo_identity_memo():
+        sc.repo_root(repo)
+        sc.derive_identifiers(repo)
+    after_block = counter["n"]
+    sc.repo_root(repo)
+    sc.derive_identifiers(repo)
+    assert counter["n"] > after_block
+
+
+def test_repo_identity_memo_does_not_cache_mutable_git_state(tmp_path):
+    repo = _init_repo(tmp_path / "main")
+    (tmp_path / "main" / "f").write_text("x")
+    _git(repo, "add", "f")
+    _git(repo, "commit", "-qm", "init")
+    head_before_commit = sc.run_git(repo, "rev-parse", "HEAD")
+    with sc.repo_identity_memo():
+        head_at_start = sc.run_git(repo, "rev-parse", "HEAD")
+        (tmp_path / "main" / "g").write_text("y")
+        _git(repo, "add", "g")
+        _git(repo, "commit", "-qm", "second")
+        head_after_commit = sc.run_git(repo, "rev-parse", "HEAD")
+    assert head_at_start == head_before_commit
+    assert head_after_commit != head_at_start
+
+
+def test_repo_identity_memo_does_not_cache_git_unavailable_ident(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "r", remote="git@github.com:org/repo.git")
+    calls = {"remote": 0}
+    real = sc.run_git_result
+
+    def fake(cwd, *args):
+        if args == ("remote", "get-url", "origin"):
+            calls["remote"] += 1
+            return sc.GitResult(None, sc.GIT_UNAVAILABLE, "x")
+        return real(cwd, *args)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    with sc.repo_identity_memo():
+        id1 = sc.derive_identifiers(repo)
+        id2 = sc.derive_identifiers(repo)
+    assert calls["remote"] == 2
+    assert id1 == id2
+
+
+def test_get_remote_result_git_ok(tmp_path):
+    repo = _init_repo(tmp_path / "r", remote="git@github.com:org/repo.git")
+    remote, status = sc.get_remote_result(repo)
+    assert remote == "github.com/org/repo"
+    assert status == sc.GIT_OK
+    assert sc.get_remote(repo) == remote
+
+
+def test_get_remote_result_git_declined(tmp_path):
+    repo = _init_repo(tmp_path / "r")
+    remote, status = sc.get_remote_result(repo)
+    assert remote is None
+    assert status == sc.GIT_DECLINED
+    assert sc.get_remote(repo) is None
+
+
+def test_get_remote_result_git_unavailable(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *a, **kw: (_ for _ in ()).throw(FileNotFoundError("no git")),
+    )
+    remote, status = sc.get_remote_result(repo)
+    assert remote is None
+    assert status == sc.GIT_UNAVAILABLE
+    assert sc.get_remote(repo) is None

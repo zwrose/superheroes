@@ -94,6 +94,73 @@ def test_engine_role_keys_are_all_surfaced_by_loader():
     assert set(EP.ENGINE_ROLE_KEYS) <= set(degenerate.keys())
 
 
+def test_degenerate_engine_prefs_defaults():
+    got = EP.degenerate_engine_prefs()
+    assert got["briefCheck"] == "codex"
+    assert got["reviewer"] == "claude"
+    assert got["implementation"] == "claude"
+    assert got["pilot"] == "claude"
+    assert got["effort"] == {}
+
+
+def test_degenerate_engine_prefs_returns_fresh_dict():
+    first = EP.degenerate_engine_prefs()
+    first["briefCheck"] = "claude"
+    second = EP.degenerate_engine_prefs()
+    assert second["briefCheck"] == "codex"
+
+
+def test_degenerate_engine_prefs_matches_resolve_engine_drift_guard():
+    pref_key_to_role_kind = {}
+    for role_kind, pref_key in EP._ROLE_KEY.items():
+        pref_key_to_role_kind.setdefault(pref_key, role_kind)
+    for pref_key in EP.ENGINE_ROLE_KEYS:
+        role_kind = pref_key_to_role_kind[pref_key]
+        degenerate_val = EP.degenerate_engine_prefs()[pref_key]
+        assert degenerate_val == EP.resolve_engine_pref_key(pref_key, {}), pref_key
+        assert degenerate_val == EP.resolve_engine(role_kind, {}), (pref_key, role_kind)
+
+
+def test_engine_pref_load_last_resort_matches_degenerate_engine_prefs():
+    epl = _load_module("engine_pref_load.py", "engine_pref_load")
+    assert epl._LAST_RESORT_PREFS == EP.degenerate_engine_prefs()
+
+
+def test_load_engine_prefs_empty_engine_preferences_brief_check_codex(tmp_path):
+    repo = str(tmp_path)
+    _write_core_with_prefs(repo, {})
+    assert EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))["briefCheck"] == "codex"
+
+
+def test_load_engine_prefs_explicit_brief_check_claude_wins(tmp_path):
+    repo = str(tmp_path)
+    _write_core_with_prefs(repo, {"briefCheck": "claude"})
+    assert EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))["briefCheck"] == "claude"
+
+
+@pytest.mark.parametrize("bad_value", ("banana", 5, None))
+def test_load_engine_prefs_invalid_brief_check_falls_to_codex(tmp_path, bad_value):
+    repo = str(tmp_path)
+    _write_core_with_prefs(repo, {"briefCheck": bad_value})
+    assert EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))["briefCheck"] == "codex"
+
+
+def test_load_engine_prefs_invalid_reviewer_falls_to_claude(tmp_path):
+    repo = str(tmp_path)
+    _write_core_with_prefs(repo, {"reviewer": "banana"})
+    assert EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))["reviewer"] == "claude"
+
+
+def test_load_engine_prefs_agrees_with_dispatch_calibration_rows(tmp_path):
+    repo = str(tmp_path)
+    raw_prefs = {}
+    _write_core_with_prefs(repo, raw_prefs)
+    loaded = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
+    rows = EP.dispatch_calibration_rows(raw_prefs, _CALIBRATION_TIERS)
+    brief_row = next(r for r in rows if r["role"] == "brief-check")
+    assert loaded["briefCheck"] == brief_row["engine"]
+
+
 def test_pref_key_defaults_match_resolve_engine_drift_guard():
     pref_key_to_role_kind = {}
     for role_kind, pref_key in EP._ROLE_KEY.items():
@@ -117,10 +184,9 @@ def test_codex_model_pin_on_implementer():
 
 
 def test_load_engine_prefs_surfaces_brief_check_and_pilot_keys(tmp_path):
-    # On an absent enginePreferences block, briefCheck and pilot normalize to claude alongside
-    # the existing keys (raw normalization; resolve_engine applies the codex default at read time).
+    # On an absent enginePreferences block, briefCheck defaults to codex; pilot to claude.
     got = EP.load_engine_prefs(str(tmp_path), root=str(tmp_path / "store"))
-    assert got["briefCheck"] == "claude"
+    assert got["briefCheck"] == "codex"
     assert got["pilot"] == "claude"
     assert got["reviewer"] == "claude"
     assert got["implementation"] == "claude"
@@ -198,13 +264,19 @@ def test_load_engine_prefs_surfaces_positive_timeout_override(tmp_path, monkeypa
     # #309 owner channel end to end: a positive-int enginePreferences.timeout is surfaced by
     # load_engine_prefs so resolve_timeout(prefs, role) honors it; a bool/non-positive is dropped.
     import core_md
-    monkeypatch.setattr(core_md, "read", lambda *a, **k: {"enginePreferences": {"timeout": 1800}})
+    monkeypatch.setattr(
+        core_md, "engine_preferences_for_gate",
+        lambda **k: core_md.CoreGateConfig({"timeout": 1800}, core_md.CONFIG_OK, None))
     prefs = EP.load_engine_prefs(str(tmp_path))
     assert prefs.get("timeout") == 1800
     assert EP.resolve_timeout(prefs, "review") == 1800
-    monkeypatch.setattr(core_md, "read", lambda *a, **k: {"enginePreferences": {"timeout": True}})
+    monkeypatch.setattr(
+        core_md, "engine_preferences_for_gate",
+        lambda **k: core_md.CoreGateConfig({"timeout": True}, core_md.CONFIG_OK, None))
     assert "timeout" not in EP.load_engine_prefs(str(tmp_path))
-    monkeypatch.setattr(core_md, "read", lambda *a, **k: {"enginePreferences": {}})
+    monkeypatch.setattr(
+        core_md, "engine_preferences_for_gate",
+        lambda **k: core_md.CoreGateConfig({}, core_md.CONFIG_OK, None))
     assert "timeout" not in EP.load_engine_prefs(str(tmp_path))
 
 
@@ -239,13 +311,19 @@ def test_load_engine_prefs_surfaces_positive_idle_override(tmp_path, monkeypatch
     # #309 owner stall-monitor channel end to end: a positive-int enginePreferences.idleTimeout is
     # surfaced by load_engine_prefs so resolve_idle(prefs, role) honors it; a bool/non-positive is dropped.
     import core_md
-    monkeypatch.setattr(core_md, "read", lambda *a, **k: {"enginePreferences": {"idleTimeout": 90}})
+    monkeypatch.setattr(
+        core_md, "engine_preferences_for_gate",
+        lambda **k: core_md.CoreGateConfig({"idleTimeout": 90}, core_md.CONFIG_OK, None))
     prefs = EP.load_engine_prefs(str(tmp_path))
     assert prefs.get("idleTimeout") == 90
     assert EP.resolve_idle(prefs, "review") == 90
-    monkeypatch.setattr(core_md, "read", lambda *a, **k: {"enginePreferences": {"idleTimeout": True}})
+    monkeypatch.setattr(
+        core_md, "engine_preferences_for_gate",
+        lambda **k: core_md.CoreGateConfig({"idleTimeout": True}, core_md.CONFIG_OK, None))
     assert "idleTimeout" not in EP.load_engine_prefs(str(tmp_path))
-    monkeypatch.setattr(core_md, "read", lambda *a, **k: {"enginePreferences": {"idleTimeout": -1}})
+    monkeypatch.setattr(
+        core_md, "engine_preferences_for_gate",
+        lambda **k: core_md.CoreGateConfig({"idleTimeout": -1}, core_md.CONFIG_OK, None))
     assert "idleTimeout" not in EP.load_engine_prefs(str(tmp_path))
 
 
@@ -345,22 +423,96 @@ def test_load_engine_prefs_reads_core_md(tmp_path):
     _write_core_with_prefs(repo, {"reviewer": "codex", "implementation": "cursor"})
     got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
     assert got == {"reviewer": "codex", "implementation": "cursor",
-                   "briefCheck": "claude", "pilot": "claude", "effort": {}}
+                   "briefCheck": "codex", "pilot": "claude", "effort": {}}
 
 
-def test_load_engine_prefs_absent_is_both_claude(tmp_path):
+def test_load_engine_prefs_absent_is_degenerate(tmp_path):
     repo = str(tmp_path)
     _write_core_with_prefs(repo, {})   # core.md exists but no engine prefs
     assert EP.load_engine_prefs(repo, root=os.path.join(repo, "store")) == \
-        {"reviewer": "claude", "implementation": "claude",
-         "briefCheck": "claude", "pilot": "claude", "effort": {}}
+        EP.degenerate_engine_prefs()
 
 
-def test_load_engine_prefs_greenfield_is_both_claude(tmp_path):
-    # no core.md at all → both claude (fail-open, never raises)
+def test_load_engine_prefs_greenfield_is_degenerate(tmp_path):
+    # no core.md at all → degenerate (fail-open, never raises)
     assert EP.load_engine_prefs(str(tmp_path), root=str(tmp_path / "store")) == \
-        {"reviewer": "claude", "implementation": "claude",
-         "briefCheck": "claude", "pilot": "claude", "effort": {}}
+        EP.degenerate_engine_prefs()
+
+
+def _make_core_unreadable(repo, store):
+    """Write briefCheck:claude core.md then make the path unreadable (chmod 000)."""
+    import stat
+    import core_md
+    _write_core_with_prefs_at(repo, store, {"briefCheck": "claude"})
+    core_p = core_md.core_path(repo, store)
+    os.chmod(core_p, 0)
+    return core_p
+
+
+def test_load_engine_prefs_unreadable_preserves_brief_check_claude_opt_out(tmp_path):
+    """#752 regression: unreadable config must not escalate briefCheck to codex."""
+    import stat
+    repo = str(tmp_path)
+    store = os.path.join(repo, "store")
+    core_p = _make_core_unreadable(repo, store)
+    try:
+        got = EP.load_engine_prefs(repo, root=store)
+        assert got["briefCheck"] == "claude"
+        assert "readError" in got
+    finally:
+        os.chmod(core_p, stat.S_IWUSR | stat.S_IRUSR)
+
+
+def test_load_engine_prefs_absent_greenfield_no_read_error(tmp_path):
+    got = EP.load_engine_prefs(str(tmp_path), root=str(tmp_path / "store"))
+    assert got["briefCheck"] == "codex"
+    assert "readError" not in got
+
+
+def test_load_engine_prefs_unreadable_all_roles_claude_with_read_error(tmp_path):
+    import stat
+    repo = str(tmp_path / "unreadable")
+    store = os.path.join(repo, "store")
+    core_p = _make_core_unreadable(repo, store)
+    try:
+        got = EP.load_engine_prefs(repo, root=store)
+        for role in EP.ENGINE_ROLE_KEYS:
+            assert got[role] == "claude", role
+        assert got["readError"].startswith("core-md-unreadable: ")
+    finally:
+        os.chmod(core_p, stat.S_IWUSR | stat.S_IRUSR)
+
+
+def test_load_engine_prefs_root_unavailable_non_escalating(tmp_path, monkeypatch):
+    import store_core as sc
+
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    real = sc.run_git_result
+
+    def fake(cwd, *args):
+        if args == ("rev-parse", "--show-toplevel"):
+            return sc.GitResult(None, sc.GIT_UNAVAILABLE, "FileNotFoundError: no git")
+        return real(cwd, *args)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    got = EP.load_engine_prefs(repo, root=store)
+    for role in EP.ENGINE_ROLE_KEYS:
+        assert got[role] == "claude", role
+    assert got["readError"].startswith("repo-root-unavailable: ")
+
+
+def test_load_engine_prefs_gate_config_refusal_keyerror_non_escalating(tmp_path, monkeypatch):
+    import core_md
+
+    monkeypatch.setattr(
+        core_md, "engine_preferences_for_gate",
+        lambda **k: core_md.CoreGateConfig({}, "unregistered-status", "detail"))
+    got = EP.load_engine_prefs(str(tmp_path))
+    for role in EP.ENGINE_ROLE_KEYS:
+        assert got[role] == "claude", role
+    assert "readError" in got
+    assert got["briefCheck"] != "codex"
 
 
 def test_load_engine_prefs_store_base_none_vs_repo_root_regression(tmp_path, monkeypatch):
@@ -391,7 +543,7 @@ def test_load_engine_prefs_normalizes_bad_values(tmp_path):
     _write_core_with_prefs(repo, {"reviewer": "bogus", "implementation": "cursor"})
     assert EP.load_engine_prefs(repo, root=os.path.join(repo, "store")) == \
         {"reviewer": "claude", "implementation": "cursor",
-         "briefCheck": "claude", "pilot": "claude", "effort": {}}
+         "briefCheck": "codex", "pilot": "claude", "effort": {}}
 
 
 def test_load_engine_prefs_surfaces_effort_submap_and_resolve_effort_honors_it(tmp_path):
@@ -987,7 +1139,7 @@ def test_cli_engine_pref_load_emits_json(tmp_path):
         capture_output=True, text=True)
     assert out.returncode == 0
     assert json.loads(out.stdout) == {"reviewer": "codex", "implementation": "claude",
-                                      "briefCheck": "claude",
+                                      "briefCheck": "codex",
                                       "pilot": "claude", "effort": {"build": "low"}}
 
 
@@ -1008,5 +1160,5 @@ def test_engine_pref_load_error_path_degenerate_carries_every_role_key(capsys, m
     assert epl.main(["engine_pref_load", "--cwd", "."]) == 0
     out = json.loads(capsys.readouterr().out)
     assert set(EP.ENGINE_ROLE_KEYS) <= set(out)
-    assert out["briefCheck"] == "claude"
+    assert out["briefCheck"] == "codex"
     assert out["pilot"] == "claude"
