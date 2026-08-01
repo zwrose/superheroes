@@ -1,10 +1,17 @@
 """Drift guard for the bite-proof doctrine one-home shape (CONVENTIONS §11, #765).
 
-Bites on: a consumer section that stops pointing at ``rubric/bite-proof.md``, load-bearing clauses
-restated in copy-holders, and a home heading that is renamed or removed. Does **not** prove the
-doctrine's prose is correct, that anyone obeys it, or that a bite-proof was recorded. Heading order
-is deliberately unguarded — no consumer cites relative order. The consumer-pointer roster is
-hand-maintained (§11.2 caveat).
+Bites on: each rostered consumer **section** and its ``rubric/bite-proof.md`` pointer **count**
+(hand-maintained roster — a deliberate second pointer must be added to the roster rather than
+absorbed silently); the named clauses in their named home and copy-holder sections; and the home's
+headings.
+
+**Residual blind spots:**
+
+- clauses restated in ``skills/workhorse/SKILL.md`` and ``agents/test-reviewer.md`` are **not**
+  guarded;
+- the clause and pointer rosters are **hand-maintained**;
+- the guard proves nothing about whether the doctrine is correct, obeyed, or actually recorded for
+  any change.
 """
 import os
 import re
@@ -18,20 +25,25 @@ REPO_ROOT = os.path.abspath(os.path.join(PLUGIN, "..", ".."))
 _POINTER = "rubric/bite-proof.md"
 _HOME = "rubric/bite-proof.md"
 
-# Copy-holder disposition (§11.2 — extend roster when adding a pointer):
-# workhorse §8 Verify — orchestrator re-reads doctrine when build adds detector
-# workhorse § When you're tempted — temptation table row on vacuous bite-proofs
-# implementer § The rules — disclosure shapes and doctrine reference in short-return rule
-# implementer § Validating — validity rule 6 names expected bite-proof
-# test-reviewer § Named test-smell taxonomy — axis-line smell cites doctrine home
-# CONVENTIONS §12 — verification contracts pointer to vacuity-trap home
+# Copy-holder disposition (§11.2 — extend roster when adding a pointer; bump expected_count when
+# a section gains a deliberate second pointer):
+# workhorse §8 Verify — orchestrator re-reads doctrine when build adds detector (count=1)
+# workhorse § When you're tempted — temptation table row on vacuous bite-proofs (count=1)
+# implementer § The rules — disclosure shapes and doctrine reference in short-return rule (count=1)
+# implementer § Validating — validity rule 6 names expected bite-proof (count=1)
+# test-reviewer § Named test-smell taxonomy — axis-line smell cites doctrine home (count=1)
+# CONVENTIONS §12 — verification contracts pointer to vacuity-trap home (count=2)
 _CONSUMER_ROSTER = [
-    ("skills/workhorse/SKILL.md", "## 8. Verify — re-run every receipt yourself"),
-    ("skills/workhorse/SKILL.md", "## When you're tempted"),
-    ("agents/implementer.md", "## The rules"),
-    ("agents/implementer.md", "## Validating your work order"),
-    ("agents/test-reviewer.md", "## Named test-smell taxonomy"),
-    ("../../CONVENTIONS.md", "## 12. Verification contracts (fix-ships-its-detector, real-seam tests)"),
+    ("skills/workhorse/SKILL.md", "## 8. Verify — re-run every receipt yourself", 1),
+    ("skills/workhorse/SKILL.md", "## When you're tempted", 1),
+    ("agents/implementer.md", "## The rules", 1),
+    ("agents/implementer.md", "## Validating your work order", 1),
+    ("agents/test-reviewer.md", "## Named test-smell taxonomy", 1),
+    (
+        "../../CONVENTIONS.md",
+        "## 12. Verification contracts (fix-ships-its-detector, real-seam tests)",
+        2,
+    ),
 ]
 
 _HEADINGS = [
@@ -50,21 +62,37 @@ _CLAUSE_ROWS = [
         ),
         "home_section": "## Who owes what",
         "copy_holder": "agents/implementer.md",
+        "copy_holder_section": "## Validating your work order",
     },
     {
         "clause": "Unprovable as placed",
         "home_section": "## When the proof cannot be produced",
         "copy_holder": "agents/implementer.md",
+        "copy_holder_section": "## The rules",
     },
     {
         "clause": "Unreachable through this entry point",
         "home_section": "## When the proof cannot be produced",
         "copy_holder": "agents/implementer.md",
+        "copy_holder_section": "## The rules",
     },
     {
         "clause": "Unrunnable here",
         "home_section": "## When the proof cannot be produced",
         "copy_holder": "agents/implementer.md",
+        "copy_holder_section": "## The rules",
+    },
+    {
+        "clause": "32 KiB",
+        "home_section": "## The record",
+        "copy_holder": "agents/implementer.md",
+        "copy_holder_section": "## The rules",
+    },
+    {
+        "clause": "128 KiB",
+        "home_section": "## The record",
+        "copy_holder": "agents/implementer.md",
+        "copy_holder_section": "## The rules",
     },
 ]
 
@@ -111,15 +139,22 @@ def _file_section(rel, heading, read_text=None):
     return _normalized("\n".join(lines[start:end]))
 
 
+def _pointer_count_in_section(text, rel, section_heading):
+    lines = text.splitlines()
+    start, end = _section_span(lines, section_heading, rel)
+    return "\n".join(lines[start:end]).count(_POINTER)
+
+
 def _clause_regex(clause):
     return re.compile(r"\s+".join(re.escape(part) for part in clause.split()))
 
 
-def _check_consumer_pointer_in_section(text, rel, section_heading):
-    if _POINTER not in _file_section(rel, section_heading, lambda _rel: text):
+def _check_consumer_pointer_in_section(text, rel, section_heading, expected_count):
+    actual = _pointer_count_in_section(text, rel, section_heading)
+    if actual != expected_count:
         raise AssertionError(
-            f"{rel} (section {section_heading}): missing pointer {_POINTER!r} — re-add it "
-            "or update test_bite_proof_doctrine.py"
+            f"{rel} (section {section_heading}): expected {_POINTER!r} count {expected_count}, "
+            f"found {actual} — re-add pointer(s) or update test_bite_proof_doctrine.py roster"
         )
 
 
@@ -133,16 +168,22 @@ def _check_home_heading(text, heading):
 def _check_clause_sync(row, read_text=None):
     if read_text is None:
         read_text = _read
-    clause, home_section, copy_holder = row["clause"], row["home_section"], row["copy_holder"]
+    clause = row["clause"]
+    home_section = row["home_section"]
+    copy_holder = row["copy_holder"]
+    copy_holder_section = row["copy_holder_section"]
     if clause not in _file_section(_HOME, home_section, read_text):
         raise AssertionError(
             f"{_HOME} (section {home_section}): clause missing — re-sync: {clause!r}"
         )
-    if clause not in _normalized(read_text(copy_holder)):
-        raise AssertionError(f"{copy_holder}: clause missing — re-sync from {_HOME}: {clause!r}")
+    if clause not in _file_section(copy_holder, copy_holder_section, read_text):
+        raise AssertionError(
+            f"{copy_holder} (section {copy_holder_section}): clause missing — "
+            f"re-sync from {_HOME}: {clause!r}"
+        )
 
 
-def _text_without_pointer_in_section(text, rel, section_heading):
+def _text_without_one_pointer_in_section(text, rel, section_heading):
     lines = text.splitlines()
     start, end = _section_span(lines, section_heading, rel)
     section_text = "\n".join(lines[start:end])
@@ -150,8 +191,8 @@ def _text_without_pointer_in_section(text, rel, section_heading):
     assert count >= 1, (
         f"mutation setup: {_POINTER!r} missing in {rel} section {section_heading!r} (count={count})"
     )
-    new_section = section_text.replace(_POINTER, "rubric/bite-proof-DRIFT.md")
-    assert _POINTER not in new_section
+    new_section = section_text.replace(_POINTER, "rubric/bite-proof-DRIFT.md", 1)
+    assert _POINTER not in new_section or new_section.count(_POINTER) == count - 1
     new_lines = lines[:start] + new_section.splitlines() + lines[end:]
     mutated = "\n".join(new_lines) + ("\n" if text.endswith("\n") else "")
     assert mutated != text
@@ -188,6 +229,15 @@ def _text_without_clause_in_section(text, rel, section_heading, clause):
     return "\n".join(new_lines) + ("\n" if text.endswith("\n") else "")
 
 
+def _plant_clause_elsewhere_in_home(text, home_section, clause, plant_section):
+    without = _text_without_clause_in_section(text, _HOME, home_section, clause)
+    lines = without.splitlines()
+    start, end = _section_span(lines, plant_section, _HOME)
+    planted_line = f"{clause} — planted outside {home_section}."
+    new_lines = lines[: start + 1] + [planted_line] + lines[start + 1 :]
+    return "\n".join(new_lines) + ("\n" if text.endswith("\n") else "")
+
+
 def _walk_pointer_carrying_md_files():
     found = set()
     for root, _dirs, files in os.walk(PLUGIN):
@@ -203,7 +253,7 @@ def _walk_pointer_carrying_md_files():
 
 
 def _check_pointer_roster_complete(found_files):
-    roster_files = frozenset(rel for rel, _ in _CONSUMER_ROSTER)
+    roster_files = frozenset(rel for rel, _, _ in _CONSUMER_ROSTER)
     expected = found_files - _POINTER_ROSTER_EXCLUDED
     if expected != roster_files:
         missing, extra = sorted(roster_files - expected), sorted(expected - roster_files)
@@ -212,9 +262,52 @@ def _check_pointer_roster_complete(found_files):
         )
 
 
-@pytest.mark.parametrize("rel,section", _CONSUMER_ROSTER, ids=[f"{r}::{s}" for r, s in _CONSUMER_ROSTER])
-def test_consumer_section_points_at_bite_proof_home(rel, section):
-    _check_consumer_pointer_in_section(_read(rel), rel, section)
+# --- _section_span direct tests (synthetic in-memory documents) ---
+
+
+def test_section_span_includes_deeper_subheading():
+    lines = "\n".join([
+        "## Parent",
+        "parent body",
+        "### Child",
+        "child body",
+        "## Sibling",
+    ]).splitlines()
+    start, end = _section_span(lines, "## Parent", "synthetic")
+    body = "\n".join(lines[start:end])
+    assert "### Child" in body
+    assert "child body" in body
+    assert "## Sibling" not in body
+
+
+def test_section_span_ends_at_same_or_higher_level():
+    lines = "\n".join([
+        "## First",
+        "first body",
+        "## Second",
+        "second body",
+    ]).splitlines()
+    start, end = _section_span(lines, "## First", "synthetic")
+    assert lines[end] == "## Second"
+    assert "first body" in "\n".join(lines[start:end])
+    assert "second body" not in "\n".join(lines[start:end])
+
+
+def test_section_span_zero_headings_raises():
+    lines = ["## Other", "text"]
+    with pytest.raises(RuntimeError, match="expected exactly one '## Missing'"):
+        _section_span(lines, "## Missing", "synthetic")
+
+
+def test_section_span_duplicate_headings_raises():
+    lines = "\n".join(["## Dup", "a", "## Dup", "b"]).splitlines()
+    with pytest.raises(RuntimeError, match="expected exactly one '## Dup'"):
+        _section_span(lines, "## Dup", "synthetic")
+
+
+@pytest.mark.parametrize("rel,section,expected_count", _CONSUMER_ROSTER, ids=[f"{r}::{s}" for r, s, _ in _CONSUMER_ROSTER])
+def test_consumer_section_points_at_bite_proof_home(rel, section, expected_count):
+    _check_consumer_pointer_in_section(_read(rel), rel, section, expected_count)
 
 
 @pytest.mark.parametrize("heading", _HEADINGS)
@@ -231,11 +324,26 @@ def test_pointer_roster_is_complete():
     _check_pointer_roster_complete(_walk_pointer_carrying_md_files())
 
 
-@pytest.mark.parametrize("rel,section", _CONSUMER_ROSTER, ids=[f"{r}::{s}" for r, s in _CONSUMER_ROSTER])
-def test_negative_consumer_pointer_missing_in_section(rel, section):
-    mutated = _text_without_pointer_in_section(_read(rel), rel, section)
+@pytest.mark.parametrize("rel,section,expected_count", _CONSUMER_ROSTER, ids=[f"{r}::{s}" for r, s, _ in _CONSUMER_ROSTER])
+def test_negative_consumer_pointer_missing_in_section(rel, section, expected_count):
+    mutated = _text_without_one_pointer_in_section(_read(rel), rel, section)
     with pytest.raises(AssertionError, match=_POINTER):
-        _check_consumer_pointer_in_section(mutated, rel, section)
+        _check_consumer_pointer_in_section(mutated, rel, section, expected_count)
+
+
+def test_negative_section_span_rejects_pointer_in_following_section():
+    """Mutant killed: widen _section_span boundary (level <= start_level -> level < start_level)."""
+    synthetic = "\n".join([
+        "## Section A",
+        "no pointer in declared section",
+        "## Section B",
+        f"only here: {_POINTER}",
+    ])
+    with pytest.raises(
+        AssertionError,
+        match=r"synthetic\.md \(section ## Section A\): expected 'rubric/bite-proof\.md' count 1",
+    ):
+        _check_consumer_pointer_in_section(synthetic, "synthetic.md", "## Section A", 1)
 
 
 @pytest.mark.parametrize("heading", _HEADINGS)
@@ -247,8 +355,13 @@ def test_negative_home_heading_missing(heading):
 
 @pytest.mark.parametrize("row", _CLAUSE_ROWS, ids=[r["clause"] for r in _CLAUSE_ROWS])
 def test_negative_clause_missing_from_copy_holder(row):
-    mutated = _remove_clause(_read(row["copy_holder"]), row["clause"], row["copy_holder"])
-    with pytest.raises(AssertionError, match=re.escape(row["clause"])):
+    lines = _read(row["copy_holder"]).splitlines()
+    start, end = _section_span(lines, row["copy_holder_section"], row["copy_holder"])
+    section_text = "\n".join(lines[start:end])
+    mutated_section = _remove_clause(section_text, row["clause"], row["copy_holder_section"])
+    new_lines = lines[:start] + mutated_section.splitlines() + lines[end:]
+    mutated = "\n".join(new_lines) + ("\n" if _read(row["copy_holder"]).endswith("\n") else "")
+    with pytest.raises(AssertionError, match=re.escape(row["copy_holder_section"])):
         _check_clause_sync(row, lambda rel: mutated if rel == row["copy_holder"] else _read(rel))
 
 
@@ -257,11 +370,20 @@ def test_negative_clause_missing_from_home_section(row):
     mutated = _text_without_clause_in_section(
         _read(_HOME), _HOME, row["home_section"], row["clause"],
     )
-    with pytest.raises(AssertionError, match=re.escape(row["clause"])):
+    with pytest.raises(AssertionError, match=re.escape(row["home_section"])):
+        _check_clause_sync(row, lambda rel: mutated if rel == _HOME else _read(rel))
+
+
+@pytest.mark.parametrize("row", _CLAUSE_ROWS, ids=[r["clause"] for r in _CLAUSE_ROWS])
+def test_negative_clause_planted_elsewhere_in_home(row):
+    mutated = _plant_clause_elsewhere_in_home(
+        _read(_HOME), row["home_section"], row["clause"], "## When the proof runs under a normalization",
+    )
+    with pytest.raises(AssertionError, match=re.escape(row["home_section"])):
         _check_clause_sync(row, lambda rel: mutated if rel == _HOME else _read(rel))
 
 
 def test_negative_pointer_roster_unrostered_file():
-    roster = frozenset(rel for rel, _ in _CONSUMER_ROSTER)
+    roster = frozenset(rel for rel, _, _ in _CONSUMER_ROSTER)
     with pytest.raises(AssertionError, match="unrostered"):
         _check_pointer_roster_complete(roster | {"synthetic/unrostered.md"})
