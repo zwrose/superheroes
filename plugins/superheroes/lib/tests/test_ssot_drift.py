@@ -634,20 +634,66 @@ def test_vet_receipt_markers_match_conventions_10_7():
     )
 
 
+def _showrunner_orchestration_duty():
+    """Duty 9 (Orchestration — dispatch and preflight) through the tempted-table heading."""
+    text = _read("skills/showrunner/SKILL.md")
+    m = re.search(
+        r"9\. \*\*Orchestration.*?(?=\n## When you're tempted)",
+        text,
+        re.DOTALL,
+    )
+    assert m, "showrunner/SKILL.md duty 9 (Orchestration) not found (moved or renumbered?)"
+    return m.group(0)
+
+
+def _showrunner_tempted_tier_row():
+    """The tempted-table row pairing account-default inheritance with the tier doctrine."""
+    text = _read("skills/showrunner/SKILL.md")
+    m = re.search(
+        r"\| \"The account default tier is fine[^|]+\|[^|]+\|",
+        text,
+    )
+    assert m, (
+        "showrunner/SKILL.md tempted-table tier row not found "
+        "(moved or reworded?)"
+    )
+    return m.group(0)
+
+
 def test_showrunner_charter_carries_builder_dispatch_tier_doctrine():
     """§11: the loaded advisor surface must carry the builder-dispatch tier rule keyed to
     model_registry.FABLE_NEVER_DEFAULT — builder launches default to opus; fable is never a launch
     default. A failure means the rule drifted out of the charter the advisor actually loads."""
+    # axis: the rule is present in BOTH loaded locations (duty-9 orchestration passage and the
+    # tempted-table tier row); partial drift in either location alone must fail this guard.
     import model_registry
 
     assert model_registry.FABLE_NEVER_DEFAULT is True
-    text = _read("skills/showrunner/SKILL.md").lower()
-    # Substantive phrases — tolerate rewording of punctuation and bolding.
-    assert "never a launch default" in text, (
-        "showrunner/SKILL.md missing the fable-never-default clause — "
-        "advisor sessions will not see that fable is refused as a builder launch tier"
+
+    orchestration = _showrunner_orchestration_duty().lower()
+    tempted_row = _showrunner_tempted_tier_row().lower()
+
+    # Substantive phrases — tolerate rewording of punctuation and bolding within each region.
+    for label, region in (
+        ("duty 9 orchestration passage", orchestration),
+        ("tempted-table tier row", tempted_row),
+    ):
+        assert "never a launch default" in region, (
+            "showrunner/SKILL.md %s missing the fable-never-default clause — "
+            "advisor sessions will not see that fable is refused as a builder launch tier"
+            % label
+        )
+
+    # orchestration carries the operative launch statement; the tempted row restates it in the
+    # excuse/reality pair — both must name the opus builder-launch default independently.
+    assert re.search(
+        r"headless builder launches run on[^.\n]{0,60}opus[^.\n]{0,40}tier",
+        orchestration,
+    ), (
+        "showrunner/SKILL.md duty 9 orchestration passage missing the opus builder-launch default — "
+        "advisor sessions may let launches inherit the account default tier at dispatch"
     )
-    assert "headless builder" in text and "opus" in text, (
-        "showrunner/SKILL.md missing the opus builder-launch default — "
-        "advisor sessions may let launches inherit the account default tier"
+    assert "opus" in tempted_row, (
+        "showrunner/SKILL.md tempted-table tier row missing the opus builder-launch default — "
+        "advisor sessions may let launches inherit the account default tier via the excuse table"
     )
