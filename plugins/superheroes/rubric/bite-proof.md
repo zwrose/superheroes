@@ -36,7 +36,9 @@ emphatic its name.
 3. **It proves one representative instead of every guarded element.** A detector that guards N
    things — three marker names, four fail-closed edges, two charter copies — owes **N separate
    neutralizations and N reds**. One representative is evidence about that one element only, and
-   partial drift is exactly what survives it.
+   partial drift is exactly what survives it (a doc guard whose legs matched a substring anywhere
+   in a section still passed when any one of three occurrences of the same marker was renamed, and
+   failed only when all three were — partial drift was invisible).
 
 4. **It is delivered through a path the guarded input can never take.** If the mutation cannot
    reach the detector through the path the test uses, the red you saw came from something else —
@@ -78,6 +80,9 @@ path the test uses, because an earlier stage strips it. **Required disclosure:**
 that strips the input**; and the **exact seam plus `file:line` of the proof that does bite**
 (usually a unit-level test on the guard itself). A test that can never deliver the guarded input
 is **inert**; shipping it as coverage is worse than shipping no test, because it reads as coverage.
+A fix batch commissioned specifically to replace inert end-to-end tests shipped three more inert
+end-to-end tests — the guarded input could not reach the guard through the public entry point,
+because an earlier stage stripped it.
 
 ## When the proof runs under a normalization
 
@@ -89,7 +94,9 @@ configuration, or concurrency, chosen to make the test deterministic. **Required
 
 Both are stated **at the pin, in the code**, and in the build record. *"Environment normalized"*
 on its own is not the disclosure — the second field is the disclosure, and without it the pin
-reads as rigor.
+reads as rigor. A wall-clock-tight interleaving suite passed on an idle machine and failed under
+load, and two earlier rounds had environment-normalizing tests hide blockers that were inert in
+production.
 
 ## Who owes what
 
