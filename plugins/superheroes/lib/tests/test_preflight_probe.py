@@ -1257,6 +1257,77 @@ def test_compose_liveness_readable_core_no_unreadable_note(tmp_path, monkeypatch
     assert unread_notes == []
 
 
+def test_compose_liveness_configured_engines_come_from_the_snapshot(tmp_path, monkeypatch, capsys):
+    import liveness_cache
+
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
+    cache_file = tmp_path / "state" / "composition-liveness.json"
+    monkeypatch.setattr(liveness_cache, "receipt_path", lambda cwd=None, root=None: str(cache_file))
+
+    distinctive_snapshot = {
+        "prefs": {"reviewer": "cursor", "implementer": "cursor",
+                  "briefCheck": "cursor", "pilot": "cursor"},
+        "status": core_md.CONFIG_OK, "reason": None, "readError": None,
+    }
+    monkeypatch.setattr(pp, "readout_config", lambda cwd=None, root=None: distinctive_snapshot)
+
+    poison_msg = "compose-liveness must use the snapshot, not an independent core.md read"
+
+    def poison(*a, **kw):
+        raise AssertionError(poison_msg)
+
+    monkeypatch.setattr(pp.core_md, "read", poison)
+    monkeypatch.setattr(pp.core_md, "engine_preferences_for_gate", poison)
+
+    captured = {}
+
+    def capture_live_vendors(configured_vendors, *args, **kwargs):
+        captured["configured_vendors"] = configured_vendors
+        return (["claude"], {}, [])
+
+    monkeypatch.setattr(pp, "live_vendors_for_composition", capture_live_vendors)
+
+    rc = pp.main(["preflight_probe.py", "compose-liveness", "--cwd", repo])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert captured["configured_vendors"] == ["cursor"]
+    assert payload["crossVendorEngines"] == ["cursor"]
+
+
+def test_both_cli_config_read_payloads_use_the_shared_projection(tmp_path, monkeypatch, capsys):
+    import dispatch_selftest
+    import liveness_cache
+
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
+    cache_file = tmp_path / "state" / "composition-liveness.json"
+    monkeypatch.setattr(liveness_cache, "receipt_path", lambda cwd=None, root=None: str(cache_file))
+    monkeypatch.setattr(pp, "gh_auth_probe", lambda run=None: {
+        "tool": "gh auth", "ok": True, "exit": 0, "detail": ""})
+    monkeypatch.setattr(pp, "cross_vendor_cli_probe", lambda engine, run=None, argv=None: {
+        "tool": "cross-vendor-cli:" + engine, "ok": True, "exit": 0, "detail": ""})
+    monkeypatch.setattr(
+        dispatch_selftest,
+        "probe_result",
+        lambda config=None: {"tool": "dispatch-vocab", "ok": True, "detail": "ok (1 checks)"},
+    )
+    monkeypatch.setattr(pp, "composition_liveness", lambda needed, run=None: {
+        "codex": {"live": True, "models": {}},
+        "claude": {"live": True, "models": {}},
+    })
+
+    rc = pp.main(["preflight_probe.py", "compose-liveness", "--cwd", repo])
+    assert rc == 0
+    compose_payload = json.loads(capsys.readouterr().out)
+    assert set(compose_payload["configRead"].keys()) == set(pp.CONFIG_READ_FIELDS)
+    assert "prefs" not in compose_payload["configRead"]
+
+    rc = pp.main(["preflight_probe.py", "run", "--cwd", repo])
+    assert rc == 0
+    run_payload = json.loads(capsys.readouterr().out)
+    assert set(run_payload["configRead"].keys()) == set(pp.CONFIG_READ_FIELDS)
+    assert "prefs" not in run_payload["configRead"]
+
+
 def _seed_invalid_utf8_tiers(repo):
     profile = os.path.join(repo, ".claude", "superheroes", "review-crew.md")
     with open(profile, "wb") as fh:

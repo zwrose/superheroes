@@ -166,6 +166,16 @@ def _eval_failed_line(exc):
             core_md.gate_refusal_detail(exc)))
 
 
+# Single home for the CLI-visible `configRead` field set; `skills/configure/reference/preflight.md`
+# §B restates it under a drift guard.
+CONFIG_READ_FIELDS = ("status", "reason", "readError")
+
+
+def config_read_payload(snapshot):
+    """The CLI-visible `configRead` projection of a `readout_config` snapshot."""
+    return {field: snapshot[field] for field in CONFIG_READ_FIELDS}
+
+
 def readout_config(cwd=None, root=None):
     """Single snapshot of the core.md engine-preference read for this module's CLI readouts.
 
@@ -456,11 +466,7 @@ def main(argv):
             "cachePath": cache_path,
             "crossVendorEngines": configured,
             "notes": notes,
-            "configRead": {
-                "status": snap["status"],
-                "reason": snap["reason"],
-                "readError": snap["readError"],
-            },
+            "configRead": config_read_payload(snap),
         }) + "\n")
         return 0
 
@@ -485,11 +491,7 @@ def main(argv):
             "aggregate": aggregate(probes),
             "browserNote": _BROWSER_NOTE,
             "crossVendorEngines": cross_vendor_engines,
-            "configRead": {
-                "status": snap["status"],
-                "reason": snap["reason"],
-                "readError": snap["readError"],
-            },
+            "configRead": config_read_payload(snap),
         }
         sys.stdout.write(json.dumps(out) + "\n")
         return 0
