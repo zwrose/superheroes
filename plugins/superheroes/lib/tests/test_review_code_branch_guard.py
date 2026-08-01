@@ -352,12 +352,13 @@ def _setup_branch_null(world):
 
 def _setup_head_symbolic_to_tag(world, tag_name="v-pr-head"):
     """HEAD symbolic to a tag with adopted-looking branch.<tag>.* config."""
+    full_ref = f"refs/tags/{tag_name}"
     _git(world["work_dir"], "tag", tag_name, world["head_sha"], tmp_path=world["tmp_path"])
     _git(
         world["work_dir"],
         "symbolic-ref",
         "HEAD",
-        f"refs/tags/{tag_name}",
+        full_ref,
         tmp_path=world["tmp_path"],
     )
     _git(
@@ -374,17 +375,32 @@ def _setup_head_symbolic_to_tag(world, tag_name="v-pr-head"):
         f"refs/heads/{world['pr_branch']}",
         tmp_path=world["tmp_path"],
     )
+    _git(
+        world["work_dir"],
+        "config",
+        f"branch.{full_ref}.remote",
+        "origin",
+        tmp_path=world["tmp_path"],
+    )
+    _git(
+        world["work_dir"],
+        "config",
+        f"branch.{full_ref}.merge",
+        f"refs/heads/{world['pr_branch']}",
+        tmp_path=world["tmp_path"],
+    )
 
 
 def _setup_head_symbolic_to_remote_tracking(world):
     """HEAD symbolic to origin/<pr_branch> with adopted-looking config."""
     pr_branch = world["pr_branch"]
     remote_branch = f"origin/{pr_branch}"
+    full_ref = f"refs/remotes/origin/{pr_branch}"
     _git(
         world["work_dir"],
         "symbolic-ref",
         "HEAD",
-        f"refs/remotes/origin/{pr_branch}",
+        full_ref,
         tmp_path=world["tmp_path"],
     )
     _git(
@@ -398,6 +414,20 @@ def _setup_head_symbolic_to_remote_tracking(world):
         world["work_dir"],
         "config",
         f"branch.{remote_branch}.merge",
+        f"refs/heads/{pr_branch}",
+        tmp_path=world["tmp_path"],
+    )
+    _git(
+        world["work_dir"],
+        "config",
+        f"branch.{full_ref}.remote",
+        "origin",
+        tmp_path=world["tmp_path"],
+    )
+    _git(
+        world["work_dir"],
+        "config",
+        f"branch.{full_ref}.merge",
         f"refs/heads/{pr_branch}",
         tmp_path=world["tmp_path"],
     )
@@ -813,6 +843,7 @@ def test_state_6d_head_symbolic_to_tag_with_adopted_config_refuse(git_world, shi
     assert code == 1
     text = _combined_output(out, err)
     assert "An ADOPTED build also qualifies" in text
+    assert "currently on '<detached HEAD>'" in text
 
 
 def test_state_6e_head_symbolic_to_remote_tracking_with_adopted_config_refuse(
@@ -830,6 +861,7 @@ def test_state_6e_head_symbolic_to_remote_tracking_with_adopted_config_refuse(
     assert code == 1
     text = _combined_output(out, err)
     assert "An ADOPTED build also qualifies" in text
+    assert "currently on '<detached HEAD>'" in text
 
 
 def test_state_4d_adopted_fork_remote_refuse(git_world, shipped_guard):
