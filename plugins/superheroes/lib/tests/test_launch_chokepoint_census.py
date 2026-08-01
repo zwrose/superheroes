@@ -19,7 +19,17 @@ _TERMINAL_EVENT_KINDS = frozenset({"outcome", "refused"})
 _TERMINAL_WRITE_ALLOWLIST = {
     "launch_ledger.py": frozenset({"terminalize"}),
 }
-_CLASS3_APPEND_ALLOWLIST = {}
+# Raw ll./launch_ledger.-qualified append is legitimate only inside functions
+# that acquire the ledger lock before appending and release it in finally.
+_CLASS3_APPEND_ALLOWLIST = {
+    "launch_ledger.py": frozenset({
+        "append_under_lock",  # holds lock around append(repo_root, ...)
+        "declare_batch",      # holds lock around append(repo_root, ...)
+        "reserve",            # holds lock around append(repo_root, ...)
+        "terminalize",        # holds lock around repair started + terminal append
+    }),
+}
+_DEFAULT_LEDGER_MODULE_IDS = frozenset({"ll", "launch_ledger"})
 
 # Modules known to import launch_ledger today; population must include them
 # or the derived census has collapsed (wrong path, bad scan, changed layout).
@@ -33,11 +43,29 @@ def _lineno(source_path, node):
     return "%s:%d" % (os.path.basename(source_path), node.lineno)
 
 
-def _is_ledger_module_expr(node):
+def _collect_ledger_module_aliases(tree):
+    """Module-level import aliases that spell the launch_ledger module."""
+    aliases = set(_DEFAULT_LEDGER_MODULE_IDS)
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "launch_ledger":
+                    aliases.add(alias.asname or alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == "launch_ledger":
+                    aliases.add(alias.asname or alias.name)
+    return frozenset(aliases)
+
+
+def _is_ledger_module_expr(node, ledger_module_ids):
     if isinstance(node, ast.Name):
-        return node.id in ("ll", "launch_ledger")
+        return node.id in ledger_module_ids
     if isinstance(node, ast.Attribute):
-        return isinstance(node.value, ast.Name) and node.value.id == "launch_ledger"
+        return (
+            isinstance(node.value, ast.Name)
+            and node.value.id in ledger_module_ids
+        )
     return False
 
 
@@ -118,7 +146,7 @@ def _is_path_join_call(node):
     return False
 
 
-def _expr_is_ledger_derived(node, tainted_names):
+def _expr_is_ledger_derived(node, tainted_names, ledger_module_ids):
     """True when an expression is ledger-derived for taint propagation."""
     if isinstance(node, ast.Name) and node.id in tainted_names:
         return True
@@ -127,13 +155,18 @@ def _expr_is_ledger_derived(node, tainted_names):
     if isinstance(node, ast.Call):
         f = node.func
         if isinstance(f, ast.Attribute) and f.attr == "ledger_path":
-            if _is_ledger_module_expr(f.value):
+            if _is_ledger_module_expr(f.value, ledger_module_ids):
                 return True
         if _is_path_join_call(node):
-            return any(_expr_is_ledger_derived(arg, tainted_names) for arg in node.args)
+            return any(
+                _expr_is_ledger_derived(arg, tainted_names, ledger_module_ids)
+                for arg in node.args
+            )
     if isinstance(node, ast.Subscript):
         if _slice_is_constant_string(node.slice, "path"):
-            return _expr_is_ledger_derived(node.value, tainted_names)
+            return _expr_is_ledger_derived(
+                node.value, tainted_names, ledger_module_ids
+            )
     return False
 
 
@@ -162,7 +195,7 @@ def _collect_stmts_in_lexical_scope(stmts):
     return collected
 
 
-def _taint_names_in_scope(stmts):
+def _taint_names_in_scope(stmts, ledger_module_ids):
     """
     Fixpoint taint over plain Name assignments in one lexical scope.
 
@@ -178,7 +211,7 @@ def _taint_names_in_scope(stmts):
         added = False
         for stmt in scope_stmts:
             if isinstance(stmt, ast.Assign):
-                if _expr_is_ledger_derived(stmt.value, tainted):
+                if _expr_is_ledger_derived(stmt.value, tainted, ledger_module_ids):
                     for target in stmt.targets:
                         if isinstance(target, ast.Name):
                             if target.id not in tainted:
@@ -189,7 +222,9 @@ def _taint_names_in_scope(stmts):
                 if (
                     isinstance(target, ast.Name)
                     and stmt.value is not None
-                    and _expr_is_ledger_derived(stmt.value, tainted)
+                    and _expr_is_ledger_derived(
+                        stmt.value, tainted, ledger_module_ids
+                    )
                 ):
                     if target.id not in tainted:
                         tainted.add(target.id)
@@ -199,11 +234,11 @@ def _taint_names_in_scope(stmts):
     return tainted
 
 
-def _collect_scope_taints(tree):
-    scopes = {"module": _taint_names_in_scope(tree.body)}
+def _collect_scope_taints(tree, ledger_module_ids):
+    scopes = {"module": _taint_names_in_scope(tree.body, ledger_module_ids)}
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            scopes[node] = _taint_names_in_scope(node.body)
+            scopes[node] = _taint_names_in_scope(node.body, ledger_module_ids)
     return scopes
 
 
@@ -259,9 +294,10 @@ def _open_call_targets_ledger(node, source_path, tainted_names):
 
 
 class _Class1Visitor(ast.NodeVisitor):
-    def __init__(self, source_path, scope_taints):
+    def __init__(self, source_path, scope_taints, ledger_module_ids):
         self.source_path = source_path
         self.scope_taints = scope_taints
+        self.ledger_module_ids = ledger_module_ids
         self.current_taint = scope_taints["module"]
         self.violations = []
 
@@ -281,7 +317,7 @@ class _Class1Visitor(ast.NodeVisitor):
         func = node.func
         tainted = self.current_taint
         if isinstance(func, ast.Attribute) and func.attr in _LEDGER_READ_WRITE_FUNCS:
-            if _is_ledger_module_expr(func.value):
+            if _is_ledger_module_expr(func.value, self.ledger_module_ids):
                 first = _first_positional_arg(node)
                 if isinstance(first, ast.Name) and first.id in tainted:
                     self.violations.append(
@@ -307,6 +343,7 @@ class _Class1Visitor(ast.NodeVisitor):
 
 def class1_census_violations_from_source(source, source_path):
     tree = _parse_source(source, source_path)
+    ledger_module_ids = _collect_ledger_module_aliases(tree)
     violations = []
     if os.path.basename(source_path) != "launch_ledger.py":
         for name in _LEDGER_PATH_CONSTANTS:
@@ -322,8 +359,8 @@ def class1_census_violations_from_source(source, source_path):
                 "(clause: only launch_ledger.py may name ledger paths)"
                 % os.path.basename(source_path)
             )
-    scope_taints = _collect_scope_taints(tree)
-    visitor = _Class1Visitor(source_path, scope_taints)
+    scope_taints = _collect_scope_taints(tree, ledger_module_ids)
+    visitor = _Class1Visitor(source_path, scope_taints, ledger_module_ids)
     visitor.visit(tree)
     violations.extend(visitor.violations)
     return violations
@@ -548,22 +585,28 @@ class _Class3AppendVisitor(ast.NodeVisitor):
     """
     Static call-site census for ll.append / launch_ledger.append.
 
-    Does not catch append reached through an alias or local variable — only
-    the ll./launch_ledger.-qualified spellings _is_ledger_module_expr recognises.
+    Recognises module spellings from _collect_ledger_module_aliases (defaults
+    ll and launch_ledger, plus import launch_ledger as <name> aliases).
+    Does not catch append reached through a local variable — only qualified
+    module.append spellings.
+    Boundary: ``from launch_ledger import append`` followed by bare
+    ``append(...)`` is not matched — only attribute access on a recognised
+    module spelling is covered.
     append_under_lock is intentionally invisible here: the attribute name is not
     append, and that helper holds the ledger lock by construction — the invariant
     is raw lock-free append, not every append-shaped entry point.
     This is not a proof of mutual exclusion; it stops new bypassing writers.
     """
 
-    def __init__(self, source_path):
+    def __init__(self, source_path, ledger_module_ids):
         self.source_path = source_path
+        self.ledger_module_ids = ledger_module_ids
         self.violations = []
 
     def visit_Call(self, node):
         func = node.func
         if isinstance(func, ast.Attribute) and func.attr == "append":
-            if _is_ledger_module_expr(func.value):
+            if _is_ledger_module_expr(func.value, self.ledger_module_ids):
                 self.violations.append(
                     "%s: append() on ledger module (clause: raw append only under lock)"
                     % _lineno(self.source_path, node)
@@ -571,11 +614,31 @@ class _Class3AppendVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+def _module_level_function_names(tree):
+    return {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+
+def _validate_class3_append_allowlist(tree, basename):
+    allowlist = _CLASS3_APPEND_ALLOWLIST.get(basename, frozenset())
+    if not allowlist:
+        return
+    defined = _module_level_function_names(tree)
+    stale = sorted(name for name in allowlist if name not in defined)
+    if stale:
+        raise RuntimeError(
+            "Class-3 append allowlist names missing from %s: %s"
+            % (basename, ", ".join(stale))
+        )
+
+
 def class3_census_violations_from_source(source, source_path):
-    basename = os.path.basename(source_path)
-    if basename == "launch_ledger.py":
-        return []
     tree = _parse_source(source, source_path)
+    basename = os.path.basename(source_path)
+    ledger_module_ids = _collect_ledger_module_aliases(tree)
     allowlist = _CLASS3_APPEND_ALLOWLIST.get(basename, frozenset())
     violations = []
     for node in ast.walk(tree):
@@ -583,7 +646,7 @@ def class3_census_violations_from_source(source, source_path):
             continue
         if node.name in allowlist:
             continue
-        visitor = _Class3AppendVisitor(source_path)
+        visitor = _Class3AppendVisitor(source_path, ledger_module_ids)
         for stmt in node.body:
             visitor.visit(stmt)
         if visitor.violations:
@@ -595,6 +658,10 @@ def class3_census_violations_from_source(source, source_path):
 def class3_census_violations(source_path):
     with open(source_path, encoding="utf-8") as fh:
         source = fh.read()
+    basename = os.path.basename(source_path)
+    if basename == "launch_ledger.py":
+        tree = _parse_source(source, source_path)
+        _validate_class3_append_allowlist(tree, basename)
     return class3_census_violations_from_source(source, source_path)
 
 
@@ -684,16 +751,17 @@ def test_class2_launcher_terminalize_is_a_pure_delegation():
 
     has_terminalize = False
     has_forbidden_call = False
+    ledger_ids = _DEFAULT_LEDGER_MODULE_IDS
     for child in ast.walk(terminalize_fn):
         if isinstance(child, ast.Call):
             func = child.func
             if isinstance(func, ast.Attribute) and func.attr == "terminalize":
-                if _is_ledger_module_expr(func.value):
+                if _is_ledger_module_expr(func.value, ledger_ids):
                     has_terminalize = True
             if isinstance(func, ast.Name) and func.id in ("append", "_append_under_lock"):
                 has_forbidden_call = True
             if isinstance(func, ast.Attribute) and func.attr == "append":
-                if _is_ledger_module_expr(func.value):
+                if _is_ledger_module_expr(func.value, ledger_ids):
                     has_forbidden_call = True
             if isinstance(func, ast.Attribute) and func.attr == "_append_under_lock":
                 has_forbidden_call = True
@@ -850,6 +918,86 @@ def test_class3_matcher_catches_rogue_append_with_empty_allowlist():
     violations = class3_census_violations_from_source(source, path)
     assert violations, violations
     assert any("rogue_writer" in v for v in violations), violations
+
+
+def test_class3_matcher_catches_raw_append_inside_the_ledger_module():
+    """launch_ledger.py is censused per-function; only lock-holders are allowlisted."""
+    ledger_path = os.path.join(_LIB, "launch_ledger.py")
+    bad_source = (
+        "def rogue_inside_ledger(repo_root, record):\n"
+        "    ll.append(repo_root, record)\n"
+    )
+    bad_violations = class3_census_violations_from_source(bad_source, ledger_path)
+    assert bad_violations, bad_violations
+    assert any("rogue_inside_ledger" in v for v in bad_violations), bad_violations
+
+    good_source = (
+        "def reserve(repo_root, record):\n"
+        "    ll.append(repo_root, record)\n"
+    )
+    good_violations = class3_census_violations_from_source(good_source, ledger_path)
+    assert good_violations == [], good_violations
+
+
+def test_class3_matcher_catches_an_aliased_ledger_module():
+    """import launch_ledger as <name> must not bypass Class-3."""
+    source = (
+        "import launch_ledger as ledger\n"
+        "def rogue_writer(repo_root, record):\n"
+        "    ledger.append(repo_root, record)\n"
+    )
+    path = os.path.join(_LIB, "fake_bypass.py")
+    violations = class3_census_violations_from_source(source, path)
+    assert violations, violations
+    assert any("rogue_writer" in v for v in violations), violations
+
+
+def test_class1_matcher_catches_aliased_ledger_read():
+    """Class-1 must recognise import launch_ledger as <name> for read/append calls."""
+    bad_source = (
+        "import launch_ledger as ledger\n"
+        "def bypass(path):\n"
+        "    ledger.read(path)\n"
+    )
+    bad_path = os.path.join(_LIB, "fake_bypass.py")
+    bad_violations = class1_census_violations_from_source(bad_source, bad_path)
+    assert any("read()" in v and "repo_root" in v for v in bad_violations), (
+        bad_violations
+    )
+
+
+def test_class3_append_allowlist_names_exist_in_launch_ledger():
+    """Stale allowlist entries must fail loudly, not silently exempt nothing."""
+    with open(_LEDGER_PY, encoding="utf-8") as fh:
+        source = fh.read()
+    tree = _parse_source(source, _LEDGER_PY)
+    _validate_class3_append_allowlist(tree, "launch_ledger.py")
+
+
+def test_class3_from_import_append_boundary():
+    """from launch_ledger import append — bare append() is a stated Class-3 boundary."""
+    source = (
+        "from launch_ledger import append\n"
+        "def rogue_writer(repo_root, record):\n"
+        "    append(repo_root, record)\n"
+    )
+    path = os.path.join(_LIB, "fake_bypass.py")
+    violations = class3_census_violations_from_source(source, path)
+    assert violations == [], violations
+
+
+def test_class1_matcher_two_ledger_import_aliases():
+    """Both import aliases for launch_ledger must be recognised for Class-1."""
+    source = (
+        "import launch_ledger as ll\n"
+        "import launch_ledger as ledger\n"
+        "def bypass(repo_root):\n"
+        "    p = ll.ledger_path(repo_root)['path']\n"
+        "    ledger.read(p)\n"
+    )
+    path = os.path.join(_LIB, "fake_bypass.py")
+    violations = class1_census_violations_from_source(source, path)
+    assert any("aliased ledger pathname" in v for v in violations), violations
 
 
 if __name__ == "__main__":

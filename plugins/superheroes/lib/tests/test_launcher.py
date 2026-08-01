@@ -851,6 +851,27 @@ def test_deadline_after_spawn_parks(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
+    clock = {"monotonic": 1000.0}
+
+    class _TimeShim:
+        @staticmethod
+        def monotonic():
+            return clock["monotonic"]
+
+        @staticmethod
+        def time():
+            return time.time()
+
+        @staticmethod
+        def sleep(seconds):
+            pass
+
+    monkeypatch.setattr(L, "time", _TimeShim)
+
+    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        proc = _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+        clock["monotonic"] += 10
+        return proc
 
     result = L.launch_build(
         repo,
@@ -858,7 +879,7 @@ def test_deadline_after_spawn_parks(tmp_path, monkeypatch):
         _valid_premise(repo),
         _all_checks(),
         log_dir,
-        spawn_fn=_make_spawn_fn("sleep"),
+        spawn_fn=capture_spawn,
         settle_seconds=10,
         total_deadline_seconds=1,
     )
@@ -927,7 +948,7 @@ def test_cli_count_resolved_exits_zero(tmp_path, monkeypatch):
         "ts": time.time(),
         "schema": ll.SCHEMA,
         "attempt": 1,
-        "pid": 1,
+        "pid": 424242,
         "logPath": "/tmp/out",
         "errPath": "/tmp/err",
     })
@@ -1023,7 +1044,7 @@ def test_edge2_declare_batch_duplicate_declaration(tmp_path, monkeypatch):
         "ts": time.time(),
         "schema": ll.SCHEMA,
         "attempt": 1,
-        "pid": 1,
+        "pid": 424242,
         "logPath": "/tmp/out",
         "errPath": "/tmp/err",
     })
@@ -1510,6 +1531,22 @@ def test_c2_edge1_deadline_settle_reaps_before_park(tmp_path, monkeypatch):
     log_dir = str(tmp_path / "logs")
     order = []
     child_pid = {"pid": None}
+    clock = {"monotonic": 1000.0}
+
+    class _TimeShim:
+        @staticmethod
+        def monotonic():
+            return clock["monotonic"]
+
+        @staticmethod
+        def time():
+            return time.time()
+
+        @staticmethod
+        def sleep(seconds):
+            pass
+
+    monkeypatch.setattr(L, "time", _TimeShim)
 
     real_reap = ll._reap_process
 
@@ -1531,6 +1568,7 @@ def test_c2_edge1_deadline_settle_reaps_before_park(tmp_path, monkeypatch):
     def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
         proc = _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
         child_pid["pid"] = proc.pid
+        clock["monotonic"] += 10
         return proc
 
     result = L.launch_build(

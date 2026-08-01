@@ -685,7 +685,7 @@ def _validate_event_fields(rec):
         pid = rec["pid"]
         if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
             return "fold-bad-field:started:attempt"
-        if not isinstance(pid, int) or isinstance(pid, bool) or pid < 1:
+        if not isinstance(pid, int) or isinstance(pid, bool) or pid < 2:
             return "fold-bad-field:started:pid"
     elif event == "retry":
         attempt = rec["attempt"]
@@ -780,7 +780,6 @@ def fold(records):
             info["started"] = True
             info["pid"] = rec["pid"]
             info["attempt"] = rec["attempt"]
-            info["childIdentity"] = rec.get("childIdentity")
         elif event == "retry":
             pass
         elif event == "refused":
@@ -891,6 +890,10 @@ def declare_batch(repo_root, batch_id, expected_launches, env=None,
 
 def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
     """Reserve a launch under lock with overlap detection."""
+    launch_id = record.get("launchId")
+    if not isinstance(launch_id, str) or not launch_id:
+        return {"ok": False, "reason": "reserve-launch-id-invalid", "path": None}
+
     lp = ledger_path(repo_root, env=env)
     if not lp["ok"]:
         return {"ok": False, "reason": lp["reason"], "path": None}
@@ -918,20 +921,36 @@ def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
             return {"ok": False, "reason": norm["reason"], "path": None}
 
         new_surfaces = norm["surfaces"]
-        for launch_id in live_launches(read_result["records"]):
-            info = folded["launches"][launch_id]
+        for live_id in live_launches(read_result["records"]):
+            info = folded["launches"][live_id]
             existing = info.get("surfaces") or []
             if surfaces_overlap(new_surfaces, existing):
                 return {
                     "ok": False,
-                    "reason": "surface-overlap:%s" % launch_id,
-                    "blockingLaunchId": launch_id,
+                    "reason": "surface-overlap:%s" % live_id,
+                    "blockingLaunchId": live_id,
                     "blockingSurfaces": list(existing),
                     "path": None,
                 }
 
+        if launch_id in folded["launches"]:
+            return {
+                "ok": False,
+                "reason": "reserve-duplicate-launch-id:%s" % launch_id,
+                "path": None,
+            }
+
         to_write = dict(record)
         to_write["surfaces"] = new_surfaces
+        # General guard: refuse any record the reader would reject after append.
+        # The explicit launch-id checks above are the named, specific refusals.
+        folded_with_new = fold(read_result["records"] + [to_write])
+        if not folded_with_new["ok"]:
+            return {
+                "ok": False,
+                "reason": folded_with_new["reason"],
+                "path": None,
+            }
         if not append(repo_root, to_write, env=env):
             return {"ok": False, "reason": "ledger-append-failed", "path": None}
         return {"ok": True, "reason": None, "path": lp["path"]}
@@ -963,15 +982,18 @@ def _reap_process(proc):
         pass
 
 
-def _child_group_is_live(pid, settle_seconds=2.0):
+def _child_group_is_live(pid):
     """True when any process remains in the recorded child's process group.
 
     Signal 0 is an existence probe, never a real signal: this function must never
     change another process's state. Every uncertain answer is True, because the
     caller refuses on True — a wrong answer here costs a refusal, not a kill.
     """
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 1:
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return False
+    if pid == 1:
+        return True
+    settle_seconds = 2.0
     try:
         if pid == os.getpid() or pid == os.getpgid(0):
             return True
@@ -1001,7 +1023,7 @@ def _validate_started_repair(started_repair):
     err_path = started_repair.get("errPath")
     if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
         return False
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid < 1:
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid < 2:
         return False
     if not isinstance(log_path, str):
         return False
@@ -1107,6 +1129,12 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
                 if not _validate_started_repair(started_repair):
                     return {
                         "ok": False, "reason": "terminal-repair-unavailable",
+                        "kind": None, "outcome": None, "reaped": reaped,
+                    }
+                if _child_group_is_live(started_repair["pid"]):
+                    return {
+                        "ok": False,
+                        "reason": "terminal-child-live:%s" % started_repair["pid"],
                         "kind": None, "outcome": None, "reaped": reaped,
                     }
                 started_record = {

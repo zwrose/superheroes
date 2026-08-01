@@ -170,7 +170,7 @@ def test_read_torn_trailing_line(tmp_path):
                        "premise": {}, "preflight": {}, "argv": [], "doctrineDigest": "d",
                        "model": "m"})
     _append_raw(path, {"event": "started", "launchId": "a", "ts": 2.0, "schema": 1,
-                     "attempt": 1, "pid": 1, "logPath": "/l", "errPath": "/e"})
+                     "attempt": 1, "pid": 424242, "logPath": "/l", "errPath": "/e"})
     with open(path, "rb") as fh:
         raw = fh.read()
     with open(path, "wb") as fh:
@@ -1569,7 +1569,94 @@ def test_fold_tolerates_child_identity_on_older_started_records(tmp_path):
     records.append(started)
     result = ll.fold(records)
     assert result["ok"] is True
-    assert result["launches"]["a"]["childIdentity"] == started["childIdentity"]
+    assert "childIdentity" not in result["launches"]["a"]
+
+
+def test_reserve_refuses_a_duplicate_launch_id(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    launch_id = "dup-id"
+    r1 = ll.reserve(repo, _reserved(launch_id, "b1", ["a"], repo))
+    assert r1["ok"] is True
+    count_after_first = len(ll.read(repo)["records"])
+    r2 = ll.reserve(repo, _reserved(launch_id, "b2", ["z"], repo))
+    assert r2["ok"] is False
+    assert r2["reason"] == "reserve-duplicate-launch-id:%s" % launch_id
+    assert len(ll.read(repo)["records"]) == count_after_first
+    folded = ll.fold(ll.read(repo)["records"])
+    assert folded["ok"] is True
+
+    repo2 = _init_repo(tmp_path / "repo2")
+    _ledger_env(tmp_path, monkeypatch)
+    launch_id2 = "dup-terminal"
+    assert ll.reserve(repo2, _reserved(launch_id2, "b1", ["a"], repo2))["ok"]
+    ll.append(repo2, _started(launch_id2))
+    assert ll.record_outcome(repo2, launch_id2, "handback", "done")["ok"]
+    count_terminal = len(ll.read(repo2)["records"])
+    r3 = ll.reserve(repo2, _reserved(launch_id2, "b2", ["z"], repo2))
+    assert r3["ok"] is False
+    assert r3["reason"] == "reserve-duplicate-launch-id:%s" % launch_id2
+    assert len(ll.read(repo2)["records"]) == count_terminal
+    assert ll.fold(ll.read(repo2)["records"])["ok"] is True
+
+
+def test_reserve_refuses_a_record_the_reader_would_reject(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    bad = _reserved("bad", "b1", ["a"], repo)
+    del bad["batchId"]
+    count_before = len(ll.read(repo)["records"])
+    result = ll.reserve(repo, bad)
+    assert result["ok"] is False
+    assert result["reason"] == "fold-missing-field:reserved:batchId"
+    assert len(ll.read(repo)["records"]) == count_before
+
+
+def test_terminalize_refuses_pid_one(tmp_path):
+    records = [_reserved("a", "b", ["x"], "/tmp")]
+    bad = _started("a")
+    bad["pid"] = 1
+    records.append(bad)
+    result = ll.fold(records)
+    assert result["ok"] is False
+    assert result["reason"] == "fold-bad-field:started:pid"
+    assert ll._child_group_is_live(1) is True
+
+
+def test_terminalize_repair_refuses_a_live_group(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    launch_id = "l-repair-live"
+    proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        ll.reserve(repo, _reserved(launch_id, "b-repair", ["a"], repo))
+        count_before = len(ll.read(repo)["records"])
+        result = ll.terminalize(
+            repo,
+            launch_id,
+            child_ever_spawned=True,
+            outcome="park",
+            evidence="test",
+            started_repair={
+                "attempt": 1,
+                "pid": proc.pid,
+                "logPath": "/tmp/log",
+                "errPath": "/tmp/err",
+            },
+        )
+        assert result["ok"] is False
+        assert result["reason"] == "terminal-child-live:%s" % proc.pid
+        assert len(ll.read(repo)["records"]) == count_before
+        os.kill(proc.pid, 0)
+    finally:
+        try:
+            os.kill(proc.pid, 9)
+        except ProcessLookupError:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
 
 
 def test_record_outcome_succeeds_when_recorded_child_is_gone(tmp_path, monkeypatch):

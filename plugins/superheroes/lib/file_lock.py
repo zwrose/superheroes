@@ -93,7 +93,7 @@ def _holder_fields_unusable(holder):
 
 def _malformed_past_grace(lock_path, now=None):
     try:
-        st = os.stat(lock_path, follow_symlinks=False)
+        st = os.lstat(lock_path)
     except OSError:
         return False
     now = time.time() if now is None else now
@@ -111,7 +111,7 @@ def _expired(acquired_at, ttl, now=None):
 def is_stale(lock_path, ttl=DEFAULT_TTL, now=None):
     """Stale iff (bootId mismatch) OR (expired by TTL AND pid dead-on-this-host)
     OR (malformed holder past grace window)."""
-    if not os.path.exists(lock_path):
+    if not os.path.lexists(lock_path):
         return False
     status, holder = _read_holder_state(lock_path)
     if status == "read_error":
@@ -191,7 +191,7 @@ def _reclaim_stale_lock(lock_path, ttl):
             return False
         try:
             _publish_lock(lock_path, _holder_info())
-        except FileExistsError:
+        except OSError:
             return False
         return True
     finally:
@@ -202,21 +202,26 @@ ACQUIRE_RETRY_LIMIT = 3
 
 
 def acquire(lock_path, ttl=DEFAULT_TTL):
-    """Acquire the lock. Returns True if a stale lock was reclaimed, else False."""
-    os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
+    """Acquire the lock. Returns True if a stale lock was reclaimed, else False.
+
+    Raises only LockHeld — never propagates OSError from publish or directory setup."""
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
+    except OSError:
+        raise LockHeld({}) from None
     for _ in range(ACQUIRE_RETRY_LIMIT):
         try:
             _publish_lock(lock_path, _holder_info())
             return False
-        except FileExistsError:
+        except OSError:
             pass
         if not is_stale(lock_path, ttl):
-            if not os.path.exists(lock_path):
+            if not os.path.lexists(lock_path):
                 continue
             raise LockHeld(read_holder(lock_path)) from None
         if _reclaim_stale_lock(lock_path, ttl):
             return True
-        if not os.path.exists(lock_path):
+        if not os.path.lexists(lock_path):
             continue
         raise LockHeld(read_holder(lock_path)) from None
     raise LockHeld(read_holder(lock_path)) from None
