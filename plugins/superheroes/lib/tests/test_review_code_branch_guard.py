@@ -4,6 +4,7 @@ Extracts the shipped bash block from SKILL.md and runs it against real git
 fixtures so a guard that reads right but behaves wrong cannot pass.
 """
 import os
+import re
 import subprocess
 
 import pytest
@@ -11,6 +12,28 @@ import pytest
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN = os.path.abspath(os.path.join(HERE, "..", ".."))
 DEFAULT_SKILL_MD = os.path.join(PLUGIN, "skills", "review-code", "SKILL.md")
+AUTO_FIX_LOOP_MD = os.path.join(
+    PLUGIN, "skills", "review-code", "reference", "auto-fix-loop.md"
+)
+
+_GIT_ENV_STRIP = frozenset(
+    {
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_TEMPLATE_DIR",
+        "GIT_CONFIG",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_SYSTEM",
+        "GIT_CONFIG_COUNT",
+        "GIT_COMMON_DIR",
+        "GIT_CEILING_DIRECTORIES",
+    }
+)
+
+_GIT_ISOLATION_FLAGS = ("-c", "init.templateDir=", "-c", "core.hooksPath=/dev/null")
 
 LEGACY_GUARD = """\
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
@@ -31,13 +54,25 @@ def _git_env():
     }
 
 
-def _git(cwd, *args, env=None):
-    base = os.environ.copy()
-    base.update(_git_env())
+def _sanitized_git_env(tmp_path=None):
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_ENV_STRIP}
+    env.update(_git_env())
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    if tmp_path is not None:
+        global_config = tmp_path / "gitconfig.global"
+        global_config.write_text("", encoding="utf-8")
+        env["GIT_CONFIG_GLOBAL"] = str(global_config)
+    else:
+        env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+    return env
+
+
+def _git(cwd, *args, env=None, tmp_path=None):
+    base = _sanitized_git_env(tmp_path)
     if env:
         base.update(env)
     subprocess.run(
-        ["git", "-C", cwd, *args],
+        ["git", *_GIT_ISOLATION_FLAGS, "-C", cwd, *args],
         check=True,
         capture_output=True,
         text=True,
@@ -85,10 +120,9 @@ def extract_branch_guard(skill_md_path=None):
     return block
 
 
-def run_guard(block, repo_dir, pr_branch, head_sha, base_env=None):
+def run_guard(block, repo_dir, pr_branch, head_sha, base_env=None, tmp_path=None):
     """Run a guard bash block in repo_dir with PR_BRANCH and HEAD_SHA set."""
-    env = os.environ.copy()
-    env.update(_git_env())
+    env = _sanitized_git_env(tmp_path)
     if base_env:
         env.update(base_env)
     env["PR_BRANCH"] = pr_branch
@@ -107,44 +141,46 @@ def build_git_fixture(tmp_path, pr_branch="feature-pr"):
     """Bare origin + work clone with one commit on pr_branch, then fetch origin."""
     bare = tmp_path / "origin.git"
     work = tmp_path / "work"
+    git_env = _sanitized_git_env(tmp_path)
 
     subprocess.run(
-        ["git", "init", "-b", pr_branch, "--bare", str(bare)],
+        ["git", *_GIT_ISOLATION_FLAGS, "init", "-b", pr_branch, "--bare", str(bare)],
         check=True,
         capture_output=True,
         text=True,
-        env={**os.environ, **_git_env()},
+        env=git_env,
     )
     subprocess.run(
-        ["git", "init", "-b", pr_branch, str(work)],
+        ["git", *_GIT_ISOLATION_FLAGS, "init", "-b", pr_branch, str(work)],
         check=True,
         capture_output=True,
         text=True,
-        env={**os.environ, **_git_env()},
+        env=git_env,
     )
 
     readme = work / "README"
     readme.write_text("initial\n", encoding="utf-8")
     work_dir = str(work)
-    _git(work_dir, "add", "README")
-    _git(work_dir, "commit", "-m", "initial")
+    _git(work_dir, "add", "README", tmp_path=tmp_path)
+    _git(work_dir, "commit", "-m", "initial", tmp_path=tmp_path)
     head_sha = subprocess.run(
-        ["git", "-C", work_dir, "rev-parse", "HEAD"],
+        ["git", *_GIT_ISOLATION_FLAGS, "-C", work_dir, "rev-parse", "HEAD"],
         check=True,
         capture_output=True,
         text=True,
-        env={**os.environ, **_git_env()},
+        env=git_env,
     ).stdout.strip()
 
-    _git(work_dir, "remote", "add", "origin", str(bare))
-    _git(work_dir, "push", "-u", "origin", pr_branch)
-    _git(work_dir, "fetch", "origin")
+    _git(work_dir, "remote", "add", "origin", str(bare), tmp_path=tmp_path)
+    _git(work_dir, "push", "-u", "origin", pr_branch, tmp_path=tmp_path)
+    _git(work_dir, "fetch", "origin", tmp_path=tmp_path)
 
     return {
         "work_dir": work_dir,
         "pr_branch": pr_branch,
         "head_sha": head_sha,
         "bare": str(bare),
+        "tmp_path": tmp_path,
     }
 
 
@@ -153,17 +189,25 @@ def _combined_output(stdout, stderr):
 
 
 def _setup_on_pr_branch(world):
-    _git(world["work_dir"], "checkout", world["pr_branch"])
+    _git(world["work_dir"], "checkout", world["pr_branch"], tmp_path=world["tmp_path"])
 
 
 def _setup_adopted(world, branch_name="adopted-x"):
-    _git(world["work_dir"], "checkout", "-B", branch_name, world["head_sha"])
+    _git(
+        world["work_dir"],
+        "checkout",
+        "-B",
+        branch_name,
+        world["head_sha"],
+        tmp_path=world["tmp_path"],
+    )
     _git(
         world["work_dir"],
         "branch",
         "--set-upstream-to",
         f"origin/{world['pr_branch']}",
         branch_name,
+        tmp_path=world["tmp_path"],
     )
 
 
@@ -172,38 +216,97 @@ def _setup_adopted_extra_commit(world):
     extra = os.path.join(world["work_dir"], "extra.txt")
     with open(extra, "w", encoding="utf-8") as fh:
         fh.write("extra\n")
-    _git(world["work_dir"], "add", "extra.txt")
-    _git(world["work_dir"], "commit", "-m", "extra commit")
+    _git(world["work_dir"], "add", "extra.txt", tmp_path=world["tmp_path"])
+    _git(world["work_dir"], "commit", "-m", "extra commit", tmp_path=world["tmp_path"])
 
 
 def _setup_wrong_upstream(world):
     other = "other-branch"
-    _git(world["work_dir"], "branch", other, world["head_sha"])
-    _git(world["work_dir"], "push", "origin", other)
-    _git(world["work_dir"], "fetch", "origin")
+    _git(
+        world["work_dir"],
+        "branch",
+        other,
+        world["head_sha"],
+        tmp_path=world["tmp_path"],
+    )
+    _git(world["work_dir"], "push", "origin", other, tmp_path=world["tmp_path"])
+    _git(world["work_dir"], "fetch", "origin", tmp_path=world["tmp_path"])
     local = "local-wrong-upstream"
-    _git(world["work_dir"], "checkout", "-B", local, world["head_sha"])
+    _git(
+        world["work_dir"],
+        "checkout",
+        "-B",
+        local,
+        world["head_sha"],
+        tmp_path=world["tmp_path"],
+    )
     _git(
         world["work_dir"],
         "branch",
         "--set-upstream-to",
         f"origin/{other}",
         local,
+        tmp_path=world["tmp_path"],
     )
 
 
 def _setup_no_upstream(world):
     local = "no-upstream"
-    _git(world["work_dir"], "checkout", "-B", local, world["head_sha"])
+    _git(
+        world["work_dir"],
+        "checkout",
+        "-B",
+        local,
+        world["head_sha"],
+        tmp_path=world["tmp_path"],
+    )
 
 
 def _setup_detached(world):
-    _git(world["work_dir"], "checkout", "--detach", world["head_sha"])
+    _git(
+        world["work_dir"],
+        "checkout",
+        "--detach",
+        world["head_sha"],
+        tmp_path=world["tmp_path"],
+    )
 
 
 def _setup_branch_null(world):
     """Create a local branch literally named 'null' at head_sha."""
-    _git(world["work_dir"], "checkout", "-B", "null", world["head_sha"])
+    _git(
+        world["work_dir"],
+        "checkout",
+        "-B",
+        "null",
+        world["head_sha"],
+        tmp_path=world["tmp_path"],
+    )
+
+
+def _setup_pr_branch_name_only_moved_head(world):
+    """On PR branch by name, no tracking config, HEAD one commit ahead."""
+    pr_branch = world["pr_branch"]
+    _git(world["work_dir"], "checkout", pr_branch, tmp_path=world["tmp_path"])
+    _git(
+        world["work_dir"],
+        "config",
+        "--unset",
+        f"branch.{pr_branch}.remote",
+        tmp_path=world["tmp_path"],
+    )
+    _git(
+        world["work_dir"],
+        "config",
+        "--unset",
+        f"branch.{pr_branch}.merge",
+        tmp_path=world["tmp_path"],
+    )
+    extra = os.path.join(world["work_dir"], "name-leg.txt")
+    with open(extra, "w", encoding="utf-8") as fh:
+        fh.write("name-leg\n")
+    _git(world["work_dir"], "add", "name-leg.txt", tmp_path=world["tmp_path"])
+    _git(world["work_dir"], "commit", "-m", "name-leg extra", tmp_path=world["tmp_path"])
 
 
 # --- extractor fail-closed ---------------------------------------------------
@@ -236,6 +339,28 @@ def test_extractor_raises_when_bash_fence_empty(tmp_path):
 def test_extractor_returns_shipped_block():
     block = extract_branch_guard()
     assert "CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)" in block
+    assert 'TRACK_REMOTE=$(git config --get "branch.$CURRENT_BRANCH.remote")' in block
+
+
+def test_auto_fix_loop_row_describes_both_acceptance_legs():
+    with open(AUTO_FIX_LOOP_MD, encoding="utf-8") as fh:
+        text = fh.read()
+    match = re.search(
+        r"^\| Auto-fixing a PR you don't have checked out\s+\|(.+?)\|\s*$",
+        text,
+        re.MULTILINE,
+    )
+    assert match is not None, (
+        "auto-fix-loop.md: Common-Mistakes row "
+        "'Auto-fixing a PR you don't have checked out' not found"
+    )
+    row_text = match.group(1)
+    assert "adopted" in row_text.lower(), (
+        "auto-fix-loop.md row must mention the adopted-build acceptance leg"
+    )
+    assert "headRefOid" in row_text or "HEAD" in row_text, (
+        "auto-fix-loop.md row must name the headRefOid/HEAD condition"
+    )
 
 
 # --- state table (shipped guard from SKILL.md) -------------------------------
@@ -258,6 +383,7 @@ def test_state_1_on_pr_branch_accept(git_world, shipped_guard):
         git_world["work_dir"],
         git_world["pr_branch"],
         git_world["head_sha"],
+        tmp_path=git_world["tmp_path"],
     )
     assert code == 0, _combined_output(out, err)
 
@@ -269,6 +395,35 @@ def test_state_2_adopted_accept(git_world, shipped_guard):
         git_world["work_dir"],
         git_world["pr_branch"],
         git_world["head_sha"],
+        tmp_path=git_world["tmp_path"],
+    )
+    assert code == 0, _combined_output(out, err)
+
+
+def test_state_2b_pr_branch_name_only_moved_head_accept(git_world, shipped_guard):
+    """Name-match leg: on PR branch by name even without tracking config or PR HEAD."""
+    _setup_pr_branch_name_only_moved_head(git_world)
+    current_head = subprocess.run(
+        [
+            "git",
+            *_GIT_ISOLATION_FLAGS,
+            "-C",
+            git_world["work_dir"],
+            "rev-parse",
+            "HEAD",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=_sanitized_git_env(git_world["tmp_path"]),
+    ).stdout.strip()
+    assert current_head != git_world["head_sha"]
+    code, out, err = run_guard(
+        shipped_guard,
+        git_world["work_dir"],
+        git_world["pr_branch"],
+        git_world["head_sha"],
+        tmp_path=git_world["tmp_path"],
     )
     assert code == 0, _combined_output(out, err)
 
@@ -280,16 +435,24 @@ def test_state_3_adopted_extra_commit_refuse(git_world, shipped_guard):
         git_world["work_dir"],
         git_world["pr_branch"],
         git_world["head_sha"],
+        tmp_path=git_world["tmp_path"],
     )
     assert code == 1
     text = _combined_output(out, err)
     assert "An ADOPTED build also qualifies" in text
     current_head = subprocess.run(
-        ["git", "-C", git_world["work_dir"], "rev-parse", "HEAD"],
+        [
+            "git",
+            *_GIT_ISOLATION_FLAGS,
+            "-C",
+            git_world["work_dir"],
+            "rev-parse",
+            "HEAD",
+        ],
         check=True,
         capture_output=True,
         text=True,
-        env={**os.environ, **_git_env()},
+        env=_sanitized_git_env(git_world["tmp_path"]),
     ).stdout.strip()
     assert f"(found '{current_head}')" in text
     assert current_head != git_world["head_sha"]
@@ -302,10 +465,11 @@ def test_state_4_wrong_upstream_refuse(git_world, shipped_guard):
         git_world["work_dir"],
         git_world["pr_branch"],
         git_world["head_sha"],
+        tmp_path=git_world["tmp_path"],
     )
     assert code == 1
     text = _combined_output(out, err)
-    assert "found 'refs/remotes/origin/other-branch'" in text
+    assert "found 'refs/heads/other-branch'" in text
 
 
 def test_state_5_no_upstream_refuse(git_world, shipped_guard):
@@ -315,6 +479,7 @@ def test_state_5_no_upstream_refuse(git_world, shipped_guard):
         git_world["work_dir"],
         git_world["pr_branch"],
         git_world["head_sha"],
+        tmp_path=git_world["tmp_path"],
     )
     assert code == 1
     text = _combined_output(out, err)
@@ -328,6 +493,7 @@ def test_state_6_detached_head_refuse(git_world, shipped_guard):
         git_world["work_dir"],
         git_world["pr_branch"],
         git_world["head_sha"],
+        tmp_path=git_world["tmp_path"],
     )
     assert code == 1
     text = _combined_output(out, err)
@@ -354,6 +520,7 @@ def test_state_7_pr_branch_empty_or_null_refuse(
         git_world["work_dir"],
         pr_branch_env,
         git_world["head_sha"],
+        tmp_path=git_world["tmp_path"],
     )
     assert code == 1
     text = _combined_output(out, err)
@@ -372,6 +539,7 @@ def test_state_8_head_sha_empty_or_null_refuse(git_world, shipped_guard, head_sh
         git_world["work_dir"],
         git_world["pr_branch"],
         head_sha_env,
+        tmp_path=git_world["tmp_path"],
     )
     assert code == 1
     text = _combined_output(out, err)
@@ -395,6 +563,7 @@ def test_legacy_guard_refuses_adopted_state_proves_harness_discriminates(git_wor
         git_world["work_dir"],
         git_world["pr_branch"],
         git_world["head_sha"],
+        tmp_path=git_world["tmp_path"],
     )
     assert code == 1
     text = _combined_output(out, err)
