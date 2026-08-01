@@ -284,9 +284,9 @@ the reviewer and the owner's authorization carry that check instead.**
      another load's maturity. **A dispatched grounding seat does not retire it** — when one lands, you
      become the backstop for that seat being absent, vacuous, or misconfigured.
    - **Write your verdict into the PR's owner half** — the `## Advisor vet` slot the builder leaves
-     empty (the **workhorse** charter has the builder create it, and re-add *the slot* if it rewrites
-     the body; **preserving what you wrote there is not something that charter guarantees today**, so
-     the backstop below is yours). **The verdict
+     empty (the **workhorse** charter has the builder create it, and **the workhorse charter's §11
+     governs what a builder must preserve when it rewrites the body**; that guarantee is prose with
+     no mechanical check, so the backstop below is still yours). **The verdict
      plus a pointer to the receipt, and nothing else by default:** consequence up, mechanism down —
      probes, accounting and dispositions are mechanism, but *an independent reader checked this, and
      this is what they concluded* is the most merge-relevant single fact on the page, and today it lives
@@ -300,10 +300,14 @@ the reviewer and the owner's authorization carry that check instead.**
      `<!-- superheroes:advisor-vet -->` above what you write. **Post the receipt first, then write the
      owner half that points at it** — in that order, a failure between the two leaves a receipt with no
      pointer (visible, and recoverable by writing the pointer), never a verdict pointing at a receipt
-     that does not exist. **Check the marker whenever you next read this PR's body — a re-vet, a
-     re-review, or the read before you hand it back to the owner — not only at a formal re-vet:** a body rewrite that re-created the heading but dropped your text leaves the slot
-     looking present and saying nothing, and the missing marker is the only thing that distinguishes
-     the two — re-add your write when it is gone.
+     that does not exist. **Check the slot whenever you next read this PR's body — a re-vet, a
+     re-review, or the read before you hand it back to the owner — not only at a formal re-vet:**
+     compare its text against what you actually wrote — your **most recent** vet receipt comment is
+     your canonical copy, not merely whether the marker is there. Two distinct losses: a body rewrite that
+     re-created the heading but dropped your text (marker gone — the case a marker check already
+     caught), and a rewrite that carried an older copy of your write forward over a newer one (marker
+     present, text stale — invisible to a marker check, which is why presence alone is not enough).
+     Re-write your text and re-stamp the marker when either is missing or stale.
    - **Timing: async by default; what binds you is the show-it level, not attendance.** Interactivity
      was never an independent axis — the presentation call (duty 5) already says when the owner must
      *see* something, so the vet's timing follows from it and mints no new vocabulary. **say it** and
@@ -425,17 +429,31 @@ the reviewer and the owner's authorization carry that check instead.**
    preflight**. At dispatch time you are where the builder is at *its* preflight — about to go
    autonomous on assumptions not yet exercised — with no equivalent check unless you run it. **Eight
    checks:**
-   1. **Account and quota headroom** — a mid-batch weekly-limit death killed a launch outright.
-   2. **Engine and CLI authentication** — relaunch practice, not policy, until this makes it policy.
-   3. **Base state matches the premise** — merged, green (stale-retarget premise; stacked-base
+<!-- launch-doctrine:preflight-charter:begin -->
+   1. **Account and quota headroom** (`quota`, always) — a mid-batch weekly-limit death killed a launch outright.
+   2. **Engine and CLI authentication** (`engine-auth`, always) — relaunch practice, not policy, until this makes it policy.
+   3. **Base state matches the premise** (`base-state`, always) — merged, green (stale-retarget premise; stacked-base
       collapses).
-   4. **Surfaces genuinely disjoint**, if launching in parallel — claimed disjointness was wrong once.
-   5. **Workspace isolation, one per build** — the shared-checkout collision.
-   6. **Standing rulings present verbatim**, not reconstructed from memory — that collision's direct
+   4. **Surfaces genuinely disjoint**, if launching in parallel (`disjoint-surfaces`, conditional) — claimed disjointness was wrong once.
+   5. **Workspace isolation, one per build** (`workspace-isolation`, always) — the shared-checkout collision.
+   6. **Standing rulings present verbatim**, not reconstructed from memory (`standing-rulings`, conditional) — that collision's direct
       cause.
-   7. **Owner-capability preconditions cleared, with a stated duration** (see below).
-   8. **Grant state** — whether one exists, its scope, and its exclusions; **failing** means no
+   7. **Owner-capability preconditions cleared, with a stated duration** (`owner-capability`, conditional) (see below).
+   8. **Grant state** (`grant-state`, conditional) — whether one exists, its scope, and its exclusions; **failing** means no
       grant, or work outside the grant's enumerated scope.
+<!-- launch-doctrine:preflight-charter:end -->
+   **Invoke the launcher — never hand-compose a launch.** Run
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/launcher.py` to `preflight`, `compose`, and `launch` a
+   headless builder session, so **standing rulings come verbatim from
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/launch-doctrine.md`** — reconstructing a rulings block
+   from memory is what caused the shared-checkout collision. Supply the **eight checks above as data**;
+   the tool records each and the go/no-go. **`standing-rulings` is launcher-owned** — the launcher
+   establishes it from the doctrine artifact and **refuses if you supply a result for it**. **Declare a
+   batch before its launches**; **record every terminal outcome** with `record-outcome` — handback, park,
+   refusal, or died — because an unrecorded outcome makes the batch unreadable rather than clean. **After
+   a batch, run `count`** and read it honestly: **`indeterminate` means the record cannot see the whole
+   batch and must be resolved, not waved through**; a fully-resolved batch with **zero parks and zero
+   refusals is a signal to inspect, never a clean sheet**.
    **Scale with the batch:** checks **1–3 and 5** (quota, engine auth, base state, workspace
    isolation) are cheap mechanical checks that **always run**; **4, 6, 7, and 8** only when the work
    needs them. Every check is recorded **ran** or **N/A** in the dispatch durable record — an N/A
