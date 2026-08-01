@@ -43,3 +43,41 @@ def test_run_surfaces_coalesced_nudge(name):
 def test_nudge_skill_defines_root_dir(name):
     assert "ROOT_DIR=" in _skill(name), \
         f"{name} must define ROOT_DIR before the nudge snippet uses $ROOT_DIR"
+
+
+def test_review_code_declared_setup_variables_are_assigned():
+    # axis: every variable SKILL.md declares reference/setup.md sets is actually assigned there
+    skill_path = os.path.join(_SKILLS, "review-code", "SKILL.md")
+    setup_path = os.path.join(_SKILLS, "review-code", "reference", "setup.md")
+
+    with open(skill_path, encoding="utf-8") as fh:
+        skill_text = fh.read()
+
+    anchor_start = "Everything below depends on the variables that file sets:"
+    anchor_end = ". A step below"
+    start_idx = skill_text.find(anchor_start)
+    if start_idx == -1:
+        pytest.fail(
+            "declaration sentence not found in review-code/SKILL.md: "
+            "missing anchor 'Everything below depends on the variables that file sets:'"
+        )
+    decl_start = start_idx + len(anchor_start)
+    end_idx = skill_text.find(anchor_end, decl_start)
+    if end_idx == -1:
+        pytest.fail(
+            "declaration sentence not found in review-code/SKILL.md: "
+            "missing anchor '. A step below'"
+        )
+
+    declaration = skill_text[decl_start:end_idx]
+    declared = re.findall(r"`\$([A-Z_][A-Z0-9_]*)`", declaration)
+
+    with open(setup_path, encoding="utf-8") as fh:
+        setup_text = fh.read()
+    assigned = set(re.findall(r"^\s*([A-Z_][A-Z0-9_]*)=", setup_text, re.MULTILINE))
+
+    missing = sorted(set(declared) - assigned)
+    assert not missing, (
+        "declared variables not assigned in reference/setup.md: "
+        + ", ".join(missing)
+    )
