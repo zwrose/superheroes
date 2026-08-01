@@ -952,14 +952,7 @@ def test_cli_count_resolved_exits_zero(tmp_path, monkeypatch):
         "logPath": "/tmp/out",
         "errPath": "/tmp/err",
     })
-    ll.append(repo, {
-        "event": "outcome",
-        "launchId": launch_id,
-        "ts": time.time(),
-        "schema": ll.SCHEMA,
-        "outcome": "handback",
-        "evidence": "done",
-    })
+    ll.record_outcome(repo, launch_id, "handback", "done")
     proc = subprocess.run(
         [sys.executable, _MOD, "count", "--repo-root", repo, "--batch", batch],
         capture_output=True,
@@ -1377,7 +1370,7 @@ def test_edge19_oserror_retry_does_not_ignore_refused_append_failure(tmp_path, m
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
-    real_append = ll.append
+    real_append_raw = ll._append_raw
     calls = {"n": 0}
 
     def always_oserror(argv, repo_root, out_fh, err_fh, child_env):
@@ -1387,9 +1380,9 @@ def test_edge19_oserror_retry_does_not_ignore_refused_append_failure(tmp_path, m
         if record.get("event") == "refused" and record.get("stage") == "spawn":
             calls["n"] += 1
             return False
-        return real_append(repo_root, record, env=env)
+        return real_append_raw(repo_root, record, env=env)
 
-    monkeypatch.setattr(ll, "append", failing_refused_append)
+    monkeypatch.setattr(ll, "_append_raw", failing_refused_append)
     result = L.launch_build(
         repo,
         656,
@@ -1556,14 +1549,16 @@ def test_c2_edge1_deadline_settle_reaps_before_park(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ll, "_reap_process", tracking_reap)
 
-    real_append = ll.append
+    real_append_raw = ll._append_raw
+    terminal_tracked = {"n": 0}
 
     def tracking_append(repo_root, record, env=None):
         if record.get("event") == "outcome":
+            terminal_tracked["n"] += 1
             order.append(("terminal", record.get("outcome")))
-        return real_append(repo_root, record, env=env)
+        return real_append_raw(repo_root, record, env=env)
 
-    monkeypatch.setattr(ll, "append", tracking_append)
+    monkeypatch.setattr(ll, "_append_raw", tracking_append)
 
     def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
         proc = _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
@@ -1589,6 +1584,7 @@ def test_c2_edge1_deadline_settle_reaps_before_park(tmp_path, monkeypatch):
     terminal_entries = [e for e in order if e[0] == "terminal"]
     assert reap_entries
     assert terminal_entries
+    assert terminal_tracked["n"] >= 1
     assert order.index(reap_entries[0]) < order.index(terminal_entries[0])
 
 
@@ -1660,16 +1656,16 @@ def test_c2_edge4_terminal_append_failure_surfaces_reason(tmp_path, monkeypatch)
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
 
-    real_append = ll.append
+    real_append_raw = ll._append_raw
     calls = {"n": 0}
 
     def fail_park_append(repo_root, record, env=None):
         if record.get("event") == "outcome" and record.get("outcome") == "park":
             calls["n"] += 1
             return False
-        return real_append(repo_root, record, env=env)
+        return real_append_raw(repo_root, record, env=env)
 
-    monkeypatch.setattr(ll, "append", fail_park_append)
+    monkeypatch.setattr(ll, "_append_raw", fail_park_append)
     result = L.launch_build(
         repo,
         656,
