@@ -433,6 +433,54 @@ def test_read_holder_state_refuses_a_fifo_without_blocking(tmp_path):
     assert elapsed < 5.0, "read_holder blocked on FIFO"
 
 
+def test_symlinked_lock_is_reclaimable_after_grace(tmp_path):
+    p = str(tmp_path / "engine.lock")
+    target = str(tmp_path / "holder-target.json")
+    json.dump(
+        {"pid": 999999, "host": socket.gethostname(),
+         "acquiredAt": "1970-01-01T00:00:00Z", "bootId": None},
+        open(target, "w"),
+    )
+    os.symlink(target, p)
+    old = time.time() - lock.MALFORMED_GRACE_SECONDS - 5
+    os.utime(p, (old, old), follow_symlinks=False)
+    status, holder = lock._read_holder_state(p)
+    assert status == "unusable"
+    assert holder is None
+    assert lock.is_stale(p) is True
+    reclaimed = lock.acquire(p)
+    assert reclaimed is True
+    assert lock.read_holder(p)["pid"] == os.getpid()
+    assert os.path.exists(target)
+    assert not os.path.islink(p)
+    lock.release(p)
+
+
+def test_directory_at_lock_path_refuses_instead_of_raising(tmp_path):
+    p = str(tmp_path / "engine.lock")
+    os.makedirs(p)
+    old = time.time() - lock.MALFORMED_GRACE_SECONDS - 5
+    os.utime(p, (old, old))
+    with pytest.raises(lock.LockHeld):
+        lock.acquire(p)
+    assert os.path.isdir(p)
+
+
+def test_reclaim_guard_refuses_a_symlinked_guard(tmp_path):
+    p = str(tmp_path / "engine.lock")
+    open(p, "w").close()
+    old = time.time() - lock.MALFORMED_GRACE_SECONDS - 5
+    os.utime(p, (old, old))
+    sentinel = str(tmp_path / "sentinel")
+    open(sentinel, "w").close()
+    os.chmod(sentinel, 0o644)
+    sentinel_mode_before = os.stat(sentinel).st_mode & 0o777
+    os.symlink(sentinel, p + ".reclaim")
+    with pytest.raises(lock.LockHeld):
+        lock.acquire(p)
+    assert (os.stat(sentinel).st_mode & 0o777) == sentinel_mode_before
+
+
 def test_reclaim_guard_mode_is_owner_only(tmp_path):
     p = str(tmp_path / "engine.lock")
     with open(p, "w") as fh:

@@ -1889,6 +1889,32 @@ def test_c2_edge15_census_detects_bypass_outside_terminalize():
     assert "launcher.py::launch_build" not in violations
 
 
+def test_append_under_lock_survives_a_raising_acquire(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        ll.file_lock, "acquire", lambda _path: (_ for _ in ()).throw(OSError("acquire failed")),
+    )
+    record = {
+        "event": "reserved",
+        "launchId": "l-oserror",
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": "b-oserror",
+        "repoId": ll.repo_identity(repo) or "test",
+        "issue": 656,
+        "surfaces": ["a"],
+        "premise": {},
+        "preflight": {},
+        "argv": [],
+        "doctrineDigest": "abc",
+        "model": "test",
+    }
+    result = L._append_under_lock(repo, record)
+    assert result["ok"] is False
+    assert result["reason"] == "lock-unavailable"
+
+
 def test_append_under_lock_refuses_a_fifo_lock_without_blocking(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     ledger_root = _ledger_env(tmp_path, monkeypatch)

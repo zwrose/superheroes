@@ -5,6 +5,7 @@ pid is dead-on-this-boot, OR when its bootId no longer matches (the host
 rebooted, so the recorded pid is meaningless). A LIVE holder still raises LockHeld.
 """
 import calendar
+import errno
 import fcntl
 import json
 import os
@@ -32,25 +33,8 @@ def _holder_info():
 
 
 def read_holder(lock_path):
-    try:
-        fd = os.open(lock_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    except OSError:
-        return {}
-    try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            return {}
-        with os.fdopen(fd) as fh:
-            fd = -1
-            parsed = json.load(fh)
-    except (OSError, ValueError):
-        return {}
-    finally:
-        if fd >= 0:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-    return parsed if isinstance(parsed, dict) else {}
+    status, holder = _read_holder_state(lock_path)
+    return holder if status == "ok" else {}
 
 
 def _read_holder_state(lock_path):
@@ -63,7 +47,12 @@ def _read_holder_state(lock_path):
         with os.fdopen(fd) as fh:
             fd = -1
             raw = fh.read()
-    except OSError:
+    except OSError as e:
+        # ELOOP: symlink refused by O_NOFOLLOW — unlink removes the link, not its
+        # target, so reclaim is safe. EACCES/EPERM: cannot read a real lock file
+        # we may be obliged to respect; fail closed as held, not malformed.
+        if e.errno in (errno.ELOOP, errno.ENXIO):
+            return "unusable", None
         return "read_error", None
     except UnicodeError:
         return "unusable", None
@@ -104,7 +93,7 @@ def _holder_fields_unusable(holder):
 
 def _malformed_past_grace(lock_path, now=None):
     try:
-        st = os.stat(lock_path)
+        st = os.stat(lock_path, follow_symlinks=False)
     except OSError:
         return False
     now = time.time() if now is None else now
@@ -174,12 +163,20 @@ def _publish_lock(lock_path, holder_info):
 
 def _reclaim_stale_lock(lock_path, ttl):
     guard_path = lock_path + ".reclaim"
-    fd = os.open(guard_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fd = os.open(guard_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    except OSError:
+        return False
     try:
         try:
-            os.fchmod(fd, 0o600)
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return False
+            try:
+                os.fchmod(fd, 0o600)
+            except OSError:
+                pass
         except OSError:
-            pass
+            return False
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
@@ -190,6 +187,8 @@ def _reclaim_stale_lock(lock_path, ttl):
             os.unlink(lock_path)
         except FileNotFoundError:
             pass
+        except OSError:
+            return False
         try:
             _publish_lock(lock_path, _holder_info())
         except FileExistsError:

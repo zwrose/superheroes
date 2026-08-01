@@ -567,9 +567,6 @@ def _spawn_attempt(
         "logPath": log_path,
         "errPath": err_path,
     }
-    child_identity = ll.process_identity(proc.pid)
-    if child_identity is not None:
-        started["childIdentity"] = child_identity
     append_result = _append_under_lock(repo_root, started, env=env)
     if not append_result["ok"]:
         term = _terminalize(

@@ -22,7 +22,6 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import file_lock  # noqa: E402
-import hostinfo  # noqa: E402
 
 LEDGER_ROOT_ENV = "SUPERHEROES_LAUNCH_LEDGER_ROOT"
 LEDGER_DIR_NAME = "superheroes-launch-ledger"
@@ -293,7 +292,11 @@ def open_ledger(repo_root, mode, env=None):
 
 
 def _ensure_lock_file(repo_root, env=None):
-    """Pre-create the lock file relative to the repo-id dirfd. Never raises."""
+    """Validate the lock path is absent or a regular non-symlink file before acquire.
+
+    Does not create the lock file. There is a TOCTOU window between this
+    validation and ``file_lock.acquire``. Never raises.
+    """
     opened = _open_ledger_dirs(repo_root, env=env)
     if not opened["ok"]:
         return {"ok": False, "reason": opened["reason"], "path": None}
@@ -362,6 +365,8 @@ def _acquire_lock(lock_path, timeout):
             if time.monotonic() >= deadline:
                 return False
             time.sleep(0.05)
+        except OSError:
+            return False
 
 
 def _release_lock(lock_path):
@@ -520,7 +525,7 @@ def append(repo_root, record, env=None):
         fh.flush()
         os.fsync(fh.fileno())
         return True
-    except OSError:
+    except (OSError, TypeError, ValueError):
         return False
     finally:
         try:
@@ -680,7 +685,7 @@ def _validate_event_fields(rec):
         pid = rec["pid"]
         if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
             return "fold-bad-field:started:attempt"
-        if not isinstance(pid, int) or isinstance(pid, bool):
+        if not isinstance(pid, int) or isinstance(pid, bool) or pid < 1:
             return "fold-bad-field:started:pid"
     elif event == "retry":
         attempt = rec["attempt"]
@@ -934,64 +939,6 @@ def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
         _release_lock(lock_path)
 
 
-def process_identity(pid):
-    """Non-reusable identity for a running pid: (bootId, kernel start time, comm).
-    Returns a dict or None when it cannot be established. Never raises."""
-    # macOS comm stabilizes shortly after execve; reading too early yields a
-    # transient argv[0] path that disagrees with later reads of the same pid.
-    time.sleep(0.05)
-    try:
-        proc_start = subprocess.run(
-            ["ps", "-o", "lstart=", "-p", str(pid)],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        proc_comm = subprocess.run(
-            ["ps", "-o", "comm=", "-p", str(pid)],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return None
-    if proc_start.returncode != 0 or proc_comm.returncode != 0:
-        return None
-    start = (proc_start.stdout or "").strip()
-    comm = (proc_comm.stdout or "").strip() or None
-    if not start:
-        return None
-    # Residual: whole-second lstart granularity plus command equality — a
-    # same-second, same-command, group-leader pid reuse would still pass.
-    return {"bootId": hostinfo.boot_id(), "start": start, "comm": comm}
-
-
-def _identity_disagrees(recorded, current):
-    """True when comparable identity fields disagree (pid recycled)."""
-    if current.get("start") != recorded.get("start"):
-        return True
-    rec_boot = recorded.get("bootId")
-    cur_boot = current.get("bootId")
-    if rec_boot is not None and cur_boot is not None and cur_boot != rec_boot:
-        return True
-    rec_comm = recorded.get("comm")
-    cur_comm = current.get("comm")
-    if rec_comm is not None and cur_comm is not None and cur_comm != rec_comm:
-        return True
-    return False
-
-
-def _pid_probe_gone(pid):
-    """True only when os.kill(pid, 0) proves the pid does not exist."""
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return True
-    except OSError:
-        return False
-    return False
-
-
 def _reap_process(proc):
     if proc is None:
         return
@@ -1016,83 +963,33 @@ def _reap_process(proc):
         pass
 
 
-def _wait_pid_gone(pid, seconds):
-    """Poll until pid is gone. Reaps our own zombie children opportunistically."""
-    deadline = time.monotonic() + seconds
-    while True:
-        try:
-            reaped, _status = os.waitpid(pid, os.WNOHANG)
-            if reaped != 0:
-                return True
-        except (ChildProcessError, OSError):
-            pass
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return True
-        except OSError:
-            return False
-        if time.monotonic() >= deadline:
-            return False
-        time.sleep(0.05)
+def _child_group_is_live(pid, settle_seconds=2.0):
+    """True when any process remains in the recorded child's process group.
 
-
-def _reap_recorded_pid(pid, recorded_identity):
-    """Reap the child recorded in a `started` event. Returns (status, detail) where
-    status is "dead" (nothing live to reap), "reaped" (we killed it), or "live"
-    (still running or unverifiable — the caller must refuse to write a terminal)."""
+    Signal 0 is an existence probe, never a real signal: this function must never
+    change another process's state. Every uncertain answer is True, because the
+    caller refuses on True — a wrong answer here costs a refusal, not a kill.
+    """
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 1:
-        return ("dead", "pid-invalid")
+        return False
     try:
         if pid == os.getpid() or pid == os.getpgid(0):
-            return ("live", "pid-is-self")
+            return True
     except OSError:
-        pass
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return ("dead", "no-such-process")
-    except PermissionError:
-        return ("live", "not-permitted")
-    except OSError:
-        return ("live", "kill-probe-failed")
-    if not recorded_identity:
-        # Deliberate refusal: operator must end the process; terminal succeeds once dead.
-        return ("live", "identity-unrecorded")
-    current = process_identity(pid)
-    if current is None:
-        if _pid_probe_gone(pid):
-            return ("dead", "process-gone")
-        return ("live", "identity-unverifiable")
-    if _identity_disagrees(recorded_identity, current):
-        return ("dead", "pid-recycled")
-    try:
-        if os.getpgid(pid) != pid:
-            return ("dead", "pid-reused-not-group-leader")
-    except ProcessLookupError:
-        return ("dead", "no-such-process")
-    except OSError:
-        return ("live", "identity-unverifiable")
-    try:
-        os.killpg(pid, signal.SIGTERM)
-    except OSError:
-        pass
-    if _wait_pid_gone(pid, 2.0):
-        return ("reaped", "sigterm")
-    before_sigkill = process_identity(pid)
-    if before_sigkill is None:
-        if _pid_probe_gone(pid):
-            return ("reaped", "exited-before-sigkill")
-        return ("live", "identity-unverifiable")
-    if _identity_disagrees(recorded_identity, before_sigkill):
-        return ("reaped", "exited-before-sigkill")
-    try:
-        os.killpg(pid, signal.SIGKILL)
-    except OSError:
-        pass
-    if _wait_pid_gone(pid, 3.0):
-        return ("reaped", "sigkill")
-    return ("live", "survived-sigkill")
+        return True
+    deadline = time.monotonic() + settle_seconds
+    while True:
+        try:
+            os.killpg(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            return True
+        if time.monotonic() >= deadline:
+            return True
+        time.sleep(0.05)
 
 
 def _validate_started_repair(started_repair):
@@ -1104,7 +1001,7 @@ def _validate_started_repair(started_repair):
     err_path = started_repair.get("errPath")
     if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
         return False
-    if not isinstance(pid, int) or isinstance(pid, bool):
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid < 1:
         return False
     if not isinstance(log_path, str):
         return False
@@ -1197,16 +1094,12 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
                 "kind": None, "outcome": None, "reaped": reaped,
             }
 
-        if proc is None and info.get("started"):
-            status, _detail = _reap_recorded_pid(info.get("pid"), info.get("childIdentity"))
-            if status == "reaped":
-                reaped = True
-            elif status == "live":
-                return {
-                    "ok": False,
-                    "reason": "terminal-child-live:%s" % info.get("pid"),
-                    "kind": None, "outcome": None, "reaped": reaped,
-                }
+        if info.get("started") and _child_group_is_live(info.get("pid")):
+            return {
+                "ok": False,
+                "reason": "terminal-child-live:%s" % info.get("pid"),
+                "kind": None, "outcome": None, "reaped": reaped,
+            }
 
         started = info.get("started")
         if started or child_ever_spawned:

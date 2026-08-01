@@ -19,9 +19,7 @@ _TERMINAL_EVENT_KINDS = frozenset({"outcome", "refused"})
 _TERMINAL_WRITE_ALLOWLIST = {
     "launch_ledger.py": frozenset({"terminalize"}),
 }
-_CLASS3_APPEND_ALLOWLIST = {
-    "launcher.py": frozenset({"_append_under_lock"}),
-}
+_CLASS3_APPEND_ALLOWLIST = {}
 
 # Modules known to import launch_ledger today; population must include them
 # or the derived census has collapsed (wrong path, bad scan, changed layout).
@@ -139,18 +137,46 @@ def _expr_is_ledger_derived(node, tainted_names):
     return False
 
 
+def _collect_stmts_in_lexical_scope(stmts):
+    """Statements in one lexical scope, including control-flow nested blocks."""
+    collected = []
+    for stmt in stmts:
+        collected.append(stmt)
+        if isinstance(stmt, ast.If):
+            collected.extend(_collect_stmts_in_lexical_scope(stmt.body))
+            collected.extend(_collect_stmts_in_lexical_scope(stmt.orelse))
+        elif isinstance(stmt, (ast.For, ast.While)):
+            collected.extend(_collect_stmts_in_lexical_scope(stmt.body))
+            collected.extend(_collect_stmts_in_lexical_scope(stmt.orelse))
+        elif isinstance(stmt, ast.With):
+            collected.extend(_collect_stmts_in_lexical_scope(stmt.body))
+        elif isinstance(stmt, ast.Try):
+            collected.extend(_collect_stmts_in_lexical_scope(stmt.body))
+            for handler in stmt.handlers:
+                collected.extend(_collect_stmts_in_lexical_scope(handler.body))
+            collected.extend(_collect_stmts_in_lexical_scope(stmt.orelse))
+            collected.extend(_collect_stmts_in_lexical_scope(stmt.finalbody))
+        elif type(stmt).__name__ == "Match":
+            for case in stmt.cases:
+                collected.extend(_collect_stmts_in_lexical_scope(case.body))
+    return collected
+
+
 def _taint_names_in_scope(stmts):
     """
-    Fixpoint taint over plain Name assignments in one scope.
+    Fixpoint taint over plain Name assignments in one lexical scope.
 
+    Descends into If/For/While/With/Try/Match nested blocks within the scope;
+    does not descend into nested FunctionDef/AsyncFunctionDef/ClassDef bodies.
     Does not cover tuple unpacking, attribute targets, augmented assignment,
     or cross-function flow — a matcher that silently pretends to cover them
     is worse than one with a stated boundary.
     """
+    scope_stmts = _collect_stmts_in_lexical_scope(stmts)
     tainted = set()
     for _ in range(_TAINT_FIXPOINT_CAP):
         added = False
-        for stmt in stmts:
+        for stmt in scope_stmts:
             if isinstance(stmt, ast.Assign):
                 if _expr_is_ledger_derived(stmt.value, tainted):
                     for target in stmt.targets:
@@ -524,6 +550,9 @@ class _Class3AppendVisitor(ast.NodeVisitor):
 
     Does not catch append reached through an alias or local variable — only
     the ll./launch_ledger.-qualified spellings _is_ledger_module_expr recognises.
+    append_under_lock is intentionally invisible here: the attribute name is not
+    append, and that helper holds the ledger lock by construction — the invariant
+    is raw lock-free append, not every append-shaped entry point.
     This is not a proof of mutual exclusion; it stops new bypassing writers.
     """
 
@@ -708,6 +737,65 @@ def test_class1_matcher_catches_aliased_ledger_path():
     )
     good_violations = class1_census_violations_from_source(good_source, bad_path)
     assert not any("aliased ledger path" in v for v in good_violations), good_violations
+
+
+def test_class1_matcher_catches_aliased_path_inside_control_flow():
+    """Aliases assigned inside control-flow blocks must taint for open() census."""
+    bad_path = os.path.join(_LIB, "fake_bypass.py")
+    cases = [
+        (
+            "import launch_ledger as ll\n"
+            "def bypass(repo_root):\n"
+            "    if repo_root:\n"
+            "        p = ll.ledger_path(repo_root)['path']\n"
+            "    open(p, 'ab')\n",
+            "if",
+        ),
+        (
+            "import launch_ledger as ll\n"
+            "def bypass(repo_root):\n"
+            "    try:\n"
+            "        p = ll.ledger_path(repo_root)['path']\n"
+            "    except OSError:\n"
+            "        pass\n"
+            "    open(p, 'ab')\n",
+            "try",
+        ),
+        (
+            "import launch_ledger as ll\n"
+            "def bypass(repo_root):\n"
+            "    with open('/dev/null'):\n"
+            "        p = ll.ledger_path(repo_root)['path']\n"
+            "    open(p, 'ab')\n",
+            "with",
+        ),
+        (
+            "import launch_ledger as ll\n"
+            "def bypass(repo_root):\n"
+            "    for _ in repo_root:\n"
+            "        p = ll.ledger_path(repo_root)['path']\n"
+            "    open(p, 'ab')\n",
+            "for",
+        ),
+    ]
+    for source, label in cases:
+        violations = class1_census_violations_from_source(source, bad_path)
+        assert any("aliased ledger path" in v for v in violations), (label, violations)
+
+
+def test_class1_matcher_nested_function_scope_boundary():
+    """Alias inside a nested function must not taint the outer scope."""
+    source = (
+        "import launch_ledger as ll\n"
+        "def outer(repo_root):\n"
+        "    def inner():\n"
+        "        p = ll.ledger_path(repo_root)['path']\n"
+        "        return p\n"
+        "    open(inner(), 'ab')\n"
+    )
+    path = os.path.join(_LIB, "fake_bypass.py")
+    violations = class1_census_violations_from_source(source, path)
+    assert not any("aliased ledger path" in v for v in violations), violations
 
 
 def test_class2_matcher_catches_non_literal_terminal_records():
