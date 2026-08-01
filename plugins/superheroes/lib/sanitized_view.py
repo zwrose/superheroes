@@ -93,6 +93,10 @@ _DIFF_CONFIG_OVERRIDES = (
     "diff.relative=false",
 )
 
+# Belt-and-braces for census paths; -z already suppresses quoting. Patch-presentation
+# keys from _DIFF_CONFIG_OVERRIDES deliberately do not appear here.
+_CENSUS_CONFIG_OVERRIDES = ("-c", "core.quotePath=false")
+
 _DIFF_PATCH_FLAGS = (
     "diff",
     "--no-ext-diff",
@@ -116,7 +120,7 @@ def _git_env():
     env["GIT_NO_REPLACE_OBJECTS"] = "1"
     env["LC_ALL"] = "C"
     env["LANGUAGE"] = ""
-    env["GIT_NO_LAZY_FETCH"] = "1"
+    # Lazy fetch stays enabled on partial clones; the export deadline bounds it.
     return env
 
 
@@ -418,7 +422,7 @@ def _git_tree_entries(repo_real, sha, started):
                 "git",
                 "-C",
                 repo_real,
-                *_DIFF_CONFIG_OVERRIDES,
+                *_CENSUS_CONFIG_OVERRIDES,
                 "ls-tree",
                 "-r",
                 "-z",
@@ -1223,7 +1227,12 @@ def _effective_review_diff_argv_budget():
         arg_max = None
     if arg_max is not None and arg_max > 0:
         env = _git_env()
-        env_bytes = sum(len(k) + len(v) + 2 for k, v in env.items())
+        env_bytes = sum(
+            len(k.encode("utf-8", errors="surrogateescape"))
+            + len(v.encode("utf-8", errors="surrogateescape"))
+            + 2
+            for k, v in env.items()
+        )
         derived = arg_max - env_bytes - _REVIEW_DIFF_ARGV_MARGIN
         budget = min(budget, derived)
     return budget
@@ -1242,8 +1251,22 @@ def _review_diff_argv_prefix(repo_real, merge_base, head_sha):
     ]
 
 
+def _collapse_descendant_pathspecs(pathspecs):
+    """Drop pathspecs that are descendants of another pathspec in the vector."""
+    collapsed = []
+    for i, path in enumerate(pathspecs):
+        if any(
+            i != j and path.startswith(ancestor + "/")
+            for j, ancestor in enumerate(pathspecs)
+        ):
+            continue
+        collapsed.append(path)
+    return collapsed
+
+
 def _batch_review_diff_pathspecs(repo_real, merge_base, head_sha, pathspecs):
     """Batch pathspecs so each emitted argv stays within the effective byte budget."""
+    pathspecs = _collapse_descendant_pathspecs(pathspecs)
     prefix = _review_diff_argv_prefix(repo_real, merge_base, head_sha)
     prefix_bytes = _argv_byte_size(prefix)
     budget = _effective_review_diff_argv_budget()
@@ -1275,9 +1298,9 @@ def _batch_review_diff_pathspecs(repo_real, merge_base, head_sha, pathspecs):
 
 def _section_is_opaque(section):
     """True when the pre-hunk header marks binary/opaque content (line-anchored)."""
-    at_idx = section.find(b"@@")
-    header_region = section if at_idx == -1 else section[:at_idx]
-    for line in header_region.split(b"\n"):
+    for line in section.split(b"\n"):
+        if line.startswith(b"@@"):
+            break
         if line.startswith(b"Binary files ") and line.endswith(b" differ"):
             return True
         if line.startswith(b"GIT binary patch"):
@@ -1336,6 +1359,9 @@ def _reconcile_review_patch(patch_bytes, survivors, withheld):
             raise SanitizedViewError("sanitized-view-diff-unaccounted")
         path = _section_resolved_path_raw(section)
         if path is None or path not in survivors_set:
+            raise SanitizedViewError("sanitized-view-diff-unaccounted")
+        if path in rendered_paths:
+            # Backstop for overlapping pathspec batches (see _collapse_descendant_pathspecs).
             raise SanitizedViewError("sanitized-view-diff-unaccounted")
         kept_sections.append(section)
         rendered_paths.add(path)
@@ -1501,8 +1527,8 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
         patch_parts.append(chunk)
 
     patch_bytes = b"".join(patch_parts)
-    # Defence in depth: output-side filter still runs; reconciliation is authoritative.
-    _filter_patch_sections(patch_bytes)
+    # _reconcile_review_patch applies _section_withhold_info per section — the
+    # output-side withhold check lives there, not in a separate filter pass.
     patch_bytes = _reconcile_review_patch(patch_bytes, survivors, withheld)
 
     if not patch_bytes:

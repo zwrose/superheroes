@@ -80,6 +80,11 @@ def _patch_abs(view):
     return os.path.join(view["path"], view["diffPath"])
 
 
+def _diff_git_section_count(patch_bytes, path):
+    marker = ("diff --git a/%s b/%s" % (path, path)).encode("utf-8")
+    return patch_bytes.count(marker)
+
+
 # --- drift: config surface ----------------------------------------------------
 
 
@@ -1980,6 +1985,30 @@ def test_review_diff_pathspec_batches_stay_within_argv_budget(tmp_path, monkeypa
         )
 
 
+def test_review_diff_argv_budget_counts_env_bytes_not_chars(monkeypatch):
+    multibyte_value = "\u20ac" * 200
+
+    def fake_git_env():
+        return {"BUDGET_PROBE": multibyte_value}
+
+    monkeypatch.setattr(sv, "_git_env", fake_git_env)
+    monkeypatch.setattr(os, "sysconf", lambda name: 10000 if name == "SC_ARG_MAX" else 0)
+
+    budget = sv._effective_review_diff_argv_budget()
+    env = fake_git_env()
+    char_env_bytes = sum(len(k) + len(v) + 2 for k, v in env.items())
+    encoded_env_bytes = sum(
+        len(k.encode("utf-8", errors="surrogateescape"))
+        + len(v.encode("utf-8", errors="surrogateescape"))
+        + 2
+        for k, v in env.items()
+    )
+    derived_char = 10000 - char_env_bytes - sv._REVIEW_DIFF_ARGV_MARGIN
+    derived_encoded = 10000 - encoded_env_bytes - sv._REVIEW_DIFF_ARGV_MARGIN
+    assert derived_encoded < derived_char
+    assert budget == min(sv._REVIEW_DIFF_ARGV_MAX_BYTES, derived_encoded)
+
+
 def test_review_diff_command_failure_is_distinct_from_unaccounted(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "cmd-fail", files={"keep.txt": "k\n"})
     repo_real = os.path.realpath(repo)
@@ -2150,6 +2179,63 @@ def test_review_diff_census_ignores_replace_refs(tmp_path):
     assert "decoy.txt" not in entries
 
 
+def test_git_env_leaves_lazy_fetch_enabled(monkeypatch):
+    monkeypatch.setenv("GIT_REPLACE_REF_BASE", "/tmp/fake-replace")
+    env = sv._git_env()
+    assert "GIT_NO_LAZY_FETCH" not in env
+    assert env["GIT_NO_REPLACE_OBJECTS"] == "1"
+    assert env["LC_ALL"] == "C"
+    assert "GIT_REPLACE_REF_BASE" not in env
+
+
+def test_review_diff_at_at_in_path_still_refuses_opaque(tmp_path, monkeypatch):
+    repo = str(tmp_path / "at-at-path")
+    os.makedirs(repo, exist_ok=True)
+    _git(repo, "init", "-q")
+    with open(os.path.join(repo, ".gitattributes"), "w", encoding="utf-8") as fh:
+        fh.write("sec@@.txt -diff\n")
+    with open(os.path.join(repo, "sec@@.txt"), "wb") as fh:
+        fh.write(b"\x00\x01\x02\n")
+    with open(os.path.join(repo, "other.txt"), "w", encoding="utf-8") as fh:
+        fh.write("baseline\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "init",
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "sec@@.txt"), "wb") as fh:
+        fh.write(b"\x00\x01\x03\n")
+    with open(os.path.join(repo, "other.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    fake_tmp = str(tmp_path / "tmpdir")
+    os.makedirs(fake_tmp)
+    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: fake_tmp)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-opaque"
+    assert _leftover_view_dirs(fake_tmp) == []
+
+
 def test_review_diff_file_named_like_binary_marker_is_not_opaque(tmp_path):
     magic_name = "Binary files a and b differ"
     repo = _init_repo(tmp_path / "binary-name", files={"keep.txt": "k\n"})
@@ -2247,6 +2333,63 @@ def test_review_diff_dir_to_file_transition_withheld_child_is_skipped(tmp_path):
         sv.destroy_sanitized_view(view["path"])
 
 
+def test_review_diff_descendant_pathspecs_collapse_to_ancestor(tmp_path, monkeypatch):
+    repo = str(tmp_path / "descendant-collapse")
+    os.makedirs(repo, exist_ok=True)
+    _git(repo, "init", "-q")
+    os.makedirs(os.path.join(repo, "pkg"))
+    with open(os.path.join(repo, "pkg", "CLAUDE.md"), "w", encoding="utf-8") as fh:
+        fh.write("secret baseline\n")
+    with open(os.path.join(repo, "pkg", "x.txt"), "w", encoding="utf-8") as fh:
+        fh.write("x baseline\n")
+    with open(os.path.join(repo, "other.txt"), "w", encoding="utf-8") as fh:
+        fh.write("other baseline\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "init pkg dir",
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    shutil.rmtree(os.path.join(repo, "pkg"))
+    with open(os.path.join(repo, "pkg"), "w", encoding="utf-8") as fh:
+        fh.write("regular file\n")
+    with open(os.path.join(repo, "other.txt"), "w", encoding="utf-8") as fh:
+        fh.write("other changed\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "pkg dir to file",
+    )
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    merge_base = _git(repo, "merge-base", base_sha, head_sha).stdout.strip()
+    started = time.monotonic()
+    changed = sv._changed_tree_entries(repo, merge_base, head_sha, started)
+    survivors = [p for p in changed if not sv._rel_path_would_be_stripped(p)]
+    monkeypatch.setattr(sv, "_REVIEW_DIFF_ARGV_MAX_BYTES", 512)
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        for path in survivors:
+            assert _diff_git_section_count(patch, path) == 1
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
 def test_review_diff_withheld_section_outside_survivor_prefix_refuses():
     # Reconciler-level guard for a shape the current pathspec set cannot emit.
     patch = (
@@ -2267,6 +2410,22 @@ def test_review_diff_withheld_section_outside_survivor_prefix_refuses():
         sv._reconcile_review_patch(
             patch, survivors=["safe.py"], withheld=["CLAUDE.md"]
         )
+    assert exc.value.detail == "sanitized-view-diff-unaccounted"
+
+
+def test_review_diff_duplicate_rendered_section_refuses():
+    section = (
+        b"diff --git a/x.py b/x.py\n"
+        b"index 111..222 100644\n"
+        b"--- a/x.py\n"
+        b"+++ b/x.py\n"
+        b"@@ -1 +1 @@\n"
+        b"-old\n"
+        b"+new\n"
+    )
+    patch = section + section
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._reconcile_review_patch(patch, survivors={"x.py"}, withheld=set())
     assert exc.value.detail == "sanitized-view-diff-unaccounted"
 
 
