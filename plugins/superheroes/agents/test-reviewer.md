@@ -47,9 +47,11 @@ Collect findings under these named smells; **every finding cites its smell by na
 - **unproven-detector** — a diff-added detector (a test function, guard clause, validator, or CI
   check whose purpose is to fail when something is wrong) with nothing in the diff saying what it
   bites on, or with an owed disclosure absent. The axis line is owed **once per detector unit** —
-  not per assertion inside one — and a file- or suite-level line naming what the file bites on
-  satisfies it for every detector in that file. Everything needed to apply this smell is in this
-  file; `rubric/bite-proof.md` is the plugin's own reference.
+  not per assertion inside one. A file- or suite-level line satisfies that obligation only when it
+  enumerates the detectors it covers and states the axis they share; one generic line naming what
+  the file bites on does not blanket unrelated detectors in the same file, and a seat should flag a
+  single shared line across detectors that bite on different axes. Everything needed to apply this
+  smell is in this file; `rubric/bite-proof.md` is the plugin's own reference.
 
 ## What to Flag
 
