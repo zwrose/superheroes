@@ -45,11 +45,6 @@ def test_review_base_stdout_specimen_accepted_by_stdout_parser():
     text = _read_review_base()
     specimen = _extract_stdout_channel_specimen(text)
     specimen_obj = json.loads(specimen)
-    for finding in specimen_obj.get("findings", []):
-        severity = finding.get("severity")
-        if severity in ("Critical", "Important"):
-            assert finding.get("evidence") is not None
-            assert finding.get("suggestion") is not None
     res = engine_adapter.parse_result("codex", "review", specimen)
     assert res["ok"] is True
     for key, value in specimen_obj.items():

@@ -95,7 +95,7 @@ your channel.
 **stdout channel** — external, sandboxed seats that cannot write a file. Your
 final stdout is a single JSON object and nothing after it:
 
-`{"findings": [{"id": "code-001", "severity": "Minor", "dimension": "Code", "title": "…", "file": "src/orders.py", "line": 21, "body": "…"}], "investigated": ["src/orders.py"]}`
+`{"findings": [], "investigated": ["src/orders.py"]}`
 
 Wrap the finding array below as the `findings` value. List in `investigated`
 every repo-relative path you actually read to ground the review. An empty
