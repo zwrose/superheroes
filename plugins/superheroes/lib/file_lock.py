@@ -9,6 +9,7 @@ import fcntl
 import json
 import os
 import socket
+import stat
 import tempfile
 import time
 
@@ -32,22 +33,46 @@ def _holder_info():
 
 def read_holder(lock_path):
     try:
-        with open(lock_path) as fh:
+        fd = os.open(lock_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return {}
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return {}
+        with os.fdopen(fd) as fh:
+            fd = -1
             parsed = json.load(fh)
     except (OSError, ValueError):
         return {}
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
     return parsed if isinstance(parsed, dict) else {}
 
 
 def _read_holder_state(lock_path):
     """Distinguish read failure from successfully read but unusable content."""
+    fd = -1
     try:
-        with open(lock_path) as fh:
+        fd = os.open(lock_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return "unusable", None
+        with os.fdopen(fd) as fh:
+            fd = -1
             raw = fh.read()
     except OSError:
         return "read_error", None
     except UnicodeError:
         return "unusable", None
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
     if not raw or not raw.strip():
         return "unusable", None
     try:

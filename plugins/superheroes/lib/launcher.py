@@ -41,9 +41,6 @@ _GIT_SCRUB_VARS = (
     "GIT_CEILING_DIRECTORIES",
 )
 
-_LOCK_SUFFIX = ".lock"
-_DEFAULT_LOCK_TIMEOUT = 30.0
-
 _VALID_STATES = frozenset({"pass", "fail", "na"})
 _HEX40 = re.compile(r"^[0-9a-fA-F]{40}$")
 
@@ -71,47 +68,8 @@ def _git_scrubbed(repo_root, *args, env=None, timeout=None):
         return None
 
 
-def _lock_path(ledger_file):
-    return ledger_file + _LOCK_SUFFIX
-
-
-def _acquire_lock(lock_path, timeout=_DEFAULT_LOCK_TIMEOUT):
-    import file_lock  # noqa: E402
-
-    deadline = time.monotonic() + timeout
-    while True:
-        try:
-            file_lock.acquire(lock_path)
-            return True
-        except file_lock.LockHeld:
-            if time.monotonic() >= deadline:
-                return False
-            time.sleep(0.05)
-
-
-def _release_lock(lock_path):
-    import file_lock  # noqa: E402
-
-    try:
-        file_lock.release(lock_path)
-    except Exception:
-        pass
-
-
 def _append_under_lock(repo_root, record, env=None):
-    lp = ll.ledger_path(repo_root, env=env)
-    if not lp["ok"]:
-        return {"ok": False, "reason": lp["reason"]}
-    path = lp["path"]
-    lock_path = _lock_path(path)
-    if not _acquire_lock(lock_path):
-        return {"ok": False, "reason": "lock-unavailable"}
-    try:
-        if not ll.append(repo_root, record, env=env):
-            return {"ok": False, "reason": "ledger-append-failed"}
-        return {"ok": True, "reason": None, "path": path}
-    finally:
-        _release_lock(lock_path)
+    return ll.append_under_lock(repo_root, record, env=env)
 
 
 def _parse_json_object(text, duplicate_reason):

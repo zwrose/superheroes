@@ -1533,6 +1533,99 @@ def test_fold_refuses_non_increasing_started_attempt(tmp_path):
     assert result_ok["launches"]["a"]["pid"] == 424242
 
 
+def test_reap_refuses_when_identity_probe_fails(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-id-fail"
+    launch_id = "l-id-fail"
+    proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        _declare(repo, batch, 1)
+        ll.reserve(repo, _reserved(launch_id, batch, ["a"], repo))
+        started = _started(launch_id)
+        started["pid"] = proc.pid
+        identity = ll.process_identity(proc.pid)
+        assert identity is not None
+        started["childIdentity"] = identity
+        assert ll.append(repo, started)
+        count_before = len(ll.read(repo)["records"])
+        monkeypatch.setattr(ll, "process_identity", lambda _pid: None)
+        result = ll.record_outcome(repo, launch_id, "handback", "done")
+        assert result["ok"] is False
+        assert result["reason"] == "terminal-child-live:%s" % proc.pid
+        assert len(ll.read(repo)["records"]) == count_before
+        os.kill(proc.pid, 0)
+    finally:
+        try:
+            os.kill(proc.pid, 9)
+        except ProcessLookupError:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+
+
+def test_reap_treats_genuinely_gone_pid_as_dead(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-gone"
+    launch_id = "l-gone"
+    proc = subprocess.Popen(["sleep", "1"], start_new_session=True)
+    proc.wait(timeout=5)
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved(launch_id, batch, ["a"], repo))
+    started = _started(launch_id)
+    started["pid"] = proc.pid
+    identity = ll.process_identity(proc.pid)
+    if identity is None:
+        identity = {"bootId": None, "start": "gone", "comm": "sleep"}
+    started["childIdentity"] = identity
+    assert ll.append(repo, started)
+    result = ll.record_outcome(repo, launch_id, "handback", "done")
+    assert result["ok"] is True
+    records = ll.read(repo)["records"]
+    assert any(r.get("event") == "outcome" for r in records)
+
+
+def test_terminalize_refuses_when_supplied_proc_survives_reaping(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    launch_id = "l-survive"
+    ll.reserve(repo, _reserved(launch_id, "b-survive", ["a"], repo))
+
+    class _SurvivingProc:
+        pid = 424242
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            pass
+
+        def kill(self):
+            pass
+
+        def wait(self, timeout=None):
+            pass
+
+    count_before = len(ll.read(repo)["records"])
+    result = ll.terminalize(
+        repo, launch_id, child_ever_spawned=False, reason="test", proc=_SurvivingProc(),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:424242"
+    assert len(ll.read(repo)["records"]) == count_before
+
+
+def test_record_outcome_maps_invalid_launch_id(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = ll.record_outcome(repo, "", "handback", "evidence")
+    assert result["ok"] is False
+    assert result["reason"] == "outcome-unknown-launch"
+
+
 def test_record_outcome_still_refuses_without_started(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)

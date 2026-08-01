@@ -371,6 +371,26 @@ def _release_lock(lock_path):
         pass
 
 
+def append_under_lock(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
+    """Append a ledger record under the canonical lock gate. Never raises."""
+    lock_result = _ensure_lock_file(repo_root, env=env)
+    if not lock_result["ok"]:
+        return {"ok": False, "reason": lock_result["reason"], "path": None}
+    lp = ledger_path(repo_root, env=env)
+    if not lp["ok"]:
+        return {"ok": False, "reason": lp["reason"], "path": None}
+    path = lp["path"]
+    lock_path = lock_result["path"]
+    if not _acquire_lock(lock_path, lock_timeout):
+        return {"ok": False, "reason": "lock-unavailable", "path": None}
+    try:
+        if not append(repo_root, record, env=env):
+            return {"ok": False, "reason": "ledger-append-failed", "path": None}
+        return {"ok": True, "reason": None, "path": path}
+    finally:
+        _release_lock(lock_path)
+
+
 def repo_identity(repo_root):
     """sha256 hex of realpath(git-common-dir); None on any failure."""
     if not repo_root or not isinstance(repo_root, str):
@@ -915,23 +935,61 @@ def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
 
 
 def process_identity(pid):
-    """Non-reusable identity for a running pid: (bootId, kernel start time).
+    """Non-reusable identity for a running pid: (bootId, kernel start time, comm).
     Returns a dict or None when it cannot be established. Never raises."""
+    # macOS comm stabilizes shortly after execve; reading too early yields a
+    # transient argv[0] path that disagrees with later reads of the same pid.
+    time.sleep(0.05)
     try:
-        proc = subprocess.run(
+        proc_start = subprocess.run(
             ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        proc_comm = subprocess.run(
+            ["ps", "-o", "comm=", "-p", str(pid)],
             capture_output=True,
             text=True,
             timeout=5,
         )
     except (subprocess.TimeoutExpired, OSError):
         return None
-    if proc.returncode != 0:
+    if proc_start.returncode != 0 or proc_comm.returncode != 0:
         return None
-    start = (proc.stdout or "").strip()
+    start = (proc_start.stdout or "").strip()
+    comm = (proc_comm.stdout or "").strip() or None
     if not start:
         return None
-    return {"bootId": hostinfo.boot_id(), "start": start}
+    # Residual: whole-second lstart granularity plus command equality — a
+    # same-second, same-command, group-leader pid reuse would still pass.
+    return {"bootId": hostinfo.boot_id(), "start": start, "comm": comm}
+
+
+def _identity_disagrees(recorded, current):
+    """True when comparable identity fields disagree (pid recycled)."""
+    if current.get("start") != recorded.get("start"):
+        return True
+    rec_boot = recorded.get("bootId")
+    cur_boot = current.get("bootId")
+    if rec_boot is not None and cur_boot is not None and cur_boot != rec_boot:
+        return True
+    rec_comm = recorded.get("comm")
+    cur_comm = current.get("comm")
+    if rec_comm is not None and cur_comm is not None and cur_comm != rec_comm:
+        return True
+    return False
+
+
+def _pid_probe_gone(pid):
+    """True only when os.kill(pid, 0) proves the pid does not exist."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    return False
 
 
 def _reap_process(proc):
@@ -963,7 +1021,9 @@ def _wait_pid_gone(pid, seconds):
     deadline = time.monotonic() + seconds
     while True:
         try:
-            os.waitpid(pid, os.WNOHANG)
+            reaped, _status = os.waitpid(pid, os.WNOHANG)
+            if reaped != 0:
+                return True
         except (ChildProcessError, OSError):
             pass
         try:
@@ -1001,12 +1061,10 @@ def _reap_recorded_pid(pid, recorded_identity):
         return ("live", "identity-unrecorded")
     current = process_identity(pid)
     if current is None:
-        return ("dead", "process-gone")
-    if current.get("start") != recorded_identity.get("start"):
-        return ("dead", "pid-recycled")
-    rec_boot = recorded_identity.get("bootId")
-    cur_boot = current.get("bootId")
-    if rec_boot is not None and cur_boot is not None and cur_boot != rec_boot:
+        if _pid_probe_gone(pid):
+            return ("dead", "process-gone")
+        return ("live", "identity-unverifiable")
+    if _identity_disagrees(recorded_identity, current):
         return ("dead", "pid-recycled")
     try:
         if os.getpgid(pid) != pid:
@@ -1014,13 +1072,20 @@ def _reap_recorded_pid(pid, recorded_identity):
     except ProcessLookupError:
         return ("dead", "no-such-process")
     except OSError:
-        return ("dead", "no-such-process")
+        return ("live", "identity-unverifiable")
     try:
         os.killpg(pid, signal.SIGTERM)
     except OSError:
         pass
     if _wait_pid_gone(pid, 2.0):
         return ("reaped", "sigterm")
+    before_sigkill = process_identity(pid)
+    if before_sigkill is None:
+        if _pid_probe_gone(pid):
+            return ("reaped", "exited-before-sigkill")
+        return ("live", "identity-unverifiable")
+    if _identity_disagrees(recorded_identity, before_sigkill):
+        return ("reaped", "exited-before-sigkill")
     try:
         os.killpg(pid, signal.SIGKILL)
     except OSError:
@@ -1058,6 +1123,12 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
     try:
         if proc is not None and proc.poll() is None:
             _reap_process(proc)
+            if proc.poll() is None:
+                return {
+                    "ok": False,
+                    "reason": "terminal-child-live:%s" % proc.pid,
+                    "kind": None, "outcome": None, "reaped": False,
+                }
             reaped = True
 
         if not isinstance(launch_id, str) or not launch_id:
@@ -1134,11 +1205,33 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
                 return {
                     "ok": False,
                     "reason": "terminal-child-live:%s" % info.get("pid"),
-                    "kind": None, "outcome": None, "reaped": False,
+                    "kind": None, "outcome": None, "reaped": reaped,
                 }
 
         started = info.get("started")
-        if started:
+        if started or child_ever_spawned:
+            if child_ever_spawned and not started:
+                if not _validate_started_repair(started_repair):
+                    return {
+                        "ok": False, "reason": "terminal-repair-unavailable",
+                        "kind": None, "outcome": None, "reaped": reaped,
+                    }
+                started_record = {
+                    "event": "started",
+                    "launchId": launch_id,
+                    "ts": time.time(),
+                    "schema": SCHEMA,
+                    "attempt": started_repair["attempt"],
+                    "pid": started_repair["pid"],
+                    "logPath": started_repair["logPath"],
+                    "errPath": started_repair["errPath"],
+                    "repaired": True,
+                }
+                if not append(repo_root, started_record, env=env):
+                    return {
+                        "ok": False, "reason": "ledger-append-failed",
+                        "kind": None, "outcome": None, "reaped": reaped,
+                    }
             kind = "outcome"
             written_outcome = outcome if outcome is not None else "park"
             written_evidence = (
@@ -1154,46 +1247,7 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
                 "outcome": written_outcome,
                 "evidence": written_evidence,
             }
-            if not child_ever_spawned:
-                record["reconciled"] = True
-        elif child_ever_spawned:
-            if not _validate_started_repair(started_repair):
-                return {
-                    "ok": False, "reason": "terminal-repair-unavailable",
-                    "kind": None, "outcome": None, "reaped": reaped,
-                }
-            started_record = {
-                "event": "started",
-                "launchId": launch_id,
-                "ts": time.time(),
-                "schema": SCHEMA,
-                "attempt": started_repair["attempt"],
-                "pid": started_repair["pid"],
-                "logPath": started_repair["logPath"],
-                "errPath": started_repair["errPath"],
-                "repaired": True,
-            }
-            if not append(repo_root, started_record, env=env):
-                return {
-                    "ok": False, "reason": "ledger-append-failed",
-                    "kind": None, "outcome": None, "reaped": reaped,
-                }
-            kind = "outcome"
-            written_outcome = outcome if outcome is not None else "park"
-            written_evidence = (
-                evidence if isinstance(evidence, str) and evidence.strip()
-                else reason if isinstance(reason, str) and reason.strip()
-                else "unknown"
-            )
-            record = {
-                "event": "outcome",
-                "launchId": launch_id,
-                "ts": time.time(),
-                "schema": SCHEMA,
-                "outcome": written_outcome,
-                "evidence": written_evidence,
-            }
-            if not child_ever_spawned:
+            if started and not child_ever_spawned:
                 record["reconciled"] = True
         elif outcome is not None:
             return {
@@ -1229,7 +1283,7 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
     except Exception:
         return {
             "ok": False, "reason": "terminalize-failed",
-            "kind": None, "outcome": None, "reaped": False,
+            "kind": None, "outcome": None, "reaped": reaped,
         }
     finally:
         if locked and lock_path is not None:
@@ -1249,7 +1303,7 @@ def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
         require_started=True, env=env, lock_timeout=lock_timeout,
     )
     mapped_reason = result["reason"]
-    if mapped_reason == "terminal-unknown-launch":
+    if mapped_reason in ("terminal-unknown-launch", "terminal-launch-id-invalid"):
         mapped_reason = "outcome-unknown-launch"
     return {"ok": result["ok"], "reason": mapped_reason}
 

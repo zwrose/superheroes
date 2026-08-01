@@ -417,6 +417,22 @@ def test_acquire_and_reclaim_survive_a_restrictive_umask(tmp_path):
         os.umask(original_umask)
 
 
+def test_read_holder_state_refuses_a_fifo_without_blocking(tmp_path):
+    p = str(tmp_path / "engine.lock")
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    os.mkfifo(p)
+    start = time.monotonic()
+    status, holder = lock._read_holder_state(p)
+    elapsed = time.monotonic() - start
+    assert elapsed < 5.0, "_read_holder_state blocked on FIFO"
+    assert status == "unusable"
+    assert holder is None
+    start = time.monotonic()
+    assert lock.read_holder(p) == {}
+    elapsed = time.monotonic() - start
+    assert elapsed < 5.0, "read_holder blocked on FIFO"
+
+
 def test_reclaim_guard_mode_is_owner_only(tmp_path):
     p = str(tmp_path / "engine.lock")
     with open(p, "w") as fh:

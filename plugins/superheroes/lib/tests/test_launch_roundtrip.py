@@ -158,9 +158,12 @@ def _scenario_started_append_failure(repo, log_dir, surfaces, batch_id, monkeypa
     real_append = L._append_under_lock
     calls = {"n": 0}
 
+    intercepted = []
+
     def failing_append(repo_root, record, env=None):
-        if record.get("event") == "started" and not record.get("repaired"):
+        if record.get("event") == "started":
             calls["n"] += 1
+            intercepted.append(record)
             return {"ok": False, "reason": "ledger-append-failed"}
         return real_append(repo_root, record, env=env)
 
@@ -179,6 +182,8 @@ def _scenario_started_append_failure(repo, log_dir, surfaces, batch_id, monkeypa
         L._append_under_lock = real_append
     assert result["ok"] is False
     assert calls["n"] >= 1
+    assert len(intercepted) == 1
+    assert intercepted[0].get("repaired") is not True
     launch_id = result["launchId"]
     _, folded = _assert_p1(repo)
     records = _read_ledger(repo)["records"]
@@ -554,7 +559,10 @@ def test_interleaved_scenarios_fold_clean(tmp_path, monkeypatch, seed):
             1 for r in read_result["records"] if r.get("event") == "reserved"
         )
         assert reserved_count == len(PART2_SCENARIOS)
-        assert folded["ok"] is True
+        terminal_count = sum(
+            1 for info in folded["launches"].values() if info["terminal"]
+        )
+        assert terminal_count == len(PART2_SCENARIOS) - 1
     finally:
         for pid in pids:
             _kill_child(pid)

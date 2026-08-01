@@ -18,7 +18,6 @@ _LEDGER_PATH_CONSTANTS = frozenset({
 _TERMINAL_EVENT_KINDS = frozenset({"outcome", "refused"})
 _TERMINAL_WRITE_ALLOWLIST = {
     "launch_ledger.py": frozenset({"terminalize"}),
-    "launcher.py": frozenset({"_terminalize"}),
 }
 _CLASS3_APPEND_ALLOWLIST = {
     "launcher.py": frozenset({"_append_under_lock"}),
@@ -643,6 +642,53 @@ def test_class2_record_outcome_delegates_to_the_door():
     )
 
 
+def test_class2_launcher_terminalize_is_a_pure_delegation():
+    with open(_LAUNCHER_PY, encoding="utf-8") as fh:
+        source = fh.read()
+    tree = _parse_source(source, _LAUNCHER_PY)
+    terminalize_fn = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_terminalize":
+            terminalize_fn = node
+            break
+    assert terminalize_fn is not None, "_terminalize not found in launcher.py"
+
+    has_terminalize = False
+    has_forbidden_call = False
+    for child in ast.walk(terminalize_fn):
+        if isinstance(child, ast.Call):
+            func = child.func
+            if isinstance(func, ast.Attribute) and func.attr == "terminalize":
+                if _is_ledger_module_expr(func.value):
+                    has_terminalize = True
+            if isinstance(func, ast.Name) and func.id in ("append", "_append_under_lock"):
+                has_forbidden_call = True
+            if isinstance(func, ast.Attribute) and func.attr == "append":
+                if _is_ledger_module_expr(func.value):
+                    has_forbidden_call = True
+            if isinstance(func, ast.Attribute) and func.attr == "_append_under_lock":
+                has_forbidden_call = True
+
+    terminal_visitor = _TerminalWriterVisitor()
+    for stmt in terminalize_fn.body:
+        terminal_visitor.visit(stmt)
+
+    assert has_terminalize, "_terminalize must delegate to ll.terminalize"
+    assert not has_forbidden_call, (
+        "_terminalize must not call append or _append_under_lock"
+    )
+    assert terminal_visitor.violations == [], (
+        "_terminalize must not construct terminal event records: %s"
+        % terminal_visitor.violations
+    )
+
+    violations, _ = class2_census_violations(_LAUNCHER_PY)
+    assert "launcher.py::_terminalize" not in violations, (
+        "_terminalize should not trip Class-2 census on its own merits: %s"
+        % violations.get("launcher.py::_terminalize")
+    )
+
+
 def test_class1_matcher_catches_aliased_ledger_path():
     bad_source = (
         "import launch_ledger as ll\n"
@@ -690,6 +736,32 @@ def test_class2_matcher_catches_non_literal_terminal_records():
         allowlisted_source, allowlisted_path
     )
     assert allowlisted_violations == {}, allowlisted_violations
+
+
+def test_class2_matcher_catches_launcher_terminalize_regression():
+    """A rogue launcher._terminalize must trip Class-2 now that it is not allowlisted."""
+    source = (
+        "def _terminalize(repo_root, launch_id):\n"
+        "    rec = {'event': 'outcome', 'launchId': launch_id}\n"
+    )
+    path = os.path.join(_LIB, "launcher.py")
+    violations, _ = class2_census_violations_from_source(source, path)
+    key = "launcher.py::_terminalize"
+    assert key in violations, violations
+    assert "event:outcome" in violations[key], violations
+
+
+def test_class3_matcher_catches_rogue_append_with_empty_allowlist():
+    """Class-3 clause must still bite when the allowlist is empty for a module."""
+    source = (
+        "import launch_ledger as ll\n"
+        "def rogue_writer(repo_root, record):\n"
+        "    ll.append(repo_root, record)\n"
+    )
+    path = os.path.join(_LIB, "fake_bypass.py")
+    violations = class3_census_violations_from_source(source, path)
+    assert violations, violations
+    assert any("rogue_writer" in v for v in violations), violations
 
 
 if __name__ == "__main__":

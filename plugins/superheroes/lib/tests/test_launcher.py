@@ -1887,3 +1887,33 @@ def test_c2_edge15_census_detects_bypass_outside_terminalize():
     violations, launch_build_calls = class2_census_violations(_MOD)
     assert "launcher.py::_terminalize" not in violations
     assert "launcher.py::launch_build" not in violations
+
+
+def test_append_under_lock_refuses_a_fifo_lock_without_blocking(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    ledger_root = _ledger_env(tmp_path, monkeypatch)
+    repo_id = ll.repo_identity(repo)
+    repo_dir = os.path.join(ledger_root, repo_id)
+    os.makedirs(repo_dir, mode=0o700, exist_ok=True)
+    fifo_lock = os.path.join(repo_dir, ll.LEDGER_NAME + ".lock")
+    os.mkfifo(fifo_lock)
+    record = {
+        "event": "reserved",
+        "launchId": "l-fifo",
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": "b-fifo",
+        "repoId": repo_id,
+        "issue": 656,
+        "surfaces": ["a"],
+        "premise": {},
+        "preflight": {},
+        "argv": [],
+        "doctrineDigest": "abc",
+        "model": "test",
+    }
+    start = time.monotonic()
+    result = L._append_under_lock(repo, record)
+    elapsed = time.monotonic() - start
+    assert elapsed < 5.0, "_append_under_lock blocked on FIFO lock"
+    assert result["ok"] is False
