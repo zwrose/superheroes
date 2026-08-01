@@ -999,22 +999,20 @@ switch this guarantee off*.
 tests green** — and the gap surfaced only in review, not in CI (the #702 arc's review record on PR
 [#710](https://github.com/zwrose/superheroes/pull/710)).
 
-Two ways a bite test looks present and is not:
+The vacuity traps — when a bite test looks present and is not — live in one home: the plugin's `## Four
+ways a bite-proof is vacuous` section in `plugins/superheroes/rubric/bite-proof.md`.
 
-- **The wrong axis.** A test can bite on something adjacent to the guarantee — presence where the
-  guarantee is about *authority*, a count where it is about *refusal* — and pass the "it went red"
-  check while the guarantee itself stays unprotected. **Name the axis the test bites on and check it is
-  the axis the guarantee claims.**
-- **Neutralizing a precondition instead of a consumer.** Mutate the **consumers** — the production
-  call sites that depend on the guarantee — not a helper the tests already assert as a *precondition*.
-  Breaking such a helper reddens the tests that assert the helper, which proves the helper is asserted
-  and says nothing about whether anything downstream is protected.
-
-Both are §12.2's trap one level up: a suite that stubs the seam verifies the stub, and a probe aimed at
-a precondition verifies the precondition. Like §12.1, this rule lives at whichever tier fits — a CI
+The vacuity traps are §12.2's trap one level up: a suite that stubs the seam verifies the stub, and a
+probe aimed at a precondition verifies the precondition. Like §12.1, this rule lives at whichever tier fits — a CI
 test where the guarantee is code, a **review-rubric question** where it is not — and is enforced the way
 review discipline is: a reviewer citing this § is enough to block a guarantee shipped without its bite
 test.
+
+The band-level statement of this rule now ships in the plugin — `plugins/superheroes/rubric/bite-proof.md`
+carries the obligation, the vacuity traps, the record shape, and the disclosures owed when the proof
+cannot be produced or runs under a normalization — and this § stays the repository's own statement of
+the guarantee rather than repeating that procedure. §12.3 is **this repository's structural-guarantee
+case** of the band rule, and the band rule's scope is **wider** — every new or changed detector.
 
 ---
 
