@@ -159,7 +159,7 @@ def _dispatch_calibration_read_error_marker_from_line(read_error_line):
     return [{"role": "*", "engine": None, "model": None, "readError": read_error_line}]
 
 
-def _tiers_eval_failed_line(exc):
+def _eval_failed_line(exc):
     return core_md.gate_refusal_line(
         core_md.gate_refusal(
             core_md.GATE_REASON_EVALUATION_FAILED,
@@ -167,13 +167,13 @@ def _tiers_eval_failed_line(exc):
 
 
 def readout_config(cwd=None, root=None):
-    """Single snapshot of engine preferences + effective model tiers for this module's CLI readouts.
+    """Single snapshot of the core.md engine-preference read for this module's CLI readouts.
 
-    Returns ``{"prefs", "status", "reason", "readError", "tiers", "tiersError"}`` — one snapshot
-    of the project's configuration. ``status``/``reason``/``readError``/``prefs`` describe the
-    core.md read only; ``tiers``/``tiersError`` describe the model-tier read only. Callers thread
-    this snapshot to every consumer in a single ``main()`` invocation so two readouts of the same
-    run can never disagree about whether the configuration was readable.
+    Returns ``{"prefs", "status", "reason", "readError"}`` — one snapshot of the project's
+    core.md read only. Model tiers are read separately by each consumer and are not part of
+    this snapshot. Callers thread this snapshot to every consumer in a single ``main()``
+    invocation so two readouts of the same run can never disagree about whether core.md was
+    readable.
 
     This is the one door for readouts **in this module** (`run`, ``compose-liveness``). Other
     snippets (e.g. ``skills/configure/reference/preflight.md`` §B and ``review-code``) still read
@@ -182,7 +182,7 @@ def readout_config(cwd=None, root=None):
     try:
         cfg = core_md.engine_preferences_for_gate(cwd=cwd, root=root)
         if core_md.gate_config_is_absent(cfg):
-            core_result = {
+            return {
                 "prefs": {},
                 "status": core_md.CONFIG_ABSENT,
                 "reason": None,
@@ -190,7 +190,7 @@ def readout_config(cwd=None, root=None):
             }
         elif not core_md.gate_config_is_refusal(cfg):
             prefs = core_md.gate_config_usable_prefs(cfg)
-            core_result = {
+            return {
                 "prefs": prefs,
                 "status": core_md.CONFIG_OK,
                 "reason": None,
@@ -199,31 +199,19 @@ def readout_config(cwd=None, root=None):
         else:
             refusal = core_md.gate_config_refusal(cfg)
             read_error = core_md.gate_refusal_line(refusal)
-            core_result = {
+            return {
                 "prefs": {},
                 "status": cfg.status,
                 "reason": refusal["reason"],
                 "readError": read_error,
             }
     except Exception as exc:
-        core_result = {
+        return {
             "prefs": {},
             "status": core_md.CONFIG_UNREADABLE,
             "reason": core_md.GATE_REASON_EVALUATION_FAILED,
-            "readError": _tiers_eval_failed_line(exc),
+            "readError": _eval_failed_line(exc),
         }
-    try:
-        tiers = model_tier_overrides.effective_tiers(
-            model_tier_overrides.resolve_profile_path(cwd, root))
-        tiers_error = None
-    except Exception as exc:
-        tiers = {}
-        tiers_error = _tiers_eval_failed_line(exc)
-    return {
-        **core_result,
-        "tiers": tiers,
-        "tiersError": tiers_error,
-    }
 
 
 def dispatch_calibration(cwd=None, root=None, prefs=None, tiers=None, snapshot=None):
@@ -234,16 +222,14 @@ def dispatch_calibration(cwd=None, root=None, prefs=None, tiers=None, snapshot=N
     used (NOT ``engine_pref.load_engine_prefs``'s normalized output: an absent ``briefCheck`` must
     stay ABSENT so ``resolve_engine`` applies the codex default, whereas the normalized 'claude'
     would suppress it). On ``CONFIG_UNREADABLE`` a single marker row carries ``readError`` instead
-    of defaulted rows. Never raises — any read failure returns that marker, not an empty list."""
+    of defaulted rows. Model tiers are read here, not supplied by the snapshot; a snapshot's
+    ``readError`` takes precedence over any explicitly passed ``prefs``. Never raises — any read
+    failure returns that marker, not an empty list."""
     try:
+        if snapshot is not None and snapshot.get("readError") is not None:
+            return _dispatch_calibration_read_error_marker_from_line(snapshot["readError"])
         if prefs is None:
             if snapshot is not None:
-                if snapshot.get("readError") is not None:
-                    return _dispatch_calibration_read_error_marker_from_line(
-                        snapshot["readError"])
-                if snapshot.get("tiersError") is not None:
-                    return _dispatch_calibration_read_error_marker_from_line(
-                        snapshot["tiersError"])
                 prefs = snapshot.get("prefs")
                 prefs = prefs if isinstance(prefs, dict) else {}
             else:
@@ -255,12 +241,8 @@ def dispatch_calibration(cwd=None, root=None, prefs=None, tiers=None, snapshot=N
                 prefs = core_md.gate_config_usable_prefs(cfg)
                 prefs = prefs if isinstance(prefs, dict) else {}
         if tiers is None:
-            if snapshot is not None:
-                tiers = snapshot.get("tiers")
-                tiers = tiers if isinstance(tiers, dict) else {}
-            else:
-                tiers = model_tier_overrides.effective_tiers(
-                    model_tier_overrides.resolve_profile_path(cwd, root))
+            tiers = model_tier_overrides.effective_tiers(
+                model_tier_overrides.resolve_profile_path(cwd, root))
         return engine_pref.dispatch_calibration_rows(prefs, tiers)
     except Exception as exc:
         return _dispatch_calibration_read_error_marker(
@@ -268,54 +250,25 @@ def dispatch_calibration(cwd=None, root=None, prefs=None, tiers=None, snapshot=N
 
 
 def _dispatch_selftest_config(cwd=None, root=None, snapshot=None):
-    """prefs/tiers bundle for dispatch_selftest leg 5 — reads engine prefs via
-    ``core_md.engine_preferences_for_gate`` (absent/ok/unreadable). ``dispatch_calibration`` uses
-    the same accessor and returns a single ``readError`` marker row when unreadable."""
+    """prefs/tiers bundle for dispatch_selftest leg 5.
+
+    No return path exists that neither carries a ``read_error`` nor completed a tier read."""
     cwd = cwd or os.getcwd()
-    if snapshot is not None:
-        try:
-            if snapshot["status"] == core_md.CONFIG_ABSENT:
-                return {"prefs": {}, "tiers": {}}
-            if snapshot.get("readError") is not None:
-                return {
-                    "prefs": {},
-                    "tiers": {},
-                    "read_error": snapshot["readError"],
-                }
-            if snapshot.get("tiersError") is not None:
-                return {
-                    "prefs": {},
-                    "tiers": {},
-                    "read_error": snapshot["tiersError"],
-                }
-            tiers = snapshot.get("tiers")
-            tiers = tiers if isinstance(tiers, dict) else {}
-            prefs = snapshot.get("prefs")
-            prefs = prefs if isinstance(prefs, dict) else {}
-            return {"prefs": prefs, "tiers": tiers}
-        except Exception as exc:
-            return {
-                "prefs": {},
-                "tiers": {},
-                "read_error": core_md.gate_refusal_line(
-                    core_md.gate_refusal(
-                        core_md.GATE_REASON_EVALUATION_FAILED,
-                        core_md.gate_refusal_detail(exc))),
-            }
     try:
-        cfg = core_md.engine_preferences_for_gate(cwd=cwd, root=root)
-        if core_md.gate_config_is_absent(cfg):
-            return {"prefs": {}, "tiers": {}}
-        refusal = core_md.gate_config_refusal(cfg)
-        if refusal is not None:
-            return {
-                "prefs": {},
-                "tiers": {},
-                "read_error": core_md.gate_refusal_line(refusal),
-            }
+        if snapshot is not None:
+            read_error = snapshot.get("readError")
+            prefs = snapshot.get("prefs")
+        else:
+            cfg = core_md.engine_preferences_for_gate(cwd=cwd, root=root)
+            refusal = core_md.gate_config_refusal(cfg)
+            read_error = core_md.gate_refusal_line(refusal) if refusal is not None else None
+            prefs = {} if core_md.gate_config_is_absent(cfg) else cfg.prefs
+        if read_error is not None:
+            return {"prefs": {}, "tiers": {}, "read_error": read_error}
+        prefs = prefs if isinstance(prefs, dict) else {}
         tiers = model_tier_overrides.effective_tiers(
             model_tier_overrides.resolve_profile_path(cwd, root))
-        return {"prefs": cfg.prefs, "tiers": tiers}
+        return {"prefs": prefs, "tiers": tiers}
     except Exception as exc:
         return {
             "prefs": {},
@@ -507,7 +460,6 @@ def main(argv):
                 "status": snap["status"],
                 "reason": snap["reason"],
                 "readError": snap["readError"],
-                "tiersError": snap["tiersError"],
             },
         }) + "\n")
         return 0
@@ -537,7 +489,6 @@ def main(argv):
                 "status": snap["status"],
                 "reason": snap["reason"],
                 "readError": snap["readError"],
-                "tiersError": snap["tiersError"],
             },
         }
         sys.stdout.write(json.dumps(out) + "\n")
