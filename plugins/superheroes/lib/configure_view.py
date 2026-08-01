@@ -300,6 +300,22 @@ def render(cwd, *, root=None):
         out.append("## Dispatch calibration (engine + model per role)")
         for label, engine, model in _dispatch_rows(prefs, tiers):
             out.append(f"{label} — {engine} — {model}")
+        eng = data.get("enginePrefs")
+        eng = eng if isinstance(eng, dict) else {}
+        builder = engine_pref.resolve_builder_dispatch_tier(eng)
+        out.append(
+            "builder dispatch (headless launch) — claude — %s (%s)"
+            % (builder["tier"], builder["source"])
+        )
+        invalid_builder = eng.get("invalidBuilderDispatchTier")
+        if isinstance(invalid_builder, dict) and invalid_builder.get("value") and invalid_builder.get("reason"):
+            out.append(
+                "Rejected builder dispatch tier (not applied — launch falls to the default):"
+            )
+            out.append(
+                "  %s: %s ⚠"
+                % (invalid_builder["value"], invalid_builder["reason"])
+            )
         out.append("")
         out.append("## Engine model pins (Codex)")
         effort = prefs.get("effort") if isinstance(prefs.get("effort"), dict) else {}

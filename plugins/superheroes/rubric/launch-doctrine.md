@@ -43,6 +43,18 @@ through the composed launch prompt (`compose_launch` sends the child only the pa
 do not assume this line reaches a builder). The load-bearing statement of this duty lives in the
 showrunner charter's orchestration duty 9.
 
+## Builder dispatch tier (artifact home)
+
+Headless builder launches run on the `opus` tier; the launcher pins it explicitly rather than
+letting a dispatch inherit whatever tier the account or session happens to default to. `fable` is
+never a launch default — it is a judgment-seat tier (advisor and review seats), never a build tier.
+An unset or unreadable configuration resolves to `opus`, never to an inherited session tier; a wrong
+tier does not error, it burns a shared account's limit at multiplied cost.
+
+This section is the doctrine artifact's home for that rule. The operative copy an advisor session
+loads is the showrunner charter (`skills/showrunner/SKILL.md`) — do not consolidate this rule back
+into the machine-parsed blocks above; nothing at launch reads prose outside those blocks.
+
 ## Recovery — taking over a build that stopped
 
 A launched builder can stop for reasons unrelated to its work — the account it burns hits a limit,

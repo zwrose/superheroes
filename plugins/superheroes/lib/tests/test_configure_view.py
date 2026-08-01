@@ -97,6 +97,44 @@ def test_render_shows_brief_check_claude_fallback_when_configured(tmp_path):
     assert "brief-check reviewer — claude — opus" in screen
 
 
+def test_render_shows_builder_dispatch_tier_default(tmp_path):
+    root = _seed_core_and_layer(tmp_path)
+    screen = cv.render(str(tmp_path), root=root)
+    assert "builder dispatch (headless launch) — claude — opus (default)" in screen
+
+
+def test_render_shows_builder_dispatch_tier_configured(tmp_path):
+    root = _seed_core_and_layer(
+        tmp_path, engine_preferences={"builderDispatchTier": "sonnet"},
+    )
+    screen = cv.render(str(tmp_path), root=root)
+    assert "builder dispatch (headless launch) — claude — sonnet (configured)" in screen
+
+
+def test_render_shows_builder_dispatch_tier_fable_rejected(tmp_path):
+    root = _seed_core_and_layer(
+        tmp_path, engine_preferences={"builderDispatchTier": "fable"},
+    )
+    screen = cv.render(str(tmp_path), root=root)
+    assert "builder dispatch (headless launch) — claude — opus" in screen
+    assert "Rejected builder dispatch tier (not applied — launch falls to the default):" in screen
+    assert "fable: fable-never-a-launch-default" in screen
+    assert "⚠" in screen
+
+
+def test_render_builder_dispatch_tier_survives_read_error(tmp_path, monkeypatch):
+    import engine_pref
+
+    root = _seed_core_and_layer(tmp_path)
+    monkeypatch.setattr(
+        engine_pref,
+        "load_engine_prefs",
+        lambda cwd, root=None: {"readError": "boom"},
+    )
+    screen = cv.render(str(tmp_path), root=root)
+    assert "builder dispatch (headless launch) — claude — opus (unreadable-default)" in screen
+
+
 def test_collect_threads_root_into_model_tier_resolution(tmp_path, monkeypatch):
     # Regression (#489): collect() reads core/engine prefs with `root`, so it must resolve the
     # model-tier profile with the SAME root — else a global-store / custom-root project reads its

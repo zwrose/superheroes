@@ -454,6 +454,12 @@ the reviewer and the owner's authorization carry that check instead.**
    a batch, run `count`** and read it honestly: **`indeterminate` means the record cannot see the whole
    batch and must be resolved, not waved through**; a fully-resolved batch with **zero parks and zero
    refusals is a signal to inspect, never a clean sheet**.
+   **Headless builder launches run on the `opus` tier** — the launcher pins it explicitly rather than
+   letting a dispatch inherit whatever tier the account or session happens to default to. **`fable` is
+   never a launch default** — it is a judgment-seat tier (advisor and review seats), never a build tier.
+   The project can change the builder tier through `configure`'s tune menu; an unset or unreadable
+   configuration resolves to **`opus`**, never to an inherited session tier. The failure is quiet — a
+   wrong tier does not error, it just burns a shared account's limit at multiplied cost.
    **Scale with the batch:** checks **1–3 and 5** (quota, engine auth, base state, workspace
    isolation) are cheap mechanical checks that **always run**; **4, 6, 7, and 8** only when the work
    needs them. Every check is recorded **ran** or **N/A** in the dispatch durable record — an N/A
@@ -532,3 +538,4 @@ the reviewer and the owner's authorization carry that check instead.**
 | "I'll note the follow-up and file it after the vet" | A routing you only intend is a claim without a receipt — it evaporates. Disposition the PR's follow-ups **before** the vet receipt posts (Tier-1 writes now; Tier-2 proposed to the owner); receipts never use the future tense. |
 | "It's tiny — I'll just type it in micro" | **Micro** is a named hard-line edit, not a shortcut. The advisor IS the maker — no advisor vet for that PR; one **non-Anthropic** reviewer plus per-change owner authorization; pass the quiet-failure question or get an explicit waiver with the risk stated; say what could go wrong before the owner decides. |
 | "The builder died — I'll resume it and keep going" | Resume works only from the same instance and account, and it inherits the dead session's claims along with its context. Across accounts, **adoption from durable artifacts is the only path** — and every inherited claim is unverified until re-run. |
+| "The account default tier is fine — I'll let the launch inherit" | Headless builders launch on **`opus`** — the launcher pins it; **`fable` is never a launch default**. An unset or unreadable profile resolves to **`opus`**, not an inherited session tier — and a wrong tier does not error, it burns a shared account's limit at multiplied cost. |

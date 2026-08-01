@@ -1282,3 +1282,42 @@ def test_load_engine_prefs_catch_all_carries_read_error_provenance(monkeypatch):
     resolved = EP.resolve_builder_dispatch_tier(got)
     assert resolved["source"] == "unreadable-default"
     assert resolved["tier"] == "opus"
+
+
+def _block_core_md_import(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _fake_import(name, *args, **kwargs):
+        if name == "core_md":
+            raise ImportError("simulated: core_md unimportable")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+
+def test_loaders_fail_closed_when_core_md_unimportable(monkeypatch):
+    """#755: exception handlers must not depend on core_md — the import that failed."""
+    _block_core_md_import(monkeypatch)
+    prefs = EP.load_engine_prefs(".")
+    assert isinstance(prefs.get("readError"), str) and prefs["readError"]
+    tier = EP.load_builder_dispatch_tier(".")
+    assert tier["tier"] == "opus"
+    assert tier["source"] == "unreadable-default"
+    assert tier["source"] != "default"
+    assert isinstance(tier.get("reason"), str) and tier["reason"]
+
+
+def test_load_builder_dispatch_tier_fail_closed_when_profile_structural_refusal_raises(monkeypatch):
+    import core_md
+
+    def _boom(cwd, root=None):
+        raise RuntimeError("profile_structural_refusal exploded")
+
+    monkeypatch.setattr(core_md, "profile_structural_refusal", _boom)
+    tier = EP.load_builder_dispatch_tier(".")
+    assert tier["tier"] == "opus"
+    assert tier["source"] == "unreadable-default"
+    assert tier["source"] != "default"
+    assert isinstance(tier.get("reason"), str) and tier["reason"]
