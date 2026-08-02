@@ -419,6 +419,8 @@ def test_exercise_passes_with_clean_files(private_tmp):
     assert receipt["reason"] is None
     assert receipt["scannedFiles"] > 0
     assert receipt["findings"] == []
+    assert receipt["symlinksSkipped"] == 0
+    assert len(receipt["coverageLimits"]) == 1
 
 
 def test_exercise_does_not_follow_symlinks(private_tmp):
@@ -441,3 +443,46 @@ def test_exercise_does_not_follow_symlinks(private_tmp):
     receipt = pp.exercise_no_policy_material_in_reach([reach_root], material)
     assert receipt["result"] == "pass"
     assert receipt["scannedFiles"] == 1
+    assert receipt["symlinksSkipped"] == 1
+    assert len(receipt["coverageLimits"]) == 2
+    assert "symbolic link" in receipt["coverageLimits"][1].lower()
+
+
+def test_exercise_finds_needle_split_across_chunk_boundary(private_tmp):
+    reach_root = os.path.join(private_tmp, "reach")
+    os.makedirs(reach_root)
+    needle = b"PILOT-CHUNK-BOUNDARY-NEEDLE"
+    half = len(needle) // 2
+    filler = b"f" * (pp._EXERCISE_CHUNK_SIZE - half)
+    content = filler + needle
+    planted = os.path.join(reach_root, "chunked.bin")
+    with open(planted, "wb") as handle:
+        handle.write(content)
+    material = {
+        "expected-identity": [needle.decode("utf-8")],
+        "mintable-account": [],
+        "connection-detail": [],
+    }
+    receipt = pp.exercise_no_policy_material_in_reach([reach_root], material)
+    assert receipt["result"] == "fail"
+    assert receipt["reason"] == pp.REASON_EXERCISE_MATERIAL_FOUND
+    assert receipt["findings"] == [{"path": planted, "materialClass": "expected-identity"}]
+
+
+def test_paths_filesystem_root_ancestor():
+    assert pp._is_same_or_ancestor("/", "/private/tmp/example") is True
+
+
+def test_exercise_symlink_free_reach_has_zero_skipped(private_tmp):
+    reach_root = os.path.join(private_tmp, "reach")
+    os.makedirs(reach_root)
+    with open(os.path.join(reach_root, "clean.txt"), "w", encoding="utf-8") as handle:
+        handle.write("no symlinks here")
+    material = {
+        "expected-identity": ["absent"],
+        "mintable-account": [],
+        "connection-detail": [],
+    }
+    receipt = pp.exercise_no_policy_material_in_reach([reach_root], material)
+    assert receipt["symlinksSkipped"] == 0
+    assert len(receipt["coverageLimits"]) == 1

@@ -266,8 +266,20 @@ redirect. There is **no `--allow-protected` equivalent** on this path — unlike
 `gate_violations`, which `--allow-protected` can bypass, protected-target refusal here is
 unconditional.
 
-Protected targets may be opaque strings (for example a database name) or URL-shaped strings;
-URL-shaped entries are canonicalized to exact origins when parseable.
+Protected targets are a **two-class** list:
+
+1. **URL-shaped entries** (contain `://`) — parsed and canonicalized to exact origins
+   (`<scheme>://<host>:<port>`). Compared by `check_target` and `check_redirect` against
+   candidate URL origins, and by `check_protected_identity` when the identity string equals the
+   canonical origin.
+2. **Opaque identity tokens** (no `://`) — stored verbatim. Compared only by
+   `check_protected_identity` against datastore identity strings (for example a database name).
+   A bare hostname such as `login.example.com` protects a **datastore identity** with that
+   name, not a URL — an owner meaning to protect a URL must write the full origin including
+   scheme and port (for example `https://login.example.com:443`).
+
+URL-shaped entries that do not parse refuse at binding time. Opaque tokens are never
+interpreted as hostnames for origin matching.
 
 Public API in `lib/pilot_boundary.py`: `parse_origin`, `target_binding`, `check_target`,
 `check_redirect`, `check_protected_identity`, `boundary_verdict`, `authorize_credentials`.
@@ -283,7 +295,8 @@ Public API in `lib/pilot_boundary.py`: `parse_origin`, `target_binding`, `check_
 | `boundary-target-off-allowlist` | `check_target`: parsed origin is not the binding origin and is not protected |
 | `boundary-redirect-off-allowlist` | `check_redirect`: parsed origin is neither the binding origin nor a permitted redirect and is not protected |
 | `boundary-protected-target-refused` | `check_target`, `check_redirect`, or `check_protected_identity`: parsed origin or identity names a protected target |
-| `boundary-unverified` | `authorize_credentials`: verdict did not pass, schema version mismatch, slot reference mismatch, or policy digest mismatch |
+| `boundary-verdict-vacuous` | `boundary_verdict`: `checks` is empty, not a list, or missing mandatory check name `target-binding` or `datastore-identity` |
+| `boundary-unverified` | `authorize_credentials`: verdict did not pass, schema version mismatch, slot reference mismatch, policy digest mismatch, or `checks` is empty, missing mandatory check names, or any check entry did not pass |
 
 ## Datastore identity
 
@@ -392,8 +405,6 @@ Public API in `lib/pilot_policy.py`: `resolve_policy_document`, `validate_policy
 | `policy-document-unreadable` | Document or an ancestor cannot be opened or read |
 | `policy-document-invalid` | JSON parse failure, wrong top-level shape, declaration mismatch, or any structural validation failure in `validate_policy` |
 | `policy-schema-version-unsupported` | `schemaVersion` is not integer `1` |
-| `policy-slot-unknown` | Reserved token (defined in `lib/pilot_policy.py`; no live raise site in A3) |
-| `policy-account-unknown` | Reserved token (defined in `lib/pilot_policy.py`; no live raise site in A3) |
 
 ## Results travel, never policy
 
@@ -444,6 +455,7 @@ regular file bytes for policy material needles. Receipt shape:
   "scannedBytes": 48,
   "findings": [],
   "coverageLimits": ["Compressed and archived content is scanned as raw bytes; material inside it is not detectable."],
+  "symlinksSkipped": 0,
   "exercisedAt": "2026-08-02T04:00:00Z"
 }
 ```
@@ -458,8 +470,11 @@ regular file bytes for policy material needles. Receipt shape:
 Material found in reach produces `result: "fail"` with reason `policy-exercise-material-found`
 and a `findings` list — the receipt itself does not echo the material string.
 
-**Coverage limit:** compressed and archived content is scanned as raw bytes; material inside
-compressed or archived containers is not reliably detectable.
+**Coverage limits:** compressed and archived content is scanned as raw bytes; material inside
+compressed or archived containers is not reliably detectable. Symbolic links inside reach roots
+are not followed; when any symlink is encountered during the walk, a second coverage-limit line
+names the blind spot and states how many symlinks were skipped (`symlinksSkipped` on the
+receipt).
 
 ### Results-travel refusal tokens
 

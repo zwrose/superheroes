@@ -62,7 +62,10 @@ def _passing_verdict(policy, slot_ref="slot-a@1"):
         "slotRef": pilot_slot.format_slot_ref(*pilot_slot.parse_slot_ref(slot_ref)),
         "result": "pass",
         "reason": None,
-        "checks": [],
+        "checks": [
+            {"check": "target-binding", "result": "pass", "reason": None},
+            {"check": "datastore-identity", "result": "pass", "reason": None},
+        ],
         "datastoreIdentity": None,
         "policyDigest": _digest(policy),
         "verifiedAt": "2026-01-01T00:00:00Z",

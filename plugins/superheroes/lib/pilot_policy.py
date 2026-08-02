@@ -24,8 +24,6 @@ REFUSAL_DOCUMENT_MODE_INSECURE = "policy-document-mode-insecure"
 REFUSAL_DOCUMENT_UNREADABLE = "policy-document-unreadable"
 REFUSAL_DOCUMENT_INVALID = "policy-document-invalid"
 REFUSAL_SCHEMA_VERSION_UNSUPPORTED = "policy-schema-version-unsupported"
-REFUSAL_SLOT_UNKNOWN = "policy-slot-unknown"
-REFUSAL_ACCOUNT_UNKNOWN = "policy-account-unknown"
 REFUSAL_MATERIAL_IN_RESULT = "policy-material-in-result"
 REFUSAL_MATERIAL_INVALID = "policy-material-invalid"
 REFUSAL_EXERCISE_VACUOUS = "policy-exercise-vacuous"
@@ -35,13 +33,13 @@ REFUSAL_REACH_ROOT_INVALID = "policy-reach-root-invalid"
 REASON_EXERCISE_MATERIAL_FOUND = "policy-exercise-material-found"
 
 _DECLARATION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*\Z")
-_ENV_VAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+ENV_VAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 _TOP_LEVEL_KEYS = frozenset(
     {"schemaVersion", "declaration", "protectedTargets", "datastore", "slots"}
 )
 _DATASTORE_KEYS = frozenset({"expectedIdentity", "connectionDetail", "observer"})
-_OBSERVER_KEYS = frozenset({"command", "connectionEnvVar"})
+OBSERVER_KEYS = frozenset({"command", "connectionEnvVar"})
 _SLOT_KEYS = frozenset(
     {"origin", "permittedRedirects", "expectedIdentities", "mintableAccounts"}
 )
@@ -53,6 +51,11 @@ _COVERAGE_LIMIT_COMPRESSED = (
     "Compressed and archived content is scanned as raw bytes; material inside "
     "it is not detectable."
 )
+_COVERAGE_LIMIT_SYMLINKS = (
+    "Symbolic links inside reach roots are not followed; content reachable only "
+    "through a symlink is not scanned."
+)
+_EXERCISE_CHUNK_SIZE = 64 * 1024
 
 
 class PilotPolicyError(Exception):
@@ -240,7 +243,10 @@ def exercise_no_policy_material_in_reach(reach_roots, material, *, exercised_at=
     findings = []
     scanned_files = 0
     scanned_bytes = 0
+    symlinks_skipped = 0
     material_index = _material_index(material)
+    max_needle_len = max((len(needle) for _, needle in material_index), default=0)
+    overlap = max(0, max_needle_len - 1)
 
     def _walk_onerror(_err):
         nonlocal walk_failed
@@ -258,6 +264,7 @@ def exercise_no_policy_material_in_reach(reach_roots, material, *, exercised_at=
                     scanned_files,
                     scanned_bytes,
                     findings,
+                    symlinks_skipped,
                 )
             try:
                 os.listdir(dirpath)
@@ -268,6 +275,7 @@ def exercise_no_policy_material_in_reach(reach_roots, material, *, exercised_at=
                     scanned_files,
                     scanned_bytes,
                     findings,
+                    symlinks_skipped,
                 )
 
             for name in dirnames + filenames:
@@ -281,7 +289,13 @@ def exercise_no_policy_material_in_reach(reach_roots, material, *, exercised_at=
                         scanned_files,
                         scanned_bytes,
                         findings,
+                        symlinks_skipped,
                     )
+                if stat.S_ISLNK(entry_stat.st_mode):
+                    # bite-axis: symlink disclosure — symbolic links inside reach roots are counted
+                    # and disclosed rather than followed or silently skipped.
+                    symlinks_skipped += 1
+                    continue
                 if stat.S_ISDIR(entry_stat.st_mode):
                     continue
                 if not stat.S_ISREG(entry_stat.st_mode):
@@ -289,23 +303,34 @@ def exercise_no_policy_material_in_reach(reach_roots, material, *, exercised_at=
 
                 try:
                     with open(entry_path, "rb") as handle:
-                        content = handle.read()
-                except OSError:
+                        file_bytes, file_findings = _scan_file_bytes(
+                            handle, material_index, overlap
+                        )
+                except (OSError, MemoryError):
                     return _exercise_fail(
                         REFUSAL_EXERCISE_UNREADABLE,
                         exercised_at,
                         scanned_files,
                         scanned_bytes,
                         findings,
+                        symlinks_skipped,
+                    )
+                if file_bytes is None:
+                    return _exercise_fail(
+                        REFUSAL_EXERCISE_UNREADABLE,
+                        exercised_at,
+                        scanned_files,
+                        scanned_bytes,
+                        findings,
+                        symlinks_skipped,
                     )
 
                 scanned_files += 1
-                scanned_bytes += len(content)
-                for material_class, needle in material_index:
-                    if needle in content:
-                        findings.append(
-                            {"path": entry_path, "materialClass": material_class}
-                        )
+                scanned_bytes += file_bytes
+                for material_class in file_findings:
+                    findings.append(
+                        {"path": entry_path, "materialClass": material_class}
+                    )
 
         if walk_failed:
             return _exercise_fail(
@@ -314,6 +339,7 @@ def exercise_no_policy_material_in_reach(reach_roots, material, *, exercised_at=
                 scanned_files,
                 scanned_bytes,
                 findings,
+                symlinks_skipped,
             )
 
     if scanned_files == 0:
@@ -323,7 +349,10 @@ def exercise_no_policy_material_in_reach(reach_roots, material, *, exercised_at=
             scanned_files,
             scanned_bytes,
             findings,
+            symlinks_skipped,
         )
+
+    coverage_limits = _exercise_coverage_limits(symlinks_skipped)
 
     if findings:
         return {
@@ -334,7 +363,8 @@ def exercise_no_policy_material_in_reach(reach_roots, material, *, exercised_at=
             "scannedFiles": scanned_files,
             "scannedBytes": scanned_bytes,
             "findings": findings,
-            "coverageLimits": [_COVERAGE_LIMIT_COMPRESSED],
+            "coverageLimits": coverage_limits,
+            "symlinksSkipped": symlinks_skipped,
             "exercisedAt": exercised_at,
         }
 
@@ -346,7 +376,8 @@ def exercise_no_policy_material_in_reach(reach_roots, material, *, exercised_at=
         "scannedFiles": scanned_files,
         "scannedBytes": scanned_bytes,
         "findings": [],
-        "coverageLimits": [_COVERAGE_LIMIT_COMPRESSED],
+        "coverageLimits": coverage_limits,
+        "symlinksSkipped": symlinks_skipped,
         "exercisedAt": exercised_at,
     }
 
@@ -408,7 +439,10 @@ def _is_same_or_ancestor(ancestor, descendant):
 
 
 def _path_parts(path):
-    return os.path.realpath(path).split(os.sep)
+    parts = os.path.realpath(path).split(os.sep)
+    if parts and parts[-1] == "":
+        parts = parts[:-1]
+    return parts
 
 
 def _ancestors_including_self(path):
@@ -430,7 +464,7 @@ def _validate_observer(observer):
     # connectionEnvVar keys and each field must be a valid non-empty string or command list.
     if observer is None:
         return
-    if not isinstance(observer, dict) or set(observer.keys()) != _OBSERVER_KEYS:
+    if not isinstance(observer, dict) or set(observer.keys()) != OBSERVER_KEYS:
         raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
     command = observer["command"]
     if not isinstance(command, list) or not command:
@@ -439,7 +473,7 @@ def _validate_observer(observer):
         if not isinstance(item, str) or not item:
             raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
     env_var = observer["connectionEnvVar"]
-    if not isinstance(env_var, str) or not _ENV_VAR_RE.match(env_var):
+    if not isinstance(env_var, str) or not ENV_VAR_RE.match(env_var):
         raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
 
 
@@ -514,7 +548,43 @@ def _fd_realpath(fd, fallback_path):
     return os.path.realpath(fallback_path)
 
 
-def _exercise_fail(reason, exercised_at, scanned_files, scanned_bytes, findings):
+def _scan_file_bytes(handle, material_index, overlap):
+    # bite-axis: bounded scan — file bytes are read in chunks with cross-chunk overlap so
+    # needles straddling chunk boundaries are still found; MemoryError fails closed.
+    carry = b""
+    scanned = 0
+    found_classes = []
+    while True:
+        try:
+            chunk = handle.read(_EXERCISE_CHUNK_SIZE)
+        except (OSError, MemoryError):
+            return None, []
+        if not chunk:
+            buffer = carry
+            for material_class, needle in material_index:
+                if needle in buffer and material_class not in found_classes:
+                    found_classes.append(material_class)
+            return scanned, found_classes
+
+        scanned += len(chunk)
+        buffer = carry + chunk
+        for material_class, needle in material_index:
+            if needle in buffer and material_class not in found_classes:
+                found_classes.append(material_class)
+        carry = buffer[-overlap:] if overlap else b""
+
+
+def _exercise_coverage_limits(symlinks_skipped):
+    limits = [_COVERAGE_LIMIT_COMPRESSED]
+    if symlinks_skipped > 0:
+        limits.append(
+            "%s (%d symbolic link(s) skipped during this exercise.)"
+            % (_COVERAGE_LIMIT_SYMLINKS, symlinks_skipped)
+        )
+    return limits
+
+
+def _exercise_fail(reason, exercised_at, scanned_files, scanned_bytes, findings, symlinks_skipped):
     return {
         "kind": "policy-out-of-reach",
         "result": "fail",
@@ -523,6 +593,7 @@ def _exercise_fail(reason, exercised_at, scanned_files, scanned_bytes, findings)
         "scannedFiles": scanned_files,
         "scannedBytes": scanned_bytes,
         "findings": findings,
-        "coverageLimits": [_COVERAGE_LIMIT_COMPRESSED],
+        "coverageLimits": _exercise_coverage_limits(symlinks_skipped),
+        "symlinksSkipped": symlinks_skipped,
         "exercisedAt": exercised_at,
     }

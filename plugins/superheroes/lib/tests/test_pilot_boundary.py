@@ -464,7 +464,19 @@ def test_boundary_verdict_carries_no_policy_values():
         permitted_redirects=[],
         protected_targets=[distinctive_identity],
     )
-    checks = [("target-binding", {"ok": True, "reason": None})]
+    checks = [
+        ("target-binding", {"ok": True, "reason": None}),
+        (
+            "datastore-identity",
+            {
+                "ok": True,
+                "reason": None,
+                "provenance": "observed",
+                "strength": "strong",
+                "match": True,
+            },
+        ),
+    ]
     identity_check = {
         "ok": True,
         "reason": None,
@@ -490,9 +502,37 @@ def test_boundary_verdict_carries_no_policy_values():
 
 # --- authorize_credentials ----------------------------------------------------
 
+def _passing_verdict_dict(slot_ref="slot@1", policy_digest="digest-abc"):
+    return {
+        "schemaVersion": pb.BOUNDARY_SCHEMA_VERSION,
+        "slotRef": slot_ref,
+        "result": "pass",
+        "reason": None,
+        "checks": [
+            {"check": "target-binding", "result": "pass", "reason": None},
+            {"check": "datastore-identity", "result": "pass", "reason": None},
+        ],
+        "datastoreIdentity": None,
+        "policyDigest": policy_digest,
+        "verifiedAt": "2026-01-01T00:00:00Z",
+    }
+
+
 def _passing_verdict(slot_ref="slot@1", policy_digest="digest-abc"):
     binding = _binding(slot_ref=slot_ref)
-    checks = [("target-binding", {"ok": True, "reason": None})]
+    checks = [
+        ("target-binding", {"ok": True, "reason": None}),
+        (
+            "datastore-identity",
+            {
+                "ok": True,
+                "reason": None,
+                "provenance": "observed",
+                "strength": "strong",
+                "match": True,
+            },
+        ),
+    ]
     return pb.boundary_verdict(binding, checks=checks, policy_digest=policy_digest)
 
 
@@ -534,3 +574,62 @@ def test_authorize_credentials_success():
         "policyDigest": "digest-abc",
         "authorized": True,
     }
+
+
+@pytest.mark.parametrize(
+    "checks",
+    [
+        [],
+        [{"check": "datastore-identity", "result": "pass", "reason": None}],
+        [{"check": "target-binding", "result": "pass", "reason": None}],
+        [
+            {"check": "target-binding", "result": "pass", "reason": None},
+            {"check": "datastore-identity", "result": "refuse", "reason": "x"},
+        ],
+    ],
+)
+def test_authorize_credentials_refuses_vacuous_or_forged_checks(checks):
+    verdict = _passing_verdict_dict()
+    verdict["checks"] = checks
+    with pytest.raises(pb.PilotBoundaryError) as exc:
+        pb.authorize_credentials(verdict, "slot@1", "digest-abc")
+    assert exc.value.reason == pb.REFUSAL_UNVERIFIED
+
+
+def test_boundary_verdict_refuses_empty_checks():
+    binding = _binding()
+    with pytest.raises(pb.PilotBoundaryError) as exc:
+        pb.boundary_verdict(binding, checks=[], policy_digest="digest")
+    assert exc.value.reason == pb.REFUSAL_VERDICT_VACUOUS
+
+
+def test_boundary_verdict_refuses_missing_mandatory_check():
+    binding = _binding()
+    checks = [("target-binding", {"ok": True, "reason": None})]
+    with pytest.raises(pb.PilotBoundaryError) as exc:
+        pb.boundary_verdict(binding, checks=checks, policy_digest="digest")
+    assert exc.value.reason == pb.REFUSAL_VERDICT_VACUOUS
+
+
+def test_observe_datastore_identity_refuses_oversized_output(private_tmp):
+    reach_root, run_cwd, bin_dir = _observer_layout(private_tmp)
+    script = os.path.join(bin_dir, "huge.sh")
+    _write_executable(
+        script,
+        "#!/bin/sh\n"
+        "python3 -c \"import sys; sys.stdout.write('x' * 20000)\"\n",
+    )
+    observer = {"command": [script], "connectionEnvVar": "PILOT_DB_URL"}
+    with pytest.raises(pb.PilotBoundaryError) as exc:
+        pb.observe_datastore_identity(
+            observer,
+            connection_detail="postgres://localhost:5432/example_dev",
+            reach_roots=[reach_root],
+            run_cwd=run_cwd,
+            max_output_bytes=1024,
+        )
+    assert exc.value.reason == pb.REFUSAL_DATASTORE_OBSERVER_FAILED
+
+
+def test_path_containment_filesystem_root():
+    assert pb._is_inside("/private/tmp/example", "/") is True

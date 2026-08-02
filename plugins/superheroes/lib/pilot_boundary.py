@@ -1,10 +1,11 @@
 """Pilot target boundary — exact-origin bindings, protected-target refusal, and verdicts (A3)."""
 import os
-import re
 import stat
 import subprocess
+import threading
 import time
 
+import pilot_policy
 import pilot_slot
 
 BOUNDARY_SCHEMA_VERSION = 1
@@ -21,8 +22,9 @@ REFUSAL_DATASTORE_IDENTITY_UNAVAILABLE = "boundary-datastore-identity-unavailabl
 REFUSAL_DATASTORE_OBSERVER_INVALID = "boundary-datastore-observer-invalid"
 REFUSAL_DATASTORE_OBSERVER_FAILED = "boundary-datastore-observer-failed"
 REFUSAL_UNVERIFIED = "boundary-unverified"
+REFUSAL_VERDICT_VACUOUS = "boundary-verdict-vacuous"
 
-_CONNECTION_ENV_VAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_MANDATORY_VERDICT_CHECKS = frozenset({"target-binding", "datastore-identity"})
 
 
 class PilotBoundaryError(Exception):
@@ -147,22 +149,18 @@ def observe_datastore_identity(
     env_var = observer["connectionEnvVar"]
     command = observer["command"]
     try:
-        completed = subprocess.run(
+        stdout = _run_bounded_observer(
             command,
-            cwd=run_cwd,
-            capture_output=True,
-            timeout=timeout_seconds,
-            shell=False,
+            run_cwd=run_cwd,
             env={env_var: connection_detail},
+            timeout_seconds=timeout_seconds,
+            max_output_bytes=max_output_bytes,
         )
+    except PilotBoundaryError:
+        raise
     except (OSError, subprocess.TimeoutExpired):
         raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_FAILED)
 
-    if completed.returncode != 0:
-        raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_FAILED)
-    stdout = completed.stdout
-    if len(stdout) > max_output_bytes:
-        raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_FAILED)
     try:
         text = stdout.decode("utf-8")
     except UnicodeDecodeError:
@@ -240,6 +238,9 @@ def boundary_verdict(
     verified_at=None,
 ):
     """Assemble a traveling verdict with outcomes only — no policy material."""
+    # bite-axis: verdict vacuity — a verdict with no checks or missing mandatory check names
+    # refuses before assembly; a zero-check verdict must not authorize credentials.
+    _refuse_if_verdict_checks_vacuous(checks)
     # bite-axis: verdict assembly — traveling verdict carries check outcomes only (no policy
     # material); any failing check makes result refuse with that check's reason.
     check_entries = []
@@ -301,6 +302,8 @@ def authorize_credentials(verdict, slot_ref, policy_digest):
     ):
         raise PilotBoundaryError(REFUSAL_UNVERIFIED)
 
+    _refuse_if_authorized_checks_invalid(verdict.get("checks"))
+
     return {
         "slotRef": canonical_slot_ref,
         "policyDigest": policy_digest,
@@ -361,7 +364,10 @@ def _parse_origin_or_none(value):
 
 
 def _path_components(path):
-    return os.path.realpath(path).split(os.sep)
+    parts = os.path.realpath(path).split(os.sep)
+    if parts and parts[-1] == "":
+        parts = parts[:-1]
+    return parts
 
 
 def _is_inside(path, root):
@@ -383,7 +389,7 @@ def _is_outside_all_reach_roots(path, reach_roots):
 def _validate_observer(observer, connection_detail, reach_roots, run_cwd):
     # bite-axis: observer confinement — observer executable, run cwd, and reachable command
     # paths must lie outside all reach roots; violation raises REFUSAL_DATASTORE_OBSERVER_INVALID.
-    if not isinstance(observer, dict) or set(observer.keys()) != {"command", "connectionEnvVar"}:
+    if not isinstance(observer, dict) or set(observer.keys()) != pilot_policy.OBSERVER_KEYS:
         raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_INVALID)
 
     command = observer["command"]
@@ -394,7 +400,7 @@ def _validate_observer(observer, connection_detail, reach_roots, run_cwd):
             raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_INVALID)
 
     env_var = observer["connectionEnvVar"]
-    if not isinstance(env_var, str) or not _CONNECTION_ENV_VAR_RE.match(env_var):
+    if not isinstance(env_var, str) or not pilot_policy.ENV_VAR_RE.match(env_var):
         raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_INVALID)
 
     if not isinstance(connection_detail, str) or not connection_detail:
@@ -428,3 +434,106 @@ def _validate_observer(observer, connection_detail, reach_roots, run_cwd):
         candidate = part if os.path.isabs(part) else os.path.join(run_cwd, part)
         if os.path.exists(candidate) and not _is_outside_all_reach_roots(candidate, reach_roots):
             raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_INVALID)
+
+
+def _refuse_if_verdict_checks_vacuous(checks):
+    if not isinstance(checks, list) or not checks:
+        raise PilotBoundaryError(REFUSAL_VERDICT_VACUOUS)
+    names = set()
+    for item in checks:
+        if not isinstance(item, (tuple, list)) or len(item) != 2:
+            raise PilotBoundaryError(REFUSAL_VERDICT_VACUOUS)
+        name, _result = item
+        if not isinstance(name, str):
+            raise PilotBoundaryError(REFUSAL_VERDICT_VACUOUS)
+        names.add(name)
+    if _MANDATORY_VERDICT_CHECKS - names:
+        raise PilotBoundaryError(REFUSAL_VERDICT_VACUOUS)
+
+
+def _refuse_if_authorized_checks_invalid(checks):
+    if not isinstance(checks, list) or not checks:
+        raise PilotBoundaryError(REFUSAL_UNVERIFIED)
+    names = set()
+    for entry in checks:
+        if not isinstance(entry, dict):
+            raise PilotBoundaryError(REFUSAL_UNVERIFIED)
+        name = entry.get("check")
+        if not isinstance(name, str):
+            raise PilotBoundaryError(REFUSAL_UNVERIFIED)
+        names.add(name)
+        if entry.get("result") != "pass":
+            raise PilotBoundaryError(REFUSAL_UNVERIFIED)
+    if _MANDATORY_VERDICT_CHECKS - names:
+        raise PilotBoundaryError(REFUSAL_UNVERIFIED)
+
+
+def _terminate_and_wait(proc):
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+
+def _run_bounded_observer(command, *, run_cwd, env, timeout_seconds, max_output_bytes):
+    # bite-axis: output containment — observer stdout is read with a byte cap so oversized output
+    # cannot exhaust memory; the child is always reaped on every exit path.
+    proc = subprocess.Popen(
+        command,
+        cwd=run_cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        shell=False,
+        env=env,
+    )
+    try:
+        stdout_holder = []
+        read_error = []
+
+        def _read_stdout():
+            try:
+                stdout_holder.append(proc.stdout.read(max_output_bytes + 1))
+            except Exception as exc:
+                read_error.append(exc)
+
+        reader = threading.Thread(target=_read_stdout, daemon=True)
+        reader.start()
+        reader.join(timeout=timeout_seconds)
+
+        if reader.is_alive():
+            _terminate_and_wait(proc)
+            raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_FAILED)
+
+        if read_error:
+            _terminate_and_wait(proc)
+            raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_FAILED)
+
+        stdout = stdout_holder[0] if stdout_holder else b""
+
+        if len(stdout) > max_output_bytes:
+            _terminate_and_wait(proc)
+            raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_FAILED)
+
+        try:
+            proc.wait(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            _terminate_and_wait(proc)
+            raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_FAILED)
+
+        if proc.returncode != 0:
+            raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_FAILED)
+
+        return stdout
+    except PilotBoundaryError:
+        raise
+    except Exception:
+        _terminate_and_wait(proc)
+        raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_FAILED)
+    finally:
+        if proc.poll() is None:
+            _terminate_and_wait(proc)
+        if proc.stdout:
+            proc.stdout.close()
