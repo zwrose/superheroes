@@ -7,7 +7,10 @@ deliberately do not build are a first-class artifact, cited instead of re-litiga
 
 The **orientation review** (standing monthly-ish routine, deliberately independent of
 the release path) walks both ledgers each pass: the first against the platform's current
-primitives, the second against its own unlock conditions. Changes land by PR. An entry
+primitives, the second against its own unlock conditions; when the harness has been
+upgraded since the previous pass, the pass also runs
+`plugins/superheroes/lib/harness_probe.py` so the native project-context tripwire (#629)
+has an owner and a cadence instead of sitting unplayed. Changes land by PR. An entry
 nobody has re-checked in months is just drift with a paper trail.
 
 ## 1. Bespoke-vs-platform ledger

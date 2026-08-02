@@ -104,15 +104,14 @@ def test_safety_machinery_set_members_are_pinned():
     assert set(ESC.SAFETY_MACHINERY) == {
         "escalation.py", "escalation_resolve.py", "loop_state.py", "circuit_breaker.py",
         "gate_write.py", "definition_doc.py",
-        "enforcer.py", "allowance.py", "model_tier.py", "model_registry.py",
+        "model_tier.py", "model_registry.py",
         "engine_pref.py", "seat_map.py", "dispatch_guard.py", "engine_dispatch.py", "seat_canary.py",
         "engine_adapter.py",
         "hooks.json",
-        "precompact.py", "session_start.py",
+        "session_start.py",
         "escalation-base.md", "review-base.md",
         # shared review-and-fix loop (#104): deciders, durable record, and the orchestration shell
         "panel_tally.py", "loop_synthesis.py", "verification.py", "verify_gate.py",
-        "loop_readout.py",
         "review_result.py", "round_driver.py", "audits.py", "delta_surface.py",
     }
 
@@ -123,7 +122,7 @@ def _band_file(tmp_path, sub, name):
     return p
 
 # Files that live under hooks/ in the merged superheroes tree (not lib/)
-_HOOKS_FILES = {"hooks.json", "precompact.py", "session_start.py"}
+_HOOKS_FILES = {"hooks.json", "session_start.py"}
 
 def test_is_safety_machinery_engine_pref_and_seat_map(tmp_path):
     band_root = str(tmp_path / "plugins" / "superheroes")
@@ -132,6 +131,7 @@ def test_is_safety_machinery_engine_pref_and_seat_map(tmp_path):
         assert ESC.is_safety_machinery(str(p), [band_root]) is True, name
 
 
+# Bite axis: is_safety_machinery must refuse every surviving SAFETY_MACHINERY member under a band root (not tuple size/membership — the pin test covers that).
 def test_guard_refuses_each_safety_file_under_a_band_root(tmp_path):
     band_root = str(tmp_path / "plugins" / "superheroes")
     for name in ESC.SAFETY_MACHINERY:

@@ -3,11 +3,11 @@ import json
 import os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-LIB = os.path.dirname(HERE)
+EVAL = os.path.dirname(HERE)
 
 
 def load():
-    spec = importlib.util.spec_from_file_location("review_telemetry", os.path.join(LIB, "review_telemetry.py"))
+    spec = importlib.util.spec_from_file_location("review_telemetry", os.path.join(EVAL, "review_telemetry.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -104,7 +104,7 @@ import sys
 
 
 def _cli(*args):
-    return subprocess.run([sys.executable, os.path.join(LIB, "review_telemetry.py"), *args],
+    return subprocess.run([sys.executable, os.path.join(EVAL, "review_telemetry.py"), *args],
                           capture_output=True, text=True)
 
 
