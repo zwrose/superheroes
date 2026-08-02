@@ -16,7 +16,7 @@ _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..",
 
 
 def _resolve_collector_bin(name):
-    """Locate a collector binary — mirrors test_guardian_lens_coupling._resolve_collector_bin."""
+    """Locate a collector binary — must stay in sync with test_guardian_lens_coupling._resolve_collector_bin."""
     found = shutil.which(name)
     if found:
         return found

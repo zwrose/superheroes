@@ -66,7 +66,16 @@ jobs:
           # running against the head checkout fails every release PR.
           # release-please.yml keeps the post-merge tripwire as the backstop; this gate
           # moves failure to before the owner's merge click (#744, #814).
-          git fetch --tags --force origin
+          # Catalog-membership fetch above leaves a shallow clone; unshallow before tag walk.
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            git fetch --unshallow --tags --force origin
+          else
+            git fetch --tags --force origin
+          fi
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            echo "Repository is still shallow after unshallow fetch — refusing to run release-bump gate"
+            exit 1
+          fi
           git worktree add "$RUNNER_TEMP/release-base" "$BASE_SHA"
           cd "$RUNNER_TEMP/release-base"
           python3 .github/scripts/check_release_bump.py --repo "$REPO"
@@ -99,8 +108,19 @@ jobs:
         run: |
           claude plugin marketplace add "$PWD"
           claude plugin install superheroes@superheroes
-          installed=$(claude plugin list | grep -E '^\s+Version:' | head -1 | awk '{print $2}')
+          installed=$(
+            claude plugin list | awk '
+              /superheroes@superheroes/ { found=1; next }
+              found && /^[[:space:]]+Version:/ {
+                sub(/^[[:space:]]+Version:[[:space:]]+/, ""); print; exit
+              }
+            '
+          )
           expected=$(python3 -c "import json; print(json.load(open('plugins/superheroes/.claude-plugin/plugin.json'))['version'])")
+          if [ -z "$installed" ]; then
+            echo "Could not parse installed plugin version for superheroes@superheroes"
+            exit 1
+          fi
           if [ "$installed" != "$expected" ]; then
             echo "Version mismatch: installed=$installed expected=$expected"
             exit 1

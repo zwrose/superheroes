@@ -48,6 +48,12 @@ def test_owner_authority_gate_wired_fail_closed_before_worktree_guard():
     assert fallback["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "owner-authority gate unavailable" in fallback["hookSpecificOutput"]["permissionDecisionReason"]
 
+    guard_idx = next(i for i, c in enumerate(cmds) if "worktree_guard_gate.py" in c)
+    owner_idx = next(i for i, c in enumerate(cmds) if "owner_authority_gate.py" in c)
+    assert owner_idx < guard_idx, (
+        "owner-authority gate must be listed before worktree guard on the Bash matcher"
+    )
+
 
 def test_worktree_guard_gate_wired_fail_closed_between_owner_and_timeout():
     cfg = json.load(open(_HOOKS))

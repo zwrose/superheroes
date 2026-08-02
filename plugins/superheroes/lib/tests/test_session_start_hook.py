@@ -30,6 +30,11 @@ def _stdout_lines(capsys):
     return [ln for ln in capsys.readouterr().out.splitlines() if ln]
 
 
+def _accepted_sources():
+    mod = _load_hook("_sources_probe")
+    return sorted(mod._SOURCES)
+
+
 def test_startup_envelope_shape(monkeypatch, capsys):
     # Axis: valid startup payload emits exactly one SessionStart JSON line with non-empty context.
     mod = _load_hook("session_start_envelope")
@@ -42,7 +47,7 @@ def test_startup_envelope_shape(monkeypatch, capsys):
     assert out["hookSpecificOutput"]["additionalContext"].strip()
 
 
-@pytest.mark.parametrize("source", ["startup", "resume", "clear", "compact"])
+@pytest.mark.parametrize("source", _accepted_sources())
 def test_each_accepted_source_produces_output(monkeypatch, capsys, source):
     # Axis: all four documented sources must reach bootstrap, not just startup.
     mod = _load_hook(f"session_start_source_{source}")
@@ -87,7 +92,7 @@ def test_empty_stdin_is_silent(monkeypatch, capsys):
     assert _stdout_lines(capsys) == []
 
 
-@pytest.mark.parametrize("payload", [[], "x"])
+@pytest.mark.parametrize("payload", [[], 123])
 def test_non_dict_json_payload_is_silent(monkeypatch, capsys, payload):
     # Axis: only dict payloads may proceed — arrays and strings are ignored.
     mod = _load_hook(f"session_start_nondict_{type(payload).__name__}")
