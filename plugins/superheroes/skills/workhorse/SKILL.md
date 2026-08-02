@@ -404,9 +404,12 @@ without a tool call.
   invocation** and consists of: the dispatch running in **its own process session** (a shell-detached
   child — the `setsid`/`nohup` shape, `start_new_session`); its stdout and stderr redirected to
   **files, never pipes** (a pipe buffer dies with the reader and makes a stall look like progress);
-  and the **child writing a done-sentinel carrying its exit code on exit — never the launcher**. Use
-  a **unique sentinel path per dispatch**, or remove any prior sentinel before launch, so a stale
-  sentinel can never read as this run's completion. **Correction the prose must carry:**
+  **state stamped to disk before any wait** — what was dispatched, where output lands, the next step,
+  the **child's PID**, and the **done-sentinel path** (with detaching as the normal channel, this
+  stamp is what makes any detached dispatch recoverable — handback or park — not merely a
+  park-handoff artifact); and the **child writing a done-sentinel carrying its exit code on exit —
+  never the launcher**. Use a **unique sentinel path per dispatch**, or remove any prior sentinel
+  before launch, so a stale sentinel can never read as this run's completion.
   `plugins/superheroes/lib/engine_dispatch.py` already spawns with `start_new_session=True`, but that
   detaches **the run-child and the engine process only**. It does **not** detach the builder's
   **outer** invocation of the dispatch CLI, and it does **not** provide the generic child-written
@@ -420,7 +423,9 @@ without a tool call.
   dispatch — reviewer and fixer — runs as a Bash tool call with a structural 600 s floor from
   `PreToolUse(Bash)`; see `review-code/reference/auto-fix-loop.md`). Reconciling `review-code`'s own
   dispatch instructions with this detached outer channel is **open and not settled by this text** —
-  do not claim it is covered, and do not silently omit it. The **timeout** contract stays the skill's;
+  a build whose review seats ran under `review-code`'s own Bash-tool-call dispatch **discloses that
+  limitation** rather than reporting the channel rule as satisfied. The **timeout** contract stays
+  the skill's;
   the **channel** is the headless session's.
 - **Stamp duty (launcher-issued lanes only).** When `SUPERHEROES_LAUNCH_ID` is present — the session
   was launched by the advisor's launcher — stamp the builder liveness heartbeat at each state change:
