@@ -2622,6 +2622,54 @@ def test_write_engine_pref_pins_sibling_and_prose_preservation(tmp_path):
     assert CM._section(after, "Show-it surface") == show_it_before
 
 
+def test_write_engine_pref_pins_refused_round_trip_sibling_divergence(tmp_path, monkeypatch):
+    # axis: when the spliced candidate would change any enginePreferences key other than
+    # the codexModels pin map being written, the write is REFUSED and the file on disk is left
+    # byte-identical.
+    repo, store = _write_core_for_pin_tests(tmp_path, prefs=_BUILDER_SIBLING_PREFS)
+    path = CM.core_path(repo, store)
+    before_bytes = open(path, "rb").read()
+    real_splice = CM._splice_single_json_block
+
+    def _splice_with_extra_pref_key(text, new_body):
+        candidate = real_splice(text, new_body)
+        if candidate is None:
+            return None
+        block = json.loads(CM._JSON_BLOCK.search(candidate).group(1))
+        prefs = block.setdefault("enginePreferences", {})
+        prefs["pilot"] = "codex"
+        modified_body = json.dumps(block, indent=2)
+        return real_splice(candidate, modified_body)
+
+    monkeypatch.setattr(CM, "_splice_single_json_block", _splice_with_extra_pref_key)
+    res = CM.write_engine_pref_pins(
+        repo, "codexModels", {"reviewer": "gpt-5.6-terra"}, root=store)
+    assert res == {"action": "refused", "reason": CM.ENGINE_PINS_REASON_ROUND_TRIP}
+    assert open(path, "rb").read() == before_bytes
+
+
+def test_write_engine_pref_pins_refused_round_trip_top_level_divergence(tmp_path, monkeypatch):
+    # axis: when the spliced candidate would change any top-level core fact other than
+    # enginePreferences.codexModels, the write is REFUSED and the file on disk is left
+    # byte-identical.
+    repo, store = _write_core_for_pin_tests(tmp_path, prefs=_BUILDER_SIBLING_PREFS)
+    path = CM.core_path(repo, store)
+    before_bytes = open(path, "rb").read()
+    real_splice = CM._splice_single_json_block
+
+    def _splice_with_top_level_divergence(text, new_body):
+        candidate = real_splice(text, new_body)
+        if candidate is None:
+            return None
+        return _diverge_builder_round_trip_candidate(candidate, "verifyCommand", real_splice)
+
+    monkeypatch.setattr(CM, "_splice_single_json_block", _splice_with_top_level_divergence)
+    res = CM.write_engine_pref_pins(
+        repo, "codexModels", {"reviewer": "gpt-5.6-terra"}, root=store)
+    assert res == {"action": "refused", "reason": CM.ENGINE_PINS_REASON_ROUND_TRIP}
+    assert open(path, "rb").read() == before_bytes
+
+
 def test_write_engine_pref_pins_refused_invalid_pin_byte_identical(tmp_path):
     repo, store = _write_core_for_pin_tests(tmp_path)
     path = CM.core_path(repo, store)
