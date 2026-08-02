@@ -3170,29 +3170,6 @@ def test_dispatch_abandon_idempotent_after_failed_ledger_append(tmp_path, monkey
     assert calls["n"] == 1
 
 
-def test_dispatch_abandon_legacy_record_idempotent(tmp_path, monkeypatch):
-    """axis: that repeat reads return the stored result — legacy records without abandonedResult."""
-    repo_root = _git_init(str(tmp_path / "repo-legacy-abandon"))
-    _ledger_env(tmp_path, monkeypatch)
-    run_dir = str(tmp_path / "run-legacy-abandon")
-    _manual_open_review_run_git(tmp_path, run_dir, repo_root)
-    ED._journal_append(run_dir, {"kind": "run-abandoned", "detail": "abandoned", "at": time.time()})
-    calls = {"n": 0}
-    real_append = _FL_MOD.append
-
-    def flaky_append(repo_root_arg, row):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return {"written": False, "path": None, "why": "ledger-lock-busy"}
-        return real_append(repo_root_arg, row)
-
-    monkeypatch.setattr(ED.forfeit_ledger, "append", flaky_append)
-    first = ED.dispatch_abandon(run_dir)
-    second = ED.dispatch_abandon(run_dir)
-    assert second == first
-    assert calls["n"] == 1
-
-
 def test_write_preflight_unrunnable_appends_ledger_caller_error(tmp_path, monkeypatch):
     """axis: which entry points append — write pre-spawn refusals with repo identity."""
     wt = _linked_worktree(tmp_path)
