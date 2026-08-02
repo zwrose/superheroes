@@ -132,6 +132,78 @@ def _is_fd_group_or_world_accessible(fd):
         return True
 
 
+def _can_repair_regular_file_fd(fd):
+    """True when fd is our regular file with link count 1."""
+    try:
+        st = os.fstat(fd)
+    except OSError:
+        return False
+    if not stat.S_ISREG(st.st_mode):
+        return False
+    if st.st_uid != os.geteuid():
+        return False
+    return st.st_nlink == 1
+
+
+def _repair_regular_file_fd(fd):
+    """fchmod our regular file (nlink==1) to 0600. Never raises."""
+    if not _can_repair_regular_file_fd(fd):
+        return False
+    try:
+        os.fchmod(fd, 0o600)
+    except OSError:
+        return False
+    return not _is_fd_group_or_world_accessible(fd)
+
+
+def _can_repair_dir_fd(fd):
+    """True when fd is our directory."""
+    try:
+        st = os.fstat(fd)
+    except OSError:
+        return False
+    if not stat.S_ISDIR(st.st_mode):
+        return False
+    return st.st_uid == os.geteuid()
+
+
+def _repair_dir_fd(fd):
+    """fchmod our directory to 0700. Never raises."""
+    if not _can_repair_dir_fd(fd):
+        return False
+    try:
+        os.fchmod(fd, 0o700)
+    except OSError:
+        return False
+    return not _is_fd_group_or_world_accessible(fd)
+
+
+def _ensure_regular_file_fd_secure(fd):
+    """Refuse hardlinks and foreign owners; repair permissive modes on our file."""
+    try:
+        st = os.fstat(fd)
+    except OSError:
+        return False
+    if not stat.S_ISREG(st.st_mode):
+        return False
+    if st.st_uid != os.geteuid():
+        return False
+    if st.st_nlink != 1:
+        return False
+    if not _is_fd_group_or_world_accessible(fd):
+        return True
+    return _repair_regular_file_fd(fd)
+
+
+def _ensure_fd_secure(fd, *, is_dir=False):
+    """Repair permissive modes on our fds; refuse only what we cannot make safe."""
+    if is_dir:
+        if not _is_fd_group_or_world_accessible(fd):
+            return True
+        return _repair_dir_fd(fd)
+    return _ensure_regular_file_fd_secure(fd)
+
+
 def _ledger_open_refusal(reason, root_fd=None, repo_fd=None, ledger_fd=None):
     _close_fd(ledger_fd)
     _close_fd(repo_fd)
@@ -163,7 +235,7 @@ def _open_ledger_dirs(repo_root, env=None):
         return {"ok": False, "reason": "ledger-root-unusable", "root_fd": None,
                 "repo_fd": None, "root": root, "repo_id": repo_id}
 
-    if _is_fd_group_or_world_accessible(root_fd):
+    if not _ensure_fd_secure(root_fd, is_dir=True):
         return _ledger_open_refusal(
             "ledger-root-insecure", root_fd=root_fd,
         )
@@ -193,7 +265,7 @@ def _open_ledger_dirs(repo_root, env=None):
                 reason = "ledger-repo-dir-symlink"
         return _ledger_open_refusal(reason, root_fd=root_fd)
 
-    if _is_fd_group_or_world_accessible(repo_fd):
+    if not _ensure_fd_secure(repo_fd, is_dir=True):
         return _ledger_open_refusal(
             "ledger-repo-dir-insecure", root_fd=root_fd, repo_fd=repo_fd,
         )
@@ -292,7 +364,8 @@ def open_ledger(repo_root, mode, env=None):
                 repo_fd=repo_fd,
                 ledger_fd=ledger_fd,
             )
-        if _is_fd_group_or_world_accessible(ledger_fd):
+        # axis: that a 0644 ledger stays writable — not that a mode check exists.
+        if not _ensure_fd_secure(ledger_fd, is_dir=False):
             return _ledger_open_refusal(
                 "ledger-file-insecure",
                 root_fd=root_fd,
@@ -458,18 +531,70 @@ def read(repo_root, env=None):
             opened["fh"].close()
         return _parse_ledger_bytes(raw)
 
+    # axis: that a refused open yields no rows — not that the refusal is computed.
     if opened["reason"] == "ledger-missing":
         return [], False
 
-    path = ledger_path(repo_root, env=env)
-    if path is None:
-        return [], False
+    return [], False
+
+
+def _atomic_replace_ledger(repo_root, content_bytes, env=None):
+    """Write ledger bytes via temp file + dir-fd rename. False on failure; never raises.
+
+    axis: that an interrupted repair preserves prior rows — not that repair works.
+    """
+    opened = _open_ledger_dirs(repo_root, env=env)
+    if not opened["ok"]:
+        return False
+
+    root_fd = opened["root_fd"]
+    repo_fd = opened["repo_fd"]
+    tmp_name = ".forfeit-ledger.%d.tmp" % os.getpid()
+    tmp_fd = None
     try:
-        with open(path, "rb") as fh:
-            raw = fh.read()
-    except OSError:
-        return [], False
-    return _parse_ledger_bytes(raw)
+        try:
+            tmp_fd = os.open(
+                tmp_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                mode=0o600,
+                dir_fd=repo_fd,
+            )
+        except OSError:
+            return False
+
+        try:
+            with os.fdopen(tmp_fd, "wb") as fh:
+                tmp_fd = None
+                fh.write(content_bytes)
+                fh.flush()
+                os.fsync(fh.fileno())
+        except (OSError, TypeError, ValueError):
+            return False
+        finally:
+            _close_fd(tmp_fd)
+
+        try:
+            os.rename(
+                tmp_name,
+                FORFEIT_LEDGER_FILE,
+                src_dir_fd=repo_fd,
+                dst_dir_fd=repo_fd,
+            )
+        except OSError:
+            return False
+
+        try:
+            os.fsync(repo_fd)
+        except OSError:
+            pass
+        return True
+    finally:
+        try:
+            os.unlink(tmp_name, dir_fd=repo_fd)
+        except OSError:
+            pass
+        _close_fd(repo_fd)
+        _close_fd(root_fd)
 
 
 def _append_raw(repo_root, row, env=None, existing_raw=None):
@@ -502,18 +627,9 @@ def _append_raw(repo_root, row, env=None, existing_raw=None):
     torn = len(valid_prefix) < len(existing_raw)
 
     if torn:
-        opened = open_ledger(repo_root, "w", env=env)
-        if not opened["ok"]:
-            return False
-        try:
-            opened["fh"].write(valid_prefix + line_bytes)
-            opened["fh"].flush()
-            os.fsync(opened["fh"].fileno())
-        except (OSError, TypeError, ValueError):
-            return False
-        finally:
-            opened["fh"].close()
-        return True
+        return _atomic_replace_ledger(
+            repo_root, valid_prefix + line_bytes, env=env,
+        )
 
     opened = open_ledger(repo_root, "a", env=env)
     if not opened["ok"]:

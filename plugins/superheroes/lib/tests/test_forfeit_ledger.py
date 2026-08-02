@@ -691,3 +691,77 @@ def test_ledger_file_symlink_inside_root_allowed(tmp_path, monkeypatch):
     result = fl.append(repo, _minimal_row())
     assert result["written"] is False
     assert result["why"] == "ledger-file-symlink"
+
+
+def test_permissive_ledger_0644_stays_writable(tmp_path, monkeypatch):
+    """axis: that a 0644 ledger stays writable — not that a mode check exists."""
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    first = _minimal_row(run_dir="/tmp/first", order_id="first-row")
+    assert fl.append(repo, first)["written"] is True
+    path = fl.ledger_path(repo)
+    os.chmod(path, 0o644)
+    second = _minimal_row(run_dir="/tmp/second", order_id="second-row")
+    result = fl.append(repo, second)
+    assert result["written"] is True
+    assert result["why"] is None
+    rows, corrupt = fl.read(repo)
+    assert corrupt is False
+    assert len(rows) == 2
+    assert rows[0]["orderId"] == "first-row"
+    assert rows[1]["orderId"] == "second-row"
+
+
+def test_read_symlink_ledger_fails_closed(tmp_path, monkeypatch):
+    """axis: that a refused open yields no rows — not that the refusal is computed."""
+    repo = _init_repo(tmp_path / "repo")
+    ledger_root = _ledger_env(tmp_path, monkeypatch)
+    repo_id = ll.repo_identity(repo)
+    repo_dir = os.path.join(ledger_root, repo_id)
+    os.makedirs(repo_dir, mode=0o700)
+    target = os.path.join(tmp_path, "target-ledger.jsonl")
+    row = _minimal_row(run_dir="/tmp/target", order_id="in-target")
+    with open(target, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, separators=(",", ":")) + "\n")
+    os.symlink(target, os.path.join(repo_dir, fl.FORFEIT_LEDGER_FILE))
+    rows, corrupt = fl.read(repo)
+    assert rows == []
+    assert corrupt is False
+
+
+def test_torn_tail_repair_preserves_rows_on_write_failure(tmp_path, monkeypatch):
+    """axis: that an interrupted repair preserves prior rows — not that repair works."""
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    row = _minimal_row(run_dir="/tmp/good", order_id="before-torn")
+    fl.append(repo, row)
+    path = fl.ledger_path(repo)
+    with open(path, "ab") as fh:
+        fh.write(b'{"broken":')
+    original_raw = open(path, "rb").read()
+
+    def fail_rename(*args, **kwargs):
+        raise OSError("simulated repair interrupt")
+
+    monkeypatch.setattr(os, "rename", fail_rename)
+    new_row = _minimal_row(run_dir="/tmp/after-torn", order_id="after-torn")
+    result = fl.append(repo, new_row)
+    assert result["written"] is False
+    assert open(path, "rb").read() == original_raw
+    rows, corrupt = fl.read(repo)
+    assert corrupt is False
+    assert len(rows) == 1
+    assert rows[0]["orderId"] == "before-torn"
+
+
+def test_ledger_hardlink_refused(tmp_path, monkeypatch):
+    """Fail-closed edge: hardlinked ledger (nlink>1) is refused."""
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    fl.append(repo, _minimal_row(run_dir="/tmp/orig"))
+    path = fl.ledger_path(repo)
+    hardlink = path + ".link"
+    os.link(path, hardlink)
+    result = fl.append(repo, _minimal_row(run_dir="/tmp/another"))
+    assert result["written"] is False
+    assert result["why"] == "ledger-file-insecure"
