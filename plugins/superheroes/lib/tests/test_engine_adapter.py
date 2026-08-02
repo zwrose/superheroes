@@ -771,6 +771,81 @@ def test_parse_result_codex_shapes_are_byte_identical_through_the_unwrap():
     assert EA.parse_result("codex", "build", verdict)["ok"] is True
 
 
+# ---------------------------------------------------------------------------
+# #811: salvage write reports after a forfeited external-engine attempt.
+
+
+def _write_report(ok=True, signal="ok", test_failed=True, test_passed=True):
+    return json.dumps({"ok": ok, "signal": signal,
+                       "evidence": {"testFailed": test_failed, "testPassed": test_passed}})
+
+
+def test_salvage_write_report_recovers_stream_enveloped_report():
+    report = _write_report()
+    assert EA.salvage_write_report("cursor", "build", _envelope(report), "fed prompt") == {
+        "report": {"ok": True, "signal": "ok",
+                   "evidence": {"testFailed": True, "testPassed": True}},
+        "salvaged": True,
+        "truncated": False,
+    }
+
+
+@pytest.mark.parametrize("stdout", [None, "", " \n\t", 7, []])
+def test_salvage_write_report_empty_or_non_string_stdout_is_none(stdout):
+    assert EA.salvage_write_report("codex", "build", stdout, "prompt") is None
+
+
+@pytest.mark.parametrize("fed_prompt", [None, "", " \n\t", 7, []])
+def test_salvage_write_report_empty_or_non_string_prompt_skips_strip(fed_prompt):
+    result = EA.salvage_write_report("codex", "fix", _write_report(), fed_prompt)
+    assert result is not None and result["report"]["ok"] is True
+
+
+def test_salvage_write_report_echo_only_residue_is_none():
+    prompt = "Please implement this.\n" + _write_report()
+    assert EA.salvage_write_report("codex", "build", prompt, prompt) is None
+
+
+def test_salvage_write_report_rejects_echo_sourced_example():
+    # axis: fabrication — a retained prompt example must not become a salvaged engine claim.
+    example = _write_report()
+    prompt = "Write a report using this example:\n" + example
+    stdout = "partial prompt echo follows:\n" + example
+    assert EA.salvage_write_report("codex", "build", stdout, prompt) is None
+
+
+def test_salvage_write_report_unreadable_is_none():
+    # axis: fail-open on garbage — parse failure cannot mint a report.
+    assert EA.salvage_write_report("codex", "build", "{not json", "prompt") is None
+
+
+def test_salvage_write_report_honest_refusal_is_recovered():
+    result = EA.salvage_write_report(
+        "cursor", "fix", _write_report(False, "plan_wrong", True, False), "prompt")
+    assert result == {
+        "report": {"ok": False, "signal": "plan_wrong",
+                   "evidence": {"testFailed": True, "testPassed": False}},
+        "salvaged": True,
+        "truncated": False,
+    }
+
+
+def test_salvage_write_report_marks_partial_json_tail_truncated():
+    # axis: truncation — a complete report followed by a partial JSON object remains recoverable.
+    stdout = _write_report() + '\n{"still-writing":'
+    result = EA.salvage_write_report("codex", "build", stdout, "prompt")
+    assert result is not None and result["truncated"] is True
+
+
+def test_salvage_write_report_rejects_review_role():
+    assert EA.salvage_write_report("codex", "review", _write_report(), "prompt") is None
+
+
+def test_salvage_write_report_never_raises(monkeypatch):
+    monkeypatch.setattr(EA, "_unwrap_stream_envelope", lambda _stdout: (_ for _ in ()).throw(RuntimeError()))
+    assert EA.salvage_write_report("codex", "build", _write_report(), "prompt") is None
+
+
 def test_build_argv_verify_match(tmp_path, capsys):
     p = tmp_path / "x.prompt"
     p.write_bytes(b"payload")
@@ -1752,10 +1827,17 @@ def test_review_artifact_shape_plan_only_stream_log_not_engaged():
 def test_review_artifact_shape_residue_byte_floor():
     # axis: ARTIFACT_MIN_RESIDUE_BYTES floor independent of signal count
     core = "- src/a.ts:1 issue\n- src/b.ts:2 issue\n### Findings\n"
-    below = core + "x" * (EA.ARTIFACT_MIN_RESIDUE_BYTES - len(core.encode("utf-8")) - 5)
-    above = core + "x" * (EA.ARTIFACT_MIN_RESIDUE_BYTES - len(core.encode("utf-8")) + 5)
+    below = core + "x" * (195 - len(core.encode("utf-8")))
+    above = core + "x" * (205 - len(core.encode("utf-8")))
+    assert len(below.encode("utf-8")) == 195
+    assert len(above.encode("utf-8")) == 205
     assert EA.review_artifact_shape(below, "")["engaged"] is False
     assert EA.review_artifact_shape(above, "")["engaged"] is True
+
+
+def test_artifact_min_residue_bytes_is_deliberately_pinned():
+    # 200 rejects one-line engine errors; changing it is a deliberate calibration change, not a refactor.
+    assert EA.ARTIFACT_MIN_RESIDUE_BYTES == 200
 
 
 def test_review_artifact_shape_requires_two_of_three_signals():

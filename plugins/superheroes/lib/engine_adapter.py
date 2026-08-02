@@ -561,6 +561,52 @@ def _review_residue(stdout, fed_prompt):
         return ""
 
 
+def salvage_write_report(engine, role_kind, stdout, fed_prompt):
+    """Recover a build/fix implementer's report from raw engine stdout. Never raises."""
+    try:
+        if role_kind == "review" or not isinstance(stdout, str) or not stdout.strip():
+            return None
+        text = _unwrap_stream_envelope(stdout)
+        if not isinstance(text, str):
+            return None
+        prompt = fed_prompt if isinstance(fed_prompt, str) else ""
+        residue = strip_echoed_prompt(text, prompt)
+        if not isinstance(residue, str) or not residue.strip():
+            return None
+
+        # A partial prompt echo can retain its example verdict even when the wider prompt was not
+        # removable verbatim. Do not turn that template object into an implementer claim.
+        if (_artifact_is_prompt_echo_residue(residue, prompt) or
+                (_last_json_object(residue) is not None and
+                 _last_json_object(residue) == _last_json_object(prompt))):
+            return None
+
+        parsed = parse_result(engine, role_kind, residue)
+        if parsed.get("reason") == "unreadable":
+            return None
+        report = {
+            "ok": parsed.get("ok") is True,
+            "signal": parsed.get("signal"),
+            "evidence": {
+                "testFailed": bool(parsed.get("evidence", {}).get("testFailed")),
+                "testPassed": bool(parsed.get("evidence", {}).get("testPassed")),
+            },
+        }
+        if not isinstance(report["signal"], str):
+            return None
+
+        # Keep parse_result as the sole report parser. This only detects a JSON-looking final tail
+        # that cannot itself contain a complete JSON value after a complete report.
+        last_open = max(residue.rfind("{"), residue.rfind("["))
+        tail = residue[last_open:] if last_open >= 0 else ""
+        json_like_tail = bool(re.match(r'^\s*(?:\{\s*(?:"|\})|\[)', tail))
+        truncated = json_like_tail and _last_json_object(tail) is None and \
+            _last_json_array(tail) is None
+        return {"report": report, "salvaged": True, "truncated": truncated}
+    except Exception:
+        return None
+
+
 def _artifact_residue_bytes(residue):
     if not isinstance(residue, str):
         return 0

@@ -654,6 +654,76 @@ def _scan_review_engaged_candidates(run_dir_real, state):
     return candidates
 
 
+def _scan_write_report_candidates(run_dir_real, state):
+    """Scan every ended write stdout for recoverable implementer reports. Never raises."""
+    try:
+        opened = state.get("opened") or {}
+        engine = opened.get("engine")
+        role_kind = opened.get("roleKind", "build")
+        fed_prompt = opened.get("fedPrompt", "")
+        candidates = []
+        for att in sorted(state.get("attempts") or {}):
+            slot = state["attempts"][att]
+            if slot.get("ended") is None:
+                continue
+            stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % att)
+            stdout = _read_stdout_for_artifact_scan(stdout_path)
+            if stdout is None:
+                continue
+            salvage = engine_adapter.salvage_write_report(
+                engine, role_kind, stdout, fed_prompt,
+            )
+            if not isinstance(salvage, dict) or not isinstance(salvage.get("report"), dict):
+                continue
+            candidates.append({
+                "attempt": att,
+                "stdoutPath": stdout_path,
+                "salvage": salvage,
+            })
+        return candidates
+    except Exception:
+        return []
+
+
+def _write_report_salvage_block(best, also):
+    salvage = {
+        "attempt": best["attempt"],
+        "stdoutPath": best["stdoutPath"],
+    }
+    salvage.update(best["salvage"])
+    if also:
+        salvage["alsoRecovered"] = also
+    return salvage
+
+
+def _write_report_disclosure(engine):
+    return (
+        "%s build worker produced a report, but our transport did not carry it to a "
+        "gradeable result — the outcome is still a forfeit. Every claim in the salvaged "
+        "report is the implementer's claim and must be independently verified before use."
+        % engine
+    )
+
+
+def _attach_write_report_salvage(run_dir_real, state, terminal, engine):
+    """Attach recoverable write-report metadata without changing a forfeited outcome."""
+    candidates = _scan_write_report_candidates(run_dir_real, state)
+    if not candidates:
+        return terminal
+    best = max(candidates, key=lambda candidate: candidate["attempt"])
+    also = [
+        {"attempt": candidate["attempt"], "stdoutPath": candidate["stdoutPath"]}
+        for candidate in candidates
+        if candidate["attempt"] != best["attempt"]
+    ]
+    out = dict(terminal)
+    out["salvage"] = _write_report_salvage_block(best, also)
+    out["disclosure"] = "%s %s" % (
+        terminal.get("disclosure", ""), _write_report_disclosure(engine),
+    )
+    return out
+
+
 def _select_best_engaged_candidate(candidates):
     """Highest citation count; ties broken by later attempt. Never raises."""
     if not candidates:
@@ -776,7 +846,7 @@ def _ledger_stages(result, state, run_dir_real, opened):
             stages["engaged"] = True
         else:
             stages["delivered"] = False
-            stages["engaged"] = None
+            stages["engaged"] = True if result.get("salvage") else None
     return stages
 
 
@@ -893,7 +963,8 @@ def _abandon_terminal_result(run_dir_real, state):
 
 
 def _stored_abandon_result(run_dir_real, state):
-    """Return persisted abandon result when present; legacy records recompute once."""
+    """Return persisted abandon result when present; legacy records recompute on every read."""
+    # Called under _supervise's non-reentrant run lock and outside it: never acquire a lock here.
     stored = state.get("abandonedResult")
     if isinstance(stored, dict):
         return dict(stored)
@@ -1580,8 +1651,8 @@ def _grade_write_attempt(run_dir_real, state, attempt):
     }
 
 
-def _write_terminal_forfeit(engine, attempts):
-    return {
+def _write_terminal_forfeit(engine, attempts, *, run_dir_real=None, state=None):
+    terminal = {
         "ok": False,
         "terminal": True,
         "reason": dispatch_outcome.REASON_FORFEITED,
@@ -1592,10 +1663,13 @@ def _write_terminal_forfeit(engine, attempts):
             "inspect the worktree and retry manually" % engine
         ),
     }
+    if run_dir_real is None or state is None:
+        return terminal
+    return _attach_write_report_salvage(run_dir_real, state, terminal, engine)
 
 
-def _worktree_dirtied_forfeit(engine):
-    return {
+def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None):
+    terminal = {
         "ok": False,
         "terminal": True,
         "reason": dispatch_outcome.REASON_FORFEITED,
@@ -1603,12 +1677,15 @@ def _worktree_dirtied_forfeit(engine):
         "attempts": 1,
         "forfeited": True,
         "disclosure": (
-            "%s forfeited attempt 1 after modifying the build worktree; the retry was "
+            "%s attempt 1 report was not gradeable; the retry was "
             "refused because a second attempt on a dirtied tree can contaminate or commit "
             "partial work. The worktree is left exactly as the engine left it — inspect "
             "and clean it yourself." % engine
         ),
     }
+    if run_dir_real is None or state is None:
+        return terminal
+    return _attach_write_report_salvage(run_dir_real, state, terminal, engine)
 
 
 def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None,
@@ -1817,7 +1894,9 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         current = _worktree_baseline(opened["cwd"])
                         if baseline is None or current is None or current != baseline:
                             return _fold_run(run_dir_real, state, _with_run_fields(
-                                _worktree_dirtied_forfeit(engine),
+                                _worktree_dirtied_forfeit(
+                                    engine, run_dir_real=run_dir_real, state=state,
+                                ),
                                 run_dir=run_dir_real, argv=argv,
                             ))
                     ok_spawn, detail = _spawn_attempt(
@@ -1835,7 +1914,9 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     continue
 
                 if run_kind == RUN_KIND_WRITE:
-                    terminal = _write_terminal_forfeit(engine, MAX_ATTEMPTS)
+                    terminal = _write_terminal_forfeit(
+                        engine, MAX_ATTEMPTS, run_dir_real=run_dir_real, state=state,
+                    )
                 else:
                     terminal = _review_terminal_forfeit(
                         engine, reason, MAX_ATTEMPTS,
