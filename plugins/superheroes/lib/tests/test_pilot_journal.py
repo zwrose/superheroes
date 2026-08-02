@@ -360,6 +360,16 @@ def test_effect_mark_not_applied(tmp_dir):
     assert replayed["effects"][0]["state"] == pj.STATE_NOT_APPLIED
 
 
+def test_effect_mark_indeterminate_replays_possibly_applied(tmp_dir):
+    path = _journal(tmp_dir)
+    with pj.effect(path, slot_ref=_SLOT_REF, kind=pj.KIND_CREDENTIAL_MINTED, at=_TS,
+                   effect_id="ctx-indet") as handle:
+        handle.mark_indeterminate(at=_TS2, reason="response-lost")
+    replayed = pj.replay(path)
+    assert replayed["effects"][0]["state"] == pj.STATE_POSSIBLY_APPLIED
+    assert replayed["effects"][0]["outcome"] == pj.OUTCOME_INDETERMINATE
+
+
 def test_effect_writes_exactly_one_end(tmp_dir):
     path = _journal(tmp_dir)
     with pj.effect(path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS,

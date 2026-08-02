@@ -55,8 +55,8 @@ class PilotIdentityError(Exception):
 
 def probe_answer(*, identity=None, reason=None):
     """Normalize and validate one probe answer."""
-  # bite-axis: answer shape — exactly one of identity or reason; identity non-empty str;
-  # reason must be a known probe token.
+    # bite-axis: answer shape — exactly one of identity or reason; identity non-empty str;
+    # reason must be a known probe token.
     has_identity = identity is not None
     has_reason = reason is not None
     if has_identity and has_reason or not has_identity and not has_reason:
@@ -79,10 +79,7 @@ def _normalize_answer_dict(answer):
     has_reason = reason is not None
     if has_identity and has_reason or not has_identity and not has_reason:
         raise PilotIdentityError(REFUSAL_IDENTITY_ANSWER_INVALID)
-    try:
-        return probe_answer(identity=identity, reason=reason)
-    except PilotIdentityError:
-        raise
+    return probe_answer(identity=identity, reason=reason)
 
 
 def evaluate_pair(seeded, unseeded, *, expected_identity):
@@ -91,8 +88,8 @@ def evaluate_pair(seeded, unseeded, *, expected_identity):
     Helper only — does not establish that answers came from two contexts.
     The authoritative exercise is ``run_pair_exercise``.
     """
-  # bite-axis: pair grading — check order is load-bearing; identical answers refuse before
-  # seeded/unseeded discrimination checks.
+    # bite-axis: pair grading — check order is load-bearing; identical answers refuse before
+    # seeded/unseeded discrimination checks.
     try:
         seeded_norm = _normalize_answer_dict(seeded)
     except PilotIdentityError as exc:
@@ -143,8 +140,8 @@ def evaluate_pair(seeded, unseeded, *, expected_identity):
 
 def run_pair_exercise(*, expected_identity, seeded_probe, unseeded_probe):
     """Authoritative single-account identity-probe exercise."""
-  # bite-axis: exercise authority — invokes each probe callable exactly once and grades via
-  # evaluate_pair; distinct callables required but different browser contexts are C7's.
+    # bite-axis: exercise authority — invokes each probe callable exactly once and grades via
+    # evaluate_pair; distinct callables required but different browser contexts are C7's.
     if not callable(seeded_probe) or not callable(unseeded_probe):
         raise PilotIdentityError(REFUSAL_IDENTITY_PROBE_NOT_CALLABLE)
     # bite-disclosure: distinct callables are verified here; whether they ran in different
@@ -193,8 +190,8 @@ def run_pair_exercise(*, expected_identity, seeded_probe, unseeded_probe):
 
 def evaluate_slot(slot_accounts, expected_identities, answers):
     """Per-account-context-pair harness across a slot's whole account set."""
-  # bite-axis: account-set alignment — authoritative account list from slot_accounts; all three
-  # input key sets must match exactly.
+    # bite-axis: account-set alignment — authoritative account list from slot_accounts; all three
+    # input key sets must match exactly.
     if not isinstance(slot_accounts, dict):
         raise PilotIdentityError(REFUSAL_IDENTITY_ACCOUNT_SET_MISMATCH)
     accounts_field = slot_accounts.get("accounts")
@@ -272,8 +269,8 @@ def evaluate_slot(slot_accounts, expected_identities, answers):
 
 def evaluate_wrong_account_leg(answer, *, expected_identity, other_identity):
     """Grade the valid-but-wrong-account leg (D3 free leg under minting)."""
-  # bite-axis: wrong-account discrimination — vacuous when identities coincide; inconclusive
-  # on infrastructure and lapse tokens; pass only on wrong-identity token or other_identity.
+    # bite-axis: wrong-account discrimination — vacuous when identities coincide; inconclusive
+    # on infrastructure and lapse tokens; pass only on wrong-identity token or other_identity.
     if other_identity == expected_identity:
         raise PilotIdentityError(REFUSAL_IDENTITY_WRONG_ACCOUNT_VACUOUS)
 
@@ -299,8 +296,8 @@ def evaluate_wrong_account_leg(answer, *, expected_identity, other_identity):
 
 def lapse_step(answer, *, sign_in_path, reprobe_count):
     """Pure lapse decision from one probe answer (design §5/§10)."""
-  # bite-axis: lapse routing — only no-session routes to lapse; infrastructure defers;
-  # identity-class tokens refuse; reprobe budget is exactly one.
+    # bite-axis: lapse routing — only no-session routes to lapse; infrastructure defers;
+    # identity-class tokens refuse; reprobe budget is exactly one.
     if (
         not isinstance(sign_in_path, str)
         or sign_in_path not in pilot_contract.SIGN_IN_PATHS
@@ -359,8 +356,8 @@ def lapse_step(answer, *, sign_in_path, reprobe_count):
 
 def lapse_episode(probe, *, sign_in_path, remint=None):
     """Authoritative lapse path — owns the re-probe budget."""
-  # bite-axis: lapse episode — at most two probe calls; remint success required for continuation;
-  # probe failures defer rather than lapse.
+    # bite-axis: lapse episode — at most two probe calls; remint success required for continuation;
+    # probe failures defer rather than lapse.
     if not callable(probe):
         raise PilotIdentityError(REFUSAL_LAPSE_PROBE_NOT_CALLABLE)
 
@@ -368,9 +365,9 @@ def lapse_episode(probe, *, sign_in_path, remint=None):
     first_reason = None
     second_reason = None
 
+    probe_calls = 1
     try:
         first_raw = probe()
-        probe_calls = 1
     except Exception:
         return {
             "action": ACTION_DEFER,
@@ -386,9 +383,9 @@ def lapse_episode(probe, *, sign_in_path, remint=None):
 
     first_reason = first_step["reason"]
 
+    probe_calls = 2
     try:
         second_raw = probe()
-        probe_calls = 2
     except Exception:
         return {
             "action": ACTION_DEFER,
@@ -448,8 +445,8 @@ def lapse_episode(probe, *, sign_in_path, remint=None):
 
 def identity_probe_declaration(*, slot_ref, policy_digest, expected_identities):
     """Canonical declaration an identity-probe receipt is bound to."""
-  # bite-axis: declaration binding — slot ref, policy digest, sorted account keys, and digest-only
-  # expected identities; policy material never travels in the declaration.
+    # bite-axis: declaration binding — slot ref, policy digest, sorted account keys, and digest-only
+    # expected identities; policy material never travels in the declaration.
     try:
         slot, generation = pilot_slot.parse_slot_ref(slot_ref)
     except pilot_slot.PilotSlotError:
@@ -475,9 +472,10 @@ def identity_probe_declaration(*, slot_ref, policy_digest, expected_identities):
 
 def identity_probe_receipt(declaration, result, *, exercised_at):
     """Build the registry record for kind identity-probe."""
-  # bite-axis: receipt assembly — pass/fail from evaluate_slot; evidence never carries expected
-  # identity values; kind must remain in DECLARATION_KINDS.
-    assert "identity-probe" in pilot_contract.DECLARATION_KINDS
+    # bite-axis: receipt assembly — pass/fail from evaluate_slot; evidence never carries expected
+    # identity values; kind must remain in DECLARATION_KINDS.
+    if "identity-probe" not in pilot_contract.DECLARATION_KINDS:
+        raise PilotIdentityError(REFUSAL_IDENTITY_RECEIPT_ARGUMENT_INVALID)
 
     if not isinstance(exercised_at, str) or not exercised_at:
         raise PilotIdentityError(REFUSAL_IDENTITY_RECEIPT_ARGUMENT_INVALID)

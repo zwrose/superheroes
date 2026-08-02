@@ -256,7 +256,7 @@ def authorized_mint(verdict, policy, slot_ref, account, envelope, *, transport,
             raw = transport(descriptor)
         except Exception:
             result = _classify_mint_response(None, transport_error=True)
-            _mark_indeterminate(handle, at=at, reason=result["reason"])
+            handle.mark_indeterminate(at=at, reason=result["reason"])
             return result
 
         result = _classify_mint_response(raw)
@@ -266,7 +266,7 @@ def authorized_mint(verdict, policy, slot_ref, account, envelope, *, transport,
         elif outcome == pilot_journal.OUTCOME_NOT_APPLIED:
             handle.mark_not_applied(at=at, reason=result["reason"])
         else:
-            _mark_indeterminate(handle, at=at, reason=result["reason"])
+            handle.mark_indeterminate(at=at, reason=result["reason"])
         return result
 
 
@@ -308,7 +308,7 @@ def sentinel_exercise(verdict, policy, slot_ref, envelope, *, control_account,
             raw = transport(descriptor)
         except Exception:
             result = _classify_sentinel_response(None, transport_error=True)
-            _mark_indeterminate(handle, at=at, reason=result["reason"])
+            handle.mark_indeterminate(at=at, reason=result["reason"])
             return _sentinel_result(result, control=control)
 
         result = _classify_sentinel_response(raw)
@@ -317,7 +317,7 @@ def sentinel_exercise(verdict, policy, slot_ref, envelope, *, control_account,
         elif result["outcome"] == OUTCOME_REFUSED:
             handle.mark_not_applied(at=at, reason=result["reason"])
         else:
-            _mark_indeterminate(handle, at=at, reason=result["reason"])
+            handle.mark_indeterminate(at=at, reason=result["reason"])
         return _sentinel_result(result, control=control)
 
 
@@ -503,13 +503,6 @@ def _scope_fail(reason):
 
 def _gate_fail(reason):
     return {"ok": False, "exitCode": None, "reason": reason, "stdout": ""}
-
-
-def _mark_indeterminate(handle, *, at, reason):
-    handle._outcome = pilot_journal.OUTCOME_INDETERMINATE
-    handle._end_at = at
-    handle._end_reason = reason
-    handle._marked = True
 
 
 def _terminate_and_wait(proc):

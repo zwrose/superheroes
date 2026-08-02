@@ -91,11 +91,10 @@ def cookie_expiry_observation(storage_state, *, cookie_name):
     if "expires" not in entry:
         raise PilotHorizonError(REFUSAL_COOKIE_SESSION_ONLY)
     expires = entry["expires"]
-    if expires in (-1, 0):
-        raise PilotHorizonError(REFUSAL_COOKIE_SESSION_ONLY)
-
     if isinstance(expires, bool) or not isinstance(expires, (int, float)):
         raise PilotHorizonError(REFUSAL_STORAGE_STATE_INVALID)
+    if expires in (-1, 0):
+        raise PilotHorizonError(REFUSAL_COOKIE_SESSION_ONLY)
 
     return {
         "provenance": "cookie-expiry",
@@ -334,9 +333,11 @@ def wave_margin(
     first_reason = None
     all_ok = True
 
-    for account in sorted(accounts.keys()):
+    for account in accounts.keys():
         if not isinstance(account, str) or not account:
             raise PilotHorizonError(REFUSAL_ACCOUNT_ENTRY_INVALID, detail=repr(account))
+
+    for account in sorted(accounts.keys()):
         result = account_margin(
             accounts[account],
             deadline_at=deadline_at,

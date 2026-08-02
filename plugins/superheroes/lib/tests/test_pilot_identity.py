@@ -656,6 +656,29 @@ def test_lapse_episode_probe_raises_defer():
     assert result["reason"] == pi.REFUSAL_IDENTITY_PROBE_LEG_FAILED
 
 
+def test_lapse_episode_first_probe_raises_probe_calls_one():
+    result = pi.lapse_episode(
+        lambda: (_ for _ in ()).throw(RuntimeError("fail")),
+        sign_in_path="captured",
+    )
+    assert result["probeCalls"] == 1
+
+
+def test_lapse_episode_second_probe_raises_probe_calls_two():
+    calls = 0
+
+    def probe():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"reason": pilot_probe.REASON_NO_SESSION}
+        raise RuntimeError("fail")
+
+    result = pi.lapse_episode(probe, sign_in_path="captured")
+    assert result["probeCalls"] == 2
+    assert result["action"] == pi.ACTION_DEFER
+
+
 # --- identity_probe_declaration -----------------------------------------------
 
 def test_identity_probe_declaration_shape():

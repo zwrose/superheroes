@@ -160,6 +160,12 @@ def test_cookie_expiry_refuses_session_cookie_absent_expires():
         ph.cookie_expiry_observation(_cookie_state(None), cookie_name="session")
 
 
+@pytest.mark.parametrize("expires", [False, True])
+def test_cookie_expiry_refuses_boolean_expires(expires):
+    with _raises(ph.REFUSAL_STORAGE_STATE_INVALID):
+        ph.cookie_expiry_observation(_cookie_state(expires), cookie_name="session")
+
+
 # --- token_claim_observation ---
 
 
@@ -488,6 +494,16 @@ def test_wave_margin_empty_refuses():
 def test_wave_margin_invalid_account_key():
     with _raises(ph.REFUSAL_ACCOUNT_ENTRY_INVALID):
         ph.wave_margin({None: _token_obs(5000)}, **_margin_kwargs())
+
+
+def test_wave_margin_mixed_type_keys_refuses():
+    with _raises(ph.REFUSAL_ACCOUNT_ENTRY_INVALID):
+        ph.wave_margin({1: _token_obs(5000), "a": _token_obs(5000)}, **_margin_kwargs())
+
+
+def test_wave_margin_empty_string_account_key_refuses():
+    with _raises(ph.REFUSAL_ACCOUNT_ENTRY_INVALID):
+        ph.wave_margin({"": _token_obs(5000)}, **_margin_kwargs())
 
 
 # --- additional refusal coverage ---
