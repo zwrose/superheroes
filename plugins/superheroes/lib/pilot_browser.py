@@ -13,7 +13,7 @@ import sys
 import tempfile
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pilot_journal
 import pilot_lifecycle
@@ -37,6 +37,7 @@ REFUSAL_SOCKET_BASE_IN_WORKTREE = "browser-socket-base-in-worktree"
 REFUSAL_SOCKET_DIR_EXISTS = "browser-socket-dir-exists"
 REFUSAL_SOCKET_DIR_UNSAFE = "browser-socket-dir-unsafe"
 REFUSAL_SOCKET_DIR_NOT_DIRECTORY = "browser-socket-dir-not-directory"
+REFUSAL_SOCKET_DIR_UNREMOVABLE = "browser-socket-dir-unremovable"
 
 REFUSAL_SERVER_RECORD_INVALID = "browser-server-record-invalid"
 REFUSAL_NOT_SERVER_CHILD = "browser-not-server-child"
@@ -116,12 +117,7 @@ def _later_timestamp(begin_at):
         dt = datetime.fromisoformat(begin_at[:-1] + "+00:00")
     except ValueError:
         return begin_at
-    micro = dt.microsecond + 1
-    second = dt.second
-    if micro >= 1000000:
-        micro = 0
-        second += 1
-    dt = dt.replace(second=second, microsecond=micro)
+    dt = dt + timedelta(microseconds=1)
     return dt.strftime("%Y-%m-%dT%H:%M:%S.") + "%06dZ" % dt.microsecond
 
 
@@ -371,6 +367,40 @@ def create_socket_dir(plan):
     return _ok(path=path)
 
 
+def _remove_socket_dir_entry(dir_path, name):
+    """Remove one enumerated entry from a socket directory; never follow symlinks."""
+    entry_path = os.path.join(dir_path, name)
+    try:
+        st = os.lstat(entry_path)
+    except OSError:
+        return False
+    if stat.S_ISLNK(st.st_mode):
+        try:
+            os.unlink(entry_path)
+        except OSError:
+            return False
+        return True
+    if stat.S_ISREG(st.st_mode) or stat.S_ISSOCK(st.st_mode):
+        try:
+            os.unlink(entry_path)
+        except OSError:
+            return False
+        return True
+    if stat.S_ISDIR(st.st_mode):
+        try:
+            sub_entries = os.listdir(entry_path)
+        except OSError:
+            return False
+        if sub_entries:
+            return False
+        try:
+            os.rmdir(entry_path)
+        except OSError:
+            return False
+        return True
+    return False
+
+
 def remove_socket_dir(path):
     """Remove a socket directory without following symlinks."""
     if not _is_str_path(path):
@@ -380,9 +410,16 @@ def remove_socket_dir(path):
     if not os.path.isdir(path):
         return _fail(REFUSAL_SOCKET_DIR_NOT_DIRECTORY)
     try:
+        entries = os.listdir(path)
+    except OSError:
+        return _fail(REFUSAL_SOCKET_DIR_UNREMOVABLE)
+    for name in entries:
+        if not _remove_socket_dir_entry(path, name):
+            return _fail(REFUSAL_SOCKET_DIR_UNREMOVABLE)
+    try:
         os.rmdir(path)
     except OSError:
-        return _fail(REFUSAL_SOCKET_DIR_NOT_DIRECTORY)
+        return _fail(REFUSAL_SOCKET_DIR_UNREMOVABLE)
     return _ok()
 
 
@@ -570,10 +607,6 @@ def teardown_server(
 
     end_at = _later_timestamp(begin_at)
 
-    remove_result = remove_socket_dir(socket_dir)
-    if not remove_result["ok"]:
-        return remove_result
-
     try:
         with pilot_journal.effect(
             journal_path,
@@ -582,6 +615,10 @@ def teardown_server(
             at=begin_at,
             detail={"serverPid": server_pid},
         ) as handle:
+            remove_result = remove_socket_dir(socket_dir)
+            if not remove_result["ok"]:
+                handle.mark_not_applied(at=end_at, reason=remove_result["reason"])
+                return remove_result
             handle.mark_applied(at=end_at)
     except pilot_journal.PilotJournalError as exc:
         return _fail(REFUSAL_SERVER_RECORD_INVALID, detail=str(exc.reason))

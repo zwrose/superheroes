@@ -1,10 +1,12 @@
 """Tests for pilot_browser — pin integrity, socket dirs, topology, broker admission."""
 import os
 import shutil
+import socket
 import stat
 import sys
 import tempfile
 import textwrap
+from datetime import datetime
 
 import pytest
 
@@ -65,6 +67,134 @@ def _server_record(**overrides):
     }
     rec.update(overrides)
     return rec
+
+
+def _parse_ts(value):
+    return datetime.fromisoformat(value[:-1] + "+00:00")
+
+
+def test_later_timestamp_second_rollover():
+    # bite-axis: timestamp carry — microsecond overflow increments second without ValueError.
+    begin = "2026-01-01T00:00:00.999999Z"
+    later = pb._later_timestamp(begin)
+    assert _parse_ts(later) > _parse_ts(begin)
+    assert later == "2026-01-01T00:00:01.000000Z"
+
+
+def test_later_timestamp_minute_rollover():
+    # bite-axis: timestamp carry — second overflow increments minute.
+    begin = "2026-01-01T00:00:59.999999Z"
+    later = pb._later_timestamp(begin)
+    assert _parse_ts(later) > _parse_ts(begin)
+    assert later == "2026-01-01T00:01:00.000000Z"
+
+
+def test_later_timestamp_hour_rollover():
+    # bite-axis: timestamp carry — minute overflow increments hour.
+    begin = "2026-01-01T00:59:59.999999Z"
+    later = pb._later_timestamp(begin)
+    assert _parse_ts(later) > _parse_ts(begin)
+    assert later == "2026-01-01T01:00:00.000000Z"
+
+
+def test_later_timestamp_day_rollover():
+    # bite-axis: timestamp carry — hour overflow increments day.
+    begin = "2026-01-01T23:59:59.999999Z"
+    later = pb._later_timestamp(begin)
+    assert _parse_ts(later) > _parse_ts(begin)
+    assert later == "2026-01-02T00:00:00.000000Z"
+
+
+def test_later_timestamp_unparseable_passthrough():
+    bad = "not-a-timestamp"
+    assert pb._later_timestamp(bad) == bad
+
+
+def test_remove_socket_dir_with_plain_file():
+    # bite-axis: socket dir removal — non-empty directory with a file is removed.
+    parent = _tmp_dir()
+    sock_dir = os.path.join(parent, "pb-abc")
+    os.makedirs(sock_dir)
+    with open(os.path.join(sock_dir, "ws.sock"), "w", encoding="utf-8") as fh:
+        fh.write("")
+    try:
+        result = pb.remove_socket_dir(sock_dir)
+        assert result == {"ok": True, "reason": None}
+        assert not os.path.exists(sock_dir)
+    finally:
+        shutil.rmtree(parent, ignore_errors=True)
+
+
+def test_remove_socket_dir_with_unix_socket():
+    # bite-axis: socket dir removal — directory containing a bound AF_UNIX socket is removed.
+    if not hasattr(socket, "AF_UNIX"):
+        pytest.skip("AF_UNIX not available")
+    parent = _tmp_dir()
+    sock_dir = os.path.join(parent, "pb-sock")
+    os.makedirs(sock_dir)
+    sock_path = os.path.join(sock_dir, "ws.sock")
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.bind(sock_path)
+    except OSError:
+        sock.close()
+        pytest.skip("cannot bind AF_UNIX socket on this platform")
+    try:
+        result = pb.remove_socket_dir(sock_dir)
+        assert result == {"ok": True, "reason": None}
+        assert not os.path.exists(sock_dir)
+    finally:
+        sock.close()
+        shutil.rmtree(parent, ignore_errors=True)
+
+
+def test_remove_socket_dir_unlinks_symlink_without_following():
+    # bite-axis: socket dir removal — symlink entry is unlinked, never followed.
+    parent = _tmp_dir()
+    outside = os.path.join(parent, "outside")
+    os.makedirs(outside)
+    outside_file = os.path.join(outside, "keep.txt")
+    with open(outside_file, "w", encoding="utf-8") as fh:
+        fh.write("keep")
+    sock_dir = os.path.join(parent, "pb-link")
+    os.makedirs(sock_dir)
+    os.symlink(outside_file, os.path.join(sock_dir, "escape"))
+    try:
+        result = pb.remove_socket_dir(sock_dir)
+        assert result == {"ok": True, "reason": None}
+        assert not os.path.exists(sock_dir)
+        assert os.path.isfile(outside_file)
+        with open(outside_file, encoding="utf-8") as fh:
+            assert fh.read() == "keep"
+    finally:
+        shutil.rmtree(parent, ignore_errors=True)
+
+
+def test_teardown_server_journals_not_applied_on_socket_dir_removal_failure():
+    # bite-axis: teardown journal — removal failure records effect as not-applied.
+    tmp = _tmp_dir()
+    journal = os.path.join(tmp, "journal.jsonl")
+    not_a_dir = os.path.join(tmp, "notadir")
+    with open(not_a_dir, "w", encoding="utf-8") as fh:
+        fh.write("file")
+    record = _server_record(socketDir=not_a_dir)
+    try:
+        result = pb.teardown_server(
+            journal,
+            server_record=record,
+            torn_down_at=LATER,
+            begin_at=NOW,
+            observe_exit=lambda _pid: {"exited": True, "status": 0},
+        )
+        assert result["ok"] is False
+        assert result["reason"] == pb.REFUSAL_SOCKET_DIR_NOT_DIRECTORY
+        replayed = pj.replay(journal)
+        assert replayed["ok"] is True
+        torn = [e for e in replayed["effects"] if e["kind"] == pj.KIND_BROWSER_SERVER_TORN_DOWN]
+        assert len(torn) == 1
+        assert torn[0]["state"] == pj.STATE_NOT_APPLIED
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_validate_pin_accepts_valid():
