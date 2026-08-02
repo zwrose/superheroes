@@ -573,25 +573,48 @@ def test_compose_configured_fable_falls_back_to_opus(tmp_path):
     assert result["modelResolution"]["reason"] == "fable-never-a-launch-default"
 
 
-def test_compose_unreadable_profile_defaults_to_opus(tmp_path, monkeypatch):
-  # axis: unreadable profile fail-closed to opus via load_builder_dispatch_tier
+def test_compose_unreadable_profile_defaults_to_opus(tmp_path):
+  # axis: structurally ambiguous profile fail-closed to opus via real profile_structural_refusal path
     repo = _init_repo(tmp_path / "repo")
-    import engine_pref as ep
-
-    def _unreadable(_cwd, root=None):
-        return {
-            "tier": "opus",
-            "source": "unreadable-default",
-            "reason": "profile-ambiguous",
-        }
-
-    monkeypatch.setattr(ep, "load_builder_dispatch_tier", _unreadable)
+    _write_core_with_builder_tier(repo, {"builderDispatchTier": "sonnet"})
+    import importlib.util as _u
+    _lib = os.path.join(_HERE, "..")
+    spec = _u.spec_from_file_location("core_md", os.path.join(_lib, "core_md.py"))
+    cm = _u.module_from_spec(spec)
+    spec.loader.exec_module(cm)
+    core_path = os.path.join(repo, ".claude", "superheroes", "core.md")
+    text = open(core_path, encoding="utf-8").read()
+    extra = "\n```json superheroes-core\n{\"schemaVersion\": %d}\n```\n" % cm.SCHEMA_VERSION
+    open(core_path, "w", encoding="utf-8").write(text + extra)
     premise = _valid_premise(repo)
     result = L.compose_launch(repo, 656, premise)
     assert result["ok"] is True
     assert "opus" in result["argv"]
     assert result["modelResolution"]["source"] == "unreadable-default"
-    assert result["modelResolution"]["reason"] == "profile-ambiguous"
+    assert result["modelResolution"]["reason"].startswith("multiple-core-blocks:")
+    assert result["modelResolution"]["tier"] == "opus"
+
+
+def test_compose_unsanctioned_tier_falls_back_to_default(tmp_path, monkeypatch):
+  # axis: stub supplies an input real config cannot produce; assertions pin _resolve_model's
+  # unsanctioned-tier fallback — unlike C1 where the stub supplied the output under test
+    repo = _init_repo(tmp_path / "repo")
+    import engine_pref as ep
+
+    def _unsanctioned(_cwd, root=None):
+        return {
+            "tier": "not-a-registry-tier",
+            "source": "configured",
+            "reason": None,
+        }
+
+    monkeypatch.setattr(ep, "load_builder_dispatch_tier", _unsanctioned)
+    premise = _valid_premise(repo)
+    result = L.compose_launch(repo, 656, premise)
+    assert result["ok"] is True
+    assert ep.BUILDER_DISPATCH_TIER_DEFAULT in result["argv"]
+    assert result["modelResolution"]["source"] == "invalid-config-default"
+    assert result["modelResolution"]["reason"] == "model-not-registry-known:not-a-registry-tier"
 
 
 def test_compose_explicit_model_beats_configured_tier(tmp_path):
