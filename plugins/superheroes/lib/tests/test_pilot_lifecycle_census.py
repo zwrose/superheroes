@@ -136,6 +136,68 @@ def _parse_effect_kind_table(doc):
     return kinds
 
 
+def _parse_first_column_table(doc, header_line, duplicate_label):
+    """Parse a markdown table's first column into a set, refusing duplicate rows."""
+    rows = _parse_markdown_table(doc, header_line)
+    if rows is None:
+        raise AssertionError(
+            "table header %r not found in pilot-contract.md (file: %s)"
+            % (header_line, _PILOT_CONTRACT)
+        )
+    tokens = []
+    for row in rows:
+        token = row[0].strip("`")
+        if token in tokens:
+            raise ValueError(
+                "duplicate %s row: %r" % (duplicate_label, token)
+            )
+        tokens.append(token)
+    return set(tokens)
+
+
+def _extract_section(doc, heading):
+    """Return text from heading through the next heading of equal or higher level."""
+    lines = doc.splitlines()
+    try:
+        start = next(
+            i for i, line in enumerate(lines) if line.strip() == heading
+        )
+    except StopIteration:
+        return None
+    level = len(heading) - len(heading.lstrip("#"))
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        line = lines[i]
+        if line.startswith("#"):
+            heading_level = len(line) - len(line.lstrip("#"))
+            if heading_level <= level:
+                end = i
+                break
+    return "\n".join(lines[start:end])
+
+
+def _append_table_row(doc, header_line, row_line, after=None):
+    """Append a row to the first markdown table matching header_line in doc text."""
+    if after is not None:
+        anchor_pos = doc.index(after)
+        return doc[:anchor_pos] + _append_table_row(
+            doc[anchor_pos:], header_line, row_line
+        )
+    lines = doc.splitlines()
+    try:
+        start = lines.index(header_line)
+    except ValueError:
+        raise AssertionError("header %r not found" % header_line)
+    insert_at = start + 2
+    for i in range(start + 2, len(lines)):
+        if not lines[i].startswith("|"):
+            insert_at = i
+            break
+        insert_at = i + 1
+    new_lines = lines[:insert_at] + [row_line] + lines[insert_at:]
+    return "\n".join(new_lines)
+
+
 def _assert_bidirectional_tokens(code_tokens, doc_tokens, label):
     missing_from_doc = code_tokens - doc_tokens
     extra_in_doc = doc_tokens - code_tokens
@@ -279,12 +341,9 @@ def test_end_outcomes_bidirectional():
     journal_section = doc.split("## The partial-failure report")[0]
     partial_start = journal_section.index("## The provisioning journal")
     journal_section = journal_section[partial_start:]
-    rows = _parse_markdown_table(journal_section, _END_OUTCOME_HEADER)
-    assert rows is not None, (
-        "end-outcome table header not found in pilot-contract.md (file: %s)"
-        % _PILOT_CONTRACT
+    doc_tokens = _parse_first_column_table(
+        journal_section, _END_OUTCOME_HEADER, "end-outcome"
     )
-    doc_tokens = {row[0].strip("`") for row in rows}
     code_tokens = set(pilot_journal.END_OUTCOMES)
     _assert_bidirectional_tokens(code_tokens, doc_tokens, "END_OUTCOME")
 
@@ -294,12 +353,9 @@ def test_effect_states_bidirectional():
     journal_section = doc.split("## The partial-failure report")[0]
     partial_start = journal_section.index("## The provisioning journal")
     journal_section = journal_section[partial_start:]
-    rows = _parse_markdown_table(journal_section, _REPLAY_STATE_HEADER)
-    assert rows is not None, (
-        "replay-state table header not found in pilot-contract.md (file: %s)"
-        % _PILOT_CONTRACT
+    doc_tokens = _parse_first_column_table(
+        journal_section, _REPLAY_STATE_HEADER, "replay-state"
     )
-    doc_tokens = {row[0].strip("`") for row in rows}
     code_tokens = set(pilot_journal.EFFECT_STATES)
     _assert_bidirectional_tokens(code_tokens, doc_tokens, "EFFECT_STATE")
 
@@ -319,9 +375,14 @@ def test_provisioning_outcome_vocabulary_matches_slot_outcomes():
 
 def test_slot_outcomes_in_contract():
     doc = _load_contract()
+    section = _extract_section(doc, "### Input shape per slot")
+    assert section is not None, (
+        "pilot-contract.md missing ### Input shape per slot (file: %s)"
+        % _PILOT_CONTRACT
+    )
     for outcome in sorted(pilot_journal.SLOT_OUTCOMES):
-        assert outcome in doc, (
-            "pilot-contract.md missing slot outcome %r (file: %s)"
+        assert outcome in section, (
+            "pilot-contract.md input-shape section missing slot outcome %r (file: %s)"
             % (outcome, _PILOT_CONTRACT)
         )
 
@@ -346,6 +407,172 @@ def test_parse_effect_kind_table_rejects_duplicate_row():
     )
     with pytest.raises(ValueError, match="duplicate effect-kind row"):
         _parse_effect_kind_table(table_text)
+
+
+def test_parse_end_outcome_table_rejects_duplicate_row():
+    table_text = (
+        "| Outcome | Meaning |\n"
+        "|---|---|\n"
+        "| `applied` | probe |\n"
+        "| `applied` | duplicate |\n"
+    )
+    with pytest.raises(ValueError, match="duplicate end-outcome row"):
+        _parse_first_column_table(table_text, _END_OUTCOME_HEADER, "end-outcome")
+
+
+def test_parse_replay_state_table_rejects_duplicate_row():
+    table_text = (
+        "| Replay state | Source |\n"
+        "|---|---|\n"
+        "| `applied` | probe |\n"
+        "| `applied` | duplicate |\n"
+    )
+    with pytest.raises(ValueError, match="duplicate replay-state row"):
+        _parse_first_column_table(table_text, _REPLAY_STATE_HEADER, "replay-state")
+
+
+def test_slot_states_extra_in_doc(monkeypatch):
+    doc = _load_contract()
+    fake = "census-extra-state"
+    assert fake not in doc
+    modified = _append_table_row(
+        doc,
+        _TRANSITION_HEADER,
+        "| `%s` | *(none)* |" % fake,
+    )
+    monkeypatch.setattr(
+        sys.modules[__name__], "_load_contract", lambda: modified
+    )
+    with pytest.raises(AssertionError, match="unknown state"):
+        test_slot_states_bidirectional()
+
+
+def test_transitions_extra_in_doc(monkeypatch):
+    doc = _load_contract()
+    fake_dst = "census-extra-target"
+    assert fake_dst not in doc
+    modified = doc.replace(
+        "| `provisioning` | `provisioned`, `failed` |",
+        "| `provisioning` | `provisioned`, `failed`, `%s` |" % fake_dst,
+    )
+    monkeypatch.setattr(
+        sys.modules[__name__], "_load_contract", lambda: modified
+    )
+    with pytest.raises(AssertionError, match="extra edge"):
+        test_transitions_bidirectional()
+
+
+def test_lifecycle_reason_tokens_extra_in_doc(monkeypatch):
+    doc = _load_contract()
+    fake = "slot-census-extra-probe"
+    assert fake not in doc
+    modified = _append_table_row(
+        doc,
+        _LIFECYCLE_TOKEN_HEADER,
+        "| `%s` | probe extra |" % fake,
+        after="### Lifecycle refusal tokens",
+    )
+    monkeypatch.setattr(
+        sys.modules[__name__], "_load_contract", lambda: modified
+    )
+    with pytest.raises(AssertionError, match="in doc but not in code"):
+        test_lifecycle_reason_tokens_bidirectional()
+
+
+def test_journal_reason_tokens_extra_in_doc(monkeypatch):
+    doc = _load_contract()
+    fake = "journal-census-extra-probe"
+    assert fake not in doc
+    modified = _append_table_row(
+        doc,
+        _JOURNAL_TOKEN_HEADER,
+        "| `%s` | probe extra |" % fake,
+        after="### Journal refusal tokens",
+    )
+    monkeypatch.setattr(
+        sys.modules[__name__], "_load_contract", lambda: modified
+    )
+    with pytest.raises(AssertionError, match="in doc but not in code"):
+        test_journal_reason_tokens_bidirectional()
+
+
+def test_block_tokens_extra_in_doc(monkeypatch):
+    doc = _load_contract()
+    fake = "report-census-extra-probe"
+    assert fake not in doc
+    modified = _append_table_row(
+        doc,
+        _BLOCKER_TOKEN_HEADER,
+        "| `%s` | probe extra |" % fake,
+    )
+    monkeypatch.setattr(
+        sys.modules[__name__], "_load_contract", lambda: modified
+    )
+    with pytest.raises(AssertionError, match="in doc but not in code"):
+        test_block_tokens_bidirectional()
+
+
+def test_effect_kinds_extra_in_doc(monkeypatch):
+    doc = _load_contract()
+    fake = "census-extra-effect-kind"
+    assert fake not in doc
+    modified = _append_table_row(
+        doc,
+        _EFFECT_KIND_HEADER,
+        "| `%s` | `shared` |" % fake,
+    )
+    monkeypatch.setattr(
+        sys.modules[__name__], "_load_contract", lambda: modified
+    )
+    with pytest.raises(AssertionError, match="unknown effect kind"):
+        test_effect_kinds_bidirectional()
+
+
+def test_end_outcomes_extra_in_doc(monkeypatch):
+    doc = _load_contract()
+    fake = "census-extra-outcome"
+    assert fake not in doc
+    modified = _append_table_row(
+        doc,
+        _END_OUTCOME_HEADER,
+        "| `%s` | probe extra |" % fake,
+    )
+    monkeypatch.setattr(
+        sys.modules[__name__], "_load_contract", lambda: modified
+    )
+    with pytest.raises(AssertionError, match="in doc but not in code"):
+        test_end_outcomes_bidirectional()
+
+
+def test_effect_states_extra_in_doc(monkeypatch):
+    doc = _load_contract()
+    fake = "census-extra-effect-state"
+    assert fake not in doc
+    modified = _append_table_row(
+        doc,
+        _REPLAY_STATE_HEADER,
+        "| `%s` | probe extra |" % fake,
+    )
+    monkeypatch.setattr(
+        sys.modules[__name__], "_load_contract", lambda: modified
+    )
+    with pytest.raises(AssertionError, match="in doc but not in code"):
+        test_effect_states_bidirectional()
+
+
+def test_slot_outcomes_missing_from_input_shape_section(monkeypatch):
+    doc = _load_contract()
+    section = _extract_section(doc, "### Input shape per slot")
+    assert section is not None
+    stripped = section
+    for outcome in pilot_journal.SLOT_OUTCOMES:
+        stripped = re.sub(r"\b%s\b" % re.escape(outcome), "REMOVED", stripped)
+    modified = doc.replace(section, stripped)
+    monkeypatch.setattr(
+        sys.modules[__name__], "_load_contract", lambda: modified
+    )
+    with pytest.raises(AssertionError, match="provisioned|failed"):
+        test_slot_outcomes_in_contract()
 
 
 def test_census_red_on_undocumented_lifecycle_reason(monkeypatch):

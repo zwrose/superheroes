@@ -698,7 +698,8 @@ allocate the same generation. `begin_generation()` is the serialized path into
 cannot recover a pre-allocation record after the new generation was handed out.
 
 `mutate()` refuses when the loaded record's `slot` differs from the slot whose lock it holds
-(`slot-record-slot-mismatch`), before the callback runs.
+(`slot-record-slot-mismatch`), **and** when the callback *return* record's `slot` differs,
+before writing either end.
 
 ### Record validation
 
@@ -709,6 +710,24 @@ the record's `generation`. A record violating that is `slot-record-invalid`.
 The slot directory must be a real directory and the lock file a regular file — a symlink at
 the slot-directory component or at the lock/record file itself is refused (`slot-dir-unsafe`).
 This is **not** a full path-ancestry walk.
+
+**Check/use limit:** the slot-directory symlink refusal is a check-then-use test by pathname —
+it refuses a symlink or non-directory **at the moment of the check** and does **not** close a
+race against an actor able to replace the directory between check and use. Under this project's
+single-user local threat model the guard targets accidents and stale state, not a hostile local
+actor; a full fix needs directory-descriptor-relative operations and is deliberately not built.
+
+**Special-file safety:** the slot-record reader opens with `O_NOFOLLOW | O_NONBLOCK` and refuses
+a non-regular file — a symlink or FIFO at the record path is refused rather than followed or
+blocked on.
+
+**Type-safety of validation:** every enum/membership check tests that the value is a string
+first, so a parseable record carrying an unhashable value (`"kind": []`, `"state": []`) produces
+the documented refusal rather than raising. Public entry points never raise on malformed *data* —
+they refuse.
+
+A non-serialisable history `detail` is refused at `transition()` and at record validation, so
+it can never reach the writer's `json.dumps`.
 
 ### Generation check (three-valued)
 
@@ -732,15 +751,16 @@ sub-issue **C7's** (design seam S1).
 | `slot-transition-illegal` | `transition` or `begin_generation` requests a move not in `TRANSITIONS` |
 | `slot-occupied` | `transition` targets `occupied` while already `occupied` |
 | `slot-retired` | mutation is attempted on a `retired` record |
-| `slot-record-invalid` | record shape, history, accounts, timestamps, caller `now`, or last-history consistency fail validation |
-| `slot-record-unreadable` | the on-disk record cannot be read |
+| `slot-record-invalid` | record shape, history, accounts, timestamps, caller `now`, last-history consistency, or non-serialisable history `detail` fail validation |
+| `slot-record-absent` | `read_record` returns this, and **only** this, when the record file genuinely does not exist (`ENOENT`); every other read failure stays `slot-record-unreadable`. `create_slot()` writes **only** on a genuinely absent record, so an unreadable-but-present record (bad mode, dangling symlink, transient I/O error) must never be mistaken for absence and silently replaced — that would reset a slot's durable history and generation to 1 while a broker may still be fencing against it |
+| `slot-record-unreadable` | the on-disk record cannot be read (any failure other than genuine absence) |
 | `slot-record-write-failed` | durable write or parent-directory fsync failed |
 | `slot-generation-stale` | `generation_check`: carried generation is behind current |
 | `slot-generation-ahead` | `generation_check`: carried generation is ahead of current |
 | `slot-lock-unavailable` | per-slot advisory `flock` could not be acquired within timeout |
 | `slot-mutation-failed` | the mutation callback raised an unexpected exception |
 | `slot-generation-allocation-required` | `transition()` refuses the `released → provisioning` edge; only `begin_generation()` may enter `provisioning` from `released`, because each provisioning attempt must allocate its own generation or it would reuse the previous attempt's `<slot>@<generation>` identity and collide with that generation's journal and fencing records. The edge remains a legal lifecycle edge in `TRANSITIONS` — the refusal is in the generic mover, not in the table |
-| `slot-record-slot-mismatch` | `mutate()` refuses when the loaded record's `slot` differs from the slot whose lock it holds, before the callback runs |
+| `slot-record-slot-mismatch` | `mutate()` refuses when the loaded record's `slot` differs from the locked slot **or** the callback return's `slot` differs, before writing |
 | `slot-dir-unsafe` | the slot directory is a symlink or not a directory, or the lock file is not a regular file; refuses a symlink at the slot-directory component and at the lock/record file itself — **not** a full path-ancestry walk |
 | `slot-record-exists` | `create_slot()` refuses because a record already exists |
 
@@ -820,10 +840,19 @@ Optional `reason` string — `end_effect()` accepts a `reason` with **any** outc
 
 ### Durable append
 
-Journal records are appended with durability and safety: opened `O_NOFOLLOW` with a regular-file
-check, written in a loop until the whole line lands, `fsync`ed, and the **parent directory**
-`fsync`ed. A symlink at the journal path is refused (`journal-write-failed`). Invalid UTF-8 in
-a journal is `journal-unreadable`, never an exception and never silently replaced.
+Journal records are appended with durability and safety: opened `O_NOFOLLOW | O_NONBLOCK` with a
+regular-file check, written in a loop until the whole line lands, `fsync`ed, and the **parent
+directory** `fsync`ed. A symlink or FIFO at the journal path is refused (`journal-write-failed`)
+rather than followed or blocked on. Invalid UTF-8 in a journal is `journal-unreadable`, never an
+exception and never silently replaced.
+
+**Special-file safety:** the journal reader also opens with `O_NOFOLLOW | O_NONBLOCK` and refuses
+a non-regular file at the journal path.
+
+**Type-safety of validation:** every enum/membership check tests that the value is a string
+first, so malformed data produces the documented refusal rather than raising. Public entry points
+never raise on malformed *data* — they refuse. A non-serialisable `detail` is refused at record
+validation so it can never reach `json.dumps`.
 
 ### Fail-closed reader rules
 
@@ -918,7 +947,8 @@ is a **deliberate widening** beyond the enumerate-failed-slots wording, taken fa
 | `failed-slot-journal-unreadable` | `replay.ok` is not `true` |
 | `failed-slot-journal-torn` | `replay.torn` is `true` |
 | `failed-slot-journal-anomaly` | `replay.anomalies` is non-empty |
-| `failed-slot-replay-shape-invalid` | the `replay` result is not a complete, well-formed replay: it must be a dict with `ok is True`, `torn` exactly `true`/`false`, `anomalies` a list, and `effects` a list whose every entry is a dict with a known `state` and a known `scope`. Anything else blocks — without this, a failed but correctly fenced slot carrying `replay: {"ok": true}` and nothing else produced `recommendLaunch: true` with no journal evidence at all |
+| `failed-slot-replay-shape-invalid` | the `replay` result is not a complete, well-formed replay: it must be a dict with `ok is True`, `torn` exactly `true`/`false`, `anomalies` a list, and `effects` a list whose every entry is a dict with a known `state` and a scope that agrees with `EFFECT_SCOPE[kind]` when `kind` is a known effect kind (unknown or absent `kind` must carry `shared`). A scope disagreement blocks — otherwise a caller could label a `credential-minted` possibly-applied effect as slot-scoped and downgrade a blocker to a warning. Anything else blocks — without this, a failed but correctly fenced slot carrying `replay: {"ok": true}` and nothing else produced `recommendLaunch: true` with no journal evidence at all |
+| `slot-replay-slot-mismatch` | the `replay` result supplied for an entry is not stamped with that entry's `slotRef`. `replay()` stamps its result with the `journalPath` it read and the `slotRef` filter it was given, and the report checks that stamp. **This is provenance, not authentication** — a caller that hand-builds a dict can still forge the stamp; what it removes is the accidental cross-wiring of one slot's replay into another slot's entry |
 | `failed-slot-shared-effect-possibly-applied` | a replayed effect has `scope: "shared"` and state `possibly-applied` (on failed or healthy slots when `replay` is supplied) |
 | `no-healthy-slots` | no slot reported `outcome: "provisioned"` |
 
