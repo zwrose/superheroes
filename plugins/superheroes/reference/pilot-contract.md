@@ -17,6 +17,8 @@
 15. [Slot lifecycle and generations](#slot-lifecycle-and-generations)
 16. [The provisioning journal](#the-provisioning-journal)
 17. [The partial-failure report](#the-partial-failure-report)
+18. [Per-slot app lifecycle](#per-slot-app-lifecycle)
+19. [Wave runtime — deadline and teardown](#wave-runtime--deadline-and-teardown)
 
 ---
 
@@ -34,7 +36,12 @@ sub-issue **A3** — the per-slot target boundary (`lib/pilot_boundary.py`), the
 document home (`lib/pilot_policy.py`), and the provisioning authorization layer
 (`lib/pilot_provision.py`); and sub-issue **A2a** — the slot lifecycle and generation
 allocation (`lib/pilot_lifecycle.py`) plus the provisioning journal and partial-failure
-report (`lib/pilot_journal.py`).
+report (`lib/pilot_journal.py`); and sub-issue **B5** — per-slot app instance control
+(`lib/pilot_appctl.py`), the wave deadline runtime and two-phase teardown
+(`lib/pilot_wave.py`), and the substrate amendments in `pilot_contract.py`
+(`app-lifecycle` declaration kind), `pilot_provision.py` (`authorized_app_launch`
+chokepoint), and `pilot_journal.py` (journal-level append lock and `DETAIL_MAX_BYTES`
+bound).
 
 **What this deliberately does not build** (successor sub-issues own these):
 
@@ -43,7 +50,10 @@ report (`lib/pilot_journal.py`).
 - Browser context creation, credential injection, or broker-side stale-generation enforcement (**C7**).
 - Running a live cleanup and capturing its effect receipt (**C9**).
 - The measured operating ceiling and its degradation receipts (**D11b**).
-- App stand-up, teardown, or wave-deadline runtime (**B5**).
+
+The `"app-lifecycle"` declaration kind's **exercise producer** is sub-issue **B4** (#826) and
+has not landed; a project with no receipt refuses, which is the correct fail-closed state, not a
+gap.
 
 This wave ships types, vocabulary, schema, and call shapes only.
 
@@ -236,7 +246,9 @@ registry document shape:
 ```
 
 **Declaration kinds:** `identity-probe`, `capture-reduction`, `cleanup-containment`,
-`mint-gate-off`, `mint-account-allowlist`, `effects-escape`, `operating-ceiling`.
+`mint-gate-off`, `mint-account-allowlist`, `effects-escape`, `operating-ceiling`,
+`app-lifecycle`. The `app-lifecycle` exercise producer is sub-issue **B4** (#826) and has not
+landed; until it lands, a project with no matching exercised record refuses stand-up.
 
 **Two load-bearing rules:**
 
@@ -973,3 +985,251 @@ A **shared**-scoped possibly-applied effect blocks even on a fenced slot: fencin
 not un-touch a shared datastore or un-mint a credential on a shared service.
 
 Sub-issue **C8** renders this report to the owner.
+
+## Per-slot app lifecycle
+
+Per-slot app instance control lives in `lib/pilot_appctl.py`. It owns one slot's app
+process: resolve the project's `devCommand` and `readinessUrl` with per-slot parameters,
+fence endpoints wave-wide before any spawn, write the durable instance record **before**
+spawn, poll readiness with attribution, and stop with two independent observations.
+
+**What it deliberately does not own:** it allocates no port, picks no port, performs no
+fencing at a broker, and never restarts or reseeds a slot. Port assignment and broker-side
+enforcement are upstream; this module consumes an allocation and proves the endpoint is free
+before bind.
+
+### Parameterization (`resolve_invocation`)
+
+The project's `devCommand` and `readinessUrl` carry `{name}` placeholders substituted from
+a per-slot `params` map. Substitution is a **single left-to-right pass** per string: each
+`{name}` is replaced once and the scan does not re-examine substituted text. A re-scanning
+implementation would let a project's parameter value become a template — a value containing
+`{other}` could expand into a second substitution the author did not intend.
+
+`{name}` must not appear at `argv[0]` — the same rule as
+`pilot-cleanup-placeholder-in-argv0` for cleanup commands. A placeholder in the executable
+position would let project data choose which binary runs.
+
+### Endpoint fencing
+
+`check_endpoint_free` probes whether `(host, port)` accepts a new bind. A per-slot occupancy
+probe is **not** the port fence: two slots handed the same free port both observe it free
+before either binds. `assert_unique_endpoints` refuses duplicate `(host, port)` pairs
+across the wave **before** any spawn — wave-wide endpoint uniqueness is the fence.
+
+### Bind conflict
+
+A bind conflict is **terminal, never retried**. `RETRYABLE_REASONS` is an **allowlist** —
+only `app-readiness-timeout` and `app-readiness-transport-error` are retryable today, so a
+future refusal token cannot silently become retryable without an explicit code change.
+`app-bind-conflict` is deliberately absent from the allowlist.
+
+### Readiness ladder
+
+`stand_up` evaluates readiness in this order on each poll:
+
+1. **Process exited** — if the child has exited, inspect stderr for bind-conflict patterns;
+   bind conflict wins over generic process exit.
+2. **Transport error** — probe error; retry until the monotonic deadline, then
+   `app-readiness-transport-error`.
+3. **Redirect** — HTTP 3xx is refused (`app-readiness-redirect-refused`), not followed. A
+   redirect means the readiness target is not the one the boundary authorized.
+4. **Success band** — HTTP 2xx:
+   - `readinessAttribution: "nonce"` — the launch nonce must appear in the response body;
+     deadline expiry without it is `app-readiness-unattributed`.
+   - `readinessAttribution: "unattributed"` — accepted but recorded as a **degradation**
+     (`readiness-unattributed` kind).
+5. **Unexpected status** — any other status after the deadline is
+   `app-readiness-unexpected-status`.
+
+`readinessAttribution` has no default — it must be exactly `nonce` or `unattributed`.
+
+### Instance record states
+
+| State | Meaning |
+|---|---|
+| `starting` | record written before spawn; process may not yet be ready |
+| `ready` | readiness probe succeeded and generation still matches |
+| `stopped` | stop observed both process-group gone and endpoint free |
+| `indeterminate` | readiness failed, stop could not observe both conditions, or generation moved mid-flight |
+
+**Record-before-spawn:** the instance record is written in `starting` state with `pid: 0`
+before `Popen`. A crash between the record and the spawn leaves `starting`, which is the
+honest state, rather than an invisible live app.
+
+### Stop observations
+
+Stop requires **two independent observations**: the process group is gone **and** the
+endpoint is free. Identity is corroborated **before** any signal (`ps` matching `argv[0]`).
+A double stop is idempotent — an already-`stopped` record returns its existing receipt.
+
+**Accepted residual:** a reused pid whose process runs the same `argv[0]` would corroborate
+via `ps`. Under this project's single-user local threat model the guard targets accidents
+and stale state, not a hostile local actor — the same posture section 15 uses for its
+check/use limit.
+
+### App lifecycle refusal tokens
+
+| Token | When returned |
+|---|---|
+| `app-command-invalid` | `devCommand` is absent, not a non-empty list of non-empty strings |
+| `app-params-invalid` | `params` is not a mapping, a key is empty or contains `{`/`}`, or a value is not a string |
+| `app-placeholder-unresolved` | a `{name}` placeholder remains after single-pass substitution |
+| `app-placeholder-in-argv0` | `argv[0]` contains a `{name}` placeholder |
+| `app-env-invalid` | optional `env` is not a mapping of valid string keys and values |
+| `app-allocation-invalid` | allocation list entry is malformed, has duplicate `slotRef`, or port out of range |
+| `app-launch-invalid` | `stand_up` launch dict shape, slot/slotRef mismatch, or `readinessAttribution` not in the allowed set |
+| `app-cwd-invalid` | `cwd` is not an absolute existing directory, or the path is a symlink or non-directory |
+| `app-readiness-url-invalid` | readiness URL is absent or not `http`/`https` after substitution |
+| `app-bind-conflict` | endpoint probe finds something listening, spawn stderr shows bind conflict, or host/port validation fails in `check_endpoint_free` |
+| `app-endpoint-duplicate` | `assert_unique_endpoints` finds the same `(host, port)` on two slots |
+| `app-spawn-failed` | `Popen` raised `OSError` |
+| `app-readiness-timeout` | *(retryable)* readiness polling exhausted the monotonic deadline on transport errors |
+| `app-readiness-transport-error` | *(retryable)* readiness probe transport error at deadline |
+| `app-readiness-unexpected-status` | readiness probe returned a non-2xx/non-3xx status at deadline |
+| `app-readiness-redirect-refused` | readiness probe returned HTTP 3xx |
+| `app-readiness-unattributed` | `nonce` attribution required but body did not contain the launch nonce at deadline |
+| `app-process-exited` | child exited before readiness succeeded (and stderr was not a bind conflict) |
+| `app-generation-moved` | slot generation changed during stand-up |
+| `app-slot-state-not-launchable` | slot lifecycle record is absent or not in `provisioning`/`provisioned` |
+| `app-instance-record-invalid` | instance record shape fails validation |
+| `app-instance-record-absent` | `read_instance` — file genuinely does not exist |
+| `app-instance-record-unreadable` | instance record cannot be read |
+| `app-instance-record-write-failed` | durable instance write or parent fsync failed |
+| `app-instance-record-exists` | an active instance record (`starting`/`ready`/`indeterminate`) already exists |
+| `app-instance-pid-mismatch` | `stop` corroboration failed — pid does not match recorded `argv[0]` |
+| `app-stop-indeterminate` | stop could not observe both process-group gone and endpoint free |
+| `app-declaration-unexercised` | `app-lifecycle` declaration has no exercised registry record |
+| `app-journal-write-failed` | journal `begin_effect` or `end_effect` failed during stand-up |
+
+## Wave runtime — deadline and teardown
+
+The wave deadline runtime and wave-end teardown live in `lib/pilot_wave.py`. It owns a
+launch-anchored monotonic deadline, the durable park latch, two-phase teardown across N
+slots, and the wave report.
+
+**Non-goals:** app-instance control (`pilot_appctl`), automation-server fencing (**C7**, issue #829),
+cleanup (**C9**, issue #831), and reclaim (**A2b**, issue #824) — those arrive as injected
+handlers.
+
+### Launch-anchored monotonic deadline
+
+`wave_anchor` records `launchedAt` (wall clock, for humans) and `launchedAtMono` (monotonic,
+for enforcement). `wave_phase` computes elapsed time from the monotonic anchor only. A
+wall-clock deadline is not enough: an NTP correction or manual clock change would move the
+terminus of an unattended promise without the framework noticing.
+
+### Wave phases
+
+| Phase | Boundary | Admission |
+|---|---|---|
+| `running` | `elapsed < deadlineSeconds` | `admit_work` returns `ok: true` |
+| `winding-down` | `deadlineSeconds ≤ elapsed < deadlineSeconds + marginSeconds` | new work refused (`ok: false`, `reason: null`) |
+| `expired` | `elapsed ≥ deadlineSeconds + marginSeconds` | parked — destructive teardown may proceed behind confirmed fences |
+
+### Durable park latch
+
+`latch_park` writes `park.json` under the per-slot lock **before** any destructive step.
+Destructive steps re-read the latch under that same lock immediately before running. The
+latch is idempotent — a valid existing latch is returned unchanged.
+
+**Fail-closed unreadable latch:** a latch file that is present but unreadable reads as
+**latched**, because a destructive step must never run because it could not read the latch
+that would have stopped it.
+
+### Two-phase teardown
+
+**Fence phase** (`app-instance`, `automation-server`): non-destructive; both steps are
+attempted regardless of each other's outcome.
+
+**Destructive phase** (`cleanup`, `reclaim`): runs only behind confirmed fences, only on a
+`complete` intent, and only with the latch unset. `reclaim` requires `cleanup` confirmed.
+
+The phases are split because halting the whole chain on a failed fence would leave an
+authenticated browser driving — the exact harm the fence phase exists to prevent.
+
+### Handler contract
+
+Each step handler returns a three-valued journal outcome:
+
+| Outcome | Step status |
+|---|---|
+| `applied` | `confirmed` — requires a valid receipt (`step`, `slotRef`, `observedAt`, `evidence`) |
+| `not-applied` | `failed` |
+| `indeterminate` | `indeterminate` |
+
+A raising handler is **indeterminate**, not failed. An **absent** handler is `unavailable`
+(`wave-step-unavailable`), never a skipped step.
+
+Unbuilt handler owners: **C7** (issue #829, `automation-server`), **C9** (issue #831,
+`cleanup`), **A2b** (issue #824, `reclaim`).
+
+### Bounded-handler limit
+
+B5 measures a handler's elapsed time on the injected monotonic clock and refuses a late
+answer with `wave-step-overran`. It **cannot interrupt** a hung in-process handler, and it
+ships no watchdog daemon.
+
+### Teardown steps
+
+| Step | Phase |
+|---|---|
+| `app-instance` | fence |
+| `automation-server` | fence |
+| `cleanup` | destructive |
+| `reclaim` | destructive |
+
+`STEP_ORDER` equals `FENCE_STEPS + DESTRUCTIVE_STEPS`; the two tuples are disjoint.
+
+### Step statuses
+
+| Status | Meaning |
+|---|---|
+| `confirmed` | handler returned `applied` with a valid receipt |
+| `failed` | handler returned `not-applied` |
+| `indeterminate` | handler raised, returned indeterminate, overran, or returned an invalid shape |
+| `unavailable` | no handler registered for the step |
+| `refused-park` | destructive step refused because intent is `park` or latch is set |
+| `not-reached` | destructive step skipped because a fence was not confirmed |
+
+### Teardown intents
+
+| Intent | Meaning |
+|---|---|
+| `complete` | full teardown — fences then destructive steps when allowed |
+| `park` | fence only — destructive steps return `refused-park` |
+
+### Slot dispositions
+
+| Disposition | When |
+|---|---|
+| `torn-down` | `complete` intent and every step in `STEP_ORDER` is `confirmed` |
+| `parked` | `park` intent, both fence steps `confirmed`, both destructive steps `refused-park` |
+| `incomplete` | any other outcome |
+
+### Wave report `complete` rule
+
+`wave_report` sets `complete: true` only when every slot disposition is `torn-down` or
+`parked` **and** there are no blockers. Any `incomplete` disposition, blocker, or empty
+slot list makes `complete` false.
+
+### Wave refusal tokens
+
+| Token | When returned |
+|---|---|
+| `wave-deadline-invalid` | `deadlineSeconds` is not a non-negative real number |
+| `wave-margin-invalid` | `marginSeconds` is not a non-negative real number |
+| `wave-clock-invalid` | monotonic clock returned non-finite value, anchor is invalid, or `now_mono < launchedAtMono` |
+| `wave-anchor-invalid` | `launchedAt` is not valid ISO-8601 UTC-Z, or anchor construction failed |
+| `wave-slot-entry-invalid` | teardown entry is not a mapping, slot/slotRef/intent invalid, or slot ≠ parsed slotRef |
+| `wave-slots-invalid` | `run_teardown` or `wave_report` received a non-mapping or slots list is invalid |
+| `wave-step-unavailable` | no handler registered for the step |
+| `wave-step-failed` | handler returned `not-applied` |
+| `wave-step-indeterminate` | handler raised, returned indeterminate, or cleanup journal begin failed |
+| `wave-step-result-invalid` | handler result is not a mapping or outcome is not a known journal outcome |
+| `wave-step-receipt-missing` | handler returned `applied` without a valid receipt |
+| `wave-step-overran` | handler elapsed time exceeded `stepTimeoutSeconds` |
+| `wave-park-destructive-refused` | destructive step refused because intent is `park` or latch is set |
+| `wave-park-latch-write-failed` | park latch could not be written or slot lock failed |
+| `wave-park-latch-unreadable` | park latch file is present but cannot be read — reads as latched |
+| `wave-fence-unconfirmed` | destructive step reached before all fence steps are `confirmed` |
