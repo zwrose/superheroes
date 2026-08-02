@@ -216,17 +216,36 @@ def policy_material(policy):
 
 
 def assert_results_only(result, material):
-    """Refuse when serialized result embeds any policy material string."""
-    # bite-axis: material leakage — any policy material string present in the serialized result
-    # raises REFUSAL_MATERIAL_IN_RESULT; neutralizing substring absence reddens results-only
-    # assertions.
+    """Refuse when result structure embeds any policy material string."""
+    # bite-axis: material leakage — any policy material string present as a result value or dict
+    # key raises REFUSAL_MATERIAL_IN_RESULT; comparing serialized form misses JSON-escaped
+    # material.
     if not isinstance(material, dict) or not _material_index(material):
         raise PilotPolicyError(REFUSAL_MATERIAL_INVALID)
-    serialized = json.dumps(result, sort_keys=True, ensure_ascii=False)
     for material_class in MATERIAL_CLASSES:
-        for value in material.get(material_class, []):
-            if value in serialized:
+        for needle in material.get(material_class, []):
+            if not isinstance(needle, str) or not needle:
+                continue
+            if _result_embeds_material(result, needle):
                 raise PilotPolicyError(REFUSAL_MATERIAL_IN_RESULT, detail=material_class)
+
+
+def _result_embeds_material(value, needle):
+    if isinstance(value, str):
+        return value == needle
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(key, str) and key == needle:
+                return True
+            if _result_embeds_material(item, needle):
+                return True
+        return False
+    if isinstance(value, list):
+        for item in value:
+            if _result_embeds_material(item, needle):
+                return True
+        return False
+    return False
 
 
 def exercise_no_policy_material_in_reach(reach_roots, material, *, exercised_at=None):
@@ -383,8 +402,9 @@ def exercise_no_policy_material_in_reach(reach_roots, material, *, exercised_at=
 
 
 def _validate_reach_roots_list(reach_roots):
-    # bite-axis: reach root validity — reach_roots must be a list of non-empty absolute path strings.
-    if not isinstance(reach_roots, list):
+    # bite-axis: reach-root vacuity — empty reach_roots makes policy-root containment vacuous;
+    # refuse before resolution proceeds.
+    if not isinstance(reach_roots, list) or not reach_roots:
         raise PilotPolicyError(REFUSAL_REACH_ROOT_INVALID)
     for reach_root in reach_roots:
         if not isinstance(reach_root, str) or not reach_root or not os.path.isabs(

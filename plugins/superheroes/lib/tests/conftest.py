@@ -1,9 +1,35 @@
-import os, sys
+import os
+import shutil
+import sys
+import tempfile
+
+import pytest
+
 _LIB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
-import pytest
+_TMP_BASE = os.path.realpath(tempfile.gettempdir())
+
+
+def _path_has_symlinked_ancestor(path):
+    current = os.path.realpath(path)
+    while True:
+        if os.path.islink(current):
+            return True
+        parent = os.path.dirname(current)
+        if parent == current:
+            return False
+        current = parent
+
+
+@pytest.fixture
+def private_tmp():
+    path = tempfile.mkdtemp(dir=_TMP_BASE)
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)

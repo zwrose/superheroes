@@ -25,13 +25,6 @@ import pilot_slot  # noqa: E402
 
 # --- fixtures ----------------------------------------------------------------
 
-@pytest.fixture
-def private_tmp():
-    path = tempfile.mkdtemp(dir="/private/tmp")
-    yield path
-    shutil.rmtree(path, ignore_errors=True)
-
-
 SAMPLE_POLICY = {
     "schemaVersion": 1,
     "declaration": "test-policy",
@@ -72,8 +65,8 @@ def _passing_verdict(policy, slot_ref="slot-a@1"):
     }
 
 
-def _write_artifact_dir():
-    artifact_dir = tempfile.mkdtemp(dir="/private/tmp")
+def _write_artifact_dir(private_tmp):
+    artifact_dir = tempfile.mkdtemp(dir=private_tmp)
     artifact_path = os.path.join(artifact_dir, "seed.bin")
     content = b"artifact-bytes"
     with open(artifact_path, "wb") as handle:
@@ -204,11 +197,11 @@ def test_verify_boundary_redirect_checks_one_per_candidate_in_order(private_tmp,
 
 # --- fail-closed edges -------------------------------------------------------
 
-def test_edge1_refused_verdict_raises_before_seed(monkeypatch):
+def test_edge1_refused_verdict_raises_before_seed(private_tmp, monkeypatch):
     policy = SAMPLE_POLICY
     verdict = _passing_verdict(policy)
     verdict["result"] = "refuse"
-    artifact_path, digest = _write_artifact_dir()
+    artifact_path, digest = _write_artifact_dir(private_tmp)
     artifact = {
         "path": artifact_path,
         "expectedUid": os.getuid(),
@@ -235,10 +228,10 @@ def test_edge1_refused_verdict_raises_before_seed(monkeypatch):
     assert exc.value.reason == pilot_boundary.REFUSAL_UNVERIFIED
 
 
-def test_edge2_verdict_bound_to_different_slot_raises(monkeypatch):
+def test_edge2_verdict_bound_to_different_slot_raises(private_tmp, monkeypatch):
     policy = SAMPLE_POLICY
     verdict = _passing_verdict(policy, slot_ref="slot-b@1")
-    artifact_path, digest = _write_artifact_dir()
+    artifact_path, digest = _write_artifact_dir(private_tmp)
     artifact = {
         "path": artifact_path,
         "expectedUid": os.getuid(),
@@ -264,12 +257,12 @@ def test_edge2_verdict_bound_to_different_slot_raises(monkeypatch):
     assert exc.value.reason == pilot_boundary.REFUSAL_UNVERIFIED
 
 
-def test_edge3_policy_digest_mismatch_raises(monkeypatch):
+def test_edge3_policy_digest_mismatch_raises(private_tmp, monkeypatch):
     policy = SAMPLE_POLICY
     verdict = _passing_verdict(policy)
     tampered = dict(policy)
     tampered["declaration"] = "tampered-policy"
-    artifact_path, digest = _write_artifact_dir()
+    artifact_path, digest = _write_artifact_dir(private_tmp)
     artifact = {
         "path": artifact_path,
         "expectedUid": os.getuid(),
@@ -407,10 +400,10 @@ def test_edge7_malformed_slot_ref_raises_typed_refusal(private_tmp):
     assert exc.value.reason == pp.REFUSAL_SLOT_UNKNOWN
 
 
-def test_edge8_unknown_account_refused_before_seed_request(monkeypatch):
+def test_edge8_unknown_account_refused_before_seed_request(private_tmp, monkeypatch):
     policy = SAMPLE_POLICY
     verdict = _passing_verdict(policy)
-    artifact_path, digest = _write_artifact_dir()
+    artifact_path, digest = _write_artifact_dir(private_tmp)
     artifact = {
         "path": artifact_path,
         "expectedUid": os.getuid(),
@@ -436,11 +429,11 @@ def test_edge8_unknown_account_refused_before_seed_request(monkeypatch):
     assert exc.value.reason == pp.REFUSAL_ACCOUNT_UNKNOWN
 
 
-def test_edge8_slot_absent_from_policy_raises_typed_refusal(monkeypatch):
+def test_edge8_slot_absent_from_policy_raises_typed_refusal(private_tmp, monkeypatch):
     policy = dict(SAMPLE_POLICY)
     policy["slots"] = {}
     verdict = _passing_verdict(policy)
-    artifact_path, digest = _write_artifact_dir()
+    artifact_path, digest = _write_artifact_dir(private_tmp)
     artifact = {
         "path": artifact_path,
         "expectedUid": os.getuid(),
@@ -555,10 +548,10 @@ def test_edge10_assert_results_only_raises_verdict_never_leaves(private_tmp, mon
 
 # --- authorized_seed_request pass path -----------------------------------------
 
-def test_authorized_seed_request_pass_end_to_end(monkeypatch):
+def test_authorized_seed_request_pass_end_to_end(private_tmp, monkeypatch):
     policy = SAMPLE_POLICY
     verdict = _passing_verdict(policy)
-    artifact_path, digest = _write_artifact_dir()
+    artifact_path, digest = _write_artifact_dir(private_tmp)
     capture_surfaces = ["indexedDB", "webauthn"]
     artifact = {
         "path": artifact_path,
@@ -686,7 +679,7 @@ def test_integration_resolve_verify_authorize_seed(private_tmp):
     )
     assert verdict["result"] == "pass"
 
-    artifact_path, digest = _write_artifact_dir()
+    artifact_path, digest = _write_artifact_dir(private_tmp)
     capture_surfaces = ["cookies"]
     artifact = {
         "path": artifact_path,
@@ -753,7 +746,7 @@ def test_integration_observer_mismatch_refuses_before_credentials(private_tmp, m
     assert verdict["result"] == "refuse"
     assert verdict["reason"] == pilot_boundary.REFUSAL_DATASTORE_IDENTITY_MISMATCH
 
-    artifact_path, digest = _write_artifact_dir()
+    artifact_path, digest = _write_artifact_dir(private_tmp)
     artifact = {
         "path": artifact_path,
         "expectedUid": os.getuid(),
@@ -807,3 +800,109 @@ def test_integration_results_only_no_policy_material_in_verdict(private_tmp):
             assert needle not in serialized, (
                 f"{material_class!r} needle {needle!r} found in verdict"
             )
+
+
+# --- authorized_sentinel_probe_request (T3) -----------------------------------
+
+def test_authorized_sentinel_probe_request_pass_end_to_end(private_tmp, monkeypatch):
+    policy = SAMPLE_POLICY
+    verdict = _passing_verdict(policy)
+    envelope = {"enablingFlagEnvVar": "ALLOW_TEST_MINT"}
+    sentinel = "pilot-sentinel-no-such-account"
+    call_order = []
+    real_sentinel = pilot_seed.sentinel_probe_request
+
+    def track_sentinel(sentinel_value, *, allowlist, envelope):
+        call_order.append("sentinel_probe_request")
+        return real_sentinel(sentinel_value, allowlist=allowlist, envelope=envelope)
+
+    real_authorize = pilot_boundary.authorize_credentials
+
+    def track_authorize(*args, **kwargs):
+        call_order.append("authorize_credentials")
+        return real_authorize(*args, **kwargs)
+
+    monkeypatch.setattr(pilot_boundary, "authorize_credentials", track_authorize)
+    monkeypatch.setattr(pilot_seed, "sentinel_probe_request", track_sentinel)
+
+    result = pp.authorized_sentinel_probe_request(
+        verdict,
+        policy,
+        "slot-a@1",
+        sentinel,
+        envelope,
+    )
+    assert call_order.index("authorize_credentials") < call_order.index(
+        "sentinel_probe_request"
+    )
+    assert result == {
+        "sentinel": sentinel,
+        "enablingFlagEnvVar": "ALLOW_TEST_MINT",
+    }
+
+
+def test_refused_verdict_never_reaches_sentinel_probe(monkeypatch):
+    policy = SAMPLE_POLICY
+    verdict = _passing_verdict(policy)
+    verdict["result"] = "refuse"
+    envelope = {"enablingFlagEnvVar": "ALLOW_TEST_MINT"}
+    sentinel_calls = []
+
+    def record_sentinel(*_args, **_kwargs):
+        sentinel_calls.append(True)
+
+    monkeypatch.setattr(pilot_seed, "sentinel_probe_request", record_sentinel)
+    with pytest.raises(pilot_boundary.PilotBoundaryError):
+        pp.authorized_sentinel_probe_request(
+            verdict,
+            policy,
+            "slot-a@1",
+            "pilot-sentinel-no-such-account",
+            envelope,
+        )
+    assert sentinel_calls == []
+
+
+def test_authorized_sentinel_probe_request_unknown_slot_refused(monkeypatch):
+    policy = dict(SAMPLE_POLICY)
+    policy["slots"] = {}
+    verdict = _passing_verdict(policy, slot_ref="unknown-slot@1")
+    envelope = {"enablingFlagEnvVar": "ALLOW_TEST_MINT"}
+    sentinel_calls = []
+
+    def record_sentinel(*_args, **_kwargs):
+        sentinel_calls.append(True)
+
+    monkeypatch.setattr(pilot_seed, "sentinel_probe_request", record_sentinel)
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.authorized_sentinel_probe_request(
+            verdict,
+            policy,
+            "unknown-slot@1",
+            "pilot-sentinel-no-such-account",
+            envelope,
+        )
+    assert sentinel_calls == []
+    assert exc.value.reason == pp.REFUSAL_SLOT_UNKNOWN
+
+
+def test_authorized_sentinel_probe_request_uses_policy_allowlist(monkeypatch):
+    policy = SAMPLE_POLICY
+    verdict = _passing_verdict(policy)
+    envelope = {"enablingFlagEnvVar": "ALLOW_TEST_MINT"}
+    sentinel_calls = []
+    real_sentinel = pilot_seed.sentinel_probe_request
+
+    def track_sentinel(sentinel, *, allowlist, envelope):
+        sentinel_calls.append({"allowlist": allowlist})
+        return real_sentinel(sentinel, allowlist=allowlist, envelope=envelope)
+
+    monkeypatch.setattr(pilot_seed, "sentinel_probe_request", track_sentinel)
+    pp.authorized_sentinel_probe_request(
+        verdict,
+        policy,
+        "slot-a@1",
+        "pilot-sentinel-no-such-account",
+        envelope,
+    )
+    assert sentinel_calls[0]["allowlist"] == policy["slots"]["slot-a"]["mintableAccounts"]

@@ -10,13 +10,6 @@ import pytest
 import pilot_policy as pp
 
 
-@pytest.fixture
-def private_tmp():
-    path = tempfile.mkdtemp(dir="/private/tmp")
-    yield path
-    shutil.rmtree(path, ignore_errors=True)
-
-
 def _sample_policy(**overrides):
     doc = {
         "schemaVersion": 1,
@@ -273,6 +266,134 @@ def test_assert_results_only_refuses_empty_indexed_material():
             {"expected-identity": [], "mintable-account": [], "connection-detail": []},
         )
     assert exc.value.reason == pp.REFUSAL_MATERIAL_INVALID
+
+
+def test_assert_results_only_passes_clean_result():
+    material = {
+        "expected-identity": ["pilot-owner@example.test"],
+        "mintable-account": [],
+        "connection-detail": ["postgres://localhost:5432/example_dev"],
+    }
+    result = {"ok": True, "checks": [{"check": "target-binding", "result": "pass"}]}
+    pp.assert_results_only(result, material)
+
+
+@pytest.mark.parametrize(
+    "secret",
+    [
+        'postgres://u:p"w@host/db',
+        "postgres://u:p\\w@host/db",
+    ],
+)
+def test_assert_results_only_refuses_json_escapable_material_in_nested_result(secret):
+    material = {"expected-identity": [], "mintable-account": [], "connection-detail": [secret]}
+    result = {"layers": [[{"nested": {"note": secret}}]]}
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.assert_results_only(result, material)
+    assert exc.value.reason == pp.REFUSAL_MATERIAL_IN_RESULT
+    assert exc.value.detail == "connection-detail"
+    assert secret not in str(exc.value)
+
+
+# --- G2 empty reach_roots -----------------------------------------------------
+
+def test_resolve_policy_document_refuses_empty_reach_roots(private_tmp):
+    policy_root = os.path.join(private_tmp, "policy")
+    os.makedirs(policy_root)
+    declaration = "example-project-pilot-policy"
+    _write_policy(policy_root, declaration, _sample_policy())
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.resolve_policy_document(policy_root, declaration, reach_roots=[])
+    assert exc.value.reason == pp.REFUSAL_REACH_ROOT_INVALID
+
+
+def test_resolve_policy_document_refuses_policy_root_in_reach_control(private_tmp):
+    policy_root = os.path.join(private_tmp, "policy")
+    os.makedirs(policy_root)
+    declaration = "example-project-pilot-policy"
+    _write_policy(policy_root, declaration, _sample_policy())
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.resolve_policy_document(
+            policy_root,
+            declaration,
+            reach_roots=[policy_root],
+        )
+    assert exc.value.reason == pp.REFUSAL_POLICY_ROOT_IN_REACH
+
+
+# --- T4 validate_policy structural refusals -----------------------------------
+
+def _policy_missing_key(key):
+    doc = _sample_policy()
+    del doc[key]
+    return doc
+
+
+def _policy_with_extra_key():
+    doc = _sample_policy()
+    doc["extra"] = True
+    return doc
+
+
+@pytest.mark.parametrize(
+    "doc_factory",
+    [
+        lambda: _policy_missing_key("declaration"),
+        _policy_with_extra_key,
+        lambda: {**_sample_policy(), "datastore": "not-a-dict"},
+        lambda: {
+            **_sample_policy(),
+            "slots": {
+                "slot-a": {
+                    "origin": "http://127.0.0.1:5173",
+                    "permittedRedirects": [],
+                    "expectedIdentities": {},
+                }
+            },
+        },
+        lambda: {**_sample_policy(), "protectedTargets": []},
+        lambda: {**_sample_policy(), "protectedTargets": [123]},
+    ],
+)
+def test_validate_policy_refuses_structural_violations(doc_factory):
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc_factory())
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+def test_resolve_policy_document_refuses_declaration_mismatch(private_tmp):
+    policy_root = os.path.join(private_tmp, "policy")
+    os.makedirs(policy_root)
+    declaration = "example-project-pilot-policy"
+    doc = _sample_policy(declaration="other-name")
+    _write_policy(policy_root, declaration, doc)
+    reach_root = os.path.join(private_tmp, "reach")
+    os.makedirs(reach_root)
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.resolve_policy_document(
+            policy_root,
+            declaration,
+            reach_roots=[reach_root],
+        )
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+def test_resolve_policy_document_refuses_invalid_document_shape(private_tmp):
+    policy_root = os.path.join(private_tmp, "policy")
+    os.makedirs(policy_root)
+    declaration = "example-project-pilot-policy"
+    doc = _sample_policy()
+    doc["extra"] = True
+    _write_policy(policy_root, declaration, doc)
+    reach_root = os.path.join(private_tmp, "reach")
+    os.makedirs(reach_root)
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.resolve_policy_document(
+            policy_root,
+            declaration,
+            reach_roots=[reach_root],
+        )
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
 
 
 # --- exercise_no_policy_material_in_reach -------------------------------------

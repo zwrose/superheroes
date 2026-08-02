@@ -317,9 +317,13 @@ multi-line stdout, or exceeds the output byte cap raises `boundary-datastore-obs
 Observer hardening (`observe_datastore_identity` validates before spawn):
 
 - Executable must be an **absolute path** to a regular file **outside every reach root**.
+- Executable owner UID must match the reading process; mode must not grant group- or
+  world-write (`boundary-datastore-observer-invalid` otherwise).
+- `reach_roots` must be a non-empty list of absolute paths (empty list refuses).
 - `run_cwd` must be an existing directory **outside every reach root**.
-- Any absolute command argument, and any relative argument whose resolved path exists, must
-  lie **outside every reach root**.
+- Any absolute command argument, and any relative argument resolved against `run_cwd`,
+  must lie **outside every reach root** — whether or not the path exists at validation
+  time.
 - Child environment is **minimal**: only the declared `connectionEnvVar` is set to
   `connectionDetail` — no inherited `PATH` or other ambient variables.
 
@@ -437,9 +441,10 @@ no origins, identities, connection strings, or mintable-account names appear in 
 verdict. `verify_boundary` in `lib/pilot_provision.py` calls `assert_results_only` on every
 verdict before returning it.
 
-`assert_results_only(result, material)` is the mechanical guard: it JSON-serializes `result`
-and refuses when any string from `policy_material(policy)` appears as a substring
-(`policy-material-in-result`). `policy_material` extracts three classes:
+`assert_results_only(result, material)` is the mechanical guard: it walks the result
+structure (dicts, lists, string values, and dict keys) and refuses when any string from
+`policy_material(policy)` appears as an exact match (`policy-material-in-result`).
+`policy_material` extracts three classes:
 `expected-identity`, `mintable-account`, and `connection-detail`.
 
 `exercise_no_policy_material_in_reach(reach_roots, material)` walks reach roots and scans
@@ -480,11 +485,11 @@ receipt).
 
 | Token | When returned |
 |---|---|
-| `policy-material-in-result` | `assert_results_only`: serialized result contains a policy material string |
+| `policy-material-in-result` | `assert_results_only`: result structure contains a policy material string as a value or dict key |
 | `policy-material-invalid` | `assert_results_only`: `material` is not a mapping or has no non-empty indexed needles |
 | `policy-exercise-vacuous` | `exercise_no_policy_material_in_reach`: empty material, or walk completes with zero files scanned |
 | `policy-exercise-unreadable` | `exercise_no_policy_material_in_reach`: directory listing or file read fails during walk |
-| `policy-reach-root-invalid` | `exercise_no_policy_material_in_reach` or `resolve_policy_document`: reach root list is invalid, or a reach root is not an absolute path to an existing directory (exercise only) |
+| `policy-reach-root-invalid` | `exercise_no_policy_material_in_reach` or `resolve_policy_document`: reach root list is empty, invalid, or (exercise only) not an absolute path to an existing directory |
 | `policy-exercise-material-found` | `exercise_no_policy_material_in_reach`: policy material byte-needle found in a reach-root file (receipt reason, not an exception) |
 
 ## Provisioning authorization

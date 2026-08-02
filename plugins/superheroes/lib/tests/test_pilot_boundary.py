@@ -1,10 +1,8 @@
 """Tests for pilot_boundary.py — target boundary bindings and verdicts."""
 import json
 import os
-import shutil
 import stat
 import sys
-import tempfile
 
 import pytest
 
@@ -14,7 +12,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import pilot_boundary as pb  # noqa: E402
-import store  # noqa: E402
+import pilot_slot  # noqa: E402
 
 
 def _binding(**kwargs):
@@ -28,15 +26,6 @@ def _binding(**kwargs):
     return pb.target_binding(**defaults)
 
 
-@pytest.fixture
-def private_tmp():
-    base = tempfile.mkdtemp(dir="/private/tmp")
-    try:
-        yield base
-    finally:
-        shutil.rmtree(base, ignore_errors=True)
-
-
 def _write_executable(path, content):
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(content)
@@ -46,7 +35,9 @@ def _write_executable(path, content):
 # --- store.SLOT_RE trailing newline (test_store.py absent) --------------------
 
 def test_slot_re_refuses_trailing_newline():
-    assert store.SLOT_RE.match("slot\n") is None
+    with pytest.raises(pilot_slot.PilotSlotError) as exc:
+        pilot_slot.validate_slot_id("slot\n")
+    assert exc.value.reason == pilot_slot.REFUSAL_SLOT_ID_INVALID
 
 
 # --- parse_origin -------------------------------------------------------------
@@ -199,7 +190,28 @@ def test_check_redirect_refuses_protected_ipv6_case_variant():
     assert result == {"ok": False, "reason": pb.REFUSAL_PROTECTED_TARGET}
 
 
-# --- check_target / check_redirect fail-closed --------------------------------
+# --- check_target allowlist (T2) ----------------------------------------------
+
+def test_check_target_accepts_bound_origin():
+    origin = "http://127.0.0.1:5173"
+    binding = _binding(origin=origin)
+    result = pb.check_target(binding, origin)
+    assert result == {"ok": True, "reason": None}
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://other.example.com:80",
+        "http://127.0.0.1:8080",
+        "https://127.0.0.1:5173",
+    ],
+)
+def test_check_target_refuses_off_allowlist_origin(url):
+    binding = _binding(origin="http://127.0.0.1:5173")
+    result = pb.check_target(binding, url)
+    assert result == {"ok": False, "reason": pb.REFUSAL_TARGET_OFF_ALLOWLIST}
+
 
 def test_check_target_refuses_protected_bound_origin_first():
     origin = "http://127.0.0.1:5173"
@@ -355,13 +367,15 @@ def test_observe_datastore_identity_runs_observer_stdout(private_tmp):
 
 
 def test_observe_datastore_identity_child_env_has_only_connection_var(private_tmp):
-    reach_root, run_cwd, _ = _observer_layout(private_tmp)
+    reach_root, run_cwd, bin_dir = _observer_layout(private_tmp)
+    script = os.path.join(bin_dir, "path_check.sh")
+    _write_executable(
+        script,
+        "#!/bin/sh\n"
+        '/usr/bin/python3 -c "import os; print(\'PATH_SET\' if \'PATH\' in os.environ else \'PATH_UNSET\')"\n',
+    )
     observer = {
-        "command": [
-            "/usr/bin/python3",
-            "-c",
-            "import os; print('PATH_SET' if 'PATH' in os.environ else 'PATH_UNSET')",
-        ],
+        "command": [script],
         "connectionEnvVar": "PILOT_DB_URL",
     }
     result = pb.observe_datastore_identity(
@@ -388,10 +402,170 @@ def test_observe_datastore_identity_refuses_nonzero_exit(private_tmp):
     assert exc.value.reason == pb.REFUSAL_DATASTORE_OBSERVER_FAILED
 
 
-def test_observe_datastore_identity_refuses_timeout(private_tmp):
+def test_path_containment_filesystem_root():
+    assert pb._is_inside("/private/tmp/example", "/") is True
+
+
+# --- G1 empty reach_roots -----------------------------------------------------
+
+def test_observe_datastore_identity_refuses_empty_reach_roots(private_tmp):
+    reach_root, run_cwd, bin_dir = _observer_layout(private_tmp)
+    script = os.path.join(bin_dir, "observer.sh")
+    _write_executable(script, "#!/bin/sh\necho observed\n")
+    observer = {"command": [script], "connectionEnvVar": "PILOT_DB_URL"}
+    with pytest.raises(pb.PilotBoundaryError) as exc:
+        pb.observe_datastore_identity(
+            observer,
+            connection_detail="postgres://localhost:5432/example_dev",
+            reach_roots=[],
+            run_cwd=run_cwd,
+        )
+    assert exc.value.reason == pb.REFUSAL_DATASTORE_OBSERVER_INVALID
+
+
+def test_observe_datastore_identity_succeeds_with_nonempty_reach_roots(private_tmp):
+    reach_root, run_cwd, bin_dir = _observer_layout(private_tmp)
+    script = os.path.join(bin_dir, "observer.sh")
+    _write_executable(script, "#!/bin/sh\necho observed\n")
+    observer = {"command": [script], "connectionEnvVar": "PILOT_DB_URL"}
+    result = pb.observe_datastore_identity(
+        observer,
+        connection_detail="postgres://localhost:5432/example_dev",
+        reach_roots=[reach_root],
+        run_cwd=run_cwd,
+    )
+    assert result["provenance"] == "observed"
+
+
+# --- G3 argv confinement for non-existent paths ---------------------------------
+
+def test_observe_datastore_identity_refuses_nonexistent_argv_inside_reach(private_tmp):
+    reach_root, run_cwd, bin_dir = _observer_layout(private_tmp)
+    script = os.path.join(bin_dir, "observer.sh")
+    _write_executable(script, "#!/bin/sh\necho ok\n")
+    missing_inside = os.path.join(reach_root, "not-created-yet.sql")
+    observer = {"command": [script, missing_inside], "connectionEnvVar": "PILOT_DB_URL"}
+    with pytest.raises(pb.PilotBoundaryError) as exc:
+        pb.observe_datastore_identity(
+            observer,
+            connection_detail="postgres://localhost:5432/example_dev",
+            reach_roots=[reach_root],
+            run_cwd=run_cwd,
+        )
+    assert exc.value.reason == pb.REFUSAL_DATASTORE_OBSERVER_INVALID
+
+
+def test_observe_datastore_identity_accepts_nonexistent_argv_outside_reach(private_tmp):
+    reach_root, run_cwd, bin_dir = _observer_layout(private_tmp)
+    script = os.path.join(bin_dir, "observer.sh")
+    _write_executable(script, "#!/bin/sh\necho ok\n")
+    missing_outside = os.path.join(private_tmp, "outside", "not-created-yet.sql")
+    observer = {"command": [script, missing_outside], "connectionEnvVar": "PILOT_DB_URL"}
+    result = pb.observe_datastore_identity(
+        observer,
+        connection_detail="postgres://localhost:5432/example_dev",
+        reach_roots=[reach_root],
+        run_cwd=run_cwd,
+    )
+    assert result["identity"] == "ok"
+
+
+# --- G5 observer executable owner/mode ----------------------------------------
+
+@pytest.mark.skipif(os.getuid() == 0, reason="mode/owner checks do not bite as root")
+def test_observe_datastore_identity_refuses_group_writable_observer(private_tmp):
+    reach_root, run_cwd, bin_dir = _observer_layout(private_tmp)
+    script = os.path.join(bin_dir, "writable.sh")
+    _write_executable(script, "#!/bin/sh\necho ok\n")
+    os.chmod(script, 0o775)
+    observer = {"command": [script], "connectionEnvVar": "PILOT_DB_URL"}
+    with pytest.raises(pb.PilotBoundaryError) as exc:
+        pb.observe_datastore_identity(
+            observer,
+            connection_detail="postgres://localhost:5432/example_dev",
+            reach_roots=[reach_root],
+            run_cwd=run_cwd,
+        )
+    assert exc.value.reason == pb.REFUSAL_DATASTORE_OBSERVER_INVALID
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="mode/owner checks do not bite as root")
+def test_observe_datastore_identity_accepts_secure_observer(private_tmp):
+    reach_root, run_cwd, bin_dir = _observer_layout(private_tmp)
+    script = os.path.join(bin_dir, "secure.sh")
+    _write_executable(script, "#!/bin/sh\necho ok\n")
+    os.chmod(script, 0o755)
+    observer = {"command": [script], "connectionEnvVar": "PILOT_DB_URL"}
+    result = pb.observe_datastore_identity(
+        observer,
+        connection_detail="postgres://localhost:5432/example_dev",
+        reach_roots=[reach_root],
+        run_cwd=run_cwd,
+    )
+    assert result["identity"] == "ok"
+
+
+# --- T1 symlink-free temp base ------------------------------------------------
+
+def test_tmp_base_has_no_symlinked_ancestor():
+    from conftest import _TMP_BASE, _path_has_symlinked_ancestor
+
+    assert not _path_has_symlinked_ancestor(_TMP_BASE)
+
+
+# --- T5 observer failure discrimination ---------------------------------------
+
+def test_observe_datastore_identity_refuses_oversized_output(private_tmp):
+    reach_root, run_cwd, bin_dir = _observer_layout(private_tmp)
+    script = os.path.join(bin_dir, "huge.sh")
+    _write_executable(
+        script,
+        "#!/bin/sh\n"
+        "/usr/bin/python3 -c \"import sys; sys.stdout.write('x' * 20000)\"\n",
+    )
+    observer = {"command": [script], "connectionEnvVar": "PILOT_DB_URL"}
+    with pytest.raises(pb.PilotBoundaryError) as exc:
+        pb.observe_datastore_identity(
+            observer,
+            connection_detail="postgres://localhost:5432/example_dev",
+            reach_roots=[reach_root],
+            run_cwd=run_cwd,
+            max_output_bytes=1024,
+        )
+    assert exc.value.reason == pb.REFUSAL_DATASTORE_OBSERVER_FAILED
+
+
+def test_observe_datastore_identity_oversized_output_bites_on_byte_cap(private_tmp):
+    reach_root, run_cwd, bin_dir = _observer_layout(private_tmp)
+    script = os.path.join(bin_dir, "huge.sh")
+    _write_executable(
+        script,
+        "#!/bin/sh\n"
+        "/usr/bin/python3 -c \"import sys; sys.stdout.write('x' * 20000)\"\n",
+    )
+    observer = {"command": [script], "connectionEnvVar": "PILOT_DB_URL"}
+    with pytest.raises(pb.PilotBoundaryError):
+        pb.observe_datastore_identity(
+            observer,
+            connection_detail="postgres://localhost:5432/example_dev",
+            reach_roots=[reach_root],
+            run_cwd=run_cwd,
+            max_output_bytes=1024,
+        )
+    result = pb.observe_datastore_identity(
+        observer,
+        connection_detail="postgres://localhost:5432/example_dev",
+        reach_roots=[reach_root],
+        run_cwd=run_cwd,
+        max_output_bytes=100000,
+    )
+    assert result["identity"].startswith("x")
+
+
+def test_observe_datastore_identity_timeout_bites_on_timeout_seconds(private_tmp):
     reach_root, run_cwd, bin_dir = _observer_layout(private_tmp)
     script = os.path.join(bin_dir, "sleep.sh")
-    _write_executable(script, "#!/bin/sh\nsleep 3\n")
+    _write_executable(script, "#!/bin/sh\n/bin/sleep 3\necho slept\n")
     observer = {"command": [script], "connectionEnvVar": "PILOT_DB_URL"}
     with pytest.raises(pb.PilotBoundaryError) as exc:
         pb.observe_datastore_identity(
@@ -402,6 +576,14 @@ def test_observe_datastore_identity_refuses_timeout(private_tmp):
             timeout_seconds=1,
         )
     assert exc.value.reason == pb.REFUSAL_DATASTORE_OBSERVER_FAILED
+    result = pb.observe_datastore_identity(
+        observer,
+        connection_detail="postgres://localhost:5432/example_dev",
+        reach_roots=[reach_root],
+        run_cwd=run_cwd,
+        timeout_seconds=10,
+    )
+    assert result["identity"] == "slept"
 
 
 def test_observe_datastore_identity_refuses_empty_stdout(private_tmp):
@@ -609,27 +791,3 @@ def test_boundary_verdict_refuses_missing_mandatory_check():
     with pytest.raises(pb.PilotBoundaryError) as exc:
         pb.boundary_verdict(binding, checks=checks, policy_digest="digest")
     assert exc.value.reason == pb.REFUSAL_VERDICT_VACUOUS
-
-
-def test_observe_datastore_identity_refuses_oversized_output(private_tmp):
-    reach_root, run_cwd, bin_dir = _observer_layout(private_tmp)
-    script = os.path.join(bin_dir, "huge.sh")
-    _write_executable(
-        script,
-        "#!/bin/sh\n"
-        "python3 -c \"import sys; sys.stdout.write('x' * 20000)\"\n",
-    )
-    observer = {"command": [script], "connectionEnvVar": "PILOT_DB_URL"}
-    with pytest.raises(pb.PilotBoundaryError) as exc:
-        pb.observe_datastore_identity(
-            observer,
-            connection_detail="postgres://localhost:5432/example_dev",
-            reach_roots=[reach_root],
-            run_cwd=run_cwd,
-            max_output_bytes=1024,
-        )
-    assert exc.value.reason == pb.REFUSAL_DATASTORE_OBSERVER_FAILED
-
-
-def test_path_containment_filesystem_root():
-    assert pb._is_inside("/private/tmp/example", "/") is True

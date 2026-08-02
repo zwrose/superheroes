@@ -406,7 +406,9 @@ def _validate_observer(observer, connection_detail, reach_roots, run_cwd):
     if not isinstance(connection_detail, str) or not connection_detail:
         raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_INVALID)
 
-    if not isinstance(reach_roots, list):
+    if not isinstance(reach_roots, list) or not reach_roots:
+        # bite-axis: reach-root vacuity — empty reach_roots makes confinement checks vacuous;
+        # refuse before any observer path is accepted.
         raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_INVALID)
     for root in reach_roots:
         if not isinstance(root, str) or not os.path.isabs(root):
@@ -424,6 +426,10 @@ def _validate_observer(observer, connection_detail, reach_roots, run_cwd):
         raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_INVALID)
     if not stat.S_ISREG(st.st_mode):
         raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_INVALID)
+    if st.st_uid != os.getuid():
+        raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_INVALID)
+    if st.st_mode & 0o022:
+        raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_INVALID)
     if not _is_outside_all_reach_roots(executable, reach_roots):
         raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_INVALID)
 
@@ -432,7 +438,10 @@ def _validate_observer(observer, connection_detail, reach_roots, run_cwd):
 
     for part in command[1:]:
         candidate = part if os.path.isabs(part) else os.path.join(run_cwd, part)
-        if os.path.exists(candidate) and not _is_outside_all_reach_roots(candidate, reach_roots):
+        # bite-axis: argv confinement — resolved paths inside reach roots refuse whether or not
+        # the path exists at validation time.
+        resolved = os.path.realpath(candidate)
+        if not _is_outside_all_reach_roots(resolved, reach_roots):
             raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_INVALID)
 
 
