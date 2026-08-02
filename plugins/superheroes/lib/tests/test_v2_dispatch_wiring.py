@@ -42,6 +42,11 @@ CONFIG_DOCS = ("skills/configure/SKILL.md", "skills/configure/reference/set-up.m
 SURFACE = (WORKHORSE, PREFLIGHT) + CONFIG_DOCS
 V2_DISPATCH_ROLES = ("implementer", "pilot")   # the model_tier roles #472 adds
 
+# Retired enginePreferences keys that must never be cited as a live config knob again (plan
+# authoring was retired in #479). Test-local since #820 retired the production tombstone: the
+# list has no production consumer, only this guard.
+RETIRED_ENGINE_KEYS = ("planAuthor",)
+
 
 def extract_engine_pref_keys(text):
     """Extract every enginePreferences key CITED in `text` — the §11 drift-guard extractor.
@@ -210,8 +215,9 @@ def test_brief_check_engine_key_wired():
 
 # --- Guard 2: §11 config-key drift ------------------------------------------------------------
 
+# Axis: a retired key reappearing as a live config knob in calibration prose.
 def test_no_retired_engine_key_in_calibration_prose():
-    for k in engine_pref.RETIRED_ENGINE_KEYS:
+    for k in RETIRED_ENGINE_KEYS:
         pattern = r"\b" + re.escape(k) + r"\b"
         for f in SURFACE:
             text = _read(f)

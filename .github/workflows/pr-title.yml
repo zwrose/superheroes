@@ -1,0 +1,30 @@
+name: pr-title
+
+on:
+  pull_request:
+    # include `edited` so the pr-title check re-validates when the title is fixed
+    # (a re-run replays the stale event payload; only a new event refreshes the title)
+    # `synchronize` re-attaches the pr-title context on every new head SHA.
+    types: [opened, reopened, synchronize, edited]
+
+permissions:
+  contents: read
+
+# Superseded runs on a PR ref cancel; pushes to main queue and are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  pr-title:
+    name: pr-title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: PR title is a Conventional Commit
+        run: python3 .github/scripts/check_conventional_commit.py "$PR_TITLE"
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}

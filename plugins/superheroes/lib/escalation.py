@@ -104,8 +104,6 @@ SAFETY_MACHINERY = (
     "circuit_breaker.py",
     "gate_write.py",
     "definition_doc.py",
-    "enforcer.py",            # workhorse action-boundary enforcer (F3)
-    "allowance.py",           # workhorse Codex approval-allowance store (gate; #14)
     "model_tier.py",          # band model-tier core — policy, protect from auto-edits
     "model_registry.py",      # band model/vendor registry — the single taxonomy data home; protect from auto-edits
     "engine_pref.py",         # band engine-selection policy (per-seat engine, loud pins, stall watchdog timeouts); a fixer editing it could disable a loud pin or a watchdog
@@ -115,7 +113,6 @@ SAFETY_MACHINERY = (
     "seat_canary.py",         # #668 control-probe engagement scoring; a fixer editing it could neuter round_driver's cross-vendor seat downgrade on its verdict
     "engine_adapter.py",      # #685 parse trust boundary (echo strip, parse_result, investigation-floor inputs); a fixer could weaken strip or vacuous-parse detection
     "hooks.json",             # workhorse PreToolUse hook registration (F3)
-    "precompact.py",          # workhorse resume hooks (resilience)
     "session_start.py",       # workhorse resume hooks (resilience)
     "escalation-base.md",
     "review-base.md",
@@ -125,7 +122,6 @@ SAFETY_MACHINERY = (
     "loop_synthesis.py",      # panel synthesis drop/keep/normalize decider
     "verification.py",          # per-finding verification 3-state verdict fold (#506)
     "verify_gate.py",         # code-leg verify gate decider
-    "loop_readout.py",        # the audit-trail readout renderer
     "review_result.py",       # the durable terminal-record writer (UFR-9)
     "round_driver.py",        # the one-entrypoint loop orchestration (#507)
     "audits.py",              # fix-audit fold decider
