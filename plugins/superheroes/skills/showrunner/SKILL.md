@@ -212,21 +212,41 @@ above).
      filed late as we#526/we#527). Complete a **two-tier disposition before you post the vet
      receipt**: **Tier 1 — record-keeping writes** (append to an owning issue, an owner-owed or
      relay memory entry, a declined-with-reason) happen **immediately**; **Tier 2 — board decisions**
-     (new issues, scope changes) are **proposed to the owner in the vet-delivery message**, and
-     **only what genuinely cannot close in this session** — typically an item awaiting the owner's
-     word — is appended to the project's **standing proposals collector**, one open issue per
-     project, filed after discussion (auto-filing per proposal was rejected as overcorrection).
+     (new issues, scope changes) reach the project's **standing proposals collector** — one open
+     issue per project (auto-filing per proposal was rejected as overcorrection) — according to
+     **owner availability within this session**. Read availability from whether the owner is
+     actually reachable here, never inferred from who launched the advisor (duty 9's three states
+     are independent axes, not a proxy for absence):
+     - **Attended** — the owner is here now; the vet-delivery message reaches them in this session.
+       **Proposed to the owner in the vet-delivery message**; discuss; **only what genuinely cannot
+       close in this session** — typically an item awaiting the owner's word — is appended **after
+       that discussion**, **filed after discussion**. This phrase belongs **here, and only here**.
+     - **Asleep** — unreachable for this session — or **reachable-with-latency** — reachable but not
+       within this session's end. The session ends before a deferred answer arrives, so deferring the
+       append is the same failure two independent sessions made on 2026-08-02, only later. There is no
+       discussion to defer to: append what cannot close **at vet time, before the vet receipt posts**,
+       stamped with **this vet's ordinal**. **"Filed after discussion" does not license waiting for the
+       owner to reconnect** — that misreading is precisely what left collectors empty while pending items
+       lived only in individual receipts.
+     When the collector pointer **cannot be resolved** — the owner is asleep and cannot supply it, and
+     opening a second collector is forbidden (see reconcile bullet below) — record the item and the
+     **disclosed degradation** in the vet receipt; **no duplicate collector is opened**. Nothing is lost,
+     because every pending item also lives in the receipt of the vet that proposed it.
      Each entry carries **what it is**, **your recommendation**, and **the vet ordinal stamped on
      it when it is appended**, and is **struck when the owner rules** — closing or declining an
-     item **removes it from the collector**; nothing re-numbers what remains. A
+     item **removes it from the collector**; nothing re-numbers what remains. Appending stamps the
+     current ordinal on it **immutably** — carrying an item forward **never re-stamps** it. A
      vet receipt states only **completed dispositions and live proposals — never the future tense**.
      **The collector is a fallback, not the path** — *"the next vet will pick it up"* is the failure
-     this prevents, not a workflow it licenses — and **nothing fires on its own**: no cadence, no
+     this prevents, not a workflow it licenses — and an owner-absent append is the collector doing its
+     job at the only moment available, not a licence to route items there when the owner *is* present.
+     **Nothing fires on its own**: no cadence, no
      release-tied default (not every project cuts releases; a cut-tied rule silently does nothing in
      some projects, which reads as covered), no scheduled routine.
-   - **Reconcile the collector at every vet — you are the backstop's actor.** Reading it is a
-     **vet-time step**: the one moment you are already in disposition mode and the one moment
-     guaranteed to recur whatever the project's release model. **Locating it is part of the duty,
+   - **Reconcile the collector at every vet — you are the backstop's actor.** Disposition above
+     appends owner-absent items before this receipt posts; reconciliation reads what is there.
+     Reading it is a **vet-time step**: the one moment you are already in disposition mode and the
+     one moment guaranteed to recur whatever the project's release model. **Locating it is part of the duty,
      and failing to locate it is never `None`** — record its issue pointer in your durable memory
      (duty 8) the first time you open or find it; if you cannot resolve it, the pending field says
      so as a **disclosed degradation**, never a bare `None` (indistinguishable from an empty
