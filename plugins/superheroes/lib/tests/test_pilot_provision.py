@@ -50,6 +50,15 @@ def _digest(policy):
     return pilot_contract.declaration_digest(policy)
 
 
+def _captured_policy():
+    """Captured-project policy with no policy-side mint grant."""
+    policy = dict(SAMPLE_POLICY)
+    slot_cfg = dict(policy["slots"]["slot-a"])
+    del slot_cfg["mintableAccounts"]
+    policy["slots"] = {"slot-a": slot_cfg}
+    return policy
+
+
 def _passing_verdict(policy, slot_ref="slot-a@1"):
     return {
         "schemaVersion": pilot_boundary.BOUNDARY_SCHEMA_VERSION,
@@ -996,7 +1005,7 @@ def test_declaration_sources_covers_declaration_kinds():
 
 
 def test_gate_provisioning_pass_strong_identity_captured(private_tmp):
-    policy = SAMPLE_POLICY
+    policy = _captured_policy()
     block = _valid_pilot_block()
     slot_ref = "slot-a@1"
     registry = _full_registry(block, policy, slot_ref)
@@ -1021,7 +1030,7 @@ def test_gate_provisioning_pass_strong_identity_captured(private_tmp):
 
 
 def test_gate_provisioning_weaker_acceptance_carried_in_receipt():
-    policy = SAMPLE_POLICY
+    policy = _captured_policy()
     block = _valid_pilot_block()
     slot_ref = "slot-a@1"
     registry = _full_registry(block, policy, slot_ref)
@@ -1038,7 +1047,7 @@ def test_gate_provisioning_weaker_acceptance_carried_in_receipt():
 
 
 def test_gate_edge1_unexercised_declaration_refuses():
-    policy = SAMPLE_POLICY
+    policy = _captured_policy()
     block = _valid_pilot_block()
     slot_ref = "slot-a@1"
     with pytest.raises(pilot_contract.PilotContractError) as exc:
@@ -1047,7 +1056,7 @@ def test_gate_edge1_unexercised_declaration_refuses():
 
 
 def test_gate_edge2_digest_mismatch_refuses():
-    policy = SAMPLE_POLICY
+    policy = _captured_policy()
     block = _valid_pilot_block()
     slot_ref = "slot-a@1"
     registry = _full_registry(block, policy, slot_ref)
@@ -1061,7 +1070,7 @@ def test_gate_edge2_digest_mismatch_refuses():
 
 
 def test_gate_edge3_receipt_fail_refuses():
-    policy = SAMPLE_POLICY
+    policy = _captured_policy()
     block = _valid_pilot_block()
     slot_ref = "slot-a@1"
     info = pp.declaration_for("identity-probe", block, policy, slot_ref)
@@ -1080,7 +1089,7 @@ def test_gate_edge3_receipt_fail_refuses():
 
 
 def test_gate_edge4_no_evidence_refuses():
-    policy = SAMPLE_POLICY
+    policy = _captured_policy()
     block = _valid_pilot_block()
     slot_ref = "slot-a@1"
     info = pp.declaration_for("identity-probe", block, policy, slot_ref)
@@ -1099,7 +1108,7 @@ def test_gate_edge4_no_evidence_refuses():
 
 
 def test_gate_edge5_wrong_schema_version_refuses():
-    policy = SAMPLE_POLICY
+    policy = _captured_policy()
     block = _valid_pilot_block()
     slot_ref = "slot-a@1"
     registry = _full_registry(block, policy, slot_ref)
@@ -1121,7 +1130,7 @@ def test_gate_edge6_declaration_kinds_uncovered(monkeypatch):
 
 
 def test_gate_edge7_missing_declaration_source_key_refuses():
-    policy = SAMPLE_POLICY
+    policy = _captured_policy()
     block = _valid_pilot_block()
     del block["identityProbe"]
     slot_ref = "slot-a@1"
@@ -1131,7 +1140,7 @@ def test_gate_edge7_missing_declaration_source_key_refuses():
 
 
 def test_gate_edge8_captured_project_skips_mint_kinds():
-    policy = SAMPLE_POLICY
+    policy = _captured_policy()
     block = _valid_pilot_block()
     slot_ref = "slot-a@1"
     registry = _full_registry(block, policy, slot_ref)
@@ -1210,7 +1219,7 @@ def test_gate_edge15_unknown_strength_refuses():
 
 
 def test_gate_edge16_authorize_credentials_called_first(monkeypatch):
-    policy = SAMPLE_POLICY
+    policy = _captured_policy()
     block = _valid_pilot_block()
     slot_ref = "slot-a@1"
     registry = _full_registry(block, policy, slot_ref)
@@ -1235,7 +1244,7 @@ def test_gate_edge16_authorize_credentials_called_first(monkeypatch):
 
 
 def test_gate_edge17_receipt_has_no_policy_material(private_tmp):
-    policy = SAMPLE_POLICY
+    policy = _captured_policy()
     block = _valid_pilot_block()
     slot_ref = "slot-a@1"
     registry = _full_registry(block, policy, slot_ref)
@@ -1251,7 +1260,7 @@ def test_gate_edge17_receipt_has_no_policy_material(private_tmp):
 
 
 def test_gate_edge17_assert_results_only_refuses_material_in_receipt(monkeypatch):
-    policy = SAMPLE_POLICY
+    policy = _captured_policy()
     block = _valid_pilot_block()
     slot_ref = "slot-a@1"
     registry = _full_registry(block, policy, slot_ref)
@@ -1267,3 +1276,75 @@ def test_gate_edge17_assert_results_only_refuses_material_in_receipt(monkeypatch
     with pytest.raises(pilot_policy.PilotPolicyError) as exc:
         pp.gate_provisioning(verdict, policy, slot_ref, block, registry)
     assert exc.value.reason == pilot_policy.REFUSAL_MATERIAL_IN_RESULT
+
+
+# --- finding 2: mint applicability from policy --------------------------------
+
+def test_mint_kinds_not_skipped_when_policy_grants_mintable_accounts():
+    policy = SAMPLE_POLICY
+    block = _valid_pilot_block()
+    slot_ref = "slot-a@1"
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.declaration_for("mint-gate-off", block, policy, slot_ref)
+    assert exc.value.reason == pp.REFUSAL_MINT_DECLARATION_MISSING
+
+
+def test_mint_kinds_skipped_when_no_policy_grant_and_no_block():
+    policy = _captured_policy()
+    block = _valid_pilot_block()
+    slot_ref = "slot-a@1"
+    info = pp.declaration_for("mint-gate-off", block, policy, slot_ref)
+    assert info["applicable"] is False
+    assert info["declaration"] is None
+
+
+# --- finding 3: ISO8601 acceptance timestamp validation ---------------------
+
+@pytest.mark.parametrize(
+    "accepted_at",
+    [
+        "2026-13-01T00:00:00Z",
+        "2026-01-45T00:00:00Z",
+        "2026-01-01T99:00:00Z",
+        "2026-01-01T00:99:00Z",
+        "2026-01-01T00:00:99Z",
+    ],
+)
+def test_weaker_acceptance_refuses_impossible_timestamps(accepted_at):
+    policy = SAMPLE_POLICY
+    verdict = _verdict_with_identity(policy, strength="weaker", provenance="app-reported")
+    bad = {
+        "acceptedBy": "owner",
+        "acceptedAt": accepted_at,
+        "reason": "app-reported identity accepted for dev slot",
+    }
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_datastore_identity(verdict, weaker_acceptance=bad)
+    assert exc.value.reason == pp.REFUSAL_WEAKER_ACCEPTANCE_INVALID
+
+
+def test_weaker_acceptance_accepts_real_timestamp():
+    policy = SAMPLE_POLICY
+    verdict = _verdict_with_identity(policy, strength="weaker", provenance="app-reported")
+    acceptance = _valid_weaker_acceptance()
+    result = pp.gate_datastore_identity(verdict, weaker_acceptance=acceptance)
+    assert result["ok"] is True
+
+
+# --- finding 4: datastore strength vocabulary drift guard ---------------------
+
+def test_datastore_strength_matches_pilot_boundary(private_tmp):
+    weaker_observation = pilot_boundary.app_reported_identity("example_dev")
+    assert weaker_observation["strength"] == pp.STRENGTH_WEAKER
+
+    reach_root, run_cwd, bin_dir, _ = _provision_layout(private_tmp)
+    script = _observer_script(bin_dir, "example_dev")
+    policy = _policy_with_observer([script])
+    verdict = pp.verify_boundary(
+        policy,
+        "slot-a@1",
+        "http://127.0.0.1:5173",
+        reach_roots=[reach_root],
+        run_cwd=run_cwd,
+    )
+    assert verdict["datastoreIdentity"]["strength"] == pp.STRENGTH_STRONG

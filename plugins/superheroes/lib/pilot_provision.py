@@ -8,8 +8,8 @@ The declare-and-exercise and datastore-identity gates are in-process ordering ch
 not sandboxes — launcher, browser, and build session share a UID by design (#660 §14), so
 they prevent ordering mistakes, not a hostile process.
 """
-import re
 import time
+from datetime import datetime
 
 import pilot_boundary
 import pilot_contract
@@ -27,12 +27,12 @@ REFUSAL_DATASTORE_IDENTITY_UNMATCHED = "provision-datastore-identity-unmatched"
 REFUSAL_DATASTORE_IDENTITY_WEAKER_UNACCEPTED = "provision-datastore-identity-weaker-unaccepted"
 REFUSAL_WEAKER_ACCEPTANCE_INVALID = "provision-weaker-acceptance-invalid"
 REFUSAL_DATASTORE_IDENTITY_STRENGTH_UNKNOWN = "provision-datastore-identity-strength-unknown"
+REFUSAL_MINT_DECLARATION_MISSING = "provision-mint-declaration-missing"
 
 STRENGTH_STRONG = "strong"
 STRENGTH_WEAKER = "weaker"
 
 _WEAKER_ACCEPTANCE_KEYS = frozenset({"acceptedBy", "acceptedAt", "reason"})
-_ISO_8601_UTC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
 class PilotProvisionError(Exception):
@@ -244,8 +244,27 @@ def _always_applicable(_block, _policy, _slot_ref):
     return True
 
 
-def _mint_applicable(block, _policy, _slot_ref):
-    return block.get("mint") is not None
+def _mint_policy_granted(policy, slot_ref):
+    try:
+        slot, _generation = pilot_slot.parse_slot_ref(slot_ref)
+    except pilot_slot.PilotSlotError:
+        return False
+    slot_config = policy.get("slots", {}).get(slot)
+    if slot_config is None:
+        return False
+    mintable_accounts = slot_config.get("mintableAccounts")
+    return bool(mintable_accounts)
+
+
+def _require_mint_block(block, policy, slot_ref):
+    if _mint_policy_granted(policy, slot_ref) and block.get("mint") is None:
+        raise PilotProvisionError(REFUSAL_MINT_DECLARATION_MISSING)
+
+
+def _mint_applicable(block, policy, slot_ref):
+    # bite-axis: mint applicability — policy-side mintableAccounts grant makes mint kinds
+    # applicable regardless of branch-mutable pilot.mint; block-only trigger is insufficient.
+    return _mint_policy_granted(policy, slot_ref) or block.get("mint") is not None
 
 
 def _extract_identity_probe(block, _policy, _slot_ref):
@@ -271,11 +290,13 @@ def _extract_operating_ceiling(block, _policy, _slot_ref):
     return {"administrativeMax": block["administrativeMax"]}
 
 
-def _extract_mint_gate_off(block, _policy, _slot_ref):
+def _extract_mint_gate_off(block, policy, slot_ref):
+    _require_mint_block(block, policy, slot_ref)
     return block["mint"]["envelope"]
 
 
-def _extract_mint_account_allowlist(_block, policy, slot_ref):
+def _extract_mint_account_allowlist(block, policy, slot_ref):
+    _require_mint_block(block, policy, slot_ref)
     slot, _generation = pilot_slot.parse_slot_ref(slot_ref)
     return policy["slots"][slot]["mintableAccounts"]
 
@@ -348,6 +369,19 @@ def require_declarations_exercised(block, policy, slot_ref, registry):
     return declarations
 
 
+def _is_iso8601_utc(value):
+    if not isinstance(value, str) or not value:
+        return False
+    text = value.strip()
+    if not text.endswith("Z"):
+        return False
+    try:
+        dt = datetime.fromisoformat(text[:-1] + "+00:00")
+    except ValueError:
+        return False
+    return dt.tzinfo is not None
+
+
 def _validate_weaker_acceptance(record):
     if not isinstance(record, dict):
         raise PilotProvisionError(REFUSAL_WEAKER_ACCEPTANCE_INVALID)
@@ -357,7 +391,7 @@ def _validate_weaker_acceptance(record):
     if not isinstance(accepted_by, str) or not accepted_by:
         raise PilotProvisionError(REFUSAL_WEAKER_ACCEPTANCE_INVALID)
     accepted_at = record.get("acceptedAt")
-    if not isinstance(accepted_at, str) or not _ISO_8601_UTC_RE.match(accepted_at):
+    if not _is_iso8601_utc(accepted_at):
         raise PilotProvisionError(REFUSAL_WEAKER_ACCEPTANCE_INVALID)
     reason = record.get("reason")
     if not isinstance(reason, str) or not reason:

@@ -11,6 +11,13 @@ REFUSAL_OPTIONS_MISMATCH = "context-options-mismatch"
 REFUSAL_ARTIFACT_MISSING = "context-artifact-missing"
 REFUSAL_ARTIFACT_UNKNOWN_ACCOUNT = "context-artifact-unknown-account"
 REFUSAL_SHARED_CONTEXT_REFUSED = "context-shared-context-refused"
+REFUSAL_PROVISIONING_RECEIPT_MISSING = "context-provisioning-receipt-missing"
+REFUSAL_PROVISIONING_RECEIPT_INVALID = "context-provisioning-receipt-invalid"
+REFUSAL_PROVISIONING_RECEIPT_SLOT_MISMATCH = "context-provisioning-receipt-slot-mismatch"
+
+_PROVISIONING_RECEIPT_KEYS = frozenset(
+    {"slotRef", "policyDigest", "datastoreIdentity", "declarations"},
+)
 
 
 class PilotContextError(Exception):
@@ -21,7 +28,15 @@ class PilotContextError(Exception):
         self.reason = reason
 
 
-def context_set(slot, generation, accounts, *, artifacts, capture_surfaces):
+def context_set(
+    slot,
+    generation,
+    accounts,
+    *,
+    artifacts,
+    capture_surfaces,
+    provisioning_receipt,
+):
     """Build the slot's context set: exactly one context spec per account."""
     try:
         account_set = pilot_slot.slot_account_set(slot, generation, accounts)
@@ -56,6 +71,7 @@ def context_set(slot, generation, accounts, *, artifacts, capture_surfaces):
             account,
             artifacts[account],
             capture_surfaces,
+            provisioning_receipt=provisioning_receipt,
         )
         if not result["ok"]:
             return _refusal(result["reason"])
@@ -69,8 +85,22 @@ def context_set(slot, generation, accounts, *, artifacts, capture_surfaces):
     }
 
 
-def context_spec(slot_ref, account, artifact, capture_surfaces, *, requested_options=None):
+def context_spec(
+    slot_ref,
+    account,
+    artifact,
+    capture_surfaces,
+    *,
+    provisioning_receipt,
+    requested_options=None,
+):
     """Build one context spec with required capture options and verify-at-seed."""
+    # bite-axis: provisioning receipt — context creation requires a valid gate_provisioning
+    # receipt before seed_request; missing or invalid receipt refuses before seeding runs.
+    receipt_refusal = _validate_provisioning_receipt(provisioning_receipt, slot_ref)
+    if receipt_refusal is not None:
+        return _refusal(receipt_refusal)
+
     # bite-axis: options mismatch — requested_options must equal required_context_options
     # exactly; any deviation refuses context-options-mismatch before seed_request runs.
     try:
@@ -100,6 +130,36 @@ def context_spec(slot_ref, account, artifact, capture_surfaces, *, requested_opt
         "artifact": seed_result["artifact"],
         "captureSurfaces": list(capture_surfaces),
     }
+
+
+def _validate_provisioning_receipt(receipt, slot_ref):
+    """Structural check of a provisioning receipt; no pilot_provision import."""
+    if receipt is None:
+        return REFUSAL_PROVISIONING_RECEIPT_MISSING
+    if not isinstance(receipt, dict):
+        return REFUSAL_PROVISIONING_RECEIPT_INVALID
+    if set(receipt.keys()) < _PROVISIONING_RECEIPT_KEYS:
+        return REFUSAL_PROVISIONING_RECEIPT_INVALID
+    for key in _PROVISIONING_RECEIPT_KEYS:
+        value = receipt.get(key)
+        if value is None:
+            return REFUSAL_PROVISIONING_RECEIPT_INVALID
+        if key == "datastoreIdentity":
+            if not isinstance(value, dict):
+                return REFUSAL_PROVISIONING_RECEIPT_INVALID
+        elif key == "declarations":
+            if not isinstance(value, list):
+                return REFUSAL_PROVISIONING_RECEIPT_INVALID
+        elif not isinstance(value, str) or not value:
+            return REFUSAL_PROVISIONING_RECEIPT_INVALID
+    try:
+        slot, generation = pilot_slot.parse_slot_ref(slot_ref)
+        canonical_slot_ref = pilot_slot.format_slot_ref(slot, generation)
+    except pilot_slot.PilotSlotError:
+        return None
+    if receipt["slotRef"] != canonical_slot_ref:
+        return REFUSAL_PROVISIONING_RECEIPT_SLOT_MISMATCH
+    return None
 
 
 def _context_identity(slot_ref, account):

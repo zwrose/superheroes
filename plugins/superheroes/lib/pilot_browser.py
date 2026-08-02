@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 import pilot_journal
 import pilot_lifecycle
 import pilot_slot
+import store_core
 
 PIN_SCHEMA_VERSION = 1
 
@@ -28,6 +29,7 @@ _SOCKET_DIR_PREFIX = "pb-"
 
 REFUSAL_PIN_INVALID = "browser-pin-invalid"
 REFUSAL_PIN_OBSERVER_INVALID = "browser-pin-observer-invalid"
+REFUSAL_PIN_OBSERVER_UNSAFE = "browser-pin-observer-unsafe"
 REFUSAL_PIN_OBSERVER_FAILED = "browser-pin-observer-failed"
 REFUSAL_PIN_VERSION_MISMATCH = "browser-pin-version-mismatch"
 REFUSAL_PIN_INTEGRITY_MISMATCH = "browser-pin-integrity-mismatch"
@@ -38,8 +40,12 @@ REFUSAL_SOCKET_DIR_EXISTS = "browser-socket-dir-exists"
 REFUSAL_SOCKET_DIR_UNSAFE = "browser-socket-dir-unsafe"
 REFUSAL_SOCKET_DIR_NOT_DIRECTORY = "browser-socket-dir-not-directory"
 REFUSAL_SOCKET_DIR_UNREMOVABLE = "browser-socket-dir-unremovable"
+REFUSAL_SOCKET_DIR_UNRECOGNIZED = "browser-socket-dir-unrecognized"
+REFUSAL_WORKTREE_ROOT_UNRESOLVED = "browser-worktree-root-unresolved"
 
 REFUSAL_SERVER_RECORD_INVALID = "browser-server-record-invalid"
+REFUSAL_SERVER_RECORD_STALE = "browser-server-record-stale"
+REFUSAL_FENCING_SLOTS_DIR_REQUIRED = "browser-fencing-slots-dir-required"
 REFUSAL_NOT_SERVER_CHILD = "browser-not-server-child"
 REFUSAL_PID_UNREADABLE = "browser-pid-unreadable"
 REFUSAL_TERMINAL_STATE_UNOBSERVED = "browser-terminal-state-unobserved"
@@ -136,6 +142,14 @@ def _path_related(base, other):
     return common == base_real or common == other_real
 
 
+def _minimal_subprocess_env():
+    env = {}
+    path = os.environ.get("PATH")
+    if isinstance(path, str) and path:
+        env["PATH"] = path
+    return env
+
+
 def _validate_observer(observer):
     if not isinstance(observer, dict) or set(observer.keys()) != frozenset({"command"}):
         raise PilotBrowserError(REFUSAL_PIN_OBSERVER_INVALID)
@@ -145,6 +159,28 @@ def _validate_observer(observer):
     for part in command:
         if not isinstance(part, str) or not part:
             raise PilotBrowserError(REFUSAL_PIN_OBSERVER_INVALID)
+
+
+def _validate_observer_safety(observer, run_cwd):
+    # bite-axis: observer safety — executable and run cwd must be absolute, owned, and not
+    # group/world-writable; violation raises REFUSAL_PIN_OBSERVER_UNSAFE.
+    command = observer["command"]
+    if not isinstance(run_cwd, str) or not os.path.isdir(run_cwd):
+        raise PilotBrowserError(REFUSAL_PIN_OBSERVER_UNSAFE)
+
+    executable = command[0]
+    if not os.path.isabs(executable):
+        raise PilotBrowserError(REFUSAL_PIN_OBSERVER_UNSAFE)
+    try:
+        st = os.stat(executable)
+    except OSError:
+        raise PilotBrowserError(REFUSAL_PIN_OBSERVER_UNSAFE)
+    if not stat.S_ISREG(st.st_mode):
+        raise PilotBrowserError(REFUSAL_PIN_OBSERVER_UNSAFE)
+    if st.st_uid != os.getuid():
+        raise PilotBrowserError(REFUSAL_PIN_OBSERVER_UNSAFE)
+    if st.st_mode & 0o022:
+        raise PilotBrowserError(REFUSAL_PIN_OBSERVER_UNSAFE)
 
 
 def validate_pin(pin):
@@ -174,14 +210,17 @@ def _terminate_and_wait(proc):
 def _run_bounded_observer(command, *, run_cwd, env, timeout_seconds, max_output_bytes):
   # bite-axis: observer execution — subprocess failure, oversized output, or non-single-line
   # UTF-8 stdout yields REFUSAL_PIN_OBSERVER_FAILED; only clean one-line output is returned.
-    proc = subprocess.Popen(
-        command,
-        cwd=run_cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        shell=False,
-        env=env,
-    )
+    try:
+        proc = subprocess.Popen(
+            command,
+            cwd=run_cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            shell=False,
+            env=env,
+        )
+    except OSError:
+        return None
     try:
         stdout_holder = []
         read_error = []
@@ -236,13 +275,14 @@ def verify_pin(pin, observer, *, run_cwd, timeout_seconds=20, max_output_bytes=4
     _validate_observer(observer)
     if not _is_str_path(run_cwd):
         raise PilotBrowserError(REFUSAL_PIN_OBSERVER_INVALID)
+    _validate_observer_safety(observer, run_cwd)
     if not isinstance(timeout_seconds, (int, float)) or isinstance(timeout_seconds, bool):
         raise PilotBrowserError(REFUSAL_PIN_OBSERVER_INVALID)
     if not isinstance(max_output_bytes, int) or isinstance(max_output_bytes, bool):
         raise PilotBrowserError(REFUSAL_PIN_OBSERVER_INVALID)
 
     command = observer["command"]
-    env = dict(os.environ)
+    env = _minimal_subprocess_env()
     stdout = _run_bounded_observer(
         command,
         run_cwd=run_cwd,
@@ -286,6 +326,17 @@ def _socket_cap(platform):
     return smallest, platform
 
 
+def _resolve_worktree_root(worktree_root):
+    if worktree_root is not None:
+        if not _is_str_path(worktree_root):
+            return None
+        return os.path.realpath(worktree_root)
+    try:
+        return store_core.repo_root(os.getcwd())
+    except store_core.RepoRootUnavailable:
+        return None
+
+
 def socket_dir_plan(slot_ref, *, base=None, launch_token=None, platform=None, worktree_root=None):
     """Plan a short unique socket directory path with measured SUN_PATH cap check."""
     try:
@@ -300,11 +351,11 @@ def socket_dir_plan(slot_ref, *, base=None, launch_token=None, platform=None, wo
 
     base = os.path.realpath(base)
 
-    if worktree_root is not None:
-        if not _is_str_path(worktree_root):
-            return _fail(REFUSAL_SOCKET_BASE_IN_WORKTREE)
-        if _path_related(base, worktree_root):
-            return _fail(REFUSAL_SOCKET_BASE_IN_WORKTREE)
+    resolved_worktree = _resolve_worktree_root(worktree_root)
+    if resolved_worktree is None:
+        return _fail(REFUSAL_WORKTREE_ROOT_UNRESOLVED)
+    if _path_related(base, resolved_worktree):
+        return _fail(REFUSAL_SOCKET_BASE_IN_WORKTREE)
 
     if platform is None:
         platform = sys.platform
@@ -409,17 +460,29 @@ def remove_socket_dir(path):
         return _fail(REFUSAL_SOCKET_DIR_UNSAFE)
     if not os.path.isdir(path):
         return _fail(REFUSAL_SOCKET_DIR_NOT_DIRECTORY)
+    basename = os.path.basename(os.path.normpath(path))
+    if not basename.startswith(_SOCKET_DIR_PREFIX):
+        return _fail(REFUSAL_SOCKET_DIR_UNRECOGNIZED)
     try:
         entries = os.listdir(path)
     except OSError:
         return _fail(REFUSAL_SOCKET_DIR_UNREMOVABLE)
+    removed_any = False
     for name in entries:
-        if not _remove_socket_dir_entry(path, name):
-            return _fail(REFUSAL_SOCKET_DIR_UNREMOVABLE)
+        if _remove_socket_dir_entry(path, name):
+            removed_any = True
+        else:
+            result = _fail(REFUSAL_SOCKET_DIR_UNREMOVABLE)
+            if removed_any:
+                result["removedAny"] = True
+            return result
     try:
         os.rmdir(path)
     except OSError:
-        return _fail(REFUSAL_SOCKET_DIR_UNREMOVABLE)
+        result = _fail(REFUSAL_SOCKET_DIR_UNREMOVABLE)
+        if removed_any:
+            result["removedAny"] = True
+        return result
     return _ok()
 
 
@@ -500,6 +563,30 @@ def assert_browser_is_server_child(server_pid, browser_pid, *, ppid_of=None):
     return _ok()
 
 
+def begin_provision_server(journal_path, *, slot_ref, at, detail=None):
+    """Write the provision begin record before any server/browser processes are spawned."""
+    if not _is_str_path(journal_path):
+        return _fail(REFUSAL_SERVER_RECORD_INVALID)
+    try:
+        slot, generation = pilot_slot.parse_slot_ref(slot_ref)
+    except pilot_slot.PilotSlotError:
+        return _fail(REFUSAL_OPERATION_SLOT_REF_INVALID)
+    if not _is_iso8601_utc(at):
+        return _fail(REFUSAL_SERVER_RECORD_INVALID)
+
+    formatted_ref = pilot_slot.format_slot_ref(slot, generation)
+    begin_result = pilot_journal.begin_effect(
+        journal_path,
+        slot_ref=formatted_ref,
+        kind=pilot_journal.KIND_BROWSER_SERVER_PROVISIONED,
+        at=at,
+        detail=detail,
+    )
+    if not begin_result["ok"]:
+        return _fail(REFUSAL_SERVER_RECORD_INVALID, detail=begin_result.get("reason"))
+    return _ok(effectId=begin_result["effectId"])
+
+
 def provision_server(
     journal_path,
     *,
@@ -512,6 +599,7 @@ def provision_server(
     created_at,
     begin_at,
     ppid_of=None,
+    effect_id=None,
 ):
     """Journal and validate a per-generation server+browser provisioning."""
     if not _is_str_path(journal_path):
@@ -559,6 +647,20 @@ def provision_server(
 
     end_at = _later_timestamp(begin_at)
 
+    if effect_id is not None:
+        if not isinstance(effect_id, str) or not effect_id:
+            return _fail(REFUSAL_SERVER_RECORD_INVALID)
+        end_result = pilot_journal.end_effect(
+            journal_path,
+            slot_ref=formatted_ref,
+            effect_id=effect_id,
+            outcome=pilot_journal.OUTCOME_APPLIED,
+            at=end_at,
+        )
+        if not end_result["ok"]:
+            return _fail(REFUSAL_SERVER_RECORD_INVALID, detail=end_result.get("reason"))
+        return _ok(record=record)
+
     try:
         with pilot_journal.effect(
             journal_path,
@@ -572,6 +674,21 @@ def provision_server(
         return _fail(REFUSAL_SERVER_RECORD_INVALID, detail=str(exc.reason))
 
     return _ok(record=record)
+
+
+class _TeardownCleanupError(Exception):
+    """Raised inside effect() so partial socket-dir cleanup journals as indeterminate."""
+
+
+def _observe_terminal_exit(observer, pid):
+    observation = observer(pid)
+    if not isinstance(observation, dict):
+        return None
+    exited = observation.get("exited")
+    status = observation.get("status")
+    if exited is not True:
+        return None
+    return status
 
 
 def teardown_server(
@@ -591,15 +708,13 @@ def teardown_server(
         return _fail(REFUSAL_SERVER_RECORD_INVALID)
 
     server_pid = server_record["serverPid"]
+    browser_pid = server_record["browserPid"]
     observer = observe_exit if observe_exit is not None else (lambda _pid: {"exited": False, "status": None})
-    observation = observer(server_pid)
-    if not isinstance(observation, dict):
+    server_status = _observe_terminal_exit(observer, server_pid)
+    if server_status is None:
         return _fail(REFUSAL_TERMINAL_STATE_UNOBSERVED)
-    exited = observation.get("exited")
-    status = observation.get("status")
-    # Never infer exit from socket file absence — that is a second read of the same
-    # liveness marker the design refuses.
-    if exited is not True:
+    browser_status = _observe_terminal_exit(observer, browser_pid)
+    if browser_status is None:
         return _fail(REFUSAL_TERMINAL_STATE_UNOBSERVED)
 
     socket_dir = server_record["socketDir"]
@@ -617,9 +732,13 @@ def teardown_server(
         ) as handle:
             remove_result = remove_socket_dir(socket_dir)
             if not remove_result["ok"]:
+                if remove_result.get("removedAny"):
+                    raise _TeardownCleanupError(remove_result["reason"])
                 handle.mark_not_applied(at=end_at, reason=remove_result["reason"])
                 return remove_result
             handle.mark_applied(at=end_at)
+    except _TeardownCleanupError as exc:
+        return _fail(str(exc))
     except pilot_journal.PilotJournalError as exc:
         return _fail(REFUSAL_SERVER_RECORD_INVALID, detail=str(exc.reason))
 
@@ -628,8 +747,9 @@ def teardown_server(
         "generation": server_record["generation"],
         "socketDir": socket_dir,
         "serverPid": server_pid,
-        "browserPid": server_record["browserPid"],
-        "observedExitStatus": status,
+        "browserPid": browser_pid,
+        "observedServerExitStatus": server_status,
+        "observedBrowserExitStatus": browser_status,
         "socketDirRemoved": True,
         "torndownAt": torn_down_at,
     }
@@ -706,10 +826,13 @@ def admit_server_registry(records):
     return _ok(accepted=len(validated))
 
 
-def admit(operation_slot_ref, live_record):
+def admit(operation_slot_ref, live_record, *, slots_dir=None):
     """Fencing chokepoint: refuse stale or mismatched browser operations."""
     if not _validate_server_record(live_record):
         return _fail(REFUSAL_SERVER_RECORD_INVALID)
+
+    if slots_dir is None:
+        return _fail(REFUSAL_FENCING_SLOTS_DIR_REQUIRED)
 
     try:
         op_slot, op_generation = pilot_slot.parse_slot_ref(operation_slot_ref)
@@ -720,8 +843,16 @@ def admit(operation_slot_ref, live_record):
     if op_slot != rec_slot:
         return _fail(REFUSAL_OPERATION_SLOT_MISMATCH)
 
-    rec_generation = live_record["generation"]
-    gen_check = pilot_lifecycle.generation_check(op_generation, rec_generation)
+    record_path = pilot_lifecycle.record_path(slots_dir, rec_slot)
+    disk = pilot_lifecycle.read_record(record_path)
+    if not disk["ok"]:
+        return _fail(REFUSAL_SERVER_RECORD_STALE, slotRef=live_record["slotRef"])
+
+    disk_generation = disk["record"]["generation"]
+    if live_record["generation"] != disk_generation:
+        return _fail(REFUSAL_SERVER_RECORD_STALE, slotRef=live_record["slotRef"])
+
+    gen_check = pilot_lifecycle.generation_check(op_generation, disk_generation)
     if not gen_check["ok"]:
         return _fail(gen_check["reason"], slotRef=live_record["slotRef"])
 
