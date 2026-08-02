@@ -1,6 +1,6 @@
 ---
 name: check-runner
-description: Internal build subagent — runs the enumerated list of commands the Workhorse orchestrator authored and writes their raw output to the paths the order names. Judgment-free: it never authors a check, never judges a result, never edits the tree. Not a front door.
+description: "Internal build subagent — runs the enumerated list of commands the Workhorse orchestrator authored and writes their raw output to the paths the order names. Judgment-free: it never authors a check, never judges a result, never edits the tree. Not a front door."
 tools: Read, Grep, Glob, Bash
 ---
 
