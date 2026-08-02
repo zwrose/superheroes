@@ -607,3 +607,401 @@ def test_exercise_symlink_free_reach_has_zero_skipped(private_tmp):
     receipt = pp.exercise_no_policy_material_in_reach([reach_root], material)
     assert receipt["symlinksSkipped"] == 0
     assert len(receipt["coverageLimits"]) == 1
+
+
+# --- datastore.containment validation -----------------------------------------
+
+def _valid_containment_permissions(cannot_reach=True):
+    return {
+        "cannotReachForeignNamespaces": cannot_reach,
+        "evidence": "cleanup cannot reach foreign namespaces",
+    }
+
+
+def _valid_containment_sentinel():
+    return {
+        "plantCommand": [
+            "/abs/path/to/plant",
+            "--ns",
+            pp.NAMESPACE_PLACEHOLDER,
+            "--id",
+            pp.SENTINEL_PLACEHOLDER,
+        ],
+        "probeCommand": [
+            "/abs/path/to/probe",
+            "--ns",
+            pp.NAMESPACE_PLACEHOLDER,
+            "--id",
+            pp.SENTINEL_PLACEHOLDER,
+        ],
+        "connectionEnvVar": "PILOT_DATASTORE_URL",
+    }
+
+
+def _datastore_with_containment(**containment_overrides):
+    containment = {
+        "permissions": _valid_containment_permissions(),
+        "sentinel": _valid_containment_sentinel(),
+    }
+    containment.update(containment_overrides)
+    datastore = dict(_sample_policy()["datastore"])
+    datastore["containment"] = containment
+    return datastore
+
+
+def _policy_with_containment_datastore(**containment_overrides):
+    return {**_sample_policy(), "datastore": _datastore_with_containment(**containment_overrides)}
+
+
+def test_validate_policy_without_containment_still_validates():
+    pp.validate_policy(_sample_policy())
+
+
+def test_validate_policy_containment_edge1_absent_validates():
+    doc = _sample_policy()
+    assert "containment" not in doc["datastore"]
+    pp.validate_policy(doc)
+
+
+def test_validate_policy_containment_edge2_null_value_refuses():
+    doc = _sample_policy()
+    doc["datastore"] = _datastore_with_containment()
+    doc["datastore"]["containment"] = None
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+@pytest.mark.parametrize(
+    "bad_containment",
+    [
+        [],
+        "not-a-dict",
+        1,
+    ],
+)
+def test_validate_policy_containment_edge3_not_dict_refuses(bad_containment):
+    doc = _policy_with_containment_datastore()
+    doc["datastore"]["containment"] = bad_containment
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+@pytest.mark.parametrize(
+    "containment_keys",
+    [
+        {"permissions": _valid_containment_permissions()},
+        {"sentinel": _valid_containment_sentinel()},
+    ],
+)
+def test_validate_policy_containment_edge4_missing_key_refuses(containment_keys):
+    doc = _sample_policy()
+    doc["datastore"] = dict(_sample_policy()["datastore"])
+    doc["datastore"]["containment"] = containment_keys
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+def test_validate_policy_containment_edge5_unknown_extra_key_refuses():
+    doc = _policy_with_containment_datastore()
+    doc["datastore"]["containment"]["extra"] = True
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+def test_validate_policy_containment_edge6_both_null_validates():
+    doc = _policy_with_containment_datastore(permissions=None, sentinel=None)
+    pp.validate_policy(doc)
+
+
+@pytest.mark.parametrize("cannot_reach", [1, 0])
+def test_validate_policy_containment_edge7_cannot_reach_not_bool_refuses(cannot_reach):
+    permissions = _valid_containment_permissions()
+    permissions["cannotReachForeignNamespaces"] = cannot_reach
+    doc = _policy_with_containment_datastore(permissions=permissions)
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+def test_validate_policy_containment_edge8_cannot_reach_false_validates():
+    permissions = _valid_containment_permissions(cannot_reach=False)
+    doc = _policy_with_containment_datastore(permissions=permissions)
+    pp.validate_policy(doc)
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        "",
+        123,
+        None,
+    ],
+)
+def test_validate_policy_containment_edge9_bad_evidence_refuses(evidence):
+    permissions = _valid_containment_permissions()
+    if evidence is None:
+        del permissions["evidence"]
+    else:
+        permissions["evidence"] = evidence
+    doc = _policy_with_containment_datastore(permissions=permissions)
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+def test_validate_policy_containment_edge10_permissions_extra_key_refuses():
+    permissions = _valid_containment_permissions()
+    permissions["extra"] = True
+    doc = _policy_with_containment_datastore(permissions=permissions)
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+def test_validate_policy_containment_edge11_plant_command_empty_refuses():
+    sentinel = _valid_containment_sentinel()
+    sentinel["plantCommand"] = []
+    doc = _policy_with_containment_datastore(sentinel=sentinel)
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+def test_validate_policy_containment_edge12_plant_command_empty_string_part_refuses():
+    sentinel = _valid_containment_sentinel()
+    sentinel["plantCommand"] = [
+        "/abs/path/to/plant",
+        "",
+        pp.NAMESPACE_PLACEHOLDER,
+        pp.SENTINEL_PLACEHOLDER,
+    ]
+    doc = _policy_with_containment_datastore(sentinel=sentinel)
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+@pytest.mark.parametrize("bad_part", [123, None])
+def test_validate_policy_containment_edge13_plant_command_non_str_part_refuses(bad_part):
+    sentinel = _valid_containment_sentinel()
+    sentinel["plantCommand"] = [
+        "/abs/path/to/plant",
+        bad_part,
+        pp.NAMESPACE_PLACEHOLDER,
+        pp.SENTINEL_PLACEHOLDER,
+    ]
+    doc = _policy_with_containment_datastore(sentinel=sentinel)
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+@pytest.mark.parametrize(
+    "executable",
+    [
+        "plant",
+        "./plant",
+    ],
+)
+def test_validate_policy_containment_edge14_plant_command_relative_executable_refuses(
+    executable,
+):
+    sentinel = _valid_containment_sentinel()
+    sentinel["plantCommand"] = [
+        executable,
+        "--ns",
+        pp.NAMESPACE_PLACEHOLDER,
+        "--id",
+        pp.SENTINEL_PLACEHOLDER,
+    ]
+    doc = _policy_with_containment_datastore(sentinel=sentinel)
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+def test_validate_policy_containment_edge15_plant_command_argv0_namespace_placeholder_refuses():
+    sentinel = _valid_containment_sentinel()
+    sentinel["plantCommand"] = [
+        "/abs/path/to/plant/%s" % pp.NAMESPACE_PLACEHOLDER,
+        "--ns",
+        pp.NAMESPACE_PLACEHOLDER,
+        "--id",
+        pp.SENTINEL_PLACEHOLDER,
+    ]
+    doc = _policy_with_containment_datastore(sentinel=sentinel)
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+def test_validate_policy_containment_edge16_plant_command_argv0_sentinel_placeholder_refuses():
+    sentinel = _valid_containment_sentinel()
+    sentinel["plantCommand"] = [
+        "/abs/path/to/plant/%s" % pp.SENTINEL_PLACEHOLDER,
+        "--ns",
+        pp.NAMESPACE_PLACEHOLDER,
+        "--id",
+        pp.SENTINEL_PLACEHOLDER,
+    ]
+    doc = _policy_with_containment_datastore(sentinel=sentinel)
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+def test_validate_policy_containment_edge17_plant_command_missing_namespace_refuses():
+    sentinel = _valid_containment_sentinel()
+    sentinel["plantCommand"] = [
+        "/abs/path/to/plant",
+        "--id",
+        pp.SENTINEL_PLACEHOLDER,
+    ]
+    doc = _policy_with_containment_datastore(sentinel=sentinel)
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+def test_validate_policy_containment_edge18_plant_command_missing_sentinel_refuses():
+    sentinel = _valid_containment_sentinel()
+    sentinel["plantCommand"] = [
+        "/abs/path/to/plant",
+        "--ns",
+        pp.NAMESPACE_PLACEHOLDER,
+    ]
+    doc = _policy_with_containment_datastore(sentinel=sentinel)
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+def test_validate_policy_containment_edge19_probe_command_missing_sentinel_refuses():
+    sentinel = _valid_containment_sentinel()
+    sentinel["probeCommand"] = [
+        "/abs/path/to/probe",
+        "--ns",
+        pp.NAMESPACE_PLACEHOLDER,
+    ]
+    doc = _policy_with_containment_datastore(sentinel=sentinel)
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+@pytest.mark.parametrize(
+    "env_var",
+    [
+        "1BAD",
+        "has-dash",
+        "",
+    ],
+)
+def test_validate_policy_containment_edge20_bad_connection_env_var_refuses(env_var):
+    sentinel = _valid_containment_sentinel()
+    sentinel["connectionEnvVar"] = env_var
+    doc = _policy_with_containment_datastore(sentinel=sentinel)
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+@pytest.mark.parametrize(
+    "sentinel_factory",
+    [
+        lambda: {"plantCommand": _valid_containment_sentinel()["plantCommand"]},
+        lambda: {**_valid_containment_sentinel(), "extra": True},
+    ],
+)
+def test_validate_policy_containment_edge21_sentinel_missing_or_unknown_key_refuses(
+    sentinel_factory,
+):
+    doc = _policy_with_containment_datastore(sentinel=sentinel_factory())
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+@pytest.mark.parametrize("bad_sentinel", [[], "not-a-dict", 1])
+def test_validate_policy_containment_edge22_sentinel_not_dict_refuses(bad_sentinel):
+    doc = _policy_with_containment_datastore(sentinel=bad_sentinel)
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+@pytest.mark.parametrize(
+    "placeholder",
+    [
+        "{slot}",
+        "{}",
+        "{Namespace}",
+    ],
+)
+def test_validate_policy_containment_edge23_unknown_placeholder_refuses(placeholder):
+    sentinel = _valid_containment_sentinel()
+    sentinel["plantCommand"] = [
+        "/abs/path/to/plant",
+        "--ns",
+        pp.NAMESPACE_PLACEHOLDER,
+        "--id",
+        pp.SENTINEL_PLACEHOLDER,
+        placeholder,
+    ]
+    doc = _policy_with_containment_datastore(sentinel=sentinel)
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+def test_validate_policy_containment_edge23_unclosed_brace_not_placeholder_validates():
+    sentinel = _valid_containment_sentinel()
+    sentinel["plantCommand"] = [
+        "/abs/path/to/plant",
+        "--ns",
+        pp.NAMESPACE_PLACEHOLDER,
+        "--id",
+        pp.SENTINEL_PLACEHOLDER,
+        "{namespace",
+    ]
+    doc = _policy_with_containment_datastore(sentinel=sentinel)
+    pp.validate_policy(doc)
+
+
+def test_validate_policy_containment_edge24_namespace_only_in_argv0_refuses():
+    sentinel = _valid_containment_sentinel()
+    sentinel["plantCommand"] = [
+        "/abs/path/to/plant/%s" % pp.NAMESPACE_PLACEHOLDER,
+        "--id",
+        pp.SENTINEL_PLACEHOLDER,
+    ]
+    doc = _policy_with_containment_datastore(sentinel=sentinel)
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+def test_validate_policy_containment_happy_path_round_trips(private_tmp):
+    policy_root = os.path.join(private_tmp, "policy")
+    os.makedirs(policy_root)
+    declaration = "example-project-pilot-policy"
+    expected = _policy_with_containment_datastore()
+    _write_policy(policy_root, declaration, expected, mode=0o600)
+    reach_root = os.path.join(private_tmp, "reach")
+    os.makedirs(reach_root)
+    doc = pp.resolve_policy_document(
+        policy_root,
+        declaration,
+        reach_roots=[reach_root],
+    )
+    assert doc == expected
+
+
+def test_policy_material_unchanged_by_containment():
+    without = pp.policy_material(_sample_policy())
+    with_containment = pp.policy_material(_policy_with_containment_datastore())
+    assert with_containment == without
