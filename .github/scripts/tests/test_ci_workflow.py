@@ -25,6 +25,19 @@ def _pr_title_data():
         return yaml.safe_load(fh)
 
 
+def _run_without_comments(run: str) -> str:
+    """Executable run text only — # comment lines are not shell commands."""
+    return "\n".join(
+        line for line in run.splitlines() if not line.strip().startswith("#")
+    )
+
+
+def _validate_step_run(data, step_name_substring: str) -> str:
+    steps = data["jobs"]["validate"]["steps"]
+    step = next(s for s in steps if step_name_substring in (s.get("name") or ""))
+    return _run_without_comments(step.get("run", ""))
+
+
 def test_ci_concurrency_cancels_pr_runs_not_main():
     # Axis: superseded PR runs cancel; main pushes queue without cancellation.
     data = _ci_data()
@@ -32,7 +45,16 @@ def test_ci_concurrency_cancels_pr_runs_not_main():
     group = conc.get("group", "")
     assert "github.workflow" in group and "github.ref" in group
     cancel = conc.get("cancel-in-progress", "")
-    assert "refs/heads/main" in cancel
+    assert isinstance(cancel, str), (
+        f"cancel-in-progress must be a string expression, got {type(cancel).__name__}"
+    )
+    normalized = " ".join(cancel.split())
+    assert re.search(
+        r"github\.ref\s*!=\s*['\"]refs/heads/main['\"]", normalized
+    ), (
+        "cancel-in-progress must express cancel unless ref is refs/heads/main, "
+        f"got: {cancel!r}"
+    )
 
 
 def test_ci_pull_request_types_exclude_edited():
@@ -97,7 +119,10 @@ def test_release_bump_gate_uses_base_sha():
     data = _ci_data()
     steps = data["jobs"]["validate"]["steps"]
     gate = next(s for s in steps if "Pre-merge release-bump gate" in (s.get("name") or ""))
-    assert "github.event.pull_request.base.sha" in gate.get("run", "")
+    env = gate.get("env", {})
+    assert env.get("BASE_SHA") == "${{ github.event.pull_request.base.sha }}"
+    run = _run_without_comments(gate.get("run", ""))
+    assert '"$BASE_SHA"' in run
 
 
 def test_release_bump_gate_sets_gh_token():
@@ -110,10 +135,16 @@ def test_release_bump_gate_sets_gh_token():
 
 def test_validate_installs_all_coupling_collectors():
     # Axis: silent-skip return — collectors must be installed so real-seam tests cannot degrade.
-    text = _ci_text()
-    assert "dependency-cruiser" in text
-    assert "typescript" in text
-    assert "import-linter" in text
+    data = _ci_data()
+    python_deps_run = _validate_step_run(
+        data, "Install Python dependencies (validators + tests + import-linter)"
+    )
+    collectors_run = _validate_step_run(
+        data, "Install coupling collectors (ungate coupling lens real-seam tests)"
+    )
+    assert "import-linter" in python_deps_run
+    assert "dependency-cruiser" in collectors_run
+    assert "typescript" in collectors_run
 
 
 def test_release_please_still_runs_check_release_bump():

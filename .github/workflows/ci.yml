@@ -58,6 +58,8 @@ jobs:
         if: github.event_name == 'pull_request' && github.head_ref == 'release-please--branches--main--components--superheroes'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          REPO: ${{ github.repository }}
         run: |
           # Baseline must be the PR base SHA: the PR checkout already holds the proposed
           # version in .release-please-manifest.json, whose tag does not exist until merge —
@@ -65,9 +67,9 @@ jobs:
           # release-please.yml keeps the post-merge tripwire as the backstop; this gate
           # moves failure to before the owner's merge click (#744, #814).
           git fetch --tags --force origin
-          git worktree add "$RUNNER_TEMP/release-base" "${{ github.event.pull_request.base.sha }}"
+          git worktree add "$RUNNER_TEMP/release-base" "$BASE_SHA"
           cd "$RUNNER_TEMP/release-base"
-          python3 .github/scripts/check_release_bump.py --repo "${{ github.repository }}"
+          python3 .github/scripts/check_release_bump.py --repo "$REPO"
 
       - name: Install jscpd (guardian duplication real-channel tests)
         run: npm install -g jscpd@5.0.12 && jscpd --version
