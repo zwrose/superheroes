@@ -25,6 +25,11 @@ _NEW_SECTIONS = (
 
 _TRANSITION_HEADER = "| From state | Legal targets |"
 _EFFECT_KIND_HEADER = "| Kind | Scope |"
+_LIFECYCLE_TOKEN_HEADER = "| Token | When returned |"
+_JOURNAL_TOKEN_HEADER = "| Token | When returned |"
+_BLOCKER_TOKEN_HEADER = "| Token | When raised |"
+_END_OUTCOME_HEADER = "| Outcome | Meaning |"
+_REPLAY_STATE_HEADER = "| Replay state | Source |"
 
 
 def _load_contract():
@@ -68,6 +73,23 @@ def _parse_markdown_table(doc, header_line):
     return rows
 
 
+def _parse_token_table(doc, header_line):
+    """Parse a two-column token table into a set of token strings from the first column."""
+    rows = _parse_markdown_table(doc, header_line)
+    if rows is None:
+        raise AssertionError(
+            "token table header %r not found in pilot-contract.md (file: %s)"
+            % (header_line, _PILOT_CONTRACT)
+        )
+    tokens = set()
+    for token_cell, _desc in rows:
+        token = token_cell.strip("`")
+        if token in tokens:
+            raise ValueError("duplicate token row in table %r: %r" % (header_line, token))
+        tokens.add(token)
+    return tokens
+
+
 def _parse_transition_table(doc):
     """Parse the lifecycle transition table into {from_state: frozenset(to_states)}."""
     rows = _parse_markdown_table(doc, _TRANSITION_HEADER)
@@ -80,6 +102,8 @@ def _parse_transition_table(doc):
     all_states = set()
     for from_cell, targets_cell in rows:
         from_state = from_cell.strip("`")
+        if from_state in transitions:
+            raise ValueError("duplicate transition row for from_state %r" % from_state)
         all_states.add(from_state)
         if targets_cell.strip() in ("*(none)*", "(none)", "—", ""):
             transitions[from_state] = frozenset()
@@ -105,8 +129,25 @@ def _parse_effect_kind_table(doc):
         )
     kinds = {}
     for kind_cell, scope_cell in rows:
-        kinds[kind_cell.strip("`")] = scope_cell.strip("`")
+        kind = kind_cell.strip("`")
+        if kind in kinds:
+            raise ValueError("duplicate effect-kind row for kind %r" % kind)
+        kinds[kind] = scope_cell.strip("`")
     return kinds
+
+
+def _assert_bidirectional_tokens(code_tokens, doc_tokens, label):
+    missing_from_doc = code_tokens - doc_tokens
+    extra_in_doc = doc_tokens - code_tokens
+    assert missing_from_doc == set() and extra_in_doc == set(), (
+        "pilot-contract.md %s token mismatch — missing from doc: %s; in doc but not in code: %s (file: %s)"
+        % (
+            label,
+            ", ".join(sorted(missing_from_doc)) or "(none)",
+            ", ".join(sorted(extra_in_doc)) or "(none)",
+            _PILOT_CONTRACT,
+        )
+    )
 
 
 def test_new_sections_in_contents():
@@ -169,34 +210,36 @@ def test_transitions_bidirectional():
     )
 
 
-def test_lifecycle_reason_tokens_in_contract():
+def test_lifecycle_reason_tokens_bidirectional():
     doc = _load_contract()
-    tokens = _reason_constants(pilot_lifecycle)
-    missing = [t for t in sorted(tokens) if t not in doc]
-    assert missing == [], (
-        "pilot-contract.md missing pilot_lifecycle REASON_* token(s): %s (file: %s)"
-        % (", ".join(missing), _PILOT_CONTRACT)
-    )
+    lifecycle_section = doc.split("## The provisioning journal")[0]
+    token_start = lifecycle_section.index("### Lifecycle refusal tokens")
+    lifecycle_tokens_section = lifecycle_section[token_start:]
+    doc_tokens = _parse_token_table(lifecycle_tokens_section, _LIFECYCLE_TOKEN_HEADER)
+    code_tokens = _reason_constants(pilot_lifecycle)
+    _assert_bidirectional_tokens(code_tokens, doc_tokens, "pilot_lifecycle REASON_*")
 
 
-def test_journal_reason_tokens_in_contract():
+def test_journal_reason_tokens_bidirectional():
     doc = _load_contract()
-    tokens = _reason_constants(pilot_journal)
-    missing = [t for t in sorted(tokens) if t not in doc]
-    assert missing == [], (
-        "pilot-contract.md missing pilot_journal REASON_* token(s): %s (file: %s)"
-        % (", ".join(missing), _PILOT_CONTRACT)
-    )
+    journal_section = doc.split("## The partial-failure report")[0]
+    partial_start = journal_section.index("## The provisioning journal")
+    journal_section = journal_section[partial_start:]
+    token_start = journal_section.index("### Journal refusal tokens")
+    journal_tokens_section = journal_section[token_start:]
+    doc_tokens = _parse_token_table(journal_tokens_section, _JOURNAL_TOKEN_HEADER)
+    code_tokens = _reason_constants(pilot_journal)
+    _assert_bidirectional_tokens(code_tokens, doc_tokens, "pilot_journal REASON_*")
 
 
-def test_block_tokens_in_contract():
+def test_block_tokens_bidirectional():
     doc = _load_contract()
-    tokens = _block_constants(pilot_journal)
-    missing = [t for t in sorted(tokens) if t not in doc]
-    assert missing == [], (
-        "pilot-contract.md missing BLOCK_* token(s): %s (file: %s)"
-        % (", ".join(missing), _PILOT_CONTRACT)
-    )
+    report_section = doc.split("## The partial-failure report")[1]
+    token_start = report_section.index("### Blocker tokens")
+    blocker_section = report_section[token_start:]
+    doc_tokens = _parse_token_table(blocker_section, _BLOCKER_TOKEN_HEADER)
+    code_tokens = _block_constants(pilot_journal)
+    _assert_bidirectional_tokens(code_tokens, doc_tokens, "BLOCK_*")
 
 
 def test_effect_kinds_bidirectional():
@@ -231,31 +274,156 @@ def test_effect_scope_matches_code():
     )
 
 
-def test_end_outcomes_and_effect_states_in_contract():
+def test_end_outcomes_bidirectional():
     doc = _load_contract()
-    for token in sorted(pilot_journal.END_OUTCOMES):
-        assert token in doc, (
-            "pilot-contract.md missing END_OUTCOME %r (file: %s)"
-            % (token, _PILOT_CONTRACT)
+    journal_section = doc.split("## The partial-failure report")[0]
+    partial_start = journal_section.index("## The provisioning journal")
+    journal_section = journal_section[partial_start:]
+    rows = _parse_markdown_table(journal_section, _END_OUTCOME_HEADER)
+    assert rows is not None, (
+        "end-outcome table header not found in pilot-contract.md (file: %s)"
+        % _PILOT_CONTRACT
+    )
+    doc_tokens = {row[0].strip("`") for row in rows}
+    code_tokens = set(pilot_journal.END_OUTCOMES)
+    _assert_bidirectional_tokens(code_tokens, doc_tokens, "END_OUTCOME")
+
+
+def test_effect_states_bidirectional():
+    doc = _load_contract()
+    journal_section = doc.split("## The partial-failure report")[0]
+    partial_start = journal_section.index("## The provisioning journal")
+    journal_section = journal_section[partial_start:]
+    rows = _parse_markdown_table(journal_section, _REPLAY_STATE_HEADER)
+    assert rows is not None, (
+        "replay-state table header not found in pilot-contract.md (file: %s)"
+        % _PILOT_CONTRACT
+    )
+    doc_tokens = {row[0].strip("`") for row in rows}
+    code_tokens = set(pilot_journal.EFFECT_STATES)
+    _assert_bidirectional_tokens(code_tokens, doc_tokens, "EFFECT_STATE")
+
+
+def test_provisioning_outcome_vocabulary_matches_slot_outcomes():
+    lifecycle_outcomes = {
+        pilot_lifecycle.provisioning_outcome(state)
+        for state in pilot_lifecycle.SLOT_STATES
+    }
+    lifecycle_outcomes.discard(None)
+    journal_outcomes = set(pilot_journal.SLOT_OUTCOMES)
+    assert lifecycle_outcomes == journal_outcomes, (
+        "provisioning_outcome vocabulary %r != SLOT_OUTCOMES %r"
+        % (sorted(lifecycle_outcomes), sorted(journal_outcomes))
+    )
+
+
+def test_slot_outcomes_in_contract():
+    doc = _load_contract()
+    for outcome in sorted(pilot_journal.SLOT_OUTCOMES):
+        assert outcome in doc, (
+            "pilot-contract.md missing slot outcome %r (file: %s)"
+            % (outcome, _PILOT_CONTRACT)
         )
-    for token in sorted(pilot_journal.EFFECT_STATES):
-        assert token in doc, (
-            "pilot-contract.md missing EFFECT_STATE %r (file: %s)"
-            % (token, _PILOT_CONTRACT)
-        )
+
+
+def test_parse_transition_table_rejects_duplicate_row():
+    table_text = (
+        "| From state | Legal targets |\n"
+        "|---|---|\n"
+        "| `provisioning` | `failed` |\n"
+        "| `provisioning` | `provisioned`, `failed` |\n"
+    )
+    with pytest.raises(ValueError, match="duplicate transition row"):
+        _parse_transition_table(table_text)
+
+
+def test_parse_effect_kind_table_rejects_duplicate_row():
+    table_text = (
+        "| Kind | Scope |\n"
+        "|---|---|\n"
+        "| `worktree-created` | `shared` |\n"
+        "| `worktree-created` | `slot` |\n"
+    )
+    with pytest.raises(ValueError, match="duplicate effect-kind row"):
+        _parse_effect_kind_table(table_text)
 
 
 def test_census_red_on_undocumented_lifecycle_reason(monkeypatch):
-    """Bite-proof axis: a REASON_* added in code but not in the doc must fail."""
+    """Bite-proof: a REASON_* added in code but not in the doc must fail."""
     doc = _load_contract()
-    tokens = _reason_constants(pilot_lifecycle)
-    fake = "slot-reason-census-probe-undocumented"
-    assert fake not in tokens
+    fake = "slot-census-probe"
     assert fake not in doc
-    augmented = tokens | {fake}
     monkeypatch.setattr(
-        "test_pilot_lifecycle_census._reason_constants",
-        lambda module: augmented if module is pilot_lifecycle else _reason_constants(module),
+        pilot_lifecycle, "REASON_CENSUS_PROBE", fake, raising=False
     )
-    with pytest.raises(AssertionError, match=fake):
-        test_lifecycle_reason_tokens_in_contract()
+    with pytest.raises(AssertionError, match="missing from doc.*slot-census-probe"):
+        test_lifecycle_reason_tokens_bidirectional()
+
+
+def test_census_red_on_undocumented_journal_reason(monkeypatch):
+    """Bite-proof: a REASON_* added in pilot_journal but not in the doc must fail."""
+    doc = _load_contract()
+    fake = "journal-census-probe"
+    assert fake not in doc
+    monkeypatch.setattr(
+        pilot_journal, "REASON_CENSUS_PROBE", fake, raising=False
+    )
+    with pytest.raises(AssertionError, match="missing from doc.*journal-census-probe"):
+        test_journal_reason_tokens_bidirectional()
+
+
+def test_census_red_on_undocumented_block_token(monkeypatch):
+    """Bite-proof: a BLOCK_* added in code but not in the doc must fail."""
+    doc = _load_contract()
+    fake = "report-census-probe"
+    assert fake not in doc
+    monkeypatch.setattr(
+        pilot_journal, "BLOCK_CENSUS_PROBE", fake, raising=False
+    )
+    with pytest.raises(AssertionError, match="missing from doc.*report-census-probe"):
+        test_block_tokens_bidirectional()
+
+
+def test_census_red_on_undocumented_effect_kind(monkeypatch):
+    """Bite-proof: an effect kind added in code but not in the doc must fail."""
+    doc = _load_contract()
+    fake = "census-probe-effect"
+    assert fake not in doc
+    monkeypatch.setattr(
+        pilot_journal, "KIND_CENSUS_PROBE", fake, raising=False
+    )
+    monkeypatch.setattr(
+        pilot_journal,
+        "EFFECT_KINDS",
+        pilot_journal.EFFECT_KINDS | frozenset({fake}),
+    )
+    with pytest.raises(AssertionError, match="missing effect kind"):
+        test_effect_kinds_bidirectional()
+
+
+def test_census_red_on_undocumented_slot_state(monkeypatch):
+    """Bite-proof: a slot state added in code but not in the doc must fail."""
+    doc = _load_contract()
+    fake = "census-probe-state"
+    assert fake not in doc
+    monkeypatch.setattr(
+        pilot_lifecycle,
+        "SLOT_STATES",
+        pilot_lifecycle.SLOT_STATES | frozenset({fake}),
+    )
+    with pytest.raises(AssertionError, match="missing state"):
+        test_slot_states_bidirectional()
+
+
+def test_census_red_on_undocumented_transition_edge(monkeypatch):
+    """Bite-proof: a transition edge added in code but not in the doc must fail."""
+    doc = _load_contract()
+    fake_dst = "census-probe-target"
+    assert fake_dst not in doc
+    new_transitions = dict(pilot_lifecycle.TRANSITIONS)
+    new_transitions[pilot_lifecycle.STATE_PROVISIONED] = (
+        new_transitions[pilot_lifecycle.STATE_PROVISIONED] | frozenset({fake_dst})
+    )
+    monkeypatch.setattr(pilot_lifecycle, "TRANSITIONS", new_transitions)
+    with pytest.raises(AssertionError, match="missing edge"):
+        test_transitions_bidirectional()
