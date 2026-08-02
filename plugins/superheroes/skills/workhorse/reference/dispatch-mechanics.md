@@ -11,7 +11,7 @@
 # Dispatch mechanics — long dispatches you own
 
 Read this at dispatch time, before you invoke a long dispatch. **Channel and wait are two choices.**
-A long-running external dispatch from a headless session runs in the **detached shape** *and* is
+A long-running external dispatch the builder invokes directly from a headless session runs in the **detached shape** *and* is
 **polled in-turn** — detaching buys survivability if the session dies; the in-turn poll is still the
 duty. Harness-tracked background-and-poll is **not** the normal path for those dispatches — tracked
 background work dies when the turn ends. The **detach-and-park contract** (files not pipes, stamp and

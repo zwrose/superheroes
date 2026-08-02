@@ -61,8 +61,10 @@ shape is wrong and the thinking wins.
    this vet's ordinal — not a promise to append later. Where the collector pointer could not be
    resolved, the receipt carries the item **and** the disclosed degradation. Each pending item carries
    **what it is**, **your recommendation** (so the owner's batch pass is one word rather than a
-   re-derivation), and **the vet ordinal it was proposed at** — a monotonic integer, one per vet,
-   assigned when the item is appended. **State this vet's own ordinal alongside the pending set**, so
+   re-derivation),    and **the vet ordinal it was proposed at** — a monotonic integer, one per vet,
+   assigned at the vet that proposed the item (the same vet when proposed and appended together; the
+   earlier proposing vet when an append was deferred). **State this vet's own ordinal alongside the
+   pending set**, so
    the sequence is readable from the receipt itself. **An item's ordinal is never re-stamped** when it
    is carried forward: age is `this vet's ordinal − the item's ordinal`, a subtraction over written
    numbers rather than a count of artifacts, which is what makes it immune to receipts being edited in

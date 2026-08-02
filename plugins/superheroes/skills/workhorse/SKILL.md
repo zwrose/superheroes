@@ -473,7 +473,7 @@ time**, before you invoke a long dispatch.
 
 A **skill-owned dispatch keeps its own structural-timeout contract** (e.g. `review-code`'s loop bounds
 each engine dispatch itself and forbids a per-dispatch watchdog) — don't override it with this rule.
-The **timeout** contract stays the skill's; the **channel** is the headless session's.
+The **timeout** contract stays the skill's; the **channel** duty attaches to what the builder itself launches.
 
 ## 8. Verify — re-run every receipt yourself
 
