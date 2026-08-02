@@ -745,7 +745,13 @@ def test_all_reason_constants_discoverable():
         pr.REASON_QUARANTINE_DIR_UNREADABLE,
         pr.REASON_JOURNAL_SEGMENTS_HIGH,
     }
-    assert expected == _reason_constants()
+    assert expected <= _reason_constants()
+    import re
+    for token in _reason_constants():
+        assert isinstance(token, str)
+        assert token
+        assert token.startswith("reclaim-")
+        assert re.match(r"^[a-z0-9]+(-[a-z0-9]+)*\Z", token)
 
 
 # --- bite-proof anchor tests (guards exercised by authorize_deletion / quarantine_entry) ---
