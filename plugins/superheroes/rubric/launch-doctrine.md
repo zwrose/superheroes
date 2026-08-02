@@ -57,6 +57,26 @@ This section is the doctrine artifact's home for that rule. The operative copy a
 loads is the showrunner charter (`skills/showrunner/SKILL.md`) — do not consolidate this rule back
 into the machine-parsed blocks above; nothing at launch reads prose outside those blocks.
 
+## Headless turn-end and detached dispatch (artifact home)
+
+A headless builder session (`claude -p`) **exits when its turn ends** — so until the durable
+handback comment or a durable park is posted, every turn ends with a tool call; a standalone narrative
+message is a session exit, not a pause. **`Monitor`, harness background-run completion, and wakeup
+scheduling cannot wake a headless session** and are never a turn's exit plan. On the night of
+**2026-08-02**, three headless builder sessions died in two lanes from this class of failure (one
+waiting on `Monitor`, two on standalone narrative with nothing in flight); all were recovered with
+zero work lost, but two live codex review seats were killed mid-run.
+
+**Channel and wait are separate choices.** A long-running external dispatch from a headless session
+runs in the **detached shape** *and* is **polled in-turn** — detaching buys survivability; the
+in-turn poll is still the duty. Park is what happens when the in-turn poll genuinely cannot fit the
+turn; it is not the automatic consequence of detaching.
+
+This section is the doctrine artifact's home for those rules. The operative copy a builder session
+loads — the full mechanism, the detached-shape contract, and the field evidence — is workhorse charter
+§7 (`skills/workhorse/SKILL.md`) — do not consolidate the mechanism back into the machine-parsed
+blocks above.
+
 ## Recovery — taking over a build that stopped
 
 A launched builder can stop for reasons unrelated to its work — the account it burns hits a limit,
