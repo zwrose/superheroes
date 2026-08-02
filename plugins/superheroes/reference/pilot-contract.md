@@ -791,6 +791,8 @@ success reports a shared effect as never having happened.
 | `credential-seeded` | `shared` |
 | `namespace-touched` | `shared` |
 | `project-declared` | `shared` |
+| `browser-server-provisioned` | `slot` |
+| `browser-server-torn-down` | `slot` |
 
 `project-declared` is the **one** project hook ("what did setup touch") and is `shared`
 because the framework cannot classify what the project names — fail closed.

@@ -1,4 +1,5 @@
 """Tests for pilot_provision.py — boundary verification and credential authorization."""
+import copy
 import hashlib
 import inspect
 import json
@@ -906,3 +907,363 @@ def test_authorized_sentinel_probe_request_uses_policy_allowlist(monkeypatch):
         envelope,
     )
     assert sentinel_calls[0]["allowlist"] == policy["slots"]["slot-a"]["mintableAccounts"]
+
+
+# --- C7: declare-and-exercise gate + datastore identity + gate_provisioning --------
+
+def _mint_block():
+    return {
+        "envelope": {
+            "enablingFlagEnvVar": "ALLOW_TEST_MINT",
+            "enabledScopes": ["development"],
+            "forbiddenScopes": ["production", "staging"],
+            "gateOffTestCommand": ["npm", "run", "test:mint-gate-off"],
+        },
+        "sentinelIdentifier": "pilot-sentinel-no-such-account",
+    }
+
+
+def _valid_pilot_block():
+    return copy.deepcopy({
+        "schemaVersion": 1,
+        "signInPath": "captured",
+        "credentialSet": [
+            {"account": "owner", "role": "resource-owner"},
+            {"account": "guest", "role": "share-recipient"},
+        ],
+        "captureSurface": ["cookies", "localStorage"],
+        "captureOptions": {"indexedDB": False, "credentials": False},
+        "validityProvenance": "server-probe",
+        "identityProbe": {"path": "/api/me", "unseededExpectation": "no-session"},
+        "cleanup": {
+            "command": ["npm", "run", "fixtures:clean", "--", "--namespace", "{namespace}"],
+        },
+        "administrativeMax": 4,
+        "effectsEscape": {
+            "canEscape": False,
+            "evidence": "dev mail capture + sandboxed outbound calls",
+        },
+        "policyRef": {"declaration": "example-project-pilot-policy"},
+    })
+
+
+def _valid_minted_pilot_block():
+    block = _valid_pilot_block()
+    block["signInPath"] = "minted"
+    block["mint"] = _mint_block()
+    return block
+
+
+def _registry_record(kind, declaration):
+    digest = pilot_contract.declaration_digest(declaration)
+    return {
+        "kind": kind,
+        "declarationDigest": digest,
+        "exercisedAt": "2026-08-02T04:00:00Z",
+        "receipt": {"result": "pass", "evidence": "exercised"},
+    }
+
+
+def _full_registry(block, policy, slot_ref):
+    records = []
+    for kind in pilot_contract.DECLARATION_KINDS:
+        info = pp.declaration_for(kind, block, policy, slot_ref)
+        if info["applicable"]:
+            records.append(_registry_record(kind, info["declaration"]))
+    return {"schemaVersion": pilot_contract.REGISTRY_SCHEMA_VERSION, "records": records}
+
+
+def _verdict_with_identity(policy, *, strength="strong", match=True, provenance="observed"):
+    verdict = _passing_verdict(policy)
+    verdict["datastoreIdentity"] = {
+        "provenance": provenance,
+        "strength": strength,
+        "match": match,
+    }
+    return verdict
+
+
+def _valid_weaker_acceptance():
+    return {
+        "acceptedBy": "owner",
+        "acceptedAt": "2026-08-02T12:00:00Z",
+        "reason": "app-reported identity accepted for dev slot",
+    }
+
+
+def test_declaration_sources_covers_declaration_kinds():
+    assert set(pp.DECLARATION_SOURCES) == pilot_contract.DECLARATION_KINDS
+
+
+def test_gate_provisioning_pass_strong_identity_captured(private_tmp):
+    policy = SAMPLE_POLICY
+    block = _valid_pilot_block()
+    slot_ref = "slot-a@1"
+    registry = _full_registry(block, policy, slot_ref)
+    verdict = _verdict_with_identity(policy)
+    receipt = pp.gate_provisioning(
+        verdict, policy, slot_ref, block, registry,
+    )
+    assert receipt["slotRef"] == "slot-a@1"
+    assert receipt["policyDigest"] == _digest(policy)
+    assert receipt["datastoreIdentity"] == {
+        "provenance": "observed",
+        "strength": "strong",
+        "match": True,
+    }
+    assert receipt["weakerAcceptance"] is None
+    mint_statuses = {
+        d["kind"]: d["status"] for d in receipt["declarations"]
+    }
+    assert mint_statuses["mint-gate-off"] == "not-applicable"
+    assert mint_statuses["mint-account-allowlist"] == "not-applicable"
+    assert "gatedAt" in receipt
+
+
+def test_gate_provisioning_weaker_acceptance_carried_in_receipt():
+    policy = SAMPLE_POLICY
+    block = _valid_pilot_block()
+    slot_ref = "slot-a@1"
+    registry = _full_registry(block, policy, slot_ref)
+    acceptance = _valid_weaker_acceptance()
+    verdict = _verdict_with_identity(
+        policy, strength="weaker", provenance="app-reported",
+    )
+    receipt = pp.gate_provisioning(
+        verdict, policy, slot_ref, block, registry,
+        weaker_acceptance=acceptance,
+    )
+    assert receipt["weakerAcceptance"] == acceptance
+    assert receipt["datastoreIdentity"]["strength"] == "weaker"
+
+
+def test_gate_edge1_unexercised_declaration_refuses():
+    policy = SAMPLE_POLICY
+    block = _valid_pilot_block()
+    slot_ref = "slot-a@1"
+    with pytest.raises(pilot_contract.PilotContractError) as exc:
+        pp.require_declarations_exercised(block, policy, slot_ref, {})
+    assert exc.value.reason == pilot_contract.REFUSAL_DECLARATION_UNEXERCISED
+
+
+def test_gate_edge2_digest_mismatch_refuses():
+    policy = SAMPLE_POLICY
+    block = _valid_pilot_block()
+    slot_ref = "slot-a@1"
+    registry = _full_registry(block, policy, slot_ref)
+    block["identityProbe"] = {
+        "path": "/api/changed",
+        "unseededExpectation": "no-session",
+    }
+    with pytest.raises(pilot_contract.PilotContractError) as exc:
+        pp.require_declarations_exercised(block, policy, slot_ref, registry)
+    assert exc.value.reason == pilot_contract.REFUSAL_DECLARATION_UNEXERCISED
+
+
+def test_gate_edge3_receipt_fail_refuses():
+    policy = SAMPLE_POLICY
+    block = _valid_pilot_block()
+    slot_ref = "slot-a@1"
+    info = pp.declaration_for("identity-probe", block, policy, slot_ref)
+    registry = {
+        "schemaVersion": pilot_contract.REGISTRY_SCHEMA_VERSION,
+        "records": [{
+            "kind": "identity-probe",
+            "declarationDigest": pilot_contract.declaration_digest(info["declaration"]),
+            "exercisedAt": "2026-08-02T04:00:00Z",
+            "receipt": {"result": "fail", "evidence": "failed"},
+        }],
+    }
+    with pytest.raises(pilot_contract.PilotContractError) as exc:
+        pp.require_declarations_exercised(block, policy, slot_ref, registry)
+    assert exc.value.reason == pilot_contract.REFUSAL_DECLARATION_UNEXERCISED
+
+
+def test_gate_edge4_no_evidence_refuses():
+    policy = SAMPLE_POLICY
+    block = _valid_pilot_block()
+    slot_ref = "slot-a@1"
+    info = pp.declaration_for("identity-probe", block, policy, slot_ref)
+    registry = {
+        "schemaVersion": pilot_contract.REGISTRY_SCHEMA_VERSION,
+        "records": [{
+            "kind": "identity-probe",
+            "declarationDigest": pilot_contract.declaration_digest(info["declaration"]),
+            "exercisedAt": "2026-08-02T04:00:00Z",
+            "receipt": {"result": "pass"},
+        }],
+    }
+    with pytest.raises(pilot_contract.PilotContractError) as exc:
+        pp.require_declarations_exercised(block, policy, slot_ref, registry)
+    assert exc.value.reason == pilot_contract.REFUSAL_DECLARATION_UNEXERCISED
+
+
+def test_gate_edge5_wrong_schema_version_refuses():
+    policy = SAMPLE_POLICY
+    block = _valid_pilot_block()
+    slot_ref = "slot-a@1"
+    registry = _full_registry(block, policy, slot_ref)
+    registry["schemaVersion"] = 2
+    with pytest.raises(pilot_contract.PilotContractError) as exc:
+        pp.require_declarations_exercised(block, policy, slot_ref, registry)
+    assert exc.value.reason == pilot_contract.REFUSAL_DECLARATION_UNEXERCISED
+
+
+def test_gate_edge6_declaration_kinds_uncovered(monkeypatch):
+    monkeypatch.setattr(
+        pilot_contract,
+        "DECLARATION_KINDS",
+        frozenset(pilot_contract.DECLARATION_KINDS) | {"future-kind"},
+    )
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp._verify_declaration_sources_complete()
+    assert exc.value.reason == pp.REFUSAL_DECLARATION_KINDS_UNCOVERED
+
+
+def test_gate_edge7_missing_declaration_source_key_refuses():
+    policy = SAMPLE_POLICY
+    block = _valid_pilot_block()
+    del block["identityProbe"]
+    slot_ref = "slot-a@1"
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.declaration_for("identity-probe", block, policy, slot_ref)
+    assert exc.value.reason == pp.REFUSAL_DECLARATION_SOURCE_MISSING
+
+
+def test_gate_edge8_captured_project_skips_mint_kinds():
+    policy = SAMPLE_POLICY
+    block = _valid_pilot_block()
+    slot_ref = "slot-a@1"
+    registry = _full_registry(block, policy, slot_ref)
+    verdict = _verdict_with_identity(policy)
+    receipt = pp.gate_provisioning(
+        verdict, policy, slot_ref, block, registry,
+    )
+    statuses = {d["kind"]: d["status"] for d in receipt["declarations"]}
+    assert statuses["mint-gate-off"] == "not-applicable"
+    assert statuses["mint-account-allowlist"] == "not-applicable"
+    assert statuses["identity-probe"] == "exercised"
+
+
+def test_gate_edge9_minted_unexercised_mint_gate_off_refuses():
+    policy = SAMPLE_POLICY
+    block = _valid_minted_pilot_block()
+    slot_ref = "slot-a@1"
+    registry = _full_registry(block, policy, slot_ref)
+    registry["records"] = [
+        record for record in registry["records"]
+        if record["kind"] != "mint-gate-off"
+    ]
+    with pytest.raises(pilot_contract.PilotContractError) as exc:
+        pp.require_declarations_exercised(block, policy, slot_ref, registry)
+    assert exc.value.reason == pilot_contract.REFUSAL_DECLARATION_UNEXERCISED
+
+
+def test_gate_edge10_datastore_identity_absent_refuses():
+    policy = SAMPLE_POLICY
+    verdict = _passing_verdict(policy)
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_datastore_identity(verdict)
+    assert exc.value.reason == pp.REFUSAL_DATASTORE_IDENTITY_ABSENT
+
+
+def test_gate_edge11_datastore_identity_unmatched_refuses():
+    policy = SAMPLE_POLICY
+    verdict = _verdict_with_identity(policy, match=False)
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_datastore_identity(verdict)
+    assert exc.value.reason == pp.REFUSAL_DATASTORE_IDENTITY_UNMATCHED
+
+
+def test_gate_edge12_weaker_without_acceptance_refuses():
+    policy = SAMPLE_POLICY
+    verdict = _verdict_with_identity(policy, strength="weaker", provenance="app-reported")
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_datastore_identity(verdict)
+    assert exc.value.reason == pp.REFUSAL_DATASTORE_IDENTITY_WEAKER_UNACCEPTED
+
+
+def test_gate_edge13_malformed_weaker_acceptance_refuses():
+    policy = SAMPLE_POLICY
+    verdict = _verdict_with_identity(policy, strength="weaker", provenance="app-reported")
+    bad = {"acceptedBy": "owner", "acceptedAt": "not-iso", "reason": "ok"}
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_datastore_identity(verdict, weaker_acceptance=bad)
+    assert exc.value.reason == pp.REFUSAL_WEAKER_ACCEPTANCE_INVALID
+
+
+def test_gate_edge14_weaker_with_valid_acceptance_passes():
+    policy = SAMPLE_POLICY
+    verdict = _verdict_with_identity(policy, strength="weaker", provenance="app-reported")
+    acceptance = _valid_weaker_acceptance()
+    result = pp.gate_datastore_identity(verdict, weaker_acceptance=acceptance)
+    assert result["ok"] is True
+    assert result["acceptance"] == acceptance
+
+
+def test_gate_edge15_unknown_strength_refuses():
+    policy = SAMPLE_POLICY
+    verdict = _verdict_with_identity(policy, strength="medium")
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_datastore_identity(verdict)
+    assert exc.value.reason == pp.REFUSAL_DATASTORE_IDENTITY_STRENGTH_UNKNOWN
+
+
+def test_gate_edge16_authorize_credentials_called_first(monkeypatch):
+    policy = SAMPLE_POLICY
+    block = _valid_pilot_block()
+    slot_ref = "slot-a@1"
+    registry = _full_registry(block, policy, slot_ref)
+    verdict = _passing_verdict(policy)
+    verdict["result"] = "refuse"
+    identity_calls = []
+    declaration_calls = []
+
+    def track_identity(*_args, **_kwargs):
+        identity_calls.append(True)
+
+    def track_declarations(*_args, **_kwargs):
+        declaration_calls.append(True)
+
+    monkeypatch.setattr(pp, "gate_datastore_identity", track_identity)
+    monkeypatch.setattr(pp, "require_declarations_exercised", track_declarations)
+    with pytest.raises(pilot_boundary.PilotBoundaryError) as exc:
+        pp.gate_provisioning(verdict, policy, slot_ref, block, registry)
+    assert exc.value.reason == pilot_boundary.REFUSAL_UNVERIFIED
+    assert identity_calls == []
+    assert declaration_calls == []
+
+
+def test_gate_edge17_receipt_has_no_policy_material(private_tmp):
+    policy = SAMPLE_POLICY
+    block = _valid_pilot_block()
+    slot_ref = "slot-a@1"
+    registry = _full_registry(block, policy, slot_ref)
+    verdict = _verdict_with_identity(policy)
+    receipt = pp.gate_provisioning(
+        verdict, policy, slot_ref, block, registry,
+    )
+    material = pilot_policy.policy_material(policy)
+    serialized = json.dumps(receipt, sort_keys=True, ensure_ascii=False)
+    for material_class in pilot_policy.MATERIAL_CLASSES:
+        for needle in material[material_class]:
+            assert needle not in serialized
+
+
+def test_gate_edge17_assert_results_only_refuses_material_in_receipt(monkeypatch):
+    policy = SAMPLE_POLICY
+    block = _valid_pilot_block()
+    slot_ref = "slot-a@1"
+    registry = _full_registry(block, policy, slot_ref)
+    verdict = _verdict_with_identity(policy)
+
+    def leaking_assert(_receipt, _material):
+        raise pilot_policy.PilotPolicyError(
+            pilot_policy.REFUSAL_MATERIAL_IN_RESULT,
+            detail="connection-detail",
+        )
+
+    monkeypatch.setattr(pilot_policy, "assert_results_only", leaking_assert)
+    with pytest.raises(pilot_policy.PilotPolicyError) as exc:
+        pp.gate_provisioning(verdict, policy, slot_ref, block, registry)
+    assert exc.value.reason == pilot_policy.REFUSAL_MATERIAL_IN_RESULT
