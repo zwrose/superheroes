@@ -86,6 +86,7 @@ SENTINEL_PLACEHOLDER = "{sentinel}"
 _PLACEHOLDER_RE = re.compile(r"\{[^{}]*\}")
 _SENTINEL_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _HEAD_RE = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
+_SHA256_HEX_LEN = 64
 
 _SENTINEL_KEYS = frozenset({"plantCommand", "probeCommand", "connectionEnvVar"})
 
@@ -262,6 +263,11 @@ def run_bounded(command, *, cwd, env, timeout_seconds=20, max_output_bytes=4096)
     except OSError:
         raise PilotCleanupError(REFUSAL_PROBE_INDETERMINATE)
 
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (ProcessLookupError, PermissionError):
+        pgid = None
+
     timed_out = False
     stdout_bytes = 0
     stdout_truncated = False
@@ -289,7 +295,7 @@ def run_bounded(command, *, cwd, env, timeout_seconds=20, max_output_bytes=4096)
         reader.join(timeout=timeout_seconds)
 
         if reader.is_alive():
-            _terminate_and_wait(proc)
+            _terminate_and_wait(proc, pgid, signal_group=True)
             timed_out = True
         else:
             total, truncated = stdout_holder[0] if stdout_holder else (0, False)
@@ -298,7 +304,7 @@ def run_bounded(command, *, cwd, env, timeout_seconds=20, max_output_bytes=4096)
             try:
                 proc.wait(timeout=timeout_seconds)
             except subprocess.TimeoutExpired:
-                _terminate_and_wait(proc)
+                _terminate_and_wait(proc, pgid, signal_group=True)
                 timed_out = True
 
         exit_code = None if timed_out else proc.returncode
@@ -309,11 +315,11 @@ def run_bounded(command, *, cwd, env, timeout_seconds=20, max_output_bytes=4096)
             "stdoutTruncated": stdout_truncated,
         }
     except Exception:
-        _terminate_and_wait(proc)
+        _terminate_and_wait(proc, pgid, signal_group=True)
         raise PilotCleanupError(REFUSAL_PROBE_INDETERMINATE)
     finally:
         if proc.poll() is None:
-            _terminate_and_wait(proc)
+            _terminate_and_wait(proc, pgid)
         if proc.stdout:
             proc.stdout.close()
 
@@ -529,6 +535,10 @@ def _sha256_file_chunks(path, chunk_size=65536):
     return digest.hexdigest()
 
 
+def _sha256_text(value):
+    return hashlib.sha256(value.encode("utf-8", errors="surrogateescape")).hexdigest()
+
+
 def _worktree_path_record(cleanup_root, rel_path):
     abs_path = os.path.join(cleanup_root, rel_path)
     try:
@@ -541,6 +551,12 @@ def _worktree_path_record(cleanup_root, rel_path):
         except OSError:
             raise PilotCleanupError(REFUSAL_SOURCE_UNREADABLE)
         return [rel_path, "f", content_hash]
+    if stat.S_ISLNK(st.st_mode):
+        try:
+            target = os.readlink(abs_path)
+        except OSError:
+            return [rel_path, "l", None]
+        return [rel_path, "l", _sha256_text(target)]
     return [rel_path, "o", None]
 
 
@@ -555,30 +571,68 @@ def _worktree_digest(cleanup_root, status_data):
     for path in sorted(paths):
         canonical.append(_worktree_path_record(cleanup_root, path))
     payload = _canonical_json(_nfc_normalize(canonical))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return hashlib.sha256(payload.encode("utf-8", errors="surrogateescape")).hexdigest()
 
 
-def _argv_tail_digests(resolved_argv):
+def _argv_tail_candidate(part, run_cwd):
+    if not isinstance(part, str) or part.startswith("-"):
+        return None
+    return part if os.path.isabs(part) else os.path.join(run_cwd, part)
+
+
+def _argv_tail_content_digest(candidate):
+    try:
+        st = os.lstat(candidate)
+    except OSError:
+        return None
+    if stat.S_ISREG(st.st_mode):
+        try:
+            return _sha256_file_chunks(candidate)
+        except OSError:
+            return None
+    if stat.S_ISLNK(st.st_mode):
+        try:
+            resolved = os.path.realpath(candidate)
+        except OSError:
+            return None
+        try:
+            target_st = os.stat(resolved)
+        except OSError:
+            return None
+        if not stat.S_ISREG(target_st.st_mode):
+            return None
+        try:
+            return _sha256_file_chunks(resolved)
+        except OSError:
+            return None
+    return None
+
+
+def _argv_tail_digests(resolved_argv, run_cwd):
+    if not isinstance(run_cwd, str) or not os.path.isdir(run_cwd):
+        raise PilotCleanupError(REFUSAL_SOURCE_ROOT_INVALID)
     digests = []
     for index, part in enumerate(resolved_argv[1:], start=1):
+        candidate = _argv_tail_candidate(part, run_cwd)
+        if candidate is None:
+            continue
+        content_hash = _argv_tail_content_digest(candidate)
+        if content_hash is not None:
+            digests.append([index, content_hash])
+            continue
         try:
-            st = os.lstat(part)
+            st = os.lstat(candidate)
         except OSError:
             continue
-        if not stat.S_ISREG(st.st_mode):
-            continue
-        try:
-            content_hash = _sha256_file_chunks(part)
-        except OSError:
-            continue
-        digests.append([index, content_hash])
+        if stat.S_ISLNK(st.st_mode):
+            digests.append([index, None])
     digests.sort(key=lambda item: item[0])
     return digests
 
 
-def _populate_source_binding(source_id, resolved_argv):
+def _populate_source_binding(source_id, resolved_argv, run_cwd):
     source_id["argv0Digest"] = argv0_content_digest(resolved_argv[0])
-    source_id["argvDigests"] = _argv_tail_digests(resolved_argv)
+    source_id["argvDigests"] = _argv_tail_digests(resolved_argv, run_cwd)
 
 
 def source_identity(cleanup_root):
@@ -780,7 +834,7 @@ def cleanup_effect_receipt(
         raise PilotCleanupError(REFUSAL_CLEANUP_ARGV0_NOT_ABSOLUTE)
 
     source_id = source_identity(cleanup_root)
-    _populate_source_binding(source_id, resolved_argv)
+    _populate_source_binding(source_id, resolved_argv, run_cwd)
     config_digest_value = config_digest(
         policy,
         resolved_cleanup_argv=resolved_argv,
@@ -797,9 +851,14 @@ def cleanup_effect_receipt(
     all_namespaces = [namespace] + foreigns
     sentinel_ids = {ns: sentinel_factory() for ns in all_namespaces}
     residual_sentinels = [
-        {"namespace": foreign, "sentinelId": sentinel_ids[foreign]}
+        {
+            "namespace": foreign,
+            "sentinelId": sentinel_ids[foreign],
+            "state": "possibly-planted",
+        }
         for foreign in foreigns
     ]
+    residual_by_ns = {entry["namespace"]: entry for entry in residual_sentinels}
     connection_detail = policy["datastore"]["connectionDetail"]
     env_var = sentinel["connectionEnvVar"]
 
@@ -842,6 +901,13 @@ def cleanup_effect_receipt(
         ) as handle:
             planted_namespaces = []
             for ns in all_namespaces:
+                if ns not in residual_by_ns:
+                    residual_by_ns[ns] = {
+                        "namespace": ns,
+                        "sentinelId": sentinel_ids[ns],
+                        "state": "possibly-planted",
+                    }
+                residual_by_ns[ns]["state"] = "possibly-planted"
                 plant_sentinel(
                     sentinel,
                     ns,
@@ -851,15 +917,16 @@ def cleanup_effect_receipt(
                     run_cwd=run_cwd,
                     timeout_seconds=timeout_seconds,
                 )
+                residual_by_ns[ns]["state"] = "planted"
                 planted_namespaces.append(ns)
+            residual_sentinels = [residual_by_ns[foreign] for foreign in foreigns]
             handle.mark_applied(at=now)
     except PilotCleanupError as exc:
         if exc.reason != REFUSAL_PLANT_FAILED:
             raise
-        planted_residuals = [
-            {"namespace": ns, "sentinelId": sentinel_ids[ns]}
-            for ns in planted_namespaces
-        ]
+        attempted_count = len(planted_namespaces)
+        attempted_namespaces = all_namespaces[: attempted_count + 1]
+        planted_residuals = [residual_by_ns[ns] for ns in attempted_namespaces]
         receipt = _build_receipt(
             result=RESULT_FAIL,
             reason=REFUSAL_PLANT_FAILED,
@@ -1014,6 +1081,20 @@ def cleanup_effect_receipt(
     return receipt
 
 
+def _digest_hex_valid(value):
+    if not isinstance(value, str):
+        return False
+    if len(value) != _SHA256_HEX_LEN:
+        return False
+    if value != value.lower():
+        return False
+    try:
+        int(value, 16)
+    except ValueError:
+        return False
+    return True
+
+
 def _receipt_schema_valid(receipt):
     if not isinstance(receipt, dict):
         return False
@@ -1022,8 +1103,7 @@ def _receipt_schema_valid(receipt):
     if receipt.get("kind") != KIND_CLEANUP_CONTAINMENT:
         return False
     for digest_key in ("commandDigest", "configDigest"):
-        digest_value = receipt.get(digest_key)
-        if not isinstance(digest_value, str) or not digest_value:
+        if not _digest_hex_valid(receipt.get(digest_key)):
             return False
     return True
 
@@ -1066,7 +1146,7 @@ def receipt_valid_for(
     sentinel = _sentinel_from_policy(policy)
     resolved_argv = resolve_cleanup_command(declared_command, namespace)
     source_id = source_identity(cleanup_root)
-    _populate_source_binding(source_id, resolved_argv)
+    _populate_source_binding(source_id, resolved_argv, run_cwd)
     expected_config_digest = config_digest(
         policy,
         resolved_cleanup_argv=resolved_argv,
@@ -1352,16 +1432,42 @@ def resurrection_plan(
     return plan
 
 
-def _terminate_and_wait(proc):
+def _terminate_and_wait(proc, pgid, *, signal_group=False):
+    parent_pgid = os.getpgid(os.getpid())
+
+    def _valid_target_pgid():
+        if not isinstance(pgid, int) or pgid <= 0:
+            return None
+        if pgid == parent_pgid:
+            return None
+        return pgid
+
+    target_pgid = _valid_target_pgid()
+    if signal_group and target_pgid is not None:
+        try:
+            os.killpg(target_pgid, signal.SIGTERM)
+            try:
+                proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(target_pgid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                proc.wait()
+        except (ProcessLookupError, PermissionError):
+            pass
+        else:
+            return
+
     if proc.poll() is not None:
         return
     try:
-        pgid = os.getpgid(proc.pid)
-        os.killpg(pgid, signal.SIGTERM)
+        child_pgid = os.getpgid(proc.pid)
+        os.killpg(child_pgid, signal.SIGTERM)
         try:
             proc.wait(timeout=1)
         except subprocess.TimeoutExpired:
-            os.killpg(pgid, signal.SIGKILL)
+            os.killpg(child_pgid, signal.SIGKILL)
             proc.wait()
     except ProcessLookupError:
         if proc.poll() is None:

@@ -1027,11 +1027,14 @@ A passing receipt binds to:
 - the resolved configuration (sentinel commands, namespace, foreign namespaces, observed
   datastore identity with provenance and strength, run cwd),
 - **and the cleanup's source state** — the repository HEAD oid plus a content digest of every
-  dirty or untracked path in the cleanup repository, plus content digests of the cleanup argv's
-  executable (`argv0`) and of every existing regular file in its argv tail (`argvDigests`), so an
-  edit to those bound files — committed or not — invalidates the receipt at the same argv. A
-  cleanup that reads a file not named in its argv (a sourced helper, an imported module, a config
-  file) is not covered by this binding; that limitation is known.
+  dirty or untracked path in the cleanup repository (regular files by content, symlinks by link
+  target string, directories and other non-regular entries by path only), plus content digests of
+  the cleanup argv's executable (`argv0`) and of every existing regular file or symlink target in
+  its argv tail (`argvDigests` — relative tail paths resolved against `runCwd`, the same cwd the
+  cleanup command runs under), so an edit to those bound files — committed or not — invalidates
+  the receipt at the same argv. A cleanup that reads a file not named in its argv (a sourced
+  helper, an imported module, a config file) is still not covered by this binding; that
+  limitation is known.
 
 Both digests are **HMAC-SHA256 keyed on a digest of the whole policy document**. An unkeyed
 truncated digest of a low-entropy identity such as a database name would be a dictionary oracle
@@ -1090,8 +1093,11 @@ present), `refuse` (declaration unexercised, containment unresolved, or verdict 
 The harness plants foreign sentinels it cannot remove — there is no remove command, and running
 the project cleanup against a sibling namespace to tidy up would be the exact destruction the
 exercise prevents — so the receipt records them under `residualSentinels` for the advisor. Each
-entry carries the foreign `namespace` and the planted `sentinelId` so the advisor can locate and
-remove residue without guessing which unpredictable id was minted for that namespace.
+entry carries the foreign `namespace`, the planted `sentinelId`, and a `state` of `planted` when
+the plant command completed successfully or `possibly-planted` when the plant may or may not have
+written (a mid-command failure or timeout leaves the honest `possibly-planted` state) so the
+advisor can locate and remove residue without guessing which unpredictable id was minted for
+that namespace.
 
 ### Declare-and-exercise binding
 

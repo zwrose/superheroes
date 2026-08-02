@@ -7,6 +7,7 @@ import os
 import stat
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -1126,7 +1127,9 @@ def test_cleanup_effect_receipt_plant_nonzero_returns_fail_receipt(private_tmp):
     )
     assert receipt["result"] == pc.RESULT_FAIL
     assert receipt["reason"] == pc.REFUSAL_PLANT_FAILED
-    assert receipt["residualSentinels"] == []
+    assert len(receipt["residualSentinels"]) == 1
+    assert receipt["residualSentinels"][0]["namespace"] == "slot-a"
+    assert receipt["residualSentinels"][0]["state"] == "possibly-planted"
 
 
 # --- edge 5: sentinel absent post-plant ----------------------------------------
@@ -1385,8 +1388,16 @@ def test_cleanup_effect_receipt_pass(private_tmp):
     assert receipt["assuranceLimits"] == list(pc.ASSURANCE_LIMITS)
     assert all(step in receipt["observations"] for step in ("preplant", "postplant", "postcleanup"))
     assert receipt["residualSentinels"] == [
-        {"namespace": "slot-ab", "sentinelId": planned_ids["slot-ab"]},
-        {"namespace": "slot-b", "sentinelId": planned_ids["slot-b"]},
+        {
+            "namespace": "slot-ab",
+            "sentinelId": planned_ids["slot-ab"],
+            "state": "planted",
+        },
+        {
+            "namespace": "slot-b",
+            "sentinelId": planned_ids["slot-b"],
+            "state": "planted",
+        },
     ]
     assert len(receipt["commandDigest"]) == 64
     assert len(receipt["configDigest"]) == 64
@@ -2284,6 +2295,116 @@ def test_source_identity_ignores_inherited_git_dir(private_tmp, monkeypatch):
     assert poisoned["head"] == baseline["head"]
 
 
+def test_argv_tail_digest_binds_relative_script_via_run_cwd(private_tmp):
+    repo = os.path.join(private_tmp, "repo")
+    run_cwd = os.path.join(private_tmp, "cwd")
+    os.makedirs(repo)
+    _init_git_repo(repo)
+    scripts_dir = os.path.join(run_cwd, "scripts")
+    os.makedirs(scripts_dir)
+    script = os.path.join(scripts_dir, "cleanup.py")
+    _write_executable(script, "#!/usr/bin/env python3\nprint('v1')\n")
+    resolved_argv = [sys.executable, "scripts/cleanup.py", "slot-a"]
+
+    def _config_for_binding():
+        source_id = pc.source_identity(repo)
+        pc._populate_source_binding(source_id, resolved_argv, run_cwd)
+        inputs = _config_digest_inputs(
+            source_identity=source_id,
+            resolved_cleanup_argv=resolved_argv,
+            run_cwd=run_cwd,
+        )
+        return pc.config_digest(**inputs)
+
+    first = _config_for_binding()
+    with open(script, "w", encoding="utf-8") as handle:
+        handle.write("#!/usr/bin/env python3\nprint('v2')\n")
+    second = _config_for_binding()
+    assert first != second
+
+
+def test_argv_tail_digest_binds_symlinked_script(private_tmp):
+    repo = os.path.join(private_tmp, "repo")
+    run_cwd = os.path.join(private_tmp, "cwd")
+    os.makedirs(repo)
+    _init_git_repo(repo)
+    os.makedirs(run_cwd)
+    script = os.path.join(run_cwd, "cleanup.py")
+    link = os.path.join(run_cwd, "cleanup-link.py")
+    _write_executable(script, "#!/usr/bin/env python3\nprint('v1')\n")
+    os.symlink(script, link)
+    resolved_argv = [sys.executable, link, "slot-a"]
+
+    def _config_for_binding():
+        source_id = pc.source_identity(repo)
+        pc._populate_source_binding(source_id, resolved_argv, run_cwd)
+        inputs = _config_digest_inputs(
+            source_identity=source_id,
+            resolved_cleanup_argv=resolved_argv,
+            run_cwd=run_cwd,
+        )
+        return pc.config_digest(**inputs)
+
+    first = _config_for_binding()
+    with open(script, "w", encoding="utf-8") as handle:
+        handle.write("#!/usr/bin/env python3\nprint('v2')\n")
+    second = _config_for_binding()
+    assert first != second
+
+
+def test_worktree_digest_detects_retargeted_dirty_symlink(private_tmp):
+    repo = os.path.join(private_tmp, "repo")
+    os.makedirs(repo)
+    _init_git_repo(repo)
+    target_a = os.path.join(repo, "target-a.txt")
+    target_b = os.path.join(repo, "target-b.txt")
+    link = os.path.join(repo, "link")
+    with open(target_a, "w", encoding="utf-8") as handle:
+        handle.write("a\n")
+    with open(target_b, "w", encoding="utf-8") as handle:
+        handle.write("b\n")
+    os.symlink(target_a, link)
+    first = pc.source_identity(repo)
+    os.remove(link)
+    os.symlink(target_b, link)
+    second = pc.source_identity(repo)
+    assert first["worktreeDigest"] != second["worktreeDigest"]
+
+
+def test_argv_tail_digest_tolerates_dangling_symlink(private_tmp):
+    run_cwd = os.path.join(private_tmp, "cwd")
+    os.makedirs(run_cwd)
+    link = os.path.join(run_cwd, "missing.py")
+    os.symlink(os.path.join(run_cwd, "nowhere.py"), link)
+    resolved_argv = [sys.executable, "missing.py", "slot-a"]
+    source_id = {
+        "head": None,
+        "worktreeDigest": "a" * 64,
+        "argv0Digest": None,
+        "argvDigests": [],
+    }
+    pc._populate_source_binding(source_id, resolved_argv, run_cwd)
+    assert source_id["argvDigests"] == [[1, None]]
+
+
+def test_source_identity_hashes_non_utf8_filename(private_tmp):
+    repo = os.path.join(private_tmp, "repo")
+    os.makedirs(repo)
+    _init_git_repo(repo)
+    bad_name = os.fsdecode(b"bad\xffname")
+    bad_path = os.path.join(repo, bad_name)
+    try:
+        with open(bad_path, "wb") as handle:
+            handle.write(b"v1\n")
+    except OSError as exc:
+        pytest.skip("filesystem rejects non-UTF-8 filename: %s" % exc)
+    first = pc.source_identity(repo)
+    with open(bad_path, "wb") as handle:
+        handle.write(b"v2\n")
+    second = pc.source_identity(repo)
+    assert first["worktreeDigest"] != second["worktreeDigest"]
+
+
 # --- FIX-2: resurrection_plan resolves containment internally ------------------
 
 def test_resurrection_plan_refuses_when_containment_unresolved_from_inputs(private_tmp):
@@ -2477,6 +2598,33 @@ def test_run_bounded_kills_grandchild_on_timeout(private_tmp):
         os.kill(pid, 0)
 
 
+def test_run_bounded_kills_orphan_grandchild_when_leader_exits_first(private_tmp):
+    _, run_cwd, bin_dir = _confinement_layout(private_tmp)
+    pid_file = os.path.join(private_tmp, "grandchild.pid")
+    script = os.path.join(bin_dir, "spawn.sh")
+    _write_executable(
+        script,
+        "#!/bin/sh\n"
+        "/bin/sleep 60 >&1 &\n"
+        "echo $! > '%s'\n"
+        "exit 0\n" % pid_file,
+    )
+    started = time.monotonic()
+    result = pc.run_bounded(
+        [script],
+        cwd=run_cwd,
+        env={},
+        timeout_seconds=1,
+    )
+    elapsed = time.monotonic() - started
+    assert result["timedOut"] is True
+    assert elapsed < 5
+    with open(pid_file, encoding="utf-8") as handle:
+        pid = int(handle.read().strip())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
 # --- WO8 FIX-1: partial plant failure ------------------------------------------
 
 def test_cleanup_effect_receipt_partial_plant_failure(private_tmp):
@@ -2525,13 +2673,72 @@ def test_cleanup_effect_receipt_partial_plant_failure(private_tmp):
     assert receipt["result"] == pc.RESULT_FAIL
     assert receipt["reason"] == pc.REFUSAL_PLANT_FAILED
     assert receipt["residualSentinels"] == [
-        {"namespace": "slot-a", "sentinelId": planned_ids["slot-a"]},
+        {
+            "namespace": "slot-a",
+            "sentinelId": planned_ids["slot-a"],
+            "state": "planted",
+        },
+        {
+            "namespace": "slot-ab",
+            "sentinelId": planned_ids["slot-ab"],
+            "state": "possibly-planted",
+        },
     ]
     planted_path = os.path.join(
         store_dir,
         "slot-a",
         planned_ids["slot-a"],
     )
+    assert os.path.isfile(planted_path)
+
+
+def test_cleanup_effect_receipt_plant_write_then_fail_records_possibly_planted(private_tmp):
+    reach_root, run_cwd, bin_dir, store_dir, cleanup_repo, journal_path = _harness_layout(
+        private_tmp
+    )
+    planned_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+    def factory():
+        return planned_id
+
+    write_then_fail_plant = (
+        "#!/bin/sh\n"
+        'ns="$2"\n'
+        'id="$4"\n'
+        'store="$PILOT_DATASTORE_URL"\n'
+        'mkdir -p "$store/$ns"\n'
+        'touch "$store/$ns/$id"\n'
+        "exit 3\n"
+    )
+    plant = os.path.join(bin_dir, "plant.sh")
+    probe = os.path.join(bin_dir, "probe.sh")
+    _write_executable(plant, write_then_fail_plant)
+    _write_executable(probe, _probe_script_present())
+    cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
+    receipt = pc.cleanup_effect_receipt(
+        _three_slot_policy(store_dir, plant, probe),
+        _pilot_block(cleanup_script),
+        _SLOT_REF,
+        reach_roots=[reach_root],
+        run_cwd=run_cwd,
+        cleanup_root=cleanup_repo,
+        journal_path=journal_path,
+        now=_NOW,
+        observed_identity="example_dev",
+        identity_provenance="observed",
+        identity_strength="strong",
+        sentinel_factory=factory,
+    )
+    assert receipt["result"] == pc.RESULT_FAIL
+    assert receipt["reason"] == pc.REFUSAL_PLANT_FAILED
+    assert receipt["residualSentinels"] == [
+        {
+            "namespace": "slot-a",
+            "sentinelId": planned_id,
+            "state": "possibly-planted",
+        },
+    ]
+    planted_path = os.path.join(store_dir, "slot-a", planned_id)
     assert os.path.isfile(planted_path)
 
 
@@ -2691,6 +2898,10 @@ def test_cleanup_effect_receipt_no_foreign_guard_refuses_material(private_tmp):
         pytest.param(42, id="int"),
         pytest.param(["digest"], id="list"),
         pytest.param("", id="empty"),
+        pytest.param("é" * 64, id="non_ascii"),
+        pytest.param("a" * 63, id="short_hex"),
+        pytest.param("A" * 64, id="uppercase_hex"),
+        pytest.param("g" * 64, id="non_hex"),
     ],
 )
 def test_receipt_valid_for_refuses_malformed_command_digest(private_tmp, bad_digest):
