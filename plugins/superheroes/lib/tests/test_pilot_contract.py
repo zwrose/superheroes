@@ -11,11 +11,22 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import pilot_contract as pc  # noqa: E402
-import pilot_probe  # noqa: E402
+
+
+def _mint_block():
+    return {
+        "envelope": {
+            "enablingFlagEnvVar": "ALLOW_TEST_MINT",
+            "enabledScopes": ["development"],
+            "forbiddenScopes": ["production", "staging"],
+            "gateOffTestCommand": ["npm", "run", "test:mint-gate-off"],
+        },
+        "sentinelIdentifier": "pilot-sentinel-no-such-account",
+    }
 
 
 def valid_pilot_block():
-    """Return a fresh deep copy of a valid pilot block."""
+    """Return a fresh deep copy of a valid captured pilot block (no mint)."""
     return copy.deepcopy({
         "schemaVersion": 1,
         "signInPath": "captured",
@@ -36,16 +47,22 @@ def valid_pilot_block():
             "evidence": "dev mail capture + sandboxed outbound calls",
         },
         "policyRef": {"declaration": "example-project-pilot-policy"},
-        "mint": {
-            "envelope": {
-                "enablingFlagEnvVar": "ALLOW_TEST_MINT",
-                "enabledScopes": ["development"],
-                "forbiddenScopes": ["production", "staging"],
-                "gateOffTestCommand": ["npm", "run", "test:mint-gate-off"],
-            },
-            "sentinelIdentifier": "pilot-sentinel-no-such-account",
-        },
     })
+
+
+def valid_pilot_block_with_mint():
+    """Captured sign-in path with optional mint block present."""
+    block = valid_pilot_block()
+    block["mint"] = copy.deepcopy(_mint_block())
+    return block
+
+
+def valid_minted_pilot_block():
+    """Minted sign-in path requires mint block."""
+    block = valid_pilot_block()
+    block["signInPath"] = "minted"
+    block["mint"] = copy.deepcopy(_mint_block())
+    return block
 
 
 def _assert_refusal(mutator, reason, path_fragment=None):
@@ -58,8 +75,34 @@ def _assert_refusal(mutator, reason, path_fragment=None):
         assert path_fragment in excinfo.value.path
 
 
+def _assert_refusal_with_mint(mutator, reason, path_fragment=None):
+    block = valid_pilot_block_with_mint()
+    mutator(block)
+    with pytest.raises(pc.PilotContractError) as excinfo:
+        pc.validate_pilot_block(block)
+    assert excinfo.value.reason == reason
+    if path_fragment is not None:
+        assert path_fragment in excinfo.value.path
+
+
+def _assert_config_refusal(cfg_mutator, reason):
+    cfg = {"schemaVersion": 1, "pilot": valid_pilot_block()}
+    cfg_mutator(cfg)
+    with pytest.raises(pc.PilotContractError) as excinfo:
+        pc.validate_config(cfg)
+    assert excinfo.value.reason == reason
+
+
 def test_valid_block_passes():
     pc.validate_pilot_block(valid_pilot_block())
+
+
+def test_valid_captured_block_with_mint_passes():
+    pc.validate_pilot_block(valid_pilot_block_with_mint())
+
+
+def test_valid_minted_block_passes():
+    pc.validate_pilot_block(valid_minted_pilot_block())
 
 
 def test_validate_config_no_pilot_key_is_noop():
@@ -99,6 +142,88 @@ def test_schema_version_two():
 
 def test_schema_version_string():
     _assert_refusal(lambda b: b.update({"schemaVersion": "1"}), pc.REFUSAL_SCHEMA_VERSION_UNSUPPORTED)
+
+
+def test_schema_version_true():
+    _assert_refusal(lambda b: b.update({"schemaVersion": True}), pc.REFUSAL_SCHEMA_VERSION_UNSUPPORTED)
+
+
+def test_schema_version_float():
+    _assert_refusal(lambda b: b.update({"schemaVersion": 1.0}), pc.REFUSAL_SCHEMA_VERSION_UNSUPPORTED)
+
+
+def test_credential_set_object_not_array():
+    _assert_config_refusal(
+        lambda cfg: cfg["pilot"].update({"credentialSet": {}}),
+        pc.REFUSAL_CREDENTIAL_SET_EMPTY,
+    )
+
+
+def test_capture_surface_object_not_array():
+    _assert_config_refusal(
+        lambda cfg: cfg["pilot"].update({"captureSurface": {"cookies": True}}),
+        pc.REFUSAL_CAPTURE_SURFACE_INVALID,
+    )
+
+
+def test_capture_surface_array_with_object_member():
+    _assert_config_refusal(
+        lambda cfg: cfg["pilot"].update({"captureSurface": [{}]}),
+        pc.REFUSAL_CAPTURE_SURFACE_INVALID,
+    )
+
+
+def test_capture_surface_array_with_int_member():
+    _assert_config_refusal(
+        lambda cfg: cfg["pilot"].update({"captureSurface": [1]}),
+        pc.REFUSAL_CAPTURE_SURFACE_INVALID,
+    )
+
+
+def test_cleanup_command_object_not_array():
+    _assert_config_refusal(
+        lambda cfg: cfg["pilot"]["cleanup"].update({"command": {}}),
+        pc.REFUSAL_CLEANUP_COMMAND_INVALID,
+    )
+
+
+def test_cleanup_command_array_with_int_member():
+    _assert_config_refusal(
+        lambda cfg: cfg["pilot"]["cleanup"].update({"command": [1]}),
+        pc.REFUSAL_CLEANUP_COMMAND_INVALID,
+    )
+
+
+def test_enabled_scopes_object_not_array():
+    block = valid_pilot_block_with_mint()
+    block["mint"]["envelope"]["enabledScopes"] = {}
+    with pytest.raises(pc.PilotContractError) as excinfo:
+        pc.validate_config({"schemaVersion": 1, "pilot": block})
+    assert excinfo.value.reason == pc.REFUSAL_MINT_ENVELOPE_INCOMPLETE
+
+
+def test_enabled_scopes_array_with_object_member():
+    block = valid_pilot_block_with_mint()
+    block["mint"]["envelope"]["enabledScopes"] = [{}]
+    with pytest.raises(pc.PilotContractError) as excinfo:
+        pc.validate_config({"schemaVersion": 1, "pilot": block})
+    assert excinfo.value.reason == pc.REFUSAL_MINT_ENVELOPE_INCOMPLETE
+
+
+def test_forbidden_scopes_object_not_array():
+    block = valid_pilot_block_with_mint()
+    block["mint"]["envelope"]["forbiddenScopes"] = {}
+    with pytest.raises(pc.PilotContractError) as excinfo:
+        pc.validate_config({"schemaVersion": 1, "pilot": block})
+    assert excinfo.value.reason == pc.REFUSAL_MINT_ENVELOPE_INCOMPLETE
+
+
+def test_forbidden_scopes_array_with_int_member():
+    block = valid_pilot_block_with_mint()
+    block["mint"]["envelope"]["forbiddenScopes"] = [1]
+    with pytest.raises(pc.PilotContractError) as excinfo:
+        pc.validate_config({"schemaVersion": 1, "pilot": block})
+    assert excinfo.value.reason == pc.REFUSAL_MINT_ENVELOPE_INCOMPLETE
 
 
 def test_sign_in_path_invalid():
@@ -252,13 +377,12 @@ def test_policy_ref_absent():
 def test_sign_in_path_minted_without_mint():
     def mutate(block):
         block["signInPath"] = "minted"
-        block.pop("mint")
 
     _assert_refusal(mutate, pc.REFUSAL_MINT_DECLARATION_MISSING)
 
 
 def test_mintable_accounts_inline_refused():
-    _assert_refusal(
+    _assert_refusal_with_mint(
         lambda b: b["mint"].update({"mintableAccounts": ["owner"]}),
         pc.REFUSAL_MINTABLE_ALLOWLIST_INLINE_REFUSED,
     )
@@ -268,7 +392,7 @@ def test_mint_envelope_scope_conflict():
     def mutate(block):
         block["mint"]["envelope"]["forbiddenScopes"].append("development")
 
-    _assert_refusal(mutate, pc.REFUSAL_MINT_ENVELOPE_SCOPE_CONFLICT)
+    _assert_refusal_with_mint(mutate, pc.REFUSAL_MINT_ENVELOPE_SCOPE_CONFLICT)
 
 
 def test_unknown_top_level_field():
@@ -279,7 +403,7 @@ def test_unknown_top_level_field():
 
 
 def test_unknown_nested_mint_envelope_field():
-    _assert_refusal(
+    _assert_refusal_with_mint(
         lambda b: b["mint"]["envelope"].update({"extraScope": "staging"}),
         pc.REFUSAL_UNKNOWN_FIELD,
     )
@@ -298,9 +422,77 @@ def test_supports_unattended_horizon_invalid_raises():
         pc.supports_unattended_horizon("bogus")
 
 
-def test_declaration_digest_stable():
-    declaration = {"path": "/api/me", "unseededExpectation": pilot_probe.REASON_NO_SESSION}
-    assert pc.declaration_digest(declaration) == pc.declaration_digest(declaration)
+def _identity_probe_declaration(**overrides):
+    base = {"path": "/api/me", "unseededExpectation": "no-session"}
+    base.update(overrides)
+    return base
+
+
+def _registry_with_digest(kind, declaration):
+    digest = pc.declaration_digest(declaration)
+    return {
+        "schemaVersion": pc.REGISTRY_SCHEMA_VERSION,
+        "records": [{
+            "kind": kind,
+            "declarationDigest": digest,
+            "exercisedAt": "2026-08-02T04:00:00Z",
+            "receipt": {"result": "pass", "evidence": "seeded returned identity"},
+        }],
+    }
+
+
+def test_declaration_digest_reordered_keys_same():
+    a = {"path": "/api/me", "unseededExpectation": "no-session"}
+    b = {"unseededExpectation": "no-session", "path": "/api/me"}
+    assert pc.declaration_digest(a) == pc.declaration_digest(b)
+
+
+def test_declaration_digest_nfc_nfd_same():
+    nfc = "\u00e9"  # é as single codepoint
+    nfd = "e\u0301"  # e + combining acute
+    a = {"path": "/api/" + nfc, "unseededExpectation": "no-session"}
+    b = {"path": "/api/" + nfd, "unseededExpectation": "no-session"}
+    assert pc.declaration_digest(a) == pc.declaration_digest(b)
+
+
+def test_declaration_digest_path_change_differs():
+    original = _identity_probe_declaration()
+    changed = _identity_probe_declaration(path="/api/other")
+    assert pc.declaration_digest(original) != pc.declaration_digest(changed)
+
+
+def test_declaration_digest_expectation_change_differs():
+    original = _identity_probe_declaration()
+    changed = _identity_probe_declaration(unseededExpectation="wrong-identity")
+    assert pc.declaration_digest(original) != pc.declaration_digest(changed)
+
+
+def test_is_exercised_false_when_declaration_changed():
+    original = _identity_probe_declaration()
+    registry = _registry_with_digest("identity-probe", original)
+    changed = _identity_probe_declaration(path="/api/changed")
+    assert pc.is_exercised(registry, "identity-probe", changed) is False
+
+
+def test_is_exercised_false_when_registry_schema_version_absent():
+    declaration = _identity_probe_declaration()
+    registry = _registry_with_digest("identity-probe", declaration)
+    del registry["schemaVersion"]
+    assert pc.is_exercised(registry, "identity-probe", declaration) is False
+
+
+def test_is_exercised_false_when_registry_schema_version_unsupported():
+    declaration = _identity_probe_declaration()
+    registry = _registry_with_digest("identity-probe", declaration)
+    registry["schemaVersion"] = 2
+    assert pc.is_exercised(registry, "identity-probe", declaration) is False
+
+
+def test_is_exercised_false_when_registry_schema_version_string():
+    declaration = _identity_probe_declaration()
+    registry = _registry_with_digest("identity-probe", declaration)
+    registry["schemaVersion"] = "1"
+    assert pc.is_exercised(registry, "identity-probe", declaration) is False
 
 
 def test_is_exercised_none_registry():

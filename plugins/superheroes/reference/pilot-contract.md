@@ -129,7 +129,7 @@ The normative `pilot` object shape (shown above under `"pilot":`) is:
 | `effectsEscape.canEscape` | boolean | required | — | `pilot-effects-escape-invalid` |
 | `effectsEscape.evidence` | string | required | non-empty | `pilot-effects-escape-evidence-missing` |
 | `policyRef` | object | required | must have `declaration` | `pilot-policy-ref-missing` (`declaration` absent or empty) |
-| `mint` | object | conditional | required when and only when `signInPath` is `"minted"` | `pilot-mint-declaration-missing` |
+| `mint` | object | conditional | required when `signInPath` is `"minted"`; optional otherwise | `pilot-mint-declaration-missing` |
 | `mint.mintableAccounts` | — | **refused** | must not appear inline | `pilot-mintable-allowlist-inline-refused` |
 | `mint.envelope` | object | required when `mint` present | must include `enablingFlagEnvVar`, `enabledScopes`, `forbiddenScopes`, `gateOffTestCommand`; `enabledScopes` and `forbiddenScopes` must not overlap | `pilot-mint-envelope-incomplete`; `pilot-mint-envelope-scope-conflict` |
 | `mint.envelope.gateOffTestCommand` | array of strings | required | non-empty command argv | `pilot-mint-gate-off-test-missing` |
@@ -235,6 +235,13 @@ registry document shape:
 A record whose digest does not match the current declaration, whose receipt is empty, or whose
 receipt does not carry `result: "pass"` counts as **absent**.
 
+### Registry refusal tokens
+
+| Token | When returned |
+|---|---|
+| `pilot-declaration-unexercised` | `require_exercised` is called for a declaration that has no matching exercised record |
+| `pilot-declaration-kind-unknown` | `is_exercised` or `require_exercised` is called with a `kind` not in the declaration-kind set |
+
 ## Seed and mint call shapes
 
 Call shapes live in `lib/pilot_seed.py`. Refusal tokens use the `seed-*`, `artifact-*`, and
@@ -245,18 +252,30 @@ Call shapes live in `lib/pilot_seed.py`. Refusal tokens use the `seed-*`, `artif
 Returns `{"indexedDB": <bool>, "credentials": <bool>}` for the declared capture surfaces.
 See [Capture surfaces](#capture-surfaces) for the two-way mapping rules.
 
+| Token | When returned |
+|---|---|
+| `seed-capture-surfaces-invalid` | `capture_surfaces` is not a non-string sequence |
+| `seed-capture-surfaces-empty` | `capture_surfaces` is an empty sequence |
+| `seed-capture-surface-duplicate` | the same surface appears more than once |
+| `seed-capture-surface-session-storage-refused` | `sessionStorage` is declared |
+| `seed-capture-surface-unknown` | a surface is not in the known set |
+
 ### `verify_artifact(path, *, expected_uid, expected_mode, recorded_sha256)`
 
 Verify-at-seed artifact integrity. Returns an `ok`/`reason` dict (never raises on artifact
 failure). Checks run in this order:
 
-1. No symlink in the path ancestry → `artifact-symlink-in-path`
-2. File exists → `artifact-missing`
-3. File is a regular file → `artifact-not-regular-file`
-4. Owner UID matches `expected_uid` → `artifact-owner-mismatch`
-5. Mode bits match `expected_mode` → `artifact-mode-mismatch`
-6. SHA-256 digest matches `recorded_sha256` → `artifact-hash-mismatch`
-7. File is readable (including hash read) → `artifact-unreadable`
+1. Path has a traversal component (`..` or absolute escape) → `artifact-path-traversal`
+2. No symlink in the path ancestry → `artifact-symlink-in-path`
+3. File exists → `artifact-missing`
+4. File is a regular file → `artifact-not-regular-file`
+5. Owner UID matches `expected_uid` → `artifact-owner-mismatch`
+6. Mode bits match `expected_mode` → `artifact-mode-mismatch`
+7. SHA-256 digest matches `recorded_sha256` → `artifact-hash-mismatch`
+8. File is readable (including hash read), or any other `OSError` during checks → `artifact-unreadable`
+
+Invalid caller arguments (`expected_uid`, `expected_mode`, `recorded_sha256`) raise
+`PilotSeedError` with `seed-verify-argument-invalid` before any filesystem check runs.
 
 ### `seed_request(slot_ref, account, artifact, context_options)`
 
@@ -271,6 +290,13 @@ Builds a seed request descriptor after local validation and artifact verificatio
 Calls `verify_artifact` and refuses with the artifact token on failure. Returns a descriptor
 with `slotRef`, `account`, `artifact` (path + verified sha256), and `contextOptions`.
 
+| Token | When returned |
+|---|---|
+| `seed-slot-ref-invalid` | `slot_ref` does not parse as a valid slot reference |
+| `seed-account-invalid` | `account` is missing, empty, or not a string |
+| `seed-context-options-invalid` | `context_options` is not exactly `{"indexedDB": bool, "credentials": bool}` |
+| `seed-verify-argument-invalid` | the `artifact` mapping is malformed or has invalid verify arguments |
+
 ### `mint_request(account, *, allowlist, envelope)`
 
 Builds a mint-client request descriptor.
@@ -282,6 +308,13 @@ Builds a mint-client request descriptor.
 
 The mint allowlist is policy and must be supplied by the caller at mint time, not embedded in
 the branch-mutable `pilot` block.
+
+| Token | When returned |
+|---|---|
+| `mint-allowlist-empty` | `allowlist` is missing, empty, or not a non-string sequence |
+| `mint-account-invalid` | `account` is missing, empty, or not a string |
+| `mint-account-not-in-allowlist` | `account` is not in the caller-supplied allowlist |
+| `mint-envelope-incomplete` | `envelope` is missing `enablingFlagEnvVar` |
 
 ### `sentinel_probe_request(sentinel, *, allowlist, envelope)`
 
@@ -295,6 +328,10 @@ Builds a sentinel probe request for the mint gate-off exercise.
 live probe would succeed (mint would return a session) instead of exercising the gate-off
 refusal — the probe would not detect a disabled mint gate.
 
+| Token | When returned |
+|---|---|
+| `mint-sentinel-in-allowlist` | `sentinel` appears in the caller-supplied allowlist |
+
 ## Slot reference format
 
 Slot references use the format `<slot>@<generation>` (§S5).
@@ -307,3 +344,13 @@ Slot references use the format `<slot>@<generation>` (§S5).
 generation)` for every valid `(slot, generation)` pair.
 
 Types and validation live in `lib/pilot_slot.py`.
+
+| Token | When returned |
+|---|---|
+| `slot-id-invalid` | slot id is not a string matching `SLOT_RE` |
+| `slot-generation-invalid` | generation is not an integer ≥ 1 (bools excluded) |
+| `slot-ref-malformed` | slot reference string is not `<slot>@<generation>` |
+| `slot-account-set-empty` | account set is empty or not a sequence |
+| `slot-account-duplicate` | the same `account` appears more than once |
+| `slot-account-role-missing` | an entry has no non-empty `role` |
+| `slot-account-entry-invalid` | an entry is not a mapping with a non-empty `account` string |

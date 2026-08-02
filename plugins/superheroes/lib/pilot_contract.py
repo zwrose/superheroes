@@ -16,6 +16,7 @@ import pilot_seed
 
 PILOT_BLOCK_KEY = "pilot"
 PILOT_SCHEMA_VERSION = 1
+REGISTRY_SCHEMA_VERSION = 1
 
 SIGN_IN_PATHS = frozenset({"captured", "minted"})
 VALIDITY_PROVENANCE = frozenset({
@@ -116,7 +117,11 @@ class PilotContractError(Exception):
 
 
 def validate_config(cfg):
-    """Validate cfg['pilot'] when present; no-op when the key is absent."""
+    """Structural validation of cfg['pilot'] when present; no-op when absent.
+
+    Declare-and-exercise is enforced by the provisioning caller (C7), which
+    holds the registry outside this process's reach — do not wire a registry here.
+    """
     if not isinstance(cfg, dict):
         raise PilotContractError(REFUSAL_UNKNOWN_FIELD, "")
     if PILOT_BLOCK_KEY not in cfg:
@@ -128,7 +133,12 @@ def validate_config(cfg):
 
 
 def validate_pilot_block(block):
-    """Raise PilotContractError on the first contract refusal."""
+    """Structural validation only; raise PilotContractError on the first refusal.
+
+    The declare-and-exercise gate is enforced by the provisioning caller, which
+    holds the registry, because the registry is deliberately outside this process's
+    reach.
+    """
     if not isinstance(block, dict):
         raise PilotContractError(REFUSAL_UNKNOWN_FIELD, PILOT_BLOCK_KEY)
     _check_unknown_keys(block, _PILOT_TOP_KEYS, PILOT_BLOCK_KEY)
@@ -170,6 +180,8 @@ def is_exercised(registry, kind, declaration):
         raise PilotContractError(REFUSAL_DECLARATION_KIND_UNKNOWN, kind)
     if not isinstance(registry, dict):
         return False
+    if registry.get("schemaVersion") != REGISTRY_SCHEMA_VERSION:
+        return False
     records = registry.get("records")
     if not isinstance(records, list):
         return False
@@ -206,7 +218,7 @@ def require_exercised(registry, kind, declaration):
 
 def _validate_schema_version(block):
     version = block.get("schemaVersion")
-    if version != PILOT_SCHEMA_VERSION:
+    if type(version) is not int or version != PILOT_SCHEMA_VERSION:
         raise PilotContractError(
             REFUSAL_SCHEMA_VERSION_UNSUPPORTED,
             "pilot.schemaVersion",
@@ -222,7 +234,7 @@ def _validate_sign_in_path(block):
 
 def _validate_credential_set(block):
     credential_set = block.get("credentialSet")
-    if not _is_non_string_sequence(credential_set) or not credential_set:
+    if not _is_json_array(credential_set) or not credential_set:
         raise PilotContractError(REFUSAL_CREDENTIAL_SET_EMPTY, "pilot.credentialSet")
     seen_accounts = set()
     for index, entry in enumerate(credential_set):
@@ -248,7 +260,7 @@ def _validate_credential_set(block):
 
 def _validate_capture_surface_and_options(block):
     capture_surface = block.get("captureSurface")
-    if not _is_non_string_sequence(capture_surface) or not capture_surface:
+    if not _is_json_array(capture_surface) or not capture_surface:
         raise PilotContractError(REFUSAL_CAPTURE_SURFACE_INVALID, "pilot.captureSurface")
     try:
         required_options = pilot_seed.required_context_options(capture_surface)
@@ -368,16 +380,28 @@ def _validate_mint(block, sign_in_path):
         )
     enabled_scopes = envelope.get("enabledScopes")
     forbidden_scopes = envelope.get("forbiddenScopes")
-    if not _is_non_string_sequence(enabled_scopes):
+    if not _is_json_array(enabled_scopes):
         raise PilotContractError(
             REFUSAL_MINT_ENVELOPE_INCOMPLETE,
             "pilot.mint.envelope.enabledScopes",
         )
-    if not _is_non_string_sequence(forbidden_scopes):
+    if not _is_json_array(forbidden_scopes):
         raise PilotContractError(
             REFUSAL_MINT_ENVELOPE_INCOMPLETE,
             "pilot.mint.envelope.forbiddenScopes",
         )
+    for index, scope in enumerate(enabled_scopes):
+        if not isinstance(scope, str):
+            raise PilotContractError(
+                REFUSAL_MINT_ENVELOPE_INCOMPLETE,
+                "pilot.mint.envelope.enabledScopes[%d]" % index,
+            )
+    for index, scope in enumerate(forbidden_scopes):
+        if not isinstance(scope, str):
+            raise PilotContractError(
+                REFUSAL_MINT_ENVELOPE_INCOMPLETE,
+                "pilot.mint.envelope.forbiddenScopes[%d]" % index,
+            )
     enabled_set = set(enabled_scopes)
     forbidden_set = set(forbidden_scopes)
     if enabled_set & forbidden_set:
@@ -412,19 +436,13 @@ def _is_valid_capture_options(capture_options):
 
 
 def _is_command_argv(command):
-    if not _is_non_string_sequence(command) or not command:
+    if not _is_json_array(command) or not command:
         return False
     return all(isinstance(part, str) and part for part in command)
 
 
-def _is_non_string_sequence(value):
-    if isinstance(value, str):
-        return False
-    try:
-        iter(value)
-    except TypeError:
-        return False
-    return True
+def _is_json_array(value):
+    return isinstance(value, list)
 
 
 def _is_bool(value):

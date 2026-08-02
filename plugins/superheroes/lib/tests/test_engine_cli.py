@@ -95,6 +95,7 @@ def test_apply_refuses_invalid_pilot_block_missing_effects_escape(tmp_path):
     out = json.loads(r.stdout)
     assert out["ok"] is False and out["command"] == "apply"
     assert pilot_contract.REFUSAL_EFFECTS_ESCAPE_ABSENT in out["error"]
+    assert out["pilotRefusal"] == pilot_contract.REFUSAL_EFFECTS_ESCAPE_ABSENT
 
 
 def test_clean_refuses_invalid_pilot_block_missing_effects_escape(tmp_path):
@@ -107,6 +108,19 @@ def test_clean_refuses_invalid_pilot_block_missing_effects_escape(tmp_path):
     out = json.loads(r.stdout)
     assert out["ok"] is False and out["command"] == "clean"
     assert pilot_contract.REFUSAL_EFFECTS_ESCAPE_ABSENT in out["error"]
+    assert out["pilotRefusal"] == pilot_contract.REFUSAL_EFFECTS_ESCAPE_ABSENT
+
+
+def test_apply_refuses_capture_surface_object_via_cli(tmp_path):
+    pilot = _valid_pilot_block()
+    pilot["captureSurface"] = {"cookies": True}
+    config = {"schemaVersion": 1, "protectedTargets": ["main"], "pilot": pilot}
+    repo, env, _ = _setup_repo_with_config(tmp_path, config)
+    r = _cli(repo, env, "apply", "--branch", "feat/x")
+    assert r.returncode == 1
+    out = json.loads(r.stdout)
+    assert out["ok"] is False and out["command"] == "apply"
+    assert out["pilotRefusal"] == pilot_contract.REFUSAL_CAPTURE_SURFACE_INVALID
 
 
 def test_apply_without_pilot_key_unchanged(tmp_path):

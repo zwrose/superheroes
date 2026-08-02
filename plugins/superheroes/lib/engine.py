@@ -198,9 +198,10 @@ def load_profile_config(profile_path):
     try:
         pilot_contract.validate_config(cfg)
     except pilot_contract.PilotContractError as exc:
+        location = (" at %s" % exc.path) if exc.path else ""
         raise EngineError(
-            f"profile {profile_path}: pilot contract refusal {exc.reason} "
-            f"at {exc.path}",
+            "profile %s: pilot contract refusal %s%s"
+            % (profile_path, exc.reason, location),
             pilotRefusal=exc.reason,
         ) from exc
     return cfg
@@ -588,7 +589,8 @@ def main(argv):
         err = {"ok": False, "command": cmd,
                "error": payload.get("error", str(exc)),
                "block": payload.get("block"),
-               "scenarioId": payload.get("scenarioId")}
+               "scenarioId": payload.get("scenarioId"),
+               "pilotRefusal": payload.get("pilotRefusal")}
         sys.stdout.write(json.dumps(err) + "\n")
         return 1
     except ValueError as exc:

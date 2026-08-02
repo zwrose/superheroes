@@ -53,13 +53,15 @@ class PilotSeedError(Exception):
 
 def required_context_options(capture_surfaces):
     """Return required browser context options for declared capture surfaces (§S3)."""
-    if not _is_non_string_sequence(capture_surfaces):
+    if not _is_json_array(capture_surfaces):
         raise PilotSeedError(REFUSAL_SURFACES_INVALID)
     surfaces = list(capture_surfaces)
     if not surfaces:
         raise PilotSeedError(REFUSAL_SURFACES_EMPTY)
     seen = set()
     for surface in surfaces:
+        if not isinstance(surface, str):
+            raise PilotSeedError(REFUSAL_SURFACES_INVALID)
         if surface in seen:
             raise PilotSeedError(REFUSAL_SURFACE_DUPLICATE)
         seen.add(surface)
@@ -99,7 +101,8 @@ def verify_artifact(path, *, expected_uid, expected_mode, recorded_sha256):
             return _refusal(REFUSAL_ARTIFACT_UNREADABLE)
         if not hmac.compare_digest(digest, recorded_sha256.lower()):
             return _refusal(REFUSAL_ARTIFACT_HASH_MISMATCH, sha256=digest)
-        return {"ok": True, "reason": None, "sha256": digest}
+        absolute_path = _absolute_path_without_normpath(path)
+        return {"ok": True, "reason": None, "sha256": digest, "path": absolute_path}
     except OSError:
         return _refusal(REFUSAL_ARTIFACT_UNREADABLE)
 
@@ -127,7 +130,7 @@ def seed_request(slot_ref, account, artifact, context_options):
         "slotRef": slot_ref,
         "account": account,
         "artifact": {
-            "path": artifact["path"],
+            "path": result["path"],
             "sha256": result["sha256"],
         },
         "contextOptions": {
@@ -139,8 +142,11 @@ def seed_request(slot_ref, account, artifact, context_options):
 
 def mint_request(account, *, allowlist, envelope):
     """Build a mint-client request descriptor; allowlist is caller-supplied policy."""
-    if not _is_non_string_sequence(allowlist) or not allowlist:
+    if not _is_json_array(allowlist) or not allowlist:
         raise PilotSeedError(REFUSAL_MINT_ALLOWLIST_EMPTY)
+    for item in allowlist:
+        if not isinstance(item, str):
+            raise PilotSeedError(REFUSAL_MINT_ALLOWLIST_EMPTY)
     if not isinstance(account, str) or not account:
         raise PilotSeedError(REFUSAL_MINT_ACCOUNT_INVALID)
     if account not in allowlist:
@@ -154,8 +160,13 @@ def mint_request(account, *, allowlist, envelope):
 
 def sentinel_probe_request(sentinel, *, allowlist, envelope):
     """Build a sentinel probe request; refuses when sentinel is mintable."""
-    if not _is_non_string_sequence(allowlist) or not allowlist:
+    if not _is_json_array(allowlist) or not allowlist:
         raise PilotSeedError(REFUSAL_MINT_ALLOWLIST_EMPTY)
+    for item in allowlist:
+        if not isinstance(item, str):
+            raise PilotSeedError(REFUSAL_MINT_ALLOWLIST_EMPTY)
+    if not isinstance(sentinel, str) or not sentinel:
+        raise PilotSeedError(REFUSAL_MINT_ACCOUNT_INVALID)
     if sentinel in allowlist:
         raise PilotSeedError(REFUSAL_MINT_SENTINEL_IN_ALLOWLIST)
     flag_var = _enabling_flag_env_var(envelope)
@@ -165,14 +176,8 @@ def sentinel_probe_request(sentinel, *, allowlist, envelope):
     }
 
 
-def _is_non_string_sequence(value):
-    if isinstance(value, str):
-        return False
-    try:
-        iter(value)
-    except TypeError:
-        return False
-    return True
+def _is_json_array(value):
+    return isinstance(value, list)
 
 
 def _is_valid_context_options(context_options):
@@ -202,7 +207,7 @@ def _validate_artifact_mapping(artifact):
 
 
 def _validate_verify_arguments(expected_uid, expected_mode, recorded_sha256):
-    if not isinstance(expected_uid, int):
+    if type(expected_uid) is not int:
         raise PilotSeedError(REFUSAL_VERIFY_ARGUMENT_INVALID)
     if not isinstance(expected_mode, int) or expected_mode < 0 or expected_mode > 0o777:
         raise PilotSeedError(REFUSAL_VERIFY_ARGUMENT_INVALID)

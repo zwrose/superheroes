@@ -85,6 +85,30 @@ def test_required_context_options_refuses_bare_string():
     assert exc.value.reason == ps.REFUSAL_SURFACES_INVALID
 
 
+def test_required_context_options_refuses_object_not_array():
+    with pytest.raises(ps.PilotSeedError) as exc:
+        ps.required_context_options({})
+    assert exc.value.reason == ps.REFUSAL_SURFACES_INVALID
+
+
+def test_required_context_options_refuses_array_with_object_member():
+    with pytest.raises(ps.PilotSeedError) as exc:
+        ps.required_context_options([{}])
+    assert exc.value.reason == ps.REFUSAL_SURFACES_INVALID
+
+
+def test_required_context_options_refuses_array_with_int_member():
+    with pytest.raises(ps.PilotSeedError) as exc:
+        ps.required_context_options([1])
+    assert exc.value.reason == ps.REFUSAL_SURFACES_INVALID
+
+
+def test_required_context_options_refuses_array_with_none_member():
+    with pytest.raises(ps.PilotSeedError) as exc:
+        ps.required_context_options([None])
+    assert exc.value.reason == ps.REFUSAL_SURFACES_INVALID
+
+
 # --- verify_artifact ----------------------------------------------------------
 
 def test_verify_artifact_ok(tmp_path):
@@ -96,7 +120,10 @@ def test_verify_artifact_ok(tmp_path):
         expected_mode=0o600,
         recorded_sha256=digest,
     )
-    assert result == {"ok": True, "reason": None, "sha256": digest}
+    assert result["ok"] is True
+    assert result["reason"] is None
+    assert result["sha256"] == digest
+    assert result["path"] == str(artifact.resolve())
 
 
 def test_verify_artifact_refuses_symlinked_leaf(tmp_path):
@@ -295,7 +322,9 @@ def test_verify_artifact_allows_literal_three_dot_component(tmp_path):
         expected_mode=0o600,
         recorded_sha256=digest,
     )
-    assert result == {"ok": True, "reason": None, "sha256": digest}
+    assert result["ok"] is True
+    assert result["sha256"] == digest
+    assert result["path"] == str(artifact.resolve())
 
 
 def test_verify_artifact_refuses_symlink_hidden_by_traversal(tmp_path):
@@ -318,6 +347,23 @@ def test_verify_artifact_refuses_symlink_hidden_by_traversal(tmp_path):
 
 # --- seed_request ---------------------------------------------------------------
 
+def test_seed_request_returns_absolute_path(tmp_path, monkeypatch):
+    sub = tmp_path / "subdir"
+    sub.mkdir()
+    artifact_path = sub / "seed.bin"
+    digest = _write_artifact(artifact_path)
+    monkeypatch.chdir(sub)
+    relative_artifact = _artifact_dict("seed.bin", sha256=digest)
+    context_options = ps.required_context_options(["cookies"])
+    result = ps.seed_request(
+        "slot@1",
+        "owner",
+        relative_artifact,
+        context_options,
+    )
+    assert result["artifact"]["path"] == str(artifact_path.resolve())
+
+
 def test_seed_request_success(tmp_path):
     artifact_path = tmp_path / "seed.bin"
     digest = _write_artifact(artifact_path)
@@ -331,7 +377,7 @@ def test_seed_request_success(tmp_path):
     assert result == {
         "slotRef": "slot@1",
         "account": "owner",
-        "artifact": {"path": str(artifact_path), "sha256": digest},
+        "artifact": {"path": str(artifact_path.resolve()), "sha256": digest},
         "contextOptions": context_options,
     }
 
@@ -504,6 +550,47 @@ def test_sentinel_probe_request_success():
         "sentinel": "pilot-sentinel-no-such-account",
         "enablingFlagEnvVar": "ALLOW_TEST_MINT",
     }
+
+
+def test_mint_request_refuses_object_allowlist():
+    envelope = {"enablingFlagEnvVar": "ALLOW_TEST_MINT"}
+    with pytest.raises(ps.PilotSeedError) as exc:
+        ps.mint_request("owner", allowlist={}, envelope=envelope)
+    assert exc.value.reason == ps.REFUSAL_MINT_ALLOWLIST_EMPTY
+
+
+def test_mint_request_refuses_allowlist_with_object_member():
+    envelope = {"enablingFlagEnvVar": "ALLOW_TEST_MINT"}
+    with pytest.raises(ps.PilotSeedError) as exc:
+        ps.mint_request("owner", allowlist=[{}], envelope=envelope)
+    assert exc.value.reason == ps.REFUSAL_MINT_ALLOWLIST_EMPTY
+
+
+def test_verify_artifact_refuses_expected_uid_bool(tmp_path):
+    artifact = tmp_path / "seed.bin"
+    digest = _write_artifact(artifact)
+    with pytest.raises(ps.PilotSeedError) as exc:
+        ps.verify_artifact(
+            str(artifact),
+            expected_uid=True,
+            expected_mode=0o600,
+            recorded_sha256=digest,
+        )
+    assert exc.value.reason == ps.REFUSAL_VERIFY_ARGUMENT_INVALID
+
+
+def test_sentinel_probe_request_refuses_empty_sentinel():
+    envelope = {"enablingFlagEnvVar": "ALLOW_TEST_MINT"}
+    with pytest.raises(ps.PilotSeedError) as exc:
+        ps.sentinel_probe_request("", allowlist=["owner"], envelope=envelope)
+    assert exc.value.reason == ps.REFUSAL_MINT_ACCOUNT_INVALID
+
+
+def test_sentinel_probe_request_refuses_none_sentinel():
+    envelope = {"enablingFlagEnvVar": "ALLOW_TEST_MINT"}
+    with pytest.raises(ps.PilotSeedError) as exc:
+        ps.sentinel_probe_request(None, allowlist=["owner"], envelope=envelope)
+    assert exc.value.reason == ps.REFUSAL_MINT_ACCOUNT_INVALID
 
 
 def test_sentinel_probe_request_refuses_sentinel_in_allowlist():

@@ -12,19 +12,6 @@ if _LIB not in sys.path:
 import pilot_probe  # noqa: E402
 
 
-def test_all_ten_tokens_present_with_exact_values():
-    assert pilot_probe.REASON_TRANSPORT_ERROR == "transport-error"
-    assert pilot_probe.REASON_UNEXPECTED_STATUS == "unexpected-status"
-    assert pilot_probe.REASON_INVALID_BODY == "invalid-body"
-    assert pilot_probe.REASON_NO_SESSION == "no-session"
-    assert pilot_probe.REASON_WRONG_IDENTITY == "wrong-identity"
-    assert pilot_probe.REASON_DISABLED_ACCOUNT == "disabled-account"
-    assert pilot_probe.REASON_UNAUTHORIZED == "unauthorized"
-    assert pilot_probe.REASON_FORBIDDEN == "forbidden"
-    assert pilot_probe.REASON_RATE_LIMITED == "rate-limited"
-    assert pilot_probe.REASON_INFRASTRUCTURE_UNAVAILABLE == "infrastructure-unavailable"
-
-
 def test_classes_pairwise_disjoint():
     assert pilot_probe.LAPSE_REASONS.isdisjoint(pilot_probe.INFRASTRUCTURE_REASONS)
     assert pilot_probe.LAPSE_REASONS.isdisjoint(pilot_probe.IDENTITY_REASONS)

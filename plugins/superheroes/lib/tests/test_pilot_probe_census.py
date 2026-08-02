@@ -15,6 +15,7 @@ import pilot_probe  # noqa: E402
 _BANNED_LITERALS = pilot_probe.ALL_PROBE_REASONS
 _EXEMPT_MODULE = "pilot_probe.py"
 _REQUIRED_BASENAMES = ("engine.py", "store.py")
+_REFUSAL_MODULE_BASENAMES = ("pilot_contract.py", "pilot_seed.py", "pilot_slot.py")
 
 
 def _lineno(source_path, node):
@@ -30,47 +31,11 @@ def _parse_source(source, source_path):
         ) from exc
 
 
-def _dict_key_constant_ids(tree):
-    """Constants that are dictionary keys — not probe token values."""
-    exempt = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Dict):
-            for key in node.keys:
-                if isinstance(key, ast.Constant):
-                    exempt.add(id(key))
-    return exempt
-
-
-def _field_lookup_constant_ids(tree):
-    """Constants naming a mapping field in .get('field') — not probe token values."""
-    exempt = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        if not (isinstance(func, ast.Attribute) and func.attr == "get"):
-            continue
-        if not node.args:
-            continue
-        first = node.args[0]
-        if isinstance(first, ast.Constant):
-            exempt.add(id(first))
-    return exempt
-
-
-def _exempt_constant_ids(tree):
-    exempt = set()
-    exempt.update(_dict_key_constant_ids(tree))
-    exempt.update(_field_lookup_constant_ids(tree))
-    return exempt
-
-
 def census_violations_from_source(source, source_path, *, member_set=None):
-    """Return violations for probe-reason string literals outside dict keys."""
+    """Return violations for probe-reason string literals outside pilot_probe.py."""
     if member_set is None:
         member_set = _BANNED_LITERALS
     tree = _parse_source(source, source_path)
-    exempt_ids = _exempt_constant_ids(tree)
     violations = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Constant):
@@ -78,8 +43,6 @@ def census_violations_from_source(source, source_path, *, member_set=None):
         if not isinstance(node.value, str):
             continue
         if node.value not in member_set:
-            continue
-        if id(node) in exempt_ids:
             continue
         violations.append(
             "%s: literal '%s' (clause: probe tokens live only in pilot_probe.py)"
@@ -173,6 +136,44 @@ def _reason_constants_from_module_source():
     return values
 
 
+def _refusal_constants_from_module(path):
+    """Collect values of module-level REFUSAL_* assignments via AST."""
+    with open(path, encoding="utf-8") as fh:
+        source = fh.read()
+    try:
+        tree = ast.parse(source, filename=path)
+    except SyntaxError as exc:
+        raise RuntimeError("Cannot parse %s: %s" % (path, exc)) from exc
+    values = set()
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if not isinstance(target, ast.Name):
+                continue
+            if not target.id.startswith("REFUSAL_"):
+                continue
+            if not isinstance(node.value, ast.Constant):
+                continue
+            if not isinstance(node.value.value, str):
+                continue
+            values.add(node.value.value)
+    return values
+
+
+def _collect_all_refusal_tokens():
+    all_tokens = set()
+    for basename in _REFUSAL_MODULE_BASENAMES:
+        path = os.path.join(_LIB, basename)
+        tokens = _refusal_constants_from_module(path)
+        if not tokens:
+            raise RuntimeError(
+                "Refusal-token drift walk collected zero constants from %s" % path
+            )
+        all_tokens.update(tokens)
+    return all_tokens
+
+
 def test_pilot_probe_census_clean():
     violations = run_census()
     assert violations == [], (
@@ -199,14 +200,26 @@ def test_matcher_catches_reason_comparison_literal():
     assert any("no-session" in v for v in violations), violations
 
 
-def test_matcher_exempts_no_session_dict_key():
+def test_matcher_catches_no_session_dict_key_dispatch():
     source = (
-        "def ok():\n"
-        "    return {\"no-session\": True}\n"
+        "def route():\n"
+        "    return {\"no-session\": handler}\n"
     )
     path = os.path.join(_LIB, "fake_consumer.py")
     violations = census_violations_from_source(source, path)
-    assert violations == [], violations
+    assert violations, violations
+    assert any("no-session" in v for v in violations), violations
+
+
+def test_matcher_catches_no_session_get_call():
+    source = (
+        "def lookup(handlers):\n"
+        "    return handlers.get(\"no-session\")\n"
+    )
+    path = os.path.join(_LIB, "fake_consumer.py")
+    violations = census_violations_from_source(source, path)
+    assert violations, violations
+    assert any("no-session" in v for v in violations), violations
 
 
 _PILOT_CONTRACT = os.path.join(
@@ -227,6 +240,22 @@ def test_pilot_contract_names_every_probe_token():
     ]
     assert missing == [], (
         "pilot-contract.md missing probe token(s): %s (file: %s)"
+        % (", ".join(missing), _PILOT_CONTRACT)
+    )
+
+
+def test_pilot_contract_names_every_refusal_token():
+    """axis: every REFUSAL_* constant value is named in pilot-contract.md."""
+    if not os.path.isfile(_PILOT_CONTRACT):
+        raise AssertionError(
+            "pilot-contract.md missing (file: %s)" % _PILOT_CONTRACT
+        )
+    with open(_PILOT_CONTRACT, encoding="utf-8") as fh:
+        doc = fh.read()
+    tokens = _collect_all_refusal_tokens()
+    missing = [token for token in sorted(tokens) if token not in doc]
+    assert missing == [], (
+        "pilot-contract.md missing refusal token(s): %s (file: %s)"
         % (", ".join(missing), _PILOT_CONTRACT)
     )
 
