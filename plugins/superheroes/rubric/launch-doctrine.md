@@ -75,7 +75,12 @@ turn; it is not the automatic consequence of detaching.
 This section is the doctrine artifact's home for those rules. The operative copy a builder session
 loads — the full mechanism, the detached-shape contract, and the field evidence — is workhorse charter
 §7 (`skills/workhorse/SKILL.md`) — do not consolidate the mechanism back into the machine-parsed
-blocks above.
+blocks above. **Limitation:** this section is prose outside the machine-parsed blocks, so it does
+not travel in a composed launch prompt — only the parsed rulings block does — and the
+`await-dispatches` ruling **has not yet been updated** to carry these turn-end and detached-channel
+rules; a launched builder currently receives the older wording. A builder reading this section should
+treat these rules as governing; aligning the ruling line is **open, tracked, and not done by this
+change**.
 
 ## Recovery — taking over a build that stopped
 

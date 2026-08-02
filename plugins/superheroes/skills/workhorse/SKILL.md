@@ -397,19 +397,24 @@ without a tool call.
   detached-child recoveries, the six-lane overnight stall, the induction trap — lives in
   dispatch-mechanics § Turn survival; the rule stands on it.
 - **Long-running external dispatches from a headless session — detached shape, polled in-turn.**
-  A long-running external dispatch invoked from a headless session — an engine CLI: the implementer,
-  the brief-check reviewer, **and review seats** — runs in the **detached shape** *and* is **polled
-  in-turn**. Detaching buys survivability if the session dies; the in-turn poll is still the duty.
-  These are not alternatives. The **detached shape** applies to the **builder's own outer
-  invocation** and consists of: the dispatch running in **its own process session** (a shell-detached
-  child — the `setsid`/`nohup` shape, `start_new_session`); its stdout and stderr redirected to
-  **files, never pipes** (a pipe buffer dies with the reader and makes a stall look like progress);
-  **state stamped to disk before any wait** — what was dispatched, where output lands, the next step,
-  the **child's PID**, and the **done-sentinel path** (with detaching as the normal channel, this
-  stamp is what makes any detached dispatch recoverable — handback or park — not merely a
-  park-handoff artifact); and the **child writing a done-sentinel carrying its exit code on exit —
-  never the launcher**. Use a **unique sentinel path per dispatch**, or remove any prior sentinel
-  before launch, so a stale sentinel can never read as this run's completion.
+  A long-running external dispatch the builder invokes directly from a headless session — an engine
+  CLI: the implementer, the brief-check reviewer, or any engine CLI the builder hand-rolls — runs in
+  the **detached shape** *and* is **polled in-turn**. Detaching buys survivability if the session
+  dies; the in-turn poll is still the duty. These are not alternatives. The **detached shape**
+  applies to the **builder's own outer invocation** and consists of: the dispatch running in **its
+  own process session** (a shell-detached child — the `setsid`/`nohup` shape, `start_new_session`);
+  its stdout and stderr redirected to **files, never pipes** (a pipe buffer dies with the reader and
+  makes a stall look like progress); **state stamped to disk before any wait** — what was dispatched,
+  where output lands, the next step, the **child's PID**, and the **done-sentinel path** — written to
+  a **stable, advisor-findable path the build names in its durable record** (issue or PR), so a
+  recovering advisor can locate a detached child's PID, output paths, and done-sentinel **without the
+  dying session's context**; a detached dispatch whose stamp is not discoverable is an **orphan the
+  advisor cannot terminate** — the containment property the old always-park shape used to provide
+  (with detaching as the normal channel, this stamp is what makes any detached dispatch recoverable —
+  handback or park — not merely a park-handoff artifact); and the **child writing a done-sentinel
+  carrying its exit code on exit — never the launcher**. Use a **unique sentinel path per dispatch**,
+  or remove any prior sentinel before launch, so a stale sentinel can never read as this run's
+  completion.
   `plugins/superheroes/lib/engine_dispatch.py` already spawns with `start_new_session=True`, but that
   detaches **the run-child and the engine process only**. It does **not** detach the builder's
   **outer** invocation of the dispatch CLI, and it does **not** provide the generic child-written
@@ -417,16 +422,18 @@ without a tool call.
   from the existing machinery. On resume, **output without a completion sentinel is an incomplete run,
   not a result** — fail closed. **Park is unchanged in kind:** it is what happens when the in-turn
   poll genuinely cannot fit the turn. It is no longer the automatic consequence of detaching.
-- **Review seats — coverage and limitation.** The channel rule above covers review seats **as a duty
-  of the headless builder that invokes them**. But `review-code` owns its seats' structural-timeout
-  and expiry contract, and its dispatch instructions still describe a Bash tool call (every engine
-  dispatch — reviewer and fixer — runs as a Bash tool call with a structural 600 s floor from
-  `PreToolUse(Bash)`; see `review-code/reference/auto-fix-loop.md`). Reconciling `review-code`'s own
-  dispatch instructions with this detached outer channel is **open and not settled by this text** —
-  a build whose review seats ran under `review-code`'s own Bash-tool-call dispatch **discloses that
-  limitation** rather than reporting the channel rule as satisfied. The **timeout** contract stays
-  the skill's;
-  the **channel** is the headless session's.
+- **Review seats — coverage and limitation.** The channel rule above binds **dispatches the builder
+  invokes directly** — its implementer orders, its brief-check reviewer, and any engine CLI it
+  hand-rolls. For **seats a skill owns and dispatches itself** — `review-code`'s panel and its
+  fixer — **that skill's own dispatch contract governs today**; the builder does not wrap or
+  re-channel them. `review-code` owns its seats' structural-timeout and expiry contract, and its
+  dispatch instructions still describe a Bash tool call (every engine dispatch — reviewer and fixer —
+  runs as a Bash tool call with a structural 600 s floor from `PreToolUse(Bash)`; see
+  `review-code/reference/auto-fix-loop.md`). Reconciling `review-code`'s own dispatch instructions
+  with this detached outer channel is **open and not settled by this text** — a build whose review
+  seats ran under `review-code`'s own Bash-tool-call dispatch **discloses that limitation** rather
+  than reporting the channel rule as satisfied. The **timeout** contract stays the skill's; the
+  **channel** duty attaches to what the builder itself launches.
 - **Stamp duty (launcher-issued lanes only).** When `SUPERHEROES_LAUNCH_ID` is present — the session
   was launched by the advisor's launcher — stamp the builder liveness heartbeat at each state change:
   entering a phase, before and after a dispatch, on park, on handback. The contract lives in

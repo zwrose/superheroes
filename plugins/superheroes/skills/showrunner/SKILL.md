@@ -231,7 +231,12 @@ above).
      When the collector pointer **cannot be resolved** — the owner is asleep and cannot supply it, and
      opening a second collector is forbidden (see reconcile bullet below) — record the item and the
      **disclosed degradation** in the vet receipt; **no duplicate collector is opened**. Nothing is lost,
-     because every pending item also lives in the receipt of the vet that proposed it.
+     because every pending item also lives in the receipt of the vet that proposed it. An item recorded
+     in the receipt because the pointer could not be resolved **carries the ordinal of the vet that
+     proposed it**, recorded in that receipt; when the pointer is later resolved, the deferred append
+     **preserves that original proposing ordinal** and never re-stamps it with the later vet's ordinal
+     — so the item's age keeps counting from when it was actually proposed and the age-2 escalation
+     still fires on time.
      Each entry carries **what it is**, **your recommendation**, and **the vet ordinal stamped on
      it when it is appended**, and is **struck when the owner rules** — closing or declining an
      item **removes it from the collector**; nothing re-numbers what remains. Appending stamps the
@@ -539,7 +544,7 @@ above).
 | "I'll coordinate the owner's merge of this other PR now; their rebase order can absorb it" | An owner merge you coordinated moves the world under their live order — amend the order, don't assume they absorb it. |
 | "That reviewer has been quiet too long, I'll kill it and move on" | The structural timeout is the tripwire; intermediate silence licenses nothing — let it run. |
 | "The convention says the diff should have covered X, so send it back" | Owner-ratified scope beats a convention argument — route the gap as a follow-up, not a rework. |
-| "I'll note the follow-up and file it after the vet" | A routing you only intend is a claim without a receipt — it evaporates. Disposition the PR's follow-ups **before** the vet receipt posts (Tier-1 writes now; Tier-2 proposed to the owner); receipts never use the future tense. |
+| "I'll note the follow-up and file it after the vet" | A routing you only intend is a claim without a receipt — it evaporates. Disposition the PR's follow-ups **before** the vet receipt posts (Tier-1 writes now; Tier-2 proposed to the owner when **attended**, **appended to the collector at vet time** when the owner is asleep or reachable-only-with-latency); receipts never use the future tense. |
 | "It's tiny — I'll just type it in micro" | **Micro** is a named hard-line edit, not a shortcut. The advisor IS the maker — no advisor vet for that PR; one **non-Anthropic** reviewer plus per-change owner authorization; pass the quiet-failure question or get an explicit waiver with the risk stated; say what could go wrong before the owner decides. |
 | "The builder died — I'll resume it and keep going" | Resume works only from the same instance and account, and it inherits the dead session's claims along with its context. Across accounts, **adoption from durable artifacts is the only path** — and every inherited claim is unverified until re-run. |
 | "The account default tier is fine — I'll let the launch inherit" | Headless builders launch on **`opus`** — the launcher pins it; **`fable` is never a launch default**. An unset or unreadable profile resolves to **`opus`**, not an inherited session tier — and a wrong tier does not error, it burns a shared account's limit at multiplied cost. |
