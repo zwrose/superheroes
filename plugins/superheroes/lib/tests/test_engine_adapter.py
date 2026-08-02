@@ -1201,6 +1201,141 @@ def test_spot_check_investigated_fail_closed_edges_no_raise(tmp_path):
     assert ok is False and all(r["reason"] == "no-repo" for r in rejected)
 
 
+_PATCH_NAME = "SUPERHEROES_REVIEW_DIFF.patch"
+
+
+def _repo_with_source_and_patch(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    source = root / "src.py"
+    source.write_text("x", encoding="utf-8")
+    patch = root / _PATCH_NAME
+    patch.write_text("diff --git\n", encoding="utf-8")
+    return str(root), source, patch
+
+
+def test_spot_check_generated_artifacts_not_passed_behaves_as_today(tmp_path):
+    """E3: omitting generated_artifacts keeps back-compat."""
+    root, source, patch = _repo_with_source_and_patch(tmp_path)
+    ok, accepted, rejected = EA.spot_check_investigated(
+        ["src.py", _PATCH_NAME], root)
+    assert ok is True
+    assert accepted == ["src.py", _PATCH_NAME]
+    assert rejected == []
+
+
+def test_spot_check_generated_artifacts_none_or_non_iterable_treated_empty(tmp_path):
+    """E4: None or non-iterable generated_artifacts never raises."""
+    root, source, _patch = _repo_with_source_and_patch(tmp_path)
+    for artifacts in (None, 42, object()):
+        ok, accepted, rejected = EA.spot_check_investigated(
+            ["src.py"], root, generated_artifacts=artifacts)
+        assert ok is True and accepted == ["src.py"] and rejected == []
+
+
+def test_spot_check_generated_artifacts_ignores_bad_entries(tmp_path):
+    """E5: non-string or empty-string artifact entries are ignored."""
+    root, source, patch = _repo_with_source_and_patch(tmp_path)
+    ok, accepted, rejected = EA.spot_check_investigated(
+        ["src.py"], root, generated_artifacts=(None, "", 7, _PATCH_NAME))
+    assert ok is True and accepted == ["src.py"]
+    assert rejected == []
+
+
+def test_spot_check_nonexistent_artifact_path_ignored(tmp_path):
+    """E6: artifact path that does not exist cannot match anything."""
+    root, source, _patch = _repo_with_source_and_patch(tmp_path)
+    ok, accepted, rejected = EA.spot_check_investigated(
+        [_PATCH_NAME], root, generated_artifacts=("no-such.patch",))
+    assert ok is True and accepted == [_PATCH_NAME]
+    assert rejected == []
+
+
+def test_spot_check_rejects_artifact_by_plain_name(tmp_path):
+    """E7: investigated cites the staged patch by plain name."""
+    root, _source, _patch = _repo_with_source_and_patch(tmp_path)
+    ok, accepted, rejected = EA.spot_check_investigated(
+        [_PATCH_NAME], root, generated_artifacts=(_PATCH_NAME,))
+    assert ok is False and accepted == []
+    assert rejected == [{"path": _PATCH_NAME, "reason": "generated-artifact"}]
+
+
+def test_spot_check_rejects_artifact_by_dotdot_spelling(tmp_path):
+    """E8: resolved identity, not spelling — ./NAME and sub/../NAME."""
+    root, _source, _patch = _repo_with_source_and_patch(tmp_path)
+    for entry in ("./%s" % _PATCH_NAME, "sub/../%s" % _PATCH_NAME):
+        ok, accepted, rejected = EA.spot_check_investigated(
+            [entry], root, generated_artifacts=(_PATCH_NAME,))
+        assert ok is False and accepted == []
+        assert rejected[0]["reason"] == "generated-artifact"
+
+
+def test_spot_check_rejects_hard_link_to_artifact(tmp_path):
+    """E9: hard-linked spelling rejected via samefile when realpath strings differ."""
+    root, _source, patch = _repo_with_source_and_patch(tmp_path)
+    link = os.path.join(root, "via-hardlink")
+    os.link(patch, link)
+    inv_real = os.path.realpath(os.path.join(root, "via-hardlink"))
+    art_real = os.path.realpath(os.path.join(root, _PATCH_NAME))
+    assert inv_real != art_real
+    ok, accepted, rejected = EA.spot_check_investigated(
+        ["via-hardlink"], root, generated_artifacts=(_PATCH_NAME,))
+    assert ok is False and accepted == []
+    assert rejected[0]["reason"] == "generated-artifact"
+
+
+def test_spot_check_rejects_symlink_to_artifact(tmp_path):
+    """E9b: genuine symlink spelling rejected via realpath identity."""
+    root, _source, patch = _repo_with_source_and_patch(tmp_path)
+    link = os.path.join(root, "via-symlink")
+    os.symlink(patch, link)
+    ok, accepted, rejected = EA.spot_check_investigated(
+        ["via-symlink"], root, generated_artifacts=(_PATCH_NAME,))
+    assert ok is False and accepted == []
+    assert rejected[0]["reason"] == "generated-artifact"
+
+
+def test_spot_check_only_artifact_fails_floor(tmp_path):
+    """E10: citing only the artifact fails the investigation floor."""
+    root, _source, _patch = _repo_with_source_and_patch(tmp_path)
+    ok, accepted, rejected = EA.spot_check_investigated(
+        [_PATCH_NAME], root, generated_artifacts=(_PATCH_NAME,))
+    assert ok is False and accepted == []
+
+
+def test_spot_check_artifact_plus_source_passes_on_source(tmp_path):
+    """E11: artifact rejected but a real source file still clears the floor."""
+    root, _source, _patch = _repo_with_source_and_patch(tmp_path)
+    ok, accepted, rejected = EA.spot_check_investigated(
+        [_PATCH_NAME, "src.py"], root, generated_artifacts=(_PATCH_NAME,))
+    assert ok is True and accepted == ["src.py"]
+    assert rejected == [{"path": _PATCH_NAME, "reason": "generated-artifact"}]
+
+
+def test_spot_check_same_name_without_generated_artifacts_accepted(tmp_path):
+    """E12: tracked file sharing the patch name is ordinary source when no artifact list."""
+    root, _source, _patch = _repo_with_source_and_patch(tmp_path)
+    ok, accepted, rejected = EA.spot_check_investigated([_PATCH_NAME], root)
+    assert ok is True and accepted == [_PATCH_NAME]
+    assert rejected == []
+
+
+def test_spot_check_samefile_raises_falls_back_to_realpath(tmp_path, monkeypatch):
+    """E13: os.path.samefile failure falls back to realpath comparison."""
+    root, _source, _patch = _repo_with_source_and_patch(tmp_path)
+    real_samefile = os.path.samefile
+
+    def _boom(a, b):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(os.path, "samefile", _boom)
+    ok, accepted, rejected = EA.spot_check_investigated(
+        [_PATCH_NAME], root, generated_artifacts=(_PATCH_NAME,))
+    assert ok is False and accepted == []
+    assert rejected[0]["reason"] == "generated-artifact"
+    monkeypatch.setattr(os.path, "samefile", real_samefile)
+
+
 def test_finding_body_quoting_prompt_tail_survives_conditional_strip():
     """Genuine finding quoting the last 2k of the prompt must not be stripped away (#668)."""
     head = "H" * 5000
@@ -1702,3 +1837,90 @@ def test_salvage_from_artifact_excerpt_capped():
     salvage = EA.salvage_from_artifact(stdout, "")
     assert salvage["excerptBytes"] == EA.ARTIFACT_EXCERPT_BYTES
     assert len(salvage["excerpt"].encode("utf-8")) <= EA.ARTIFACT_EXCERPT_BYTES + 4
+
+
+def test_sanitized_view_receipt_binds_producer_diff_keys(tmp_path):
+    """Producer build_sanitized_view diff keys must reach _sanitized_view_receipt."""
+    import subprocess as sp
+    import sys
+
+    lib = os.path.join(_HERE, "..")
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    import sanitized_view as sv
+    ed_spec = importlib.util.spec_from_file_location(
+        "engine_dispatch_receipt_bind",
+        os.path.join(lib, "engine_dispatch.py"),
+    )
+    ed = importlib.util.module_from_spec(ed_spec)
+    ed_spec.loader.exec_module(ed)
+
+    repo = tmp_path / "receipt-bind"
+    os.makedirs(repo, exist_ok=True)
+    sp.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    with open(repo / "keep.txt", "w", encoding="utf-8") as fh:
+        fh.write("k\n")
+    sp.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    sp.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "-c",
+            "user.email=test@test.local",
+            "-c",
+            "user.name=test",
+            "commit",
+            "-q",
+            "-m",
+            "init",
+        ],
+        check=True,
+    )
+    base_sha = sp.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    with open(repo / "keep.txt", "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    sp.run(["git", "-C", str(repo), "add", "keep.txt"], check=True)
+    sp.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "-c",
+            "user.email=test@test.local",
+            "-c",
+            "user.name=test",
+            "commit",
+            "-q",
+            "-m",
+            "change",
+        ],
+        check=True,
+    )
+
+    fake_tmp = str(tmp_path / "sanitized-temp-base")
+    os.makedirs(fake_tmp, exist_ok=True)
+    import tempfile as tf
+
+    orig_gettempdir = tf.gettempdir
+    tf.gettempdir = lambda: fake_tmp
+    try:
+        view = sv.build_sanitized_view(str(repo), diff_base=base_sha)
+        receipt = ed._sanitized_view_receipt(view)
+        assert receipt["diffBase"] == view["diffBase"]
+        assert receipt["diffPath"] == view["diffPath"]
+        assert receipt["diffBytes"] == view["diffBytes"]
+        assert receipt["diffWithheldCount"] == view["diffWithheldCount"]
+        assert receipt["diffBase"] is not None
+        assert receipt["diffPath"] is not None
+        assert receipt["diffBytes"] is not None
+        assert receipt["diffWithheldCount"] is not None
+    finally:
+        tf.gettempdir = orig_gettempdir
+        if "view" in locals():
+            sv.destroy_sanitized_view(view["path"])

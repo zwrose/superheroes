@@ -153,10 +153,73 @@ never drop a finding or a lens.
 > materializes a fresh single-commit git repo at `headSha` holding the reviewed tree, with the named
 > repo-local agent-config surface removed (`AGENTS.md`, `.cursor/`, `CLAUDE.md`, and the other basenames
 > the runner strips at every directory level). That config is **not discoverable** from the seat's cwd —
-> which is the point of #684. Reading ordinary source files and `git grep` work; **`git log` and
-> `git blame` do not** (one synthetic commit, no history). Paths the runner stripped are **unreadable**
+> which is the point of #684. Reading ordinary source files and `git grep` work; **`git log`,
+> `git blame`, `git diff <ref>`, and `git show <ref>` do not** — the view has no `origin/main`, no
+> remote, and no parent commit (one synthetic commit, no history). The dispatch prompt's auto-prepended
+> notice states this prohibition to the seat explicitly. Paths the runner stripped are **unreadable**
 > even when the diff under review touches them — the dispatch prompt should name stripped paths so the
 > seat knows why a read failed.
+>
+> **`--diff-base <commit-oid>` (optional).** Omitted → behaviour is exactly as today: nothing is staged
+> and the four receipt keys below are `null`. Supplied → the value must be a **pinned commit object id**
+> (40 hex characters, or 64 in a SHA-256 repository); a revision expression, branch name or tag is
+> refused as `sanitized-view-diff-base-unresolved` **before any repository-local git command runs**.
+> The runner verifies that commit **in the source repository** (which has git), resolves the **merge
+> base** of that commit and the view's `headSha`,
+> generates the merge-base→head patch, and stages it inside the view at the view-root-relative path
+> `SUPERHEROES_REVIEW_DIFF.patch`. The patch is written **after** export verification and **before**
+> the view's synthetic commit, so the view is committed clean rather than dirty. Changed paths that
+> match the runner's stripped-config predicate are **withheld from the patch and counted** — the patch
+> can never reintroduce the agent/IDE config the export just removed. The dispatch prompt's
+> auto-prepended notice states explicitly that when a patch was staged, the change under review **is**
+> that patch, that it is a **generated artifact rather than repository source**, and that the seat
+> must not review it, must not list it in `investigated`, and should exclude it from repo-wide
+> searches. On a **continuation** (`--run-dir` naming an existing run), `--diff-base` is accepted but
+> ignored — the live run's view is not rebuilt.
+>
+> The staged patch is **rejected from the #666 investigation floor**: a seat whose `investigated` array
+> cites only the patch fails the floor and forfeits vacuously, exactly as if it had cited nothing.
+> Rejection is by resolved file identity, so `./NAME`, `a/../NAME` and a symlink to it are all
+> rejected. The rejection reason string is `generated-artifact`.
+>
+> **Four `sanitizedView` receipt keys** (always present, `null` when `--diff-base` was not used):
+>
+> | key | meaning |
+> |---|---|
+> | `diffBase` | the resolved **merge-base** sha the patch is against (40 hex chars, or 64 in a SHA-256 repository) |
+> | `diffPath` | `SUPERHEROES_REVIEW_DIFF.patch`, relative to the view root |
+> | `diffBytes` | patch size in bytes |
+> | `diffWithheldCount` | **only** the changed non-tree entries the stripped-config policy withheld; underivable, unrecognized, unaccounted, and opaque content **refuse the dispatch** rather than being counted here — this is what keeps the reviewer-facing "the absence is not a finding" statement true |
+>
+> The census of changed paths comes from direct two-tree enumeration (`git ls-tree` on the
+> merge-base and head), not from patch presentation — `git diff`, rendered patch text, or a list of
+> presently-known dangerous configuration keys. Every changed recursively enumerated **non-tree**
+> entry — blob/file, symlink or gitlink — must be **rendered**, **policy-withheld**, or **refused**
+> before any external engine spawns. The merge-base the census is taken against is resolved outside
+> the reviewed repository's git directory — in a scratch repository linked only by its object store,
+> under an environment with every inherited `GIT_*` variable dropped — so repository-controlled
+> ancestry overlays cannot select a base that omits a genuine change, and dispatch **refuses** when
+> authoritative ancestry cannot be established. An empty directory added or removed in a commit is a
+> tree-only change carrying no file, symlink or gitlink content, `git diff` renders nothing for it
+> either, and it is therefore outside this contract. Until a follow-up issue
+> lands, opaque or unaccounted content returns a named terminal refusal (`attempts: 0`) that is
+> never interpreted as zero findings or a clean review; there is no automatic fallback, and that
+> absence is an explicitly accepted availability limitation.
+>
+> **Diff refusals** (all `attempts: 0`, no token spend), joining the existing `sanitized-view-*`
+> family:
+>
+> | token | when |
+> |---|---|
+> | `sanitized-view-diff-base-unresolved` | the base is empty, begins with `-`, is not a pinned 40-/64-hex commit object id, does not resolve to a commit, shares no merge base with head, the repository's shallow state cannot be determined from its git, the repository's object store cannot be located, the scratch ancestry repository cannot be created, or the merge-base cannot be established from it |
+> | `sanitized-view-diff-base-shallow` | the reviewed repository is a shallow clone, so the genuine merge-base cannot be established from its object store; fetch full history (for example `fetch-depth: 0` or `git fetch --unshallow`) and dispatch again |
+> | `sanitized-view-diff-empty` | a base was requested and the resulting patch is empty with nothing withheld |
+> | `sanitized-view-diff-fully-withheld` | every changed path was withheld as stripped config — an external seat could not review this change at all |
+> | `sanitized-view-diff-too-large` | the patch exceeds the 8 MiB ceiling, or census `ls-tree` stdout exceeds the export byte ceiling |
+> | `sanitized-view-diff-path-collision` | the repository already tracks a file named `SUPERHEROES_REVIEW_DIFF.patch` |
+> | `sanitized-view-diff-failed` | a git subprocess failed while resolving ancestry or generating the patch (spawn error, non-zero exit, timeout) — command failure only |
+> | `sanitized-view-diff-unaccounted` | an unrecognized non-`diff --git` span, a duplicate path within one census tree, a changed census entry that survived the stripped policy but has no rendered section, a rendered section for a path the census does not contain, or a duplicate rendered section for the same path |
+> | `sanitized-view-diff-opaque` | a rendered section whose content is opaque — `Binary files … differ` (or `GIT binary patch`) instead of hunks |
 >
 > **#666 investigation floor.** A seat that cites a **stripped** path in its `investigated` array fails
 > the investigation floor and forfeits vacuously — fail-safe (the seat falls open to Claude), never a
@@ -178,8 +241,11 @@ never drop a finding or a lens.
 > There is **no fallback to the raw repo and no opt-out**.
 >
 > **Receipt.** Every dispatch result carries a `sanitizedView` block (`strategy`, `stripped`,
-> `strippedCount`, `headSha`, `sourceDirty`, `buildSeconds`, `bytes`, `fileCount`). The view is the
-> **committed** tree at `headSha`; `sourceDirty: true` flags modified tracked files in the source repo
+> `strippedCount`, `headSha`, `sourceDirty`, `buildSeconds`, `bytes`, `fileCount`, plus `diffBase`,
+> `diffPath`, `diffBytes`, `diffWithheldCount` — the last four always present, `null` when
+> `--diff-base` was not used). The `bytes` and `fileCount` figures **include** the staged patch when
+> one was written. The view is the **committed** tree at `headSha`; `sourceDirty: true` flags modified
+> tracked files in the source repo
 > so a caller reviewing uncommitted work is disclosed rather than silently given the pre-change tree.
 > Every result also carries **`terminal`**, **`argv`** (the exact spawned command), and **`runDir`**.
 >
@@ -261,6 +327,7 @@ never drop a finding or a lens.
 > python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
 >   --engine "$REVIEWER_ENGINE" --engine-model "$SEAT_ENGINE_MODEL" --effort "$SEAT_EFFORT" \
 >   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
+>   --diff-base "$BASE_REF" \
 >   --run-dir "$RUN_DIR" --max-wait 540 \
 >   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
 > ```
@@ -275,8 +342,16 @@ never drop a finding or a lens.
 > its findings (`--repo-root` on the CLI still names the **source** repository; the runner builds the
 > view itself). An unresolvable source repo root is a **named refusal** before any view is built
 > (`repo-root-absent`, `repo-root-missing`, `repo-root-not-a-directory`, `repo-root-not-a-repo`) with
-> `attempts: 0`. The seat prompt should still inline the diff (a self-contained prompt remains the
-> cheapest path); repo access is no longer forbidden.
+> `attempts: 0`. `--diff-base` makes staging the diff **machinery** — the runner stages the change as
+> `SUPERHEROES_REVIEW_DIFF.patch` inside the view so the seat can read it without git history.
+> The value must be the **pinned base commit object id** the round diff was computed against — not a
+> symbolic ref like `origin/main`, which can drift mid-loop and stage a patch that disagrees with the
+> round diff. This is now **mechanized**: anything that is not a 40-/64-hex commit object id is refused
+> before any repository-local git command runs. An unset shell variable expands to `--diff-base ""`,
+> which the runner refuses as
+> `sanitized-view-diff-base-unresolved` with `attempts: 0` — empty is not the same as omitted.
+> Inlining the diff in the seat prompt remains available and is still reasonable for a small diff,
+> but it is no longer the only way a seat gets the change. Repo access is no longer forbidden.
 >
 > **Host grants (subcommand granularity).** The owner may adopt these grant strings at subcommand
 > granularity (the band states them; it never writes the owner's settings):

@@ -323,6 +323,51 @@ def test_schema_refusal_tokens_in_auto_fix_loop_doc():
     )
 
 
+# --- Cluster: sanitized-view diff refusal tokens (sanitized_view → auto-fix-loop.md) ---
+
+
+def _sanitized_view_diff_refusal_tokens_from_home():
+    text = _read("lib/sanitized_view.py")
+    return set(re.findall(
+        r'SanitizedViewError\("(sanitized-view-diff-[^"]+)"\)',
+        text,
+    ))
+
+
+def _sanitized_view_diff_refusal_tokens_from_auto_fix_loop_doc(doc):
+    """The six-row diff refusal table in auto-fix-loop.md — scoped to that block only."""
+    m = re.search(
+        r"\*\*Diff refusals\*\*.*?\n>\n> \| token \| when \|\n> \|---\|---\|\n(.*?)\n>\n",
+        doc,
+        re.DOTALL,
+    )
+    assert m, (
+        "auto-fix-loop.md: sanitized-view diff refusal table not found "
+        "(moved or reworded?)"
+    )
+    tokens = set(re.findall(r">\s*\|\s*`([^`]+)`\s*\|", m.group(1)))
+    assert tokens, (
+        "auto-fix-loop.md: sanitized-view diff refusal table parsed to zero tokens "
+        "(regex drift or empty table?)"
+    )
+    return tokens
+
+
+def test_sanitized_view_diff_refusal_tokens_in_auto_fix_loop_doc():
+    """§11: auto-fix-loop.md restates sanitized_view.py diff refusal literals."""
+    home = _sanitized_view_diff_refusal_tokens_from_home()
+    doc = _read("skills/review-code/reference/auto-fix-loop.md")
+    doc_tokens = _sanitized_view_diff_refusal_tokens_from_auto_fix_loop_doc(doc)
+    missing_from_doc = sorted(home - doc_tokens)
+    extra_in_doc = sorted(doc_tokens - home)
+    assert not missing_from_doc and not extra_in_doc, (
+        "auto-fix-loop.md sanitized-view diff refusal vocabulary drift from "
+        "sanitized_view.py — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_from_doc, extra_in_doc)
+    )
+
+
 # --- Cluster 4: negative drift scans (concrete model ids must not leak) ------
 
 _CONCRETE_MODEL_TOKENS = (
