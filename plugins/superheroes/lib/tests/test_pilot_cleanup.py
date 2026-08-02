@@ -1145,6 +1145,51 @@ def test_cleanup_effect_receipt_fails_sentinel_absent_after_plant(private_tmp):
     assert receipt["reason"] == pc.REASON_RECEIPT_VACUOUS
 
 
+def test_cleanup_effect_receipt_own_plant_silently_failing_is_vacuous(private_tmp):
+    # The sibling test's plant no-ops for every namespace, so a missing vacuity check
+    # is masked by the foreign-sentinel detector; this fixture isolates own-namespace
+    # plant failure, which is the path where vacuity removal yields a false pass.
+    reach_root, run_cwd, bin_dir, store_dir, cleanup_repo, journal_path = _harness_layout(
+        private_tmp
+    )
+    plant = os.path.join(bin_dir, "plant.sh")
+    probe = os.path.join(bin_dir, "probe.sh")
+    selective_plant = (
+        "#!/bin/sh\n"
+        'ns="$2"\n'
+        'id="$4"\n'
+        'store="$PILOT_DATASTORE_URL"\n'
+        'if [ "$ns" = "slot-a" ]; then\n'
+        "  exit 0\n"
+        "fi\n"
+        'mkdir -p "$store/$ns"\n'
+        'touch "$store/$ns/$id"\n'
+        "exit 0\n"
+    )
+    _write_executable(plant, selective_plant)
+    _write_executable(probe, _probe_script_present())
+    cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
+    receipt = pc.cleanup_effect_receipt(
+        _three_slot_policy(store_dir, plant, probe),
+        _pilot_block(cleanup_script),
+        _SLOT_REF,
+        reach_roots=[reach_root],
+        run_cwd=run_cwd,
+        cleanup_root=cleanup_repo,
+        journal_path=journal_path,
+        now=_NOW,
+        observed_identity="example_dev",
+        identity_provenance="observed",
+        identity_strength="strong",
+    )
+    assert receipt["result"] == pc.RESULT_FAIL
+    assert receipt["reason"] == pc.REASON_RECEIPT_VACUOUS
+    postplant = receipt["observations"]["postplant"]
+    assert postplant["slot-a"] is False
+    for foreign in ("slot-ab", "slot-b"):
+        assert postplant[foreign] is True
+
+
 # --- edge 6/7: cleanup fails or times out --------------------------------------
 
 def test_cleanup_effect_receipt_fails_cleanup_nonzero(private_tmp):
