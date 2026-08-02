@@ -6,6 +6,8 @@ import os
 
 import pytest
 
+from skill_surface import surface_text
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILLS = os.path.normpath(os.path.join(HERE, "..", "..", "skills"))
 
@@ -20,8 +22,7 @@ APPLY_MARKER = "model: $DEEP_MODEL"
 
 
 def _read(skill):
-    with open(os.path.join(SKILLS, skill, "SKILL.md"), encoding="utf-8") as fh:
-        return fh.read()
+    return surface_text(skill)
 
 
 @pytest.mark.parametrize("skill", WIRED)

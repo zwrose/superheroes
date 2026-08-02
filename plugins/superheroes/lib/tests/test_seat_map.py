@@ -503,10 +503,8 @@ def test_cli_compose_with_pins(capsys):
 
 
 def test_review_code_skill_wires_seat_pins_from_ep_to_compose():
-    skill_path = os.path.normpath(os.path.join(
-        _HERE, "..", "..", "skills", "review-code", "SKILL.md"))
-    with open(skill_path, encoding="utf-8") as fh:
-        text = fh.read()
+    from skill_surface import surface_text
+    text = surface_text("review-code")
     assert ".seatPins" in text
     assert "(.seatPins // {}) == {} then empty" in text
     assert '[ -n "$SEAT_PINS" ]' in text
