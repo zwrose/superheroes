@@ -29,7 +29,7 @@ from store_core import (
     repo_root,
 )
 
-SLOT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+SLOT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 
 # The ONE definition of the machine-readable calibration block (```json test-pilot-config```).
 # Both resolve()'s layer presence gate (here) and engine.load_profile_config match this exact
