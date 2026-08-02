@@ -107,12 +107,13 @@ def _dispatch_write(tmp_path, fake, *, cwd=_NO_CWD, run_dir=None, engine="codex"
     defaults = {
         "model": "sonnet",
         "effort": "high",
-        "prompt_path": _prompt(tmp_path),
         "cwd": cwd,
         "run_dir": run_dir,
         "order_id": "order-1",
         "run_engine": fake,
     }
+    if "prompt_path" not in kwargs:
+        defaults["prompt_path"] = _prompt(tmp_path)
     defaults.update(kwargs)
     return ED.dispatch_write(engine, **defaults)
 
@@ -466,6 +467,204 @@ def test_worktree_dirtied_refuses_retry(tmp_path):
     assert res["detail"] == "worktree-dirtied-by-attempt"
     assert res["forfeited"] is True
     assert res["attempts"] == 1
+
+
+# --- WO-B: write report recovery ---------------------------------------------
+
+
+def _install_write_salvage(monkeypatch, recover):
+    monkeypatch.setattr(ED.engine_adapter, "salvage_write_report", recover, raising=False)
+
+
+def _write_report(*, ok=True):
+    return {
+        "report": {
+            "ok": ok,
+            "signal": "ok" if ok else "tests_failed",
+            "evidence": {"testFailed": not ok, "testPassed": ok},
+        },
+        "structured": True,
+        "requiresManualRead": False,
+        "salvaged": True,
+        "truncated": False,
+    }
+
+
+def _prose_write_report():
+    return {
+        "report": None,
+        "structured": False,
+        "requiresManualRead": True,
+        "excerpt": "scrubbed prose pointer",
+        "excerptBytes": 22,
+        "salvaged": True,
+        "truncated": False,
+    }
+
+
+def test_write_forfeit_attaches_salvage_without_upgrading_outcome(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree(tmp_path)
+    calls = []
+
+    def recover(engine, role_kind, stdout, fed_prompt):
+        if stdout == "unrecoverable":
+            return None
+        calls.append((engine, role_kind, stdout, fed_prompt))
+        return _write_report()
+
+    _install_write_salvage(monkeypatch, recover)
+    res = _dispatch_write(tmp_path, FakeRunner([
+        ("unrecoverable", True, 0, ""),
+        (_build_ok_stdout(), True, 0, ""),
+    ]), cwd=wt)
+
+    assert res["ok"] is False
+    assert res["terminal"] is True
+    assert res["forfeited"] is True
+    assert res["reason"] == ED.dispatch_outcome.REASON_FORFEITED
+    assert res["salvage"] == {
+        "attempt": 2,
+        "stdoutPath": os.path.join(str(tmp_path / "run"), "attempt-2.stdout"),
+        **_write_report(),
+    }
+    assert "still a forfeit" in res["disclosure"]
+    assert "independently verified" in res["disclosure"]
+    assert calls == [("codex", "build", _build_ok_stdout(), "Build this.\n")]
+
+
+def test_write_run_opened_records_fed_prompt(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    prompt_text = "Implement exactly the assigned work order.\n"
+    prompt_path = _prompt(tmp_path, prompt_text)
+    res = _dispatch_write(
+        tmp_path,
+        FakeRunner([(_build_ok_stdout(), False, 0, "")]),
+        cwd=wt,
+        prompt_path=prompt_path,
+    )
+
+    assert res["ok"] is True
+    records, _ = ED._journal_read(str(tmp_path / "run"))
+    opened = next(record for record in records if record.get("kind") == "run-opened")
+    assert opened["fedPrompt"] == prompt_text
+
+
+def test_write_salvage_uses_latest_report_and_records_earlier_attempt(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree(tmp_path)
+
+    def recover(_engine, _role_kind, stdout, _fed_prompt):
+        return _write_report(ok=stdout == "second report") if stdout in {"first report", "second report"} else None
+
+    _install_write_salvage(monkeypatch, recover)
+    res = _dispatch_write(tmp_path, FakeRunner([
+        ("first report", True, 0, ""),
+        ("second report", True, 0, ""),
+    ]), cwd=wt)
+
+    assert res["forfeited"] is True
+    assert res["salvage"]["attempt"] == 2
+    assert res["salvage"]["alsoRecovered"] == [{
+        "attempt": 1,
+        "stdoutPath": os.path.join(str(tmp_path / "run"), "attempt-1.stdout"),
+    }]
+
+
+def test_write_salvage_prefers_structured_report_over_later_prose(tmp_path, monkeypatch):
+    # axis: C4 structure must beat recency; prose remains visible in alsoRecovered.
+    wt, _main = _linked_worktree(tmp_path)
+
+    def recover(_engine, _role_kind, stdout, _fed_prompt):
+        if stdout == "structured report":
+            return _write_report()
+        if stdout == "prose report":
+            return _prose_write_report()
+        return None
+
+    _install_write_salvage(monkeypatch, recover)
+    res = _dispatch_write(tmp_path, FakeRunner([
+        ("structured report", True, 0, ""),
+        ("prose report", True, 0, ""),
+    ]), cwd=wt)
+
+    assert res["salvage"]["attempt"] == 1
+    assert res["salvage"]["structured"] is True
+    assert res["salvage"]["alsoRecovered"] == [{
+        "attempt": 2,
+        "stdoutPath": os.path.join(str(tmp_path / "run"), "attempt-2.stdout"),
+    }]
+
+
+def test_write_salvage_prose_survives_ledger_scrubbing(tmp_path):
+    salvage = _prose_write_report()
+    # Deliberate fake token fixture; it must never resemble a real credential leak.
+    fake_token = "ghp_EXAMPLEfakenotarealtoken000000000"
+    salvage["excerpt"] = "token %s" % fake_token
+    row = ED._build_ledger_row(str(tmp_path), {"opened": {}, "attempts": {}}, {
+        "ok": False,
+        "salvage": salvage,
+    })
+    assert row["salvage"]["report"] is None
+    assert row["salvage"]["structured"] is False
+    assert row["salvage"]["requiresManualRead"] is True
+    assert "[REDACTED]" in row["salvage"]["excerpt"]
+    assert fake_token not in row["salvage"]["excerpt"]
+
+
+def test_write_dirty_tree_forfeit_attaches_salvage(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree(tmp_path)
+
+    class DirtyTimeoutRunner:
+        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+            with open(os.path.join(cwd, "dirty.txt"), "w", encoding="utf-8") as fh:
+                fh.write("x")
+            return _build_ok_stdout(), True, 0, ""
+
+    _install_write_salvage(monkeypatch, lambda *_args: _write_report())
+    res = _dispatch_write(tmp_path, DirtyTimeoutRunner(), cwd=wt, max_wait=120)
+
+    assert res["detail"] == "worktree-dirtied-by-attempt"
+    assert res["forfeited"] is True
+    assert res["salvage"]["attempt"] == 1
+    assert "report was not gradeable" in res["disclosure"]
+
+
+def test_write_salvage_scan_exception_leaves_terminal_forfeit_unchanged(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree(tmp_path)
+
+    def boom(*_args):
+        raise RuntimeError("salvage boom")
+
+    _install_write_salvage(monkeypatch, boom)
+    res = _dispatch_write(tmp_path, FakeRunner([
+        (_build_ok_stdout(), True, 0, ""),
+        (_build_ok_stdout(), True, 0, ""),
+    ]), cwd=wt)
+
+    assert res["forfeited"] is True
+    assert "salvage" not in res
+
+
+def test_write_salvage_marks_ledger_engaged_but_not_delivered(tmp_path):
+    result = {"ok": False, "salvage": {"report": _write_report()["report"]}}
+    stages = ED._ledger_stages(
+        result,
+        {"attempts": {}},
+        str(tmp_path),
+        {"runKind": ED.RUN_KIND_WRITE},
+    )
+
+    assert stages == {"engaged": True, "delivered": False}
+
+
+def test_write_forfeit_without_salvage_leaves_ledger_unengaged(tmp_path):
+    stages = ED._ledger_stages(
+        {"ok": False},
+        {"attempts": {}},
+        str(tmp_path),
+        {"runKind": ED.RUN_KIND_WRITE},
+    )
+
+    assert stages == {"engaged": None, "delivered": False}
 
 
 def test_write_success_terminal(tmp_path):
