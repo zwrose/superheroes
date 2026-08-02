@@ -14,6 +14,7 @@ import time
 
 import blocks
 import file_lock as lock
+import pilot_contract
 import state
 import store
 import store_core
@@ -193,6 +194,15 @@ def load_profile_config(profile_path):
     except json.JSONDecodeError as exc:
         raise EngineError(
             f"profile config block in {profile_path} is invalid JSON: {exc}"
+        ) from exc
+    try:
+        pilot_contract.validate_config(cfg)
+    except pilot_contract.PilotContractError as exc:
+        location = (" at %s" % exc.path) if exc.path else ""
+        raise EngineError(
+            "profile %s: pilot contract refusal %s%s"
+            % (profile_path, exc.reason, location),
+            pilotRefusal=exc.reason,
         ) from exc
     return cfg
 
@@ -579,7 +589,8 @@ def main(argv):
         err = {"ok": False, "command": cmd,
                "error": payload.get("error", str(exc)),
                "block": payload.get("block"),
-               "scenarioId": payload.get("scenarioId")}
+               "scenarioId": payload.get("scenarioId"),
+               "pilotRefusal": payload.get("pilotRefusal")}
         sys.stdout.write(json.dumps(err) + "\n")
         return 1
     except ValueError as exc:

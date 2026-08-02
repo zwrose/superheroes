@@ -116,6 +116,19 @@ trade-offs AND a recommendation derived from what you detected.
 Report what was written and where; remind the user that `test-pilot-plan`
 picks it up from here.
 
+### Pilot block (optional)
+
+The nested `pilot` key inside `test-pilot-config` is **omitted entirely** unless the owner
+has answered every one of its no-default fields. Do not scaffold it during init.
+
+- `effectsEscape`, the mint envelope, and expected pilot identities are **never synthesized,
+  defaulted, or placeholder-filled** — an unanswered declaration is absent and absent refuses.
+- Expected identity and the mintable-account allowlist are **policy**; they do not belong in
+  the `pilot` block at all (resolved via `policyRef.declaration` against an external policy
+  document).
+- Normative field table, refusal tokens, and probe vocabulary:
+  `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/pilot-contract.md`.
+
 ## Step 7 — Reconcile mode
 
 Re-run detection, then DIFF against the existing profile. Present drift to

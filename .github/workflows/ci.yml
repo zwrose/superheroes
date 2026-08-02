@@ -4,12 +4,18 @@ on:
   push:
     branches: [main]
   pull_request:
-    # include `edited` so the pr-title check re-validates when the title is fixed
-    # (a re-run replays the stale event payload; only a new event refreshes the title)
-    types: [opened, synchronize, reopened, edited]
+    # `edited` is deliberately absent: a title/body edit does not change the head SHA,
+    # so the code checks on that SHA remain valid (pr-title.yml handles title re-validation).
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
+  pull-requests: read
+
+# Superseded runs on a PR ref cancel; pushes to main queue and are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   validate:
@@ -24,8 +30,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Python dependencies (validators + tests)
-        run: python3 -m pip install --upgrade pytest jsonschema pyyaml
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install Python dependencies (validators + tests + import-linter)
+        run: uv pip install --system pytest jsonschema pyyaml "import-linter>=2,<3"
 
       - name: Validate marketplace + plugin manifests
         run: python3 .github/scripts/validate_marketplace.py
@@ -45,29 +54,81 @@ jobs:
       - name: Validate STUB markers carry an issue reference
         run: python3 .github/scripts/validate_stubs.py
 
-      - name: Install uv (test-pilot block-execution tests)
-        uses: astral-sh/setup-uv@v5
+      - name: Pre-merge release-bump gate
+        if: github.event_name == 'pull_request' && github.head_ref == 'release-please--branches--main--components--superheroes'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Baseline must be the PR base SHA: the PR checkout already holds the proposed
+          # version in .release-please-manifest.json, whose tag does not exist until merge —
+          # running against the head checkout fails every release PR.
+          # release-please.yml keeps the post-merge tripwire as the backstop; this gate
+          # moves failure to before the owner's merge click (#744, #814).
+          # Catalog-membership fetch above leaves a shallow clone; unshallow before tag walk.
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            git fetch --unshallow --tags --force origin
+          else
+            git fetch --tags --force origin
+          fi
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            echo "Repository is still shallow after unshallow fetch — refusing to run release-bump gate"
+            exit 1
+          fi
+          git worktree add "$RUNNER_TEMP/release-base" "$BASE_SHA"
+          cd "$RUNNER_TEMP/release-base"
+          python3 .github/scripts/check_release_bump.py --repo "$REPO"
 
       - name: Install jscpd (guardian duplication real-channel tests)
         run: npm install -g jscpd@5.0.12 && jscpd --version
+
+      - name: Install coupling collectors (ungate coupling lens real-seam tests)
+        # Without co-located supported-major TypeScript, guardian_tools.typescript_toolchain_node_path
+        # returns None and the lens's .ts/.tsx collection stays degraded while the JS-only positive
+        # control still passes — issue #815 silent-skip shape.
+        run: npm install -g dependency-cruiser@18 typescript@5 && depcruise --version
+
+      - name: Install Claude Code CLI (host manifest validation)
+        # Unpinned deliberately: validate against the host consumers actually run.
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Validate plugin manifests against host CLI
+        env:
+          CLAUDE_CONFIG_DIR: ${{ runner.temp }}/claude-config
+        run: |
+          mkdir -p "$CLAUDE_CONFIG_DIR"
+          claude plugin validate . --strict
+          claude plugin validate plugins/superheroes --strict
+
+      - name: Release-PR install smoke test
+        if: github.event_name == 'pull_request' && github.head_ref == 'release-please--branches--main--components--superheroes'
+        env:
+          CLAUDE_CONFIG_DIR: ${{ runner.temp }}/claude-config
+        run: |
+          claude plugin marketplace add "$PWD"
+          claude plugin install superheroes@superheroes
+          installed=$(
+            claude plugin list | awk '
+              /superheroes@superheroes/ { found=1; next }
+              found && /^[[:space:]]+Version:/ {
+                sub(/^[[:space:]]+Version:[[:space:]]+/, ""); print; exit
+              }
+            '
+          )
+          expected=$(python3 -c "import json; print(json.load(open('plugins/superheroes/.claude-plugin/plugin.json'))['version'])")
+          if [ -z "$installed" ]; then
+            echo "Could not parse installed plugin version for superheroes@superheroes"
+            exit 1
+          fi
+          if [ "$installed" != "$expected" ]; then
+            echo "Version mismatch: installed=$installed expected=$expected"
+            exit 1
+          fi
 
       - name: Run plugin + band-eval tests
         # Single pytest process is safe: the four plugins merged into one superheroes
         # plugin lib tree (no shared module basenames), and eval/lib/identifiers.py was
         # removed, so the historical sys.path collision is resolved.
         run: |
-          python3 -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ plugins/superheroes/eval/tests/ eval/lib/tests/ -q
-
-  pr-title:
-    name: pr-title
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: PR title is a Conventional Commit
-        run: python3 .github/scripts/check_conventional_commit.py "$PR_TITLE"
-        env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
+          python3 -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ plugins/superheroes/eval/tests/ eval/lib/tests/ -q -rs

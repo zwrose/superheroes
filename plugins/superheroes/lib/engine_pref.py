@@ -21,7 +21,7 @@ ENGINES = ("claude", "codex", "cursor")
 # Canonical v2 engine-preference role keys (the single home the §11 drift guard reads). Each is a
 # key under core.md's enginePreferences. `orchestrator` is intentionally absent — the session model
 # is not owner-configurable. `planAuthor` is retired (plan authoring was retired in #479) — it is
-# not a v2 schema key and survives only as a tombstone in RETIRED_ENGINE_KEYS below.
+# not a v2 schema key.
 ENGINE_ROLE_KEYS = ("reviewer", "implementation", "briefCheck", "pilot")
 
 # The FULL valid enginePreferences key set (role keys + the non-role tuning keys) — the schema home
@@ -37,10 +37,6 @@ BUILDER_DISPATCH_TIER_DEFAULT = "opus"
 BUILDER_TIER_SOURCES = (
     "configured", "default", "unreadable-default", "invalid-config-default", "explicit",
 )
-
-# Retired enginePreferences keys that must never be cited as a live config knob again (plan authoring
-# was retired in #479). The §11 drift guard asserts these never re-appear in the calibration prose.
-RETIRED_ENGINE_KEYS = ("planAuthor",)
 
 # Codex model policy is provider-specific and deliberately separate from model_tier's
 # Claude-family capability names. Shared tiers express role strength; this map translates those
