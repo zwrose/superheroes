@@ -17,9 +17,9 @@ import store_core
 
 SCHEMA = 1
 
-PHASE_RUNNING = "running"
-PHASE_WINDING_DOWN = "winding-down"
-PHASE_EXPIRED = "expired"
+PHASE_RUNNING = "wave-running"
+PHASE_WINDING_DOWN = "wave-winding-down"
+PHASE_EXPIRED = "wave-expired"
 
 INTENT_COMPLETE = "complete"
 INTENT_PARK = "park"

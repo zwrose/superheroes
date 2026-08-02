@@ -1016,6 +1016,9 @@ position would let project data choose which binary runs.
 probe is **not** the port fence: two slots handed the same free port both observe it free
 before either binds. `assert_unique_endpoints` refuses duplicate `(host, port)` pairs
 across the wave **before** any spawn — wave-wide endpoint uniqueness is the fence.
+A malformed host or port is an allocation error (`app-allocation-invalid`), never a bind
+conflict — `app-bind-conflict` means evidence that something is already listening on a
+well-formed endpoint.
 
 ### Bind conflict
 
@@ -1077,11 +1080,11 @@ check/use limit.
 | `app-placeholder-unresolved` | a `{name}` placeholder remains after single-pass substitution |
 | `app-placeholder-in-argv0` | `argv[0]` contains a `{name}` placeholder |
 | `app-env-invalid` | optional `env` is not a mapping of valid string keys and values |
-| `app-allocation-invalid` | allocation list entry is malformed, has duplicate `slotRef`, or port out of range |
+| `app-allocation-invalid` | allocation list entry is malformed, has duplicate `slotRef`, or port out of range; or `check_endpoint_free` received a malformed host, port, timeout, or non-callable `connect` |
 | `app-launch-invalid` | `stand_up` launch dict shape, slot/slotRef mismatch, or `readinessAttribution` not in the allowed set |
 | `app-cwd-invalid` | `cwd` is not an absolute existing directory, or the path is a symlink or non-directory |
 | `app-readiness-url-invalid` | readiness URL is absent or not `http`/`https` after substitution |
-| `app-bind-conflict` | endpoint probe finds something listening, spawn stderr shows bind conflict, or host/port validation fails in `check_endpoint_free` |
+| `app-bind-conflict` | endpoint probe on a well-formed `(host, port)` finds something listening, spawn stderr shows bind conflict, or probe raises an `OSError` other than connection refused / timeout |
 | `app-endpoint-duplicate` | `assert_unique_endpoints` finds the same `(host, port)` on two slots |
 | `app-spawn-failed` | `Popen` raised `OSError` |
 | `app-readiness-timeout` | *(retryable)* readiness polling exhausted the monotonic deadline on transport errors |
@@ -1123,9 +1126,9 @@ terminus of an unattended promise without the framework noticing.
 
 | Phase | Boundary | Admission |
 |---|---|---|
-| `running` | `elapsed < deadlineSeconds` | `admit_work` returns `ok: true` |
-| `winding-down` | `deadlineSeconds ≤ elapsed < deadlineSeconds + marginSeconds` | new work refused (`ok: false`, `reason: null`) |
-| `expired` | `elapsed ≥ deadlineSeconds + marginSeconds` | parked — destructive teardown may proceed behind confirmed fences |
+| `wave-running` | `elapsed < deadlineSeconds` | `admit_work` returns `ok: true` |
+| `wave-winding-down` | `deadlineSeconds ≤ elapsed < deadlineSeconds + marginSeconds` | new work refused (`ok: false`, `reason: null`) |
+| `wave-expired` | `elapsed ≥ deadlineSeconds + marginSeconds` | parked — destructive teardown may proceed behind confirmed fences |
 
 ### Durable park latch
 
