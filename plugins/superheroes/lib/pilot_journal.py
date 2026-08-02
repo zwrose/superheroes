@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import contextlib
 import json
-import math
 import os
 import re
+import stat
 import uuid
 from datetime import datetime
 
@@ -83,6 +83,8 @@ BLOCK_JOURNAL_ANOMALY = "failed-slot-journal-anomaly"
 BLOCK_SHARED_POSSIBLY_APPLIED = "failed-slot-shared-effect-possibly-applied"
 BLOCK_NO_HEALTHY_SLOTS = "no-healthy-slots"
 BLOCK_SLOTS_INVALID = "report-slots-invalid"
+BLOCK_REPLAY_SHAPE_INVALID = "failed-slot-replay-shape-invalid"
+BLOCK_SLOT_DUPLICATE = "report-slot-duplicate"
 
 _EFFECT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _REASON_MAX_LEN = 500
@@ -173,11 +175,25 @@ def _write_record(journal_path, record):
         _ensure_parent_dir(journal_path)
         fd = os.open(
             journal_path,
-            os.O_WRONLY | os.O_APPEND | os.O_CREAT,
+            os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW,
             0o600,
         )
-        os.write(fd, encoded)
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return _fail(REASON_JOURNAL_WRITE_FAILED)
+        offset = 0
+        while offset < len(encoded):
+            written = os.write(fd, encoded[offset:])
+            if written == 0:
+                return _fail(REASON_JOURNAL_WRITE_FAILED)
+            offset += written
         os.fsync(fd)
+        parent = os.path.dirname(os.path.abspath(journal_path)) or "."
+        dir_fd = os.open(parent, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
         return _ok()
     except OSError:
         return _fail(REASON_JOURNAL_WRITE_FAILED)
@@ -305,9 +321,11 @@ def effect(journal_path, *, slot_ref, kind, at, detail=None, effect_id=None):
         raise PilotJournalError(begin_result["reason"])
 
     handle = _EffectHandle(begin_result["effectId"])
+    body_raised = False
     try:
         yield handle
     except BaseException as exc:
+        body_raised = True
         handle._outcome = OUTCOME_INDETERMINATE
         handle._end_at = at
         reason_text = repr(exc)
@@ -318,12 +336,17 @@ def effect(journal_path, *, slot_ref, kind, at, detail=None, effect_id=None):
         raise
     finally:
         if not handle._marked:
+            # A clean exit is the caller's assertion that the effect completed; callers
+            # that swallow their own errors must call mark_not_applied or let the
+            # exception propagate — this context manager cannot distinguish swallowed
+            # failure from success. mark_applied records applied with an explicit end
+            # timestamp when needed.
             handle._outcome = OUTCOME_APPLIED
         end_at = handle._end_at if handle._marked else at
         end_reason = handle._end_reason if handle._outcome == OUTCOME_INDETERMINATE else (
             handle._end_reason if handle._outcome == OUTCOME_NOT_APPLIED else None
         )
-        end_effect(
+        end_result = end_effect(
             journal_path,
             slot_ref=slot_ref,
             effect_id=handle.effect_id,
@@ -331,6 +354,11 @@ def effect(journal_path, *, slot_ref, kind, at, detail=None, effect_id=None):
             at=end_at,
             reason=end_reason,
         )
+        # When the body raised, propagate that exception — the missing end record
+        # replays as possibly-applied, which is the honest state. Only surface an
+        # end-write failure when the body completed cleanly.
+        if not end_result["ok"] and not body_raised:
+            raise PilotJournalError(end_result["reason"])
 
 
 def _validate_begin_record(record):
@@ -451,6 +479,29 @@ def _merge_begin_end(begin_entry, end_record):
     return entry
 
 
+def _effect_id_involves_slot_ref(effect_id, slot_ref, parsed_records):
+    for rec in parsed_records:
+        if rec["valid"] and isinstance(rec["raw"], dict):
+            if rec["raw"].get("effectId") == effect_id and rec["raw"].get("slotRef") == slot_ref:
+                return True
+    return False
+
+
+def _anomaly_involves_slot_ref(anomaly, slot_ref, parsed_records):
+    if "reason" not in anomaly and "record" in anomaly:
+        return True
+    effect_id = anomaly.get("effectId")
+    if effect_id and _effect_id_involves_slot_ref(effect_id, slot_ref, parsed_records):
+        return True
+    line = anomaly.get("line")
+    if line is not None:
+        for rec in parsed_records:
+            if rec["line"] == line and rec["valid"] and isinstance(rec["raw"], dict):
+                if rec["raw"].get("slotRef") == slot_ref:
+                    return True
+    return False
+
+
 def replay(journal_path, *, slot_ref=None):
     """Replay journal into effect entries with fail-closed pairing."""
     if slot_ref is not None and not _validate_slot_ref(slot_ref):
@@ -470,7 +521,11 @@ def replay(journal_path, *, slot_ref=None):
             return _ok(effects=[], torn=True, anomalies=[])
         raw = raw[:last_nl + 1]
 
-    text = raw.decode("utf-8")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return _fail(REASON_JOURNAL_UNREADABLE, effects=[], torn=False, anomalies=[])
+
     lines = text.splitlines()
 
     parsed_records = []
@@ -512,27 +567,18 @@ def replay(journal_path, *, slot_ref=None):
             "phase": phase,
         })
 
-    if slot_ref is not None:
-        filtered = []
-        for rec in parsed_records:
-            if not rec["valid"]:
-                if rec["raw"] is not None and rec["raw"].get("slotRef") == slot_ref:
-                    filtered.append(rec)
-                elif rec["raw"] is None:
-                    filtered.append(rec)
-                continue
-            if rec["raw"].get("slotRef") == slot_ref:
-                filtered.append(rec)
-        parsed_records = filtered
-
     anomalies = []
     begins = {}
     ends = {}
     begin_order = []
     end_order = []
     invalid_entries = []
+    begin_counts = {}
+    end_counts = {}
+    first_begin_idx = {}
+    first_end_idx = {}
 
-    for rec in parsed_records:
+    for i, rec in enumerate(parsed_records):
         if not rec["valid"]:
             anomalies.append({"line": rec["line"], "record": rec["raw"]})
             if rec["raw"] is not None and isinstance(rec["raw"], dict):
@@ -573,6 +619,9 @@ def replay(journal_path, *, slot_ref=None):
                 })
             begins[effect_id] = record
             begin_order.append(effect_id)
+            begin_counts[effect_id] = begin_counts.get(effect_id, 0) + 1
+            if effect_id not in first_begin_idx:
+                first_begin_idx[effect_id] = i
         else:
             if effect_id in ends:
                 anomalies.append({
@@ -582,33 +631,28 @@ def replay(journal_path, *, slot_ref=None):
                 })
             ends[effect_id] = record
             end_order.append(effect_id)
+            end_counts[effect_id] = end_counts.get(effect_id, 0) + 1
+            if effect_id not in first_end_idx:
+                first_end_idx[effect_id] = i
 
     anomaly_effect_ids = set()
-    for effect_id in begin_order:
-        if begin_order.count(effect_id) > 1:
+    for effect_id, count in begin_counts.items():
+        if count > 1:
             anomaly_effect_ids.add(effect_id)
-    for effect_id in end_order:
-        if end_order.count(effect_id) > 1:
+    for effect_id, count in end_counts.items():
+        if count > 1:
             anomaly_effect_ids.add(effect_id)
 
-    for effect_id in set(begin_order) & set(end_order):
-        begin_idx = None
-        end_idx = None
-        for i, rec in enumerate(parsed_records):
-            if not rec["valid"] or rec["raw"]["effectId"] != effect_id:
-                continue
-            if rec["raw"]["phase"] == PHASE_BEGIN and begin_idx is None:
-                begin_idx = i
-            elif rec["raw"]["phase"] == PHASE_END and end_idx is None:
-                end_idx = i
-        if begin_idx is not None and end_idx is not None and end_idx < begin_idx:
+    paired_ids = set(first_begin_idx) & set(first_end_idx)
+    for effect_id in paired_ids:
+        if first_end_idx[effect_id] < first_begin_idx[effect_id]:
             anomalies.append({
                 "reason": "end-before-begin",
                 "effectId": effect_id,
             })
             anomaly_effect_ids.add(effect_id)
 
-    for effect_id in set(begin_order) & set(end_order):
+    for effect_id in paired_ids:
         if effect_id in anomaly_effect_ids:
             continue
         if begins[effect_id]["slotRef"] != ends[effect_id]["slotRef"]:
@@ -618,29 +662,14 @@ def replay(journal_path, *, slot_ref=None):
             })
             anomaly_effect_ids.add(effect_id)
 
-    for effect_id in set(begin_order) & set(end_order):
-        if begin_order.count(effect_id) > 1 or end_order.count(effect_id) > 1:
-            anomaly_effect_ids.add(effect_id)
-
-    begin_counts = {}
-    end_counts = {}
-    end_seen = {}
-    for rec in parsed_records:
-        if not rec["valid"]:
-            continue
-        eid = rec["raw"]["effectId"]
-        if rec["raw"]["phase"] == PHASE_BEGIN:
-            begin_counts[eid] = begin_counts.get(eid, 0) + 1
-        else:
-            end_counts[eid] = end_counts.get(eid, 0) + 1
-
     effects = []
     merged_from_begin = set()
+    end_seen = {}
 
     for rec in parsed_records:
         if not rec["valid"]:
             entry = invalid_entries.pop(0) if invalid_entries else _unknown_effect_entry()
-            effects.append(entry)
+            effects.append((entry, True))
             continue
 
         record = rec["raw"]
@@ -650,7 +679,7 @@ def replay(journal_path, *, slot_ref=None):
             entry = _effect_entry_from_begin(record)
             if effect_id in anomaly_effect_ids:
                 entry["state"] = STATE_POSSIBLY_APPLIED
-                effects.append(entry)
+                effects.append((entry, False))
             elif (
                 effect_id in ends
                 and begin_counts.get(effect_id, 0) == 1
@@ -658,9 +687,9 @@ def replay(journal_path, *, slot_ref=None):
             ):
                 entry = _merge_begin_end(entry, ends[effect_id])
                 merged_from_begin.add(effect_id)
-                effects.append(entry)
+                effects.append((entry, False))
             else:
-                effects.append(entry)
+                effects.append((entry, False))
         else:
             if effect_id not in begins:
                 entry = _effect_entry_from_end(record)
@@ -669,14 +698,29 @@ def replay(journal_path, *, slot_ref=None):
                     "reason": "orphan-end",
                     "effectId": effect_id,
                 })
-                effects.append(entry)
+                effects.append((entry, False))
             elif effect_id in merged_from_begin:
                 continue
             elif effect_id in anomaly_effect_ids:
                 end_seen[effect_id] = end_seen.get(effect_id, 0) + 1
                 if end_counts.get(effect_id, 0) > 1:
                     entry = _effect_entry_from_end(record)
-                    effects.append(entry)
+                    effects.append((entry, False))
+
+    if slot_ref is not None:
+        filtered_effects = []
+        for entry, from_invalid in effects:
+            if from_invalid:
+                filtered_effects.append(entry)
+            elif entry.get("slotRef") == slot_ref:
+                filtered_effects.append(entry)
+        effects = filtered_effects
+        anomalies = [
+            a for a in anomalies
+            if _anomaly_involves_slot_ref(a, slot_ref, parsed_records)
+        ]
+    else:
+        effects = [entry for entry, _from_invalid in effects]
 
     return _ok(effects=effects, torn=torn, anomalies=anomalies)
 
@@ -688,6 +732,47 @@ def _blocker(reason, *, slot=None, slot_ref=None, detail=None):
         "slotRef": slot_ref,
         "detail": detail,
     }
+
+
+def _validate_replay_shape(replay_result):
+    """Validate a replay result shape fail-closed. Returns blocker reason or None."""
+    if not isinstance(replay_result, dict):
+        return BLOCK_REPLAY_SHAPE_INVALID
+    if replay_result.get("ok") is not True:
+        return BLOCK_JOURNAL_UNREADABLE
+    torn = replay_result.get("torn")
+    if torn is not True and torn is not False:
+        return BLOCK_REPLAY_SHAPE_INVALID
+    if not isinstance(replay_result.get("anomalies"), list):
+        return BLOCK_REPLAY_SHAPE_INVALID
+    effects = replay_result.get("effects")
+    if not isinstance(effects, list):
+        return BLOCK_REPLAY_SHAPE_INVALID
+    for effect in effects:
+        if not isinstance(effect, dict):
+            return BLOCK_REPLAY_SHAPE_INVALID
+        if effect.get("state") not in EFFECT_STATES:
+            return BLOCK_REPLAY_SHAPE_INVALID
+        if effect.get("scope") not in {SCOPE_SLOT, SCOPE_SHARED}:
+            return BLOCK_REPLAY_SHAPE_INVALID
+    return None
+
+
+def _enumerate_replay_effects(replay_result, slot, slot_ref, blockers, warnings):
+    """Enumerate possibly-applied effects from a validated replay result."""
+    slot_warnings = []
+    for effect in replay_result["effects"]:
+        if effect.get("state") == STATE_POSSIBLY_APPLIED:
+            slot_warnings.append(effect)
+            if effect.get("scope") == SCOPE_SHARED:
+                blockers.append(_blocker(
+                    BLOCK_SHARED_POSSIBLY_APPLIED,
+                    slot=slot,
+                    slot_ref=slot_ref,
+                    detail=effect.get("effectId"),
+                ))
+    for w in slot_warnings:
+        warnings.append({"slot": slot, "slotRef": slot_ref, "effect": w})
 
 
 def partial_failure_report(slots):
@@ -706,6 +791,8 @@ def partial_failure_report(slots):
     warnings = []
     failed_slots = []
     healthy_slots = []
+    seen_slots = set()
+    seen_slot_refs = set()
 
     for entry in slots:
         if not isinstance(entry, dict):
@@ -724,7 +811,6 @@ def partial_failure_report(slots):
             or not isinstance(slot_ref, str)
             or not _validate_slot_ref(slot_ref)
             or outcome is None
-            or replay_result is None
         ):
             blockers.append(_blocker(
                 BLOCK_SLOT_ENTRY_INVALID,
@@ -733,6 +819,25 @@ def partial_failure_report(slots):
             ))
             continue
 
+        parsed_slot, _ = pilot_slot.parse_slot_ref(slot_ref)
+        if parsed_slot != slot:
+            blockers.append(_blocker(
+                BLOCK_SLOT_ENTRY_INVALID,
+                slot=slot,
+                slot_ref=slot_ref,
+            ))
+            continue
+
+        if slot in seen_slots or slot_ref in seen_slot_refs:
+            blockers.append(_blocker(
+                BLOCK_SLOT_DUPLICATE,
+                slot=slot,
+                slot_ref=slot_ref,
+            ))
+            continue
+        seen_slots.add(slot)
+        seen_slot_refs.add(slot_ref)
+
         if outcome not in SLOT_OUTCOMES:
             blockers.append(_blocker(
                 BLOCK_SLOT_OUTCOME_INVALID,
@@ -740,11 +845,43 @@ def partial_failure_report(slots):
                 slot_ref=slot_ref,
             ))
         elif outcome == SLOT_OUTCOME_PROVISIONED:
+            if replay_result is None:
+                healthy_slots.append({"slot": slot, "slotRef": slot_ref})
+                continue
+            shape_blocker = _validate_replay_shape(replay_result)
+            if shape_blocker is not None:
+                blockers.append(_blocker(
+                    shape_blocker,
+                    slot=slot,
+                    slot_ref=slot_ref,
+                ))
+                healthy_slots.append({"slot": slot, "slotRef": slot_ref})
+                continue
+            if replay_result.get("torn") is True:
+                blockers.append(_blocker(
+                    BLOCK_JOURNAL_TORN,
+                    slot=slot,
+                    slot_ref=slot_ref,
+                ))
+            if replay_result.get("anomalies"):
+                blockers.append(_blocker(
+                    BLOCK_JOURNAL_ANOMALY,
+                    slot=slot,
+                    slot_ref=slot_ref,
+                ))
+            _enumerate_replay_effects(replay_result, slot, slot_ref, blockers, warnings)
             healthy_slots.append({"slot": slot, "slotRef": slot_ref})
             continue
 
+        if replay_result is None:
+            blockers.append(_blocker(
+                BLOCK_SLOT_ENTRY_INVALID,
+                slot=slot,
+                slot_ref=slot_ref,
+            ))
+            continue
+
         failed_slots.append({"slot": slot, "slotRef": slot_ref})
-        slot_warnings = []
 
         if fencing is None:
             blockers.append(_blocker(
@@ -780,9 +917,10 @@ def partial_failure_report(slots):
                     slot_ref=slot_ref,
                 ))
 
-        if not isinstance(replay_result, dict) or replay_result.get("ok") is not True:
+        shape_blocker = _validate_replay_shape(replay_result)
+        if shape_blocker is not None:
             blockers.append(_blocker(
-                BLOCK_JOURNAL_UNREADABLE,
+                shape_blocker,
                 slot=slot,
                 slot_ref=slot_ref,
             ))
@@ -799,20 +937,7 @@ def partial_failure_report(slots):
                     slot=slot,
                     slot_ref=slot_ref,
                 ))
-
-            for effect in replay_result.get("effects", []):
-                if effect.get("state") == STATE_POSSIBLY_APPLIED:
-                    slot_warnings.append(effect)
-                    if effect.get("scope") == SCOPE_SHARED:
-                        blockers.append(_blocker(
-                            BLOCK_SHARED_POSSIBLY_APPLIED,
-                            slot=slot,
-                            slot_ref=slot_ref,
-                            detail=effect.get("effectId"),
-                        ))
-
-        for w in slot_warnings:
-            warnings.append({"slot": slot, "slotRef": slot_ref, "effect": w})
+            _enumerate_replay_effects(replay_result, slot, slot_ref, blockers, warnings)
 
     if not healthy_slots:
         blockers.append(_blocker(BLOCK_NO_HEALTHY_SLOTS))
