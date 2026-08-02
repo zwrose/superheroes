@@ -7,8 +7,13 @@
 5. [The probe vocabulary](#the-probe-vocabulary)
 6. [Capture surfaces](#capture-surfaces)
 7. [Declare and exercise](#declare-and-exercise)
-8. [Seed and mint call shapes](#seed-and-mint-call-shapes)
-9. [Slot reference format](#slot-reference-format)
+8. [The target boundary](#the-target-boundary)
+9. [Datastore identity](#datastore-identity)
+10. [The policy document](#the-policy-document)
+11. [Results travel, never policy](#results-travel-never-policy)
+12. [Provisioning authorization](#provisioning-authorization)
+13. [Seed and mint call shapes](#seed-and-mint-call-shapes)
+14. [Slot reference format](#slot-reference-format)
 
 ---
 
@@ -21,12 +26,14 @@ downstream sub-issues build against.
 **What this pins:** the optional nested `pilot` key inside `test-pilot-config`; the ten-token
 probe vocabulary (`lib/pilot_probe.py`); slot reference format and account-set types
 (`lib/pilot_slot.py`); seed/mint call shapes and artifact verification (`lib/pilot_seed.py`);
-and the contract validator (`lib/pilot_contract.py`, wired into `engine.load_profile_config`).
+the contract validator (`lib/pilot_contract.py`, wired into `engine.load_profile_config`);
+and sub-issue **A3** — the per-slot target boundary (`lib/pilot_boundary.py`), the policy
+document home (`lib/pilot_policy.py`), and the provisioning authorization layer
+(`lib/pilot_provision.py`).
 
 **What this deliberately does not build** (successor sub-issues own these):
 
 - Generation allocation, incrementing, or staleness comparison (**A2a**).
-- Where the policy document lives or how it is read (**A3**).
 - Browser context creation, credential injection, or broker-side stale-generation enforcement (**C7**).
 - Running a live cleanup and capturing its effect receipt (**C9**).
 - The measured operating ceiling and its degradation receipts (**D11b**).
@@ -241,6 +248,261 @@ receipt does not carry `result: "pass"` counts as **absent**.
 |---|---|
 | `pilot-declaration-unexercised` | `require_exercised` is called for a declaration that has no matching exercised record |
 | `pilot-declaration-kind-unknown` | `is_exercised` or `require_exercised` is called with a `kind` not in the declaration-kind set |
+
+## The target boundary
+
+A **binding** is a validated per-slot target contract: a canonical slot reference, an exact
+**origin** (`<scheme>://<host>:<port>`), a list of **permitted redirects** (each an exact
+origin), and a non-empty **protected targets** list. Origins are never patterns — every
+scheme/host/port triple is parsed and canonicalized; implicit ports, wildcards, userinfo,
+path/query/fragment suffixes, and other non-canonical forms refuse.
+
+`target_binding(slot_ref, *, origin, permitted_redirects, protected_targets)` builds the
+binding dict. `check_target(binding, url)` and `check_redirect(binding, url)` evaluate
+candidate URLs without raising on malformed input. Protected targets are checked **before**
+the allowlist: a URL whose canonical origin appears in `protectedTargets` is refused with
+`boundary-protected-target-refused` even when it equals the slot origin or a permitted
+redirect. There is **no `--allow-protected` equivalent** on this path — unlike the engine's
+`gate_violations`, which `--allow-protected` can bypass, protected-target refusal here is
+unconditional.
+
+Protected targets may be opaque strings (for example a database name) or URL-shaped strings;
+URL-shaped entries are canonicalized to exact origins when parseable.
+
+Public API in `lib/pilot_boundary.py`: `parse_origin`, `target_binding`, `check_target`,
+`check_redirect`, `check_protected_identity`, `boundary_verdict`, `authorize_credentials`.
+
+### Target boundary refusal tokens
+
+| Token | When returned |
+|---|---|
+| `boundary-origin-invalid` | `parse_origin` receives a non-canonical origin; or `check_target` / `check_redirect` receives a URL that does not parse as an exact origin |
+| `boundary-slot-ref-invalid` | `target_binding` receives a slot reference that does not parse |
+| `boundary-redirects-invalid` | `permitted_redirects` is not a list, or any redirect does not parse as an exact origin |
+| `boundary-protected-targets-invalid` | `protected_targets` is missing, empty, not a list, contains a non-string or empty entry, or contains a URL-shaped entry that does not parse |
+| `boundary-target-off-allowlist` | `check_target`: parsed origin is not the binding origin and is not protected |
+| `boundary-redirect-off-allowlist` | `check_redirect`: parsed origin is neither the binding origin nor a permitted redirect and is not protected |
+| `boundary-protected-target-refused` | `check_target`, `check_redirect`, or `check_protected_identity`: parsed origin or identity names a protected target |
+| `boundary-unverified` | `authorize_credentials`: verdict did not pass, schema version mismatch, slot reference mismatch, or policy digest mismatch |
+
+## Datastore identity
+
+Datastore identity has two provenances:
+
+- **`observed`** — the framework runs the policy-declared observer subprocess itself,
+  delivering the policy's `connectionDetail` through the observer's `connectionEnvVar`.
+  Recorded as **strong** (`strength: "strong"`, `weaker: false`).
+- **`app-reported`** — the application reports its datastore identity when no observer is
+  declared. Recorded as **weaker** (`strength: "weaker"`, `weaker: true`) rather than
+  silently treated as equal to an observed identity.
+
+When the policy declares an observer (`datastore.observer` is not `null`), the framework
+runs `observe_datastore_identity` and **refuses** on observer failure — it does not fall back
+to app-reported identity. A declared observer that exits non-zero, times out, emits empty or
+multi-line stdout, or exceeds the output byte cap raises `boundary-datastore-observer-failed`.
+
+Observer hardening (`observe_datastore_identity` validates before spawn):
+
+- Executable must be an **absolute path** to a regular file **outside every reach root**.
+- `run_cwd` must be an existing directory **outside every reach root**.
+- Any absolute command argument, and any relative argument whose resolved path exists, must
+  lie **outside every reach root**.
+- Child environment is **minimal**: only the declared `connectionEnvVar` is set to
+  `connectionDetail` — no inherited `PATH` or other ambient variables.
+
+`app_reported_identity(value)` records a weaker identity when no observer runs.
+`check_datastore_identity(binding, observation, expected_identity)` compares the observation
+against the policy's `expectedIdentity`.
+
+### Datastore identity refusal tokens
+
+| Token | When returned |
+|---|---|
+| `boundary-datastore-identity-unavailable` | `check_protected_identity`, `app_reported_identity`, or `check_datastore_identity`: identity is missing, empty, or not a string; or no observer is declared and no app-reported value is supplied |
+| `boundary-datastore-identity-mismatch` | `check_datastore_identity`: observed identity does not equal `expectedIdentity` |
+| `boundary-datastore-observer-invalid` | `observe_datastore_identity`: observer shape, connection detail, reach roots, run cwd, or confinement rules are violated |
+| `boundary-datastore-observer-failed` | `observe_datastore_identity`: subprocess failure, non-zero exit, oversized output, invalid UTF-8, or stdout that is empty, multi-line, or contains control characters |
+
+## The policy document
+
+The policy document lives **outside every reach root**. Resolution is keyed by a
+`policy_root` directory (absolute, existing) and a **declaration** identifier — an opaque
+name, never a path fragment. The on-disk file is `<policy_root>/<declaration>.json`.
+
+**Declaration grammar:** `^[A-Za-z0-9][A-Za-z0-9_-]*$` — no slashes, dots as path
+components, or traversal sequences. The identifier selects a filename; it is not interpreted
+as a relative path.
+
+**File-integrity requirements** (enforced by `resolve_policy_document`):
+
+- No symlink in the document path ancestry.
+- Document must exist, be a regular file, and be readable.
+- Owner UID must match the reading process (`policy-document-owner-mismatch` otherwise).
+- Mode bits must not grant group- or world-write (`policy-document-mode-insecure` otherwise).
+- Open uses `O_RDONLY | O_NOFOLLOW`; inode/device comparison closes symlink-rebind windows.
+
+**JSON shape** (`schemaVersion` must be `1`):
+
+```json
+{
+  "schemaVersion": 1,
+  "declaration": "example-project-pilot-policy",
+  "protectedTargets": ["https://app.example.com:443", "example_prod"],
+  "datastore": {
+    "expectedIdentity": "example_dev",
+    "connectionDetail": "postgres://localhost:5432/example_dev",
+    "observer": {
+      "command": ["/opt/pilot/db-identity"],
+      "connectionEnvVar": "PILOT_DB_URL"
+    }
+  },
+  "slots": {
+    "slot-a": {
+      "origin": "http://127.0.0.1:5173",
+      "permittedRedirects": ["http://127.0.0.1:9000"],
+      "expectedIdentities": {"owner": "pilot-owner@example.test"},
+      "mintableAccounts": ["pilot-owner"]
+    }
+  }
+}
+```
+
+Top-level keys are exactly `schemaVersion`, `declaration`, `protectedTargets`, `datastore`,
+and `slots`. Each slot requires `origin`, `permittedRedirects`, and `expectedIdentities`
+(non-empty dict mapping account names to identity strings). `mintableAccounts` is optional.
+`datastore.observer` may be `null` (app-reported path) or an object with `command` (non-empty
+argv list) and `connectionEnvVar` (valid env-var name). The resolved document's
+`declaration` field must match the identifier used to open it.
+
+Public API in `lib/pilot_policy.py`: `resolve_policy_document`, `validate_policy`,
+`policy_material`.
+
+### Policy document refusal tokens
+
+| Token | When returned |
+|---|---|
+| `policy-root-invalid` | `policy_root` is missing, not an absolute path, or not an existing directory |
+| `policy-root-in-reach` | `policy_root` overlaps any reach root (raw or realpath) |
+| `policy-declaration-invalid` | `declaration` does not match the declaration grammar |
+| `policy-document-missing` | `<policy_root>/<declaration>.json` does not exist |
+| `policy-document-symlink` | A symlink appears in the document path ancestry, or open-time inode/path checks detect a symlink rebind |
+| `policy-document-not-regular-file` | Document path exists but is not a regular file |
+| `policy-document-owner-mismatch` | Document owner UID does not match the reading process |
+| `policy-document-mode-insecure` | Document mode grants group- or world-write |
+| `policy-document-unreadable` | Document or an ancestor cannot be opened or read |
+| `policy-document-invalid` | JSON parse failure, wrong top-level shape, declaration mismatch, or any structural validation failure in `validate_policy` |
+| `policy-schema-version-unsupported` | `schemaVersion` is not integer `1` |
+| `policy-slot-unknown` | Reserved token (defined in `lib/pilot_policy.py`; no live raise site in A3) |
+| `policy-account-unknown` | Reserved token (defined in `lib/pilot_policy.py`; no live raise site in A3) |
+
+## Results travel, never policy
+
+Boundary checks produce a **traveling verdict** — outcomes only, never policy material.
+`boundary_verdict(binding, *, checks, policy_digest, datastore_identity=None, verified_at=None)`
+assembles it:
+
+```json
+{
+  "schemaVersion": 1,
+  "slotRef": "slot-a@1",
+  "result": "pass",
+  "reason": null,
+  "checks": [
+    {"check": "target-binding", "result": "pass", "reason": null},
+    {"check": "datastore-identity", "result": "pass", "reason": null}
+  ],
+  "datastoreIdentity": {
+    "provenance": "observed",
+    "strength": "strong",
+    "match": true
+  },
+  "policyDigest": "a1b2c3d4e5f60718",
+  "verifiedAt": "2026-08-02T04:00:00Z"
+}
+```
+
+The verdict carries a `policyDigest` (the declaration digest) but **no policy field value** —
+no origins, identities, connection strings, or mintable-account names appear in the serialized
+verdict. `verify_boundary` in `lib/pilot_provision.py` calls `assert_results_only` on every
+verdict before returning it.
+
+`assert_results_only(result, material)` is the mechanical guard: it JSON-serializes `result`
+and refuses when any string from `policy_material(policy)` appears as a substring
+(`policy-material-in-result`). `policy_material` extracts three classes:
+`expected-identity`, `mintable-account`, and `connection-detail`.
+
+`exercise_no_policy_material_in_reach(reach_roots, material)` walks reach roots and scans
+regular file bytes for policy material needles. Receipt shape:
+
+```json
+{
+  "kind": "policy-out-of-reach",
+  "result": "pass",
+  "reason": null,
+  "evidence": "no policy material found in reach root",
+  "scannedFiles": 2,
+  "scannedBytes": 48,
+  "findings": [],
+  "coverageLimits": ["Compressed and archived content is scanned as raw bytes; material inside it is not detectable."],
+  "exercisedAt": "2026-08-02T04:00:00Z"
+}
+```
+
+**Vacuity rules** (a vacuous scan is a failure, never a pass):
+
+- Empty material (no non-empty string needles) → `policy-exercise-vacuous` (raises).
+- Zero files scanned → `policy-exercise-vacuous` (receipt `result: "fail"`).
+- Unreadable directory or file during walk → `policy-exercise-unreadable` (receipt
+  `result: "fail"`).
+
+Material found in reach produces `result: "fail"` with reason `policy-exercise-material-found`
+and a `findings` list — the receipt itself does not echo the material string.
+
+**Coverage limit:** compressed and archived content is scanned as raw bytes; material inside
+compressed or archived containers is not reliably detectable.
+
+### Results-travel refusal tokens
+
+| Token | When returned |
+|---|---|
+| `policy-material-in-result` | `assert_results_only`: serialized result contains a policy material string |
+| `policy-material-invalid` | `assert_results_only`: `material` is not a mapping or has no non-empty indexed needles |
+| `policy-exercise-vacuous` | `exercise_no_policy_material_in_reach`: empty material, or walk completes with zero files scanned |
+| `policy-exercise-unreadable` | `exercise_no_policy_material_in_reach`: directory listing or file read fails during walk |
+| `policy-reach-root-invalid` | `exercise_no_policy_material_in_reach` or `resolve_policy_document`: reach root list is invalid, or a reach root is not an absolute path to an existing directory (exercise only) |
+| `policy-exercise-material-found` | `exercise_no_policy_material_in_reach`: policy material byte-needle found in a reach-root file (receipt reason, not an exception) |
+
+## Provisioning authorization
+
+`authorize_credentials(verdict, slot_ref, policy_digest)` is the chokepoint every
+credential-producing call passes through. It authorizes only when the verdict's `result` is
+`pass`, `schemaVersion` matches, `slotRef` matches the caller's slot reference, and
+`policyDigest` matches the caller's policy digest.
+
+The `authorized_*` wrappers in `lib/pilot_provision.py` resolve sensitive allowlists from
+the policy so the caller never holds them:
+
+- `authorized_seed_request` — account must appear in the slot's `expectedIdentities`; calls
+  `pilot_seed.seed_request` after authorization.
+- `authorized_mint_request` — `mintableAccounts` is read from the policy and passed to
+  `pilot_seed.mint_request`; the function signature has **no `allowlist` parameter**.
+- `authorized_sentinel_probe_request` — slot's `mintableAccounts` is passed to
+  `pilot_seed.sentinel_probe_request`.
+
+`verify_boundary` runs target, redirect, and datastore-identity checks, assembles the
+traveling verdict, and enforces `assert_results_only` before returning.
+
+This is an **in-process chokepoint, not a sandbox**: the launcher, browser, and build session
+share a UID by design (#660 §14). It prevents ordering mistakes (credentials before boundary
+verification, or with a stale verdict), not a hostile process in another address space.
+
+### Provisioning refusal tokens
+
+| Token | When returned |
+|---|---|
+| `provision-slot-unknown` | `verify_boundary` or an `authorized_*` wrapper: slot reference does not parse, or slot id is absent from `policy.slots` |
+| `provision-account-unknown` | `authorized_seed_request`: account is not in the slot's `expectedIdentities` |
+| `provision-mint-unsupported` | `authorized_mint_request`: slot has no `mintableAccounts` or the list is empty |
 
 ## Seed and mint call shapes
 
