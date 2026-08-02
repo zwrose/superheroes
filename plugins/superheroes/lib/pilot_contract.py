@@ -180,7 +180,8 @@ def is_exercised(registry, kind, declaration):
         raise PilotContractError(REFUSAL_DECLARATION_KIND_UNKNOWN, kind)
     if not isinstance(registry, dict):
         return False
-    if registry.get("schemaVersion") != REGISTRY_SCHEMA_VERSION:
+    registry_version = registry.get("schemaVersion")
+    if type(registry_version) is not int or registry_version != REGISTRY_SCHEMA_VERSION:
         return False
     records = registry.get("records")
     if not isinstance(records, list):

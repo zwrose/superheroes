@@ -254,8 +254,8 @@ See [Capture surfaces](#capture-surfaces) for the two-way mapping rules.
 
 | Token | When returned |
 |---|---|
-| `seed-capture-surfaces-invalid` | `capture_surfaces` is not a non-string sequence |
-| `seed-capture-surfaces-empty` | `capture_surfaces` is an empty sequence |
+| `seed-capture-surfaces-invalid` | `capture_surfaces` is not a JSON array (a Python `list`) of non-empty strings |
+| `seed-capture-surfaces-empty` | `capture_surfaces` is an empty JSON array (a Python `list`) |
 | `seed-capture-surface-duplicate` | the same surface appears more than once |
 | `seed-capture-surface-session-storage-refused` | `sessionStorage` is declared |
 | `seed-capture-surface-unknown` | a surface is not in the known set |
@@ -311,7 +311,7 @@ the branch-mutable `pilot` block.
 
 | Token | When returned |
 |---|---|
-| `mint-allowlist-empty` | `allowlist` is missing, empty, or not a non-string sequence |
+| `mint-allowlist-empty` | `allowlist` is missing, empty, or not a JSON array (a Python `list`) of non-empty strings |
 | `mint-account-invalid` | `account` is missing, empty, or not a string |
 | `mint-account-not-in-allowlist` | `account` is not in the caller-supplied allowlist |
 | `mint-envelope-incomplete` | `envelope` is missing `enablingFlagEnvVar` |
@@ -330,6 +330,8 @@ refusal — the probe would not detect a disabled mint gate.
 
 | Token | When returned |
 |---|---|
+| `mint-allowlist-empty` | `allowlist` is missing, empty, or not a JSON array (a Python `list`) of non-empty strings |
+| `mint-account-invalid` | `sentinel` is missing, empty, or not a string |
 | `mint-sentinel-in-allowlist` | `sentinel` appears in the caller-supplied allowlist |
 
 ## Slot reference format

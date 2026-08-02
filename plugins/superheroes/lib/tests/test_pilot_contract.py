@@ -495,6 +495,39 @@ def test_is_exercised_false_when_registry_schema_version_string():
     assert pc.is_exercised(registry, "identity-probe", declaration) is False
 
 
+def test_is_exercised_false_when_registry_schema_version_true():
+    declaration = _identity_probe_declaration()
+    registry = _registry_with_digest("identity-probe", declaration)
+    registry["schemaVersion"] = True
+    assert pc.is_exercised(registry, "identity-probe", declaration) is False
+
+
+def test_is_exercised_false_when_registry_schema_version_false():
+    declaration = _identity_probe_declaration()
+    registry = _registry_with_digest("identity-probe", declaration)
+    registry["schemaVersion"] = False
+    assert pc.is_exercised(registry, "identity-probe", declaration) is False
+
+
+def test_is_exercised_false_when_registry_schema_version_float():
+    declaration = _identity_probe_declaration()
+    registry = _registry_with_digest("identity-probe", declaration)
+    registry["schemaVersion"] = 1.0
+    assert pc.is_exercised(registry, "identity-probe", declaration) is False
+
+
+def test_is_exercised_false_when_registry_schema_version_zero():
+    declaration = _identity_probe_declaration()
+    registry = _registry_with_digest("identity-probe", declaration)
+    registry["schemaVersion"] = 0
+    assert pc.is_exercised(registry, "identity-probe", declaration) is False
+
+
+def test_is_exercised_false_when_registry_not_mapping():
+    declaration = _identity_probe_declaration()
+    assert pc.is_exercised([], "identity-probe", declaration) is False
+
+
 def test_is_exercised_none_registry():
     declaration = {"path": "/api/me"}
     assert pc.is_exercised(None, "identity-probe", declaration) is False
@@ -574,6 +607,59 @@ def test_require_exercised_raises_when_absent():
     with pytest.raises(pc.PilotContractError) as excinfo:
         pc.require_exercised({}, "identity-probe", declaration)
     assert excinfo.value.reason == pc.REFUSAL_DECLARATION_UNEXERCISED
+
+
+def _assert_require_exercised_refuses_for_registry(registry):
+    declaration = _identity_probe_declaration()
+    with pytest.raises(pc.PilotContractError) as excinfo:
+        pc.require_exercised(registry, "identity-probe", declaration)
+    assert excinfo.value.reason == pc.REFUSAL_DECLARATION_UNEXERCISED
+
+
+def test_require_exercised_refuses_when_registry_schema_version_true():
+    registry = _registry_with_digest("identity-probe", _identity_probe_declaration())
+    registry["schemaVersion"] = True
+    _assert_require_exercised_refuses_for_registry(registry)
+
+
+def test_require_exercised_refuses_when_registry_schema_version_false():
+    registry = _registry_with_digest("identity-probe", _identity_probe_declaration())
+    registry["schemaVersion"] = False
+    _assert_require_exercised_refuses_for_registry(registry)
+
+
+def test_require_exercised_refuses_when_registry_schema_version_float():
+    registry = _registry_with_digest("identity-probe", _identity_probe_declaration())
+    registry["schemaVersion"] = 1.0
+    _assert_require_exercised_refuses_for_registry(registry)
+
+
+def test_require_exercised_refuses_when_registry_schema_version_string():
+    registry = _registry_with_digest("identity-probe", _identity_probe_declaration())
+    registry["schemaVersion"] = "1"
+    _assert_require_exercised_refuses_for_registry(registry)
+
+
+def test_require_exercised_refuses_when_registry_schema_version_unsupported():
+    registry = _registry_with_digest("identity-probe", _identity_probe_declaration())
+    registry["schemaVersion"] = 2
+    _assert_require_exercised_refuses_for_registry(registry)
+
+
+def test_require_exercised_refuses_when_registry_schema_version_zero():
+    registry = _registry_with_digest("identity-probe", _identity_probe_declaration())
+    registry["schemaVersion"] = 0
+    _assert_require_exercised_refuses_for_registry(registry)
+
+
+def test_require_exercised_refuses_when_registry_schema_version_absent():
+    registry = _registry_with_digest("identity-probe", _identity_probe_declaration())
+    del registry["schemaVersion"]
+    _assert_require_exercised_refuses_for_registry(registry)
+
+
+def test_require_exercised_refuses_when_registry_not_mapping():
+    _assert_require_exercised_refuses_for_registry([])
 
 
 def test_is_exercised_unknown_kind():
