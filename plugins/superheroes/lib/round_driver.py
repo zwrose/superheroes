@@ -49,6 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import audits  # noqa: E402
 import circuit_breaker  # noqa: E402
 import delta_surface  # noqa: E402
+import dispatch_outcome  # noqa: E402
 import engine_adapter  # noqa: E402
 import loop_plan_common  # noqa: E402
 import model_registry  # noqa: E402
@@ -930,11 +931,8 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None):
 
 _PANEL_VENDORS = tuple(model_registry.VENDORS)  # SSOT — never a hand-maintained copy (#563/§11)
 
-_DISPATCH_NOT_RUN_REASONS = frozenset({
-    engine_adapter.REVIEW_FORFEIT_VACUOUS,
-    "forfeited",
-    "unrunnable",
-})
+# Derived from dispatch_outcome.py — the single home for not-run reason tokens (#747).
+_DISPATCH_NOT_RUN_REASONS = dispatch_outcome.NOT_RUN_REASONS
 
 
 def _fell_open_rows(seat_map, ran_manifest, seat_status):
@@ -1128,6 +1126,7 @@ def _fold_panel(state, config, artifact):
     unverified = []
     missing_dims = []
     vacuous_dims = []
+    engaged_artifact_dims = []
     for dim in _panel_dimensions(config):
         seat = seats.get(dim) if isinstance(seats, dict) else None
         findings = _usable_findings(seat)
@@ -1142,6 +1141,9 @@ def _fold_panel(state, config, artifact):
                         isinstance(reason, str)
                         and reason == engine_adapter.REVIEW_FORFEIT_VACUOUS):
                     vacuous_dims.append(dim)
+                elif isinstance(reason, str) and (
+                        reason == dispatch_outcome.REASON_FORFEIT_ENGAGED_ARTIFACT):
+                    engaged_artifact_dims.append(dim)
             if seat.get("receiptMissing") or seat.get("receiptStale"):
                 status = "missing"
         elif not isinstance(seat, list):
@@ -1166,6 +1168,13 @@ def _fold_panel(state, config, artifact):
                   "%d seat(s) returned no findings and no verifiable investigation record (%s) — "
                   "classed as never-ran; certification cannot rest on them"
                   % (len(vacuous_dims), ", ".join(vacuous_dims)))
+    if engaged_artifact_dims:
+        _record_round(state, "engagedArtifactSeats", list(engaged_artifact_dims))
+        _decision(state, "seat-engaged-artifact",
+                  "%d seat(s) produced a review our transport could not carry (%s) — they do "
+                  "not count toward certification; salvaged artifacts are available for "
+                  "independent verification"
+                  % (len(engaged_artifact_dims), ", ".join(engaged_artifact_dims)))
     # Cross-vendor liveness canary — per-vendor judgement via canary_liveness (pure).
     _sm_for_canary = state.get("seatMap") if isinstance(state.get("seatMap"), dict) else seat_map
     canary_panel_gap = False
@@ -2183,6 +2192,8 @@ def build_receipt(state, session_dir=None):
             rd["seatMapViolations"] = rec.get("seatMapViolations")
         if rec.get("vacuousSeats"):
             rd["vacuousSeats"] = rec.get("vacuousSeats")
+        if rec.get("engagedArtifactSeats"):
+            rd["engagedArtifactSeats"] = rec.get("engagedArtifactSeats")
         if rec.get("canaryUnverified"):
             rd["canaryUnverified"] = rec.get("canaryUnverified")
         if rec.get("canaryFailed"):
@@ -2264,6 +2275,12 @@ def build_receipt(state, session_dir=None):
             degraded.append(
                 "vacuous-seat (round %s): seat(s) %s returned no findings and no verifiable "
                 "investigation record — classed as never-ran" % (rkey, ", ".join(vac)))
+        eng_art = rrec.get("engagedArtifactSeats")
+        if eng_art:
+            degraded.append(
+                "engaged-artifact-seat (round %s): seat(s) %s produced a review our transport "
+                "could not carry — they do not count toward certification; salvaged artifacts "
+                "are available for independent verification" % (rkey, ", ".join(eng_art)))
         cuv = rrec.get("canaryUnverified")
         if cuv:
             cv = rrec.get("canaryVerified")

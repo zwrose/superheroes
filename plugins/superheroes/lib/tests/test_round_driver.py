@@ -2968,6 +2968,28 @@ def test_forfeited_seat_reason_discriminant_classed_never_ran_not_vacuous():
     assert state["fullPanelRan"] is False
 
 
+def test_engaged_artifact_seat_recorded_not_vacuous():
+    """axis: seat credit — engaged-artifact seats are not classed vacuous."""
+    state = RD.new_state(_cfg(leg="panel"))
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seats["code-reviewer"] = {
+        "findings": [],
+        "reason": "forfeit-with-engaged-artifact",
+        "disclosure": "not credited",
+    }
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": seat_map})
+    assert state["rounds"]["1"]["seatStatus"]["code-reviewer"] == "missing"
+    assert state["rounds"]["1"]["engagedArtifactSeats"] == ["code-reviewer"]
+    assert "vacuousSeats" not in state["rounds"]["1"]
+    assert "seat-engaged-artifact" in _decision_kinds(state)
+    receipt = RD.build_receipt(state)
+    assert receipt["rounds"][0]["engagedArtifactSeats"] == ["code-reviewer"]
+    eng_lines = [d for d in receipt["degraded"] if d.startswith("engaged-artifact-seat (round 1):")]
+    assert len(eng_lines) == 1
+    assert "code-reviewer" in eng_lines[0]
+
+
 def test_vacuous_seat_reason_discriminant_classed_never_ran():
     state = RD.new_state(_cfg(leg="panel"))
     seats = {d: {"findings": []} for d in RD.DIMENSIONS}

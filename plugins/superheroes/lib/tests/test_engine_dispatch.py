@@ -1010,10 +1010,15 @@ def test_sanitized_view_build_error_refusal_no_spawn(tmp_path):
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=fail_build,
     )
-    assert res == {
-        "ok": False, "reason": "unrunnable", "detail": "sanitized-view-export-failed",
-        "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
-    }
+    assert res["ok"] is False
+    assert res["reason"] == "unrunnable"
+    assert res["detail"] == "sanitized-view-export-failed"
+    assert res["attempts"] == 0
+    assert res["forfeited"] is False
+    assert res["terminal"] is True
+    assert res["runDir"] == ""
+    assert res["argv"] == []
+    assert "ledger" in res
     assert len(fake.calls) == 0
     assert "sanitizedView" not in res
 
@@ -1221,6 +1226,7 @@ def _manual_open_review_run(tmp_path, run_dir):
         timeout=ED.RETRY_MIN_TIMEOUT, retry_timeout=ED.RETRY_MIN_TIMEOUT,
         prompt_path=prompt_path, view_path=view["path"], view_meta=view,
         fed_prompt=fed, order_id="test-order", progress_path=os.path.join(run_dir, "progress.jsonl"),
+        repo_root=os.path.realpath(repo_root),
     )
     assert ok, detail
     return repo_root, view
@@ -1913,6 +1919,7 @@ def _git_init(path):
         ["git", "-C", path, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-qm", "init"],
         check=True,
     )
+    return path
 
 
 def _build_ok_stdout():
@@ -2665,6 +2672,566 @@ def test_grade_review_attempt_empty_stdout_payload_shape_empty_stdout(tmp_path):
     shape = grade.get("payloadShape")
     assert shape is not None
     assert shape["parsed"] == ED.engine_adapter.SHAPE_EMPTY_STDOUT
+
+
+# --- WO-2 (#747): per-attempt telemetry + terminal-record supersede (PR #783) ---
+
+
+def _wo2_open_run(run_dir, prompt_path, **opened_overrides):
+    opened = {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "codex",
+        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "wo2",
+        "argv": [sys.executable, "-c", "x"],
+        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "supervisorPid": 1, "at": time.time(),
+    }
+    opened.update(opened_overrides)
+    ED._journal_append(run_dir, opened)
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1, "childPid": 1,
+        "argv": opened["argv"], "at": time.time(),
+    })
+
+
+def _wo2_run_engine(run_dir, script, timeout=30, heartbeat=None, monkeypatch=None):
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    _wo2_open_run(run_dir, prompt_path)
+    if monkeypatch is not None and heartbeat is not None:
+        monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", heartbeat)
+    ED._run_engine_files(
+        run_dir, 1, [sys.executable, "-c", script], run_dir,
+        prompt_path, stdout_path, stderr_path, timeout,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    return ended, stdout_path, stderr_path
+
+
+def test_run_engine_files_telemetry_stdout_activity(tmp_path, monkeypatch):
+    """axis: which stream is observed for activity sampling (stdout participation)."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    script = (
+        "import sys, time\n"
+        "sys.stdout.write('a')\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(0.12)\n"
+        "sys.stdout.write('b')\n"
+    )
+    ended, _, _ = _wo2_run_engine(run_dir, script, monkeypatch=monkeypatch, heartbeat=0.05)
+    assert ended["exit"] == 0
+    assert ended.get("signal") is None
+    assert ended.get("signalSource") is None
+    assert ended.get("activityStream") == "stdout"
+    assert ended.get("silenceSeconds") is not None
+    assert ended["silenceSeconds"] < 0.5
+
+
+def test_run_engine_files_telemetry_stderr_activity(tmp_path, monkeypatch):
+    """axis: which stream is observed for activity sampling (stderr participation)."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    script = "import sys\nsys.stderr.write('codex-progress')\n"
+    ended, _, stderr_path = _wo2_run_engine(run_dir, script, monkeypatch=monkeypatch)
+    assert ended.get("activityStream") == "stderr"
+    assert ended.get("stderrBytes", 0) > 0
+    assert os.path.getsize(stderr_path) > 0
+
+
+def test_run_engine_files_telemetry_sigkill(tmp_path, monkeypatch):
+    """axis: attribution of kill (engine-side signal death vs runner timeout)."""
+    import signal
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    script = (
+        "import os, signal\n"
+        "os.kill(os.getpid(), signal.SIGKILL)\n"
+    )
+    ended, _, _ = _wo2_run_engine(run_dir, script, monkeypatch=monkeypatch, heartbeat=0.05)
+    assert ended["exit"] < 0
+    assert ended.get("signal") == signal.SIGKILL
+    assert ended.get("signalSource") == "engine"
+
+
+def test_run_engine_files_telemetry_timeout(tmp_path, monkeypatch):
+    """axis: attribution of kill (runner-timeout on cap)."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    script = "import time\ntime.sleep(2)\n"
+    ended, _, _ = _wo2_run_engine(
+        run_dir, script, timeout=0.15, heartbeat=0.05, monkeypatch=monkeypatch,
+    )
+    assert ended.get("timedOut") is True
+    assert ended.get("capSeconds") == 0.15
+    assert ended.get("signalSource") == "runner-timeout"
+
+
+def test_run_engine_files_telemetry_answer_at_exit_stdout(tmp_path, monkeypatch):
+    """axis: timing accuracy of silenceSeconds (post-exit final sample, stdout)."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.5)
+    script = "import sys\nsys.stdout.write('final')\n"
+    ended, _, _ = _wo2_run_engine(run_dir, script, monkeypatch=monkeypatch)
+    assert ended.get("silenceSeconds") is not None
+    assert ended["silenceSeconds"] < 0.25
+
+
+def test_run_engine_files_telemetry_answer_at_exit_stderr(tmp_path, monkeypatch):
+    """axis: timing accuracy of silenceSeconds (post-exit final sample, stderr)."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.5)
+    script = "import sys\nsys.stderr.write('final')\n"
+    ended, _, _ = _wo2_run_engine(run_dir, script, monkeypatch=monkeypatch)
+    assert ended.get("silenceSeconds") is not None
+    assert ended["silenceSeconds"] < 0.25
+
+
+def test_journal_state_real_attempt_ended_wins_over_synthetic_second():
+    """axis: which attempt-ended record wins (real over synthetic, not mere presence)."""
+    records = [
+        {"kind": "attempt-ended", "attempt": 1, "exit": 0, "refusal": None, "at": 1.0},
+        {"kind": "attempt-ended", "attempt": 1, "refusal": "attempt-died-unrecorded", "at": 2.0},
+    ]
+    state = ED._journal_state(records)
+    slot = state["attempts"][1]
+    assert slot["ended"]["exit"] == 0
+    assert slot["endedSuperseded"]["refusal"] == "attempt-died-unrecorded"
+
+
+def test_journal_state_real_attempt_ended_wins_over_synthetic_first():
+    """axis: which attempt-ended record wins (real over synthetic when real arrives second)."""
+    records = [
+        {"kind": "attempt-ended", "attempt": 1, "refusal": "attempt-died-unrecorded", "at": 1.0},
+        {"kind": "attempt-ended", "attempt": 1, "exit": 0, "refusal": None, "at": 2.0},
+    ]
+    state = ED._journal_state(records)
+    slot = state["attempts"][1]
+    assert slot["ended"]["exit"] == 0
+    assert slot["endedSuperseded"]["refusal"] == "attempt-died-unrecorded"
+
+
+def test_journal_state_two_real_attempt_ended_first_wins():
+    """axis: which attempt-ended record wins (first real when both are real)."""
+    records = [
+        {"kind": "attempt-ended", "attempt": 1, "exit": 0, "refusal": None, "at": 1.0},
+        {"kind": "attempt-ended", "attempt": 1, "exit": 1, "refusal": None, "at": 2.0},
+    ]
+    state = ED._journal_state(records)
+    slot = state["attempts"][1]
+    assert slot["ended"]["exit"] == 0
+    assert slot["endedSuperseded"]["exit"] == 1
+
+
+def test_journal_state_legacy_attempt_ended_keys_grade_unchanged(tmp_path):
+    """axis: no-raise on 0.23.0-era attempt-ended keys during fold and grade."""
+    run_dir = str(tmp_path / "run")
+    repo_root = _repo(tmp_path)
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(_VALID_FINDINGS_STDOUT)
+    records = [
+        {
+            "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "codex",
+            "roleKind": ED.RUN_KIND_REVIEW, "orderId": "legacy",
+            "argv": [sys.executable, "-c", "x"], "cwd": repo_root,
+            "timeout": 30, "retryTimeout": 30,
+            "promptPath": os.path.join(run_dir, "prompt.txt"),
+            "baseSha": "abc", "supervisorPid": 1, "at": time.time(),
+        },
+        {
+            "kind": "attempt-ended", "attempt": 1,
+            "exit": 0, "timedOut": False, "signal": None, "refusal": None,
+            "at": time.time(),
+        },
+    ]
+    state = ED._journal_state(records)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+
+
+# --- #747 WO-4b: forfeit-with-engaged-artifact + ledger wiring ---
+
+_DO = importlib.util.spec_from_file_location(
+    "dispatch_outcome", os.path.join(_HERE, "..", "dispatch_outcome.py"))
+_DO_MOD = importlib.util.module_from_spec(_DO)
+_DO.loader.exec_module(_DO_MOD)
+
+_FL = importlib.util.spec_from_file_location(
+    "forfeit_ledger", os.path.join(_HERE, "..", "forfeit_ledger.py"))
+_FL_MOD = importlib.util.module_from_spec(_FL)
+_FL.loader.exec_module(_FL_MOD)
+
+_LL = importlib.util.spec_from_file_location(
+    "launch_ledger", os.path.join(_HERE, "..", "launch_ledger.py"))
+_LL_MOD = importlib.util.module_from_spec(_LL)
+_LL.loader.exec_module(_LL_MOD)
+
+_EA_WO4B = importlib.util.spec_from_file_location(
+    "engine_adapter", os.path.join(_HERE, "..", "engine_adapter.py"))
+_EA_WO4B_MOD = importlib.util.module_from_spec(_EA_WO4B)
+_EA_WO4B.loader.exec_module(_EA_WO4B_MOD)
+
+
+def _ledger_env(tmp_path, monkeypatch):
+    root = str(tmp_path / "forfeit-ledger-root")
+    os.makedirs(root, mode=0o700, exist_ok=True)
+    monkeypatch.setenv(_FL_MOD.LEDGER_ROOT_ENV, root)
+    return root
+
+
+def _manual_open_review_run_git(tmp_path, run_dir, repo_root):
+    build_view = _fake_build_view(tmp_path)
+    view = build_view(os.path.realpath(repo_root))
+    cwd = os.path.realpath(view["path"])
+    built = __import__("engine_adapter").build_argv_result(
+        "codex", "review", "high", {"model": "sonnet", "cwd": cwd},
+    )
+    argv = built["argv"]
+    prompt_path = _valid_prompt(tmp_path)
+    with open(prompt_path, encoding="utf-8") as fh:
+        base = fh.read()
+    fed = ED.ANTIHIJACK_PREAMBLE + _SV_MOD.sanitized_view_notice(view) + base
+    os.makedirs(run_dir, exist_ok=True)
+    ok, detail = ED._open_review_run(
+        run_dir, engine="codex", argv=argv, cwd=cwd,
+        timeout=ED.RETRY_MIN_TIMEOUT, retry_timeout=ED.RETRY_MIN_TIMEOUT,
+        prompt_path=prompt_path, view_path=view["path"], view_meta=view,
+        fed_prompt=fed, order_id="test-order", progress_path=os.path.join(run_dir, "progress.jsonl"),
+        repo_root=os.path.realpath(repo_root),
+    )
+    assert ok, detail
+    return repo_root, view
+
+
+def _artifact_pad(text):
+    out = text
+    while len(out.encode("utf-8")) < _EA_WO4B_MOD.ARTIFACT_MIN_RESIDUE_BYTES + 20:
+        out += " Additional review context padding."
+    return out
+
+
+def _poster_child_attempt1_stdout():
+    cites = [
+        "src/app/widget.ts:42", "src/lib/util.ts:7", "src/app/model.ts:15",
+        "tests/widget.test.ts:88", "src/app/view.ts:3",
+    ]
+    lines = ["Review of the widget module identified several concerns."]
+    lines += ["- %s: null check missing" % c for c in cites[:3]]
+    lines += ["Also noted %s and %s in related files." % (cites[3], cites[4])]
+    return _artifact_pad("\n".join(lines))
+
+
+def test_poster_child_engaged_artifact_forfeit_plain_path(tmp_path):
+    """axis: which outcome is minted — poster-child regression (attempt-1 engaged, attempt-2 unreadable)."""
+    repo_root = _git_init(str(tmp_path / "repo"))
+    prose = _poster_child_attempt1_stdout()
+    fake = FakeRunner([
+        (prose, True, 0, ""),
+        ("short echo only", False, 0, ""),
+    ])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is False
+    assert res["forfeited"] is True
+    assert res["reason"] == _DO_MOD.REASON_FORFEIT_ENGAGED_ARTIFACT
+    assert res["salvage"]["attempt"] == 1
+    assert "findings" not in res
+    assert "not credited" in res["disclosure"].lower()
+    assert "independently verified" in res["disclosure"].lower()
+
+
+def test_engaged_artifact_forfeit_from_vacuous_path(tmp_path):
+    """axis: which outcome is minted — vacuous terminal upgraded when earlier attempt engaged."""
+    repo_root = _git_init(str(tmp_path / "repo-vac"))
+    prose = _poster_child_attempt1_stdout()
+    empty = json.dumps({"findings": []})
+    fake = FakeRunner([
+        (prose, False, 0, ""),
+        (empty, False, 0, ""),
+    ])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["reason"] == _DO_MOD.REASON_FORFEIT_ENGAGED_ARTIFACT
+    assert res["salvage"]["attempt"] == 1
+
+
+def test_forfeit_without_engaged_artifact_unchanged(tmp_path):
+    repo_root = _git_init(str(tmp_path / "repo-plain"))
+    fake = FakeRunner([("", True, 0, ""), ("echo", False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["reason"] == _DO_MOD.REASON_FORFEITED
+    assert "salvage" not in res
+
+
+def test_fold_ledger_forfeited_transport_class(tmp_path, monkeypatch):
+    repo_root = _git_init(str(tmp_path / "repo-ledger"))
+    _ledger_env(tmp_path, monkeypatch)
+    prose = _poster_child_attempt1_stdout()
+    fake = FakeRunner([
+        (prose, False, 0, ""),
+        ('{"verdicts":[]}', False, 0, ""),
+    ])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ledger"]["written"] is True
+    rows, _ = _FL_MOD.read(repo_root)
+    assert len(rows) == 1
+    assert rows[0]["attribution"]["class"] == _DO_MOD.ATTRIBUTION_TRANSPORT
+
+
+def test_fold_ledger_success_thin_row(tmp_path, monkeypatch):
+    repo_root = _git_init(str(tmp_path / "repo-success"))
+    _ledger_env(tmp_path, monkeypatch)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    assert res["ledger"]["written"] is True
+    rows, _ = _FL_MOD.read(repo_root)
+    assert len(rows) == 1
+    assert rows[0]["ok"] is True
+    thin = rows[0]["attempts"][0]
+    assert thin["attempt"] == 1
+    assert thin["exit"] == 0
+    assert thin["timedOut"] is False
+    assert "wallSeconds" not in thin
+
+
+def test_fold_ledger_idempotent_per_run_id(tmp_path, monkeypatch):
+    run_dir = str(tmp_path / "run-idem")
+    repo_root = _git_init(str(tmp_path / "repo-idem"))
+    _ledger_env(tmp_path, monkeypatch)
+    _manual_open_review_run_git(tmp_path, run_dir, repo_root)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    result = {
+        "ok": True, "terminal": True, "attempts": 1,
+        "findings": [{"id": "f1", "message": "x"}],
+        "engagement": {"read": "engaged"},
+    }
+    ED._append_fold_ledger(run_dir, state, result)
+    ED._append_fold_ledger(run_dir, state, result)
+    rows, _ = _FL_MOD.read(repo_root)
+    assert len(rows) == 1
+
+
+def test_fold_ledger_no_repo_root_written_false(tmp_path, monkeypatch):
+    run_dir = str(tmp_path / "run-noroot")
+    _ledger_env(tmp_path, monkeypatch)
+    os.makedirs(run_dir, exist_ok=True)
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "codex",
+        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "x",
+        "argv": [], "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": os.path.join(run_dir, "prompt.txt"),
+        "supervisorPid": 1, "at": time.time(),
+    })
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    result = {"ok": False, "terminal": True, "reason": "forfeited", "forfeited": True, "attempts": 0}
+    receipt = ED._append_fold_ledger(run_dir, state, result)
+    assert receipt["written"] is False
+    assert receipt["why"] == "repo-root-absent-from-run-opened"
+
+
+def test_fold_ledger_append_failure_fail_soft(tmp_path, monkeypatch):
+    repo_root = _git_init(str(tmp_path / "repo-failsoft"))
+    _ledger_env(tmp_path, monkeypatch)
+    prose = _poster_child_attempt1_stdout()
+    fake = FakeRunner([
+        (prose, True, 0, ""),
+        ("short", False, 0, ""),
+    ])
+
+    def boom(*_a, **_k):
+        raise RuntimeError("ledger-boom")
+
+    monkeypatch.setattr(ED.forfeit_ledger, "append", boom)
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["reason"] == _DO_MOD.REASON_FORFEIT_ENGAGED_ARTIFACT
+    assert res["ledger"]["written"] is False
+    assert res["ledger"]["why"] == "ledger-internal-error"
+
+
+def test_preflight_unrunnable_appends_ledger_caller_error(tmp_path, monkeypatch):
+    """axis: which entry points append — review pre-spawn refusals with repo identity."""
+    repo_root = _git_init(str(tmp_path / "repo-preflight"))
+    _ledger_env(tmp_path, monkeypatch)
+    missing_prompt = str(tmp_path / "missing-prompt.txt")
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=missing_prompt, repo_root=repo_root, run_engine=_never_call,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["reason"] == "unrunnable"
+    assert res["detail"] == "prompt-missing"
+    assert res["attempts"] == 0
+    assert res["ledger"]["written"] is True
+    rows, _ = _FL_MOD.read(repo_root)
+    assert len(rows) == 1
+    assert rows[0]["attribution"]["class"] == _DO_MOD.ATTRIBUTION_CALLER_ERROR
+
+
+def test_abandon_appends_ledger_row(tmp_path, monkeypatch):
+    """axis: which terminal paths append — run-abandoned with repo identity."""
+    repo_root = _git_init(str(tmp_path / "repo-abandon"))
+    _ledger_env(tmp_path, monkeypatch)
+    run_dir = str(tmp_path / "run-abandon")
+    _manual_open_review_run_git(tmp_path, run_dir, repo_root)
+    res = ED.dispatch_abandon(run_dir)
+    assert res["detail"] == "run-abandoned"
+    assert res["ledger"]["written"] is True
+    rows, _ = _FL_MOD.read(repo_root)
+    assert len(rows) == 1
+    assert rows[0]["reason"] == "unrunnable"
+    assert rows[0]["detail"] == "run-abandoned"
+
+
+def test_dispatch_abandon_idempotent_equal_results(tmp_path, monkeypatch):
+    """axis: that repeat reads return the stored result — not a fresh ledger append."""
+    repo_root = _git_init(str(tmp_path / "repo-abandon-idem"))
+    _ledger_env(tmp_path, monkeypatch)
+    run_dir = str(tmp_path / "run-abandon-idem")
+    _manual_open_review_run_git(tmp_path, run_dir, repo_root)
+    first = ED.dispatch_abandon(run_dir)
+    second = ED.dispatch_abandon(run_dir)
+    assert second == first
+
+
+def test_preflight_run_id_namespaced_from_run_dir_dedupe_key(tmp_path, monkeypatch):
+    """axis: that a preflight row cannot take a real run's dedupe key — collision, not presence."""
+    repo_root = _git_init(str(tmp_path / "repo-preflight-id"))
+    _ledger_env(tmp_path, monkeypatch)
+    run_dir = str(tmp_path / "run-preflight-id")
+    os.makedirs(run_dir, exist_ok=True)
+    _manual_open_review_run_git(tmp_path, run_dir, repo_root)
+    wrong_order = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir, order_id="wrong-order",
+    )
+    assert wrong_order["detail"] == "run-dir-reused"
+    assert wrong_order["ledger"]["written"] is True
+    rows, _ = _FL_MOD.read(repo_root)
+    preflight_row = rows[-1]
+    real_run_id = _FL_MOD.run_id_from_run_dir(run_dir)
+    assert preflight_row["runId"] != real_run_id
+    assert preflight_row["runId"].startswith("preflight-")
+
+
+def test_dispatch_abandon_idempotent_after_failed_ledger_append(tmp_path, monkeypatch):
+    """axis: that repeat reads return the stored result even when ledger state changed."""
+    repo_root = _git_init(str(tmp_path / "repo-abandon-fail"))
+    _ledger_env(tmp_path, monkeypatch)
+    run_dir = str(tmp_path / "run-abandon-fail")
+    _manual_open_review_run_git(tmp_path, run_dir, repo_root)
+    calls = {"n": 0}
+    real_append = _FL_MOD.append
+
+    def flaky_append(repo_root_arg, row):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"written": False, "path": None, "why": "ledger-lock-busy"}
+        return real_append(repo_root_arg, row)
+
+    monkeypatch.setattr(ED.forfeit_ledger, "append", flaky_append)
+    first = ED.dispatch_abandon(run_dir)
+    assert first["ledger"]["written"] is False
+    second = ED.dispatch_abandon(run_dir)
+    assert second == first
+    assert calls["n"] == 1
+
+
+def test_write_preflight_unrunnable_appends_ledger_caller_error(tmp_path, monkeypatch):
+    """axis: which entry points append — write pre-spawn refusals with repo identity."""
+    wt = _linked_worktree(tmp_path)
+    _ledger_env(tmp_path, monkeypatch)
+    missing_prompt = str(tmp_path / "missing-write-prompt.txt")
+    res = ED.dispatch_write(
+        "codex", model="sonnet", effort="high",
+        prompt_path=missing_prompt, cwd=wt,
+        run_dir=str(tmp_path / "run-write-preflight"), order_id="inv-write",
+        run_engine=_never_call,
+    )
+    assert res["reason"] == "unrunnable"
+    assert res["detail"] == "prompt-missing"
+    assert res["ledger"]["written"] is True
+    repo_root = ED._repository_root_from_git_cwd(wt)
+    rows, _ = _FL_MOD.read(repo_root)
+    assert len(rows) == 1
+    assert rows[0]["attribution"]["class"] == _DO_MOD.ATTRIBUTION_CALLER_ERROR
+    assert rows[0]["runKind"] == ED.RUN_KIND_WRITE
+
+
+def test_write_preflight_primary_checkout_ledgers_refusal(tmp_path, monkeypatch):
+    """axis: which entry points append — cwd-validation refusals with repo identity."""
+    main = _git_init(str(tmp_path / "main-primary"))
+    _ledger_env(tmp_path, monkeypatch)
+    res = ED.dispatch_write(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), cwd=main,
+        run_dir=str(tmp_path / "run-write-primary"), order_id="inv-primary",
+        run_engine=_never_call,
+    )
+    assert res["detail"] == "cwd-primary-checkout"
+    assert res["ledger"]["written"] is True
+    rows, _ = _FL_MOD.read(os.path.realpath(main))
+    assert len(rows) == 1
+    assert rows[0]["attribution"]["class"] == _DO_MOD.ATTRIBUTION_CALLER_ERROR
+    assert rows[0]["runKind"] == ED.RUN_KIND_WRITE
+
+
+def test_write_preflight_non_repo_stays_unledgered(tmp_path, monkeypatch):
+    """axis: which entry points append — no repo identity means no ledger row."""
+    _ledger_env(tmp_path, monkeypatch)
+    non_repo = str(tmp_path / "not-a-repo")
+    os.makedirs(non_repo)
+    res = ED.dispatch_write(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), cwd=non_repo,
+        run_dir=str(tmp_path / "run-write-nonrepo"), order_id="inv-nonrepo",
+        run_engine=_never_call,
+    )
+    assert res["detail"] == "cwd-not-a-repo"
+    assert "ledger" not in res
+
+
+def test_run_opened_records_repo_root_and_id(tmp_path):
+    run_dir = str(tmp_path / "run-meta")
+    repo_root = _git_init(str(tmp_path / "repo-opened"))
+    _manual_open_review_run_git(tmp_path, run_dir, repo_root)
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    assert opened["repoRoot"] == os.path.realpath(repo_root)
+    assert opened["repoId"] == _LL_MOD.repo_identity(opened["repoRoot"])
 
 
 # --- WO B: diff_base threading + investigation-floor artifact hole ---------------

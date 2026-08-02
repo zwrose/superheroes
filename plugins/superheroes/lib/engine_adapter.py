@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import stat as _stat
 import subprocess
 import sys
@@ -25,10 +26,12 @@ import model_registry  # noqa: E402  (band-wide model taxonomy; same-tree siblin
 # build_state_cli git-log parser both reference this so the convention cannot fork.
 TASK_ID_TRAILER = "Task-Id"
 
-# Single home for the vacuous forfeit reason token (CONVENTIONS §11 Pattern 1). The dispatch
-# runner produces it; round_driver and seat_canary compare against it — consumers import this,
-# never restate the literal.
-REVIEW_FORFEIT_VACUOUS = "vacuous"
+# Re-export vacuous forfeit reason from dispatch_outcome (CONVENTIONS §11 Pattern 1). The
+# dispatch runner produces it; round_driver and seat_canary compare against it — consumers
+# import this name, never restate the literal.
+import dispatch_outcome  # noqa: E402  (stdlib-only chokepoint; must not import engine_adapter)
+
+REVIEW_FORFEIT_VACUOUS = dispatch_outcome.REASON_VACUOUS
 
 # Bounds for the payload-shape diagnostic. These strings come from ENGINE-CONTROLLED JSON and
 # cross the same trust boundary as any other external free text.
@@ -79,6 +82,28 @@ MAX_STDOUT_TAIL_BYTES = 512 * 1024
 # #668: runner stdout capture keeps only the tail (MAX_STDOUT_CAPTURE in engine_dispatch); a large
 # echoed prompt can arrive truncated while the trailing shape-contract example survives.
 ECHO_TAIL_CHARS = 2000
+
+# #747 WO-4a: pure engaged-artifact detector thresholds. Measured 2026-07-31 on the preserved
+# dispatch corpus (harness 2.1.219, plugin 0.23.0): all seven prose specimens score ≥2 signals
+# under the two-of-three rule; the preserved cursor stream log (66,821 B raw) scores 1 signal and
+# is correctly rejected. Smallest genuine prose specimen is 661 B; the floor rejects one-line errors.
+ARTIFACT_MIN_RESIDUE_BYTES = 200
+ARTIFACT_EXCERPT_BYTES = 2000
+ARTIFACT_MIN_SIGNALS = 2  # of citations / enumerations / sections — never one signal alone (BC-5)
+ARTIFACT_SECTION_NAMES = (
+    "findings",
+    "investigation record",
+    "verdict",
+    "no blocking findings",
+    "blocking",
+    "summary",
+)
+_ARTIFACT_CITATION_RE = re.compile(r"[\w./\\-]+\.[\w]+:\d+")
+_ARTIFACT_ENUM_LINE_RE = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+", re.MULTILINE)
+_ARTIFACT_TRACEBACK_FIRST_LINE_RE = re.compile(
+    r"^(?:Traceback \(most recent call last\)|panic:|error\[E\d+\])",
+    re.IGNORECASE,
+)
 
 
 # Named refusal tokens from build_argv_result (issue #636). The dispatch runner surfaces them as
@@ -398,6 +423,17 @@ def _scrub(text):
 _FINDING_STRUCTURAL_KEYS = {"file", "line", "severity", "id", "dimension", "confidence"}
 
 
+def _scrub_finding_value(val):
+    """Recursively scrub every string in a finding field value."""
+    if isinstance(val, str):
+        return _scrub(val)
+    if isinstance(val, dict):
+        return {k: _scrub_finding_value(v) for k, v in val.items()}
+    if isinstance(val, list):
+        return [_scrub_finding_value(x) for x in val]
+    return val
+
+
 def _scrub_findings(findings):
     out = []
     for f in findings if isinstance(findings, list) else []:
@@ -407,10 +443,39 @@ def _scrub_findings(findings):
         for key, val in g.items():
             if key in _FINDING_STRUCTURAL_KEYS:
                 continue
-            if isinstance(val, str):
-                g[key] = _scrub(val)
+            g[key] = _scrub_finding_value(val)
         out.append(g)
     return out
+
+
+def _scrub_mapping(obj):
+    """Recursively scrub every string key and value in a mapping tree."""
+    if isinstance(obj, str):
+        return _scrub(obj)
+    if isinstance(obj, dict):
+        out = {}
+        for idx, (k, v) in enumerate(obj.items()):
+            new_k = _scrub(k) if isinstance(k, str) else k
+            out_key = new_k
+            if out_key in out:
+                # axis: entry-preserving scrubbed-key collision disambiguation by position.
+                out_key = f"{new_k}#{idx}"
+                while out_key in out:
+                    idx += 1
+                    out_key = f"{new_k}#{idx}"
+            out[out_key] = _scrub_mapping(v)
+        return out
+    if isinstance(obj, list):
+        return [_scrub_mapping(x) for x in obj]
+    return obj
+
+
+def scrub_salvage_block(salvage):
+    """Scrub every string in a salvage block for durable export. Never raises."""
+    # axis: that every string leaving salvage is scrubbed — keys, structural values, all fields.
+    if not isinstance(salvage, dict):
+        return salvage
+    return _scrub_mapping(salvage)
 
 
 def _scrub_investigated(investigated):
@@ -478,6 +543,215 @@ def review_payload_shape(stdout):
         # A diagnostic that cannot diagnose says nothing — never fabricate a parsed label from an
         # internal error (no-parseable-json is a finding about stdout, not a guess after failure).
         return None
+
+
+def _review_residue(stdout, fed_prompt):
+    """Unwrap stream-json envelope, strip echoed prompt, return graded residue. Never raises."""
+    try:
+        text = stdout if isinstance(stdout, str) else ""
+        text = _unwrap_stream_envelope(text)
+        if not isinstance(text, str):
+            text = ""
+        prompt = fed_prompt if isinstance(fed_prompt, str) else ""
+        stripped = strip_echoed_prompt(text, prompt)
+        if not isinstance(stripped, str) or not stripped.strip():
+            return ""
+        return stripped
+    except Exception:
+        return ""
+
+
+def _artifact_residue_bytes(residue):
+    if not isinstance(residue, str):
+        return 0
+    return len(residue.encode("utf-8"))
+
+
+def _artifact_citations(residue):
+    if not isinstance(residue, str) or not residue:
+        return 0
+    return len(set(_ARTIFACT_CITATION_RE.findall(residue)))
+
+
+def _artifact_enumerations(residue):
+    if not isinstance(residue, str) or not residue:
+        return 0
+    return len(_ARTIFACT_ENUM_LINE_RE.findall(residue))
+
+
+def _artifact_sections(residue):
+    """Recognised review section headings, lowercased, in document order. Never raises."""
+    if not isinstance(residue, str) or not residue:
+        return []
+    found = []
+    seen = set()
+    for line in residue.splitlines():
+        line_stripped = line.strip()
+        if not line_stripped:
+            continue
+        line_lower = line_stripped.lower()
+        for name in ARTIFACT_SECTION_NAMES:
+            if name in seen:
+                continue
+            if re.match(r"#+\s*" + re.escape(name) + r"\s*:?\s*$", line_lower):
+                found.append(name)
+                seen.add(name)
+            elif line_lower.rstrip(":") == name:
+                found.append(name)
+                seen.add(name)
+    return found
+
+
+def _artifact_is_prompt_echo_residue(residue, fed_prompt):
+    """Reject residue that is an echoed fragment of the fed prompt (BC-5 partial-echo case)."""
+    if not isinstance(residue, str) or not residue:
+        return False
+    if not isinstance(fed_prompt, str) or not fed_prompt:
+        return False
+    return residue in fed_prompt
+
+
+def _artifact_is_traceback_residue(residue):
+    if not isinstance(residue, str) or not residue:
+        return False
+    for line in residue.splitlines():
+        if line.strip():
+            return _ARTIFACT_TRACEBACK_FIRST_LINE_RE.match(line.strip()) is not None
+    return False
+
+
+def review_artifact_shape(stdout, fed_prompt):
+    """Detect whether stdout holds a review-shaped artifact after prompt echo is stripped.
+
+    Unwraps a cursor stream-json envelope first, then applies the same echo strip as
+    ``engine_dispatch._grade_review_attempt`` (``strip_echoed_prompt`` on the unwrapped text).
+    When the strip yields empty-or-whitespace, the residue is empty and the artifact is **not**
+    engaged — never fall back to raw stdout.
+
+    Citations match a ``path.ext:line`` shape anywhere in the residue, **including inside fenced
+    code blocks** (a citation-shaped token in a fence is counted).
+
+    Engaged when ``residueBytes >= ARTIFACT_MIN_RESIDUE_BYTES`` and at least two of: citations ≥ 1,
+    enumerations ≥ 2, sections ≥ 1. ``basis`` names which signals held (sorted); otherwise
+    ``engaged: False`` and ``basis: None``.
+
+    Error direction (honest): a long engine error dump that happens to carry citations and bullets
+    can read as engaged. That is bounded, not fixed, here — consumers keep the outcome a forfeit,
+    never credit the seat, and verify any finding independently. This must **never** be read as
+    evidence a seat was *inert* (``engagement_read`` already refuses ``inert``).
+
+    Never raises."""
+    try:
+        residue = _review_residue(stdout, fed_prompt)
+        residue_bytes = _artifact_residue_bytes(residue)
+        citations = _artifact_citations(residue)
+        enumerations = _artifact_enumerations(residue)
+        sections = _artifact_sections(residue)
+        shape = {
+            "engaged": False,
+            "residueBytes": residue_bytes,
+            "citations": citations,
+            "enumerations": enumerations,
+            "sections": sections,
+            "basis": None,
+        }
+        if not residue.strip():
+            return shape
+        if _artifact_is_prompt_echo_residue(residue, fed_prompt):
+            return shape
+        if _artifact_is_traceback_residue(residue):
+            return shape
+        if residue_bytes < ARTIFACT_MIN_RESIDUE_BYTES:
+            return shape
+        signals = []
+        if citations >= 1:
+            signals.append("citations")
+        if enumerations >= 2:
+            signals.append("enumerations")
+        if len(sections) >= 1:
+            signals.append("sections")
+        if len(signals) >= ARTIFACT_MIN_SIGNALS:
+            shape["engaged"] = True
+            shape["basis"] = sorted(signals)
+        return shape
+    except Exception:
+        return {
+            "engaged": False,
+            "residueBytes": 0,
+            "citations": 0,
+            "enumerations": 0,
+            "sections": [],
+            "basis": None,
+        }
+
+
+def salvage_from_artifact(stdout, fed_prompt):
+    """Salvage structured findings or a scrubbed prose excerpt from review stdout.
+
+    Uses the same residue path as ``review_artifact_shape``. When ``parse_result`` yields
+    non-empty findings, returns them (``structured: True``). **Never** heuristically splits prose
+    into findings — manufacturing claims from prose is worse than handing over the artifact.
+
+    ``structured: True`` means findings were genuinely parsed — not merely that ``parse_result``
+    returned ok. When ``parse_result`` returns ok with an **empty** findings list on residue that
+    ``review_artifact_shape`` reports as **engaged**, that is a false clean (e.g. incidental bare
+    ``[]`` in prose): return ``structured: False``, ``requiresManualRead: True``, and the excerpt.
+    Genuinely structured empty JSON (non-engaged residue) may still report ``structured: True``
+    with zero findings.
+
+    When ``review_artifact_shape`` reports ``engaged: True`` but this returns ``structured: False``,
+    callers must treat ``requiresManualRead: True`` and use ``excerpt`` as the human/orchestrator
+    pointer — do not coerce prose into the findings transport.
+
+    Every returned string (``excerpt`` and all free-text in structured ``findings``) passes through
+    the module's existing scrub seam (``_scrub`` / ``_scrub_findings``). Never raises."""
+    try:
+        residue = _review_residue(stdout, fed_prompt)
+        excerpt_raw = residue.encode("utf-8")[:ARTIFACT_EXCERPT_BYTES]
+        excerpt = _scrub(excerpt_raw.decode("utf-8", errors="ignore"))
+        excerpt_bytes = len(excerpt_raw)
+        parsed = parse_result("codex", "review", residue)
+        if parsed.get("ok") and isinstance(parsed.get("findings"), list):
+            findings = parsed["findings"]
+            if findings:
+                return scrub_salvage_block({
+                    "findings": findings,
+                    "structured": True,
+                    "requiresManualRead": False,
+                    "excerptBytes": excerpt_bytes,
+                    "excerpt": excerpt,
+                })
+            engaged = review_artifact_shape(stdout, fed_prompt).get("engaged")
+            if engaged:
+                return scrub_salvage_block({
+                    "findings": [],
+                    "structured": False,
+                    "requiresManualRead": True,
+                    "excerptBytes": excerpt_bytes,
+                    "excerpt": excerpt,
+                })
+            return scrub_salvage_block({
+                "findings": [],
+                "structured": True,
+                "requiresManualRead": False,
+                "excerptBytes": excerpt_bytes,
+                "excerpt": excerpt,
+            })
+        return {
+            "findings": [],
+            "structured": False,
+            "requiresManualRead": bool(residue.strip()),
+            "excerptBytes": excerpt_bytes,
+            "excerpt": excerpt,
+        }
+    except Exception:
+        return {
+            "findings": [],
+            "structured": False,
+            "requiresManualRead": False,
+            "excerptBytes": 0,
+            "excerpt": "",
+        }
 
 
 def engagement_read(result):

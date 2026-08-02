@@ -248,8 +248,9 @@ reviewer is the fallback **only with disclosed degradation** (never a silent dow
 fold its findings in, or dispute each with a reason. Post the dispositions.
 
 **Only a terminal forfeit licenses that Claude fallback.** The substitution is earned when the
-cross-vendor dispatch **terminally forfeits** — its structural timeout fired, or it returned no final
-output at all — and **not before**: a *risk* of forfeit (a tight step budget, an engine you expect to
+cross-vendor dispatch **terminally forfeits** — per `rubric/review-discipline.md`'s definition, which
+includes `forfeit-with-engaged-artifact` (final output *did* arrive; our transport could not carry
+it) — and **not before**: a *risk* of forfeit (a tight step budget, an engine you expect to
 run slow) is **not** a forfeit; anything short of the terminal condition **parks or runs the retry
 ladder** (the #563 sequence), never a pre-emptive swap — a quiet substitute-on-risk erodes the
 cross-vendor guarantee if sessions learn it (we#520 was exactly that swap, disclosed but forbidden).

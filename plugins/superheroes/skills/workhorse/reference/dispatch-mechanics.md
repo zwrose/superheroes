@@ -111,6 +111,59 @@ probe` can justify calling a seat inert. Token spend does not measure engagement
 calibrated codex reviewer seat, a 2,449-token dispatch was engaged-clean and a 10,415-token
 dispatch produced a Critical finding.
 
+**`reason: "forfeit-with-engaged-artifact"`** — the seat produced a review our transport could not
+carry. It **is a forfeit** (`ok: false`, `forfeited: true`, `terminal: true`) and every existing
+rule about a terminal forfeit applies unchanged — including the three-case reviewer-loss rule in
+`rubric/review-discipline.md` (a `forfeit-with-engaged-artifact` is one of those terminal forfeits,
+not an exception to them). What is different is what you know: the result carries **`salvage`** with
+the artifact's location and shape (`stdoutPath`, `shape`, and when structured, `findings`).
+
+**Salvage rule — findings only, never the seat.** The seat is not credited, not counted toward panel
+composition, and not a substitute for a re-dispatch. Each claim you take from the artifact is
+**independently verified before use**, and the degradation is disclosed in the PR — because a timeout
+can truncate stdout, you can verify what an artifact contains but never what it never reached, and a
+seat-count vouches for the latter. **`salvage.structured: false`** means the artifact is prose: the
+runner deliberately does **not** parse prose into findings (that would manufacture claims); you read
+the artifact yourself (`requiresManualRead: true`, `excerpt` is a scrubbed pointer).
+
+**Per-attempt telemetry** (each ledger row's `attempts[]` entry, one per spawned attempt):
+
+| Field | Meaning |
+|---|---|
+| `exit` | Process return code |
+| `signal` | Signal number when exit was signal-terminated |
+| `signalSource` | Who delivered the signal — see below |
+| `timedOut` | Runner cap fired |
+| `capSeconds` | The cap that applied |
+| `wallSeconds` | Wall time for the attempt |
+| `lastActivityAt` | Epoch of last observed output growth |
+| `silenceSeconds` | Seconds between last activity and kill/exit |
+| `activityStream` | Which stream (`stdout` or `stderr`) last grew |
+| `stdoutBytes` / `stderrBytes` | Byte sizes at kill (pre-cap snapshot) |
+| `promptBytes` | Fed prompt size |
+| `dispatchPath` | Which spawn path ran (`subprocess` vs injected seam) |
+
+The spawned command is on the result as top-level **`argv`** (one value per run, shared across
+attempts). **Silence against the cap** carries the most diagnostic weight: killed at the cap while
+`silenceSeconds` is small (output was still moving) means *our cap was short*; killed after long
+silence is a genuine stall. `lastActivityAt` and `silenceSeconds` are accurate to the runner's poll
+interval (10 s), not to the byte. **`signalSource`** — the runner terminates the process group on
+every path, so without this field a runner-inflicted `SIGTERM` (`runner-timeout`) is indistinguishable
+from an engine crash (`engine`).
+
+**Ledger receipt** — every terminal fold appends `result["ledger"]`: `written`, `path`, `why`. The row
+records `reason`, per-attempt telemetry, `stages`, `engagement`, `evidence` (stdout/stderr/journal
+paths), `attribution` (caller-error, our-transport-contract, our-environment, engine-side, unknown —
+a forfeit is presumed self-inflicted until attributed; **unknown is a queue, not a bucket**), and
+`salvage` when detected. The ledger is a **record, never a control input** — nothing reads it to
+decide what a dispatch does. Read standing accounting via
+`python3 -B "$ROOT_DIR/lib/forfeit_ledger.py" report --repo-root <repo-root>`.
+
+**Engaged vs delivered are two variables** — `stages.engaged` and `stages.delivered` are recorded
+separately on every row. A seat can burn hundreds of thousands of tokens, reach real findings in its
+stdout, and deliver nothing gradeable through our transport (`stages.engaged: true`,
+`stages.delivered: false`). Other terminal reasons: `forfeited`, `vacuous`, `unrunnable`.
+
 ## Supervised write dispatch
 
 The sanctioned way to dispatch a long-running **external implementer** is the supervised runner:

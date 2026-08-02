@@ -138,11 +138,14 @@ never drop a finding or a lens.
 > empty-prompt guard, builds a **disposable sanitized export** of the repository named by
 > `--repo-root` and pins the dispatch to that view (codex `-C`, cursor's subprocess cwd — not the
 > caller's live checkout), bounds the attempt and streams liveness heartbeats to `--progress-file`,
-> and on a **terminal forfeit** (timeout OR nonzero engine exit OR `unreadable` OR **vacuous** — never intermediate bootstrap
-> noise that still yields a final answer) auto-retries ONCE tight-inline with a ≥900 s ceiling before
-> returning `{"ok": false, "forfeited": true, "disclosure": …}` (or `reason: "vacuous"` when the
-> **last** attempt ended vacuous — e.g. attempt 1 timing out and attempt 2 coming back vacuous still
-> yields `vacuous`, not only a double vacuous forfeit). A forfeit → the seat falls open to a Claude re-run (UFR-7) and the
+> and on a **terminal forfeit** (timeout OR nonzero engine exit OR `unreadable` OR **vacuous** OR
+> **`forfeit-with-engaged-artifact`** — never intermediate bootstrap noise that still yields a final
+> answer) auto-retries ONCE tight-inline with a ≥900 s ceiling before returning
+> `{"ok": false, "forfeited": true, "disclosure": …}` (or `reason: "vacuous"` when the **last**
+> attempt ended vacuous — e.g. attempt 1 timing out and attempt 2 coming back vacuous still yields
+> `vacuous`, not only a double vacuous forfeit; or `reason: "forfeit-with-engaged-artifact"` when
+> stdout was engaged but our transport could not grade it — still a forfeit, the seat does not count
+> toward the panel, and the loop's behaviour is unchanged). A forfeit → the seat falls open to a Claude re-run (UFR-7) and the
 > orchestrator **discloses** the degraded vendor mix (the `disclosure` string); making that fall-open
 > loud by machinery in the receipt is #563 PR C.
 >
