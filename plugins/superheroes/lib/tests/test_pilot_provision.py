@@ -1107,23 +1107,7 @@ def test_app_launch_edge_base_url_off_origin():
     assert exc.value.reason == pilot_boundary.REFUSAL_TARGET_OFF_ALLOWLIST
 
 
-def test_app_launch_edge_readiness_url_off_origin():
-    policy = SAMPLE_POLICY
-    verdict = _passing_verdict(policy)
-    with pytest.raises(pp.PilotProvisionError) as exc:
-        pp.authorized_app_launch(
-            verdict,
-            policy,
-            "slot-a@1",
-            {
-                "baseUrl": "http://127.0.0.1:5173",
-                "readinessUrl": "http://evil.example.com:80",
-            },
-        )
-    assert exc.value.reason == pilot_boundary.REFUSAL_TARGET_OFF_ALLOWLIST
-
-
-def test_app_launch_edge_base_url_off_origin_readiness_on_origin():
+def test_app_launch_edge_base_url_off_origin():
     policy = SAMPLE_POLICY
     verdict = _passing_verdict(policy)
     with pytest.raises(pp.PilotProvisionError) as exc:
@@ -1139,7 +1123,7 @@ def test_app_launch_edge_base_url_off_origin_readiness_on_origin():
     assert exc.value.reason == pilot_boundary.REFUSAL_TARGET_OFF_ALLOWLIST
 
 
-def test_app_launch_edge_readiness_url_off_origin_base_on_origin():
+def test_app_launch_edge_readiness_url_off_origin():
     policy = SAMPLE_POLICY
     verdict = _passing_verdict(policy)
     with pytest.raises(pp.PilotProvisionError) as exc:

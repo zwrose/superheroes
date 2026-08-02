@@ -546,6 +546,7 @@ def _run_handler(step, entry, handlers, context, mono_fn, timeout_seconds):
         return {
             "status": STATUS_INDETERMINATE,
             "reason": REASON_STEP_INDETERMINATE,
+            "detail": reason_text,
             "receipt": None,
             "elapsed": elapsed,
         }
@@ -619,6 +620,46 @@ def _run_destructive_step(
             allowed = assert_destructive_allowed(step, intent=intent, latched=latched)
             if not allowed["ok"]:
                 return _empty_step_result(STATUS_REFUSED_PARK, allowed["reason"])
+
+            effect_id = None
+            if step == STEP_CLEANUP:
+                now = now_fn()
+                begin = pilot_journal.begin_effect(
+                    journal_path,
+                    slot_ref=slot_ref,
+                    kind=pilot_journal.KIND_NAMESPACE_TOUCHED,
+                    at=now,
+                )
+                if not begin["ok"]:
+                    return {
+                        "status": STATUS_INDETERMINATE,
+                        "reason": REASON_STEP_INDETERMINATE,
+                        "receipt": None,
+                        "elapsed": None,
+                    }
+                effect_id = begin["effectId"]
+
+            result = _run_handler(step, entry, handlers, context, mono_fn, timeout_seconds)
+
+            if step == STEP_CLEANUP and effect_id is not None:
+                end_at = now_fn()
+                end = pilot_journal.end_effect(
+                    journal_path,
+                    slot_ref=slot_ref,
+                    effect_id=effect_id,
+                    outcome=_journal_outcome_for_status(result["status"]),
+                    at=end_at,
+                    reason=result["reason"],
+                )
+                if not end["ok"]:
+                    result = {
+                        "status": STATUS_INDETERMINATE,
+                        "reason": REASON_STEP_INDETERMINATE,
+                        "receipt": None,
+                        "elapsed": result.get("elapsed"),
+                    }
+
+            return result
     except pilot_lifecycle.PilotLifecycleError as exc:
         return {
             "status": STATUS_INDETERMINATE,
@@ -626,39 +667,6 @@ def _run_destructive_step(
             "receipt": None,
             "elapsed": None,
         }
-
-    effect_id = None
-    if step == STEP_CLEANUP:
-        now = now_fn()
-        begin = pilot_journal.begin_effect(
-            journal_path,
-            slot_ref=slot_ref,
-            kind=pilot_journal.KIND_NAMESPACE_TOUCHED,
-            at=now,
-        )
-        if not begin["ok"]:
-            return {
-                "status": STATUS_INDETERMINATE,
-                "reason": REASON_STEP_INDETERMINATE,
-                "receipt": None,
-                "elapsed": None,
-            }
-        effect_id = begin["effectId"]
-
-    result = _run_handler(step, entry, handlers, context, mono_fn, timeout_seconds)
-
-    if step == STEP_CLEANUP and effect_id is not None:
-        end_at = now_fn()
-        pilot_journal.end_effect(
-            journal_path,
-            slot_ref=slot_ref,
-            effect_id=effect_id,
-            outcome=_journal_outcome_for_status(result["status"]),
-            at=end_at,
-            reason=result["reason"],
-        )
-
-    return result
 
 
 def _compute_disposition(intent, steps):
@@ -744,6 +752,20 @@ def teardown_slot(
                 )],
             }
 
+        if timeout_seconds is not None and not _is_nonneg_number(timeout_seconds):
+            return {
+                "slot": slot,
+                "slotRef": slot_ref,
+                "intent": intent,
+                "steps": {},
+                "disposition": DISPOSITION_INCOMPLETE,
+                "blockers": [_blocker(
+                    REASON_SLOT_ENTRY_INVALID,
+                    slot=slot,
+                    slot_ref=slot_ref,
+                )],
+            }
+
         try:
             parsed_slot, _ = pilot_slot.parse_slot_ref(slot_ref)
             if parsed_slot != slot:
@@ -772,50 +794,64 @@ def teardown_slot(
         }
 
         steps = {}
-        for step in FENCE_STEPS:
-            context["step"] = step
-            steps[step] = _run_handler(
-                step, entry, handlers, context, mono_fn, timeout_seconds
-            )
-        context["steps"] = steps
-
-        for step in DESTRUCTIVE_STEPS:
-            context["step"] = step
-            if intent == INTENT_PARK:
-                steps[step] = _empty_step_result(
-                    STATUS_REFUSED_PARK, REASON_PARK_DESTRUCTIVE_REFUSED
+        try:
+            for step in FENCE_STEPS:
+                context["step"] = step
+                steps[step] = _run_handler(
+                    step, entry, handlers, context, mono_fn, timeout_seconds
                 )
-                continue
-            if step == STEP_RECLAIM:
-                cleanup_status = steps.get(STEP_CLEANUP, {}).get("status")
-                if cleanup_status != STATUS_CONFIRMED:
-                    steps[step] = _empty_step_result(STATUS_NOT_REACHED, None)
-                    continue
-            steps[step] = _run_destructive_step(
-                step,
-                entry,
-                handlers,
-                context,
-                mono_fn,
-                timeout_seconds,
-                slots_dir_path,
-                journal_path,
-                now_fn,
-                lock_timeout,
-            )
             context["steps"] = steps
 
-        disposition = _compute_disposition(intent, steps)
-        blockers = _collect_blockers(slot, slot_ref, intent, steps, disposition)
+            for step in DESTRUCTIVE_STEPS:
+                context["step"] = step
+                if intent == INTENT_PARK:
+                    steps[step] = _empty_step_result(
+                        STATUS_REFUSED_PARK, REASON_PARK_DESTRUCTIVE_REFUSED
+                    )
+                    continue
+                if step == STEP_RECLAIM:
+                    cleanup_status = steps.get(STEP_CLEANUP, {}).get("status")
+                    if cleanup_status != STATUS_CONFIRMED:
+                        steps[step] = _empty_step_result(STATUS_NOT_REACHED, None)
+                        continue
+                steps[step] = _run_destructive_step(
+                    step,
+                    entry,
+                    handlers,
+                    context,
+                    mono_fn,
+                    timeout_seconds,
+                    slots_dir_path,
+                    journal_path,
+                    now_fn,
+                    lock_timeout,
+                )
+                context["steps"] = steps
 
-        return {
-            "slot": slot,
-            "slotRef": slot_ref,
-            "intent": intent,
-            "steps": steps,
-            "disposition": disposition,
-            "blockers": blockers,
-        }
+            disposition = _compute_disposition(intent, steps)
+            blockers = _collect_blockers(slot, slot_ref, intent, steps, disposition)
+
+            return {
+                "slot": slot,
+                "slotRef": slot_ref,
+                "intent": intent,
+                "steps": steps,
+                "disposition": disposition,
+                "blockers": blockers,
+            }
+        except BaseException:
+            disposition = _compute_disposition(intent, steps)
+            blockers = _collect_blockers(slot, slot_ref, intent, steps, disposition)
+            if not blockers:
+                blockers = [_blocker(REASON_STEP_INDETERMINATE, slot=slot, slot_ref=slot_ref)]
+            return {
+                "slot": slot,
+                "slotRef": slot_ref,
+                "intent": intent,
+                "steps": steps,
+                "disposition": DISPOSITION_INCOMPLETE,
+                "blockers": blockers,
+            }
     except BaseException:
         return {
             "slot": entry.get("slot") if isinstance(entry, dict) else None,
@@ -836,7 +872,7 @@ def run_teardown(
     now_fn,
     monotonic=None,
 ):
-    """Run teardown_slot for each entry. Slots are independent."""
+    """Run teardown_slot for each entry sequentially (per-slot chains, not wave-level)."""
     try:
         if not isinstance(slots, (list, tuple)):
             return wave_report({
