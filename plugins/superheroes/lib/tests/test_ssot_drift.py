@@ -24,7 +24,6 @@ The reviewer-roster and docs-location clusters live in their topical sibling gua
 """
 import os
 import re
-import sys
 
 import pytest
 
