@@ -7,6 +7,7 @@ import contextlib
 import fcntl
 import json
 import os
+import stat
 import time
 from datetime import datetime
 
@@ -54,6 +55,10 @@ REASON_GENERATION_STALE = "slot-generation-stale"
 REASON_GENERATION_AHEAD = "slot-generation-ahead"
 REASON_LOCK_UNAVAILABLE = "slot-lock-unavailable"
 REASON_MUTATION_FAILED = "slot-mutation-failed"
+REASON_GENERATION_ALLOCATION_REQUIRED = "slot-generation-allocation-required"
+REASON_RECORD_SLOT_MISMATCH = "slot-record-slot-mismatch"
+REASON_SLOT_DIR_UNSAFE = "slot-dir-unsafe"
+REASON_RECORD_EXISTS = "slot-record-exists"
 
 
 class PilotLifecycleError(Exception):
@@ -135,6 +140,11 @@ def _validate_record(record):
         raise PilotLifecycleError(REASON_RECORD_INVALID)
     for entry in history:
         _validate_history_entry(entry)
+    last = history[-1]
+    if last.get("to") != state:
+        raise PilotLifecycleError(REASON_RECORD_INVALID)
+    if last.get("generation") != generation:
+        raise PilotLifecycleError(REASON_RECORD_INVALID)
     return slot, generation, state
 
 
@@ -186,6 +196,10 @@ def transition(record, to, *, now, detail=None):
         raise PilotLifecycleError(REASON_RETIRED)
     if to == STATE_OCCUPIED and from_state == STATE_OCCUPIED:
         raise PilotLifecycleError(REASON_OCCUPIED)
+    # released → provisioning is a legal TRANSITIONS edge, but generation allocation
+    # must go through begin_generation() so each attempt gets a unique slot@generation.
+    if from_state == STATE_RELEASED and to == STATE_PROVISIONING:
+        raise PilotLifecycleError(REASON_GENERATION_ALLOCATION_REQUIRED)
     if to not in TRANSITIONS.get(from_state, frozenset()):
         raise PilotLifecycleError(REASON_TRANSITION_ILLEGAL)
     if detail is not None and (not isinstance(detail, dict) or not detail):
@@ -262,13 +276,38 @@ def lock_path(slots_dir_path, slot):
     return os.path.join(slots_dir_path, slot, ".slot.lock")
 
 
+def _slot_dir_path(slots_dir_path, slot):
+    slot = pilot_slot.validate_slot_id(slot)
+    return os.path.join(slots_dir_path, slot)
+
+
+def _refuse_unsafe_slot_dir(slot_dir):
+    """Refuse a symlink or non-directory at the slot-directory component only.
+
+    This does not walk the full path ancestry — only the slot directory itself.
+    """
+    if os.path.exists(slot_dir):
+        if os.path.islink(slot_dir):
+            raise PilotLifecycleError(REASON_SLOT_DIR_UNSAFE)
+        if not os.path.isdir(slot_dir):
+            raise PilotLifecycleError(REASON_SLOT_DIR_UNSAFE)
+
+
 @contextlib.contextmanager
 def slot_lock(slots_dir_path, slot, *, timeout=30.0, poll=0.05):
     """Exclusive advisory flock on the per-slot lock file."""
     slot = pilot_slot.validate_slot_id(slot)
     lock_file = lock_path(slots_dir_path, slot)
-    os.makedirs(os.path.dirname(lock_file), exist_ok=True)
-    fd = os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o644)
+    slot_dir = _slot_dir_path(slots_dir_path, slot)
+    _refuse_unsafe_slot_dir(slot_dir)
+    os.makedirs(slot_dir, exist_ok=True)
+    if os.path.islink(lock_file):
+        raise PilotLifecycleError(REASON_SLOT_DIR_UNSAFE)
+    fd = os.open(lock_file, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o644)
+    lock_stat = os.fstat(fd)
+    if not stat.S_ISREG(lock_stat.st_mode):
+        os.close(fd)
+        raise PilotLifecycleError(REASON_SLOT_DIR_UNSAFE)
     acquired = False
     deadline = time.monotonic() + timeout
     try:
@@ -298,6 +337,8 @@ def read_record(path):
             raw = fh.read()
     except OSError:
         return {"ok": False, "reason": REASON_RECORD_UNREADABLE, "record": None}
+    except UnicodeDecodeError:
+        return {"ok": False, "reason": REASON_RECORD_INVALID, "record": None}
     try:
         parsed = json.loads(raw)
     except ValueError:
@@ -320,6 +361,10 @@ def write_record(path, record):
     text = json.dumps(record, indent=2, sort_keys=True) + "\n"
     parent = os.path.dirname(os.path.abspath(path)) or "."
     try:
+        _refuse_unsafe_slot_dir(parent)
+    except PilotLifecycleError as exc:
+        return {"ok": False, "reason": exc.reason}
+    try:
         store_core.atomic_write(path, text)
         dir_fd = os.open(parent, os.O_RDONLY)
         try:
@@ -339,6 +384,12 @@ def mutate(slots_dir_path, slot, fn, *, timeout=30.0):
             loaded = read_record(path)
             if not loaded["ok"]:
                 return {"ok": False, "reason": loaded["reason"], "record": None}
+            if loaded["record"]["slot"] != slot:
+                return {
+                    "ok": False,
+                    "reason": REASON_RECORD_SLOT_MISMATCH,
+                    "record": None,
+                }
             try:
                 new_record = fn(loaded["record"])
             except (pilot_slot.PilotSlotError, PilotLifecycleError) as exc:
@@ -351,3 +402,29 @@ def mutate(slots_dir_path, slot, fn, *, timeout=30.0):
             return {"ok": True, "reason": None, "record": new_record}
     except PilotLifecycleError as exc:
         return {"ok": False, "reason": exc.reason, "record": None}
+    except OSError:
+        return {"ok": False, "reason": REASON_LOCK_UNAVAILABLE, "record": None}
+
+
+def create_slot(slots_dir_path, slot, accounts, *, now, timeout=30.0):
+    """Create a slot's first record under the per-slot lock. Refuses if one exists."""
+    try:
+        with slot_lock(slots_dir_path, slot, timeout=timeout):
+            path = record_path(slots_dir_path, slot)
+            loaded = read_record(path)
+            if loaded["ok"]:
+                return {"ok": False, "reason": REASON_RECORD_EXISTS, "record": None}
+            if loaded["reason"] == REASON_RECORD_INVALID:
+                return {"ok": False, "reason": REASON_RECORD_INVALID, "record": None}
+            try:
+                rec = new_record(slot, accounts, now=now)
+            except (PilotLifecycleError, pilot_slot.PilotSlotError) as exc:
+                return {"ok": False, "reason": exc.reason, "record": None}
+            written = write_record(path, rec)
+            if not written["ok"]:
+                return {"ok": False, "reason": written["reason"], "record": None}
+            return {"ok": True, "reason": None, "record": rec}
+    except PilotLifecycleError as exc:
+        return {"ok": False, "reason": exc.reason, "record": None}
+    except OSError:
+        return {"ok": False, "reason": REASON_LOCK_UNAVAILABLE, "record": None}
