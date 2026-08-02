@@ -166,6 +166,25 @@ action that owns it, leaving the rest of the calibration untouched:
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  printf '%s\n' '{"reviewer": "gpt-5.6-terra"}' | \
+    python3 -B "$ROOT_DIR/lib/core_md.py" write-engine-pins --key codexModels --cwd .
+  ```
+
+  To clear one role's pin, pass `null` for that entry; to clear every pin, pass an empty object:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  printf '%s\n' '{"reviewer": null}' | \
+    python3 -B "$ROOT_DIR/lib/core_md.py" write-engine-pins --key codexModels --cwd .
+  ```
+
+  **Read the result, don't assume success.** `write-engine-pins` returns `{action, reason?}`.
+  Only `written` or `noop` means the pin map was saved — surface any other
+  `action` (`refused`, `deferred`, `behind`) to the owner with its `reason`; the command
+  exits 0 either way, so check `action`, not exit status.
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
   python3 -B "$ROOT_DIR/lib/model_tier_overrides.py" show
   ```
 
@@ -199,6 +218,25 @@ action that owns it, leaving the rest of the calibration untouched:
   structurally-broken entry is surfaced as `invalidSeatPins` in `configure view`. Show the current
   engine preferences and effective seat map context first, merge only the requested seat into the
   existing `seatPins` object, and preserve every sibling key.
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  printf '%s\n' '{"security-reviewer": {"vendor": "claude"}}' | \
+    python3 -B "$ROOT_DIR/lib/core_md.py" write-engine-pins --key seatPins --cwd .
+  ```
+
+  To clear one seat's pin, pass `null` for that entry:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  printf '%s\n' '{"security-reviewer": null}' | \
+    python3 -B "$ROOT_DIR/lib/core_md.py" write-engine-pins --key seatPins --cwd .
+  ```
+
+  **Read the result, don't assume success.** `write-engine-pins` returns `{action, reason?}`.
+  Only `written` or `noop` means the pin map was saved — surface any other
+  `action` (`refused`, `deferred`, `behind`) to the owner with its `reason`; the command
+  exits 0 either way, so check `action`, not exit status.
 
   ```json
   {
