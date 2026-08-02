@@ -640,8 +640,10 @@ def argv0_content_digest(argv0):
         return None
     if not stat.S_ISREG(st.st_mode):
         return None
-    with open(argv0, "rb") as handle:
-        return hashlib.sha256(handle.read()).hexdigest()
+    try:
+        return _sha256_file_chunks(argv0)
+    except OSError:
+        return None
 
 
 def _command_digest(policy, declared_command):
@@ -752,10 +754,9 @@ def cleanup_effect_receipt(
     command_digest = _command_digest(policy, declared_command)
 
     observations = {"preplant": {}, "postplant": {}, "postcleanup": {}}
-    residual_sentinels = [{"namespace": foreign} for foreign in foreigns]
 
     if not foreigns:
-        return _build_receipt(
+        receipt = _build_receipt(
             result=RESULT_FAIL,
             reason=REASON_NO_FOREIGN_NAMESPACE,
             evidence="no foreign namespaces to contain against",
@@ -771,6 +772,8 @@ def cleanup_effect_receipt(
             residual_sentinels=[],
             exercised_at=now,
         )
+        pilot_policy.assert_results_only(receipt, pilot_policy.policy_material(policy))
+        return receipt
 
     resolved_argv = resolve_cleanup_command(declared_command, namespace)
     if not os.path.isabs(resolved_argv[0]):
@@ -793,6 +796,10 @@ def cleanup_effect_receipt(
 
     all_namespaces = [namespace] + foreigns
     sentinel_ids = {ns: sentinel_factory() for ns in all_namespaces}
+    residual_sentinels = [
+        {"namespace": foreign, "sentinelId": sentinel_ids[foreign]}
+        for foreign in foreigns
+    ]
     connection_detail = policy["datastore"]["connectionDetail"]
     env_var = sentinel["connectionEnvVar"]
 
@@ -825,24 +832,52 @@ def cleanup_effect_receipt(
         pilot_policy.assert_results_only(receipt, pilot_policy.policy_material(policy))
         return receipt
 
-    with pilot_journal.effect(
-        journal_path,
-        slot_ref=slot_ref,
-        kind=pilot_journal.KIND_NAMESPACE_TOUCHED,
-        at=now,
-        detail={"namespaces": list(all_namespaces)},
-    ) as handle:
-        for ns in all_namespaces:
-            plant_sentinel(
-                sentinel,
-                ns,
-                sentinel_ids[ns],
-                connection_detail=connection_detail,
-                reach_roots=reach_roots,
-                run_cwd=run_cwd,
-                timeout_seconds=timeout_seconds,
-            )
-        handle.mark_applied(at=now)
+    try:
+        with pilot_journal.effect(
+            journal_path,
+            slot_ref=slot_ref,
+            kind=pilot_journal.KIND_NAMESPACE_TOUCHED,
+            at=now,
+            detail={"namespaces": list(all_namespaces)},
+        ) as handle:
+            planted_namespaces = []
+            for ns in all_namespaces:
+                plant_sentinel(
+                    sentinel,
+                    ns,
+                    sentinel_ids[ns],
+                    connection_detail=connection_detail,
+                    reach_roots=reach_roots,
+                    run_cwd=run_cwd,
+                    timeout_seconds=timeout_seconds,
+                )
+                planted_namespaces.append(ns)
+            handle.mark_applied(at=now)
+    except PilotCleanupError as exc:
+        if exc.reason != REFUSAL_PLANT_FAILED:
+            raise
+        planted_residuals = [
+            {"namespace": ns, "sentinelId": sentinel_ids[ns]}
+            for ns in planted_namespaces
+        ]
+        receipt = _build_receipt(
+            result=RESULT_FAIL,
+            reason=REFUSAL_PLANT_FAILED,
+            evidence="sentinel plant failed mid-exercise",
+            slot=slot,
+            slot_ref=slot_ref,
+            namespace=namespace,
+            foreign_namespaces=foreigns,
+            command_digest=command_digest,
+            config_digest=config_digest_value,
+            identity_provenance=identity_provenance,
+            identity_strength=identity_strength,
+            observations=observations,
+            residual_sentinels=planted_residuals,
+            exercised_at=now,
+        )
+        pilot_policy.assert_results_only(receipt, pilot_policy.policy_material(policy))
+        return receipt
 
     observations["postplant"] = _probe_all(
         sentinel,
@@ -878,7 +913,7 @@ def cleanup_effect_receipt(
         slot_ref=slot_ref,
         kind=pilot_journal.KIND_NAMESPACE_TOUCHED,
         at=now,
-        detail={"namespace": namespace},
+        detail={"namespace": namespace, "atRiskNamespaces": list(all_namespaces)},
     ) as handle:
         cleanup_result = run_bounded(
             resolved_argv,
@@ -986,6 +1021,10 @@ def _receipt_schema_valid(receipt):
         return False
     if receipt.get("kind") != KIND_CLEANUP_CONTAINMENT:
         return False
+    for digest_key in ("commandDigest", "configDigest"):
+        digest_value = receipt.get(digest_key)
+        if not isinstance(digest_value, str) or not digest_value:
+            return False
     return True
 
 
@@ -1046,15 +1085,24 @@ def receipt_valid_for(
     return {"ok": True, "reason": None}
 
 
+def cleanup_containment_exercise_declaration(cleanup_declaration, slot):
+    """Declaration shape for cleanup-containment declare-and-exercise — slot-bound."""
+    return {"cleanup": cleanup_declaration, "slot": slot}
+
+
 def registry_record(receipt, declaration, *, evidence=None):
     """Build a declare-and-exercise record for A1's gate from a passing receipt."""
     if not _receipt_schema_valid(receipt):
         raise PilotCleanupError(REASON_RECEIPT_SCHEMA_INVALID)
     if receipt["result"] != RESULT_PASS:
         raise PilotCleanupError(REASON_RECEIPT_NOT_PASS)
+    exercise_declaration = cleanup_containment_exercise_declaration(
+        declaration,
+        receipt["slot"],
+    )
     return {
         "kind": KIND_CLEANUP_CONTAINMENT,
-        "declarationDigest": pilot_contract.declaration_digest(declaration),
+        "declarationDigest": pilot_contract.declaration_digest(exercise_declaration),
         "exercisedAt": receipt["exercisedAt"],
         "receipt": {
             "result": RESULT_PASS,
@@ -1174,6 +1222,7 @@ def resurrection_plan(
     only.
     """
     pilot_contract.validate_pilot_block(pilot_block)
+    slot, _generation = pilot_slot.parse_slot_ref(slot_ref)
 
     try:
         pilot_contract.require_exercised(
@@ -1220,7 +1269,10 @@ def resurrection_plan(
             pilot_contract.require_exercised(
                 registry,
                 "cleanup-containment",
-                pilot_block["cleanup"],
+                cleanup_containment_exercise_declaration(
+                    pilot_block["cleanup"],
+                    slot,
+                ),
             )
         except pilot_contract.PilotContractError:
             return {
@@ -1236,7 +1288,6 @@ def resurrection_plan(
             "containment": containment,
         }
 
-    slot, _generation = pilot_slot.parse_slot_ref(slot_ref)
     namespace = namespace_for_slot(slot)
     declared_command = pilot_block["cleanup"]["command"]
     resolved_argv = resolve_cleanup_command(declared_command, namespace)

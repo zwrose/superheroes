@@ -17,6 +17,7 @@ if _LIB not in sys.path:
 
 import pilot_boundary  # noqa: E402
 import pilot_contract  # noqa: E402
+import pilot_journal  # noqa: E402
 import pilot_policy  # noqa: E402
 import pilot_provision as pp  # noqa: E402
 import pilot_cleanup as pc  # noqa: E402
@@ -666,7 +667,29 @@ def test_argv0_content_digest_nonexistent():
     assert pc.argv0_content_digest("/no/such/file") is None
 
 
-def test_argv0_content_digest_symlink_to_file(private_tmp):
+def test_argv0_content_digest_unreadable_regular_file(private_tmp):
+    path = os.path.join(private_tmp, "script.sh")
+    with open(path, "wb") as handle:
+        handle.write(b"content\n")
+    os.chmod(path, 0o000)
+    try:
+        assert pc.argv0_content_digest(path) is None
+    finally:
+        os.chmod(path, stat.S_IMODE(os.stat(path).st_mode) | 0o600)
+
+
+def test_argv0_content_digest_large_file(private_tmp):
+    path = os.path.join(private_tmp, "large.sh")
+    digest = hashlib.sha256()
+    with open(path, "wb") as handle:
+        for _ in range(64):
+            chunk = b"x" * 65536
+            handle.write(chunk)
+            digest.update(chunk)
+    expected = digest.hexdigest()
+    assert pc.argv0_content_digest(path) == expected
+
+
     target = os.path.join(private_tmp, "target.sh")
     with open(target, "wb") as handle:
         handle.write(b"content\n")
@@ -739,7 +762,7 @@ def test_config_digest_deterministic():
         "sentinelPlantCommand",
         "sentinelProbeCommand",
         "sentinelConnectionEnvVar",
-        "connectionDetail",
+        "connectionDetailViaBindingKey",
         "namespace",
         "foreignNamespaces",
         "runCwd",
@@ -946,30 +969,6 @@ def _run_receipt(private_tmp, cleanup_content, *, probe_content=None, sentinel_f
     }
 
 
-def _init_git_repo(path):
-    subprocess.run(["git", "init", path], check=True, capture_output=True)
-    subprocess.run(
-        ["git", "-C", path, "config", "user.email", "pilot@example.test"],
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        ["git", "-C", path, "config", "user.name", "Pilot"],
-        check=True,
-        capture_output=True,
-    )
-
-
-def _init_git_repo_with_commit(path):
-    _init_git_repo(path)
-    subprocess.run(
-        ["git", "-C", path, "-c", "user.email=pilot@example.test", "-c", "user.name=Pilot",
-         "commit", "--allow-empty", "-m", "init"],
-        check=True,
-        capture_output=True,
-    )
-
-
 def _passing_verdict(policy, slot_ref=_SLOT_REF):
     return {
         "schemaVersion": pilot_boundary.BOUNDARY_SCHEMA_VERSION,
@@ -1103,7 +1102,7 @@ def test_cleanup_effect_receipt_fails_sentinel_present_before_plant(private_tmp)
 
 # --- edge 4: plant nonzero -----------------------------------------------------
 
-def test_cleanup_effect_receipt_plant_nonzero_raises(private_tmp):
+def test_cleanup_effect_receipt_plant_nonzero_returns_fail_receipt(private_tmp):
     reach_root, run_cwd, bin_dir, store_dir, cleanup_repo, journal_path = _harness_layout(
         private_tmp
     )
@@ -1112,21 +1111,22 @@ def test_cleanup_effect_receipt_plant_nonzero_raises(private_tmp):
     _write_executable(plant, "#!/bin/sh\nexit 2\n")
     _write_executable(probe, _probe_script_present())
     cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
-    with pytest.raises(pc.PilotCleanupError) as exc:
-        pc.cleanup_effect_receipt(
-            _three_slot_policy(store_dir, plant, probe),
-            _pilot_block(cleanup_script),
-            _SLOT_REF,
-            reach_roots=[reach_root],
-            run_cwd=run_cwd,
-            cleanup_root=cleanup_repo,
-            journal_path=journal_path,
-            now=_NOW,
-            observed_identity="example_dev",
-            identity_provenance="observed",
-            identity_strength="strong",
-        )
-    assert exc.value.reason == pc.REFUSAL_PLANT_FAILED
+    receipt = pc.cleanup_effect_receipt(
+        _three_slot_policy(store_dir, plant, probe),
+        _pilot_block(cleanup_script),
+        _SLOT_REF,
+        reach_roots=[reach_root],
+        run_cwd=run_cwd,
+        cleanup_root=cleanup_repo,
+        journal_path=journal_path,
+        now=_NOW,
+        observed_identity="example_dev",
+        identity_provenance="observed",
+        identity_strength="strong",
+    )
+    assert receipt["result"] == pc.RESULT_FAIL
+    assert receipt["reason"] == pc.REFUSAL_PLANT_FAILED
+    assert receipt["residualSentinels"] == []
 
 
 # --- edge 5: sentinel absent post-plant ----------------------------------------
@@ -1260,18 +1260,51 @@ def test_cleanup_effect_receipt_indeterminate_probe_raises(private_tmp):
     )
     plant, probe = _write_scripts(bin_dir)
     cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
-
-    def probe_then_indeterminate():
-        if not hasattr(probe_then_indeterminate, "called"):
-            probe_then_indeterminate.called = True
-            return _probe_script_present()
-        return _probe_script_indeterminate()
-
-    # Use indeterminate probe from the start for preplant
     plant_path, probe_path = _write_scripts(bin_dir, probe_content=_probe_script_indeterminate())
     with pytest.raises(pc.PilotCleanupError) as exc:
         pc.cleanup_effect_receipt(
             _three_slot_policy(store_dir, plant_path, probe_path),
+            _pilot_block(cleanup_script),
+            _SLOT_REF,
+            reach_roots=[reach_root],
+            run_cwd=run_cwd,
+            cleanup_root=cleanup_repo,
+            journal_path=journal_path,
+            now=_NOW,
+            observed_identity="example_dev",
+            identity_provenance="observed",
+            identity_strength="strong",
+        )
+    assert exc.value.reason == pc.REFUSAL_PROBE_INDETERMINATE
+
+
+def test_cleanup_effect_receipt_indeterminate_probe_after_cleanup_raises(private_tmp):
+    reach_root, run_cwd, bin_dir, store_dir, cleanup_repo, journal_path = _harness_layout(
+        private_tmp
+    )
+    count_file = os.path.join(private_tmp, "probe-count.txt")
+    counting_probe = (
+        "#!/bin/sh\n"
+        f'countfile="{count_file}"\n'
+        "if [ -f \"$countfile\" ]; then\n"
+        "  n=$(cat \"$countfile\")\n"
+        "else\n"
+        "  n=0\n"
+        "fi\n"
+        "echo $((n + 1)) > \"$countfile\"\n"
+        "if [ \"$n\" -ge 6 ]; then exit 2; fi\n"
+        'ns="$2"\n'
+        'id="$4"\n'
+        'store="$PILOT_DATASTORE_URL"\n'
+        'if [ -f "$store/$ns/$id" ]; then exit 0; else exit 1; fi\n'
+    )
+    plant, _ = _write_scripts(bin_dir)
+    probe = os.path.join(bin_dir, "counting-probe.sh")
+    _write_executable(probe, counting_probe)
+    cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
+    with pytest.raises(pc.PilotCleanupError) as exc:
+        pc.cleanup_effect_receipt(
+            _three_slot_policy(store_dir, plant, probe),
             _pilot_block(cleanup_script),
             _SLOT_REF,
             reach_roots=[reach_root],
@@ -1329,7 +1362,21 @@ def test_cleanup_effect_receipt_refuses_relative_argv0_before_plant(private_tmp)
 # --- happy path: passing receipt -----------------------------------------------
 
 def test_cleanup_effect_receipt_pass(private_tmp):
-    receipt, ctx = _run_receipt(private_tmp, _cleanup_correct_script())
+    planned_ids = {
+        "slot-a": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "slot-ab": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "slot-b": "cccccccccccccccccccccccccccccccc",
+    }
+    id_queue = list(planned_ids.values())
+
+    def factory():
+        return id_queue.pop(0)
+
+    receipt, ctx = _run_receipt(
+        private_tmp,
+        _cleanup_correct_script(),
+        sentinel_factory=factory,
+    )
     assert receipt["result"] == pc.RESULT_PASS
     assert receipt["reason"] is None
     assert receipt["kind"] == pc.KIND_CLEANUP_CONTAINMENT
@@ -1338,8 +1385,8 @@ def test_cleanup_effect_receipt_pass(private_tmp):
     assert receipt["assuranceLimits"] == list(pc.ASSURANCE_LIMITS)
     assert all(step in receipt["observations"] for step in ("preplant", "postplant", "postcleanup"))
     assert receipt["residualSentinels"] == [
-        {"namespace": "slot-ab"},
-        {"namespace": "slot-b"},
+        {"namespace": "slot-ab", "sentinelId": planned_ids["slot-ab"]},
+        {"namespace": "slot-b", "sentinelId": planned_ids["slot-b"]},
     ]
     assert len(receipt["commandDigest"]) == 64
     assert len(receipt["configDigest"]) == 64
@@ -1554,7 +1601,10 @@ def test_registry_record_closes_is_exercised_loop(private_tmp):
     assert pilot_contract.is_exercised(
         registry,
         "cleanup-containment",
-        ctx["pilot_block"]["cleanup"],
+        pc.cleanup_containment_exercise_declaration(
+            ctx["pilot_block"]["cleanup"],
+            receipt["slot"],
+        ),
     ) is True
 
 
@@ -2425,3 +2475,330 @@ def test_run_bounded_kills_grandchild_on_timeout(private_tmp):
         pid = int(handle.read().strip())
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
+
+
+# --- WO8 FIX-1: partial plant failure ------------------------------------------
+
+def test_cleanup_effect_receipt_partial_plant_failure(private_tmp):
+    reach_root, run_cwd, bin_dir, store_dir, cleanup_repo, journal_path = _harness_layout(
+        private_tmp
+    )
+    planned_ids = {
+        "slot-a": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "slot-ab": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "slot-b": "cccccccccccccccccccccccccccccccc",
+    }
+    id_queue = list(planned_ids.values())
+
+    def factory():
+        return id_queue.pop(0)
+
+    selective_plant = (
+        "#!/bin/sh\n"
+        'ns="$2"\n'
+        'id="$4"\n'
+        'store="$PILOT_DATASTORE_URL"\n'
+        'if [ "$ns" = "slot-ab" ]; then exit 2; fi\n'
+        'mkdir -p "$store/$ns"\n'
+        'touch "$store/$ns/$id"\n'
+        "exit 0\n"
+    )
+    plant = os.path.join(bin_dir, "plant.sh")
+    probe = os.path.join(bin_dir, "probe.sh")
+    _write_executable(plant, selective_plant)
+    _write_executable(probe, _probe_script_present())
+    cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
+    receipt = pc.cleanup_effect_receipt(
+        _three_slot_policy(store_dir, plant, probe),
+        _pilot_block(cleanup_script),
+        _SLOT_REF,
+        reach_roots=[reach_root],
+        run_cwd=run_cwd,
+        cleanup_root=cleanup_repo,
+        journal_path=journal_path,
+        now=_NOW,
+        observed_identity="example_dev",
+        identity_provenance="observed",
+        identity_strength="strong",
+        sentinel_factory=factory,
+    )
+    assert receipt["result"] == pc.RESULT_FAIL
+    assert receipt["reason"] == pc.REFUSAL_PLANT_FAILED
+    assert receipt["residualSentinels"] == [
+        {"namespace": "slot-a", "sentinelId": planned_ids["slot-a"]},
+    ]
+    planted_path = os.path.join(
+        store_dir,
+        "slot-a",
+        planned_ids["slot-a"],
+    )
+    assert os.path.isfile(planted_path)
+
+
+# --- WO8 FIX-4: journal read-back ---------------------------------------------
+
+def _journal_namespace_effects(replay_result):
+    return [
+        effect
+        for effect in replay_result["effects"]
+        if effect.get("kind") == pilot_journal.KIND_NAMESPACE_TOUCHED
+    ]
+
+
+def test_cleanup_effect_receipt_journals_plant_and_cleanup_happy_path(private_tmp):
+    receipt, ctx = _run_receipt(private_tmp, _cleanup_correct_script())
+    assert receipt["result"] == pc.RESULT_PASS
+    replay_result = pilot_journal.replay(ctx["journal_path"], slot_ref=_SLOT_REF)
+    assert replay_result["ok"] is True
+    effects = _journal_namespace_effects(replay_result)
+    assert len(effects) == 2
+    for effect in effects:
+        assert effect["beganAt"] is not None
+        assert effect["endedAt"] is not None
+        assert effect["outcome"] == pilot_journal.OUTCOME_APPLIED
+        assert effect["state"] == pilot_journal.STATE_APPLIED
+    cleanup_effect = next(
+        e for e in effects
+        if isinstance(e.get("detail"), dict) and "atRiskNamespaces" in e["detail"]
+    )
+    assert cleanup_effect["detail"]["namespace"] == "slot-a"
+    assert cleanup_effect["detail"]["atRiskNamespaces"] == ["slot-a", "slot-ab", "slot-b"]
+
+
+def test_cleanup_effect_receipt_journals_cleanup_applied_when_command_fails(private_tmp):
+    receipt, ctx = _run_receipt(private_tmp, _cleanup_fail_script())
+    assert receipt["reason"] == pc.REASON_CLEANUP_COMMAND_FAILED
+    replay_result = pilot_journal.replay(ctx["journal_path"], slot_ref=_SLOT_REF)
+    assert replay_result["ok"] is True
+    effects = _journal_namespace_effects(replay_result)
+    cleanup_effect = next(
+        e for e in effects
+        if isinstance(e.get("detail"), dict) and "atRiskNamespaces" in e["detail"]
+    )
+    assert cleanup_effect["outcome"] == pilot_journal.OUTCOME_APPLIED
+    assert cleanup_effect["state"] == pilot_journal.STATE_APPLIED
+
+
+def test_cleanup_effect_receipt_journals_plant_indeterminate_on_failure(private_tmp):
+    reach_root, run_cwd, bin_dir, store_dir, cleanup_repo, journal_path = _harness_layout(
+        private_tmp
+    )
+    plant = os.path.join(bin_dir, "plant.sh")
+    probe = os.path.join(bin_dir, "probe.sh")
+    _write_executable(plant, "#!/bin/sh\nexit 2\n")
+    _write_executable(probe, _probe_script_present())
+    cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
+    receipt = pc.cleanup_effect_receipt(
+        _three_slot_policy(store_dir, plant, probe),
+        _pilot_block(cleanup_script),
+        _SLOT_REF,
+        reach_roots=[reach_root],
+        run_cwd=run_cwd,
+        cleanup_root=cleanup_repo,
+        journal_path=journal_path,
+        now=_NOW,
+        observed_identity="example_dev",
+        identity_provenance="observed",
+        identity_strength="strong",
+    )
+    assert receipt["reason"] == pc.REFUSAL_PLANT_FAILED
+    replay_result = pilot_journal.replay(journal_path, slot_ref=_SLOT_REF)
+    assert replay_result["ok"] is True
+    plant_effect = next(
+        e for e in _journal_namespace_effects(replay_result)
+        if isinstance(e.get("detail"), dict) and "namespaces" in e["detail"]
+    )
+    assert plant_effect["outcome"] == pilot_journal.OUTCOME_INDETERMINATE
+    assert plant_effect["state"] == pilot_journal.STATE_POSSIBLY_APPLIED
+
+
+# --- WO8 FIX-5: guard through resurrection_plan --------------------------------
+
+def test_resurrection_plan_refuses_connection_detail_in_cleanup_argv(private_tmp):
+    policy, reach_root, run_cwd, cleanup_repo = _resurrection_policy(private_tmp)
+    policy["datastore"]["containment"]["permissions"] = {
+        "cannotReachForeignNamespaces": True,
+        "evidence": "isolated datastore",
+    }
+    cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
+    block = _pilot_block(cleanup_script)
+    connection_detail = policy["datastore"]["connectionDetail"]
+    block["cleanup"]["command"] = [cleanup_script, connection_detail, pc.NAMESPACE_PLACEHOLDER]
+    registry = _registry_with(_effects_escape_record(block))
+    artifact_path = os.path.join(private_tmp, "seed.bin")
+    with open(artifact_path, "wb") as handle:
+        handle.write(b"artifact")
+    os.chmod(artifact_path, 0o600)
+    artifact = {
+        "path": artifact_path,
+        "expectedUid": os.getuid(),
+        "expectedMode": 0o600,
+        "sha256": hashlib.sha256(b"artifact").hexdigest(),
+        "captureSurfaces": ["cookies"],
+    }
+    with pytest.raises(pilot_policy.PilotPolicyError) as exc:
+        pc.resurrection_plan(
+            policy,
+            block,
+            _SLOT_REF,
+            registry=registry,
+            journal_path=os.path.join(private_tmp, "j.jsonl"),
+            verdict=_passing_verdict(policy),
+            account="owner",
+            artifact=artifact,
+        )
+    assert exc.value.reason == pilot_policy.REFUSAL_MATERIAL_IN_RESULT
+
+
+# --- WO8 FIX-6: assert_results_only on no-foreign path -------------------------
+
+def test_cleanup_effect_receipt_no_foreign_guard_refuses_material(private_tmp):
+    reach_root, run_cwd, bin_dir, store_dir, cleanup_repo, journal_path = _harness_layout(
+        private_tmp
+    )
+    plant, probe = _write_scripts(bin_dir)
+    cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
+    policy = _three_slot_policy(store_dir, plant, probe)
+    policy["slots"] = {"only": _slot_entry("http://127.0.0.1:1")}
+    receipt = pc.cleanup_effect_receipt(
+        policy,
+        _pilot_block(cleanup_script),
+        "only@1",
+        reach_roots=[reach_root],
+        run_cwd=run_cwd,
+        cleanup_root=cleanup_repo,
+        journal_path=journal_path,
+        now=_NOW,
+        observed_identity="example_dev",
+        identity_provenance="observed",
+        identity_strength="strong",
+    )
+    assert receipt["result"] == pc.RESULT_FAIL
+    assert receipt["reason"] == pc.REASON_NO_FOREIGN_NAMESPACE
+    material = pilot_policy.policy_material(policy)
+    contaminated = dict(receipt)
+    contaminated["evidence"] = policy["datastore"]["connectionDetail"]
+    with pytest.raises(pilot_policy.PilotPolicyError):
+        pilot_policy.assert_results_only(contaminated, material)
+
+
+# --- WO8 FIX-8: digest field typing --------------------------------------------
+
+@pytest.mark.parametrize(
+    "bad_digest",
+    [
+        pytest.param(None, id="none"),
+        pytest.param(42, id="int"),
+        pytest.param(["digest"], id="list"),
+        pytest.param("", id="empty"),
+    ],
+)
+def test_receipt_valid_for_refuses_malformed_command_digest(private_tmp, bad_digest):
+    receipt, ctx = _run_receipt(private_tmp, _cleanup_correct_script())
+    receipt["commandDigest"] = bad_digest
+    result = pc.receipt_valid_for(
+        receipt,
+        ctx["policy"],
+        ctx["pilot_block"],
+        _SLOT_REF,
+        cleanup_root=ctx["cleanup_repo"],
+        run_cwd=ctx["run_cwd"],
+        observed_identity="example_dev",
+        identity_provenance="observed",
+        identity_strength="strong",
+    )
+    assert result == {"ok": False, "reason": pc.REASON_RECEIPT_SCHEMA_INVALID}
+
+
+# --- WO8 FIX-9: slot-bound containment registry --------------------------------
+
+def test_cleanup_containment_record_does_not_satisfy_other_slot(private_tmp):
+    receipt_a, ctx = _run_receipt(private_tmp, _cleanup_correct_script())
+    record = pc.registry_record(receipt_a, ctx["pilot_block"]["cleanup"])
+    registry = _registry_with(_effects_escape_record(ctx["pilot_block"]), record)
+    reach_root = ctx["reach_root"]
+    run_cwd = ctx["run_cwd"]
+    cleanup_repo = ctx["cleanup_repo"]
+    policy = ctx["policy"]
+    policy["slots"]["slot-b"]["mintableAccounts"] = ["owner"]
+    block = ctx["pilot_block"]
+    receipt_b = pc.cleanup_effect_receipt(
+        policy,
+        block,
+        "slot-b@1",
+        reach_roots=[reach_root],
+        run_cwd=run_cwd,
+        cleanup_root=cleanup_repo,
+        journal_path=os.path.join(private_tmp, "journal-b.jsonl"),
+        now=_NOW,
+        observed_identity="example_dev",
+        identity_provenance="observed",
+        identity_strength="strong",
+    )
+    assert receipt_b["result"] == pc.RESULT_PASS
+    artifact_path = os.path.join(private_tmp, "seed-b.bin")
+    with open(artifact_path, "wb") as handle:
+        handle.write(b"artifact")
+    os.chmod(artifact_path, 0o600)
+    artifact = {
+        "path": artifact_path,
+        "expectedUid": os.getuid(),
+        "expectedMode": 0o600,
+        "sha256": hashlib.sha256(b"artifact").hexdigest(),
+        "captureSurfaces": ["cookies"],
+    }
+    result = pc.resurrection_plan(
+        policy,
+        block,
+        "slot-b@1",
+        registry=registry,
+        journal_path=os.path.join(private_tmp, "j.jsonl"),
+        verdict=_passing_verdict(policy, "slot-b@1"),
+        account="owner",
+        artifact=artifact,
+        receipt=receipt_b,
+        cleanup_root=cleanup_repo,
+        run_cwd=run_cwd,
+        observed_identity="example_dev",
+        identity_provenance="observed",
+        identity_strength="strong",
+    )
+    assert result["action"] == pc.ACTION_REFUSE
+    assert result["reason"] == pc.REASON_CONTAINMENT_UNEXERCISED
+
+
+def test_cleanup_containment_record_satisfies_same_slot(private_tmp):
+    policy, reach_root, run_cwd, cleanup_repo = _resurrection_policy(private_tmp)
+    cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
+    block = _pilot_block(cleanup_script)
+    receipt = _take_receipt(private_tmp, policy, block, reach_root, run_cwd, cleanup_repo)
+    record = pc.registry_record(receipt, block["cleanup"])
+    registry = _registry_with(_effects_escape_record(block), record)
+    artifact_path = os.path.join(private_tmp, "seed.bin")
+    with open(artifact_path, "wb") as handle:
+        handle.write(b"artifact")
+    os.chmod(artifact_path, 0o600)
+    artifact = {
+        "path": artifact_path,
+        "expectedUid": os.getuid(),
+        "expectedMode": 0o600,
+        "sha256": hashlib.sha256(b"artifact").hexdigest(),
+        "captureSurfaces": ["cookies"],
+    }
+    plan = pc.resurrection_plan(
+        policy,
+        block,
+        _SLOT_REF,
+        registry=registry,
+        journal_path=os.path.join(private_tmp, "j.jsonl"),
+        verdict=_passing_verdict(policy),
+        account="owner",
+        artifact=artifact,
+        receipt=receipt,
+        cleanup_root=cleanup_repo,
+        run_cwd=run_cwd,
+        observed_identity="example_dev",
+        identity_provenance="observed",
+        identity_strength="strong",
+    )
+    assert plan["action"] == pc.ACTION_RESURRECT

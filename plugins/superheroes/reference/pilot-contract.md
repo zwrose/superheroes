@@ -1089,13 +1089,25 @@ present), `refuse` (declaration unexercised, containment unresolved, or verdict 
 
 The harness plants foreign sentinels it cannot remove — there is no remove command, and running
 the project cleanup against a sibling namespace to tidy up would be the exact destruction the
-exercise prevents — so the receipt records them under `residualSentinels` for the advisor.
+exercise prevents — so the receipt records them under `residualSentinels` for the advisor. Each
+entry carries the foreign `namespace` and the planted `sentinelId` so the advisor can locate and
+remove residue without guessing which unpredictable id was minted for that namespace.
+
+### Declare-and-exercise binding
+
+`cleanup_containment_exercise_declaration(cleanup, slot)` is the declaration shape for
+`cleanup-containment` registry records and `require_exercised` checks: the cleanup declaration
+plus the slot id, so a receipt exercised for one slot cannot satisfy resurrection for a sibling.
+
+The containment exercise is **not** safe to run concurrently against one datastore for two
+sibling slots: concurrent exercises can interfere through shared sentinel state and degrade to a
+false `cleanup-foreign-sentinel-destroyed` containment failure rather than a false pass.
 
 ### Cleanup containment refusal tokens
 
 | Token | When returned |
 |---|---|
-| `cleanup-namespace-invalid` | `namespace_for_slot`, `resolve_cleanup_command`, `substitute_sentinel_command`, or `foreign_namespaces`: slot id does not validate |
+| `cleanup-namespace-invalid` | `namespace_for_slot`, `resolve_cleanup_command`, or `substitute_sentinel_command`: slot id does not validate |
 | `cleanup-command-invalid` | `resolve_cleanup_command` or `substitute_sentinel_command`: command is missing, empty, or contains a non-string or empty argv element |
 | `cleanup-command-unparameterized` | `resolve_cleanup_command` or `substitute_sentinel_command`: `{namespace}` or `{sentinel}` is absent from `command[1:]`, or substitution leaves no namespace/sentinel in the resolved argv |
 | `cleanup-command-argv0-placeholder` | `resolve_cleanup_command` or `substitute_sentinel_command`: `{namespace}` or `{sentinel}` appears in `argv[0]` |
@@ -1131,4 +1143,4 @@ exercise prevents — so the receipt records them under `residualSentinels` for 
 Public API in `lib/pilot_cleanup.py`: `namespace_for_slot`, `foreign_namespaces`,
 `resolve_cleanup_command`, `substitute_sentinel_command`, `mint_sentinel_id`, `plant_sentinel`,
 `probe_sentinel`, `cleanup_effect_receipt`, `receipt_valid_for`, `registry_record`,
-`resolve_containment`, `resurrection_plan`.
+`cleanup_containment_exercise_declaration`, `resolve_containment`, `resurrection_plan`.
