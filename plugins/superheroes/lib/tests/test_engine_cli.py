@@ -6,6 +6,7 @@ import textwrap
 import pytest
 
 import engine
+import pilot_contract
 import store
 
 
@@ -14,6 +15,11 @@ LIB = os.path.dirname(os.path.abspath(engine.__file__))
 
 def _setup_repo(tmp_path):
     """Git repo + global-store profile/manifest so the CLI resolves paths."""
+    return _setup_repo_with_config(tmp_path, {"schemaVersion": 1, "protectedTargets": ["main"]})
+
+
+def _setup_repo_with_config(tmp_path, config):
+    """Like _setup_repo but with a custom test-pilot-config block."""
     repo = str(tmp_path / "repo")
     subprocess.run(["git", "init", "-q", repo], check=True)
     root = str(tmp_path / "store")
@@ -23,9 +29,9 @@ def _setup_repo(tmp_path):
         # profile
 
         ```json test-pilot-config
-        {"schemaVersion": 1, "protectedTargets": ["main"]}
+        %s
         ```
-        """))
+        """) % json.dumps(config))
     marker = os.path.join(repo, "seeded.marker")
     manifest = {
         "schemaVersion": 1, "branch": "feat/x", "slot": None,
@@ -41,6 +47,89 @@ def _setup_repo(tmp_path):
     key = store.artifact_key("feat/x")
     json.dump(manifest, open(os.path.join(c["manifests_dir"], f"{key}.json"), "w"))
     return repo, env, marker
+
+
+def _valid_pilot_block():
+    return {
+        "schemaVersion": 1,
+        "signInPath": "captured",
+        "credentialSet": [{"account": "owner", "role": "resource-owner"}],
+        "captureSurface": ["cookies", "localStorage"],
+        "captureOptions": {"indexedDB": False, "credentials": False},
+        "validityProvenance": "server-probe",
+        "identityProbe": {"path": "/api/me", "unseededExpectation": "no-session"},
+        "cleanup": {
+            "command": ["npm", "run", "fixtures:clean", "--", "--namespace", "{namespace}"],
+        },
+        "administrativeMax": 4,
+        "effectsEscape": {
+            "canEscape": False,
+            "evidence": "dev mail capture + sandboxed outbound calls",
+        },
+        "policyRef": {"declaration": "example-project-pilot-policy"},
+    }
+
+
+def test_apply_with_valid_pilot_block(tmp_path):
+    config = {
+        "schemaVersion": 1,
+        "protectedTargets": ["main"],
+        "pilot": _valid_pilot_block(),
+    }
+    repo, env, marker = _setup_repo_with_config(tmp_path, config)
+    r = _cli(repo, env, "apply", "--branch", "feat/x")
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["ok"] is True and out["command"] == "apply"
+    assert out["applied"] == ["a"] and out["key"] == "feat%2Fx"
+    assert os.path.exists(marker)
+
+
+def test_apply_refuses_invalid_pilot_block_missing_effects_escape(tmp_path):
+    pilot = _valid_pilot_block()
+    del pilot["effectsEscape"]
+    config = {"schemaVersion": 1, "protectedTargets": ["main"], "pilot": pilot}
+    repo, env, _ = _setup_repo_with_config(tmp_path, config)
+    r = _cli(repo, env, "apply", "--branch", "feat/x")
+    assert r.returncode == 1
+    out = json.loads(r.stdout)
+    assert out["ok"] is False and out["command"] == "apply"
+    assert pilot_contract.REFUSAL_EFFECTS_ESCAPE_ABSENT in out["error"]
+    assert out["pilotRefusal"] == pilot_contract.REFUSAL_EFFECTS_ESCAPE_ABSENT
+
+
+def test_clean_refuses_invalid_pilot_block_missing_effects_escape(tmp_path):
+    pilot = _valid_pilot_block()
+    del pilot["effectsEscape"]
+    config = {"schemaVersion": 1, "protectedTargets": ["main"], "pilot": pilot}
+    repo, env, _ = _setup_repo_with_config(tmp_path, config)
+    r = _cli(repo, env, "clean", "--branch", "feat/x")
+    assert r.returncode == 1
+    out = json.loads(r.stdout)
+    assert out["ok"] is False and out["command"] == "clean"
+    assert pilot_contract.REFUSAL_EFFECTS_ESCAPE_ABSENT in out["error"]
+    assert out["pilotRefusal"] == pilot_contract.REFUSAL_EFFECTS_ESCAPE_ABSENT
+
+
+def test_apply_refuses_capture_surface_object_via_cli(tmp_path):
+    pilot = _valid_pilot_block()
+    pilot["captureSurface"] = {"cookies": True}
+    config = {"schemaVersion": 1, "protectedTargets": ["main"], "pilot": pilot}
+    repo, env, _ = _setup_repo_with_config(tmp_path, config)
+    r = _cli(repo, env, "apply", "--branch", "feat/x")
+    assert r.returncode == 1
+    out = json.loads(r.stdout)
+    assert out["ok"] is False and out["command"] == "apply"
+    assert out["pilotRefusal"] == pilot_contract.REFUSAL_CAPTURE_SURFACE_INVALID
+
+
+def test_apply_without_pilot_key_unchanged(tmp_path):
+    repo, env, marker = _setup_repo(tmp_path)
+    r = _cli(repo, env, "apply", "--branch", "feat/x")
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["ok"] is True and out["applied"] == ["a"]
+    assert os.path.exists(marker)
 
 
 def _cli(repo, env, *args):

@@ -59,3 +59,44 @@ The engine parses ONLY this block; keep it in sync with the prose above.
   "mayManageServer": true
 }
 ```
+
+## Pilot framework (optional)
+
+The `pilot` key is optional. Do not add it to the live `test-pilot-config` block above until
+the owner has answered every field — `effectsEscape`, the mint envelope, and expected pilot
+identities have no defaults; an unanswered declaration is absent and absent refuses.
+
+`mint` is required when `signInPath` is `"minted"` and may also be declared on the `"captured"`
+path (the example below shows both); it is optional on the captured path.
+
+Copy the example below **only** once every field is owner-answered. Field definitions,
+refusal tokens, and the probe vocabulary live in
+[`reference/pilot-contract.md`](../reference/pilot-contract.md).
+
+```json
+{
+  "schemaVersion": 1,
+  "signInPath": "captured",
+  "credentialSet": [
+    {"account": "owner", "role": "resource-owner"},
+    {"account": "guest", "role": "share-recipient"}
+  ],
+  "captureSurface": ["cookies", "localStorage"],
+  "captureOptions": {"indexedDB": false, "credentials": false},
+  "validityProvenance": "server-probe",
+  "identityProbe": {"path": "/api/me", "unseededExpectation": "no-session"},
+  "cleanup": {"command": ["npm", "run", "fixtures:clean", "--", "--namespace", "{namespace}"]},
+  "administrativeMax": 4,
+  "effectsEscape": {"canEscape": false, "evidence": "dev mail capture + sandboxed outbound calls"},
+  "policyRef": {"declaration": "example-project-pilot-policy"},
+  "mint": {
+    "envelope": {
+      "enablingFlagEnvVar": "ALLOW_TEST_MINT",
+      "enabledScopes": ["development"],
+      "forbiddenScopes": ["production", "staging"],
+      "gateOffTestCommand": ["npm", "run", "test:mint-gate-off"]
+    },
+    "sentinelIdentifier": "pilot-sentinel-no-such-account"
+  }
+}
+```
