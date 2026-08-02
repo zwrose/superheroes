@@ -402,6 +402,12 @@ handoff, so every journal record and every fencing confirmation can be keyed to 
 
 ### Serialized allocation
 
+`slots_dir(cwd, root=None)` resolves the on-disk slot-store directory from a working
+directory; it returns `{"ok", "reason", "path"}` and never raises. Every public entry
+point in `pilot_lifecycle.py` and `pilot_journal.py` refuses rather than raising a builtin
+exception; `slots_dir` was the last lifecycle entry point that could leak an `OSError`
+from the store's repo-root walk.
+
 **Every** allocation, including the first, happens under the per-slot advisory `flock`.
 `create_slot(slots_dir_path, slot, accounts, *, now, timeout=...)` creates a slot's **first**
 record **under the per-slot lock**, refusing if one already exists (`slot-record-exists`).
@@ -481,6 +487,7 @@ sub-issue **C7's** (design seam S1).
 | `slot-record-slot-mismatch` | `mutate()` refuses when the loaded record's `slot` differs from the locked slot **or** the callback return's `slot` differs, before writing |
 | `slot-dir-unsafe` | the slot directory is a symlink or not a directory, or the lock file is not a regular file; refuses a symlink at the slot-directory component and at the lock/record file itself — **not** a full path-ancestry walk |
 | `slot-record-exists` | `create_slot()` refuses because a record already exists |
+| `slot-root-unresolved` | `slots_dir()` could not resolve the slot-store root from the supplied `cwd` — a non-string, over-long, missing, or otherwise unresolvable working directory — returned rather than raised |
 
 ## The provisioning journal
 
