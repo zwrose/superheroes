@@ -29,6 +29,26 @@ def test_bash_timeout_hook_is_wired_fail_soft():
     assert any("bash_timeout.py" in c for c in cmds)
 
 
+def test_owner_authority_gate_wired_fail_closed_before_worktree_guard():
+    # Axis: owner-authority gate fails closed — hook process failure must deny Bash, not allow.
+    cfg = json.load(open(_HOOKS))
+    bash = [h for h in cfg["hooks"]["PreToolUse"] if h.get("matcher") == "Bash"]
+    assert bash, "no Bash PreToolUse matcher"
+    cmds = [h["command"] for entry in bash for h in entry["hooks"]]
+
+    gate = [c for c in cmds if "owner_authority_gate.py" in c]
+    assert gate, "hooks.json must wire owner_authority_gate.py on the Bash matcher"
+    gate_cmd = gate[0]
+    assert "|| printf" in gate_cmd, "gate must carry a process-failure fallback"
+
+    start = gate_cmd.index("printf ") + len("printf ")
+    assert gate_cmd[start] == "'", "printf argument must be single-quoted"
+    end = gate_cmd.index("'", start + 1)
+    fallback = json.loads(gate_cmd[start + 1 : end])
+    assert fallback["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "owner-authority gate unavailable" in fallback["hookSpecificOutput"]["permissionDecisionReason"]
+
+
 def test_worktree_guard_gate_wired_fail_closed_between_owner_and_timeout():
     cfg = json.load(open(_HOOKS))
     bash = [h for h in cfg["hooks"]["PreToolUse"] if h.get("matcher") == "Bash"]
