@@ -56,8 +56,8 @@ class PilotIdentityError(Exception):
 
 def _json_serializable(value):
     try:
-        json.dumps(value)
-    except (TypeError, ValueError):
+        json.dumps(value, ensure_ascii=False).encode("utf-8")
+    except (TypeError, ValueError, UnicodeEncodeError):
         return False
     return True
 
@@ -503,6 +503,11 @@ def identity_probe_declaration(*, slot_ref, policy_digest, expected_identities):
 
     if not isinstance(expected_identities, dict):
         raise PilotIdentityError(REFUSAL_IDENTITY_DECLARATION_INVALID)
+    for key, val in expected_identities.items():
+        if not isinstance(key, str) or not key:
+            raise PilotIdentityError(REFUSAL_IDENTITY_DECLARATION_INVALID)
+        if not isinstance(val, str) or not val:
+            raise PilotIdentityError(REFUSAL_IDENTITY_DECLARATION_INVALID)
     if not _json_serializable(expected_identities):
         raise PilotIdentityError(REFUSAL_IDENTITY_DECLARATION_INVALID)
 
@@ -518,8 +523,14 @@ def identity_probe_declaration(*, slot_ref, policy_digest, expected_identities):
     }
 
 
-def _validate_evaluate_slot_result(result):
-    """Require result to be a real evaluate_slot return shape."""
+def _validate_evaluate_slot_result(result, declaration):
+    """Require result to be a real evaluate_slot return shape bound to declaration."""
+    if not isinstance(declaration, dict):
+        raise PilotIdentityError(REFUSAL_IDENTITY_RECEIPT_ARGUMENT_INVALID)
+    declared_keys = declaration.get("accountKeys")
+    if not isinstance(declared_keys, list):
+        raise PilotIdentityError(REFUSAL_IDENTITY_RECEIPT_ARGUMENT_INVALID)
+
     if not isinstance(result, dict):
         raise PilotIdentityError(REFUSAL_IDENTITY_RECEIPT_ARGUMENT_INVALID)
     ok = result.get("ok")
@@ -527,6 +538,8 @@ def _validate_evaluate_slot_result(result):
         raise PilotIdentityError(REFUSAL_IDENTITY_RECEIPT_ARGUMENT_INVALID)
     accounts = result.get("accounts")
     if not isinstance(accounts, dict) or not accounts:
+        raise PilotIdentityError(REFUSAL_IDENTITY_RECEIPT_ARGUMENT_INVALID)
+    if set(accounts.keys()) != set(declared_keys):
         raise PilotIdentityError(REFUSAL_IDENTITY_RECEIPT_ARGUMENT_INVALID)
     for account_result in accounts.values():
         if not isinstance(account_result, dict):
@@ -553,7 +566,7 @@ def identity_probe_receipt(declaration, result, *, exercised_at):
     if not isinstance(declaration, dict) or not _json_serializable(declaration):
         raise PilotIdentityError(REFUSAL_IDENTITY_RECEIPT_ARGUMENT_INVALID)
 
-    ok, accounts = _validate_evaluate_slot_result(result)
+    ok, accounts = _validate_evaluate_slot_result(result, declaration)
 
     if ok is True:
         passed = len(accounts)

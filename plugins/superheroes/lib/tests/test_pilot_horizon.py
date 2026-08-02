@@ -237,6 +237,16 @@ def test_token_claim_refuses_missing_exp():
         ph.token_claim_observation(_jwt({"sub": "x"}))
 
 
+def test_token_claim_refuses_surrogate_segment():
+    with _raises(ph.REFUSAL_TOKEN_MALFORMED):
+        ph.token_claim_observation("a.\ud800.c")
+
+
+def test_token_claim_refuses_non_string_claim():
+    with _raises(ph.REFUSAL_TOKEN_CLAIM_INVALID):
+        ph.token_claim_observation("aGVhZA.eyJleHAiOjF9.c", claim=[])
+
+
 # --- server_probe_observation ---
 
 

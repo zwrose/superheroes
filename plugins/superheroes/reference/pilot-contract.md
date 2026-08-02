@@ -1225,8 +1225,7 @@ before Python 3.11.
 | `horizon-server-probe-stale` | server-probe observation older than `server_probe_max_age` |
 | `horizon-margin-exceeded` | `deadline_at + margin_seconds > expiresAt` |
 | `horizon-account-set-empty` | `wave_margin`: accounts mapping empty or absent |
-| `horizon-account-set-mismatch` | `wave_margin`: observation keys do not match the slot account set |
-| `horizon-account-entry-invalid` | `wave_margin`: account key missing or empty |
+| `horizon-account-set-mismatch` | `wave_margin`: observation keys do not match the slot account set, or slot account entry missing or empty |
 
 ## Minted sign-in exercises
 
@@ -1288,10 +1287,9 @@ real account — only that it is absent from the allowlist
 
 | Token | When returned |
 |---|---|
-| `mint-envelope-incomplete` | envelope missing required keys or malformed scope/command fields |
+| `mint-envelope-incomplete` | envelope missing required keys, malformed scope fields, or missing/malformed `gateOffTestCommand` |
 | `mint-observed-scopes-invalid` | `flag_scope_check`: `observed_scopes` empty or malformed |
 | `mint-flag-set-outside-declared-scope` | enabling flag observed in a scope outside `enabledScopes` |
-| `mint-gate-off-command-invalid` | `gateOffTestCommand` missing or not a non-empty argv list |
 | `mint-gate-off-argument-invalid` | `timeout_seconds` or `max_output_bytes` not a positive integer |
 | `mint-gate-off-cwd-invalid` | `run_cwd` missing or not an existing directory |
 | `mint-gate-off-environment-invalid` | environment not a string-to-string mapping |

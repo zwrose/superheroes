@@ -23,7 +23,6 @@ REFUSAL_ENVELOPE_INCOMPLETE = "mint-envelope-incomplete"
 REFUSAL_OBSERVED_SCOPES_INVALID = "mint-observed-scopes-invalid"
 REFUSAL_FLAG_SET_OUTSIDE_DECLARED_SCOPE = "mint-flag-set-outside-declared-scope"
 
-REFUSAL_GATE_OFF_COMMAND_INVALID = "mint-gate-off-command-invalid"
 REFUSAL_GATE_OFF_ARGUMENT_INVALID = "mint-gate-off-argument-invalid"
 REFUSAL_GATE_OFF_CWD_INVALID = "mint-gate-off-cwd-invalid"
 REFUSAL_GATE_OFF_ENVIRONMENT_INVALID = "mint-gate-off-environment-invalid"
@@ -73,8 +72,8 @@ class PilotMintError(Exception):
 
 def _json_serializable(value):
     try:
-        json.dumps(value)
-    except (TypeError, ValueError):
+        json.dumps(value, ensure_ascii=False).encode("utf-8")
+    except (TypeError, ValueError, UnicodeEncodeError):
         return False
     return True
 
@@ -129,8 +128,6 @@ def run_gate_off_test(envelope, *, run_cwd, environment, timeout_seconds=120,
     ):
         return _gate_fail(REFUSAL_GATE_OFF_ARGUMENT_INVALID)
     command = envelope["gateOffTestCommand"]
-    if not _is_command_argv(command):
-        return _gate_fail(REFUSAL_GATE_OFF_COMMAND_INVALID)
     if not isinstance(run_cwd, str) or not run_cwd or not os.path.isdir(run_cwd):
         return _gate_fail(REFUSAL_GATE_OFF_CWD_INVALID)
     if not _is_str_str_mapping(environment):
@@ -154,6 +151,11 @@ def run_gate_off_test(envelope, *, run_cwd, environment, timeout_seconds=120,
         return _gate_fail(REFUSAL_GATE_OFF_SPAWN_FAILED)
 
     try:
+        pgid = os.getpgid(proc.pid)
+    except (ProcessLookupError, PermissionError):
+        pgid = None
+
+    try:
         stdout_holder = []
         read_error = []
 
@@ -168,23 +170,23 @@ def run_gate_off_test(envelope, *, run_cwd, environment, timeout_seconds=120,
         reader.join(timeout=timeout_seconds)
 
         if reader.is_alive():
-            _terminate_process_group(proc)
+            _terminate_process_group(proc, pgid)
             reader.join(timeout=1)
             return _gate_fail(REFUSAL_GATE_OFF_TIMEOUT)
 
         if read_error:
-            _terminate_process_group(proc)
+            _terminate_process_group(proc, pgid)
             return _gate_fail(REFUSAL_GATE_OFF_SPAWN_FAILED)
 
         stdout_bytes = stdout_holder[0] if stdout_holder else b""
         if len(stdout_bytes) > max_output_bytes:
-            _terminate_process_group(proc)
+            _terminate_process_group(proc, pgid)
             return _gate_fail(REFUSAL_GATE_OFF_OUTPUT_OVERSIZE)
 
         try:
             proc.wait(timeout=timeout_seconds)
         except subprocess.TimeoutExpired:
-            _terminate_process_group(proc)
+            _terminate_process_group(proc, pgid)
             reader.join(timeout=1)
             return _gate_fail(REFUSAL_GATE_OFF_TIMEOUT)
 
@@ -208,11 +210,11 @@ def run_gate_off_test(envelope, *, run_cwd, environment, timeout_seconds=120,
             "stdout": stdout_text,
         }
     except Exception:
-        _terminate_process_group(proc)
+        _terminate_process_group(proc, pgid)
         return _gate_fail(REFUSAL_GATE_OFF_SPAWN_FAILED)
     finally:
         if proc.poll() is None:
-            _terminate_process_group(proc)
+            _terminate_process_group(proc, pgid)
         if reader.is_alive():
             reader.join(timeout=1)
         if proc.stdout and not reader.is_alive():
@@ -238,7 +240,12 @@ def gate_off_receipt(envelope, run_result, *, exercised_at):
     exit_code = run_result.get("exitCode")
     reason = run_result.get("reason")
     if passed:
-        if type(exit_code) is not int or isinstance(exit_code, bool):
+        if (
+            type(exit_code) is not int
+            or isinstance(exit_code, bool)
+            or exit_code != 0
+            or reason is not None
+        ):
             raise PilotMintError(REFUSAL_RECEIPT_ARGUMENT_INVALID)
         evidence = "exitCode=%s" % exit_code
     elif reason is not None:
@@ -553,31 +560,30 @@ def _gate_fail(reason):
     return {"ok": False, "exitCode": None, "reason": reason, "stdout": ""}
 
 
-def _terminate_process_group(proc):
-    """Signal the child's process group, then reap the direct child."""
-    if proc.poll() is not None:
-        return
-    try:
-        pgid = os.getpgid(proc.pid)
-        os.killpg(pgid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
-        _terminate_and_wait(proc)
-        return
-    try:
-        proc.wait(timeout=1)
-    except subprocess.TimeoutExpired:
+def _terminate_process_group(proc, pgid):
+    """Signal the captured process group, then reap the direct child."""
+    if pgid is not None:
         try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            os.killpg(pgid, signal.SIGTERM)
         except (ProcessLookupError, PermissionError):
-            proc.kill()
-        proc.wait()
-
-
-def _terminate_and_wait(proc):
-    if proc.poll() is None:
-        proc.terminate()
+            pass
         try:
             proc.wait(timeout=1)
         except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+            pass
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    if proc.poll() is None:
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+            except (ProcessLookupError, PermissionError):
+                pass
+            try:
+                proc.wait()
+            except Exception:
+                pass

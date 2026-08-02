@@ -535,9 +535,11 @@ def test_gate_off_grandchild_timeout_reaps_process_group(private_tmp):
     envelope = dict(SAMPLE_ENVELOPE)
     envelope["gateOffTestCommand"] = [
         sys.executable, "-c",
-        "import subprocess, sys, time; "
-        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], "
-        "stdout=subprocess.PIPE); time.sleep(30)",
+        "import os, signal, subprocess, sys; "
+        "subprocess.Popen([sys.executable, '-c', "
+        "'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        "time.sleep(30)'], stdout=sys.stdout); "
+        "os._exit(0)",
     ]
     result = pm.run_gate_off_test(
         envelope,
@@ -551,6 +553,26 @@ def test_gate_off_grandchild_timeout_reaps_process_group(private_tmp):
         ["pgrep", "-f", "time.sleep(30)"],
         capture_output=True,
     ).returncode != 0
+
+
+def test_gate_off_receipt_pass_requires_exit_code_zero():
+    with pytest.raises(pm.PilotMintError) as exc:
+        pm.gate_off_receipt(
+            SAMPLE_ENVELOPE,
+            {"ok": True, "exitCode": 99},
+            exercised_at=NOW,
+        )
+    assert exc.value.reason == pm.REFUSAL_RECEIPT_ARGUMENT_INVALID
+
+
+def test_gate_off_receipt_pass_requires_reason_none():
+    with pytest.raises(pm.PilotMintError) as exc:
+        pm.gate_off_receipt(
+            SAMPLE_ENVELOPE,
+            {"ok": True, "exitCode": 0, "reason": pm.REFUSAL_GATE_OFF_TEST_FAILED},
+            exercised_at=NOW,
+        )
+    assert exc.value.reason == pm.REFUSAL_RECEIPT_ARGUMENT_INVALID
 
 
 def test_gate_off_receipt_requires_exit_code():

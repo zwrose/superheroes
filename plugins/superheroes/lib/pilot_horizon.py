@@ -40,8 +40,6 @@ REFUSAL_SERVER_PROBE_STALE = "horizon-server-probe-stale"
 REFUSAL_MARGIN_EXCEEDED = "horizon-margin-exceeded"
 REFUSAL_ACCOUNT_SET_EMPTY = "horizon-account-set-empty"
 REFUSAL_ACCOUNT_SET_MISMATCH = "horizon-account-set-mismatch"
-REFUSAL_ACCOUNT_ENTRY_INVALID = "horizon-account-entry-invalid"
-
 _OBSERVATION_KEYS = frozenset({"provenance", "expiresAt"})
 _SERVER_PROBE_KEYS = frozenset({"provenance", "expiresAt", "observedAt"})
 
@@ -125,9 +123,11 @@ def token_claim_observation(token, *, claim="exp"):
         raise PilotHorizonError(REFUSAL_TOKEN_MALFORMED)
 
     payload_segment = segments[1]
-    if len(payload_segment.encode("utf-8")) > MAX_JWT_PAYLOAD_BYTES:
-        raise PilotHorizonError(REFUSAL_TOKEN_MALFORMED)
+    if not isinstance(claim, str) or not claim:
+        raise PilotHorizonError(REFUSAL_TOKEN_CLAIM_INVALID)
     try:
+        if len(payload_segment.encode("utf-8")) > MAX_JWT_PAYLOAD_BYTES:
+            raise PilotHorizonError(REFUSAL_TOKEN_MALFORMED)
         padding = "=" * ((4 - len(payload_segment) % 4) % 4)
         raw = base64.urlsafe_b64decode(payload_segment + padding)
         payload = json.loads(raw.decode("utf-8"))
@@ -364,9 +364,6 @@ def wave_margin(
     requires_mid_wave_recheck = False
 
     for account in sorted(account_list):
-        if not isinstance(account, str) or not account:
-            raise PilotHorizonError(REFUSAL_ACCOUNT_ENTRY_INVALID, detail=repr(account))
-
         result = account_margin(
             accounts[account],
             deadline_at=deadline_at,

@@ -804,6 +804,57 @@ def test_identity_probe_receipt_fabricated_result_refused():
     assert exc.value.reason == pi.REFUSAL_IDENTITY_RECEIPT_ARGUMENT_INVALID
 
 
+def test_identity_probe_receipt_unrelated_account_refused():
+    declaration = pi.identity_probe_declaration(
+        slot_ref=SLOT_REF,
+        policy_digest=POLICY_DIGEST,
+        expected_identities={"owner": EXPECTED_ID},
+    )
+    with pytest.raises(pi.PilotIdentityError) as exc:
+        pi.identity_probe_receipt(
+            declaration,
+            {"ok": True, "accounts": {"other": {"ok": True}}},
+            exercised_at="2026-08-02T00:00:00Z",
+        )
+    assert exc.value.reason == pi.REFUSAL_IDENTITY_RECEIPT_ARGUMENT_INVALID
+
+
+def test_identity_probe_receipt_missing_account_refused():
+    declaration = pi.identity_probe_declaration(
+        slot_ref=SLOT_REF,
+        policy_digest=POLICY_DIGEST,
+        expected_identities={"owner": EXPECTED_ID, "viewer": "viewer@example.test"},
+    )
+    with pytest.raises(pi.PilotIdentityError) as exc:
+        pi.identity_probe_receipt(
+            declaration,
+            {"ok": True, "accounts": {"owner": {"ok": True}}},
+            exercised_at="2026-08-02T00:00:00Z",
+        )
+    assert exc.value.reason == pi.REFUSAL_IDENTITY_RECEIPT_ARGUMENT_INVALID
+
+
+def test_identity_probe_receipt_extra_account_refused():
+    declaration = pi.identity_probe_declaration(
+        slot_ref=SLOT_REF,
+        policy_digest=POLICY_DIGEST,
+        expected_identities={"owner": EXPECTED_ID},
+    )
+    with pytest.raises(pi.PilotIdentityError) as exc:
+        pi.identity_probe_receipt(
+            declaration,
+            {
+                "ok": True,
+                "accounts": {
+                    "owner": {"ok": True},
+                    "extra": {"ok": True},
+                },
+            },
+            exercised_at="2026-08-02T00:00:00Z",
+        )
+    assert exc.value.reason == pi.REFUSAL_IDENTITY_RECEIPT_ARGUMENT_INVALID
+
+
 def test_identity_probe_receipt_pass_round_trip():
     """Positive is_exercised round-trip catches field-name drift."""
     declaration = pi.identity_probe_declaration(
@@ -839,6 +890,26 @@ def test_identity_probe_declaration_non_serializable_refused():
             slot_ref=SLOT_REF,
             policy_digest=POLICY_DIGEST,
             expected_identities={"owner": set()},
+        )
+    assert exc.value.reason == pi.REFUSAL_IDENTITY_DECLARATION_INVALID
+
+
+def test_identity_probe_declaration_lone_surrogate_refused():
+    with pytest.raises(pi.PilotIdentityError) as exc:
+        pi.identity_probe_declaration(
+            slot_ref=SLOT_REF,
+            policy_digest=POLICY_DIGEST,
+            expected_identities={"owner": "\ud800"},
+        )
+    assert exc.value.reason == pi.REFUSAL_IDENTITY_DECLARATION_INVALID
+
+
+def test_identity_probe_declaration_mixed_keys_refused():
+    with pytest.raises(pi.PilotIdentityError) as exc:
+        pi.identity_probe_declaration(
+            slot_ref=SLOT_REF,
+            policy_digest=POLICY_DIGEST,
+            expected_identities={"owner": "id", 1: "id2"},
         )
     assert exc.value.reason == pi.REFUSAL_IDENTITY_DECLARATION_INVALID
 
