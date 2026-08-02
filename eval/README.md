@@ -21,7 +21,7 @@ generalizes the pattern proven in [`plugins/superheroes/eval/`](../plugins/super
 contracts in [`CONVENTIONS.md`](../CONVENTIONS.md)? This is buildable today because the
 conventions are frozen and these checks need no running loop:
 
-- [`lib/identifiers.py`](../plugins/superheroes/lib/identifiers.py) — the **canonical reference impls** of the
+- [`plugins/superheroes/lib/identifiers.py`](../plugins/superheroes/lib/identifiers.py) — the **canonical reference impls** of the
   new §6 pure functions (`work_item_slug`, `content_hash`). The executable spec of §6.
   Plugins consume these instead of re-implementing them, so they can't drift (the #1
   theme of the convention reviews). *How a plugin consumes them — vendor vs shared dep —

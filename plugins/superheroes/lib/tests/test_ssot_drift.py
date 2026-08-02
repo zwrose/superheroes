@@ -78,7 +78,7 @@ def _rubric_blocking_tiers(text, tiers):
     return blocking
 
 
-def test_severity_vocabulary_is_single_sourced():
+def test_severity_vocabulary_is_single_sourced(monkeypatch):
     """CONVENTIONS §11: the severity tiers, the blocking/non-blocking partition, and the
     Critical<Important<Minor<Nit rank are re-typed across the surviving Python copy-holders.
     All must agree with the rubric home — the ordered tier vocabulary and the blocking set are
@@ -99,7 +99,7 @@ def test_severity_vocabulary_is_single_sourced():
     # #820: review_telemetry now lives in eval/ (no production consumer); pin bites on
     # review_telemetry._BLOCKING drifting from the rubric's blocking tiers — reach across
     # to the eval tree so this copy-holder stays covered rather than silently unimported.
-    sys.path.insert(0, os.path.join(PLUGIN, "eval"))
+    monkeypatch.syspath_prepend(os.path.join(PLUGIN, "eval"))
     import review_telemetry
     import verification
 

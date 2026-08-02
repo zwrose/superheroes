@@ -75,7 +75,8 @@ ship but aren't a user-facing feature or bugfix; use `fix`/`feat` when they are.
 
 Every PR and push to `main` runs `.github/workflows/ci.yml` (Python **3.12** on
 `ubuntu-latest`). Pull requests also fire on `edited` so the PR-title check
-re-validates when a title is fixed.
+re-validates when a title is fixed; because that trigger is workflow-level, any PR
+edit (including a body edit) re-runs the whole workflow.
 
 **Job `validate`**
 
@@ -92,7 +93,8 @@ re-validates when a title is fixed.
    depend on it.
 8. `pytest` over plugin lib/eval tests + the band-level eval harness — scripts
    (`.github/scripts/tests/`), `plugins/superheroes/` (`lib/`, `eval/`), and
-   `eval/lib/` (artifact schemas and the activation-result CI gate). Schema tests
+   `eval/lib/` (identifier reference-impl conformance, artifact schemas, and the
+   activation-result CI gate). Schema tests
    need `jsonschema`.
 
 **Job `pr-title`** (**pull-request events only**)
