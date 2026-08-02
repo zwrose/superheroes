@@ -195,7 +195,9 @@ Every file begins with a one-line **provenance comment**:
   ````
 
   A plugin layer keeps its own block where it has one (e.g. test-pilot's existing
-  `json test-pilot-config` block moves into `test-pilot.md` verbatim).
+  `json test-pilot-config` block moves into `test-pilot.md` verbatim). That block may
+  carry an optional nested `pilot` key whose normative field table, refusal tokens, and
+  probe vocabulary live in `plugins/superheroes/reference/pilot-contract.md`.
 - **`guardian/vitals.jsonl` provenance (deliberate §2.2 reading).** The vitals trend file
   must both carry provenance and stay valid JSONL — an HTML comment would not parse. Its
   first line is therefore a JSON provenance object (not an HTML comment), written once at
