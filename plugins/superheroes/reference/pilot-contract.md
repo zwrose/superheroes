@@ -1044,7 +1044,8 @@ Public API in `lib/pilot_browser.py`: `validate_pin`, `verify_pin`, `socket_dir_
 | `browser-socket-base-in-worktree` | `socket_dir_plan`: `worktree_root` is not a string, or the resolved base directory overlaps the worktree |
 | `browser-socket-dir-exists` | `create_socket_dir`: the planned path already exists |
 | `browser-socket-dir-unsafe` | `create_socket_dir`: plan is invalid, path is a symlink, created path is not a directory, mode is wrong, or `os.makedirs`/`stat` fails; `remove_socket_dir`: path is a symlink |
-| `browser-socket-dir-not-directory` | `remove_socket_dir`: path is not a string, not a directory, or `os.rmdir` fails |
+| `browser-socket-dir-not-directory` | `remove_socket_dir`: path is not a string or not a directory |
+| `browser-socket-dir-unremovable` | `remove_socket_dir`: directory contents cannot be enumerated; an entry cannot be classified or removed safely (including a non-empty subdirectory); or removing the now-empty directory fails |
 | `browser-server-record-invalid` | `provision_server`, `teardown_server`, `admit_server_registry`, or `admit`: server record shape, slot reference, generation, PIDs, pin, or timestamps fail validation; journal write fails |
 | `browser-not-server-child` | `assert_browser_is_server_child`: browser PID's parent is not the server PID |
 | `browser-pid-unreadable` | `assert_browser_is_server_child`: parent PID cannot be read from the process table |
