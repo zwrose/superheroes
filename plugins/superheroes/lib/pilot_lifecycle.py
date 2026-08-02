@@ -49,6 +49,7 @@ REASON_TRANSITION_ILLEGAL = "slot-transition-illegal"
 REASON_OCCUPIED = "slot-occupied"
 REASON_RETIRED = "slot-retired"
 REASON_RECORD_INVALID = "slot-record-invalid"
+REASON_RECORD_ABSENT = "slot-record-absent"
 REASON_RECORD_UNREADABLE = "slot-record-unreadable"
 REASON_RECORD_WRITE_FAILED = "slot-record-write-failed"
 REASON_GENERATION_STALE = "slot-generation-stale"
@@ -82,6 +83,16 @@ def _is_iso8601_utc(value):
     return dt.tzinfo is not None
 
 
+def _is_json_serialisable_detail(detail):
+    if not isinstance(detail, dict):
+        return False
+    try:
+        json.dumps(detail, allow_nan=False)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 def _validate_history_entry(entry):
     if not isinstance(entry, dict):
         raise PilotLifecycleError(REASON_RECORD_INVALID)
@@ -89,15 +100,19 @@ def _validate_history_entry(entry):
     if not _is_iso8601_utc(at):
         raise PilotLifecycleError(REASON_RECORD_INVALID)
     from_state = entry.get("from")
-    if from_state is not None and from_state not in SLOT_STATES:
+    if from_state is not None and (
+        not isinstance(from_state, str) or from_state not in SLOT_STATES
+    ):
         raise PilotLifecycleError(REASON_RECORD_INVALID)
     to_state = entry.get("to")
-    if to_state not in SLOT_STATES:
+    if not isinstance(to_state, str) or to_state not in SLOT_STATES:
         raise PilotLifecycleError(REASON_RECORD_INVALID)
     pilot_slot.validate_generation(entry.get("generation"))
     if "detail" in entry:
         detail = entry.get("detail")
         if not isinstance(detail, dict) or not detail:
+            raise PilotLifecycleError(REASON_RECORD_INVALID)
+        if not _is_json_serialisable_detail(detail):
             raise PilotLifecycleError(REASON_RECORD_INVALID)
 
 
@@ -128,7 +143,7 @@ def _validate_record(record):
     slot = pilot_slot.validate_slot_id(record.get("slot"))
     generation = pilot_slot.validate_generation(record.get("generation"))
     state = record.get("state")
-    if state not in SLOT_STATES:
+    if not isinstance(state, str) or state not in SLOT_STATES:
         raise PilotLifecycleError(REASON_RECORD_INVALID)
     _validate_accounts(record.get("accounts"))
     created_at = record.get("createdAt")
@@ -203,6 +218,8 @@ def transition(record, to, *, now, detail=None):
     if to not in TRANSITIONS.get(from_state, frozenset()):
         raise PilotLifecycleError(REASON_TRANSITION_ILLEGAL)
     if detail is not None and (not isinstance(detail, dict) or not detail):
+        raise PilotLifecycleError(REASON_RECORD_INVALID)
+    if isinstance(detail, dict) and detail and not _is_json_serialisable_detail(detail):
         raise PilotLifecycleError(REASON_RECORD_INVALID)
     history_entry = {
         "at": now,
@@ -284,13 +301,20 @@ def _slot_dir_path(slots_dir_path, slot):
 def _refuse_unsafe_slot_dir(slot_dir):
     """Refuse a symlink or non-directory at the slot-directory component only.
 
+    This check inspects the pathname at the moment of the call only — it is a
+    check-then-use pattern and does not close a race against an attacker who can
+    replace the directory between this check and subsequent operations. Under
+    this project's single-user local threat model the guard is aimed at accidents
+    and stale state, not a hostile local actor; a full fix would need
+    directory-descriptor-relative operations (``os.open(dir, O_DIRECTORY)`` plus
+    ``openat``-style access), which is deliberately not built here.
+
     This does not walk the full path ancestry — only the slot directory itself.
     """
-    if os.path.exists(slot_dir):
-        if os.path.islink(slot_dir):
-            raise PilotLifecycleError(REASON_SLOT_DIR_UNSAFE)
-        if not os.path.isdir(slot_dir):
-            raise PilotLifecycleError(REASON_SLOT_DIR_UNSAFE)
+    if os.path.islink(slot_dir):
+        raise PilotLifecycleError(REASON_SLOT_DIR_UNSAFE)
+    if os.path.lexists(slot_dir) and not os.path.isdir(slot_dir):
+        raise PilotLifecycleError(REASON_SLOT_DIR_UNSAFE)
 
 
 @contextlib.contextmanager
@@ -333,12 +357,28 @@ def slot_lock(slots_dir_path, slot, *, timeout=30.0, poll=0.05):
 def read_record(path):
     """Load and validate a slot record. Never raises."""
     try:
-        with open(path, encoding="utf-8") as fh:
-            raw = fh.read()
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return {"ok": False, "reason": REASON_RECORD_ABSENT, "record": None}
+    except OSError:
+        return {"ok": False, "reason": REASON_RECORD_UNREADABLE, "record": None}
+    try:
+        stat_result = os.fstat(fd)
+        if not stat.S_ISREG(stat_result.st_mode):
+            return {"ok": False, "reason": REASON_RECORD_UNREADABLE, "record": None}
+        chunks = []
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        raw = b"".join(chunks).decode("utf-8")
     except OSError:
         return {"ok": False, "reason": REASON_RECORD_UNREADABLE, "record": None}
     except UnicodeDecodeError:
         return {"ok": False, "reason": REASON_RECORD_INVALID, "record": None}
+    finally:
+        os.close(fd)
     try:
         parsed = json.loads(raw)
     except ValueError:
@@ -358,7 +398,10 @@ def write_record(path, record):
         _validate_record(record)
     except (PilotLifecycleError, pilot_slot.PilotSlotError):
         return {"ok": False, "reason": REASON_RECORD_INVALID}
-    text = json.dumps(record, indent=2, sort_keys=True) + "\n"
+    try:
+        text = json.dumps(record, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    except (TypeError, ValueError):
+        return {"ok": False, "reason": REASON_RECORD_WRITE_FAILED}
     parent = os.path.dirname(os.path.abspath(path)) or "."
     try:
         _refuse_unsafe_slot_dir(parent)
@@ -396,6 +439,12 @@ def mutate(slots_dir_path, slot, fn, *, timeout=30.0):
                 return {"ok": False, "reason": exc.reason, "record": None}
             except Exception:
                 return {"ok": False, "reason": REASON_MUTATION_FAILED, "record": None}
+            if new_record.get("slot") != slot:
+                return {
+                    "ok": False,
+                    "reason": REASON_RECORD_SLOT_MISMATCH,
+                    "record": None,
+                }
             written = write_record(path, new_record)
             if not written["ok"]:
                 return {"ok": False, "reason": written["reason"], "record": None}
@@ -414,8 +463,8 @@ def create_slot(slots_dir_path, slot, accounts, *, now, timeout=30.0):
             loaded = read_record(path)
             if loaded["ok"]:
                 return {"ok": False, "reason": REASON_RECORD_EXISTS, "record": None}
-            if loaded["reason"] == REASON_RECORD_INVALID:
-                return {"ok": False, "reason": REASON_RECORD_INVALID, "record": None}
+            if loaded["reason"] != REASON_RECORD_ABSENT:
+                return {"ok": False, "reason": loaded["reason"], "record": None}
             try:
                 rec = new_record(slot, accounts, now=now)
             except (PilotLifecycleError, pilot_slot.PilotSlotError) as exc:

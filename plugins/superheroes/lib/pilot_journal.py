@@ -84,6 +84,7 @@ BLOCK_SHARED_POSSIBLY_APPLIED = "failed-slot-shared-effect-possibly-applied"
 BLOCK_NO_HEALTHY_SLOTS = "no-healthy-slots"
 BLOCK_SLOTS_INVALID = "report-slots-invalid"
 BLOCK_REPLAY_SHAPE_INVALID = "failed-slot-replay-shape-invalid"
+BLOCK_REPLAY_SLOT_MISMATCH = "slot-replay-slot-mismatch"
 BLOCK_SLOT_DUPLICATE = "report-slot-duplicate"
 
 _EFFECT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -173,9 +174,11 @@ def _write_record(journal_path, record):
     fd = None
     try:
         _ensure_parent_dir(journal_path)
+        # O_NONBLOCK prevents an existing FIFO at journal_path from blocking open
+        # before the regular-file fstat check can refuse the write.
         fd = os.open(
             journal_path,
-            os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW,
+            os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
             0o600,
         )
         st = os.fstat(fd)
@@ -237,7 +240,7 @@ def begin_effect(journal_path, *, slot_ref, kind, at, detail=None, effect_id=Non
     """Append a begin-phase journal record."""
     if not _validate_slot_ref(slot_ref):
         return _fail(REASON_SLOT_REF_INVALID)
-    if kind not in EFFECT_KINDS:
+    if not isinstance(kind, str) or kind not in EFFECT_KINDS:
         return _fail(REASON_KIND_UNKNOWN)
     if not _is_iso8601_utc(at):
         return _fail(REASON_RECORD_INVALID)
@@ -267,7 +270,7 @@ def end_effect(journal_path, *, slot_ref, effect_id, outcome, at, reason=None):
         return _fail(REASON_SLOT_REF_INVALID)
     if not _validate_effect_id(effect_id):
         return _fail(REASON_EFFECT_ID_INVALID)
-    if outcome not in END_OUTCOMES:
+    if not isinstance(outcome, str) or outcome not in END_OUTCOMES:
         return _fail(REASON_OUTCOME_INVALID)
     if not _is_iso8601_utc(at):
         return _fail(REASON_RECORD_INVALID)
@@ -379,7 +382,8 @@ def _validate_begin_record(record):
         return False
     if not _validate_slot_ref(record.get("slotRef")):
         return False
-    if record.get("kind") not in EFFECT_KINDS:
+    kind = record.get("kind")
+    if not isinstance(kind, str) or kind not in EFFECT_KINDS:
         return False
     if not _is_iso8601_utc(record.get("at")):
         return False
@@ -406,7 +410,8 @@ def _validate_end_record(record):
         return False
     if not _validate_slot_ref(record.get("slotRef")):
         return False
-    if record.get("outcome") not in END_OUTCOMES:
+    outcome = record.get("outcome")
+    if not isinstance(outcome, str) or outcome not in END_OUTCOMES:
         return False
     if not _is_iso8601_utc(record.get("at")):
         return False
@@ -479,19 +484,27 @@ def _merge_begin_end(begin_entry, end_record):
     return entry
 
 
-def _effect_id_involves_slot_ref(effect_id, slot_ref, parsed_records):
+def _build_effect_id_slot_ref_map(parsed_records):
+    effect_id_slot_refs = {}
     for rec in parsed_records:
-        if rec["valid"] and isinstance(rec["raw"], dict):
-            if rec["raw"].get("effectId") == effect_id and rec["raw"].get("slotRef") == slot_ref:
-                return True
-    return False
+        if not isinstance(rec.get("raw"), dict):
+            continue
+        effect_id = rec["raw"].get("effectId")
+        slot = rec["raw"].get("slotRef")
+        if effect_id is not None and slot is not None:
+            effect_id_slot_refs.setdefault(effect_id, set()).add(slot)
+    return effect_id_slot_refs
 
 
-def _anomaly_involves_slot_ref(anomaly, slot_ref, parsed_records):
+def _effect_id_involves_slot_ref(effect_id, slot_ref, effect_id_slot_refs):
+    return slot_ref in effect_id_slot_refs.get(effect_id, set())
+
+
+def _anomaly_involves_slot_ref(anomaly, slot_ref, parsed_records, effect_id_slot_refs):
     if "reason" not in anomaly and "record" in anomaly:
         return True
     effect_id = anomaly.get("effectId")
-    if effect_id and _effect_id_involves_slot_ref(effect_id, slot_ref, parsed_records):
+    if effect_id and _effect_id_involves_slot_ref(effect_id, slot_ref, effect_id_slot_refs):
         return True
     line = anomaly.get("line")
     if line is not None:
@@ -502,29 +515,73 @@ def _anomaly_involves_slot_ref(anomaly, slot_ref, parsed_records):
     return False
 
 
+def _stamp_replay(result, journal_path, slot_ref):
+    result["journalPath"] = journal_path
+    result["slotRef"] = slot_ref
+    return result
+
+
 def replay(journal_path, *, slot_ref=None):
     """Replay journal into effect entries with fail-closed pairing."""
     if slot_ref is not None and not _validate_slot_ref(slot_ref):
-        return _fail(REASON_SLOT_REF_INVALID, effects=[], torn=False, anomalies=[])
+        return _stamp_replay(
+            _fail(REASON_SLOT_REF_INVALID, effects=[], torn=False, anomalies=[]),
+            journal_path,
+            slot_ref,
+        )
 
+    fd = None
     try:
-        with open(journal_path, "rb") as fh:
-            raw = fh.read()
+        fd = os.open(
+            journal_path,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+        )
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return _stamp_replay(
+                _fail(REASON_JOURNAL_UNREADABLE, effects=[], torn=False, anomalies=[]),
+                journal_path,
+                slot_ref,
+            )
+        raw = b""
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            raw += chunk
     except OSError:
-        return _fail(REASON_JOURNAL_UNREADABLE, effects=[], torn=False, anomalies=[])
+        return _stamp_replay(
+            _fail(REASON_JOURNAL_UNREADABLE, effects=[], torn=False, anomalies=[]),
+            journal_path,
+            slot_ref,
+        )
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
     torn = False
     if raw and not raw.endswith(b"\n"):
         torn = True
         last_nl = raw.rfind(b"\n")
         if last_nl == -1:
-            return _ok(effects=[], torn=True, anomalies=[])
+            return _stamp_replay(
+                _ok(effects=[], torn=True, anomalies=[]),
+                journal_path,
+                slot_ref,
+            )
         raw = raw[:last_nl + 1]
 
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
-        return _fail(REASON_JOURNAL_UNREADABLE, effects=[], torn=False, anomalies=[])
+        return _stamp_replay(
+            _fail(REASON_JOURNAL_UNREADABLE, effects=[], torn=False, anomalies=[]),
+            journal_path,
+            slot_ref,
+        )
 
     lines = text.splitlines()
 
@@ -662,13 +719,20 @@ def replay(journal_path, *, slot_ref=None):
             })
             anomaly_effect_ids.add(effect_id)
 
+    effect_id_slot_refs = _build_effect_id_slot_ref_map(parsed_records)
+
     effects = []
     merged_from_begin = set()
     end_seen = {}
+    invalid_entry_idx = 0
 
     for rec in parsed_records:
         if not rec["valid"]:
-            entry = invalid_entries.pop(0) if invalid_entries else _unknown_effect_entry()
+            if invalid_entry_idx < len(invalid_entries):
+                entry = invalid_entries[invalid_entry_idx]
+                invalid_entry_idx += 1
+            else:
+                entry = _unknown_effect_entry()
             effects.append((entry, True))
             continue
 
@@ -717,12 +781,16 @@ def replay(journal_path, *, slot_ref=None):
         effects = filtered_effects
         anomalies = [
             a for a in anomalies
-            if _anomaly_involves_slot_ref(a, slot_ref, parsed_records)
+            if _anomaly_involves_slot_ref(a, slot_ref, parsed_records, effect_id_slot_refs)
         ]
     else:
         effects = [entry for entry, _from_invalid in effects]
 
-    return _ok(effects=effects, torn=torn, anomalies=anomalies)
+    return _stamp_replay(
+        _ok(effects=effects, torn=torn, anomalies=anomalies),
+        journal_path,
+        slot_ref,
+    )
 
 
 def _blocker(reason, *, slot=None, slot_ref=None, detail=None):
@@ -751,10 +819,31 @@ def _validate_replay_shape(replay_result):
     for effect in effects:
         if not isinstance(effect, dict):
             return BLOCK_REPLAY_SHAPE_INVALID
-        if effect.get("state") not in EFFECT_STATES:
+        state = effect.get("state")
+        if not isinstance(state, str) or state not in EFFECT_STATES:
             return BLOCK_REPLAY_SHAPE_INVALID
-        if effect.get("scope") not in {SCOPE_SLOT, SCOPE_SHARED}:
+        scope = effect.get("scope")
+        if not isinstance(scope, str) or scope not in {SCOPE_SLOT, SCOPE_SHARED}:
             return BLOCK_REPLAY_SHAPE_INVALID
+        kind = effect.get("kind")
+        if isinstance(kind, str) and kind in EFFECT_KINDS:
+            if scope != EFFECT_SCOPE[kind]:
+                return BLOCK_REPLAY_SHAPE_INVALID
+        elif scope != SCOPE_SHARED:
+            # Unknown or absent kind is unclassifiable — fail closed as shared.
+            return BLOCK_REPLAY_SHAPE_INVALID
+    return None
+
+
+def _validate_replay_provenance(replay_result, slot_ref):
+    """Verify replay stamp matches the report entry — provenance, not authentication.
+
+    A caller that constructs a replay dict by hand can still forge the stamp.
+    This check removes accidental cross-wiring (passing slot A's replay for slot B),
+    which is the realistic failure mode.
+    """
+    if replay_result.get("slotRef") != slot_ref:
+        return BLOCK_REPLAY_SLOT_MISMATCH
     return None
 
 
@@ -838,7 +927,7 @@ def partial_failure_report(slots):
         seen_slots.add(slot)
         seen_slot_refs.add(slot_ref)
 
-        if outcome not in SLOT_OUTCOMES:
+        if not isinstance(outcome, str) or outcome not in SLOT_OUTCOMES:
             blockers.append(_blocker(
                 BLOCK_SLOT_OUTCOME_INVALID,
                 slot=slot,
@@ -846,6 +935,15 @@ def partial_failure_report(slots):
             ))
         elif outcome == SLOT_OUTCOME_PROVISIONED:
             if replay_result is None:
+                healthy_slots.append({"slot": slot, "slotRef": slot_ref})
+                continue
+            provenance_blocker = _validate_replay_provenance(replay_result, slot_ref)
+            if provenance_blocker is not None:
+                blockers.append(_blocker(
+                    provenance_blocker,
+                    slot=slot,
+                    slot_ref=slot_ref,
+                ))
                 healthy_slots.append({"slot": slot, "slotRef": slot_ref})
                 continue
             shape_blocker = _validate_replay_shape(replay_result)
@@ -917,27 +1015,35 @@ def partial_failure_report(slots):
                     slot_ref=slot_ref,
                 ))
 
-        shape_blocker = _validate_replay_shape(replay_result)
-        if shape_blocker is not None:
+        provenance_blocker = _validate_replay_provenance(replay_result, slot_ref)
+        if provenance_blocker is not None:
             blockers.append(_blocker(
-                shape_blocker,
+                provenance_blocker,
                 slot=slot,
                 slot_ref=slot_ref,
             ))
         else:
-            if replay_result.get("torn") is True:
+            shape_blocker = _validate_replay_shape(replay_result)
+            if shape_blocker is not None:
                 blockers.append(_blocker(
-                    BLOCK_JOURNAL_TORN,
+                    shape_blocker,
                     slot=slot,
                     slot_ref=slot_ref,
                 ))
-            if replay_result.get("anomalies"):
-                blockers.append(_blocker(
-                    BLOCK_JOURNAL_ANOMALY,
-                    slot=slot,
-                    slot_ref=slot_ref,
-                ))
-            _enumerate_replay_effects(replay_result, slot, slot_ref, blockers, warnings)
+            else:
+                if replay_result.get("torn") is True:
+                    blockers.append(_blocker(
+                        BLOCK_JOURNAL_TORN,
+                        slot=slot,
+                        slot_ref=slot_ref,
+                    ))
+                if replay_result.get("anomalies"):
+                    blockers.append(_blocker(
+                        BLOCK_JOURNAL_ANOMALY,
+                        slot=slot,
+                        slot_ref=slot_ref,
+                    ))
+                _enumerate_replay_effects(replay_result, slot, slot_ref, blockers, warnings)
 
     if not healthy_slots:
         blockers.append(_blocker(BLOCK_NO_HEALTHY_SLOTS))
