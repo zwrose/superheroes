@@ -33,6 +33,7 @@ DECLARATION_KINDS = frozenset({
     "mint-account-allowlist",
     "effects-escape",
     "operating-ceiling",
+    "app-lifecycle",
 })
 
 NAMESPACE_PLACEHOLDER = "{namespace}"
