@@ -122,6 +122,22 @@ def test_render_shows_builder_dispatch_tier_fable_rejected(tmp_path):
     assert "⚠" in screen
 
 
+def test_render_rejected_builder_dispatch_tier_bounded_long_value(tmp_path):
+    junk = "J" * 500
+    root = _seed_core_and_layer(
+        tmp_path, engine_preferences={"builderDispatchTier": junk},
+    )
+    screen = cv.render(str(tmp_path), root=root)
+    assert junk not in screen
+    assert "Rejected builder dispatch tier (not applied — launch falls to the default):" in screen
+    # bounded echo: limit chars + ellipsis, not the raw 500-char value
+    import engine_pref as ep
+
+    bounded = ep.safe_config_echo(junk)
+    assert bounded in screen
+    assert len(bounded) <= 121
+
+
 def test_render_builder_dispatch_agrees_with_launch_on_structural_ambiguity(tmp_path):
     # axis: calibration screen uses load_builder_dispatch_tier — same path as headless launch.
     import core_md as cm
@@ -138,12 +154,12 @@ def test_render_builder_dispatch_agrees_with_launch_on_structural_ambiguity(tmp_
     assert loaded["source"] == "unreadable-default"
     assert loaded["tier"] == "opus"
     assert loaded["reason"].startswith("multiple-core-blocks:")
+    assert loaded["display"] == "multiple-core-blocks"
     screen = cv.render(str(tmp_path), root=root)
     assert "sonnet (configured)" not in screen
     assert "builder dispatch (headless launch) — claude — opus (unreadable-default)" in screen
-    classifier_prefix = loaded["reason"].split(":", 1)[0]
+    assert "multiple-core-blocks" in screen
     core_md_path = loaded["reason"].split(":", 1)[1]
-    assert classifier_prefix in screen
     assert core_md_path not in screen
 
 

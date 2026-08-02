@@ -273,11 +273,10 @@ def _append_builder_dispatch_row(out, cwd, root):
         "builder dispatch (headless launch) — claude — %s (%s)"
         % (builder["tier"], builder["source"])
     )
-    reason = builder.get("reason")
+    display = builder.get("display")
     if builder["source"] in ("unreadable-default", "invalid-config-default"):
-        if isinstance(reason, str) and reason:
-            displayed = reason.split(":", 1)[0] if ":" in reason else reason
-            out.append("  %s" % displayed)
+        if isinstance(display, str) and display:
+            out.append("  %s" % display)
 
 
 def render(cwd, *, root=None):
@@ -325,7 +324,10 @@ def render(cwd, *, root=None):
             )
             out.append(
                 "  %s: %s ⚠"
-                % (invalid_builder["value"], invalid_builder["reason"])
+                % (
+                    engine_pref.safe_config_echo(invalid_builder["value"]),
+                    engine_pref.safe_config_echo(invalid_builder["reason"]),
+                )
             )
         out.append("")
         out.append("## Engine model pins (Codex)")
