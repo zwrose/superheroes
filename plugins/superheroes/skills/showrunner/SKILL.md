@@ -237,8 +237,8 @@ above).
      **preserves that original proposing ordinal** and never re-stamps it with the later vet's ordinal
      — so the item's age keeps counting from when it was actually proposed and the age-2 escalation
      still fires on time.
-     Each entry carries **what it is**, **your recommendation**, and **the vet ordinal stamped on
-     it when it is appended**, and is **struck when the owner rules** — closing or declining an
+     Each entry carries **what it is**, **your recommendation**, and **the proposing vet's ordinal
+     stamped on it immutably**, and is **struck when the owner rules** — closing or declining an
      item **removes it from the collector**; nothing re-numbers what remains. Appending stamps the
      **proposing vet's ordinal** on it **immutably** — the current vet's in the normal case, the
      earlier recorded one when the append was deferred — carrying an item forward **never
@@ -266,7 +266,7 @@ above).
      ordinal** — one integer per vet, per project — kept in durable memory (duty 8) alongside the
      collector pointer and **also written into each receipt**, so the sequence survives a lost
      memory: the next ordinal is **one more than the highest appearing in the collector or the
-     receipts**. Appending an item **stamps the current ordinal on it, immutably** — carrying an
+     receipts**. Appending an item **stamps the proposing vet's ordinal on it, immutably** — carrying an
      item forward never re-stamps it, and nothing re-numbers on close. Age is `this vet's ordinal −
      the item's ordinal`; the escalation is owed at **2 or more**, and an item that old is evidence
      the owner batch is not happening — the receipt says so plainly rather than re-listing as though

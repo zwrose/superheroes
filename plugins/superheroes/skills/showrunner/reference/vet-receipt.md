@@ -58,8 +58,10 @@ shape is wrong and the thinking wins.
    **pending** set under `<!-- superheroes:pending-proposals -->` — only what genuinely could not
    close in this session. On an owner-absent vet (showrunner charter duty 4 owns the availability
    rule), pending items here have **already been appended to the collector at this vet**, stamped with
-   this vet's ordinal — not a promise to append later. Where the collector pointer could not be
-   resolved, the receipt carries the item **and** the disclosed degradation. Each pending item carries
+   this vet's ordinal — not a promise to append later — **except where the collector pointer could
+   not be resolved**: then the receipt carries the item **and** the disclosed degradation, and the
+   item keeps **this vet's ordinal as its proposing ordinal** for the later deferred append. Each
+   pending item carries
    **what it is**, **your recommendation** (so the owner's batch pass is one word rather than a
    re-derivation),    and **the vet ordinal it was proposed at** — a monotonic integer, one per vet,
    assigned at the vet that proposed the item (the same vet when proposed and appended together; the

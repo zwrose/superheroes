@@ -67,9 +67,10 @@ scheduling cannot wake a headless session** and are never a turn's exit plan. On
 waiting on `Monitor`, two on standalone narrative with nothing in flight); all were recovered with
 zero work lost, but two live codex review seats were killed mid-run.
 
-**Channel and wait are separate choices.** A long-running external dispatch from a headless session
-runs in the **detached shape** *and* is **polled in-turn** — detaching buys survivability; the
-in-turn poll is still the duty. Park is what happens when the in-turn poll genuinely cannot fit the
+**Channel and wait are separate choices.** A long-running external dispatch the builder invokes
+directly from a headless session runs in the **detached shape** *and* is **polled in-turn** —
+detaching buys survivability; the in-turn poll is still the duty; skill-owned seats (`review-code`'s
+panel and fixer) keep that skill's own dispatch contract. Park is what happens when the in-turn poll genuinely cannot fit the
 turn; it is not the automatic consequence of detaching.
 
 This section is the doctrine artifact's home for those rules. The operative copy a builder session
