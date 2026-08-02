@@ -9,6 +9,9 @@
 7. [Declare and exercise](#declare-and-exercise)
 8. [Seed and mint call shapes](#seed-and-mint-call-shapes)
 9. [Slot reference format](#slot-reference-format)
+10. [Slot lifecycle and generations](#slot-lifecycle-and-generations)
+11. [The provisioning journal](#the-provisioning-journal)
+12. [The partial-failure report](#the-partial-failure-report)
 
 ---
 
@@ -356,3 +359,236 @@ Types and validation live in `lib/pilot_slot.py`.
 | `slot-account-duplicate` | the same `account` appears more than once |
 | `slot-account-role-missing` | an entry has no non-empty `role` |
 | `slot-account-entry-invalid` | an entry is not a mapping with a non-empty `account` string |
+
+## Slot lifecycle and generations
+
+Slot lifecycle state, generation allocation, and serialized persistence live in
+`lib/pilot_lifecycle.py`. The module owns the per-slot record and its transitions; it does
+not write journal records, enforce fencing, or expose recovery entry points from `failed`.
+
+### Slot states
+
+| State | Meaning |
+|---|---|
+| `provisioning` | A provisioning attempt is in progress for this generation |
+| `provisioned` | Provisioning finished; the slot is ready for session handoff |
+| `occupied` | A pilot session holds the slot |
+| `released` | The session released the slot; ready for the next provisioning attempt |
+| `failed` | Provisioning or occupancy failed; partial effects may exist |
+| `retired` | The slot is permanently withdrawn from service |
+
+### Legal transitions
+
+One row per source state; targets are every state the code allows from that source.
+
+| From state | Legal targets |
+|---|---|
+| `provisioning` | `provisioned`, `failed` |
+| `provisioned` | `occupied`, `failed`, `retired` |
+| `occupied` | `released`, `failed`, `retired` |
+| `released` | `provisioning`, `retired` |
+| `failed` | `retired` |
+| `retired` | *(none)* |
+
+`failed` is terminal within this module apart from `retired`: a partial provisioning failure
+must reach the owner before anything relaunches. Sub-issue **A2b** adds the named recovery
+entry point; this module deliberately does not.
+
+### Generation allocation
+
+The generation is allocated at the **start of a provisioning attempt**, not at session
+handoff, so every journal record and every fencing confirmation can be keyed to a
+`<slot>@<generation>` reference. `begin_generation` is legal only from `released`.
+
+### Serialized allocation
+
+`mutate()` holds a per-slot advisory `flock` across load → validate → increment → durable
+save, because atomic replacement alone gives no read-modify-write exclusion; without it two
+launchers both allocate the same generation. The record write fsyncs the **parent directory**,
+so a crash cannot recover a pre-allocation record after the new generation was handed out.
+
+### Generation check (three-valued)
+
+`generation_check(carried, current)` returns one of three answers:
+
+| Answer | When |
+|---|---|
+| `ok` | `carried` equals `current` |
+| `slot-generation-stale` | `carried` is less than `current` |
+| `slot-generation-ahead` | `carried` is greater than `current` |
+
+The module deliberately exports **no boolean staleness helper**, because a two-valued answer
+falls open on the `carried > current` case. Numbering lives here; broker-side enforcement is
+sub-issue **C7's** (design seam S1).
+
+### Lifecycle refusal tokens
+
+| Token | When returned |
+|---|---|
+| `slot-state-invalid` | target state is not in `SLOT_STATES`, or `provisioning_outcome` is called with an unknown state |
+| `slot-transition-illegal` | `transition` or `begin_generation` requests a move not in `TRANSITIONS` |
+| `slot-occupied` | `transition` targets `occupied` while already `occupied` |
+| `slot-retired` | mutation is attempted on a `retired` record |
+| `slot-record-invalid` | record shape, history, accounts, timestamps, or caller `now` fail validation |
+| `slot-record-unreadable` | the on-disk record cannot be read |
+| `slot-record-write-failed` | durable write or parent-directory fsync failed |
+| `slot-generation-stale` | `generation_check`: carried generation is behind current |
+| `slot-generation-ahead` | `generation_check`: carried generation is ahead of current |
+| `slot-lock-unavailable` | per-slot advisory `flock` could not be acquired within timeout |
+| `slot-mutation-failed` | the mutation callback raised an unexpected exception |
+
+## The provisioning journal
+
+The durable provisioning journal lives in `lib/pilot_journal.py`. Each shared or slot-scoped
+effect is recorded **before and after** the operation: a crash between acting and recording
+must replay as *possibly applied*, which is the honest state; a journal written only on
+success reports a shared effect as never having happened.
+
+### Effect kinds and scope
+
+| Kind | Scope |
+|---|---|
+| `worktree-created` | `slot` |
+| `app-started` | `slot` |
+| `credential-minted` | `shared` |
+| `credential-seeded` | `shared` |
+| `namespace-touched` | `shared` |
+| `project-declared` | `shared` |
+
+`project-declared` is the **one** project hook ("what did setup touch") and is `shared`
+because the framework cannot classify what the project names — fail closed.
+
+### End outcomes (three-valued)
+
+| Outcome | Meaning |
+|---|---|
+| `applied` | the caller proved the effect completed |
+| `not-applied` | the caller proved the effect did not run |
+| `indeterminate` | transport, process, timeout, or partial-operation error |
+
+Only a caller that can *prove* non-application may record `not-applied`; every transport,
+process, timeout, or partial-operation error records `indeterminate`. A two-valued outcome
+would report a credential that really was minted as never minted.
+
+### Replay states
+
+| Replay state | Source |
+|---|---|
+| `applied` | paired `end` with outcome `applied` |
+| `not-applied` | paired `end` with outcome `not-applied` |
+| `possibly-applied` | paired `end` with outcome `indeterminate`, or `begin` with no `end`, or any anomaly |
+
+### On-disk record shapes
+
+Begin phase (`_build_begin_record`):
+
+```json
+{
+  "schemaVersion": 1,
+  "phase": "begin",
+  "effectId": "<id>",
+  "slotRef": "<slot>@<generation>",
+  "kind": "<effect-kind>",
+  "at": "<ISO-8601-UTC-Z>"
+}
+```
+
+Optional `detail` object when the caller supplies one.
+
+End phase (`_build_end_record`):
+
+```json
+{
+  "schemaVersion": 1,
+  "phase": "end",
+  "effectId": "<id>",
+  "slotRef": "<slot>@<generation>",
+  "outcome": "applied | not-applied | indeterminate",
+  "at": "<ISO-8601-UTC-Z>"
+}
+```
+
+Optional `reason` string when the outcome is `not-applied` or `indeterminate`.
+
+### Fail-closed reader rules
+
+- A missing or unreadable journal is a refusal and never "no effects".
+- A torn trailing line (file does not end with newline) sets `torn`.
+- A parseable-but-non-conforming record becomes an anomaly **and** an `unknown` /
+  `possibly-applied` entry rather than being skipped.
+- Orphan `end`, duplicate `effectId`, out-of-order pairs, and `slotRef` disagreement never
+  pair opportunistically.
+
+### Journal refusal tokens
+
+| Token | When returned |
+|---|---|
+| `journal-unreadable` | journal file cannot be read during replay |
+| `journal-write-failed` | append or fsync failed |
+| `journal-record-invalid` | record shape, timestamp, or serialisable `detail` fails validation |
+| `journal-effect-kind-unknown` | `kind` is not in `EFFECT_KINDS` |
+| `journal-outcome-invalid` | `outcome` is not in `END_OUTCOMES` |
+| `journal-slot-ref-invalid` | `slotRef` does not parse |
+| `journal-effect-id-invalid` | `effectId` is missing or does not match the allowed pattern |
+
+## The partial-failure report
+
+`partial_failure_report` answers whether healthy slots may launch after one or more slots
+failed provisioning. A failed slot may already have started an app, created a credential, or
+touched shared fixtures, so the healthy slots are **not safe by assumption**. The report
+enumerates what the failed slots touched and confirms they are fenced before recommending the
+rest launch.
+
+### Input shape per slot
+
+`fencing` is a **caller-supplied verification result** — this module never performs or infers
+fencing.
+
+```json
+{
+  "slot": "<slot-id>",
+  "slotRef": "<slot>@<generation>",
+  "outcome": "provisioned | failed",
+  "replay": {
+    "ok": true,
+    "effects": [],
+    "torn": false,
+    "anomalies": []
+  },
+  "fencing": {
+    "fenced": true,
+    "slotRef": "<slot>@<generation>"
+  }
+}
+```
+
+For `outcome: "provisioned"` slots, `replay` and `fencing` are ignored. For
+`outcome: "failed"` slots, both are required.
+
+### Blocker tokens
+
+| Token | When raised |
+|---|---|
+| `report-slot-entry-invalid` | entry is not a mapping, or required fields are missing or malformed |
+| `report-slot-outcome-invalid` | `outcome` is not `provisioned` or `failed` |
+| `failed-slot-fence-missing` | `fencing` is absent on a failed slot |
+| `failed-slot-fence-invalid` | `fencing` is not a mapping, or `fenced` is not a boolean |
+| `failed-slot-not-fenced` | `fenced` is `false` |
+| `failed-slot-fence-ref-mismatch` | `fencing.slotRef` does not equal the entry's `slotRef` |
+| `failed-slot-journal-unreadable` | `replay.ok` is not `true` |
+| `failed-slot-journal-torn` | `replay.torn` is `true` |
+| `failed-slot-journal-anomaly` | `replay.anomalies` is non-empty |
+| `failed-slot-shared-effect-possibly-applied` | a replayed effect has `scope: "shared"` and state `possibly-applied` |
+| `no-healthy-slots` | no slot reported `outcome: "provisioned"` |
+
+### Launch recommendation rule
+
+`recommendLaunch` is true only when there are no blockers and at least one healthy slot.
+Every unknown — missing fencing, a non-boolean `fenced`, a mismatched `slotRef`, an
+unreadable or torn journal, an anomaly — is a blocker, never a pass. `fenced` is compared
+with `is True` / `is False` so a truthy string like `"true"` cannot confirm.
+
+A **shared**-scoped possibly-applied effect blocks even on a fenced slot: fencing a slot does
+not un-touch a shared datastore or un-mint a credential on a shared service.
+
+Sub-issue **C8** renders this report to the owner.
