@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.24.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.23.0...superheroes-v0.24.0) (2026-08-02)
+
+
+### Features
+
+* **superheroes:** builder-dispatch model tier — opus default in loaded surfaces, owner knob, launcher pin ([#755](https://github.com/zwrose/superheroes/issues/755)) ([#805](https://github.com/zwrose/superheroes/issues/805)) ([b503c9c](https://github.com/zwrose/superheroes/commit/b503c9cbe1c4cef518d625b0a5bd675fc9240c83))
+* **superheroes:** forfeit observability — per-attempt telemetry, attribution ledger, forfeit-with-engaged-artifact + verified salvage valve ([#804](https://github.com/zwrose/superheroes/issues/804)) ([87ebf63](https://github.com/zwrose/superheroes/commit/87ebf63a73c454fdbc859a900f7ef00988f5fbd1))
+* **superheroes:** launch-shape mechanization — the ledger's grammar has one authority ([#656](https://github.com/zwrose/superheroes/issues/656)) ([#758](https://github.com/zwrose/superheroes/issues/758)) ([e4ea239](https://github.com/zwrose/superheroes/commit/e4ea239d7cd1473dfcfd12a5a0879c09481c4cd6))
+* **superheroes:** recovery doctrine into plugin surfaces — adopt-never-resume, unpushed-work sweep, transcript pinning ([#775](https://github.com/zwrose/superheroes/issues/775)) ([#788](https://github.com/zwrose/superheroes/issues/788)) ([ca4fbfc](https://github.com/zwrose/superheroes/commit/ca4fbfcf067149546f92304c3e73a601e9010987))
+* **superheroes:** semantic liveness signal for headless builds (advisor-consumed heartbeat) ([#657](https://github.com/zwrose/superheroes/issues/657)) ([#791](https://github.com/zwrose/superheroes/issues/791)) ([16f2931](https://github.com/zwrose/superheroes/commit/16f293179bfcebf1f3f0e3024f2cfe72fa4e8501))
+
+
+### Bug Fixes
+
+* **superheroes:** close the file_lock crash window — one guarded reclaimer, no unreclaimable locks ([#733](https://github.com/zwrose/superheroes/issues/733)) ([#759](https://github.com/zwrose/superheroes/issues/759)) ([c27e642](https://github.com/zwrose/superheroes/commit/c27e6427754401b515d782eb1b3ea05fd7b83e0b))
+* **superheroes:** findings delivery contract is channel-keyed at its source — review-base.md ordered a write the review sandbox forbids ([#776](https://github.com/zwrose/superheroes/issues/776)) ([#783](https://github.com/zwrose/superheroes/issues/783)) ([8db94c2](https://github.com/zwrose/superheroes/commit/8db94c230d16332aaf3ab22bccbcb2bdccebcd12))
+* **superheroes:** hygiene B — config-surface family, riders 7/18/25-27 ([#752](https://github.com/zwrose/superheroes/issues/752)) ([#778](https://github.com/zwrose/superheroes/issues/778)) ([3d85c74](https://github.com/zwrose/superheroes/commit/3d85c7408fa407e3b89d82bf21693e592757647f))
+* **superheroes:** lean the workhorse/showrunner charters — conflict-pass + relocation, no rule loss ([#801](https://github.com/zwrose/superheroes/issues/801)) ([9d7f001](https://github.com/zwrose/superheroes/commit/9d7f00129406c44fa6f5861f5d4c50fe91aac8c0))
+* **superheroes:** liveness probe dispatches through the hardened path — no inherited stdin, no positional prompt ([#745](https://github.com/zwrose/superheroes/issues/745)) ([aa3a5ae](https://github.com/zwrose/superheroes/commit/aa3a5ae1eba5db1a38f64689a6961300fed54f5d))
+* **superheroes:** pin the codex dispatch fast-exit trigger — transport diagnosis, real telemetry, pre-spawn schema refusal ([#746](https://github.com/zwrose/superheroes/issues/746)) ([625c898](https://github.com/zwrose/superheroes/commit/625c8980a97e30a9ae90bf3b049004eac48f87bf))
+* **superheroes:** resolve the review-diff merge-base outside the repository's git directory ([#748](https://github.com/zwrose/superheroes/issues/748)) ([#761](https://github.com/zwrose/superheroes/issues/761)) ([93ac9c5](https://github.com/zwrose/superheroes/commit/93ac9c55f45e70a9686f1701c3ed2e634c62233d))
+* **superheroes:** review-code auto-fix branch guard accepts adopted builds ([#769](https://github.com/zwrose/superheroes/issues/769)) ([#780](https://github.com/zwrose/superheroes/issues/780)) ([4a78de1](https://github.com/zwrose/superheroes/commit/4a78de116e46dc1d2566b4ec848a88e03707114a))
+* **superheroes:** six sibling _repo_root copies + get_gitdir fall open on a broken repo — one fail-closed chokepoint ([#742](https://github.com/zwrose/superheroes/issues/742)) ([#760](https://github.com/zwrose/superheroes/issues/760)) ([e5932e1](https://github.com/zwrose/superheroes/commit/e5932e165759c0f3850d39e7d0e589c1845fb1ae))
+* **superheroes:** workhorse preserves advisor-authored PR-body content verbatim; retire the LEDGERS residual ([#734](https://github.com/zwrose/superheroes/issues/734)) ([#779](https://github.com/zwrose/superheroes/issues/779)) ([07d05c8](https://github.com/zwrose/superheroes/commit/07d05c8857294088f72d28a62c53737fbf400919))
+* **superheroes:** worktree guard — refuse destructive git discards on dirty trees ([#682](https://github.com/zwrose/superheroes/issues/682)) ([#756](https://github.com/zwrose/superheroes/issues/756)) ([f8faa45](https://github.com/zwrose/superheroes/commit/f8faa452f787d9788fe44684b92bd24024c3d09e))
+
+
+### Chores
+
+* **superheroes:** cursor implementer order template — targeted verify, short structured returns, forfeit recovery ([#713](https://github.com/zwrose/superheroes/issues/713)) ([#743](https://github.com/zwrose/superheroes/issues/743)) ([62833de](https://github.com/zwrose/superheroes/commit/62833de464e1683a36cdb3a7268418289febbf9b))
+* **superheroes:** every new detector ships a recorded bite-proof ([#765](https://github.com/zwrose/superheroes/issues/765)) ([#799](https://github.com/zwrose/superheroes/issues/799)) ([4c3cf49](https://github.com/zwrose/superheroes/commit/4c3cf4972792f3200cf08db972e516a5ed1bd879))
+* **superheroes:** implementer contract — one open reporting obligation + a total precedence ladder ([#750](https://github.com/zwrose/superheroes/issues/750)) ([#757](https://github.com/zwrose/superheroes/issues/757)) ([ab45ce8](https://github.com/zwrose/superheroes/commit/ab45ce88f295b595026f3b93c3f194cddb21e7d8))
+* **superheroes:** review-code body diet — 508 → 363 lines, ceiling 515 → 400 ([#646](https://github.com/zwrose/superheroes/issues/646)) ([#802](https://github.com/zwrose/superheroes/issues/802)) ([6bab310](https://github.com/zwrose/superheroes/commit/6bab31099d13c056b7f9b630c2f0ff42fea2737d))
+
 ## [0.23.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.22.0...superheroes-v0.23.0) (2026-07-31)
 
 
