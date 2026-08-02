@@ -66,6 +66,8 @@ class PilotPolicyError(Exception):
 
 def resolve_policy_document(policy_root, declaration, *, reach_roots):
     """Return the validated policy document from outside branch-mutable reach."""
+    # bite-axis: document trust — policy root must be outside reach; document must be owner-owned,
+    # mode-safe, inode-stable via O_NOFOLLOW open, and readable; symlink or traversal escape refuses.
     if not isinstance(policy_root, str) or not policy_root or not os.path.isabs(policy_root):
         raise PilotPolicyError(REFUSAL_POLICY_ROOT_INVALID)
     if not os.path.isdir(policy_root):
@@ -138,6 +140,8 @@ def resolve_policy_document(policy_root, declaration, *, reach_roots):
 
 def validate_policy(doc):
     """Structural validation of a policy document; returns the document."""
+    # bite-axis: document structure — schema version, top-level keys, datastore, slots, and each
+    # slot shape must match the policy schema; any structural violation raises REFUSAL_DOCUMENT_INVALID.
     if not isinstance(doc, dict) or set(doc.keys()) != _TOP_LEVEL_KEYS:
         raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
 
@@ -182,6 +186,9 @@ def validate_policy(doc):
 
 def policy_material(policy):
     """Extract sensitive material strings grouped by class."""
+    # bite-axis: material extraction — all expected-identity, mintable-account, and
+    # connection-detail strings are collected from a validated policy for downstream leakage and
+    # exercise checks.
     validate_policy(policy)
     expected_identities = []
     mintable_accounts = []
@@ -207,6 +214,9 @@ def policy_material(policy):
 
 def assert_results_only(result, material):
     """Refuse when serialized result embeds any policy material string."""
+    # bite-axis: material leakage — any policy material string present in the serialized result
+    # raises REFUSAL_MATERIAL_IN_RESULT; neutralizing substring absence reddens results-only
+    # assertions.
     if not isinstance(material, dict) or not _material_index(material):
         raise PilotPolicyError(REFUSAL_MATERIAL_INVALID)
     serialized = json.dumps(result, sort_keys=True, ensure_ascii=False)
@@ -218,6 +228,8 @@ def assert_results_only(result, material):
 
 def exercise_no_policy_material_in_reach(reach_roots, material, *, exercised_at=None):
     """Walk reach roots and scan file bytes for policy material."""
+    # bite-axis: non-vacuity plus fail-closed reads — a scan that searched for zero needles,
+    # covered zero files, or could not read a file or directory is a failure, never a pass.
     _validate_exercise_reach_roots(reach_roots)
     if _material_is_vacuous(material):
         raise PilotPolicyError(REFUSAL_EXERCISE_VACUOUS)
@@ -340,6 +352,7 @@ def exercise_no_policy_material_in_reach(reach_roots, material, *, exercised_at=
 
 
 def _validate_reach_roots_list(reach_roots):
+    # bite-axis: reach root validity — reach_roots must be a list of non-empty absolute path strings.
     if not isinstance(reach_roots, list):
         raise PilotPolicyError(REFUSAL_REACH_ROOT_INVALID)
     for reach_root in reach_roots:
@@ -350,6 +363,8 @@ def _validate_reach_roots_list(reach_roots):
 
 
 def _validate_exercise_reach_roots(reach_roots):
+    # bite-axis: reach root existence — each reach root must be a non-empty absolute path to an
+    # existing directory before exercise walks it.
     if not isinstance(reach_roots, list) or not reach_roots:
         raise PilotPolicyError(REFUSAL_REACH_ROOT_INVALID)
     for reach_root in reach_roots:
@@ -362,6 +377,8 @@ def _validate_exercise_reach_roots(reach_roots):
 
 
 def _policy_root_conflicts_with_reach(policy_root, reach_roots):
+    # bite-axis: policy-root separation — policy root overlapping any reach root (raw or
+    # realpath) refuses resolution with REFUSAL_POLICY_ROOT_IN_REACH.
     policy_forms = [policy_root, os.path.realpath(policy_root)]
     for reach_root in reach_roots:
         reach_forms = [reach_root, os.path.realpath(reach_root)]
@@ -381,6 +398,8 @@ def _paths_overlap(left, right):
 
 
 def _is_same_or_ancestor(ancestor, descendant):
+    # bite-axis: path ancestry — descendant path components must share the ancestor prefix; used
+    # to detect symlink escapes and policy-root overlap.
     ancestor_parts = _path_parts(ancestor)
     descendant_parts = _path_parts(descendant)
     if len(ancestor_parts) > len(descendant_parts):
@@ -407,6 +426,8 @@ def _ancestors_including_self(path):
 
 
 def _validate_observer(observer):
+    # bite-axis: observer shape — when present, observer must be a dict with only command and
+    # connectionEnvVar keys and each field must be a valid non-empty string or command list.
     if observer is None:
         return
     if not isinstance(observer, dict) or set(observer.keys()) != _OBSERVER_KEYS:
@@ -423,6 +444,9 @@ def _validate_observer(observer):
 
 
 def _validate_slot(slot):
+    # bite-axis: slot shape — each slot must have required keys with non-empty origin, redirects
+    # list, and expectedIdentities dict; optional mintableAccounts must be a list of non-empty
+    # strings.
     if not isinstance(slot, dict):
         raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
     extra = set(slot.keys()) - _SLOT_KEYS
@@ -466,6 +490,8 @@ def _material_is_vacuous(material):
 
 
 def _material_index(material):
+    # bite-axis: material indexing — only non-empty string material values are UTF-8-encoded into
+    # scan needles; empty or wrong-type material makes exercise vacuous.
     indexed = []
     for material_class in MATERIAL_CLASSES:
         for value in material.get(material_class, []):
@@ -475,6 +501,10 @@ def _material_index(material):
 
 
 def _fd_realpath(fd, fallback_path):
+    # bite-disclosure: on platforms without /proc/self/fd (macOS among them), falls back to
+    # os.path.realpath(fallback_path) which re-resolves by name rather than by descriptor and
+    # does not fully close the window between the check and the open; the O_NOFOLLOW open plus
+    # inode/device comparison is what carries the guarantee there.
     proc_fd = "/proc/self/fd/%d" % fd
     if os.path.exists(proc_fd):
         try:

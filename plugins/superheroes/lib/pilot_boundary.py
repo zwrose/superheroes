@@ -34,6 +34,8 @@ class PilotBoundaryError(Exception):
 
 def parse_origin(value):
     """Return canonical ``<scheme>://<host>:<port>`` or raise."""
+    # bite-axis: origin canonicalization — only http(s) origins with valid host and port are
+    # accepted; any malformed or non-canonical input raises REFUSAL_ORIGIN_INVALID.
     canonical = _parse_origin_or_none(value)
     if canonical is None:
         raise PilotBoundaryError(REFUSAL_ORIGIN_INVALID)
@@ -42,6 +44,8 @@ def parse_origin(value):
 
 def target_binding(slot_ref, *, origin, permitted_redirects, protected_targets):
     """Build a validated target binding dict."""
+    # bite-axis: binding integrity — invalid slot ref, origin, redirects list, or protected
+    # targets refuse before a binding dict is returned.
     try:
         slot, generation = pilot_slot.parse_slot_ref(slot_ref)
         canonical_slot_ref = pilot_slot.format_slot_ref(slot, generation)
@@ -87,6 +91,9 @@ def target_binding(slot_ref, *, origin, permitted_redirects, protected_targets):
 
 def check_target(binding, url):
     """Check whether ``url`` is an allowed target; never raises on malformed input."""
+    # bite-axis: precedence — protected targets are refused before the allowlist check and there
+    # is no bypass parameter, deliberately unlike engine.gate_violations which --allow-protected
+    # can bypass.
     parsed = _parse_origin_or_none(url)
     if parsed is None:
         return {"ok": False, "reason": REFUSAL_ORIGIN_INVALID}
@@ -99,6 +106,9 @@ def check_target(binding, url):
 
 def check_redirect(binding, url):
     """Check whether ``url`` is an allowed redirect destination; never raises."""
+    # bite-axis: precedence — protected targets are refused before the redirect allowlist check
+    # and there is no bypass parameter, deliberately unlike engine.gate_violations which
+    # --allow-protected can bypass.
     parsed = _parse_origin_or_none(url)
     if parsed is None:
         return {"ok": False, "reason": REFUSAL_ORIGIN_INVALID}
@@ -111,6 +121,8 @@ def check_redirect(binding, url):
 
 def check_protected_identity(binding, identity):
     """Refuse when ``identity`` names a protected target or is unavailable."""
+    # bite-axis: protected identity refusal — an identity naming a protected target or an
+    # unavailable identity is refused before any binding proceeds.
     if identity in binding["protectedTargets"]:
         return {"ok": False, "reason": REFUSAL_PROTECTED_TARGET}
     if not isinstance(identity, str) or not identity:
@@ -128,6 +140,9 @@ def observe_datastore_identity(
     max_output_bytes=4096,
 ):
     """Run the policy observer and return a strong observed identity."""
+    # bite-axis: observer execution — subprocess failure, oversized output, or non-single-line
+    # UTF-8 stdout raises REFUSAL_DATASTORE_OBSERVER_FAILED; only a clean one-line identity is
+    # returned.
     _validate_observer(observer, connection_detail, reach_roots, run_cwd)
     env_var = observer["connectionEnvVar"]
     command = observer["command"]
@@ -166,6 +181,8 @@ def observe_datastore_identity(
 
 def app_reported_identity(value):
     """Record a weaker app-reported identity when no observer is declared."""
+    # bite-axis: identity availability — empty or non-string app-reported identity raises
+    # REFUSAL_DATASTORE_IDENTITY_UNAVAILABLE; only a non-empty string yields a weaker record.
     if not isinstance(value, str) or not value:
         raise PilotBoundaryError(REFUSAL_DATASTORE_IDENTITY_UNAVAILABLE)
     return {
@@ -178,6 +195,8 @@ def app_reported_identity(value):
 
 def check_datastore_identity(binding, observation, expected_identity):
     """Compare observed identity against policy expectation."""
+    # bite-axis: identity match — protected, unavailable, or mismatched observed identity refuses
+    # before a passing datastore-identity check is recorded.
     protected = check_protected_identity(binding, observation["identity"])
     if not protected["ok"]:
         return {
@@ -221,6 +240,8 @@ def boundary_verdict(
     verified_at=None,
 ):
     """Assemble a traveling verdict with outcomes only — no policy material."""
+    # bite-axis: verdict assembly — traveling verdict carries check outcomes only (no policy
+    # material); any failing check makes result refuse with that check's reason.
     check_entries = []
     first_failure_reason = None
     for name, result in checks:
@@ -254,6 +275,9 @@ def boundary_verdict(
 
 def authorize_credentials(verdict, slot_ref, policy_digest):
     """Authorize credential minting only for a verified passing verdict."""
+    # bite-axis: authority — a verdict that did not pass, or is bound to a different slot or
+    # policy digest, yields no authorization; neutralizing any one of those conditions reddens
+    # credential gates.
     if not isinstance(verdict, dict):
         raise PilotBoundaryError(REFUSAL_UNVERIFIED)
     schema_version = verdict.get("schemaVersion")
@@ -357,6 +381,8 @@ def _is_outside_all_reach_roots(path, reach_roots):
 
 
 def _validate_observer(observer, connection_detail, reach_roots, run_cwd):
+    # bite-axis: observer confinement — observer executable, run cwd, and reachable command
+    # paths must lie outside all reach roots; violation raises REFUSAL_DATASTORE_OBSERVER_INVALID.
     if not isinstance(observer, dict) or set(observer.keys()) != {"command", "connectionEnvVar"}:
         raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_INVALID)
 

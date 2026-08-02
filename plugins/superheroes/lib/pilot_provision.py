@@ -41,6 +41,9 @@ def verify_boundary(
     verified_at=None,
 ):
     """Run provisioning-time boundary checks and return a traveling verdict."""
+    # bite-axis: boundary verification — target, redirect, and datastore-identity checks assemble a
+    # traveling verdict bound to policy digest; assert_results_only refuses material leakage in the
+    # verdict.
     try:
         slot, _generation = pilot_slot.parse_slot_ref(slot_ref)
     except pilot_slot.PilotSlotError:
@@ -137,6 +140,8 @@ def _canonical_slot_ref(slot_ref):
 
 def authorized_seed_request(verdict, policy, slot_ref, account, artifact):
     """Authorize and build a seed request descriptor."""
+    # bite-axis: seed authorization — passing authorize_credentials gate plus a known account and
+    # artifact produce a seed request; neutralizing any gate reddens test_pilot_provision seed paths.
     pilot_boundary.authorize_credentials(
         verdict,
         slot_ref,
@@ -168,6 +173,9 @@ def authorized_seed_request(verdict, policy, slot_ref, account, artifact):
 
 def authorized_mint_request(verdict, policy, slot_ref, account, envelope):
     """Authorize and build a mint request descriptor."""
+    # bite-axis: mint authorization — passing authorize_credentials gate plus an account in
+    # mintableAccounts produce a mint request; unsupported mintable list refuses before pilot_seed
+    # is reached.
     pilot_boundary.authorize_credentials(
         verdict,
         slot_ref,
@@ -191,6 +199,9 @@ def authorized_mint_request(verdict, policy, slot_ref, account, envelope):
 
 def authorized_sentinel_probe_request(verdict, policy, slot_ref, sentinel, envelope):
     """Authorize and build a sentinel probe request descriptor."""
+    # bite-axis: sentinel authorization — passing authorize_credentials gate plus a known slot
+    # produce a sentinel probe request; credential refusal reddens before
+    # pilot_seed.sentinel_probe_request runs.
     pilot_boundary.authorize_credentials(
         verdict,
         slot_ref,
