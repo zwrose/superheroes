@@ -14,6 +14,8 @@ police descriptive prose, which legitimately still mentions the literals.
 import os
 import re
 
+from skill_surface import linked_reference_files
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILLS = os.path.normpath(os.path.join(HERE, "..", "..", "skills"))
 
@@ -53,22 +55,36 @@ def _section(text, heading, next_heading=None):
 
 
 def test_rule1_no_path_literal_inside_fences():
+    # axis: no path literal inside fenced blocks on skill surface (SKILL.md + linked references)
     offenders = []
     for skill in ALL_SKILLS:
-        for lineno, line in _lines_in_fences(_read(skill)):
-            for lit in PATH_LITERALS:
-                if lit in line:
-                    offenders.append(f"{skill}/SKILL.md:{lineno}: {lit}")
+        sources = [(os.path.join(SKILLS, skill, "SKILL.md"), f"{skill}/SKILL.md")]
+        for ref_path in linked_reference_files(skill):
+            sources.append((ref_path, f"{skill}/{os.path.relpath(ref_path, os.path.join(SKILLS, skill))}"))
+        for path, label in sources:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+            for lineno, line in _lines_in_fences(text):
+                for lit in PATH_LITERALS:
+                    if lit in line:
+                        offenders.append(f"{label}:{lineno}: {lit}")
     assert not offenders, "path literal inside a fence:\n" + "\n".join(offenders)
 
 
 def test_rule2_no_literal_existence_test_in_review_skills():
+    # axis: no literal .claude/review-profile.md existence test on review skill surface (SKILL.md + linked references)
     pat = re.compile(r"\[\s*!?\s*-f\s+\.claude/review-profile\.md\s*\]")
     offenders = []
     for skill in REVIEW_SKILLS:
-        for i, line in enumerate(_read(skill).splitlines(), 1):
-            if pat.search(line):
-                offenders.append(f"{skill}/SKILL.md:{i}")
+        sources = [(os.path.join(SKILLS, skill, "SKILL.md"), f"{skill}/SKILL.md")]
+        for ref_path in linked_reference_files(skill):
+            sources.append((ref_path, f"{skill}/{os.path.relpath(ref_path, os.path.join(SKILLS, skill))}"))
+        for path, label in sources:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+            for i, line in enumerate(text.splitlines(), 1):
+                if pat.search(line):
+                    offenders.append(f"{label}:{i}")
     assert not offenders, "literal existence test still present:\n" + "\n".join(offenders)
 
 

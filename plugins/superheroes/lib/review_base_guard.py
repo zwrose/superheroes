@@ -7,7 +7,7 @@ never certify on silence. The only two git operations used here are read-only (`
 `remote get-url`).
 
 Deliberate non-goal: the head-side fork gap (a PR whose head branch lives in a fork, which
-`git fetch origin "$PR_BRANCH"` cannot reach — see review-code SKILL ~line 230) is out of scope
+`git fetch origin "$PR_BRANCH"` cannot reach — see review-code SKILL.md §1 Setup, the "PR mode" block) is out of scope
 for #648. Fork support on the base side (fetching the base by URL) is deliberately deferred
 until a named consumer exists — detect and fail loud only.
 """
