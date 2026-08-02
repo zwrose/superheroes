@@ -24,6 +24,16 @@ def _path_has_symlinked_ancestor(path):
 
 
 @pytest.fixture
+def tmp_base():
+    return _TMP_BASE
+
+
+@pytest.fixture
+def path_has_symlinked_ancestor():
+    return _path_has_symlinked_ancestor
+
+
+@pytest.fixture
 def private_tmp():
     path = tempfile.mkdtemp(dir=_TMP_BASE)
     try:

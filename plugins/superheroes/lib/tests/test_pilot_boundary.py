@@ -507,10 +507,8 @@ def test_observe_datastore_identity_accepts_secure_observer(private_tmp):
 
 # --- T1 symlink-free temp base ------------------------------------------------
 
-def test_tmp_base_has_no_symlinked_ancestor():
-    from conftest import _TMP_BASE, _path_has_symlinked_ancestor
-
-    assert not _path_has_symlinked_ancestor(_TMP_BASE)
+def test_tmp_base_has_no_symlinked_ancestor(tmp_base, path_has_symlinked_ancestor):
+    assert not path_has_symlinked_ancestor(tmp_base)
 
 
 # --- T5 observer failure discrimination ---------------------------------------
