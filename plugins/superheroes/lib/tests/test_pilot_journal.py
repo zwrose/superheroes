@@ -2,6 +2,7 @@
 import json
 import os
 import shutil
+import stat
 import sys
 import tempfile
 
@@ -1009,3 +1010,43 @@ def test_replay_refuses_symlink(tmp_dir):
     result = pj.replay(journal)
     assert result["ok"] is False
     assert result["reason"] == pj.REASON_JOURNAL_UNREADABLE
+
+
+def test_write_record_partial_write_still_completes(tmp_dir, monkeypatch):
+    path = _journal(tmp_dir)
+    real_write = os.write
+    calls = {"count": 0}
+
+    def partial_write(fd, data):
+        calls["count"] += 1
+        if calls["count"] == 1 and len(data) > 1:
+            return real_write(fd, data[: len(data) // 2])
+        return real_write(fd, data)
+
+    monkeypatch.setattr(os, "write", partial_write)
+    result = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="partial1",
+    )
+    assert result["ok"] is True
+    with open(path, encoding="utf-8") as fh:
+        line = fh.readline()
+    record = json.loads(line)
+    assert record["effectId"] == "partial1"
+    assert record["phase"] == pj.PHASE_BEGIN
+
+
+def test_write_record_directory_fsync_failure(tmp_dir, monkeypatch):
+    path = _journal(tmp_dir)
+    real_fsync = os.fsync
+
+    def failing_fsync(fd):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError("simulated directory fsync failure")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", failing_fsync)
+    result = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="dirfsync1",
+    )
+    assert result["ok"] is False
+    assert result["reason"] == pj.REASON_JOURNAL_WRITE_FAILED
