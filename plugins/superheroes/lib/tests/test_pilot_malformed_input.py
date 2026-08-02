@@ -1,4 +1,4 @@
-"""Invariant: public pilot_lifecycle / pilot_journal entry points never leak builtin exceptions."""
+"""Invariant: public pilot_lifecycle / pilot_journal / pilot_appctl / pilot_wave entry points never leak builtin exceptions."""
 import inspect
 import json
 import os
@@ -15,6 +15,8 @@ if _LIB not in sys.path:
 
 import pilot_journal as pj  # noqa: E402
 import pilot_lifecycle as pl  # noqa: E402
+import pilot_appctl as pa  # noqa: E402
+import pilot_wave as pw  # noqa: E402
 import pilot_slot  # noqa: E402
 
 NOW = "2026-01-01T00:00:00Z"
@@ -41,6 +43,8 @@ ALLOWED_EXCEPTIONS = (
     pl.PilotLifecycleError,
     pj.PilotJournalError,
     pilot_slot.PilotSlotError,
+    pa.PilotAppctlError,
+    pw.PilotWaveError,
 )
 
 
@@ -53,13 +57,14 @@ def _safe_path_under(tmp, hostile):
 
 def _public_callables(module):
     names = set()
+    mod_name = module.__name__
     for name in dir(module):
         if name.startswith("_"):
             continue
         obj = getattr(module, name)
         if inspect.isclass(obj):
             continue
-        if callable(obj):
+        if callable(obj) and getattr(obj, "__module__", None) == mod_name:
             names.add(name)
     return names
 
@@ -70,6 +75,81 @@ def _valid_record():
 
 def _tmp_dir():
     return tempfile.mkdtemp()
+
+
+def _valid_instance():
+    return {
+        "schemaVersion": pa.SCHEMA,
+        "slot": SLOT,
+        "slotRef": SLOT_REF,
+        "state": pa.STATE_READY,
+        "pid": 1,
+        "pgid": 1,
+        "launchNonce": "a" * 32,
+        "cwd": os.path.realpath(tempfile.gettempdir()),
+        "allocation": {
+            "host": "127.0.0.1",
+            "port": 9,
+            "hostnames": [],
+            "containers": [],
+            "envMetadata": {},
+        },
+        "command": ["echo", "hi"],
+        "readinessUrl": "http://127.0.0.1:9/",
+        "readinessAttribution": pa.READINESS_ATTRIBUTION_UNATTRIBUTED,
+        "startedAt": NOW,
+        "updatedAt": NOW,
+        "stopReceipt": None,
+    }
+
+
+def _valid_launch(cwd):
+    return {
+        "authorized": {
+            "schemaVersion": 1,
+            "slotRef": SLOT_REF,
+            "baseUrl": "http://127.0.0.1/",
+            "readinessUrl": "http://127.0.0.1:9/",
+            "policyDigest": "abc",
+        },
+        "slot": SLOT,
+        "slotRef": SLOT_REF,
+        "cwd": cwd,
+        "argv": ["echo", "hi"],
+        "env": {},
+        "allocation": {
+            "host": "127.0.0.1",
+            "port": 9,
+            "hostnames": [],
+            "containers": [],
+            "envMetadata": {},
+        },
+        "readinessUrl": "http://127.0.0.1:9/",
+        "readinessAttribution": pa.READINESS_ATTRIBUTION_UNATTRIBUTED,
+        "readinessTimeoutSeconds": 1.0,
+        "pollSeconds": 0.1,
+    }
+
+
+def _valid_anchor():
+    return {
+        "schemaVersion": pw.SCHEMA,
+        "launchedAt": NOW,
+        "launchedAtMono": 0.0,
+        "deadlineSeconds": 10.0,
+        "marginSeconds": 5.0,
+    }
+
+
+def _valid_teardown_entry():
+    return {
+        "slot": SLOT,
+        "slotRef": SLOT_REF,
+        "intent": pw.INTENT_COMPLETE,
+        "instance": None,
+        "allocation": None,
+        "stepTimeoutSeconds": None,
+    }
 
 
 def _invoke_lifecycle(name, hostile, param):
@@ -236,6 +316,237 @@ def _invoke_journal(name, hostile, param):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _invoke_appctl(name, hostile, param):
+    tmp = _tmp_dir()
+    try:
+        slots_path = os.path.join(tmp, "slots")
+        journal_path = os.path.join(tmp, "journal.jsonl")
+        open(journal_path, "a", encoding="utf-8").close()
+        cwd = os.path.realpath(tempfile.gettempdir())
+        if name == "instance_path":
+            if param == "slots_dir_path":
+                return pa.instance_path(_safe_path_under(tmp, hostile), SLOT)
+            return pa.instance_path(slots_path, hostile)
+        if name == "resolve_invocation":
+            if param == "dev_command":
+                return pa.resolve_invocation(hostile, params={}, readiness_url="http://x/")
+            if param == "params":
+                return pa.resolve_invocation(["echo"], params=hostile, readiness_url="http://x/")
+            if param == "readiness_url":
+                return pa.resolve_invocation(["echo"], params={}, readiness_url=hostile)
+            return pa.resolve_invocation(["echo"], params={}, readiness_url="http://x/", env=hostile)
+        if name == "assert_unique_endpoints":
+            return pa.assert_unique_endpoints(hostile)
+        if name == "check_endpoint_free":
+            if param == "host":
+                return pa.check_endpoint_free(hostile, 9)
+            if param == "port":
+                return pa.check_endpoint_free("127.0.0.1", hostile)
+            if param == "timeout":
+                return pa.check_endpoint_free("127.0.0.1", 9, timeout=hostile)
+            return pa.check_endpoint_free("127.0.0.1", 9, connect=hostile)
+        if name == "retry_gate":
+            return pa.retry_gate(hostile)
+        if name == "write_instance":
+            inst = _valid_instance()
+            if param == "slots_dir_path":
+                return pa.write_instance(_safe_path_under(tmp, hostile), SLOT, inst)
+            if param == "slot":
+                return pa.write_instance(slots_path, hostile, inst)
+            if param == "instance":
+                return pa.write_instance(slots_path, SLOT, hostile)
+            return pa.write_instance(slots_path, SLOT, inst, timeout=hostile)
+        if name == "read_instance":
+            if param == "slots_dir_path":
+                return pa.read_instance(_safe_path_under(tmp, hostile), SLOT)
+            return pa.read_instance(slots_path, hostile)
+        if name == "clear_instance":
+            if param == "slots_dir_path":
+                return pa.clear_instance(_safe_path_under(tmp, hostile), SLOT)
+            if param == "slot":
+                return pa.clear_instance(slots_path, hostile)
+            return pa.clear_instance(slots_path, SLOT, timeout=hostile)
+        if name == "stand_up":
+            launch = _valid_launch(cwd)
+            kwargs = {
+                "journal_path": journal_path,
+                "slots_dir_path": slots_path,
+                "now": NOW,
+                "now_fn": lambda: NOW,
+                "registry": {},
+                "declaration": {},
+            }
+            if param == "launch":
+                return pa.stand_up(hostile, **kwargs)
+            if param == "journal_path":
+                kwargs["journal_path"] = hostile
+            elif param == "slots_dir_path":
+                kwargs["slots_dir_path"] = _safe_path_under(tmp, hostile)
+            elif param == "now":
+                kwargs["now"] = hostile
+            elif param == "now_fn":
+                kwargs["now_fn"] = hostile
+            elif param == "registry":
+                kwargs["registry"] = hostile
+            elif param == "declaration":
+                kwargs["declaration"] = hostile
+            elif param == "spawn":
+                kwargs["spawn"] = hostile
+            elif param == "readiness_probe":
+                kwargs["readiness_probe"] = hostile
+            elif param == "monotonic":
+                kwargs["monotonic"] = hostile
+            else:
+                kwargs["sleep"] = hostile
+            return pa.stand_up(launch, **kwargs)
+        if name == "stop":
+            inst = _valid_instance()
+            kwargs = {"now_fn": lambda: NOW}
+            if param == "instance":
+                return pa.stop(hostile, **kwargs)
+            if param == "now_fn":
+                kwargs["now_fn"] = hostile
+            elif param == "terminate":
+                kwargs["terminate"] = hostile
+            elif param == "poll_alive":
+                kwargs["poll_alive"] = hostile
+            elif param == "corroborate":
+                kwargs["corroborate"] = hostile
+            elif param == "check_free":
+                kwargs["check_free"] = hostile
+            elif param == "wait_seconds":
+                kwargs["wait_seconds"] = hostile
+            elif param == "sleep":
+                kwargs["sleep"] = hostile
+            else:
+                kwargs["monotonic"] = hostile
+            return pa.stop(inst, **kwargs)
+        raise AssertionError("unhandled appctl function %r" % name)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _invoke_wave(name, hostile, param):
+    tmp = _tmp_dir()
+    try:
+        slots_path = os.path.join(tmp, "slots")
+        journal_path = os.path.join(tmp, "journal.jsonl")
+        open(journal_path, "a", encoding="utf-8").close()
+        if name == "park_latch_path":
+            if param == "slots_dir_path":
+                return pw.park_latch_path(_safe_path_under(tmp, hostile), SLOT)
+            return pw.park_latch_path(slots_path, hostile)
+        if name == "wave_anchor":
+            kwargs = {
+                "launched_at": NOW,
+                "deadline_seconds": 10,
+                "margin_seconds": 5,
+            }
+            if param == "launched_at":
+                kwargs["launched_at"] = hostile
+            elif param == "deadline_seconds":
+                kwargs["deadline_seconds"] = hostile
+            elif param == "margin_seconds":
+                kwargs["margin_seconds"] = hostile
+            else:
+                kwargs["monotonic"] = hostile
+            return pw.wave_anchor(**kwargs)
+        if name == "wave_phase":
+            anchor = _valid_anchor()
+            if param == "anchor":
+                return pw.wave_phase(hostile)
+            return pw.wave_phase(anchor, monotonic=hostile)
+        if name == "admit_work":
+            anchor = _valid_anchor()
+            if param == "anchor":
+                return pw.admit_work(hostile)
+            return pw.admit_work(anchor, monotonic=hostile)
+        if name == "latch_park":
+            kwargs = {
+                "slot_ref": SLOT_REF,
+                "now": NOW,
+                "reason": "park",
+            }
+            if param == "slots_dir_path":
+                return pw.latch_park(_safe_path_under(tmp, hostile), SLOT, **kwargs)
+            if param == "slot":
+                return pw.latch_park(slots_path, hostile, **kwargs)
+            if param == "slot_ref":
+                kwargs["slot_ref"] = hostile
+            elif param == "now":
+                kwargs["now"] = hostile
+            elif param == "reason":
+                kwargs["reason"] = hostile
+            else:
+                kwargs["timeout"] = hostile
+            return pw.latch_park(slots_path, SLOT, **kwargs)
+        if name == "read_park_latch":
+            if param == "slots_dir_path":
+                return pw.read_park_latch(_safe_path_under(tmp, hostile), SLOT)
+            if param == "slot":
+                return pw.read_park_latch(slots_path, hostile)
+            return pw.read_park_latch(slots_path, SLOT, timeout=hostile)
+        if name == "validate_step_result":
+            if param == "result":
+                return pw.validate_step_result(hostile, step=pw.STEP_APP, slot_ref=SLOT_REF)
+            if param == "step":
+                return pw.validate_step_result({}, step=hostile, slot_ref=SLOT_REF)
+            return pw.validate_step_result({}, step=pw.STEP_APP, slot_ref=hostile)
+        if name == "assert_destructive_allowed":
+            if param == "step":
+                return pw.assert_destructive_allowed(hostile, intent=pw.INTENT_COMPLETE, latched=False)
+            if param == "intent":
+                return pw.assert_destructive_allowed(pw.STEP_CLEANUP, intent=hostile, latched=False)
+            return pw.assert_destructive_allowed(pw.STEP_CLEANUP, intent=pw.INTENT_COMPLETE, latched=hostile)
+        if name == "teardown_slot":
+            entry = _valid_teardown_entry()
+            kwargs = {
+                "handlers": {},
+                "slots_dir_path": slots_path,
+                "journal_path": journal_path,
+                "now_fn": lambda: NOW,
+            }
+            if param == "entry":
+                return pw.teardown_slot(hostile, **kwargs)
+            if param == "handlers":
+                kwargs["handlers"] = hostile
+            elif param == "slots_dir_path":
+                kwargs["slots_dir_path"] = _safe_path_under(tmp, hostile)
+            elif param == "journal_path":
+                kwargs["journal_path"] = hostile
+            elif param == "now_fn":
+                kwargs["now_fn"] = hostile
+            else:
+                kwargs["monotonic"] = hostile
+            return pw.teardown_slot(entry, **kwargs)
+        if name == "run_teardown":
+            entry = _valid_teardown_entry()
+            kwargs = {
+                "handlers": {},
+                "slots_dir_path": slots_path,
+                "journal_path": journal_path,
+                "now_fn": lambda: NOW,
+            }
+            if param == "slots":
+                return pw.run_teardown(hostile, **kwargs)
+            if param == "handlers":
+                kwargs["handlers"] = hostile
+            elif param == "slots_dir_path":
+                kwargs["slots_dir_path"] = _safe_path_under(tmp, hostile)
+            elif param == "journal_path":
+                kwargs["journal_path"] = hostile
+            elif param == "now_fn":
+                kwargs["now_fn"] = hostile
+            else:
+                kwargs["monotonic"] = hostile
+            return pw.run_teardown([entry], **kwargs)
+        if name == "wave_report":
+            return pw.wave_report(hostile)
+        raise AssertionError("unhandled wave function %r" % name)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def _lifecycle_params(name):
     if name == "generation_check":
         return ("carried", "current")
@@ -280,8 +591,65 @@ def _journal_params(name):
     raise AssertionError("add driver params for new public function %r" % name)
 
 
+def _appctl_params(name):
+    if name == "instance_path":
+        return ("slots_dir_path", "slot")
+    if name == "resolve_invocation":
+        return ("dev_command", "params", "readiness_url", "env")
+    if name == "assert_unique_endpoints":
+        return ("allocations",)
+    if name == "check_endpoint_free":
+        return ("host", "port", "connect", "timeout")
+    if name == "retry_gate":
+        return ("reason",)
+    if name == "write_instance":
+        return ("slots_dir_path", "slot", "instance", "timeout")
+    if name == "read_instance":
+        return ("slots_dir_path", "slot")
+    if name == "clear_instance":
+        return ("slots_dir_path", "slot", "timeout")
+    if name == "stand_up":
+        return (
+            "launch", "journal_path", "slots_dir_path", "now", "now_fn",
+            "registry", "declaration", "spawn", "readiness_probe",
+            "monotonic", "sleep",
+        )
+    if name == "stop":
+        return (
+            "instance", "now_fn", "terminate", "poll_alive", "corroborate",
+            "check_free", "wait_seconds", "sleep", "monotonic",
+        )
+    raise AssertionError("add driver params for new public function %r" % name)
+
+
+def _wave_params(name):
+    if name == "park_latch_path":
+        return ("slots_dir_path", "slot")
+    if name == "wave_anchor":
+        return ("launched_at", "deadline_seconds", "margin_seconds", "monotonic")
+    if name in ("wave_phase", "admit_work"):
+        return ("anchor", "monotonic")
+    if name == "latch_park":
+        return ("slots_dir_path", "slot", "slot_ref", "now", "reason", "timeout")
+    if name == "read_park_latch":
+        return ("slots_dir_path", "slot", "timeout")
+    if name == "validate_step_result":
+        return ("result", "step", "slot_ref")
+    if name == "assert_destructive_allowed":
+        return ("step", "intent", "latched")
+    if name == "teardown_slot":
+        return ("entry", "handlers", "slots_dir_path", "journal_path", "now_fn", "monotonic")
+    if name == "run_teardown":
+        return ("slots", "handlers", "slots_dir_path", "journal_path", "now_fn", "monotonic")
+    if name == "wave_report":
+        return ("results",)
+    raise AssertionError("add driver params for new public function %r" % name)
+
+
 DRIVERS_LIFECYCLE = {name: _invoke_lifecycle for name in _public_callables(pl)}
 DRIVERS_JOURNAL = {name: _invoke_journal for name in _public_callables(pj)}
+DRIVERS_APPCTL = {name: _invoke_appctl for name in _public_callables(pa)}
+DRIVERS_WAVE = {name: _invoke_wave for name in _public_callables(pw)}
 
 assert set(DRIVERS_LIFECYCLE) == _public_callables(pl), (
     "pilot_lifecycle public API changed — add drivers for: %s"
@@ -290,6 +658,14 @@ assert set(DRIVERS_LIFECYCLE) == _public_callables(pl), (
 assert set(DRIVERS_JOURNAL) == _public_callables(pj), (
     "pilot_journal public API changed — add drivers for: %s"
     % sorted(_public_callables(pj) - set(DRIVERS_JOURNAL))
+)
+assert set(DRIVERS_APPCTL) == _public_callables(pa), (
+    "pilot_appctl public API changed — add drivers for: %s"
+    % sorted(_public_callables(pa) - set(DRIVERS_APPCTL))
+)
+assert set(DRIVERS_WAVE) == _public_callables(pw), (
+    "pilot_wave public API changed — add drivers for: %s"
+    % sorted(_public_callables(pw) - set(DRIVERS_WAVE))
 )
 
 
@@ -317,6 +693,20 @@ def test_pilot_lifecycle_public_api_never_leaks_builtin_exceptions(name, hostile
 def test_pilot_journal_public_api_never_leaks_builtin_exceptions(name, hostile):
     for param in _journal_params(name):
         _assert_no_leaked_exceptions("pilot_journal", name, param, hostile, _invoke_journal)
+
+
+@pytest.mark.parametrize("name", sorted(DRIVERS_APPCTL))
+@pytest.mark.parametrize("hostile", HOSTILE_VALUES, ids=lambda v: repr(v)[:40])
+def test_pilot_appctl_public_api_never_leaks_builtin_exceptions(name, hostile):
+    for param in _appctl_params(name):
+        _assert_no_leaked_exceptions("pilot_appctl", name, param, hostile, _invoke_appctl)
+
+
+@pytest.mark.parametrize("name", sorted(DRIVERS_WAVE))
+@pytest.mark.parametrize("hostile", HOSTILE_VALUES, ids=lambda v: repr(v)[:40])
+def test_pilot_wave_public_api_never_leaks_builtin_exceptions(name, hostile):
+    for param in _wave_params(name):
+        _assert_no_leaked_exceptions("pilot_wave", name, param, hostile, _invoke_wave)
 
 
 def test_replay_refuses_hostile_journal_lines():
