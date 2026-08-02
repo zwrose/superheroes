@@ -518,6 +518,152 @@ def test_compose_argv_shape(tmp_path):
     assert result["argv"] == ["claude", "--model", "sonnet", "-p", result["prompt"]]
 
 
+def _write_core_with_builder_tier(repo, prefs):
+    import importlib.util as _u
+    _lib = os.path.join(_HERE, "..")
+    spec = _u.spec_from_file_location("core_md", os.path.join(_lib, "core_md.py"))
+    cm = _u.module_from_spec(spec)
+    spec.loader.exec_module(cm)
+    facts = {
+        "verifyCommand": "npm test",
+        "stackTags": [],
+        "threatModel": "x",
+        "patterns": "",
+        "enginePreferences": prefs,
+    }
+    text = cm.render_core(facts, "confirmed", "2026-06-30", "2026-06-30")
+    core_dir = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(core_dir, exist_ok=True)
+    with open(os.path.join(core_dir, "core.md"), "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+
+def test_compose_default_tier_from_unset_config(tmp_path):
+  # axis: unset builderDispatchTier resolves launch to opus default tier
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo)
+    result = L.compose_launch(repo, 656, premise)
+    assert result["ok"] is True
+    assert "opus" in result["argv"]
+    assert result["modelResolution"]["source"] == "default"
+
+
+def test_compose_configured_sonnet_from_core_md(tmp_path):
+  # axis: configured sonnet tier passes through compose_launch argv
+    repo = _init_repo(tmp_path / "repo")
+    _write_core_with_builder_tier(repo, {"builderDispatchTier": "sonnet"})
+    premise = _valid_premise(repo)
+    result = L.compose_launch(repo, 656, premise)
+    assert result["ok"] is True
+    assert "sonnet" in result["argv"]
+    assert "opus" not in result["argv"]
+    assert result["modelResolution"]["source"] == "configured"
+
+
+def test_compose_configured_fable_falls_back_to_opus(tmp_path):
+  # axis: configured fable tier refused — launch falls back to opus default
+    repo = _init_repo(tmp_path / "repo")
+    _write_core_with_builder_tier(repo, {"builderDispatchTier": "fable"})
+    premise = _valid_premise(repo)
+    result = L.compose_launch(repo, 656, premise)
+    assert result["ok"] is True
+    assert "opus" in result["argv"]
+    assert "fable" not in result["argv"]
+    assert result["modelResolution"]["source"] == "invalid-config-default"
+    assert result["modelResolution"]["reason"] == "fable-never-a-launch-default"
+
+
+def test_compose_unreadable_profile_defaults_to_opus(tmp_path, monkeypatch):
+  # axis: unreadable profile fail-closed to opus via load_builder_dispatch_tier
+    repo = _init_repo(tmp_path / "repo")
+    import engine_pref as ep
+
+    def _unreadable(_cwd, root=None):
+        return {
+            "tier": "opus",
+            "source": "unreadable-default",
+            "reason": "profile-ambiguous",
+        }
+
+    monkeypatch.setattr(ep, "load_builder_dispatch_tier", _unreadable)
+    premise = _valid_premise(repo)
+    result = L.compose_launch(repo, 656, premise)
+    assert result["ok"] is True
+    assert "opus" in result["argv"]
+    assert result["modelResolution"]["source"] == "unreadable-default"
+    assert result["modelResolution"]["reason"] == "profile-ambiguous"
+
+
+def test_compose_explicit_model_beats_configured_tier(tmp_path):
+  # axis: explicit --model beats configured builderDispatchTier
+    repo = _init_repo(tmp_path / "repo")
+    _write_core_with_builder_tier(repo, {"builderDispatchTier": "haiku"})
+    premise = _valid_premise(repo)
+    result = L.compose_launch(repo, 656, premise, model="sonnet")
+    assert result["ok"] is True
+    assert "sonnet" in result["argv"]
+    assert result["modelResolution"]["source"] == "explicit"
+
+
+def test_compose_model_fable_refuses(tmp_path):
+  # axis: explicit fable model refused — not registry-known for launch
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo)
+    result = L.compose_launch(repo, 656, premise, model="fable")
+    assert result["ok"] is False
+    assert result["reason"] == "model-not-registry-known"
+
+
+def test_launch_build_reserved_carries_model_source(tmp_path, monkeypatch):
+  # axis: reserved ledger row carries model + modelResolution source from compose
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is True
+    assert result["model"] == "opus"
+    assert result["modelResolution"]["source"] == "default"
+    records = ll.read(repo)["records"]
+    reserved = [r for r in records if r.get("event") == "reserved"][0]
+    assert reserved["modelSource"] == "default"
+    assert reserved["modelReason"] == ""
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_launch_build_preflight_refusal_empty_model_source(tmp_path, monkeypatch):
+  # axis: preflight refusal leaves modelSource and modelReason empty on reserved row
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    checks = _all_checks()
+    checks["engine-auth"] = {"state": "fail", "reason": "no auth"}
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        checks,
+        log_dir,
+    )
+    assert result["ok"] is False
+    records = ll.read(repo)["records"]
+    reserved = [r for r in records if r.get("event") == "reserved"]
+    assert len(reserved) == 1
+    assert reserved[0]["model"] == ""
+    assert reserved[0]["modelSource"] == ""
+    assert reserved[0]["modelReason"] == ""
+
+
 # --- spawn ordering and detachment ---------------------------------------------
 
 

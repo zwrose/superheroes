@@ -2123,3 +2123,385 @@ def test_confirm_all_bounded_git_calls(tmp_path, monkeypatch):
     res = CM.confirm_all(repo, root=store)
     assert res == {"core": {"action": "absent", "record": None}, "layers": {}}
     assert counter["n"] <= 6
+
+
+def test_profile_structural_refusal_none_for_normal_single_block_core(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.write(repo, dict(_CORE_FACTS), "confirmed", root=store, now="2026-06-26")
+    assert CM.profile_structural_refusal(repo, root=store) is None
+
+
+def test_profile_structural_refusal_multiple_core_blocks(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.write(repo, dict(_CORE_FACTS), "confirmed", root=store, now="2026-06-26")
+    path = CM.core_path(repo, root=store)
+    text = open(path, encoding="utf-8").read()
+    extra = "\n```json superheroes-core\n{\"schemaVersion\": 2}\n```\n"
+    open(path, "w", encoding="utf-8").write(text + extra)
+    reason = CM.profile_structural_refusal(repo, root=store)
+    assert reason is not None
+    assert reason.startswith("multiple-core-blocks:")
+    assert path in reason
+
+
+def test_profile_structural_refusal_duplicate_top_level_key(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    path = _gate_core_beside(repo)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    block = (
+        '{\n  "schemaVersion": 2,\n  "verifyCommand": "npm test",\n'
+        '  "stackTags": [],\n  "verifyCommand": "dup"\n}'
+    )
+    open(path, "w", encoding="utf-8").write(
+        "<!-- superheroes-core: schemaVersion=2 status=confirmed "
+        "created=2026-01-01 updated=2026-01-01 -->\n\n"
+        "## Threat model\n\nt\n\n## Canonical patterns\n\n\n"
+        "```json superheroes-core\n%s\n```\n" % block
+    )
+    reason = CM.profile_structural_refusal(repo, root=store)
+    assert reason == "duplicate-core-key:verifyCommand"
+
+
+def test_profile_structural_refusal_duplicate_nested_engine_preferences_key(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    path = _gate_core_beside(repo)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    block = (
+        '{\n  "schemaVersion": 2,\n  "verifyCommand": "npm test",\n  "stackTags": [],\n'
+        '  "enginePreferences": {\n    "reviewer": "claude",\n    "reviewer": "codex"\n  }\n}'
+    )
+    open(path, "w", encoding="utf-8").write(
+        "<!-- superheroes-core: schemaVersion=2 status=confirmed "
+        "created=2026-01-01 updated=2026-01-01 -->\n\n"
+        "## Threat model\n\nt\n\n## Canonical patterns\n\n\n"
+        "```json superheroes-core\n%s\n```\n" % block
+    )
+    reason = CM.profile_structural_refusal(repo, root=store)
+    assert reason == "duplicate-core-key:reviewer"
+
+
+def test_profile_structural_refusal_none_for_corrupt_block(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    path = _gate_core_beside(repo)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "w", encoding="utf-8").write(
+        "<!-- superheroes-core: schemaVersion=2 status=confirmed "
+        "created=2026-01-01 updated=2026-01-01 -->\n\n"
+        "## Threat model\n\nt\n\n## Canonical patterns\n\n\n"
+        "```json superheroes-core\n{ not json\n```\n"
+    )
+    assert CM.profile_structural_refusal(repo, root=store) is None
+
+
+def test_profile_structural_refusal_none_when_no_core_md(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    assert CM.profile_structural_refusal(repo, root=store) is None
+
+
+# ---------------------------------------------------------------------------
+# issue #755 — write_builder_dispatch_tier surgical writer
+# ---------------------------------------------------------------------------
+
+_BUILDER_SIBLING_PREFS = {
+    "reviewer": "codex",
+    "implementation": "cursor",
+    "codexModels": {"build": "gpt-4"},
+}
+
+
+def _write_core_for_builder_tests(tmp_path, prefs=None, show_it=None):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    facts = dict(_CORE_FACTS)
+    if prefs is not None:
+        facts["enginePreferences"] = dict(prefs)
+    if show_it is not None:
+        facts["showItSurface"] = show_it
+    CM.write(repo, facts, "confirmed", root=store, now="2026-06-26")
+    return repo, store
+
+
+def test_write_builder_dispatch_tier_written_and_parses(tmp_path):
+    repo, store = _write_core_for_builder_tests(tmp_path)
+    res = CM.write_builder_dispatch_tier(repo, "sonnet", root=store)
+    assert res["action"] == "written"
+    got = CM.read(repo, root=store)
+    assert got["enginePreferences"]["builderDispatchTier"] == "sonnet"
+
+
+def test_write_builder_dispatch_tier_sibling_preservation(tmp_path):
+    repo, store = _write_core_for_builder_tests(tmp_path, prefs=_BUILDER_SIBLING_PREFS)
+    res = CM.write_builder_dispatch_tier(repo, "sonnet", root=store)
+    assert res["action"] == "written"
+    got = CM.read(repo, root=store)
+    prefs = got["enginePreferences"]
+    assert prefs["builderDispatchTier"] == "sonnet"
+    assert prefs["reviewer"] == "codex"
+    assert prefs["implementation"] == "cursor"
+    assert prefs["codexModels"] == {"build": "gpt-4"}
+
+
+def test_write_builder_dispatch_tier_prose_preservation(tmp_path):
+    repo, store = _write_core_for_builder_tests(tmp_path, show_it=_SHOW_IT_BODY)
+    path = CM.core_path(repo, store)
+    before = open(path, encoding="utf-8").read()
+    threat_before = CM._section(before, "Threat model")
+    patterns_before = CM._section(before, "Canonical patterns")
+    show_it_before = CM._section(before, "Show-it surface")
+    res = CM.write_builder_dispatch_tier(repo, "sonnet", root=store)
+    assert res["action"] == "written"
+    after = open(path, encoding="utf-8").read()
+    assert CM._section(after, "Threat model") == threat_before
+    assert CM._section(after, "Canonical patterns") == patterns_before
+    assert CM._section(after, "Show-it surface") == show_it_before
+
+
+def test_write_builder_dispatch_tier_noop_when_unchanged(tmp_path):
+    repo, store = _write_core_for_builder_tests(
+        tmp_path, prefs={"builderDispatchTier": "sonnet"})
+    CM.write_builder_dispatch_tier(repo, "sonnet", root=store)
+    res = CM.write_builder_dispatch_tier(repo, "sonnet", root=store)
+    assert res["action"] == "noop"
+
+
+def test_write_builder_dispatch_tier_clear_removes_key_preserves_siblings(tmp_path):
+    repo, store = _write_core_for_builder_tests(
+        tmp_path, prefs=dict(_BUILDER_SIBLING_PREFS, builderDispatchTier="sonnet"))
+    res = CM.write_builder_dispatch_tier(repo, None, root=store)
+    assert res["action"] == "written"
+    got = CM.read(repo, root=store)
+    assert "builderDispatchTier" not in got["enginePreferences"]
+    assert got["enginePreferences"]["reviewer"] == "codex"
+    assert got["enginePreferences"]["implementation"] == "cursor"
+    assert got["enginePreferences"]["codexModels"] == {"build": "gpt-4"}
+
+
+def test_write_builder_dispatch_tier_clear_noop_when_already_absent(tmp_path):
+    repo, store = _write_core_for_builder_tests(tmp_path, prefs=_BUILDER_SIBLING_PREFS)
+    res = CM.write_builder_dispatch_tier(repo, None, root=store)
+    assert res["action"] == "noop"
+
+
+@pytest.mark.parametrize("tier,reason", [
+    ("fable", "fable-never-a-launch-default"),
+    ("nonsense", "builder-tier-not-sanctioned:nonsense"),
+    (True, "builder-tier-not-a-string"),
+    (5, "builder-tier-not-a-string"),
+    ({}, "builder-tier-not-a-string"),
+    ("   ", "builder-tier-empty"),
+])
+def test_write_builder_dispatch_tier_refused_invalid_tier_byte_identical(
+        tmp_path, tier, reason):
+    repo, store = _write_core_for_builder_tests(
+        tmp_path, prefs=dict(_BUILDER_SIBLING_PREFS, builderDispatchTier="opus"))
+    path = CM.core_path(repo, store)
+    before = open(path, encoding="utf-8").read()
+    res = CM.write_builder_dispatch_tier(repo, tier, root=store)
+    assert res["action"] == "refused"
+    assert res["reason"] == reason
+    after = open(path, encoding="utf-8").read()
+    assert after == before
+
+
+def test_write_builder_dispatch_tier_refused_duplicate_key_byte_identical(tmp_path):
+    # axis: profile_structural_refusal blocks the write before the lock splice — duplicate-key
+    # fixture (not multiple-blocks, which the len(blocks) check would refuse anyway).
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.mode_registry.ensure_project_store(repo, store)
+    path = _gate_core_beside(repo)
+    block = (
+        '{\n  "schemaVersion": 2,\n  "verifyCommand": "npm test",\n  "stackTags": [],\n'
+        '  "enginePreferences": {\n    "reviewer": "claude",\n    "reviewer": "codex"\n  }\n}'
+    )
+    open(path, "w", encoding="utf-8").write(
+        "<!-- superheroes-core: schemaVersion=2 status=confirmed "
+        "created=2026-01-01 updated=2026-01-01 -->\n\n"
+        "## Threat model\n\nt\n\n## Canonical patterns\n\n\n"
+        "```json superheroes-core\n%s\n```\n" % block
+    )
+    before = open(path, encoding="utf-8").read()
+    res = CM.write_builder_dispatch_tier(repo, "sonnet", root=store)
+    assert res["action"] == "refused"
+    assert res["reason"] == "duplicate-core-key:reviewer"
+    after = open(path, encoding="utf-8").read()
+    assert after == before
+
+
+def test_write_builder_dispatch_tier_refused_absent_core(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.mode_registry.ensure_project_store(repo, store)
+    res = CM.write_builder_dispatch_tier(repo, "sonnet", root=store)
+    assert res["action"] == "refused"
+    assert res["reason"] == CM.BUILDER_DISPATCH_REASON_ABSENT
+
+
+def test_write_builder_dispatch_tier_behind_refuses(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    facts = dict(_CORE_FACTS)
+    text = CM.render_core(facts, "confirmed", "2026-06-26", "2026-06-26")
+    text = text.replace(
+        '"schemaVersion": %d' % CM.SCHEMA_VERSION,
+        '"schemaVersion": %d' % (CM.SCHEMA_VERSION + 1),
+        1,
+    )
+    text = text.replace(
+        "schemaVersion=%d" % CM.SCHEMA_VERSION,
+        "schemaVersion=%d" % (CM.SCHEMA_VERSION + 1),
+        1,
+    )
+    CM.mode_registry.ensure_project_store(repo, store)
+    path = CM.core_path(repo, store)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "w").write(text)
+    before = open(path, encoding="utf-8").read()
+    res = CM.write_builder_dispatch_tier(repo, "sonnet", root=store)
+    assert res["action"] == "behind"
+    assert res["reason"] == CM.BUILDER_DISPATCH_DEFER_SCHEMA_BEHIND
+    after = open(path, encoding="utf-8").read()
+    assert after == before
+
+
+def test_cli_write_builder_tier_from_stdin(tmp_path, capsys, monkeypatch):
+    import io
+
+    repo, store = _write_core_for_builder_tests(tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO("sonnet"))
+    rc = CM.main(["write-builder-tier", "--cwd", repo, "--root", store])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["action"] == "written"
+    assert CM.read(repo, root=store)["enginePreferences"]["builderDispatchTier"] == "sonnet"
+
+
+def test_cli_write_builder_tier_empty_stdin_clears(tmp_path, capsys, monkeypatch):
+    import io
+
+    repo, store = _write_core_for_builder_tests(
+        tmp_path, prefs={"builderDispatchTier": "sonnet"})
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    rc = CM.main(["write-builder-tier", "--cwd", repo, "--root", store])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["action"] == "written"
+    assert "builderDispatchTier" not in CM.read(repo, root=store)["enginePreferences"]
+
+
+def test_write_builder_dispatch_tier_refused_round_trip_sibling_divergence(tmp_path, monkeypatch):
+    # axis: when the spliced candidate would change anything other than
+    # enginePreferences.builderDispatchTier, the write is REFUSED and the file on disk is left
+    # byte-identical.
+    repo, store = _write_core_for_builder_tests(tmp_path, prefs=_BUILDER_SIBLING_PREFS)
+    path = CM.core_path(repo, store)
+    before_bytes = open(path, "rb").read()
+    real_splice = CM._splice_single_json_block
+
+    def _splice_with_extra_pref_key(text, new_body):
+        candidate = real_splice(text, new_body)
+        if candidate is None:
+            return None
+        block = json.loads(CM._JSON_BLOCK.search(candidate).group(1))
+        prefs = block.setdefault("enginePreferences", {})
+        prefs["pilot"] = "codex"
+        modified_body = json.dumps(block, indent=2)
+        return real_splice(candidate, modified_body)
+
+    monkeypatch.setattr(CM, "_splice_single_json_block", _splice_with_extra_pref_key)
+    res = CM.write_builder_dispatch_tier(repo, "sonnet", root=store)
+    assert res == {"action": "refused", "reason": CM.BUILDER_DISPATCH_REASON_ROUND_TRIP}
+    assert open(path, "rb").read() == before_bytes
+
+
+_TOP_LEVEL_ROUND_TRIP_KEYS = (
+    "schemaVersion", "status", "verifyCommand", "stackTags",
+    "threatModel", "patterns", "showItSurface", "created",
+)
+
+
+def _diverge_builder_round_trip_candidate(candidate, key, real_splice):
+    """Return candidate text whose parse diverges from orig on one top-level fact."""
+    if key == "schemaVersion":
+        block = json.loads(CM._JSON_BLOCK.search(candidate).group(1))
+        block["schemaVersion"] = CM.SCHEMA_VERSION + 99
+        return real_splice(candidate, json.dumps(block, indent=2))
+    if key == "verifyCommand":
+        block = json.loads(CM._JSON_BLOCK.search(candidate).group(1))
+        block["verifyCommand"] = "diverged-command"
+        return real_splice(candidate, json.dumps(block, indent=2))
+    if key == "stackTags":
+        block = json.loads(CM._JSON_BLOCK.search(candidate).group(1))
+        block["stackTags"] = ["diverged-tag"]
+        return real_splice(candidate, json.dumps(block, indent=2))
+    if key == "status":
+        return candidate.replace("status=confirmed", "status=provisional", 1)
+    if key == "created":
+        return candidate.replace("created=2026-06-26", "created=2026-01-01", 1)
+    if key == "threatModel":
+        return candidate.replace("single-user", "diverged-threat-model", 1)
+    if key == "patterns":
+        return candidate.replace("- x: a.ts:1", "diverged-pattern", 1)
+    if key == "showItSurface":
+        insert = "## Show-it surface\n\ndiverged show-it\n\n"
+        fence = "```json superheroes-core"
+        idx = candidate.index(fence)
+        return candidate[:idx] + insert + candidate[idx:]
+    raise ValueError("unknown top-level round-trip key %r" % key)
+
+
+@pytest.mark.parametrize("top_level_key", _TOP_LEVEL_ROUND_TRIP_KEYS)
+def test_write_builder_dispatch_tier_refused_round_trip_top_level_divergence(
+    tmp_path, monkeypatch, top_level_key,
+):
+    # axis: when the spliced candidate would change any top-level fact other than
+    # enginePreferences.builderDispatchTier, the write is REFUSED and the file on disk is left
+    # byte-identical.
+    repo, store = _write_core_for_builder_tests(tmp_path, prefs=_BUILDER_SIBLING_PREFS)
+    path = CM.core_path(repo, store)
+    before_bytes = open(path, "rb").read()
+    real_splice = CM._splice_single_json_block
+
+    def _splice_with_top_level_divergence(text, new_body):
+        candidate = real_splice(text, new_body)
+        if candidate is None:
+            return None
+        return _diverge_builder_round_trip_candidate(candidate, top_level_key, real_splice)
+
+    monkeypatch.setattr(CM, "_splice_single_json_block", _splice_with_top_level_divergence)
+    res = CM.write_builder_dispatch_tier(repo, "sonnet", root=store)
+    assert res == {"action": "refused", "reason": CM.BUILDER_DISPATCH_REASON_ROUND_TRIP}
+    assert open(path, "rb").read() == before_bytes
+
+
+def test_write_builder_dispatch_tier_deferred_lock_contended(tmp_path, monkeypatch):
+    # axis: lock-contended builder-tier write returns deferred with a stable path-free reason.
+    repo, store = _write_core_for_builder_tests(tmp_path)
+
+    @contextlib.contextmanager
+    def _contended(cwd, root=None):
+        yield False
+
+    monkeypatch.setattr(CM.mode_registry, "config_lock", _contended)
+    res = CM.write_builder_dispatch_tier(repo, "sonnet", root=store)
+    assert res == {
+        "action": "deferred",
+        "reason": CM.BUILDER_DISPATCH_DEFER_LOCK_CONTENDED,
+    }
+
+
+def test_write_builder_dispatch_tier_deferred_store_unwritable(tmp_path, monkeypatch):
+    # axis: store-unwritable builder-tier write returns deferred with a stable path-free reason.
+    repo, store = _write_core_for_builder_tests(tmp_path)
+    monkeypatch.setattr(CM.mode_registry, "ensure_project_store", lambda cwd, root=None: None)
+    res = CM.write_builder_dispatch_tier(repo, "sonnet", root=store)
+    assert res == {
+        "action": "deferred",
+        "reason": CM.BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE,
+    }

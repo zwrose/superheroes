@@ -27,7 +27,16 @@ ENGINE_ROLE_KEYS = ("reviewer", "implementation", "briefCheck", "pilot")
 # The FULL valid enginePreferences key set (role keys + the non-role tuning keys) — the schema home
 # the §11 drift guard reads so no test re-types the list. `codexModels`/`seatPins`/`effort`/
 # `timeout`/`idleTimeout` are the non-role keys load_engine_prefs already honors.
-ENGINE_PREF_KEYS = ENGINE_ROLE_KEYS + ("codexModels", "seatPins", "effort", "timeout", "idleTimeout")
+ENGINE_PREF_KEYS = ENGINE_ROLE_KEYS + (
+    "codexModels", "seatPins", "effort", "timeout", "idleTimeout", "builderDispatchTier",
+)
+
+BUILDER_DISPATCH_TIER_KEY = "builderDispatchTier"
+BUILDER_DISPATCH_TIER_DEFAULT = "opus"
+
+BUILDER_TIER_SOURCES = (
+    "configured", "default", "unreadable-default", "invalid-config-default", "explicit",
+)
 
 # Retired enginePreferences keys that must never be cited as a live config knob again (plan authoring
 # was retired in #479). The §11 drift guard asserts these never re-appear in the calibration prose.
@@ -78,6 +87,107 @@ _PREF_KEY_DEFAULT_ENGINE = {
     for role_kind, pref_key in _ROLE_KEY.items()
     if pref_key in ENGINE_ROLE_KEYS
 }
+
+
+def sanctioned_builder_tiers() -> tuple[str, ...]:
+    """The claude tiers a headless builder launch may run — the registry's list, never a copy."""
+    return model_registry.claude_dispatch_tokens()
+
+
+def classify_builder_dispatch_tier(value):
+    """Pure classifier for builderDispatchTier — never raises."""
+    default = BUILDER_DISPATCH_TIER_DEFAULT
+    if value is None:
+        return {"state": "unset", "tier": default, "reason": None}
+    if not isinstance(value, str):
+        return {"state": "invalid", "tier": default, "reason": "builder-tier-not-a-string"}
+    stripped = value.strip()
+    if not stripped:
+        return {"state": "invalid", "tier": default, "reason": "builder-tier-empty"}
+    if stripped == "fable":
+        return {
+            "state": "invalid",
+            "tier": default,
+            "reason": "fable-never-a-launch-default",
+        }
+    if stripped not in sanctioned_builder_tiers():
+        return {
+            "state": "invalid",
+            "tier": default,
+            "reason": "builder-tier-not-sanctioned:%s" % stripped,
+        }
+    return {"state": "valid", "tier": stripped, "reason": None}
+
+
+def resolve_builder_dispatch_tier(prefs):
+    """Pure resolution of builder dispatch tier from a load_engine_prefs-shaped dict."""
+    default = BUILDER_DISPATCH_TIER_DEFAULT
+    if not isinstance(prefs, dict):
+        return {
+            "tier": default,
+            "source": "unreadable-default",
+            "reason": "engine-prefs-not-a-mapping",
+        }
+    read_error = prefs.get("readError")
+    if read_error:
+        return {
+            "tier": default,
+            "source": "unreadable-default",
+            "reason": str(read_error),
+        }
+    invalid_builder = prefs.get("invalidBuilderDispatchTier")
+    if isinstance(invalid_builder, dict):
+        reason = invalid_builder.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            reason = "invalid-builder-dispatch-tier"
+        else:
+            reason = str(reason)
+        return {
+            "tier": default,
+            "source": "invalid-config-default",
+            "reason": reason,
+        }
+    classified = classify_builder_dispatch_tier(prefs.get(BUILDER_DISPATCH_TIER_KEY))
+    state = classified["state"]
+    if state == "unset":
+        return {"tier": classified["tier"], "source": "default", "reason": None}
+    if state == "valid":
+        return {"tier": classified["tier"], "source": "configured", "reason": None}
+    return {
+        "tier": classified["tier"],
+        "source": "invalid-config-default",
+        "reason": classified["reason"],
+    }
+
+
+def load_builder_dispatch_tier(cwd, root=None):
+    """Disk read of builder dispatch tier — never raises."""
+    default = BUILDER_DISPATCH_TIER_DEFAULT
+    try:
+        import core_md
+
+        refusal = core_md.profile_structural_refusal(cwd, root=root)
+        if refusal is not None:
+            return {
+                "tier": default,
+                "source": "unreadable-default",
+                "reason": refusal,
+            }
+        record = core_md.read(cwd, root)
+        if record is not None and record.get("behind"):
+            return {
+                "tier": default,
+                "source": "unreadable-default",
+                "reason": "core-schema-newer",
+            }
+        prefs = load_engine_prefs(cwd, root)
+        return resolve_builder_dispatch_tier(prefs)
+    except Exception as exc:
+        return {
+            "tier": default,
+            "source": "unreadable-default",
+            "reason": "builder-tier-load-failed: %s" % ("%s: %s" % (type(exc).__name__, exc)),
+        }
 
 
 def degenerate_engine_prefs():
@@ -451,6 +561,16 @@ def _normalize_engine_preferences_block(prefs):
     idle_timeout = prefs.get("idleTimeout")
     if isinstance(idle_timeout, int) and not isinstance(idle_timeout, bool) and idle_timeout > 0:
         out["idleTimeout"] = idle_timeout
+    tier_value = prefs.get(BUILDER_DISPATCH_TIER_KEY)
+    tier_class = classify_builder_dispatch_tier(tier_value)
+    if tier_class["state"] == "valid":
+        out[BUILDER_DISPATCH_TIER_KEY] = tier_class["tier"]
+    elif tier_class["state"] == "invalid":
+        raw = tier_value if isinstance(tier_value, str) else repr(tier_value)
+        out["invalidBuilderDispatchTier"] = {
+            "value": raw,
+            "reason": tier_class["reason"],
+        }
     return out
 
 
@@ -477,5 +597,6 @@ def load_engine_prefs(cwd, root=None):
             return refusal_engine_prefs(read_error)
         prefs = core_md.gate_config_usable_prefs(cfg)
         return _normalize_engine_preferences_block(prefs)
-    except Exception:
-        return refusal_engine_prefs()
+    except Exception as exc:
+        return refusal_engine_prefs(
+            "engine-pref-load-failed: %s" % ("%s: %s" % (type(exc).__name__, exc)))

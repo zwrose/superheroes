@@ -371,6 +371,29 @@ def known_claude_models() -> tuple[str, ...]:
     return ("haiku", "sonnet", "opus", "fable")
 
 
+def claude_dispatch_tokens() -> tuple[str, ...]:
+    """Every claude dispatch token sanctioned for at least one role, in ladder order.
+
+    The ONE home for "what a claude dispatch may run": `launcher.py`'s launch-model validation
+    and `engine_pref`'s builder-dispatch-tier classifier both read it, so a tier no role
+    sanctions can never become a launch default. `fable` is override-only and absent from the
+    claude ladder, so it is absent here by construction — see FABLE_NEVER_DEFAULT."""
+    sanctioned: set[str] = set()
+    for role in roles():
+        for model_id, effort in allowlist(role, "claude"):
+            tok = dispatch_token("claude", model_id, effort)
+            if tok is not None:
+                sanctioned.add(tok)
+    out: list[str] = []
+    seen: set[str] = set()
+    for model_id, effort in ladder("claude"):
+        tok = dispatch_token("claude", model_id, effort)
+        if tok is not None and tok in sanctioned and tok not in seen:
+            seen.add(tok)
+            out.append(tok)
+    return tuple(out)
+
+
 def codex_models() -> tuple[str, ...]:
     return tuple(_MODELS["codex"])
 
