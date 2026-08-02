@@ -482,6 +482,8 @@ def _write_report(*, ok=True):
             "signal": "ok" if ok else "tests_failed",
             "evidence": {"testFailed": not ok, "testPassed": ok},
         },
+        "structured": True,
+        "requiresManualRead": False,
         "salvaged": True,
         "truncated": False,
     }

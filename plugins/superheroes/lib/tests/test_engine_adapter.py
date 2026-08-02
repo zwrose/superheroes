@@ -882,6 +882,8 @@ def test_salvage_write_report_honest_refusal_is_recovered():
     assert result == {
         "report": {"ok": False, "signal": "plan_wrong",
                    "evidence": {"testFailed": True, "testPassed": False}},
+        "structured": True,
+        "requiresManualRead": False,
         "salvaged": True,
         "truncated": False,
     }
