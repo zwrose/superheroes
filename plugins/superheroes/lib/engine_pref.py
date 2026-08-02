@@ -34,7 +34,9 @@ ENGINE_PREF_KEYS = ENGINE_ROLE_KEYS + (
 BUILDER_DISPATCH_TIER_KEY = "builderDispatchTier"
 BUILDER_DISPATCH_TIER_DEFAULT = "opus"
 
-BUILDER_TIER_SOURCES = ("configured", "default", "unreadable-default", "invalid-config-default")
+BUILDER_TIER_SOURCES = (
+    "configured", "default", "unreadable-default", "invalid-config-default", "explicit",
+)
 
 # Retired enginePreferences keys that must never be cited as a live config knob again (plan authoring
 # was retired in #479). The §11 drift guard asserts these never re-appear in the calibration prose.
@@ -170,6 +172,13 @@ def load_builder_dispatch_tier(cwd, root=None):
                 "tier": default,
                 "source": "unreadable-default",
                 "reason": refusal,
+            }
+        record = core_md.read(cwd, root)
+        if record is not None and record.get("behind"):
+            return {
+                "tier": default,
+                "source": "unreadable-default",
+                "reason": "core-schema-newer",
             }
         prefs = load_engine_prefs(cwd, root)
         return resolve_builder_dispatch_tier(prefs)

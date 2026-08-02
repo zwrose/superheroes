@@ -54,6 +54,11 @@ SHOW_IT_REASON_ROUND_TRIP = "show-it-round-trip-refused"
 BUILDER_DISPATCH_REASON_ABSENT = "core-md-absent"
 BUILDER_DISPATCH_REASON_UNPARSEABLE = "core-md-unparseable"
 BUILDER_DISPATCH_REASON_ROUND_TRIP = "builder-dispatch-round-trip-refused"
+BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE = "store-unwritable"
+BUILDER_DISPATCH_DEFER_LOCK_CONTENDED = "lock-contended"
+BUILDER_DISPATCH_DEFER_SCHEMA_BEHIND = "core-schema-behind"
+BUILDER_DISPATCH_DEFER_WRITE_FAILED = "builder-tier-write-failed"
+BUILDER_DISPATCH_DEFER_CLI_FAILED = "builder-tier-cli-failed"
 
 CoreGateConfig = collections.namedtuple("CoreGateConfig", "prefs status detail")
 
@@ -745,8 +750,8 @@ def write_builder_dispatch_tier(cwd, tier, *, root=None):
     of that key. Every other enginePreferences key, every other core fact, and every prose section
     survive byte-identical. Never raises."""
     if mode_registry.ensure_project_store(cwd, root) is None:
-        mark_pending(cwd, root, detail={"reason": "store-unwritable"})
-        return {"action": "deferred"}
+        mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
+        return {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE}
     gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
     if gate_cfg.status == CONFIG_ROOT_UNAVAILABLE:
         return {"action": "deferred",
@@ -760,8 +765,8 @@ def write_builder_dispatch_tier(cwd, tier, *, root=None):
         return {"action": "refused", "reason": structural}
     with mode_registry.config_lock(cwd, root) as got:
         if not got:
-            mark_pending(cwd, root, detail={"reason": "lock-contended"})
-            return {"action": "deferred"}
+            mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_LOCK_CONTENDED})
+            return {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_LOCK_CONTENDED}
         record = read(cwd, root)
         if record is None:
             cls = _classify_core_md_at_path(core_path(cwd, root))
@@ -769,7 +774,11 @@ def write_builder_dispatch_tier(cwd, tier, *, root=None):
                 return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_ABSENT}
             return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
         if record.get("behind"):
-            return {"action": "behind", "record": record}
+            return {
+                "action": "behind",
+                "reason": BUILDER_DISPATCH_DEFER_SCHEMA_BEHIND,
+                "record": record,
+            }
         try:
             path = core_path(cwd, root)
         except RepoRootUnavailable as exc:
@@ -779,9 +788,12 @@ def write_builder_dispatch_tier(cwd, tier, *, root=None):
         try:
             with open(path, encoding="utf-8") as fh:
                 text = fh.read()
-        except OSError:
-            mark_pending(cwd, root, detail={"reason": "store-unwritable"})
-            return {"action": "deferred"}
+        except OSError as exc:
+            mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
+            return {
+                "action": "deferred",
+                "reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE,
+            }
         orig = parse_core(text)
         if orig is None:
             return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
@@ -814,9 +826,12 @@ def write_builder_dispatch_tier(cwd, tier, *, root=None):
             return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_ROUND_TRIP}
         try:
             store_core.atomic_write(path, new_text)
-        except OSError:
-            mark_pending(cwd, root, detail={"reason": "store-unwritable"})
-            return {"action": "deferred"}
+        except OSError as exc:
+            mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
+            return {
+                "action": "deferred",
+                "reason": BUILDER_DISPATCH_DEFER_WRITE_FAILED,
+            }
         clear_pending(cwd, root)
         return {"action": "written"}
 
@@ -1232,8 +1247,11 @@ def main(argv):
             out = {"action": "deferred",
                     "reason": GATE_REASON_ROOT_UNAVAILABLE,
                     "detail": gate_refusal_detail(exc)}
-        except Exception:
-            out = {"action": "deferred"}
+        except Exception as exc:
+            out = {
+                "action": "deferred",
+                "reason": BUILDER_DISPATCH_DEFER_CLI_FAILED,
+            }
     else:  # confirm
         try:
             out = confirm_all(args.cwd, root=args.root)

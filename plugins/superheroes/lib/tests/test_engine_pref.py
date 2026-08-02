@@ -1393,3 +1393,67 @@ def test_load_builder_dispatch_tier_fail_closed_on_structural_refusal_multiple_b
     assert tier["tier"] == "opus"
     assert tier["source"] == "unreadable-default"
     assert tier["reason"].startswith("multiple-core-blocks:")
+
+
+def test_load_builder_dispatch_tier_fail_closed_on_newer_schema(tmp_path):
+    # axis: a core profile newer than this build's schema is fail-closed to opus — the loader must
+    # not trust a tier from a profile we refuse to rewrite.
+    import importlib.util as _u
+
+    repo = str(tmp_path)
+    store = os.path.join(repo, "store")
+    _write_core_with_prefs(repo, {"builderDispatchTier": "sonnet"})
+    spec = _u.spec_from_file_location("core_md", os.path.join(_LIB, "core_md.py"))
+    cm = _u.module_from_spec(spec)
+    spec.loader.exec_module(cm)
+    path = cm.core_path(repo, store)
+    text = open(path, encoding="utf-8").read()
+    newer = cm.SCHEMA_VERSION + 1
+    text = text.replace(
+        '"schemaVersion": %d' % cm.SCHEMA_VERSION,
+        '"schemaVersion": %d' % newer,
+        1,
+    )
+    text = text.replace(
+        "schemaVersion=%d" % cm.SCHEMA_VERSION,
+        "schemaVersion=%d" % newer,
+        1,
+    )
+    open(path, "w", encoding="utf-8").write(text)
+    tier = EP.load_builder_dispatch_tier(repo, root=store)
+    assert tier == {
+        "tier": "opus",
+        "source": "unreadable-default",
+        "reason": "core-schema-newer",
+    }
+
+
+def test_load_builder_dispatch_tier_current_schema_still_resolves_configured(tmp_path):
+    repo = str(tmp_path)
+    _write_core_with_prefs(repo, {"builderDispatchTier": "sonnet"})
+    tier = EP.load_builder_dispatch_tier(repo, root=os.path.join(repo, "store"))
+    assert tier == {"tier": "sonnet", "source": "configured", "reason": None}
+
+
+def test_builder_tier_sources_cover_all_resolution_sources():
+    # axis: every source load/resolve can return is a member of BUILDER_TIER_SOURCES, including
+    # the launcher's explicit override path.
+    import launcher
+
+    sources = set(EP.BUILDER_TIER_SOURCES)
+    assert "explicit" in sources
+
+    for prefs, label in (
+        ({}, "unset"),
+        ({"builderDispatchTier": "sonnet"}, "configured"),
+        ({"readError": "boom"}, "read-error"),
+        ({"invalidBuilderDispatchTier": {"reason": "x"}}, "invalid-marker"),
+        ({"builderDispatchTier": "fable"}, "fable"),
+    ):
+        got = EP.resolve_builder_dispatch_tier(prefs)
+        assert got["source"] in sources, "%s resolution source %r not in BUILDER_TIER_SOURCES" % (
+            label, got["source"])
+
+    explicit = launcher._resolve_model("sonnet", ".")
+    assert explicit["ok"]
+    assert explicit["resolution"]["source"] in sources
