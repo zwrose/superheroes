@@ -30,13 +30,16 @@ downstream sub-issues build against.
 probe vocabulary (`lib/pilot_probe.py`); slot reference format and account-set types
 (`lib/pilot_slot.py`); seed/mint call shapes and artifact verification (`lib/pilot_seed.py`);
 the contract validator (`lib/pilot_contract.py`, wired into `engine.load_profile_config`);
-and sub-issue **A3** — the per-slot target boundary (`lib/pilot_boundary.py`), the policy
+sub-issue **A3** — the per-slot target boundary (`lib/pilot_boundary.py`), the policy
 document home (`lib/pilot_policy.py`), and the provisioning authorization layer
-(`lib/pilot_provision.py`).
+(`lib/pilot_provision.py`); and sub-issue **A2a** — the slot lifecycle and generation
+allocation (`lib/pilot_lifecycle.py`) plus the provisioning journal and partial-failure
+report (`lib/pilot_journal.py`).
 
 **What this deliberately does not build** (successor sub-issues own these):
 
-- Generation allocation, incrementing, or staleness comparison (**A2a**).
+- Quarantine, sweep, the reassignment acceptance probe, deletion rules, and any recovery path out of
+  `failed` (**A2b**).
 - Browser context creation, credential injection, or broker-side stale-generation enforcement (**C7**).
 - Running a live cleanup and capturing its effect receipt (**C9**).
 - The measured operating ceiling and its degradation receipts (**D11b**).
