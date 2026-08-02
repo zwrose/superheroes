@@ -605,6 +605,7 @@ def _run_destructive_step(
     slot_ref = entry["slotRef"]
     intent = entry["intent"]
 
+    # Defence-in-depth duplicate of teardown_slot's INTENT_PARK short-circuit (not exercised by test_park_path_never_calls_destructive_handlers).
     if intent == INTENT_PARK:
         return _empty_step_result(STATUS_REFUSED_PARK, REASON_PARK_DESTRUCTIVE_REFUSED)
 

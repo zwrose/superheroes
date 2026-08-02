@@ -259,6 +259,11 @@ def test_retry_gate_bind_conflict_not_retryable():
 
 
 def test_retry_gate_census():
+    retryable = frozenset({
+        pa.REASON_READINESS_TIMEOUT,
+        pa.REASON_READINESS_TRANSPORT_ERROR,
+    })
+    assert retryable == pa.RETRYABLE_REASONS
     for name in dir(pa):
         if not name.startswith("REASON_"):
             continue
@@ -266,7 +271,7 @@ def test_retry_gate_census():
         if not isinstance(token, str):
             continue
         gated = pa.retry_gate(token)
-        if token in pa.RETRYABLE_REASONS:
+        if token in retryable:
             assert gated["retryable"] is True, token
         else:
             assert gated["retryable"] is False, token
@@ -924,7 +929,7 @@ def test_stop_double_idempotent():
     assert r["ok"] and r["observed"]
 
 
-@pytest.mark.real_defaults
+# real-default integration tests (no custom pytest mark — repo has no pytest config)
 def test_real_default_spawn_process_group():
     proc = None
     inst = None
@@ -967,7 +972,6 @@ def test_real_default_spawn_process_group():
         shutil.rmtree(tmp)
 
 
-@pytest.mark.real_defaults
 def test_real_spawn_process_group_and_stop():
     proc = None
     inst = None
@@ -988,7 +992,6 @@ def test_real_spawn_process_group_and_stop():
             proc.wait(timeout=_JOIN_TIMEOUT)
 
 
-@pytest.mark.real_defaults
 def test_real_readiness_probe_2xx():
     holder = {"port": None, "server": None, "thread": None}
 
@@ -1016,7 +1019,6 @@ def test_real_readiness_probe_2xx():
         server.shutdown()
 
 
-@pytest.mark.real_defaults
 def test_real_readiness_probe_302_not_followed():
     class RedirectHandler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
