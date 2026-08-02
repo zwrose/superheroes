@@ -266,6 +266,20 @@ def _dispatch_rows(prefs, tiers):
     return rows
 
 
+def _append_builder_dispatch_row(out, cwd, root):
+    """Builder dispatch row — same resolver headless launch uses (load_builder_dispatch_tier)."""
+    builder = engine_pref.load_builder_dispatch_tier(cwd, root)
+    out.append(
+        "builder dispatch (headless launch) — claude — %s (%s)"
+        % (builder["tier"], builder["source"])
+    )
+    reason = builder.get("reason")
+    if builder["source"] in ("unreadable-default", "invalid-config-default"):
+        if isinstance(reason, str) and reason:
+            displayed = reason.split(":", 1)[0] if ":" in reason else reason
+            out.append("  %s" % displayed)
+
+
 def render(cwd, *, root=None):
     """One plain-text screen — 'here is everything superheroes knows about this project'.
     Read-only; the FR-7 drift notice (if any) trails the profile, re-shown on every run."""
@@ -280,6 +294,7 @@ def render(cwd, *, root=None):
     out.append("## Core")
     if core is None:
         out.append("(no core calibration yet)")
+        _append_builder_dispatch_row(out, cwd, root)
     else:
         out.append(f"status: {core.get('status')}")
         out.append(f"verify command: {core.get('verifyCommand') or '(none)'}")
@@ -300,6 +315,18 @@ def render(cwd, *, root=None):
         out.append("## Dispatch calibration (engine + model per role)")
         for label, engine, model in _dispatch_rows(prefs, tiers):
             out.append(f"{label} — {engine} — {model}")
+        eng = data.get("enginePrefs")
+        eng = eng if isinstance(eng, dict) else {}
+        _append_builder_dispatch_row(out, cwd, root)
+        invalid_builder = eng.get("invalidBuilderDispatchTier")
+        if isinstance(invalid_builder, dict) and invalid_builder.get("value") and invalid_builder.get("reason"):
+            out.append(
+                "Rejected builder dispatch tier (not applied — launch falls to the default):"
+            )
+            out.append(
+                "  %s: %s ⚠"
+                % (invalid_builder["value"], invalid_builder["reason"])
+            )
         out.append("")
         out.append("## Engine model pins (Codex)")
         effort = prefs.get("effort") if isinstance(prefs.get("effort"), dict) else {}

@@ -51,6 +51,14 @@ SHOW_IT_REASON_ABSENT = "core-md-absent"
 SHOW_IT_REASON_UNPARSEABLE = "core-md-unparseable"
 SHOW_IT_REASON_PROSE_FORBIDDEN = "show-it-prose-forbidden"
 SHOW_IT_REASON_ROUND_TRIP = "show-it-round-trip-refused"
+BUILDER_DISPATCH_REASON_ABSENT = "core-md-absent"
+BUILDER_DISPATCH_REASON_UNPARSEABLE = "core-md-unparseable"
+BUILDER_DISPATCH_REASON_ROUND_TRIP = "builder-dispatch-round-trip-refused"
+BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE = "store-unwritable"
+BUILDER_DISPATCH_DEFER_LOCK_CONTENDED = "lock-contended"
+BUILDER_DISPATCH_DEFER_SCHEMA_BEHIND = "core-schema-behind"
+BUILDER_DISPATCH_DEFER_WRITE_FAILED = "builder-tier-write-failed"
+BUILDER_DISPATCH_DEFER_CLI_FAILED = "builder-tier-cli-failed"
 
 CoreGateConfig = collections.namedtuple("CoreGateConfig", "prefs status detail")
 
@@ -421,6 +429,57 @@ def gate_refusal(reason, detail):
     return {"reason": reason, "detail": detail}
 
 
+def profile_structural_refusal(cwd=None, root=None):
+    """Structural soundness of the project's core.md candidates — the fail-closed guard for a
+    configuration value whose WRONG value is costly rather than merely inconvenient (#755).
+
+    Returns None when every EXISTING candidate is structurally unambiguous, else a reason string
+    naming the first problem found. Never raises.
+
+    `parse_core` takes the FIRST `superheroes-core` block and uses a plain `json.loads` (last
+    duplicate key wins). That is fine for a knob whose fallback is free; it is not fine for a
+    launch tier, where an ambiguous profile must fail closed rather than pick a value out of a
+    file we cannot fully trust."""
+    try:
+        cwd = cwd or os.getcwd()
+        in_repo, global_path = _core_candidates(cwd, root)
+        for path in (in_repo, global_path):
+            if not os.path.exists(path):
+                continue
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    text = fh.read()
+            except (OSError, UnicodeDecodeError):
+                return "core-md-unreadable:%s" % path
+            blocks = _JSON_BLOCK.findall(text)
+            if len(blocks) > 1:
+                return "multiple-core-blocks:%s" % path
+            if not blocks:
+                continue
+            dup_key = [None]
+
+            def _reject_dupes(pairs):
+                seen = {}
+                for key, value in pairs:
+                    if key in seen:
+                        dup_key[0] = key
+                        raise ValueError("duplicate-core-key")
+                    seen[key] = value
+                return seen
+
+            try:
+                json.loads(blocks[0], object_pairs_hook=_reject_dupes)
+            except ValueError as exc:
+                if dup_key[0] is not None:
+                    return "duplicate-core-key:%s" % dup_key[0]
+                # corrupt block — upstream's job, not this guard's
+            except TypeError:
+                pass
+        return None
+    except Exception as exc:
+        return "core-md-structural-check-failed: %s" % gate_refusal_detail(exc)
+
+
 def gate_refusal_detail(exc, *, at=None, verb="at"):
     """The type-name-carrying detail string for an exception-caused gate refusal.
 
@@ -655,6 +714,124 @@ def write_show_it_surface(cwd, prose, *, root=None):
         except OSError:
             mark_pending(cwd, root, detail={"reason": "store-unwritable"})
             return {"action": "deferred"}
+        clear_pending(cwd, root)
+        return {"action": "written"}
+
+
+def _builder_dispatch_round_trip_ok(orig, new_parsed):
+    """True when the candidate changes only enginePreferences.builderDispatchTier."""
+    if new_parsed is None:
+        return False
+    for key in ("schemaVersion", "status", "verifyCommand", "stackTags", "threatModel",
+                "patterns", "showItSurface", "created"):
+        if orig.get(key) != new_parsed.get(key):
+            return False
+    orig_prefs = orig.get("enginePreferences") or {}
+    new_prefs = new_parsed.get("enginePreferences") or {}
+    for key in set(orig_prefs) | set(new_prefs):
+        if key == "builderDispatchTier":
+            continue
+        if orig_prefs.get(key) != new_prefs.get(key):
+            return False
+    return True
+
+
+def _splice_single_json_block(text, new_body):
+    """Replace the body of the sole ```json superheroes-core``` block, or None if not exactly one."""
+    matches = list(_JSON_BLOCK.finditer(text or ""))
+    if len(matches) != 1:
+        return None
+    m = matches[0]
+    return text[:m.start(1)] + new_body + text[m.end(1):]
+
+
+def write_builder_dispatch_tier(cwd, tier, *, root=None):
+    """Lock-guarded surgical write of enginePreferences.builderDispatchTier only — the ONE writer
+    of that key. Every other enginePreferences key, every other core fact, and every prose section
+    survive byte-identical. Never raises."""
+    if mode_registry.ensure_project_store(cwd, root) is None:
+        mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
+        return {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE}
+    gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
+    if gate_cfg.status == CONFIG_ROOT_UNAVAILABLE:
+        return {"action": "deferred",
+                "reason": GATE_REASON_ROOT_UNAVAILABLE, "detail": gate_cfg.detail}
+    import engine_pref
+    classified = engine_pref.classify_builder_dispatch_tier(tier)
+    if classified["state"] == "invalid":
+        return {"action": "refused", "reason": classified["reason"]}
+    structural = profile_structural_refusal(cwd, root=root)
+    if structural is not None:
+        return {"action": "refused", "reason": structural}
+    with mode_registry.config_lock(cwd, root) as got:
+        if not got:
+            mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_LOCK_CONTENDED})
+            return {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_LOCK_CONTENDED}
+        record = read(cwd, root)
+        if record is None:
+            cls = _classify_core_md_at_path(core_path(cwd, root))
+            if cls.status == CONFIG_ABSENT:
+                return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_ABSENT}
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        if record.get("behind"):
+            return {
+                "action": "behind",
+                "reason": BUILDER_DISPATCH_DEFER_SCHEMA_BEHIND,
+                "record": record,
+            }
+        try:
+            path = core_path(cwd, root)
+        except RepoRootUnavailable as exc:
+            return {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError as exc:
+            mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
+            return {
+                "action": "deferred",
+                "reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE,
+            }
+        orig = parse_core(text)
+        if orig is None:
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        blocks = list(_JSON_BLOCK.finditer(text))
+        if len(blocks) != 1:
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        try:
+            block = json.loads(blocks[0].group(1))
+        except ValueError:
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        if not isinstance(block, dict):
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        prefs = block.get("enginePreferences")
+        if not isinstance(prefs, dict):
+            prefs = {}
+            block["enginePreferences"] = prefs
+        if classified["state"] == "unset":
+            if "builderDispatchTier" in prefs:
+                del prefs["builderDispatchTier"]
+        else:
+            prefs["builderDispatchTier"] = classified["tier"]
+        new_body = json.dumps(block, indent=2)
+        new_text = _splice_single_json_block(text, new_body)
+        if new_text is None:
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        if new_text == text:
+            return {"action": "noop"}
+        new_parsed = parse_core(new_text)
+        if not _builder_dispatch_round_trip_ok(orig, new_parsed):
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_ROUND_TRIP}
+        try:
+            store_core.atomic_write(path, new_text)
+        except OSError as exc:
+            mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
+            return {
+                "action": "deferred",
+                "reason": BUILDER_DISPATCH_DEFER_WRITE_FAILED,
+            }
         clear_pending(cwd, root)
         return {"action": "written"}
 
@@ -1017,6 +1194,9 @@ def main(argv):
     sip = sub.add_parser("write-show-it")  # Show-it surface prose section only
     sip.add_argument("--cwd", default=".")
     sip.add_argument("--root", default=None)
+    btp = sub.add_parser("write-builder-tier")  # enginePreferences.builderDispatchTier only
+    btp.add_argument("--cwd", default=".")
+    btp.add_argument("--root", default=None)
     args = ap.parse_args(argv)
     if args.cmd == "resolve":
         try:
@@ -1058,6 +1238,20 @@ def main(argv):
                     "detail": gate_refusal_detail(exc)}
         except Exception:
             out = {"action": "deferred"}
+    elif args.cmd == "write-builder-tier":
+        try:
+            raw = sys.stdin.read().strip()
+            tier = None if raw == "" else raw
+            out = write_builder_dispatch_tier(args.cwd, tier, root=args.root)
+        except RepoRootUnavailable as exc:
+            out = {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        except Exception as exc:
+            out = {
+                "action": "deferred",
+                "reason": BUILDER_DISPATCH_DEFER_CLI_FAILED,
+            }
     else:  # confirm
         try:
             out = confirm_all(args.cwd, root=args.root)

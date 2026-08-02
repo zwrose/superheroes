@@ -85,6 +85,36 @@ action that owns it, leaving the rest of the calibration untouched:
   implementer/pilot) → show the effective map first, then write only the `## Model tiers` block in
   the resolved review-crew profile. This is an optional tune action: if the owner declines, change
   nothing.
+- **Change the builder-dispatch tier** — which Claude tier a headless builder session launches on.
+  Unconfigured resolves to `opus`; an unreadable or structurally ambiguous profile also resolves to
+  `opus` (fail-closed), never an inherited session tier. `fable` is **refused** — it is a
+  judgment-seat tier, never a launch default.
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  printf '%s\n' 'sonnet' | python3 -B "$ROOT_DIR/lib/core_md.py" write-builder-tier --cwd .
+  ```
+
+  To clear (empty stdin returns the project to the `opus` default):
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  printf '' | python3 -B "$ROOT_DIR/lib/core_md.py" write-builder-tier --cwd .
+  ```
+
+  **Read the result, don't assume success.** `write-builder-tier` returns `{action, reason?}`.
+  Only `written` or `noop` means the builder-dispatch tier was saved — surface any other
+  `action` (`refused`, `deferred`, `behind`) to the owner with its `reason`; the command
+  exits 0 either way, so check `action`, not exit status.
+
+  ```json
+  {
+    "enginePreferences": {
+      "builderDispatchTier": "sonnet"
+    }
+  }
+  ```
+
 - **Declare or change the Show-it surface** → persist **only** the `## Show-it surface`
   section in `core.md`, leaving every other section untouched. Clearing it (empty stdin)
   returns the project to `none`:

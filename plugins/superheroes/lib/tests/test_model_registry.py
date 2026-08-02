@@ -460,3 +460,17 @@ def test_every_ladder_is_family_uniform():
             "ladder for %r spans families %r — the maker-family prose in "
             "skills/workhorse/SKILL.md and CONVENTIONS §7.5 assumes it does not"
             % (vendor, sorted(families)))
+
+
+def test_claude_dispatch_tokens_returns_ladder_ordered_sanctioned_tiers():
+    assert MR.claude_dispatch_tokens() == ("haiku", "sonnet", "opus")
+
+
+def test_claude_dispatch_tokens_excludes_fable_override_only():
+    # fable is override-only and absent from the claude ladder — never a launch default.
+    assert "fable" not in MR.claude_dispatch_tokens()
+
+
+def test_claude_dispatch_tokens_round_trip_through_parse_dispatch_token():
+    for token in MR.claude_dispatch_tokens():
+        assert MR.parse_dispatch_token("claude", token) is not None, token

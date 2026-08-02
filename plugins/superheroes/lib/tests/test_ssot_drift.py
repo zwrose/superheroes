@@ -677,3 +677,87 @@ def test_vet_receipt_markers_match_conventions_10_7():
         "showrunner/SKILL.md carries no vet-receipt marker literal at all — it tells the advisor to "
         "stamp one and to re-check it whenever it next reads the PR body"
     )
+
+
+def _showrunner_orchestration_duty():
+    """Duty 9 (Orchestration — dispatch and preflight) through the tempted-table heading."""
+    text = _read("skills/showrunner/SKILL.md")
+    m = re.search(
+        r"9\. \*\*Orchestration.*?(?=\n## When you're tempted)",
+        text,
+        re.DOTALL,
+    )
+    assert m, "showrunner/SKILL.md duty 9 (Orchestration) not found (moved or renumbered?)"
+    return m.group(0)
+
+
+def _showrunner_tempted_tier_row():
+    """The tempted-table row pairing account-default inheritance with the tier doctrine."""
+    text = _read("skills/showrunner/SKILL.md")
+    m = re.search(
+        r"\| \"The account default tier is fine[^|]+\|[^|]+\|",
+        text,
+    )
+    assert m, (
+        "showrunner/SKILL.md tempted-table tier row not found "
+        "(moved or reworded?)"
+    )
+    return m.group(0)
+
+
+def _launch_doctrine_builder_dispatch_section():
+    """The Builder dispatch tier artifact-home section in launch-doctrine.md."""
+    text = _read("rubric/launch-doctrine.md")
+    m = re.search(
+        r"## Builder dispatch tier \(artifact home\)\n(.*?)(?=\n## )",
+        text,
+        re.DOTALL,
+    )
+    assert m, (
+        "launch-doctrine.md Builder dispatch tier (artifact home) section not found "
+        "(moved or reworded?)"
+    )
+    return m.group(1)
+
+
+def test_showrunner_charter_carries_builder_dispatch_tier_doctrine():
+    """§11: loaded advisor surfaces and the doctrine artifact home must carry the builder-dispatch
+    tier rule keyed to model_registry.FABLE_NEVER_DEFAULT — builder launches default to opus; fable
+    is never a launch default. A failure means the rule drifted out of a surface the advisor or
+    doctrine actually loads."""
+    # axis: each guarded region (duty-9 orchestration passage, tempted-table tier row, and the
+    # launch-doctrine artifact home) must name engine_pref.BUILDER_DISPATCH_TIER_DEFAULT and each
+    # registry-refused launch tier; partial drift in any one region alone must fail this guard.
+    import engine_pref
+    import model_registry
+
+    assert model_registry.FABLE_NEVER_DEFAULT is True
+    default_tier = engine_pref.BUILDER_DISPATCH_TIER_DEFAULT
+    refused_tiers = set(model_registry.known_claude_models()) - set(
+        model_registry.claude_dispatch_tokens()
+    )
+    assert refused_tiers, "expected at least one registry-refused launch tier"
+
+    regions = (
+        ("showrunner/SKILL.md duty 9 orchestration passage", _showrunner_orchestration_duty()),
+        ("showrunner/SKILL.md tempted-table tier row", _showrunner_tempted_tier_row()),
+        ("launch-doctrine.md artifact home", _launch_doctrine_builder_dispatch_section()),
+    )
+
+    for label, region in regions:
+        lower = re.sub(r"\s+", " ", region.lower())
+        assert default_tier in lower, (
+            "%s missing the %s builder-launch default — "
+            "sessions may let launches inherit the account default tier"
+            % (label, default_tier)
+        )
+        for refused in sorted(refused_tiers):
+            assert refused in lower, (
+                "%s missing the refused launch tier %r — "
+                "sessions will not see that %s is refused as a builder launch tier"
+                % (label, refused, refused)
+            )
+            assert "never a launch default" in lower, (
+                "%s missing the never-a-launch-default clause for %s"
+                % (label, refused)
+            )

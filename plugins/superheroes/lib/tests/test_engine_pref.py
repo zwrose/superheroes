@@ -1162,3 +1162,298 @@ def test_engine_pref_load_error_path_degenerate_carries_every_role_key(capsys, m
     assert set(EP.ENGINE_ROLE_KEYS) <= set(out)
     assert out["briefCheck"] == "codex"
     assert out["pilot"] == "claude"
+
+
+def test_builder_dispatch_tier_in_engine_pref_keys_not_role_keys():
+    assert "builderDispatchTier" in EP.ENGINE_PREF_KEYS
+    assert "builderDispatchTier" not in EP.ENGINE_ROLE_KEYS
+
+
+def test_classify_builder_dispatch_tier_unset():
+    got = EP.classify_builder_dispatch_tier(None)
+    assert got == {"state": "unset", "tier": "opus", "reason": None}
+
+
+def test_classify_builder_dispatch_tier_valid():
+    got = EP.classify_builder_dispatch_tier("sonnet")
+    assert got == {"state": "valid", "tier": "sonnet", "reason": None}
+
+
+def test_classify_builder_dispatch_tier_fable():
+    got = EP.classify_builder_dispatch_tier("fable")
+    assert got["state"] == "invalid"
+    assert got["tier"] == "opus"
+    assert got["reason"] == "fable-never-a-launch-default"
+
+
+def test_classify_builder_dispatch_tier_unknown_string():
+    got = EP.classify_builder_dispatch_tier("bogus")
+    assert got["state"] == "invalid"
+    assert got["tier"] == "opus"
+    assert got["reason"] == "builder-tier-not-sanctioned:bogus"
+
+
+@pytest.mark.parametrize("bad", (True, 5, {}, []))
+def test_classify_builder_dispatch_tier_non_string(bad):
+    got = EP.classify_builder_dispatch_tier(bad)
+    assert got["state"] == "invalid"
+    assert got["tier"] == "opus"
+    assert got["reason"] == "builder-tier-not-a-string"
+
+
+@pytest.mark.parametrize("bad", ("", "  ", "\t"))
+def test_classify_builder_dispatch_tier_empty(bad):
+    got = EP.classify_builder_dispatch_tier(bad)
+    assert got["state"] == "invalid"
+    assert got["tier"] == "opus"
+    assert got["reason"] == "builder-tier-empty"
+
+
+def test_resolve_builder_dispatch_tier_unset():
+    got = EP.resolve_builder_dispatch_tier({})
+    assert (got["tier"], got["source"]) == ("opus", "default")
+
+
+def test_resolve_builder_dispatch_tier_configured():
+    got = EP.resolve_builder_dispatch_tier({"builderDispatchTier": "sonnet"})
+    assert (got["tier"], got["source"]) == ("sonnet", "configured")
+
+
+def test_resolve_builder_dispatch_tier_read_error():
+    got = EP.resolve_builder_dispatch_tier({"readError": "boom"})
+    assert (got["tier"], got["source"]) == ("opus", "unreadable-default")
+    assert got["reason"] == "boom"
+
+
+def test_resolve_builder_dispatch_tier_fable():
+    got = EP.resolve_builder_dispatch_tier({"builderDispatchTier": "fable"})
+    assert (got["tier"], got["source"]) == ("opus", "invalid-config-default")
+    assert got["reason"] == "fable-never-a-launch-default"
+
+
+def test_resolve_builder_dispatch_tier_non_dict_prefs():
+    got = EP.resolve_builder_dispatch_tier("not-a-dict")
+    assert (got["tier"], got["source"]) == ("opus", "unreadable-default")
+
+
+def test_resolve_builder_dispatch_tier_read_error_wins_over_valid_tier():
+    got = EP.resolve_builder_dispatch_tier(
+        {"readError": "boom", "builderDispatchTier": "sonnet"})
+    assert (got["tier"], got["source"]) == ("opus", "unreadable-default")
+    assert got["reason"] == "boom"
+
+
+def test_resolve_builder_dispatch_tier_invalid_builder_dispatch_tier_marker():
+    got = EP.resolve_builder_dispatch_tier({
+        "invalidBuilderDispatchTier": {
+            "value": "fable",
+            "reason": "fable-never-a-launch-default",
+        },
+    })
+    assert (got["tier"], got["source"]) == ("opus", "invalid-config-default")
+    assert got["reason"] == "fable-never-a-launch-default"
+
+
+def test_resolve_builder_dispatch_tier_read_error_wins_over_invalid_marker():
+    got = EP.resolve_builder_dispatch_tier({
+        "readError": "boom",
+        "invalidBuilderDispatchTier": {
+            "value": "fable",
+            "reason": "fable-never-a-launch-default",
+        },
+    })
+    assert (got["tier"], got["source"]) == ("opus", "unreadable-default")
+    assert got["reason"] == "boom"
+
+
+def test_resolve_builder_dispatch_tier_normalized_fable_round_trip():
+    raw = {"builderDispatchTier": "fable"}
+    normalized = EP._normalize_engine_preferences_block(raw)
+    got = EP.resolve_builder_dispatch_tier(normalized)
+    assert got["source"] == "invalid-config-default"
+    assert got["tier"] == "opus"
+    assert got["reason"] == "fable-never-a-launch-default"
+
+
+def test_resolve_builder_dispatch_tier_normalized_unsanctioned_round_trip():
+    raw = {"builderDispatchTier": "turbo"}
+    normalized = EP._normalize_engine_preferences_block(raw)
+    got = EP.resolve_builder_dispatch_tier(normalized)
+    assert got["source"] == "invalid-config-default"
+    assert got["tier"] == "opus"
+    assert got["reason"] == "builder-tier-not-sanctioned:turbo"
+
+
+def test_resolve_builder_dispatch_tier_malformed_invalid_marker_falls_through():
+    got = EP.resolve_builder_dispatch_tier({"invalidBuilderDispatchTier": "not-a-dict"})
+    assert (got["tier"], got["source"]) == ("opus", "default")
+
+
+def test_resolve_builder_dispatch_tier_invalid_marker_missing_reason():
+    got = EP.resolve_builder_dispatch_tier({
+        "invalidBuilderDispatchTier": {"value": "fable"},
+    })
+    assert (got["tier"], got["source"]) == ("opus", "invalid-config-default")
+    assert isinstance(got["reason"], str) and got["reason"]
+
+
+def test_normalize_engine_preferences_block_builder_dispatch_tier_valid(tmp_path):
+    repo = str(tmp_path)
+    _write_core_with_prefs(repo, {"builderDispatchTier": "sonnet"})
+    got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
+    assert got.get("builderDispatchTier") == "sonnet"
+    assert "invalidBuilderDispatchTier" not in got
+
+
+def test_normalize_engine_preferences_block_builder_dispatch_tier_fable(tmp_path):
+    repo = str(tmp_path)
+    _write_core_with_prefs(repo, {"builderDispatchTier": "fable"})
+    got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
+    assert "builderDispatchTier" not in got
+    assert got["invalidBuilderDispatchTier"] == {
+        "value": "fable",
+        "reason": "fable-never-a-launch-default",
+    }
+
+
+def test_normalize_engine_preferences_block_builder_dispatch_tier_unset(tmp_path):
+    repo = str(tmp_path)
+    _write_core_with_prefs(repo, {})
+    got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
+    assert "builderDispatchTier" not in got
+    assert "invalidBuilderDispatchTier" not in got
+
+
+def test_load_engine_prefs_catch_all_carries_read_error_provenance(monkeypatch):
+    import core_md
+
+    def _boom(cwd, root=None):
+        raise RuntimeError("loader exploded")
+
+    monkeypatch.setattr(core_md, "engine_preferences_for_gate", _boom)
+    got = EP.load_engine_prefs("/tmp")
+    assert got.get("readError", "").startswith("engine-pref-load-failed:")
+    resolved = EP.resolve_builder_dispatch_tier(got)
+    assert resolved["source"] == "unreadable-default"
+    assert resolved["tier"] == "opus"
+
+
+def _block_core_md_import(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _fake_import(name, *args, **kwargs):
+        if name == "core_md":
+            raise ImportError("simulated: core_md unimportable")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+
+def test_loaders_fail_closed_when_core_md_unimportable(monkeypatch):
+    """#755: exception handlers must not depend on core_md — the import that failed."""
+    _block_core_md_import(monkeypatch)
+    prefs = EP.load_engine_prefs(".")
+    assert isinstance(prefs.get("readError"), str) and prefs["readError"]
+    tier = EP.load_builder_dispatch_tier(".")
+    assert tier["tier"] == "opus"
+    assert tier["source"] == "unreadable-default"
+    assert tier["source"] != "default"
+    assert isinstance(tier.get("reason"), str) and tier["reason"]
+
+
+def test_load_builder_dispatch_tier_fail_closed_when_profile_structural_refusal_raises(monkeypatch):
+    import core_md
+
+    def _boom(cwd, root=None):
+        raise RuntimeError("profile_structural_refusal exploded")
+
+    monkeypatch.setattr(core_md, "profile_structural_refusal", _boom)
+    tier = EP.load_builder_dispatch_tier(".")
+    assert tier["tier"] == "opus"
+    assert tier["source"] == "unreadable-default"
+    assert tier["source"] != "default"
+    assert isinstance(tier.get("reason"), str) and tier["reason"]
+
+
+def test_load_builder_dispatch_tier_fail_closed_on_structural_refusal_multiple_blocks(tmp_path):
+    # axis: a structurally ambiguous profile makes the DISK read fail closed to opus,
+    # and carries the structural reason through.
+    import core_md as cm
+
+    repo = str(tmp_path)
+    store = os.path.join(repo, "store")
+    _write_core_with_prefs(repo, {})
+    path = cm.core_path(repo, store)
+    text = open(path, encoding="utf-8").read()
+    extra = "\n```json superheroes-core\n{\"schemaVersion\": 2}\n```\n"
+    open(path, "w", encoding="utf-8").write(text + extra)
+    tier = EP.load_builder_dispatch_tier(repo, root=store)
+    assert tier["tier"] == "opus"
+    assert tier["source"] == "unreadable-default"
+    assert tier["reason"].startswith("multiple-core-blocks:")
+
+
+def test_load_builder_dispatch_tier_fail_closed_on_newer_schema(tmp_path):
+    # axis: a core profile newer than this build's schema is fail-closed to opus — the loader must
+    # not trust a tier from a profile we refuse to rewrite.
+    import importlib.util as _u
+
+    repo = str(tmp_path)
+    store = os.path.join(repo, "store")
+    _write_core_with_prefs(repo, {"builderDispatchTier": "sonnet"})
+    spec = _u.spec_from_file_location("core_md", os.path.join(_LIB, "core_md.py"))
+    cm = _u.module_from_spec(spec)
+    spec.loader.exec_module(cm)
+    path = cm.core_path(repo, store)
+    text = open(path, encoding="utf-8").read()
+    newer = cm.SCHEMA_VERSION + 1
+    text = text.replace(
+        '"schemaVersion": %d' % cm.SCHEMA_VERSION,
+        '"schemaVersion": %d' % newer,
+        1,
+    )
+    text = text.replace(
+        "schemaVersion=%d" % cm.SCHEMA_VERSION,
+        "schemaVersion=%d" % newer,
+        1,
+    )
+    open(path, "w", encoding="utf-8").write(text)
+    tier = EP.load_builder_dispatch_tier(repo, root=store)
+    assert tier == {
+        "tier": "opus",
+        "source": "unreadable-default",
+        "reason": "core-schema-newer",
+    }
+
+
+def test_load_builder_dispatch_tier_current_schema_still_resolves_configured(tmp_path):
+    repo = str(tmp_path)
+    _write_core_with_prefs(repo, {"builderDispatchTier": "sonnet"})
+    tier = EP.load_builder_dispatch_tier(repo, root=os.path.join(repo, "store"))
+    assert tier == {"tier": "sonnet", "source": "configured", "reason": None}
+
+
+def test_builder_tier_sources_cover_all_resolution_sources():
+    # axis: every source load/resolve can return is a member of BUILDER_TIER_SOURCES, including
+    # the launcher's explicit override path.
+    import launcher
+
+    sources = set(EP.BUILDER_TIER_SOURCES)
+    assert "explicit" in sources
+
+    for prefs, label in (
+        ({}, "unset"),
+        ({"builderDispatchTier": "sonnet"}, "configured"),
+        ({"readError": "boom"}, "read-error"),
+        ({"invalidBuilderDispatchTier": {"reason": "x"}}, "invalid-marker"),
+        ({"builderDispatchTier": "fable"}, "fable"),
+    ):
+        got = EP.resolve_builder_dispatch_tier(prefs)
+        assert got["source"] in sources, "%s resolution source %r not in BUILDER_TIER_SOURCES" % (
+            label, got["source"])
+
+    explicit = launcher._resolve_model("sonnet", ".")
+    assert explicit["ok"]
+    assert explicit["resolution"]["source"] in sources
