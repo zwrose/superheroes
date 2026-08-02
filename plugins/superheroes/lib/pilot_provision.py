@@ -13,6 +13,7 @@ import pilot_slot
 REFUSAL_SLOT_UNKNOWN = "provision-slot-unknown"
 REFUSAL_ACCOUNT_UNKNOWN = "provision-account-unknown"
 REFUSAL_MINT_UNSUPPORTED = "provision-mint-unsupported"
+REFUSAL_LAUNCH_INVALID = "provision-launch-invalid"
 
 
 class PilotProvisionError(Exception):
@@ -195,6 +196,67 @@ def authorized_mint_request(verdict, policy, slot_ref, account, envelope):
         allowlist=mintable_accounts,
         envelope=envelope,
     )
+
+
+def authorized_app_launch(verdict, policy, slot_ref, launch):
+    """Authorize and build an app-launch descriptor bound to the slot's verified origin."""
+    # bite-axis: app-launch authorization — passing authorize_credentials gate plus verified
+    # baseUrl and readinessUrl on the slot origin produce a launch descriptor; skipping either
+    # URL check reddens off-origin readiness tests while baseUrl checks stay green.
+    pilot_boundary.authorize_credentials(
+        verdict,
+        slot_ref,
+        policy_digest(policy),
+    )
+
+    try:
+        slot, _generation = pilot_slot.parse_slot_ref(slot_ref)
+    except pilot_slot.PilotSlotError:
+        raise PilotProvisionError(REFUSAL_SLOT_UNKNOWN)
+    slot_config = policy.get("slots", {}).get(slot)
+    if slot_config is None:
+        raise PilotProvisionError(REFUSAL_SLOT_UNKNOWN)
+
+    permitted_redirects = slot_config.get("permittedRedirects", [])
+    binding = pilot_boundary.target_binding(
+        slot_ref,
+        origin=slot_config["origin"],
+        permitted_redirects=permitted_redirects,
+        protected_targets=policy["protectedTargets"],
+    )
+
+    if not isinstance(launch, dict):
+        raise PilotProvisionError(REFUSAL_LAUNCH_INVALID)
+
+    base_url = launch.get("baseUrl")
+    if not isinstance(base_url, str) or not base_url:
+        raise PilotProvisionError(REFUSAL_LAUNCH_INVALID)
+
+    readiness_url = launch.get("readinessUrl")
+    if not isinstance(readiness_url, str) or not readiness_url:
+        raise PilotProvisionError(REFUSAL_LAUNCH_INVALID)
+
+    base_result = pilot_boundary.check_target(binding, base_url)
+    if not base_result["ok"]:
+        raise PilotProvisionError(base_result["reason"])
+
+    readiness_result = pilot_boundary.check_target(binding, readiness_url)
+    if not readiness_result["ok"]:
+        raise PilotProvisionError(readiness_result["reason"])
+
+    descriptor = {
+        "schemaVersion": 1,
+        "slotRef": _canonical_slot_ref(slot_ref),
+        "baseUrl": base_url,
+        "readinessUrl": readiness_url,
+        "policyDigest": policy_digest(policy),
+    }
+
+    pilot_policy.assert_results_only(
+        descriptor,
+        pilot_policy.policy_material(policy),
+    )
+    return descriptor
 
 
 def authorized_sentinel_probe_request(verdict, policy, slot_ref, sentinel, envelope):

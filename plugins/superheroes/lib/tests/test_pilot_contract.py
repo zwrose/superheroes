@@ -672,3 +672,79 @@ def test_require_exercised_unknown_kind():
     with pytest.raises(pc.PilotContractError) as excinfo:
         pc.require_exercised({}, "not-a-kind", {})
     assert excinfo.value.reason == pc.REFUSAL_DECLARATION_KIND_UNKNOWN
+
+
+def _app_lifecycle_declaration(**overrides):
+    base = {
+        "devCommand": ["npm", "run", "dev"],
+        "readinessUrl": "http://127.0.0.1:5173/ready",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_is_exercised_app_lifecycle_matching_record():
+    declaration = _app_lifecycle_declaration()
+    registry = _registry_with_digest("app-lifecycle", declaration)
+    assert pc.is_exercised(registry, "app-lifecycle", declaration) is True
+
+
+def test_require_exercised_app_lifecycle_matching_record():
+    declaration = _app_lifecycle_declaration()
+    registry = _registry_with_digest("app-lifecycle", declaration)
+    pc.require_exercised(registry, "app-lifecycle", declaration)
+
+
+def test_require_exercised_app_lifecycle_unexercised():
+    declaration = _app_lifecycle_declaration()
+    with pytest.raises(pc.PilotContractError) as excinfo:
+        pc.require_exercised({}, "app-lifecycle", declaration)
+    assert excinfo.value.reason == pc.REFUSAL_DECLARATION_UNEXERCISED
+
+
+def test_is_exercised_app_lifecycle_mismatched_digest():
+    declaration = _app_lifecycle_declaration()
+    registry = _registry_with_digest("app-lifecycle", declaration)
+    changed = _app_lifecycle_declaration(readinessUrl="http://127.0.0.1:5173/other")
+    assert pc.is_exercised(registry, "app-lifecycle", changed) is False
+
+
+def test_require_exercised_app_lifecycle_mismatched_digest():
+    declaration = _app_lifecycle_declaration()
+    registry = _registry_with_digest("app-lifecycle", declaration)
+    changed = _app_lifecycle_declaration(readinessUrl="http://127.0.0.1:5173/other")
+    with pytest.raises(pc.PilotContractError) as excinfo:
+        pc.require_exercised(registry, "app-lifecycle", changed)
+    assert excinfo.value.reason == pc.REFUSAL_DECLARATION_UNEXERCISED
+
+
+def test_is_exercised_app_lifecycle_receipt_not_pass():
+    declaration = _app_lifecycle_declaration()
+    digest = pc.declaration_digest(declaration)
+    registry = {
+        "schemaVersion": 1,
+        "records": [{
+            "kind": "app-lifecycle",
+            "declarationDigest": digest,
+            "exercisedAt": "2026-08-02T04:00:00Z",
+            "receipt": {"result": "fail", "evidence": "failed"},
+        }],
+    }
+    assert pc.is_exercised(registry, "app-lifecycle", declaration) is False
+
+
+def test_require_exercised_app_lifecycle_receipt_not_pass():
+    declaration = _app_lifecycle_declaration()
+    digest = pc.declaration_digest(declaration)
+    registry = {
+        "schemaVersion": 1,
+        "records": [{
+            "kind": "app-lifecycle",
+            "declarationDigest": digest,
+            "exercisedAt": "2026-08-02T04:00:00Z",
+            "receipt": {"result": "fail", "evidence": "failed"},
+        }],
+    }
+    with pytest.raises(pc.PilotContractError) as excinfo:
+        pc.require_exercised(registry, "app-lifecycle", declaration)
+    assert excinfo.value.reason == pc.REFUSAL_DECLARATION_UNEXERCISED
