@@ -60,6 +60,7 @@ BUILDER_DISPATCH_DEFER_SCHEMA_BEHIND = "core-schema-behind"
 BUILDER_DISPATCH_DEFER_WRITE_FAILED = "builder-tier-write-failed"
 BUILDER_DISPATCH_DEFER_CLI_FAILED = "builder-tier-cli-failed"
 ENGINE_PREF_PIN_KEYS = ("codexModels", "seatPins")
+DUPLICATE_CORE_KEY_REASON = "duplicate-core-key"
 ENGINE_PINS_REASON_UNKNOWN_KEY = "engine-pins-unknown-key"
 ENGINE_PINS_REASON_INPUT_UNPARSEABLE = "engine-pins-input-unparseable"
 ENGINE_PINS_REASON_NOT_A_MAPPING = "engine-pins-not-a-mapping"
@@ -469,7 +470,7 @@ def profile_structural_refusal(cwd=None, root=None):
                 for key, value in pairs:
                     if key in seen:
                         dup_key[0] = key
-                        raise ValueError("duplicate-core-key")
+                        raise ValueError(DUPLICATE_CORE_KEY_REASON)
                     seen[key] = value
                 return seen
 
@@ -477,7 +478,7 @@ def profile_structural_refusal(cwd=None, root=None):
                 json.loads(blocks[0], object_pairs_hook=_reject_dupes)
             except ValueError as exc:
                 if dup_key[0] is not None:
-                    return "duplicate-core-key:%s" % dup_key[0]
+                    return "%s:%s" % (DUPLICATE_CORE_KEY_REASON, dup_key[0])
                 # corrupt block — upstream's job, not this guard's
             except TypeError:
                 pass
@@ -738,7 +739,7 @@ def _loads_rejecting_duplicate_keys(text):
         for key, value in pairs:
             if key in seen:
                 dup_key[0] = key
-                raise ValueError("duplicate-core-key")
+                raise ValueError(DUPLICATE_CORE_KEY_REASON)
             seen[key] = value
         return seen
 
@@ -848,7 +849,8 @@ def write_builder_dispatch_tier(cwd, tier, *, root=None):
             return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
         block, duplicate_key = _loads_rejecting_duplicate_keys(blocks[0].group(1))
         if duplicate_key is not None:
-            return {"action": "refused", "reason": "duplicate-core-key:%s" % duplicate_key}
+            return {"action": "refused",
+                    "reason": "%s:%s" % (DUPLICATE_CORE_KEY_REASON, duplicate_key)}
         if block is None or not isinstance(block, dict):
             return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
         prefs = block.get("enginePreferences")
@@ -950,7 +952,8 @@ def write_engine_pref_pins(cwd, key, pins, *, root=None):
             return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
         block, duplicate_key = _loads_rejecting_duplicate_keys(blocks[0].group(1))
         if duplicate_key is not None:
-            return {"action": "refused", "reason": "duplicate-core-key:%s" % duplicate_key}
+            return {"action": "refused",
+                    "reason": "%s:%s" % (DUPLICATE_CORE_KEY_REASON, duplicate_key)}
         if block is None or not isinstance(block, dict):
             return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
         prefs = block.get("enginePreferences")

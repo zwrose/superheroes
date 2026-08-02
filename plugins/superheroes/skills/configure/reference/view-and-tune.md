@@ -170,7 +170,9 @@ action that owns it, leaving the rest of the calibration untouched:
     python3 -B "$ROOT_DIR/lib/core_md.py" write-engine-pins --key codexModels --cwd .
   ```
 
-  To clear one role's pin, pass `null` for that entry; to clear every pin, pass an empty object:
+  Clearing is per-entry: pass `null` for each role you want removed; when the last entry is
+  removed the whole `codexModels` key is dropped from the block. An empty object (`{}`) is a
+  no-op that changes nothing — do not mistake a returned `noop` for a successful clear-all.
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -225,7 +227,9 @@ action that owns it, leaving the rest of the calibration untouched:
     python3 -B "$ROOT_DIR/lib/core_md.py" write-engine-pins --key seatPins --cwd .
   ```
 
-  To clear one seat's pin, pass `null` for that entry:
+  Clearing is per-entry: pass `null` for each seat you want removed; when the last entry is
+  removed the whole `seatPins` key is dropped from the block. An empty object (`{}`) is a
+  no-op that changes nothing — do not mistake a returned `noop` for a successful clear-all.
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"

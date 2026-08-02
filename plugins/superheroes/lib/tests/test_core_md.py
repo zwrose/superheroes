@@ -2633,6 +2633,17 @@ def test_write_engine_pref_pins_refused_invalid_pin_byte_identical(tmp_path):
     assert open(path, encoding="utf-8").read() == before
 
 
+def test_write_engine_pref_pins_refused_invalid_seat_pin_byte_identical(tmp_path):
+    repo, store = _write_core_for_pin_tests(tmp_path)
+    path = CM.core_path(repo, store)
+    before = open(path, encoding="utf-8").read()
+    res = CM.write_engine_pref_pins(
+        repo, "seatPins", {"security-reviewer": {"vendor": "claude", "model": ""}}, root=store)
+    assert res["action"] == "refused"
+    assert res["reason"].startswith(CM.ENGINE_PINS_REASON_INVALID + ":")
+    assert open(path, encoding="utf-8").read() == before
+
+
 def test_write_engine_pref_pins_empty_pins_is_noop_byte_identical(tmp_path):
     repo, store = _write_core_for_pin_tests(tmp_path)
     path = CM.core_path(repo, store)
@@ -2666,7 +2677,7 @@ def test_write_engine_pref_pins_legacy_fixer_dropped_on_canonical_set_or_delete(
     assert "fixer" not in pins
     assert pins == {"code-fixer": "gpt-5.6-sol"}
     repo2, store2 = _write_core_for_pin_tests(
-        tmp_path, prefs={"codexModels": {"fixer": "gpt-5.6-terra"}})
+        tmp_path / "second", prefs={"codexModels": {"fixer": "gpt-5.6-terra"}})
     res = CM.write_engine_pref_pins(repo2, "codexModels", {"code-fixer": None}, root=store2)
     assert res["action"] == "written"
     got = CM.read(repo2, root=store2)
@@ -2717,6 +2728,50 @@ def test_cli_write_engine_pins_deferred_unexpected_failure(tmp_path, capsys, mon
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
     assert out == {"action": "deferred", "reason": CM.BUILDER_DISPATCH_DEFER_CLI_FAILED}
+
+
+def test_cli_write_engine_pins_seat_pins_success(tmp_path, capsys, monkeypatch):
+    import io
+
+    engine_pref = _load("engine_pref")
+    repo, store = _write_core_for_pin_tests(tmp_path)
+    monkeypatch.setattr(
+        "sys.stdin",
+        io.StringIO('{"security-reviewer": {"vendor": "claude", "model": "sonnet"}}'),
+    )
+    rc = CM.main(["write-engine-pins", "--cwd", repo, "--root", store, "--key", "seatPins"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"action": "written"}
+    loaded = engine_pref.load_engine_prefs(repo, root=store)
+    assert "seatPins" in loaded
+    assert loaded["seatPins"] == {
+        "security-reviewer": {"vendor": "claude", "model": "sonnet"},
+    }
+    assert "codexModels" not in loaded
+
+
+def test_cli_write_engine_pins_empty_stdin_noop(tmp_path, capsys, monkeypatch):
+    import io
+
+    repo, store = _write_core_for_pin_tests(
+        tmp_path, prefs={"codexModels": {"reviewer": "gpt-5.6-terra"}})
+    path = CM.core_path(repo, store)
+    before = open(path, encoding="utf-8").read()
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    rc = CM.main(["write-engine-pins", "--cwd", repo, "--root", store, "--key", "codexModels"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"action": "noop"}
+    assert open(path, encoding="utf-8").read() == before
+
+
+def test_duplicate_core_key_reason_shared_with_engine_pref_safe_heads():
+    engine_pref = _load("engine_pref")
+    reason = "%s:reviewer" % CM.DUPLICATE_CORE_KEY_REASON
+    assert engine_pref.builder_tier_reason_display(reason) == "%s: reviewer" % (
+        CM.DUPLICATE_CORE_KEY_REASON,
+    )
 
 
 def test_write_builder_dispatch_tier_refused_duplicate_key_in_lock_b2(tmp_path, monkeypatch):

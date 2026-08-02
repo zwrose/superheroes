@@ -94,7 +94,10 @@ def sanctioned_builder_tiers() -> tuple[str, ...]:
     return model_registry.claude_dispatch_tokens()
 
 
-_REASON_SAFE_DETAIL_HEADS = frozenset({"builder-tier-not-sanctioned", "duplicate-core-key"})
+from core_md import DUPLICATE_CORE_KEY_REASON  # noqa: E402  (authoritative token home)
+
+_REASON_SAFE_DETAIL_HEADS = frozenset(
+    {"builder-tier-not-sanctioned", DUPLICATE_CORE_KEY_REASON})
 
 
 def safe_config_echo(value, limit=120):
