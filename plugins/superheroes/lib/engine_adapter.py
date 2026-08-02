@@ -448,16 +448,27 @@ def _scrub_findings(findings):
     return out
 
 
+def _scrub_mapping(obj):
+    """Recursively scrub every string key and value in a mapping tree."""
+    if isinstance(obj, str):
+        return _scrub(obj)
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            new_k = _scrub(k) if isinstance(k, str) else k
+            out[new_k] = _scrub_mapping(v)
+        return out
+    if isinstance(obj, list):
+        return [_scrub_mapping(x) for x in obj]
+    return obj
+
+
 def scrub_salvage_block(salvage):
     """Scrub every string in a salvage block for durable export. Never raises."""
+    # axis: that every string leaving salvage is scrubbed — keys, structural values, all fields.
     if not isinstance(salvage, dict):
         return salvage
-    out = dict(salvage)
-    if isinstance(out.get("excerpt"), str):
-        out["excerpt"] = _scrub(out["excerpt"])
-    if isinstance(out.get("findings"), list):
-        out["findings"] = _scrub_findings(out["findings"])
-    return out
+    return _scrub_mapping(salvage)
 
 
 def _scrub_investigated(investigated):

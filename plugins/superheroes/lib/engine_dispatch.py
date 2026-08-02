@@ -214,6 +214,8 @@ def _journal_state(records):
             state["folded"] = rec.get("result")
         elif kind == "run-abandoned":
             state["abandoned"] = rec.get("detail")
+            if isinstance(rec.get("result"), dict):
+                state["abandonedResult"] = rec["result"]
     return state
 
 
@@ -815,7 +817,22 @@ def _build_ledger_row(run_dir_real, state, result):
     return row
 
 
-def _append_fold_ledger(run_dir_real, state, result, *, repo_root=None):
+def _preflight_run_id(repo_root_resolved, row, run_dir_real=None):
+    """Namespace-separated preflight id — never reuses a real run's dedupe key."""
+    # axis: that a preflight row cannot take a real run's dedupe key — collision, not presence.
+    material = json.dumps({
+        "namespace": "preflight",
+        "repo": repo_root_resolved,
+        "runDir": run_dir_real or row.get("runDir"),
+        "reason": row.get("reason"),
+        "detail": row.get("detail"),
+        "at": row.get("at"),
+        "attemptCount": row.get("attemptCount"),
+    }, sort_keys=True, separators=(",", ":"))
+    return "preflight-" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
+
+
+def _append_fold_ledger(run_dir_real, state, result, *, repo_root=None, preflight=False):
     """Append one ledger row at terminal fold or preflight refusal; fail-soft — never changes dispatch outcome."""
     try:
         opened = state.get("opened") or {}
@@ -823,15 +840,10 @@ def _append_fold_ledger(run_dir_real, state, result, *, repo_root=None):
         if not repo_root_resolved:
             return {"written": False, "path": None, "why": "repo-root-absent-from-run-opened"}
         row = _build_ledger_row(run_dir_real, state, result)
-        if not row.get("runId"):
-            material = json.dumps({
-                "repo": repo_root_resolved,
-                "reason": row.get("reason"),
-                "detail": row.get("detail"),
-                "at": row.get("at"),
-                "attemptCount": row.get("attemptCount"),
-            }, sort_keys=True, separators=(",", ":"))
-            row["runId"] = "preflight-" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
+        if preflight:
+            row["runId"] = _preflight_run_id(repo_root_resolved, row, run_dir_real)
+        elif not row.get("runId"):
+            row["runId"] = _preflight_run_id(repo_root_resolved, row, run_dir_real)
         append_result = forfeit_ledger.append(repo_root_resolved, row)
         return {
             "written": append_result.get("written", False),
@@ -842,8 +854,11 @@ def _append_fold_ledger(run_dir_real, state, result, *, repo_root=None):
         return {"written": False, "path": None, "why": "ledger-internal-error"}
 
 
-def _finish_preflight_terminal(repo_root, result, *, run_dir="", argv=None, engine=None):
+def _finish_preflight_terminal(
+    repo_root, result, *, run_dir="", argv=None, engine=None, run_kind=RUN_KIND_REVIEW,
+):
     """Return a terminal pre-spawn refusal; append a ledger row when repo identity is known."""
+    # axis: which entry points append — review and write pre-spawn refusals with repo identity.
     out = _with_run_fields(result, run_dir=run_dir, argv=argv or [])
     if (
         repo_root
@@ -854,10 +869,12 @@ def _finish_preflight_terminal(repo_root, result, *, run_dir="", argv=None, engi
             "opened": {
                 "repoRoot": repo_root,
                 "engine": engine,
-                "runKind": RUN_KIND_REVIEW,
+                "runKind": run_kind,
             },
         }
-        out["ledger"] = _append_fold_ledger(run_dir, state, out, repo_root=repo_root)
+        out["ledger"] = _append_fold_ledger(
+            run_dir, state, out, repo_root=repo_root, preflight=True,
+        )
     return out
 
 
@@ -875,6 +892,14 @@ def _abandon_terminal_result(run_dir_real, state):
     return abandon_result
 
 
+def _stored_abandon_result(run_dir_real, state):
+    """Return persisted abandon result when present; legacy records recompute once."""
+    stored = state.get("abandonedResult")
+    if isinstance(stored, dict):
+        return dict(stored)
+    return _abandon_terminal_result(run_dir_real, state)
+
+
 def _terminate_run(run_dir_real, state, *, record_kind, result, abandon_detail=None):
     """The ONLY path to a terminal run. Journals terminal record, verifies append, then
     finalizes (release lease, destroy view). Returns the terminal result, or a named
@@ -889,11 +914,12 @@ def _terminate_run(run_dir_real, state, *, record_kind, result, abandon_detail=N
         result["ledger"] = ledger_receipt
         record = {"kind": "run-folded", "result": result, "at": time.time()}
     elif record_kind == "run-abandoned":
-        # axis: which terminal paths append — run-abandoned is a terminal non-success with repo identity.
+        # axis: that repeat reads return the stored result — not a fresh ledger append.
         abandon_result = _abandon_terminal_result(run_dir_real, state)
         record = {
             "kind": "run-abandoned",
             "detail": abandon_detail or "abandoned",
+            "result": abandon_result,
             "at": time.time(),
         }
     else:
@@ -1652,9 +1678,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
 
             if state.get("abandoned") is not None:
                 return _with_run_fields(
-                    {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-                     "detail": "run-abandoned", "attempts": len(state.get("attempts") or {}),
-                     "forfeited": False},
+                    _stored_abandon_result(run_dir_real, state),
                     run_dir=run_dir_real, argv=argv,
                 )
 
@@ -2285,31 +2309,38 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
             run_dir="", argv=[],
         )
     cwd_real = cwd_detail
+    repo_root = _repository_root_from_git_cwd(cwd_real, timeout=preflight_timeout)
+
+    def _write_preflight_terminal(result, *, run_dir="", argv=None):
+        if repo_root:
+            return _finish_preflight_terminal(
+                repo_root, result, run_dir=run_dir, argv=argv or [], engine=engine,
+                run_kind=RUN_KIND_WRITE,
+            )
+        return _with_run_fields(result, run_dir=run_dir, argv=argv or [])
 
     ok, why = engine_adapter.prompt_path_ok(prompt_path)
     if not ok:
-        return _with_run_fields(
+        return _write_preflight_terminal(
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "prompt-%s" % why,
              "attempts": 0, "forfeited": False, "terminal": True},
-            run_dir="", argv=[],
         )
 
     opts = {"model": model, "engine_model": engine_model, "cwd": cwd_real}
     built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
     if built["reason"] is not None:
-        return _with_run_fields(
+        return _write_preflight_terminal(
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
              "detail": "engine-config:%s" % built["reason"],
              "attempts": 0, "forfeited": False, "terminal": True},
-            run_dir="", argv=[],
         )
     argv = built["argv"]
 
     if run_dir is None:
-        return _with_run_fields(
+        return _write_preflight_terminal(
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-absent",
              "attempts": 0, "forfeited": False, "terminal": True},
-            run_dir="", argv=argv,
+            argv=argv,
         )
 
     ok_rd, rd_detail = _validate_run_dir(run_dir)
@@ -2318,7 +2349,7 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
             try:
                 os.makedirs(run_dir, mode=0o700, exist_ok=True)
             except OSError as exc:
-                return _with_run_fields(
+                return _write_preflight_terminal(
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                      "detail": "run-dir-setup-failed:%s" % type(exc).__name__,
                      "attempts": 0, "forfeited": False, "terminal": True},
@@ -2326,7 +2357,7 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
                 )
             ok_rd, rd_detail = _validate_run_dir(run_dir)
         if not ok_rd:
-            return _with_run_fields(
+            return _write_preflight_terminal(
                 {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": rd_detail,
                  "attempts": 0, "forfeited": False, "terminal": True},
                 run_dir=run_dir or "", argv=argv,
@@ -2334,7 +2365,7 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
     run_dir_real = rd_detail
 
     if _path_inside(cwd_real, run_dir_real):
-        return _with_run_fields(
+        return _write_preflight_terminal(
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-inside-cwd",
              "attempts": 0, "forfeited": False, "terminal": True},
             run_dir=run_dir_real, argv=argv,
@@ -2344,7 +2375,7 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
         try:
             head = _git_scrubbed(cwd_real, "rev-parse", "HEAD", timeout=preflight_timeout)
         except subprocess.TimeoutExpired:
-            return _with_run_fields(
+            return _write_preflight_terminal(
                 {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "git-preflight-timeout",
                  "attempts": 0, "forfeited": False, "terminal": True},
                 run_dir=run_dir_real, argv=argv,
@@ -2358,13 +2389,13 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
 
         if opened is not None:
             if os.path.realpath(opened.get("cwd", "")) != cwd_real:
-                return _with_run_fields(
+                return _write_preflight_terminal(
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "cwd-authorization-mismatch",
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=opened.get("argv") or argv,
                 )
             if order_id is not None and opened.get("orderId") != order_id:
-                return _with_run_fields(
+                return _write_preflight_terminal(
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-reused",
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=opened.get("argv") or argv,
@@ -2372,14 +2403,14 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
             argv = opened.get("argv") or argv
         else:
             if _run_dir_nonempty(run_dir_real):
-                return _with_run_fields(
+                return _write_preflight_terminal(
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-not-empty-unopened",
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=argv,
                 )
             baseline = _worktree_baseline(cwd_real, timeout=preflight_timeout)
             if baseline is None and preflight_timeout is not None:
-                return _with_run_fields(
+                return _write_preflight_terminal(
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "git-preflight-timeout",
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=argv,
@@ -2388,7 +2419,7 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
                 cwd_real, run_dir_real,
             )
             if not ok_lease:
-                return _with_run_fields(
+                return _write_preflight_terminal(
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": lease_detail,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=argv,
@@ -2399,13 +2430,13 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
                 prompt_path=prompt_path, order_id=order_id, base_sha=base_sha,
                 worktree_baseline=baseline,
                 progress_path=progress_path or os.path.join(run_dir_real, PROGRESS_NAME),
-                repo_root=_repository_root_from_git_cwd(cwd_real, timeout=preflight_timeout),
+                repo_root=repo_root,
             )
             if not ok_open:
                 holder = file_lock.read_holder(lease_path)
                 if holder.get("dispatchToken"):
                     file_lock.release(lease_path)
-                return _with_run_fields(
+                return _write_preflight_terminal(
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": open_detail,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=argv,
@@ -2575,7 +2606,7 @@ def dispatch_abandon(run_dir):
 
         if state.get("abandoned") is not None:
             return _with_run_fields(
-                _abandon_terminal_result(run_dir_real, state),
+                _stored_abandon_result(run_dir_real, state),
                 run_dir=run_dir_real, argv=argv,
             )
 
@@ -2629,7 +2660,7 @@ def dispatch_abandon(run_dir):
             argv = (state.get("opened") or {}).get("argv") or argv
             if state.get("abandoned") is not None:
                 return _with_run_fields(
-                    _abandon_terminal_result(run_dir_real, state),
+                    _stored_abandon_result(run_dir_real, state),
                     run_dir=run_dir_real, argv=argv,
                 )
             return _terminate_run(

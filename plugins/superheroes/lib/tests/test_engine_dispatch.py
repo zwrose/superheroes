@@ -3077,7 +3077,7 @@ def test_fold_ledger_append_failure_fail_soft(tmp_path, monkeypatch):
 
 
 def test_preflight_unrunnable_appends_ledger_caller_error(tmp_path, monkeypatch):
-    """axis: which terminal paths append — pre-spawn refusals with repo identity."""
+    """axis: which entry points append — review pre-spawn refusals with repo identity."""
     repo_root = _git_init(str(tmp_path / "repo-preflight"))
     _ledger_env(tmp_path, monkeypatch)
     missing_prompt = str(tmp_path / "missing-prompt.txt")
@@ -3111,7 +3111,7 @@ def test_abandon_appends_ledger_row(tmp_path, monkeypatch):
 
 
 def test_dispatch_abandon_idempotent_equal_results(tmp_path, monkeypatch):
-    """axis: that two abandon calls return equal results — not that a ledger key exists."""
+    """axis: that repeat reads return the stored result — not a fresh ledger append."""
     repo_root = _git_init(str(tmp_path / "repo-abandon-idem"))
     _ledger_env(tmp_path, monkeypatch)
     run_dir = str(tmp_path / "run-abandon-idem")
@@ -3119,6 +3119,71 @@ def test_dispatch_abandon_idempotent_equal_results(tmp_path, monkeypatch):
     first = ED.dispatch_abandon(run_dir)
     second = ED.dispatch_abandon(run_dir)
     assert second == first
+
+
+def test_preflight_run_id_namespaced_from_run_dir_dedupe_key(tmp_path, monkeypatch):
+    """axis: that a preflight row cannot take a real run's dedupe key — collision, not presence."""
+    repo_root = _git_init(str(tmp_path / "repo-preflight-id"))
+    _ledger_env(tmp_path, monkeypatch)
+    run_dir = str(tmp_path / "run-preflight-id")
+    os.makedirs(run_dir, exist_ok=True)
+    _manual_open_review_run_git(tmp_path, run_dir, repo_root)
+    wrong_order = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir, order_id="wrong-order",
+    )
+    assert wrong_order["detail"] == "run-dir-reused"
+    assert wrong_order["ledger"]["written"] is True
+    rows, _ = _FL_MOD.read(repo_root)
+    preflight_row = rows[-1]
+    real_run_id = _FL_MOD.run_id_from_run_dir(run_dir)
+    assert preflight_row["runId"] != real_run_id
+    assert preflight_row["runId"].startswith("preflight-")
+
+
+def test_dispatch_abandon_idempotent_after_failed_ledger_append(tmp_path, monkeypatch):
+    """axis: that repeat reads return the stored result even when ledger state changed."""
+    repo_root = _git_init(str(tmp_path / "repo-abandon-fail"))
+    _ledger_env(tmp_path, monkeypatch)
+    run_dir = str(tmp_path / "run-abandon-fail")
+    _manual_open_review_run_git(tmp_path, run_dir, repo_root)
+    calls = {"n": 0}
+    real_append = _FL_MOD.append
+
+    def flaky_append(repo_root_arg, row):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"written": False, "path": None, "why": "ledger-lock-busy"}
+        return real_append(repo_root_arg, row)
+
+    monkeypatch.setattr(ED.forfeit_ledger, "append", flaky_append)
+    first = ED.dispatch_abandon(run_dir)
+    assert first["ledger"]["written"] is False
+    second = ED.dispatch_abandon(run_dir)
+    assert second == first
+    assert calls["n"] == 1
+
+
+def test_write_preflight_unrunnable_appends_ledger_caller_error(tmp_path, monkeypatch):
+    """axis: which entry points append — write pre-spawn refusals with repo identity."""
+    wt = _linked_worktree(tmp_path)
+    _ledger_env(tmp_path, monkeypatch)
+    missing_prompt = str(tmp_path / "missing-write-prompt.txt")
+    res = ED.dispatch_write(
+        "codex", model="sonnet", effort="high",
+        prompt_path=missing_prompt, cwd=wt,
+        run_dir=str(tmp_path / "run-write-preflight"), order_id="inv-write",
+        run_engine=_never_call,
+    )
+    assert res["reason"] == "unrunnable"
+    assert res["detail"] == "prompt-missing"
+    assert res["ledger"]["written"] is True
+    repo_root = ED._repository_root_from_git_cwd(wt)
+    rows, _ = _FL_MOD.read(repo_root)
+    assert len(rows) == 1
+    assert rows[0]["attribution"]["class"] == _DO_MOD.ATTRIBUTION_CALLER_ERROR
+    assert rows[0]["runKind"] == ED.RUN_KIND_WRITE
 
 
 def test_run_opened_records_repo_root_and_id(tmp_path):
