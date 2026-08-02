@@ -2600,6 +2600,68 @@ def test_run_bounded_kills_grandchild_on_timeout(private_tmp):
         os.kill(pid, 0)
 
 
+def _read_grandchild_pid(pid_file):
+    if not os.path.isfile(pid_file):
+        pytest.fail(f"grandchild pid file missing: {pid_file!r}")
+    with open(pid_file, encoding="utf-8") as handle:
+        raw = handle.read().strip()
+    if not raw:
+        pytest.fail(f"grandchild pid file empty: {pid_file!r}")
+    try:
+        return int(raw)
+    except ValueError:
+        pytest.fail(
+            f"grandchild pid file not an integer: {pid_file!r} contents {raw!r}"
+        )
+
+
+def _observed_process_state(pid):
+    """Return a description of ``pid`` if still present, else ``None`` when gone."""
+    proc_stat = os.path.join("/proc", str(pid), "stat")
+    if os.path.isfile(proc_stat):
+        try:
+            with open(proc_stat, encoding="utf-8") as handle:
+                content = handle.read()
+        except OSError as exc:
+            return f"/proc/{pid}/stat unreadable: {exc}"
+        close_paren = content.rfind(")")
+        if close_paren < 0 or close_paren + 2 >= len(content):
+            return f"/proc/{pid}/stat unparseable: {content!r}"
+        state = content[close_paren + 2]
+        if state == "Z":
+            return None
+        state_names = {
+            "R": "running",
+            "S": "sleeping",
+            "D": "disk sleep",
+            "T": "stopped",
+            "t": "tracing stop",
+            "X": "dead",
+            "x": "dead",
+            "Z": "zombie",
+            "P": "parked",
+            "I": "idle",
+        }
+        label = state_names.get(state, "unknown")
+        return f"/proc state {state!r} ({label})"
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return None
+    except PermissionError:
+        return "alive (kill(pid, 0) raised PermissionError; /proc unavailable)"
+    return "alive (kill(pid, 0) succeeded; /proc unavailable)"
+
+
+def _wait_for_process_gone(pid, timeout=10):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _observed_process_state(pid) is None:
+            return True
+        time.sleep(0.05)
+    return False
+
+
 def test_run_bounded_kills_orphan_grandchild_when_leader_exits_first(private_tmp):
     _, run_cwd, bin_dir = _confinement_layout(private_tmp)
     pid_file = os.path.join(private_tmp, "grandchild.pid")
@@ -2621,10 +2683,16 @@ def test_run_bounded_kills_orphan_grandchild_when_leader_exits_first(private_tmp
     elapsed = time.monotonic() - started
     assert result["timedOut"] is True
     assert elapsed < 5
-    with open(pid_file, encoding="utf-8") as handle:
-        pid = int(handle.read().strip())
-    with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)
+    pid = _read_grandchild_pid(pid_file)
+    # Leader exits before timeout cleanup; reaping is async and zombies count as gone.
+    if not _wait_for_process_gone(pid, timeout=10):
+        state = _observed_process_state(pid)
+        detail = f"observed state: {state}"
+        try:
+            detail += f"; pgid={os.getpgid(pid)}"
+        except (ProcessLookupError, PermissionError):
+            pass
+        pytest.fail(f"grandchild pid {pid} still present after 10s poll; {detail}")
 
 
 def test_run_bounded_kills_sigterm_ignoring_orphan_grandchild_when_leader_exits_first(
