@@ -273,8 +273,29 @@ def test_retryable_reasons_strict_subset():
 
 
 def test_step_order_fence_plus_destructive_disjoint():
-    assert pw.STEP_ORDER == pw.FENCE_STEPS + pw.DESTRUCTIVE_STEPS
+    assert pw.STEP_ORDER == (
+        pw.STEP_APP,
+        pw.STEP_AUTOMATION,
+        pw.STEP_CLEANUP,
+        pw.STEP_RECLAIM,
+    )
+    assert pw.FENCE_STEPS == (pw.STEP_APP, pw.STEP_AUTOMATION)
+    assert pw.DESTRUCTIVE_STEPS == (pw.STEP_CLEANUP, pw.STEP_RECLAIM)
     assert set(pw.FENCE_STEPS).isdisjoint(set(pw.DESTRUCTIVE_STEPS))
+
+
+def test_retryable_reasons_reachable_in_appctl_source():
+    import pathlib
+
+    source = pathlib.Path(pa.__file__).read_text(encoding="utf-8")
+    name_by_token = {
+        getattr(pa, name): name
+        for name in dir(pa)
+        if name.startswith("REASON_") and isinstance(getattr(pa, name), str)
+    }
+    for token in pa.RETRYABLE_REASONS:
+        const_name = name_by_token[token]
+        assert source.count(const_name) >= 2, const_name
 
 
 def test_app_lifecycle_declaration_kind():

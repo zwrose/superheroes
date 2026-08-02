@@ -13,6 +13,7 @@ _LIB = os.path.realpath(os.path.join(_HERE, ".."))
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
+import pilot_contract as pc  # noqa: E402
 import pilot_journal as pj  # noqa: E402
 import pilot_lifecycle as pl  # noqa: E402
 import pilot_appctl as pa  # noqa: E402
@@ -97,6 +98,8 @@ def _valid_instance():
         "command": ["echo", "hi"],
         "readinessUrl": "http://127.0.0.1:9/",
         "readinessAttribution": pa.READINESS_ATTRIBUTION_UNATTRIBUTED,
+        "stdoutPath": os.path.join(os.path.realpath(tempfile.gettempdir()), "app.stdout.log"),
+        "stderrPath": os.path.join(os.path.realpath(tempfile.gettempdir()), "app.stderr.log"),
         "startedAt": NOW,
         "updatedAt": NOW,
         "stopReceipt": None,
@@ -794,3 +797,42 @@ def test_lifecycle_helpers_do_not_write_into_repository_cwd():
     after = _cwd_listing()
     assert repo_cwd == os.getcwd()
     assert after == before
+
+
+def test_stand_up_exercised_registry_refuses_nul_argv_without_leak():
+    tmp = _tmp_dir()
+    try:
+        cwd = os.path.join(tmp, "wt")
+        os.makedirs(cwd)
+        slots_dir = os.path.join(tmp, "slots")
+        os.makedirs(slots_dir, exist_ok=True)
+        created = pl.create_slot(slots_dir, SLOT, ACCOUNTS, now=NOW)
+        rec = pl.transition(created["record"], pl.STATE_PROVISIONED, now=NOW)
+        pl.write_record(pl.record_path(slots_dir, SLOT), rec)
+        journal = os.path.join(tmp, "journal.jsonl")
+        launch = _valid_launch(cwd)
+        launch["argv"] = ["echo\x00", "hi"]
+        digest = pc.declaration_digest({"evidence": "app-lifecycle exercised"})
+        registry = {
+            "schemaVersion": pc.REGISTRY_SCHEMA_VERSION,
+            "records": [{
+                "kind": "app-lifecycle",
+                "declarationDigest": digest,
+                "exercisedAt": NOW,
+                "receipt": {"result": "pass", "evidence": "ok"},
+            }],
+        }
+        result = pa.stand_up(
+            launch,
+            journal_path=journal,
+            slots_dir_path=slots_dir,
+            now=NOW,
+            now_fn=lambda: NOW,
+            registry=registry,
+            declaration={"evidence": "app-lifecycle exercised"},
+            monotonic=lambda: 0.0,
+            sleep=lambda _t: None,
+        )
+        assert result["reason"] == pa.REASON_COMMAND_INVALID
+    finally:
+        shutil.rmtree(tmp)

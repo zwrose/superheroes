@@ -417,7 +417,7 @@ def test_phase_a_independence_app_failure_still_runs_automation(tmp_dir):
     calls = []
 
     handlers = {
-        pw.STEP_APP: lambda ctx: _applied(pw.STEP_APP, evidence="fail") and {
+        pw.STEP_APP: lambda ctx: {
             "outcome": pj.OUTCOME_NOT_APPLIED,
             "receipt": None,
             "reason": "stop-failed",
@@ -425,11 +425,6 @@ def test_phase_a_independence_app_failure_still_runs_automation(tmp_dir):
         pw.STEP_AUTOMATION: lambda ctx: calls.append(pw.STEP_AUTOMATION) or _applied(
             pw.STEP_AUTOMATION
         ),
-    }
-    handlers[pw.STEP_APP] = lambda ctx: {
-        "outcome": pj.OUTCOME_NOT_APPLIED,
-        "receipt": None,
-        "reason": "stop-failed",
     }
     result = pw.teardown_slot(
         _entry(intent=pw.INTENT_COMPLETE),
@@ -440,6 +435,7 @@ def test_phase_a_independence_app_failure_still_runs_automation(tmp_dir):
         monotonic=_mono_sequence([0.0, 1.0, 2.0]),
     )
     assert pw.STEP_AUTOMATION in calls
+    assert result["steps"][pw.STEP_APP]["status"] == pw.STATUS_FAILED
     assert result["steps"][pw.STEP_AUTOMATION]["status"] == pw.STATUS_CONFIRMED
 
 

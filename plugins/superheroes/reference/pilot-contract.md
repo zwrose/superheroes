@@ -1034,7 +1034,7 @@ future refusal token cannot silently become retryable without an explicit code c
 1. **Process exited** — if the child has exited, inspect stderr for bind-conflict patterns;
    bind conflict wins over generic process exit.
 2. **Transport error** — probe error; retry until the monotonic deadline, then
-   `app-readiness-transport-error`.
+   `app-readiness-timeout`.
 3. **Redirect** — HTTP 3xx is refused (`app-readiness-redirect-refused`), not followed. A
    redirect means the readiness target is not the one the boundary authorized.
 4. **Success band** — HTTP 2xx:
@@ -1043,7 +1043,8 @@ future refusal token cannot silently become retryable without an explicit code c
    - `readinessAttribution: "unattributed"` — accepted but recorded as a **degradation**
      (`readiness-unattributed` kind).
 5. **Unexpected status** — any other status after the deadline is
-   `app-readiness-unexpected-status`.
+   `app-readiness-unexpected-status`; if the last probe before deadline still carries a
+   transport `error`, `app-readiness-transport-error` is returned instead.
 
 `readinessAttribution` has no default — it must be exactly `nonce` or `unattributed`.
 
@@ -1060,11 +1061,22 @@ future refusal token cannot silently become retryable without an explicit code c
 before `Popen`. A crash between the record and the spawn leaves `starting`, which is the
 honest state, rather than an invisible live app.
 
+**On-disk instance record (`app.json`):** durable fields include `stdoutPath` and
+`stderrPath` — absolute paths beside the slot directory where the default spawn redirects
+child stdout/stderr so long-running chatty processes cannot block on pipe buffers.
+
 ### Stop observations
 
 Stop requires **two independent observations**: the process group is gone **and** the
-endpoint is free. Identity is corroborated **before** any signal (`ps` matching `argv[0]`).
-A double stop is idempotent — an already-`stopped` record returns its existing receipt.
+endpoint is free. Identity is corroborated **before** any signal (`ps` matching the
+executable token — the first whitespace-separated field of the `ps` command line, or its
+basename — not a substring of the whole line). A double stop is idempotent — an
+already-`stopped` record with a valid `stopReceipt` returns that receipt; a `stopped`
+record without one is not evidence and falls through to the two-observation path.
+
+`check_endpoint_free` may return `observable: false` on `socket.timeout` (unknown occupancy).
+That carve-out applies to the pre-spawn probe only. `stop()` treats a non-observable
+endpoint probe as **not** endpoint-free.
 
 **Accepted residual:** a reused pid whose process runs the same `argv[0]` would corroborate
 via `ps`. Under this project's single-user local threat model the guard targets accidents
@@ -1088,7 +1100,7 @@ check/use limit.
 | `app-endpoint-duplicate` | `assert_unique_endpoints` finds the same `(host, port)` on two slots |
 | `app-spawn-failed` | `Popen` raised `OSError` |
 | `app-readiness-timeout` | *(retryable)* readiness polling exhausted the monotonic deadline on transport errors |
-| `app-readiness-transport-error` | *(retryable)* readiness probe transport error at deadline |
+| `app-readiness-transport-error` | *(retryable)* readiness probe still carries a transport `error` at deadline after a non-2xx status band |
 | `app-readiness-unexpected-status` | readiness probe returned a non-2xx/non-3xx status at deadline |
 | `app-readiness-redirect-refused` | readiness probe returned HTTP 3xx |
 | `app-readiness-unattributed` | `nonce` attribution required but body did not contain the launch nonce at deadline |
@@ -1108,8 +1120,8 @@ check/use limit.
 ## Wave runtime — deadline and teardown
 
 The wave deadline runtime and wave-end teardown live in `lib/pilot_wave.py`. It owns a
-launch-anchored monotonic deadline, the durable park latch, two-phase teardown across N
-slots, and the wave report.
+launch-anchored monotonic deadline, the durable park latch, per-slot two-phase teardown
+(sequential across slots — not a wave-level fence sweep), and the wave report.
 
 **Non-goals:** app-instance control (`pilot_appctl`), automation-server fencing (**C7**, issue #829),
 cleanup (**C9**, issue #831), and reclaim (**A2b**, issue #824) — those arrive as injected
@@ -1150,6 +1162,11 @@ attempted regardless of each other's outcome.
 
 The phases are split because halting the whole chain on a failed fence would leave an
 authenticated browser driving — the exact harm the fence phase exists to prevent.
+
+`run_teardown` invokes `teardown_slot` **sequentially** — each slot's full fence-then-
+destructive chain completes before the next slot starts. On the deadline path this means
+earlier slots may be torn down while a later slot's browser is still driving; there is no
+wave-level fence pass that halts every slot's browser before any destructive step begins.
 
 ### Handler contract
 
@@ -1224,7 +1241,7 @@ slot list makes `complete` false.
 | `wave-margin-invalid` | `marginSeconds` is not a non-negative real number |
 | `wave-clock-invalid` | monotonic clock returned non-finite value, anchor is invalid, or `now_mono < launchedAtMono` |
 | `wave-anchor-invalid` | `launchedAt` is not valid ISO-8601 UTC-Z, or anchor construction failed |
-| `wave-slot-entry-invalid` | teardown entry is not a mapping, slot/slotRef/intent invalid, or slot ≠ parsed slotRef |
+| `wave-slot-entry-invalid` | teardown entry is not a mapping, slot/slotRef/intent invalid, slot ≠ parsed slotRef, or `stepTimeoutSeconds` is present but not a non-negative real number |
 | `wave-slots-invalid` | `run_teardown` or `wave_report` received a non-mapping or slots list is invalid |
 | `wave-step-unavailable` | no handler registered for the step |
 | `wave-step-failed` | handler returned `not-applied` |

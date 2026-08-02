@@ -209,7 +209,35 @@ def _is_command_argv(argv):
     for part in argv:
         if not isinstance(part, str) or not part:
             return False
+        if "\x00" in part:
+            return False
     return True
+
+
+def _validate_env_overlay(env):
+    """Shared env overlay rules for resolve_invocation and _validate_launch."""
+    if env is None:
+        return _ok()
+    if not isinstance(env, dict):
+        return _fail(REASON_ENV_INVALID)
+    for key, value in env.items():
+        if not isinstance(key, str) or not key:
+            return _fail(REASON_ENV_INVALID)
+        if "=" in key or "\x00" in key:
+            return _fail(REASON_ENV_INVALID)
+        if not isinstance(value, str):
+            return _fail(REASON_ENV_INVALID)
+        if "\x00" in value:
+            return _fail(REASON_ENV_INVALID)
+    return _ok()
+
+
+def _instance_log_paths(slots_dir_path, slot):
+    slot_dir = os.path.join(slots_dir_path, slot)
+    return (
+        os.path.join(slot_dir, "app.stdout.log"),
+        os.path.join(slot_dir, "app.stderr.log"),
+    )
 
 
 def _refuse_unsafe_dir(path):
@@ -264,19 +292,10 @@ def resolve_invocation(dev_command, *, params, readiness_url, env=None):
     if not _validate_readiness_scheme(resolved_url):
         return _fail(REASON_READINESS_URL_INVALID)
 
-    resolved_env = None
-    if env is not None:
-        if not isinstance(env, dict):
-            return _fail(REASON_ENV_INVALID)
-        resolved_env = {}
-        for key, value in env.items():
-            if not isinstance(key, str) or not key:
-                return _fail(REASON_ENV_INVALID)
-            if "=" in key or "\x00" in key:
-                return _fail(REASON_ENV_INVALID)
-            if not isinstance(value, str):
-                return _fail(REASON_ENV_INVALID)
-            resolved_env[key] = value
+    env_check = _validate_env_overlay(env)
+    if not env_check["ok"]:
+        return env_check
+    resolved_env = None if env is None else dict(env)
 
     return _ok(argv=resolved_argv, readinessUrl=resolved_url, env=resolved_env)
 
@@ -372,11 +391,11 @@ def check_endpoint_free(host, port, *, connect=None, timeout=0.25):
             connect((host, port), timeout)
             return _fail(REASON_BIND_CONFLICT)
         except ConnectionRefusedError:
-            return _ok()
+            return _ok(observable=True)
         except socket.timeout:
-            return _ok()
+            return _ok(observable=False)
         except (OSError, UnicodeError):
-            return _fail(REASON_BIND_CONFLICT)
+            return _fail(REASON_BIND_CONFLICT, observable=False)
     except BaseException:
         return _fail(REASON_BIND_CONFLICT)
 
@@ -450,8 +469,10 @@ def _validate_launch(launch):
         return _fail(REASON_LAUNCH_INVALID)
     try:
         slot = pilot_slot.validate_slot_id(launch.get("slot"))
-        pilot_slot.parse_slot_ref(launch.get("slotRef"))
+        parsed_slot, _ = pilot_slot.parse_slot_ref(launch.get("slotRef"))
     except pilot_slot.PilotSlotError:
+        return _fail(REASON_LAUNCH_INVALID)
+    if slot != parsed_slot:
         return _fail(REASON_LAUNCH_INVALID)
     cwd = launch.get("cwd")
     if not _is_str_path(cwd) or not os.path.isabs(cwd):
@@ -464,15 +485,16 @@ def _validate_launch(launch):
         return _fail(REASON_CWD_INVALID)
     if not _validate_authorized(launch.get("authorized")):
         return _fail(REASON_LAUNCH_INVALID)
-    if not _is_command_argv(launch.get("argv")):
+    argv = launch.get("argv")
+    if isinstance(argv, list):
+        for part in argv:
+            if isinstance(part, str) and "\x00" in part:
+                return _fail(REASON_COMMAND_INVALID)
+    if not _is_command_argv(argv):
         return _fail(REASON_LAUNCH_INVALID)
-    env = launch.get("env")
-    if env is not None and not isinstance(env, dict):
-        return _fail(REASON_LAUNCH_INVALID)
-    if env is not None:
-        for key, value in env.items():
-            if not isinstance(key, str) or not isinstance(value, str):
-                return _fail(REASON_LAUNCH_INVALID)
+    env_check = _validate_env_overlay(launch.get("env"))
+    if not env_check["ok"]:
+        return env_check
     if not _validate_allocation(launch.get("allocation")):
         return _fail(REASON_ALLOCATION_INVALID)
     readiness_url = launch.get("readinessUrl")
@@ -517,8 +539,10 @@ def _validate_instance_record(instance):
         raise PilotAppctlError(REASON_INSTANCE_RECORD_INVALID)
     slot = pilot_slot.validate_slot_id(instance.get("slot"))
     try:
-        pilot_slot.parse_slot_ref(instance.get("slotRef"))
+        parsed_slot, _ = pilot_slot.parse_slot_ref(instance.get("slotRef"))
     except pilot_slot.PilotSlotError:
+        raise PilotAppctlError(REASON_INSTANCE_RECORD_INVALID)
+    if instance.get("slot") != parsed_slot:
         raise PilotAppctlError(REASON_INSTANCE_RECORD_INVALID)
     state = instance.get("state")
     if state not in INSTANCE_STATES:
@@ -549,6 +573,12 @@ def _validate_instance_record(instance):
     updated_at = instance.get("updatedAt")
     if not _is_iso8601_utc(started_at) or not _is_iso8601_utc(updated_at):
         raise PilotAppctlError(REASON_INSTANCE_RECORD_INVALID)
+    stdout_path = instance.get("stdoutPath")
+    stderr_path = instance.get("stderrPath")
+    if not _is_str_path(stdout_path) or not os.path.isabs(stdout_path):
+        raise PilotAppctlError(REASON_INSTANCE_RECORD_INVALID)
+    if not _is_str_path(stderr_path) or not os.path.isabs(stderr_path):
+        raise PilotAppctlError(REASON_INSTANCE_RECORD_INVALID)
     stop_receipt = instance.get("stopReceipt")
     if stop_receipt is not None and not _validate_stop_receipt(stop_receipt):
         raise PilotAppctlError(REASON_INSTANCE_RECORD_INVALID)
@@ -570,7 +600,7 @@ def _write_instance_file(path, instance):
     try:
         _refuse_unsafe_dir(parent)
     except PilotAppctlError as exc:
-        return _fail(REASON_INSTANCE_RECORD_WRITE_FAILED if exc.reason != REASON_INSTANCE_RECORD_INVALID else REASON_INSTANCE_RECORD_WRITE_FAILED)
+        return _fail(exc.reason)
     try:
         store_core.atomic_write(path, text)
         dir_fd = os.open(parent, os.O_RDONLY)
@@ -679,18 +709,41 @@ def clear_instance(slots_dir_path, slot, *, timeout=30.0):
         return _fail(REASON_INSTANCE_RECORD_WRITE_FAILED)
 
 
-def _default_spawn(argv, *, cwd, env):
+def _default_spawn(argv, *, cwd, env, stdout_path=None, stderr_path=None):
     merged = dict(os.environ)
     if env:
         merged.update(env)
-    return subprocess.Popen(
-        argv,
-        cwd=cwd,
-        env=merged,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
-    )
+    stdout_dest = subprocess.DEVNULL
+    stderr_dest = subprocess.DEVNULL
+    opened = []
+    try:
+        if stdout_path is not None:
+            stdout_dest = open(stdout_path, "wb")
+            opened.append(stdout_dest)
+        if stderr_path is not None:
+            stderr_dest = open(stderr_path, "wb")
+            opened.append(stderr_dest)
+        proc = subprocess.Popen(
+            argv,
+            cwd=cwd,
+            env=merged,
+            stdout=stdout_dest,
+            stderr=stderr_dest,
+            start_new_session=True,
+        )
+    except OSError:
+        for handle in opened:
+            try:
+                handle.close()
+            except OSError:
+                pass
+        raise
+    for handle in opened:
+        try:
+            handle.close()
+        except OSError:
+            pass
+    return proc
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -711,15 +764,14 @@ def _default_readiness_probe(url, *, timeout):
         return {"status": None, "body": "", "error": str(exc)}
 
 
-def _stderr_bind_conflict(proc):
+def _stderr_bind_conflict(stderr_path):
+    if not isinstance(stderr_path, str) or not stderr_path:
+        return False
     try:
-        _, stderr = proc.communicate(timeout=0)
-    except Exception:
-        try:
-            stderr = proc.stderr.read() if proc.stderr else b""
-        except Exception:
-            return False
-    text = (stderr or b"").decode("utf-8", errors="replace").casefold()
+        with open(stderr_path, "rb") as fh:
+            text = fh.read().decode("utf-8", errors="replace").casefold()
+    except OSError:
+        return False
     return any(pat in text for pat in _BIND_CONFLICT_PATTERNS)
 
 
@@ -727,7 +779,7 @@ def _proc_exited(proc):
     return proc.poll() is not None
 
 
-def _build_starting_record(launch, *, nonce, now):
+def _build_starting_record(launch, *, nonce, now, stdout_path, stderr_path):
     return {
         "schemaVersion": SCHEMA,
         "slot": launch["slot"],
@@ -741,6 +793,8 @@ def _build_starting_record(launch, *, nonce, now):
         "command": list(launch["argv"]),
         "readinessUrl": launch["readinessUrl"],
         "readinessAttribution": launch["readinessAttribution"],
+        "stdoutPath": stdout_path,
+        "stderrPath": stderr_path,
         "startedAt": now,
         "updatedAt": now,
         "stopReceipt": None,
@@ -758,9 +812,37 @@ def _journal_end(journal_path, *, slot_ref, effect_id, outcome, at, reason=None)
     )
 
 
+def _validate_stand_up_hooks(*, spawn, readiness_probe, monotonic, sleep):
+    for hook in (spawn, readiness_probe, monotonic, sleep):
+        if hook is not None and not _is_callable(hook):
+            return _fail(REASON_LAUNCH_INVALID)
+    return _ok()
+
+
+def _stand_up_failure(reason, *, instance=None, degradations=None, **extra):
+    return {
+        "ok": False,
+        "reason": reason,
+        "instance": instance,
+        "degradations": degradations if degradations is not None else [],
+        **extra,
+    }
+
+
+def _compensate_running_child(instance_record, proc, pgid):
+    if proc is not None and proc.poll() is None:
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+        except OSError:
+            pass
+    if instance_record is not None:
+        instance_record["state"] = STATE_INDETERMINATE
+
+
 def stand_up(launch, *, journal_path, slots_dir_path, now, now_fn, registry, declaration,
              spawn=None, readiness_probe=None, monotonic=None, sleep=None):
     """Stand up one slot's app instance with durable record and readiness polling."""
+    use_default_spawn = spawn is None
     if spawn is None:
         spawn = _default_spawn
     if readiness_probe is None:
@@ -772,106 +854,76 @@ def stand_up(launch, *, journal_path, slots_dir_path, now, now_fn, registry, dec
 
     validated = _validate_launch(launch)
     if not validated["ok"]:
-        return {
-            "ok": False,
-            "reason": validated["reason"],
-            "instance": None,
-            "degradations": [],
-        }
+        return _stand_up_failure(validated["reason"])
+
+    hook_check = _validate_stand_up_hooks(
+        spawn=spawn,
+        readiness_probe=readiness_probe,
+        monotonic=monotonic,
+        sleep=sleep,
+    )
+    if not hook_check["ok"]:
+        return _stand_up_failure(hook_check["reason"])
 
     try:
         pilot_contract.require_exercised(registry, "app-lifecycle", declaration)
     except pilot_contract.PilotContractError:
-        return {
-            "ok": False,
-            "reason": REASON_DECLARATION_UNEXERCISED,
-            "instance": None,
-            "degradations": [],
-        }
+        return _stand_up_failure(REASON_DECLARATION_UNEXERCISED)
 
     authorized = launch["authorized"]
     if authorized["slotRef"] != launch["slotRef"]:
-        return {
-            "ok": False,
-            "reason": REASON_LAUNCH_INVALID,
-            "instance": None,
-            "degradations": [],
-        }
+        return _stand_up_failure(REASON_LAUNCH_INVALID)
     if authorized["readinessUrl"] != launch["readinessUrl"]:
-        return {
-            "ok": False,
-            "reason": REASON_LAUNCH_INVALID,
-            "instance": None,
-            "degradations": [],
-        }
+        return _stand_up_failure(REASON_LAUNCH_INVALID)
 
     allocation = launch["allocation"]
     free = check_endpoint_free(allocation["host"], allocation["port"])
     if not free["ok"]:
-        return {
-            "ok": False,
-            "reason": free["reason"],
-            "instance": None,
-            "degradations": [],
-        }
+        return _stand_up_failure(free["reason"])
 
     slot = launch["slot"]
     _, carried_gen = pilot_slot.parse_slot_ref(launch["slotRef"])
     effect_id = None
     instance_record = None
     proc = None
+    pgid = None
+    pid = None
     degradations = []
+    stdout_path, stderr_path = _instance_log_paths(slots_dir_path, slot)
 
     try:
         with pilot_lifecycle.slot_lock(slots_dir_path, slot):
             slot_path = pilot_lifecycle.record_path(slots_dir_path, slot)
             loaded = pilot_lifecycle.read_record(slot_path)
             if not loaded["ok"]:
-                return {
-                    "ok": False,
-                    "reason": REASON_SLOT_STATE_NOT_LAUNCHABLE,
-                    "instance": None,
-                    "degradations": [],
-                }
+                return _stand_up_failure(REASON_SLOT_STATE_NOT_LAUNCHABLE)
             record = loaded["record"]
             if record["state"] not in LAUNCHABLE_SLOT_STATES:
-                return {
-                    "ok": False,
-                    "reason": REASON_SLOT_STATE_NOT_LAUNCHABLE,
-                    "instance": None,
-                    "degradations": [],
-                }
+                return _stand_up_failure(REASON_SLOT_STATE_NOT_LAUNCHABLE)
             gen_check = pilot_lifecycle.generation_check(carried_gen, record["generation"])
             if not gen_check["ok"]:
-                return {
-                    "ok": False,
-                    "reason": REASON_GENERATION_MOVED,
-                    "generationReason": gen_check["reason"],
-                    "instance": None,
-                    "degradations": [],
-                }
+                return _stand_up_failure(
+                    REASON_GENERATION_MOVED,
+                    generationReason=gen_check["reason"],
+                )
 
             inst_path = instance_path(slots_dir_path, slot)
             existing = _read_instance_from_path(inst_path)
             if existing["ok"]:
                 if existing["instance"]["state"] in ACTIVE_INSTANCE_STATES:
-                    return {
-                        "ok": False,
-                        "reason": REASON_INSTANCE_RECORD_EXISTS,
-                        "instance": None,
-                        "degradations": [],
-                    }
+                    return _stand_up_failure(REASON_INSTANCE_RECORD_EXISTS)
 
             nonce = secrets.token_hex(16)
-            instance_record = _build_starting_record(launch, nonce=nonce, now=now)
+            instance_record = _build_starting_record(
+                launch,
+                nonce=nonce,
+                now=now,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+            )
             written = _write_instance_file(inst_path, instance_record)
             if not written["ok"]:
-                return {
-                    "ok": False,
-                    "reason": REASON_INSTANCE_RECORD_WRITE_FAILED,
-                    "instance": None,
-                    "degradations": [],
-                }
+                return _stand_up_failure(REASON_INSTANCE_RECORD_WRITE_FAILED)
 
         begin = pilot_journal.begin_effect(
             journal_path,
@@ -885,22 +937,29 @@ def stand_up(launch, *, journal_path, slots_dir_path, now, now_fn, registry, dec
             },
         )
         if not begin["ok"]:
-            return {
-                "ok": False,
-                "reason": REASON_JOURNAL_WRITE_FAILED,
-                "instance": instance_record,
-                "degradations": [],
-            }
+            return _stand_up_failure(
+                REASON_JOURNAL_WRITE_FAILED,
+                instance=instance_record,
+            )
         effect_id = begin["effectId"]
 
         child_env = dict(launch["env"] or {})
         child_env["SUPERHEROES_PILOT_LAUNCH_NONCE"] = nonce
         child_env["SUPERHEROES_PILOT_SLOT_REF"] = launch["slotRef"]
         try:
-            proc = spawn(launch["argv"], cwd=launch["cwd"], env=child_env)
+            if use_default_spawn:
+                proc = spawn(
+                    launch["argv"],
+                    cwd=launch["cwd"],
+                    env=child_env,
+                    stdout_path=stdout_path,
+                    stderr_path=stderr_path,
+                )
+            else:
+                proc = spawn(launch["argv"], cwd=launch["cwd"], env=child_env)
         except OSError as exc:
             end_at = now_fn()
-            _journal_end(
+            end = _journal_end(
                 journal_path,
                 slot_ref=launch["slotRef"],
                 effect_id=effect_id,
@@ -908,12 +967,12 @@ def stand_up(launch, *, journal_path, slots_dir_path, now, now_fn, registry, dec
                 at=end_at,
                 reason=str(exc),
             )
-            return {
-                "ok": False,
-                "reason": REASON_SPAWN_FAILED,
-                "instance": instance_record,
-                "degradations": [],
-            }
+            if not end["ok"]:
+                return _stand_up_failure(
+                    REASON_JOURNAL_WRITE_FAILED,
+                    instance=instance_record,
+                )
+            return _stand_up_failure(REASON_SPAWN_FAILED, instance=instance_record)
 
         pid = proc.pid
         try:
@@ -924,7 +983,33 @@ def stand_up(launch, *, journal_path, slots_dir_path, now, now_fn, registry, dec
         instance_record["pid"] = pid
         instance_record["pgid"] = pgid
         instance_record["updatedAt"] = now_fn()
-        write_instance(slots_dir_path, slot, instance_record)
+        pid_write = write_instance(slots_dir_path, slot, instance_record)
+        if not pid_write["ok"]:
+            _compensate_running_child(instance_record, proc, pgid)
+            instance_record["updatedAt"] = now_fn()
+            write_instance(slots_dir_path, slot, instance_record)
+            end_at = now_fn()
+            end = _journal_end(
+                journal_path,
+                slot_ref=launch["slotRef"],
+                effect_id=effect_id,
+                outcome=pilot_journal.OUTCOME_INDETERMINATE,
+                at=end_at,
+                reason=REASON_INSTANCE_RECORD_WRITE_FAILED,
+            )
+            if not end["ok"]:
+                return _stand_up_failure(
+                    REASON_JOURNAL_WRITE_FAILED,
+                    instance=instance_record,
+                    pid=pid,
+                    pgid=pgid,
+                )
+            return _stand_up_failure(
+                REASON_INSTANCE_RECORD_WRITE_FAILED,
+                instance=instance_record,
+                pid=pid,
+                pgid=pgid,
+            )
 
         deadline = monotonic() + launch["readinessTimeoutSeconds"]
         poll_interval = launch["pollSeconds"]
@@ -932,7 +1017,7 @@ def stand_up(launch, *, journal_path, slots_dir_path, now, now_fn, registry, dec
 
         while True:
             if _proc_exited(proc):
-                if _stderr_bind_conflict(proc):
+                if _stderr_bind_conflict(instance_record.get("stderrPath")):
                     readiness_reason = REASON_BIND_CONFLICT
                 else:
                     readiness_reason = REASON_PROCESS_EXITED
@@ -945,7 +1030,7 @@ def stand_up(launch, *, journal_path, slots_dir_path, now, now_fn, registry, dec
 
             if probe.get("error"):
                 if monotonic() >= deadline:
-                    readiness_reason = REASON_READINESS_TRANSPORT_ERROR
+                    readiness_reason = REASON_READINESS_TIMEOUT
                     break
                 sleep(poll_interval)
                 continue
@@ -980,13 +1065,16 @@ def stand_up(launch, *, journal_path, slots_dir_path, now, now_fn, registry, dec
                 break
 
             if monotonic() >= deadline:
-                readiness_reason = REASON_READINESS_UNEXPECTED_STATUS
+                if probe.get("error"):
+                    readiness_reason = REASON_READINESS_TRANSPORT_ERROR
+                else:
+                    readiness_reason = REASON_READINESS_UNEXPECTED_STATUS
                 break
             sleep(poll_interval)
 
         if readiness_reason is not None:
             end_at = now_fn()
-            _journal_end(
+            end = _journal_end(
                 journal_path,
                 slot_ref=launch["slotRef"],
                 effect_id=effect_id,
@@ -994,69 +1082,119 @@ def stand_up(launch, *, journal_path, slots_dir_path, now, now_fn, registry, dec
                 at=end_at,
                 reason=readiness_reason,
             )
-            if proc is not None and proc.poll() is None:
-                try:
-                    os.killpg(pgid, signal.SIGTERM)
-                except OSError:
-                    pass
-            instance_record["state"] = STATE_INDETERMINATE
+            if not end["ok"]:
+                return _stand_up_failure(
+                    REASON_JOURNAL_WRITE_FAILED,
+                    instance=instance_record,
+                    pid=pid,
+                    pgid=pgid,
+                )
+            _compensate_running_child(instance_record, proc, pgid)
             instance_record["updatedAt"] = end_at
             write_instance(slots_dir_path, slot, instance_record)
-            return {
-                "ok": False,
-                "reason": readiness_reason,
-                "instance": instance_record,
-                "degradations": degradations,
-            }
+            return _stand_up_failure(
+                readiness_reason,
+                instance=instance_record,
+                degradations=degradations,
+            )
 
         with pilot_lifecycle.slot_lock(slots_dir_path, slot):
             loaded = pilot_lifecycle.read_record(
                 pilot_lifecycle.record_path(slots_dir_path, slot),
             )
-            if loaded["ok"]:
-                gen_check = pilot_lifecycle.generation_check(
-                    carried_gen,
-                    loaded["record"]["generation"],
+            if not loaded["ok"]:
+                stop(instance_record, now_fn=now_fn)
+                end_at = now_fn()
+                end = _journal_end(
+                    journal_path,
+                    slot_ref=launch["slotRef"],
+                    effect_id=effect_id,
+                    outcome=pilot_journal.OUTCOME_INDETERMINATE,
+                    at=end_at,
+                    reason=REASON_SLOT_STATE_NOT_LAUNCHABLE,
                 )
-                if not gen_check["ok"]:
-                    stop(instance_record, now_fn=now_fn, corroborate=lambda _inst: True)
-                    end_at = now_fn()
-                    _journal_end(
-                        journal_path,
-                        slot_ref=launch["slotRef"],
-                        effect_id=effect_id,
-                        outcome=pilot_journal.OUTCOME_INDETERMINATE,
-                        at=end_at,
-                        reason=REASON_GENERATION_MOVED,
+                if not end["ok"]:
+                    return _stand_up_failure(
+                        REASON_JOURNAL_WRITE_FAILED,
+                        instance=instance_record,
+                        pid=pid,
+                        pgid=pgid,
+                        degradations=degradations,
                     )
-                    return {
-                        "ok": False,
-                        "reason": REASON_GENERATION_MOVED,
-                        "generationReason": gen_check["reason"],
-                        "instance": instance_record,
-                        "degradations": degradations,
-                    }
+                instance_record["updatedAt"] = end_at
+                write_instance(slots_dir_path, slot, instance_record)
+                return _stand_up_failure(
+                    REASON_SLOT_STATE_NOT_LAUNCHABLE,
+                    instance=instance_record,
+                    degradations=degradations,
+                )
+            gen_check = pilot_lifecycle.generation_check(
+                carried_gen,
+                loaded["record"]["generation"],
+            )
+            if not gen_check["ok"]:
+                # Child was spawned moments earlier in this same call; corroborate=True
+                # is safe here because positivity is gated inside stop().
+                stop(instance_record, now_fn=now_fn, corroborate=lambda _inst: True)
+                end_at = now_fn()
+                end = _journal_end(
+                    journal_path,
+                    slot_ref=launch["slotRef"],
+                    effect_id=effect_id,
+                    outcome=pilot_journal.OUTCOME_INDETERMINATE,
+                    at=end_at,
+                    reason=REASON_GENERATION_MOVED,
+                )
+                if not end["ok"]:
+                    return _stand_up_failure(
+                        REASON_JOURNAL_WRITE_FAILED,
+                        instance=instance_record,
+                        pid=pid,
+                        pgid=pgid,
+                        degradations=degradations,
+                    )
+                instance_record["updatedAt"] = end_at
+                write_instance(slots_dir_path, slot, instance_record)
+                return _stand_up_failure(
+                    REASON_GENERATION_MOVED,
+                    generationReason=gen_check["reason"],
+                    instance=instance_record,
+                    degradations=degradations,
+                )
 
         instance_record["state"] = STATE_READY
         instance_record["updatedAt"] = now_fn()
         final_write = write_instance(slots_dir_path, slot, instance_record)
         end_at = now_fn()
-        _journal_end(
+        end = _journal_end(
             journal_path,
             slot_ref=launch["slotRef"],
             effect_id=effect_id,
             outcome=pilot_journal.OUTCOME_APPLIED,
             at=end_at,
         )
+        if not end["ok"]:
+            _compensate_running_child(instance_record, proc, pgid)
+            instance_record["updatedAt"] = end_at
+            write_instance(slots_dir_path, slot, instance_record)
+            return _stand_up_failure(
+                REASON_JOURNAL_WRITE_FAILED,
+                instance=instance_record,
+                pid=pid,
+                pgid=pgid,
+                degradations=degradations,
+            )
         if not final_write["ok"]:
-            return {
-                "ok": False,
-                "reason": REASON_INSTANCE_RECORD_WRITE_FAILED,
-                "pid": pid,
-                "pgid": pgid,
-                "instance": instance_record,
-                "degradations": degradations,
-            }
+            _compensate_running_child(instance_record, proc, pgid)
+            instance_record["updatedAt"] = end_at
+            write_instance(slots_dir_path, slot, instance_record)
+            return _stand_up_failure(
+                REASON_INSTANCE_RECORD_WRITE_FAILED,
+                pid=pid,
+                pgid=pgid,
+                instance=instance_record,
+                degradations=degradations,
+            )
         return {
             "ok": True,
             "reason": None,
@@ -1064,27 +1202,41 @@ def stand_up(launch, *, journal_path, slots_dir_path, now, now_fn, registry, dec
             "degradations": degradations,
         }
     except pilot_lifecycle.PilotLifecycleError:
-        return {
-            "ok": False,
-            "reason": REASON_SLOT_STATE_NOT_LAUNCHABLE,
-            "instance": instance_record,
-            "degradations": degradations,
-        }
-    except OSError:
+        return _stand_up_failure(
+            REASON_SLOT_STATE_NOT_LAUNCHABLE,
+            instance=instance_record,
+            degradations=degradations,
+        )
+    except BaseException as exc:
+        if proc is not None and pgid is not None:
+            _compensate_running_child(instance_record, proc, pgid)
+            if instance_record is not None:
+                instance_record["updatedAt"] = now_fn()
+                write_instance(slots_dir_path, slot, instance_record)
         if effect_id is not None:
-            _journal_end(
+            end = _journal_end(
                 journal_path,
                 slot_ref=launch["slotRef"],
                 effect_id=effect_id,
                 outcome=pilot_journal.OUTCOME_INDETERMINATE,
                 at=now_fn(),
+                reason=repr(exc),
             )
-        return {
-            "ok": False,
-            "reason": REASON_INSTANCE_RECORD_WRITE_FAILED,
-            "instance": instance_record,
-            "degradations": degradations,
-        }
+            if not end["ok"]:
+                return _stand_up_failure(
+                    REASON_JOURNAL_WRITE_FAILED,
+                    instance=instance_record,
+                    pid=pid,
+                    pgid=pgid,
+                    degradations=degradations,
+                )
+        return _stand_up_failure(
+            REASON_SPAWN_FAILED,
+            instance=instance_record,
+            pid=pid,
+            pgid=pgid,
+            degradations=degradations,
+        )
 
 
 def _default_corroborate(instance):
@@ -1104,8 +1256,11 @@ def _default_corroborate(instance):
         return False
     if result.returncode != 0:
         return False
-    output = result.stdout or ""
-    return argv0 in output
+    output = (result.stdout or "").strip()
+    if not output:
+        return False
+    exe_token = output.split(None, 1)[0]
+    return exe_token == argv0 or os.path.basename(exe_token) == os.path.basename(argv0)
 
 
 def _default_poll_alive(pgid):
@@ -1176,20 +1331,14 @@ def stop(instance, *, now_fn, terminate=None, poll_alive=None, corroborate=None,
 
         if instance.get("state") == STATE_STOPPED:
             receipt = instance.get("stopReceipt")
-            if receipt is None:
-                receipt = {
-                    "step": "app-instance",
-                    "slotRef": instance["slotRef"],
-                    "observedAt": now_fn(),
-                    "evidence": "already stopped",
+            if receipt is not None and _validate_stop_receipt(receipt):
+                return {
+                    "ok": True,
+                    "reason": None,
+                    "observed": True,
+                    "exit": None,
+                    "receipt": receipt,
                 }
-            return {
-                "ok": True,
-                "reason": None,
-                "observed": True,
-                "exit": None,
-                "receipt": receipt,
-            }
 
         if not corroborate(instance):
             return {
@@ -1200,7 +1349,25 @@ def stop(instance, *, now_fn, terminate=None, poll_alive=None, corroborate=None,
                 "receipt": None,
             }
 
+        pid = instance["pid"]
         pgid = instance["pgid"]
+        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+            return {
+                "ok": False,
+                "reason": REASON_STOP_INDETERMINATE,
+                "observed": False,
+                "exit": None,
+                "receipt": None,
+            }
+        if not isinstance(pgid, int) or isinstance(pgid, bool) or pgid <= 0:
+            return {
+                "ok": False,
+                "reason": REASON_STOP_INDETERMINATE,
+                "observed": False,
+                "exit": None,
+                "receipt": None,
+            }
+
         exit_code = None
 
         if poll_alive(pgid):
@@ -1221,7 +1388,9 @@ def stop(instance, *, now_fn, terminate=None, poll_alive=None, corroborate=None,
                     sleep(0.05)
 
         try:
-            os.waitpid(instance["pid"], os.WNOHANG)
+            _pid, status = os.waitpid(pid, os.WNOHANG)
+            if _pid == pid:
+                exit_code = os.waitstatus_to_exitcode(status)
         except ChildProcessError:
             pass
         except OSError:
@@ -1232,7 +1401,10 @@ def stop(instance, *, now_fn, terminate=None, poll_alive=None, corroborate=None,
         host = alloc.get("host", "127.0.0.1")
         port = alloc.get("port", 0)
         endpoint_free = check_free(host, port)
-        endpoint_observed = endpoint_free.get("ok") is True
+        endpoint_observed = (
+            endpoint_free.get("ok") is True
+            and endpoint_free.get("observable", True) is not False
+        )
 
         observed = group_gone and endpoint_observed
         now = now_fn()

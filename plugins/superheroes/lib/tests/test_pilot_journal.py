@@ -1129,7 +1129,13 @@ def test_write_record_directory_fsync_failure(tmp_dir, monkeypatch):
     assert result["reason"] == pj.REASON_JOURNAL_WRITE_FAILED
 
 
-def test_concurrent_append_all_lines_parse(tmp_dir):
+def test_concurrent_append_all_lines_parse(tmp_dir, monkeypatch):
+    # Load-bearing concurrency proof is test_concurrent_append_flock_short_write_all_lines_parse;
+    # this case only checks parseability when the lock is bypassed.
+    def _noop_lock(_path, _timeout=30.0):
+        return os.open(os.devnull, os.O_RDONLY)
+
+    monkeypatch.setattr(pj, "_acquire_journal_lock", _noop_lock)
     multiprocessing.set_start_method("spawn", force=True)
     path = _journal(tmp_dir)
     n = _CONCURRENCY_WORKERS
@@ -1201,12 +1207,17 @@ def test_detail_one_byte_over_max_refuses(tmp_dir):
     assert result["reason"] == pj.REASON_RECORD_INVALID
 
 
-def test_refused_write_empty_path_leaves_no_lock():
-    result = pj.begin_effect(
-        "", slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS,
-    )
-    assert result == {"ok": False, "reason": pj.REASON_JOURNAL_WRITE_FAILED}
-    assert not os.path.exists(".lock")
+def test_refused_write_empty_path_leaves_no_lock(tmp_dir):
+    cwd = os.getcwd()
+    os.chdir(tmp_dir)
+    try:
+        result = pj.begin_effect(
+            "", slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS,
+        )
+        assert result == {"ok": False, "reason": pj.REASON_JOURNAL_WRITE_FAILED}
+        assert not os.path.exists(".lock")
+    finally:
+        os.chdir(cwd)
 
 
 def test_refused_write_bad_parent_leaves_no_lock(tmp_dir):
