@@ -1,8 +1,4 @@
-"""Cleanup-command resolution, sentinel instrumentation, and receipt binding primitives (C9).
-
-Non-goals: receipt assembly, containment resolution, and resurrection planning land in a later
-order.
-"""
+"""Cleanup-command resolution, sentinel instrumentation, containment receipts, and resurrection planning (C9)."""
 import hashlib
 import hmac
 import json
@@ -15,7 +11,10 @@ import threading
 import unicodedata
 
 import pilot_boundary
+import pilot_contract
+import pilot_journal
 import pilot_policy
+import pilot_provision
 import pilot_slot
 
 REFUSAL_NAMESPACE_INVALID = "cleanup-namespace-invalid"
@@ -33,6 +32,51 @@ REFUSAL_PROBE_INDETERMINATE = "cleanup-sentinel-probe-indeterminate"
 REFUSAL_SOURCE_ROOT_INVALID = "cleanup-source-root-invalid"
 REFUSAL_SOURCE_UNREADABLE = "cleanup-source-unreadable"
 REFUSAL_POLICY_INVALID = "cleanup-policy-invalid"
+REFUSAL_CLEANUP_ARGV0_NOT_ABSOLUTE = "cleanup-argv0-not-absolute"
+
+KIND_CLEANUP_CONTAINMENT = "cleanup-containment"
+
+MODE_PERMISSIONS = "permissions"
+MODE_RECEIPT = "receipt"
+MODE_SINGLE_SLOT = "single-slot"
+MODE_REFUSED = "refused"
+
+RESULT_PASS = "pass"
+RESULT_FAIL = "fail"
+
+ACTION_PARK = "park"
+ACTION_RESURRECT = "resurrect"
+ACTION_REFUSE = "refuse"
+
+REASON_RECEIPT_VACUOUS = "cleanup-receipt-vacuous"
+REASON_OWN_SENTINEL_SURVIVED = "cleanup-own-sentinel-survived"
+REASON_FOREIGN_SENTINEL_DESTROYED = "cleanup-foreign-sentinel-destroyed"
+REASON_CLEANUP_COMMAND_FAILED = "cleanup-command-failed"
+REASON_NO_FOREIGN_NAMESPACE = "cleanup-no-foreign-namespace"
+
+REASON_RECEIPT_SCHEMA_INVALID = "receipt-schema-invalid"
+REASON_RECEIPT_NOT_PASS = "receipt-result-not-pass"
+REASON_RECEIPT_SLOT_MISMATCH = "receipt-slot-mismatch"
+REASON_RECEIPT_STALE_COMMAND = "receipt-stale-command"
+REASON_RECEIPT_STALE_CONFIG = "receipt-stale-config"
+
+REASON_CONTAINMENT_UNDECLARED = "containment-undeclared"
+
+REASON_EFFECTS_ESCAPE_PARK = "resurrection-effects-escape-park"
+REASON_EFFECTS_ESCAPE_UNEXERCISED = "resurrection-effects-escape-unexercised"
+REASON_CONTAINMENT_UNRESOLVED = "resurrection-containment-unresolved"
+REASON_CONTAINMENT_UNEXERCISED = "resurrection-cleanup-containment-unexercised"
+REASON_VERDICT_MISSING = "resurrection-verdict-missing"
+
+ASSURANCE_LIMITS = (
+    "This receipt is evidence about one execution of one cleanup command. It shows that a "
+    "stale, buggy, or edited cleanup did not reach a foreign namespace on this run.",
+    "It is NOT a defense against hostile cleanup code. A cleanup with datastore access can "
+    "preserve or recreate a sentinel while destroying other foreign data, so a passing receipt "
+    "does not establish containment against an adversary. Datastore permissions that cannot "
+    "reach foreign namespaces are the stronger assurance, which is why resolve_containment "
+    "prefers them.",
+)
 
 NAMESPACE_PLACEHOLDER = "{namespace}"
 SENTINEL_PLACEHOLDER = "{sentinel}"
@@ -42,6 +86,31 @@ _SENTINEL_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _HEAD_RE = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
 
 _SENTINEL_KEYS = frozenset({"plantCommand", "probeCommand", "connectionEnvVar"})
+
+_RECEIPT_SCHEMA_KEYS = frozenset({
+    "kind",
+    "result",
+    "reason",
+    "evidence",
+    "slot",
+    "slotRef",
+    "namespace",
+    "foreignNamespaces",
+    "commandDigest",
+    "configDigest",
+    "identityProvenance",
+    "identityStrength",
+    "observations",
+    "residualSentinels",
+    "assuranceLimits",
+    "exercisedAt",
+})
+
+_CONTAINMENT_RESOLVED_MODES = frozenset({
+    MODE_PERMISSIONS,
+    MODE_RECEIPT,
+    MODE_SINGLE_SLOT,
+})
 
 
 class PilotCleanupError(Exception):
@@ -434,6 +503,609 @@ def argv0_content_digest(argv0):
         return None
     with open(argv0, "rb") as handle:
         return hashlib.sha256(handle.read()).hexdigest()
+
+
+def _command_digest(policy, declared_command):
+    canonical = _canonical_json(_nfc_normalize(declared_command))
+    return hmac.new(binding_key(policy), canonical.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _sentinel_from_policy(policy):
+    containment = policy.get("datastore", {}).get("containment")
+    if not isinstance(containment, dict):
+        raise PilotCleanupError(REFUSAL_SENTINEL_UNDECLARED)
+    sentinel = containment.get("sentinel")
+    if sentinel is None:
+        raise PilotCleanupError(REFUSAL_SENTINEL_UNDECLARED)
+    return sentinel
+
+
+def _probe_all(sentinel, namespaces, sentinel_ids, *, connection_detail, reach_roots, run_cwd,
+               timeout_seconds):
+    observations = {}
+    for namespace in namespaces:
+        sentinel_id = sentinel_ids[namespace]
+        result = probe_sentinel(
+            sentinel,
+            namespace,
+            sentinel_id,
+            connection_detail=connection_detail,
+            reach_roots=reach_roots,
+            run_cwd=run_cwd,
+            timeout_seconds=timeout_seconds,
+        )
+        observations[namespace] = result["present"]
+    return observations
+
+
+def _build_receipt(
+    *,
+    result,
+    reason,
+    evidence,
+    slot,
+    slot_ref,
+    namespace,
+    foreign_namespaces,
+    command_digest,
+    config_digest,
+    identity_provenance,
+    identity_strength,
+    observations,
+    residual_sentinels,
+    exercised_at,
+):
+    return {
+        "kind": KIND_CLEANUP_CONTAINMENT,
+        "result": result,
+        "reason": reason,
+        "evidence": evidence,
+        "slot": slot,
+        "slotRef": slot_ref,
+        "namespace": namespace,
+        "foreignNamespaces": foreign_namespaces,
+        "commandDigest": command_digest,
+        "configDigest": config_digest,
+        "identityProvenance": identity_provenance,
+        "identityStrength": identity_strength,
+        "observations": observations,
+        "residualSentinels": residual_sentinels,
+        "assuranceLimits": list(ASSURANCE_LIMITS),
+        "exercisedAt": exercised_at,
+    }
+
+
+def cleanup_effect_receipt(
+    policy,
+    pilot_block,
+    slot_ref,
+    *,
+    reach_roots,
+    run_cwd,
+    cleanup_root,
+    journal_path,
+    now,
+    observed_identity,
+    identity_provenance,
+    identity_strength,
+    sentinel_factory=None,
+    timeout_seconds=20,
+):
+    """Run the cleanup containment exercise and return a pass/fail receipt.
+
+    The cleanup command must be independently resolvable — an absolute path — because it runs
+    with a minimal environment and no shell; a relative argv0 would fail to spawn opaquely deep
+    inside the runner.
+
+    Residual foreign sentinels are recorded and disclosed rather than silently removed: the
+    framework has no remove command, and running the project cleanup against a sibling namespace
+    to tidy up would be the exact destruction this exercise exists to prevent.
+    """
+    if sentinel_factory is None:
+        sentinel_factory = mint_sentinel_id
+
+    sentinel = _sentinel_from_policy(policy)
+    slot, _generation = pilot_slot.parse_slot_ref(slot_ref)
+    namespace = namespace_for_slot(slot)
+    foreigns = foreign_namespaces(policy, slot)
+
+    declared_command = pilot_block["cleanup"]["command"]
+    command_digest = _command_digest(policy, declared_command)
+
+    observations = {"preplant": {}, "postplant": {}, "postcleanup": {}}
+    residual_sentinels = [{"namespace": foreign} for foreign in foreigns]
+
+    if not foreigns:
+        return _build_receipt(
+            result=RESULT_FAIL,
+            reason=REASON_NO_FOREIGN_NAMESPACE,
+            evidence="no foreign namespaces to contain against",
+            slot=slot,
+            slot_ref=slot_ref,
+            namespace=namespace,
+            foreign_namespaces=foreigns,
+            command_digest=command_digest,
+            config_digest="",
+            identity_provenance=identity_provenance,
+            identity_strength=identity_strength,
+            observations=observations,
+            residual_sentinels=[],
+            exercised_at=now,
+        )
+
+    resolved_argv = resolve_cleanup_command(declared_command, namespace)
+    if not os.path.isabs(resolved_argv[0]):
+        raise PilotCleanupError(REFUSAL_CLEANUP_ARGV0_NOT_ABSOLUTE)
+
+    source_id = source_identity(cleanup_root)
+    source_id["argv0Digest"] = argv0_content_digest(resolved_argv[0])
+    config_digest_value = config_digest(
+        policy,
+        resolved_cleanup_argv=resolved_argv,
+        sentinel=sentinel,
+        namespace=namespace,
+        foreign_namespaces=foreigns,
+        run_cwd=run_cwd,
+        identity_provenance=identity_provenance,
+        identity_strength=identity_strength,
+        observed_identity=observed_identity,
+        source_identity=source_id,
+    )
+
+    all_namespaces = [namespace] + foreigns
+    sentinel_ids = {ns: sentinel_factory() for ns in all_namespaces}
+    connection_detail = policy["datastore"]["connectionDetail"]
+    env_var = sentinel["connectionEnvVar"]
+
+    observations["preplant"] = _probe_all(
+        sentinel,
+        all_namespaces,
+        sentinel_ids,
+        connection_detail=connection_detail,
+        reach_roots=reach_roots,
+        run_cwd=run_cwd,
+        timeout_seconds=timeout_seconds,
+    )
+    if any(observations["preplant"].values()):
+        receipt = _build_receipt(
+            result=RESULT_FAIL,
+            reason=REASON_RECEIPT_VACUOUS,
+            evidence="sentinel already present before plant",
+            slot=slot,
+            slot_ref=slot_ref,
+            namespace=namespace,
+            foreign_namespaces=foreigns,
+            command_digest=command_digest,
+            config_digest=config_digest_value,
+            identity_provenance=identity_provenance,
+            identity_strength=identity_strength,
+            observations=observations,
+            residual_sentinels=residual_sentinels,
+            exercised_at=now,
+        )
+        pilot_policy.assert_results_only(receipt, pilot_policy.policy_material(policy))
+        return receipt
+
+    with pilot_journal.effect(
+        journal_path,
+        slot_ref=slot_ref,
+        kind=pilot_journal.KIND_NAMESPACE_TOUCHED,
+        at=now,
+        detail={"namespaces": list(all_namespaces)},
+    ) as handle:
+        for ns in all_namespaces:
+            plant_sentinel(
+                sentinel,
+                ns,
+                sentinel_ids[ns],
+                connection_detail=connection_detail,
+                reach_roots=reach_roots,
+                run_cwd=run_cwd,
+                timeout_seconds=timeout_seconds,
+            )
+        handle.mark_applied(at=now)
+
+    observations["postplant"] = _probe_all(
+        sentinel,
+        all_namespaces,
+        sentinel_ids,
+        connection_detail=connection_detail,
+        reach_roots=reach_roots,
+        run_cwd=run_cwd,
+        timeout_seconds=timeout_seconds,
+    )
+    if not all(observations["postplant"].values()):
+        receipt = _build_receipt(
+            result=RESULT_FAIL,
+            reason=REASON_RECEIPT_VACUOUS,
+            evidence="sentinel absent after plant",
+            slot=slot,
+            slot_ref=slot_ref,
+            namespace=namespace,
+            foreign_namespaces=foreigns,
+            command_digest=command_digest,
+            config_digest=config_digest_value,
+            identity_provenance=identity_provenance,
+            identity_strength=identity_strength,
+            observations=observations,
+            residual_sentinels=residual_sentinels,
+            exercised_at=now,
+        )
+        pilot_policy.assert_results_only(receipt, pilot_policy.policy_material(policy))
+        return receipt
+
+    with pilot_journal.effect(
+        journal_path,
+        slot_ref=slot_ref,
+        kind=pilot_journal.KIND_NAMESPACE_TOUCHED,
+        at=now,
+        detail={"namespace": namespace},
+    ) as handle:
+        cleanup_result = run_bounded(
+            resolved_argv,
+            cwd=run_cwd,
+            env={env_var: connection_detail},
+            timeout_seconds=timeout_seconds,
+        )
+        handle.mark_applied(at=now)
+
+    if cleanup_result["timedOut"] or cleanup_result["exit"] != 0:
+        receipt = _build_receipt(
+            result=RESULT_FAIL,
+            reason=REASON_CLEANUP_COMMAND_FAILED,
+            evidence="cleanup command exited nonzero or timed out",
+            slot=slot,
+            slot_ref=slot_ref,
+            namespace=namespace,
+            foreign_namespaces=foreigns,
+            command_digest=command_digest,
+            config_digest=config_digest_value,
+            identity_provenance=identity_provenance,
+            identity_strength=identity_strength,
+            observations=observations,
+            residual_sentinels=residual_sentinels,
+            exercised_at=now,
+        )
+        pilot_policy.assert_results_only(receipt, pilot_policy.policy_material(policy))
+        return receipt
+
+    observations["postcleanup"] = _probe_all(
+        sentinel,
+        all_namespaces,
+        sentinel_ids,
+        connection_detail=connection_detail,
+        reach_roots=reach_roots,
+        run_cwd=run_cwd,
+        timeout_seconds=timeout_seconds,
+    )
+
+    if observations["postcleanup"].get(namespace):
+        receipt = _build_receipt(
+            result=RESULT_FAIL,
+            reason=REASON_OWN_SENTINEL_SURVIVED,
+            evidence="own sentinel survived cleanup",
+            slot=slot,
+            slot_ref=slot_ref,
+            namespace=namespace,
+            foreign_namespaces=foreigns,
+            command_digest=command_digest,
+            config_digest=config_digest_value,
+            identity_provenance=identity_provenance,
+            identity_strength=identity_strength,
+            observations=observations,
+            residual_sentinels=residual_sentinels,
+            exercised_at=now,
+        )
+        pilot_policy.assert_results_only(receipt, pilot_policy.policy_material(policy))
+        return receipt
+
+    for foreign in foreigns:
+        if not observations["postcleanup"].get(foreign):
+            receipt = _build_receipt(
+                result=RESULT_FAIL,
+                reason=REASON_FOREIGN_SENTINEL_DESTROYED,
+                evidence="foreign sentinel destroyed by cleanup",
+                slot=slot,
+                slot_ref=slot_ref,
+                namespace=namespace,
+                foreign_namespaces=foreigns,
+                command_digest=command_digest,
+                config_digest=config_digest_value,
+                identity_provenance=identity_provenance,
+                identity_strength=identity_strength,
+                observations=observations,
+                residual_sentinels=residual_sentinels,
+                exercised_at=now,
+            )
+            pilot_policy.assert_results_only(receipt, pilot_policy.policy_material(policy))
+            return receipt
+
+    receipt = _build_receipt(
+        result=RESULT_PASS,
+        reason=None,
+        evidence="cleanup removed own sentinel and preserved all foreign sentinels",
+        slot=slot,
+        slot_ref=slot_ref,
+        namespace=namespace,
+        foreign_namespaces=foreigns,
+        command_digest=command_digest,
+        config_digest=config_digest_value,
+        identity_provenance=identity_provenance,
+        identity_strength=identity_strength,
+        observations=observations,
+        residual_sentinels=residual_sentinels,
+        exercised_at=now,
+    )
+    pilot_policy.assert_results_only(receipt, pilot_policy.policy_material(policy))
+    return receipt
+
+
+def _receipt_schema_valid(receipt):
+    if not isinstance(receipt, dict):
+        return False
+    if set(receipt.keys()) != _RECEIPT_SCHEMA_KEYS:
+        return False
+    if receipt.get("kind") != KIND_CLEANUP_CONTAINMENT:
+        return False
+    return True
+
+
+def receipt_valid_for(
+    receipt,
+    policy,
+    pilot_block,
+    slot_ref,
+    *,
+    cleanup_root,
+    run_cwd,
+    observed_identity,
+    identity_provenance,
+    identity_strength,
+):
+    """Return whether a receipt is fresh for the current policy, block, and source tree.
+
+    The config recomputation calls ``source_identity(cleanup_root)`` fresh — a cleanup script
+    edited since the receipt was taken changes ``head`` or ``statusDigest``, the config digest
+    moves, and the receipt is stale.
+    """
+    if not _receipt_schema_valid(receipt):
+        return {"ok": False, "reason": REASON_RECEIPT_SCHEMA_INVALID}
+
+    if receipt["slotRef"] != slot_ref:
+        return {"ok": False, "reason": REASON_RECEIPT_SLOT_MISMATCH}
+
+    if receipt["result"] != RESULT_PASS:
+        return {"ok": False, "reason": REASON_RECEIPT_NOT_PASS}
+
+    declared_command = pilot_block["cleanup"]["command"]
+    expected_command_digest = _command_digest(policy, declared_command)
+    if not hmac.compare_digest(receipt["commandDigest"], expected_command_digest):
+        return {"ok": False, "reason": REASON_RECEIPT_STALE_COMMAND}
+
+    slot, _generation = pilot_slot.parse_slot_ref(slot_ref)
+    namespace = namespace_for_slot(slot)
+    foreigns = foreign_namespaces(policy, slot)
+    sentinel = _sentinel_from_policy(policy)
+    resolved_argv = resolve_cleanup_command(declared_command, namespace)
+    source_id = source_identity(cleanup_root)
+    source_id["argv0Digest"] = argv0_content_digest(resolved_argv[0])
+    expected_config_digest = config_digest(
+        policy,
+        resolved_cleanup_argv=resolved_argv,
+        sentinel=sentinel,
+        namespace=namespace,
+        foreign_namespaces=foreigns,
+        run_cwd=run_cwd,
+        identity_provenance=identity_provenance,
+        identity_strength=identity_strength,
+        observed_identity=observed_identity,
+        source_identity=source_id,
+    )
+    if not hmac.compare_digest(receipt["configDigest"], expected_config_digest):
+        return {"ok": False, "reason": REASON_RECEIPT_STALE_CONFIG}
+
+    return {"ok": True, "reason": None}
+
+
+def registry_record(receipt, declaration, *, evidence=None):
+    """Build a declare-and-exercise record for A1's gate from a passing receipt."""
+    if not _receipt_schema_valid(receipt):
+        raise PilotCleanupError(REASON_RECEIPT_SCHEMA_INVALID)
+    if receipt["result"] != RESULT_PASS:
+        raise PilotCleanupError(REASON_RECEIPT_NOT_PASS)
+    return {
+        "kind": KIND_CLEANUP_CONTAINMENT,
+        "declarationDigest": pilot_contract.declaration_digest(declaration),
+        "exercisedAt": receipt["exercisedAt"],
+        "receipt": {
+            "result": RESULT_PASS,
+            "evidence": evidence if evidence is not None else receipt["evidence"],
+        },
+    }
+
+
+def resolve_containment(
+    policy,
+    pilot_block,
+    slot_ref,
+    *,
+    receipt=None,
+    cleanup_root=None,
+    run_cwd=None,
+    observed_identity=None,
+    identity_provenance=None,
+    identity_strength=None,
+):
+    """Resolve how cleanup containment is assured for a slot."""
+    containment = policy.get("datastore", {}).get("containment")
+    permissions = None
+    if isinstance(containment, dict):
+        permissions = containment.get("permissions")
+
+    if (
+        isinstance(permissions, dict)
+        and permissions.get("cannotReachForeignNamespaces") is True
+        and isinstance(permissions.get("evidence"), str)
+        and permissions["evidence"]
+    ):
+        # Permissions outrank a receipt: they remove the need to prove behaviour, and a receipt
+        # cannot bind hostile code (see ASSURANCE_LIMITS).
+        return {"mode": MODE_PERMISSIONS, "reason": None, "remedy": None}
+
+    slot, _generation = pilot_slot.parse_slot_ref(slot_ref)
+    if foreign_namespaces(policy, slot) == []:
+        return {"mode": MODE_SINGLE_SLOT, "reason": None, "remedy": None}
+
+    if receipt is not None:
+        if cleanup_root is None or run_cwd is None or observed_identity is None:
+            return {
+                "mode": MODE_REFUSED,
+                "reason": REASON_RECEIPT_SCHEMA_INVALID,
+                "remedy": None,
+            }
+        validation = receipt_valid_for(
+            receipt,
+            policy,
+            pilot_block,
+            slot_ref,
+            cleanup_root=cleanup_root,
+            run_cwd=run_cwd,
+            observed_identity=observed_identity,
+            identity_provenance=identity_provenance,
+            identity_strength=identity_strength,
+        )
+        if validation["ok"]:
+            return {"mode": MODE_RECEIPT, "reason": None, "remedy": None}
+        return {
+            "mode": MODE_REFUSED,
+            "reason": validation["reason"],
+            "remedy": None,
+        }
+
+    return {
+        "mode": MODE_REFUSED,
+        "reason": REASON_CONTAINMENT_UNDECLARED,
+        "remedy": "isolated datastores, or one slot",
+    }
+
+
+def resurrection_plan(
+    policy,
+    pilot_block,
+    slot_ref,
+    *,
+    registry,
+    containment,
+    journal_path,
+    verdict=None,
+    account=None,
+    artifact=None,
+    mint_envelope=None,
+    now=None,
+):
+    """Return a park, refusal, or ordered resurrection plan without executing anything.
+
+    The generation bump is C7's seam, and B6's mint client does not exist — this function plans
+    only.
+    """
+    pilot_contract.validate_pilot_block(pilot_block)
+
+    try:
+        pilot_contract.require_exercised(
+            registry,
+            "effects-escape",
+            pilot_block["effectsEscape"],
+        )
+    except pilot_contract.PilotContractError:
+        return {"action": ACTION_REFUSE, "reason": REASON_EFFECTS_ESCAPE_UNEXERCISED}
+
+    if pilot_block["effectsEscape"]["canEscape"] is True:
+        return {
+            "action": ACTION_PARK,
+            "reason": REASON_EFFECTS_ESCAPE_PARK,
+            "owner": (
+                "A crashed slot whose actions can escape the datastore parks for owner "
+                "inspection: reseeding cannot un-send mail or un-fire a webhook, and replay "
+                "would duplicate it."
+            ),
+            "steps": [],
+        }
+
+    mode = containment.get("mode")
+    if mode not in _CONTAINMENT_RESOLVED_MODES:
+        return {"action": ACTION_REFUSE, "reason": REASON_CONTAINMENT_UNRESOLVED}
+
+    if mode == MODE_RECEIPT:
+        try:
+            pilot_contract.require_exercised(
+                registry,
+                "cleanup-containment",
+                pilot_block["cleanup"],
+            )
+        except pilot_contract.PilotContractError:
+            return {"action": ACTION_REFUSE, "reason": REASON_CONTAINMENT_UNEXERCISED}
+
+    if verdict is None:
+        return {"action": ACTION_REFUSE, "reason": REASON_VERDICT_MISSING}
+
+    slot, _generation = pilot_slot.parse_slot_ref(slot_ref)
+    namespace = namespace_for_slot(slot)
+    declared_command = pilot_block["cleanup"]["command"]
+    resolved_argv = resolve_cleanup_command(declared_command, namespace)
+
+    sign_in_path = pilot_block["signInPath"]
+    if sign_in_path == "captured":
+        reseed_request = pilot_provision.authorized_seed_request(
+            verdict,
+            policy,
+            slot_ref,
+            account,
+            artifact,
+        )
+        reseed_path = "captured"
+    else:
+        reseed_request = pilot_provision.authorized_mint_request(
+            verdict,
+            policy,
+            slot_ref,
+            account,
+            mint_envelope,
+        )
+        reseed_path = "minted"
+
+    plan = {
+        "action": ACTION_RESURRECT,
+        "reason": None,
+        "slotRef": slot_ref,
+        "steps": [
+            {
+                "op": "cleanup",
+                "argv": resolved_argv,
+                "namespace": namespace,
+                "journal": {
+                    "kind": pilot_journal.KIND_NAMESPACE_TOUCHED,
+                    "slotRef": slot_ref,
+                },
+            },
+            {
+                "op": "reseed",
+                "request": reseed_request,
+                "path": reseed_path,
+            },
+            {
+                "op": "begin-generation",
+                "owner": "C7",
+                "requires": "released",
+                "note": "the generation bump is enforced at the broker; this plan does not perform it",
+            },
+            {
+                "op": "resume",
+                "owner": "C7",
+            },
+        ],
+    }
+    pilot_policy.assert_results_only(plan, pilot_policy.policy_material(policy))
+    return plan
 
 
 def _terminate_and_wait(proc):
