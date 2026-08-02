@@ -277,7 +277,68 @@ def test_retry_gate_census():
             assert gated["retryable"] is False, token
 
 
-# --- check_endpoint_free real socket ---
+# --- check_endpoint_free ---
+
+
+@pytest.mark.parametrize(
+    "host,port,timeout,connect",
+    [
+        (None, 9, 0.25, None),
+        (123, 9, 0.25, None),
+        ("", 9, 0.25, None),
+        ("host\x00name", 9, 0.25, None),
+        ("x" * 254, 9, 0.25, None),
+        ("127.0.0.1", "9", 0.25, None),
+        ("127.0.0.1", True, 0.25, None),
+        ("127.0.0.1", 0, 0.25, None),
+        ("127.0.0.1", 65536, 0.25, None),
+        ("127.0.0.1", 9, float("nan"), None),
+        ("127.0.0.1", 9, float("inf"), None),
+        ("127.0.0.1", 9, "bad", None),
+        ("127.0.0.1", 9, 0.25, "not-callable"),
+    ],
+    ids=[
+        "host-none", "host-not-str", "host-empty", "host-nul", "host-too-long",
+        "port-not-int", "port-bool", "port-zero", "port-out-of-range",
+        "timeout-nan", "timeout-inf", "timeout-non-numeric", "connect-not-callable",
+    ],
+)
+def test_check_endpoint_free_malformed_allocation(host, port, timeout, connect):
+    r = pa.check_endpoint_free(host, port, timeout=timeout, connect=connect)
+    assert r["ok"] is False
+    assert r["reason"] == pa.REASON_ALLOCATION_INVALID
+
+
+def test_check_endpoint_free_refused_ok():
+    def connect_refused(addr, t):
+        raise ConnectionRefusedError()
+
+    assert pa.check_endpoint_free("127.0.0.1", 9, connect=connect_refused)["ok"]
+
+
+def test_check_endpoint_free_timeout_ok():
+    def connect_timeout(addr, t):
+        raise socket.timeout()
+
+    assert pa.check_endpoint_free("127.0.0.1", 9, connect=connect_timeout)["ok"]
+
+
+def test_check_endpoint_free_other_oserror_bind_conflict():
+    def connect_error(addr, t):
+        raise OSError("probe failed")
+
+    r = pa.check_endpoint_free("127.0.0.1", 9, connect=connect_error)
+    assert r["ok"] is False
+    assert r["reason"] == pa.REASON_BIND_CONFLICT
+
+
+def test_check_endpoint_free_connect_raises_no_leak():
+    def connect_boom(addr, t):
+        raise ValueError("injected")
+
+    r = pa.check_endpoint_free("127.0.0.1", 9, connect=connect_boom)
+    assert r["ok"] is False
+    assert r["reason"] == pa.REASON_BIND_CONFLICT
 
 
 def test_check_endpoint_free_real_socket():

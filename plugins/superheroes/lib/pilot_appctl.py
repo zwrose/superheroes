@@ -347,17 +347,23 @@ def check_endpoint_free(host, port, *, connect=None, timeout=0.25):
     """Return whether (host, port) accepts a new bind (nothing listening)."""
     try:
         if not isinstance(host, str) or not host:
-            return _fail(REASON_BIND_CONFLICT)
+            return _fail(REASON_ALLOCATION_INVALID)
         if "\x00" in host:
-            return _fail(REASON_BIND_CONFLICT)
+            return _fail(REASON_ALLOCATION_INVALID)
+        try:
+            host.encode("idna")
+        except UnicodeError:
+            return _fail(REASON_ALLOCATION_INVALID)
+        if len(host) > 253:
+            return _fail(REASON_ALLOCATION_INVALID)
         if not isinstance(port, int) or isinstance(port, bool):
-            return _fail(REASON_BIND_CONFLICT)
+            return _fail(REASON_ALLOCATION_INVALID)
         if port < 1 or port > 65535:
-            return _fail(REASON_BIND_CONFLICT)
+            return _fail(REASON_ALLOCATION_INVALID)
         if not _is_timeout(timeout):
-            return _fail(REASON_BIND_CONFLICT)
+            return _fail(REASON_ALLOCATION_INVALID)
         if connect is not None and not _is_callable(connect):
-            return _fail(REASON_BIND_CONFLICT)
+            return _fail(REASON_ALLOCATION_INVALID)
         if connect is None:
             def connect(addr, t):
                 sock = socket.create_connection(addr, timeout=t)
