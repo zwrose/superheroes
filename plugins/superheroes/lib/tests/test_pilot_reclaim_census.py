@@ -40,6 +40,11 @@ _DESTRUCTIVE_CALLS = frozenset({
     "replace",
     "renames",
     "move",
+    "rename",
+})
+_RENAME_ALLOWED_FUNCTIONS = frozenset({
+    "quarantine_entry",
+    "rotate_journal",
 })
 _FORBIDDEN_FREE_SPACE = frozenset({"disk_usage", "statvfs"})
 _FORBIDDEN_PARAMS = frozenset({
@@ -147,6 +152,12 @@ class _DestructiveCallVisitor(ast.NodeVisitor):
         self.import_aliases = {}
         self.calls = []
         self.subprocess_calls = []
+        self._function_stack = []
+
+    def visit_FunctionDef(self, node):
+        self._function_stack.append(node.name)
+        self.generic_visit(node)
+        self._function_stack.pop()
 
     def visit_Import(self, node):
         for alias in node.names:
@@ -189,6 +200,10 @@ class _DestructiveCallVisitor(ast.NodeVisitor):
                 inner = self._resolve_call(value)
                 if inner is not None:
                     return "%s.%s" % (inner, attr)
+            if isinstance(value, ast.Call):
+                inner = self._resolve_call(value.func)
+                if inner is not None:
+                    return "%s.%s" % (inner, attr)
             return None
         return None
 
@@ -198,6 +213,10 @@ class _DestructiveCallVisitor(ast.NodeVisitor):
         leaf = target.split(".")[-1]
         if leaf not in _DESTRUCTIVE_CALLS:
             return False
+        if leaf == "rename":
+            if not self._function_stack:
+                return True
+            return self._function_stack[-1] not in _RENAME_ALLOWED_FUNCTIONS
         if target.startswith(("shutil.", "os.")):
             return True
         if target in self.import_aliases:
@@ -231,6 +250,14 @@ class _IdentifierVisitor(ast.NodeVisitor):
 
     def __init__(self):
         self.names = []
+        self.import_aliases = {}
+
+    def visit_ImportFrom(self, node):
+        if node.module == "shutil":
+            for alias in node.names:
+                name = alias.asname or alias.name
+                self.import_aliases[name] = "shutil.%s" % alias.name
+        self.generic_visit(node)
 
     def visit_Name(self, node):
         self.names.append((node.lineno, node.id))
@@ -344,16 +371,51 @@ def test_only_authorized_shutil_rmtree_in_reclaim_modules():
         % (site[0], site[1])
     )
 
+    tree = _parse_module_ast(pilot_reclaim)
+    visitor = _DestructiveCallVisitor(_module_path(pilot_reclaim))
+    visitor.visit(tree)
+    rmtree_enclosing = None
+    stack = []
+
+    class _EnclosingWalker(ast.NodeVisitor):
+        def visit_FunctionDef(self, node):
+            stack.append(node.name)
+            self.generic_visit(node)
+            stack.pop()
+
+        def visit_Call(self, node):
+            target = visitor._resolve_call(node.func)
+            nonlocal rmtree_enclosing
+            if target and target.endswith("rmtree"):
+                rmtree_enclosing = stack[-1] if stack else None
+            self.generic_visit(node)
+
+    _EnclosingWalker().visit(tree)
+    if rmtree_enclosing != "_delete_entry":
+        raise AssertionError(
+            "shutil.rmtree must be inside _delete_entry, found in %r"
+            % rmtree_enclosing
+        )
+
 
 def test_no_free_space_read_in_reclaim_modules():
     """Neither module references disk_usage or statvfs."""
     for module in (pilot_reclaim, pilot_fence):
-        for lineno, name in _collect_identifiers(module):
+        tree = _parse_module_ast(module)
+        id_visitor = _IdentifierVisitor()
+        id_visitor.visit(tree)
+        for lineno, name in id_visitor.names:
             lower = name.lower()
             if name in _FORBIDDEN_FREE_SPACE or "disk_usage" in lower or "statvfs" in lower:
                 raise AssertionError(
                     "forbidden free-space read %r at %s:%d"
                     % (name, module.__name__, lineno)
+                )
+        for alias_name, resolved in id_visitor.import_aliases.items():
+            if resolved in _FORBIDDEN_FREE_SPACE or "disk_usage" in resolved:
+                raise AssertionError(
+                    "forbidden free-space import %r -> %r in %s"
+                    % (alias_name, resolved, module.__name__)
                 )
 
 
@@ -378,3 +440,41 @@ def test_grace_hours_threshold_matches_doc():
         "pilot-contract.md reclaim section missing 72-hour grace (file: %s)"
         % _PILOT_CONTRACT
     )
+
+
+_LAYOUT_FILENAME_SITES = {
+    "slot.json": ("pilot_lifecycle", "record_path"),
+    ".slot.lock": ("pilot_lifecycle", "lock_path"),
+    "journal.ndjson": ("pilot_reclaim", "_journal_segment_re_for"),
+    ".pilot-quarantine": ("pilot_reclaim", "QUARANTINE_DIR_NAME"),
+    ".quarantine.json": ("pilot_reclaim", "SIDECAR_SUFFIX"),
+}
+
+
+def test_on_disk_layout_filenames_match_lib():
+    doc = _load_contract()
+    section = _extract_section(doc, _RECLAIM_SECTION)
+    assert section is not None
+    layout_start = section.index("### On-disk layout")
+    layout_block = section[layout_start:].split("```")[1]
+    for filename, site in _LAYOUT_FILENAME_SITES.items():
+        assert filename in layout_block, (
+            "pilot-contract.md on-disk layout missing %r (file: %s)"
+            % (filename, _PILOT_CONTRACT)
+        )
+        module_name, attr = site
+        if module_name == "pilot_lifecycle":
+            import pilot_lifecycle as pl_mod
+            if attr == "record_path":
+                path = pl_mod.record_path("/slots", "slot-a")
+                assert path.endswith(filename)
+            elif attr == "lock_path":
+                path = pl_mod.lock_path("/slots", "slot-a")
+                assert path.endswith(filename)
+        elif module_name == "pilot_reclaim":
+            if attr == "_journal_segment_re_for":
+                journal_path = os.path.join("/slots", "slot-a", filename)
+                seg_re = pilot_reclaim._journal_segment_re_for(journal_path)
+                assert seg_re.match("journal.0001.ndjson")
+            else:
+                assert getattr(pilot_reclaim, attr) == filename

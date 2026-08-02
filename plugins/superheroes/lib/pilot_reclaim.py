@@ -54,6 +54,10 @@ REASON_SIDECAR_WRITE_FAILED = "reclaim-sidecar-write-failed"
 REASON_SIDECAR_ABSENT = "reclaim-sidecar-absent"
 REASON_SIDECAR_UNREADABLE = "reclaim-sidecar-unreadable"
 REASON_SIDECAR_INVALID = "reclaim-sidecar-invalid"
+REASON_SIDECAR_STATUS_UNBACKED = "reclaim-sidecar-status-unbacked"
+REASON_SIDECAR_ENTRY_NAME_MISMATCH = "reclaim-sidecar-entry-name-mismatch"
+REASON_QUARANTINE_DIR_UNSAFE = "reclaim-quarantine-dir-unsafe"
+REASON_PENDING_MOVE_NOT_APPLIED = "reclaim-pending-move-not-applied"
 REASON_GRACE_NOT_ELAPSED = "reclaim-grace-not-elapsed"
 REASON_RECEIPT_INVALID = "reclaim-receipt-invalid"
 REASON_RECEIPT_SOURCE_NOT_TERMINAL = "reclaim-receipt-source-not-terminal"
@@ -93,7 +97,6 @@ _RECEIPT_REQUIRED_KEYS = frozenset({
 })
 _REASON_MAX_LEN = 500
 _PROCESS_INSTANCE_MAX_LEN = 200
-_JOURNAL_SEGMENT_RE = re.compile(r"^journal\.\d+\.ndjson\Z")
 
 
 def _ok(**extra):
@@ -332,7 +335,7 @@ def terminal_receipt(*, pid, process_instance, wait_status, entry_name, slot_ref
 def _validate_receipt_structural(receipt):
     if not isinstance(receipt, dict) or set(receipt.keys()) != _RECEIPT_REQUIRED_KEYS:
         return False
-    if receipt["schemaVersion"] != SCHEMA:
+    if not _is_exact_int(receipt["schemaVersion"]) or receipt["schemaVersion"] != SCHEMA:
         return False
     if not _is_str_path(receipt["source"]) or not receipt["source"]:
         return False
@@ -373,7 +376,7 @@ def _validate_sidecar_dict(sidecar):
     allowed_extra = frozenset({"terminalReceipt", "deletionAuthorizedAt", "deletedAt"})
     if not extra_keys.issubset(allowed_extra):
         return False
-    if sidecar["schemaVersion"] != SCHEMA:
+    if not _is_exact_int(sidecar["schemaVersion"]) or sidecar["schemaVersion"] != SCHEMA:
         return False
     if not _is_str_path(sidecar["entryName"]) or not sidecar["entryName"]:
         return False
@@ -406,6 +409,22 @@ def _validate_sidecar_dict(sidecar):
         return False
     if parsed_slot != sidecar["slot"] or parsed_gen != sidecar["generation"]:
         return False
+    status = sidecar["status"]
+    has_receipt = "terminalReceipt" in sidecar
+    if status in (STATUS_DELETION_AUTHORIZED, STATUS_DELETED):
+        if not has_receipt:
+            return False
+        if not _validate_receipt_dict(sidecar["terminalReceipt"]):
+            return False
+    elif has_receipt:
+        if not _validate_receipt_dict(sidecar["terminalReceipt"]):
+            return False
+    if "deletionAuthorizedAt" in sidecar:
+        if not _is_iso8601_utc(sidecar["deletionAuthorizedAt"]):
+            return False
+    if "deletedAt" in sidecar:
+        if not _is_iso8601_utc(sidecar["deletedAt"]):
+            return False
     return True
 
 
@@ -468,6 +487,14 @@ def quarantine_entry(slots_dir_path, source_path, *, slot_ref, reason, occupant,
     entry_path = os.path.join(qdir, entry_name)
     sidecar_path = entry_path + SIDECAR_SUFFIX
 
+    if os.path.lexists(qdir):
+        refused = _refuse_unsafe_quarantine_dir(qdir)
+        if refused is not None:
+            return _fail(
+                refused["reason"],
+                entryName=None, entryPath=None, sidecarPath=None,
+            )
+
     try:
         os.makedirs(qdir, exist_ok=True)
     except OSError:
@@ -475,6 +502,12 @@ def quarantine_entry(slots_dir_path, source_path, *, slot_ref, reason, occupant,
             REASON_SIDECAR_WRITE_FAILED,
             entryName=None, entryPath=None, sidecarPath=None,
         )
+
+    try:
+        _fsync_dir(os.path.dirname(os.path.abspath(qdir)))
+        _fsync_dir(qdir)
+    except OSError:
+        pass
 
     if os.path.lexists(entry_path) or os.path.lexists(sidecar_path):
         return _fail(
@@ -576,6 +609,11 @@ def read_sidecar(path):
         parsed = json.loads(raw)
     except ValueError:
         return _fail(REASON_SIDECAR_INVALID, sidecar=None)
+    if isinstance(parsed, dict):
+        status = parsed.get("status")
+        if status in (STATUS_DELETION_AUTHORIZED, STATUS_DELETED):
+            if "terminalReceipt" not in parsed:
+                return _fail(REASON_SIDECAR_STATUS_UNBACKED, sidecar=None)
     if not _validate_sidecar_dict(parsed):
         return _fail(REASON_SIDECAR_INVALID, sidecar=None)
     return _ok(sidecar=parsed)
@@ -624,8 +662,25 @@ def _grace_elapsed(sidecar, now):
     return now_dt >= quarantined_at + timedelta(hours=GRACE_HOURS)
 
 
-def _list_entry(entry_name, sidecar_path, entry_path, reason=None):
+def _refuse_unsafe_quarantine_dir(qdir):
+    """Refuse a symlink or non-directory at the quarantine-directory component only.
+
+    This check inspects the pathname at the moment of the call only — it is a
+    check-then-use pattern and does not close a race against an attacker who can
+    replace the directory between this check and subsequent operations. Under
+    this project's single-user local threat model the guard is aimed at accidents
+    and stale state, not a hostile local actor.
+    """
+    if os.path.islink(qdir):
+        return _fail(REASON_QUARANTINE_DIR_UNSAFE)
+    if os.path.lexists(qdir) and not os.path.isdir(qdir):
+        return _fail(REASON_QUARANTINE_DIR_UNSAFE)
+    return None
+
+
+def _list_entry(entry_name, sidecar_path, entry_path, reason=None, kind="entry"):
     return {
+        "kind": kind,
         "entryName": entry_name,
         "sidecarPath": sidecar_path,
         "entryPath": entry_path,
@@ -652,20 +707,32 @@ def _scan_journal_segments(slots_dir_path, warned):
             files = os.listdir(slot_dir)
         except OSError:
             continue
-        segment_count = sum(
-            1 for f in files if _JOURNAL_SEGMENT_RE.match(f)
-        )
+        journal_stems = set()
+        for fname in files:
+            if fname.endswith(".ndjson") and not re.search(r"\.\d{4,}\.ndjson\Z", fname):
+                base = os.path.basename(fname)
+                stem, _ext = os.path.splitext(base)
+                journal_stems.add(stem)
+        segment_count = 0
+        for fname in files:
+            for stem in journal_stems:
+                seg_re = re.compile(
+                    r"^%s\.(\d{4,})\.ndjson\Z" % re.escape(stem)
+                )
+                if seg_re.match(fname):
+                    segment_count += 1
+                    break
         if segment_count >= SEGMENT_WARN_COUNT:
             warned.append({
+                "kind": "journal-segments",
                 "slot": name,
                 "segmentCount": segment_count,
                 "reason": REASON_JOURNAL_SEGMENTS_HIGH,
             })
 
 
-def _delete_entry(qdir, sidecar, sidecar_path, entry_path, receipt, now,
+def _delete_entry(sidecar, sidecar_path, entry_path, entry_name, receipt, now,
                   deleted, warned, retained):
-    entry_name = sidecar["entryName"]
     authorized = dict(sidecar)
     authorized["status"] = STATUS_DELETION_AUTHORIZED
     authorized["terminalReceipt"] = receipt
@@ -705,7 +772,6 @@ def sweep(slots_dir_path, *, now, receipts=None):
     deleted = []
     warned = []
     retained = []
-    refusals = []
 
     refused = _validate_slots_dir(slots_dir_path)
     if refused is not None:
@@ -716,7 +782,7 @@ def sweep(slots_dir_path, *, now, receipts=None):
     if receipts is not None and not isinstance(receipts, dict):
         return _fail(
             REASON_RECEIPT_INVALID,
-            deleted=deleted, warned=warned, retained=retained, refusals=refusals,
+            deleted=deleted, warned=warned, retained=retained,
         )
     if receipts is None:
         receipts = {}
@@ -724,16 +790,24 @@ def sweep(slots_dir_path, *, now, receipts=None):
     qdir_result = quarantine_dir(slots_dir_path)
     qdir = qdir_result["path"]
 
+    if os.path.isdir(qdir):
+        refused = _refuse_unsafe_quarantine_dir(qdir)
+        if refused is not None:
+            return _fail(
+                refused["reason"],
+                deleted=deleted, warned=warned, retained=retained,
+            )
+
     if not os.path.isdir(qdir):
         _scan_journal_segments(slots_dir_path, warned)
-        return _ok(deleted=deleted, warned=warned, retained=retained, refusals=refusals)
+        return _ok(deleted=deleted, warned=warned, retained=retained)
 
     try:
         entries = os.listdir(qdir)
     except OSError:
         return _fail(
             REASON_QUARANTINE_DIR_UNREADABLE,
-            deleted=deleted, warned=warned, retained=retained, refusals=refusals,
+            deleted=deleted, warned=warned, retained=retained,
         )
 
     sidecar_paths = {}
@@ -773,6 +847,17 @@ def sweep(slots_dir_path, *, now, receipts=None):
 
         sidecar = loaded["sidecar"]
 
+        if sidecar["entryName"] != entry_name:
+            warned.append(_list_entry(
+                entry_name, sidecar_path, entry_path,
+                REASON_SIDECAR_ENTRY_NAME_MISMATCH,
+            ))
+            retained.append(_list_entry(
+                entry_name, sidecar_path, entry_path,
+                REASON_SIDECAR_ENTRY_NAME_MISMATCH,
+            ))
+            continue
+
         if sidecar["move"] == MOVE_PENDING:
             if os.path.lexists(entry_path):
                 repaired = dict(sidecar)
@@ -784,6 +869,17 @@ def sweep(slots_dir_path, *, now, receipts=None):
                 ))
                 retained.append(_list_entry(
                     entry_name, sidecar_path, entry_path, None,
+                ))
+                continue
+            original_path = sidecar.get("originalPath")
+            if original_path and os.path.lexists(original_path):
+                warned.append(_list_entry(
+                    entry_name, sidecar_path, entry_path,
+                    REASON_PENDING_MOVE_NOT_APPLIED,
+                ))
+                retained.append(_list_entry(
+                    entry_name, sidecar_path, entry_path,
+                    REASON_PENDING_MOVE_NOT_APPLIED,
                 ))
                 continue
             warned.append(_list_entry(
@@ -801,20 +897,38 @@ def sweep(slots_dir_path, *, now, receipts=None):
             continue
 
         if sidecar["status"] == STATUS_DELETION_AUTHORIZED:
+            receipt = sidecar.get("terminalReceipt")
+            auth = authorize_deletion(sidecar, receipt, now=now)
+            if not auth["ok"]:
+                retained.append(_list_entry(
+                    entry_name, sidecar_path, entry_path, auth["reason"],
+                ))
+                warned.append(_list_entry(
+                    entry_name, sidecar_path, entry_path, auth["reason"],
+                ))
+                continue
             if os.path.lexists(entry_path):
-                receipt = sidecar.get("terminalReceipt")
                 _delete_entry(
-                    qdir, sidecar, sidecar_path, entry_path, receipt, now,
+                    sidecar, sidecar_path, entry_path, entry_name, receipt, now,
                     deleted, warned, retained,
                 )
             else:
                 tombstone = dict(sidecar)
                 tombstone["status"] = STATUS_DELETED
                 tombstone["deletedAt"] = now
-                _write_sidecar(sidecar_path, tombstone)
-                retained.append(_list_entry(
-                    entry_name, sidecar_path, entry_path, None,
-                ))
+                if not _write_sidecar(sidecar_path, tombstone):
+                    warned.append(_list_entry(
+                        entry_name, sidecar_path, entry_path,
+                        REASON_SIDECAR_WRITE_FAILED,
+                    ))
+                    retained.append(_list_entry(
+                        entry_name, sidecar_path, entry_path,
+                        REASON_SIDECAR_WRITE_FAILED,
+                    ))
+                else:
+                    retained.append(_list_entry(
+                        entry_name, sidecar_path, entry_path, None,
+                    ))
             continue
 
         receipt = receipts.get(entry_name)
@@ -822,7 +936,7 @@ def sweep(slots_dir_path, *, now, receipts=None):
             auth = authorize_deletion(sidecar, receipt, now=now)
             if auth["ok"]:
                 _delete_entry(
-                    qdir, sidecar, sidecar_path, entry_path, receipt, now,
+                    sidecar, sidecar_path, entry_path, entry_name, receipt, now,
                     deleted, warned, retained,
                 )
             else:
@@ -844,7 +958,7 @@ def sweep(slots_dir_path, *, now, receipts=None):
             ))
 
     _scan_journal_segments(slots_dir_path, warned)
-    return _ok(deleted=deleted, warned=warned, retained=retained, refusals=refusals)
+    return _ok(deleted=deleted, warned=warned, retained=retained)
 
 
 def _validate_journal_path(journal_path):

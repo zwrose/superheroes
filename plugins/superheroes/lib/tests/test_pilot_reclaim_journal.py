@@ -376,6 +376,24 @@ def test_rotate_journal_rejects_existing_segment_path(tmp_path, monkeypatch):
     assert os.path.isfile(journal)
 
 
+def test_rotate_journal_rename_failure_leaves_journal_intact(tmp_path, monkeypatch):
+    slots_dir = _slots_dir(tmp_path)
+    _setup_released_with_journal(slots_dir)
+    journal = _journal_path(slots_dir, _SLOT)
+    original_content = open(journal, encoding="utf-8").read()
+    monkeypatch.setattr(os, "rename", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("fail")))
+    result = pr.rotate_journal(slots_dir, _SLOT, journal, now=_NOW)
+    assert result == {
+        "ok": False,
+        "reason": pr.REASON_ROTATE_FAILED,
+        "rotated": False,
+        "segmentPath": None,
+    }
+    assert os.path.isfile(journal)
+    assert open(journal, encoding="utf-8").read() == original_content
+    assert not os.path.exists(_journal_path(slots_dir, _SLOT, "journal.0001.ndjson"))
+
+
 def test_rotate_journal_sequence_allocation_three_times(tmp_path):
     slots_dir = _slots_dir(tmp_path)
     record, journal = _setup_released_with_journal(slots_dir)

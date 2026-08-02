@@ -518,6 +518,25 @@ def test_authorize_deletion_not_independent():
     assert result["reason"] == pr.REASON_RECEIPT_NOT_INDEPENDENT
 
 
+def test_liveness_and_terminal_sources_disjoint():
+    """The independence branch is unreachable via real call shape when sets are disjoint."""
+    assert pr.LIVENESS_SOURCES.isdisjoint(pr.TERMINAL_SOURCES)
+
+
+def test_independence_branch_refuses_when_reached_defensive():
+    """Defensive branch only — unreachable via real call shape today.
+
+    LIVENESS_SOURCES and TERMINAL_SOURCES are disjoint; test_liveness_and_terminal_sources_disjoint
+    is the live guarantee. This test pins the defensive branch's behaviour if they ever overlap.
+    """
+    sidecar = _sidecar_for_auth(occupant=_occupant(livenessSource="mtime"))
+    receipt = _receipt_for(sidecar)
+    sidecar["occupant"]["livenessSource"] = "process-exit-status"
+    with mock.patch.object(pr, "_validate_sidecar_dict", return_value=True):
+        result = pr.authorize_deletion(sidecar, receipt, now=_NOW_LATE)
+    assert result["reason"] == pr.REASON_RECEIPT_NOT_INDEPENDENT
+
+
 def test_authorize_deletion_occupant_unbound():
     sidecar = _sidecar_for_auth(occupant=_occupant(pid=None))
     receipt = pr.terminal_receipt(
@@ -527,6 +546,30 @@ def test_authorize_deletion_occupant_unbound():
     )["receipt"]
     result = pr.authorize_deletion(sidecar, receipt, now=_NOW_LATE)
     assert result["reason"] == pr.REASON_OCCUPANT_UNBOUND
+
+
+def test_authorize_deletion_binding_mismatch_entry_name():
+    sidecar = _sidecar_for_auth()
+    receipt = _receipt_for(sidecar)
+    receipt["entryName"] = "wrong"
+    result = pr.authorize_deletion(sidecar, receipt, now=_NOW_LATE)
+    assert result["reason"] == pr.REASON_RECEIPT_BINDING_MISMATCH
+
+
+def test_authorize_deletion_binding_mismatch_process_instance():
+    sidecar = _sidecar_for_auth()
+    receipt = _receipt_for(sidecar)
+    receipt["processInstance"] = "wrong-instance"
+    result = pr.authorize_deletion(sidecar, receipt, now=_NOW_LATE)
+    assert result["reason"] == pr.REASON_RECEIPT_BINDING_MISMATCH
+
+
+def test_authorize_deletion_binding_mismatch_slot_ref():
+    sidecar = _sidecar_for_auth()
+    receipt = _receipt_for(sidecar)
+    receipt["slotRef"] = "slot-b@2"
+    result = pr.authorize_deletion(sidecar, receipt, now=_NOW_LATE)
+    assert result["reason"] == pr.REASON_RECEIPT_BINDING_MISMATCH
 
 
 def test_authorize_deletion_binding_mismatch():
@@ -554,6 +597,7 @@ def test_authorize_deletion_entry_not_moved():
 def test_authorize_deletion_status_not_deletable():
     sidecar = _sidecar_for_auth(status=pr.STATUS_DELETED)
     receipt = _receipt_for(sidecar)
+    sidecar["terminalReceipt"] = receipt
     result = pr.authorize_deletion(sidecar, receipt, now=_NOW_LATE)
     assert result["reason"] == pr.REASON_STATUS_NOT_DELETABLE
 
@@ -670,6 +714,178 @@ def test_sweep_resumes_deletion_authorized(tmp_path):
     _write_sidecar_raw(result["sidecarPath"], auth_sidecar)
     sweep = pr.sweep(slots, now=_NOW_LATE)
     assert len(sweep["deleted"]) == 1
+    assert sweep["deleted"][0]["kind"] == "entry"
+
+
+def test_sweep_refuses_deletion_authorized_without_receipt(tmp_path):
+    slots = _slots_dir(tmp_path)
+    result = _quarantine(slots, now=_NOW_EARLY)
+    sidecar = pr.read_sidecar(result["sidecarPath"])["sidecar"]
+    auth_sidecar = dict(sidecar)
+    auth_sidecar["status"] = pr.STATUS_DELETION_AUTHORIZED
+    auth_sidecar["deletionAuthorizedAt"] = _NOW_LATE
+    _write_sidecar_raw(result["sidecarPath"], auth_sidecar)
+    sweep = pr.sweep(slots, now=_NOW_LATE)
+    assert sweep["deleted"] == []
+    assert os.path.isdir(result["entryPath"])
+    assert any(
+        w["reason"] == pr.REASON_SIDECAR_STATUS_UNBACKED for w in sweep["warned"]
+    )
+
+
+def test_sweep_refuses_sidecar_entry_name_mismatch(tmp_path):
+    slots = _slots_dir(tmp_path)
+    result_a = _quarantine(slots, now=_NOW_EARLY)
+    loaded = pr.read_sidecar(result_a["sidecarPath"])["sidecar"]
+    loaded["entryName"] = "wrong-entry-name"
+    _write_sidecar_raw(result_a["sidecarPath"], loaded)
+    receipt = _receipt_for(loaded)
+    sweep = pr.sweep(
+        slots, now=_NOW_LATE,
+        receipts={loaded["entryName"]: receipt},
+    )
+    assert sweep["deleted"] == []
+    assert os.path.isdir(result_a["entryPath"])
+    assert any(
+        w["reason"] == pr.REASON_SIDECAR_ENTRY_NAME_MISMATCH for w in sweep["warned"]
+    )
+
+
+def test_sweep_partial_rmtree_then_resume(tmp_path):
+    slots = _slots_dir(tmp_path)
+    result = _quarantine(slots, now=_NOW_EARLY)
+    sidecar = pr.read_sidecar(result["sidecarPath"])["sidecar"]
+    receipt = _receipt_for(sidecar)
+    entry_path = result["entryPath"]
+    child = os.path.join(entry_path, "subdir")
+    os.makedirs(child)
+    with open(os.path.join(child, "x.txt"), "w") as fh:
+        fh.write("x")
+    calls = {"n": 0}
+    original_rmtree = pr.shutil.rmtree
+
+    def partial_rmtree(path, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            os.remove(os.path.join(path, "work.txt"))
+            raise OSError("partial")
+        return original_rmtree(path, *args, **kwargs)
+
+    with mock.patch.object(pr.shutil, "rmtree", side_effect=partial_rmtree):
+        sweep1 = pr.sweep(
+            slots, now=_NOW_LATE,
+            receipts={sidecar["entryName"]: receipt},
+        )
+    assert any(e["reason"] == pr.REASON_DELETE_FAILED for e in sweep1["warned"])
+    assert os.path.lexists(entry_path)
+    sweep2 = pr.sweep(slots, now=_NOW_LATE)
+    assert len(sweep2["deleted"]) == 1
+    assert not os.path.exists(entry_path)
+    tombstone = pr.read_sidecar(result["sidecarPath"])
+    assert tombstone["sidecar"]["status"] == pr.STATUS_DELETED
+
+
+def test_sweep_resume_payload_gone_tombstone_write(tmp_path):
+    slots = _slots_dir(tmp_path)
+    result = _quarantine(slots, now=_NOW_EARLY)
+    sidecar = pr.read_sidecar(result["sidecarPath"])["sidecar"]
+    receipt = _receipt_for(sidecar)
+    auth_sidecar = dict(sidecar)
+    auth_sidecar["status"] = pr.STATUS_DELETION_AUTHORIZED
+    auth_sidecar["terminalReceipt"] = receipt
+    auth_sidecar["deletionAuthorizedAt"] = _NOW_LATE
+    _write_sidecar_raw(result["sidecarPath"], auth_sidecar)
+    shutil.rmtree(result["entryPath"])
+    sweep = pr.sweep(slots, now=_NOW_LATE)
+    assert len(sweep["retained"]) == 1
+    tombstone = pr.read_sidecar(result["sidecarPath"])
+    assert tombstone["sidecar"]["status"] == pr.STATUS_DELETED
+
+
+def test_sweep_pending_move_not_applied(tmp_path):
+    slots = _slots_dir(tmp_path)
+    source = _payload_dir(str(tmp_path))
+    q = pr.quarantine_dir(slots)["path"]
+    os.makedirs(q)
+    sidecar_path = os.path.join(q, "stale.quarantine.json")
+    sidecar = _sidecar_for_auth(
+        entryName="stale",
+        originalPath=source,
+        move=pr.MOVE_PENDING,
+    )
+    _write_sidecar_raw(sidecar_path, sidecar)
+    sweep = pr.sweep(slots, now=_NOW_LATE)
+    assert any(
+        w["reason"] == pr.REASON_PENDING_MOVE_NOT_APPLIED for w in sweep["warned"]
+    )
+    assert os.path.isdir(source)
+
+
+def test_sweep_refuses_symlinked_quarantine(tmp_path):
+    slots = _slots_dir(tmp_path)
+    real_q = os.path.join(str(tmp_path), "real-quarantine")
+    os.makedirs(real_q)
+    link_q = os.path.join(slots, pr.QUARANTINE_DIR_NAME)
+    os.symlink(real_q, link_q)
+    result = pr.sweep(slots, now=_NOW_LATE)
+    assert result["reason"] == pr.REASON_QUARANTINE_DIR_UNSAFE
+
+
+def test_quarantine_entry_refuses_symlinked_quarantine(tmp_path):
+    slots = _slots_dir(tmp_path)
+    real_q = os.path.join(str(tmp_path), "real-quarantine")
+    os.makedirs(real_q)
+    link_q = os.path.join(slots, pr.QUARANTINE_DIR_NAME)
+    os.symlink(real_q, link_q)
+    source = _payload_dir(str(tmp_path))
+    result = pr.quarantine_entry(
+        slots, source, slot_ref=_SLOT_REF, reason=_REASON,
+        occupant=_occupant(), now=_NOW,
+    )
+    assert result["reason"] == pr.REASON_QUARANTINE_DIR_UNSAFE
+    assert os.path.isdir(source)
+
+
+def test_sweep_warned_retained_deleted_have_kind(tmp_path):
+    slots = _slots_dir(tmp_path)
+    result = _quarantine(slots, now=_NOW_EARLY)
+    sidecar = pr.read_sidecar(result["sidecarPath"])["sidecar"]
+    receipt = _receipt_for(sidecar)
+    sweep = pr.sweep(slots, now=_NOW_LATE, receipts={sidecar["entryName"]: receipt})
+    for entry in sweep["deleted"] + sweep["retained"] + sweep["warned"]:
+        assert entry["kind"] == "entry"
+    slot_dir = os.path.join(slots, _SLOT)
+    os.makedirs(slot_dir)
+    open(os.path.join(slot_dir, "journal.ndjson"), "w").close()
+    for i in range(pr.SEGMENT_WARN_COUNT):
+        open(os.path.join(slot_dir, "journal.%04d.ndjson" % (i + 1)), "w").close()
+    sweep2 = pr.sweep(slots, now=_NOW_LATE)
+    journal_warns = [w for w in sweep2["warned"] if w.get("reason") == pr.REASON_JOURNAL_SEGMENTS_HIGH]
+    assert len(journal_warns) >= 1
+    assert journal_warns[0]["kind"] == "journal-segments"
+
+
+def test_sweep_non_default_journal_segments_counted(tmp_path):
+    slots = _slots_dir(tmp_path)
+    slot_dir = os.path.join(slots, _SLOT)
+    os.makedirs(slot_dir)
+    for i in range(pr.SEGMENT_WARN_COUNT):
+        open(os.path.join(slot_dir, "events.%04d.ndjson" % (i + 1)), "w").close()
+    open(os.path.join(slot_dir, "events.ndjson"), "w").close()
+    sweep = pr.sweep(slots, now=_NOW_LATE)
+    assert any(
+        w.get("reason") == pr.REASON_JOURNAL_SEGMENTS_HIGH for w in sweep["warned"]
+    )
+
+
+def test_read_sidecar_refuses_bool_schema_version(tmp_path):
+    slots = _slots_dir(tmp_path)
+    result = _quarantine(slots)
+    loaded = pr.read_sidecar(result["sidecarPath"])["sidecar"]
+    loaded["schemaVersion"] = True
+    _write_sidecar_raw(result["sidecarPath"], loaded)
+    reread = pr.read_sidecar(result["sidecarPath"])
+    assert reread["reason"] == pr.REASON_SIDECAR_INVALID
 
 
 def test_sweep_delete_failed_retained(tmp_path):
@@ -707,8 +923,9 @@ def test_sweep_journal_segments_high(tmp_path):
     slots = _slots_dir(tmp_path)
     slot_dir = os.path.join(slots, _SLOT)
     os.makedirs(slot_dir)
+    open(os.path.join(slot_dir, "journal.ndjson"), "w").close()
     for i in range(pr.SEGMENT_WARN_COUNT):
-        open(os.path.join(slot_dir, "journal.%d.ndjson" % i), "w").close()
+        open(os.path.join(slot_dir, "journal.%04d.ndjson" % (i + 1)), "w").close()
     sweep = pr.sweep(slots, now=_NOW_LATE)
     assert any(
         w.get("reason") == pr.REASON_JOURNAL_SEGMENTS_HIGH for w in sweep["warned"]
@@ -732,6 +949,10 @@ def test_all_reason_constants_discoverable():
         pr.REASON_SIDECAR_ABSENT,
         pr.REASON_SIDECAR_UNREADABLE,
         pr.REASON_SIDECAR_INVALID,
+        pr.REASON_SIDECAR_STATUS_UNBACKED,
+        pr.REASON_SIDECAR_ENTRY_NAME_MISMATCH,
+        pr.REASON_QUARANTINE_DIR_UNSAFE,
+        pr.REASON_PENDING_MOVE_NOT_APPLIED,
         pr.REASON_GRACE_NOT_ELAPSED,
         pr.REASON_RECEIPT_INVALID,
         pr.REASON_RECEIPT_SOURCE_NOT_TERMINAL,
@@ -773,7 +994,7 @@ def test_bite_terminal_source_required():
 
 
 def test_bite_independence_required():
-    """Guard: independence condition in authorize_deletion."""
+    """Guard: independence condition in authorize_deletion (defensive branch only)."""
     sidecar = _sidecar_for_auth(occupant=_occupant(livenessSource="lock-probe"))
     receipt = _receipt_for(sidecar)
     sidecar["occupant"]["livenessSource"] = "process-exit-status"
@@ -783,8 +1004,12 @@ def test_bite_independence_required():
 
 def test_bite_occupant_bound_required():
     """Guard: occupant-bound condition in authorize_deletion."""
-    sidecar = _sidecar_for_auth(occupant=_occupant(processInstance=None))
-    receipt = _receipt_for(sidecar)
+    sidecar = _sidecar_for_auth(occupant=_occupant(processInstance=None, pid=None))
+    receipt = pr.terminal_receipt(
+        pid=12345, process_instance="inst-abc", wait_status=0,
+        entry_name=sidecar["entryName"], slot_ref=sidecar["slotRef"],
+        observed_at=_NOW_LATE,
+    )["receipt"]
     assert pr.authorize_deletion(sidecar, receipt, now=_NOW_LATE)["ok"] is False
 
 

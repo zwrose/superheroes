@@ -986,7 +986,8 @@ reassignment acceptance probe live in `lib/pilot_reclaim.py` and `lib/pilot_fenc
   <slot>/
     journal.ndjson
     journal.<NNNN>.ndjson
-    slot-record.json
+    slot.json
+    .slot.lock
   .pilot-quarantine/
     <entryName>/
       …payload…
@@ -1001,8 +1002,14 @@ requires a leading `[A-Za-z0-9]`, so no valid slot id begins with `.`.
 When a stale occupant is reclaimed, its payload directory is **renamed aside** into
 `.pilot-quarantine`, never deleted. A cross-device rename **refuses** (`reclaim-cross-device`)
 rather than degrading to a copy. The sidecar is written **before** the rename: a crash must
-leave an unexplained sidecar (loud, recoverable) rather than an unexplained entry — the same
-before-and-after discipline the provisioning journal uses.
+leave an unexplained sidecar rather than an unexplained entry — the same before-and-after
+discipline the provisioning journal uses.
+
+If the rename never happened (cross-device or other `OSError` refusal), the payload remains
+**untouched at `originalPath`** and the pending sidecar is stale. Recovery: the operator
+removes the stale sidecar by hand — the framework will not, by design. The sidecar is loud
+so the operator can distinguish "payload safe at original path, sidecar stale" from a
+completed move.
 
 ### The sidecar
 
@@ -1099,23 +1106,42 @@ mechanism becomes a data-loss mechanism.
 The caller mints this **at its real wait/reap seam, immediately after `os.waitpid`/
 `Popen.wait()` returns, and nowhere else**.
 
+The receipt is a **caller attestation minted at the reap seam** — the framework cannot verify
+that the caller actually reaped the process. Its trustworthiness is the caller's responsibility.
+Specifically, a non-blocking `waitpid(..., WNOHANG)` that returns `(0, 0)` means the process
+has **not** exited and must never be turned into a receipt.
+
 ### The sweep
 
 `sweep(slots_dir_path, *, now, receipts=None)` runs **on the next acting run, never on a
 timer**. `receipts` is a mapping keyed by `entryName` to terminal receipts.
 
+Each entry in `warned`, `retained`, and `deleted` carries a `kind` discriminator:
+
+- `"entry"` — per-quarantine-entry shapes (`entryName`, `sidecarPath`, `entryPath`, `reason`).
+- `"journal-segments"` — segment-pressure shapes (`slot`, `segmentCount`, `reason`).
+
 Per-entry classification:
 
 - Payload directory without a matching sidecar → warn `reclaim-sidecar-absent`, retain.
 - Unreadable or invalid sidecar → warn with the load reason, retain.
+- Sidecar `entryName` disagrees with its filename → warn `reclaim-sidecar-entry-name-mismatch`, retain.
 - `move` is `pending` and the payload exists → repair sidecar to `moved`, warn, retain.
-- `move` is `pending` and the payload is absent → warn `reclaim-entry-not-moved`, retain.
+- `move` is `pending`, payload absent, but `originalPath` still exists → warn
+  `reclaim-pending-move-not-applied` (payload safe at original path; sidecar stale), retain.
+- `move` is `pending` and the payload is absent with no `originalPath` → warn
+  `reclaim-entry-not-moved`, retain.
 - `status` is `deleted` → retain (tombstone, no warn).
-- `status` is `deletion-authorized` → resume delete if payload exists; otherwise write
-  tombstone.
+- `status` is `deletion-authorized` → re-run `authorize_deletion` with the stored receipt;
+  on success resume delete if payload exists, otherwise write tombstone; on refusal retain and warn.
 - Receipt supplied for entry → `authorize_deletion`; on success delete; on refusal retain
   (warn if grace has elapsed).
 - No receipt → retain; warn `reclaim-grace-not-elapsed` if grace has elapsed.
+
+Symlinked `.pilot-quarantine` refuses in both `quarantine_entry` and `sweep`
+(`reclaim-quarantine-dir-unsafe`). Containment checks and sweep listing are check-then-use guards
+under this project's single-user threat model — they aim at accidents and stale state, not a
+hostile local actor.
 
 Deletion order (three steps):
 
@@ -1142,8 +1168,13 @@ effect in `applied` or `not-applied` state (`reclaim-rotate-not-quiescent` other
 **Threshold:** at least `ROTATE_MIN_RECORDS` (200) non-empty lines in the live journal
 (`reclaim-rotate-below-threshold` when below).
 
-**Segment naming:** `journal.<NNNN>.ndjson` where `<NNNN>` is a zero-padded four-digit
-sequence (`journal.0001.ndjson`, `journal.0002.ndjson`, …). **Segments are never deleted.**
+**Segment naming:** `<stem>.<NNNN>.ndjson` where `<stem>` is the live journal basename without
+extension and `<NNNN>` is a zero-padded four-digit (or longer) sequence (`journal.0001.ndjson`,
+`journal.0002.ndjson`, …). **Segments are never deleted.**
+
+Segment-pressure warnings in `sweep` count retained segments for every `*.ndjson` live journal
+found in a slot directory (default `journal.ndjson` and any non-segment sibling such as
+`events.ndjson`), using the same stem-based derivation as `rotate_journal`.
 
 `pilot_journal`'s writers do not hold the slot lock, so the exclusion rotation relies on is
 **contract-level, not lock-level** — no provisioning attempt is live in `released` or
@@ -1166,10 +1197,14 @@ and recreates the live journal on the next append.
 | `reclaim-entry-exists` | quarantine entry or sidecar path already exists |
 | `reclaim-cross-device` | `os.rename` fails with `EXDEV` |
 | `reclaim-rename-failed` | `os.rename` fails for any other reason |
-| `reclaim-sidecar-write-failed` | sidecar atomic write or parent-directory fsync fails |
+| `reclaim-sidecar-write-failed` | sidecar atomic write or parent-directory fsync fails — before any rename (nothing moved); after rename but before `move: moved` update (payload moved, sidecar stale); or during tombstone write after deletion (payload gone, tombstone missing) |
 | `reclaim-sidecar-absent` | sidecar file does not exist |
 | `reclaim-sidecar-unreadable` | sidecar cannot be opened or read as a regular file |
 | `reclaim-sidecar-invalid` | sidecar JSON or structural validation fails |
+| `reclaim-sidecar-status-unbacked` | `status` is `deletion-authorized` or `deleted` but `terminalReceipt` is absent |
+| `reclaim-sidecar-entry-name-mismatch` | sidecar `entryName` disagrees with its filename |
+| `reclaim-quarantine-dir-unsafe` | `.pilot-quarantine` is a symlink or non-directory |
+| `reclaim-pending-move-not-applied` | `move` is `pending`, payload absent from quarantine, but `originalPath` still exists |
 | `reclaim-grace-not-elapsed` | fewer than 72 hours since `quarantinedAt` |
 | `reclaim-receipt-invalid` | receipt shape fails validation, or `receipts` argument to `sweep` is not a mapping |
 | `reclaim-receipt-source-not-terminal` | receipt `source` is not in `TERMINAL_SOURCES` |
