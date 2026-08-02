@@ -861,6 +861,20 @@ def _finish_preflight_terminal(repo_root, result, *, run_dir="", argv=None, engi
     return out
 
 
+def _abandon_terminal_result(run_dir_real, state):
+    """Terminal run-abandoned payload with fail-soft ledger receipt for idempotent re-reads."""
+    abandon_result = {
+        "ok": False,
+        "terminal": True,
+        "reason": dispatch_outcome.REASON_UNRUNNABLE,
+        "detail": "run-abandoned",
+        "attempts": len(state.get("attempts") or {}),
+        "forfeited": False,
+    }
+    abandon_result["ledger"] = _append_fold_ledger(run_dir_real, state, abandon_result)
+    return abandon_result
+
+
 def _terminate_run(run_dir_real, state, *, record_kind, result, abandon_detail=None):
     """The ONLY path to a terminal run. Journals terminal record, verifies append, then
     finalizes (release lease, destroy view). Returns the terminal result, or a named
@@ -875,22 +889,13 @@ def _terminate_run(run_dir_real, state, *, record_kind, result, abandon_detail=N
         result["ledger"] = ledger_receipt
         record = {"kind": "run-folded", "result": result, "at": time.time()}
     elif record_kind == "run-abandoned":
-        abandon_result = {
-            "ok": False,
-            "terminal": True,
-            "reason": dispatch_outcome.REASON_UNRUNNABLE,
-            "detail": "run-abandoned",
-            "attempts": len(state.get("attempts") or {}),
-            "forfeited": False,
-        }
         # axis: which terminal paths append — run-abandoned is a terminal non-success with repo identity.
-        ledger_receipt = _append_fold_ledger(run_dir_real, state, abandon_result)
+        abandon_result = _abandon_terminal_result(run_dir_real, state)
         record = {
             "kind": "run-abandoned",
             "detail": abandon_detail or "abandoned",
             "at": time.time(),
         }
-        abandon_result["ledger"] = ledger_receipt
     else:
         record = {"kind": record_kind, "at": time.time()}
         abandon_result = None
@@ -2570,9 +2575,7 @@ def dispatch_abandon(run_dir):
 
         if state.get("abandoned") is not None:
             return _with_run_fields(
-                {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-                 "detail": "run-abandoned", "attempts": len(state.get("attempts") or {}),
-                 "forfeited": False},
+                _abandon_terminal_result(run_dir_real, state),
                 run_dir=run_dir_real, argv=argv,
             )
 
@@ -2626,9 +2629,7 @@ def dispatch_abandon(run_dir):
             argv = (state.get("opened") or {}).get("argv") or argv
             if state.get("abandoned") is not None:
                 return _with_run_fields(
-                    {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-                     "detail": "run-abandoned",
-                     "attempts": len(state.get("attempts") or {}), "forfeited": False},
+                    _abandon_terminal_result(run_dir_real, state),
                     run_dir=run_dir_real, argv=argv,
                 )
             return _terminate_run(

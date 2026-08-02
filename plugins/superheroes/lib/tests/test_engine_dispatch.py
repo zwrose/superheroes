@@ -3110,6 +3110,17 @@ def test_abandon_appends_ledger_row(tmp_path, monkeypatch):
     assert rows[0]["detail"] == "run-abandoned"
 
 
+def test_dispatch_abandon_idempotent_equal_results(tmp_path, monkeypatch):
+    """axis: that two abandon calls return equal results — not that a ledger key exists."""
+    repo_root = _git_init(str(tmp_path / "repo-abandon-idem"))
+    _ledger_env(tmp_path, monkeypatch)
+    run_dir = str(tmp_path / "run-abandon-idem")
+    _manual_open_review_run_git(tmp_path, run_dir, repo_root)
+    first = ED.dispatch_abandon(run_dir)
+    second = ED.dispatch_abandon(run_dir)
+    assert second == first
+
+
 def test_run_opened_records_repo_root_and_id(tmp_path):
     run_dir = str(tmp_path / "run-meta")
     repo_root = _git_init(str(tmp_path / "repo-opened"))
