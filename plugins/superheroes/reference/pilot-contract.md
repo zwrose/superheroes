@@ -17,6 +17,10 @@
 15. [Slot lifecycle and generations](#slot-lifecycle-and-generations)
 16. [The provisioning journal](#the-provisioning-journal)
 17. [The partial-failure report](#the-partial-failure-report)
+18. [The identity-probe exercise](#the-identity-probe-exercise)
+19. [Mid-wave lapse](#mid-wave-lapse)
+20. [Credential validity margin](#credential-validity-margin)
+21. [Minted sign-in exercises](#minted-sign-in-exercises)
 
 ---
 
@@ -34,7 +38,9 @@ sub-issue **A3** — the per-slot target boundary (`lib/pilot_boundary.py`), the
 document home (`lib/pilot_policy.py`), and the provisioning authorization layer
 (`lib/pilot_provision.py`); and sub-issue **A2a** — the slot lifecycle and generation
 allocation (`lib/pilot_lifecycle.py`) plus the provisioning journal and partial-failure
-report (`lib/pilot_journal.py`).
+report (`lib/pilot_journal.py`); and sub-issue **B6** — the identity-probe exercise and
+mid-wave lapse episode (`lib/pilot_identity.py`), the launch-time credential validity
+margin (`lib/pilot_horizon.py`), and minted sign-in exercises (`lib/pilot_mint.py`).
 
 **What this deliberately does not build** (successor sub-issues own these):
 
@@ -43,7 +49,9 @@ report (`lib/pilot_journal.py`).
 - Browser context creation, credential injection, or broker-side stale-generation enforcement (**C7**).
 - Running a live cleanup and capturing its effect receipt (**C9**).
 - The measured operating ceiling and its degradation receipts (**D11b**).
-- App stand-up, teardown, or wave-deadline runtime (**B5**).
+- App stand-up, teardown, or wave-deadline **runtime** terminus enforcement (**B5**,
+  #827) — the launch-time `deadline + margin ≤ horizon` comparison now lives here
+  (B6, `lib/pilot_horizon.py`); runtime terminus stays B5's.
 
 This wave ships types, vocabulary, schema, and call shapes only.
 
@@ -885,6 +893,10 @@ On a clean body a failed `end` write raises `PilotJournalError`; when the body i
 the body's exception wins and the missing `end` record replays as `possibly-applied`. The
 asymmetry is deliberate.
 
+`mark_indeterminate` records `indeterminate` with an explicit end timestamp and optional
+`reason` when transport, process, timeout, or partial-operation error prevents the caller
+from proving applied or not-applied.
+
 ### Journal refusal tokens
 
 | Token | When returned |
@@ -973,3 +985,313 @@ A **shared**-scoped possibly-applied effect blocks even on a fenced slot: fencin
 not un-touch a shared datastore or un-mint a credential on a shared service.
 
 Sub-issue **C8** renders this report to the owner.
+
+## The identity-probe exercise
+
+The identity-probe exercise (design decision D3) proves that the configured probe
+discriminates between seeded and unseeded contexts. Public API lives in
+`lib/pilot_identity.py`.
+
+### Answer shape
+
+Each probe answer carries **exactly one** of:
+
+- `identity` — a non-empty string naming the session's identity, or
+- `reason` — one of the ten probe tokens from [The probe vocabulary](#the-probe-vocabulary).
+
+Both fields present, neither present, or an empty identity refuses
+(`identity-answer-invalid`). An unknown `reason` token refuses
+(`identity-answer-reason-unknown`).
+
+`probe_answer(*, identity=None, reason=None)` normalizes and validates one answer.
+`evaluate_pair` and `run_pair_exercise` accept answer dicts with the same shape.
+
+### Authoritative exercise vs helper
+
+`run_pair_exercise` is the **authoritative** single-account exercise: it invokes two
+**distinct** probe callables exactly once each and grades the results through
+`evaluate_pair`. Distinct callables are verified here; whether they ran in different
+browser contexts is C7's responsibility.
+
+`evaluate_pair(seeded, unseeded, *, expected_identity)` is a **helper** only — grading
+two fabricated answers does not establish that they came from two contexts. Preflight
+must call `run_pair_exercise` (or the slot-level harness below), not `evaluate_pair`
+alone.
+
+### Ordered checks in `evaluate_pair`
+
+Checks run in this order:
+
+1. **Normalize both answers** — malformed shape returns the answer-validation refusal.
+2. **Identical answers** — if the normalized seeded and unseeded answers are equal,
+   refuse with `identity-probe-answers-identical`. This runs **before** seeded/unseeded
+   discrimination because identical answers prove the probe cannot distinguish contexts,
+   regardless of whether each answer individually looks valid.
+3. **Seeded leg** — seeded answer must carry `identity` matching `expected_identity`;
+   a seeded `reason` refuses (`identity-probe-seeded-refused`).
+4. **Unseeded leg** — unseeded answer must carry `reason: no-session`
+   (`identity-probe-unseeded-not-no-session` otherwise).
+
+### Per-account harness
+
+`evaluate_slot(slot_accounts, expected_identities, answers)` runs the pair grading across
+a slot's whole account set. The authoritative account list comes from
+`pilot_slot.account_keys(slot_accounts)`; the `expected_identities` and `answers` key sets
+must match that list exactly (`identity-account-set-mismatch`). An empty account set
+refuses (`identity-account-set-empty`).
+
+### Valid-but-wrong-account leg
+
+`evaluate_wrong_account_leg(answer, *, expected_identity, other_identity)` grades the
+free leg under minting: the probe must discriminate when a valid-but-wrong account is
+presented. When `other_identity` equals `expected_identity`, the check is vacuous and
+refuses (`identity-wrong-account-vacuous`). Pass requires `wrong-identity` or an identity
+matching `other_identity`; infrastructure and lapse tokens are inconclusive
+(`identity-wrong-account-inconclusive`).
+
+### Declaration and registry binding
+
+`identity_probe_declaration` binds a receipt to slot reference, generation, policy digest,
+sorted account keys, and a **digest** of the expected identities — never the identity
+strings themselves (they are policy material).
+
+`identity_probe_receipt` assembles the `identity-probe` registry record.
+`require_identity_probe_exercised` calls `require_exercised` for that kind.
+
+A registry record is the durable receipt of an exercise that happened; it is **never**
+a substitute for running the live probe in the current preflight. `is_exercised` carries
+no freshness or launched-instance binding — the declaration binds slot, generation, and
+policy digest.
+
+### Identity-probe refusal tokens
+
+| Token | When returned |
+|---|---|
+| `identity-answer-invalid` | `probe_answer` or answer normalization: both fields set, neither set, empty identity, or malformed dict |
+| `identity-answer-reason-unknown` | `reason` is not one of the ten probe tokens |
+| `identity-expected-missing` | `evaluate_pair`: `expected_identity` missing or empty |
+| `identity-probe-answers-identical` | `evaluate_pair`: normalized seeded and unseeded answers are equal |
+| `identity-probe-seeded-refused` | `evaluate_pair`: seeded answer carries a `reason` instead of identity |
+| `identity-probe-seeded-identity-mismatch` | `evaluate_pair`: seeded identity does not match `expected_identity` |
+| `identity-probe-unseeded-not-no-session` | `evaluate_pair`: unseeded answer is not `no-session` |
+| `identity-probe-not-callable` | `run_pair_exercise`: a probe argument is not callable |
+| `identity-probe-legs-not-distinct` | `run_pair_exercise`: seeded and unseeded callables are the same object |
+| `identity-probe-leg-failed` | `run_pair_exercise` or `lapse_episode`: probe callable raised |
+| `identity-account-set-empty` | `evaluate_slot`: account list from `account_keys` is empty |
+| `identity-account-set-mismatch` | `evaluate_slot`: `expected_identities` or `answers` keys do not match the slot account set |
+| `identity-wrong-account-vacuous` | `evaluate_wrong_account_leg`: `other_identity` equals `expected_identity` |
+| `identity-wrong-account-not-discriminated` | `evaluate_wrong_account_leg`: answer identity equals `expected_identity` |
+| `identity-wrong-account-unexpected-identity` | `evaluate_wrong_account_leg`: answer identity matches neither expected nor other |
+| `identity-wrong-account-inconclusive` | `evaluate_wrong_account_leg`: infrastructure/lapse token or malformed answer |
+| `identity-declaration-slot-invalid` | `identity_probe_declaration`: slot reference does not parse |
+| `identity-declaration-invalid` | `identity_probe_declaration`: policy digest or expected-identities shape invalid |
+| `identity-receipt-argument-invalid` | `identity_probe_receipt`: malformed result, timestamp, or declaration kind absent |
+
+## Mid-wave lapse
+
+When a mid-wave probe returns `no-session`, the framework routes to the lapse path.
+Public API: `lapse_step`, `lapse_episode` in `lib/pilot_identity.py`.
+
+Infrastructure classifications **never** route to lapse — only `no-session` does
+(see [The probe vocabulary](#the-probe-vocabulary)). `lapse_step` classifies via
+`pilot_probe.classify`; infrastructure tokens defer, identity-class tokens refuse.
+
+### Action set
+
+| Action | Meaning |
+|---|---|
+| `continue` | Session is valid; wave proceeds |
+| `reprobe` | First `no-session` within budget — exactly one re-probe allowed |
+| `park` | Confirmed lapse on `captured` sign-in path — slot parks (durable transition is A2a/B5) |
+| `remint` | Confirmed lapse on `minted` sign-in path — caller must re-mint before continuing |
+| `defer` | Infrastructure classification or probe transport failure — not a lapse |
+| `refuse` | Identity-class probe token — not a lapse |
+
+### Re-probe budget
+
+`lapse_episode` **owns** the re-probe budget. A caller-supplied `reprobe_count` on
+`lapse_step` can grade individual steps but cannot confirm a lapse — only
+`lapse_episode` performs the second probe. The budget is exactly one re-probe: first
+`no-session` → `reprobe`; second confirmed `no-session` → `park` (captured) or
+`remint` (minted).
+
+### Captured ⇒ park / minted ⇒ re-mint
+
+After the single re-probe confirms `no-session`:
+
+- **`signInPath: captured`** → `park` with lapse evidence.
+- **`signInPath: minted`** → `remint` action; `continue` is returned **only after** a
+  supplied `remint` callable actually succeeds. If `remint` is absent, not callable,
+  raises, or returns falsy, the episode parks (`lapse-remint-unavailable` or
+  `lapse-remint-failed`).
+
+Probe callable failures during the episode defer rather than lapse.
+
+### Lapse refusal tokens
+
+| Token | When returned |
+|---|---|
+| `lapse-sign-in-path-invalid` | `lapse_step`: `sign_in_path` not in `captured` / `minted` |
+| `lapse-reprobe-budget-invalid` | `lapse_step`: `reprobe_count` not `0` or `1` (bools excluded) |
+| `lapse-probe-not-callable` | `lapse_episode`: probe argument is not callable |
+| `lapse-remint-unavailable` | `lapse_episode`: minted path confirmed lapse but `remint` absent or not callable |
+| `lapse-remint-failed` | `lapse_episode`: `remint` raised or returned falsy |
+
+## Credential validity margin
+
+Launch-time comparison: for each account, `deadline + margin ≤ horizon` must hold before
+the wave launches. Public API lives in `lib/pilot_horizon.py`.
+
+**Runtime terminus enforcement is B5's (#827); only the launch-time comparison lives
+here.**
+
+The margin math never takes a bare integer horizon — every comparison uses a
+**provenance-bound observation** constructed by one of:
+
+- `cookie_expiry_observation(storage_state, *, cookie_name)`
+- `token_claim_observation(token, *, claim="exp")`
+- `server_probe_observation(*, expires_at, observed_at)`
+- `unknown_observation()`
+
+`validate_observation` refuses shapes the constructors would not emit.
+
+### The comparison
+
+`account_margin(observation, *, deadline_at, margin_seconds, sign_in_path, attended, ...)`
+computes `required_until = deadline_at + margin_seconds` and requires
+`required_until ≤ expiresAt` for a covered launch.
+
+There is **no minted-path exemption** from `deadline + margin ≤ horizon`. Re-minting is
+recovery after a confirmed mid-wave lapse (see [Mid-wave lapse](#mid-wave-lapse)), not a
+launch gate — a short horizon cannot be waived because the sign-in path is `minted`.
+
+### Decision order
+
+1. **Validate observation shape** — refuse malformed observations before margin math.
+2. **Unknown provenance, unattended** — when `validityProvenance` is `unknown` and
+   `attended` is `false`, refuse (`horizon-unknown-provenance-unattended`). Unknown
+   cannot claim an unattended horizon. When `attended` is `true`, disposition is
+   `attended` (pass).
+3. **Server-probe staleness** — when `server_probe_max_age` is set, refuse if
+   `now - observedAt > server_probe_max_age` (`horizon-server-probe-stale`).
+4. **Server-probe without expiry** — when `expiresAt` is `null`, disposition is
+   `server-probe-recheck` with `requiresMidWaveRecheck: true` (pass at launch; B5
+   re-checks mid-wave).
+5. **Missing expiry** — non-server-probe observation with `expiresAt: null` refuses
+   (`horizon-expiry-missing`).
+6. **Margin comparison** — `required_until ≤ expiresAt` → disposition `covered`; else
+   `horizon-margin-exceeded` with `shortfallSeconds`.
+
+`wave_margin` evaluates every account and fails closed on the first refusal.
+
+### Epoch seconds
+
+All instants in the margin path are **UTC epoch seconds** (integer). Instants in wire
+format (`YYYY-MM-DDTHH:MM:SSZ`) parse through `parse_instant`, which uses
+`time.strptime` — not `datetime.fromisoformat`, which does not accept a trailing `Z`
+before Python 3.11.
+
+### Horizon refusal tokens
+
+| Token | When returned |
+|---|---|
+| `horizon-instant-invalid` | `parse_instant`: value is not `YYYY-MM-DDTHH:MM:SSZ` |
+| `horizon-storage-state-invalid` | `cookie_expiry_observation`: malformed storage state or cookie entry |
+| `horizon-cookie-name-invalid` | `cookie_name` missing or empty |
+| `horizon-cookie-not-found` | named cookie absent from storage state |
+| `horizon-cookie-ambiguous` | more than one cookie with the same name |
+| `horizon-cookie-session-only` | cookie has no expiry or session-only expiry (`-1`, `0`) |
+| `horizon-token-malformed` | JWT-shaped token cannot be decoded |
+| `horizon-token-claim-missing` | claim (default `exp`) absent from payload |
+| `horizon-token-claim-invalid` | claim value not a non-negative number |
+| `horizon-observation-invalid` | `validate_observation` or constructor input shape invalid |
+| `horizon-sign-in-path-invalid` | `sign_in_path` not in `captured` / `minted` |
+| `horizon-deadline-invalid` | `deadline_at` not a positive integer (bools excluded) |
+| `horizon-margin-invalid` | `margin_seconds` not a strictly positive integer |
+| `horizon-flag-invalid` | `attended` is not a bool |
+| `horizon-now-invalid` | `now` invalid, or required but absent for staleness / past-deadline checks |
+| `horizon-max-age-invalid` | `server_probe_max_age` invalid when provided |
+| `horizon-deadline-in-past` | `deadline_at <= now` when `now` is supplied |
+| `horizon-unknown-provenance-unattended` | `unknown` provenance with `attended: false` |
+| `horizon-server-probe-stale` | server-probe observation older than `server_probe_max_age` |
+| `horizon-expiry-missing` | non-server-probe observation with `expiresAt: null` |
+| `horizon-margin-exceeded` | `deadline_at + margin_seconds > expiresAt` |
+| `horizon-account-set-empty` | `wave_margin`: accounts mapping empty or absent |
+| `horizon-account-entry-invalid` | `wave_margin`: account key missing or empty |
+
+## Minted sign-in exercises
+
+Minted sign-in exercises live in `lib/pilot_mint.py`. Every public path that mints goes
+through A3's `authorized_*` wrappers; this module performs no network I/O — the caller
+injects a transport callable.
+
+A registry record is the durable receipt of an exercise that happened; it is **never**
+a substitute for the live sentinel exercise in the current preflight (see
+[Declare and exercise](#declare-and-exercise) — `is_exercised` carries no freshness or
+launched-instance binding).
+
+### Flag-scope rule
+
+`flag_scope_check(envelope, *, observed_scopes)` returns whether the enabling flag was
+observed only in declared `enabledScopes`. A flag set in any scope **outside**
+`enabledScopes` is disqualifying (`mint-flag-set-outside-declared-scope`). Vacuous or
+malformed `observed_scopes` refuses (`mint-observed-scopes-invalid`).
+
+### Gate-off receipt
+
+`run_gate_off_test` executes `gateOffTestCommand` with the enabling environment variable
+**removed** from the supplied environment. Timeout, oversize output, and spawn failure
+refuse rather than pass.
+
+`gate_off_receipt` binds the registry record to the exact envelope via
+`declaration_digest`. `require_gate_off` calls `require_exercised` for kind
+`mint-gate-off`.
+
+### Live sentinel exercise
+
+`sentinel_exercise` runs a two-leg preflight:
+
+1. **Positive control** — an authorized mint of an allowlisted `control_account` must
+   succeed first. If the control mint fails, the exercise is `inconclusive`
+   (`mint-control-did-not-mint`) — a refusal only discriminates when minting
+   demonstrably works.
+2. **Sentinel probe** — `authorized_sentinel_probe_request` probes the sentinel
+   identifier, which must be absent from the mintable allowlist.
+
+**Unverifiable half:** the framework cannot verify that the sentinel corresponds to no
+real account — only that it is absent from the allowlist
+(`sentinel_probe_request` enforces allowlist absence, not global non-existence).
+
+### Sentinel status table
+
+| HTTP status | Outcome | Notes |
+|---|---|---|
+| 400, 401, 403, 409, 422 | `refused` (pass) | Gate refused as expected |
+| 2xx | `minted` (fail) | `mint-sentinel-minted` — gate did not refuse |
+| 404 | `inconclusive` | Endpoint absent — allowlist was never consulted; treating "could not tell" as "refused" fails open (`mint-sentinel-endpoint-absent`) |
+| 429 | `inconclusive` | `rate-limited` |
+| ≥ 500 | `inconclusive` | `infrastructure-unavailable` |
+| other | `inconclusive` | `mint-sentinel-unexpected-status` |
+| transport error | `inconclusive` | `transport-error` |
+
+### Mint exercise refusal tokens
+
+| Token | When returned |
+|---|---|
+| `mint-envelope-incomplete` | envelope missing required keys or malformed scope/command fields |
+| `mint-observed-scopes-invalid` | `flag_scope_check`: `observed_scopes` empty or malformed |
+| `mint-flag-set-outside-declared-scope` | enabling flag observed in a scope outside `enabledScopes` |
+| `mint-gate-off-command-invalid` | `gateOffTestCommand` missing or not a non-empty argv list |
+| `mint-gate-off-cwd-invalid` | `run_cwd` missing or not an existing directory |
+| `mint-gate-off-environment-invalid` | environment not a string-to-string mapping |
+| `mint-gate-off-flag-still-set` | enabling variable still present after removal attempt |
+| `mint-gate-off-timeout` | gate-off subprocess exceeded timeout |
+| `mint-gate-off-output-oversize` | gate-off stdout exceeded byte cap |
+| `mint-gate-off-spawn-failed` | gate-off subprocess could not start or stdout read failed |
+| `mint-gate-off-test-failed` | gate-off subprocess exited non-zero |
+| `mint-receipt-argument-invalid` | `gate_off_receipt`: malformed run result or timestamp |
+| `mint-transport-invalid` | `authorized_mint` or `sentinel_exercise`: transport not callable |
+| `mint-control-did-not-mint` | sentinel exercise: control mint leg failed — exercise inconclusive |
+| `mint-sentinel-minted` | sentinel leg returned 2xx — gate did not refuse |
+| `mint-sentinel-endpoint-absent` | sentinel leg returned 404 — inconclusive, not refusal |
+| `mint-sentinel-unexpected-status` | sentinel leg returned an unclassified status |
