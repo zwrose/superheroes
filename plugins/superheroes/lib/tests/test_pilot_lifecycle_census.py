@@ -431,6 +431,39 @@ def test_parse_replay_state_table_rejects_duplicate_row():
         _parse_first_column_table(table_text, _REPLAY_STATE_HEADER, "replay-state")
 
 
+def test_parse_lifecycle_token_table_rejects_duplicate_row():
+    table_text = (
+        "| Token | When returned |\n"
+        "|---|---|\n"
+        "| `slot-state-invalid` | probe |\n"
+        "| `slot-state-invalid` | duplicate |\n"
+    )
+    with pytest.raises(ValueError, match="duplicate token row"):
+        _parse_token_table(table_text, _LIFECYCLE_TOKEN_HEADER)
+
+
+def test_parse_journal_token_table_rejects_duplicate_row():
+    table_text = (
+        "| Token | When returned |\n"
+        "|---|---|\n"
+        "| `journal-record-invalid` | probe |\n"
+        "| `journal-record-invalid` | duplicate |\n"
+    )
+    with pytest.raises(ValueError, match="duplicate token row"):
+        _parse_token_table(table_text, _JOURNAL_TOKEN_HEADER)
+
+
+def test_parse_block_token_table_rejects_duplicate_row():
+    table_text = (
+        "| Token | When raised |\n"
+        "|---|---|\n"
+        "| `report-slot-duplicate` | probe |\n"
+        "| `report-slot-duplicate` | duplicate |\n"
+    )
+    with pytest.raises(ValueError, match="duplicate token row"):
+        _parse_token_table(table_text, _BLOCKER_TOKEN_HEADER)
+
+
 def test_slot_states_extra_in_doc(monkeypatch):
     doc = _load_contract()
     fake = "census-extra-state"
@@ -654,3 +687,42 @@ def test_census_red_on_undocumented_transition_edge(monkeypatch):
     monkeypatch.setattr(pilot_lifecycle, "TRANSITIONS", new_transitions)
     with pytest.raises(AssertionError, match="missing edge"):
         test_transitions_bidirectional()
+
+
+def test_census_red_on_undocumented_end_outcome(monkeypatch):
+    """Bite-proof: an END_OUTCOME added in code but not in the doc must fail."""
+    doc = _load_contract()
+    fake = "census-probe-end-outcome"
+    assert fake not in doc
+    monkeypatch.setattr(
+        pilot_journal,
+        "END_OUTCOMES",
+        pilot_journal.END_OUTCOMES | frozenset({fake}),
+    )
+    with pytest.raises(AssertionError, match="missing from doc.*census-probe-end-outcome"):
+        test_end_outcomes_bidirectional()
+
+
+def test_census_red_on_undocumented_effect_state(monkeypatch):
+    """Bite-proof: an EFFECT_STATE added in code but not in the doc must fail."""
+    doc = _load_contract()
+    fake = "census-probe-effect-state"
+    assert fake not in doc
+    monkeypatch.setattr(
+        pilot_journal,
+        "EFFECT_STATES",
+        pilot_journal.EFFECT_STATES | frozenset({fake}),
+    )
+    with pytest.raises(AssertionError, match="missing from doc.*census-probe-effect-state"):
+        test_effect_states_bidirectional()
+
+
+def test_census_red_on_provisioning_outcome_vocabulary_drift(monkeypatch):
+    """Bite-proof: cross-module outcome guard must fail when vocabularies diverge."""
+    monkeypatch.setattr(
+        pilot_journal,
+        "SLOT_OUTCOMES",
+        frozenset({pilot_journal.SLOT_OUTCOME_PROVISIONED}),
+    )
+    with pytest.raises(AssertionError, match="provisioning_outcome vocabulary"):
+        test_provisioning_outcome_vocabulary_matches_slot_outcomes()

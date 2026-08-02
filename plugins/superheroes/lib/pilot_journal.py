@@ -106,6 +106,15 @@ class PilotJournalError(Exception):
         super().__init__(reason)
 
 
+def _is_member(value, members):
+    """True only when value is a str AND a member. Never raises on unhashable input."""
+    return isinstance(value, str) and value in members
+
+
+def _is_str_path(value):
+    return isinstance(value, str)
+
+
 def _ok(**extra):
     out = {"ok": True, "reason": None}
     out.update(extra)
@@ -169,6 +178,8 @@ def _ensure_parent_dir(path):
 
 def _write_record(journal_path, record):
     """Durable single-write append. Returns ok/reason dict."""
+    if not _is_str_path(journal_path):
+        return _fail(REASON_JOURNAL_WRITE_FAILED)
     line = json.dumps(record, sort_keys=True) + "\n"
     encoded = line.encode("utf-8")
     fd = None
@@ -238,9 +249,11 @@ def _build_end_record(*, slot_ref, effect_id, outcome, at, reason):
 
 def begin_effect(journal_path, *, slot_ref, kind, at, detail=None, effect_id=None):
     """Append a begin-phase journal record."""
+    if not _is_str_path(journal_path):
+        return _fail(REASON_JOURNAL_WRITE_FAILED)
     if not _validate_slot_ref(slot_ref):
         return _fail(REASON_SLOT_REF_INVALID)
-    if not isinstance(kind, str) or kind not in EFFECT_KINDS:
+    if not _is_member(kind, EFFECT_KINDS):
         return _fail(REASON_KIND_UNKNOWN)
     if not _is_iso8601_utc(at):
         return _fail(REASON_RECORD_INVALID)
@@ -266,11 +279,13 @@ def begin_effect(journal_path, *, slot_ref, kind, at, detail=None, effect_id=Non
 
 def end_effect(journal_path, *, slot_ref, effect_id, outcome, at, reason=None):
     """Append an end-phase journal record."""
+    if not _is_str_path(journal_path):
+        return _fail(REASON_JOURNAL_WRITE_FAILED)
     if not _validate_slot_ref(slot_ref):
         return _fail(REASON_SLOT_REF_INVALID)
     if not _validate_effect_id(effect_id):
         return _fail(REASON_EFFECT_ID_INVALID)
-    if not isinstance(outcome, str) or outcome not in END_OUTCOMES:
+    if not _is_member(outcome, END_OUTCOMES):
         return _fail(REASON_OUTCOME_INVALID)
     if not _is_iso8601_utc(at):
         return _fail(REASON_RECORD_INVALID)
@@ -383,7 +398,7 @@ def _validate_begin_record(record):
     if not _validate_slot_ref(record.get("slotRef")):
         return False
     kind = record.get("kind")
-    if not isinstance(kind, str) or kind not in EFFECT_KINDS:
+    if not _is_member(kind, EFFECT_KINDS):
         return False
     if not _is_iso8601_utc(record.get("at")):
         return False
@@ -411,7 +426,7 @@ def _validate_end_record(record):
     if not _validate_slot_ref(record.get("slotRef")):
         return False
     outcome = record.get("outcome")
-    if not isinstance(outcome, str) or outcome not in END_OUTCOMES:
+    if not _is_member(outcome, END_OUTCOMES):
         return False
     if not _is_iso8601_utc(record.get("at")):
         return False
@@ -491,7 +506,7 @@ def _build_effect_id_slot_ref_map(parsed_records):
             continue
         effect_id = rec["raw"].get("effectId")
         slot = rec["raw"].get("slotRef")
-        if effect_id is not None and slot is not None:
+        if isinstance(effect_id, str) and isinstance(slot, str):
             effect_id_slot_refs.setdefault(effect_id, set()).add(slot)
     return effect_id_slot_refs
 
@@ -523,6 +538,12 @@ def _stamp_replay(result, journal_path, slot_ref):
 
 def replay(journal_path, *, slot_ref=None):
     """Replay journal into effect entries with fail-closed pairing."""
+    if not _is_str_path(journal_path):
+        return _stamp_replay(
+            _fail(REASON_JOURNAL_UNREADABLE, effects=[], torn=False, anomalies=[]),
+            journal_path,
+            slot_ref,
+        )
     if slot_ref is not None and not _validate_slot_ref(slot_ref):
         return _stamp_replay(
             _fail(REASON_SLOT_REF_INVALID, effects=[], torn=False, anomalies=[]),
@@ -820,13 +841,13 @@ def _validate_replay_shape(replay_result):
         if not isinstance(effect, dict):
             return BLOCK_REPLAY_SHAPE_INVALID
         state = effect.get("state")
-        if not isinstance(state, str) or state not in EFFECT_STATES:
+        if not _is_member(state, EFFECT_STATES):
             return BLOCK_REPLAY_SHAPE_INVALID
         scope = effect.get("scope")
-        if not isinstance(scope, str) or scope not in {SCOPE_SLOT, SCOPE_SHARED}:
+        if not _is_member(scope, frozenset({SCOPE_SLOT, SCOPE_SHARED})):
             return BLOCK_REPLAY_SHAPE_INVALID
         kind = effect.get("kind")
-        if isinstance(kind, str) and kind in EFFECT_KINDS:
+        if _is_member(kind, EFFECT_KINDS):
             if scope != EFFECT_SCOPE[kind]:
                 return BLOCK_REPLAY_SHAPE_INVALID
         elif scope != SCOPE_SHARED:
@@ -927,7 +948,7 @@ def partial_failure_report(slots):
         seen_slots.add(slot)
         seen_slot_refs.add(slot_ref)
 
-        if not isinstance(outcome, str) or outcome not in SLOT_OUTCOMES:
+        if not _is_member(outcome, SLOT_OUTCOMES):
             blockers.append(_blocker(
                 BLOCK_SLOT_OUTCOME_INVALID,
                 slot=slot,
@@ -937,19 +958,19 @@ def partial_failure_report(slots):
             if replay_result is None:
                 healthy_slots.append({"slot": slot, "slotRef": slot_ref})
                 continue
-            provenance_blocker = _validate_replay_provenance(replay_result, slot_ref)
-            if provenance_blocker is not None:
+            shape_blocker = _validate_replay_shape(replay_result)
+            if shape_blocker is not None:
                 blockers.append(_blocker(
-                    provenance_blocker,
+                    shape_blocker,
                     slot=slot,
                     slot_ref=slot_ref,
                 ))
                 healthy_slots.append({"slot": slot, "slotRef": slot_ref})
                 continue
-            shape_blocker = _validate_replay_shape(replay_result)
-            if shape_blocker is not None:
+            provenance_blocker = _validate_replay_provenance(replay_result, slot_ref)
+            if provenance_blocker is not None:
                 blockers.append(_blocker(
-                    shape_blocker,
+                    provenance_blocker,
                     slot=slot,
                     slot_ref=slot_ref,
                 ))
@@ -1015,18 +1036,18 @@ def partial_failure_report(slots):
                     slot_ref=slot_ref,
                 ))
 
-        provenance_blocker = _validate_replay_provenance(replay_result, slot_ref)
-        if provenance_blocker is not None:
+        shape_blocker = _validate_replay_shape(replay_result)
+        if shape_blocker is not None:
             blockers.append(_blocker(
-                provenance_blocker,
+                shape_blocker,
                 slot=slot,
                 slot_ref=slot_ref,
             ))
         else:
-            shape_blocker = _validate_replay_shape(replay_result)
-            if shape_blocker is not None:
+            provenance_blocker = _validate_replay_provenance(replay_result, slot_ref)
+            if provenance_blocker is not None:
                 blockers.append(_blocker(
-                    shape_blocker,
+                    provenance_blocker,
                     slot=slot,
                     slot_ref=slot_ref,
                 ))

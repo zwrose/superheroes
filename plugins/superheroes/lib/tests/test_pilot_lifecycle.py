@@ -458,13 +458,19 @@ def test_mutate_oserror_returns_lock_unavailable():
     try:
         slots_path = os.path.join(tmp, "slots")
         os.makedirs(slots_path, mode=0o555)
+        slot_dir = os.path.join(slots_path, SLOT)
         try:
-            result = pl.mutate(slots_path, SLOT, lambda r: r)
+            os.makedirs(slot_dir)
+        except OSError:
+            pass
+        try:
+            with open(os.path.join(slot_dir, ".probe"), "w", encoding="utf-8") as fh:
+                fh.write("probe")
         except OSError:
             pytest.skip(
-                "read-only slots directory did not prevent slot subdirectory "
-                "creation for this user"
+                "read-only slots directory did not prevent writes for this user"
             )
+        result = pl.mutate(slots_path, SLOT, lambda r: r)
         assert result == {
             "ok": False,
             "reason": pl.REASON_LOCK_UNAVAILABLE,
@@ -820,9 +826,15 @@ def test_concurrent_create_slot():
         shutil.rmtree(tmp)
 
 
-def test_slot_ref_uses_format_slot_ref():
+def test_slot_ref_uses_format_slot_ref(monkeypatch):
     rec = pl.new_record(SLOT, ACCOUNTS, now=NOW)
-    assert pl.slot_ref(rec) == pilot_slot.format_slot_ref(SLOT, 1)
+    sentinel = "delegation-probe@42"
+
+    def fake_format_slot_ref(slot, generation):
+        return sentinel
+
+    monkeypatch.setattr(pilot_slot, "format_slot_ref", fake_format_slot_ref)
+    assert pl.slot_ref(rec) == sentinel
 
 
 def test_provisioning_outcome_mapping():
@@ -907,11 +919,13 @@ def test_create_slot_refuses_unreadable_existing_record():
         original_bytes = open(path, "rb").read()
         os.chmod(path, 0o000)
         try:
-            result = pl.create_slot(slots_path, SLOT, ACCOUNTS, now=NOW)
-        except PermissionError:
+            with open(path, "rb") as probe_fh:
+                probe_fh.read(1)
+        except OSError:
             pytest.skip(
                 "mode 0o000 record file did not prevent read for this user"
             )
+        result = pl.create_slot(slots_path, SLOT, ACCOUNTS, now=NOW)
         assert result == {
             "ok": False,
             "reason": pl.REASON_RECORD_UNREADABLE,

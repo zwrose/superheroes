@@ -70,6 +70,20 @@ class PilotLifecycleError(Exception):
         super().__init__(reason)
 
 
+def _is_member(value, members):
+    """True only when value is a str AND a member. Never raises on unhashable input."""
+    return isinstance(value, str) and value in members
+
+
+def _is_str_path(value):
+    """True only for str paths accepted by this module."""
+    return isinstance(value, str)
+
+
+def _is_timeout(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def _is_iso8601_utc(value):
     if not isinstance(value, str) or not value:
         return False
@@ -100,12 +114,10 @@ def _validate_history_entry(entry):
     if not _is_iso8601_utc(at):
         raise PilotLifecycleError(REASON_RECORD_INVALID)
     from_state = entry.get("from")
-    if from_state is not None and (
-        not isinstance(from_state, str) or from_state not in SLOT_STATES
-    ):
+    if from_state is not None and not _is_member(from_state, SLOT_STATES):
         raise PilotLifecycleError(REASON_RECORD_INVALID)
     to_state = entry.get("to")
-    if not isinstance(to_state, str) or to_state not in SLOT_STATES:
+    if not _is_member(to_state, SLOT_STATES):
         raise PilotLifecycleError(REASON_RECORD_INVALID)
     pilot_slot.validate_generation(entry.get("generation"))
     if "detail" in entry:
@@ -143,7 +155,7 @@ def _validate_record(record):
     slot = pilot_slot.validate_slot_id(record.get("slot"))
     generation = pilot_slot.validate_generation(record.get("generation"))
     state = record.get("state")
-    if not isinstance(state, str) or state not in SLOT_STATES:
+    if not _is_member(state, SLOT_STATES):
         raise PilotLifecycleError(REASON_RECORD_INVALID)
     _validate_accounts(record.get("accounts"))
     created_at = record.get("createdAt")
@@ -182,6 +194,8 @@ def new_record(slot, accounts, *, now):
     slot = pilot_slot.validate_slot_id(slot)
     if not _is_iso8601_utc(now):
         raise PilotLifecycleError(REASON_RECORD_INVALID)
+    if not isinstance(accounts, list):
+        raise PilotLifecycleError(REASON_RECORD_INVALID)
     account_set = pilot_slot.slot_account_set(slot, INITIAL_GENERATION, accounts)
     return {
         "schemaVersion": SCHEMA,
@@ -205,7 +219,7 @@ def transition(record, to, *, now, detail=None):
     if not _is_iso8601_utc(now):
         raise PilotLifecycleError(REASON_RECORD_INVALID)
     _, generation, from_state = _validate_record(record)
-    if to not in SLOT_STATES:
+    if not _is_member(to, SLOT_STATES):
         raise PilotLifecycleError(REASON_STATE_INVALID)
     if from_state == STATE_RETIRED:
         raise PilotLifecycleError(REASON_RETIRED)
@@ -215,7 +229,7 @@ def transition(record, to, *, now, detail=None):
     # must go through begin_generation() so each attempt gets a unique slot@generation.
     if from_state == STATE_RELEASED and to == STATE_PROVISIONING:
         raise PilotLifecycleError(REASON_GENERATION_ALLOCATION_REQUIRED)
-    if to not in TRANSITIONS.get(from_state, frozenset()):
+    if not _is_member(to, TRANSITIONS.get(from_state, frozenset())):
         raise PilotLifecycleError(REASON_TRANSITION_ILLEGAL)
     if detail is not None and (not isinstance(detail, dict) or not detail):
         raise PilotLifecycleError(REASON_RECORD_INVALID)
@@ -268,7 +282,7 @@ def slot_ref(record):
 
 def provisioning_outcome(state):
     """Map a slot state to the partial-failure report outcome vocabulary."""
-    if state not in SLOT_STATES:
+    if not _is_member(state, SLOT_STATES):
         raise PilotLifecycleError(REASON_STATE_INVALID)
     if state in (STATE_PROVISIONED, STATE_OCCUPIED, STATE_RELEASED):
         return "provisioned"
@@ -279,16 +293,27 @@ def provisioning_outcome(state):
 
 def slots_dir(cwd, root=None):
     """``<state_dir>/pilot-slots`` for the resolved test-pilot store entry."""
-    resolved = store.resolve(cwd, root or store.store_root())
+    if not _is_str_path(cwd):
+        raise PilotLifecycleError(REASON_RECORD_INVALID)
+    if root is not None and not _is_str_path(root):
+        raise PilotLifecycleError(REASON_RECORD_INVALID)
+    try:
+        resolved = store.resolve(cwd, root or store.store_root())
+    except OSError:
+        raise PilotLifecycleError(REASON_RECORD_INVALID)
     return os.path.join(resolved["state_dir"], "pilot-slots")
 
 
 def record_path(slots_dir_path, slot):
+    if not _is_str_path(slots_dir_path):
+        raise PilotLifecycleError(REASON_RECORD_INVALID)
     slot = pilot_slot.validate_slot_id(slot)
     return os.path.join(slots_dir_path, slot, "slot.json")
 
 
 def lock_path(slots_dir_path, slot):
+    if not _is_str_path(slots_dir_path):
+        raise PilotLifecycleError(REASON_RECORD_INVALID)
     slot = pilot_slot.validate_slot_id(slot)
     return os.path.join(slots_dir_path, slot, ".slot.lock")
 
@@ -320,42 +345,66 @@ def _refuse_unsafe_slot_dir(slot_dir):
 @contextlib.contextmanager
 def slot_lock(slots_dir_path, slot, *, timeout=30.0, poll=0.05):
     """Exclusive advisory flock on the per-slot lock file."""
+    if not _is_str_path(slots_dir_path):
+        raise PilotLifecycleError(REASON_LOCK_UNAVAILABLE)
+    if not _is_timeout(timeout) or not _is_timeout(poll):
+        raise PilotLifecycleError(REASON_LOCK_UNAVAILABLE)
     slot = pilot_slot.validate_slot_id(slot)
     lock_file = lock_path(slots_dir_path, slot)
     slot_dir = _slot_dir_path(slots_dir_path, slot)
     _refuse_unsafe_slot_dir(slot_dir)
-    os.makedirs(slot_dir, exist_ok=True)
-    if os.path.islink(lock_file):
-        raise PilotLifecycleError(REASON_SLOT_DIR_UNSAFE)
-    fd = os.open(lock_file, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o644)
-    lock_stat = os.fstat(fd)
-    if not stat.S_ISREG(lock_stat.st_mode):
-        os.close(fd)
-        raise PilotLifecycleError(REASON_SLOT_DIR_UNSAFE)
-    acquired = False
-    deadline = time.monotonic() + timeout
     try:
-        while True:
+        os.makedirs(slot_dir, exist_ok=True)
+        parent_dir = os.path.dirname(slot_dir)
+        if parent_dir:
+            parent_fd = os.open(parent_dir, os.O_RDONLY)
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                acquired = True
-                break
-            except OSError:
-                if time.monotonic() >= deadline:
-                    raise PilotLifecycleError(REASON_LOCK_UNAVAILABLE)
-                time.sleep(poll)
-        yield
-    finally:
-        if acquired:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-            except OSError:
-                pass
-        os.close(fd)
+                os.fsync(parent_fd)
+            finally:
+                os.close(parent_fd)
+        if os.path.islink(lock_file):
+            raise PilotLifecycleError(REASON_SLOT_DIR_UNSAFE)
+        if os.path.lexists(lock_file):
+            if os.path.isdir(lock_file):
+                raise PilotLifecycleError(REASON_SLOT_DIR_UNSAFE)
+            lock_stat = os.stat(lock_file, follow_symlinks=False)
+            if stat.S_ISSOCK(lock_stat.st_mode):
+                raise PilotLifecycleError(REASON_SLOT_DIR_UNSAFE)
+        fd = os.open(lock_file, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o644)
+        lock_stat = os.fstat(fd)
+        if not stat.S_ISREG(lock_stat.st_mode):
+            os.close(fd)
+            raise PilotLifecycleError(REASON_SLOT_DIR_UNSAFE)
+        acquired = False
+        deadline = time.monotonic() + timeout
+        try:
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise PilotLifecycleError(REASON_LOCK_UNAVAILABLE)
+                    time.sleep(poll)
+            yield
+        finally:
+            if acquired:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                except OSError:
+                    pass
+            os.close(fd)
+    except PilotLifecycleError:
+        raise
+    except OSError:
+        raise PilotLifecycleError(REASON_LOCK_UNAVAILABLE)
 
 
 def read_record(path):
     """Load and validate a slot record. Never raises."""
+    if not _is_str_path(path):
+        return {"ok": False, "reason": REASON_RECORD_UNREADABLE, "record": None}
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
@@ -394,6 +443,8 @@ def read_record(path):
 
 def write_record(path, record):
     """Durably persist a validated slot record. Never raises."""
+    if not _is_str_path(path):
+        return {"ok": False, "reason": REASON_RECORD_WRITE_FAILED}
     try:
         _validate_record(record)
     except (PilotLifecycleError, pilot_slot.PilotSlotError):
@@ -421,6 +472,10 @@ def write_record(path, record):
 
 def mutate(slots_dir_path, slot, fn, *, timeout=30.0):
     """Serialized read-modify-write under the per-slot advisory lock."""
+    if not _is_str_path(slots_dir_path):
+        return {"ok": False, "reason": REASON_LOCK_UNAVAILABLE, "record": None}
+    if not _is_timeout(timeout):
+        return {"ok": False, "reason": REASON_LOCK_UNAVAILABLE, "record": None}
     try:
         with slot_lock(slots_dir_path, slot, timeout=timeout):
             path = record_path(slots_dir_path, slot)
@@ -439,12 +494,17 @@ def mutate(slots_dir_path, slot, fn, *, timeout=30.0):
                 return {"ok": False, "reason": exc.reason, "record": None}
             except Exception:
                 return {"ok": False, "reason": REASON_MUTATION_FAILED, "record": None}
-            if new_record.get("slot") != slot:
-                return {
-                    "ok": False,
-                    "reason": REASON_RECORD_SLOT_MISMATCH,
-                    "record": None,
-                }
+            if not isinstance(new_record, dict):
+                return {"ok": False, "reason": REASON_RECORD_INVALID, "record": None}
+            try:
+                if new_record.get("slot") != slot:
+                    return {
+                        "ok": False,
+                        "reason": REASON_RECORD_SLOT_MISMATCH,
+                        "record": None,
+                    }
+            except Exception:
+                return {"ok": False, "reason": REASON_MUTATION_FAILED, "record": None}
             written = write_record(path, new_record)
             if not written["ok"]:
                 return {"ok": False, "reason": written["reason"], "record": None}
@@ -457,6 +517,10 @@ def mutate(slots_dir_path, slot, fn, *, timeout=30.0):
 
 def create_slot(slots_dir_path, slot, accounts, *, now, timeout=30.0):
     """Create a slot's first record under the per-slot lock. Refuses if one exists."""
+    if not _is_str_path(slots_dir_path):
+        return {"ok": False, "reason": REASON_LOCK_UNAVAILABLE, "record": None}
+    if not _is_timeout(timeout):
+        return {"ok": False, "reason": REASON_LOCK_UNAVAILABLE, "record": None}
     try:
         with slot_lock(slots_dir_path, slot, timeout=timeout):
             path = record_path(slots_dir_path, slot)
