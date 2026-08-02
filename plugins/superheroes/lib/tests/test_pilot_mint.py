@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -532,27 +533,69 @@ def test_gate_off_invalid_bounds(private_tmp):
 
 
 def test_gate_off_grandchild_timeout_reaps_process_group(private_tmp):
+    pid_file = os.path.join(private_tmp, "grandchild.pid")
     envelope = dict(SAMPLE_ENVELOPE)
     envelope["gateOffTestCommand"] = [
         sys.executable, "-c",
         "import os, signal, subprocess, sys; "
+        "pid_path = sys.argv[1]; "
         "subprocess.Popen([sys.executable, '-c', "
-        "'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-        "time.sleep(30)'], stdout=sys.stdout); "
+        "'import os, signal, sys, time; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        "open(sys.argv[1], \"w\").write(str(os.getpid())); "
+        "time.sleep(120)', "
+        "pid_path], stdout=sys.stdout); "
         "os._exit(0)",
+        pid_file,
     ]
-    result = pm.run_gate_off_test(
-        envelope,
-        run_cwd=private_tmp,
-        environment={},
-        timeout_seconds=1,
-    )
-    assert result["reason"] == pm.REFUSAL_GATE_OFF_TIMEOUT
-    time.sleep(0.3)
-    assert subprocess.run(
-        ["pgrep", "-f", "time.sleep(30)"],
-        capture_output=True,
-    ).returncode != 0
+    gpid = None
+    result_holder = {}
+    try:
+        def _run_gate_off():
+            result_holder["result"] = pm.run_gate_off_test(
+                envelope,
+                run_cwd=private_tmp,
+                environment={},
+                timeout_seconds=2,
+            )
+
+        runner = threading.Thread(target=_run_gate_off)
+        runner.start()
+
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if os.path.isfile(pid_file):
+                with open(pid_file) as f:
+                    gpid = int(f.read().strip())
+                break
+            time.sleep(0.02)
+        else:
+            pytest.fail("grandchild never started: pid file never appeared")
+
+        runner.join(timeout=10)
+        assert runner.is_alive() is False, "run_gate_off_test did not finish"
+        result = result_holder["result"]
+        assert result["reason"] == pm.REFUSAL_GATE_OFF_TIMEOUT
+
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            try:
+                os.kill(gpid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            pytest.fail(
+                "grandchild pid %d still alive after gate-off timeout reap" % gpid
+            )
+    finally:
+        if gpid is not None:
+            try:
+                os.kill(gpid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if os.path.isfile(pid_file):
+            os.remove(pid_file)
 
 
 def test_gate_off_receipt_pass_requires_exit_code_zero():
