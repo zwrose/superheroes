@@ -1407,6 +1407,8 @@ def test_cleanup_effect_receipt_pass(private_tmp):
 
 def test_receipt_valid_for_happy_path(private_tmp):
     receipt, ctx = _run_receipt(private_tmp, _cleanup_correct_script())
+    assert pc._digest_hex_valid(receipt["commandDigest"])
+    assert pc._digest_hex_valid(receipt["configDigest"])
     result = pc.receipt_valid_for(
         receipt,
         ctx["policy"],
@@ -2625,6 +2627,39 @@ def test_run_bounded_kills_orphan_grandchild_when_leader_exits_first(private_tmp
         os.kill(pid, 0)
 
 
+def test_run_bounded_kills_sigterm_ignoring_orphan_grandchild_when_leader_exits_first(
+    private_tmp,
+):
+    _, run_cwd, bin_dir = _confinement_layout(private_tmp)
+    pid_file = os.path.join(private_tmp, "grandchild.pid")
+    script = os.path.join(bin_dir, "spawn.sh")
+    _write_executable(
+        script,
+        "#!/bin/sh\n"
+        "trap '' TERM\n"
+        "("
+        "trap '' TERM; "
+        "/bin/sleep 60 >&1 & "
+        "echo $! > '%s'"
+        ") &\n"
+        "exit 0\n" % pid_file,
+    )
+    started = time.monotonic()
+    result = pc.run_bounded(
+        [script],
+        cwd=run_cwd,
+        env={},
+        timeout_seconds=1,
+    )
+    elapsed = time.monotonic() - started
+    assert result["timedOut"] is True
+    assert elapsed < 5
+    with open(pid_file, encoding="utf-8") as handle:
+        pid = int(handle.read().strip())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
 # --- WO8 FIX-1: partial plant failure ------------------------------------------
 
 def test_cleanup_effect_receipt_partial_plant_failure(private_tmp):
@@ -2899,6 +2934,7 @@ def test_cleanup_effect_receipt_no_foreign_guard_refuses_material(private_tmp):
         pytest.param(["digest"], id="list"),
         pytest.param("", id="empty"),
         pytest.param("é" * 64, id="non_ascii"),
+        pytest.param("\u0660" * 64, id="arabic_indic_digits"),
         pytest.param("a" * 63, id="short_hex"),
         pytest.param("A" * 64, id="uppercase_hex"),
         pytest.param("g" * 64, id="non_hex"),

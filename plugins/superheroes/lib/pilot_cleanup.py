@@ -87,6 +87,7 @@ _PLACEHOLDER_RE = re.compile(r"\{[^{}]*\}")
 _SENTINEL_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _HEAD_RE = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
 _SHA256_HEX_LEN = 64
+_DIGEST_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
 _SENTINEL_KEYS = frozenset({"plantCommand", "probeCommand", "connectionEnvVar"})
 
@@ -1084,15 +1085,7 @@ def cleanup_effect_receipt(
 def _digest_hex_valid(value):
     if not isinstance(value, str):
         return False
-    if len(value) != _SHA256_HEX_LEN:
-        return False
-    if value != value.lower():
-        return False
-    try:
-        int(value, 16)
-    except ValueError:
-        return False
-    return True
+    return _DIGEST_HEX_RE.fullmatch(value) is not None
 
 
 def _receipt_schema_valid(receipt):
@@ -1442,22 +1435,38 @@ def _terminate_and_wait(proc, pgid, *, signal_group=False):
             return None
         return pgid
 
+    def _group_has_members(target):
+        try:
+            os.killpg(target, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return False
+
+    def _signal_group_term_then_kill(target):
+        try:
+            os.killpg(target, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            return
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
+        if _group_has_members(target):
+            try:
+                os.killpg(target, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
+
     target_pgid = _valid_target_pgid()
     if signal_group and target_pgid is not None:
-        try:
-            os.killpg(target_pgid, signal.SIGTERM)
-            try:
-                proc.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(target_pgid, signal.SIGKILL)
-                except (ProcessLookupError, PermissionError):
-                    pass
-                proc.wait()
-        except (ProcessLookupError, PermissionError):
-            pass
-        else:
-            return
+        _signal_group_term_then_kill(target_pgid)
+        return
 
     if proc.poll() is not None:
         return

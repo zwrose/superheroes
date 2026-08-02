@@ -1092,12 +1092,14 @@ present), `refuse` (declaration unexercised, containment unresolved, or verdict 
 
 The harness plants foreign sentinels it cannot remove — there is no remove command, and running
 the project cleanup against a sibling namespace to tidy up would be the exact destruction the
-exercise prevents — so the receipt records them under `residualSentinels` for the advisor. Each
-entry carries the foreign `namespace`, the planted `sentinelId`, and a `state` of `planted` when
-the plant command completed successfully or `possibly-planted` when the plant may or may not have
-written (a mid-command failure or timeout leaves the honest `possibly-planted` state) so the
-advisor can locate and remove residue without guessing which unpredictable id was minted for
-that namespace.
+exercise prevents — so the receipt records them under `residualSentinels` for the advisor. On a
+successful exercise, residual entries name the **foreign** namespaces whose sentinels were
+planted and not removed. On a **plant failure**, an entry may also name the **own** namespace,
+marked `possibly-planted`, meaning the plant may or may not have written before failing. Each
+entry carries the `namespace`, the planted `sentinelId`, and a `state` of `planted` when the plant
+command completed successfully or `possibly-planted` when the plant may or may not have written (a
+mid-command failure or timeout leaves the honest `possibly-planted` state) so the advisor can
+locate and remove residue without guessing which unpredictable id was minted for that namespace.
 
 ### Declare-and-exercise binding
 
