@@ -8,7 +8,7 @@ import hmac
 import os
 import stat
 
-from store import SLOT_RE
+import pilot_slot
 
 CAPTURE_SURFACES = frozenset({"cookies", "localStorage", "indexedDB", "webauthn"})
 REFUSED_CAPTURE_SURFACES = frozenset({"sessionStorage"})
@@ -24,6 +24,7 @@ REFUSAL_ACCOUNT_INVALID = "seed-account-invalid"
 REFUSAL_CONTEXT_OPTIONS_INVALID = "seed-context-options-invalid"
 REFUSAL_VERIFY_ARGUMENT_INVALID = "seed-verify-argument-invalid"
 
+REFUSAL_ARTIFACT_PATH_TRAVERSAL = "artifact-path-traversal"
 REFUSAL_ARTIFACT_SYMLINK = "artifact-symlink-in-path"
 REFUSAL_ARTIFACT_MISSING = "artifact-missing"
 REFUSAL_ARTIFACT_NOT_REGULAR = "artifact-not-regular-file"
@@ -75,6 +76,8 @@ def required_context_options(capture_surfaces):
 def verify_artifact(path, *, expected_uid, expected_mode, recorded_sha256):
     """Verify artifact integrity at seed time; returns ok/reason dict (never raises on artifact)."""
     _validate_verify_arguments(expected_uid, expected_mode, recorded_sha256)
+    if _path_has_traversal_component(path):
+        return _refusal(REFUSAL_ARTIFACT_PATH_TRAVERSAL)
     try:
         for ancestor in _ancestors_including_self(path):
             if os.path.islink(ancestor):
@@ -103,7 +106,9 @@ def verify_artifact(path, *, expected_uid, expected_mode, recorded_sha256):
 
 def seed_request(slot_ref, account, artifact, context_options):
     """Build a seed request descriptor after local validation and artifact verification."""
-    if not _is_valid_slot_ref(slot_ref):
+    try:
+        pilot_slot.parse_slot_ref(slot_ref)
+    except pilot_slot.PilotSlotError:
         raise PilotSeedError(REFUSAL_SLOT_REF_INVALID)
     if not isinstance(account, str) or not account:
         raise PilotSeedError(REFUSAL_ACCOUNT_INVALID)
@@ -170,21 +175,6 @@ def _is_non_string_sequence(value):
     return True
 
 
-def _is_valid_slot_ref(slot_ref):
-    if not isinstance(slot_ref, str) or slot_ref.count("@") != 1:
-        return False
-    slot, generation = slot_ref.rsplit("@", 1)
-    if not SLOT_RE.match(slot):
-        return False
-    if not generation.isdigit():
-        return False
-    if len(generation) > 1 and generation[0] == "0":
-        return False
-    if int(generation) < 1:
-        return False
-    return True
-
-
 def _is_valid_context_options(context_options):
     if not isinstance(context_options, dict):
         return False
@@ -237,12 +227,21 @@ def _enabling_flag_env_var(envelope):
     return flag_var
 
 
+def _absolute_path_without_normpath(path):
+    if os.path.isabs(path):
+        return path
+    return os.path.join(os.getcwd(), path)
+
+
+def _path_has_traversal_component(path):
+    absolute = _absolute_path_without_normpath(path)
+    return ".." in absolute.split(os.sep)
+
+
 def _ancestors_including_self(path):
-    normalized = os.path.normpath(path)
-    if not os.path.isabs(normalized):
-        normalized = os.path.normpath(os.path.join(os.getcwd(), normalized))
+    absolute = _absolute_path_without_normpath(path)
     ancestors = []
-    current = normalized
+    current = absolute
     while True:
         ancestors.append(current)
         parent = os.path.dirname(current)

@@ -11,6 +11,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import pilot_seed as ps  # noqa: E402
+import pilot_slot  # noqa: E402
 
 
 def _write_artifact(path, content=b"artifact-bytes", mode=0o600):
@@ -261,6 +262,60 @@ def test_verify_artifact_refuses_expected_mode_out_of_range(tmp_path):
     assert exc.value.reason == ps.REFUSAL_VERIFY_ARGUMENT_INVALID
 
 
+def test_verify_artifact_refuses_path_with_traversal_component(tmp_path):
+    result = ps.verify_artifact(
+        str(tmp_path / ".." / "other" / "artifact.json"),
+        expected_uid=os.getuid(),
+        expected_mode=0o600,
+        recorded_sha256="a" * 64,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == ps.REFUSAL_ARTIFACT_PATH_TRAVERSAL
+
+
+def test_verify_artifact_refuses_absolute_path_with_traversal_component(tmp_path):
+    result = ps.verify_artifact(
+        str(tmp_path / "sub" / ".." / "artifact.json"),
+        expected_uid=os.getuid(),
+        expected_mode=0o600,
+        recorded_sha256="a" * 64,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == ps.REFUSAL_ARTIFACT_PATH_TRAVERSAL
+
+
+def test_verify_artifact_allows_literal_three_dot_component(tmp_path):
+    triple_dot = tmp_path / "..."
+    triple_dot.mkdir()
+    artifact = triple_dot / "artifact.json"
+    digest = _write_artifact(artifact)
+    result = ps.verify_artifact(
+        str(artifact),
+        expected_uid=os.getuid(),
+        expected_mode=0o600,
+        recorded_sha256=digest,
+    )
+    assert result == {"ok": True, "reason": None, "sha256": digest}
+
+
+def test_verify_artifact_refuses_symlink_hidden_by_traversal(tmp_path):
+    artifact = tmp_path / "artifact.json"
+    digest = _write_artifact(artifact)
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real_dir)
+    traversal_path = str(tmp_path / "link" / ".." / "artifact.json")
+    result = ps.verify_artifact(
+        traversal_path,
+        expected_uid=os.getuid(),
+        expected_mode=0o600,
+        recorded_sha256=digest,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == ps.REFUSAL_ARTIFACT_PATH_TRAVERSAL
+
+
 # --- seed_request ---------------------------------------------------------------
 
 def test_seed_request_success(tmp_path):
@@ -296,6 +351,48 @@ def test_seed_request_refuses_slot_at_zero_generation():
 def test_seed_request_refuses_slot_with_leading_zero_generation():
     with pytest.raises(ps.PilotSeedError) as exc:
         ps.seed_request("slot@01", "owner", {}, {"indexedDB": False, "credentials": False})
+    assert exc.value.reason == ps.REFUSAL_SLOT_REF_INVALID
+
+
+def test_seed_request_refuses_arabic_indic_digit_generation(tmp_path):
+    artifact_path = tmp_path / "seed.bin"
+    digest = _write_artifact(artifact_path)
+    with pytest.raises(ps.PilotSeedError) as exc:
+        ps.seed_request(
+            "slotA@\u0663",
+            "owner",
+            _artifact_dict(artifact_path, sha256=digest),
+            {"indexedDB": False, "credentials": False},
+        )
+    assert exc.value.reason == ps.REFUSAL_SLOT_REF_INVALID
+
+
+def test_seed_request_agrees_with_pilot_slot_on_malformed_refs(tmp_path):
+    artifact_path = tmp_path / "seed.bin"
+    digest = _write_artifact(artifact_path)
+    artifact = _artifact_dict(artifact_path, sha256=digest)
+    context_options = {"indexedDB": False, "credentials": False}
+    malformed_refs = [
+        "slot",
+        "slot@0",
+        "slot@01",
+        "slot@+3",
+        "slot@\u0663",
+        "a@b@c",
+        "@3",
+        "slot@",
+    ]
+    for ref in malformed_refs:
+        with pytest.raises(pilot_slot.PilotSlotError):
+            pilot_slot.parse_slot_ref(ref)
+        with pytest.raises(ps.PilotSeedError) as exc:
+            ps.seed_request(ref, "owner", artifact, context_options)
+        assert exc.value.reason == ps.REFUSAL_SLOT_REF_INVALID
+
+
+def test_seed_request_refuses_non_string_slot_ref():
+    with pytest.raises(ps.PilotSeedError) as exc:
+        ps.seed_request(42, "owner", {}, {"indexedDB": False, "credentials": False})
     assert exc.value.reason == ps.REFUSAL_SLOT_REF_INVALID
 
 

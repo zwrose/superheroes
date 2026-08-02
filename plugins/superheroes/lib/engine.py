@@ -14,6 +14,7 @@ import time
 
 import blocks
 import file_lock as lock
+import pilot_contract
 import state
 import store
 import store_core
@@ -193,6 +194,14 @@ def load_profile_config(profile_path):
     except json.JSONDecodeError as exc:
         raise EngineError(
             f"profile config block in {profile_path} is invalid JSON: {exc}"
+        ) from exc
+    try:
+        pilot_contract.validate_config(cfg)
+    except pilot_contract.PilotContractError as exc:
+        raise EngineError(
+            f"profile {profile_path}: pilot contract refusal {exc.reason} "
+            f"at {exc.path}",
+            pilotRefusal=exc.reason,
         ) from exc
     return cfg
 

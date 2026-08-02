@@ -207,3 +207,42 @@ def test_matcher_exempts_no_session_dict_key():
     path = os.path.join(_LIB, "fake_consumer.py")
     violations = census_violations_from_source(source, path)
     assert violations == [], violations
+
+
+_PILOT_CONTRACT = os.path.join(
+    os.path.dirname(_LIB), "reference", "pilot-contract.md"
+)
+_PROFILE_TEMPLATE = os.path.join(
+    os.path.dirname(_LIB), "templates", "profile.md"
+)
+
+
+def test_pilot_contract_names_every_probe_token():
+    """axis: every probe member is actually named in pilot-contract.md — presence, not mere existence."""
+    with open(_PILOT_CONTRACT, encoding="utf-8") as fh:
+        doc = fh.read()
+    missing = [
+        reason for reason in sorted(pilot_probe.ALL_PROBE_REASONS)
+        if reason not in doc
+    ]
+    assert missing == [], (
+        "pilot-contract.md missing probe token(s): %s (file: %s)"
+        % (", ".join(missing), _PILOT_CONTRACT)
+    )
+
+
+def test_profile_template_unseeded_expectation_is_probe_token():
+    import re
+
+    with open(_PROFILE_TEMPLATE, encoding="utf-8") as fh:
+        doc = fh.read()
+    match = re.search(r'"unseededExpectation"\s*:\s*"([^"]+)"', doc)
+    if match is None:
+        raise AssertionError(
+            "profile.md has no unseededExpectation example (file: %s)" % _PROFILE_TEMPLATE
+        )
+    token = match.group(1)
+    assert token in pilot_probe.ALL_PROBE_REASONS, (
+        "profile.md unseededExpectation %r is not a probe token (file: %s)"
+        % (token, _PROFILE_TEMPLATE)
+    )
