@@ -12,6 +12,28 @@ import launch_ledger as ll
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
 _LAUNCHER_MOD = os.path.join(_LIB, "launcher.py")
+_THIS_FILE = os.path.abspath(__file__)
+
+
+@pytest.fixture(autouse=True)
+def _pin_heartbeat_env(monkeypatch):
+    """#843: these tests build their own ledger/heartbeat roots under tmp_path, but any test
+    reaching `resolve_root` with the ambient process env inherits whatever the *session* was
+    launched with. `launcher.py` exports SUPERHEROES_HEARTBEAT_ROOT (and SUPERHEROES_LAUNCH_ID)
+    into every builder it spawns, so in a launcher-issued session the ambient override wins over
+    the tmp root: the e2e test's sweep read the real launch ledger instead of its own root and
+    classified the child's stamp `unknown` — six independent field receipts in one night, while
+    CI (which sets neither var) stayed green.
+
+    Same class as conftest's `_isolate_store_root`: pin the env so the module is hermetic
+    wherever it runs. Deleting rather than redirecting is deliberate — each test already
+    establishes its own root via SUPERHEROES_LAUNCH_LEDGER_ROOT or its own
+    SUPERHEROES_HEARTBEAT_ROOT, and a test that sets either still wins (it applies after this
+    fixture). Stripping the ambient value also stops these tests writing heartbeat files for
+    throwaway tmp repos into the developer's real launch-ledger root.
+    """
+    monkeypatch.delenv(hb.HEARTBEAT_ROOT_ENV, raising=False)
+    monkeypatch.delenv(hb.LAUNCH_ID_ENV, raising=False)
 
 
 def _init_repo(tmp_path):
@@ -653,6 +675,30 @@ def test_e2e_child_stamp_visible_from_primary_checkout(tmp_path, monkeypatch):
     entry = next(e for e in sweep_result["launches"] if e["launchId"] == launch_id)
     assert entry["class"] == "fresh"
     assert entry["phase"] == "child-dispatch"
+
+
+def test_e2e_survives_ambient_launcher_env(tmp_path):
+    """#843 guard: re-run the e2e test in a child pytest carrying the env a launcher-issued
+    session exports. Without `_pin_heartbeat_env` the ambient SUPERHEROES_HEARTBEAT_ROOT
+    redirects the sweep away from the test's own root and the child run fails. CI sets neither
+    var, so this subprocess is what makes the regression visible there rather than only in a
+    real launcher session.
+    """
+    decoy = tmp_path / "decoy-heartbeat-root"
+    decoy.mkdir(mode=0o700)
+    child_env = dict(os.environ)
+    child_env[hb.HEARTBEAT_ROOT_ENV] = str(decoy)
+    child_env[hb.LAUNCH_ID_ENV] = "ambient-launch"
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+            "%s::test_e2e_child_stamp_visible_from_primary_checkout" % _THIS_FILE,
+        ],
+        capture_output=True,
+        text=True,
+        env=child_env,
+    )
+    assert proc.returncode == 0, proc.stdout[-4000:] + proc.stderr[-2000:]
 
 
 # --- CLI smoke ----------------------------------------------------------------
