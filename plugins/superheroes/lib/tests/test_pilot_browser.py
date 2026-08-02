@@ -282,13 +282,14 @@ def test_teardown_server_journals_not_applied_on_socket_dir_removal_failure():
 
 def test_teardown_server_journals_indeterminate_on_partial_socket_dir_removal():
     # bite-axis: partial socket-dir cleanup — journal replays as possibly-applied.
+    # Removable 00-removable.txt must be processed before blocked 99-nested/ (sorted order).
     tmp = _tmp_dir()
     journal = os.path.join(tmp, "journal.jsonl")
     sock_dir = os.path.join(tmp, "pb-partial")
     os.makedirs(sock_dir)
-    with open(os.path.join(sock_dir, "first.txt"), "w", encoding="utf-8") as fh:
+    with open(os.path.join(sock_dir, "00-removable.txt"), "w", encoding="utf-8") as fh:
         fh.write("a")
-    nested = os.path.join(sock_dir, "nested")
+    nested = os.path.join(sock_dir, "99-nested")
     os.makedirs(nested)
     with open(os.path.join(nested, "inner.txt"), "w", encoding="utf-8") as fh:
         fh.write("b")
@@ -307,8 +308,42 @@ def test_teardown_server_journals_indeterminate_on_partial_socket_dir_removal():
         torn = [e for e in replayed["effects"] if e["kind"] == pj.KIND_BROWSER_SERVER_TORN_DOWN]
         assert len(torn) == 1
         assert torn[0]["state"] == pj.STATE_POSSIBLY_APPLIED
-        assert not os.path.exists(os.path.join(sock_dir, "first.txt"))
+        assert not os.path.exists(os.path.join(sock_dir, "00-removable.txt"))
         assert os.path.isdir(nested)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_teardown_server_journals_not_applied_when_blocked_entry_sorts_first():
+    # bite-axis: partial socket-dir cleanup — blocked entry before any removal → not-applied.
+    # 00-blocked/ is encountered first (sorted order); nothing is mutated on disk.
+    tmp = _tmp_dir()
+    journal = os.path.join(tmp, "journal.jsonl")
+    sock_dir = os.path.join(tmp, "pb-blocked-first")
+    os.makedirs(sock_dir)
+    blocked = os.path.join(sock_dir, "00-blocked")
+    os.makedirs(blocked)
+    with open(os.path.join(blocked, "inner.txt"), "w", encoding="utf-8") as fh:
+        fh.write("b")
+    with open(os.path.join(sock_dir, "99-removable.txt"), "w", encoding="utf-8") as fh:
+        fh.write("a")
+    record = _server_record(socketDir=sock_dir)
+    try:
+        result = pb.teardown_server(
+            journal,
+            server_record=record,
+            torn_down_at=LATER,
+            begin_at=NOW,
+            observe_exit=_both_exited_observer(),
+        )
+        assert result["ok"] is False
+        assert result["reason"] == pb.REFUSAL_SOCKET_DIR_UNREMOVABLE
+        replayed = pj.replay(journal)
+        torn = [e for e in replayed["effects"] if e["kind"] == pj.KIND_BROWSER_SERVER_TORN_DOWN]
+        assert len(torn) == 1
+        assert torn[0]["state"] == pj.STATE_NOT_APPLIED
+        assert os.path.isfile(os.path.join(sock_dir, "99-removable.txt"))
+        assert os.path.isdir(blocked)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

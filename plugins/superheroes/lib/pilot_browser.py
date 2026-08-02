@@ -487,7 +487,7 @@ def _remove_socket_dir_entry(dir_path, name):
         return True
     if stat.S_ISDIR(st.st_mode):
         try:
-            sub_entries = os.listdir(entry_path)
+            sub_entries = sorted(os.listdir(entry_path))
         except OSError:
             return False
         if sub_entries:
@@ -512,7 +512,7 @@ def remove_socket_dir(path):
     if not basename.startswith(_SOCKET_DIR_PREFIX):
         return _fail(REFUSAL_SOCKET_DIR_UNRECOGNIZED)
     try:
-        entries = os.listdir(path)
+        entries = sorted(os.listdir(path))
     except OSError:
         return _fail(REFUSAL_SOCKET_DIR_UNREMOVABLE)
     removed_any = False
