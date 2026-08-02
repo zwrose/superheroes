@@ -241,6 +241,80 @@ def test_check_redirect_never_raises_on_malformed_url(url):
     assert result["reason"] == pb.REFUSAL_ORIGIN_INVALID
 
 
+# --- check_protected_identity -------------------------------------------------
+
+def test_check_protected_identity_refuses_protected_target():
+    binding = _binding(protected_targets=["example_prod"])
+    result = pb.check_protected_identity(binding, "example_prod")
+    assert result == {"ok": False, "reason": pb.REFUSAL_PROTECTED_TARGET}
+
+
+def test_check_protected_identity_passes_non_protected():
+    binding = _binding(protected_targets=["example_prod"])
+    result = pb.check_protected_identity(binding, "example_dev")
+    assert result == {"ok": True, "reason": None}
+
+
+# --- check_datastore_identity -------------------------------------------------
+
+def _observation(identity, *, provenance="observed", strength="strong"):
+    return {
+        "identity": identity,
+        "provenance": provenance,
+        "strength": strength,
+    }
+
+
+@pytest.mark.parametrize("expected_identity", [None, "", 123])
+def test_check_datastore_identity_refuses_unavailable_expected_identity(expected_identity):
+    binding = _binding(protected_targets=["example_prod"])
+    observation = _observation("example_dev")
+    result = pb.check_datastore_identity(binding, observation, expected_identity)
+    assert result == {
+        "ok": False,
+        "reason": pb.REFUSAL_DATASTORE_IDENTITY_UNAVAILABLE,
+        "provenance": "observed",
+        "strength": "strong",
+        "match": False,
+    }
+
+
+def test_check_datastore_identity_protected_identity_precedes_unavailable_expected():
+    binding = _binding(protected_targets=["example_prod"])
+    observation = _observation(
+        "example_prod",
+        provenance="app-reported",
+        strength="weaker",
+    )
+    result = pb.check_datastore_identity(binding, observation, None)
+    assert result == {
+        "ok": False,
+        "reason": pb.REFUSAL_PROTECTED_TARGET,
+        "provenance": "app-reported",
+        "strength": "weaker",
+        "match": False,
+    }
+
+
+# --- app_reported_identity ----------------------------------------------------
+
+@pytest.mark.parametrize("value", [None, "", 123])
+def test_app_reported_identity_refuses_unavailable(value):
+    with pytest.raises(pb.PilotBoundaryError) as exc:
+        pb.app_reported_identity(value)
+    assert exc.value.reason == pb.REFUSAL_DATASTORE_IDENTITY_UNAVAILABLE
+
+
+def test_app_reported_identity_records_weaker_provenance():
+    result = pb.app_reported_identity("example_dev")
+    assert result == {
+        "identity": "example_dev",
+        "provenance": "app-reported",
+        "strength": "weaker",
+        "weaker": True,
+    }
+
+
 # --- observe_datastore_identity ------------------------------------------------
 
 def _observer_layout(private_tmp):
