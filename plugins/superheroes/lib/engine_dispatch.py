@@ -216,6 +216,9 @@ def _journal_state(records):
             state["abandoned"] = rec.get("detail")
             if isinstance(rec.get("result"), dict):
                 state["abandonedResult"] = rec["result"]
+        elif kind == "abandon-result-stored":
+            if isinstance(rec.get("result"), dict):
+                state["abandonedResult"] = rec["result"]
     return state
 
 
@@ -878,9 +881,14 @@ def _finish_preflight_terminal(
     return out
 
 
-def _abandon_terminal_result(run_dir_real, state):
-    """Terminal run-abandoned payload with fail-soft ledger receipt for idempotent re-reads."""
-    abandon_result = {
+_LEGACY_ABANDON_LOCK_LEDGER = {
+    "written": False, "path": None, "why": "legacy-abandon-lock-held",
+}
+_LEGACY_ABANDON_UPGRADE_RETRIES = 5
+
+
+def _abandon_result_without_ledger(state):
+    return {
         "ok": False,
         "terminal": True,
         "reason": dispatch_outcome.REASON_UNRUNNABLE,
@@ -888,16 +896,69 @@ def _abandon_terminal_result(run_dir_real, state):
         "attempts": len(state.get("attempts") or {}),
         "forfeited": False,
     }
+
+
+def _abandon_terminal_result(run_dir_real, state):
+    """Terminal run-abandoned payload with fail-soft ledger receipt for idempotent re-reads."""
+    abandon_result = _abandon_result_without_ledger(state)
     abandon_result["ledger"] = _append_fold_ledger(run_dir_real, state, abandon_result)
     return abandon_result
 
 
+def _upgrade_legacy_abandon_result(run_dir_real, state):
+    """Persist a legacy abandon result once under the run lock; deterministic when lock is busy."""
+    lock_path = os.path.join(run_dir_real, RUN_LOCK_NAME)
+    locked = False
+    for _ in range(_LEGACY_ABANDON_UPGRADE_RETRIES):
+        records, _ = _journal_read(run_dir_real)
+        state = _journal_state(records)
+        stored = state.get("abandonedResult")
+        if isinstance(stored, dict):
+            return dict(stored)
+        try:
+            file_lock.acquire(lock_path, ttl=RUN_LOCK_TTL)
+            locked = True
+            break
+        except file_lock.LockHeld:
+            time.sleep(SUPERVISOR_POLL_INTERVAL)
+    if not locked:
+        records, _ = _journal_read(run_dir_real)
+        state = _journal_state(records)
+        stored = state.get("abandonedResult")
+        if isinstance(stored, dict):
+            return dict(stored)
+        out = _abandon_result_without_ledger(state)
+        out["ledger"] = dict(_LEGACY_ABANDON_LOCK_LEDGER)
+        return out
+
+    try:
+        records, _ = _journal_read(run_dir_real)
+        state = _journal_state(records)
+        stored = state.get("abandonedResult")
+        if isinstance(stored, dict):
+            return dict(stored)
+        abandon_result = _abandon_terminal_result(run_dir_real, state)
+        _journal_append(run_dir_real, {
+            "kind": "abandon-result-stored",
+            "result": abandon_result,
+            "at": time.time(),
+        })
+        return abandon_result
+    finally:
+        if locked:
+            try:
+                file_lock.release(lock_path)
+            except Exception:
+                pass
+
+
 def _stored_abandon_result(run_dir_real, state):
-    """Return persisted abandon result when present; legacy records recompute once."""
+    """Return persisted abandon result; upgrade legacy records once under the run lock."""
     stored = state.get("abandonedResult")
     if isinstance(stored, dict):
         return dict(stored)
-    return _abandon_terminal_result(run_dir_real, state)
+    # axis: that repeat reads return the stored result — legacy records without abandonedResult.
+    return _upgrade_legacy_abandon_result(run_dir_real, state)
 
 
 def _terminate_run(run_dir_real, state, *, record_kind, result, abandon_detail=None):
@@ -2315,11 +2376,26 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
 
     ok, cwd_detail = _validate_linked_build_cwd(cwd, timeout=preflight_timeout)
     if not ok:
-        return _with_run_fields(
-            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": cwd_detail,
-             "attempts": 0, "forfeited": False, "terminal": True},
-            run_dir="", argv=[],
-        )
+        refusal = {
+            "ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": cwd_detail,
+            "attempts": 0, "forfeited": False, "terminal": True,
+        }
+        # axis: which entry points append — cwd-validation refusals with repo identity.
+        if cwd_detail in (
+            "cwd-absent", "cwd-missing", "cwd-not-a-directory",
+            "cwd-not-a-repo", "git-preflight-timeout",
+        ):
+            return _with_run_fields(refusal, run_dir="", argv=[])
+        try:
+            cwd_real = os.path.realpath((cwd or "").strip())
+        except OSError:
+            return _with_run_fields(refusal, run_dir="", argv=[])
+        repo_root = _repository_root_from_git_cwd(cwd_real, timeout=preflight_timeout)
+        if repo_root:
+            return _finish_preflight_terminal(
+                repo_root, refusal, engine=engine, run_kind=RUN_KIND_WRITE,
+            )
+        return _with_run_fields(refusal, run_dir="", argv=[])
     cwd_real = cwd_detail
     repo_root = _repository_root_from_git_cwd(cwd_real, timeout=preflight_timeout)
 
