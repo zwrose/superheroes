@@ -272,8 +272,9 @@ above).
      empty (the **workhorse** charter's §11 has the builder create it and governs what it must
      preserve on a body rewrite; that guarantee is prose with no mechanical check, so the backstop
      below is still yours). **The verdict plus a pointer to the receipt, and nothing else by
-     default:** consequence up, mechanism down — *an independent reader checked this, and this is
-     what they concluded* is the most merge-relevant single fact on the page. **One conditional:**
+     default:** consequence up, mechanism down — probes, accounting and dispositions are mechanism,
+     but *an independent reader checked this, and this is what they concluded* is the most
+     merge-relevant single fact on the page. **One conditional:**
      when the principle check finds an omission, the missing consequence goes **there too**, not only
      in the receipt — recording it only in a document addressed to you repeats the original defect in
      a politer voice. **Never Tier-2 proposals:** *what should we do next* is a different question
