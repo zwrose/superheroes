@@ -145,7 +145,7 @@ def mint_request(account, *, allowlist, envelope):
     if not _is_json_array(allowlist) or not allowlist:
         raise PilotSeedError(REFUSAL_MINT_ALLOWLIST_EMPTY)
     for item in allowlist:
-        if not isinstance(item, str):
+        if not isinstance(item, str) or not item:
             raise PilotSeedError(REFUSAL_MINT_ALLOWLIST_EMPTY)
     if not isinstance(account, str) or not account:
         raise PilotSeedError(REFUSAL_MINT_ACCOUNT_INVALID)
@@ -163,7 +163,7 @@ def sentinel_probe_request(sentinel, *, allowlist, envelope):
     if not _is_json_array(allowlist) or not allowlist:
         raise PilotSeedError(REFUSAL_MINT_ALLOWLIST_EMPTY)
     for item in allowlist:
-        if not isinstance(item, str):
+        if not isinstance(item, str) or not item:
             raise PilotSeedError(REFUSAL_MINT_ALLOWLIST_EMPTY)
     if not isinstance(sentinel, str) or not sentinel:
         raise PilotSeedError(REFUSAL_MINT_ACCOUNT_INVALID)

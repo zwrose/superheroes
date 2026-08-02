@@ -73,6 +73,12 @@ def test_required_context_options_refuses_unknown_surface():
     assert exc.value.reason == ps.REFUSAL_SURFACE_UNKNOWN
 
 
+def test_required_context_options_refuses_empty_string_surface():
+    with pytest.raises(ps.PilotSeedError) as exc:
+        ps.required_context_options([""])
+    assert exc.value.reason == ps.REFUSAL_SURFACE_UNKNOWN
+
+
 def test_required_context_options_refuses_session_storage():
     with pytest.raises(ps.PilotSeedError) as exc:
         ps.required_context_options(["sessionStorage"])
@@ -566,6 +572,33 @@ def test_mint_request_refuses_allowlist_with_object_member():
     assert exc.value.reason == ps.REFUSAL_MINT_ALLOWLIST_EMPTY
 
 
+def test_mint_request_refuses_allowlist_with_int_member():
+    envelope = {"enablingFlagEnvVar": "ALLOW_TEST_MINT"}
+    with pytest.raises(ps.PilotSeedError) as exc:
+        ps.mint_request("owner", allowlist=[1], envelope=envelope)
+    assert exc.value.reason == ps.REFUSAL_MINT_ALLOWLIST_EMPTY
+
+
+def test_mint_request_refuses_allowlist_with_empty_string_member():
+    envelope = {"enablingFlagEnvVar": "ALLOW_TEST_MINT"}
+    with pytest.raises(ps.PilotSeedError) as exc:
+        ps.mint_request("owner", allowlist=["a", ""], envelope=envelope)
+    assert exc.value.reason == ps.REFUSAL_MINT_ALLOWLIST_EMPTY
+
+
+def test_mint_request_refuses_allowlist_of_only_empty_string():
+    envelope = {"enablingFlagEnvVar": "ALLOW_TEST_MINT"}
+    with pytest.raises(ps.PilotSeedError) as exc:
+        ps.mint_request("owner", allowlist=[""], envelope=envelope)
+    assert exc.value.reason == ps.REFUSAL_MINT_ALLOWLIST_EMPTY
+
+
+def test_mint_request_accepts_single_member_allowlist():
+    envelope = {"enablingFlagEnvVar": "ALLOW_TEST_MINT"}
+    result = ps.mint_request("a", allowlist=["a"], envelope=envelope)
+    assert result == {"account": "a", "enablingFlagEnvVar": "ALLOW_TEST_MINT"}
+
+
 def test_verify_artifact_refuses_expected_uid_bool(tmp_path):
     artifact = tmp_path / "seed.bin"
     digest = _write_artifact(artifact)
@@ -602,3 +635,51 @@ def test_sentinel_probe_request_refuses_sentinel_in_allowlist():
             envelope=envelope,
         )
     assert exc.value.reason == ps.REFUSAL_MINT_SENTINEL_IN_ALLOWLIST
+
+
+def test_sentinel_probe_request_refuses_empty_allowlist():
+    envelope = {"enablingFlagEnvVar": "ALLOW_TEST_MINT"}
+    with pytest.raises(ps.PilotSeedError) as exc:
+        ps.sentinel_probe_request("s", allowlist=[], envelope=envelope)
+    assert exc.value.reason == ps.REFUSAL_MINT_ALLOWLIST_EMPTY
+
+
+def test_sentinel_probe_request_refuses_none_allowlist():
+    envelope = {"enablingFlagEnvVar": "ALLOW_TEST_MINT"}
+    with pytest.raises(ps.PilotSeedError) as exc:
+        ps.sentinel_probe_request("s", allowlist=None, envelope=envelope)
+    assert exc.value.reason == ps.REFUSAL_MINT_ALLOWLIST_EMPTY
+
+
+def test_sentinel_probe_request_refuses_object_allowlist():
+    envelope = {"enablingFlagEnvVar": "ALLOW_TEST_MINT"}
+    with pytest.raises(ps.PilotSeedError) as exc:
+        ps.sentinel_probe_request("s", allowlist={}, envelope=envelope)
+    assert exc.value.reason == ps.REFUSAL_MINT_ALLOWLIST_EMPTY
+
+
+def test_sentinel_probe_request_refuses_allowlist_with_int_member():
+    envelope = {"enablingFlagEnvVar": "ALLOW_TEST_MINT"}
+    with pytest.raises(ps.PilotSeedError) as exc:
+        ps.sentinel_probe_request("s", allowlist=[1], envelope=envelope)
+    assert exc.value.reason == ps.REFUSAL_MINT_ALLOWLIST_EMPTY
+
+
+def test_sentinel_probe_request_refuses_allowlist_with_empty_string_member():
+    envelope = {"enablingFlagEnvVar": "ALLOW_TEST_MINT"}
+    with pytest.raises(ps.PilotSeedError) as exc:
+        ps.sentinel_probe_request("s", allowlist=["a", ""], envelope=envelope)
+    assert exc.value.reason == ps.REFUSAL_MINT_ALLOWLIST_EMPTY
+
+
+def test_sentinel_probe_request_refuses_allowlist_of_only_empty_string():
+    envelope = {"enablingFlagEnvVar": "ALLOW_TEST_MINT"}
+    with pytest.raises(ps.PilotSeedError) as exc:
+        ps.sentinel_probe_request("s", allowlist=[""], envelope=envelope)
+    assert exc.value.reason == ps.REFUSAL_MINT_ALLOWLIST_EMPTY
+
+
+def test_sentinel_probe_request_accepts_valid_allowlist():
+    envelope = {"enablingFlagEnvVar": "ALLOW_TEST_MINT"}
+    result = ps.sentinel_probe_request("s", allowlist=["a"], envelope=envelope)
+    assert result == {"sentinel": "s", "enablingFlagEnvVar": "ALLOW_TEST_MINT"}

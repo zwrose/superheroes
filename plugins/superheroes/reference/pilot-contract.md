@@ -254,11 +254,11 @@ See [Capture surfaces](#capture-surfaces) for the two-way mapping rules.
 
 | Token | When returned |
 |---|---|
-| `seed-capture-surfaces-invalid` | `capture_surfaces` is not a JSON array (a Python `list`) of non-empty strings |
+| `seed-capture-surfaces-invalid` | `capture_surfaces` is not a JSON array (a Python `list`) of strings |
 | `seed-capture-surfaces-empty` | `capture_surfaces` is an empty JSON array (a Python `list`) |
 | `seed-capture-surface-duplicate` | the same surface appears more than once |
 | `seed-capture-surface-session-storage-refused` | `sessionStorage` is declared |
-| `seed-capture-surface-unknown` | a surface is not in the known set |
+| `seed-capture-surface-unknown` | a surface is not in the known set (including an empty string) |
 
 ### `verify_artifact(path, *, expected_uid, expected_mode, recorded_sha256)`
 
