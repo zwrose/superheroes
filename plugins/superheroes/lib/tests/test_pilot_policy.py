@@ -2,6 +2,7 @@
 import json
 import os
 import shutil
+import stat
 import tempfile
 
 import pytest
@@ -259,6 +260,21 @@ def test_assert_results_only_refuses_nested_material():
     assert secret not in str(exc.value)
 
 
+def test_assert_results_only_refuses_non_mapping_material():
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.assert_results_only({"ok": True}, ["not", "a", "mapping"])
+    assert exc.value.reason == pp.REFUSAL_MATERIAL_INVALID
+
+
+def test_assert_results_only_refuses_empty_indexed_material():
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.assert_results_only(
+            {"ok": True},
+            {"expected-identity": [], "mintable-account": [], "connection-detail": []},
+        )
+    assert exc.value.reason == pp.REFUSAL_MATERIAL_INVALID
+
+
 # --- exercise_no_policy_material_in_reach -------------------------------------
 
 def test_exercise_refuses_missing_reach_root(private_tmp):
@@ -299,6 +315,47 @@ def test_exercise_refuses_empty_material(private_tmp):
             {"expected-identity": [], "mintable-account": [], "connection-detail": []},
         )
     assert exc.value.reason == pp.REFUSAL_EXERCISE_VACUOUS
+
+
+def test_exercise_refuses_vacuous_material_with_empty_string_needle(private_tmp):
+    reach_root = os.path.join(private_tmp, "reach")
+    os.makedirs(reach_root)
+    with open(os.path.join(reach_root, "file.txt"), "w", encoding="utf-8") as handle:
+        handle.write("harmless")
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.exercise_no_policy_material_in_reach(
+            [reach_root],
+            {
+                "expected-identity": [""],
+                "mintable-account": [],
+                "connection-detail": [],
+            },
+        )
+    assert exc.value.reason == pp.REFUSAL_EXERCISE_VACUOUS
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="unreadable-directory test cannot bite as root")
+def test_exercise_fails_on_unreadable_subdirectory(private_tmp):
+    reach_root = os.path.join(private_tmp, "reach")
+    locked_dir = os.path.join(reach_root, "locked")
+    os.makedirs(reach_root)
+    os.makedirs(locked_dir)
+    with open(os.path.join(reach_root, "readable.txt"), "w", encoding="utf-8") as handle:
+        handle.write("harmless")
+    with open(os.path.join(locked_dir, "secret.txt"), "w", encoding="utf-8") as handle:
+        handle.write("PILOT-SECRET-IDENTITY")
+    os.chmod(locked_dir, 0o000)
+    try:
+        material = {
+            "expected-identity": ["PILOT-SECRET-IDENTITY"],
+            "mintable-account": [],
+            "connection-detail": [],
+        }
+        receipt = pp.exercise_no_policy_material_in_reach([reach_root], material)
+        assert receipt["result"] == "fail"
+        assert receipt["reason"] == pp.REFUSAL_EXERCISE_UNREADABLE
+    finally:
+        os.chmod(locked_dir, 0o700)
 
 
 @pytest.mark.skipif(os.getuid() == 0, reason="unreadable-file test cannot bite as root")

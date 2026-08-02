@@ -41,7 +41,10 @@ def verify_boundary(
     verified_at=None,
 ):
     """Run provisioning-time boundary checks and return a traveling verdict."""
-    slot, _generation = pilot_slot.parse_slot_ref(slot_ref)
+    try:
+        slot, _generation = pilot_slot.parse_slot_ref(slot_ref)
+    except pilot_slot.PilotSlotError:
+        raise PilotProvisionError(REFUSAL_SLOT_UNKNOWN)
     slot_config = policy.get("slots", {}).get(slot)
     if slot_config is None:
         raise PilotProvisionError(REFUSAL_SLOT_UNKNOWN)
@@ -141,7 +144,10 @@ def authorized_seed_request(verdict, policy, slot_ref, account, artifact):
     )
 
     slot, _generation = pilot_slot.parse_slot_ref(slot_ref)
-    expected_identities = policy["slots"][slot].get("expectedIdentities", {})
+    slot_config = policy.get("slots", {}).get(slot)
+    if slot_config is None:
+        raise PilotProvisionError(REFUSAL_SLOT_UNKNOWN)
+    expected_identities = slot_config.get("expectedIdentities", {})
     if account not in expected_identities:
         raise PilotProvisionError(REFUSAL_ACCOUNT_UNKNOWN)
 
@@ -169,7 +175,10 @@ def authorized_mint_request(verdict, policy, slot_ref, account, envelope):
     )
 
     slot, _generation = pilot_slot.parse_slot_ref(slot_ref)
-    mintable_accounts = policy["slots"][slot].get("mintableAccounts")
+    slot_config = policy.get("slots", {}).get(slot)
+    if slot_config is None:
+        raise PilotProvisionError(REFUSAL_SLOT_UNKNOWN)
+    mintable_accounts = slot_config.get("mintableAccounts")
     if not mintable_accounts:
         raise PilotProvisionError(REFUSAL_MINT_UNSUPPORTED)
 
@@ -189,7 +198,10 @@ def authorized_sentinel_probe_request(verdict, policy, slot_ref, sentinel, envel
     )
 
     slot, _generation = pilot_slot.parse_slot_ref(slot_ref)
-    mintable_accounts = policy["slots"][slot].get("mintableAccounts", [])
+    slot_config = policy.get("slots", {}).get(slot)
+    if slot_config is None:
+        raise PilotProvisionError(REFUSAL_SLOT_UNKNOWN)
+    mintable_accounts = slot_config.get("mintableAccounts", [])
     return pilot_seed.sentinel_probe_request(
         sentinel,
         allowlist=mintable_accounts,

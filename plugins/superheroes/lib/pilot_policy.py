@@ -27,6 +27,7 @@ REFUSAL_SCHEMA_VERSION_UNSUPPORTED = "policy-schema-version-unsupported"
 REFUSAL_SLOT_UNKNOWN = "policy-slot-unknown"
 REFUSAL_ACCOUNT_UNKNOWN = "policy-account-unknown"
 REFUSAL_MATERIAL_IN_RESULT = "policy-material-in-result"
+REFUSAL_MATERIAL_INVALID = "policy-material-invalid"
 REFUSAL_EXERCISE_VACUOUS = "policy-exercise-vacuous"
 REFUSAL_EXERCISE_UNREADABLE = "policy-exercise-unreadable"
 REFUSAL_REACH_ROOT_INVALID = "policy-reach-root-invalid"
@@ -206,6 +207,8 @@ def policy_material(policy):
 
 def assert_results_only(result, material):
     """Refuse when serialized result embeds any policy material string."""
+    if not isinstance(material, dict) or not _material_index(material):
+        raise PilotPolicyError(REFUSAL_MATERIAL_INVALID)
     serialized = json.dumps(result, sort_keys=True, ensure_ascii=False)
     for material_class in MATERIAL_CLASSES:
         for value in material.get(material_class, []):
@@ -227,10 +230,23 @@ def exercise_no_policy_material_in_reach(reach_roots, material, *, exercised_at=
     scanned_bytes = 0
     material_index = _material_index(material)
 
+    def _walk_onerror(_err):
+        nonlocal walk_failed
+        walk_failed = True
+
     for reach_root in reach_roots:
+        walk_failed = False
         for dirpath, dirnames, filenames in os.walk(
-            reach_root, followlinks=False, topdown=True
+            reach_root, followlinks=False, topdown=True, onerror=_walk_onerror
         ):
+            if walk_failed:
+                return _exercise_fail(
+                    REFUSAL_EXERCISE_UNREADABLE,
+                    exercised_at,
+                    scanned_files,
+                    scanned_bytes,
+                    findings,
+                )
             try:
                 os.listdir(dirpath)
             except OSError:
@@ -278,6 +294,15 @@ def exercise_no_policy_material_in_reach(reach_roots, material, *, exercised_at=
                         findings.append(
                             {"path": entry_path, "materialClass": material_class}
                         )
+
+        if walk_failed:
+            return _exercise_fail(
+                REFUSAL_EXERCISE_UNREADABLE,
+                exercised_at,
+                scanned_files,
+                scanned_bytes,
+                findings,
+            )
 
     if scanned_files == 0:
         return _exercise_fail(
@@ -435,13 +460,9 @@ def _validate_slot(slot):
 
 
 def _material_is_vacuous(material):
-    if not isinstance(material, dict) or not material:
+    if not isinstance(material, dict):
         return True
-    for material_class in MATERIAL_CLASSES:
-        values = material.get(material_class)
-        if values:
-            return False
-    return True
+    return not _material_index(material)
 
 
 def _material_index(material):

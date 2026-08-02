@@ -99,6 +99,12 @@ def test_parse_origin_refuses_userinfo():
     assert exc.value.reason == pb.REFUSAL_ORIGIN_INVALID
 
 
+def test_parse_origin_refuses_non_bracketed_host_with_colon():
+    with pytest.raises(pb.PilotBoundaryError) as exc:
+        pb.parse_origin("http://host:8080:9090")
+    assert exc.value.reason == pb.REFUSAL_ORIGIN_INVALID
+
+
 @pytest.mark.parametrize(
     "url",
     [
@@ -142,6 +148,55 @@ def test_target_binding_refuses_empty_protected_targets():
             protected_targets=[],
         )
     assert exc.value.reason == pb.REFUSAL_PROTECTED_TARGETS_INVALID
+
+
+def test_target_binding_refuses_portless_url_protected_target():
+    with pytest.raises(pb.PilotBoundaryError) as exc:
+        pb.target_binding(
+            "slot@1",
+            origin="http://127.0.0.1:5173",
+            permitted_redirects=["https://login.example.com:443"],
+            protected_targets=["https://login.example.com"],
+        )
+    assert exc.value.reason == pb.REFUSAL_PROTECTED_TARGETS_INVALID
+
+
+def test_target_binding_opaque_protected_target_still_works():
+    binding = pb.target_binding(
+        "slot@1",
+        origin="http://127.0.0.1:5173",
+        permitted_redirects=[],
+        protected_targets=["example_prod"],
+    )
+    assert binding["protectedTargets"] == ["example_prod"]
+
+
+def test_check_redirect_refuses_protected_target_with_explicit_port():
+    binding = pb.target_binding(
+        "slot@1",
+        origin="http://127.0.0.1:5173",
+        permitted_redirects=["https://login.example.com:443"],
+        protected_targets=["https://login.example.com:443"],
+    )
+    result = pb.check_redirect(binding, "https://login.example.com:443")
+    assert result == {"ok": False, "reason": pb.REFUSAL_PROTECTED_TARGET}
+
+
+def test_parse_origin_lowercases_ipv6_host():
+    lower = pb.parse_origin("https://[::ffff:1]:443")
+    upper = pb.parse_origin("https://[::FFFF:1]:443")
+    assert lower == upper == "https://[::ffff:1]:443"
+
+
+def test_check_redirect_refuses_protected_ipv6_case_variant():
+    binding = pb.target_binding(
+        "slot@1",
+        origin="http://127.0.0.1:5173",
+        permitted_redirects=["https://[::FFFF:1]:443"],
+        protected_targets=["https://[::ffff:1]:443"],
+    )
+    result = pb.check_redirect(binding, "https://[::FFFF:1]:443")
+    assert result == {"ok": False, "reason": pb.REFUSAL_PROTECTED_TARGET}
 
 
 # --- check_target / check_redirect fail-closed --------------------------------
