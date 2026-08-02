@@ -66,6 +66,21 @@ REASON_STATUS_NOT_DELETABLE = "reclaim-status-not-deletable"
 REASON_DELETE_FAILED = "reclaim-delete-failed"
 REASON_QUARANTINE_DIR_UNREADABLE = "reclaim-quarantine-dir-unreadable"
 REASON_JOURNAL_SEGMENTS_HIGH = "reclaim-journal-segments-high"
+REASON_SLOT_INVALID = "reclaim-slot-invalid"
+REASON_JOURNAL_PATH_INVALID = "reclaim-journal-path-invalid"
+REASON_JOURNAL_OUTSIDE_SLOT = "reclaim-journal-outside-slot"
+REASON_JOURNAL_ABSENT = "reclaim-journal-absent"
+REASON_ROTATE_SLOT_UNREADABLE = "reclaim-rotate-slot-unreadable"
+REASON_ROTATE_SLOT_ACTIVE = "reclaim-rotate-slot-active"
+REASON_ROTATE_SLOT_FAILED = "reclaim-rotate-slot-failed"
+REASON_ROTATE_NOT_QUIESCENT = "reclaim-rotate-not-quiescent"
+REASON_ROTATE_BELOW_THRESHOLD = "reclaim-rotate-below-threshold"
+REASON_ROTATE_SEGMENT_EXISTS = "reclaim-rotate-segment-exists"
+REASON_ROTATE_FAILED = "reclaim-rotate-failed"
+REASON_SEGMENTS_UNREADABLE = "reclaim-segments-unreadable"
+
+ROTATE_MIN_RECORDS = 200
+_JOURNAL_SEGMENT_TEMPLATE = "%s.%04d%s"
 
 _OCCUPANT_KEYS = frozenset({"pid", "processInstance", "livenessSource", "observedAt"})
 _SIDECAR_REQUIRED_KEYS = frozenset({
@@ -830,3 +845,207 @@ def sweep(slots_dir_path, *, now, receipts=None):
 
     _scan_journal_segments(slots_dir_path, warned)
     return _ok(deleted=deleted, warned=warned, retained=retained, refusals=refusals)
+
+
+def _validate_journal_path(journal_path):
+    if not _is_str_path(journal_path) or not journal_path:
+        return _fail(REASON_JOURNAL_PATH_INVALID)
+    if not os.path.isabs(journal_path):
+        return _fail(REASON_JOURNAL_PATH_INVALID)
+    if os.path.islink(journal_path):
+        return _fail(REASON_JOURNAL_PATH_INVALID)
+    return None
+
+
+def _journal_segment_re_for(journal_path):
+    base = os.path.basename(journal_path)
+    stem, ext = os.path.splitext(base)
+    return re.compile(
+        r"^%s\.(\d{4,})%s\Z" % (re.escape(stem), re.escape(ext))
+    )
+
+
+def _list_journal_segments(slot_dir, journal_path):
+    seg_re = _journal_segment_re_for(journal_path)
+    segments = []
+    try:
+        names = os.listdir(slot_dir)
+    except OSError:
+        return None
+    for name in names:
+        match = seg_re.match(name)
+        if match:
+            segments.append((
+                int(match.group(1)),
+                os.path.join(slot_dir, name),
+            ))
+    segments.sort(key=lambda item: item[0])
+    return segments
+
+
+def _highest_segment_sequence(slot_dir, journal_path):
+    segments = _list_journal_segments(slot_dir, journal_path)
+    if segments is None:
+        return None
+    if not segments:
+        return 0
+    return segments[-1][0]
+
+
+def _count_nonempty_journal_lines(journal_path):
+    try:
+        fd = os.open(journal_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return 0
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return 0
+        count = 0
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            for line in chunk.split(b"\n"):
+                if line.strip():
+                    count += 1
+        return count
+    except OSError:
+        return 0
+    finally:
+        os.close(fd)
+
+
+def _replay_is_quiescent(journal_path):
+    import pilot_journal
+    result = pilot_journal.replay(journal_path)
+    if not result["ok"]:
+        return False
+    if result["torn"]:
+        return False
+    if result["anomalies"]:
+        return False
+    for effect in result["effects"]:
+        state = effect.get("state")
+        if state not in (
+            pilot_journal.STATE_APPLIED,
+            pilot_journal.STATE_NOT_APPLIED,
+        ):
+            return False
+    return True
+
+
+def journal_segments(slots_dir_path, slot, journal_path):
+    """List retained journal segments for a slot, sorted by sequence number.
+
+    Exists as the input a future segment-aware aggregate replay will need;
+    nothing in this module consumes it yet.
+    """
+    refused = _validate_slots_dir(slots_dir_path)
+    if refused is not None:
+        return refused
+    try:
+        pilot_slot.validate_slot_id(slot)
+    except pilot_slot.PilotSlotError:
+        return _fail(REASON_SLOT_INVALID, segments=[])
+    refused = _validate_journal_path(journal_path)
+    if refused is not None:
+        return refused
+    slot_dir = os.path.join(slots_dir_path, slot)
+    if not _path_contained_in(journal_path, slot_dir):
+        return _fail(REASON_JOURNAL_OUTSIDE_SLOT, segments=[])
+    if not os.path.isdir(slot_dir):
+        return _ok(segments=[])
+    segments = _list_journal_segments(slot_dir, journal_path)
+    if segments is None:
+        return _fail(REASON_SEGMENTS_UNREADABLE, segments=[])
+    return _ok(segments=[path for _seq, path in segments])
+
+
+def rotate_journal(slots_dir_path, slot, journal_path, *, now, timeout=30.0):
+    """Rotate a quiescent live journal into a retained segment file.
+
+    Rotation is permitted only when the slot record's state is ``released`` or
+    ``retired`` — a contract-level exclusion, not a lock-level one. Journal
+    writers do not hold the slot lock, so a clean replay snapshot alone cannot
+    prevent a begin/end pair from splitting across the live journal and a
+    segment; the state gate is what excludes in-flight provisioning effects.
+    """
+    import pilot_journal
+    import pilot_lifecycle
+
+    rotate_no = {"rotated": False, "segmentPath": None}
+
+    refused = _validate_slots_dir(slots_dir_path)
+    if refused is not None:
+        refused.update(rotate_no)
+        return refused
+    try:
+        pilot_slot.validate_slot_id(slot)
+    except pilot_slot.PilotSlotError:
+        return _fail(REASON_SLOT_INVALID, **rotate_no)
+    refused = _validate_now(now)
+    if refused is not None:
+        refused.update(rotate_no)
+        return refused
+    refused = _validate_journal_path(journal_path)
+    if refused is not None:
+        refused.update(rotate_no)
+        return refused
+    slot_dir = os.path.join(slots_dir_path, slot)
+    if not _path_contained_in(journal_path, slot_dir):
+        return _fail(REASON_JOURNAL_OUTSIDE_SLOT, **rotate_no)
+
+    try:
+        with pilot_lifecycle.slot_lock(slots_dir_path, slot, timeout=timeout):
+            record_path = pilot_lifecycle.record_path(slots_dir_path, slot)
+            loaded = pilot_lifecycle.read_record(record_path)
+            if not loaded["ok"]:
+                return _fail(REASON_ROTATE_SLOT_UNREADABLE, **rotate_no)
+            state = loaded["record"]["state"]
+            if state in (
+                pilot_lifecycle.STATE_PROVISIONING,
+                pilot_lifecycle.STATE_PROVISIONED,
+                pilot_lifecycle.STATE_OCCUPIED,
+            ):
+                return _fail(REASON_ROTATE_SLOT_ACTIVE, **rotate_no)
+            if state == pilot_lifecycle.STATE_FAILED:
+                return _fail(REASON_ROTATE_SLOT_FAILED, **rotate_no)
+
+            if not os.path.lexists(journal_path):
+                return _fail(REASON_JOURNAL_ABSENT, **rotate_no)
+
+            if not _replay_is_quiescent(journal_path):
+                return _fail(REASON_ROTATE_NOT_QUIESCENT, **rotate_no)
+
+            if _count_nonempty_journal_lines(journal_path) < ROTATE_MIN_RECORDS:
+                return _ok(
+                    reason=REASON_ROTATE_BELOW_THRESHOLD,
+                    rotated=False,
+                    segmentPath=None,
+                )
+
+            base = os.path.basename(journal_path)
+            stem, ext = os.path.splitext(base)
+            highest = _highest_segment_sequence(slot_dir, journal_path)
+            if highest is None:
+                return _fail(REASON_SEGMENTS_UNREADABLE, **rotate_no)
+            seq = highest + 1
+            segment_name = _JOURNAL_SEGMENT_TEMPLATE % (stem, seq, ext)
+            segment_path = os.path.join(slot_dir, segment_name)
+            if os.path.lexists(segment_path):
+                return _fail(REASON_ROTATE_SEGMENT_EXISTS, **rotate_no)
+
+            try:
+                os.rename(journal_path, segment_path)
+            except OSError:
+                return _fail(REASON_ROTATE_FAILED, **rotate_no)
+
+            try:
+                _fsync_dir(slot_dir)
+            except OSError:
+                pass
+
+            return _ok(rotated=True, segmentPath=segment_path)
+    except pilot_lifecycle.PilotLifecycleError as exc:
+        return _fail(exc.reason, **rotate_no)
