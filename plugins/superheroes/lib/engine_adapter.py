@@ -228,18 +228,20 @@ def build_argv(engine, role_kind, effort, opts):
     return build_argv_result(engine, role_kind, effort, opts)["argv"]
 
 
-def _last_top_level_json(stdout, want_type):
-    """Return the LAST top-level JSON value of `want_type` (dict or list) in a (possibly
-    line-delimited / streamed) blob, or None. Tries a whole-blob parse first, then a
-    raw_decode scan that skips non-JSON stream noise a char at a time. Shared by
-    _last_json_object (dict) and _last_json_array (list) so the scan logic lives once."""
+def _top_level_json_matches(stdout, want_type=None):
+    """Return top-level JSON (value, start, end) matches in a streamed blob.
+
+    `want_type` limits returned container types when supplied. The scan attempts decoding only
+    at plausible object/array starts, avoiding raw_decode exceptions for ordinary stream noise.
+    """
     s = (stdout or "").strip()
     if not s:
-        return None
+        return []
     try:
         val = json.loads(s)
-        if isinstance(val, want_type):
-            return val
+        if want_type is None or isinstance(val, want_type):
+            return [(val, 0, len(s))]
+        return []
     except ValueError:
         pass
     # A top-level JSON object starts with '{' and an array with '['. Attempt a decode ONLY at one of
@@ -254,7 +256,7 @@ def _last_top_level_json(stdout, want_type):
     # empty-object array like `[{},{}]` — near-nil in practice, and restoring strict scalar-
     # consumption parity would reopen the per-char exception storm this scan exists to close).
     dec = json.JSONDecoder()
-    last = None
+    matches = []
     i, n = 0, len(s)
     while i < n:
         if s[i] != "{" and s[i] != "[":
@@ -262,12 +264,20 @@ def _last_top_level_json(stdout, want_type):
             continue
         try:
             val, end = dec.raw_decode(s, i)
-            if isinstance(val, want_type):
-                last = val
+            if want_type is None or isinstance(val, want_type):
+                matches.append((val, i, end))
             i = end
         except ValueError:
             i += 1
-    return last
+    return matches
+
+
+def _last_top_level_json(stdout, want_type):
+    """Return the LAST top-level JSON value of `want_type` (dict or list) in a (possibly
+    line-delimited / streamed) blob, or None. Shared by _last_json_object (dict) and
+    _last_json_array (list) so the plausible-start scan logic lives once."""
+    matches = _top_level_json_matches(stdout, want_type)
+    return matches[-1][0] if matches else None
 
 
 def _last_json_object(stdout):
@@ -562,7 +572,11 @@ def _review_residue(stdout, fed_prompt):
 
 
 def salvage_write_report(engine, role_kind, stdout, fed_prompt):
-    """Recover a build/fix implementer's report from raw engine stdout. Never raises."""
+    """Recover a build/fix implementer's report from raw engine stdout. Never raises.
+
+    In the structured tier, `truncated` means a partial JSON fragment followed a complete
+    report. In the prose tier, it means the manual-read excerpt was capped by byte length.
+    """
     try:
         if role_kind == "review" or not isinstance(stdout, str) or not stdout.strip():
             return None
@@ -576,9 +590,12 @@ def salvage_write_report(engine, role_kind, stdout, fed_prompt):
 
         # A partial prompt echo can retain its example verdict even when the wider prompt was not
         # removable verbatim. Do not turn that template object into an implementer claim.
+        residue_objects = _top_level_json_matches(residue, dict)
+        prompt_objects = _top_level_json_matches(prompt, dict)
         if (_artifact_is_prompt_echo_residue(residue, prompt) or
-                (_last_json_object(residue) is not None and
-                 _last_json_object(residue) == _last_json_object(prompt))):
+                any(residue_object[0] == prompt_object[0]
+                    for residue_object in residue_objects
+                    for prompt_object in prompt_objects)):
             return None
 
         parsed = parse_result(engine, role_kind, residue)
@@ -609,20 +626,20 @@ def salvage_write_report(engine, role_kind, stdout, fed_prompt):
         if not isinstance(report["signal"], str):
             return None
 
-        # Keep parse_result as the sole report parser. This only detects a JSON-looking final tail
-        # that cannot itself contain a complete JSON value after a complete report.
-        last_open = max(residue.rfind("{"), residue.rfind("["))
-        tail = residue[last_open:] if last_open >= 0 else ""
+        # Keep parse_result as the sole report parser. This only detects a JSON-looking partial
+        # tail after the last complete JSON value, so later markdown brackets do not look truncated.
+        complete_values = _top_level_json_matches(residue)
+        tail = residue.strip()[complete_values[-1][2]:] if complete_values else residue
         json_like_tail = bool(re.match(r'^\s*(?:\{\s*(?:"|\})|\[)', tail))
         truncated = json_like_tail and _last_json_object(tail) is None and \
             _last_json_array(tail) is None
-        return {
+        return scrub_salvage_block({
             "report": report,
             "structured": True,
             "requiresManualRead": False,
             "salvaged": True,
             "truncated": truncated,
-        }
+        })
     except Exception:
         return None
 

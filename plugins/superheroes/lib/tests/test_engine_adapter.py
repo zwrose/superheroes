@@ -811,7 +811,9 @@ def test_salvage_write_report_echo_only_residue_is_none():
 def test_salvage_write_report_rejects_echo_sourced_example():
     # axis: fabrication — a retained prompt example must not become a salvaged engine claim.
     example = _write_report()
-    prompt = "Write a report using this example:\n" + example
+    refusal_example = _write_report(False, "plan_wrong", True, False)
+    prompt = "Write a report using this example:\n" + example + \
+        "\nOr honestly refuse with:\n" + refusal_example
     stdout = "partial prompt echo follows:\n" + example
     assert EA.salvage_write_report("codex", "build", stdout, prompt) is None
 
@@ -821,6 +823,7 @@ def test_salvage_write_report_unreadable_is_none():
     assert EA.salvage_write_report("codex", "build", "{not json", "prompt") is None
 
 
+# Deliberate fake test credential; it is not a real leak.
 _DISPATCH_1_PROSE = """Worktree changes left in:
 
 - `plugins/superheroes/lib/engine_adapter.py`
@@ -835,6 +838,25 @@ inverse edits.
 Command report:
 
 - `/usr/bin/python3 -m pytest .../test_engine_adapter.py -q` initially ran: `198 passed in 4.40s`
+- fake fixture credential: ghp_EXAMPLEfakenotarealtoken000000000
+..."""
+
+
+_DISPATCH_1_PROSE_REDACTED = """Worktree changes left in:
+
+- `plugins/superheroes/lib/engine_adapter.py`
+- `plugins/superheroes/lib/tests/test_engine_adapter.py`
+
+Implemented `salvage_write_report`, E1–E9 coverage, echo-fabrication rejection, refusal recovery,
+truncation marking, and the 200-byte pin/absolute 195/205 boundary.
+
+Bite-proofs B1–B4 each produced the expected red test result and were restored with targeted
+inverse edits.
+
+Command report:
+
+- `/usr/bin/python3 -m pytest .../test_engine_adapter.py -q` initially ran: `198 passed in 4.40s`
+- fake fixture credential: [REDACTED]
 ..."""
 
 
@@ -845,7 +867,7 @@ def test_salvage_write_report_recovers_real_dispatch_prose_for_manual_read():
         "report": None,
         "structured": False,
         "requiresManualRead": True,
-        "excerpt": EA._scrub(_DISPATCH_1_PROSE),
+        "excerpt": _DISPATCH_1_PROSE_REDACTED,
         "excerptBytes": len(_DISPATCH_1_PROSE.encode("utf-8")),
         "salvaged": True,
         "truncated": False,
@@ -894,6 +916,13 @@ def test_salvage_write_report_marks_partial_json_tail_truncated():
     stdout = _write_report() + '\n{"still-writing":'
     result = EA.salvage_write_report("codex", "build", stdout, "prompt")
     assert result is not None and result["truncated"] is True
+
+
+def test_salvage_write_report_does_not_mark_markdown_checklist_tail_truncated():
+    # axis: truncation — bracketed markdown after a complete report is ordinary prose, not JSON.
+    stdout = _write_report() + "\n- [x] tests green"
+    result = EA.salvage_write_report("codex", "build", stdout, "prompt")
+    assert result is not None and result["truncated"] is False
 
 
 def test_salvage_write_report_rejects_review_role():
@@ -1888,10 +1917,16 @@ def test_review_artifact_shape_residue_byte_floor():
     core = "- src/a.ts:1 issue\n- src/b.ts:2 issue\n### Findings\n"
     below = core + "x" * (195 - len(core.encode("utf-8")))
     above = core + "x" * (205 - len(core.encode("utf-8")))
+    just_below = core + "x" * (199 - len(core.encode("utf-8")))
+    at_floor = core + "x" * (200 - len(core.encode("utf-8")))
     assert len(below.encode("utf-8")) == 195
     assert len(above.encode("utf-8")) == 205
+    assert len(just_below.encode("utf-8")) == 199
+    assert len(at_floor.encode("utf-8")) == 200
     assert EA.review_artifact_shape(below, "")["engaged"] is False
     assert EA.review_artifact_shape(above, "")["engaged"] is True
+    assert EA.review_artifact_shape(just_below, "")["engaged"] is False
+    assert EA.review_artifact_shape(at_floor, "")["engaged"] is True
 
 
 def test_artifact_min_residue_bytes_is_deliberately_pinned():

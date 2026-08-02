@@ -503,12 +503,12 @@ def _prose_write_report():
 
 def test_write_forfeit_attaches_salvage_without_upgrading_outcome(tmp_path, monkeypatch):
     wt, _main = _linked_worktree(tmp_path)
+    calls = []
 
     def recover(engine, role_kind, stdout, fed_prompt):
         if stdout == "unrecoverable":
             return None
-        assert (engine, role_kind, fed_prompt) == ("codex", "build", "")
-        assert stdout == _build_ok_stdout()
+        calls.append((engine, role_kind, stdout, fed_prompt))
         return _write_report()
 
     _install_write_salvage(monkeypatch, recover)
@@ -528,6 +528,24 @@ def test_write_forfeit_attaches_salvage_without_upgrading_outcome(tmp_path, monk
     }
     assert "still a forfeit" in res["disclosure"]
     assert "independently verified" in res["disclosure"]
+    assert calls == [("codex", "build", _build_ok_stdout(), "Build this.\n")]
+
+
+def test_write_run_opened_records_fed_prompt(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    prompt_text = "Implement exactly the assigned work order.\n"
+    prompt_path = _prompt(tmp_path, prompt_text)
+    res = _dispatch_write(
+        tmp_path,
+        FakeRunner([(_build_ok_stdout(), False, 0, "")]),
+        cwd=wt,
+        prompt_path=prompt_path,
+    )
+
+    assert res["ok"] is True
+    records, _ = ED._journal_read(str(tmp_path / "run"))
+    opened = next(record for record in records if record.get("kind") == "run-opened")
+    assert opened["fedPrompt"] == prompt_text
 
 
 def test_write_salvage_uses_latest_report_and_records_earlier_attempt(tmp_path, monkeypatch):
@@ -577,7 +595,9 @@ def test_write_salvage_prefers_structured_report_over_later_prose(tmp_path, monk
 
 def test_write_salvage_prose_survives_ledger_scrubbing(tmp_path):
     salvage = _prose_write_report()
-    salvage["excerpt"] = "token ghp_abcdefghijklmnopqrstuvwxyz1234567890"
+    # Deliberate fake token fixture; it must never resemble a real credential leak.
+    fake_token = "ghp_EXAMPLEfakenotarealtoken000000000"
+    salvage["excerpt"] = "token %s" % fake_token
     row = ED._build_ledger_row(str(tmp_path), {"opened": {}, "attempts": {}}, {
         "ok": False,
         "salvage": salvage,
@@ -585,7 +605,8 @@ def test_write_salvage_prose_survives_ledger_scrubbing(tmp_path):
     assert row["salvage"]["report"] is None
     assert row["salvage"]["structured"] is False
     assert row["salvage"]["requiresManualRead"] is True
-    assert row["salvage"]["excerpt"] != salvage["excerpt"]
+    assert "[REDACTED]" in row["salvage"]["excerpt"]
+    assert fake_token not in row["salvage"]["excerpt"]
 
 
 def test_write_dirty_tree_forfeit_attaches_salvage(tmp_path, monkeypatch):
@@ -632,6 +653,17 @@ def test_write_salvage_marks_ledger_engaged_but_not_delivered(tmp_path):
     )
 
     assert stages == {"engaged": True, "delivered": False}
+
+
+def test_write_forfeit_without_salvage_leaves_ledger_unengaged(tmp_path):
+    stages = ED._ledger_stages(
+        {"ok": False},
+        {"attempts": {}},
+        str(tmp_path),
+        {"runKind": ED.RUN_KIND_WRITE},
+    )
+
+    assert stages == {"engaged": None, "delivered": False}
 
 
 def test_write_success_terminal(tmp_path):
