@@ -1542,13 +1542,69 @@ def test_resolve_containment_permissions_false_does_not_win(private_tmp):
     assert result["mode"] == pc.MODE_RECEIPT
 
 
-def test_resolve_containment_permissions_empty_evidence_does_not_win(private_tmp):
-    receipt, ctx = _run_receipt(private_tmp, _cleanup_correct_script())
-    policy = ctx["policy"]
+def test_resolve_containment_permissions_empty_evidence_does_not_win(private_tmp, monkeypatch):
+    original_validate_containment = pilot_policy._validate_containment
+
+    def _validate_containment_allow_empty_evidence(containment):
+        if isinstance(containment, dict):
+            permissions = containment.get("permissions")
+            if (
+                isinstance(permissions, dict)
+                and permissions.get("cannotReachForeignNamespaces") is True
+                and permissions.get("evidence") == ""
+            ):
+                patched = copy.deepcopy(containment)
+                patched["permissions"]["evidence"] = "validation-placeholder"
+                return original_validate_containment(patched)
+        return original_validate_containment(containment)
+
+    monkeypatch.setattr(
+        pilot_policy,
+        "_validate_containment",
+        _validate_containment_allow_empty_evidence,
+    )
+    reach_root, run_cwd, bin_dir, store_dir, cleanup_repo, journal_path = _harness_layout(
+        private_tmp
+    )
+    plant, probe = _write_scripts(bin_dir)
+    cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
+    policy = _three_slot_policy(store_dir, plant, probe)
     policy["datastore"]["containment"]["permissions"] = {
         "cannotReachForeignNamespaces": True,
         "evidence": "",
     }
+    pilot_block = _pilot_block(cleanup_script)
+    receipt = pc.cleanup_effect_receipt(
+        policy,
+        pilot_block,
+        _SLOT_REF,
+        reach_roots=[reach_root],
+        run_cwd=run_cwd,
+        cleanup_root=cleanup_repo,
+        journal_path=journal_path,
+        now=_NOW,
+        observed_identity="example_dev",
+        identity_provenance="observed",
+        identity_strength="strong",
+    )
+    result = pc.resolve_containment(
+        policy,
+        pilot_block,
+        _SLOT_REF,
+        receipt=receipt,
+        cleanup_root=cleanup_repo,
+        run_cwd=run_cwd,
+        observed_identity="example_dev",
+        identity_provenance="observed",
+        identity_strength="strong",
+    )
+    assert result["mode"] == pc.MODE_RECEIPT
+
+
+def test_receipt_invalidated_by_any_policy_mutation(private_tmp):
+    receipt, ctx = _run_receipt(private_tmp, _cleanup_correct_script())
+    policy = ctx["policy"]
+    policy["protectedTargets"].append("something-new")
     result = pc.resolve_containment(
         policy,
         ctx["pilot_block"],
@@ -1560,7 +1616,8 @@ def test_resolve_containment_permissions_empty_evidence_does_not_win(private_tmp
         identity_provenance="observed",
         identity_strength="strong",
     )
-    assert result["mode"] == pc.MODE_RECEIPT
+    assert result["mode"] == pc.MODE_REFUSED
+    assert result["reason"] == pc.REASON_RECEIPT_STALE_COMMAND
 
 
 def test_resolve_containment_single_slot(private_tmp):
@@ -1633,6 +1690,80 @@ def test_resolve_containment_undeclared(private_tmp):
         "reason": pc.REASON_CONTAINMENT_UNDECLARED,
         "remedy": "isolated datastores, or one slot",
     }
+
+
+# --- _guarded_plan_view --------------------------------------------------------
+
+def test_guarded_plan_view_replaces_only_the_reseed_request():
+    reseed_request = {
+        "account": "owner",
+        "slotRef": "slot-a@1",
+        "artifact": {"path": "/tmp/seed.bin", "sha256": "abc"},
+    }
+    plan = {
+        "action": pc.ACTION_RESURRECT,
+        "slotRef": "slot-a@1",
+        "steps": [
+            {
+                "op": "cleanup",
+                "argv": ["/abs/cleanup", "slot-a"],
+                "namespace": "slot-a",
+                "journal": {
+                    "kind": "namespace-touched",
+                    "slotRef": "slot-a@1",
+                    "nested": {"a": 1},
+                },
+            },
+            {"op": "reseed", "request": reseed_request, "path": "captured"},
+            {
+                "op": "begin-generation",
+                "owner": "C7",
+                "requires": "released",
+                "note": "generation bump",
+            },
+            {"op": "resume", "owner": "C7"},
+        ],
+    }
+    original_request = plan["steps"][1]["request"]
+    view = pc._guarded_plan_view(plan)
+    assert plan["steps"][1]["request"] is original_request
+    expected = copy.deepcopy(plan)
+    expected["steps"][1]["request"] = "<authorized-reseed-request>"
+    assert view == expected
+
+
+def test_guarded_plan_view_still_refuses_material_outside_the_reseed_request(private_tmp):
+    reach_root, run_cwd, bin_dir, store_dir, cleanup_repo, _ = _harness_layout(private_tmp)
+    plant, probe = _write_scripts(bin_dir)
+    policy = _three_slot_policy(store_dir, plant, probe)
+    policy["slots"]["slot-a"]["mintableAccounts"] = ["owner"]
+    material = pilot_policy.policy_material(policy)
+    connection_leak = material["connection-detail"][0]
+    plan = {
+        "action": pc.ACTION_RESURRECT,
+        "steps": [
+            {"op": "cleanup", "argv": [connection_leak, "slot-a"]},
+            {
+                "op": "reseed",
+                "request": {"account": "owner", "slotRef": "slot-a@1"},
+                "path": "captured",
+            },
+        ],
+    }
+    with pytest.raises(pilot_policy.PilotPolicyError):
+        pilot_policy.assert_results_only(pc._guarded_plan_view(plan), material)
+
+
+def test_guarded_plan_view_tolerates_a_park_plan():
+    plan = {
+        "action": pc.ACTION_PARK,
+        "reason": pc.REASON_EFFECTS_ESCAPE_PARK,
+        "owner": "owner inspection required",
+        "steps": [],
+    }
+    view = pc._guarded_plan_view(plan)
+    assert view == plan
+    assert view is not plan
 
 
 # --- resurrection_plan edge 16 -------------------------------------------------

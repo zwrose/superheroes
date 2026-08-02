@@ -1,4 +1,5 @@
 """Cleanup-command resolution, sentinel instrumentation, containment receipts, and resurrection planning (C9)."""
+import copy
 import hashlib
 import hmac
 import json
@@ -989,6 +990,27 @@ def resolve_containment(
     }
 
 
+def _guarded_plan_view(plan):
+    """Return the plan with the authorized reseed descriptor replaced by a placeholder.
+
+    ``assert_results_only`` is A3's guard on a traveling RESULT — it must not carry policy
+    material. A reseed step is not a result: it is an authorized credential descriptor built
+    through ``pilot_provision``'s chokepoint, and it names the account it seeds by construction
+    (``pilot_provision`` runs no such guard on its own return, for the same reason). So the guard
+    applies to every other surface of the plan — the action, the cleanup argv, the namespaces, the
+    journal references, the C7 notes — where an identity or connection detail appearing WOULD be a
+    leak.
+    """
+    view = copy.deepcopy(plan)
+    steps = view.get("steps")
+    if not isinstance(steps, list):
+        return view
+    for step in steps:
+        if isinstance(step, dict) and step.get("op") == "reseed" and "request" in step:
+            step["request"] = "<authorized-reseed-request>"
+    return view
+
+
 def resurrection_plan(
     policy,
     pilot_block,
@@ -1094,17 +1116,21 @@ def resurrection_plan(
             },
             {
                 "op": "begin-generation",
-                "owner": "C7",
+                "responsibleParty": "C7",
                 "requires": "released",
                 "note": "the generation bump is enforced at the broker; this plan does not perform it",
             },
             {
                 "op": "resume",
-                "owner": "C7",
+                "responsibleParty": "C7",
             },
         ],
     }
-    pilot_policy.assert_results_only(plan, pilot_policy.policy_material(policy))
+    # Narrow guard: see _guarded_plan_view docstring — reseed request is an authorized descriptor.
+    pilot_policy.assert_results_only(
+        _guarded_plan_view(plan),
+        pilot_policy.policy_material(policy),
+    )
     return plan
 
 
