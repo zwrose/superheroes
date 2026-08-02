@@ -642,20 +642,28 @@ def _run_destructive_step(
             result = _run_handler(step, entry, handlers, context, mono_fn, timeout_seconds)
 
             if step == STEP_CLEANUP and effect_id is not None:
-                end_at = now_fn()
-                end = pilot_journal.end_effect(
-                    journal_path,
-                    slot_ref=slot_ref,
-                    effect_id=effect_id,
-                    outcome=_journal_outcome_for_status(result["status"]),
-                    at=end_at,
-                    reason=result["reason"],
-                )
-                if not end["ok"]:
+                try:
+                    end_at = now_fn()
+                    end = pilot_journal.end_effect(
+                        journal_path,
+                        slot_ref=slot_ref,
+                        effect_id=effect_id,
+                        outcome=_journal_outcome_for_status(result["status"]),
+                        at=end_at,
+                        reason=result["reason"],
+                    )
+                    if not end["ok"]:
+                        result = {
+                            "status": STATUS_INDETERMINATE,
+                            "reason": REASON_STEP_INDETERMINATE,
+                            "receipt": None,
+                            "elapsed": result.get("elapsed"),
+                        }
+                except BaseException:
                     result = {
                         "status": STATUS_INDETERMINATE,
                         "reason": REASON_STEP_INDETERMINATE,
-                        "receipt": None,
+                        "receipt": result.get("receipt"),
                         "elapsed": result.get("elapsed"),
                     }
 
