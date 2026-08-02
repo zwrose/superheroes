@@ -73,29 +73,50 @@ ship but aren't a user-facing feature or bugfix; use `fix`/`feat` when they are.
 
 ## CI
 
-Every PR and push to `main` runs `.github/workflows/ci.yml`:
+Every PR and push to `main` runs `.github/workflows/ci.yml` (Python **3.12** on
+`ubuntu-latest`). Pull requests also fire on `edited` so the PR-title check
+re-validates when a title is fixed; because that trigger is workflow-level, any PR
+edit (including a body edit) re-runs the whole workflow.
+
+**Job `validate`**
 
 1. `validate_marketplace.py` — manifests parse, sources exist, versions are valid
    SemVer, no duplicate-version trap.
-2. `validate_hosts.py` — dual-host manifests and tool maps are consistent.
-3. `validate_skills.py` — skill token-shape (line counts, description sizes,
+2. `check_catalog_membership.py` — catalog membership / `metadata.version`
+   consistency against the PR base ref (**pull-request events only**).
+3. `validate_hosts.py` — dual-host manifests and tool maps are consistent.
+4. `validate_skills.py` — skill token-shape (line counts, description sizes,
    required phrases, reference links, CONVENTIONS citations).
-4. `pytest` over plugin lib/eval tests + the band-level eval harness — scripts
+5. `validate_stubs.py` — STUB markers carry an issue reference.
+6. Install `uv` — test-pilot block-execution tests depend on it.
+7. Install `jscpd@5.0.12` via npm — guardian duplication real-channel tests
+   depend on it.
+8. `pytest` over plugin lib/eval tests + the band-level eval harness — scripts
    (`.github/scripts/tests/`), `plugins/superheroes/` (`lib/`, `eval/`), and
-   `eval/lib/` (identifier reference impls, artifact schemas, and the
-   activation-result CI gate). The plugin lib tests include a pytest wrapper that
-   runs the showrunner Node smoke tests. Schema tests need `jsonschema`.
+   `eval/lib/` (identifier reference-impl conformance, artifact schemas, and the
+   activation-result CI gate). Schema tests
+   need `jsonschema`.
 
-Run all steps locally before pushing:
+**Job `pr-title`** (**pull-request events only**)
+
+1. `check_conventional_commit.py` — PR title is a Conventional Commit.
+
+Run all locally-runnable steps before pushing:
 
 ```bash
 /usr/bin/python3 .github/scripts/validate_marketplace.py
 /usr/bin/python3 .github/scripts/validate_hosts.py
 /usr/bin/python3 .github/scripts/validate_skills.py
+/usr/bin/python3 .github/scripts/validate_stubs.py
 /usr/bin/python3 -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ plugins/superheroes/eval/tests/ eval/lib/tests/ -q
 ```
 
-Use `/usr/bin/python3` for local gates: that interpreter carries both pytest and PyYAML, which the validators and test suite require.
+Use `/usr/bin/python3` for local gates: that interpreter carries both pytest and
+PyYAML, which the validators and test suite require. CI runs the gates on Python
+**3.12** while `/usr/bin/python3` on macOS is **3.9.6**, so a green local run is
+strong but not conclusive evidence for CI — version-sensitive syntax or stdlib
+behavior can pass one and fail the other. The catalog-membership check and the
+PR-title check are CI-side only (they need a base ref or a PR title).
 
 ## Review discipline — no unreviewed PRs
 
