@@ -195,7 +195,10 @@ nowhere.
 
 When a terminal write result includes `salvage`, it carries a recoverable implementer report from an
 ended attempt's stdout. The outcome remains a forfeit; its contents are the implementer's claims and
-must be independently re-verified before use.
+must be independently re-verified before use. Write salvage has two tiers: a structured report is
+gradeable only after that independent verification, while a prose-tier block has
+`requiresManualRead: true` and a scrubbed `excerpt` for a human or orchestrator to read. Prose is a
+pointer, never a gradeable report.
 
 ## Engine forfeits and order shape
 

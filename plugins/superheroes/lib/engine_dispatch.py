@@ -673,7 +673,7 @@ def _scan_write_report_candidates(run_dir_real, state):
             salvage = engine_adapter.salvage_write_report(
                 engine, role_kind, stdout, fed_prompt,
             )
-            if not isinstance(salvage, dict) or not isinstance(salvage.get("report"), dict):
+            if not isinstance(salvage, dict) or salvage.get("salvaged") is not True:
                 continue
             candidates.append({
                 "attempt": att,
@@ -710,7 +710,10 @@ def _attach_write_report_salvage(run_dir_real, state, terminal, engine):
     candidates = _scan_write_report_candidates(run_dir_real, state)
     if not candidates:
         return terminal
-    best = max(candidates, key=lambda candidate: candidate["attempt"])
+    best = max(candidates, key=lambda candidate: (
+        candidate["salvage"].get("structured") is True,
+        candidate["attempt"],
+    ))
     also = [
         {"attempt": candidate["attempt"], "stdoutPath": candidate["stdoutPath"]}
         for candidate in candidates

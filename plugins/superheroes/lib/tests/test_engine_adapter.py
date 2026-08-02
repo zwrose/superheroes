@@ -785,6 +785,8 @@ def test_salvage_write_report_recovers_stream_enveloped_report():
     assert EA.salvage_write_report("cursor", "build", _envelope(report), "fed prompt") == {
         "report": {"ok": True, "signal": "ok",
                    "evidence": {"testFailed": True, "testPassed": True}},
+        "structured": True,
+        "requiresManualRead": False,
         "salvaged": True,
         "truncated": False,
     }
@@ -817,6 +819,61 @@ def test_salvage_write_report_rejects_echo_sourced_example():
 def test_salvage_write_report_unreadable_is_none():
     # axis: fail-open on garbage — parse failure cannot mint a report.
     assert EA.salvage_write_report("codex", "build", "{not json", "prompt") is None
+
+
+_DISPATCH_1_PROSE = """Worktree changes left in:
+
+- `plugins/superheroes/lib/engine_adapter.py`
+- `plugins/superheroes/lib/tests/test_engine_adapter.py`
+
+Implemented `salvage_write_report`, E1–E9 coverage, echo-fabrication rejection, refusal recovery,
+truncation marking, and the 200-byte pin/absolute 195/205 boundary.
+
+Bite-proofs B1–B4 each produced the expected red test result and were restored with targeted
+inverse edits.
+
+Command report:
+
+- `/usr/bin/python3 -m pytest .../test_engine_adapter.py -q` initially ran: `198 passed in 4.40s`
+..."""
+
+
+def test_salvage_write_report_recovers_real_dispatch_prose_for_manual_read():
+    # axis: C1 prose recovery — the measured forfeited artifact must not be written off as garbage.
+    salvage = EA.salvage_write_report("codex", "build", _DISPATCH_1_PROSE, "fed prompt")
+    assert salvage == {
+        "report": None,
+        "structured": False,
+        "requiresManualRead": True,
+        "excerpt": EA._scrub(_DISPATCH_1_PROSE),
+        "excerptBytes": len(_DISPATCH_1_PROSE.encode("utf-8")),
+        "salvaged": True,
+        "truncated": False,
+    }
+
+
+def test_salvage_write_report_prose_never_synthesizes_report():
+    # axis: C2 fabrication — prose is a human pointer, never a gradeable result.
+    salvage = EA.salvage_write_report("codex", "build", _DISPATCH_1_PROSE, "fed prompt")
+    assert salvage is not None and salvage["report"] is None
+
+
+@pytest.mark.parametrize("stdout, prompt", [
+    ("Traceback (most recent call last):\n" + "frame\n" * 100, "fed prompt"),
+    ("x" * (EA.ARTIFACT_MIN_RESIDUE_BYTES - 1), "fed prompt"),
+    (_DISPATCH_1_PROSE, _DISPATCH_1_PROSE),
+])
+def test_salvage_write_report_rejects_traceback_below_floor_and_prompt_echo(stdout, prompt):
+    # axis: C3 noise admission — crash dumps, short residue, and echo cannot become prose salvage.
+    assert EA.salvage_write_report("codex", "build", stdout, prompt) is None
+
+
+def test_salvage_write_report_prose_excerpt_caps_bytes_without_multibyte_failure():
+    stdout = (_DISPATCH_1_PROSE + "\N{SNOWMAN}" * EA.ARTIFACT_EXCERPT_BYTES)
+    salvage = EA.salvage_write_report("codex", "build", stdout, "fed prompt")
+    assert salvage is not None
+    assert salvage["excerptBytes"] == EA.ARTIFACT_EXCERPT_BYTES
+    assert len(salvage["excerpt"].encode("utf-8")) <= EA.ARTIFACT_EXCERPT_BYTES
 
 
 def test_salvage_write_report_honest_refusal_is_recovered():

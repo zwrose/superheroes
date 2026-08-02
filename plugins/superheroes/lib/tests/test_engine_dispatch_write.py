@@ -487,6 +487,18 @@ def _write_report(*, ok=True):
     }
 
 
+def _prose_write_report():
+    return {
+        "report": None,
+        "structured": False,
+        "requiresManualRead": True,
+        "excerpt": "scrubbed prose pointer",
+        "excerptBytes": 22,
+        "salvaged": True,
+        "truncated": False,
+    }
+
+
 def test_write_forfeit_attaches_salvage_without_upgrading_outcome(tmp_path, monkeypatch):
     wt, _main = _linked_worktree(tmp_path)
 
@@ -534,6 +546,44 @@ def test_write_salvage_uses_latest_report_and_records_earlier_attempt(tmp_path, 
         "attempt": 1,
         "stdoutPath": os.path.join(str(tmp_path / "run"), "attempt-1.stdout"),
     }]
+
+
+def test_write_salvage_prefers_structured_report_over_later_prose(tmp_path, monkeypatch):
+    # axis: C4 structure must beat recency; prose remains visible in alsoRecovered.
+    wt, _main = _linked_worktree(tmp_path)
+
+    def recover(_engine, _role_kind, stdout, _fed_prompt):
+        if stdout == "structured report":
+            return _write_report()
+        if stdout == "prose report":
+            return _prose_write_report()
+        return None
+
+    _install_write_salvage(monkeypatch, recover)
+    res = _dispatch_write(tmp_path, FakeRunner([
+        ("structured report", True, 0, ""),
+        ("prose report", True, 0, ""),
+    ]), cwd=wt)
+
+    assert res["salvage"]["attempt"] == 1
+    assert res["salvage"]["structured"] is True
+    assert res["salvage"]["alsoRecovered"] == [{
+        "attempt": 2,
+        "stdoutPath": os.path.join(str(tmp_path / "run"), "attempt-2.stdout"),
+    }]
+
+
+def test_write_salvage_prose_survives_ledger_scrubbing(tmp_path):
+    salvage = _prose_write_report()
+    salvage["excerpt"] = "token ghp_abcdefghijklmnopqrstuvwxyz1234567890"
+    row = ED._build_ledger_row(str(tmp_path), {"opened": {}, "attempts": {}}, {
+        "ok": False,
+        "salvage": salvage,
+    })
+    assert row["salvage"]["report"] is None
+    assert row["salvage"]["structured"] is False
+    assert row["salvage"]["requiresManualRead"] is True
+    assert row["salvage"]["excerpt"] != salvage["excerpt"]
 
 
 def test_write_dirty_tree_forfeit_attaches_salvage(tmp_path, monkeypatch):

@@ -583,7 +583,21 @@ def salvage_write_report(engine, role_kind, stdout, fed_prompt):
 
         parsed = parse_result(engine, role_kind, residue)
         if parsed.get("reason") == "unreadable":
-            return None
+            residue_bytes = len(residue.encode("utf-8"))
+            if (residue_bytes < ARTIFACT_MIN_RESIDUE_BYTES or
+                    _artifact_is_prompt_echo_residue(residue, prompt) or
+                    _artifact_is_traceback_residue(residue)):
+                return None
+            excerpt_raw = residue.encode("utf-8")[:ARTIFACT_EXCERPT_BYTES]
+            return {
+                "report": None,
+                "structured": False,
+                "requiresManualRead": True,
+                "excerpt": _scrub(excerpt_raw.decode("utf-8", errors="ignore")),
+                "excerptBytes": len(excerpt_raw),
+                "salvaged": True,
+                "truncated": residue_bytes > ARTIFACT_EXCERPT_BYTES,
+            }
         report = {
             "ok": parsed.get("ok") is True,
             "signal": parsed.get("signal"),
@@ -602,7 +616,13 @@ def salvage_write_report(engine, role_kind, stdout, fed_prompt):
         json_like_tail = bool(re.match(r'^\s*(?:\{\s*(?:"|\})|\[)', tail))
         truncated = json_like_tail and _last_json_object(tail) is None and \
             _last_json_array(tail) is None
-        return {"report": report, "salvaged": True, "truncated": truncated}
+        return {
+            "report": report,
+            "structured": True,
+            "requiresManualRead": False,
+            "salvaged": True,
+            "truncated": truncated,
+        }
     except Exception:
         return None
 
