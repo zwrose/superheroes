@@ -487,7 +487,8 @@ def quarantine_entry(slots_dir_path, source_path, *, slot_ref, reason, occupant,
     entry_path = os.path.join(qdir, entry_name)
     sidecar_path = entry_path + SIDECAR_SUFFIX
 
-    if os.path.lexists(qdir):
+    qdir_existed = os.path.lexists(qdir)
+    if qdir_existed:
         refused = _refuse_unsafe_quarantine_dir(qdir)
         if refused is not None:
             return _fail(
@@ -503,8 +504,19 @@ def quarantine_entry(slots_dir_path, source_path, *, slot_ref, reason, occupant,
             entryName=None, entryPath=None, sidecarPath=None,
         )
 
+    qdir_created = not qdir_existed
+    if qdir_created:
+        try:
+            _fsync_dir(os.path.dirname(os.path.abspath(qdir)))
+        except OSError:
+            return _fail(
+                REASON_SIDECAR_WRITE_FAILED,
+                entryName=None, entryPath=None, sidecarPath=None,
+            )
+
     try:
-        _fsync_dir(os.path.dirname(os.path.abspath(qdir)))
+        if not qdir_created:
+            _fsync_dir(os.path.dirname(os.path.abspath(qdir)))
         _fsync_dir(qdir)
     except OSError:
         pass
@@ -790,13 +802,12 @@ def sweep(slots_dir_path, *, now, receipts=None):
     qdir_result = quarantine_dir(slots_dir_path)
     qdir = qdir_result["path"]
 
-    if os.path.isdir(qdir):
-        refused = _refuse_unsafe_quarantine_dir(qdir)
-        if refused is not None:
-            return _fail(
-                refused["reason"],
-                deleted=deleted, warned=warned, retained=retained,
-            )
+    refused = _refuse_unsafe_quarantine_dir(qdir)
+    if refused is not None:
+        return _fail(
+            refused["reason"],
+            deleted=deleted, warned=warned, retained=retained,
+        )
 
     if not os.path.isdir(qdir):
         _scan_journal_segments(slots_dir_path, warned)

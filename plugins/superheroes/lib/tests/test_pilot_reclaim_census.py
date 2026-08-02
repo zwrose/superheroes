@@ -3,6 +3,8 @@ import ast
 import os
 import sys
 
+import pytest
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.realpath(os.path.join(_HERE, ".."))
 if _LIB not in sys.path:
@@ -173,10 +175,6 @@ class _DestructiveCallVisitor(ast.NodeVisitor):
             for alias in node.names:
                 name = alias.asname or alias.name
                 self.import_aliases[name] = "shutil.%s" % alias.name
-        elif node.module == "os":
-            for alias in node.names:
-                name = alias.asname or alias.name
-                self.import_aliases[name] = "os.%s" % alias.name
         elif node.module == "pathlib":
             for alias in node.names:
                 name = alias.asname or alias.name
@@ -257,6 +255,10 @@ class _IdentifierVisitor(ast.NodeVisitor):
             for alias in node.names:
                 name = alias.asname or alias.name
                 self.import_aliases[name] = "shutil.%s" % alias.name
+        elif node.module == "os":
+            for alias in node.names:
+                name = alias.asname or alias.name
+                self.import_aliases[name] = "os.%s" % alias.name
         self.generic_visit(node)
 
     def visit_Name(self, node):
@@ -398,6 +400,82 @@ def test_only_authorized_shutil_rmtree_in_reclaim_modules():
         )
 
 
+def _check_free_space_in_snippet(source, module_name="snippet"):
+    tree = ast.parse(source, filename=module_name)
+    id_visitor = _IdentifierVisitor()
+    id_visitor.visit(tree)
+    for lineno, name in id_visitor.names:
+        lower = name.lower()
+        if name in _FORBIDDEN_FREE_SPACE or "disk_usage" in lower or "statvfs" in lower:
+            raise AssertionError(
+                "forbidden free-space read %r at %s:%d"
+                % (name, module_name, lineno)
+            )
+    for alias_name, resolved in id_visitor.import_aliases.items():
+        if resolved in _FORBIDDEN_FREE_SPACE or "disk_usage" in resolved or "statvfs" in resolved:
+            raise AssertionError(
+                "forbidden free-space import %r -> %r in %s"
+                % (alias_name, resolved, module_name)
+            )
+
+
+def _check_destructive_in_snippet(source, module_name="snippet"):
+    tree = ast.parse(source, filename=module_name)
+    visitor = _DestructiveCallVisitor(module_name)
+    visitor.visit(tree)
+    return visitor.calls, visitor.subprocess_calls
+
+
+def test_free_space_detector_flags_os_statvfs_alias():
+    with pytest.raises(AssertionError, match="forbidden free-space"):
+        _check_free_space_in_snippet(
+            "from os import statvfs as free\nx = free('/')\n",
+            "os_statvfs_alias",
+        )
+
+
+def test_free_space_detector_flags_shutil_disk_usage_alias():
+    with pytest.raises(AssertionError, match="forbidden free-space"):
+        _check_free_space_in_snippet(
+            "from shutil import disk_usage as usage\nx = usage('/')\n",
+            "shutil_disk_usage_alias",
+        )
+
+
+def test_destructive_detector_flags_shutil_rmtree_attribute():
+    calls, subprocess = _check_destructive_in_snippet("import shutil\nshutil.rmtree('/x')\n")
+    assert calls == [(2, "shutil.rmtree")]
+    assert subprocess == []
+
+
+def test_destructive_detector_flags_bare_rmtree_after_import():
+    calls, subprocess = _check_destructive_in_snippet("from shutil import rmtree\nrmtree('/x')\n")
+    assert calls == [(2, "shutil.rmtree")]
+    assert subprocess == []
+
+
+def test_destructive_detector_flags_aliased_rmtree():
+    calls, subprocess = _check_destructive_in_snippet(
+        "from shutil import rmtree as rm\nrm('/x')\n"
+    )
+    assert calls == [(2, "shutil.rmtree")]
+    assert subprocess == []
+
+
+def test_destructive_detector_flags_path_unlink_call_receiver():
+    calls, subprocess = _check_destructive_in_snippet(
+        "from pathlib import Path\nPath('/x').unlink()\n"
+    )
+    assert calls == [(2, "pathlib.Path.unlink")]
+    assert subprocess == []
+
+
+def test_destructive_detector_flags_subprocess():
+    calls, subprocess = _check_destructive_in_snippet("import subprocess\nsubprocess.run(['rm', '-rf', '/'])\n")
+    assert calls == []
+    assert subprocess == [(2, "subprocess.run")]
+
+
 def test_no_free_space_read_in_reclaim_modules():
     """Neither module references disk_usage or statvfs."""
     for module in (pilot_reclaim, pilot_fence):
@@ -445,10 +523,15 @@ def test_grace_hours_threshold_matches_doc():
 _LAYOUT_FILENAME_SITES = {
     "slot.json": ("pilot_lifecycle", "record_path"),
     ".slot.lock": ("pilot_lifecycle", "lock_path"),
-    "journal.ndjson": ("pilot_reclaim", "_journal_segment_re_for"),
-    ".pilot-quarantine": ("pilot_reclaim", "QUARANTINE_DIR_NAME"),
-    ".quarantine.json": ("pilot_reclaim", "SIDECAR_SUFFIX"),
+    "journal.ndjson": ("caller", "journal_path"),
+    ".pilot-quarantine": ("pilot_reclaim", "quarantine_dir"),
+    ".quarantine.json": ("pilot_reclaim", "sidecar_path"),
 }
+
+
+def _default_journal_path(slots_dir, slot):
+    """Documented caller pattern for the live journal path (see test_pilot_reclaim_journal)."""
+    return os.path.join(slots_dir, slot, "journal.ndjson")
 
 
 def test_on_disk_layout_filenames_match_lib():
@@ -471,10 +554,17 @@ def test_on_disk_layout_filenames_match_lib():
             elif attr == "lock_path":
                 path = pl_mod.lock_path("/slots", "slot-a")
                 assert path.endswith(filename)
-        elif module_name == "pilot_reclaim":
-            if attr == "_journal_segment_re_for":
-                journal_path = os.path.join("/slots", "slot-a", filename)
+        elif module_name == "caller":
+            if attr == "journal_path":
+                journal_path = _default_journal_path("/slots", "slot-a")
+                assert journal_path.endswith(filename)
                 seg_re = pilot_reclaim._journal_segment_re_for(journal_path)
                 assert seg_re.match("journal.0001.ndjson")
-            else:
-                assert getattr(pilot_reclaim, attr) == filename
+        elif module_name == "pilot_reclaim":
+            if attr == "quarantine_dir":
+                path = pilot_reclaim.quarantine_dir("/slots")["path"]
+                assert path.endswith(filename)
+            elif attr == "sidecar_path":
+                qdir = pilot_reclaim.quarantine_dir("/slots")["path"]
+                sidecar = os.path.join(qdir, "entry%s" % pilot_reclaim.SIDECAR_SUFFIX)
+                assert sidecar.endswith(filename)

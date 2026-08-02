@@ -379,6 +379,51 @@ def test_quarantine_entry_refuses_rename_failed(tmp_path):
     assert os.path.isdir(source)
 
 
+def test_quarantine_entry_refuses_parent_fsync_on_new_qdir(tmp_path):
+    slots = _slots_dir(tmp_path)
+    source = _payload_dir(str(tmp_path))
+    calls = {"n": 0}
+    original = pr._fsync_dir
+
+    def flaky_fsync(path):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("parent fsync fail")
+        return original(path)
+
+    with mock.patch.object(pr, "_fsync_dir", side_effect=flaky_fsync):
+        result = pr.quarantine_entry(
+            slots, source, slot_ref=_SLOT_REF, reason=_REASON,
+            occupant=_occupant(), now=_NOW,
+        )
+    assert result["reason"] == pr.REASON_SIDECAR_WRITE_FAILED
+    assert os.path.isdir(source)
+
+
+def test_quarantine_entry_allows_parent_fsync_fail_when_qdir_exists(tmp_path):
+    slots = _slots_dir(tmp_path)
+    qdir = pr.quarantine_dir(slots)["path"]
+    os.makedirs(qdir)
+    source = _payload_dir(str(tmp_path))
+    calls = {"n": 0}
+    original = pr._fsync_dir
+
+    def flaky_fsync(path):
+        calls["n"] += 1
+        parent = os.path.dirname(os.path.abspath(qdir))
+        if path == parent and calls["n"] == 1:
+            raise OSError("parent fsync fail")
+        return original(path)
+
+    with mock.patch.object(pr, "_fsync_dir", side_effect=flaky_fsync):
+        result = pr.quarantine_entry(
+            slots, source, slot_ref=_SLOT_REF, reason=_REASON,
+            occupant=_occupant(), now=_NOW,
+        )
+    assert result["ok"] is True
+    assert not os.path.exists(source)
+
+
 def test_quarantine_entry_sidecar_write_failed_before_rename(tmp_path):
     slots = _slots_dir(tmp_path)
     source = _payload_dir(str(tmp_path))
@@ -717,6 +762,25 @@ def test_sweep_resumes_deletion_authorized(tmp_path):
     assert sweep["deleted"][0]["kind"] == "entry"
 
 
+def test_sweep_resumes_deletion_authorized_refuses_inside_grace(tmp_path):
+    slots = _slots_dir(tmp_path)
+    result = _quarantine(slots, now=_NOW)
+    sidecar = pr.read_sidecar(result["sidecarPath"])["sidecar"]
+    receipt = _receipt_for(sidecar, observed_at=_NOW_LATE)
+    auth_sidecar = dict(sidecar)
+    auth_sidecar["status"] = pr.STATUS_DELETION_AUTHORIZED
+    auth_sidecar["terminalReceipt"] = receipt
+    auth_sidecar["deletionAuthorizedAt"] = _NOW
+    _write_sidecar_raw(result["sidecarPath"], auth_sidecar)
+    sweep = pr.sweep(slots, now=_NOW)
+    assert sweep["deleted"] == []
+    assert os.path.isdir(result["entryPath"])
+    assert any(
+        e["reason"] == pr.REASON_GRACE_NOT_ELAPSED
+        for e in sweep["retained"] + sweep["warned"]
+    )
+
+
 def test_sweep_refuses_deletion_authorized_without_receipt(tmp_path):
     slots = _slots_dir(tmp_path)
     result = _quarantine(slots, now=_NOW_EARLY)
@@ -736,13 +800,14 @@ def test_sweep_refuses_deletion_authorized_without_receipt(tmp_path):
 def test_sweep_refuses_sidecar_entry_name_mismatch(tmp_path):
     slots = _slots_dir(tmp_path)
     result_a = _quarantine(slots, now=_NOW_EARLY)
+    filename_entry_name = result_a["entryName"]
     loaded = pr.read_sidecar(result_a["sidecarPath"])["sidecar"]
     loaded["entryName"] = "wrong-entry-name"
     _write_sidecar_raw(result_a["sidecarPath"], loaded)
     receipt = _receipt_for(loaded)
     sweep = pr.sweep(
         slots, now=_NOW_LATE,
-        receipts={loaded["entryName"]: receipt},
+        receipts={filename_entry_name: receipt},
     )
     assert sweep["deleted"] == []
     assert os.path.isdir(result_a["entryPath"])
@@ -796,10 +861,14 @@ def test_sweep_resume_payload_gone_tombstone_write(tmp_path):
     auth_sidecar["deletionAuthorizedAt"] = _NOW_LATE
     _write_sidecar_raw(result["sidecarPath"], auth_sidecar)
     shutil.rmtree(result["entryPath"])
-    sweep = pr.sweep(slots, now=_NOW_LATE)
-    assert len(sweep["retained"]) == 1
-    tombstone = pr.read_sidecar(result["sidecarPath"])
-    assert tombstone["sidecar"]["status"] == pr.STATUS_DELETED
+    with mock.patch.object(pr, "_write_sidecar", return_value=False):
+        sweep = pr.sweep(slots, now=_NOW_LATE)
+    assert any(
+        w["reason"] == pr.REASON_SIDECAR_WRITE_FAILED for w in sweep["warned"]
+    )
+    assert any(
+        r["reason"] == pr.REASON_SIDECAR_WRITE_FAILED for r in sweep["retained"]
+    )
 
 
 def test_sweep_pending_move_not_applied(tmp_path):
@@ -827,6 +896,23 @@ def test_sweep_refuses_symlinked_quarantine(tmp_path):
     os.makedirs(real_q)
     link_q = os.path.join(slots, pr.QUARANTINE_DIR_NAME)
     os.symlink(real_q, link_q)
+    result = pr.sweep(slots, now=_NOW_LATE)
+    assert result["reason"] == pr.REASON_QUARANTINE_DIR_UNSAFE
+
+
+def test_sweep_refuses_dangling_symlink_quarantine(tmp_path):
+    slots = _slots_dir(tmp_path)
+    link_q = os.path.join(slots, pr.QUARANTINE_DIR_NAME)
+    os.symlink("/nonexistent/quarantine-target", link_q)
+    result = pr.sweep(slots, now=_NOW_LATE)
+    assert result["reason"] == pr.REASON_QUARANTINE_DIR_UNSAFE
+
+
+def test_sweep_refuses_file_quarantine(tmp_path):
+    slots = _slots_dir(tmp_path)
+    file_q = os.path.join(slots, pr.QUARANTINE_DIR_NAME)
+    with open(file_q, "w") as fh:
+        fh.write("not a directory")
     result = pr.sweep(slots, now=_NOW_LATE)
     assert result["reason"] == pr.REASON_QUARANTINE_DIR_UNSAFE
 
