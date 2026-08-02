@@ -286,6 +286,7 @@ def test_step_order_fence_plus_destructive_disjoint():
 
 def test_retryable_reasons_reachable_in_appctl_source():
     import pathlib
+    import re
 
     source = pathlib.Path(pa.__file__).read_text(encoding="utf-8")
     name_by_token = {
@@ -295,7 +296,18 @@ def test_retryable_reasons_reachable_in_appctl_source():
     }
     for token in pa.RETRYABLE_REASONS:
         const_name = name_by_token[token]
-        assert source.count(const_name) >= 2, const_name
+        assigned = re.search(
+            r"readiness_reason\s*=\s*" + re.escape(const_name),
+            source,
+        )
+        returned = re.search(
+            r"return\s+_stand_up_failure\(\s*" + re.escape(const_name),
+            source,
+        )
+        assert assigned or returned, (
+            "%s is in RETRYABLE_REASONS but is not assigned to readiness_reason "
+            "or returned from stand_up" % const_name
+        )
 
 
 def test_app_lifecycle_declaration_kind():
@@ -331,6 +343,36 @@ def test_census_red_on_undocumented_wave_reason(monkeypatch):
     monkeypatch.setattr(pw, "REASON_CENSUS_PROBE", fake, raising=False)
     with pytest.raises(AssertionError, match="missing from doc.*wave-census-probe"):
         test_wave_reason_tokens_bidirectional()
+
+
+def test_census_red_on_unreachable_retryable_reason():
+    import pathlib
+    import re
+
+    source = pathlib.Path(pa.__file__).read_text(encoding="utf-8")
+    neutralized = source.replace(
+        "readiness_reason = REASON_READINESS_TRANSPORT_ERROR",
+        "readiness_reason = REASON_READINESS_TIMEOUT",
+    )
+    name_by_token = {
+        getattr(pa, name): name
+        for name in dir(pa)
+        if name.startswith("REASON_") and isinstance(getattr(pa, name), str)
+    }
+    missing = []
+    for token in pa.RETRYABLE_REASONS:
+        const_name = name_by_token[token]
+        assigned = re.search(
+            r"readiness_reason\s*=\s*" + re.escape(const_name),
+            neutralized,
+        )
+        returned = re.search(
+            r"return\s+_stand_up_failure\(\s*" + re.escape(const_name),
+            neutralized,
+        )
+        if not (assigned or returned):
+            missing.append(const_name)
+    assert missing == ["REASON_READINESS_TRANSPORT_ERROR"]
 
 
 def test_census_red_on_bind_conflict_in_retryable(monkeypatch):

@@ -669,6 +669,75 @@ def test_journal_cleanup_indeterminate(tmp_dir):
     assert effects[0]["state"] == pj.STATE_POSSIBLY_APPLIED
 
 
+def test_run_destructive_step_cleanup_journal_end_write_failure(tmp_dir, monkeypatch):
+    journal = _journal(tmp_dir)
+    real_end = pj.end_effect
+    receipt = _receipt(step=pw.STEP_CLEANUP, evidence="cleaned")
+
+    def fail_end(*args, **kwargs):
+        return {"ok": False, "reason": pj.REASON_JOURNAL_WRITE_FAILED}
+
+    monkeypatch.setattr(pj, "end_effect", fail_end)
+    result = pw.teardown_slot(
+        _entry(intent=pw.INTENT_COMPLETE),
+        handlers={
+            pw.STEP_APP: lambda ctx: _applied(pw.STEP_APP),
+            pw.STEP_AUTOMATION: lambda ctx: _applied(pw.STEP_AUTOMATION),
+            pw.STEP_CLEANUP: lambda ctx: {
+                "outcome": pj.OUTCOME_APPLIED,
+                "receipt": receipt,
+                "reason": None,
+            },
+            pw.STEP_RECLAIM: lambda ctx: _applied(pw.STEP_RECLAIM),
+        },
+        slots_dir_path=_slots_dir(tmp_dir),
+        journal_path=journal,
+        now_fn=_now_fn,
+        monotonic=_mono_sequence([0.0, 1.0, 2.0, 3.0, 4.0, 5.0]),
+    )
+    cleanup = result["steps"][pw.STEP_CLEANUP]
+    assert cleanup["status"] == pw.STATUS_INDETERMINATE
+    assert cleanup["reason"] == pw.REASON_STEP_INDETERMINATE
+    assert cleanup["status"] != pw.STATUS_CONFIRMED
+
+
+def test_run_destructive_step_preserves_evidence_when_bookkeeping_raises(
+    tmp_dir, monkeypatch,
+):
+    journal = _journal(tmp_dir)
+    receipt = _receipt(step=pw.STEP_CLEANUP, evidence="cleaned")
+    calls = {"n": 0}
+
+    def flaky_now():
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise RuntimeError("bookkeeping blew up")
+        return _TS2
+
+    result = pw._run_destructive_step(
+        pw.STEP_CLEANUP,
+        _entry(intent=pw.INTENT_COMPLETE),
+        {
+            pw.STEP_CLEANUP: lambda ctx: {
+                "outcome": pj.OUTCOME_APPLIED,
+                "receipt": receipt,
+                "reason": None,
+            },
+        },
+        {"steps": {pw.STEP_APP: {"status": pw.STATUS_CONFIRMED},
+                   pw.STEP_AUTOMATION: {"status": pw.STATUS_CONFIRMED}}},
+        lambda: 1.0,
+        30.0,
+        _slots_dir(tmp_dir),
+        journal,
+        flaky_now,
+        30.0,
+    )
+    assert result["status"] == pw.STATUS_INDETERMINATE
+    assert result["reason"] == pw.REASON_STEP_INDETERMINATE
+    assert result["receipt"] == receipt
+
+
 def test_journal_no_record_when_cleanup_refused_park(tmp_dir):
     journal = _journal(tmp_dir)
     pw.teardown_slot(

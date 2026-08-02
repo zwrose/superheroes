@@ -1,4 +1,5 @@
 """Tests for pilot per-slot app instance control."""
+import contextlib
 import http.server
 import json
 import os
@@ -476,7 +477,7 @@ def test_stand_up_spawn_oserror_not_applied():
         shutil.rmtree(tmp)
 
 
-def test_stand_up_readiness_timeout_indeterminate():
+def test_stand_up_readiness_transport_error_at_deadline():
     tmp = _tmp_dir()
     try:
         cwd = os.path.join(tmp, "wt")
@@ -510,8 +511,47 @@ def test_stand_up_readiness_timeout_indeterminate():
             monotonic=lambda: next(times, 99.0),
             sleep=lambda _t: None,
         )
-        assert result["reason"] == pa.REASON_READINESS_TIMEOUT
+        assert result["reason"] == pa.REASON_READINESS_TRANSPORT_ERROR
         assert _journal_lines(journal)[-1]["outcome"] == pj.OUTCOME_INDETERMINATE
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_stand_up_readiness_timeout_no_status():
+    tmp = _tmp_dir()
+    try:
+        cwd = os.path.join(tmp, "wt")
+        os.makedirs(cwd)
+        slots_dir = os.path.join(tmp, "slots")
+        _setup_slot(slots_dir)
+        journal = os.path.join(tmp, "journal.jsonl")
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        launch = _launch_base(cwd, port, f"http://127.0.0.1:{port}/ready")
+        times = iter([0.0, 5.0])
+
+        result = pa.stand_up(
+            launch,
+            journal_path=journal,
+            slots_dir_path=slots_dir,
+            now=NOW,
+            now_fn=_now_seq(),
+            registry=_registry(),
+            declaration=_DECLARATION,
+            spawn=lambda argv, *, cwd, env: subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(30)"],
+                cwd=cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            ),
+            readiness_probe=lambda *_a, **_k: {"status": None, "body": "", "error": None},
+            monotonic=lambda: next(times, 99.0),
+            sleep=lambda _t: None,
+        )
+        assert result["reason"] == pa.REASON_READINESS_TIMEOUT
     finally:
         shutil.rmtree(tmp)
 
@@ -1427,3 +1467,259 @@ def test_stand_up_journal_end_write_failure(monkeypatch):
                 pass
     finally:
         shutil.rmtree(tmp)
+
+
+def test_write_instance_locked_inside_slot_lock_succeeds_quickly():
+    tmp = _tmp_dir()
+    try:
+        slots_dir = os.path.join(tmp, "slots")
+        _setup_slot(slots_dir)
+        stdout_path, stderr_path = pa._instance_log_paths(slots_dir, SLOT)
+        inst = _instance_record(
+            state=pa.STATE_STARTING,
+            pid=0,
+            pgid=0,
+            stdoutPath=stdout_path,
+            stderrPath=stderr_path,
+        )
+        t0 = time.monotonic()
+        with pl.slot_lock(slots_dir, SLOT, timeout=0.5):
+            result = pa._write_instance_locked(slots_dir, SLOT, inst)
+        elapsed = time.monotonic() - t0
+        assert result["ok"] is True, result
+        assert elapsed < 0.25, elapsed
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_write_instance_refuses_when_lock_held_externally():
+    tmp = _tmp_dir()
+    try:
+        slots_dir = os.path.join(tmp, "slots")
+        _setup_slot(slots_dir)
+        stdout_path, stderr_path = pa._instance_log_paths(slots_dir, SLOT)
+        inst = _instance_record(
+            state=pa.STATE_STARTING,
+            pid=0,
+            pgid=0,
+            stdoutPath=stdout_path,
+            stderrPath=stderr_path,
+        )
+        held = threading.Event()
+        release = threading.Event()
+
+        def holder():
+            with pl.slot_lock(slots_dir, SLOT):
+                held.set()
+                release.wait(timeout=5.0)
+
+        thread = threading.Thread(target=holder)
+        thread.start()
+        held.wait(timeout=5.0)
+        t0 = time.monotonic()
+        result = pa.write_instance(slots_dir, SLOT, inst, timeout=0.2)
+        elapsed = time.monotonic() - t0
+        release.set()
+        thread.join(timeout=5.0)
+        assert result["ok"] is False
+        assert result["reason"] == pa.REASON_INSTANCE_RECORD_WRITE_FAILED
+        assert elapsed >= 0.15
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_stand_up_post_spawn_lock_failure_compensates_child(monkeypatch):
+    tmp = _tmp_dir()
+    try:
+        cwd = os.path.join(tmp, "wt")
+        os.makedirs(cwd)
+        slots_dir = os.path.join(tmp, "slots")
+        _setup_slot(slots_dir)
+        journal = os.path.join(tmp, "journal.jsonl")
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        launch = _launch_base(cwd, port, f"http://127.0.0.1:{port}/ready")
+        child_holder = {}
+        real_slot_lock = pl.slot_lock
+        calls = {"n": 0}
+
+        @contextlib.contextmanager
+        def flaky_slot_lock(slots_dir_path, slot, *, timeout=30.0):
+            calls["n"] += 1
+            if calls["n"] >= 3:
+                raise pl.PilotLifecycleError(pl.REASON_LOCK_UNAVAILABLE)
+            with real_slot_lock(slots_dir_path, slot, timeout=timeout):
+                yield
+
+        monkeypatch.setattr(pl, "slot_lock", flaky_slot_lock)
+        result = pa.stand_up(
+            launch,
+            journal_path=journal,
+            slots_dir_path=slots_dir,
+            now=NOW,
+            now_fn=_now_seq(),
+            registry=_registry(),
+            declaration=_DECLARATION,
+            spawn=lambda argv, *, cwd, env: (
+                child_holder.update({
+                    "nonce": env["SUPERHEROES_PILOT_LAUNCH_NONCE"],
+                    "proc": subprocess.Popen(
+                        [sys.executable, "-c", "import time; time.sleep(60)"],
+                        cwd=cwd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    ),
+                }) or child_holder["proc"]
+            ),
+            readiness_probe=lambda *_a, **_k: {
+                "status": 200,
+                "body": child_holder.get("nonce", ""),
+                "error": None,
+            },
+            monotonic=lambda: 0.0,
+            sleep=lambda _t: None,
+        )
+        assert result["ok"] is False
+        assert result["reason"] == pa.REASON_SLOT_STATE_NOT_LAUNCHABLE
+        proc = child_holder.get("proc")
+        assert proc is not None
+        proc.wait(timeout=_JOIN_TIMEOUT)
+        assert _journal_lines(journal)[-1]["outcome"] == pj.OUTCOME_INDETERMINATE
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_stand_up_readiness_failure_journal_end_fails_compensates_child(monkeypatch):
+    tmp = _tmp_dir()
+    child_holder = {}
+    try:
+        cwd = os.path.join(tmp, "wt")
+        os.makedirs(cwd)
+        slots_dir = os.path.join(tmp, "slots")
+        _setup_slot(slots_dir)
+        journal = os.path.join(tmp, "journal.jsonl")
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        launch = _launch_base(cwd, port, f"http://127.0.0.1:{port}/ready")
+        real_end = pj.end_effect
+
+        def fail_indeterminate_end(*args, **kwargs):
+            if kwargs.get("outcome") == pj.OUTCOME_INDETERMINATE:
+                return {"ok": False, "reason": pj.REASON_JOURNAL_WRITE_FAILED}
+            return real_end(*args, **kwargs)
+
+        monkeypatch.setattr(pj, "end_effect", fail_indeterminate_end)
+        compensate_calls = {"n": 0}
+        real_compensate = pa._compensate_running_child
+
+        def track_compensate(*args, **kwargs):
+            compensate_calls["n"] += 1
+            return real_compensate(*args, **kwargs)
+
+        monkeypatch.setattr(pa, "_compensate_running_child", track_compensate)
+        times = iter([0.0, 5.0])
+        result = pa.stand_up(
+            launch,
+            journal_path=journal,
+            slots_dir_path=slots_dir,
+            now=NOW,
+            now_fn=_now_seq(),
+            registry=_registry(),
+            declaration=_DECLARATION,
+            spawn=lambda argv, *, cwd, env: (
+                child_holder.update({"proc": subprocess.Popen(
+                    [sys.executable, "-c", "import time; time.sleep(60)"],
+                    cwd=cwd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )}) or child_holder["proc"]
+            ),
+            readiness_probe=lambda *_a, **_k: {"status": None, "body": "", "error": "down"},
+            monotonic=lambda: next(times, 99.0),
+            sleep=lambda _t: None,
+        )
+        assert result["ok"] is False
+        assert result["reason"] == pa.REASON_JOURNAL_WRITE_FAILED
+        assert compensate_calls["n"] >= 1
+    finally:
+        proc = child_holder.get("proc")
+        if proc is not None and proc.poll() is None:
+            try:
+                os.kill(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
+        shutil.rmtree(tmp)
+
+
+def test_stand_up_log_symlink_refuses_spawn():
+    tmp = _tmp_dir()
+    try:
+        cwd = os.path.join(tmp, "wt")
+        os.makedirs(cwd)
+        slots_dir = os.path.join(tmp, "slots")
+        _setup_slot(slots_dir)
+        journal = os.path.join(tmp, "journal.jsonl")
+        victim = os.path.join(tmp, "victim.log")
+        with open(victim, "w", encoding="utf-8") as fh:
+            fh.write("precious\n")
+        slot_dir = os.path.join(slots_dir, SLOT)
+        os.symlink(victim, os.path.join(slot_dir, "app.stdout.log"))
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        launch = _launch_base(cwd, port, f"http://127.0.0.1:{port}/ready")
+        result = pa.stand_up(
+            launch,
+            journal_path=journal,
+            slots_dir_path=slots_dir,
+            now=NOW,
+            now_fn=_now_seq(),
+            registry=_registry(),
+            declaration=_DECLARATION,
+            monotonic=lambda: 0.0,
+            sleep=lambda _t: None,
+        )
+        assert result["ok"] is False
+        assert result["reason"] == pa.REASON_SPAWN_FAILED
+        with open(victim, encoding="utf-8") as fh:
+            assert fh.read() == "precious\n"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_validate_instance_rejects_foreign_stop_receipt():
+    inst = _instance_record(
+        state=pa.STATE_STOPPED,
+        stopReceipt={
+            "step": "app-instance",
+            "slotRef": "slotb@1",
+            "observedAt": NOW,
+            "evidence": "evidence about a DIFFERENT slot",
+        },
+    )
+    with pytest.raises(pa.PilotAppctlError) as exc:
+        pa._validate_instance_record(inst)
+    assert exc.value.reason == pa.REASON_INSTANCE_RECORD_INVALID
+
+
+def test_stop_rejects_foreign_stop_receipt_on_stopped_record():
+    inst = _instance_record(
+        state=pa.STATE_STOPPED,
+        stopReceipt={
+            "step": "app-instance",
+            "slotRef": "slotb@1",
+            "observedAt": NOW,
+            "evidence": "evidence about a DIFFERENT slot",
+        },
+    )
+    result = pa.stop(inst, now_fn=lambda: NOW)
+    assert result["ok"] is False
+    assert result["reason"] == pa.REASON_INSTANCE_RECORD_INVALID
+    assert result["observed"] is False

@@ -836,3 +836,87 @@ def test_stand_up_exercised_registry_refuses_nul_argv_without_leak():
         assert result["reason"] == pa.REASON_COMMAND_INVALID
     finally:
         shutil.rmtree(tmp)
+
+
+def _exercised_registry(declaration):
+    digest = pc.declaration_digest(declaration)
+    return {
+        "schemaVersion": pc.REGISTRY_SCHEMA_VERSION,
+        "records": [{
+            "kind": "app-lifecycle",
+            "declarationDigest": digest,
+            "exercisedAt": NOW,
+            "receipt": {"result": "pass", "evidence": "ok"},
+        }],
+    }
+
+
+@pytest.mark.parametrize(
+    "registry,declaration,slots_dir_path,expected",
+    [
+        (
+            _exercised_registry({"evidence": "x"}),
+            {"bad": {1, 2, 3}},
+            None,
+            pa.REASON_DECLARATION_UNEXERCISED,
+        ),
+        (
+            _exercised_registry({"value": 1.0}),
+            {"value": float("nan")},
+            None,
+            pa.REASON_DECLARATION_UNEXERCISED,
+        ),
+        (
+            _exercised_registry({"evidence": "x"}),
+            ["not", "a", "dict"],
+            None,
+            pa.REASON_DECLARATION_UNEXERCISED,
+        ),
+        (
+            ["not", "a", "dict"],
+            {"evidence": "app-lifecycle exercised"},
+            None,
+            pa.REASON_DECLARATION_UNEXERCISED,
+        ),
+        (
+            _exercised_registry({"evidence": "x"}),
+            {"evidence": "app-lifecycle exercised"},
+            ["not", "a", "path"],
+            pa.REASON_INSTANCE_RECORD_INVALID,
+        ),
+        (
+            _exercised_registry({"evidence": "x"}),
+            {"evidence": "app-lifecycle exercised"},
+            42,
+            pa.REASON_INSTANCE_RECORD_INVALID,
+        ),
+    ],
+)
+def test_stand_up_malformed_inputs_with_exercised_registry(
+    registry, declaration, slots_dir_path, expected,
+):
+    tmp = _tmp_dir()
+    try:
+        cwd = os.path.join(tmp, "wt")
+        os.makedirs(cwd)
+        slots_dir = os.path.join(tmp, "slots")
+        os.makedirs(slots_dir, exist_ok=True)
+        created = pl.create_slot(slots_dir, SLOT, ACCOUNTS, now=NOW)
+        rec = pl.transition(created["record"], pl.STATE_PROVISIONED, now=NOW)
+        pl.write_record(pl.record_path(slots_dir, SLOT), rec)
+        journal = os.path.join(tmp, "journal.jsonl")
+        launch = _valid_launch(cwd)
+        result = pa.stand_up(
+            launch,
+            journal_path=journal,
+            slots_dir_path=slots_dir if slots_dir_path is None else slots_dir_path,
+            now=NOW,
+            now_fn=lambda: NOW,
+            registry=registry,
+            declaration=declaration,
+            monotonic=lambda: 0.0,
+            sleep=lambda _t: None,
+        )
+        assert result["reason"] == expected
+    finally:
+        shutil.rmtree(tmp)

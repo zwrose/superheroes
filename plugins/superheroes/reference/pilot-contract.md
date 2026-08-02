@@ -1033,8 +1033,8 @@ future refusal token cannot silently become retryable without an explicit code c
 
 1. **Process exited** — if the child has exited, inspect stderr for bind-conflict patterns;
    bind conflict wins over generic process exit.
-2. **Transport error** — probe error; retry until the monotonic deadline, then
-   `app-readiness-timeout`.
+2. **Transport error** — probe carries a transport `error`; retry until the monotonic
+   deadline, then `app-readiness-transport-error`.
 3. **Redirect** — HTTP 3xx is refused (`app-readiness-redirect-refused`), not followed. A
    redirect means the readiness target is not the one the boundary authorized.
 4. **Success band** — HTTP 2xx:
@@ -1042,9 +1042,10 @@ future refusal token cannot silently become retryable without an explicit code c
      deadline expiry without it is `app-readiness-unattributed`.
    - `readinessAttribution: "unattributed"` — accepted but recorded as a **degradation**
      (`readiness-unattributed` kind).
-5. **Unexpected status** — any other status after the deadline is
-   `app-readiness-unexpected-status`; if the last probe before deadline still carries a
-   transport `error`, `app-readiness-transport-error` is returned instead.
+5. **Unexpected status** — any other non-empty HTTP status at deadline is
+   `app-readiness-unexpected-status`.
+6. **No answer** — deadline reached with no transport error and no HTTP status is
+   `app-readiness-timeout`.
 
 `readinessAttribution` has no default — it must be exactly `nonce` or `unattributed`.
 
@@ -1072,7 +1073,11 @@ endpoint is free. Identity is corroborated **before** any signal (`ps` matching 
 executable token — the first whitespace-separated field of the `ps` command line, or its
 basename — not a substring of the whole line). A double stop is idempotent — an
 already-`stopped` record with a valid `stopReceipt` returns that receipt; a `stopped`
-record without one is not evidence and falls through to the two-observation path.
+record without one is not evidence and falls through to the two-observation path. A
+`stopReceipt` whose `slotRef` does not exactly match the instance record's `slotRef` is
+invalid — the same provenance rule as `slot-replay-slot-mismatch`: **provenance, not
+authentication**; a caller that hand-builds the dict can still forge it; what it removes is
+the accidental cross-wiring of one slot's stop evidence into another slot's record.
 
 `check_endpoint_free` may return `observable: false` on `socket.timeout` (unknown occupancy).
 That carve-out applies to the pre-spawn probe only. `stop()` treats a non-observable
@@ -1099,15 +1104,15 @@ check/use limit.
 | `app-bind-conflict` | endpoint probe on a well-formed `(host, port)` finds something listening, spawn stderr shows bind conflict, or probe raises an `OSError` other than connection refused / timeout |
 | `app-endpoint-duplicate` | `assert_unique_endpoints` finds the same `(host, port)` on two slots |
 | `app-spawn-failed` | `Popen` raised `OSError` |
-| `app-readiness-timeout` | *(retryable)* readiness polling exhausted the monotonic deadline on transport errors |
-| `app-readiness-transport-error` | *(retryable)* readiness probe still carries a transport `error` at deadline after a non-2xx status band |
-| `app-readiness-unexpected-status` | readiness probe returned a non-2xx/non-3xx status at deadline |
+| `app-readiness-timeout` | *(retryable)* readiness polling exhausted the monotonic deadline with no transport error and no HTTP status |
+| `app-readiness-transport-error` | *(retryable)* readiness probe still carries a transport `error` when the monotonic deadline is reached |
+| `app-readiness-unexpected-status` | readiness probe returned a non-2xx/non-3xx HTTP status when the monotonic deadline is reached |
 | `app-readiness-redirect-refused` | readiness probe returned HTTP 3xx |
 | `app-readiness-unattributed` | `nonce` attribution required but body did not contain the launch nonce at deadline |
 | `app-process-exited` | child exited before readiness succeeded (and stderr was not a bind conflict) |
 | `app-generation-moved` | slot generation changed during stand-up |
 | `app-slot-state-not-launchable` | slot lifecycle record is absent or not in `provisioning`/`provisioned` |
-| `app-instance-record-invalid` | instance record shape fails validation |
+| `app-instance-record-invalid` | instance record shape fails validation, including a `stopReceipt` whose `slotRef` does not match the record's `slotRef` |
 | `app-instance-record-absent` | `read_instance` — file genuinely does not exist |
 | `app-instance-record-unreadable` | instance record cannot be read |
 | `app-instance-record-write-failed` | durable instance write or parent fsync failed |
