@@ -1,6 +1,7 @@
 """Tests for pilot_cleanup.py — cleanup primitives and receipt binding."""
 import copy
 import hashlib
+import inspect
 import json
 import os
 import stat
@@ -83,7 +84,12 @@ def _config_digest_inputs(**overrides):
         "identity_provenance": "observed",
         "identity_strength": "strong",
         "observed_identity": "example_dev",
-        "source_identity": {"head": None, "statusDigest": "a" * 64, "argv0Digest": None},
+        "source_identity": {
+            "head": None,
+            "worktreeDigest": "a" * 64,
+            "argv0Digest": None,
+            "argvDigests": [],
+        },
     }
     defaults.update(overrides)
     return defaults
@@ -281,7 +287,7 @@ def test_run_bounded_exit_zero(private_tmp):
     script = os.path.join(bin_dir, "exit0.sh")
     _write_executable(script, "#!/bin/sh\nexit 0\n")
     result = pc.run_bounded([script], cwd=run_cwd, env={})
-    assert result == {"exit": 0, "timedOut": False, "stdoutBytes": 0}
+    assert result == {"exit": 0, "timedOut": False, "stdoutBytes": 0, "stdoutTruncated": False}
 
 
 def test_run_bounded_exit_one(private_tmp):
@@ -289,7 +295,7 @@ def test_run_bounded_exit_one(private_tmp):
     script = os.path.join(bin_dir, "exit1.sh")
     _write_executable(script, "#!/bin/sh\nexit 1\n")
     result = pc.run_bounded([script], cwd=run_cwd, env={})
-    assert result == {"exit": 1, "timedOut": False, "stdoutBytes": 0}
+    assert result == {"exit": 1, "timedOut": False, "stdoutBytes": 0, "stdoutTruncated": False}
 
 
 def test_run_bounded_exit_forty_two(private_tmp):
@@ -297,7 +303,7 @@ def test_run_bounded_exit_forty_two(private_tmp):
     script = os.path.join(bin_dir, "exit42.sh")
     _write_executable(script, "#!/bin/sh\nexit 42\n")
     result = pc.run_bounded([script], cwd=run_cwd, env={})
-    assert result == {"exit": 42, "timedOut": False, "stdoutBytes": 0}
+    assert result == {"exit": 42, "timedOut": False, "stdoutBytes": 0, "stdoutTruncated": False}
 
 
 def test_run_bounded_timeout(private_tmp):
@@ -336,7 +342,8 @@ def test_run_bounded_oversized_stdout(private_tmp):
         max_output_bytes=100,
         timeout_seconds=5,
     )
-    assert result["stdoutBytes"] >= 100
+    assert result["stdoutBytes"] == 100
+    assert result["stdoutTruncated"] is True
     assert result["timedOut"] is False
     assert result["exit"] == 0
 
@@ -615,7 +622,7 @@ def test_source_identity_no_commits(private_tmp):
     _init_git_repo(repo)
     result = pc.source_identity(repo)
     assert result["head"] is None
-    assert len(result["statusDigest"]) == 64
+    assert len(result["worktreeDigest"]) == 64
     assert result["argv0Digest"] is None
 
 
@@ -635,7 +642,7 @@ def test_source_identity_with_commit(private_tmp):
     result = pc.source_identity(repo)
     assert result["head"] is not None
     assert len(result["head"]) in (40, 64)
-    assert len(result["statusDigest"]) == 64
+    assert len(result["worktreeDigest"]) == 64
 
 
 # --- argv0_content_digest edge 20 ----------------------------------------------
@@ -719,7 +726,12 @@ def test_config_digest_deterministic():
         ("identity_strength", lambda i: i.update({"identity_strength": "weaker"})),
         ("observed_identity", lambda i: i.update({"observed_identity": "other_dev"})),
         ("source_identity", lambda i: i.update({
-            "source_identity": {"head": "a" * 40, "statusDigest": "b" * 64, "argv0Digest": None}
+            "source_identity": {
+                "head": "a" * 40,
+                "worktreeDigest": "b" * 64,
+                "argv0Digest": None,
+                "argvDigests": [],
+            }
         })),
     ],
     ids=[
@@ -1822,7 +1834,6 @@ def test_resurrection_plan_refuses_missing_effects_escape():
             block,
             _SLOT_REF,
             registry={},
-            containment={"mode": pc.MODE_SINGLE_SLOT},
             journal_path="/tmp/journal.jsonl",
         )
 
@@ -1836,7 +1847,6 @@ def test_resurrection_plan_refuses_unexercised_effects_escape(private_tmp):
         block,
         _SLOT_REF,
         registry=_registry_with(),
-        containment={"mode": pc.MODE_SINGLE_SLOT},
         journal_path=os.path.join(private_tmp, "j.jsonl"),
     )
     assert result == {"action": pc.ACTION_REFUSE, "reason": pc.REASON_EFFECTS_ESCAPE_UNEXERCISED}
@@ -1853,7 +1863,6 @@ def test_resurrection_plan_parks_when_effects_escape(private_tmp):
         block,
         _SLOT_REF,
         registry=registry,
-        containment={"mode": pc.MODE_SINGLE_SLOT},
         journal_path=os.path.join(private_tmp, "j.jsonl"),
         verdict=_passing_verdict(policy),
     )
@@ -1873,28 +1882,37 @@ def test_resurrection_plan_refuses_unresolved_containment(private_tmp):
         block,
         _SLOT_REF,
         registry=registry,
-        containment={"mode": pc.MODE_REFUSED},
         journal_path=os.path.join(private_tmp, "j.jsonl"),
         verdict=_passing_verdict(policy),
     )
-    assert result == {"action": pc.ACTION_REFUSE, "reason": pc.REASON_CONTAINMENT_UNRESOLVED}
+    assert result["action"] == pc.ACTION_REFUSE
+    assert result["reason"] == pc.REASON_CONTAINMENT_UNRESOLVED
+    assert "containment" in result
 
 
 def test_resurrection_plan_refuses_unexercised_cleanup_containment(private_tmp):
-    policy, _, _, cleanup_repo = _resurrection_policy(private_tmp)
+    policy, reach_root, run_cwd, cleanup_repo = _resurrection_policy(private_tmp)
     cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
     block = _pilot_block(cleanup_script)
+    receipt = _take_receipt(private_tmp, policy, block, reach_root, run_cwd, cleanup_repo)
     registry = _registry_with(_effects_escape_record(block))
     result = pc.resurrection_plan(
         policy,
         block,
         _SLOT_REF,
         registry=registry,
-        containment={"mode": pc.MODE_RECEIPT},
         journal_path=os.path.join(private_tmp, "j.jsonl"),
         verdict=_passing_verdict(policy),
+        receipt=receipt,
+        cleanup_root=cleanup_repo,
+        run_cwd=run_cwd,
+        observed_identity="example_dev",
+        identity_provenance="observed",
+        identity_strength="strong",
     )
-    assert result == {"action": pc.ACTION_REFUSE, "reason": pc.REASON_CONTAINMENT_UNEXERCISED}
+    assert result["action"] == pc.ACTION_REFUSE
+    assert result["reason"] == pc.REASON_CONTAINMENT_UNEXERCISED
+    assert result["containment"]["mode"] == pc.MODE_RECEIPT
 
 
 def _take_receipt(private_tmp, policy, pilot_block, reach_root, run_cwd, cleanup_repo):
@@ -1928,11 +1946,17 @@ def test_resurrection_plan_refuses_missing_verdict(private_tmp):
         block,
         _SLOT_REF,
         registry=registry,
-        containment={"mode": pc.MODE_RECEIPT},
         journal_path=os.path.join(private_tmp, "j.jsonl"),
         verdict=None,
+        receipt=receipt,
+        cleanup_root=cleanup_repo,
+        run_cwd=run_cwd,
+        observed_identity="example_dev",
+        identity_provenance="observed",
+        identity_strength="strong",
     )
-    assert result == {"action": pc.ACTION_REFUSE, "reason": pc.REASON_VERDICT_MISSING}
+    assert result["action"] == pc.ACTION_REFUSE
+    assert result["reason"] == pc.REASON_VERDICT_MISSING
 
 
 def test_resurrection_plan_captured_happy_path(private_tmp):
@@ -1960,14 +1984,20 @@ def test_resurrection_plan_captured_happy_path(private_tmp):
         block,
         _SLOT_REF,
         registry=registry,
-        containment={"mode": pc.MODE_RECEIPT},
         journal_path=os.path.join(private_tmp, "j.jsonl"),
         verdict=_passing_verdict(policy),
         account="owner",
         artifact=artifact,
+        receipt=receipt,
+        cleanup_root=cleanup_repo,
+        run_cwd=run_cwd,
+        observed_identity="example_dev",
+        identity_provenance="observed",
+        identity_strength="strong",
     )
     assert plan["action"] == pc.ACTION_RESURRECT
     assert plan["slotRef"] == _SLOT_REF
+    assert plan["containment"]["mode"] == pc.MODE_RECEIPT
     assert plan["steps"][0]["op"] == "cleanup"
     assert plan["steps"][1]["op"] == "reseed"
     assert plan["steps"][1]["path"] == "captured"
@@ -1999,11 +2029,16 @@ def test_resurrection_plan_minted_happy_path(private_tmp):
         block,
         _SLOT_REF,
         registry=registry,
-        containment={"mode": pc.MODE_RECEIPT},
         journal_path=os.path.join(private_tmp, "j.jsonl"),
         verdict=_passing_verdict(policy),
         account="owner",
         mint_envelope=block["mint"]["envelope"],
+        receipt=receipt,
+        cleanup_root=cleanup_repo,
+        run_cwd=run_cwd,
+        observed_identity="example_dev",
+        identity_provenance="observed",
+        identity_strength="strong",
     )
     assert plan["action"] == pc.ACTION_RESURRECT
     assert plan["steps"][1]["path"] == "minted"
@@ -2036,9 +2071,357 @@ def test_resurrection_plan_unauthorized_verdict_propagates(private_tmp):
             block,
             _SLOT_REF,
             registry=registry,
-            containment={"mode": pc.MODE_RECEIPT},
             journal_path=os.path.join(private_tmp, "j.jsonl"),
             verdict=verdict,
             account="owner",
             artifact=artifact,
+            receipt=receipt,
+            cleanup_root=cleanup_repo,
+            run_cwd=run_cwd,
+            observed_identity="example_dev",
+            identity_provenance="observed",
+            identity_strength="strong",
         )
+
+
+# --- FIX-1: content-addressed source binding -----------------------------------
+
+def test_source_identity_detects_second_edit_to_dirty_file(private_tmp):
+    repo = os.path.join(private_tmp, "git-repo")
+    os.makedirs(repo)
+    _init_git_repo(repo)
+    script = os.path.join(repo, "cleanup.sh")
+    _write_executable(script, "#!/bin/sh\necho v1\n")
+    subprocess.run(["git", "-C", repo, "add", "cleanup.sh"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", repo, "-c", "user.email=pilot@example.test", "-c", "user.name=Pilot",
+         "commit", "-m", "add cleanup"],
+        check=True,
+        capture_output=True,
+    )
+    with open(script, "w", encoding="utf-8") as handle:
+        handle.write("#!/bin/sh\necho v2\n")
+    first = pc.source_identity(repo)
+    with open(script, "w", encoding="utf-8") as handle:
+        handle.write("#!/bin/sh\necho v3\n")
+    second = pc.source_identity(repo)
+    assert first["worktreeDigest"] != second["worktreeDigest"]
+
+
+def test_source_identity_detects_edit_to_untracked_file(private_tmp):
+    repo = os.path.join(private_tmp, "git-repo")
+    os.makedirs(repo)
+    _init_git_repo(repo)
+    script = os.path.join(repo, "cleanup.sh")
+    _write_executable(script, "#!/bin/sh\necho v1\n")
+    first = pc.source_identity(repo)
+    with open(script, "w", encoding="utf-8") as handle:
+        handle.write("#!/bin/sh\necho v2\n")
+    second = pc.source_identity(repo)
+    assert first["worktreeDigest"] != second["worktreeDigest"]
+
+
+def test_source_identity_detects_deleted_file(private_tmp):
+    repo = os.path.join(private_tmp, "git-repo")
+    os.makedirs(repo)
+    _init_git_repo(repo)
+    script = os.path.join(repo, "cleanup.sh")
+    _write_executable(script, "#!/bin/sh\necho v1\n")
+    first = pc.source_identity(repo)
+    os.remove(script)
+    second = pc.source_identity(repo)
+    assert first["worktreeDigest"] != second["worktreeDigest"]
+
+
+def test_source_identity_handles_path_with_space(private_tmp):
+    repo = os.path.join(private_tmp, "git-repo")
+    os.makedirs(repo)
+    _init_git_repo(repo)
+    spaced = os.path.join(repo, "my script.sh")
+    _write_executable(spaced, "#!/bin/sh\necho v1\n")
+    first = pc.source_identity(repo)
+    with open(spaced, "w", encoding="utf-8") as handle:
+        handle.write("#!/bin/sh\necho v2\n")
+    second = pc.source_identity(repo)
+    assert first["worktreeDigest"] != second["worktreeDigest"]
+
+
+def test_receipt_valid_for_stale_config_interpreter_invoked_script(private_tmp):
+    reach_root, run_cwd, bin_dir, store_dir, cleanup_repo, journal_path = _harness_layout(
+        private_tmp
+    )
+    plant, probe = _write_scripts(bin_dir)
+    cleanup_script = os.path.join(bin_dir, "cleanup.sh")
+    _write_executable(cleanup_script, _cleanup_correct_script())
+    subprocess.run(
+        ["git", "-C", cleanup_repo, "-c", "user.email=pilot@example.test", "-c", "user.name=Pilot",
+         "commit", "--allow-empty", "-m", "pin clean root"],
+        check=True,
+        capture_output=True,
+    )
+    policy = _three_slot_policy(store_dir, plant, probe)
+    pilot_block = {
+        "schemaVersion": 1,
+        "signInPath": "captured",
+        "credentialSet": [{"account": "owner", "role": "resource-owner"}],
+        "captureSurface": ["cookies"],
+        "captureOptions": {"indexedDB": False, "credentials": False},
+        "validityProvenance": "server-probe",
+        "identityProbe": {"path": "/api/me", "unseededExpectation": "no-session"},
+        "cleanup": {
+            "command": ["/bin/sh", cleanup_script, pc.NAMESPACE_PLACEHOLDER],
+        },
+        "administrativeMax": 4,
+        "effectsEscape": {
+            "canEscape": False,
+            "evidence": "dev mail capture",
+        },
+        "policyRef": {"declaration": "example-project-pilot-policy"},
+    }
+    receipt = pc.cleanup_effect_receipt(
+        policy,
+        pilot_block,
+        _SLOT_REF,
+        reach_roots=[reach_root],
+        run_cwd=run_cwd,
+        cleanup_root=cleanup_repo,
+        journal_path=journal_path,
+        now=_NOW,
+        observed_identity="example_dev",
+        identity_provenance="observed",
+        identity_strength="strong",
+    )
+    with open(cleanup_script, "a", encoding="utf-8") as handle:
+        handle.write("# edited\n")
+    result = pc.receipt_valid_for(
+        receipt,
+        policy,
+        pilot_block,
+        _SLOT_REF,
+        cleanup_root=cleanup_repo,
+        run_cwd=run_cwd,
+        observed_identity="example_dev",
+        identity_provenance="observed",
+        identity_strength="strong",
+    )
+    assert result == {"ok": False, "reason": pc.REASON_RECEIPT_STALE_CONFIG}
+
+
+def test_source_identity_ignores_inherited_git_dir(private_tmp, monkeypatch):
+    repo = os.path.join(private_tmp, "target-repo")
+    other = os.path.join(private_tmp, "other-repo")
+    os.makedirs(repo)
+    os.makedirs(other)
+    _init_git_repo(repo)
+    _init_git_repo(other)
+    marker = os.path.join(repo, "marker.txt")
+    with open(marker, "w", encoding="utf-8") as handle:
+        handle.write("bound\n")
+    other_marker = os.path.join(other, "other.txt")
+    with open(other_marker, "w", encoding="utf-8") as handle:
+        handle.write("other\n")
+    subprocess.run(["git", "-C", other, "add", "other.txt"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", other, "-c", "user.email=pilot@example.test", "-c", "user.name=Pilot",
+         "commit", "-m", "other"],
+        check=True,
+        capture_output=True,
+    )
+    baseline = pc.source_identity(repo)
+    monkeypatch.setenv("GIT_DIR", os.path.join(other, ".git"))
+    poisoned = pc.source_identity(repo)
+    assert poisoned["worktreeDigest"] == baseline["worktreeDigest"]
+    assert poisoned["head"] == baseline["head"]
+
+
+# --- FIX-2: resurrection_plan resolves containment internally ------------------
+
+def test_resurrection_plan_refuses_when_containment_unresolved_from_inputs(private_tmp):
+    policy, _, _, cleanup_repo = _resurrection_policy(private_tmp)
+    cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
+    block = _pilot_block(cleanup_script)
+    registry = _registry_with(_effects_escape_record(block))
+    result = pc.resurrection_plan(
+        policy,
+        block,
+        _SLOT_REF,
+        registry=registry,
+        journal_path=os.path.join(private_tmp, "j.jsonl"),
+        verdict=_passing_verdict(policy),
+    )
+    assert result["action"] == pc.ACTION_REFUSE
+    assert result["reason"] == pc.REASON_CONTAINMENT_UNRESOLVED
+
+
+def test_resurrection_plan_cannot_be_handed_a_forged_containment_mode():
+    params = inspect.signature(pc.resurrection_plan).parameters
+    assert "containment" not in params
+
+
+def test_resurrection_plan_permissions_path(private_tmp):
+    policy, reach_root, run_cwd, cleanup_repo = _resurrection_policy(private_tmp)
+    cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
+    block = _pilot_block(cleanup_script)
+    policy["datastore"]["containment"]["permissions"] = {
+        "cannotReachForeignNamespaces": True,
+        "evidence": "isolated datastore",
+    }
+    registry = _registry_with(_effects_escape_record(block))
+    artifact_path = os.path.join(private_tmp, "seed.bin")
+    with open(artifact_path, "wb") as handle:
+        handle.write(b"artifact")
+    os.chmod(artifact_path, 0o600)
+    artifact = {
+        "path": artifact_path,
+        "expectedUid": os.getuid(),
+        "expectedMode": 0o600,
+        "sha256": hashlib.sha256(b"artifact").hexdigest(),
+        "captureSurfaces": ["cookies"],
+    }
+    plan = pc.resurrection_plan(
+        policy,
+        block,
+        _SLOT_REF,
+        registry=registry,
+        journal_path=os.path.join(private_tmp, "j.jsonl"),
+        verdict=_passing_verdict(policy),
+        account="owner",
+        artifact=artifact,
+    )
+    assert plan["action"] == pc.ACTION_RESURRECT
+    assert plan["containment"]["mode"] == pc.MODE_PERMISSIONS
+
+
+# --- FIX-3: sentinel argv-tail confinement -----------------------------------
+
+def test_validate_sentinel_declaration_refuses_plant_argv1_inside_reach_root(private_tmp):
+    reach_root, run_cwd, bin_dir = _confinement_layout(private_tmp)
+    plant = os.path.join(bin_dir, "plant.sh")
+    probe = os.path.join(bin_dir, "probe.sh")
+    evil = os.path.join(reach_root, "evil.py")
+    with open(evil, "w", encoding="utf-8") as handle:
+        handle.write("print('evil')\n")
+    _write_executable(plant, "#!/bin/sh\nexit 0\n")
+    _write_executable(probe, "#!/bin/sh\nexit 0\n")
+    sentinel = {
+        "plantCommand": [plant, evil, pc.NAMESPACE_PLACEHOLDER, pc.SENTINEL_PLACEHOLDER],
+        "probeCommand": [probe, "--ns", pc.NAMESPACE_PLACEHOLDER, "--id", pc.SENTINEL_PLACEHOLDER],
+        "connectionEnvVar": "PILOT_DATASTORE_URL",
+    }
+    with pytest.raises(pc.PilotCleanupError) as exc:
+        pc._validate_sentinel_declaration(sentinel, reach_roots=[reach_root], run_cwd=run_cwd)
+    assert exc.value.reason == pc.REFUSAL_SENTINEL_CONFINEMENT
+
+
+def test_validate_sentinel_declaration_refuses_probe_argv1_inside_reach_root(private_tmp):
+    reach_root, run_cwd, bin_dir = _confinement_layout(private_tmp)
+    plant = os.path.join(bin_dir, "plant.sh")
+    probe = os.path.join(bin_dir, "probe.sh")
+    evil = os.path.join(reach_root, "evil.py")
+    with open(evil, "w", encoding="utf-8") as handle:
+        handle.write("print('evil')\n")
+    _write_executable(plant, "#!/bin/sh\nexit 0\n")
+    _write_executable(probe, "#!/bin/sh\nexit 0\n")
+    sentinel = {
+        "plantCommand": [plant, "--ns", pc.NAMESPACE_PLACEHOLDER, "--id", pc.SENTINEL_PLACEHOLDER],
+        "probeCommand": [probe, evil, pc.NAMESPACE_PLACEHOLDER, pc.SENTINEL_PLACEHOLDER],
+        "connectionEnvVar": "PILOT_DATASTORE_URL",
+    }
+    with pytest.raises(pc.PilotCleanupError) as exc:
+        pc._validate_sentinel_declaration(sentinel, reach_roots=[reach_root], run_cwd=run_cwd)
+    assert exc.value.reason == pc.REFUSAL_SENTINEL_CONFINEMENT
+
+
+def test_validate_sentinel_declaration_refuses_relative_argv1_inside_reach_root(private_tmp):
+    reach_root, run_cwd, bin_dir = _confinement_layout(private_tmp)
+    plant = os.path.join(bin_dir, "plant.sh")
+    probe = os.path.join(bin_dir, "probe.sh")
+    evil = os.path.join(reach_root, "evil.py")
+    with open(evil, "w", encoding="utf-8") as handle:
+        handle.write("print('evil')\n")
+    _write_executable(plant, "#!/bin/sh\nexit 0\n")
+    _write_executable(probe, "#!/bin/sh\nexit 0\n")
+    relative_evil = os.path.relpath(evil, run_cwd)
+    sentinel = {
+        "plantCommand": [plant, relative_evil, pc.NAMESPACE_PLACEHOLDER, pc.SENTINEL_PLACEHOLDER],
+        "probeCommand": [probe, "--ns", pc.NAMESPACE_PLACEHOLDER, "--id", pc.SENTINEL_PLACEHOLDER],
+        "connectionEnvVar": "PILOT_DATASTORE_URL",
+    }
+    with pytest.raises(pc.PilotCleanupError) as exc:
+        pc._validate_sentinel_declaration(sentinel, reach_roots=[reach_root], run_cwd=run_cwd)
+    assert exc.value.reason == pc.REFUSAL_SENTINEL_CONFINEMENT
+
+
+def test_validate_sentinel_declaration_allows_flag_argv_tail(private_tmp):
+    reach_root, run_cwd, bin_dir = _confinement_layout(private_tmp)
+    plant = os.path.join(bin_dir, "plant.sh")
+    probe = os.path.join(bin_dir, "probe.sh")
+    _write_executable(plant, "#!/bin/sh\nexit 0\n")
+    _write_executable(probe, "#!/bin/sh\nexit 0\n")
+    sentinel = _sentinel_declaration(plant, probe)
+    pc._validate_sentinel_declaration(sentinel, reach_roots=[reach_root], run_cwd=run_cwd)
+
+
+def test_validate_sentinel_declaration_refuses_nonexistent_argv1_inside_reach_root(private_tmp):
+    reach_root, run_cwd, bin_dir = _confinement_layout(private_tmp)
+    plant = os.path.join(bin_dir, "plant.sh")
+    probe = os.path.join(bin_dir, "probe.sh")
+    _write_executable(plant, "#!/bin/sh\nexit 0\n")
+    _write_executable(probe, "#!/bin/sh\nexit 0\n")
+    missing_inside = os.path.join(reach_root, "missing.py")
+    sentinel = {
+        "plantCommand": [plant, missing_inside, pc.NAMESPACE_PLACEHOLDER, pc.SENTINEL_PLACEHOLDER],
+        "probeCommand": [probe, "--ns", pc.NAMESPACE_PLACEHOLDER, "--id", pc.SENTINEL_PLACEHOLDER],
+        "connectionEnvVar": "PILOT_DATASTORE_URL",
+    }
+    with pytest.raises(pc.PilotCleanupError) as exc:
+        pc._validate_sentinel_declaration(sentinel, reach_roots=[reach_root], run_cwd=run_cwd)
+    assert exc.value.reason == pc.REFUSAL_SENTINEL_CONFINEMENT
+
+
+# --- FIX-4: run_bounded drain and process-group termination --------------------
+
+def test_run_bounded_drains_past_stdout_cap(private_tmp):
+    _, run_cwd, bin_dir = _confinement_layout(private_tmp)
+    script = os.path.join(bin_dir, "huge.sh")
+    _write_executable(
+        script,
+        "#!/bin/sh\n"
+        "i=0\n"
+        "while [ $i -lt 307200 ]; do printf x; i=$((i+1)); done\n",
+    )
+    result = pc.run_bounded(
+        [script],
+        cwd=run_cwd,
+        env={},
+        max_output_bytes=4096,
+        timeout_seconds=30,
+    )
+    assert result["exit"] == 0
+    assert result["timedOut"] is False
+    assert result["stdoutTruncated"] is True
+    assert result["stdoutBytes"] == 4096
+
+
+def test_run_bounded_kills_grandchild_on_timeout(private_tmp):
+    _, run_cwd, bin_dir = _confinement_layout(private_tmp)
+    pid_file = os.path.join(private_tmp, "grandchild.pid")
+    script = os.path.join(bin_dir, "spawn.sh")
+    _write_executable(
+        script,
+        "#!/bin/sh\n"
+        "/bin/sleep 60 &\n"
+        "echo $! > '%s'\n"
+        "/bin/sleep 5\n" % pid_file,
+    )
+    result = pc.run_bounded(
+        [script],
+        cwd=run_cwd,
+        env={},
+        timeout_seconds=1,
+    )
+    assert result["timedOut"] is True
+    with open(pid_file, encoding="utf-8") as handle:
+        pid = int(handle.read().strip())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)

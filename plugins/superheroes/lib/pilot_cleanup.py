@@ -6,6 +6,7 @@ import json
 import os
 import re
 import secrets
+import signal
 import stat
 import subprocess
 import threading
@@ -256,20 +257,32 @@ def run_bounded(command, *, cwd, env, timeout_seconds=20, max_output_bytes=4096)
             stderr=subprocess.DEVNULL,
             shell=False,
             env=env,
+            start_new_session=True,
         )
     except OSError:
         raise PilotCleanupError(REFUSAL_PROBE_INDETERMINATE)
 
     timed_out = False
     stdout_bytes = 0
+    stdout_truncated = False
     try:
         stdout_holder = []
 
         def _read_stdout():
+            total = 0
+            truncated = False
             try:
-                stdout_holder.append(proc.stdout.read(max_output_bytes + 1))
+                while True:
+                    chunk = proc.stdout.read(65536)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > max_output_bytes:
+                        truncated = True
             except Exception:
-                stdout_holder.append(b"")
+                total = 0
+                truncated = False
+            stdout_holder.append((total, truncated))
 
         reader = threading.Thread(target=_read_stdout, daemon=True)
         reader.start()
@@ -279,8 +292,9 @@ def run_bounded(command, *, cwd, env, timeout_seconds=20, max_output_bytes=4096)
             _terminate_and_wait(proc)
             timed_out = True
         else:
-            raw = stdout_holder[0] if stdout_holder else b""
-            stdout_bytes = len(raw)
+            total, truncated = stdout_holder[0] if stdout_holder else (0, False)
+            stdout_truncated = truncated
+            stdout_bytes = min(total, max_output_bytes)
             try:
                 proc.wait(timeout=timeout_seconds)
             except subprocess.TimeoutExpired:
@@ -288,7 +302,12 @@ def run_bounded(command, *, cwd, env, timeout_seconds=20, max_output_bytes=4096)
                 timed_out = True
 
         exit_code = None if timed_out else proc.returncode
-        return {"exit": exit_code, "timedOut": timed_out, "stdoutBytes": stdout_bytes}
+        return {
+            "exit": exit_code,
+            "timedOut": timed_out,
+            "stdoutBytes": stdout_bytes,
+            "stdoutTruncated": stdout_truncated,
+        }
     except Exception:
         _terminate_and_wait(proc)
         raise PilotCleanupError(REFUSAL_PROBE_INDETERMINATE)
@@ -341,6 +360,12 @@ def _validate_sentinel_declaration(sentinel, *, reach_roots, run_cwd):
         # instrument a branch can edit can forge its own verdict.
         if not pilot_boundary.is_outside_all_reach_roots(executable, reach_roots):
             raise PilotCleanupError(REFUSAL_SENTINEL_CONFINEMENT)
+
+        for part in command[1:]:
+            candidate = part if os.path.isabs(part) else os.path.join(run_cwd, part)
+            resolved = os.path.realpath(candidate)
+            if not pilot_boundary.is_outside_all_reach_roots(resolved, reach_roots):
+                raise PilotCleanupError(REFUSAL_SENTINEL_CONFINEMENT)
 
     if not pilot_boundary.is_outside_all_reach_roots(run_cwd, reach_roots):
         raise PilotCleanupError(REFUSAL_SENTINEL_CONFINEMENT)
@@ -452,15 +477,121 @@ def config_digest(
     return hmac.new(binding_key(policy), canonical.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
+def _git_env():
+    """Environment for git subprocesses, built by rule rather than by denylist.
+
+    Every inherited ``GIT_*`` variable is dropped — including ones this module has
+    never heard of — and only process-owned values are added back.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env["GIT_NO_REPLACE_OBJECTS"] = "1"
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_CONFIG_SYSTEM"] = os.devnull
+    env["LC_ALL"] = "C"
+    env["LANGUAGE"] = ""
+    return env
+
+
+def _parse_git_status_porcelain_z(data):
+    """Parse ``git status --porcelain -z`` output into path records."""
+    if isinstance(data, bytes):
+        text = data.decode("utf-8", errors="surrogateescape")
+    else:
+        text = data
+    records = []
+    parts = text.split("\0")
+    index = 0
+    while index < len(parts):
+        entry = parts[index]
+        if not entry:
+            index += 1
+            continue
+        status_xy = entry[:2]
+        path = entry[3:] if len(entry) > 2 and entry[2] == " " else entry[2:]
+        if status_xy[0] in ("R", "C") or status_xy[1] in ("R", "C"):
+            index += 1
+            original_path = parts[index] if index < len(parts) else ""
+            records.append((status_xy, path, original_path))
+        else:
+            records.append((status_xy, path, None))
+        index += 1
+    return records
+
+
+def _sha256_file_chunks(path, chunk_size=65536):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        while True:
+            chunk = handle.read(chunk_size)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _worktree_path_record(cleanup_root, rel_path):
+    abs_path = os.path.join(cleanup_root, rel_path)
+    try:
+        st = os.lstat(abs_path)
+    except OSError:
+        return [rel_path, "d", None]
+    if stat.S_ISREG(st.st_mode):
+        try:
+            content_hash = _sha256_file_chunks(abs_path)
+        except OSError:
+            raise PilotCleanupError(REFUSAL_SOURCE_UNREADABLE)
+        return [rel_path, "f", content_hash]
+    return [rel_path, "o", None]
+
+
+def _worktree_digest(cleanup_root, status_data):
+    paths = set()
+    for _status_xy, path, original_path in _parse_git_status_porcelain_z(status_data):
+        if path:
+            paths.add(path)
+        if original_path:
+            paths.add(original_path)
+    canonical = []
+    for path in sorted(paths):
+        canonical.append(_worktree_path_record(cleanup_root, path))
+    payload = _canonical_json(_nfc_normalize(canonical))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _argv_tail_digests(resolved_argv):
+    digests = []
+    for index, part in enumerate(resolved_argv[1:], start=1):
+        try:
+            st = os.lstat(part)
+        except OSError:
+            continue
+        if not stat.S_ISREG(st.st_mode):
+            continue
+        try:
+            content_hash = _sha256_file_chunks(part)
+        except OSError:
+            continue
+        digests.append([index, content_hash])
+    digests.sort(key=lambda item: item[0])
+    return digests
+
+
+def _populate_source_binding(source_id, resolved_argv):
+    source_id["argv0Digest"] = argv0_content_digest(resolved_argv[0])
+    source_id["argvDigests"] = _argv_tail_digests(resolved_argv)
+
+
 def source_identity(cleanup_root):
-    """Return source-state identity for the cleanup run: HEAD oid and porcelain status digest.
+    """Return source-state identity for the cleanup run: HEAD oid and worktree content digest.
 
     Hashing the declared argv does not catch a branch rewriting the script at the same path — HEAD
-    catches a committed edit; porcelain status catches an uncommitted one.
+    catches a committed edit; a content digest of every dirty or untracked path catches an
+    uncommitted one.
     """
     if not isinstance(cleanup_root, str) or not os.path.isdir(cleanup_root):
         raise PilotCleanupError(REFUSAL_SOURCE_ROOT_INVALID)
 
+    git_env = _git_env()
     head = None
     try:
         result = subprocess.run(
@@ -468,6 +599,7 @@ def source_identity(cleanup_root):
             capture_output=True,
             timeout=30,
             shell=False,
+            env=git_env,
         )
         if result.returncode == 0:
             candidate = result.stdout.decode("utf-8", errors="replace").strip()
@@ -478,18 +610,24 @@ def source_identity(cleanup_root):
 
     try:
         status_result = subprocess.run(
-            ["git", "-C", cleanup_root, "status", "--porcelain"],
+            ["git", "-C", cleanup_root, "status", "--porcelain", "-z"],
             capture_output=True,
             timeout=30,
             shell=False,
+            env=git_env,
         )
     except (OSError, subprocess.TimeoutExpired):
         raise PilotCleanupError(REFUSAL_SOURCE_UNREADABLE)
     if status_result.returncode != 0:
         raise PilotCleanupError(REFUSAL_SOURCE_UNREADABLE)
 
-    status_digest = hashlib.sha256(status_result.stdout).hexdigest()
-    return {"head": head, "statusDigest": status_digest, "argv0Digest": None}
+    worktree_digest = _worktree_digest(cleanup_root, status_result.stdout)
+    return {
+        "head": head,
+        "worktreeDigest": worktree_digest,
+        "argv0Digest": None,
+        "argvDigests": [],
+    }
 
 
 def argv0_content_digest(argv0):
@@ -639,7 +777,7 @@ def cleanup_effect_receipt(
         raise PilotCleanupError(REFUSAL_CLEANUP_ARGV0_NOT_ABSOLUTE)
 
     source_id = source_identity(cleanup_root)
-    source_id["argv0Digest"] = argv0_content_digest(resolved_argv[0])
+    _populate_source_binding(source_id, resolved_argv)
     config_digest_value = config_digest(
         policy,
         resolved_cleanup_argv=resolved_argv,
@@ -866,7 +1004,7 @@ def receipt_valid_for(
     """Return whether a receipt is fresh for the current policy, block, and source tree.
 
     The config recomputation calls ``source_identity(cleanup_root)`` fresh — a cleanup script
-    edited since the receipt was taken changes ``head`` or ``statusDigest``, the config digest
+    edited since the receipt was taken changes ``head`` or ``worktreeDigest``, the config digest
     moves, and the receipt is stale.
     """
     if not _receipt_schema_valid(receipt):
@@ -889,7 +1027,7 @@ def receipt_valid_for(
     sentinel = _sentinel_from_policy(policy)
     resolved_argv = resolve_cleanup_command(declared_command, namespace)
     source_id = source_identity(cleanup_root)
-    source_id["argv0Digest"] = argv0_content_digest(resolved_argv[0])
+    _populate_source_binding(source_id, resolved_argv)
     expected_config_digest = config_digest(
         policy,
         resolved_cleanup_argv=resolved_argv,
@@ -1017,13 +1155,18 @@ def resurrection_plan(
     slot_ref,
     *,
     registry,
-    containment,
     journal_path,
     verdict=None,
     account=None,
     artifact=None,
     mint_envelope=None,
     now=None,
+    receipt=None,
+    cleanup_root=None,
+    run_cwd=None,
+    observed_identity=None,
+    identity_provenance=None,
+    identity_strength=None,
 ):
     """Return a park, refusal, or ordered resurrection plan without executing anything.
 
@@ -1053,9 +1196,24 @@ def resurrection_plan(
             "steps": [],
         }
 
+    containment = resolve_containment(
+        policy,
+        pilot_block,
+        slot_ref,
+        receipt=receipt,
+        cleanup_root=cleanup_root,
+        run_cwd=run_cwd,
+        observed_identity=observed_identity,
+        identity_provenance=identity_provenance,
+        identity_strength=identity_strength,
+    )
     mode = containment.get("mode")
     if mode not in _CONTAINMENT_RESOLVED_MODES:
-        return {"action": ACTION_REFUSE, "reason": REASON_CONTAINMENT_UNRESOLVED}
+        return {
+            "action": ACTION_REFUSE,
+            "reason": REASON_CONTAINMENT_UNRESOLVED,
+            "containment": containment,
+        }
 
     if mode == MODE_RECEIPT:
         try:
@@ -1065,10 +1223,18 @@ def resurrection_plan(
                 pilot_block["cleanup"],
             )
         except pilot_contract.PilotContractError:
-            return {"action": ACTION_REFUSE, "reason": REASON_CONTAINMENT_UNEXERCISED}
+            return {
+                "action": ACTION_REFUSE,
+                "reason": REASON_CONTAINMENT_UNEXERCISED,
+                "containment": containment,
+            }
 
     if verdict is None:
-        return {"action": ACTION_REFUSE, "reason": REASON_VERDICT_MISSING}
+        return {
+            "action": ACTION_REFUSE,
+            "reason": REASON_VERDICT_MISSING,
+            "containment": containment,
+        }
 
     slot, _generation = pilot_slot.parse_slot_ref(slot_ref)
     namespace = namespace_for_slot(slot)
@@ -1099,6 +1265,7 @@ def resurrection_plan(
         "action": ACTION_RESURRECT,
         "reason": None,
         "slotRef": slot_ref,
+        "containment": containment,
         "steps": [
             {
                 "op": "cleanup",
@@ -1135,13 +1302,24 @@ def resurrection_plan(
 
 
 def _terminate_and_wait(proc):
-    if proc.poll() is None:
-        proc.terminate()
+    if proc.poll() is not None:
+        return
+    try:
+        pgid = os.getpgid(proc.pid)
+        os.killpg(pgid, signal.SIGTERM)
         try:
             proc.wait(timeout=1)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            os.killpg(pgid, signal.SIGKILL)
             proc.wait()
+    except ProcessLookupError:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
 
 
 def _nfc_normalize(value):

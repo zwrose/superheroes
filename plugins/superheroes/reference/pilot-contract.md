@@ -1026,9 +1026,12 @@ A passing receipt binds to:
 - the declared cleanup argv (HMAC digest keyed on the policy document),
 - the resolved configuration (sentinel commands, namespace, foreign namespaces, observed
   datastore identity with provenance and strength, run cwd),
-- **and the cleanup's source state** — the repository HEAD oid plus a digest of
-  `git status --porcelain`, so an edit to the cleanup script — committed or not — invalidates
-  the receipt at the same argv.
+- **and the cleanup's source state** — the repository HEAD oid plus a content digest of every
+  dirty or untracked path in the cleanup repository, plus content digests of the cleanup argv's
+  executable (`argv0`) and of every existing regular file in its argv tail (`argvDigests`), so an
+  edit to those bound files — committed or not — invalidates the receipt at the same argv. A
+  cleanup that reads a file not named in its argv (a sourced helper, an imported module, a config
+  file) is not covered by this binding; that limitation is known.
 
 Both digests are **HMAC-SHA256 keyed on a digest of the whole policy document**. An unkeyed
 truncated digest of a low-entropy identity such as a database name would be a dictionary oracle
@@ -1105,7 +1108,7 @@ exercise prevents — so the receipt records them under `residualSentinels` for 
 | `cleanup-sentinel-plant-failed` | `plant_sentinel`: plant command exited non-zero or timed out |
 | `cleanup-sentinel-probe-indeterminate` | `probe_sentinel` or `run_bounded`: probe exited with a code other than 0/1, timed out, or subprocess could not be started |
 | `cleanup-source-root-invalid` | `source_identity`: `cleanup_root` is missing or not an existing directory |
-| `cleanup-source-unreadable` | `source_identity`: `git status --porcelain` could not be read |
+| `cleanup-source-unreadable` | `source_identity`: `git status --porcelain -z` could not be read, or a dirty worktree file could not be hashed |
 | `cleanup-policy-invalid` | `foreign_namespaces`: policy shape or slot membership is invalid |
 | `cleanup-argv0-not-absolute` | `cleanup_effect_receipt`: resolved cleanup `argv[0]` is not an absolute path |
 | `cleanup-receipt-vacuous` | `cleanup_effect_receipt`: sentinel already present before plant, or absent after plant |
