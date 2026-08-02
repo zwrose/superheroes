@@ -1393,6 +1393,7 @@ def test_load_builder_dispatch_tier_fail_closed_on_structural_refusal_multiple_b
     assert tier["tier"] == "opus"
     assert tier["source"] == "unreadable-default"
     assert tier["reason"].startswith("multiple-core-blocks:")
+    assert tier["display"] == "multiple-core-blocks"
 
 
 def test_load_builder_dispatch_tier_fail_closed_on_newer_schema(tmp_path):
@@ -1441,14 +1442,10 @@ def test_load_builder_dispatch_tier_current_schema_still_resolves_configured(tmp
     }
 
 
-    assert tier["reason"].startswith("multiple-core-blocks:")
-    assert tier["display"] == "multiple-core-blocks"
-
-
 def test_safe_config_echo_escapes_and_truncates():
     assert EP.safe_config_echo("") == ""
     assert EP.safe_config_echo("a\\b") == "a\\\\b"
-    assert EP.safe_config_echo("a\nb\rc\t") == "a\\x0ab\\x0d\\x0ac\\x09"
+    assert EP.safe_config_echo("a\nb\rc\t") == "a\\x0ab\\x0dc\\x09"
     long_val = "x" * 200
     echoed = EP.safe_config_echo(long_val, limit=10)
     assert echoed == ("x" * 10) + "\u2026"
