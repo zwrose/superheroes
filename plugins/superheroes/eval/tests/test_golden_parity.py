@@ -1,5 +1,10 @@
 """Golden parity: Python harness vs frozen JS-shell goldens (#507 WO-D).
 
+The JS shell this file originally checked parity against was retired in #478/#555,
+so what it pins today is regression against a frozen historical snapshot rather than
+parity with a live second implementation — retire it only if it ever blocks a
+legitimate change.
+
 For each of the 12 goldens under ``fixtures/review_loop/goldens/``, run the Python
 harness on the matching fixture (with ``capture_goldens.normalize``) and compare.
 

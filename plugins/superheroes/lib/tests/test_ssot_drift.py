@@ -24,6 +24,7 @@ The reviewer-roster and docs-location clusters live in their topical sibling gua
 """
 import os
 import re
+import sys
 
 import pytest
 
@@ -95,6 +96,10 @@ def test_severity_vocabulary_is_single_sourced():
     import loop_plan_common
     import panel_tally
     import review_memory
+    # #820: review_telemetry now lives in eval/ (no production consumer); pin bites on
+    # review_telemetry._BLOCKING drifting from the rubric's blocking tiers — reach across
+    # to the eval tree so this copy-holder stays covered rather than silently unimported.
+    sys.path.insert(0, os.path.join(PLUGIN, "eval"))
     import review_telemetry
     import verification
 

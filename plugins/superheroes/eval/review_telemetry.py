@@ -136,7 +136,8 @@ def _load_rounds(records_path):
     Missing file -> ok with [] (early terminals finalize before any round persisted);
     corrupt -> fail-closed."""
     import sys
-    lib_dir = os.path.dirname(os.path.abspath(__file__))
+    # #820: module lives in eval/; review_memory remains in production lib/
+    lib_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib")
     if lib_dir not in sys.path:
         sys.path.insert(0, lib_dir)
     import review_memory
