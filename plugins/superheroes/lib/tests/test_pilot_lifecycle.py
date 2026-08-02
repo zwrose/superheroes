@@ -848,6 +848,37 @@ def test_provisioning_outcome_mapping():
         pl.provisioning_outcome("bogus")
 
 
+def test_slots_dir_valid_cwd_returns_pilot_slots_path():
+    tmp = _tmp_dir()
+    try:
+        result = pl.slots_dir(tmp)
+        assert result["ok"] is True
+        assert result["reason"] is None
+        assert result["path"].endswith(os.path.join("pilot-slots"))
+    finally:
+        shutil.rmtree(tmp)
+
+
+@pytest.mark.parametrize("bad_cwd", ["x" * 10000, "/nonexistent/path/that/does/not/exist"])
+def test_slots_dir_unresolvable_cwd_refuses(bad_cwd):
+    result = pl.slots_dir(bad_cwd)
+    assert result == {
+        "ok": False,
+        "reason": pl.REASON_ROOT_UNRESOLVED,
+        "path": None,
+    }
+
+
+@pytest.mark.parametrize("bad_cwd", [[], None, 0])
+def test_slots_dir_non_string_cwd_refuses(bad_cwd):
+    result = pl.slots_dir(bad_cwd)
+    assert result == {
+        "ok": False,
+        "reason": pl.REASON_ROOT_UNRESOLVED,
+        "path": None,
+    }
+
+
 @pytest.mark.parametrize("bad_state", [[], {}])
 def test_read_record_unhashable_state_refuses(bad_state):
     tmp = _tmp_dir()

@@ -60,6 +60,7 @@ REASON_GENERATION_ALLOCATION_REQUIRED = "slot-generation-allocation-required"
 REASON_RECORD_SLOT_MISMATCH = "slot-record-slot-mismatch"
 REASON_SLOT_DIR_UNSAFE = "slot-dir-unsafe"
 REASON_RECORD_EXISTS = "slot-record-exists"
+REASON_ROOT_UNRESOLVED = "slot-root-unresolved"
 
 
 class PilotLifecycleError(Exception):
@@ -292,16 +293,22 @@ def provisioning_outcome(state):
 
 
 def slots_dir(cwd, root=None):
-    """``<state_dir>/pilot-slots`` for the resolved test-pilot store entry."""
+    """{"ok": bool, "reason": str|None, "path": str|None}. Never raises."""
     if not _is_str_path(cwd):
-        raise PilotLifecycleError(REASON_RECORD_INVALID)
+        return {"ok": False, "reason": REASON_ROOT_UNRESOLVED, "path": None}
     if root is not None and not _is_str_path(root):
-        raise PilotLifecycleError(REASON_RECORD_INVALID)
+        return {"ok": False, "reason": REASON_ROOT_UNRESOLVED, "path": None}
     try:
+        if not os.path.exists(cwd):
+            return {"ok": False, "reason": REASON_ROOT_UNRESOLVED, "path": None}
         resolved = store.resolve(cwd, root or store.store_root())
-    except OSError:
-        raise PilotLifecycleError(REASON_RECORD_INVALID)
-    return os.path.join(resolved["state_dir"], "pilot-slots")
+    except (OSError, store_core.RepoRootUnavailable):
+        return {"ok": False, "reason": REASON_ROOT_UNRESOLVED, "path": None}
+    return {
+        "ok": True,
+        "reason": None,
+        "path": os.path.join(resolved["state_dir"], "pilot-slots"),
+    }
 
 
 def record_path(slots_dir_path, slot):

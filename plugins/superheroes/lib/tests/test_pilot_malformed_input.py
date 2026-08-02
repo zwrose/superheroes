@@ -44,6 +44,13 @@ ALLOWED_EXCEPTIONS = (
 )
 
 
+def _safe_path_under(tmp, hostile):
+    """Hostile path values for write-capable helpers must stay under tmp."""
+    if isinstance(hostile, str):
+        return os.path.join(tmp, hostile)
+    return hostile
+
+
 def _public_callables(module):
     names = set()
     for name in dir(module):
@@ -111,7 +118,7 @@ def _invoke_lifecycle(name, hostile, param):
             return pl.lock_path(slots_path, hostile)
         if name == "slot_lock":
             if param == "slots_dir_path":
-                ctx = pl.slot_lock(hostile, SLOT)
+                ctx = pl.slot_lock(_safe_path_under(tmp, hostile), SLOT)
             elif param == "slot":
                 ctx = pl.slot_lock(slots_path, hostile)
             elif param == "timeout":
@@ -125,11 +132,11 @@ def _invoke_lifecycle(name, hostile, param):
             return pl.read_record(hostile)
         if name == "write_record":
             if param == "path":
-                return pl.write_record(hostile, rec)
+                return pl.write_record(_safe_path_under(tmp, hostile), rec)
             return pl.write_record(path, hostile)
         if name == "mutate":
             if param == "slots_dir_path":
-                return pl.mutate(hostile, SLOT, lambda r: r)
+                return pl.mutate(_safe_path_under(tmp, hostile), SLOT, lambda r: r)
             if param == "slot":
                 return pl.mutate(slots_path, hostile, lambda r: r)
             if param == "fn":
@@ -137,7 +144,9 @@ def _invoke_lifecycle(name, hostile, param):
             return pl.mutate(slots_path, SLOT, lambda r: r, timeout=hostile)
         if name == "create_slot":
             if param == "slots_dir_path":
-                return pl.create_slot(hostile, SLOT, ACCOUNTS, now=NOW)
+                return pl.create_slot(
+                    _safe_path_under(tmp, hostile), SLOT, ACCOUNTS, now=NOW
+                )
             if param == "slot":
                 return pl.create_slot(slots_path, hostile, ACCOUNTS, now=NOW)
             if param == "accounts":
@@ -367,3 +376,31 @@ def test_read_record_refuses_hostile_on_disk_state():
         }
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _cwd_listing():
+    return set(os.listdir(os.getcwd()))
+
+
+def _exercise_write_capable_lifecycle_helpers(tmp):
+    slots_path = os.path.join(tmp, "slots")
+    rec = pl.new_record(SLOT, ACCOUNTS, now=NOW)
+    path = pl.record_path(slots_path, SLOT)
+    pl.write_record(path, rec)
+    with pl.slot_lock(slots_path, SLOT):
+        pass
+    pl.mutate(slots_path, SLOT, lambda r: r)
+    pl.create_slot(slots_path, "slot2", ACCOUNTS, now=NOW)
+
+
+def test_lifecycle_helpers_do_not_write_into_repository_cwd():
+    repo_cwd = os.getcwd()
+    before = _cwd_listing()
+    tmp = _tmp_dir()
+    try:
+        _exercise_write_capable_lifecycle_helpers(tmp)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    after = _cwd_listing()
+    assert repo_cwd == os.getcwd()
+    assert after == before
