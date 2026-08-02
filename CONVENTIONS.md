@@ -706,8 +706,27 @@ Recovery, with the two session charters as enumerated copy-holders guarded by a 
 
 **Sanitized review view (#684).** External **review** seats (codex/cursor via `dispatch-review`)
 run against a disposable sanitized export of the named repo root — machinery inside the runner, not
-orchestrator discipline. A view that cannot be built is a named refusal with `attempts: 0` and no
-spawn; there is no fallback to the raw checkout.
+orchestrator discipline. The runner can stage the reviewed change as a patch inside the view via
+optional `--diff-base <commit-oid>` (a pinned commit object id) (merge-base→head in the source repo, written to
+`SUPERHEROES_REVIEW_DIFF.patch` before the view's synthetic commit); paths matching the stripped-config
+predicate are withheld from that patch by the same rule that strips the tree. The staged patch does
+not satisfy the #666 investigation floor — citing only that artifact forfeits vacuously. A view that
+cannot be built is a named refusal with `attempts: 0` and no spawn; there is no fallback to the raw
+checkout. The census of changed paths is authoritative: it comes from direct two-tree enumeration,
+not from `git diff` output or rendered patch text, and every changed recursively enumerated
+non-tree entry — blob/file, symlink or gitlink — must be rendered, policy-withheld, or refused
+before spawn. The merge-base is resolved outside the reviewed repository's git directory (scratch
+repository linked only through the object store, with every inherited `GIT_*` variable dropped), so
+git-directory ancestry overlays — grafts, replace refs, shallow metadata, config — cannot shrink the
+changed set. **Commit-graph data is the stated exception**: it lives in the object directory the
+alternate exposes and is excluded instead by the documented `-c core.commitGraph=false` reader-wide pin
+on every commit-peeling source-repository command, so that half of the guarantee is conditional on
+the git executable honoring it. Dispatch refuses when
+authoritative ancestry cannot be established, and any shallow-state answer other than exact
+`true`/`false` is itself a refusal; empty directory additions and removals are tree-only and outside
+this contract. Repo-local config overrides remain defence in depth, not the proof of authority. Until a follow-up issue lands, opaque or unaccounted patch content refuses
+with `sanitized-view-diff-opaque`, `sanitized-view-diff-unaccounted`, or (for git command failure)
+`sanitized-view-diff-failed`; that result is never a clean review and there is no automatic fallback.
 
 **Dispatch vocabulary contract.** Three token shapes stay distinct:
 

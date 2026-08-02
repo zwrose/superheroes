@@ -48,10 +48,11 @@ def _fake_build_view(tmp_path, *, source_dirty=False, stripped=None):
     counter = {"n": 0}
     meta = {"repo_arg": None, "view_path": None, "build_count": 0}
 
-    def build_view(repo_real):
+    def build_view(repo_real, *, diff_base=None):
         counter["n"] += 1
         meta["build_count"] = counter["n"]
         meta["repo_arg"] = repo_real
+        meta["diff_base"] = diff_base
         view_base = _SV_MOD.tempfile.gettempdir()
         view_dir = os.path.join(
             view_base,
@@ -96,6 +97,10 @@ def _fake_view_receipt(**overrides):
         "buildSeconds": 0.01,
         "bytes": 1,
         "fileCount": 1,
+        "diffBase": None,
+        "diffPath": None,
+        "diffBytes": None,
+        "diffWithheldCount": None,
     }
     base.update(overrides)
     return base
@@ -119,7 +124,7 @@ def _valid_prompt(tmp_path, content="Review this code.\n"):
 def _repo(tmp_path, git_as_file=True):
     """Directory with a .git entry (file for worktree shape, or directory)."""
     root = tmp_path / "repo"
-    root.mkdir()
+    root.mkdir(exist_ok=True)
     if git_as_file:
         (root / ".git").write_text("gitdir: /fake/worktree\n", encoding="utf-8")
     else:
@@ -997,7 +1002,7 @@ def test_sanitized_view_build_error_refusal_no_spawn(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([])
 
-    def fail_build(_repo):
+    def fail_build(_repo, *, diff_base=None):
         raise ED.sanitized_view.SanitizedViewError("sanitized-view-export-failed")
 
     res = ED.dispatch_review(
@@ -1054,8 +1059,8 @@ def test_view_destroyed_after_dispatch(tmp_path):
     repo_root = _repo(tmp_path)
     captured_path = []
 
-    def capture_build(repo_real):
-        view = _fake_build_view(tmp_path)(repo_real)
+    def capture_build(repo_real, *, diff_base=None):
+        view = _fake_build_view(tmp_path)(repo_real, diff_base=diff_base)
         captured_path.append(view["path"])
         return view
 
@@ -1105,8 +1110,8 @@ def test_view_destroyed_across_dispatch_outcomes(tmp_path, case, run_engine, kwa
     captured_path = []
     build_view_fn = _fake_build_view(tmp_path)
 
-    def capture_build(repo_real):
-        view = build_view_fn(repo_real)
+    def capture_build(repo_real, *, diff_base=None):
+        view = build_view_fn(repo_real, diff_base=diff_base)
         captured_path.append(view["path"])
         return view
 
@@ -2660,3 +2665,200 @@ def test_grade_review_attempt_empty_stdout_payload_shape_empty_stdout(tmp_path):
     shape = grade.get("payloadShape")
     assert shape is not None
     assert shape["parsed"] == ED.engine_adapter.SHAPE_EMPTY_STDOUT
+
+
+# --- WO B: diff_base threading + investigation-floor artifact hole ---------------
+
+
+def _capture_build_view(tmp_path, *, diff_keys=None):
+    inner = _fake_build_view(tmp_path)
+    captured = {"kwargs": []}
+
+    def build_view(repo_real, *, diff_base=None):
+        captured["kwargs"].append({"repo": repo_real, "diff_base": diff_base})
+        view = inner(repo_real)
+        if diff_keys:
+            view.update(diff_keys)
+        elif diff_base is not None:
+            view.update({
+                "diffBase": "a" * 40,
+                "diffPath": "SUPERHEROES_REVIEW_DIFF.patch",
+                "diffBytes": 42,
+                "diffWithheldCount": 0,
+            })
+        return view
+
+    build_view.captured = captured
+    build_view.meta = inner.meta
+    return build_view
+
+
+def test_dispatch_review_diff_base_omitted_reaches_build_view(tmp_path):
+    """E1: --diff-base omitted → diff_base=None; receipt diff keys are None."""
+    repo_root = _repo(tmp_path)
+    build_view = _capture_build_view(tmp_path)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=build_view,
+    )
+    assert build_view.captured["kwargs"][0]["diff_base"] is None
+    assert res["sanitizedView"]["diffBase"] is None
+    assert res["sanitizedView"]["diffPath"] is None
+    assert res["sanitizedView"]["diffBytes"] is None
+    assert res["sanitizedView"]["diffWithheldCount"] is None
+
+
+def test_dispatch_review_diff_base_forwarded_to_build_view(tmp_path):
+    repo_root = _repo(tmp_path)
+    build_view = _capture_build_view(tmp_path)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=build_view, diff_base="origin/main",
+    )
+    assert build_view.captured["kwargs"][0]["diff_base"] == "origin/main"
+    assert res["sanitizedView"]["diffPath"] == "SUPERHEROES_REVIEW_DIFF.patch"
+    assert res["sanitizedView"]["diffBytes"] == 42
+
+
+def test_sanitized_view_receipt_forwards_diff_keys_with_get():
+    """E2: old view dict without diff keys yields None in the receipt."""
+    old_shape = {
+        "strategy": "git-archive-export",
+        "stripped": [],
+        "strippedCount": 0,
+        "headSha": "abc",
+        "sourceDirty": False,
+        "buildSeconds": 0.1,
+        "bytes": 9,
+        "fileCount": 2,
+    }
+    receipt = ED._sanitized_view_receipt(old_shape)
+    assert receipt["diffBase"] is None
+    assert receipt["diffPath"] is None
+    assert receipt["diffBytes"] is None
+    assert receipt["diffWithheldCount"] is None
+
+    full = dict(old_shape, diffBase="b" * 40, diffPath="SUPERHEROES_REVIEW_DIFF.patch",
+                diffBytes=99, diffWithheldCount=1)
+    receipt = ED._sanitized_view_receipt(full)
+    assert receipt["diffBase"] == "b" * 40
+    assert receipt["diffPath"] == "SUPERHEROES_REVIEW_DIFF.patch"
+    assert receipt["diffBytes"] == 99
+    assert receipt["diffWithheldCount"] == 1
+
+
+def test_review_continuation_ignores_diff_base(tmp_path):
+    """E14: continuation does not rebuild the view for a differing diff_base."""
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run(tmp_path, run_dir)
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)"],
+        start_new_session=True,
+    )
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": proc.pid, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-started", "attempt": 1, "enginePgid": proc.pid, "at": time.time(),
+    })
+    build_view = _capture_build_view(tmp_path)
+    try:
+        ED.dispatch_review(
+            "codex", model="sonnet", effort="high",
+            prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
+            run_engine=FakeRunner([]), build_view=build_view, run_dir=run_dir,
+            order_id="test-order", max_wait=1, diff_base="other-ref",
+        )
+        assert build_view.meta["build_count"] == 0
+        assert build_view.captured["kwargs"] == []
+    finally:
+        ED._terminate_process_group(proc.pid)
+        proc.wait(timeout=2)
+
+
+def _grade_state_with_view_meta(tmp_path, view_meta, *, omit_view_meta=False, run_name="run"):
+    run_dir = str(tmp_path / run_name)
+    repo_root, view = _manual_open_review_run(tmp_path, run_dir)
+    records, _ = ED._journal_read(run_dir)
+    for rec in records:
+        if rec.get("kind") == "run-opened":
+            if omit_view_meta:
+                rec.pop("viewMeta", None)
+            else:
+                rec["viewMeta"] = view_meta
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    stdout = json.dumps({"findings": [], "investigated": ["SUPERHEROES_REVIEW_DIFF.patch"]})
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    with open(os.path.join(run_dir, "attempt-1.stderr"), "w", encoding="utf-8") as fh:
+        fh.write("")
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "signal": None,
+        "refusal": None, "at": time.time(), "wallSeconds": 1.0, "stdoutBytes": len(stdout),
+    })
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    patch_path = os.path.join(view["path"], "SUPERHEROES_REVIEW_DIFF.patch")
+    with open(patch_path, "w", encoding="utf-8") as fh:
+        fh.write("diff\n")
+    return run_dir, state
+
+
+def test_grade_review_view_meta_absent_or_none_passes_empty_artifacts(tmp_path):
+    """E15: missing viewMeta does not pass a generated artifact to the floor."""
+    run_dir, state = _grade_state_with_view_meta(tmp_path, None)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("investigated") == ["SUPERHEROES_REVIEW_DIFF.patch"]
+
+    run_dir2, state2 = _grade_state_with_view_meta(
+        tmp_path, None, omit_view_meta=True, run_name="run2")
+    grade2 = ED._grade_review_attempt(run_dir2, state2, 1)
+    assert grade2.get("ok") is True
+    assert grade2.get("investigated") == ["SUPERHEROES_REVIEW_DIFF.patch"]
+
+
+def test_grade_review_view_meta_diff_path_rejects_patch_only_investigation(tmp_path):
+    run_dir, state = _grade_state_with_view_meta(
+        tmp_path,
+        {"diffPath": "SUPERHEROES_REVIEW_DIFF.patch", "headSha": "abc"},
+    )
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("reason") == ED.engine_adapter.REVIEW_FORFEIT_VACUOUS
+    assert "generated-artifact" in grade.get("investigatedRejected", [])
+
+
+def test_main_dispatch_review_diff_base_cli_wiring(tmp_path, monkeypatch, capsys):
+    captured = {}
+
+    def _capture_dispatch(*_args, **kwargs):
+        captured.update(kwargs)
+        return {
+            "ok": False, "reason": "unrunnable", "detail": "repo-root-absent",
+            "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
+        }
+
+    monkeypatch.setattr(ED, "dispatch_review", _capture_dispatch)
+    prompt = _valid_prompt(tmp_path)
+    rc = ED.main([
+        "dispatch-review",
+        "--engine", "codex",
+        "--effort", "high",
+        "--prompt-path", prompt,
+        "--diff-base", "REF",
+    ])
+    assert rc == 0
+    json.loads(capsys.readouterr().out.strip())
+    assert captured.get("diff_base") == "REF"
