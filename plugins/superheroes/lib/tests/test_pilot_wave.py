@@ -551,6 +551,52 @@ def test_assert_destructive_allowed_park_intent():
     assert result == {"ok": False, "reason": pw.REASON_PARK_DESTRUCTIVE_REFUSED}
 
 
+def test_run_destructive_step_refuses_park_intent_directly(tmp_dir, monkeypatch):
+    """Covers _run_destructive_step's defence-in-depth park guard (not teardown_slot's short-circuit)."""
+    monkeypatch.setattr(
+        pw,
+        "assert_destructive_allowed",
+        lambda *args, **kwargs: {"ok": True},
+    )
+    slots = _slots_dir(tmp_dir)
+    journal = _journal(tmp_dir)
+    entry = {
+        "slot": _SLOT,
+        "slotRef": _SLOT_REF,
+        "intent": pw.INTENT_PARK,
+    }
+    context = {
+        "step": pw.STEP_CLEANUP,
+        "slot": _SLOT,
+        "slotRef": _SLOT_REF,
+        "intent": pw.INTENT_PARK,
+        "instance": None,
+        "allocation": None,
+        "steps": {
+            pw.STEP_APP: {"status": pw.STATUS_CONFIRMED},
+            pw.STEP_AUTOMATION: {"status": pw.STATUS_CONFIRMED},
+        },
+    }
+    result = pw._run_destructive_step(
+        pw.STEP_CLEANUP,
+        entry,
+        handlers={pw.STEP_CLEANUP: lambda ctx: _applied(pw.STEP_CLEANUP)},
+        context=context,
+        mono_fn=lambda: 0.0,
+        timeout_seconds=None,
+        slots_dir_path=slots,
+        journal_path=journal,
+        now_fn=_now_fn,
+        lock_timeout=30.0,
+    )
+    assert result == {
+        "status": pw.STATUS_REFUSED_PARK,
+        "reason": pw.REASON_PARK_DESTRUCTIVE_REFUSED,
+        "receipt": None,
+        "elapsed": None,
+    }
+
+
 def test_assert_destructive_allowed_latched():
     result = pw.assert_destructive_allowed(
         pw.STEP_CLEANUP, intent=pw.INTENT_COMPLETE, latched=True

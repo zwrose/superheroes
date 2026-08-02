@@ -8,6 +8,7 @@ pid was reused by a different process running the same ``argv[0]`` would corrobo
 via ``ps``. Same posture as ``pilot_lifecycle``'s check-then-use slot-directory guard.
 """
 import json
+import math
 import os
 import re
 import secrets
@@ -124,7 +125,17 @@ def _is_str_path(value):
 
 
 def _is_timeout(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if isinstance(value, bool):
+        return False
+    if not isinstance(value, (int, float)):
+        return False
+    if math.isnan(value) or math.isinf(value):
+        return False
+    return True
+
+
+def _is_callable(value):
+    return callable(value)
 
 
 def _is_iso8601_utc(value):
@@ -209,6 +220,8 @@ def _refuse_unsafe_dir(path):
 
 
 def instance_path(slots_dir_path, slot):
+    if not _is_str_path(slots_dir_path):
+        raise PilotAppctlError(REASON_INSTANCE_RECORD_INVALID)
     slot = pilot_slot.validate_slot_id(slot)
     return os.path.join(slots_dir_path, slot, "app.json")
 
@@ -332,29 +345,40 @@ def assert_unique_endpoints(allocations):
 
 def check_endpoint_free(host, port, *, connect=None, timeout=0.25):
     """Return whether (host, port) accepts a new bind (nothing listening)."""
-    if not isinstance(host, str) or not host:
-        return _fail(REASON_BIND_CONFLICT)
-    if not isinstance(port, int) or isinstance(port, bool):
-        return _fail(REASON_BIND_CONFLICT)
-    if port < 1 or port > 65535:
-        return _fail(REASON_BIND_CONFLICT)
-    if connect is None:
-        def connect(addr, t):
-            sock = socket.create_connection(addr, timeout=t)
-            sock.close()
     try:
-        connect((host, port), timeout)
-        return _fail(REASON_BIND_CONFLICT)
-    except ConnectionRefusedError:
-        return _ok()
-    except socket.timeout:
-        return _ok()
-    except OSError:
+        if not isinstance(host, str) or not host:
+            return _fail(REASON_BIND_CONFLICT)
+        if "\x00" in host:
+            return _fail(REASON_BIND_CONFLICT)
+        if not isinstance(port, int) or isinstance(port, bool):
+            return _fail(REASON_BIND_CONFLICT)
+        if port < 1 or port > 65535:
+            return _fail(REASON_BIND_CONFLICT)
+        if not _is_timeout(timeout):
+            return _fail(REASON_BIND_CONFLICT)
+        if connect is not None and not _is_callable(connect):
+            return _fail(REASON_BIND_CONFLICT)
+        if connect is None:
+            def connect(addr, t):
+                sock = socket.create_connection(addr, timeout=t)
+                sock.close()
+        try:
+            connect((host, port), timeout)
+            return _fail(REASON_BIND_CONFLICT)
+        except ConnectionRefusedError:
+            return _ok()
+        except socket.timeout:
+            return _ok()
+        except (OSError, UnicodeError):
+            return _fail(REASON_BIND_CONFLICT)
+    except BaseException:
         return _fail(REASON_BIND_CONFLICT)
 
 
 def retry_gate(reason):
     """Allowlist-backed retry classification."""
+    if not isinstance(reason, str):
+        return {"retryable": False, "reason": reason}
     return {"retryable": reason in RETRYABLE_REASONS, "reason": reason}
 
 
@@ -1092,128 +1116,155 @@ def _default_terminate(pgid, sig):
     os.killpg(pgid, sig)
 
 
+def _stop_refused_invalid():
+    return {
+        "ok": False,
+        "reason": REASON_INSTANCE_RECORD_INVALID,
+        "observed": False,
+        "exit": None,
+        "receipt": None,
+    }
+
+
 def stop(instance, *, now_fn, terminate=None, poll_alive=None, corroborate=None,
          check_free=None, wait_seconds=10.0, sleep=None, monotonic=None):
     """Stop an app instance with corroborated identity and two observations."""
-    if terminate is None:
-        terminate = _default_terminate
-    if poll_alive is None:
-        poll_alive = _default_poll_alive
-    if corroborate is None:
-        corroborate = _default_corroborate
-    if check_free is None:
-        check_free = check_endpoint_free
-    if sleep is None:
-        sleep = time.sleep
-    if monotonic is None:
-        monotonic = time.monotonic
-
     try:
-        _validate_instance_record(instance)
-    except (PilotAppctlError, pilot_slot.PilotSlotError):
-        return {
-            "ok": False,
-            "reason": REASON_INSTANCE_RECORD_INVALID,
-            "observed": False,
-            "exit": None,
-            "receipt": None,
-        }
+        if not _is_callable(now_fn):
+            return _stop_refused_invalid()
+        if terminate is not None and not _is_callable(terminate):
+            return _stop_refused_invalid()
+        if poll_alive is not None and not _is_callable(poll_alive):
+            return _stop_refused_invalid()
+        if corroborate is not None and not _is_callable(corroborate):
+            return _stop_refused_invalid()
+        if check_free is not None and not _is_callable(check_free):
+            return _stop_refused_invalid()
+        if sleep is not None and not _is_callable(sleep):
+            return _stop_refused_invalid()
+        if monotonic is not None and not _is_callable(monotonic):
+            return _stop_refused_invalid()
+        if not _is_timeout(wait_seconds):
+            return _stop_refused_invalid()
 
-    if instance.get("state") == STATE_STOPPED:
-        receipt = instance.get("stopReceipt")
-        if receipt is None:
-            receipt = {
-                "step": "app-instance",
-                "slotRef": instance["slotRef"],
-                "observedAt": now_fn(),
-                "evidence": "already stopped",
-            }
-        return {
-            "ok": True,
-            "reason": None,
-            "observed": True,
-            "exit": None,
-            "receipt": receipt,
-        }
+        if terminate is None:
+            terminate = _default_terminate
+        if poll_alive is None:
+            poll_alive = _default_poll_alive
+        if corroborate is None:
+            corroborate = _default_corroborate
+        if check_free is None:
+            check_free = check_endpoint_free
+        if sleep is None:
+            sleep = time.sleep
+        if monotonic is None:
+            monotonic = time.monotonic
 
-    if not corroborate(instance):
-        return {
-            "ok": False,
-            "reason": REASON_INSTANCE_PID_MISMATCH,
-            "observed": False,
-            "exit": None,
-            "receipt": None,
-        }
+        if not isinstance(instance, dict):
+            return _stop_refused_invalid()
 
-    pgid = instance["pgid"]
-    exit_code = None
-
-    if poll_alive(pgid):
         try:
-            terminate(pgid, signal.SIGTERM)
-        except OSError:
-            pass
-        deadline = monotonic() + wait_seconds
-        while poll_alive(pgid) and monotonic() < deadline:
-            sleep(0.05)
+            _validate_instance_record(instance)
+        except (PilotAppctlError, pilot_slot.PilotSlotError):
+            return _stop_refused_invalid()
+
+        if instance.get("state") == STATE_STOPPED:
+            receipt = instance.get("stopReceipt")
+            if receipt is None:
+                receipt = {
+                    "step": "app-instance",
+                    "slotRef": instance["slotRef"],
+                    "observedAt": now_fn(),
+                    "evidence": "already stopped",
+                }
+            return {
+                "ok": True,
+                "reason": None,
+                "observed": True,
+                "exit": None,
+                "receipt": receipt,
+            }
+
+        if not corroborate(instance):
+            return {
+                "ok": False,
+                "reason": REASON_INSTANCE_PID_MISMATCH,
+                "observed": False,
+                "exit": None,
+                "receipt": None,
+            }
+
+        pgid = instance["pgid"]
+        exit_code = None
+
         if poll_alive(pgid):
             try:
-                terminate(pgid, signal.SIGKILL)
+                terminate(pgid, signal.SIGTERM)
             except OSError:
                 pass
             deadline = monotonic() + wait_seconds
             while poll_alive(pgid) and monotonic() < deadline:
                 sleep(0.05)
+            if poll_alive(pgid):
+                try:
+                    terminate(pgid, signal.SIGKILL)
+                except OSError:
+                    pass
+                deadline = monotonic() + wait_seconds
+                while poll_alive(pgid) and monotonic() < deadline:
+                    sleep(0.05)
 
-    try:
-        os.waitpid(instance["pid"], os.WNOHANG)
-    except ChildProcessError:
-        pass
-    except OSError:
-        pass
+        try:
+            os.waitpid(instance["pid"], os.WNOHANG)
+        except ChildProcessError:
+            pass
+        except OSError:
+            pass
 
-    group_gone = not poll_alive(pgid)
-    alloc = instance.get("allocation", {})
-    host = alloc.get("host", "127.0.0.1")
-    port = alloc.get("port", 0)
-    endpoint_free = check_free(host, port)
-    endpoint_observed = endpoint_free.get("ok") is True
+        group_gone = not poll_alive(pgid)
+        alloc = instance.get("allocation", {})
+        host = alloc.get("host", "127.0.0.1")
+        port = alloc.get("port", 0)
+        endpoint_free = check_free(host, port)
+        endpoint_observed = endpoint_free.get("ok") is True
 
-    observed = group_gone and endpoint_observed
-    now = now_fn()
+        observed = group_gone and endpoint_observed
+        now = now_fn()
 
-    if observed:
-        evidence = "process group gone; endpoint free"
-        receipt = {
-            "step": "app-instance",
-            "slotRef": instance["slotRef"],
-            "observedAt": now,
-            "evidence": evidence,
-        }
-        instance["state"] = STATE_STOPPED
-        instance["stopReceipt"] = receipt
+        if observed:
+            evidence = "process group gone; endpoint free"
+            receipt = {
+                "step": "app-instance",
+                "slotRef": instance["slotRef"],
+                "observedAt": now,
+                "evidence": evidence,
+            }
+            instance["state"] = STATE_STOPPED
+            instance["stopReceipt"] = receipt
+            instance["updatedAt"] = now
+            return {
+                "ok": True,
+                "reason": None,
+                "observed": True,
+                "exit": exit_code,
+                "receipt": receipt,
+            }
+
+        detail_parts = []
+        if not group_gone:
+            detail_parts.append("process group still alive")
+        if not endpoint_observed:
+            detail_parts.append("endpoint still occupied")
+        reason_detail = "; ".join(detail_parts) if detail_parts else "observations incomplete"
+        instance["state"] = STATE_INDETERMINATE
         instance["updatedAt"] = now
         return {
-            "ok": True,
-            "reason": None,
-            "observed": True,
+            "ok": False,
+            "reason": REASON_STOP_INDETERMINATE,
+            "observed": False,
             "exit": exit_code,
-            "receipt": receipt,
+            "receipt": None,
+            "detail": reason_detail,
         }
-
-    detail_parts = []
-    if not group_gone:
-        detail_parts.append("process group still alive")
-    if not endpoint_observed:
-        detail_parts.append("endpoint still occupied")
-    reason_detail = "; ".join(detail_parts) if detail_parts else "observations incomplete"
-    instance["state"] = STATE_INDETERMINATE
-    instance["updatedAt"] = now
-    return {
-        "ok": False,
-        "reason": REASON_STOP_INDETERMINATE,
-        "observed": False,
-        "exit": exit_code,
-        "receipt": None,
-        "detail": reason_detail,
-    }
+    except BaseException:
+        return _stop_refused_invalid()

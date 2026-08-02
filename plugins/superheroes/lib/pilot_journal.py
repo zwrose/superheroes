@@ -193,6 +193,24 @@ def _journal_lock_path(journal_path):
     return journal_path + ".lock"
 
 
+def _journal_path_writable(journal_path):
+    """True only when a write may proceed to lock acquisition."""
+    if not _is_str_path(journal_path):
+        return False
+    if not journal_path:
+        return False
+    parent = os.path.dirname(os.path.abspath(journal_path)) or "."
+    if os.path.islink(parent):
+        return False
+    if os.path.lexists(parent) and not os.path.isdir(parent):
+        return False
+    try:
+        os.makedirs(parent, exist_ok=True)
+    except OSError:
+        return False
+    return os.path.isdir(parent)
+
+
 def _acquire_journal_lock(journal_path, timeout=_LOCK_DEFAULT_TIMEOUT):
     """Acquire an advisory flock on a separate lock file beside the journal."""
     lock_file = _journal_lock_path(journal_path)
@@ -248,7 +266,7 @@ def _release_journal_lock(lock_fd):
 
 def _write_record(journal_path, record):
     """Durable single-write append. Returns ok/reason dict."""
-    if not _is_str_path(journal_path):
+    if not _journal_path_writable(journal_path):
         return _fail(REASON_JOURNAL_WRITE_FAILED)
     line = json.dumps(record, sort_keys=True) + "\n"
     encoded = line.encode("utf-8")
