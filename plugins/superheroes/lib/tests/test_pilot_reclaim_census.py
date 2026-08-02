@@ -175,6 +175,10 @@ class _DestructiveCallVisitor(ast.NodeVisitor):
             for alias in node.names:
                 name = alias.asname or alias.name
                 self.import_aliases[name] = "shutil.%s" % alias.name
+        elif node.module == "os":
+            for alias in node.names:
+                name = alias.asname or alias.name
+                self.import_aliases[name] = "os.%s" % alias.name
         elif node.module == "pathlib":
             for alias in node.names:
                 name = alias.asname or alias.name
@@ -400,23 +404,41 @@ def test_only_authorized_shutil_rmtree_in_reclaim_modules():
         )
 
 
-def _check_free_space_in_snippet(source, module_name="snippet"):
-    tree = ast.parse(source, filename=module_name)
-    id_visitor = _IdentifierVisitor()
-    id_visitor.visit(tree)
-    for lineno, name in id_visitor.names:
-        lower = name.lower()
-        if name in _FORBIDDEN_FREE_SPACE or "disk_usage" in lower or "statvfs" in lower:
+def _is_forbidden_free_space_name(name):
+    lower = name.lower()
+    return name in _FORBIDDEN_FREE_SPACE or "disk_usage" in lower or "statvfs" in lower
+
+
+def _is_forbidden_free_space_resolved(resolved):
+    return (
+        resolved in _FORBIDDEN_FREE_SPACE
+        or "disk_usage" in resolved
+        or "statvfs" in resolved
+    )
+
+
+def _check_free_space_identifiers(names, import_aliases, module_name):
+    for lineno, name in names:
+        if _is_forbidden_free_space_name(name):
             raise AssertionError(
                 "forbidden free-space read %r at %s:%d"
                 % (name, module_name, lineno)
             )
-    for alias_name, resolved in id_visitor.import_aliases.items():
-        if resolved in _FORBIDDEN_FREE_SPACE or "disk_usage" in resolved or "statvfs" in resolved:
+    for alias_name, resolved in import_aliases.items():
+        if _is_forbidden_free_space_resolved(resolved):
             raise AssertionError(
                 "forbidden free-space import %r -> %r in %s"
                 % (alias_name, resolved, module_name)
             )
+
+
+def _check_free_space_in_snippet(source, module_name="snippet"):
+    tree = ast.parse(source, filename=module_name)
+    id_visitor = _IdentifierVisitor()
+    id_visitor.visit(tree)
+    _check_free_space_identifiers(
+        id_visitor.names, id_visitor.import_aliases, module_name
+    )
 
 
 def _check_destructive_in_snippet(source, module_name="snippet"):
@@ -462,6 +484,22 @@ def test_destructive_detector_flags_aliased_rmtree():
     assert subprocess == []
 
 
+def test_destructive_detector_flags_os_unlink_alias():
+    calls, subprocess = _check_destructive_in_snippet(
+        "from os import unlink as erase\nerase('/x')\n"
+    )
+    assert calls == [(2, "os.unlink")]
+    assert subprocess == []
+
+
+def test_destructive_detector_flags_os_remove_alias():
+    calls, subprocess = _check_destructive_in_snippet(
+        "from os import remove as rm\nrm('/x')\n"
+    )
+    assert calls == [(2, "os.remove")]
+    assert subprocess == []
+
+
 def test_destructive_detector_flags_path_unlink_call_receiver():
     calls, subprocess = _check_destructive_in_snippet(
         "from pathlib import Path\nPath('/x').unlink()\n"
@@ -482,19 +520,9 @@ def test_no_free_space_read_in_reclaim_modules():
         tree = _parse_module_ast(module)
         id_visitor = _IdentifierVisitor()
         id_visitor.visit(tree)
-        for lineno, name in id_visitor.names:
-            lower = name.lower()
-            if name in _FORBIDDEN_FREE_SPACE or "disk_usage" in lower or "statvfs" in lower:
-                raise AssertionError(
-                    "forbidden free-space read %r at %s:%d"
-                    % (name, module.__name__, lineno)
-                )
-        for alias_name, resolved in id_visitor.import_aliases.items():
-            if resolved in _FORBIDDEN_FREE_SPACE or "disk_usage" in resolved:
-                raise AssertionError(
-                    "forbidden free-space import %r -> %r in %s"
-                    % (alias_name, resolved, module.__name__)
-                )
+        _check_free_space_identifiers(
+            id_visitor.names, id_visitor.import_aliases, module.__name__
+        )
 
 
 def test_no_forbidden_public_parameters_in_reclaim_modules():
@@ -529,12 +557,7 @@ _LAYOUT_FILENAME_SITES = {
 }
 
 
-def _default_journal_path(slots_dir, slot):
-    """Documented caller pattern for the live journal path (see test_pilot_reclaim_journal)."""
-    return os.path.join(slots_dir, slot, "journal.ndjson")
-
-
-def test_on_disk_layout_filenames_match_lib():
+def test_on_disk_layout_filenames_match_lib(tmp_path):
     doc = _load_contract()
     section = _extract_section(doc, _RECLAIM_SECTION)
     assert section is not None
@@ -556,15 +579,36 @@ def test_on_disk_layout_filenames_match_lib():
                 assert path.endswith(filename)
         elif module_name == "caller":
             if attr == "journal_path":
-                journal_path = _default_journal_path("/slots", "slot-a")
-                assert journal_path.endswith(filename)
+                slot_dir = os.path.join("/slots", "slot-a")
+                journal_path = os.path.join(slot_dir, filename)
+                stem, ext = os.path.splitext(filename)
+                example_segment = pilot_reclaim._JOURNAL_SEGMENT_TEMPLATE % (
+                    stem, 1, ext
+                )
                 seg_re = pilot_reclaim._journal_segment_re_for(journal_path)
-                assert seg_re.match("journal.0001.ndjson")
+                assert seg_re.match(example_segment)
         elif module_name == "pilot_reclaim":
             if attr == "quarantine_dir":
                 path = pilot_reclaim.quarantine_dir("/slots")["path"]
                 assert path.endswith(filename)
             elif attr == "sidecar_path":
-                qdir = pilot_reclaim.quarantine_dir("/slots")["path"]
-                sidecar = os.path.join(qdir, "entry%s" % pilot_reclaim.SIDECAR_SUFFIX)
+                slots = os.path.join(str(tmp_path), "slots")
+                os.makedirs(slots)
+                source = os.path.join(str(tmp_path), "payload")
+                os.makedirs(source)
+                result = pilot_reclaim.quarantine_entry(
+                    slots,
+                    source,
+                    slot_ref="slot-a@1",
+                    reason="stale-occupant",
+                    occupant={
+                        "pid": 1,
+                        "processInstance": "/proc/1",
+                        "livenessSource": "lock-probe",
+                        "observedAt": "2026-08-02T12:00:00Z",
+                    },
+                    now="2026-08-02T12:00:00Z",
+                )
+                assert result["ok"] is True
+                sidecar = result["sidecarPath"]
                 assert sidecar.endswith(filename)

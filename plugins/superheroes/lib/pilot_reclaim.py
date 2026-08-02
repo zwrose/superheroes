@@ -504,19 +504,15 @@ def quarantine_entry(slots_dir_path, source_path, *, slot_ref, reason, occupant,
             entryName=None, entryPath=None, sidecarPath=None,
         )
 
-    qdir_created = not qdir_existed
-    if qdir_created:
-        try:
-            _fsync_dir(os.path.dirname(os.path.abspath(qdir)))
-        except OSError:
-            return _fail(
-                REASON_SIDECAR_WRITE_FAILED,
-                entryName=None, entryPath=None, sidecarPath=None,
-            )
+    try:
+        _fsync_dir(os.path.dirname(os.path.abspath(qdir)))
+    except OSError:
+        return _fail(
+            REASON_SIDECAR_WRITE_FAILED,
+            entryName=None, entryPath=None, sidecarPath=None,
+        )
 
     try:
-        if not qdir_created:
-            _fsync_dir(os.path.dirname(os.path.abspath(qdir)))
         _fsync_dir(qdir)
     except OSError:
         pass

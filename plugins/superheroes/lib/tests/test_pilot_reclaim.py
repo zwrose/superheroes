@@ -400,28 +400,29 @@ def test_quarantine_entry_refuses_parent_fsync_on_new_qdir(tmp_path):
     assert os.path.isdir(source)
 
 
-def test_quarantine_entry_allows_parent_fsync_fail_when_qdir_exists(tmp_path):
+def test_quarantine_entry_refuses_parent_fsync_on_retry_when_qdir_exists(tmp_path):
     slots = _slots_dir(tmp_path)
-    qdir = pr.quarantine_dir(slots)["path"]
-    os.makedirs(qdir)
     source = _payload_dir(str(tmp_path))
-    calls = {"n": 0}
+    parent = os.path.dirname(os.path.abspath(pr.quarantine_dir(slots)["path"]))
     original = pr._fsync_dir
 
-    def flaky_fsync(path):
-        calls["n"] += 1
-        parent = os.path.dirname(os.path.abspath(qdir))
-        if path == parent and calls["n"] == 1:
+    def parent_fsync_fail(path):
+        if path == parent:
             raise OSError("parent fsync fail")
         return original(path)
 
-    with mock.patch.object(pr, "_fsync_dir", side_effect=flaky_fsync):
-        result = pr.quarantine_entry(
+    with mock.patch.object(pr, "_fsync_dir", side_effect=parent_fsync_fail):
+        first = pr.quarantine_entry(
             slots, source, slot_ref=_SLOT_REF, reason=_REASON,
             occupant=_occupant(), now=_NOW,
         )
-    assert result["ok"] is True
-    assert not os.path.exists(source)
+        second = pr.quarantine_entry(
+            slots, source, slot_ref=_SLOT_REF, reason=_REASON,
+            occupant=_occupant(), now=_NOW,
+        )
+    assert first["reason"] == pr.REASON_SIDECAR_WRITE_FAILED
+    assert second["reason"] == pr.REASON_SIDECAR_WRITE_FAILED
+    assert os.path.isdir(source)
 
 
 def test_quarantine_entry_sidecar_write_failed_before_rename(tmp_path):
