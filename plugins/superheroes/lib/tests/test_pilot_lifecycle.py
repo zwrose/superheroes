@@ -27,8 +27,8 @@ _BARRIER_TIMEOUT = 60.0
 _JOIN_TIMEOUT = 60.0
 
 
-def _tmp_private():
-    return tempfile.mkdtemp(dir="/private/tmp")
+def _tmp_dir():
+    return tempfile.mkdtemp()
 
 
 def _raises(reason):
@@ -210,7 +210,7 @@ def test_no_is_stale_helper():
 
 
 def test_new_record_write_read_round_trip():
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         path = os.path.join(tmp, "slot.json")
         rec = pl.new_record(SLOT, ACCOUNTS, now=NOW)
@@ -223,13 +223,13 @@ def test_new_record_write_read_round_trip():
 
 
 def test_read_record_missing_file():
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         path = os.path.join(tmp, "missing.json")
         result = pl.read_record(path)
         assert result == {
             "ok": False,
-            "reason": pl.REASON_RECORD_UNREADABLE,
+            "reason": pl.REASON_RECORD_ABSENT,
             "record": None,
         }
     finally:
@@ -237,7 +237,7 @@ def test_read_record_missing_file():
 
 
 def test_read_record_non_json_bytes():
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         path = os.path.join(tmp, "slot.json")
         with open(path, "wb") as fh:
@@ -251,7 +251,7 @@ def test_read_record_non_json_bytes():
 
 
 def test_read_record_invalid_utf8():
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         path = os.path.join(tmp, "slot.json")
         with open(path, "wb") as fh:
@@ -267,7 +267,7 @@ def test_read_record_invalid_utf8():
 
 
 def test_mutate_invalid_utf8_record():
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         slots_path = os.path.join(tmp, "slots")
         path = pl.record_path(slots_path, SLOT)
@@ -285,7 +285,7 @@ def test_mutate_invalid_utf8_record():
 
 
 def test_read_record_history_to_disagrees_with_state():
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         path = os.path.join(tmp, "slot.json")
         rec = pl.new_record(SLOT, ACCOUNTS, now=NOW)
@@ -303,7 +303,7 @@ def test_read_record_history_to_disagrees_with_state():
 
 
 def test_read_record_history_generation_disagrees():
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         path = os.path.join(tmp, "slot.json")
         rec = _released_at_generation(2)
@@ -317,7 +317,7 @@ def test_read_record_history_generation_disagrees():
 
 
 def test_write_record_refuses_history_state_mismatch():
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         path = os.path.join(tmp, "slot.json")
         rec = pl.new_record(SLOT, ACCOUNTS, now=NOW)
@@ -331,7 +331,7 @@ def test_write_record_refuses_history_state_mismatch():
 
 
 def test_write_record_refuses_history_generation_mismatch():
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         path = os.path.join(tmp, "slot.json")
         rec = _released_at_generation(2)
@@ -344,7 +344,7 @@ def test_write_record_refuses_history_generation_mismatch():
 
 
 def test_mutate_refuses_record_slot_mismatch():
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         slots_path = os.path.join(tmp, "slots")
         path = pl.record_path(slots_path, "slot1")
@@ -370,7 +370,7 @@ def test_mutate_refuses_record_slot_mismatch():
 
 
 def test_slot_lock_refuses_symlinked_slot_dir():
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         slots_path = os.path.join(tmp, "slots")
         target = os.path.join(tmp, "target")
@@ -391,7 +391,7 @@ def test_slot_lock_refuses_symlinked_slot_dir():
 
 
 def test_slot_lock_refuses_file_slot_dir():
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         slots_path = os.path.join(tmp, "slots")
         os.makedirs(slots_path)
@@ -405,7 +405,7 @@ def test_slot_lock_refuses_file_slot_dir():
 
 
 def test_slot_lock_refuses_symlinked_lock_file():
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         slots_path = os.path.join(tmp, "slots")
         slot_dir = os.path.join(slots_path, SLOT)
@@ -422,7 +422,7 @@ def test_slot_lock_refuses_symlinked_lock_file():
 
 
 def test_create_slot_persists_first_record():
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         slots_path = os.path.join(tmp, "slots")
         result = pl.create_slot(slots_path, SLOT, ACCOUNTS, now=NOW)
@@ -436,7 +436,7 @@ def test_create_slot_persists_first_record():
 
 
 def test_create_slot_twice_refuses_record_exists():
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         slots_path = os.path.join(tmp, "slots")
         first = pl.create_slot(slots_path, SLOT, ACCOUNTS, now=NOW)
@@ -454,7 +454,7 @@ def test_create_slot_twice_refuses_record_exists():
 
 
 def test_mutate_oserror_returns_lock_unavailable():
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         slots_path = os.path.join(tmp, "slots")
         os.makedirs(slots_path, mode=0o555)
@@ -475,7 +475,7 @@ def test_mutate_oserror_returns_lock_unavailable():
 
 
 def test_read_record_wrong_schema_version():
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         path = os.path.join(tmp, "slot.json")
         rec = pl.new_record(SLOT, ACCOUNTS, now=NOW)
@@ -489,7 +489,7 @@ def test_read_record_wrong_schema_version():
 
 
 def test_read_record_missing_required_field():
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         path = os.path.join(tmp, "slot.json")
         with open(path, "w", encoding="utf-8") as fh:
@@ -501,7 +501,7 @@ def test_read_record_missing_required_field():
 
 
 def test_read_record_json_array():
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         path = os.path.join(tmp, "slot.json")
         with open(path, "w", encoding="utf-8") as fh:
@@ -513,7 +513,7 @@ def test_read_record_json_array():
 
 
 def test_write_record_invalid_refuses_before_write():
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         path = os.path.join(tmp, "slot.json")
         result = pl.write_record(path, {"schemaVersion": 1})
@@ -524,7 +524,7 @@ def test_write_record_invalid_refuses_before_write():
 
 
 def test_write_record_fsyncs_directory_fd(monkeypatch):
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         path = os.path.join(tmp, "slot.json")
         rec = pl.new_record(SLOT, ACCOUNTS, now=NOW)
@@ -556,7 +556,7 @@ def test_write_record_fsyncs_directory_fd(monkeypatch):
 
 
 def test_write_record_directory_fsync_failure(monkeypatch):
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         path = os.path.join(tmp, "slot.json")
         rec = pl.new_record(SLOT, ACCOUNTS, now=NOW)
@@ -575,7 +575,7 @@ def test_write_record_directory_fsync_failure(monkeypatch):
 
 
 def test_slot_lock_timeout():
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         slots_path = os.path.join(tmp, "slots")
         with pl.slot_lock(slots_path, SLOT):
@@ -587,7 +587,7 @@ def test_slot_lock_timeout():
 
 
 def test_mutate_releases_lock_when_fn_raises():
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         slots_path = os.path.join(tmp, "slots")
         path = pl.record_path(slots_path, SLOT)
@@ -610,7 +610,7 @@ def test_mutate_releases_lock_when_fn_raises():
 
 def test_concurrent_generation_allocation():
     multiprocessing.set_start_method("spawn", force=True)
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         slots_path = os.path.join(tmp, "slots")
         path = pl.record_path(slots_path, SLOT)
@@ -703,7 +703,7 @@ def _deterministic_lock_contender_worker(
 
 def test_mutate_lock_held_during_callback_blocks_contender():
     multiprocessing.set_start_method("spawn", force=True)
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         slots_path = os.path.join(tmp, "slots")
         path = pl.record_path(slots_path, SLOT)
@@ -775,7 +775,7 @@ def test_mutate_lock_held_during_callback_blocks_contender():
 
 def test_concurrent_create_slot():
     multiprocessing.set_start_method("spawn", force=True)
-    tmp = _tmp_private()
+    tmp = _tmp_dir()
     try:
         slots_path = os.path.join(tmp, "slots")
         n = 8
@@ -834,3 +834,399 @@ def test_provisioning_outcome_mapping():
     assert pl.provisioning_outcome(pl.STATE_RETIRED) == "failed"
     with _raises(pl.REASON_STATE_INVALID):
         pl.provisioning_outcome("bogus")
+
+
+@pytest.mark.parametrize("bad_state", [[], {}])
+def test_read_record_unhashable_state_refuses(bad_state):
+    tmp = _tmp_dir()
+    try:
+        path = os.path.join(tmp, "slot.json")
+        rec = pl.new_record(SLOT, ACCOUNTS, now=NOW)
+        rec["state"] = bad_state
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(rec, fh)
+        result = pl.read_record(path)
+        assert result == {
+            "ok": False,
+            "reason": pl.REASON_RECORD_INVALID,
+            "record": None,
+        }
+        slots_path = os.path.join(tmp, "slots")
+        slot_path = pl.record_path(slots_path, SLOT)
+        os.makedirs(os.path.dirname(slot_path), exist_ok=True)
+        shutil.copy(path, slot_path)
+        mutate_result = pl.mutate(slots_path, SLOT, lambda r: r)
+        assert mutate_result == {
+            "ok": False,
+            "reason": pl.REASON_RECORD_INVALID,
+            "record": None,
+        }
+    finally:
+        shutil.rmtree(tmp)
+
+
+@pytest.mark.parametrize("field,value", [("to", []), ("from", {})])
+def test_read_record_unhashable_history_refuses(field, value):
+    tmp = _tmp_dir()
+    try:
+        path = os.path.join(tmp, "slot.json")
+        rec = pl.new_record(SLOT, ACCOUNTS, now=NOW)
+        rec["history"][-1][field] = value
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(rec, fh)
+        result = pl.read_record(path)
+        assert result == {
+            "ok": False,
+            "reason": pl.REASON_RECORD_INVALID,
+            "record": None,
+        }
+        slots_path = os.path.join(tmp, "slots")
+        slot_path = pl.record_path(slots_path, SLOT)
+        os.makedirs(os.path.dirname(slot_path), exist_ok=True)
+        shutil.copy(path, slot_path)
+        mutate_result = pl.mutate(slots_path, SLOT, lambda r: r)
+        assert mutate_result == {
+            "ok": False,
+            "reason": pl.REASON_RECORD_INVALID,
+            "record": None,
+        }
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_create_slot_refuses_unreadable_existing_record():
+    tmp = _tmp_dir()
+    try:
+        slots_path = os.path.join(tmp, "slots")
+        path = pl.record_path(slots_path, SLOT)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        rec = pl.new_record(SLOT, ACCOUNTS, now=NOW)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(rec, fh)
+        original_ino = os.stat(path).st_ino
+        original_bytes = open(path, "rb").read()
+        os.chmod(path, 0o000)
+        try:
+            result = pl.create_slot(slots_path, SLOT, ACCOUNTS, now=NOW)
+        except PermissionError:
+            pytest.skip(
+                "mode 0o000 record file did not prevent read for this user"
+            )
+        assert result == {
+            "ok": False,
+            "reason": pl.REASON_RECORD_UNREADABLE,
+            "record": None,
+        }
+        os.chmod(path, 0o644)
+        assert os.stat(path).st_ino == original_ino
+        assert open(path, "rb").read() == original_bytes
+    finally:
+        try:
+            os.chmod(path, 0o644)
+        except OSError:
+            pass
+        shutil.rmtree(tmp)
+
+
+def test_create_slot_refuses_dangling_record_symlink():
+    tmp = _tmp_dir()
+    try:
+        slots_path = os.path.join(tmp, "slots")
+        slot_dir = os.path.join(slots_path, SLOT)
+        os.makedirs(slot_dir)
+        record = pl.record_path(slots_path, SLOT)
+        os.symlink(os.path.join(tmp, "nowhere"), record)
+        result = pl.create_slot(slots_path, SLOT, ACCOUNTS, now=NOW)
+        assert result == {
+            "ok": False,
+            "reason": pl.REASON_RECORD_UNREADABLE,
+            "record": None,
+        }
+        assert os.path.islink(record)
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_create_slot_succeeds_when_record_absent():
+    tmp = _tmp_dir()
+    try:
+        slots_path = os.path.join(tmp, "slots")
+        result = pl.create_slot(slots_path, SLOT, ACCOUNTS, now=NOW)
+        assert result["ok"]
+        assert result["record"]["generation"] == pl.INITIAL_GENERATION
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_transition_refuses_non_serialisable_detail():
+    rec = pl.new_record(SLOT, ACCOUNTS, now=NOW)
+    with _raises(pl.REASON_RECORD_INVALID):
+        pl.transition(rec, pl.STATE_PROVISIONED, now=NOW, detail={"a": {1, 2}})
+
+
+def test_read_record_refuses_non_serialisable_detail():
+    tmp = _tmp_dir()
+    try:
+        path = os.path.join(tmp, "slot.json")
+        rec = pl.new_record(SLOT, ACCOUNTS, now=NOW)
+        rec["history"][-1]["detail"] = {"a": float("nan")}
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(rec, fh)
+        result = pl.read_record(path)
+        assert result == {
+            "ok": False,
+            "reason": pl.REASON_RECORD_INVALID,
+            "record": None,
+        }
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_write_record_refuses_non_serialisable_detail():
+    tmp = _tmp_dir()
+    try:
+        path = os.path.join(tmp, "slot.json")
+        rec = pl.new_record(SLOT, ACCOUNTS, now=NOW)
+        rec["history"][-1]["detail"] = {"a": {1, 2}}
+        result = pl.write_record(path, rec)
+        assert result == {"ok": False, "reason": pl.REASON_RECORD_INVALID}
+        assert not os.path.exists(path)
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_mutate_refuses_callback_returning_wrong_slot():
+    tmp = _tmp_dir()
+    try:
+        slots_path = os.path.join(tmp, "slots")
+        path = pl.record_path(slots_path, "slot1")
+        rec = pl.new_record("slot1", ACCOUNTS, now=NOW)
+        assert pl.write_record(path, rec)["ok"]
+        original_bytes = open(path, "rb").read()
+
+        def fn(_record):
+            return pl.new_record("slot2", ACCOUNTS, now=NOW)
+
+        result = pl.mutate(slots_path, "slot1", fn)
+        assert result == {
+            "ok": False,
+            "reason": pl.REASON_RECORD_SLOT_MISMATCH,
+            "record": None,
+        }
+        assert open(path, "rb").read() == original_bytes
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_slot_lock_refuses_dangling_slot_dir_symlink():
+    tmp = _tmp_dir()
+    try:
+        slots_path = os.path.join(tmp, "slots")
+        os.makedirs(slots_path)
+        os.symlink(os.path.join(tmp, "nowhere"), os.path.join(slots_path, SLOT))
+        with _raises(pl.REASON_SLOT_DIR_UNSAFE):
+            with pl.slot_lock(slots_path, SLOT):
+                pass
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_mutate_refuses_dangling_slot_dir_symlink():
+    tmp = _tmp_dir()
+    try:
+        slots_path = os.path.join(tmp, "slots")
+        os.makedirs(slots_path)
+        os.symlink(os.path.join(tmp, "nowhere"), os.path.join(slots_path, SLOT))
+        result = pl.mutate(slots_path, SLOT, lambda r: r)
+        assert result == {
+            "ok": False,
+            "reason": pl.REASON_SLOT_DIR_UNSAFE,
+            "record": None,
+        }
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_create_slot_refuses_dangling_slot_dir_symlink():
+    tmp = _tmp_dir()
+    try:
+        slots_path = os.path.join(tmp, "slots")
+        os.makedirs(slots_path)
+        os.symlink(os.path.join(tmp, "nowhere"), os.path.join(slots_path, SLOT))
+        result = pl.create_slot(slots_path, SLOT, ACCOUNTS, now=NOW)
+        assert result == {
+            "ok": False,
+            "reason": pl.REASON_SLOT_DIR_UNSAFE,
+            "record": None,
+        }
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_read_record_refuses_symlinked_record():
+    tmp = _tmp_dir()
+    try:
+        target = os.path.join(tmp, "target.json")
+        rec = pl.new_record(SLOT, ACCOUNTS, now=NOW)
+        with open(target, "w", encoding="utf-8") as fh:
+            json.dump(rec, fh)
+        path = os.path.join(tmp, "slot.json")
+        os.symlink(target, path)
+        result = pl.read_record(path)
+        assert result == {
+            "ok": False,
+            "reason": pl.REASON_RECORD_UNREADABLE,
+            "record": None,
+        }
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_mutate_refuses_symlinked_record():
+    tmp = _tmp_dir()
+    try:
+        slots_path = os.path.join(tmp, "slots")
+        slot_dir = os.path.join(slots_path, SLOT)
+        os.makedirs(slot_dir)
+        target = os.path.join(tmp, "target.json")
+        rec = pl.new_record(SLOT, ACCOUNTS, now=NOW)
+        with open(target, "w", encoding="utf-8") as fh:
+            json.dump(rec, fh)
+        path = pl.record_path(slots_path, SLOT)
+        os.symlink(target, path)
+        callback_ran = []
+
+        def fn(_record):
+            callback_ran.append(True)
+            return _record
+
+        result = pl.mutate(slots_path, SLOT, fn)
+        assert result == {
+            "ok": False,
+            "reason": pl.REASON_RECORD_UNREADABLE,
+            "record": None,
+        }
+        assert not callback_ran
+    finally:
+        shutil.rmtree(tmp)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no os.mkfifo on this platform")
+def test_read_record_refuses_fifo_without_blocking():
+    tmp = _tmp_dir()
+    try:
+        path = os.path.join(tmp, "slot.json")
+        os.mkfifo(path)
+        result = pl.read_record(path)
+        assert result == {
+            "ok": False,
+            "reason": pl.REASON_RECORD_UNREADABLE,
+            "record": None,
+        }
+    finally:
+        shutil.rmtree(tmp)
+
+
+def _create_slot_lock_holder_worker(
+    slots_dir_path,
+    slot,
+    hold_sentinel,
+    release_sentinel,
+    done_sentinel,
+    result_path,
+):
+    with pl.slot_lock(slots_dir_path, slot, timeout=30.0):
+        with open(hold_sentinel, "w", encoding="utf-8") as fh:
+            fh.write("holding")
+        deadline = time.monotonic() + 30.0
+        while not os.path.exists(release_sentinel):
+            if time.monotonic() >= deadline:
+                raise RuntimeError("timed out waiting for release sentinel")
+            time.sleep(0.05)
+    result = pl.create_slot(
+        slots_dir_path, slot, ACCOUNTS, now=_CONCURRENCY_NOW
+    )
+    with open(result_path, "w", encoding="utf-8") as fh:
+        json.dump(result, fh)
+    with open(done_sentinel, "w", encoding="utf-8") as fh:
+        fh.write("done")
+
+
+def _create_slot_lock_contender_worker(
+    slots_dir_path,
+    slot,
+    start_sentinel,
+    result_path,
+):
+    deadline = time.monotonic() + 30.0
+    while not os.path.exists(start_sentinel):
+        if time.monotonic() >= deadline:
+            raise RuntimeError("timed out waiting for start sentinel")
+        time.sleep(0.05)
+    result = pl.create_slot(
+        slots_dir_path, slot, ACCOUNTS, now=_CONCURRENCY_NOW, timeout=0.5
+    )
+    with open(result_path, "w", encoding="utf-8") as fh:
+        json.dump(result, fh)
+
+
+def test_create_slot_lock_held_blocks_contender():
+    multiprocessing.set_start_method("spawn", force=True)
+    tmp = _tmp_dir()
+    try:
+        slots_path = os.path.join(tmp, "slots")
+        hold_sentinel = os.path.join(tmp, "hold")
+        release_sentinel = os.path.join(tmp, "release")
+        start_sentinel = os.path.join(tmp, "start")
+        done_sentinel = os.path.join(tmp, "done")
+        contender_result = os.path.join(tmp, "contender.json")
+
+        holder = multiprocessing.Process(
+            target=_create_slot_lock_holder_worker,
+            args=(
+                slots_path,
+                SLOT,
+                hold_sentinel,
+                release_sentinel,
+                done_sentinel,
+                os.path.join(tmp, "holder.json"),
+            ),
+        )
+        contender = multiprocessing.Process(
+            target=_create_slot_lock_contender_worker,
+            args=(slots_path, SLOT, start_sentinel, contender_result),
+        )
+        holder.start()
+        contender.start()
+
+        deadline = time.monotonic() + 30.0
+        while not os.path.exists(hold_sentinel):
+            if time.monotonic() >= deadline:
+                raise AssertionError("holder never acquired lock")
+            time.sleep(0.05)
+
+        with open(start_sentinel, "w", encoding="utf-8") as fh:
+            fh.write("go")
+
+        contender.join(timeout=_JOIN_TIMEOUT)
+        assert contender.exitcode == 0, f"contender exited with {contender.exitcode}"
+
+        with open(contender_result, encoding="utf-8") as fh:
+            contender_out = json.load(fh)
+        assert contender_out == {
+            "ok": False,
+            "reason": pl.REASON_LOCK_UNAVAILABLE,
+            "record": None,
+        }
+
+        with open(release_sentinel, "w", encoding="utf-8") as fh:
+            fh.write("release")
+
+        holder.join(timeout=_JOIN_TIMEOUT)
+        assert holder.exitcode == 0, f"holder exited with {holder.exitcode}"
+
+        final = pl.read_record(pl.record_path(slots_path, SLOT))
+        assert final["ok"]
+        assert final["record"]["generation"] == pl.INITIAL_GENERATION
+    finally:
+        shutil.rmtree(tmp)

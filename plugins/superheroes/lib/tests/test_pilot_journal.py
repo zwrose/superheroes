@@ -24,7 +24,7 @@ _SLOT_REF_B = "slot-b@1"
 
 @pytest.fixture
 def tmp_dir():
-    path = tempfile.mkdtemp(dir="/private/tmp")
+    path = tempfile.mkdtemp()
     try:
         yield path
     finally:
@@ -71,18 +71,34 @@ def _end_record(*, effect_id="eff1", outcome=pj.OUTCOME_APPLIED, slot_ref=_SLOT_
 
 
 def _slot_entry(*, slot=_SLOT, slot_ref=_SLOT_REF, outcome=pj.SLOT_OUTCOME_FAILED,
-                replay=None, fencing=None):
+                replay=None, fencing=None, journal_path=None):
+    if journal_path is None:
+        journal_path = "/fake/journal.jsonl"
+    if replay is None:
+        replay = _ok_replay(slot_ref=slot_ref, journal_path=journal_path)
+    else:
+        replay = dict(replay)
+        replay.setdefault("journalPath", journal_path)
+        if replay.get("slotRef") is None:
+            replay["slotRef"] = slot_ref
     return {
         "slot": slot,
         "slotRef": slot_ref,
         "outcome": outcome,
-        "replay": replay if replay is not None else {"ok": True, "effects": [], "torn": False, "anomalies": []},
+        "replay": replay,
         "fencing": fencing,
     }
 
 
-def _ok_replay(**kwargs):
-    base = {"ok": True, "effects": [], "torn": False, "anomalies": []}
+def _ok_replay(*, slot_ref=_SLOT_REF, journal_path="/fake/journal.jsonl", **kwargs):
+    base = {
+        "ok": True,
+        "effects": [],
+        "torn": False,
+        "anomalies": [],
+        "journalPath": journal_path,
+        "slotRef": slot_ref,
+    }
     base.update(kwargs)
     return base
 
@@ -92,9 +108,31 @@ def _healthy_slot_entry(*, slot="slot-healthy", slot_ref="slot-healthy@1"):
         "slot": slot,
         "slotRef": slot_ref,
         "outcome": pj.SLOT_OUTCOME_PROVISIONED,
-        "replay": _ok_replay(),
+        "replay": _ok_replay(slot_ref=slot_ref),
         "fencing": None,
     }
+
+
+def _begin_unpaired_shared_effect(tmp_dir, kind, *, slot_ref=_SLOT_REF, effect_id="shared-eff"):
+    path = _journal(tmp_dir)
+    result = pj.begin_effect(
+        path, slot_ref=slot_ref, kind=kind, at=_TS, effect_id=effect_id,
+    )
+    assert result["ok"] is True
+    return path
+
+
+def _begin_end_applied_effect(tmp_dir, kind, *, slot_ref=_SLOT_REF, effect_id="applied-eff"):
+    path = _journal(tmp_dir)
+    result = pj.begin_effect(
+        path, slot_ref=slot_ref, kind=kind, at=_TS, effect_id=effect_id,
+    )
+    assert result["ok"] is True
+    pj.end_effect(
+        path, slot_ref=slot_ref, effect_id=effect_id,
+        outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    return path
 
 
 def _blocker_reasons(report):
@@ -469,13 +507,11 @@ def test_report_block_journal_anomaly():
     assert pj.BLOCK_JOURNAL_ANOMALY in _blocker_reasons(report)
 
 
-def test_report_block_shared_possibly_applied():
-    effect = {
-        "effectId": "sh1", "kind": pj.KIND_CREDENTIAL_MINTED,
-        "scope": pj.SCOPE_SHARED, "state": pj.STATE_POSSIBLY_APPLIED,
-    }
+def test_report_block_shared_possibly_applied(tmp_dir):
+    path = _begin_unpaired_shared_effect(tmp_dir, pj.KIND_CREDENTIAL_MINTED)
+    replay_result = pj.replay(path, slot_ref=_SLOT_REF)
     entry = _slot_entry(
-        replay=_ok_replay(effects=[effect]),
+        replay=replay_result,
         fencing={"slotRef": _SLOT_REF, "fenced": True},
     )
     report = pj.partial_failure_report([_healthy_slot_entry(), entry])
@@ -491,50 +527,55 @@ def test_report_block_no_healthy_slots():
 
 
 def test_report_happy_path(tmp_dir):
-    slot_scoped_effect = {
-        "effectId": "slot1", "kind": pj.KIND_APP_STARTED,
-        "scope": pj.SCOPE_SLOT, "state": pj.STATE_POSSIBLY_APPLIED,
-    }
+    healthy_path = _begin_end_applied_effect(
+        tmp_dir, pj.KIND_APP_STARTED, slot_ref="slot1@1", effect_id="slot1-eff",
+    )
     healthy1 = {
         "slot": "slot1", "slotRef": "slot1@1",
         "outcome": pj.SLOT_OUTCOME_PROVISIONED,
-        "replay": _ok_replay(),
+        "replay": pj.replay(healthy_path, slot_ref="slot1@1"),
         "fencing": None,
     }
     healthy2 = {
         "slot": "slot2", "slotRef": "slot2@1",
         "outcome": pj.SLOT_OUTCOME_PROVISIONED,
-        "replay": _ok_replay(),
+        "replay": _ok_replay(slot_ref="slot2@1"),
         "fencing": None,
     }
+    failed_path = _begin_unpaired_shared_effect(
+        tmp_dir, pj.KIND_APP_STARTED, slot_ref=_SLOT_REF, effect_id="failed-slot-eff",
+    )
     failed = {
         "slot": _SLOT, "slotRef": _SLOT_REF,
         "outcome": pj.SLOT_OUTCOME_FAILED,
-        "replay": _ok_replay(effects=[slot_scoped_effect]),
+        "replay": pj.replay(failed_path, slot_ref=_SLOT_REF),
         "fencing": {"slotRef": _SLOT_REF, "fenced": True},
     }
     report = pj.partial_failure_report([healthy1, healthy2, failed])
     assert report["recommendLaunch"] is True
     assert not report["blockers"]
     assert len(report["warnings"]) == 1
-    assert report["warnings"][0]["effect"] == slot_scoped_effect
+    assert report["warnings"][0]["effect"]["effectId"] == "failed-slot-eff"
 
 
-def test_report_failed_shared_possibly_applied_blocks_launch():
-    shared_effect = {
-        "effectId": "sh2", "kind": pj.KIND_NAMESPACE_TOUCHED,
-        "scope": pj.SCOPE_SHARED, "state": pj.STATE_POSSIBLY_APPLIED,
-    }
+@pytest.mark.parametrize("kind", [
+    pj.KIND_CREDENTIAL_MINTED,
+    pj.KIND_CREDENTIAL_SEEDED,
+    pj.KIND_NAMESPACE_TOUCHED,
+    pj.KIND_PROJECT_DECLARED,
+])
+def test_report_failed_shared_possibly_applied_blocks_launch(tmp_dir, kind):
+    path = _begin_unpaired_shared_effect(tmp_dir, kind, effect_id=f"shared-{kind}")
     healthy = {
         "slot": "slot1", "slotRef": "slot1@1",
         "outcome": pj.SLOT_OUTCOME_PROVISIONED,
-        "replay": _ok_replay(),
+        "replay": _ok_replay(slot_ref="slot1@1"),
         "fencing": None,
     }
     failed = {
         "slot": _SLOT, "slotRef": _SLOT_REF,
         "outcome": pj.SLOT_OUTCOME_FAILED,
-        "replay": _ok_replay(effects=[shared_effect]),
+        "replay": pj.replay(path, slot_ref=_SLOT_REF),
         "fencing": {"slotRef": _SLOT_REF, "fenced": True},
     }
     report = pj.partial_failure_report([healthy, failed])
@@ -647,7 +688,7 @@ def test_report_block_slot_ref_mismatch_with_slot():
         "slot": "slot2",
         "slotRef": _SLOT_REF1,
         "outcome": pj.SLOT_OUTCOME_FAILED,
-        "replay": _ok_replay(),
+        "replay": _ok_replay(slot_ref=_SLOT_REF1),
         "fencing": {"slotRef": _SLOT_REF1, "fenced": True},
     }
     report = pj.partial_failure_report([_healthy_slot_entry(), entry])
@@ -660,14 +701,14 @@ def test_report_block_slot_duplicate():
         "slot": "slot-dup",
         "slotRef": "slot-dup@1",
         "outcome": pj.SLOT_OUTCOME_PROVISIONED,
-        "replay": _ok_replay(),
+        "replay": _ok_replay(slot_ref="slot-dup@1"),
         "fencing": None,
     }
     dup2 = {
         "slot": "slot-dup",
         "slotRef": "slot-dup@2",
         "outcome": pj.SLOT_OUTCOME_FAILED,
-        "replay": _ok_replay(),
+        "replay": _ok_replay(slot_ref="slot-dup@2"),
         "fencing": {"slotRef": "slot-dup@2", "fenced": True},
     }
     report = pj.partial_failure_report([_healthy_slot_entry(), dup1, dup2])
@@ -687,23 +728,28 @@ def test_report_provisioned_no_replay_healthy(tmp_dir):
     assert not report["blockers"]
 
 
-def test_report_provisioned_shared_possibly_applied_blocks():
-    shared_effect = {
-        "effectId": "sh-prov", "kind": pj.KIND_CREDENTIAL_MINTED,
-        "scope": pj.SCOPE_SHARED, "state": pj.STATE_POSSIBLY_APPLIED,
-    }
+@pytest.mark.parametrize("kind", [
+    pj.KIND_CREDENTIAL_MINTED,
+    pj.KIND_CREDENTIAL_SEEDED,
+    pj.KIND_NAMESPACE_TOUCHED,
+    pj.KIND_PROJECT_DECLARED,
+])
+def test_report_provisioned_shared_possibly_applied_blocks(tmp_dir, kind):
+    path = _begin_unpaired_shared_effect(
+        tmp_dir, kind, slot_ref="slot1@1", effect_id=f"prov-{kind}",
+    )
     healthy = {
         "slot": "slot1",
         "slotRef": "slot1@1",
         "outcome": pj.SLOT_OUTCOME_PROVISIONED,
-        "replay": _ok_replay(effects=[shared_effect]),
+        "replay": pj.replay(path, slot_ref="slot1@1"),
         "fencing": None,
     }
     report = pj.partial_failure_report([healthy])
     assert report["recommendLaunch"] is False
     assert pj.BLOCK_SHARED_POSSIBLY_APPLIED in _blocker_reasons(report)
     assert len(report["warnings"]) == 1
-    assert report["warnings"][0]["effect"] == shared_effect
+    assert report["warnings"][0]["effect"]["kind"] == kind
 
 
 def test_report_provisioned_slot_possibly_applied_warning_only():
@@ -715,7 +761,7 @@ def test_report_provisioned_slot_possibly_applied_warning_only():
         "slot": "slot1",
         "slotRef": "slot1@1",
         "outcome": pj.SLOT_OUTCOME_PROVISIONED,
-        "replay": _ok_replay(effects=[slot_effect]),
+        "replay": _ok_replay(slot_ref="slot1@1", effects=[slot_effect]),
         "fencing": None,
     }
     report = pj.partial_failure_report([healthy])
@@ -795,3 +841,171 @@ def test_write_record_refuses_directory(tmp_dir):
     )
     assert result["ok"] is False
     assert result["reason"] == pj.REASON_JOURNAL_WRITE_FAILED
+
+
+# --- WO-9 round-2 review fixes ---
+
+
+def test_replay_stamps_journal_path_and_slot_ref(tmp_dir):
+    path = _journal(tmp_dir)
+    result = pj.replay(path, slot_ref=_SLOT_REF)
+    assert result["journalPath"] == path
+    assert result["slotRef"] == _SLOT_REF
+
+
+def test_replay_stamps_failure_returns(tmp_dir):
+    result = pj.replay(os.path.join(tmp_dir, "missing.jsonl"))
+    assert result["journalPath"] == os.path.join(tmp_dir, "missing.jsonl")
+    assert result["slotRef"] is None
+    assert result["ok"] is False
+
+
+def test_report_block_replay_slot_mismatch(tmp_dir):
+    path = _begin_unpaired_shared_effect(tmp_dir, pj.KIND_CREDENTIAL_MINTED, slot_ref=_SLOT_REF1)
+    replay_for_slot1 = pj.replay(path, slot_ref=_SLOT_REF1)
+    entry = _slot_entry(
+        slot=_SLOT_B,
+        slot_ref=_SLOT_REF_B,
+        replay=replay_for_slot1,
+        fencing={"slotRef": _SLOT_REF_B, "fenced": True},
+    )
+    report = pj.partial_failure_report([_healthy_slot_entry(), entry])
+    assert report["recommendLaunch"] is False
+    assert pj.BLOCK_REPLAY_SLOT_MISMATCH in _blocker_reasons(report)
+
+
+def test_report_block_replay_missing_slot_ref_stamp():
+    entry = {
+        "slot": _SLOT,
+        "slotRef": _SLOT_REF,
+        "outcome": pj.SLOT_OUTCOME_FAILED,
+        "replay": {"ok": True, "effects": [], "torn": False, "anomalies": [],
+                   "journalPath": "/fake/journal.jsonl"},
+        "fencing": {"slotRef": _SLOT_REF, "fenced": True},
+    }
+    report = pj.partial_failure_report([_healthy_slot_entry(), entry])
+    assert report["recommendLaunch"] is False
+    assert pj.BLOCK_REPLAY_SLOT_MISMATCH in _blocker_reasons(report)
+
+
+def test_report_block_replay_scope_mismatch_credential_minted():
+    effect = {
+        "effectId": "cm1", "kind": pj.KIND_CREDENTIAL_MINTED,
+        "scope": pj.SCOPE_SLOT, "state": pj.STATE_APPLIED,
+    }
+    entry = _slot_entry(
+        replay=_ok_replay(slot_ref=_SLOT_REF, effects=[effect]),
+        fencing={"slotRef": _SLOT_REF, "fenced": True},
+    )
+    report = pj.partial_failure_report([_healthy_slot_entry(), entry])
+    assert report["recommendLaunch"] is False
+    assert pj.BLOCK_REPLAY_SHAPE_INVALID in _blocker_reasons(report)
+
+
+def test_report_block_replay_scope_mismatch_unknown_kind():
+    effect = {
+        "effectId": "unk1", "kind": pj.KIND_UNKNOWN,
+        "scope": pj.SCOPE_SLOT, "state": pj.STATE_POSSIBLY_APPLIED,
+    }
+    entry = _slot_entry(
+        replay=_ok_replay(slot_ref=_SLOT_REF, effects=[effect]),
+        fencing={"slotRef": _SLOT_REF, "fenced": True},
+    )
+    report = pj.partial_failure_report([_healthy_slot_entry(), entry])
+    assert report["recommendLaunch"] is False
+    assert pj.BLOCK_REPLAY_SHAPE_INVALID in _blocker_reasons(report)
+
+
+@pytest.mark.parametrize("bad_kind", [[], {}])
+def test_replay_begin_non_string_kind(tmp_dir, bad_kind):
+    path = _journal(tmp_dir)
+    rec = _begin_record()
+    rec["kind"] = bad_kind
+    _write_line(path, rec)
+    replayed = pj.replay(path)
+    assert replayed["ok"] is True
+    assert replayed["anomalies"]
+    assert replayed["effects"][0]["kind"] == pj.KIND_UNKNOWN
+
+
+def test_replay_end_non_string_outcome(tmp_dir):
+    path = _journal(tmp_dir)
+    rec = _end_record()
+    rec["outcome"] = []
+    _write_line(path, rec)
+    replayed = pj.replay(path)
+    assert replayed["ok"] is True
+    assert replayed["anomalies"]
+    assert replayed["effects"][0]["state"] == pj.STATE_POSSIBLY_APPLIED
+
+
+def test_report_block_non_string_outcome():
+    entry = {
+        "slot": _SLOT,
+        "slotRef": _SLOT_REF,
+        "outcome": [],
+        "replay": _ok_replay(slot_ref=_SLOT_REF),
+        "fencing": {"slotRef": _SLOT_REF, "fenced": True},
+    }
+    report = pj.partial_failure_report([_healthy_slot_entry(), entry])
+    assert report["recommendLaunch"] is False
+    assert pj.BLOCK_SLOT_OUTCOME_INVALID in _blocker_reasons(report)
+
+
+def test_report_block_replay_non_string_state():
+    effect = {
+        "effectId": "st1", "kind": pj.KIND_APP_STARTED,
+        "scope": pj.SCOPE_SLOT, "state": [],
+    }
+    entry = _slot_entry(
+        replay=_ok_replay(slot_ref=_SLOT_REF, effects=[effect]),
+        fencing={"slotRef": _SLOT_REF, "fenced": True},
+    )
+    report = pj.partial_failure_report([_healthy_slot_entry(), entry])
+    assert report["recommendLaunch"] is False
+    assert pj.BLOCK_REPLAY_SHAPE_INVALID in _blocker_reasons(report)
+
+
+def test_report_block_replay_non_string_scope():
+    effect = {
+        "effectId": "sc1", "kind": pj.KIND_APP_STARTED,
+        "scope": {}, "state": pj.STATE_APPLIED,
+    }
+    entry = _slot_entry(
+        replay=_ok_replay(slot_ref=_SLOT_REF, effects=[effect]),
+        fencing={"slotRef": _SLOT_REF, "fenced": True},
+    )
+    report = pj.partial_failure_report([_healthy_slot_entry(), entry])
+    assert report["recommendLaunch"] is False
+    assert pj.BLOCK_REPLAY_SHAPE_INVALID in _blocker_reasons(report)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="os.mkfifo not available on this platform")
+def test_write_record_refuses_fifo(tmp_dir):
+    journal = _journal(tmp_dir)
+    os.mkfifo(journal)
+    result = pj.begin_effect(
+        journal, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="fifo1",
+    )
+    assert result["ok"] is False
+    assert result["reason"] == pj.REASON_JOURNAL_WRITE_FAILED
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="os.mkfifo not available on this platform")
+def test_replay_refuses_fifo(tmp_dir):
+    journal = _journal(tmp_dir)
+    os.mkfifo(journal)
+    result = pj.replay(journal)
+    assert result["ok"] is False
+    assert result["reason"] == pj.REASON_JOURNAL_UNREADABLE
+
+
+def test_replay_refuses_symlink(tmp_dir):
+    target = os.path.join(tmp_dir, "real.jsonl")
+    journal = os.path.join(tmp_dir, "journal.jsonl")
+    os.symlink(target, journal)
+    with open(target, "w", encoding="utf-8") as fh:
+        fh.write("{}\n")
+    result = pj.replay(journal)
+    assert result["ok"] is False
+    assert result["reason"] == pj.REASON_JOURNAL_UNREADABLE
