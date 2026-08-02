@@ -147,16 +147,34 @@ def _validate_provisioning_receipt(receipt, slot_ref):
         if key == "datastoreIdentity":
             if not isinstance(value, dict):
                 return REFUSAL_PROVISIONING_RECEIPT_INVALID
-        elif key == "declarations":
-            if not isinstance(value, list):
+            provenance = value.get("provenance")
+            strength = value.get("strength")
+            match = value.get("match")
+            if not isinstance(provenance, str) or not provenance:
                 return REFUSAL_PROVISIONING_RECEIPT_INVALID
+            if not isinstance(strength, str) or not strength:
+                return REFUSAL_PROVISIONING_RECEIPT_INVALID
+            if match is not True:
+                return REFUSAL_PROVISIONING_RECEIPT_INVALID
+        elif key == "declarations":
+            if not isinstance(value, list) or not value:
+                return REFUSAL_PROVISIONING_RECEIPT_INVALID
+            for entry in value:
+                if not isinstance(entry, dict):
+                    return REFUSAL_PROVISIONING_RECEIPT_INVALID
+                kind = entry.get("kind")
+                status = entry.get("status")
+                if not isinstance(kind, str) or not kind:
+                    return REFUSAL_PROVISIONING_RECEIPT_INVALID
+                if not isinstance(status, str) or not status:
+                    return REFUSAL_PROVISIONING_RECEIPT_INVALID
         elif not isinstance(value, str) or not value:
             return REFUSAL_PROVISIONING_RECEIPT_INVALID
     try:
         slot, generation = pilot_slot.parse_slot_ref(slot_ref)
         canonical_slot_ref = pilot_slot.format_slot_ref(slot, generation)
     except pilot_slot.PilotSlotError:
-        return None
+        return REFUSAL_PROVISIONING_RECEIPT_SLOT_MISMATCH
     if receipt["slotRef"] != canonical_slot_ref:
         return REFUSAL_PROVISIONING_RECEIPT_SLOT_MISMATCH
     return None

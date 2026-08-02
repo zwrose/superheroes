@@ -390,7 +390,7 @@ def test_context_spec_refuses_malformed_slot_ref(artifact_tmp):
         provisioning_receipt=_valid_provisioning_receipt("slot1"),
     )
     assert result["ok"] is False
-    assert result["reason"] == ps.REFUSAL_SLOT_REF_INVALID
+    assert result["reason"] == pc.REFUSAL_PROVISIONING_RECEIPT_SLOT_MISMATCH
 
 
 def test_context_spec_refuses_zero_generation(artifact_tmp):
@@ -400,7 +400,7 @@ def test_context_spec_refuses_zero_generation(artifact_tmp):
         provisioning_receipt=_valid_provisioning_receipt("slot1@0"),
     )
     assert result["ok"] is False
-    assert result["reason"] == ps.REFUSAL_SLOT_REF_INVALID
+    assert result["reason"] == pc.REFUSAL_PROVISIONING_RECEIPT_SLOT_MISMATCH
 
 
 # --- context_set success ------------------------------------------------------
@@ -504,3 +504,53 @@ def test_context_spec_valid_provisioning_receipt_proceeds(artifact_tmp):
         provisioning_receipt=_valid_provisioning_receipt("slot1@1"),
     )
     assert result["ok"] is True
+
+
+def test_context_spec_refuses_empty_declarations(artifact_tmp):
+    artifact = _make_artifact_simple(artifact_tmp, "owner")
+    receipt = _valid_provisioning_receipt("slot1@1")
+    receipt["declarations"] = []
+    result = pc.context_spec(
+        "slot1@1", "owner", artifact, ["cookies"], provisioning_receipt=receipt,
+    )
+    assert result["reason"] == pc.REFUSAL_PROVISIONING_RECEIPT_INVALID
+
+
+def test_context_spec_refuses_declaration_missing_kind(artifact_tmp):
+    artifact = _make_artifact_simple(artifact_tmp, "owner")
+    receipt = _valid_provisioning_receipt("slot1@1")
+    receipt["declarations"] = [{"status": "exercised"}]
+    result = pc.context_spec(
+        "slot1@1", "owner", artifact, ["cookies"], provisioning_receipt=receipt,
+    )
+    assert result["reason"] == pc.REFUSAL_PROVISIONING_RECEIPT_INVALID
+
+
+def test_context_spec_refuses_datastore_identity_match_false(artifact_tmp):
+    artifact = _make_artifact_simple(artifact_tmp, "owner")
+    receipt = _valid_provisioning_receipt("slot1@1")
+    receipt["datastoreIdentity"]["match"] = False
+    result = pc.context_spec(
+        "slot1@1", "owner", artifact, ["cookies"], provisioning_receipt=receipt,
+    )
+    assert result["reason"] == pc.REFUSAL_PROVISIONING_RECEIPT_INVALID
+
+
+def test_context_spec_refuses_empty_policy_digest(artifact_tmp):
+    artifact = _make_artifact_simple(artifact_tmp, "owner")
+    receipt = _valid_provisioning_receipt("slot1@1")
+    receipt["policyDigest"] = ""
+    result = pc.context_spec(
+        "slot1@1", "owner", artifact, ["cookies"], provisioning_receipt=receipt,
+    )
+    assert result["reason"] == pc.REFUSAL_PROVISIONING_RECEIPT_INVALID
+
+
+def test_context_spec_refuses_unparseable_slot_ref_with_receipt(artifact_tmp):
+    # bite-axis: provisioning receipt — unparseable slot ref refuses, never falls open.
+    artifact = _make_artifact_simple(artifact_tmp, "owner")
+    receipt = _valid_provisioning_receipt("slot1@1")
+    result = pc.context_spec(
+        "slot1", "owner", artifact, ["cookies"], provisioning_receipt=receipt,
+    )
+    assert result["reason"] == pc.REFUSAL_PROVISIONING_RECEIPT_SLOT_MISMATCH

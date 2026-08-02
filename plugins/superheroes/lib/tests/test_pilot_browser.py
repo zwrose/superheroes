@@ -35,14 +35,33 @@ VALID_PIN = {
 SHORT_BASE = None  # set per-test via _socket_base_outside_worktree()
 
 
-def _socket_base_outside_worktree():
-    import store_core
+def _socket_base_parent():
+    """Return a short writable temp parent for socket bases (SUN_PATH cap)."""
+    short_tmp = "/tmp"
+    if os.path.isdir(short_tmp):
+        return os.path.realpath(short_tmp)
+    return os.path.realpath(tempfile.gettempdir())
 
-    wt = store_core.repo_root(os.getcwd())
-    parent = os.path.dirname(wt)
-    base = os.path.join(parent, "pb-base")
+
+def _socket_base_outside_worktree():
+    base = os.path.join(_socket_base_parent(), "pb-base")
     os.makedirs(base, exist_ok=True)
     return base
+
+
+def _reach_roots_outside(run_cwd):
+    """Return reach_roots that confine a sibling tree, not run_cwd or its observer."""
+    parent = _tmp_dir()
+    reach_root = os.path.join(parent, "reach")
+    os.makedirs(reach_root)
+    return [reach_root], parent
+
+
+def _outside_reach_roots():
+    parent = _tmp_dir()
+    reach_root = os.path.join(parent, "reach")
+    os.makedirs(reach_root)
+    return [reach_root]
 
 
 def _user_owned_observer_command(script_path):
@@ -90,7 +109,17 @@ def _server_record(**overrides):
     return rec
 
 
-def _lifecycle_record_at_generation(generation):
+def _lifecycle_record_at_generation(generation, *, state=None):
+    state_paths = {
+        pl.STATE_PROVISIONING: [],
+        pl.STATE_PROVISIONED: [pl.STATE_PROVISIONED],
+        pl.STATE_OCCUPIED: [pl.STATE_PROVISIONED, pl.STATE_OCCUPIED],
+        pl.STATE_RELEASED: [
+            pl.STATE_PROVISIONED, pl.STATE_OCCUPIED, pl.STATE_RELEASED,
+        ],
+        pl.STATE_FAILED: [pl.STATE_FAILED],
+        pl.STATE_RETIRED: [pl.STATE_PROVISIONED, pl.STATE_RETIRED],
+    }
     rec = pl.new_record(SLOT, ACCOUNTS, now=NOW)
     while rec["generation"] < generation:
         rec = pl.transition(rec, pl.STATE_PROVISIONED, now=NOW)
@@ -98,16 +127,19 @@ def _lifecycle_record_at_generation(generation):
         rec = pl.transition(rec, pl.STATE_RELEASED, now=NOW)
         if rec["generation"] < generation:
             rec = pl.begin_generation(rec, now=NOW)
+    target = state if state is not None else pl.STATE_PROVISIONED
+    for step in state_paths[target]:
+        rec = pl.transition(rec, step, now=NOW)
     return rec
 
 
-def _write_slots_record(generation):
+def _write_slots_record(generation, *, state=None):
     slots_dir = os.path.join(_tmp_dir(), "pilot-slots")
-    rec = _lifecycle_record_at_generation(generation)
+    rec = _lifecycle_record_at_generation(generation, state=state)
     path = pl.record_path(slots_dir, SLOT)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     assert pl.write_record(path, rec)["ok"]
-    return slots_dir
+    return slots_dir, rec
 
 
 def _both_exited_observer(server_pid=100, browser_pid=101, server_status=0, browser_status=0):
@@ -310,8 +342,11 @@ def test_validate_pin_refuses_extra_key():
 
 def test_verify_pin_success():
     observer, cwd = _valid_observer("1.40.0 %s" % VALID_DIGEST)
+    reach_roots, layout_parent = _reach_roots_outside(cwd)
     try:
-        result = pb.verify_pin(VALID_PIN, observer, run_cwd=cwd)
+        result = pb.verify_pin(
+            VALID_PIN, observer, run_cwd=cwd, reach_roots=reach_roots,
+        )
         assert result == {
             "ok": True,
             "reason": None,
@@ -320,6 +355,7 @@ def test_verify_pin_success():
         }
     finally:
         shutil.rmtree(cwd, ignore_errors=True)
+        shutil.rmtree(layout_parent, ignore_errors=True)
 
 
 def test_verify_pin_observer_fails_on_missing_binary():
@@ -327,7 +363,9 @@ def test_verify_pin_observer_fails_on_missing_binary():
     tmp = os.path.realpath(tempfile.gettempdir())
     observer = {"command": ["/nonexistent/definitely-not-here"]}
     with pytest.raises(pb.PilotBrowserError, match=pb.REFUSAL_PIN_OBSERVER_UNSAFE):
-        pb.verify_pin(VALID_PIN, observer, run_cwd=tmp)
+        pb.verify_pin(
+            VALID_PIN, observer, run_cwd=tmp, reach_roots=_outside_reach_roots(),
+        )
 
 
 def test_verify_pin_observer_fails_on_nonexistent_run_cwd():
@@ -338,47 +376,62 @@ def test_verify_pin_observer_fails_on_nonexistent_run_cwd():
             VALID_PIN,
             observer,
             run_cwd=os.path.join(os.path.realpath(tempfile.gettempdir()), "no-such-cwd"),
+            reach_roots=_outside_reach_roots(),
         )
 
 
 def test_verify_pin_observer_fails_on_relative_executable():
     # bite-axis: observer safety — relative executable refuses browser-pin-observer-unsafe.
     observer, cwd = _valid_observer("1.40.0 %s" % VALID_DIGEST)
+    reach_roots, layout_parent = _reach_roots_outside(cwd)
     try:
         relative = {"command": ["python", observer["command"][1]]}
         with pytest.raises(pb.PilotBrowserError, match=pb.REFUSAL_PIN_OBSERVER_UNSAFE):
-            pb.verify_pin(VALID_PIN, relative, run_cwd=cwd)
+            pb.verify_pin(
+                VALID_PIN, relative, run_cwd=cwd, reach_roots=reach_roots,
+            )
     finally:
         shutil.rmtree(cwd, ignore_errors=True)
+        shutil.rmtree(layout_parent, ignore_errors=True)
 
 
 def test_verify_pin_observer_fails_on_group_writable_executable():
     # bite-axis: observer safety — group-writable executable refuses browser-pin-observer-unsafe.
     observer, cwd = _valid_observer("1.40.0 %s" % VALID_DIGEST)
+    reach_roots, layout_parent = _reach_roots_outside(cwd)
     try:
         os.chmod(observer["command"][0], stat.S_IRWXU | stat.S_IWGRP | stat.S_IRGRP)
         with pytest.raises(pb.PilotBrowserError, match=pb.REFUSAL_PIN_OBSERVER_UNSAFE):
-            pb.verify_pin(VALID_PIN, observer, run_cwd=cwd)
+            pb.verify_pin(
+                VALID_PIN, observer, run_cwd=cwd, reach_roots=reach_roots,
+            )
     finally:
         shutil.rmtree(cwd, ignore_errors=True)
+        shutil.rmtree(layout_parent, ignore_errors=True)
 
 
 def test_verify_pin_observer_fails_on_world_writable_executable():
     # bite-axis: observer safety — world-writable executable refuses browser-pin-observer-unsafe.
     observer, cwd = _valid_observer("1.40.0 %s" % VALID_DIGEST)
+    reach_roots, layout_parent = _reach_roots_outside(cwd)
     try:
         os.chmod(observer["command"][0], stat.S_IRWXU | stat.S_IWOTH | stat.S_IROTH)
         with pytest.raises(pb.PilotBrowserError, match=pb.REFUSAL_PIN_OBSERVER_UNSAFE):
-            pb.verify_pin(VALID_PIN, observer, run_cwd=cwd)
+            pb.verify_pin(
+                VALID_PIN, observer, run_cwd=cwd, reach_roots=reach_roots,
+            )
     finally:
         shutil.rmtree(cwd, ignore_errors=True)
+        shutil.rmtree(layout_parent, ignore_errors=True)
 
 
 def test_verify_pin_observer_fails_on_nonzero_exit():
     # bite-axis: observer execution — non-zero exit refuses browser-pin-observer-failed.
     tmp, path = _observer_script("import sys; sys.exit(1)")
     observer = {"command": _user_owned_observer_command(path)}
-    result = pb.verify_pin(VALID_PIN, observer, run_cwd=tmp)
+    result = pb.verify_pin(
+        VALID_PIN, observer, run_cwd=tmp, reach_roots=_outside_reach_roots(),
+    )
     assert result["ok"] is False
     assert result["reason"] == pb.REFUSAL_PIN_OBSERVER_FAILED
     shutil.rmtree(tmp, ignore_errors=True)
@@ -387,32 +440,44 @@ def test_verify_pin_observer_fails_on_nonzero_exit():
 def test_verify_pin_observer_fails_on_garbage_output():
     # bite-axis: observer execution — malformed stdout refuses browser-pin-observer-failed.
     observer, cwd = _valid_observer("only-one-field")
+    reach_roots, layout_parent = _reach_roots_outside(cwd)
     try:
-        result = pb.verify_pin(VALID_PIN, observer, run_cwd=cwd)
+        result = pb.verify_pin(
+            VALID_PIN, observer, run_cwd=cwd, reach_roots=reach_roots,
+        )
         assert result["reason"] == pb.REFUSAL_PIN_OBSERVER_FAILED
     finally:
         shutil.rmtree(cwd, ignore_errors=True)
+        shutil.rmtree(layout_parent, ignore_errors=True)
 
 
 def test_verify_pin_version_mismatch():
     # bite-axis: pin version — mismatch refuses browser-pin-version-mismatch.
     observer, cwd = _valid_observer("9.9.9 %s" % VALID_DIGEST)
+    reach_roots, layout_parent = _reach_roots_outside(cwd)
     try:
-        result = pb.verify_pin(VALID_PIN, observer, run_cwd=cwd)
+        result = pb.verify_pin(
+            VALID_PIN, observer, run_cwd=cwd, reach_roots=reach_roots,
+        )
         assert result["reason"] == pb.REFUSAL_PIN_VERSION_MISMATCH
     finally:
         shutil.rmtree(cwd, ignore_errors=True)
+        shutil.rmtree(layout_parent, ignore_errors=True)
 
 
 def test_verify_pin_integrity_mismatch():
     # bite-axis: pin digest — mismatch refuses browser-pin-integrity-mismatch.
     other = "b" * 64
     observer, cwd = _valid_observer("1.40.0 %s" % other)
+    reach_roots, layout_parent = _reach_roots_outside(cwd)
     try:
-        result = pb.verify_pin(VALID_PIN, observer, run_cwd=cwd)
+        result = pb.verify_pin(
+            VALID_PIN, observer, run_cwd=cwd, reach_roots=reach_roots,
+        )
         assert result["reason"] == pb.REFUSAL_PIN_INTEGRITY_MISMATCH
     finally:
         shutil.rmtree(cwd, ignore_errors=True)
+        shutil.rmtree(layout_parent, ignore_errors=True)
 
 
 def test_socket_dir_plan_refuses_path_too_long():
@@ -426,6 +491,43 @@ def test_socket_dir_plan_refuses_path_too_long():
         assert result["reason"] == pb.REFUSAL_SOCKET_PATH_TOO_LONG
     finally:
         shutil.rmtree(long_base, ignore_errors=True)
+
+
+def test_socket_dir_plan_short_base_succeeds_path_independent():
+    # bite-axis: socket path cap — short explicit base succeeds regardless of checkout path.
+    base = os.path.join(_socket_base_parent(), "pb")
+    os.makedirs(base, exist_ok=True)
+    try:
+        result = pb.socket_dir_plan(
+            SLOT_REF, base=base, launch_token="short", worktree_root=_tmp_dir(),
+        )
+        assert result["ok"] is True
+        assert result["measured"] <= result["cap"]
+        dir_name = "pb-short"
+        worst_case = os.path.join(os.path.realpath(base), dir_name, "x" * pb.MAX_SOCKET_FILENAME)
+        expected_measured = len(worst_case.encode("utf-8")) + 1
+        assert result["measured"] == expected_measured
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def test_socket_dir_plan_long_base_refuses_path_independent():
+    # bite-axis: socket path cap — long explicit base refuses regardless of checkout path.
+    base = os.path.join(os.path.realpath(tempfile.gettempdir()), "x" * 200)
+    os.makedirs(base, exist_ok=True)
+    try:
+        result = pb.socket_dir_plan(
+            SLOT_REF, base=base, launch_token="tok", worktree_root=_tmp_dir(),
+        )
+        assert result["ok"] is False
+        assert result["reason"] == pb.REFUSAL_SOCKET_PATH_TOO_LONG
+        dir_name = "pb-tok"
+        worst_case = os.path.join(os.path.realpath(base), dir_name, "x" * pb.MAX_SOCKET_FILENAME)
+        expected_measured = len(worst_case.encode("utf-8")) + 1
+        assert result["measured"] == expected_measured
+        assert result["measured"] > result["cap"]
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
 
 
 def test_socket_dir_plan_unrecognized_platform_uses_smallest_cap():
@@ -591,7 +693,7 @@ def test_admit_refuses_without_slots_dir():
 
 def test_admit_refuses_stale_server_record_against_disk():
     # bite-axis: fencing — caller-supplied record stale vs on-disk generation refuses.
-    slots_dir = _write_slots_record(2)
+    slots_dir, _rec = _write_slots_record(2)
     record = _server_record(generation=1, slotRef="slot1@1")
     try:
         result = pb.admit("slot1@1", record, slots_dir=slots_dir)
@@ -602,7 +704,7 @@ def test_admit_refuses_stale_server_record_against_disk():
 
 def test_admit_refuses_stale_generation():
     # bite-axis: fencing — stale generation propagates slot-generation-stale.
-    slots_dir = _write_slots_record(2)
+    slots_dir, _rec = _write_slots_record(2)
     record = _server_record(generation=2, slotRef="slot1@2")
     try:
         result = pb.admit("slot1@1", record, slots_dir=slots_dir)
@@ -613,7 +715,7 @@ def test_admit_refuses_stale_generation():
 
 def test_admit_refuses_generation_ahead():
     # bite-axis: fencing — ahead generation propagates slot-generation-ahead.
-    slots_dir = _write_slots_record(1)
+    slots_dir, _rec = _write_slots_record(1)
     record = _server_record(generation=1)
     try:
         result = pb.admit("slot1@2", record, slots_dir=slots_dir)
@@ -624,7 +726,7 @@ def test_admit_refuses_generation_ahead():
 
 def test_admit_refuses_slot_mismatch():
     # bite-axis: fencing — operation slot id mismatch refuses browser-operation-slot-mismatch.
-    slots_dir = _write_slots_record(1)
+    slots_dir, _rec = _write_slots_record(1)
     record = _server_record(slotRef="slot1@1")
     try:
         result = pb.admit("slot2@1", record, slots_dir=slots_dir)
@@ -633,14 +735,63 @@ def test_admit_refuses_slot_mismatch():
         shutil.rmtree(os.path.dirname(slots_dir), ignore_errors=True)
 
 
-def test_admit_accepts_matching_generation():
-    slots_dir = _write_slots_record(1)
+def test_admit_accepts_matching_generation_provisioned():
+    slots_dir, _rec = _write_slots_record(1, state=pl.STATE_PROVISIONED)
     record = _server_record()
     try:
         result = pb.admit(SLOT_REF, record, slots_dir=slots_dir)
         assert result == {"ok": True, "reason": None, "slotRef": SLOT_REF}
     finally:
         shutil.rmtree(os.path.dirname(slots_dir), ignore_errors=True)
+
+
+def test_admit_accepts_matching_generation_occupied():
+    slots_dir, _rec = _write_slots_record(1, state=pl.STATE_OCCUPIED)
+    record = _server_record()
+    try:
+        result = pb.admit(SLOT_REF, record, slots_dir=slots_dir)
+        assert result == {"ok": True, "reason": None, "slotRef": SLOT_REF}
+    finally:
+        shutil.rmtree(os.path.dirname(slots_dir), ignore_errors=True)
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        pl.STATE_PROVISIONING,
+        pl.STATE_RELEASED,
+        pl.STATE_FAILED,
+        pl.STATE_RETIRED,
+    ],
+)
+def test_admit_refuses_non_live_slot_state(state):
+    # bite-axis: fencing — non-live slot state refuses browser-slot-state-not-live.
+    slots_dir, _rec = _write_slots_record(1, state=state)
+    record = _server_record()
+    try:
+        result = pb.admit(SLOT_REF, record, slots_dir=slots_dir)
+        assert result["reason"] == pb.REFUSAL_SLOT_STATE_NOT_LIVE
+    finally:
+        shutil.rmtree(os.path.dirname(slots_dir), ignore_errors=True)
+
+
+def test_admit_refuses_non_string_slots_dir():
+    record = _server_record()
+    result = pb.admit(SLOT_REF, record, slots_dir=123)
+    assert result["reason"] == pb.REFUSAL_FENCING_SLOTS_DIR_REQUIRED
+
+
+def test_admit_refuses_empty_slots_dir():
+    record = _server_record()
+    result = pb.admit(SLOT_REF, record, slots_dir="")
+    assert result["reason"] == pb.REFUSAL_FENCING_SLOTS_DIR_REQUIRED
+
+
+def test_admit_refuses_missing_slots_dir():
+    record = _server_record()
+    missing = os.path.join(_tmp_dir(), "no-such-slots-dir")
+    result = pb.admit(SLOT_REF, record, slots_dir=missing)
+    assert result["reason"] == pb.REFUSAL_FENCING_SLOTS_DIR_REQUIRED
 
 
 def test_create_socket_dir_success():
@@ -784,6 +935,77 @@ def test_teardown_server_success():
         assert pj.KIND_BROWSER_SERVER_TORN_DOWN in kinds
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_teardown_server_accepts_observed_exit_with_unknown_status():
+    # bite-axis: teardown exit — observed exit with unknown status succeeds.
+    tmp = _tmp_dir()
+    journal = os.path.join(tmp, "journal.jsonl")
+    sock = os.path.join(tmp, "pb-sockdir")
+    os.makedirs(sock)
+    record = _server_record(socketDir=sock)
+
+    def observe(pid):
+        return {"exited": True, "status": None}
+
+    try:
+        result = pb.teardown_server(
+            journal,
+            server_record=record,
+            torn_down_at=LATER,
+            begin_at=NOW,
+            observe_exit=observe,
+        )
+        assert result["ok"] is True
+        assert result["receipt"]["observedServerExitStatus"] is None
+        assert result["receipt"]["observedBrowserExitStatus"] is None
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_teardown_server_refuses_non_dict_observation():
+    # bite-axis: teardown exit — non-dict observation refuses browser-terminal-state-unobserved.
+    tmp = _tmp_dir()
+    journal = os.path.join(tmp, "journal.jsonl")
+    record = _server_record()
+    try:
+        result = pb.teardown_server(
+            journal,
+            server_record=record,
+            torn_down_at=LATER,
+            begin_at=NOW,
+            observe_exit=lambda _pid: "not-a-dict",
+        )
+        assert result["reason"] == pb.REFUSAL_TERMINAL_STATE_UNOBSERVED
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_verify_pin_refuses_observer_inside_reach_root(private_tmp):
+    # bite-axis: observer confinement — executable inside reach root refuses.
+    reach_root = os.path.join(private_tmp, "reach")
+    run_cwd = os.path.join(private_tmp, "cwd")
+    os.makedirs(reach_root)
+    os.makedirs(run_cwd)
+    script = os.path.join(reach_root, "inside.py")
+    with open(script, "w", encoding="utf-8") as fh:
+        fh.write("import sys\nsys.stdout.write('1.40.0 %s')\n" % VALID_DIGEST)
+    os.chmod(script, 0o700)
+    observer = {"command": _user_owned_observer_command(script)}
+    with pytest.raises(pb.PilotBrowserError, match=pb.REFUSAL_PIN_OBSERVER_UNSAFE):
+        pb.verify_pin(
+            VALID_PIN, observer, run_cwd=run_cwd, reach_roots=[reach_root],
+        )
+
+
+def test_verify_pin_refuses_missing_reach_roots():
+    # bite-axis: reach-root vacuity — omitted reach_roots refuses browser-pin-observer-unsafe.
+    observer, cwd = _valid_observer("1.40.0 %s" % VALID_DIGEST)
+    try:
+        with pytest.raises(pb.PilotBrowserError, match=pb.REFUSAL_PIN_OBSERVER_UNSAFE):
+            pb.verify_pin(VALID_PIN, observer, run_cwd=cwd)
+    finally:
+        shutil.rmtree(cwd, ignore_errors=True)
 
 
 def test_plan_topology_success():

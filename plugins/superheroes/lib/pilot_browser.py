@@ -46,6 +46,7 @@ REFUSAL_WORKTREE_ROOT_UNRESOLVED = "browser-worktree-root-unresolved"
 REFUSAL_SERVER_RECORD_INVALID = "browser-server-record-invalid"
 REFUSAL_SERVER_RECORD_STALE = "browser-server-record-stale"
 REFUSAL_FENCING_SLOTS_DIR_REQUIRED = "browser-fencing-slots-dir-required"
+REFUSAL_SLOT_STATE_NOT_LIVE = "browser-slot-state-not-live"
 REFUSAL_NOT_SERVER_CHILD = "browser-not-server-child"
 REFUSAL_PID_UNREADABLE = "browser-pid-unreadable"
 REFUSAL_TERMINAL_STATE_UNOBSERVED = "browser-terminal-state-unobserved"
@@ -65,6 +66,13 @@ _SERVER_RECORD_KEYS = frozenset({
     "serverPid", "browserPid", "pin", "createdAt",
 })
 _VALID_PID_MIN = 1
+
+_LIVE_SLOT_STATES = frozenset({
+    pilot_lifecycle.STATE_PROVISIONED,
+    pilot_lifecycle.STATE_OCCUPIED,
+})
+
+_TERMINAL_EXIT_UNOBSERVED = object()
 
 
 class PilotBrowserError(Exception):
@@ -161,9 +169,39 @@ def _validate_observer(observer):
             raise PilotBrowserError(REFUSAL_PIN_OBSERVER_INVALID)
 
 
-def _validate_observer_safety(observer, run_cwd):
-    # bite-axis: observer safety — executable and run cwd must be absolute, owned, and not
-    # group/world-writable; violation raises REFUSAL_PIN_OBSERVER_UNSAFE.
+def _path_components(path):
+    parts = os.path.realpath(path).split(os.sep)
+    if parts and parts[-1] == "":
+        parts = parts[:-1]
+    return parts
+
+
+def _is_inside(path, root):
+    path_parts = _path_components(path)
+    root_parts = _path_components(root)
+    if len(path_parts) < len(root_parts):
+        return False
+    return path_parts[:len(root_parts)] == root_parts
+
+
+def _is_outside_all_reach_roots(path, reach_roots):
+    real = os.path.realpath(path)
+    for root in reach_roots:
+        if _is_inside(real, root):
+            return False
+    return True
+
+
+def _validate_observer_safety(observer, run_cwd, reach_roots):
+    # bite-axis: observer safety — executable and run cwd must be absolute, owned, not
+    # group/world-writable, and outside all reach roots; violation raises
+    # REFUSAL_PIN_OBSERVER_UNSAFE.
+    if not isinstance(reach_roots, list) or not reach_roots:
+        raise PilotBrowserError(REFUSAL_PIN_OBSERVER_UNSAFE)
+    for root in reach_roots:
+        if not isinstance(root, str) or not os.path.isabs(root):
+            raise PilotBrowserError(REFUSAL_PIN_OBSERVER_UNSAFE)
+
     command = observer["command"]
     if not isinstance(run_cwd, str) or not os.path.isdir(run_cwd):
         raise PilotBrowserError(REFUSAL_PIN_OBSERVER_UNSAFE)
@@ -181,6 +219,16 @@ def _validate_observer_safety(observer, run_cwd):
         raise PilotBrowserError(REFUSAL_PIN_OBSERVER_UNSAFE)
     if st.st_mode & 0o022:
         raise PilotBrowserError(REFUSAL_PIN_OBSERVER_UNSAFE)
+    if not _is_outside_all_reach_roots(executable, reach_roots):
+        raise PilotBrowserError(REFUSAL_PIN_OBSERVER_UNSAFE)
+    if not _is_outside_all_reach_roots(run_cwd, reach_roots):
+        raise PilotBrowserError(REFUSAL_PIN_OBSERVER_UNSAFE)
+
+    for part in command[1:]:
+        candidate = part if os.path.isabs(part) else os.path.join(run_cwd, part)
+        resolved = os.path.realpath(candidate)
+        if not _is_outside_all_reach_roots(resolved, reach_roots):
+            raise PilotBrowserError(REFUSAL_PIN_OBSERVER_UNSAFE)
 
 
 def validate_pin(pin):
@@ -269,13 +317,13 @@ def _run_bounded_observer(command, *, run_cwd, env, timeout_seconds, max_output_
             proc.stdout.close()
 
 
-def verify_pin(pin, observer, *, run_cwd, timeout_seconds=20, max_output_bytes=4096):
+def verify_pin(pin, observer, *, run_cwd, reach_roots=None, timeout_seconds=20, max_output_bytes=4096):
     """Observe pin integrity via a bounded subprocess and compare version and digest."""
     pin = validate_pin(pin)
     _validate_observer(observer)
     if not _is_str_path(run_cwd):
         raise PilotBrowserError(REFUSAL_PIN_OBSERVER_INVALID)
-    _validate_observer_safety(observer, run_cwd)
+    _validate_observer_safety(observer, run_cwd, reach_roots)
     if not isinstance(timeout_seconds, (int, float)) or isinstance(timeout_seconds, bool):
         raise PilotBrowserError(REFUSAL_PIN_OBSERVER_INVALID)
     if not isinstance(max_output_bytes, int) or isinstance(max_output_bytes, bool):
@@ -683,12 +731,11 @@ class _TeardownCleanupError(Exception):
 def _observe_terminal_exit(observer, pid):
     observation = observer(pid)
     if not isinstance(observation, dict):
-        return None
+        return _TERMINAL_EXIT_UNOBSERVED
     exited = observation.get("exited")
-    status = observation.get("status")
     if exited is not True:
-        return None
-    return status
+        return _TERMINAL_EXIT_UNOBSERVED
+    return observation.get("status")
 
 
 def teardown_server(
@@ -711,10 +758,10 @@ def teardown_server(
     browser_pid = server_record["browserPid"]
     observer = observe_exit if observe_exit is not None else (lambda _pid: {"exited": False, "status": None})
     server_status = _observe_terminal_exit(observer, server_pid)
-    if server_status is None:
+    if server_status is _TERMINAL_EXIT_UNOBSERVED:
         return _fail(REFUSAL_TERMINAL_STATE_UNOBSERVED)
     browser_status = _observe_terminal_exit(observer, browser_pid)
-    if browser_status is None:
+    if browser_status is _TERMINAL_EXIT_UNOBSERVED:
         return _fail(REFUSAL_TERMINAL_STATE_UNOBSERVED)
 
     socket_dir = server_record["socketDir"]
@@ -833,6 +880,10 @@ def admit(operation_slot_ref, live_record, *, slots_dir=None):
 
     if slots_dir is None:
         return _fail(REFUSAL_FENCING_SLOTS_DIR_REQUIRED)
+    if not isinstance(slots_dir, str) or not slots_dir:
+        return _fail(REFUSAL_FENCING_SLOTS_DIR_REQUIRED)
+    if not os.path.isdir(slots_dir):
+        return _fail(REFUSAL_FENCING_SLOTS_DIR_REQUIRED)
 
     try:
         op_slot, op_generation = pilot_slot.parse_slot_ref(operation_slot_ref)
@@ -848,9 +899,14 @@ def admit(operation_slot_ref, live_record, *, slots_dir=None):
     if not disk["ok"]:
         return _fail(REFUSAL_SERVER_RECORD_STALE, slotRef=live_record["slotRef"])
 
-    disk_generation = disk["record"]["generation"]
+    disk_record = disk["record"]
+    disk_generation = disk_record["generation"]
     if live_record["generation"] != disk_generation:
         return _fail(REFUSAL_SERVER_RECORD_STALE, slotRef=live_record["slotRef"])
+
+    disk_state = disk_record.get("state")
+    if disk_state not in _LIVE_SLOT_STATES:
+        return _fail(REFUSAL_SLOT_STATE_NOT_LIVE, slotRef=live_record["slotRef"])
 
     gen_check = pilot_lifecycle.generation_check(op_generation, disk_generation)
     if not gen_check["ok"]:
