@@ -59,6 +59,13 @@ BUILDER_DISPATCH_DEFER_LOCK_CONTENDED = "lock-contended"
 BUILDER_DISPATCH_DEFER_SCHEMA_BEHIND = "core-schema-behind"
 BUILDER_DISPATCH_DEFER_WRITE_FAILED = "builder-tier-write-failed"
 BUILDER_DISPATCH_DEFER_CLI_FAILED = "builder-tier-cli-failed"
+ENGINE_PREF_PIN_KEYS = ("codexModels", "seatPins")
+DUPLICATE_CORE_KEY_REASON = "duplicate-core-key"
+ENGINE_PINS_REASON_UNKNOWN_KEY = "engine-pins-unknown-key"
+ENGINE_PINS_REASON_INPUT_UNPARSEABLE = "engine-pins-input-unparseable"
+ENGINE_PINS_REASON_NOT_A_MAPPING = "engine-pins-not-a-mapping"
+ENGINE_PINS_REASON_INVALID = "engine-pins-invalid"
+ENGINE_PINS_REASON_ROUND_TRIP = "engine-pins-round-trip-refused"
 
 CoreGateConfig = collections.namedtuple("CoreGateConfig", "prefs status detail")
 
@@ -463,7 +470,7 @@ def profile_structural_refusal(cwd=None, root=None):
                 for key, value in pairs:
                     if key in seen:
                         dup_key[0] = key
-                        raise ValueError("duplicate-core-key")
+                        raise ValueError(DUPLICATE_CORE_KEY_REASON)
                     seen[key] = value
                 return seen
 
@@ -471,7 +478,7 @@ def profile_structural_refusal(cwd=None, root=None):
                 json.loads(blocks[0], object_pairs_hook=_reject_dupes)
             except ValueError as exc:
                 if dup_key[0] is not None:
-                    return "duplicate-core-key:%s" % dup_key[0]
+                    return "%s:%s" % (DUPLICATE_CORE_KEY_REASON, dup_key[0])
                 # corrupt block — upstream's job, not this guard's
             except TypeError:
                 pass
@@ -718,20 +725,59 @@ def write_show_it_surface(cwd, prose, *, root=None):
         return {"action": "written"}
 
 
-def _builder_dispatch_round_trip_ok(orig, new_parsed):
-    """True when the candidate changes only enginePreferences.builderDispatchTier."""
+def _loads_rejecting_duplicate_keys(text):
+    """Parse a JSON object, returning ``(value, duplicate_key)``.
+
+    ``duplicate_key`` is the first duplicated key name when one is present (``value`` is then
+    ``None``); a parse failure returns ``(None, None)``. This is the in-lock half of the
+    ``profile_structural_refusal`` duplicate-key check: the pre-lock check cannot bind a file that
+    may change before the lock is taken."""
+    dup_key = [None]
+
+    def _reject_dupes(pairs):
+        seen = {}
+        for key, value in pairs:
+            if key in seen:
+                dup_key[0] = key
+                raise ValueError(DUPLICATE_CORE_KEY_REASON)
+            seen[key] = value
+        return seen
+
+    try:
+        value = json.loads(text, object_pairs_hook=_reject_dupes)
+    except ValueError:
+        if dup_key[0] is not None:
+            return None, dup_key[0]
+        return None, None
+    except TypeError:
+        return None, None
+    return value, None
+
+
+def _engine_pref_round_trip_ok(orig, new_parsed, allowed_pref_key):
+    """True when the candidate changes only ``enginePreferences[allowed_pref_key]``.
+
+    Key sets are derived from the parsed documents rather than hand-typed, so a key added to
+    ``parse_core`` later is guarded by construction instead of silently unguarded. Key sets are
+    compared before values so that an absent key and a key present with the value ``None`` can
+    never be treated as equal."""
     if new_parsed is None:
         return False
-    for key in ("schemaVersion", "status", "verifyCommand", "stackTags", "threatModel",
-                "patterns", "showItSurface", "created"):
-        if orig.get(key) != new_parsed.get(key):
+    orig_facts = {k: v for k, v in orig.items() if k != "enginePreferences"}
+    new_facts = {k: v for k, v in new_parsed.items() if k != "enginePreferences"}
+    if set(orig_facts) != set(new_facts):
+        return False
+    for key in orig_facts:
+        if orig_facts[key] != new_facts[key]:
             return False
-    orig_prefs = orig.get("enginePreferences") or {}
-    new_prefs = new_parsed.get("enginePreferences") or {}
-    for key in set(orig_prefs) | set(new_prefs):
-        if key == "builderDispatchTier":
-            continue
-        if orig_prefs.get(key) != new_prefs.get(key):
+    orig_prefs = dict(orig.get("enginePreferences") or {})
+    new_prefs = dict(new_parsed.get("enginePreferences") or {})
+    orig_prefs.pop(allowed_pref_key, None)
+    new_prefs.pop(allowed_pref_key, None)
+    if set(orig_prefs) != set(new_prefs):
+        return False
+    for key in orig_prefs:
+        if orig_prefs[key] != new_prefs[key]:
             return False
     return True
 
@@ -747,8 +793,9 @@ def _splice_single_json_block(text, new_body):
 
 def write_builder_dispatch_tier(cwd, tier, *, root=None):
     """Lock-guarded surgical write of enginePreferences.builderDispatchTier only — the ONE writer
-    of that key. Every other enginePreferences key, every other core fact, and every prose section
-    survive byte-identical. Never raises."""
+    of that key. Every other ``enginePreferences`` key and core fact is preserved semantically, and
+    everything outside the ```json superheroes-core``` fence is preserved byte-identically. Never
+    raises."""
     if mode_registry.ensure_project_store(cwd, root) is None:
         mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
         return {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE}
@@ -800,11 +847,11 @@ def write_builder_dispatch_tier(cwd, tier, *, root=None):
         blocks = list(_JSON_BLOCK.finditer(text))
         if len(blocks) != 1:
             return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
-        try:
-            block = json.loads(blocks[0].group(1))
-        except ValueError:
-            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
-        if not isinstance(block, dict):
+        block, duplicate_key = _loads_rejecting_duplicate_keys(blocks[0].group(1))
+        if duplicate_key is not None:
+            return {"action": "refused",
+                    "reason": "%s:%s" % (DUPLICATE_CORE_KEY_REASON, duplicate_key)}
+        if block is None or not isinstance(block, dict):
             return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
         prefs = block.get("enginePreferences")
         if not isinstance(prefs, dict):
@@ -822,11 +869,147 @@ def write_builder_dispatch_tier(cwd, tier, *, root=None):
         if new_text == text:
             return {"action": "noop"}
         new_parsed = parse_core(new_text)
-        if not _builder_dispatch_round_trip_ok(orig, new_parsed):
+        if not _engine_pref_round_trip_ok(orig, new_parsed, "builderDispatchTier"):
             return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_ROUND_TRIP}
         try:
             store_core.atomic_write(path, new_text)
         except OSError as exc:
+            mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
+            return {
+                "action": "deferred",
+                "reason": BUILDER_DISPATCH_DEFER_WRITE_FAILED,
+            }
+        clear_pending(cwd, root)
+        return {"action": "written"}
+
+
+def _drop_legacy_codex_pin_aliases(merged, canonical_role):
+    """Remove legacy alias keys for ``canonical_role`` from a codexModels map."""
+    import engine_pref
+    for alias, canon in engine_pref._LEGACY_CODEX_PIN_ALIAS.items():
+        if canon == canonical_role:
+            merged.pop(alias, None)
+
+
+def write_engine_pref_pins(cwd, key, pins, *, root=None):
+    """Lock-guarded surgical write of ``enginePreferences[key]`` for one of the pin maps — the ONE
+    writer of ``codexModels`` / ``seatPins``. Never raises.
+
+    Only the entries being *set* in this call are validated; a pre-existing invalid entry already in
+    the file is left alone — the loader already surfaces it as ``invalidCodexModels`` /
+    ``invalidSeatPins``, and refusing here would block the owner from fixing a sibling pin."""
+    if mode_registry.ensure_project_store(cwd, root) is None:
+        mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
+        return {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE}
+    gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
+    if gate_cfg.status == CONFIG_ROOT_UNAVAILABLE:
+        return {"action": "deferred",
+                "reason": GATE_REASON_ROOT_UNAVAILABLE, "detail": gate_cfg.detail}
+    if key not in ENGINE_PREF_PIN_KEYS:
+        return {"action": "refused", "reason": ENGINE_PINS_REASON_UNKNOWN_KEY}
+    if not isinstance(pins, dict):
+        return {"action": "refused", "reason": ENGINE_PINS_REASON_NOT_A_MAPPING}
+    import engine_pref
+    structural = profile_structural_refusal(cwd, root=root)
+    if structural is not None:
+        return {"action": "refused", "reason": structural}
+    with mode_registry.config_lock(cwd, root) as got:
+        if not got:
+            mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_LOCK_CONTENDED})
+            return {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_LOCK_CONTENDED}
+        record = read(cwd, root)
+        if record is None:
+            cls = _classify_core_md_at_path(core_path(cwd, root))
+            if cls.status == CONFIG_ABSENT:
+                return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_ABSENT}
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        if record.get("behind"):
+            return {
+                "action": "behind",
+                "reason": BUILDER_DISPATCH_DEFER_SCHEMA_BEHIND,
+                "record": record,
+            }
+        try:
+            path = core_path(cwd, root)
+        except RepoRootUnavailable as exc:
+            return {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError:
+            mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
+            return {
+                "action": "deferred",
+                "reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE,
+            }
+        orig = parse_core(text)
+        if orig is None:
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        blocks = list(_JSON_BLOCK.finditer(text))
+        if len(blocks) != 1:
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        block, duplicate_key = _loads_rejecting_duplicate_keys(blocks[0].group(1))
+        if duplicate_key is not None:
+            return {"action": "refused",
+                    "reason": "%s:%s" % (DUPLICATE_CORE_KEY_REASON, duplicate_key)}
+        if block is None or not isinstance(block, dict):
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        prefs = block.get("enginePreferences")
+        if not isinstance(prefs, dict):
+            prefs = {}
+            block["enginePreferences"] = prefs
+        current = prefs.get(key)
+        if not isinstance(current, dict):
+            current = {}
+        merged = dict(current)
+        set_values = {}
+        for raw_key, val in pins.items():
+            if key == "codexModels":
+                role = engine_pref.canonical_codex_pin_role(raw_key)
+            else:
+                role = raw_key
+            if val is None:
+                merged.pop(role, None)
+                if key == "codexModels":
+                    _drop_legacy_codex_pin_aliases(merged, role)
+            else:
+                if key == "codexModels":
+                    _drop_legacy_codex_pin_aliases(merged, role)
+                merged[role] = val
+                set_values[role] = val
+        if set_values:
+            if key == "codexModels":
+                effort = prefs.get("effort")
+                effort_map = effort if isinstance(effort, dict) else {}
+                norm = engine_pref.normalize_codex_pin_map(set_values, effort_map)
+            else:
+                norm = engine_pref.normalize_seat_pin_map(set_values)
+            if norm["invalid"]:
+                return {
+                    "action": "refused",
+                    "reason": "%s:%s" % (
+                        ENGINE_PINS_REASON_INVALID,
+                        ",".join(sorted(norm["invalid"])),
+                    ),
+                }
+        if merged:
+            prefs[key] = merged
+        else:
+            prefs.pop(key, None)
+        new_body = json.dumps(block, indent=2)
+        new_text = _splice_single_json_block(text, new_body)
+        if new_text is None:
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        if new_text == text:
+            return {"action": "noop"}
+        new_parsed = parse_core(new_text)
+        if not _engine_pref_round_trip_ok(orig, new_parsed, key):
+            return {"action": "refused", "reason": ENGINE_PINS_REASON_ROUND_TRIP}
+        try:
+            store_core.atomic_write(path, new_text)
+        except OSError:
             mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
             return {
                 "action": "deferred",
@@ -1197,6 +1380,10 @@ def main(argv):
     btp = sub.add_parser("write-builder-tier")  # enginePreferences.builderDispatchTier only
     btp.add_argument("--cwd", default=".")
     btp.add_argument("--root", default=None)
+    epp = sub.add_parser("write-engine-pins")  # enginePreferences.codexModels / seatPins
+    epp.add_argument("--key", choices=ENGINE_PREF_PIN_KEYS, required=True)
+    epp.add_argument("--cwd", default=".")
+    epp.add_argument("--root", default=None)
     args = ap.parse_args(argv)
     if args.cmd == "resolve":
         try:
@@ -1252,6 +1439,29 @@ def main(argv):
                 "action": "deferred",
                 "reason": BUILDER_DISPATCH_DEFER_CLI_FAILED,
             }
+    elif args.cmd == "write-engine-pins":
+        try:
+            raw = sys.stdin.read()
+            if raw.strip() == "":
+                pins = {}
+            else:
+                try:
+                    pins = json.loads(raw)
+                except ValueError:
+                    out = {"action": "refused", "reason": ENGINE_PINS_REASON_INPUT_UNPARSEABLE}
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+                if not isinstance(pins, dict):
+                    out = {"action": "refused", "reason": ENGINE_PINS_REASON_NOT_A_MAPPING}
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+            out = write_engine_pref_pins(args.cwd, args.key, pins, root=args.root)
+        except RepoRootUnavailable as exc:
+            out = {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        except Exception:
+            out = {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_CLI_FAILED}
     else:  # confirm
         try:
             out = confirm_all(args.cwd, root=args.root)

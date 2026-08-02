@@ -166,6 +166,31 @@ action that owns it, leaving the rest of the calibration untouched:
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  printf '%s\n' '{"reviewer": "gpt-5.6-terra"}' | \
+    python3 -B "$ROOT_DIR/lib/core_md.py" write-engine-pins --key codexModels --cwd .
+  ```
+
+  Clearing is per-entry: pass `null` for each role you want removed; when the last entry is
+  removed the whole `codexModels` key is dropped from the block. An empty object (`{}`) clears
+  nothing — it is never a clear-all. It usually returns `noop` with the file untouched, but it
+  can return `written` when the block was already degenerate (a present-but-empty or mistyped pin
+  map, or a missing `enginePreferences` block), in which case the write only normalizes structure
+  and still removes no pins. A returned `written` therefore does not mean pins were cleared, and a
+  returned `noop` does not mean a clear-all succeeded.
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  printf '%s\n' '{"reviewer": null}' | \
+    python3 -B "$ROOT_DIR/lib/core_md.py" write-engine-pins --key codexModels --cwd .
+  ```
+
+  **Read the result, don't assume success.** `write-engine-pins` returns `{action, reason?}`.
+  Only `written` or `noop` means the pin map was saved — surface any other
+  `action` (`refused`, `deferred`, `behind`) to the owner with its `reason`; the command
+  exits 0 either way, so check `action`, not exit status.
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
   python3 -B "$ROOT_DIR/lib/model_tier_overrides.py" show
   ```
 
@@ -199,6 +224,31 @@ action that owns it, leaving the rest of the calibration untouched:
   structurally-broken entry is surfaced as `invalidSeatPins` in `configure view`. Show the current
   engine preferences and effective seat map context first, merge only the requested seat into the
   existing `seatPins` object, and preserve every sibling key.
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  printf '%s\n' '{"security-reviewer": {"vendor": "claude"}}' | \
+    python3 -B "$ROOT_DIR/lib/core_md.py" write-engine-pins --key seatPins --cwd .
+  ```
+
+  Clearing is per-entry: pass `null` for each seat you want removed; when the last entry is
+  removed the whole `seatPins` key is dropped from the block. An empty object (`{}`) clears
+  nothing — it is never a clear-all. It usually returns `noop` with the file untouched, but it
+  can return `written` when the block was already degenerate (a present-but-empty or mistyped pin
+  map, or a missing `enginePreferences` block), in which case the write only normalizes structure
+  and still removes no seats. A returned `written` therefore does not mean seats were cleared, and a
+  returned `noop` does not mean a clear-all succeeded.
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  printf '%s\n' '{"security-reviewer": null}' | \
+    python3 -B "$ROOT_DIR/lib/core_md.py" write-engine-pins --key seatPins --cwd .
+  ```
+
+  **Read the result, don't assume success.** `write-engine-pins` returns `{action, reason?}`.
+  Only `written` or `noop` means the pin map was saved — surface any other
+  `action` (`refused`, `deferred`, `behind`) to the owner with its `reason`; the command
+  exits 0 either way, so check `action`, not exit status.
 
   ```json
   {

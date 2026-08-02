@@ -90,6 +90,121 @@ def sanctioned_builder_tiers() -> tuple[str, ...]:
     return model_registry.claude_dispatch_tokens()
 
 
+from core_md import DUPLICATE_CORE_KEY_REASON  # noqa: E402  (authoritative token home)
+
+_REASON_SAFE_DETAIL_HEADS = frozenset(
+    {"builder-tier-not-sanctioned", DUPLICATE_CORE_KEY_REASON})
+
+
+def safe_config_echo(value, limit=120):
+    """Bounded, control-character-escaped rendering for owner-facing screens. Never raises."""
+    if not isinstance(value, str):
+        value = repr(value)
+    if not value:
+        return ""
+    s = value[: limit * 8 + 8]
+    out = []
+    for ch in s:
+        if ch == "\\":
+            out.append("\\\\")
+        elif ord(ch) < 0x20 or ord(ch) == 0x7f:
+            out.append("\\x%02x" % ord(ch))
+        else:
+            out.append(ch)
+    escaped = "".join(out)
+    if len(escaped) > limit:
+        return escaped[:limit] + "\u2026"
+    return escaped
+
+
+def builder_tier_reason_display(reason):
+    """Owner-safe rendering of a builder-tier provenance reason. Never raises."""
+    if reason is None:
+        return None
+    if not isinstance(reason, str):
+        reason = repr(reason)
+    reason = reason.strip()
+    if not reason:
+        return None
+    if ":" not in reason:
+        return safe_config_echo(reason)
+    head, _, tail = reason.partition(":")
+    head = head.strip()
+    tail = tail.strip()
+    if head in _REASON_SAFE_DETAIL_HEADS:
+        return "%s: %s" % (safe_config_echo(head), safe_config_echo(tail))
+    return safe_config_echo(head)
+
+
+def _builder_dispatch_with_display(result):
+    """Add owner-safe ``display`` alongside provenance ``reason``."""
+    result = dict(result)
+    result["display"] = builder_tier_reason_display(result.get("reason"))
+    return result
+
+
+def canonical_codex_pin_role(role):
+    """Canonical codexModels pin-role key (legacy alias resolution)."""
+    return _LEGACY_CODEX_PIN_ALIAS.get(role, role)
+
+
+def normalize_codex_pin_map(raw, effort_map=None):
+    """→ {"pins": {role: model}, "invalid": {role: reason_string}}"""
+    if not isinstance(raw, dict):
+        return {"pins": {}, "invalid": {}}
+    if not isinstance(effort_map, dict):
+        effort_map = {}
+    pins = {}
+    invalid = {}
+    for role, model in raw.items():
+        canonical = _LEGACY_CODEX_PIN_ALIAS.get(role, role)
+        if canonical != role and canonical in raw:
+            continue  # explicit canonical key wins over the legacy alias
+        role = canonical
+        if role not in CODEX_PIN_ROLES:
+            invalid[role] = "unknown role %r rejected" % role
+            continue
+        if not isinstance(model, str) or model not in CODEX_MODELS:
+            invalid[role] = "unknown model %r rejected" % model
+            continue
+        role_effort = resolve_effort("codex", CODEX_ROLE_KIND[role], effort_map)
+        if valid_codex_model_effort(model, role_effort):
+            pins[role] = model
+        else:
+            invalid[role] = "%s + %s is invalid" % (model, role_effort)
+    return {"pins": pins, "invalid": invalid}
+
+
+def normalize_seat_pin_map(raw):
+    """→ {"pins": {seat: {"vendor": ..., "model"?: ..., "effort"?: ...}}, "invalid": {seat: reason}}"""
+    if not isinstance(raw, dict):
+        return {"pins": {}, "invalid": {}}
+    pins = {}
+    invalid = {}
+    for seat, pin in raw.items():
+        if not isinstance(pin, dict):
+            invalid[seat] = "pin must be an object with a vendor"
+            continue
+        vendor = pin.get("vendor")
+        if not isinstance(vendor, str) or not vendor.strip():
+            invalid[seat] = "missing or invalid vendor"
+            continue
+        cleaned = {"vendor": vendor.strip()}
+        bad_opt = None
+        for opt in ("model", "effort"):
+            if opt in pin:
+                val = pin.get(opt)
+                if not isinstance(val, str) or not val.strip():
+                    bad_opt = opt
+                    break
+                cleaned[opt] = val.strip()
+        if bad_opt is not None:
+            invalid[seat] = "invalid %s (must be a non-empty string)" % bad_opt
+            continue
+        pins[seat] = cleaned
+    return {"pins": pins, "invalid": invalid}
+
+
 def classify_builder_dispatch_tier(value):
     """Pure classifier for builderDispatchTier — never raises."""
     default = BUILDER_DISPATCH_TIER_DEFAULT
@@ -119,18 +234,18 @@ def resolve_builder_dispatch_tier(prefs):
     """Pure resolution of builder dispatch tier from a load_engine_prefs-shaped dict."""
     default = BUILDER_DISPATCH_TIER_DEFAULT
     if not isinstance(prefs, dict):
-        return {
+        return _builder_dispatch_with_display({
             "tier": default,
             "source": "unreadable-default",
             "reason": "engine-prefs-not-a-mapping",
-        }
+        })
     read_error = prefs.get("readError")
     if read_error:
-        return {
+        return _builder_dispatch_with_display({
             "tier": default,
             "source": "unreadable-default",
             "reason": str(read_error),
-        }
+        })
     invalid_builder = prefs.get("invalidBuilderDispatchTier")
     if isinstance(invalid_builder, dict):
         reason = invalid_builder.get("reason")
@@ -138,22 +253,24 @@ def resolve_builder_dispatch_tier(prefs):
             reason = "invalid-builder-dispatch-tier"
         else:
             reason = str(reason)
-        return {
+        return _builder_dispatch_with_display({
             "tier": default,
             "source": "invalid-config-default",
             "reason": reason,
-        }
+        })
     classified = classify_builder_dispatch_tier(prefs.get(BUILDER_DISPATCH_TIER_KEY))
     state = classified["state"]
     if state == "unset":
-        return {"tier": classified["tier"], "source": "default", "reason": None}
+        return _builder_dispatch_with_display(
+            {"tier": classified["tier"], "source": "default", "reason": None})
     if state == "valid":
-        return {"tier": classified["tier"], "source": "configured", "reason": None}
-    return {
+        return _builder_dispatch_with_display(
+            {"tier": classified["tier"], "source": "configured", "reason": None})
+    return _builder_dispatch_with_display({
         "tier": classified["tier"],
         "source": "invalid-config-default",
         "reason": classified["reason"],
-    }
+    })
 
 
 def load_builder_dispatch_tier(cwd, root=None):
@@ -164,26 +281,26 @@ def load_builder_dispatch_tier(cwd, root=None):
 
         refusal = core_md.profile_structural_refusal(cwd, root=root)
         if refusal is not None:
-            return {
+            return _builder_dispatch_with_display({
                 "tier": default,
                 "source": "unreadable-default",
                 "reason": refusal,
-            }
+            })
         record = core_md.read(cwd, root)
         if record is not None and record.get("behind"):
-            return {
+            return _builder_dispatch_with_display({
                 "tier": default,
                 "source": "unreadable-default",
                 "reason": "core-schema-newer",
-            }
+            })
         prefs = load_engine_prefs(cwd, root)
         return resolve_builder_dispatch_tier(prefs)
     except Exception as exc:
-        return {
+        return _builder_dispatch_with_display({
             "tier": default,
             "source": "unreadable-default",
             "reason": "builder-tier-load-failed: %s" % ("%s: %s" % (type(exc).__name__, exc)),
-        }
+        })
 
 
 def degenerate_engine_prefs():
@@ -494,57 +611,18 @@ def _normalize_engine_preferences_block(prefs):
            "effort": dict(effort) if isinstance(effort, dict) else {}}
     codex_models = prefs.get("codexModels")
     if isinstance(codex_models, dict):
-        pins = {}
-        invalid = {}
-        for role, model in codex_models.items():
-            canonical = _LEGACY_CODEX_PIN_ALIAS.get(role, role)
-            if canonical != role and canonical in codex_models:
-                continue  # explicit canonical key wins over the legacy alias
-            role = canonical
-            if role not in CODEX_PIN_ROLES:
-                invalid[role] = "unknown role %r rejected" % role
-                continue
-            if not isinstance(model, str) or model not in CODEX_MODELS:
-                invalid[role] = "unknown model %r rejected" % model
-                continue
-            role_effort = resolve_effort("codex", CODEX_ROLE_KIND[role], out["effort"])
-            if valid_codex_model_effort(model, role_effort):
-                pins[role] = model
-            else:
-                invalid[role] = "%s + %s is invalid" % (model, role_effort)
-        if pins:
-            out["codexModels"] = pins
-        if invalid:
-            out["invalidCodexModels"] = invalid
+        codex_result = normalize_codex_pin_map(codex_models, out["effort"])
+        if codex_result["pins"]:
+            out["codexModels"] = codex_result["pins"]
+        if codex_result["invalid"]:
+            out["invalidCodexModels"] = codex_result["invalid"]
     seat_pins = prefs.get("seatPins")
     if isinstance(seat_pins, dict):
-        spins = {}
-        sinvalid = {}
-        for seat, pin in seat_pins.items():
-            if not isinstance(pin, dict):
-                sinvalid[seat] = "pin must be an object with a vendor"
-                continue
-            vendor = pin.get("vendor")
-            if not isinstance(vendor, str) or not vendor.strip():
-                sinvalid[seat] = "missing or invalid vendor"
-                continue
-            cleaned = {"vendor": vendor.strip()}
-            bad_opt = None
-            for opt in ("model", "effort"):
-                if opt in pin:
-                    val = pin.get(opt)
-                    if not isinstance(val, str) or not val.strip():
-                        bad_opt = opt
-                        break
-                    cleaned[opt] = val.strip()
-            if bad_opt is not None:
-                sinvalid[seat] = "invalid %s (must be a non-empty string)" % bad_opt
-                continue
-            spins[seat] = cleaned
-        if spins:
-            out["seatPins"] = spins
-        if sinvalid:
-            out["invalidSeatPins"] = sinvalid
+        seat_result = normalize_seat_pin_map(seat_pins)
+        if seat_result["pins"]:
+            out["seatPins"] = seat_result["pins"]
+        if seat_result["invalid"]:
+            out["invalidSeatPins"] = seat_result["invalid"]
     # #309 owner override channel: a positive-int `timeout` rides the same enginePreferences block so
     # resolve_timeout(prefs, role) can honor it at real dispatch. A bool (an int subclass) or any
     # non-positive/non-int value is dropped, leaving the role ceiling in force.

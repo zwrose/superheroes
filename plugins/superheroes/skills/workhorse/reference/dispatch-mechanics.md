@@ -193,6 +193,13 @@ implementer path and not review-code's in-place fixer path. `BASH_MAX_TIMEOUT_MS
 premise field owned by [#656](https://github.com/zwrose/superheroes/issues/656)**; this change sets it
 nowhere.
 
+When a terminal write result includes `salvage`, it carries a recoverable implementer report from an
+ended attempt's stdout. The outcome remains a forfeit; its contents are the implementer's claims and
+must be independently re-verified before use. Write salvage has two tiers: a structured report is
+gradeable only after that independent verification, while a prose-tier block has
+`requiresManualRead: true` and a scrubbed `excerpt` for a human or orchestrator to read. Prose is a
+pointer, never a gradeable report.
+
 ## Engine forfeits and order shape
 
 An external engine can forfeit *after* writing files — characteristically with cursor's
