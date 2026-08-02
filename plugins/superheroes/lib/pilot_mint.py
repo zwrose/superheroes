@@ -7,7 +7,9 @@ performs no network I/O — the caller injects a transport callable.
 Non-goals: setting the enabling flag (design §4 — read-only), network I/O, policy
 resolution, boundary verification — those belong to callers and sibling modules.
 """
+import json
 import os
+import signal
 import subprocess
 import threading
 
@@ -22,9 +24,9 @@ REFUSAL_OBSERVED_SCOPES_INVALID = "mint-observed-scopes-invalid"
 REFUSAL_FLAG_SET_OUTSIDE_DECLARED_SCOPE = "mint-flag-set-outside-declared-scope"
 
 REFUSAL_GATE_OFF_COMMAND_INVALID = "mint-gate-off-command-invalid"
+REFUSAL_GATE_OFF_ARGUMENT_INVALID = "mint-gate-off-argument-invalid"
 REFUSAL_GATE_OFF_CWD_INVALID = "mint-gate-off-cwd-invalid"
 REFUSAL_GATE_OFF_ENVIRONMENT_INVALID = "mint-gate-off-environment-invalid"
-REFUSAL_GATE_OFF_FLAG_STILL_SET = "mint-gate-off-flag-still-set"
 REFUSAL_GATE_OFF_TIMEOUT = "mint-gate-off-timeout"
 REFUSAL_GATE_OFF_OUTPUT_OVERSIZE = "mint-gate-off-output-oversize"
 REFUSAL_GATE_OFF_SPAWN_FAILED = "mint-gate-off-spawn-failed"
@@ -38,12 +40,13 @@ REFUSAL_CONTROL_DID_NOT_MINT = "mint-control-did-not-mint"
 REFUSAL_SENTINEL_MINTED = "mint-sentinel-minted"
 REFUSAL_SENTINEL_ENDPOINT_ABSENT = "mint-sentinel-endpoint-absent"
 REFUSAL_SENTINEL_UNEXPECTED_STATUS = "mint-sentinel-unexpected-status"
+REFUSAL_SENTINEL_SETUP_FAILED = "mint-sentinel-setup-failed"
 
 OUTCOME_REFUSED = "refused"
 OUTCOME_MINTED = "minted"
 OUTCOME_INCONCLUSIVE = "inconclusive"
 
-REFUSAL_STATUSES = frozenset({400, 401, 403, 409, 422})
+REFUSAL_STATUSES = frozenset({400, 403, 409, 422})
 
 _ENVELOPE_KEYS = frozenset({
     "enablingFlagEnvVar",
@@ -66,6 +69,14 @@ class PilotMintError(Exception):
         super().__init__(reason)
         self.reason = reason
         self.detail = detail
+
+
+def _json_serializable(value):
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 def flag_scope_check(envelope, *, observed_scopes):
@@ -99,11 +110,24 @@ def run_gate_off_test(envelope, *, run_cwd, environment, timeout_seconds=120,
     """Execute gateOffTestCommand with the enabling flag removed from the environment."""
     # bite-axis: gate-off execution — the declared test runs with the enabling variable
     # absent; timeout, oversize output, and spawn failure refuse rather than pass.
-    # bite-disclosure: bounded-runner shape knowingly duplicated from pilot_boundary._run_bounded_observer
-    # (private helper there) with different environment semantics here; a third caller triggers extraction.
+    # bite-disclosure: bounded-runner shape duplicated from pilot_boundary._run_bounded_observer
+    # (private helper there); copies have diverged here (process-group handling on timeout).
+    # A third caller should trigger extraction into a shared helper.
     envelope_error = _validate_envelope(envelope)
     if envelope_error is not None:
-        return _gate_fail(REFUSAL_GATE_OFF_COMMAND_INVALID)
+        return _gate_fail(envelope_error)
+    if (
+        type(timeout_seconds) is not int
+        or isinstance(timeout_seconds, bool)
+        or timeout_seconds <= 0
+    ):
+        return _gate_fail(REFUSAL_GATE_OFF_ARGUMENT_INVALID)
+    if (
+        type(max_output_bytes) is not int
+        or isinstance(max_output_bytes, bool)
+        or max_output_bytes <= 0
+    ):
+        return _gate_fail(REFUSAL_GATE_OFF_ARGUMENT_INVALID)
     command = envelope["gateOffTestCommand"]
     if not _is_command_argv(command):
         return _gate_fail(REFUSAL_GATE_OFF_COMMAND_INVALID)
@@ -115,8 +139,6 @@ def run_gate_off_test(envelope, *, run_cwd, environment, timeout_seconds=120,
     flag_var = envelope["enablingFlagEnvVar"]
     env_copy = dict(environment)
     env_copy.pop(flag_var, None)
-    if flag_var in env_copy:
-        return _gate_fail(REFUSAL_GATE_OFF_FLAG_STILL_SET)
 
     try:
         proc = subprocess.Popen(
@@ -126,6 +148,7 @@ def run_gate_off_test(envelope, *, run_cwd, environment, timeout_seconds=120,
             stderr=subprocess.DEVNULL,
             shell=False,
             env=env_copy,
+            start_new_session=True,
         )
     except OSError:
         return _gate_fail(REFUSAL_GATE_OFF_SPAWN_FAILED)
@@ -145,22 +168,24 @@ def run_gate_off_test(envelope, *, run_cwd, environment, timeout_seconds=120,
         reader.join(timeout=timeout_seconds)
 
         if reader.is_alive():
-            _terminate_and_wait(proc)
+            _terminate_process_group(proc)
+            reader.join(timeout=1)
             return _gate_fail(REFUSAL_GATE_OFF_TIMEOUT)
 
         if read_error:
-            _terminate_and_wait(proc)
+            _terminate_process_group(proc)
             return _gate_fail(REFUSAL_GATE_OFF_SPAWN_FAILED)
 
         stdout_bytes = stdout_holder[0] if stdout_holder else b""
         if len(stdout_bytes) > max_output_bytes:
-            _terminate_and_wait(proc)
+            _terminate_process_group(proc)
             return _gate_fail(REFUSAL_GATE_OFF_OUTPUT_OVERSIZE)
 
         try:
             proc.wait(timeout=timeout_seconds)
         except subprocess.TimeoutExpired:
-            _terminate_and_wait(proc)
+            _terminate_process_group(proc)
+            reader.join(timeout=1)
             return _gate_fail(REFUSAL_GATE_OFF_TIMEOUT)
 
         try:
@@ -183,12 +208,14 @@ def run_gate_off_test(envelope, *, run_cwd, environment, timeout_seconds=120,
             "stdout": stdout_text,
         }
     except Exception:
-        _terminate_and_wait(proc)
+        _terminate_process_group(proc)
         return _gate_fail(REFUSAL_GATE_OFF_SPAWN_FAILED)
     finally:
         if proc.poll() is None:
-            _terminate_and_wait(proc)
-        if proc.stdout:
+            _terminate_process_group(proc)
+        if reader.is_alive():
+            reader.join(timeout=1)
+        if proc.stdout and not reader.is_alive():
             proc.stdout.close()
 
 
@@ -200,14 +227,20 @@ def gate_off_receipt(envelope, run_result, *, exercised_at):
         raise PilotMintError(REFUSAL_RECEIPT_ARGUMENT_INVALID)
     if not isinstance(exercised_at, str) or not exercised_at:
         raise PilotMintError(REFUSAL_RECEIPT_ARGUMENT_INVALID)
-    if not isinstance(run_result, dict):
+    if not isinstance(envelope, dict) or not _json_serializable(envelope):
         raise PilotMintError(REFUSAL_RECEIPT_ARGUMENT_INVALID)
 
-    passed = run_result.get("ok") is True
+    if not isinstance(run_result, dict):
+        raise PilotMintError(REFUSAL_RECEIPT_ARGUMENT_INVALID)
+    passed = run_result.get("ok")
+    if type(passed) is not bool:
+        raise PilotMintError(REFUSAL_RECEIPT_ARGUMENT_INVALID)
     exit_code = run_result.get("exitCode")
     reason = run_result.get("reason")
     if passed:
-        evidence = "exitCode=0"
+        if type(exit_code) is not int or isinstance(exit_code, bool):
+            raise PilotMintError(REFUSAL_RECEIPT_ARGUMENT_INVALID)
+        evidence = "exitCode=%s" % exit_code
     elif reason is not None:
         evidence = "exitCode=%s reason=%s" % (exit_code, reason)
     else:
@@ -231,7 +264,7 @@ def require_gate_off(registry, envelope):
     never a substitute for the live sentinel exercise in the current preflight.
     is_exercised carries no freshness or launched-instance binding.
     """
-    pilot_contract.require_exercised(registry, "mint-gate-off", envelope)
+    return pilot_contract.require_exercised(registry, "mint-gate-off", envelope)
 
 
 def authorized_mint(verdict, policy, slot_ref, account, envelope, *, transport,
@@ -294,31 +327,42 @@ def sentinel_exercise(verdict, policy, slot_ref, envelope, *, control_account,
             "unverifiedDeclarations": [_UNVERIFIED_SENTINEL_DECLARATION],
         }
 
-    descriptor = pilot_provision.authorized_sentinel_probe_request(
-        verdict, policy, slot_ref, sentinel, envelope,
-    )
-    canonical_ref = _canonical_slot_ref(slot_ref)
-    with pilot_journal.effect(
-        journal_path,
-        slot_ref=canonical_ref,
-        kind=pilot_journal.KIND_CREDENTIAL_MINTED,
-        at=at,
-    ) as handle:
-        try:
-            raw = transport(descriptor)
-        except Exception:
-            result = _classify_sentinel_response(None, transport_error=True)
-            handle.mark_indeterminate(at=at, reason=result["reason"])
-            return _sentinel_result(result, control=control)
+    try:
+        descriptor = pilot_provision.authorized_sentinel_probe_request(
+            verdict, policy, slot_ref, sentinel, envelope,
+        )
+        canonical_ref = _canonical_slot_ref(slot_ref)
+        with pilot_journal.effect(
+            journal_path,
+            slot_ref=canonical_ref,
+            kind=pilot_journal.KIND_CREDENTIAL_MINTED,
+            at=at,
+        ) as handle:
+            try:
+                raw = transport(descriptor)
+            except Exception:
+                result = _classify_sentinel_response(None, transport_error=True)
+                handle.mark_indeterminate(at=at, reason=result["reason"])
+                return _sentinel_result(result, control=control)
 
-        result = _classify_sentinel_response(raw)
-        if result["outcome"] == OUTCOME_MINTED:
-            handle.mark_applied(at=at)
-        elif result["outcome"] == OUTCOME_REFUSED:
-            handle.mark_not_applied(at=at, reason=result["reason"])
-        else:
-            handle.mark_indeterminate(at=at, reason=result["reason"])
-        return _sentinel_result(result, control=control)
+            result = _classify_sentinel_response(raw)
+            if result["outcome"] == OUTCOME_MINTED:
+                handle.mark_applied(at=at)
+            elif result["outcome"] == OUTCOME_REFUSED:
+                handle.mark_not_applied(at=at, reason=result["reason"])
+            else:
+                handle.mark_indeterminate(at=at, reason=result["reason"])
+            return _sentinel_result(result, control=control)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "outcome": OUTCOME_INCONCLUSIVE,
+            "reason": REFUSAL_SENTINEL_SETUP_FAILED,
+            "status": None,
+            "control": control,
+            "unverifiedDeclarations": [_UNVERIFIED_SENTINEL_DECLARATION],
+            "detail": type(exc).__name__,
+        }
 
 
 def _classify_mint_response(raw, *, transport_error=False):
@@ -365,6 +409,10 @@ def _classify_sentinel_response(raw, *, transport_error=False):
             "reason": None,
             "status": status,
         }
+    if status == 401:
+        # 401 means the request was not authenticated — the allowlist may never have
+        # been consulted, which is the same "could not tell ≠ refused" reasoning as 404.
+        return _sentinel_inconclusive(pilot_probe.REASON_UNAUTHORIZED, status=status)
     if _is_2xx(status):
         return {
             "ok": False,
@@ -503,6 +551,26 @@ def _scope_fail(reason):
 
 def _gate_fail(reason):
     return {"ok": False, "exitCode": None, "reason": reason, "stdout": ""}
+
+
+def _terminate_process_group(proc):
+    """Signal the child's process group, then reap the direct child."""
+    if proc.poll() is not None:
+        return
+    try:
+        pgid = os.getpgid(proc.pid)
+        os.killpg(pgid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        _terminate_and_wait(proc)
+        return
+    try:
+        proc.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+        proc.wait()
 
 
 def _terminate_and_wait(proc):

@@ -253,7 +253,7 @@ def test_gate_off_invalid_command(private_tmp):
     envelope = dict(SAMPLE_ENVELOPE)
     envelope["gateOffTestCommand"] = []
     result = pm.run_gate_off_test(envelope, run_cwd=private_tmp, environment={})
-    assert result["reason"] == pm.REFUSAL_GATE_OFF_COMMAND_INVALID
+    assert result["reason"] == pm.REFUSAL_ENVELOPE_INCOMPLETE
 
 
 def test_gate_off_output_oversize(private_tmp):
@@ -500,6 +500,123 @@ def test_edge18_sentinel_404_inconclusive_not_refused(private_tmp):
     assert result["outcome"] == pm.OUTCOME_INCONCLUSIVE
     assert result["ok"] is False
     assert result["reason"] == pm.REFUSAL_SENTINEL_ENDPOINT_ABSENT
+
+
+def test_gate_off_invalid_envelope_reports_incomplete(private_tmp):
+    result = pm.run_gate_off_test(None, run_cwd=private_tmp, environment={})
+    assert result["reason"] == pm.REFUSAL_ENVELOPE_INCOMPLETE
+
+    bad_scope = dict(SAMPLE_ENVELOPE)
+    bad_scope["enabledScopes"] = "not-a-list"
+    result = pm.run_gate_off_test(bad_scope, run_cwd=private_tmp, environment={})
+    assert result["reason"] == pm.REFUSAL_ENVELOPE_INCOMPLETE
+
+
+def test_gate_off_spawn_failed(private_tmp):
+    envelope = dict(SAMPLE_ENVELOPE)
+    envelope["gateOffTestCommand"] = ["/no/such/executable-pilot-mint-test"]
+    result = pm.run_gate_off_test(envelope, run_cwd=private_tmp, environment={})
+    assert result["reason"] == pm.REFUSAL_GATE_OFF_SPAWN_FAILED
+
+
+def test_gate_off_invalid_bounds(private_tmp):
+    result = pm.run_gate_off_test(
+        SAMPLE_ENVELOPE, run_cwd=private_tmp, environment={}, timeout_seconds=None,
+    )
+    assert result["reason"] == pm.REFUSAL_GATE_OFF_ARGUMENT_INVALID
+
+    result = pm.run_gate_off_test(
+        SAMPLE_ENVELOPE, run_cwd=private_tmp, environment={}, max_output_bytes=-2,
+    )
+    assert result["reason"] == pm.REFUSAL_GATE_OFF_ARGUMENT_INVALID
+
+
+def test_gate_off_grandchild_timeout_reaps_process_group(private_tmp):
+    envelope = dict(SAMPLE_ENVELOPE)
+    envelope["gateOffTestCommand"] = [
+        sys.executable, "-c",
+        "import subprocess, sys, time; "
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], "
+        "stdout=subprocess.PIPE); time.sleep(30)",
+    ]
+    result = pm.run_gate_off_test(
+        envelope,
+        run_cwd=private_tmp,
+        environment={},
+        timeout_seconds=1,
+    )
+    assert result["reason"] == pm.REFUSAL_GATE_OFF_TIMEOUT
+    time.sleep(0.3)
+    assert subprocess.run(
+        ["pgrep", "-f", "time.sleep(30)"],
+        capture_output=True,
+    ).returncode != 0
+
+
+def test_gate_off_receipt_requires_exit_code():
+    with pytest.raises(pm.PilotMintError) as exc:
+        pm.gate_off_receipt(SAMPLE_ENVELOPE, {"ok": True}, exercised_at=NOW)
+    assert exc.value.reason == pm.REFUSAL_RECEIPT_ARGUMENT_INVALID
+
+
+def test_gate_off_receipt_evidence_from_actual_exit_code():
+    run_result = {"ok": True, "exitCode": 0, "reason": None}
+    record = pm.gate_off_receipt(SAMPLE_ENVELOPE, run_result, exercised_at=NOW)
+    assert record["receipt"]["evidence"] == "exitCode=0"
+
+
+def test_gate_off_receipt_non_serializable_envelope():
+    with pytest.raises(pm.PilotMintError) as exc:
+        pm.gate_off_receipt({"k": set()}, {"ok": True, "exitCode": 0}, exercised_at=NOW)
+    assert exc.value.reason == pm.REFUSAL_RECEIPT_ARGUMENT_INVALID
+
+
+PINNED_REFUSAL_STATUSES = {400, 401, 403, 409, 422}
+
+
+def test_refusal_statuses_pinned_membership():
+    assert pm.REFUSAL_STATUSES == {400, 403, 409, 422}
+    assert PINNED_REFUSAL_STATUSES - pm.REFUSAL_STATUSES == {401}
+
+
+def test_sentinel_401_inconclusive(private_tmp):
+    def transport(desc):
+        if "account" in desc:
+            return {"status": 200, "body": "control-cred"}
+        return {"status": 401, "body": ""}
+
+    result = pm.sentinel_exercise(**_sentinel_kwargs(private_tmp, transport))
+    assert result["outcome"] == pm.OUTCOME_INCONCLUSIVE
+    assert result["reason"] == pilot_probe.REASON_UNAUTHORIZED
+
+
+def test_sentinel_429_inconclusive(private_tmp):
+    def transport(desc):
+        if "account" in desc:
+            return {"status": 200, "body": "control-cred"}
+        return {"status": 429, "body": ""}
+
+    result = pm.sentinel_exercise(**_sentinel_kwargs(private_tmp, transport))
+    assert result["outcome"] == pm.OUTCOME_INCONCLUSIVE
+    assert result["reason"] == pilot_probe.REASON_RATE_LIMITED
+
+
+def test_sentinel_setup_failure_preserves_control(private_tmp):
+    import copy
+    policy = copy.deepcopy(SAMPLE_POLICY)
+    policy["slots"]["slot-a"]["mintableAccounts"].append("pilot-sentinel-no-such-account")
+
+    def transport(desc):
+        return {"status": 200, "body": "control-cred"}
+
+    kwargs = _sentinel_kwargs(private_tmp, transport)
+    kwargs["policy"] = policy
+    kwargs["verdict"] = _passing_verdict(policy)
+    kwargs["sentinel"] = "pilot-sentinel-no-such-account"
+    result = pm.sentinel_exercise(**kwargs)
+    assert result["outcome"] == pm.OUTCOME_INCONCLUSIVE
+    assert result["reason"] == pm.REFUSAL_SENTINEL_SETUP_FAILED
+    assert result["control"]["ok"] is True
 
 
 @pytest.mark.parametrize("status", sorted(pm.REFUSAL_STATUSES))

@@ -125,6 +125,27 @@ def test_evaluate_pair_identical_before_seeded_refused():
     assert result["reason"] == pi.REFUSAL_IDENTITY_PROBE_ANSWERS_IDENTICAL
 
 
+def test_evaluate_pair_expected_missing_before_identical():
+    """expected_identity check runs before identical-answer check."""
+    result = pi.evaluate_pair(
+        {"identity": EXPECTED_ID},
+        {"identity": EXPECTED_ID},
+        expected_identity="",
+    )
+    assert result["reason"] == pi.REFUSAL_IDENTITY_EXPECTED_MISSING
+
+
+def test_evaluate_pair_identical_with_valid_expectation():
+    """Identical answers with a valid expectation still report answers-identical."""
+    result = pi.evaluate_pair(
+        {"identity": EXPECTED_ID},
+        {"identity": EXPECTED_ID},
+        expected_identity=EXPECTED_ID,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == pi.REFUSAL_IDENTITY_PROBE_ANSWERS_IDENTICAL
+
+
 def test_evaluate_pair_identical_before_seeded_mismatch():
     """Edge 1: identical correct identity before mismatch path."""
     result = pi.evaluate_pair(
@@ -308,6 +329,21 @@ def test_run_pair_exercise_not_callable():
 
 
 # --- evaluate_slot ------------------------------------------------------------
+
+def test_evaluate_slot_malformed_account_entries():
+    """Malformed account entries refuse before account_keys."""
+    with pytest.raises(pi.PilotIdentityError) as exc:
+        pi.evaluate_slot({"accounts": [{}]}, {"owner": EXPECTED_ID}, {})
+    assert exc.value.reason == pi.REFUSAL_IDENTITY_ACCOUNT_SET_MISMATCH
+
+    with pytest.raises(pi.PilotIdentityError) as exc:
+        pi.evaluate_slot({"accounts": ["x"]}, {"owner": EXPECTED_ID}, {})
+    assert exc.value.reason == pi.REFUSAL_IDENTITY_ACCOUNT_SET_MISMATCH
+
+    with pytest.raises(pi.PilotIdentityError) as exc:
+        pi.evaluate_slot({"accounts": [None]}, {"owner": EXPECTED_ID}, {})
+    assert exc.value.reason == pi.REFUSAL_IDENTITY_ACCOUNT_SET_MISMATCH
+
 
 def test_evaluate_slot_ok():
     slot_accounts = _slot_accounts()
@@ -620,15 +656,16 @@ def test_lapse_episode_remint_raises_park():
 
 # --- edge 19: remint None refuses ---------------------------------------------
 
-def test_lapse_episode_remint_none_refused():
-    """Edge 19: remint=None on minted path => remint-unavailable."""
-    with pytest.raises(pi.PilotIdentityError) as exc:
-        pi.lapse_episode(
-            lambda: {"reason": pilot_probe.REASON_NO_SESSION},
-            sign_in_path="minted",
-            remint=None,
-        )
-    assert exc.value.reason == pi.REFUSAL_LAPSE_REMINT_UNAVAILABLE
+def test_lapse_episode_remint_none_parks():
+    """Edge 19: remint=None on minted path => park with remint-unavailable."""
+    result = pi.lapse_episode(
+        lambda: {"reason": pilot_probe.REASON_NO_SESSION},
+        sign_in_path="minted",
+        remint=None,
+    )
+    assert result["action"] == pi.ACTION_PARK
+    assert result["reason"] == pi.REFUSAL_LAPSE_REMINT_UNAVAILABLE
+    assert result["reminted"] is False
 
 
 def test_lapse_episode_remint_success():
@@ -746,6 +783,72 @@ def test_identity_probe_declaration_bad_policy_digest():
 
 # --- identity_probe_receipt ---------------------------------------------------
 
+def test_identity_probe_receipt_fabricated_result_refused():
+    declaration = pi.identity_probe_declaration(
+        slot_ref=SLOT_REF,
+        policy_digest=POLICY_DIGEST,
+        expected_identities={"owner": EXPECTED_ID},
+    )
+    with pytest.raises(pi.PilotIdentityError) as exc:
+        pi.identity_probe_receipt(
+            declaration, {"ok": True}, exercised_at="2026-08-02T12:00:00Z",
+        )
+    assert exc.value.reason == pi.REFUSAL_IDENTITY_RECEIPT_ARGUMENT_INVALID
+
+    with pytest.raises(pi.PilotIdentityError) as exc:
+        pi.identity_probe_receipt(
+            declaration,
+            {"ok": True, "accounts": {}},
+            exercised_at="2026-08-02T12:00:00Z",
+        )
+    assert exc.value.reason == pi.REFUSAL_IDENTITY_RECEIPT_ARGUMENT_INVALID
+
+
+def test_identity_probe_receipt_pass_round_trip():
+    """Positive is_exercised round-trip catches field-name drift."""
+    declaration = pi.identity_probe_declaration(
+        slot_ref=SLOT_REF,
+        policy_digest=POLICY_DIGEST,
+        expected_identities={"owner": EXPECTED_ID},
+    )
+    slot_result = pi.evaluate_slot(
+        pilot_slot.slot_account_set("slot-a", 1, [{"account": "owner", "role": "resource-owner"}]),
+        {"owner": EXPECTED_ID},
+        {
+            "owner": {
+                "seeded": {"identity": EXPECTED_ID},
+                "unseeded": {"reason": pilot_probe.REASON_NO_SESSION},
+            },
+        },
+    )
+    record = pi.identity_probe_receipt(
+        declaration,
+        slot_result,
+        exercised_at="2026-08-02T12:00:00Z",
+    )
+    registry = {
+        "schemaVersion": pilot_contract.REGISTRY_SCHEMA_VERSION,
+        "records": [record],
+    }
+    assert pilot_contract.is_exercised(registry, "identity-probe", declaration) is True
+
+
+def test_identity_probe_declaration_non_serializable_refused():
+    with pytest.raises(pi.PilotIdentityError) as exc:
+        pi.identity_probe_declaration(
+            slot_ref=SLOT_REF,
+            policy_digest=POLICY_DIGEST,
+            expected_identities={"owner": set()},
+        )
+    assert exc.value.reason == pi.REFUSAL_IDENTITY_DECLARATION_INVALID
+
+
+def test_probe_answer_unhashable_reason_refused():
+    with pytest.raises(pi.PilotIdentityError) as exc:
+        pi.probe_answer(reason=[])
+    assert exc.value.reason == pi.REFUSAL_IDENTITY_ANSWER_REASON_UNKNOWN
+
+
 def test_identity_probe_receipt_pass():
     declaration = pi.identity_probe_declaration(
         slot_ref=SLOT_REF,
@@ -779,7 +882,16 @@ def test_identity_probe_receipt_fail_evidence_no_identity():
         policy_digest=POLICY_DIGEST,
         expected_identities={"owner": EXPECTED_ID},
     )
-    slot_result = {"ok": False, "reason": pi.REFUSAL_IDENTITY_PROBE_SEEDED_REFUSED, "accounts": {}}
+    slot_result = pi.evaluate_slot(
+        pilot_slot.slot_account_set("slot-a", 1, [{"account": "owner", "role": "resource-owner"}]),
+        {"owner": EXPECTED_ID},
+        {
+            "owner": {
+                "seeded": {"reason": pilot_probe.REASON_WRONG_IDENTITY},
+                "unseeded": {"reason": pilot_probe.REASON_NO_SESSION},
+            },
+        },
+    )
     record = pi.identity_probe_receipt(
         declaration,
         slot_result,
@@ -798,7 +910,16 @@ def test_fail_receipt_not_exercised():
         policy_digest=POLICY_DIGEST,
         expected_identities={"owner": EXPECTED_ID},
     )
-    slot_result = {"ok": False, "reason": pi.REFUSAL_IDENTITY_PROBE_SEEDED_REFUSED, "accounts": {}}
+    slot_result = pi.evaluate_slot(
+        pilot_slot.slot_account_set("slot-a", 1, [{"account": "owner", "role": "resource-owner"}]),
+        {"owner": EXPECTED_ID},
+        {
+            "owner": {
+                "seeded": {"reason": pilot_probe.REASON_WRONG_IDENTITY},
+                "unseeded": {"reason": pilot_probe.REASON_NO_SESSION},
+            },
+        },
+    )
     record = pi.identity_probe_receipt(
         declaration,
         slot_result,
@@ -857,6 +978,10 @@ def test_public_entry_points_no_builtin_on_hostile(name):
             if hostile is None:
                 continue
             kwargs = {"identity": hostile}
+            if isinstance(hostile, str) and hostile in pilot_probe.ALL_PROBE_REASONS:
+                kwargs = {"reason": hostile}
+            elif not isinstance(hostile, str):
+                kwargs = {"reason": hostile}
         elif name == "evaluate_pair":
             kwargs = {"seeded": hostile, "unseeded": hostile, "expected_identity": hostile}
         elif name == "run_pair_exercise":
@@ -888,7 +1013,7 @@ def test_public_entry_points_no_builtin_on_hostile(name):
         elif name == "require_identity_probe_exercised":
             kwargs = {"registry": hostile, "declaration": hostile}
         else:
-            continue
+            pytest.fail("unrecognized public callable: %s" % name)
 
         try:
             fn(**kwargs)

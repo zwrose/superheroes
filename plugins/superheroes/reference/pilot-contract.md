@@ -1023,13 +1023,16 @@ alone.
 Checks run in this order:
 
 1. **Normalize both answers** — malformed shape returns the answer-validation refusal.
-2. **Identical answers** — if the normalized seeded and unseeded answers are equal,
+2. **Expected identity** — `expected_identity` must be a non-empty string
+   (`identity-expected-missing` otherwise). This runs before grading because an absent
+   expectation cannot discriminate seeded from unseeded answers.
+3. **Identical answers** — if the normalized seeded and unseeded answers are equal,
    refuse with `identity-probe-answers-identical`. This runs **before** seeded/unseeded
    discrimination because identical answers prove the probe cannot distinguish contexts,
    regardless of whether each answer individually looks valid.
-3. **Seeded leg** — seeded answer must carry `identity` matching `expected_identity`;
+4. **Seeded leg** — seeded answer must carry `identity` matching `expected_identity`;
    a seeded `reason` refuses (`identity-probe-seeded-refused`).
-4. **Unseeded leg** — unseeded answer must carry `reason: no-session`
+5. **Unseeded leg** — unseeded answer must carry `reason: no-session`
    (`identity-probe-unseeded-not-no-session` otherwise).
 
 ### Per-account harness
@@ -1122,10 +1125,15 @@ After the single re-probe confirms `no-session`:
 - **`signInPath: captured`** → `park` with lapse evidence.
 - **`signInPath: minted`** → `remint` action; `continue` is returned **only after** a
   supplied `remint` callable actually succeeds. If `remint` is absent, not callable,
-  raises, or returns falsy, the episode parks (`lapse-remint-unavailable` or
+  raises, or returns falsy, the episode **parks** (`lapse-remint-unavailable` or
   `lapse-remint-failed`).
 
 Probe callable failures during the episode defer rather than lapse.
+
+### `lapse_episode` return shape
+
+Every return carries the same keys: `action`, `class`, `reason`, `firstReason`,
+`secondReason`, `probeCalls`, `reminted` (`null` where not applicable).
 
 ### Lapse refusal tokens
 
@@ -1134,7 +1142,7 @@ Probe callable failures during the episode defer rather than lapse.
 | `lapse-sign-in-path-invalid` | `lapse_step`: `sign_in_path` not in `captured` / `minted` |
 | `lapse-reprobe-budget-invalid` | `lapse_step`: `reprobe_count` not `0` or `1` (bools excluded) |
 | `lapse-probe-not-callable` | `lapse_episode`: probe argument is not callable |
-| `lapse-remint-unavailable` | `lapse_episode`: minted path confirmed lapse but `remint` absent or not callable |
+| `lapse-remint-unavailable` | `lapse_episode`: minted path confirmed lapse but `remint` absent or not callable — episode parks |
 | `lapse-remint-failed` | `lapse_episode`: `remint` raised or returned falsy |
 
 ## Credential validity margin
@@ -1177,12 +1185,13 @@ launch gate — a short horizon cannot be waived because the sign-in path is `mi
 4. **Server-probe without expiry** — when `expiresAt` is `null`, disposition is
    `server-probe-recheck` with `requiresMidWaveRecheck: true` (pass at launch; B5
    re-checks mid-wave).
-5. **Missing expiry** — non-server-probe observation with `expiresAt: null` refuses
-   (`horizon-expiry-missing`).
-6. **Margin comparison** — `required_until ≤ expiresAt` → disposition `covered`; else
+5. **Margin comparison** — `required_until ≤ expiresAt` → disposition `covered`; else
    `horizon-margin-exceeded` with `shortfallSeconds`.
 
-`wave_margin` evaluates every account and fails closed on the first refusal.
+`wave_margin(slot_accounts, accounts, ...)` evaluates every account in the authoritative
+account set from `pilot_slot.account_keys(slot_accounts)`. The `accounts` observation
+mapping must match that set exactly (`horizon-account-set-mismatch`). The wave result
+includes `requiresMidWaveRecheck: true` when **any** account's margin result requires it.
 
 ### Epoch seconds
 
@@ -1203,7 +1212,7 @@ before Python 3.11.
 | `horizon-cookie-session-only` | cookie has no expiry or session-only expiry (`-1`, `0`) |
 | `horizon-token-malformed` | JWT-shaped token cannot be decoded |
 | `horizon-token-claim-missing` | claim (default `exp`) absent from payload |
-| `horizon-token-claim-invalid` | claim value not a non-negative number |
+| `horizon-token-claim-invalid` | claim value not a finite number with `int(value) >= 1` |
 | `horizon-observation-invalid` | `validate_observation` or constructor input shape invalid |
 | `horizon-sign-in-path-invalid` | `sign_in_path` not in `captured` / `minted` |
 | `horizon-deadline-invalid` | `deadline_at` not a positive integer (bools excluded) |
@@ -1214,9 +1223,9 @@ before Python 3.11.
 | `horizon-deadline-in-past` | `deadline_at <= now` when `now` is supplied |
 | `horizon-unknown-provenance-unattended` | `unknown` provenance with `attended: false` |
 | `horizon-server-probe-stale` | server-probe observation older than `server_probe_max_age` |
-| `horizon-expiry-missing` | non-server-probe observation with `expiresAt: null` |
 | `horizon-margin-exceeded` | `deadline_at + margin_seconds > expiresAt` |
 | `horizon-account-set-empty` | `wave_margin`: accounts mapping empty or absent |
+| `horizon-account-set-mismatch` | `wave_margin`: observation keys do not match the slot account set |
 | `horizon-account-entry-invalid` | `wave_margin`: account key missing or empty |
 
 ## Minted sign-in exercises
@@ -1266,7 +1275,8 @@ real account — only that it is absent from the allowlist
 
 | HTTP status | Outcome | Notes |
 |---|---|---|
-| 400, 401, 403, 409, 422 | `refused` (pass) | Gate refused as expected |
+| 400, 403, 409, 422 | `refused` (pass) | Gate refused as expected |
+| 401 | `inconclusive` | Request was not authenticated — the allowlist may never have been consulted; treating "could not tell" as "refused" fails open (`unauthorized`) |
 | 2xx | `minted` (fail) | `mint-sentinel-minted` — gate did not refuse |
 | 404 | `inconclusive` | Endpoint absent — allowlist was never consulted; treating "could not tell" as "refused" fails open (`mint-sentinel-endpoint-absent`) |
 | 429 | `inconclusive` | `rate-limited` |
@@ -1282,9 +1292,9 @@ real account — only that it is absent from the allowlist
 | `mint-observed-scopes-invalid` | `flag_scope_check`: `observed_scopes` empty or malformed |
 | `mint-flag-set-outside-declared-scope` | enabling flag observed in a scope outside `enabledScopes` |
 | `mint-gate-off-command-invalid` | `gateOffTestCommand` missing or not a non-empty argv list |
+| `mint-gate-off-argument-invalid` | `timeout_seconds` or `max_output_bytes` not a positive integer |
 | `mint-gate-off-cwd-invalid` | `run_cwd` missing or not an existing directory |
 | `mint-gate-off-environment-invalid` | environment not a string-to-string mapping |
-| `mint-gate-off-flag-still-set` | enabling variable still present after removal attempt |
 | `mint-gate-off-timeout` | gate-off subprocess exceeded timeout |
 | `mint-gate-off-output-oversize` | gate-off stdout exceeded byte cap |
 | `mint-gate-off-spawn-failed` | gate-off subprocess could not start or stdout read failed |
@@ -1292,6 +1302,7 @@ real account — only that it is absent from the allowlist
 | `mint-receipt-argument-invalid` | `gate_off_receipt`: malformed run result or timestamp |
 | `mint-transport-invalid` | `authorized_mint` or `sentinel_exercise`: transport not callable |
 | `mint-control-did-not-mint` | sentinel exercise: control mint leg failed — exercise inconclusive |
+| `mint-sentinel-setup-failed` | sentinel exercise: post-control setup failed — exercise inconclusive but control result preserved |
 | `mint-sentinel-minted` | sentinel leg returned 2xx — gate did not refuse |
 | `mint-sentinel-endpoint-absent` | sentinel leg returned 404 — inconclusive, not refusal |
 | `mint-sentinel-unexpected-status` | sentinel leg returned an unclassified status |

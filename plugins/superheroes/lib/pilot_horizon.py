@@ -10,9 +10,13 @@ disk (B4); server-probe transport (caller's responsibility).
 import base64
 import calendar
 import json
+import math
 import time
 
 import pilot_contract
+import pilot_slot
+
+MAX_JWT_PAYLOAD_BYTES = 8192
 
 REFUSAL_INSTANT_INVALID = "horizon-instant-invalid"
 REFUSAL_STORAGE_STATE_INVALID = "horizon-storage-state-invalid"
@@ -33,9 +37,9 @@ REFUSAL_MAX_AGE_INVALID = "horizon-max-age-invalid"
 REFUSAL_DEADLINE_IN_PAST = "horizon-deadline-in-past"
 REFUSAL_UNKNOWN_PROVENANCE_UNATTENDED = "horizon-unknown-provenance-unattended"
 REFUSAL_SERVER_PROBE_STALE = "horizon-server-probe-stale"
-REFUSAL_EXPIRY_MISSING = "horizon-expiry-missing"
 REFUSAL_MARGIN_EXCEEDED = "horizon-margin-exceeded"
 REFUSAL_ACCOUNT_SET_EMPTY = "horizon-account-set-empty"
+REFUSAL_ACCOUNT_SET_MISMATCH = "horizon-account-set-mismatch"
 REFUSAL_ACCOUNT_ENTRY_INVALID = "horizon-account-entry-invalid"
 
 _OBSERVATION_KEYS = frozenset({"provenance", "expiresAt"})
@@ -93,7 +97,13 @@ def cookie_expiry_observation(storage_state, *, cookie_name):
     expires = entry["expires"]
     if isinstance(expires, bool) or not isinstance(expires, (int, float)):
         raise PilotHorizonError(REFUSAL_STORAGE_STATE_INVALID)
+    if not math.isfinite(expires):
+        raise PilotHorizonError(REFUSAL_STORAGE_STATE_INVALID)
     if expires in (-1, 0):
+        raise PilotHorizonError(REFUSAL_COOKIE_SESSION_ONLY)
+    if expires < 0:
+        raise PilotHorizonError(REFUSAL_STORAGE_STATE_INVALID)
+    if int(expires) < 1:
         raise PilotHorizonError(REFUSAL_COOKIE_SESSION_ONLY)
 
     return {
@@ -115,6 +125,8 @@ def token_claim_observation(token, *, claim="exp"):
         raise PilotHorizonError(REFUSAL_TOKEN_MALFORMED)
 
     payload_segment = segments[1]
+    if len(payload_segment.encode("utf-8")) > MAX_JWT_PAYLOAD_BYTES:
+        raise PilotHorizonError(REFUSAL_TOKEN_MALFORMED)
     try:
         padding = "=" * ((4 - len(payload_segment) % 4) % 4)
         raw = base64.urlsafe_b64decode(payload_segment + padding)
@@ -130,7 +142,9 @@ def token_claim_observation(token, *, claim="exp"):
     claim_value = payload[claim]
     if isinstance(claim_value, bool) or not isinstance(claim_value, (int, float)):
         raise PilotHorizonError(REFUSAL_TOKEN_CLAIM_INVALID)
-    if claim_value < 0:
+    if not math.isfinite(claim_value):
+        raise PilotHorizonError(REFUSAL_TOKEN_CLAIM_INVALID)
+    if claim_value < 1:
         raise PilotHorizonError(REFUSAL_TOKEN_CLAIM_INVALID)
 
     return {
@@ -170,7 +184,7 @@ def validate_observation(observation):
         raise PilotHorizonError(REFUSAL_OBSERVATION_INVALID)
 
     provenance = observation.get("provenance")
-    if provenance not in pilot_contract.VALIDITY_PROVENANCE:
+    if not isinstance(provenance, str) or provenance not in pilot_contract.VALIDITY_PROVENANCE:
         raise PilotHorizonError(REFUSAL_OBSERVATION_INVALID)
 
     if provenance == "server-probe":
@@ -216,7 +230,7 @@ def account_margin(
     # bite-axis: server-probe staleness — an observation older than server_probe_max_age refuses.
     validate_observation(observation)
 
-    if sign_in_path not in pilot_contract.SIGN_IN_PATHS:
+    if not isinstance(sign_in_path, str) or sign_in_path not in pilot_contract.SIGN_IN_PATHS:
         raise PilotHorizonError(REFUSAL_SIGN_IN_PATH_INVALID)
 
     if type(deadline_at) is not int or isinstance(deadline_at, bool) or deadline_at < 1:
@@ -287,14 +301,6 @@ def account_margin(
             requiresMidWaveRecheck=True,
         )
 
-    if expires_at is None:
-        return dict(
-            base,
-            ok=False,
-            disposition=None,
-            reason=REFUSAL_EXPIRY_MISSING,
-        )
-
     required_until = deadline_at + margin_seconds
     base["requiredUntil"] = required_until
 
@@ -316,6 +322,7 @@ def account_margin(
 
 
 def wave_margin(
+    slot_accounts,
     accounts,
     *,
     deadline_at,
@@ -326,18 +333,40 @@ def wave_margin(
     server_probe_max_age=None,
 ):
     """Evaluate account_margin for every account; fail closed on the first refusal."""
+    # bite-axis: account-set alignment — authoritative account list from slot_accounts; the
+    # observations key set must match exactly.
+    if not isinstance(slot_accounts, dict):
+        raise PilotHorizonError(REFUSAL_ACCOUNT_SET_MISMATCH)
+    accounts_field = slot_accounts.get("accounts")
+    if not isinstance(accounts_field, list):
+        raise PilotHorizonError(REFUSAL_ACCOUNT_SET_MISMATCH)
+    for entry in accounts_field:
+        if not isinstance(entry, dict):
+            raise PilotHorizonError(REFUSAL_ACCOUNT_SET_MISMATCH)
+        account = entry.get("account")
+        if not isinstance(account, str) or not account:
+            raise PilotHorizonError(REFUSAL_ACCOUNT_SET_MISMATCH)
+    account_list = pilot_slot.account_keys(slot_accounts)
+    if not account_list:
+        raise PilotHorizonError(REFUSAL_ACCOUNT_SET_EMPTY)
+
     if not isinstance(accounts, dict) or not accounts:
         raise PilotHorizonError(REFUSAL_ACCOUNT_SET_EMPTY)
+
+    slot_keys = set(account_list)
+    observation_keys = set(accounts.keys())
+    if observation_keys != slot_keys:
+        raise PilotHorizonError(REFUSAL_ACCOUNT_SET_MISMATCH)
 
     per_account = {}
     first_reason = None
     all_ok = True
+    requires_mid_wave_recheck = False
 
-    for account in accounts.keys():
+    for account in sorted(account_list):
         if not isinstance(account, str) or not account:
             raise PilotHorizonError(REFUSAL_ACCOUNT_ENTRY_INVALID, detail=repr(account))
 
-    for account in sorted(accounts.keys()):
         result = account_margin(
             accounts[account],
             deadline_at=deadline_at,
@@ -348,6 +377,8 @@ def wave_margin(
             server_probe_max_age=server_probe_max_age,
         )
         per_account[account] = result
+        if result.get("requiresMidWaveRecheck"):
+            requires_mid_wave_recheck = True
         if not result["ok"]:
             all_ok = False
             if first_reason is None:
@@ -357,4 +388,5 @@ def wave_margin(
         "ok": all_ok,
         "reason": first_reason,
         "accounts": per_account,
+        "requiresMidWaveRecheck": requires_mid_wave_recheck,
     }

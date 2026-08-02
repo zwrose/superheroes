@@ -36,23 +36,36 @@ _MODULE_CONFIG = (
     {
         "label": "pilot_identity",
         "module": pilot_identity,
-        "headings": _NEW_SECTIONS[:2],
-        "token_subheaders": (
-            _IDENTITY_PROBE_TOKEN_SUBHEADER,
-            _LAPSE_TOKEN_SUBHEADER,
+        "sections": (
+            {
+                "heading": _NEW_SECTIONS[0],
+                "token_subheader": _IDENTITY_PROBE_TOKEN_SUBHEADER,
+            },
+            {
+                "heading": _NEW_SECTIONS[1],
+                "token_subheader": _LAPSE_TOKEN_SUBHEADER,
+            },
         ),
     },
     {
         "label": "pilot_horizon",
         "module": pilot_horizon,
-        "headings": (_NEW_SECTIONS[2],),
-        "token_subheaders": (_HORIZON_TOKEN_SUBHEADER,),
+        "sections": (
+            {
+                "heading": _NEW_SECTIONS[2],
+                "token_subheader": _HORIZON_TOKEN_SUBHEADER,
+            },
+        ),
     },
     {
         "label": "pilot_mint",
         "module": pilot_mint,
-        "headings": (_NEW_SECTIONS[3],),
-        "token_subheaders": (_MINT_TOKEN_SUBHEADER,),
+        "sections": (
+            {
+                "heading": _NEW_SECTIONS[3],
+                "token_subheader": _MINT_TOKEN_SUBHEADER,
+            },
+        ),
     },
 )
 
@@ -138,35 +151,65 @@ def _extract_section(doc, heading):
     return "\n".join(lines[start:end])
 
 
+def _section_doc_tokens(doc, heading, subheader):
+    section = _extract_section(doc, heading)
+    if section is None:
+        raise AssertionError(
+            "pilot-contract.md missing section heading %s (file: %s)"
+            % (heading, _PILOT_CONTRACT)
+        )
+    if subheader not in section:
+        raise AssertionError(
+            "pilot-contract.md section %s missing %s (file: %s)"
+            % (heading, subheader, _PILOT_CONTRACT)
+        )
+    sub_start = section.index(subheader)
+    sub_section = section[sub_start:]
+    return _parse_token_table(sub_section, _TOKEN_HEADER)
+
+
 def _module_doc_tokens(doc, config):
-    """Union token tables from every subheader in a module config."""
+    """Union token tables from every section in a module config."""
     tokens = set()
-    for heading, subheader in zip(config["headings"], config["token_subheaders"]):
-        section = _extract_section(doc, heading)
-        if section is None:
-            raise AssertionError(
-                "pilot-contract.md missing section heading %s (file: %s)"
-                % (heading, _PILOT_CONTRACT)
-            )
-        if subheader not in section:
-            raise AssertionError(
-                "pilot-contract.md section %s missing %s (file: %s)"
-                % (heading, subheader, _PILOT_CONTRACT)
-            )
-        sub_start = section.index(subheader)
-        sub_section = section[sub_start:]
-        tokens |= _parse_token_table(sub_section, _TOKEN_HEADER)
+    for section_cfg in config["sections"]:
+        tokens |= _section_doc_tokens(
+            doc, section_cfg["heading"], section_cfg["token_subheader"],
+        )
     return tokens
+
+
+def _section_code_tokens(module, subheader):
+    """Map each token subheader to the REFUSAL_* constants in that section."""
+    if subheader == _IDENTITY_PROBE_TOKEN_SUBHEADER:
+        lapse_tokens = {
+            pilot_identity.REFUSAL_LAPSE_SIGN_IN_PATH_INVALID,
+            pilot_identity.REFUSAL_LAPSE_REPROBE_BUDGET_INVALID,
+            pilot_identity.REFUSAL_LAPSE_PROBE_NOT_CALLABLE,
+            pilot_identity.REFUSAL_LAPSE_REMINT_UNAVAILABLE,
+            pilot_identity.REFUSAL_LAPSE_REMINT_FAILED,
+        }
+        return _refusal_constants(module) - lapse_tokens
+    if subheader == _LAPSE_TOKEN_SUBHEADER:
+        return {
+            pilot_identity.REFUSAL_LAPSE_SIGN_IN_PATH_INVALID,
+            pilot_identity.REFUSAL_LAPSE_REPROBE_BUDGET_INVALID,
+            pilot_identity.REFUSAL_LAPSE_PROBE_NOT_CALLABLE,
+            pilot_identity.REFUSAL_LAPSE_REMINT_UNAVAILABLE,
+            pilot_identity.REFUSAL_LAPSE_REMINT_FAILED,
+        }
+    if subheader in (_HORIZON_TOKEN_SUBHEADER, _MINT_TOKEN_SUBHEADER):
+        return _refusal_constants(module)
+    raise AssertionError("unknown token subheader %r" % subheader)
 
 
 def _validate_population(config, code_tokens, doc_tokens):
     """Fail loudly when heading, table, or module population collapses."""
     doc = _load_contract()
-    for heading in config["headings"]:
-        if _extract_section(doc, heading) is None:
+    for section_cfg in config["sections"]:
+        if _extract_section(doc, section_cfg["heading"]) is None:
             raise AssertionError(
                 "pilot-contract.md missing section heading %s (file: %s)"
-                % (heading, _PILOT_CONTRACT)
+                % (section_cfg["heading"], _PILOT_CONTRACT)
             )
     if not code_tokens:
         raise AssertionError(
@@ -234,11 +277,26 @@ def test_module_tokens_code_to_doc(config):
     code_tokens = _refusal_constants(config["module"])
     doc_tokens = _module_doc_tokens(doc, config)
     _validate_population(config, code_tokens, doc_tokens)
-    missing = code_tokens - doc_tokens
-    assert missing == set(), (
-        "pilot-contract.md missing token(s) for %s: %s (file: %s)"
-        % (config["label"], ", ".join(sorted(missing)), _PILOT_CONTRACT)
-    )
+    for section_cfg in config["sections"]:
+        section_doc = _section_doc_tokens(
+            doc, section_cfg["heading"], section_cfg["token_subheader"],
+        )
+        assert section_doc, (
+            "%s section %s parsed to zero doc tokens (file: %s)"
+            % (config["label"], section_cfg["heading"], _PILOT_CONTRACT)
+        )
+        section_code = _section_code_tokens(
+            config["module"], section_cfg["token_subheader"],
+        )
+        assert section_code, (
+            "%s section %s yielded zero code tokens"
+            % (config["label"], section_cfg["token_subheader"])
+        )
+        _assert_bidirectional_tokens(
+            section_code,
+            section_doc,
+            "%s/%s" % (config["label"], section_cfg["token_subheader"]),
+        )
 
 
 @pytest.mark.parametrize("config", _MODULE_CONFIG, ids=lambda c: c["label"])
@@ -247,11 +305,18 @@ def test_module_tokens_doc_to_code(config):
     code_tokens = _refusal_constants(config["module"])
     doc_tokens = _module_doc_tokens(doc, config)
     _validate_population(config, code_tokens, doc_tokens)
-    extra = doc_tokens - code_tokens
-    assert extra == set(), (
-        "pilot-contract.md documents unknown token(s) for %s: %s (file: %s)"
-        % (config["label"], ", ".join(sorted(extra)), _PILOT_CONTRACT)
-    )
+    for section_cfg in config["sections"]:
+        section_doc = _section_doc_tokens(
+            doc, section_cfg["heading"], section_cfg["token_subheader"],
+        )
+        section_code = _section_code_tokens(
+            config["module"], section_cfg["token_subheader"],
+        )
+        _assert_bidirectional_tokens(
+            section_code,
+            section_doc,
+            "%s/%s" % (config["label"], section_cfg["token_subheader"]),
+        )
 
 
 @pytest.mark.parametrize("config", _MODULE_CONFIG, ids=lambda c: c["label"])
@@ -309,13 +374,23 @@ def test_parse_token_table_rejects_duplicate_row():
         _parse_token_table(table_text, _TOKEN_HEADER)
 
 
+def test_census_red_per_section_union_collapse(monkeypatch):
+    """Bite-proof: union collapse must fail when one section's table vanishes."""
+    doc = _load_contract()
+    token = pilot_identity.REFUSAL_LAPSE_SIGN_IN_PATH_INVALID
+    modified = _remove_table_row(doc, token)
+    monkeypatch.setattr(sys.modules[__name__], "_load_contract", lambda: modified)
+    with pytest.raises(AssertionError):
+        test_module_tokens_code_to_doc(_MODULE_CONFIG[0])
+
+
 def test_census_red_code_to_doc_missing_token(monkeypatch):
     """Bite-proof: undocumented module token must fail code→doc."""
     doc = _load_contract()
     token = pilot_identity.REFUSAL_IDENTITY_ANSWER_INVALID
     modified = _remove_table_row(doc, token)
     monkeypatch.setattr(sys.modules[__name__], "_load_contract", lambda: modified)
-    with pytest.raises(AssertionError, match="missing token"):
+    with pytest.raises(AssertionError):
         test_module_tokens_code_to_doc(_MODULE_CONFIG[0])
 
 
@@ -331,7 +406,7 @@ def test_census_red_doc_to_code_fictitious_token(monkeypatch):
         after=_HORIZON_TOKEN_SUBHEADER,
     )
     monkeypatch.setattr(sys.modules[__name__], "_load_contract", lambda: modified)
-    with pytest.raises(AssertionError, match="unknown token"):
+    with pytest.raises(AssertionError):
         test_module_tokens_doc_to_code(_MODULE_CONFIG[1])
 
 

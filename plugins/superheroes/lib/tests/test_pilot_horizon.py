@@ -13,6 +13,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import pilot_horizon as ph  # noqa: E402
+import pilot_slot  # noqa: E402
 
 HOSTILE_VALUES = [
     None,
@@ -54,6 +55,15 @@ def _token_obs(expires_at):
     return ph.token_claim_observation(_jwt({"exp": expires_at}))
 
 
+def _slot_accounts(accounts=None):
+    if accounts is None:
+        accounts = [
+            {"account": "good", "role": "resource-owner"},
+            {"account": "bad", "role": "viewer"},
+        ]
+    return pilot_slot.slot_account_set("slot-a", 1, accounts)
+
+
 def _margin_kwargs(**overrides):
     base = {
         "deadline_at": 1000,
@@ -63,6 +73,10 @@ def _margin_kwargs(**overrides):
     }
     base.update(overrides)
     return base
+
+
+def _wave_margin(slot_accounts, accounts, **overrides):
+    return ph.wave_margin(slot_accounts, accounts, **_margin_kwargs(**overrides))
 
 
 # --- parse_instant ---
@@ -463,10 +477,7 @@ def test_edge19_wave_margin_one_failing_account():
         "good": _token_obs(5000),
         "bad": _token_obs(1050),
     }
-    result = ph.wave_margin(
-        accounts,
-        **_margin_kwargs(deadline_at=1000, margin_seconds=100),
-    )
+    result = _wave_margin(_slot_accounts(), accounts, deadline_at=1000, margin_seconds=100)
     assert result["ok"] is False
     assert result["reason"] == ph.REFUSAL_MARGIN_EXCEEDED
     assert result["accounts"]["bad"]["ok"] is False
@@ -478,32 +489,87 @@ def test_wave_margin_all_ok():
         "a": _token_obs(5000),
         "b": _token_obs(6000),
     }
-    result = ph.wave_margin(
-        accounts,
-        **_margin_kwargs(deadline_at=1000, margin_seconds=100),
+    slot_accounts = pilot_slot.slot_account_set(
+        "slot-a", 1,
+        [
+            {"account": "a", "role": "resource-owner"},
+            {"account": "b", "role": "viewer"},
+        ],
     )
+    result = _wave_margin(slot_accounts, accounts, deadline_at=1000, margin_seconds=100)
     assert result["ok"] is True
     assert result["reason"] is None
+    assert result["requiresMidWaveRecheck"] is False
 
 
 def test_wave_margin_empty_refuses():
     with _raises(ph.REFUSAL_ACCOUNT_SET_EMPTY):
-        ph.wave_margin({}, **_margin_kwargs())
+        _wave_margin(_slot_accounts(), {})
+
+
+def test_wave_margin_account_set_mismatch():
+    slot_accounts = _slot_accounts()
+    with _raises(ph.REFUSAL_ACCOUNT_SET_MISMATCH):
+        _wave_margin(slot_accounts, {"good": _token_obs(5000)})
 
 
 def test_wave_margin_invalid_account_key():
-    with _raises(ph.REFUSAL_ACCOUNT_ENTRY_INVALID):
-        ph.wave_margin({None: _token_obs(5000)}, **_margin_kwargs())
+    slot_accounts = {
+        "slot": "slot-a",
+        "generation": 1,
+        "ref": "slot-a@1",
+        "accounts": [{"account": "", "role": "x"}],
+    }
+    with _raises(ph.REFUSAL_ACCOUNT_SET_MISMATCH):
+        _wave_margin(slot_accounts, {"": _token_obs(5000)})
 
 
 def test_wave_margin_mixed_type_keys_refuses():
-    with _raises(ph.REFUSAL_ACCOUNT_ENTRY_INVALID):
-        ph.wave_margin({1: _token_obs(5000), "a": _token_obs(5000)}, **_margin_kwargs())
+    slot_accounts = pilot_slot.slot_account_set(
+        "slot-a", 1, [{"account": "a", "role": "x"}],
+    )
+    with _raises(ph.REFUSAL_ACCOUNT_SET_MISMATCH):
+        _wave_margin(slot_accounts, {1: _token_obs(5000), "a": _token_obs(5000)})
 
 
 def test_wave_margin_empty_string_account_key_refuses():
-    with _raises(ph.REFUSAL_ACCOUNT_ENTRY_INVALID):
-        ph.wave_margin({"": _token_obs(5000)}, **_margin_kwargs())
+    slot_accounts = pilot_slot.slot_account_set(
+        "slot-a", 1, [{"account": "x", "role": "r"}],
+    )
+    with _raises(ph.REFUSAL_ACCOUNT_SET_MISMATCH):
+        _wave_margin(slot_accounts, {"": _token_obs(5000), "x": _token_obs(5000)})
+
+
+@pytest.mark.parametrize("expires", [float("nan"), float("inf"), float("-inf")])
+def test_cookie_expiry_refuses_non_finite(expires):
+    with _raises(ph.REFUSAL_STORAGE_STATE_INVALID):
+        ph.cookie_expiry_observation(_cookie_state(expires), cookie_name="session")
+
+
+@pytest.mark.parametrize("exp_value", [float("nan"), float("inf"), float("-inf")])
+def test_token_claim_refuses_non_finite(exp_value):
+    with _raises(ph.REFUSAL_TOKEN_CLAIM_INVALID):
+        ph.token_claim_observation(_jwt({"exp": exp_value}))
+
+
+def test_token_claim_refuses_zero_exp():
+    with _raises(ph.REFUSAL_TOKEN_CLAIM_INVALID):
+        ph.token_claim_observation(_jwt({"exp": 0}))
+
+
+def test_cookie_expiry_refuses_negative_other_than_session():
+    with _raises(ph.REFUSAL_STORAGE_STATE_INVALID):
+        ph.cookie_expiry_observation(_cookie_state(-2), cookie_name="session")
+
+
+def test_wave_margin_requires_mid_wave_recheck():
+    accounts = {
+        "good": ph.server_probe_observation(expires_at=None, observed_at=1000),
+        "bad": _token_obs(5000),
+    }
+    result = _wave_margin(_slot_accounts(), accounts)
+    assert result["ok"] is True
+    assert result["requiresMidWaveRecheck"] is True
 
 
 # --- additional refusal coverage ---
@@ -575,8 +641,13 @@ def test_public_entry_points_never_leak_builtin_exceptions(name):
             elif name == "cookie_expiry_observation":
                 if hostile == {}:
                     fn(hostile, cookie_name="x")
+                elif isinstance(hostile, dict) and "cookies" in hostile:
+                    fn(hostile, cookie_name="x")
                 else:
-                    fn(hostile, cookie_name=hostile if isinstance(hostile, str) else "x")
+                    state = _cookie_state(hostile if isinstance(hostile, (int, float)) else 5000)
+                    if isinstance(hostile, (int, float)):
+                        state["cookies"][0]["expires"] = hostile
+                    fn(state, cookie_name="session")
             elif name == "token_claim_observation":
                 fn(hostile)
             elif name == "server_probe_observation":
@@ -591,7 +662,9 @@ def test_public_entry_points_never_leak_builtin_exceptions(name):
             elif name == "account_margin":
                 fn(hostile, **_margin_kwargs())
             elif name == "wave_margin":
-                fn(hostile, **_margin_kwargs())
+                fn(hostile, hostile, **_margin_kwargs())
+            else:
+                raise AssertionError("unrecognized public callable: %s" % name)
         except ph.PilotHorizonError:
             pass
         except TypeError:

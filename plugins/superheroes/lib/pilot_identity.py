@@ -7,6 +7,7 @@ Non-goals: no HTTP or browser driving of its own — browser context creation an
 injection are C7's; the durable slot-record mutation that a park performs is A2a's state
 machine driven by B5's wave runtime; capture artifact production is B4's.
 """
+import json
 import pilot_contract
 import pilot_probe
 import pilot_slot
@@ -53,6 +54,35 @@ class PilotIdentityError(Exception):
         self.detail = detail
 
 
+def _json_serializable(value):
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _lapse_episode_result(
+    *,
+    action,
+    class_=None,
+    reason=None,
+    first_reason=None,
+    second_reason=None,
+    probe_calls,
+    reminted=None,
+):
+    return {
+        "action": action,
+        "class": class_,
+        "reason": reason,
+        "firstReason": first_reason,
+        "secondReason": second_reason,
+        "probeCalls": probe_calls,
+        "reminted": reminted,
+    }
+
+
 def probe_answer(*, identity=None, reason=None):
     """Normalize and validate one probe answer."""
     # bite-axis: answer shape — exactly one of identity or reason; identity non-empty str;
@@ -65,7 +95,7 @@ def probe_answer(*, identity=None, reason=None):
         if not isinstance(identity, str) or not identity:
             raise PilotIdentityError(REFUSAL_IDENTITY_ANSWER_INVALID)
         return {"identity": identity, "reason": None}
-    if reason not in pilot_probe.ALL_PROBE_REASONS:
+    if not isinstance(reason, str) or reason not in pilot_probe.ALL_PROBE_REASONS:
         raise PilotIdentityError(REFUSAL_IDENTITY_ANSWER_REASON_UNKNOWN)
     return {"identity": None, "reason": reason}
 
@@ -197,6 +227,12 @@ def evaluate_slot(slot_accounts, expected_identities, answers):
     accounts_field = slot_accounts.get("accounts")
     if not isinstance(accounts_field, list):
         raise PilotIdentityError(REFUSAL_IDENTITY_ACCOUNT_SET_MISMATCH)
+    for entry in accounts_field:
+        if not isinstance(entry, dict):
+            raise PilotIdentityError(REFUSAL_IDENTITY_ACCOUNT_SET_MISMATCH)
+        account = entry.get("account")
+        if not isinstance(account, str) or not account:
+            raise PilotIdentityError(REFUSAL_IDENTITY_ACCOUNT_SET_MISMATCH)
     account_list = pilot_slot.account_keys(slot_accounts)
     if not account_list:
         raise PilotIdentityError(REFUSAL_IDENTITY_ACCOUNT_SET_EMPTY)
@@ -361,25 +397,24 @@ def lapse_episode(probe, *, sign_in_path, remint=None):
     if not callable(probe):
         raise PilotIdentityError(REFUSAL_LAPSE_PROBE_NOT_CALLABLE)
 
-    probe_calls = 0
-    first_reason = None
-    second_reason = None
-
     probe_calls = 1
     try:
         first_raw = probe()
     except Exception:
-        return {
-            "action": ACTION_DEFER,
-            "class": None,
-            "reason": REFUSAL_IDENTITY_PROBE_LEG_FAILED,
-            "probeCalls": probe_calls,
-        }
+        return _lapse_episode_result(
+            action=ACTION_DEFER,
+            reason=REFUSAL_IDENTITY_PROBE_LEG_FAILED,
+            probe_calls=probe_calls,
+        )
 
     first_step = lapse_step(first_raw, sign_in_path=sign_in_path, reprobe_count=0)
     if first_step["action"] != ACTION_REPROBE:
-        first_step["probeCalls"] = probe_calls
-        return first_step
+        return _lapse_episode_result(
+            action=first_step["action"],
+            class_=first_step["class"],
+            reason=first_step["reason"],
+            probe_calls=probe_calls,
+        )
 
     first_reason = first_step["reason"]
 
@@ -387,60 +422,71 @@ def lapse_episode(probe, *, sign_in_path, remint=None):
     try:
         second_raw = probe()
     except Exception:
-        return {
-            "action": ACTION_DEFER,
-            "class": None,
-            "reason": REFUSAL_IDENTITY_PROBE_LEG_FAILED,
-            "probeCalls": probe_calls,
-        }
+        return _lapse_episode_result(
+            action=ACTION_DEFER,
+            reason=REFUSAL_IDENTITY_PROBE_LEG_FAILED,
+            first_reason=first_reason,
+            probe_calls=probe_calls,
+        )
 
     second_step = lapse_step(second_raw, sign_in_path=sign_in_path, reprobe_count=1)
     second_reason = second_step["reason"]
 
     if second_step["action"] == ACTION_REMINT:
         if remint is None or not callable(remint):
-            raise PilotIdentityError(REFUSAL_LAPSE_REMINT_UNAVAILABLE)
+            return _lapse_episode_result(
+                action=ACTION_PARK,
+                class_="lapse",
+                reason=REFUSAL_LAPSE_REMINT_UNAVAILABLE,
+                first_reason=first_reason,
+                second_reason=second_reason,
+                probe_calls=probe_calls,
+                reminted=False,
+            )
         try:
             remint_ok = remint()
         except Exception:
             remint_ok = False
         if not remint_ok:
-            return {
-                "action": ACTION_PARK,
-                "class": "lapse",
-                "reason": REFUSAL_LAPSE_REMINT_FAILED,
-                "reminted": False,
-                "firstReason": first_reason,
-                "secondReason": second_reason,
-                "probeCalls": probe_calls,
-            }
-        return {
-            "action": ACTION_CONTINUE,
-            "class": None,
-            "reason": None,
-            "reminted": True,
-            "firstReason": first_reason,
-            "secondReason": second_reason,
-            "probeCalls": probe_calls,
-        }
+            return _lapse_episode_result(
+                action=ACTION_PARK,
+                class_="lapse",
+                reason=REFUSAL_LAPSE_REMINT_FAILED,
+                first_reason=first_reason,
+                second_reason=second_reason,
+                probe_calls=probe_calls,
+                reminted=False,
+            )
+        return _lapse_episode_result(
+            action=ACTION_CONTINUE,
+            reason=None,
+            first_reason=first_reason,
+            second_reason=second_reason,
+            probe_calls=probe_calls,
+            reminted=True,
+        )
 
     if second_step["action"] == ACTION_PARK:
         # bite-disclosure: durable park — slot-record transition and work preservation are
         # pilot_lifecycle's lock-serialized state machine driven by B5's wave runtime; this
         # module returns the required action and evidence only.
-        return {
-            "action": ACTION_PARK,
-            "class": "lapse",
-            "reason": second_reason,
-            "firstReason": first_reason,
-            "secondReason": second_reason,
-            "probeCalls": probe_calls,
-        }
+        return _lapse_episode_result(
+            action=ACTION_PARK,
+            class_="lapse",
+            reason=second_reason,
+            first_reason=first_reason,
+            second_reason=second_reason,
+            probe_calls=probe_calls,
+        )
 
-    second_step["probeCalls"] = probe_calls
-    if first_reason is not None:
-        second_step["firstReason"] = first_reason
-    return second_step
+    return _lapse_episode_result(
+        action=second_step["action"],
+        class_=second_step["class"],
+        reason=second_reason,
+        first_reason=first_reason,
+        second_reason=second_reason,
+        probe_calls=probe_calls,
+    )
 
 
 def identity_probe_declaration(*, slot_ref, policy_digest, expected_identities):
@@ -457,6 +503,8 @@ def identity_probe_declaration(*, slot_ref, policy_digest, expected_identities):
 
     if not isinstance(expected_identities, dict):
         raise PilotIdentityError(REFUSAL_IDENTITY_DECLARATION_INVALID)
+    if not _json_serializable(expected_identities):
+        raise PilotIdentityError(REFUSAL_IDENTITY_DECLARATION_INVALID)
 
     account_keys = sorted(expected_identities.keys())
     expected_identity_digest = pilot_contract.declaration_digest(expected_identities)
@@ -470,6 +518,28 @@ def identity_probe_declaration(*, slot_ref, policy_digest, expected_identities):
     }
 
 
+def _validate_evaluate_slot_result(result):
+    """Require result to be a real evaluate_slot return shape."""
+    if not isinstance(result, dict):
+        raise PilotIdentityError(REFUSAL_IDENTITY_RECEIPT_ARGUMENT_INVALID)
+    ok = result.get("ok")
+    if type(ok) is not bool:
+        raise PilotIdentityError(REFUSAL_IDENTITY_RECEIPT_ARGUMENT_INVALID)
+    accounts = result.get("accounts")
+    if not isinstance(accounts, dict) or not accounts:
+        raise PilotIdentityError(REFUSAL_IDENTITY_RECEIPT_ARGUMENT_INVALID)
+    for account_result in accounts.values():
+        if not isinstance(account_result, dict):
+            raise PilotIdentityError(REFUSAL_IDENTITY_RECEIPT_ARGUMENT_INVALID)
+        account_ok = account_result.get("ok")
+        if type(account_ok) is not bool:
+            raise PilotIdentityError(REFUSAL_IDENTITY_RECEIPT_ARGUMENT_INVALID)
+    if ok is True:
+        if not all(account_result["ok"] for account_result in accounts.values()):
+            raise PilotIdentityError(REFUSAL_IDENTITY_RECEIPT_ARGUMENT_INVALID)
+    return ok, accounts
+
+
 def identity_probe_receipt(declaration, result, *, exercised_at):
     """Build the registry record for kind identity-probe."""
     # bite-axis: receipt assembly — pass/fail from evaluate_slot; evidence never carries expected
@@ -480,19 +550,18 @@ def identity_probe_receipt(declaration, result, *, exercised_at):
     if not isinstance(exercised_at, str) or not exercised_at:
         raise PilotIdentityError(REFUSAL_IDENTITY_RECEIPT_ARGUMENT_INVALID)
 
-    if not isinstance(result, dict):
+    if not isinstance(declaration, dict) or not _json_serializable(declaration):
         raise PilotIdentityError(REFUSAL_IDENTITY_RECEIPT_ARGUMENT_INVALID)
 
-    ok = result.get("ok")
+    ok, accounts = _validate_evaluate_slot_result(result)
+
     if ok is True:
-        passed = sum(1 for account_result in result.get("accounts", {}).values() if account_result.get("ok"))
+        passed = len(accounts)
         evidence = "%d account(s) passed" % passed
         receipt_result = "pass"
-    elif ok is False:
+    else:
         evidence = result.get("reason") or "fail"
         receipt_result = "fail"
-    else:
-        raise PilotIdentityError(REFUSAL_IDENTITY_RECEIPT_ARGUMENT_INVALID)
 
     return {
         "kind": "identity-probe",
