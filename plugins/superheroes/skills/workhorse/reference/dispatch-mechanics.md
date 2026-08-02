@@ -1,9 +1,10 @@
 # Contents
 
 1. [Dispatch mechanics — long dispatches you own](#dispatch-mechanics--long-dispatches-you-own)
-2. [Supervised review dispatch](#supervised-review-dispatch)
-3. [Supervised write dispatch](#supervised-write-dispatch)
-4. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
+2. [Turn survival — the harness evidence](#turn-survival--the-harness-evidence)
+3. [Supervised review dispatch](#supervised-review-dispatch)
+4. [Supervised write dispatch](#supervised-write-dispatch)
+5. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
 
 ---
 
@@ -39,6 +40,39 @@ charter §7 (Channel-conditioned) — not restated here. Mechanics by dispatch k
   shell-detach** — await in-turn when you dispatch; if it genuinely cannot fit the turn, **do not
   dispatch** — park durably on the issue or PR **with the work order ready** (charter §7), or split so
   each dispatch fits one turn.
+
+## Turn survival — the harness evidence
+
+The evidence base behind the charter's §7 Channel-conditioned rules. The rules and the
+detach-and-park contract live in the charter; this section carries the physics and the field record,
+pinned to the harness versions they were observed on.
+
+- **Harness-tracked background work dies when the turn ends** (harness 2.1.219, three runs): a probe
+  wrote a start marker at t+8s, the session exited at t+15s, and the completion marker never
+  appeared — no completion, no orphan process. Treating tracked-background work as durable is how
+  builds orphan: the #574 build background-dispatched its implementer, ended its turn, orphaned
+  mid-flight, and was recovered only via `--resume`.
+- **Shell-detached children with durable on-disk output survive the exit**, keep working, and are
+  recoverable when the advisor resumes — proven twice mid-flight (brief-check builds): session
+  exited, detached child completed to disk, resumed session recovered with zero work lost. Earlier
+  readings that those recoveries were luck or that the engines "were already finished" are
+  **refuted**; this record corrects them.
+- **Wake notifications never fire for a dormant builder.** Sessions that trusted a waiter were
+  believing their tools — background-run, wakeup scheduling, and their success messages all promise
+  a re-wake that never fires headless. On 2.1.219, with the spawning agent dormant, a background
+  task's completion notification reaches the **root session**, not the builder — the builder is
+  never woken and the advisor becomes an accidental message broker. Field record: a six-lane
+  overnight wave stalled for hours on finished soaks and green gates — builders' own review seats
+  woke the advisor instead of the builders, zero handbacks by morning, recovered only when the
+  advisor swept and resumed each lane.
+- **The induction trap.** Wake-on-completion **does** work early in a session while the parent still
+  holds an active task — so a builder that verified a re-wake once has evidence about the
+  **active-task regime only**, and **none at all** about the **dormant-parent regime** where it
+  fails. Trusting "re-wake proven earlier this session" into the dormant-parent regime is the trap;
+  both halves were observed on 2.1.219.
+- The same physics catches **any** outcome that resolves outside the turn, not only dispatches: a
+  harness-tracked background waiter (#600 — fired despite dual warnings) and a post-handback CI
+  watch (#608) died the same way (#526 evidence trail).
 
 ## Supervised review dispatch
 
