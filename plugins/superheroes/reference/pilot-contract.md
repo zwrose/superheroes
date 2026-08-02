@@ -14,6 +14,9 @@
 12. [Provisioning authorization](#provisioning-authorization)
 13. [Seed and mint call shapes](#seed-and-mint-call-shapes)
 14. [Slot reference format](#slot-reference-format)
+15. [Slot lifecycle and generations](#slot-lifecycle-and-generations)
+16. [The provisioning journal](#the-provisioning-journal)
+17. [The partial-failure report](#the-partial-failure-report)
 
 ---
 
@@ -27,13 +30,16 @@ downstream sub-issues build against.
 probe vocabulary (`lib/pilot_probe.py`); slot reference format and account-set types
 (`lib/pilot_slot.py`); seed/mint call shapes and artifact verification (`lib/pilot_seed.py`);
 the contract validator (`lib/pilot_contract.py`, wired into `engine.load_profile_config`);
-and sub-issue **A3** — the per-slot target boundary (`lib/pilot_boundary.py`), the policy
+sub-issue **A3** — the per-slot target boundary (`lib/pilot_boundary.py`), the policy
 document home (`lib/pilot_policy.py`), and the provisioning authorization layer
-(`lib/pilot_provision.py`).
+(`lib/pilot_provision.py`); and sub-issue **A2a** — the slot lifecycle and generation
+allocation (`lib/pilot_lifecycle.py`) plus the provisioning journal and partial-failure
+report (`lib/pilot_journal.py`).
 
 **What this deliberately does not build** (successor sub-issues own these):
 
-- Generation allocation, incrementing, or staleness comparison (**A2a**).
+- Quarantine, sweep, the reassignment acceptance probe, deletion rules, and any recovery path out of
+  `failed` (**A2b**).
 - Browser context creation, credential injection, or broker-side stale-generation enforcement (**C7**).
 - Running a live cleanup and capturing its effect receipt (**C9**).
 - The measured operating ceiling and its degradation receipts (**D11b**).
@@ -638,3 +644,332 @@ Types and validation live in `lib/pilot_slot.py`.
 | `slot-account-duplicate` | the same `account` appears more than once |
 | `slot-account-role-missing` | an entry has no non-empty `role` |
 | `slot-account-entry-invalid` | an entry is not a mapping with a non-empty `account` string |
+
+## Slot lifecycle and generations
+
+Slot lifecycle state, generation allocation, and serialized persistence live in
+`lib/pilot_lifecycle.py`. The module owns the per-slot record and its transitions; it does
+not write journal records, enforce fencing, or expose recovery entry points from `failed`.
+
+### Slot states
+
+| State | Meaning |
+|---|---|
+| `provisioning` | A provisioning attempt is in progress for this generation |
+| `provisioned` | Provisioning finished; the slot is ready for session handoff |
+| `occupied` | A pilot session holds the slot |
+| `released` | The session released the slot; ready for the next provisioning attempt |
+| `failed` | Provisioning or occupancy failed; partial effects may exist |
+| `retired` | The slot is permanently withdrawn from service |
+
+### Legal transitions
+
+One row per source state; targets are every state the code allows from that source.
+
+| From state | Legal targets |
+|---|---|
+| `provisioning` | `provisioned`, `failed` |
+| `provisioned` | `occupied`, `failed`, `retired` |
+| `occupied` | `released`, `failed`, `retired` |
+| `released` | `provisioning`, `retired` |
+| `failed` | `retired` |
+| `retired` | *(none)* |
+
+`failed` is terminal within this module apart from `retired`: a partial provisioning failure
+must reach the owner before anything relaunches. Sub-issue **A2b** adds the named recovery
+entry point; this module deliberately does not.
+
+### Generation allocation
+
+The generation is allocated at the **start of a provisioning attempt**, not at session
+handoff, so every journal record and every fencing confirmation can be keyed to a
+`<slot>@<generation>` reference. `begin_generation` is legal only from `released`.
+
+### Serialized allocation
+
+`slots_dir(cwd, root=None)` resolves the on-disk slot-store directory from a working
+directory; it returns `{"ok", "reason", "path"}` and never raises. Every public entry
+point in `pilot_lifecycle.py` and `pilot_journal.py` refuses rather than raising a builtin
+exception; `slots_dir` was the last lifecycle entry point that could leak an `OSError`
+from the store's repo-root walk.
+
+**Every** allocation, including the first, happens under the per-slot advisory `flock`.
+`create_slot(slots_dir_path, slot, accounts, *, now, timeout=...)` creates a slot's **first**
+record **under the per-slot lock**, refusing if one already exists (`slot-record-exists`).
+It exists because `mutate()` refuses when no record is present — without it, the very first
+record (and therefore generation 1) would be allocated through the lock-free `write_record()`,
+and two launchers first-provisioning the same slot would both persist `slot@1`.
+
+`mutate()` holds the same lock across load → validate → callback → durable save, because
+atomic replacement alone gives no read-modify-write exclusion; without it two launchers both
+allocate the same generation. `begin_generation()` is the serialized path into
+`provisioning` from `released`. The record write fsyncs the **parent directory**, so a crash
+cannot recover a pre-allocation record after the new generation was handed out.
+
+`mutate()` refuses when the loaded record's `slot` differs from the slot whose lock it holds
+(`slot-record-slot-mismatch`), **and** when the callback *return* record's `slot` differs,
+before writing either end.
+
+### Record validation
+
+`_validate_record()` enforces a bounded consistency check, not a full history replay: the
+**last** history entry's `to` must equal the record's `state` and its `generation` must equal
+the record's `generation`. A record violating that is `slot-record-invalid`.
+
+The slot directory must be a real directory and the lock file a regular file — a symlink at
+the slot-directory component or at the lock/record file itself is refused (`slot-dir-unsafe`).
+This is **not** a full path-ancestry walk.
+
+**Check/use limit:** the slot-directory symlink refusal is a check-then-use test by pathname —
+it refuses a symlink or non-directory **at the moment of the check** and does **not** close a
+race against an actor able to replace the directory between check and use. Under this project's
+single-user local threat model the guard targets accidents and stale state, not a hostile local
+actor; a full fix needs directory-descriptor-relative operations and is deliberately not built.
+
+**Special-file safety:** the slot-record reader opens with `O_NOFOLLOW | O_NONBLOCK` and refuses
+a non-regular file — a symlink or FIFO at the record path is refused rather than followed or
+blocked on.
+
+**Type-safety of validation:** every enum/membership check tests that the value is a string
+first, so a parseable record carrying an unhashable value (`"kind": []`, `"state": []`) produces
+the documented refusal rather than raising. Public entry points never raise on malformed *data* —
+they refuse.
+
+A non-serialisable history `detail` is refused at `transition()` and at record validation, so
+it can never reach the writer's `json.dumps`.
+
+### Generation check (three-valued)
+
+`generation_check(carried, current)` returns one of three answers:
+
+| Answer | When |
+|---|---|
+| `ok` | `carried` equals `current` |
+| `slot-generation-stale` | `carried` is less than `current` |
+| `slot-generation-ahead` | `carried` is greater than `current` |
+
+The module deliberately exports **no boolean staleness helper**, because a two-valued answer
+falls open on the `carried > current` case. Numbering lives here; broker-side enforcement is
+sub-issue **C7's** (design seam S1).
+
+### Lifecycle refusal tokens
+
+| Token | When returned |
+|---|---|
+| `slot-state-invalid` | target state is not in `SLOT_STATES`, or `provisioning_outcome` is called with an unknown state |
+| `slot-transition-illegal` | `transition` or `begin_generation` requests a move not in `TRANSITIONS` |
+| `slot-occupied` | `transition` targets `occupied` while already `occupied` |
+| `slot-retired` | mutation is attempted on a `retired` record |
+| `slot-record-invalid` | record shape, history, accounts, timestamps, caller `now`, last-history consistency, or non-serialisable history `detail` fail validation |
+| `slot-record-absent` | `read_record` returns this, and **only** this, when the record file genuinely does not exist (`ENOENT`); every other read failure stays `slot-record-unreadable`. `create_slot()` writes **only** on a genuinely absent record, so an unreadable-but-present record (bad mode, dangling symlink, transient I/O error) must never be mistaken for absence and silently replaced — that would reset a slot's durable history and generation to 1 while a broker may still be fencing against it |
+| `slot-record-unreadable` | the on-disk record cannot be read (any failure other than genuine absence) |
+| `slot-record-write-failed` | durable write or parent-directory fsync failed |
+| `slot-generation-stale` | `generation_check`: carried generation is behind current |
+| `slot-generation-ahead` | `generation_check`: carried generation is ahead of current |
+| `slot-lock-unavailable` | per-slot advisory `flock` could not be acquired within timeout |
+| `slot-mutation-failed` | the mutation callback raised an unexpected exception |
+| `slot-generation-allocation-required` | `transition()` refuses the `released → provisioning` edge; only `begin_generation()` may enter `provisioning` from `released`, because each provisioning attempt must allocate its own generation or it would reuse the previous attempt's `<slot>@<generation>` identity and collide with that generation's journal and fencing records. The edge remains a legal lifecycle edge in `TRANSITIONS` — the refusal is in the generic mover, not in the table |
+| `slot-record-slot-mismatch` | `mutate()` refuses when the loaded record's `slot` differs from the locked slot **or** the callback return's `slot` differs, before writing |
+| `slot-dir-unsafe` | the slot directory is a symlink or not a directory, or the lock file is not a regular file; refuses a symlink at the slot-directory component and at the lock/record file itself — **not** a full path-ancestry walk |
+| `slot-record-exists` | `create_slot()` refuses because a record already exists |
+| `slot-root-unresolved` | `slots_dir()` could not resolve the slot-store root from the supplied `cwd` — a non-string, over-long, missing, or otherwise unresolvable working directory — returned rather than raised |
+
+## The provisioning journal
+
+The durable provisioning journal lives in `lib/pilot_journal.py`. Each shared or slot-scoped
+effect is recorded **before and after** the operation: a crash between acting and recording
+must replay as *possibly applied*, which is the honest state; a journal written only on
+success reports a shared effect as never having happened.
+
+### Effect kinds and scope
+
+| Kind | Scope |
+|---|---|
+| `worktree-created` | `slot` |
+| `app-started` | `slot` |
+| `credential-minted` | `shared` |
+| `credential-seeded` | `shared` |
+| `namespace-touched` | `shared` |
+| `project-declared` | `shared` |
+
+`project-declared` is the **one** project hook ("what did setup touch") and is `shared`
+because the framework cannot classify what the project names — fail closed.
+
+### End outcomes (three-valued)
+
+| Outcome | Meaning |
+|---|---|
+| `applied` | the caller proved the effect completed |
+| `not-applied` | the caller proved the effect did not run |
+| `indeterminate` | transport, process, timeout, or partial-operation error |
+
+Only a caller that can *prove* non-application may record `not-applied`; every transport,
+process, timeout, or partial-operation error records `indeterminate`. A two-valued outcome
+would report a credential that really was minted as never minted.
+
+### Replay states
+
+| Replay state | Source |
+|---|---|
+| `applied` | paired `end` with outcome `applied` |
+| `not-applied` | paired `end` with outcome `not-applied` |
+| `possibly-applied` | paired `end` with outcome `indeterminate`, or `begin` with no `end`, or any anomaly |
+
+### On-disk record shapes
+
+Begin phase (`_build_begin_record`):
+
+```json
+{
+  "schemaVersion": 1,
+  "phase": "begin",
+  "effectId": "<id>",
+  "slotRef": "<slot>@<generation>",
+  "kind": "<effect-kind>",
+  "at": "<ISO-8601-UTC-Z>"
+}
+```
+
+Optional `detail` object when the caller supplies one.
+
+End phase (`_build_end_record`):
+
+```json
+{
+  "schemaVersion": 1,
+  "phase": "end",
+  "effectId": "<id>",
+  "slotRef": "<slot>@<generation>",
+  "outcome": "applied | not-applied | indeterminate",
+  "at": "<ISO-8601-UTC-Z>"
+}
+```
+
+Optional `reason` string — `end_effect()` accepts a `reason` with **any** outcome including
+`applied`, not only `not-applied` or `indeterminate`.
+
+### Durable append
+
+Journal records are appended with durability and safety: opened `O_NOFOLLOW | O_NONBLOCK` with a
+regular-file check, written in a loop until the whole line lands, `fsync`ed, and the **parent
+directory** `fsync`ed. A symlink or FIFO at the journal path is refused (`journal-write-failed`)
+rather than followed or blocked on. Invalid UTF-8 in a journal is `journal-unreadable`, never an
+exception and never silently replaced.
+
+**Special-file safety:** the journal reader also opens with `O_NOFOLLOW | O_NONBLOCK` and refuses
+a non-regular file at the journal path.
+
+**Type-safety of validation:** every enum/membership check tests that the value is a string
+first, so malformed data produces the documented refusal rather than raising. Public entry points
+never raise on malformed *data* — they refuse. A non-serialisable `detail` is refused at record
+validation so it can never reach `json.dumps`.
+
+### Fail-closed reader rules
+
+- A missing or unreadable journal is a refusal and never "no effects".
+- A torn trailing line (file does not end with newline) sets `torn`.
+- A parseable-but-non-conforming record becomes an anomaly **and** an `unknown` /
+  `possibly-applied` entry rather than being skipped.
+- Orphan `end`, duplicate `effectId`, out-of-order pairs, and `slotRef` disagreement never
+  pair opportunistically.
+- **Filtering by `slotRef` never hides evidence:** invalid records are retained regardless of
+  their `slotRef`, and pairing anomalies are detected globally before filtering.
+
+### `effect()` context manager
+
+A clean exit from the `effect()` block **is** the caller's assertion that the effect completed;
+a caller that swallows its own errors must call `mark_not_applied` or let the exception
+propagate, because the context manager cannot tell a swallowed failure from success.
+
+On a clean body a failed `end` write raises `PilotJournalError`; when the body itself raised,
+the body's exception wins and the missing `end` record replays as `possibly-applied`. The
+asymmetry is deliberate.
+
+### Journal refusal tokens
+
+| Token | When returned |
+|---|---|
+| `journal-unreadable` | journal file cannot be read during replay |
+| `journal-write-failed` | append or fsync failed |
+| `journal-record-invalid` | record shape, timestamp, or serialisable `detail` fails validation |
+| `journal-effect-kind-unknown` | `kind` is not in `EFFECT_KINDS` |
+| `journal-outcome-invalid` | `outcome` is not in `END_OUTCOMES` |
+| `journal-slot-ref-invalid` | `slotRef` does not parse |
+| `journal-effect-id-invalid` | `effectId` is missing or does not match the allowed pattern |
+
+## The partial-failure report
+
+`partial_failure_report` answers whether healthy slots may launch after one or more slots
+failed provisioning. A failed slot may already have started an app, created a credential, or
+touched shared fixtures, so the healthy slots are **not safe by assumption**. The report
+enumerates what the failed slots touched and confirms they are fenced before recommending the
+rest launch.
+
+### Input shape per slot
+
+`fencing` is a **caller-supplied verification result** — this module never performs or infers
+fencing.
+
+```json
+{
+  "slot": "<slot-id>",
+  "slotRef": "<slot>@<generation>",
+  "outcome": "provisioned | failed",
+  "replay": {
+    "ok": true,
+    "effects": [],
+    "torn": false,
+    "anomalies": []
+  },
+  "fencing": {
+    "fenced": true,
+    "slotRef": "<slot>@<generation>"
+  }
+}
+```
+
+**Entry identity is bound:** the slot id parsed out of `slotRef` must equal the entry's
+`slot`; a mismatch is `report-slot-entry-invalid`. Otherwise one slot could borrow another
+slot's fencing confirmation.
+
+`replay` is **optional** for a `provisioned` entry and **required** for a `failed` one.
+`fencing` is meaningful only for failed slots and is ignored for provisioned entries.
+
+When a healthy slot's `replay` **is** supplied, its journal is enumerated: every
+`possibly-applied` effect becomes a warning, and a **shared**-scoped `possibly-applied` effect
+on a *healthy* slot raises `failed-slot-shared-effect-possibly-applied` just as it does on a
+failed slot. An unsettled shared effect — a credential mint that crashed mid-flight — is
+unsettled whichever slot produced it, and fencing a slot does not un-touch shared state. This
+is a **deliberate widening** beyond the enumerate-failed-slots wording, taken fail-closed.
+
+### Blocker tokens
+
+| Token | When raised |
+|---|---|
+| `report-slots-invalid` | `slots` argument is not a list or tuple; returns fail-closed report with `recommendLaunch: false` rather than raising |
+| `report-slot-entry-invalid` | entry is not a mapping, required fields are missing or malformed, or the slot id parsed from `slotRef` does not equal the entry's `slot` |
+| `report-slot-outcome-invalid` | `outcome` is not `provisioned` or `failed` |
+| `report-slot-duplicate` | the same `slot` id (or the same `slotRef`) appears in more than one entry |
+| `failed-slot-fence-missing` | `fencing` is absent on a failed slot |
+| `failed-slot-fence-invalid` | `fencing` is not a mapping, or `fenced` is not a boolean |
+| `failed-slot-not-fenced` | `fenced` is `false` |
+| `failed-slot-fence-ref-mismatch` | `fencing.slotRef` does not equal the entry's `slotRef` |
+| `failed-slot-journal-unreadable` | `replay.ok` is not `true` |
+| `failed-slot-journal-torn` | `replay.torn` is `true` |
+| `failed-slot-journal-anomaly` | `replay.anomalies` is non-empty |
+| `failed-slot-replay-shape-invalid` | the `replay` result is not a complete, well-formed replay: it must be a dict with `ok is True`, `torn` exactly `true`/`false`, `anomalies` a list, and `effects` a list whose every entry is a dict with a known `state` and a scope that agrees with `EFFECT_SCOPE[kind]` when `kind` is a known effect kind (unknown or absent `kind` must carry `shared`). A scope disagreement blocks — otherwise a caller could label a `credential-minted` possibly-applied effect as slot-scoped and downgrade a blocker to a warning. Anything else blocks — without this, a failed but correctly fenced slot carrying `replay: {"ok": true}` and nothing else produced `recommendLaunch: true` with no journal evidence at all |
+| `slot-replay-slot-mismatch` | the `replay` result supplied for an entry is not stamped with that entry's `slotRef`. `replay()` stamps its result with the `journalPath` it read and the `slotRef` filter it was given, and the report checks that stamp. **This is provenance, not authentication** — a caller that hand-builds a dict can still forge the stamp; what it removes is the accidental cross-wiring of one slot's replay into another slot's entry |
+| `failed-slot-shared-effect-possibly-applied` | a replayed effect has `scope: "shared"` and state `possibly-applied` (on failed or healthy slots when `replay` is supplied) |
+| `no-healthy-slots` | no slot reported `outcome: "provisioned"` |
+
+### Launch recommendation rule
+
+`recommendLaunch` is true only when there are no blockers and at least one healthy slot.
+Every unknown — missing fencing, a non-boolean `fenced`, a mismatched `slotRef`, an
+unreadable or torn journal, an anomaly — is a blocker, never a pass. `fenced` is compared
+with `is True` / `is False` so a truthy string like `"true"` cannot confirm.
+
+A **shared**-scoped possibly-applied effect blocks even on a fenced slot: fencing a slot does
+not un-touch a shared datastore or un-mint a credential on a shared service.
+
+Sub-issue **C8** renders this report to the owner.
