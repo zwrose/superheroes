@@ -171,8 +171,12 @@ action that owns it, leaving the rest of the calibration untouched:
   ```
 
   Clearing is per-entry: pass `null` for each role you want removed; when the last entry is
-  removed the whole `codexModels` key is dropped from the block. An empty object (`{}`) is a
-  no-op that changes nothing — do not mistake a returned `noop` for a successful clear-all.
+  removed the whole `codexModels` key is dropped from the block. An empty object (`{}`) clears
+  nothing — it is never a clear-all. It usually returns `noop` with the file untouched, but it
+  can return `written` when the block was already degenerate (a present-but-empty or mistyped pin
+  map, or a missing `enginePreferences` block), in which case the write only normalizes structure
+  and still removes no pins. A returned `written` therefore does not mean pins were cleared, and a
+  returned `noop` does not mean a clear-all succeeded.
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -228,8 +232,12 @@ action that owns it, leaving the rest of the calibration untouched:
   ```
 
   Clearing is per-entry: pass `null` for each seat you want removed; when the last entry is
-  removed the whole `seatPins` key is dropped from the block. An empty object (`{}`) is a
-  no-op that changes nothing — do not mistake a returned `noop` for a successful clear-all.
+  removed the whole `seatPins` key is dropped from the block. An empty object (`{}`) clears
+  nothing — it is never a clear-all. It usually returns `noop` with the file untouched, but it
+  can return `written` when the block was already degenerate (a present-but-empty or mistyped pin
+  map, or a missing `enginePreferences` block), in which case the write only normalizes structure
+  and still removes no seats. A returned `written` therefore does not mean seats were cleared, and a
+  returned `noop` does not mean a clear-all succeeded.
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
