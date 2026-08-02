@@ -454,9 +454,16 @@ def _scrub_mapping(obj):
         return _scrub(obj)
     if isinstance(obj, dict):
         out = {}
-        for k, v in obj.items():
+        for idx, (k, v) in enumerate(obj.items()):
             new_k = _scrub(k) if isinstance(k, str) else k
-            out[new_k] = _scrub_mapping(v)
+            out_key = new_k
+            if out_key in out:
+                # axis: entry-preserving scrubbed-key collision disambiguation by position.
+                out_key = f"{new_k}#{idx}"
+                while out_key in out:
+                    idx += 1
+                    out_key = f"{new_k}#{idx}"
+            out[out_key] = _scrub_mapping(v)
         return out
     if isinstance(obj, list):
         return [_scrub_mapping(x) for x in obj]

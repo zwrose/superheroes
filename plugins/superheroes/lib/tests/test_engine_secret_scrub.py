@@ -102,3 +102,55 @@ def test_scrub_salvage_block_scrubs_nested_keys_structural_values_and_other_fiel
     assert "[REDACTED]" in finding["dimension"]
     assert out["count"] == 3
     assert out["optional"] is None
+
+
+_ANT_KEY_A = "sk-ant-api03-" + ("A" * 40)
+_ANT_KEY_B = "sk-ant-api03-" + ("B" * 40)
+_ANT_KEY_C = "sk-ant-api03-" + ("C" * 40)
+
+
+def test_scrub_salvage_block_two_secret_keys_both_values_survive():
+    # axis: scrubbed-key collision preserves every entry — not injective key scrub.
+    blk = {_ANT_KEY_A: "v1", _ANT_KEY_B: "v2"}
+    out = engine_adapter.scrub_salvage_block(blk)
+    assert set(out.values()) == {"v1", "v2"}
+    assert len(out) == 2
+    assert _ANT_KEY_A not in out and _ANT_KEY_B not in out
+    assert _SECRET not in json.dumps(out)
+
+
+def test_scrub_salvage_block_three_secret_keys_all_values_survive():
+    # axis: scrubbed-key collision preserves every entry — not injective key scrub.
+    blk = {_ANT_KEY_A: "v1", _ANT_KEY_B: "v2", _ANT_KEY_C: "v3"}
+    out = engine_adapter.scrub_salvage_block(blk)
+    assert set(out.values()) == {"v1", "v2", "v3"}
+    assert len(out) == 3
+
+
+def test_scrub_salvage_block_nested_secret_key_collision_preserves_entries():
+    # axis: scrubbed-key collision preserves every entry — not injective key scrub.
+    nested = {_ANT_KEY_A: "inner1", _ANT_KEY_B: "inner2"}
+    out = engine_adapter.scrub_salvage_block({"wrapper": nested})
+    inner = out["wrapper"]
+    assert set(inner.values()) == {"inner1", "inner2"}
+    assert len(inner) == 2
+
+
+def test_scrub_salvage_block_no_collision_keys_byte_identical():
+    # axis: scrubbed-key collision preserves every entry — not injective key scrub.
+    blk = {"safe_key": "val", "other": "data", 42: "int_val", ("t",): "tuple_val"}
+    out = engine_adapter.scrub_salvage_block(blk)
+    assert out["safe_key"] == "val"
+    assert out["other"] == "data"
+    assert out[42] == "int_val"
+    assert out[("t",)] == "tuple_val"
+    assert set(out.keys()) == set(blk.keys())
+
+
+def test_scrub_salvage_block_literal_redacted_key_survives_collision():
+    # axis: scrubbed-key collision preserves every entry — not injective key scrub.
+    blk = {"[REDACTED]": "literal", _ANT_KEY_A: "secret_val"}
+    out = engine_adapter.scrub_salvage_block(blk)
+    assert out["[REDACTED]"] == "literal"
+    assert "secret_val" in out.values()
+    assert len(out) == 2

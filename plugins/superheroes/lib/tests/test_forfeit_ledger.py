@@ -1,6 +1,7 @@
 """Tests for forfeit_ledger — durable ledger and attribution decider (#747)."""
 import json
 import os
+import stat
 import subprocess
 import sys
 
@@ -694,7 +695,7 @@ def test_ledger_file_symlink_inside_root_allowed(tmp_path, monkeypatch):
 
 
 def test_permissive_ledger_0644_stays_writable(tmp_path, monkeypatch):
-    """axis: that a 0644 ledger stays writable — not that a mode check exists."""
+    """axis: append repairs 0644 ledger to 0600 before read — not mere writability."""
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     first = _minimal_row(run_dir="/tmp/first", order_id="first-row")
@@ -705,6 +706,7 @@ def test_permissive_ledger_0644_stays_writable(tmp_path, monkeypatch):
     result = fl.append(repo, second)
     assert result["written"] is True
     assert result["why"] is None
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
     rows, corrupt = fl.read(repo)
     assert corrupt is False
     assert len(rows) == 2
