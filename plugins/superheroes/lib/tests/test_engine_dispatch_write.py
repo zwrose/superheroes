@@ -107,12 +107,13 @@ def _dispatch_write(tmp_path, fake, *, cwd=_NO_CWD, run_dir=None, engine="codex"
     defaults = {
         "model": "sonnet",
         "effort": "high",
-        "prompt_path": _prompt(tmp_path),
         "cwd": cwd,
         "run_dir": run_dir,
         "order_id": "order-1",
         "run_engine": fake,
     }
+    if "prompt_path" not in kwargs:
+        defaults["prompt_path"] = _prompt(tmp_path)
     defaults.update(kwargs)
     return ED.dispatch_write(engine, **defaults)
 
