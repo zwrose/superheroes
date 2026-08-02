@@ -87,6 +87,16 @@ def _ok_replay(**kwargs):
     return base
 
 
+def _healthy_slot_entry(*, slot="slot-healthy", slot_ref="slot-healthy@1"):
+    return {
+        "slot": slot,
+        "slotRef": slot_ref,
+        "outcome": pj.SLOT_OUTCOME_PROVISIONED,
+        "replay": _ok_replay(),
+        "fencing": None,
+    }
+
+
 def _blocker_reasons(report):
     return [b["reason"] for b in report["blockers"]]
 
@@ -274,6 +284,34 @@ def test_effect_raises_indeterminate_and_reraises(tmp_dir):
     assert replayed["effects"][0]["outcome"] == pj.OUTCOME_INDETERMINATE
 
 
+def test_effect_keyboard_interrupt_indeterminate(tmp_dir):
+    path = _journal(tmp_dir)
+    with pytest.raises(KeyboardInterrupt):
+        with pj.effect(path, slot_ref=_SLOT_REF, kind=pj.KIND_CREDENTIAL_MINTED, at=_TS,
+                       effect_id="ctx-kb"):
+            raise KeyboardInterrupt
+    with open(path, encoding="utf-8") as fh:
+        lines = [json.loads(ln) for ln in fh if ln.strip()]
+    end_record = next(r for r in lines if r["phase"] == pj.PHASE_END)
+    assert end_record["outcome"] == pj.OUTCOME_INDETERMINATE
+    replayed = pj.replay(path)
+    assert replayed["effects"][0]["state"] == pj.STATE_POSSIBLY_APPLIED
+
+
+def test_effect_system_exit_indeterminate(tmp_dir):
+    path = _journal(tmp_dir)
+    with pytest.raises(SystemExit):
+        with pj.effect(path, slot_ref=_SLOT_REF, kind=pj.KIND_CREDENTIAL_MINTED, at=_TS,
+                       effect_id="ctx-se"):
+            raise SystemExit(1)
+    with open(path, encoding="utf-8") as fh:
+        lines = [json.loads(ln) for ln in fh if ln.strip()]
+    end_record = next(r for r in lines if r["phase"] == pj.PHASE_END)
+    assert end_record["outcome"] == pj.OUTCOME_INDETERMINATE
+    replayed = pj.replay(path)
+    assert replayed["effects"][0]["state"] == pj.STATE_POSSIBLY_APPLIED
+
+
 def test_effect_mark_not_applied(tmp_dir):
     path = _journal(tmp_dir)
     with pj.effect(path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS,
@@ -315,8 +353,44 @@ def test_replay_missing_journal(tmp_dir):
 
 # --- partial_failure_report blocker tests ---
 
+def test_report_block_slots_invalid_none():
+    report = pj.partial_failure_report(None)
+    assert report["recommendLaunch"] is False
+    assert report["blockers"] == [{"reason": pj.BLOCK_SLOTS_INVALID, "slot": None, "slotRef": None, "detail": None}]
+    assert report["warnings"] == []
+    assert report["failedSlots"] == []
+    assert report["healthySlots"] == []
+
+
+def test_report_block_slots_invalid_dict():
+    report = pj.partial_failure_report({})
+    assert report["recommendLaunch"] is False
+    assert report["blockers"] == [{"reason": pj.BLOCK_SLOTS_INVALID, "slot": None, "slotRef": None, "detail": None}]
+    assert report["warnings"] == []
+    assert report["failedSlots"] == []
+    assert report["healthySlots"] == []
+
+
+def test_report_block_slots_invalid_string():
+    report = pj.partial_failure_report("abc")
+    assert report["recommendLaunch"] is False
+    assert report["blockers"] == [{"reason": pj.BLOCK_SLOTS_INVALID, "slot": None, "slotRef": None, "detail": None}]
+    assert report["warnings"] == []
+    assert report["failedSlots"] == []
+    assert report["healthySlots"] == []
+
+
+def test_report_block_slots_invalid_int():
+    report = pj.partial_failure_report(7)
+    assert report["recommendLaunch"] is False
+    assert report["blockers"] == [{"reason": pj.BLOCK_SLOTS_INVALID, "slot": None, "slotRef": None, "detail": None}]
+    assert report["warnings"] == []
+    assert report["failedSlots"] == []
+    assert report["healthySlots"] == []
+
+
 def test_report_block_slot_entry_invalid():
-    report = pj.partial_failure_report(["not-a-dict"])
+    report = pj.partial_failure_report([_healthy_slot_entry(), "not-a-dict"])
     assert report["recommendLaunch"] is False
     assert pj.BLOCK_SLOT_ENTRY_INVALID in _blocker_reasons(report)
 
@@ -324,49 +398,49 @@ def test_report_block_slot_entry_invalid():
 def test_report_block_slot_outcome_invalid():
     entry = _slot_entry(outcome="unknown-outcome",
                         fencing={"slotRef": _SLOT_REF, "fenced": True})
-    report = pj.partial_failure_report([entry])
+    report = pj.partial_failure_report([_healthy_slot_entry(), entry])
     assert report["recommendLaunch"] is False
     assert pj.BLOCK_SLOT_OUTCOME_INVALID in _blocker_reasons(report)
 
 
 def test_report_block_fence_missing():
     entry = _slot_entry(fencing=None)
-    report = pj.partial_failure_report([entry])
+    report = pj.partial_failure_report([_healthy_slot_entry(), entry])
     assert report["recommendLaunch"] is False
     assert pj.BLOCK_FENCE_MISSING in _blocker_reasons(report)
 
 
 def test_report_block_fence_invalid_string():
     entry = _slot_entry(fencing={"slotRef": _SLOT_REF, "fenced": "true"})
-    report = pj.partial_failure_report([entry])
+    report = pj.partial_failure_report([_healthy_slot_entry(), entry])
     assert report["recommendLaunch"] is False
     assert pj.BLOCK_FENCE_INVALID in _blocker_reasons(report)
 
 
 def test_report_block_fence_invalid_int():
     entry = _slot_entry(fencing={"slotRef": _SLOT_REF, "fenced": 1})
-    report = pj.partial_failure_report([entry])
+    report = pj.partial_failure_report([_healthy_slot_entry(), entry])
     assert report["recommendLaunch"] is False
     assert pj.BLOCK_FENCE_INVALID in _blocker_reasons(report)
 
 
 def test_report_block_fence_invalid_none():
     entry = _slot_entry(fencing={"slotRef": _SLOT_REF, "fenced": None})
-    report = pj.partial_failure_report([entry])
+    report = pj.partial_failure_report([_healthy_slot_entry(), entry])
     assert report["recommendLaunch"] is False
     assert pj.BLOCK_FENCE_INVALID in _blocker_reasons(report)
 
 
 def test_report_block_not_fenced():
     entry = _slot_entry(fencing={"slotRef": _SLOT_REF, "fenced": False})
-    report = pj.partial_failure_report([entry])
+    report = pj.partial_failure_report([_healthy_slot_entry(), entry])
     assert report["recommendLaunch"] is False
     assert pj.BLOCK_NOT_FENCED in _blocker_reasons(report)
 
 
 def test_report_block_fence_ref_mismatch():
     entry = _slot_entry(fencing={"slotRef": "slot-a@2", "fenced": True})
-    report = pj.partial_failure_report([entry])
+    report = pj.partial_failure_report([_healthy_slot_entry(), entry])
     assert report["recommendLaunch"] is False
     assert pj.BLOCK_FENCE_REF_MISMATCH in _blocker_reasons(report)
 
@@ -374,7 +448,7 @@ def test_report_block_fence_ref_mismatch():
 def test_report_block_journal_unreadable():
     entry = _slot_entry(replay={"ok": False, "reason": pj.REASON_JOURNAL_UNREADABLE},
                         fencing={"slotRef": _SLOT_REF, "fenced": True})
-    report = pj.partial_failure_report([entry])
+    report = pj.partial_failure_report([_healthy_slot_entry(), entry])
     assert report["recommendLaunch"] is False
     assert pj.BLOCK_JOURNAL_UNREADABLE in _blocker_reasons(report)
 
@@ -382,7 +456,7 @@ def test_report_block_journal_unreadable():
 def test_report_block_journal_torn():
     entry = _slot_entry(replay=_ok_replay(torn=True),
                         fencing={"slotRef": _SLOT_REF, "fenced": True})
-    report = pj.partial_failure_report([entry])
+    report = pj.partial_failure_report([_healthy_slot_entry(), entry])
     assert report["recommendLaunch"] is False
     assert pj.BLOCK_JOURNAL_TORN in _blocker_reasons(report)
 
@@ -390,7 +464,7 @@ def test_report_block_journal_torn():
 def test_report_block_journal_anomaly():
     entry = _slot_entry(replay=_ok_replay(anomalies=[{"line": 1}]),
                         fencing={"slotRef": _SLOT_REF, "fenced": True})
-    report = pj.partial_failure_report([entry])
+    report = pj.partial_failure_report([_healthy_slot_entry(), entry])
     assert report["recommendLaunch"] is False
     assert pj.BLOCK_JOURNAL_ANOMALY in _blocker_reasons(report)
 
@@ -404,7 +478,7 @@ def test_report_block_shared_possibly_applied():
         replay=_ok_replay(effects=[effect]),
         fencing={"slotRef": _SLOT_REF, "fenced": True},
     )
-    report = pj.partial_failure_report([entry])
+    report = pj.partial_failure_report([_healthy_slot_entry(), entry])
     assert report["recommendLaunch"] is False
     assert pj.BLOCK_SHARED_POSSIBLY_APPLIED in _blocker_reasons(report)
 
@@ -474,10 +548,9 @@ def test_report_enumerates_multiple_blockers():
         replay={"ok": False, "reason": pj.REASON_JOURNAL_UNREADABLE},
         fencing=None,
     )
-    report = pj.partial_failure_report([entry])
+    report = pj.partial_failure_report([_healthy_slot_entry(), entry])
     reasons = _blocker_reasons(report)
     assert pj.BLOCK_SLOT_OUTCOME_INVALID in reasons
     assert pj.BLOCK_FENCE_MISSING in reasons
     assert pj.BLOCK_JOURNAL_UNREADABLE in reasons
-    assert pj.BLOCK_NO_HEALTHY_SLOTS in reasons
     assert report["recommendLaunch"] is False

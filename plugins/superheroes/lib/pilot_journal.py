@@ -82,6 +82,7 @@ BLOCK_JOURNAL_TORN = "failed-slot-journal-torn"
 BLOCK_JOURNAL_ANOMALY = "failed-slot-journal-anomaly"
 BLOCK_SHARED_POSSIBLY_APPLIED = "failed-slot-shared-effect-possibly-applied"
 BLOCK_NO_HEALTHY_SLOTS = "no-healthy-slots"
+BLOCK_SLOTS_INVALID = "report-slots-invalid"
 
 _EFFECT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _REASON_MAX_LEN = 500
@@ -272,7 +273,7 @@ class _EffectHandle:
 
     def __init__(self, effect_id):
         self.effect_id = effect_id
-        self._outcome = OUTCOME_APPLIED
+        self._outcome = OUTCOME_INDETERMINATE
         self._end_at = None
         self._end_reason = None
         self._marked = False
@@ -306,7 +307,7 @@ def effect(journal_path, *, slot_ref, kind, at, detail=None, effect_id=None):
     handle = _EffectHandle(begin_result["effectId"])
     try:
         yield handle
-    except Exception as exc:
+    except BaseException as exc:
         handle._outcome = OUTCOME_INDETERMINATE
         handle._end_at = at
         reason_text = repr(exc)
@@ -316,6 +317,8 @@ def effect(journal_path, *, slot_ref, kind, at, detail=None, effect_id=None):
         handle._marked = True
         raise
     finally:
+        if not handle._marked:
+            handle._outcome = OUTCOME_APPLIED
         end_at = handle._end_at if handle._marked else at
         end_reason = handle._end_reason if handle._outcome == OUTCOME_INDETERMINATE else (
             handle._end_reason if handle._outcome == OUTCOME_NOT_APPLIED else None
@@ -689,6 +692,16 @@ def _blocker(reason, *, slot=None, slot_ref=None, detail=None):
 
 def partial_failure_report(slots):
     """Build a fail-closed partial-failure report from slot provisioning results."""
+    if not isinstance(slots, (list, tuple)):
+        return {
+            "schemaVersion": SCHEMA,
+            "recommendLaunch": False,
+            "blockers": [_blocker(BLOCK_SLOTS_INVALID)],
+            "warnings": [],
+            "failedSlots": [],
+            "healthySlots": [],
+        }
+
     blockers = []
     warnings = []
     failed_slots = []
