@@ -569,6 +569,7 @@ For `outcome: "provisioned"` slots, `replay` and `fencing` are ignored. For
 
 | Token | When raised |
 |---|---|
+| `report-slots-invalid` | `slots` argument is not a list or tuple; returns fail-closed report with `recommendLaunch: false` rather than raising |
 | `report-slot-entry-invalid` | entry is not a mapping, or required fields are missing or malformed |
 | `report-slot-outcome-invalid` | `outcome` is not `provisioned` or `failed` |
 | `failed-slot-fence-missing` | `fencing` is absent on a failed slot |
