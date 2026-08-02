@@ -156,6 +156,19 @@ def _parse_ts(value):
     return datetime.fromisoformat(value[:-1] + "+00:00")
 
 
+def _reverse_listdir_for_path(target_dir, monkeypatch):
+    """Monkeypatch os.listdir to return reverse-of-sorted order for target_dir only."""
+    real_listdir = os.listdir
+
+    def listdir(path):
+        entries = real_listdir(path)
+        if os.path.realpath(path) == os.path.realpath(target_dir):
+            return list(reversed(sorted(entries)))
+        return entries
+
+    monkeypatch.setattr(os, "listdir", listdir)
+
+
 def test_later_timestamp_second_rollover():
     # bite-axis: timestamp carry — microsecond overflow increments second without ValueError.
     begin = "2026-01-01T00:00:00.999999Z"
@@ -327,6 +340,80 @@ def test_teardown_server_journals_not_applied_when_blocked_entry_sorts_first():
         fh.write("b")
     with open(os.path.join(sock_dir, "99-removable.txt"), "w", encoding="utf-8") as fh:
         fh.write("a")
+    record = _server_record(socketDir=sock_dir)
+    try:
+        result = pb.teardown_server(
+            journal,
+            server_record=record,
+            torn_down_at=LATER,
+            begin_at=NOW,
+            observe_exit=_both_exited_observer(),
+        )
+        assert result["ok"] is False
+        assert result["reason"] == pb.REFUSAL_SOCKET_DIR_UNREMOVABLE
+        replayed = pj.replay(journal)
+        torn = [e for e in replayed["effects"] if e["kind"] == pj.KIND_BROWSER_SERVER_TORN_DOWN]
+        assert len(torn) == 1
+        assert torn[0]["state"] == pj.STATE_NOT_APPLIED
+        assert os.path.isfile(os.path.join(sock_dir, "99-removable.txt"))
+        assert os.path.isdir(blocked)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_teardown_server_journals_possibly_applied_when_adverse_listdir_partial_cleanup(
+    monkeypatch,
+):
+    # bite-axis: socket-dir enumeration order — sorted() restores lexical order under
+    # adverse listdir so removable is still processed before blocked nested dir.
+    tmp = _tmp_dir()
+    journal = os.path.join(tmp, "journal.jsonl")
+    sock_dir = os.path.join(tmp, "pb-partial")
+    os.makedirs(sock_dir)
+    with open(os.path.join(sock_dir, "00-removable.txt"), "w", encoding="utf-8") as fh:
+        fh.write("a")
+    nested = os.path.join(sock_dir, "99-nested")
+    os.makedirs(nested)
+    with open(os.path.join(nested, "inner.txt"), "w", encoding="utf-8") as fh:
+        fh.write("b")
+    _reverse_listdir_for_path(sock_dir, monkeypatch)
+    record = _server_record(socketDir=sock_dir)
+    try:
+        result = pb.teardown_server(
+            journal,
+            server_record=record,
+            torn_down_at=LATER,
+            begin_at=NOW,
+            observe_exit=_both_exited_observer(),
+        )
+        assert result["ok"] is False
+        assert result["reason"] == pb.REFUSAL_SOCKET_DIR_UNREMOVABLE
+        replayed = pj.replay(journal)
+        torn = [e for e in replayed["effects"] if e["kind"] == pj.KIND_BROWSER_SERVER_TORN_DOWN]
+        assert len(torn) == 1
+        assert torn[0]["state"] == pj.STATE_POSSIBLY_APPLIED
+        assert not os.path.exists(os.path.join(sock_dir, "00-removable.txt"))
+        assert os.path.isdir(nested)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_teardown_server_journals_not_applied_when_adverse_listdir_blocked_first(
+    monkeypatch,
+):
+    # bite-axis: socket-dir enumeration order — sorted() restores lexical order under
+    # adverse listdir so blocked dir is still encountered before removable file.
+    tmp = _tmp_dir()
+    journal = os.path.join(tmp, "journal.jsonl")
+    sock_dir = os.path.join(tmp, "pb-blocked-first")
+    os.makedirs(sock_dir)
+    blocked = os.path.join(sock_dir, "00-blocked")
+    os.makedirs(blocked)
+    with open(os.path.join(blocked, "inner.txt"), "w", encoding="utf-8") as fh:
+        fh.write("b")
+    with open(os.path.join(sock_dir, "99-removable.txt"), "w", encoding="utf-8") as fh:
+        fh.write("a")
+    _reverse_listdir_for_path(sock_dir, monkeypatch)
     record = _server_record(socketDir=sock_dir)
     try:
         result = pb.teardown_server(
