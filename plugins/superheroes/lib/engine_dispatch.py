@@ -809,21 +809,30 @@ def _build_ledger_row(run_dir_real, state, result):
     )
     salvage = result.get("salvage")
     if isinstance(salvage, dict):
-        ledger_salvage = dict(salvage)
+        ledger_salvage = engine_adapter.scrub_salvage_block(dict(salvage))
         ledger_salvage["detected"] = True
         row["salvage"] = ledger_salvage
     return row
 
 
-def _append_fold_ledger(run_dir_real, state, result):
-    """Append one ledger row at fold; fail-soft — never changes dispatch outcome."""
+def _append_fold_ledger(run_dir_real, state, result, *, repo_root=None):
+    """Append one ledger row at terminal fold or preflight refusal; fail-soft — never changes dispatch outcome."""
     try:
         opened = state.get("opened") or {}
-        repo_root = opened.get("repoRoot")
-        if not repo_root:
+        repo_root_resolved = repo_root or opened.get("repoRoot")
+        if not repo_root_resolved:
             return {"written": False, "path": None, "why": "repo-root-absent-from-run-opened"}
         row = _build_ledger_row(run_dir_real, state, result)
-        append_result = forfeit_ledger.append(repo_root, row)
+        if not row.get("runId"):
+            material = json.dumps({
+                "repo": repo_root_resolved,
+                "reason": row.get("reason"),
+                "detail": row.get("detail"),
+                "at": row.get("at"),
+                "attemptCount": row.get("attemptCount"),
+            }, sort_keys=True, separators=(",", ":"))
+            row["runId"] = "preflight-" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
+        append_result = forfeit_ledger.append(repo_root_resolved, row)
         return {
             "written": append_result.get("written", False),
             "path": append_result.get("path"),
@@ -831,6 +840,25 @@ def _append_fold_ledger(run_dir_real, state, result):
         }
     except Exception:
         return {"written": False, "path": None, "why": "ledger-internal-error"}
+
+
+def _finish_preflight_terminal(repo_root, result, *, run_dir="", argv=None, engine=None):
+    """Return a terminal pre-spawn refusal; append a ledger row when repo identity is known."""
+    out = _with_run_fields(result, run_dir=run_dir, argv=argv or [])
+    if (
+        repo_root
+        and out.get("terminal")
+        and not (out.get("ok") is True and out.get("reason") is None)
+    ):
+        state = {
+            "opened": {
+                "repoRoot": repo_root,
+                "engine": engine,
+                "runKind": RUN_KIND_REVIEW,
+            },
+        }
+        out["ledger"] = _append_fold_ledger(run_dir, state, out, repo_root=repo_root)
+    return out
 
 
 def _terminate_run(run_dir_real, state, *, record_kind, result, abandon_detail=None):
@@ -847,13 +875,25 @@ def _terminate_run(run_dir_real, state, *, record_kind, result, abandon_detail=N
         result["ledger"] = ledger_receipt
         record = {"kind": "run-folded", "result": result, "at": time.time()}
     elif record_kind == "run-abandoned":
+        abandon_result = {
+            "ok": False,
+            "terminal": True,
+            "reason": dispatch_outcome.REASON_UNRUNNABLE,
+            "detail": "run-abandoned",
+            "attempts": len(state.get("attempts") or {}),
+            "forfeited": False,
+        }
+        # axis: which terminal paths append — run-abandoned is a terminal non-success with repo identity.
+        ledger_receipt = _append_fold_ledger(run_dir_real, state, abandon_result)
         record = {
             "kind": "run-abandoned",
             "detail": abandon_detail or "abandoned",
             "at": time.time(),
         }
+        abandon_result["ledger"] = ledger_receipt
     else:
         record = {"kind": record_kind, "at": time.time()}
+        abandon_result = None
 
     if not _journal_append(run_dir_real, record):
         return _terminal_record_not_durable(run_dir_real, state, result)
@@ -862,9 +902,7 @@ def _terminate_run(run_dir_real, state, *, record_kind, result, abandon_detail=N
 
     if record_kind == "run-abandoned":
         return _with_run_fields(
-            {"ok": False, "terminal": True, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-             "detail": "run-abandoned",
-             "attempts": len(state.get("attempts") or {}), "forfeited": False},
+            abandon_result,
             run_dir=run_dir_real, argv=argv,
         )
 
@@ -1966,20 +2004,22 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 
     ok, why = engine_adapter.prompt_path_ok(prompt_path)
     if not ok:
-        return _with_run_fields(
+        return _finish_preflight_terminal(
+            repo_detail,
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "prompt-%s" % why,
              "attempts": 0, "forfeited": False, "terminal": True},
-            run_dir="", argv=[],
+            engine=engine,
         )
 
     try:
         with open(prompt_path, "r", encoding="utf-8", errors="ignore") as fh:
             base_prompt = fh.read()
     except Exception:
-        return _with_run_fields(
+        return _finish_preflight_terminal(
+            repo_detail,
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "prompt-unreadable",
              "attempts": 0, "forfeited": False, "terminal": True},
-            run_dir="", argv=[],
+            engine=engine,
         )
 
     view = None
@@ -1992,56 +2032,62 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
         if run_dir is not None:
             ok_rd, rd_detail = _validate_run_dir(run_dir)
             if not ok_rd:
-                return _with_run_fields(
+                return _finish_preflight_terminal(
+                    repo_detail,
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": rd_detail,
                      "attempts": 0, "forfeited": False, "terminal": True},
-                    run_dir=run_dir or "", argv=[],
+                    run_dir=run_dir or "", engine=engine,
                 )
             run_dir_real = rd_detail
             if _path_inside(repo_detail, run_dir_real):
-                return _with_run_fields(
+                return _finish_preflight_terminal(
+                    repo_detail,
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-inside-repo-root",
                      "attempts": 0, "forfeited": False, "terminal": True},
-                    run_dir=run_dir_real, argv=[],
+                    run_dir=run_dir_real, engine=engine,
                 )
             records, _corrupt = _journal_read(run_dir_real)
             state = _journal_state(records)
             opened = state.get("opened")
             if opened is not None:
                 if order_id is not None and opened.get("orderId") != order_id:
-                    return _with_run_fields(
+                    return _finish_preflight_terminal(
+                        repo_detail,
                         {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-reused",
                          "attempts": 0, "forfeited": False, "terminal": True},
-                        run_dir=run_dir_real, argv=opened.get("argv") or [],
+                        run_dir=run_dir_real, argv=opened.get("argv") or [], engine=engine,
                     )
                 continuation = True
                 argv = list(opened.get("argv") or [])
                 view = opened.get("viewMeta")
                 view_path = opened.get("viewPath")
             elif _run_dir_nonempty(run_dir_real):
-                return _with_run_fields(
+                return _finish_preflight_terminal(
+                    repo_detail,
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                      "detail": "run-dir-not-empty-unopened",
                      "attempts": 0, "forfeited": False, "terminal": True},
-                    run_dir=run_dir_real, argv=[],
+                    run_dir=run_dir_real, engine=engine,
                 )
 
         if not continuation:
             if schema_path is not None:
                 ok_schema, schema_detail = _validate_review_schema_path(schema_path)
                 if not ok_schema:
-                    return _with_run_fields(
+                    return _finish_preflight_terminal(
+                        repo_detail,
                         {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": schema_detail,
                          "attempts": 0, "forfeited": False, "terminal": True},
-                        run_dir=run_dir_real or "", argv=[],
+                        run_dir=run_dir_real or "", engine=engine,
                     )
             try:
                 view = build_view(repo_detail)
             except sanitized_view.SanitizedViewError as exc:
-                return _with_run_fields(
+                return _finish_preflight_terminal(
+                    repo_detail,
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": exc.detail,
                      "attempts": 0, "forfeited": False, "terminal": True},
-                    run_dir="", argv=[],
+                    engine=engine,
                 )
 
             view_path = view["path"]
@@ -2059,7 +2105,12 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 if run_dir_real is None:
                     run_dir_real = tempfile.mkdtemp(prefix="superheroes-dispatch-review-")
                 return _terminate_run(
-                    run_dir_real, {"opened": {"viewPath": view_path}},
+                    run_dir_real, {"opened": {
+                        "viewPath": view_path,
+                        "repoRoot": repo_detail,
+                        "engine": engine,
+                        "runKind": RUN_KIND_REVIEW,
+                    }},
                     record_kind="run-folded", result=err,
                 )
 
@@ -2085,7 +2136,13 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 ), view)
                 return _terminate_run(
                     run_dir_real,
-                    {"opened": {"viewPath": view_path, "viewMeta": view}},
+                    {"opened": {
+                        "viewPath": view_path,
+                        "viewMeta": view,
+                        "repoRoot": repo_detail,
+                        "engine": engine,
+                        "runKind": RUN_KIND_REVIEW,
+                    }},
                     record_kind="run-folded", result=err,
                 )
 
@@ -2136,7 +2193,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
             records, _corrupt = _journal_read(run_dir_real)
             state = _journal_state(records)
             return _fold_run(run_dir_real, state, err)
-        return err
+        return _finish_preflight_terminal(repo_detail, err, run_dir=run_dir_real or "", argv=argv, engine=engine)
 
 
 def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,

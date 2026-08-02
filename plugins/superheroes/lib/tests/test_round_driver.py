@@ -2983,6 +2983,11 @@ def test_engaged_artifact_seat_recorded_not_vacuous():
     assert state["rounds"]["1"]["engagedArtifactSeats"] == ["code-reviewer"]
     assert "vacuousSeats" not in state["rounds"]["1"]
     assert "seat-engaged-artifact" in _decision_kinds(state)
+    receipt = RD.build_receipt(state)
+    assert receipt["rounds"][0]["engagedArtifactSeats"] == ["code-reviewer"]
+    eng_lines = [d for d in receipt["degraded"] if d.startswith("engaged-artifact-seat (round 1):")]
+    assert len(eng_lines) == 1
+    assert "code-reviewer" in eng_lines[0]
 
 
 def test_vacuous_seat_reason_discriminant_classed_never_ran():

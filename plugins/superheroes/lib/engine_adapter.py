@@ -423,6 +423,17 @@ def _scrub(text):
 _FINDING_STRUCTURAL_KEYS = {"file", "line", "severity", "id", "dimension", "confidence"}
 
 
+def _scrub_finding_value(val):
+    """Recursively scrub every string in a finding field value."""
+    if isinstance(val, str):
+        return _scrub(val)
+    if isinstance(val, dict):
+        return {k: _scrub_finding_value(v) for k, v in val.items()}
+    if isinstance(val, list):
+        return [_scrub_finding_value(x) for x in val]
+    return val
+
+
 def _scrub_findings(findings):
     out = []
     for f in findings if isinstance(findings, list) else []:
@@ -432,9 +443,20 @@ def _scrub_findings(findings):
         for key, val in g.items():
             if key in _FINDING_STRUCTURAL_KEYS:
                 continue
-            if isinstance(val, str):
-                g[key] = _scrub(val)
+            g[key] = _scrub_finding_value(val)
         out.append(g)
+    return out
+
+
+def scrub_salvage_block(salvage):
+    """Scrub every string in a salvage block for durable export. Never raises."""
+    if not isinstance(salvage, dict):
+        return salvage
+    out = dict(salvage)
+    if isinstance(out.get("excerpt"), str):
+        out["excerpt"] = _scrub(out["excerpt"])
+    if isinstance(out.get("findings"), list):
+        out["findings"] = _scrub_findings(out["findings"])
     return out
 
 
@@ -648,9 +670,16 @@ def review_artifact_shape(stdout, fed_prompt):
 def salvage_from_artifact(stdout, fed_prompt):
     """Salvage structured findings or a scrubbed prose excerpt from review stdout.
 
-    Uses the same residue path as ``review_artifact_shape``. When ``parse_result`` can read the
-    residue as findings, returns them (``structured: True``). **Never** heuristically splits prose
+    Uses the same residue path as ``review_artifact_shape``. When ``parse_result`` yields
+    non-empty findings, returns them (``structured: True``). **Never** heuristically splits prose
     into findings — manufacturing claims from prose is worse than handing over the artifact.
+
+    ``structured: True`` means findings were genuinely parsed — not merely that ``parse_result``
+    returned ok. When ``parse_result`` returns ok with an **empty** findings list on residue that
+    ``review_artifact_shape`` reports as **engaged**, that is a false clean (e.g. incidental bare
+    ``[]`` in prose): return ``structured: False``, ``requiresManualRead: True``, and the excerpt.
+    Genuinely structured empty JSON (non-engaged residue) may still report ``structured: True``
+    with zero findings.
 
     When ``review_artifact_shape`` reports ``engaged: True`` but this returns ``structured: False``,
     callers must treat ``requiresManualRead: True`` and use ``excerpt`` as the human/orchestrator
@@ -666,13 +695,30 @@ def salvage_from_artifact(stdout, fed_prompt):
         parsed = parse_result("codex", "review", residue)
         if parsed.get("ok") and isinstance(parsed.get("findings"), list):
             findings = parsed["findings"]
-            return {
-                "findings": findings,
+            if findings:
+                return scrub_salvage_block({
+                    "findings": findings,
+                    "structured": True,
+                    "requiresManualRead": False,
+                    "excerptBytes": excerpt_bytes,
+                    "excerpt": excerpt,
+                })
+            engaged = review_artifact_shape(stdout, fed_prompt).get("engaged")
+            if engaged:
+                return scrub_salvage_block({
+                    "findings": [],
+                    "structured": False,
+                    "requiresManualRead": True,
+                    "excerptBytes": excerpt_bytes,
+                    "excerpt": excerpt,
+                })
+            return scrub_salvage_block({
+                "findings": [],
                 "structured": True,
                 "requiresManualRead": False,
                 "excerptBytes": excerpt_bytes,
                 "excerpt": excerpt,
-            }
+            })
         return {
             "findings": [],
             "structured": False,

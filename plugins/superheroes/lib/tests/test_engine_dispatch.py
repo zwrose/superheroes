@@ -1005,10 +1005,15 @@ def test_sanitized_view_build_error_refusal_no_spawn(tmp_path):
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
         build_view=fail_build,
     )
-    assert res == {
-        "ok": False, "reason": "unrunnable", "detail": "sanitized-view-export-failed",
-        "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
-    }
+    assert res["ok"] is False
+    assert res["reason"] == "unrunnable"
+    assert res["detail"] == "sanitized-view-export-failed"
+    assert res["attempts"] == 0
+    assert res["forfeited"] is False
+    assert res["terminal"] is True
+    assert res["runDir"] == ""
+    assert res["argv"] == []
+    assert "ledger" in res
     assert len(fake.calls) == 0
     assert "sanitizedView" not in res
 
@@ -3069,6 +3074,40 @@ def test_fold_ledger_append_failure_fail_soft(tmp_path, monkeypatch):
     assert res["reason"] == _DO_MOD.REASON_FORFEIT_ENGAGED_ARTIFACT
     assert res["ledger"]["written"] is False
     assert res["ledger"]["why"] == "ledger-internal-error"
+
+
+def test_preflight_unrunnable_appends_ledger_caller_error(tmp_path, monkeypatch):
+    """axis: which terminal paths append — pre-spawn refusals with repo identity."""
+    repo_root = _git_init(str(tmp_path / "repo-preflight"))
+    _ledger_env(tmp_path, monkeypatch)
+    missing_prompt = str(tmp_path / "missing-prompt.txt")
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=missing_prompt, repo_root=repo_root, run_engine=_never_call,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["reason"] == "unrunnable"
+    assert res["detail"] == "prompt-missing"
+    assert res["attempts"] == 0
+    assert res["ledger"]["written"] is True
+    rows, _ = _FL_MOD.read(repo_root)
+    assert len(rows) == 1
+    assert rows[0]["attribution"]["class"] == _DO_MOD.ATTRIBUTION_CALLER_ERROR
+
+
+def test_abandon_appends_ledger_row(tmp_path, monkeypatch):
+    """axis: which terminal paths append — run-abandoned with repo identity."""
+    repo_root = _git_init(str(tmp_path / "repo-abandon"))
+    _ledger_env(tmp_path, monkeypatch)
+    run_dir = str(tmp_path / "run-abandon")
+    _manual_open_review_run_git(tmp_path, run_dir, repo_root)
+    res = ED.dispatch_abandon(run_dir)
+    assert res["detail"] == "run-abandoned"
+    assert res["ledger"]["written"] is True
+    rows, _ = _FL_MOD.read(repo_root)
+    assert len(rows) == 1
+    assert rows[0]["reason"] == "unrunnable"
+    assert rows[0]["detail"] == "run-abandoned"
 
 
 def test_run_opened_records_repo_root_and_id(tmp_path):

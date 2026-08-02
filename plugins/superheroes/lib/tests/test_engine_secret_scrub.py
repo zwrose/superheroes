@@ -57,3 +57,16 @@ def test_salvage_from_artifact_scrubs_secret_in_prose_excerpt():
     assert _SECRET not in salvage["excerpt"]
     assert "[REDACTED]" in salvage["excerpt"]
     assert _SECRET not in json.dumps(salvage["findings"])
+
+
+def test_salvage_from_artifact_scrubs_nested_secret_in_structured_findings():
+    # axis: secret containment on every string leaving salvage — nested evidence dicts included.
+    stdout = json.dumps({"findings": [{
+        "file": "a.py", "line": 3, "severity": "Critical", "title": "leak",
+        "evidence": {"raw": "token %s in nested field" % _SECRET},
+    }]})
+    salvage = engine_adapter.salvage_from_artifact(stdout, "")
+    assert salvage["structured"] is True
+    blob = json.dumps(salvage["findings"])
+    assert _SECRET not in blob
+    assert "[REDACTED]" in salvage["findings"][0]["evidence"]["raw"]

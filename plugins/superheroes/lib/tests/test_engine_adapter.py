@@ -1658,6 +1658,25 @@ def test_review_artifact_shape_stray_bracket_array_parse_and_engaged():
     assert EA.review_artifact_shape(prose, "")["engaged"] is True
 
 
+def test_salvage_from_artifact_false_clean_engaged_empty_parse():
+    # axis: whether a parse counts as structured — engaged prose with incidental [] is not structured.
+    prose = _artifact_pad("### Findings\n\n[]\n\n- real issue at src/x.ts:1\n- second point")
+    salvage = EA.salvage_from_artifact(prose, "")
+    assert salvage["structured"] is False
+    assert salvage["requiresManualRead"] is True
+    assert salvage["findings"] == []
+    assert salvage["excerpt"]
+
+
+def test_salvage_from_artifact_non_engaged_empty_json_structured():
+    stdout = json.dumps({"findings": []})
+    salvage = EA.salvage_from_artifact(stdout, "")
+    assert EA.review_artifact_shape(stdout, "")["engaged"] is False
+    assert salvage["structured"] is True
+    assert salvage["requiresManualRead"] is False
+    assert salvage["findings"] == []
+
+
 def test_salvage_from_artifact_structured_json():
     stdout = json.dumps({"findings": [
         {"severity": "Minor", "title": "t", "body": "b", "file": "a.py", "line": 1}]})

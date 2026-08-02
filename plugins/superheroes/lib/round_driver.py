@@ -2192,6 +2192,8 @@ def build_receipt(state, session_dir=None):
             rd["seatMapViolations"] = rec.get("seatMapViolations")
         if rec.get("vacuousSeats"):
             rd["vacuousSeats"] = rec.get("vacuousSeats")
+        if rec.get("engagedArtifactSeats"):
+            rd["engagedArtifactSeats"] = rec.get("engagedArtifactSeats")
         if rec.get("canaryUnverified"):
             rd["canaryUnverified"] = rec.get("canaryUnverified")
         if rec.get("canaryFailed"):
@@ -2273,6 +2275,12 @@ def build_receipt(state, session_dir=None):
             degraded.append(
                 "vacuous-seat (round %s): seat(s) %s returned no findings and no verifiable "
                 "investigation record — classed as never-ran" % (rkey, ", ".join(vac)))
+        eng_art = rrec.get("engagedArtifactSeats")
+        if eng_art:
+            degraded.append(
+                "engaged-artifact-seat (round %s): seat(s) %s produced a review our transport "
+                "could not carry — they do not count toward certification; salvaged artifacts "
+                "are available for independent verification" % (rkey, ", ".join(eng_art)))
         cuv = rrec.get("canaryUnverified")
         if cuv:
             cv = rrec.get("canaryVerified")
