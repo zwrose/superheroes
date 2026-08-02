@@ -2681,6 +2681,44 @@ def test_write_engine_pref_pins_refused_unknown_key_and_non_mapping(tmp_path):
     assert res == {"action": "refused", "reason": CM.ENGINE_PINS_REASON_NOT_A_MAPPING}
 
 
+def test_cli_write_engine_pins_refused_malformed_json(tmp_path, capsys, monkeypatch):
+    import io
+
+    repo, store = _write_core_for_pin_tests(tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO("{not json"))
+    rc = CM.main(["write-engine-pins", "--cwd", repo, "--root", store, "--key", "codexModels"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"action": "refused", "reason": CM.ENGINE_PINS_REASON_INPUT_UNPARSEABLE}
+
+
+def test_cli_write_engine_pins_refused_non_mapping(tmp_path, capsys, monkeypatch):
+    import io
+
+    repo, store = _write_core_for_pin_tests(tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO('["array"]'))
+    rc = CM.main(["write-engine-pins", "--cwd", repo, "--root", store, "--key", "codexModels"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"action": "refused", "reason": CM.ENGINE_PINS_REASON_NOT_A_MAPPING}
+
+
+def test_cli_write_engine_pins_deferred_unexpected_failure(tmp_path, capsys, monkeypatch):
+    import io
+
+    repo, store = _write_core_for_pin_tests(tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"reviewer": "gpt-5.6-terra"}'))
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(CM, "write_engine_pref_pins", _boom)
+    rc = CM.main(["write-engine-pins", "--cwd", repo, "--root", store, "--key", "codexModels"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"action": "deferred", "reason": CM.BUILDER_DISPATCH_DEFER_CLI_FAILED}
+
+
 def test_write_builder_dispatch_tier_refused_duplicate_key_in_lock_b2(tmp_path, monkeypatch):
     # axis: in-lock duplicate-key rejection (B2) — bypass pre-lock structural check so only the
     # in-lock _loads_rejecting_duplicate_keys path is exercised.

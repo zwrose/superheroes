@@ -122,6 +122,17 @@ def test_render_shows_builder_dispatch_tier_fable_rejected(tmp_path):
     assert "⚠" in screen
 
 
+def test_render_builder_dispatch_row_shows_rejected_tier_on_detail_line(tmp_path):
+    # axis: builder-dispatch row detail uses display (safe detail), not reason.split trimming.
+    root = _seed_core_and_layer(
+        tmp_path, engine_preferences={"builderDispatchTier": "opusX"},
+    )
+    screen = cv.render(str(tmp_path), root=root)
+    lines = screen.splitlines()
+    i = next(n for n, ln in enumerate(lines) if ln.startswith("builder dispatch (headless launch)"))
+    assert lines[i + 1].strip() == "builder-tier-not-sanctioned: opusX"
+
+
 def test_render_rejected_builder_dispatch_tier_bounded_long_value(tmp_path):
     junk = "J" * 500
     root = _seed_core_and_layer(

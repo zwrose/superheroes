@@ -61,6 +61,7 @@ BUILDER_DISPATCH_DEFER_WRITE_FAILED = "builder-tier-write-failed"
 BUILDER_DISPATCH_DEFER_CLI_FAILED = "builder-tier-cli-failed"
 ENGINE_PREF_PIN_KEYS = ("codexModels", "seatPins")
 ENGINE_PINS_REASON_UNKNOWN_KEY = "engine-pins-unknown-key"
+ENGINE_PINS_REASON_INPUT_UNPARSEABLE = "engine-pins-input-unparseable"
 ENGINE_PINS_REASON_NOT_A_MAPPING = "engine-pins-not-a-mapping"
 ENGINE_PINS_REASON_INVALID = "engine-pins-invalid"
 ENGINE_PINS_REASON_ROUND_TRIP = "engine-pins-round-trip-refused"
@@ -1441,7 +1442,12 @@ def main(argv):
             if raw.strip() == "":
                 pins = {}
             else:
-                pins = json.loads(raw)
+                try:
+                    pins = json.loads(raw)
+                except ValueError:
+                    out = {"action": "refused", "reason": ENGINE_PINS_REASON_INPUT_UNPARSEABLE}
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
                 if not isinstance(pins, dict):
                     out = {"action": "refused", "reason": ENGINE_PINS_REASON_NOT_A_MAPPING}
                     sys.stdout.write(json.dumps(out, indent=2) + "\n")
@@ -1452,7 +1458,7 @@ def main(argv):
                     "reason": GATE_REASON_ROOT_UNAVAILABLE,
                     "detail": gate_refusal_detail(exc)}
         except Exception:
-            out = {"action": "refused", "reason": ENGINE_PINS_REASON_NOT_A_MAPPING}
+            out = {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_CLI_FAILED}
     else:  # confirm
         try:
             out = confirm_all(args.cwd, root=args.root)
